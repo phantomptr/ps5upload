@@ -1163,6 +1163,7 @@ dependencies = [
  "tokio-stream",
  "tower-http",
  "uuid",
+ "zip",
 ]
 
 [[package]]

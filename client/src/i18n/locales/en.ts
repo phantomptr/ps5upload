@@ -3097,6 +3097,7 @@ helper_mismatch_go: "Reload helper",
 "joberr.preflight_insufficient_space": "The destination drive doesn't have enough free space for this file. Free up space on the PS5 (Settings → Storage) or pick a different destination, then click Retry.",
 "joberr.size_mismatch": "The transfer didn't finish before being interrupted — a file on the PS5 is incomplete, so it wasn't published (your old copy, if any, is untouched). This usually means the PS5 went into rest mode or lost power mid-upload. Keep the console awake (Settings → System → Power Saving → Set Time Until PS5 Turns Off), then re-run this item — Resume now re-sends only the missing files, or choose Override for a clean copy.",
 "joberr.tx_table_full": "Too many simultaneous transfers in flight on the PS5. Wait for some to finish or restart the payload.",
+"bug_report_browser_note": "The zip downloads through your browser. It carries the engine's recent log rather than the full file on the engine host — for that, use docker logs on the container.",
 };
 
 export default en;

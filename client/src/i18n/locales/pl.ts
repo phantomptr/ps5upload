@@ -2999,6 +2999,7 @@ helper_mismatch_go: "Załaduj pomocnika",
 "joberr.preflight_insufficient_space": "Dysk docelowy nie ma wystarczającej ilości wolnego miejsca na ten plik. Zwolnij miejsce na PS5 (Ustawienia → Pamięć) albo wybierz inne miejsce docelowe, a następnie kliknij „Ponów”.",
 "joberr.size_mismatch": "Transfer nie zdążył się zakończyć przed przerwaniem — plik na PS5 jest niekompletny, więc nie został opublikowany (stara kopia, jeśli istniała, pozostaje nienaruszona). Zwykle oznacza to, że PS5 przeszła w tryb spoczynku albo straciła zasilanie w trakcie przesyłania. Nie pozwól konsoli zasnąć (Ustawienia → System → Oszczędzanie energii → Czas do wyłączenia PS5) i uruchom tę pozycję ponownie: „Wznów” dośle tylko brakujące pliki, a „Nadpisz” utworzy czystą kopię.",
 "joberr.tx_table_full": "Na PS5 trwa zbyt wiele jednoczesnych transferów. Poczekaj, aż część się zakończy, albo uruchom ponownie payload.",
+"bug_report_browser_note": "Archiwum ZIP pobiera się przez przeglądarkę. Zawiera ostatni dziennik silnika, a nie pełny plik na hoście silnika — po ten użyj „docker logs” na kontenerze.",
 };
 
 export default pl;

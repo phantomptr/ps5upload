@@ -28,6 +28,15 @@ import { useDiagSettingsStore, LOG_LEVELS } from "../../state/diagSettings";
 import { useConnectionStore } from "../../state/connection";
 import { buildDiagnosticBundle } from "../../lib/diagnosticBundle";
 import { collectEngineDiagnostics } from "../../lib/engineDiagnostics";
+import {
+  BROWSER_README,
+  appLogJsonl,
+  currentAppLog,
+  downloadBugBundle,
+  engineLogText,
+  fileToBase64,
+  type BundleEntry,
+} from "../../lib/browserBugBundle";
 import { buildPs5Snapshot } from "../../lib/ps5Snapshot";
 import { ensurePayloadCurrent } from "../../lib/ensurePayloadCurrent";
 import { hostOf } from "../../lib/addr";
@@ -88,6 +97,10 @@ export default function BugReportScreen() {
 
   const [description, setDescription] = useState("");
   const [images, setImages] = useState<AttachedImage[]>([]);
+  // Browser file picker returns File objects (no filesystem paths exist in a
+  // browser), so the web UI keeps its attachments separately from the
+  // desktop's path-based list.
+  const [browserImages, setBrowserImages] = useState<File[]>([]);
   // Captured-screenshot gallery (from the global capture button → disk).
   const [shots, setShots] = useState<SavedShot[]>([]);
   const [selectedShots, setSelectedShots] = useState<Set<string>>(new Set());
@@ -260,8 +273,64 @@ export default function BugReportScreen() {
         ps5: snapshot,
       };
 
-      const { save } = await import("@tauri-apps/plugin-dialog");
       const destFilename = `ps5upload-bugreport-${stamp(new Date())}.zip`;
+
+      // Browser (self-hosted web UI): the engine builds the zip and hands it
+      // back as a download. Everything below is already in the browser — the
+      // app log ring, the engine's log tail over HTTP, and the PS5 snapshot
+      // fetched through the engine — so the only missing pieces were zipping
+      // and saving, which is what the engine route does.
+      if (!isTauriEnv()) {
+        const entries: BundleEntry[] = [
+          { path: "README.txt", text: BROWSER_README },
+          { path: "report.json", text: JSON.stringify(manifest, null, 2) },
+        ];
+        if (include.app_logs) {
+          entries.push({
+            path: "logs/app.jsonl",
+            text: appLogJsonl(currentAppLog(), windowMinutes),
+          });
+        }
+        if (include.engine_log) {
+          try {
+            entries.push({ path: "logs/engine.log", text: await engineLogText() });
+          } catch {
+            // A missing engine tail must not sink the whole report.
+            entries.push({
+              path: "logs/engine.log",
+              text: "(engine log tail unavailable when this bundle was built)",
+            });
+          }
+        }
+        if (include.ps5_logs) {
+          if (klog) entries.push({ path: "ps5/klog.txt", text: klog });
+          if (syslog) entries.push({ path: "ps5/syslog.txt", text: syslog });
+          for (const f of payloadLogs) {
+            entries.push({ path: `ps5/payload-logs/${f.name}`, text: f.text });
+          }
+        }
+        if (include.images) {
+          for (const f of browserImages) {
+            entries.push({
+              path: `images/${f.name.replace(/[^A-Za-z0-9._-]/g, "_")}`,
+              base64: await fileToBase64(f),
+            });
+          }
+        }
+        await downloadBugBundle(entries, destFilename);
+        setResult({
+          entries: entries.length,
+          bytes: 0,
+          dest: destFilename,
+          log_lines: include.app_logs ? currentAppLog().length : 0,
+          crash_reports: 0,
+          images: include.images ? browserImages.length : 0,
+        });
+        setBusy(false);
+        return;
+      }
+
+      const { save } = await import("@tauri-apps/plugin-dialog");
       const dest = await save({
         defaultPath: destFilename,
         filters: [{ name: "Zip", extensions: ["zip"] }],
@@ -355,6 +424,29 @@ export default function BugReportScreen() {
                 >
                   {tr("refresh", undefined, "Refresh")}
                 </Button>
+                {!isTauriEnv() && (
+                  <label className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-[var(--color-border)] px-2 py-1 text-xs hover:bg-[var(--color-surface-2)]">
+                    <ImagePlus size={12} />
+                    {tr("bug_report_images_add", undefined, "Attach file")}
+                    <input
+                      type="file"
+                      multiple
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(ev) => {
+                        const picked = Array.from(ev.target.files ?? []);
+                        setBrowserImages((cur) => {
+                          const seen = new Set(cur.map((f) => `${f.name}:${f.size}`));
+                          return [
+                            ...cur,
+                            ...picked.filter((f) => !seen.has(`${f.name}:${f.size}`)),
+                          ];
+                        });
+                        ev.target.value = "";
+                      }}
+                    />
+                  </label>
+                )}
                 {isTauriEnv() && (
                   <Button
                     variant="secondary"
@@ -591,7 +683,7 @@ export default function BugReportScreen() {
             />
           </div>
 
-          {isTauriEnv() ? (
+          {(
             <div className="mt-4 flex items-center gap-2">
               <Button
                 variant="primary"
@@ -606,20 +698,23 @@ export default function BugReportScreen() {
                   ? tr("bug_report_building", undefined, "Building…")
                   : tr("bug_report_create", undefined, "Create bug report (.zip)")}
               </Button>
-              <button
-                type="button"
-                onClick={openLogsFolder}
-                className="text-xs text-[var(--color-accent)] hover:underline"
-              >
-                {tr("logs_open_folder", undefined, "Open logs folder")}
-              </button>
+              {isTauriEnv() && (
+                <button
+                  type="button"
+                  onClick={openLogsFolder}
+                  className="text-xs text-[var(--color-accent)] hover:underline"
+                >
+                  {tr("logs_open_folder", undefined, "Open logs folder")}
+                </button>
+              )}
             </div>
-          ) : (
-            <p className="mt-4 text-xs text-[var(--color-muted)]">
+          )}
+          {!isTauriEnv() && (
+            <p className="mt-2 text-xs text-[var(--color-muted)]">
               {tr(
-                "bug_report_browser_unsupported",
+                "bug_report_browser_note",
                 undefined,
-                "Building a bug report zip requires the desktop app — it saves to your computer's filesystem.",
+                "The zip downloads through your browser. It carries the engine's recent log rather than the full file on the engine host — for that, use docker logs on the container.",
               )}
             </p>
           )}

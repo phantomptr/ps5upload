@@ -2705,6 +2705,7 @@ helper_mismatch_go: "Tải lại trợ giúp",
 "joberr.preflight_insufficient_space": "Ổ đích không đủ dung lượng trống cho tệp này. Hãy giải phóng dung lượng trên PS5 (Cài đặt → Bộ nhớ) hoặc chọn đích khác, rồi bấm «Thử lại».",
 "joberr.size_mismatch": "Quá trình truyền bị gián đoạn trước khi hoàn tất — một tệp trên PS5 chưa đầy đủ nên chưa được công bố (bản sao cũ của bạn, nếu có, vẫn nguyên vẹn). Thường là do PS5 chuyển sang chế độ nghỉ hoặc mất điện giữa chừng. Hãy giữ cho máy không tắt (Cài đặt → Hệ thống → Tiết kiệm điện → Thời gian đến khi PS5 tắt), rồi chạy lại mục này: «Tiếp tục» chỉ gửi lại các tệp còn thiếu, «Ghi đè» tạo một bản sao sạch.",
 "joberr.tx_table_full": "Có quá nhiều lượt truyền đang chạy đồng thời trên PS5. Hãy đợi một số hoàn tất hoặc khởi động lại payload.",
+"bug_report_browser_note": "Tệp zip được tải xuống qua trình duyệt của bạn. Nó chứa nhật ký gần đây của engine chứ không phải tệp đầy đủ trên máy chủ engine — với tệp đó, hãy dùng «docker logs» trên container.",
 };
 
 export default vi;

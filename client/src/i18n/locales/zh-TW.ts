@@ -2651,6 +2651,7 @@ helper_mismatch_go: "重新載入小幫手",
 "joberr.preflight_insufficient_space": "目標硬碟沒有足夠的可用空間存放此檔案。請釋放 PS5 的空間（設定 → 儲存空間）或改選其他目標位置，然後點選「重試」。",
 "joberr.size_mismatch": "傳輸在完成前被中斷——PS5 上的某個檔案不完整，因此未被發布（若原本有舊副本，它維持不變）。這通常表示上傳過程中 PS5 進入休息模式或斷電。請讓主機保持喚醒（設定 → 系統 → 省電 → PS5 關閉前的時間），然後重新執行此項目：「續傳」只會重送缺少的檔案，「覆寫」則會重新完整複製一份。",
 "joberr.tx_table_full": "PS5 上同時進行的傳輸過多。請等待部分傳輸完成，或重新啟動 payload。",
+"bug_report_browser_note": "壓縮檔會透過瀏覽器下載。其中包含引擎最近的日誌，而不是引擎主機上的完整日誌檔案——如需完整日誌，請對容器使用 docker logs。",
 };
 
 export default zh_TW;

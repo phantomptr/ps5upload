@@ -2711,6 +2711,7 @@ helper_mismatch_go: "Helfer neu laden",
 "joberr.preflight_insufficient_space": "Auf dem Ziellaufwerk ist nicht genug freier Speicher für diese Datei. Gib Speicher auf der PS5 frei (Einstellungen → Speicher) oder wähle ein anderes Ziel und klicke dann auf „Wiederholen“.",
 "joberr.size_mismatch": "Die Übertragung wurde unterbrochen, bevor sie fertig war – eine Datei auf der PS5 ist unvollständig und wurde deshalb nicht veröffentlicht (eine eventuell vorhandene alte Kopie bleibt unberührt). Meist ist die PS5 dabei in den Ruhemodus gegangen oder hat den Strom verloren. Halte die Konsole wach (Einstellungen → System → Energiesparen → Zeit bis zum Ausschalten der PS5) und führe diesen Eintrag erneut aus – „Fortsetzen“ sendet nur die fehlenden Dateien erneut, „Überschreiben“ liefert eine saubere Kopie.",
 "joberr.tx_table_full": "Auf der PS5 laufen zu viele gleichzeitige Übertragungen. Warte, bis einige abgeschlossen sind, oder starte das Payload neu.",
+"bug_report_browser_note": "Die ZIP-Datei wird über deinen Browser heruntergeladen. Sie enthält das jüngste Protokoll der Engine statt der vollständigen Datei auf dem Engine-Host – dafür nutze „docker logs“ auf dem Container.",
 };
 
 export default de;

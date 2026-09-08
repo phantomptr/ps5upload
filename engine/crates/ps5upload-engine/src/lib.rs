@@ -8399,6 +8399,146 @@ async fn list_jobs(State(state): State<AppState>) -> impl IntoResponse {
     Json(summary)
 }
 
+// ─── Bug-report bundling (browser / self-hosted web UI) ──────────────────────
+
+/// One entry to place in the bundle. Exactly one of `text` / `base64` is used;
+/// `text` wins when both are present.
+#[derive(Deserialize)]
+struct BugBundleEntry {
+    /// Zip-relative path, e.g. "logs/app.jsonl". Traversal is rejected.
+    path: String,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    base64: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct BugBundleReq {
+    #[serde(default)]
+    filename: Option<String>,
+    entries: Vec<BugBundleEntry>,
+}
+
+/// Reject anything that could escape the archive root or produce a surprising
+/// path on extraction. The client builds these names, but the engine is a
+/// network service and must not trust its caller.
+fn bundle_path_ok(p: &str) -> bool {
+    !p.is_empty()
+        && p.len() <= 200
+        && !p.starts_with('/')
+        && !p.starts_with('\\')
+        && !p.contains("..")
+        && !p.contains(':')
+        && !p.contains('\0')
+        && p.split('/')
+            .all(|seg| !seg.is_empty() && seg != "." && seg != "..")
+}
+
+/// POST /api/bug-report/bundle — zip client-supplied entries and return the
+/// archive as a download.
+///
+/// The desktop app builds its bundle in the Tauri shell, which can read the
+/// local log files and open a save dialog. A browser can do neither, so the
+/// self-hosted web UI had no way to produce a bug report at all — it rendered
+/// the whole form and then said "requires the desktop app", which is where a
+/// user who has just hit a bug finds out they cannot report it.
+///
+/// The client already holds everything the bundle needs (its own log ring, the
+/// engine log tail over HTTP, the PS5 snapshot and payload logs), so the engine
+/// only has to do the two things a browser cannot: build the zip and hand it
+/// back as an attachment.
+async fn bug_report_bundle_handler(Json(req): Json<BugBundleReq>) -> axum::response::Response {
+    use base64::Engine as _;
+    use std::io::{Cursor, Write};
+
+    if req.entries.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "entries is required").into_response();
+    }
+    // A bundle is diagnostics, not a file transfer. Cap it so a malformed or
+    // hostile caller cannot drive the engine's memory through the roof.
+    const MAX_TOTAL: usize = 64 * 1024 * 1024;
+
+    let mut buf = Cursor::new(Vec::<u8>::new());
+    let mut total = 0usize;
+    {
+        let mut zw = zip::ZipWriter::new(&mut buf);
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for e in &req.entries {
+            if !bundle_path_ok(&e.path) {
+                return json_err(
+                    StatusCode::BAD_REQUEST,
+                    &format!("unsafe entry path: {}", e.path),
+                )
+                .into_response();
+            }
+            let bytes: Vec<u8> = if let Some(t) = &e.text {
+                t.as_bytes().to_vec()
+            } else if let Some(b) = &e.base64 {
+                match base64::engine::general_purpose::STANDARD.decode(b) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        return json_err(
+                            StatusCode::BAD_REQUEST,
+                            format!("entry {} has invalid base64", e.path),
+                        )
+                        .into_response()
+                    }
+                }
+            } else {
+                Vec::new()
+            };
+            total = total.saturating_add(bytes.len());
+            if total > MAX_TOTAL {
+                return json_err(StatusCode::PAYLOAD_TOO_LARGE, "bundle too large").into_response();
+            }
+            if zw.start_file(e.path.clone(), opts).is_err() {
+                return json_err(StatusCode::INTERNAL_SERVER_ERROR, "zip entry failed")
+                    .into_response();
+            }
+            if zw.write_all(&bytes).is_err() {
+                return json_err(StatusCode::INTERNAL_SERVER_ERROR, "zip write failed")
+                    .into_response();
+            }
+        }
+        if zw.finish().is_err() {
+            return json_err(StatusCode::INTERNAL_SERVER_ERROR, "zip finish failed")
+                .into_response();
+        }
+    }
+
+    // Keep the leaf name simple: it lands in the user's Downloads folder and is
+    // echoed into a Content-Disposition header.
+    let name = req
+        .filename
+        .as_deref()
+        .filter(|n| {
+            !n.is_empty()
+                && n.len() <= 128
+                && n.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        })
+        .unwrap_or("ps5upload-bugreport.zip");
+
+    let body = buf.into_inner();
+    crate::log_info!(
+        "bug-report bundle: {} entries, {} bytes, name={}",
+        req.entries.len(),
+        body.len(),
+        name
+    );
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/zip"),
+    );
+    if let Ok(v) = axum::http::HeaderValue::from_str(&format!("attachment; filename=\"{name}\"")) {
+        headers.insert(axum::http::header::CONTENT_DISPOSITION, v);
+    }
+    (StatusCode::OK, headers, body).into_response()
+}
+
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 /// Spawn the parent-watch thread when running under the desktop shell.
@@ -8784,6 +8924,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         )
         .route("/api/version", get(engine_version))
         .route("/api/jobs", get(list_jobs))
+        .route("/api/bug-report/bundle", post(bug_report_bundle_handler))
         .route("/api/jobs/{id}", get(get_job))
         .route("/api/jobs/{id}/cancel", post(cancel_job))
         .route("/api/events", get(events_stream))
@@ -9612,5 +9753,53 @@ mod cheats_route_tests {
         let req: CheatsEngineSetReq = serde_json::from_str(json).unwrap();
         assert!(req.enabled);
         assert!(req.addr.is_none());
+    }
+}
+
+#[cfg(test)]
+mod bug_bundle_tests {
+    use super::bundle_path_ok;
+
+    #[test]
+    fn accepts_the_paths_the_bundle_actually_uses() {
+        for p in [
+            "report.json",
+            "README.txt",
+            "logs/app.jsonl",
+            "logs/engine.log",
+            "ps5/klog.txt",
+            "ps5/payload-logs/03_tx_events.log",
+            "images/shot.png",
+        ] {
+            assert!(bundle_path_ok(p), "should accept {p}");
+        }
+    }
+
+    #[test]
+    fn rejects_anything_that_could_escape_the_archive() {
+        // The client builds these names, but this is a network service: a
+        // caller on the LAN must not be able to write outside the zip root or
+        // produce a path that surprises the extractor.
+        let null_path = format!("with{}null.txt", '\0');
+        let cases: Vec<String> = vec![
+            String::new(),
+            "/etc/passwd".into(),
+            "\\windows\\system32".into(),
+            "../outside.txt".into(),
+            "logs/../../etc/hosts".into(),
+            "C:/Users/me/thing.txt".into(),
+            "logs//double.txt".into(),
+            "logs/./same.txt".into(),
+            null_path,
+        ];
+        for p in &cases {
+            assert!(!bundle_path_ok(p), "should reject {p:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_absurdly_long_paths() {
+        assert!(!bundle_path_ok(&"a".repeat(201)));
+        assert!(bundle_path_ok(&"a".repeat(200)));
     }
 }
