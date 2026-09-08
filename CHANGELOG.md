@@ -4,6 +4,21 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.17.6
+
+**A build fix, and one that quietly protected the Docker image.**
+
+- **Building the app no longer damages its own dependency lockfile.** Every
+  build ran `npm install`, which on npm 10 deletes information newer npm
+  versions record — including which native components match Alpine/musl, the
+  base the web UI Docker image is built on. It had to be undone by hand before
+  every release, and had it ever been committed, that image could have been
+  built with the wrong native binaries. Builds now install strictly from the
+  lockfile (`npm ci`, the same thing CI does) and leave it alone, and a new
+  check fails the build if the file ever loses that information again.
+
+---
+
 ## 5.17.5
 
 **An update that silently does nothing is now reported as a failure, and tells you how to fix it.**
