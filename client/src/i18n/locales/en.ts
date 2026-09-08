@@ -3086,6 +3086,17 @@ helper_mismatch_title: "The PS5 helper is v{payload} but this app is v{app}",
 helper_mismatch_body: "Fixes and features from the newer version won't work until the helper on the console matches. Reload it from the Connection screen.",
 helper_mismatch_go: "Reload helper",
 
+"joberr.direct_staged_file_missing": "This upload had already finished, so there was nothing left to publish — and the file on the PS5 is now missing or the wrong size. Upload it again and choose Override rather than Resume.",
+"joberr.direct_tx_corrupt": "The PS5 detected protocol corruption on this transfer. Restart the payload from the Send Payload tab and retry.",
+"joberr.direct_writer_io_error": "The PS5 ran out of free space (or an external drive disconnected) while writing the file. Free up space on the destination drive and click Retry — the upload resumes from where it stopped.",
+"joberr.fs_delete_path_not_allowed": "PS5 refused access to that path. Use /data/, /user/, or a mounted /mnt/ext*, /mnt/usb* path.",
+"joberr.fs_read_path_not_allowed": "This file is in a read-only system partition that's normally blocked. Enable Settings → \"Allow downloading system files\" to download from /system, /system_data, and other protected paths.",
+"joberr.fs_write_failed": "The PS5 couldn't write to the destination mid-transfer — most often the drive filled up or an external drive disconnected. Check free space / reconnect the drive, then click Retry (the upload resumes from where it stopped).",
+"joberr.fs_write_failed_no_space": "The destination drive ran out of space (or the file is too big for that filesystem). Free space on the PS5 / external drive — or pick a different destination — then click Retry.",
+"joberr.packed_unsupported": "The PS5 helper rejected a packed transfer — this happens with an outdated payload when a folder upload comes down to a single small file (e.g. a Resume of a game with many tiny files). Update ps5upload to the latest version, re-send the payload from the Send Payload tab, then retry.",
+"joberr.preflight_insufficient_space": "The destination drive doesn't have enough free space for this file. Free up space on the PS5 (Settings → Storage) or pick a different destination, then click Retry.",
+"joberr.size_mismatch": "The transfer didn't finish before being interrupted — a file on the PS5 is incomplete, so it wasn't published (your old copy, if any, is untouched). This usually means the PS5 went into rest mode or lost power mid-upload. Keep the console awake (Settings → System → Power Saving → Set Time Until PS5 Turns Off), then re-run this item — Resume now re-sends only the missing files, or choose Override for a clean copy.",
+"joberr.tx_table_full": "Too many simultaneous transfers in flight on the PS5. Wait for some to finish or restart the payload.",
 };
 
 export default en;

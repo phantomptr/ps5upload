@@ -2694,6 +2694,17 @@ helper_mismatch_title: "Trình trợ giúp PS5 là v{payload} còn ứng dụng 
 helper_mismatch_body: "Các bản sửa lỗi và tính năng của phiên bản mới sẽ không hoạt động cho tới khi trình trợ giúp trên máy khớp. Hãy tải lại từ màn hình Kết nối.",
 helper_mismatch_go: "Tải lại trợ giúp",
 
+"joberr.direct_staged_file_missing": "Lần tải lên này đã hoàn tất từ trước nên không còn gì để công bố — và tệp trên PS5 hiện đã mất hoặc sai kích thước. Hãy tải lên lại và chọn «Ghi đè» thay vì «Tiếp tục».",
+"joberr.direct_tx_corrupt": "PS5 phát hiện lỗi hỏng giao thức trong lần truyền này. Hãy khởi động lại payload từ thẻ «Gửi payload» rồi thử lại.",
+"joberr.direct_writer_io_error": "PS5 đã hết dung lượng trống (hoặc ổ ngoài bị ngắt kết nối) khi đang ghi tệp. Hãy giải phóng dung lượng trên ổ đích rồi bấm «Thử lại» — quá trình tải lên tiếp tục từ chỗ dừng.",
+"joberr.fs_delete_path_not_allowed": "PS5 từ chối truy cập đường dẫn đó. Hãy dùng /data/, /user/ hoặc đường dẫn đã gắn kết /mnt/ext*, /mnt/usb*.",
+"joberr.fs_read_path_not_allowed": "Tệp này nằm trong phân vùng hệ thống chỉ đọc vốn thường bị chặn. Hãy bật Cài đặt → «Cho phép tải xuống tệp hệ thống» để tải từ /system, /system_data và các đường dẫn được bảo vệ khác.",
+"joberr.fs_write_failed": "PS5 không ghi được vào đích giữa chừng — thường là ổ đĩa đã đầy hoặc ổ ngoài bị ngắt kết nối. Hãy kiểm tra dung lượng trống hoặc cắm lại ổ, rồi bấm «Thử lại» (quá trình tải lên tiếp tục từ chỗ dừng).",
+"joberr.fs_write_failed_no_space": "Ổ đích đã hết dung lượng (hoặc tệp quá lớn với hệ thống tệp đó). Hãy giải phóng dung lượng trên PS5 hoặc ổ ngoài — hoặc chọn đích khác — rồi bấm «Thử lại».",
+"joberr.packed_unsupported": "Trình trợ giúp PS5 đã từ chối một lần truyền dạng gói. Điều này xảy ra với payload cũ khi việc tải lên một thư mục rút lại chỉ còn một tệp nhỏ (ví dụ khi tiếp tục một trò chơi có rất nhiều tệp nhỏ). Hãy cập nhật ps5upload lên bản mới nhất, gửi lại payload từ thẻ «Gửi payload», rồi thử lại.",
+"joberr.preflight_insufficient_space": "Ổ đích không đủ dung lượng trống cho tệp này. Hãy giải phóng dung lượng trên PS5 (Cài đặt → Bộ nhớ) hoặc chọn đích khác, rồi bấm «Thử lại».",
+"joberr.size_mismatch": "Quá trình truyền bị gián đoạn trước khi hoàn tất — một tệp trên PS5 chưa đầy đủ nên chưa được công bố (bản sao cũ của bạn, nếu có, vẫn nguyên vẹn). Thường là do PS5 chuyển sang chế độ nghỉ hoặc mất điện giữa chừng. Hãy giữ cho máy không tắt (Cài đặt → Hệ thống → Tiết kiệm điện → Thời gian đến khi PS5 tắt), rồi chạy lại mục này: «Tiếp tục» chỉ gửi lại các tệp còn thiếu, «Ghi đè» tạo một bản sao sạch.",
+"joberr.tx_table_full": "Có quá nhiều lượt truyền đang chạy đồng thời trên PS5. Hãy đợi một số hoàn tất hoặc khởi động lại payload.",
 };
 
 export default vi;

@@ -2700,6 +2700,17 @@ helper_mismatch_title: "Der PS5-Helfer ist v{payload}, diese App ist v{app}",
 helper_mismatch_body: "Korrekturen und Funktionen der neueren Version wirken erst, wenn der Helfer auf der Konsole dazu passt. Lade ihn im Verbindungs-Bildschirm neu.",
 helper_mismatch_go: "Helfer neu laden",
 
+"joberr.direct_staged_file_missing": "Dieser Upload war bereits abgeschlossen, es gab also nichts mehr zu veröffentlichen – und die Datei auf der PS5 fehlt jetzt oder hat die falsche Größe. Lade sie erneut hoch und wähle „Überschreiben“ statt „Fortsetzen“.",
+"joberr.direct_tx_corrupt": "Die PS5 hat bei dieser Übertragung eine Protokollbeschädigung erkannt. Starte das Payload über den Tab „Payload senden“ neu und versuche es erneut.",
+"joberr.direct_writer_io_error": "Auf der PS5 ging beim Schreiben der Datei der Speicherplatz aus (oder ein externes Laufwerk wurde getrennt). Gib Speicherplatz auf dem Ziellaufwerk frei und klicke auf „Wiederholen“ – der Upload wird an der Abbruchstelle fortgesetzt.",
+"joberr.fs_delete_path_not_allowed": "Die PS5 hat den Zugriff auf diesen Pfad verweigert. Verwende /data/, /user/ oder einen eingehängten Pfad unter /mnt/ext* bzw. /mnt/usb*.",
+"joberr.fs_read_path_not_allowed": "Diese Datei liegt in einer schreibgeschützten Systempartition, die normalerweise gesperrt ist. Aktiviere in den Einstellungen „Herunterladen von Systemdateien erlauben“, um aus /system, /system_data und anderen geschützten Pfaden zu laden.",
+"joberr.fs_write_failed": "Die PS5 konnte während der Übertragung nicht ans Ziel schreiben – meist ist das Laufwerk voll gelaufen oder ein externes Laufwerk wurde getrennt. Prüfe den freien Speicher bzw. schließe das Laufwerk wieder an und klicke auf „Wiederholen“ (der Upload wird an der Abbruchstelle fortgesetzt).",
+"joberr.fs_write_failed_no_space": "Auf dem Ziellaufwerk ist kein Speicherplatz mehr frei (oder die Datei ist zu groß für dieses Dateisystem). Gib Speicher auf der PS5 bzw. dem externen Laufwerk frei – oder wähle ein anderes Ziel – und klicke dann auf „Wiederholen“.",
+"joberr.packed_unsupported": "Der PS5-Helper hat eine gepackte Übertragung abgelehnt. Das passiert mit einem veralteten Payload, wenn ein Ordner-Upload auf eine einzelne kleine Datei zusammenschrumpft (z. B. beim Fortsetzen eines Spiels mit vielen winzigen Dateien). Aktualisiere ps5upload auf die neueste Version, sende das Payload über den Tab „Payload senden“ erneut und versuche es dann noch einmal.",
+"joberr.preflight_insufficient_space": "Auf dem Ziellaufwerk ist nicht genug freier Speicher für diese Datei. Gib Speicher auf der PS5 frei (Einstellungen → Speicher) oder wähle ein anderes Ziel und klicke dann auf „Wiederholen“.",
+"joberr.size_mismatch": "Die Übertragung wurde unterbrochen, bevor sie fertig war – eine Datei auf der PS5 ist unvollständig und wurde deshalb nicht veröffentlicht (eine eventuell vorhandene alte Kopie bleibt unberührt). Meist ist die PS5 dabei in den Ruhemodus gegangen oder hat den Strom verloren. Halte die Konsole wach (Einstellungen → System → Energiesparen → Zeit bis zum Ausschalten der PS5) und führe diesen Eintrag erneut aus – „Fortsetzen“ sendet nur die fehlenden Dateien erneut, „Überschreiben“ liefert eine saubere Kopie.",
+"joberr.tx_table_full": "Auf der PS5 laufen zu viele gleichzeitige Übertragungen. Warte, bis einige abgeschlossen sind, oder starte das Payload neu.",
 };
 
 export default de;

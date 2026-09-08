@@ -216,3 +216,51 @@ describe("volumeForPath (longest-prefix match)", () => {
     expect(volumeForPath(vlist, "/data/foo")?.path).toBe("/data");
   });
 });
+
+describe("humanizeJobErrorReason i18n", () => {
+  it("returns the English text when no locale is loaded", () => {
+    // trStatic falls back to the English literal at the call site, so a key
+    // missing from a locale degrades to the pre-i18n behaviour rather than
+    // leaking a raw key like "joberr.tx_table_full" into the UI.
+    const msg = humanizeJobErrorReason("tx_table_full");
+    expect(msg).toBeTruthy();
+    expect(msg).not.toContain("joberr.");
+  });
+
+  it("never leaks a translation key for any known reason", () => {
+    const reasons = [
+      "preflight_insufficient_space",
+      "direct_staged_file_missing",
+      "direct_writer_io_error",
+      "direct_tx_corrupt",
+      "packed_unsupported",
+      "size_mismatch",
+      "shards_incomplete",
+      "spool_apply_failed",
+      "fs_delete_path_not_allowed",
+      "fs_mkdir_path_not_allowed",
+      "fs_list_dir_path_denied",
+      "fs_read_path_not_allowed",
+      "tx_table_full",
+      "fs_write_failed_errno_28",
+      "fs_write_failed_errno_27",
+      "fs_write_failed",
+    ];
+    for (const r of reasons) {
+      const msg = humanizeJobErrorReason(r);
+      expect(msg, `reason ${r}`).toBeTruthy();
+      expect(msg, `reason ${r}`).not.toContain("joberr.");
+    }
+  });
+
+  it("still returns null for an unknown reason so callers fall back", () => {
+    expect(humanizeJobErrorReason("something_new_from_a_newer_payload")).toBeNull();
+  });
+
+  it("maps the repeat-commit reason to its own message, not the rename one", () => {
+    // Regression: the payload used to report `direct_rename_failed` with an
+    // empty source path for this case, which sent users chasing a rename bug.
+    const msg = humanizeJobErrorReason("direct_staged_file_missing");
+    expect(msg).toMatch(/Override/i);
+  });
+});

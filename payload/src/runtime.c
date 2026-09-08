@@ -30,6 +30,7 @@
 #include <fnmatch.h>
 #include <regex.h>
 #include "config.h"
+#include "commit_apply.h"
 #include "runtime.h"
 
 #include "content_db.h"
@@ -14797,6 +14798,24 @@ static int handle_begin_tx_frame(runtime_state_t *state, int client_fd,
                     free(mbuf);
                 }
             }
+        } else if (!entry->multi_file && entry->direct_mode &&
+                   entry->dest_root[0] && entry->tmp_path[0] == '\0') {
+            /* Resuming a direct single-file transaction whose staging path
+             * was cleared by a COMMIT that already succeeded. The entry
+             * stays in the table with direct_mode set, so the restore
+             * branch below (which requires !direct_mode) never ran and
+             * tmp_path stayed empty — leaving shard writes with nowhere to
+             * go and COMMIT with nothing to publish.
+             *
+             * Restore the tmp path so a genuine re-send works. If the
+             * destination is in fact already complete, COMMIT's
+             * already-published check settles it without touching the
+             * file. */
+            snprintf(entry->tmp_path, sizeof(entry->tmp_path),
+                     "%s.ps5up2-tmp", entry->dest_root);
+            (void)unlink(entry->tmp_path);
+            entry->shards_received = 0;
+            entry->bytes_received  = 0;
         } else if (!entry->multi_file && !entry->direct_mode &&
                    entry->dest_root[0]) {
             /* Single-file resume after a restart. We can't precisely map
@@ -15341,9 +15360,55 @@ static int handle_commit_tx_frame(runtime_state_t *state, int client_fd,
                  * the shard path — skip it. stat() failure is left to
                  * the rename below, which then reports its own error.) */
                 struct stat st_done;
-                if (entry->total_bytes > 0 &&
-                    stat(entry->tmp_path, &st_done) == 0 &&
-                    (uint64_t)st_done.st_size != entry->total_bytes) {
+                /* Is there actually a staged file to publish? A COMMIT that
+                 * already succeeded cleared tmp_path (see below), and a
+                 * resume of an already-finished transaction keeps
+                 * direct_mode set without restoring it — so a second COMMIT
+                 * arrives here with tmp_path == "".
+                 *
+                 * That MUST NOT reach the rename branch. It unlinks
+                 * dest_root first, so a repeat commit deleted the very file
+                 * the first commit delivered and then failed with
+                 * `rename  -> <dest> failed: No such file or directory` —
+                 * note the empty source, which is exactly how users
+                 * reported it. The upload was gone and every retry made it
+                 * worse. Nothing below may touch dest_root until we know a
+                 * replacement exists. */
+                int have_staged =
+                    entry->tmp_path[0] != '\0' &&
+                    stat(entry->tmp_path, &st_done) == 0;
+                struct stat st_dest;
+                int dest_exists = stat(entry->dest_root, &st_dest) == 0;
+                commit_apply_action_t action = commit_apply_decide(
+                    have_staged,
+                    have_staged ? (uint64_t)st_done.st_size : 0,
+                    dest_exists,
+                    dest_exists ? (uint64_t)st_dest.st_size : 0,
+                    entry->total_bytes);
+                if (action != COMMIT_APPLY_PUBLISH &&
+                    action != COMMIT_APPLY_SIZE_MISMATCH) {
+                    if (action == COMMIT_APPLY_ALREADY_DONE) {
+                        /* Already published by an earlier COMMIT. Committing
+                         * the same transaction twice is idempotent: the file
+                         * the caller asked for is on disk, at the right
+                         * size. Report success and leave it alone. */
+                        printf("[payload2] direct apply: %s already published "
+                               "(idempotent commit, no staged tmp)\n",
+                               entry->dest_root);
+                    } else {
+                        apply_failed = 1;
+                        apply_failure_reason = "direct_staged_file_missing";
+                        snprintf(apply_failure_detail, sizeof(apply_failure_detail),
+                                 "nothing staged to publish for %s and the "
+                                 "destination is missing or the wrong size; "
+                                 "re-upload with Override rather than Resume",
+                                 entry->dest_root);
+                        fprintf(stderr,
+                                "[payload2] commit with no staged tmp tx %s dest=%s "
+                                "— destination left untouched\n",
+                                entry->tx_id_hex, entry->dest_root);
+                    }
+                } else if (action == COMMIT_APPLY_SIZE_MISMATCH) {
                     apply_failed = 1;
                     apply_failure_reason = "size_mismatch";
                     snprintf(apply_failure_detail, sizeof(apply_failure_detail),
