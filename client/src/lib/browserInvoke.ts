@@ -789,6 +789,8 @@ export async function browserInvoke<T>(
         {
           ps5_addr: args["ps5Addr"],
           local_ps5_path: args["localPs5Path"],
+          title_id: args["titleId"],
+          package_app_ver: args["packageAppVer"],
         },
         /*long=*/ true,
       );

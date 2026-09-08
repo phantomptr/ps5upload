@@ -2711,6 +2711,10 @@ helper_mismatch_go: "Yardımcıyı yükle",
 "joberr.size_mismatch": "Aktarım kesintiye uğramadan önce tamamlanamadı — PS5'teki bir dosya eksik olduğu için yayımlanmadı (varsa eski kopyanıza dokunulmadı). Bu genellikle yükleme sırasında PS5'in dinlenme moduna geçtiği ya da elektriğinin kesildiği anlamına gelir. Konsolu uyanık tutun (Ayarlar → Sistem → Güç Tasarrufu → PS5'in Kapanmasına Kalan Süre) ve bu öğeyi yeniden çalıştırın: «Sürdür» yalnızca eksik dosyaları yeniden gönderir, «Üzerine yaz» ise temiz bir kopya oluşturur.",
 "joberr.tx_table_full": "PS5'te aynı anda çok fazla aktarım sürüyor. Bir kısmının bitmesini bekleyin ya da payload'ı yeniden başlatın.",
 "bug_report_browser_note": "Zip dosyası tarayıcınız üzerinden indirilir. Motor ana makinesindeki tam dosya yerine motorun son günlüğünü içerir — tamamı için kapsayıcıda «docker logs» kullanın.",
+"pkg.patch_did_not_apply": "PS5 bu güncellemeyi kabul etti ve ardından onunla hiçbir şey yapmadı — oyun hâlâ önceki sürümde. Bu, konsolun güncellemeyi kurulu ana oyunla eşleştiremediği anlamına gelir. Ana oyunu, bu güncellemeye ait ana paketten ps5upload ile yeniden kurun («Üzerine yaz» seçin), sonra güncellemeyi tekrar uygulayın.",
+"pkglib.updateBaseUnknown.title": "Bu güncelleme uygulanmayabilir",
+"pkglib.updateBaseUnknown.installAnyway": "Yine de kur",
+"pkglib.updateBaseUnknown.body": "{id} kurulu, ancak ps5upload'ın kurduğu bir ana paketten gelmiyor — bu yüzden PS5 bu güncellemeyi onunla eşleştiremeyebilir. Böyle olduğunda konsol başarı bildirir ve hiçbir şeyi değiştirmez. Sonrasında oyun eski sürümde kalırsa, uygun ana paketi ps5upload ile kurun («Üzerine yaz» seçin) ve güncellemeyi tekrar uygulayın.",
 };
 
 export default tr;

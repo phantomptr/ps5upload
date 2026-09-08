@@ -2578,6 +2578,16 @@ pub struct DpiInstallRequest {
     pub ps5_addr: String,
     /// Absolute PS5-side path to the staged `.pkg` (under /user/data).
     pub local_ps5_path: String,
+    /// Title the package belongs to. Supplied by the client, which parsed the
+    /// pkg locally; the engine cannot parse a file that lives on the console.
+    /// When present with `package_app_ver`, the install is verified afterwards
+    /// (see ps5upload_core::patch_verify). Absent = no verification, which is
+    /// what an older client sends.
+    #[serde(default)]
+    pub title_id: Option<String>,
+    /// `APP_VER` the package declares, e.g. "01.09".
+    #[serde(default)]
+    pub package_app_ver: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2596,6 +2606,15 @@ pub struct DpiInstallResponse {
     /// pkg-host evidence for Stream installs. Always zero for staged paths.
     pub requests_served: u64,
     pub bytes_served: u64,
+    /// Post-install version check: "applied", "did_not_apply", "inconclusive",
+    /// or absent when the caller supplied no identity to check against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub patch_verdict: Option<String>,
+    /// Installed APP_VER before and after, for the UI and for bug reports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_ver_before: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_ver_after: Option<String>,
 }
 
 /// One parsed reply from the DPI daemon. The daemon replies in the
@@ -2682,6 +2701,105 @@ fn dpi_send(ps5_ip: &str, line: &str) -> std::io::Result<DpiReply> {
     Ok(parse_dpi_reply(&buf))
 }
 
+/// Normalize whatever address the caller gave into a management address.
+/// Callers pass `ip:9114` today, but a bare IP must not silently produce a
+/// broken connect.
+fn mgmt_addr_for_dpi(addr: &str) -> String {
+    let host = strip_host_port(addr);
+    if host.is_empty() {
+        return addr.to_string();
+    }
+    match addr.rsplit_once(':') {
+        Some((_, port)) if port.parse::<u16>().is_ok() => addr.to_string(),
+        _ => format!("{host}:9114"),
+    }
+}
+
+/// Read a title's installed `APP_VER`, or `None` when it cannot be read (title
+/// absent, payload too old, console busy). `None` deliberately means "unknown"
+/// and never "failed" — see patch_verify, which stays inconclusive on it.
+fn read_installed_app_ver(mgmt_addr: &str, title_id: &str) -> Option<String> {
+    let rows =
+        ps5upload_core::diagnostics::appinfo_query(mgmt_addr, title_id, Some("APP_VER")).ok()?;
+    rows.rows
+        .into_iter()
+        .find(|r| r.key == "APP_VER")
+        .map(|r| r.val)
+        .filter(|v| !v.trim().is_empty())
+}
+
+/// Wait for a patch to take effect, then say whether it did.
+///
+/// A PS5 install is asynchronous: on hardware the same patch landed 150 s
+/// after the call returned. Polling too early is exactly how this bug was
+/// twice mis-diagnosed, so this waits, and returns the moment the version
+/// moves rather than burning the whole budget on a success.
+fn verify_patch_after_install(
+    mgmt_addr: &str,
+    title_id: &str,
+    before: Option<&str>,
+    package_app_ver: &str,
+) -> (ps5upload_core::patch_verify::PatchVerdict, Option<String>) {
+    use ps5upload_core::patch_verify::{parse_app_ver, verify_patch_applied, PatchVerdict};
+    const BUDGET: std::time::Duration = std::time::Duration::from_secs(240);
+    const STEP: std::time::Duration = std::time::Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + BUDGET;
+    let mut latest: Option<String> = before.map(|s| s.to_string());
+
+    // When the package does not claim a newer version there is no change to
+    // wait for. Poll once and report — this also stops an ordinary
+    // same-version re-install from sitting here for minutes.
+    let expecting_rise = match (
+        before.and_then(parse_app_ver),
+        parse_app_ver(package_app_ver),
+    ) {
+        (Some(b), Some(p)) => p > b,
+        _ => false,
+    };
+    if !expecting_rise {
+        let after = read_installed_app_ver(mgmt_addr, title_id).or(latest.clone());
+        let verdict = verify_patch_applied(before, after.as_deref(), Some(package_app_ver));
+        // A single sample is enough ONLY when it is not claiming a loss.
+        // Sony's overwrite removes the old update before writing the new one,
+        // so mid-flight the title legitimately reads lower than it started —
+        // returning `Regressed` from one poll turns that transient into a
+        // reported failure. Observed exactly that way on hardware. Anything
+        // that looks like a loss falls through to the wait loop, which only
+        // concludes at its deadline.
+        if verdict != PatchVerdict::Regressed {
+            return (verdict, after);
+        }
+        latest = after;
+    }
+
+    loop {
+        let after = read_installed_app_ver(mgmt_addr, title_id);
+        if after.is_some() {
+            latest = after.clone();
+        }
+        // `Applied` is the ONLY early exit. A reading below where we started
+        // is not evidence of loss: Sony's overwrite removes the old update
+        // before installing the new one, so a re-apply legitimately reports
+        // the base version for a while — observed on hardware as 01.00 with
+        // /user/patch/<TID> absent for over a minute, then back to 01.09.
+        // Concluding "regressed" from that sample would fail a perfectly good
+        // install, which is worse than the silent no-op this exists to catch.
+        // Only the deadline decides a failure.
+        if verify_patch_applied(before, latest.as_deref(), Some(package_app_ver))
+            == PatchVerdict::Applied
+        {
+            return (PatchVerdict::Applied, latest);
+        }
+        if std::time::Instant::now() >= deadline {
+            return (
+                verify_patch_applied(before, latest.as_deref(), Some(package_app_ver)),
+                latest,
+            );
+        }
+        std::thread::sleep(STEP);
+    }
+}
+
 async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Body> {
     if !req.local_ps5_path.starts_with('/') {
         return json_err(
@@ -2695,7 +2813,26 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
     }
     let path = req.local_ps5_path.clone();
     crate::log_info!("dpi-install: ps5={} path={}", ps5_ip, path);
-    let res = tokio::task::spawn_blocking(move || dpi_send(&ps5_ip, &path)).await;
+
+    // Snapshot the installed version BEFORE the install so an accepted-but-
+    // inert overwrite can be told from a real one afterwards. Sony returns
+    // 0x00000000 either way.
+    let mgmt = mgmt_addr_for_dpi(&req.ps5_addr);
+    let verify_id = req.title_id.clone().filter(|t| !t.trim().is_empty());
+    let verify_pkg_ver = req.package_app_ver.clone().filter(|v| !v.trim().is_empty());
+    let app_ver_before = match (&verify_id, &verify_pkg_ver) {
+        (Some(tid), Some(_)) => {
+            let (m, t) = (mgmt.clone(), tid.clone());
+            tokio::task::spawn_blocking(move || read_installed_app_ver(&m, &t))
+                .await
+                .ok()
+                .flatten()
+        }
+        _ => None,
+    };
+
+    let ps5_ip_for_send = ps5_ip.clone();
+    let res = tokio::task::spawn_blocking(move || dpi_send(&ps5_ip_for_send, &path)).await;
     match res {
         Ok(Ok(reply)) => {
             let (ok, rc, init_failed, err_message) = match reply {
@@ -2764,6 +2901,74 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
             if ok {
                 crate::log_info!("dpi-install ok");
             }
+            // Only a package that claims a higher version is worth waiting
+            // on; a fresh install or a same-version reinstall skips this
+            // entirely and costs nothing.
+            let (patch_verdict, app_ver_after, ok, err_message) =
+                match (ok, &verify_id, &verify_pkg_ver) {
+                    (true, Some(tid), Some(pkg_ver)) => {
+                        use ps5upload_core::patch_verify::{
+                            PatchVerdict, DID_NOT_APPLY_HINT, REGRESSED_HINT,
+                        };
+                        let (m, t, pv, before) = (
+                            mgmt.clone(),
+                            tid.clone(),
+                            pkg_ver.clone(),
+                            app_ver_before.clone(),
+                        );
+                        let (verdict, after) = tokio::task::spawn_blocking(move || {
+                            verify_patch_after_install(&m, &t, before.as_deref(), &pv)
+                        })
+                        .await
+                        .unwrap_or((PatchVerdict::Inconclusive, None));
+                        match verdict {
+                            PatchVerdict::DidNotApply => {
+                                crate::log_error!(
+                                "patch did not apply: title={} before={:?} after={:?} package={} \
+                                 — Sony accepted the package and copied nothing",
+                                tid,
+                                app_ver_before,
+                                after,
+                                pkg_ver
+                            );
+                                (
+                                    Some("did_not_apply".to_string()),
+                                    after,
+                                    false,
+                                    Some(DID_NOT_APPLY_HINT.to_string()),
+                                )
+                            }
+                            PatchVerdict::Applied => {
+                                crate::log_info!(
+                                    "patch applied: title={} {:?} -> {:?}",
+                                    tid,
+                                    app_ver_before,
+                                    after
+                                );
+                                (Some("applied".to_string()), after, true, err_message)
+                            }
+                            PatchVerdict::Regressed => {
+                                crate::log_error!(
+                                    "update was REMOVED by re-applying it: title={} {:?} -> {:?} \
+                                     — the console reverted to the base version",
+                                    tid,
+                                    app_ver_before,
+                                    after
+                                );
+                                (
+                                    Some("regressed".to_string()),
+                                    after,
+                                    false,
+                                    Some(REGRESSED_HINT.to_string()),
+                                )
+                            }
+                            PatchVerdict::Inconclusive => {
+                                (Some("inconclusive".to_string()), after, true, err_message)
+                            }
+                        }
+                    }
+                    _ => (None, None, ok, err_message),
+                };
             json_ok(&DpiInstallResponse {
                 ok,
                 rc,
@@ -2771,6 +2976,9 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
                 err_message,
                 requests_served: 0,
                 bytes_served: 0,
+                patch_verdict,
+                app_ver_before,
+                app_ver_after,
             })
         }
         Ok(Err(e)) => json_err(
@@ -2927,6 +3135,11 @@ async fn dpi_direct_install_handler(
                 err_message,
                 requests_served,
                 bytes_served,
+                // Stream installs go through the session/status flow, which
+                // does its own verification; nothing to report from here.
+                patch_verdict: None,
+                app_ver_before: None,
+                app_ver_after: None,
             })
         }
         Ok(Err(e)) => json_err(

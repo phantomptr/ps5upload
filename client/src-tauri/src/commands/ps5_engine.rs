@@ -2680,11 +2680,18 @@ pub async fn pkg_install_start(
 pub async fn pkg_dpi_install(
     ps5_addr: String,
     local_ps5_path: String,
+    // Identity of the staged package. The engine cannot parse a file that
+    // lives on the console, so it needs these to verify afterwards that an
+    // update actually took effect. Optional: absent skips the check.
+    title_id: Option<String>,
+    package_app_ver: Option<String>,
 ) -> Result<JsonValue, String> {
     let url = format!("{}/api/pkg/dpi-install", engine::url());
     let body = serde_json::json!({
         "ps5_addr": ps5_addr,
         "local_ps5_path": local_ps5_path,
+        "title_id": title_id,
+        "package_app_ver": package_app_ver,
     });
     post_json_long(&url, &body).await
 }

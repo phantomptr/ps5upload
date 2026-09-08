@@ -2713,6 +2713,10 @@ helper_mismatch_go: "Muat ulang helper",
 "joberr.size_mismatch": "Transfer belum selesai sebelum terputus — sebuah berkas di PS5 tidak lengkap sehingga tidak diterbitkan (salinan lama Anda, jika ada, tetap utuh). Biasanya ini berarti PS5 masuk mode istirahat atau kehilangan daya di tengah unggahan. Jaga konsol tetap menyala (Pengaturan → Sistem → Penghematan Daya → Waktu Sampai PS5 Mati), lalu jalankan lagi item ini: «Lanjutkan» hanya mengirim ulang berkas yang hilang, «Timpa» membuat salinan bersih.",
 "joberr.tx_table_full": "Terlalu banyak transfer berjalan bersamaan di PS5. Tunggu beberapa selesai atau mulai ulang payload.",
 "bug_report_browser_note": "Zip diunduh melalui peramban Anda. Isinya log terbaru mesin, bukan berkas lengkap di host mesin — untuk itu, gunakan «docker logs» pada kontainer.",
+"pkg.patch_did_not_apply": "PS5 menerima pembaruan ini lalu tidak melakukan apa pun dengannya — gim masih di versi sebelumnya. Artinya konsol tidak dapat mencocokkan pembaruan dengan gim dasar yang terpasang. Pasang ulang gim dasar melalui ps5upload dari paket dasar yang sesuai dengan pembaruan ini (pilih «Timpa»), lalu terapkan lagi.",
+"pkglib.updateBaseUnknown.title": "Pembaruan ini mungkin tidak diterapkan",
+"pkglib.updateBaseUnknown.installAnyway": "Tetap pasang",
+"pkglib.updateBaseUnknown.body": "{id} sudah terpasang, tetapi bukan dari paket dasar yang dipasang ps5upload — jadi PS5 mungkin tidak bisa mencocokkan pembaruan ini dengannya. Bila itu terjadi, konsol melaporkan berhasil dan tidak mengubah apa pun. Jika setelahnya gim masih di versi lama, pasang paket dasar yang sesuai lewat ps5upload (pilih «Timpa»), lalu terapkan pembaruan ini lagi.",
 };
 
 export default id;

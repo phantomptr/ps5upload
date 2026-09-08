@@ -3098,6 +3098,10 @@ helper_mismatch_go: "Reload helper",
 "joberr.size_mismatch": "The transfer didn't finish before being interrupted — a file on the PS5 is incomplete, so it wasn't published (your old copy, if any, is untouched). This usually means the PS5 went into rest mode or lost power mid-upload. Keep the console awake (Settings → System → Power Saving → Set Time Until PS5 Turns Off), then re-run this item — Resume now re-sends only the missing files, or choose Override for a clean copy.",
 "joberr.tx_table_full": "Too many simultaneous transfers in flight on the PS5. Wait for some to finish or restart the payload.",
 "bug_report_browser_note": "The zip downloads through your browser. It carries the engine's recent log rather than the full file on the engine host — for that, use docker logs on the container.",
+"pkg.patch_did_not_apply": "The PS5 accepted this update and then did nothing with it — the game is still on its previous version. This means the console could not match the update to the base game you have installed. Re-install the base game through ps5upload from the base package that goes with this update (choose Override), then apply the update again.",
+"pkglib.updateBaseUnknown.title": "This update might not apply",
+"pkglib.updateBaseUnknown.installAnyway": "Install anyway",
+"pkglib.updateBaseUnknown.body": "{id} is installed, but not from a base package ps5upload installed — so the PS5 may not be able to match this update to it. When that happens the console reports success and silently changes nothing. If the game stays on its old version afterwards, install the matching base package through ps5upload (choose Override), then apply this update again.",
 };
 
 export default en;

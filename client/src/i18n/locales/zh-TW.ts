@@ -2652,6 +2652,10 @@ helper_mismatch_go: "重新載入小幫手",
 "joberr.size_mismatch": "傳輸在完成前被中斷——PS5 上的某個檔案不完整，因此未被發布（若原本有舊副本，它維持不變）。這通常表示上傳過程中 PS5 進入休息模式或斷電。請讓主機保持喚醒（設定 → 系統 → 省電 → PS5 關閉前的時間），然後重新執行此項目：「續傳」只會重送缺少的檔案，「覆寫」則會重新完整複製一份。",
 "joberr.tx_table_full": "PS5 上同時進行的傳輸過多。請等待部分傳輸完成，或重新啟動 payload。",
 "bug_report_browser_note": "壓縮檔會透過瀏覽器下載。其中包含引擎最近的日誌，而不是引擎主機上的完整日誌檔案——如需完整日誌，請對容器使用 docker logs。",
+"pkg.patch_did_not_apply": "PS5 接受了這個更新，然後什麼也沒做——遊戲仍是先前的版本。這表示主機無法將該更新與你已安裝的本體遊戲對應起來。請用 ps5upload 從與此更新搭配的本體安裝檔重新安裝本體遊戲（選擇「覆寫」），然後再次套用此更新。",
+"pkglib.updateBaseUnknown.title": "此更新可能不會生效",
+"pkglib.updateBaseUnknown.installAnyway": "仍然安裝",
+"pkglib.updateBaseUnknown.body": "{id} 已安裝，但並非來自 ps5upload 安裝的本體安裝檔——因此 PS5 可能無法將此更新與之對應。發生這種情況時，主機會回報成功卻什麼都不改。若之後遊戲仍是舊版本，請用 ps5upload 安裝搭配的本體安裝檔（選擇「覆寫」），然後再次套用此更新。",
 };
 
 export default zh_TW;
