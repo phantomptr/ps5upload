@@ -15,7 +15,14 @@
 # (folded into scripts/). The 1.x C payload was already gone pre-rename.
 
 JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 4)
-NPM_INSTALL ?= npm install --no-audit --no-fund
+# `npm ci` — NOT `npm install`. The lockfile carries `libc` fields that select
+# musl vs glibc native binaries for the Alpine-based web UI image
+# (engine/Dockerfile.webui, node:26-alpine). npm 11 writes them; npm 10 does
+# not know the field and DELETES it on every `npm install`. Since this target
+# runs on every build, an older npm silently stripped that metadata and it had
+# to be hand-reverted before each release. `npm ci` installs strictly FROM the
+# lockfile and never rewrites it, which is also what CI does.
+NPM_INSTALL ?= npm ci --no-audit --no-fund
 CARGO ?= cargo
 
 PS5_HOST ?= 192.168.137.2
@@ -648,6 +655,10 @@ test-root:
 	@node --check bench/run-ftx2-upload.mjs
 	@node --check bench/check-ftx2-baseline.mjs
 	@node --check scripts/gen-fixtures.mjs
+	@node --check scripts/check-lockfile.mjs
+	@node scripts/check-lockfile.mjs --self-test
+	@echo "Checking the client lockfile kept its libc metadata..."
+	@node scripts/check-lockfile.mjs
 	@echo "✓ Root scripts valid"
 
 test-engine: setup-engine
