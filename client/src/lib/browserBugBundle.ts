@@ -60,7 +60,8 @@ app data.
                        diagnostic bundle, engine state (transfer jobs and live
                        install sessions), and a snapshot of the connected PS5
                        — including per-volume free space with the safety
-                       reserve, and the installed title list.
+                       reserve, the installed title list, and which service
+                       ports (loader :9021, DPI :9040, ours) were answering.
   logs/app.jsonl       The web UI's log for the selected time window.
   logs/engine.log      The engine's recent log ring (see note below).
   ps5/klog.txt         PS5 /dev/klog tail (kernel log).

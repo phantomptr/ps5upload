@@ -2661,6 +2661,10 @@ helper_mismatch_go: "重新加载助手",
 "pkglib.updateBaseUnknown.title": "此更新可能不会生效",
 "pkglib.updateBaseUnknown.installAnyway": "仍然安装",
 "pkglib.updateBaseUnknown.body": "{id} 已安装，但并非来自 ps5upload 安装的本体安装包——因此 PS5 可能无法将此更新与之对应。出现这种情况时，主机会报告成功却什么都不改。如果之后游戏仍是旧版本，请用 ps5upload 安装配套的本体安装包（选择「覆盖」），然后再次应用此更新。",
+"pkg.patch_loader_unreachable": "这个更新无法安装：ps5upload 无法连接到 PS5 上 9021 端口的 payload 加载器，所需的安装器从未送达，主机也从未看到这个更新。你的本体游戏没有受到影响。请在 PS5 上重新运行加载器（就是你平时用来发送 ps5upload 的那个越狱页面或自制加载器），然后再试一次。更新已经在你的 PS5 上，无需重新上传——直接在包列表里再安装一次即可。你也可以直接在 PS5 上安装该更新：Settings → System → Debug Settings → Game → Package Installer。",
+"pkg.patch_daemon_unavailable": "这个更新无法安装：本次构建里没有可发送的 PS5 更新安装器，主机从未看到这个更新。你的本体游戏没有受到影响。请使用发布版 engine 构建（或 ps5upload-engine 的 Docker 镜像）——缺少 PS5 payload SDK 的源码构建不含安装器镜像。更新已经在你的 PS5 上，无需重新上传——直接在包列表里再安装一次即可。你也可以直接在 PS5 上安装该更新：Settings → System → Debug Settings → Game → Package Installer。",
+"pkg.patch_daemon_no_bringup": "这个更新无法安装：PS5 的更新安装器始终没有启动——发送之后 9040 端口没有任何响应——主机也从未看到这个更新。你的本体游戏没有受到影响。请重启 PS5，重新运行加载器，然后再试一次。更新已经在你的 PS5 上，无需重新上传——直接在包列表里再安装一次即可。你也可以直接在 PS5 上安装该更新：Settings → System → Debug Settings → Game → Package Installer。",
+"pkg.patch_regressed": "重新安装这个更新反而把它移除了——游戏退回到了本体版本。PS5 的安装器会把重复安装的更新当作要撤销的更新。再安装一次即可回到更新后的版本；请避免重复安装游戏已有的更新。",
 };
 
 export default zh_CN;

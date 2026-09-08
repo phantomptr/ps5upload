@@ -1,7 +1,7 @@
 import { invoke } from "./invokeLogged";
 
 import { useConnectionStore } from "../state/connection";
-import { mgmtAddr, transferAddr } from "./addr";
+import { hostOf, mgmtAddr, transferAddr } from "./addr";
 import { redactHost } from "./diagnosticBundle";
 import {
   fetchHwInfo,
@@ -18,6 +18,7 @@ import {
   fsListDir,
   smpStatus,
   smpCheckoutStatus,
+  portProbe,
   type SmpStatus,
   type SmpCheckout,
   type HwInfo,
@@ -93,10 +94,42 @@ export interface Ps5Snapshot {
   /** Names of the payload's on-PS5 black-box files we pulled (the file bodies
    *  ride alongside in `Ps5SnapshotResult.payload_logs`, not in this JSON). */
   payload_log_files: string[];
+  /** Which of the PS5's service ports are accepting connections, and why a
+   *  probe failed when one isn't.
+   *
+   *  Added after a report where an update install failed with "ps5upload
+   *  couldn't start the PS5's update installer": the cause was that the
+   *  console's ELF loader had stopped answering on :9021, so the installer
+   *  image could not be delivered. Nothing in the bundle said that — it had
+   *  to be inferred from one line of an app log. The loader port is the
+   *  single dependency the whole install fallback rests on, and it isn't
+   *  ours, so a bundle should always state whether it was up. */
+  ports: PortState[] | null;
   /** Per-probe failures, keyed by probe name, so a maintainer can see what
    *  couldn't be collected and why. */
   errors: Record<string, string>;
 }
+
+/** One probed PS5 service port. */
+export interface PortState {
+  port: number;
+  /** What listens there, so the reader doesn't need the port table. */
+  role: string;
+  open: boolean;
+  /** Why the probe failed, when it did. */
+  error: string | null;
+}
+
+/** The ports a diagnosis actually turns on, with who owns each. `loader` is
+ *  the console's own jailbreak loader — not ours — which is exactly why its
+ *  state has to be recorded rather than assumed. */
+const PROBED_PORTS: { port: number; role: string }[] = [
+  { port: 9021, role: "ELF loader (console's, not ps5upload's)" },
+  { port: 9040, role: "DPI install daemon" },
+  { port: 9113, role: "ps5upload transfer" },
+  { port: 9114, role: "ps5upload management" },
+  { port: 2121, role: "ps5upload FTP" },
+];
 
 /** One on-PS5 diagnostic file fetched for the bundle. */
 export interface PayloadLogFile {
@@ -236,6 +269,7 @@ export async function buildPs5Snapshot(opts: {
     volumes: null,
     installed_apps: null,
     installed_apps_total: null,
+    ports: null,
     smp_status: null,
     smp_checkout: null,
     focus: null,
@@ -274,6 +308,7 @@ export async function buildPs5Snapshot(opts: {
     nets,
     volumes,
     installedApps,
+    ports,
     smp,
     checkout,
     focus,
@@ -292,6 +327,17 @@ export async function buildPs5Snapshot(opts: {
       probe("net_interfaces", () => netInterfacesGet(maddr)),
       probe("volumes", () => listVolumes(taddr)),
       probe("installed_apps", () => appsInstalled(taddr)),
+      // Deliberately a plain TCP connect per port and nothing more: an ELF
+      // loader that is handed a connection and no bytes can try to execute an
+      // empty image, so we must never write to :9021 here.
+      probe("ports", () =>
+        Promise.all(
+          PROBED_PORTS.map(async ({ port, role }) => {
+            const r = await portProbe(hostOf(host), port);
+            return { port, role, open: r.open, error: r.error };
+          }),
+        ),
+      ),
       probe("smp_status", () => smpStatus(taddr)),
       probe("smp_checkout", () => smpCheckoutStatus(taddr)),
       // Newer helpers only; an older payload rejects the frame and this
@@ -329,6 +375,7 @@ export async function buildPs5Snapshot(opts: {
       .slice(0, INSTALLED_APP_CAP)
       .map((t) => ({ title_id: t.titleId, title_name: t.titleName }));
   }
+  base.ports = ports;
   base.smp_status = smp;
   base.smp_checkout = checkout;
   base.focus = focus;

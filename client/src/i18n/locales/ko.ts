@@ -2746,6 +2746,10 @@ helper_mismatch_go: "헬퍼 다시 불러오기",
 "pkglib.updateBaseUnknown.title": "이 업데이트가 적용되지 않을 수 있습니다",
 "pkglib.updateBaseUnknown.installAnyway": "그래도 설치",
 "pkglib.updateBaseUnknown.body": "{id}은(는) 설치되어 있지만 ps5upload가 설치한 본편 패키지에서 온 것이 아닙니다. 그래서 PS5가 이 업데이트를 연결하지 못할 수 있습니다. 그럴 경우 콘솔은 성공했다고 알리면서 아무것도 바꾸지 않습니다. 이후에도 게임이 이전 버전이라면, 맞는 본편 패키지를 ps5upload로 설치한 뒤('덮어쓰기' 선택) 업데이트를 다시 적용하세요.",
+"pkg.patch_loader_unreachable": "이 업데이트를 적용하지 못했습니다. ps5upload가 PS5의 페이로드 로더(포트 9021)에 연결하지 못해 필요한 설치 프로그램이 전혀 전달되지 않았고, 본체는 업데이트를 보지도 못했습니다. 본편 게임은 그대로입니다. PS5에서 로더를 다시 실행한 뒤 — ps5upload를 보낼 때 쓰는 것과 같은 탈옥 페이지나 홈브류 로더입니다 — 다시 시도해 주세요. 업데이트는 이미 PS5에 있으므로 다시 업로드할 필요가 없습니다 — 패키지 목록에서 설치를 다시 시도하세요. 업데이트는 PS5 본체에서 직접 적용할 수도 있습니다: Settings → System → Debug Settings → Game → Package Installer.",
+"pkg.patch_daemon_unavailable": "이 업데이트를 적용하지 못했습니다. 이 빌드에는 보낼 PS5 업데이트 설치 프로그램이 들어 있지 않아 본체가 업데이트를 보지도 못했습니다. 본편 게임은 그대로입니다. 배포된 engine 빌드(또는 ps5upload-engine 도커 이미지)를 사용하세요 — PS5 페이로드 SDK 없이 소스에서 빌드하면 설치 프로그램 이미지가 포함되지 않습니다. 업데이트는 이미 PS5에 있으므로 다시 업로드할 필요가 없습니다 — 패키지 목록에서 설치를 다시 시도하세요. 업데이트는 PS5 본체에서 직접 적용할 수도 있습니다: Settings → System → Debug Settings → Game → Package Installer.",
+"pkg.patch_daemon_no_bringup": "이 업데이트를 적용하지 못했습니다. PS5의 업데이트 설치 프로그램이 시작되지 않아(전송 후에도 포트 9040에서 아무 응답이 없었습니다) 본체가 업데이트를 보지도 못했습니다. 본편 게임은 그대로입니다. PS5를 재시작하고 로더를 다시 실행한 뒤 다시 시도해 주세요. 업데이트는 이미 PS5에 있으므로 다시 업로드할 필요가 없습니다 — 패키지 목록에서 설치를 다시 시도하세요. 업데이트는 PS5 본체에서 직접 적용할 수도 있습니다: Settings → System → Debug Settings → Game → Package Installer.",
+"pkg.patch_regressed": "이 업데이트를 다시 적용하자 오히려 제거되었습니다 — 게임이 본편 버전으로 되돌아갔습니다. PS5의 설치 프로그램은 다시 적용된 업데이트를 되돌릴 대상으로 취급합니다. 업데이트된 버전으로 돌아가려면 업데이트를 한 번 더 적용하고, 게임에 이미 적용된 업데이트는 다시 설치하지 마세요.",
 };
 
 export default ko;

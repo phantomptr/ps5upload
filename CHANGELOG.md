@@ -4,6 +4,62 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.17.7
+
+**One report, four fixes: updates that couldn't reach the console, an error
+that blamed the wrong thing, and a 6 GB re-upload nobody asked for.**
+
+- **A failed install no longer restarts the upload on its own.** When an update
+  failed to install, the app treated it like a dropped connection and re-ran the
+  whole queue item — which for a package means uploading it again from scratch.
+  One user watched a 5.93 GiB update start over six seconds after the error,
+  with no prompt. The bytes were already on the console; re-sending them could
+  never have changed the outcome. Anything that fails *after* the upload has
+  committed — the install, or a mount — is now final, and the package stays on
+  the PS5 for a retry.
+
+- **The update installer is now started early, while the console is known to be
+  reachable.** ps5upload applies updates through a small installer it hands to
+  the console's own payload loader. That loader belongs to your jailbreak, not
+  to us, and it can stop answering partway through a session — which is exactly
+  what happened to the person who reported this: it accepted ps5upload's helper
+  and then refused everything four minutes later, so the installer could never
+  be delivered and the update failed. ps5upload now starts that installer as
+  soon as it has talked to the console, rather than an hour later when an
+  upload has already finished. Once started it stays running, so the loader is
+  never needed again.
+
+  Verified on two consoles: the installer comes up in about half a second,
+  leaves the helper running beside it, and a later install uses it without
+  touching the loader at all.
+
+- **The self-hosted web UI can now redeploy the helper.** Its check for "is the
+  console running the right helper" asked the desktop shell for the app
+  version — a call that does not exist in a browser and threw, so the whole
+  check quietly did nothing there. That is also why the web UI could never
+  restore a helper it had just found stale or offline.
+
+- **"ps5upload couldn't start the PS5's update installer" told most people the
+  wrong thing.** That message blamed a self-hosted engine built without the PS5
+  payload SDK. That is one of three unrelated causes, and it was the *least*
+  likely: the common one is that the console's own ELF loader has stopped
+  answering on port 9021, so the installer can't be delivered at all. The
+  message now names which of the three actually happened, and what to do about
+  it — and all three now say the package is already on the PS5, so nothing needs
+  uploading again. In every language the app speaks.
+
+- **The web UI stopped logging a warning on every upload.** It asked the
+  desktop shell to keep the machine awake — a call that doesn't exist in a
+  browser. Nothing was broken, but each attempt left a scary-looking failure in
+  the log and in any bug report captured during a transfer.
+
+- **Bug reports now record which PS5 ports were answering.** The loader port is
+  the one dependency the whole update-install fallback rests on, and it isn't
+  ours. A report where it was down took a log grep to spot; now it's in the
+  snapshot alongside free space and the installed titles.
+
+---
+
 ## 5.17.6
 
 **A build fix, and one that quietly protected the Docker image.**
