@@ -2712,6 +2712,7 @@ helper_mismatch_go: "Muat ulang helper",
 "joberr.preflight_insufficient_space": "Drive tujuan tidak punya cukup ruang kosong untuk berkas ini. Kosongkan ruang di PS5 (Pengaturan → Penyimpanan) atau pilih tujuan lain, lalu klik «Coba lagi».",
 "joberr.size_mismatch": "Transfer belum selesai sebelum terputus — sebuah berkas di PS5 tidak lengkap sehingga tidak diterbitkan (salinan lama Anda, jika ada, tetap utuh). Biasanya ini berarti PS5 masuk mode istirahat atau kehilangan daya di tengah unggahan. Jaga konsol tetap menyala (Pengaturan → Sistem → Penghematan Daya → Waktu Sampai PS5 Mati), lalu jalankan lagi item ini: «Lanjutkan» hanya mengirim ulang berkas yang hilang, «Timpa» membuat salinan bersih.",
 "joberr.tx_table_full": "Terlalu banyak transfer berjalan bersamaan di PS5. Tunggu beberapa selesai atau mulai ulang payload.",
+"bug_report_browser_note": "Zip diunduh melalui peramban Anda. Isinya log terbaru mesin, bukan berkas lengkap di host mesin — untuk itu, gunakan «docker logs» pada kontainer.",
 };
 
 export default id;

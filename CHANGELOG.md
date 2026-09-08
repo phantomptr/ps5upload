@@ -4,6 +4,29 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.17.4
+
+**You can file a bug report from the self-hosted web UI.**
+
+- **The web UI could not produce a bug report at all.** It showed the whole
+  form — description, options, screenshot list — and then, where the button
+  should have been, a line of grey text saying a bug report needed the desktop
+  app. So you filled everything in and only then found out you could not send
+  it. One reporter put it plainly: "Could not capture a bug report on the
+  webui." The button is now there and it works: the engine builds the zip and
+  your browser downloads it.
+
+- **Screenshots can be attached in the browser too**, using the normal file
+  picker.
+
+- **The bundle tells you what it is.** A report built in a browser cannot
+  contain quite the same things as one built by the desktop app, so the README
+  inside the zip now says which parts differ and where to get the rest — for a
+  Docker setup, the engine's full log is `docker logs` on the container.
+  Nobody should have to guess whether a missing file is a clue.
+
+---
+
 ## 5.17.3
 
 **A repeat upload no longer deletes the file it already delivered — and failure messages now speak your language.**

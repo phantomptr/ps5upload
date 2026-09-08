@@ -2738,6 +2738,7 @@ helper_mismatch_go: "Recarregar auxiliar",
 "joberr.preflight_insufficient_space": "A unidade de destino não tem espaço livre suficiente para este arquivo. Libere espaço no PS5 (Configurações → Armazenamento) ou escolha outro destino e clique em «Tentar novamente».",
 "joberr.size_mismatch": "A transferência não terminou antes de ser interrompida — um arquivo no PS5 está incompleto e por isso não foi publicado (sua cópia antiga, se houver, permanece intacta). Normalmente isso significa que o PS5 entrou em repouso ou perdeu energia durante o envio. Mantenha o console acordado (Configurações → Sistema → Economia de energia → Tempo até o PS5 desligar) e execute este item de novo: «Retomar» reenvia apenas os arquivos que faltam, «Substituir» faz uma cópia limpa.",
 "joberr.tx_table_full": "Há transferências simultâneas demais em andamento no PS5. Espere algumas terminarem ou reinicie o payload.",
+"bug_report_browser_note": "O zip é baixado pelo seu navegador. Ele traz o log recente do motor, não o arquivo completo no host do motor — para isso, use «docker logs» no contêiner.",
 };
 
 export default pt_BR;

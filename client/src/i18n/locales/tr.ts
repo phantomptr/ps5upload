@@ -2710,6 +2710,7 @@ helper_mismatch_go: "Yardımcıyı yükle",
 "joberr.preflight_insufficient_space": "Hedef sürücüde bu dosya için yeterli boş alan yok. PS5'te yer açın (Ayarlar → Depolama) ya da başka bir hedef seçin, sonra «Yeniden dene»ye tıklayın.",
 "joberr.size_mismatch": "Aktarım kesintiye uğramadan önce tamamlanamadı — PS5'teki bir dosya eksik olduğu için yayımlanmadı (varsa eski kopyanıza dokunulmadı). Bu genellikle yükleme sırasında PS5'in dinlenme moduna geçtiği ya da elektriğinin kesildiği anlamına gelir. Konsolu uyanık tutun (Ayarlar → Sistem → Güç Tasarrufu → PS5'in Kapanmasına Kalan Süre) ve bu öğeyi yeniden çalıştırın: «Sürdür» yalnızca eksik dosyaları yeniden gönderir, «Üzerine yaz» ise temiz bir kopya oluşturur.",
 "joberr.tx_table_full": "PS5'te aynı anda çok fazla aktarım sürüyor. Bir kısmının bitmesini bekleyin ya da payload'ı yeniden başlatın.",
+"bug_report_browser_note": "Zip dosyası tarayıcınız üzerinden indirilir. Motor ana makinesindeki tam dosya yerine motorun son günlüğünü içerir — tamamı için kapsayıcıda «docker logs» kullanın.",
 };
 
 export default tr;
