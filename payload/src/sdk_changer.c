@@ -2,6 +2,7 @@
 
 #include "sdk_param.h"
 #include "elf_param.h"
+#include "sdk_pairs.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -204,11 +205,20 @@ static int patch_binary_sdk(const char *path, uint32_t target_sdk) {
                                      (int)(sizeof(sites) / sizeof(sites[0])),
                                      &status);
 
+    /* A title declares BOTH an SDK pair member per param struct, so a site
+     * needs rewriting when EITHER field disagrees. Checking only the
+     * preferred field is how a half-patched executable — PPR downgraded,
+     * PS4 left at 12.09 — got reported as fully patched. */
+    sdk_pair_t pair;
+    int have_pair = sdk_pair_lookup(target_sdk, &pair);
     int patched = 0;
     for (int i = 0; i < found; i++) {
-        if (elf_rd32(data + sites[i].offset) != target_sdk) {
-            sites[patched++] = sites[i];
-        }
+        size_t base = sites[i].param_offset;
+        int stale = have_pair
+                        ? (elf_rd32(data + base + SCE_PARAM_PS5_SDK_OFFSET) != pair.ps5 ||
+                           elf_rd32(data + base + SCE_PARAM_PS4_SDK_OFFSET) != pair.ps4)
+                        : (elf_rd32(data + sites[i].offset) != target_sdk);
+        if (stale) sites[patched++] = sites[i];
     }
 
     munmap(map, len);
@@ -226,13 +236,41 @@ static int patch_binary_sdk(const char *path, uint32_t target_sdk) {
         return -1;
     }
 
-    unsigned char value[4] = {
-        (unsigned char)(target_sdk & 0xffu),
-        (unsigned char)((target_sdk >> 8) & 0xffu),
-        (unsigned char)((target_sdk >> 16) & 0xffu),
-        (unsigned char)((target_sdk >> 24) & 0xffu),
-    };
     for (int i = 0; i < patched; i++) {
+        if (have_pair) {
+            /* Both halves, always. The kernel prints them together
+             * (`SDK vesion: PS4:09040001 PPR:04000031`) and a title whose
+             * halves disagree launches and then dies. */
+            unsigned char ps5v[4] = {
+                (unsigned char)(pair.ps5 & 0xffu),
+                (unsigned char)((pair.ps5 >> 8) & 0xffu),
+                (unsigned char)((pair.ps5 >> 16) & 0xffu),
+                (unsigned char)((pair.ps5 >> 24) & 0xffu),
+            };
+            unsigned char ps4v[4] = {
+                (unsigned char)(pair.ps4 & 0xffu),
+                (unsigned char)((pair.ps4 >> 8) & 0xffu),
+                (unsigned char)((pair.ps4 >> 16) & 0xffu),
+                (unsigned char)((pair.ps4 >> 24) & 0xffu),
+            };
+            size_t base = sites[i].param_offset;
+            if (fd_pwrite_all(fd, ps5v, sizeof(ps5v),
+                              (off_t)(base + SCE_PARAM_PS5_SDK_OFFSET)) != 0 ||
+                fd_pwrite_all(fd, ps4v, sizeof(ps4v),
+                              (off_t)(base + SCE_PARAM_PS4_SDK_OFFSET)) != 0) {
+                close(fd);
+                return -1;
+            }
+            continue;
+        }
+        /* No known pair for this request: write only the field this
+         * segment declares, exactly as before. */
+        unsigned char value[4] = {
+            (unsigned char)(target_sdk & 0xffu),
+            (unsigned char)((target_sdk >> 8) & 0xffu),
+            (unsigned char)((target_sdk >> 16) & 0xffu),
+            (unsigned char)((target_sdk >> 24) & 0xffu),
+        };
         if (fd_pwrite_all(fd, value, sizeof(value),
                           (off_t)sites[i].offset) != 0) {
             close(fd);
@@ -317,6 +355,15 @@ static void walk_and_patch(const char *dir_path, uint32_t target_sdk,
         if (lstat(full, &st) != 0) continue;
 
         if (S_ISDIR(st.st_mode)) {
+            /* Never rewrite `fakelib/`. Those are replacement SYSTEM
+             * libraries a backport supplies, and they are meant to keep
+             * the SDK version of the firmware they came from — every
+             * working backported title on the test console carries them
+             * at 0x09040001 while its own eboot sits at 0x04000031.
+             * Rewriting them to the title's target made a game that
+             * already failed fail differently, and would silently damage
+             * a working one. */
+            if (strcmp(de->d_name, "fakelib") == 0) continue;
             walk_and_patch(full, target_sdk, patched_count, signed_count,
                            error_count);
             continue;

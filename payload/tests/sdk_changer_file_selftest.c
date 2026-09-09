@@ -190,6 +190,19 @@ int main(void) {
     memcpy(asset, "ordinary game data", 18);
     CHECK(write_bytes(asset_path, asset, sizeof(asset)) == 0);
 
+    /* A backport's replacement system libraries. These must be left ALONE:
+     * they carry the SDK version of the firmware they were taken from, and
+     * every working backported title on the test console keeps them at
+     * 0x09040001 while its own eboot is patched down to 0x04000031.
+     * Rewriting them corrupts a working backport. */
+    char fakelib_dir[2048], fakelib_path[2048];
+    snprintf(fakelib_dir, sizeof(fakelib_dir), "%s/fakelib", game);
+    CHECK(mkdir_tree(fakelib_dir) == 0);
+    snprintf(fakelib_path, sizeof(fakelib_path), "%s/libSceAgc.sprx", fakelib_dir);
+    unsigned char fakelib[0x240];
+    make_patchable_elf(fakelib, sizeof(fakelib), 0x09040001u);
+    CHECK(write_bytes(fakelib_path, fakelib, sizeof(fakelib)) == 0);
+
     char scan[8192];
     size_t scan_len = 0;
     CHECK(sdk_changer_scan(scan, sizeof(scan), &scan_len) == 0);
@@ -200,18 +213,28 @@ int main(void) {
     CHECK(pkg_obj && strstr(pkg_obj, "\"patchable\":false"));
 
     char detail[512] = {0};
-    CHECK(sdk_changer_patch(pkg_title_id, "0x05050000", detail,
+    CHECK(sdk_changer_patch(pkg_title_id, "0x04000031", detail,
                             sizeof(detail)) != 0);
     char pkg_bak[2048];
     snprintf(pkg_bak, sizeof(pkg_bak), "%s.bak", pkg_meta_param);
     CHECK(!exists(pkg_bak));
 
     memset(detail, 0, sizeof(detail));
-    CHECK(sdk_changer_patch(title_id, "0x05050000", detail,
+    CHECK(sdk_changer_patch(title_id, "0x04000031", detail,
                             sizeof(detail)) == 0);
     CHECK(strstr(detail, "ELF sites: 1") != NULL);
     CHECK(read_u32_at(elf_path, 0x200 + SCE_PARAM_PS5_SDK_OFFSET) ==
-          0x05050000u);
+          0x04000031u);
+    /* Untouched, and no backup taken for it either. */
+    CHECK(read_u32_at(fakelib_path, 0x200 + SCE_PARAM_PS5_SDK_OFFSET) ==
+          0x09040001u);
+    /* Both halves of the pair are written, not just the one this segment
+     * type prefers — a half-patched executable launches and then dies. */
+    CHECK(read_u32_at(elf_path, 0x200 + SCE_PARAM_PS4_SDK_OFFSET) ==
+          0x09040001u);
+    char fakelib_bak[2048];
+    snprintf(fakelib_bak, sizeof(fakelib_bak), "%s.bak", fakelib_path);
+    CHECK(!exists(fakelib_bak));
 
     char source_bak[2048], meta_bak[2048], elf_bak[2048];
     char signed_bak[2048], asset_bak[2048];
