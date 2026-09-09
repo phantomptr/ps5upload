@@ -2714,6 +2714,8 @@ helper_mismatch_go: "Tải lại trợ giúp",
 "pkg.patch_daemon_unavailable": "Không thể áp dụng bản cập nhật này vì bản dựng này không có trình cài đặt cập nhật PS5 để gửi, nên máy chưa từng thấy bản cập nhật. Game gốc của bạn không bị ảnh hưởng. Hãy dùng bản dựng engine đã phát hành (hoặc image Docker ps5upload-engine) — bản dựng từ mã nguồn mà thiếu PS5 payload SDK sẽ không có image trình cài đặt. Bản cập nhật đã nằm sẵn trên PS5 của bạn nên không cần tải lên lại — hãy thử cài lại từ danh sách gói. Bạn cũng có thể cài bản cập nhật ngay trên PS5: Settings → System → Debug Settings → Game → Package Installer.",
 "pkg.patch_daemon_no_bringup": "Không thể áp dụng bản cập nhật này vì trình cài đặt cập nhật của PS5 chưa từng khởi động — sau khi gửi, không có gì trả lời ở cổng 9040 — nên máy chưa từng thấy bản cập nhật. Game gốc của bạn không bị ảnh hưởng. Hãy khởi động lại PS5, chạy lại trình nạp rồi thử lại. Bản cập nhật đã nằm sẵn trên PS5 của bạn nên không cần tải lên lại — hãy thử cài lại từ danh sách gói. Bạn cũng có thể cài bản cập nhật ngay trên PS5: Settings → System → Debug Settings → Game → Package Installer.",
 "pkg.patch_regressed": "Áp dụng lại bản cập nhật này đã gỡ nó đi — game đã quay về phiên bản gốc. Trình cài đặt của PS5 coi một bản cập nhật được áp dụng lại là bản cần hoàn tác. Hãy áp dụng bản cập nhật thêm một lần nữa để trở lại phiên bản đã cập nhật, và tránh cài lại bản cập nhật mà game đã có.",
+"sdk_patch_libc": "Vá cả libc.prx",
+"sdk_patch_libc_hint": "Một chỉnh sửa tương thích mà một số game backport cần — và khiến số khác không khởi động được. Hãy để tắt trừ khi game không chạy nếu thiếu nó.",
 };
 
 export default vi;

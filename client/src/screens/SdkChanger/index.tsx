@@ -21,7 +21,12 @@ export default function SdkChangerScreen() {
   // A firmware version, not a raw hex word. The field used to take hex
   // and defaulted to 0x09060000 — which is not a real firmware, because
   // versions are BCD (9.60 is 0x09600000). See lib/fwVersion.ts.
-  const [targetFw, setTargetFw] = useState("9.60");
+  // 4.00 is what every shipped backport carries — measured across five
+  // working titles on hardware — and a 4.xx backport runs on every firmware
+  // above it, so it is the safe default rather than the console's own version.
+  const [targetFw, setTargetFw] = useState("4.00");
+  // BestPig's libc.prx swap: helps some titles, breaks others. Off by default.
+  const [patchLibc, setPatchLibc] = useState(false);
   const [patching, setPatching] = useState(false);
   const [patchResult, setPatchResult] = useState<{ ok: boolean; msg: string } | null>(null);
   const [restoreTitleId, setRestoreTitleId] = useState<string | null>(null);
@@ -57,7 +62,7 @@ export default function SdkChangerScreen() {
         });
         return;
       }
-      const resp = await sdkPatch(titleId, hex, addr);
+      const resp = await sdkPatch(titleId, hex, addr, patchLibc);
       if (resp.ok) {
         // The payload reports how many sites it actually rewrote, so the
         // result is verifiable rather than asserted.
@@ -267,6 +272,18 @@ export default function SdkChangerScreen() {
                           </option>
                         ))}
                       </select>
+                      <label className="flex items-center gap-1.5 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={patchLibc}
+                          onChange={(e) => setPatchLibc(e.target.checked)}
+                        />
+                        {tr(
+                          "sdk_patch_libc",
+                          undefined,
+                          "Also patch libc.prx",
+                        )}
+                      </label>
                       <Button
                         variant="primary"
                         size="sm"

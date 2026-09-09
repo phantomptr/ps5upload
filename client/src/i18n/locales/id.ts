@@ -2721,6 +2721,8 @@ helper_mismatch_go: "Muat ulang helper",
 "pkg.patch_daemon_unavailable": "Pembaruan ini tidak bisa diterapkan karena build ini tidak punya pemasang pembaruan PS5 untuk dikirim, jadi konsol tidak pernah melihat pembaruan ini. Game dasarmu tidak tersentuh. Gunakan build engine rilis (atau image Docker ps5upload-engine) — build dari sumber tanpa PS5 payload SDK tidak punya image pemasang. Pembaruan sudah ada di PS5-mu, jadi tidak ada yang perlu diunggah ulang — coba pasang lagi dari daftar paket. Kamu juga bisa memasang pembaruan langsung dari PS5: Settings → System → Debug Settings → Game → Package Installer.",
 "pkg.patch_daemon_no_bringup": "Pembaruan ini tidak bisa diterapkan karena pemasang pembaruan PS5 tidak pernah berjalan — tidak ada yang menjawab di port 9040 setelah dikirim — jadi konsol tidak pernah melihat pembaruan ini. Game dasarmu tidak tersentuh. Nyalakan ulang PS5, jalankan lagi pemuatmu, lalu coba lagi. Pembaruan sudah ada di PS5-mu, jadi tidak ada yang perlu diunggah ulang — coba pasang lagi dari daftar paket. Kamu juga bisa memasang pembaruan langsung dari PS5: Settings → System → Debug Settings → Game → Package Installer.",
 "pkg.patch_regressed": "Menerapkan ulang pembaruan ini justru menghapusnya — game kembali ke versi dasarnya. Pemasang PS5 memperlakukan pembaruan yang diterapkan ulang sebagai pembaruan yang harus dibatalkan. Terapkan pembaruan sekali lagi untuk kembali ke versi terbaru, dan hindari memasang ulang pembaruan yang sudah dimiliki game.",
+"sdk_patch_libc": "Tambal juga libc.prx",
+"sdk_patch_libc_hint": "Penyesuaian kompatibilitas yang dibutuhkan sebagian game backport — dan yang membuat game lain gagal jalan. Biarkan mati kecuali game tidak mau berjalan tanpanya.",
 };
 
 export default id;

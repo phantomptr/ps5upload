@@ -3,6 +3,7 @@
 #include "sdk_param.h"
 #include "elf_param.h"
 #include "sdk_pairs.h"
+#include "libc_backport.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -335,6 +336,52 @@ static int patch_param_json_file(const char *path, uint32_t target_sdk) {
     return changed;
 }
 
+/* Apply BestPig's libc.prx edit, which some titles need before they will
+ * start on a downgraded firmware. Separate from the SDK walk on purpose: it
+ * targets one exact file, it is a same-length symbol swap rather than a
+ * version field, and a libc that does not carry the symbol is the common
+ * case (three of five titles on the test console) and must not read as an
+ * error. Returns the number of occurrences rewritten, 0 for nothing to do,
+ * -1 only when the file exists but could not be backed up or written. */
+static int patch_libc_prx(const char *game_path) {
+    char path[SDK_PATH_MAX];
+    if (snprintf(path, sizeof(path), "%s/sce_module/libc.prx", game_path) < 0)
+        return 0;
+
+    struct stat st;
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) return 0;
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return 0;
+    size_t len = (size_t)st.st_size;
+    void *map = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (map == MAP_FAILED) return 0;
+
+    /* Find the sites first so an already-patched file is never rewritten
+     * (and never gets a fresh backup that would shadow the true original). */
+    unsigned char *copy = (unsigned char *)malloc(len);
+    if (!copy) { munmap(map, len); return 0; }
+    memcpy(copy, map, len);
+    munmap(map, len);
+
+    int n = libc_backport_apply(copy, len);
+    if (n == 0) { free(copy); return 0; }
+
+    if (make_backup(path) != 0) { free(copy); return -1; }
+    fd = open(path, O_WRONLY);
+    if (fd < 0) { free(copy); return -1; }
+    struct stat now;
+    if (fstat(fd, &now) != 0 || (size_t)now.st_size != len) {
+        close(fd); free(copy); return -1;
+    }
+    int rc = fd_write_all(fd, copy, len);
+    if (rc == 0 && fsync(fd) != 0) rc = -1;
+    close(fd);
+    free(copy);
+    return rc == 0 ? n : -1;
+}
+
 static void walk_and_patch(const char *dir_path, uint32_t target_sdk,
                            int *patched_count, int *signed_count,
                            int *error_count) {
@@ -616,7 +663,7 @@ static int patch_appmeta_param(const char *title_id, uint32_t target,
 }
 
 int sdk_changer_patch(const char *title_id, const char *target_sdk,
-                      char *err, size_t err_cap) {
+                      int patch_libc, char *err, size_t err_cap) {
     if (!title_id || !target_sdk) {
         if (err) snprintf(err, err_cap, "missing title_id or target_sdk");
         return -1;
@@ -654,7 +701,11 @@ int sdk_changer_patch(const char *title_id, const char *target_sdk,
     int signed_skipped = 0;
     walk_and_patch(game_path, target, &patched, &signed_skipped, &errors);
 
-    int actual_changed = game_json_changed + patched;
+    /* Opt-in only — see sdk_changer.h. */
+    int libc_sites = patch_libc ? patch_libc_prx(game_path) : 0;
+    if (libc_sites < 0) { errors++; libc_sites = 0; }
+
+    int actual_changed = game_json_changed + patched + libc_sites;
     int appmeta_changed = 0;
     if (actual_changed > 0) {
         /* appmeta is only a display cache. Update it after the real source was
@@ -689,10 +740,11 @@ int sdk_changer_patch(const char *title_id, const char *target_sdk,
 
     if (err) {
         snprintf(err, err_cap,
-                 "source param fields: %d, ELF sites: %d, metadata fields: %d, "
-                 "signed skipped: %d, write errors: %d, path=%s",
-                 game_json_changed, patched, appmeta_changed, signed_skipped,
-                 errors, game_path);
+                 "source param fields: %d, ELF sites: %d, libc sites: %d, "
+                 "metadata fields: %d, signed skipped: %d, write errors: %d, "
+                 "path=%s",
+                 game_json_changed, patched, libc_sites, appmeta_changed,
+                 signed_skipped, errors, game_path);
     }
     return 0;
 }

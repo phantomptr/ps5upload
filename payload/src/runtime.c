@@ -11028,7 +11028,12 @@ static int handle_sdk_patch(runtime_state_t *state, int client_fd,
     }
 
     char err[256] = {0};
-    int rc = sdk_changer_patch(title_id, target_sdk, err, sizeof(err));
+    /* Optional, default off: the libc.prx symbol swap helps some titles and
+     * breaks others, so it is never applied unless the caller asks. */
+    int patch_libc_flag = 0;
+    (void)extract_json_bool_field(body, "patch_libc", &patch_libc_flag);
+    int rc = sdk_changer_patch(title_id, target_sdk, patch_libc_flag, err,
+                               sizeof(err));
     cheat_inc_cmd_count(state);
 
     char title_id_esc[64];

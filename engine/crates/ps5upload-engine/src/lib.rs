@@ -6372,6 +6372,9 @@ struct SdkPatchReq {
     addr: Option<String>,
     title_id: String,
     target_sdk: String,
+    /// Opt-in libc.prx symbol swap — see sdk_changer.rs.
+    #[serde(default)]
+    patch_libc: bool,
 }
 
 async fn sdk_patch_handler(
@@ -6381,8 +6384,9 @@ async fn sdk_patch_handler(
     let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let title_id = req.title_id;
     let target_sdk = req.target_sdk;
+    let patch_libc = req.patch_libc;
     let r = tokio::task::spawn_blocking(move || {
-        ps5upload_core::sdk_changer::sdk_patch(&addr, &title_id, &target_sdk)
+        ps5upload_core::sdk_changer::sdk_patch(&addr, &title_id, &target_sdk, patch_libc)
     })
     .await
     .map_err(anyhow::Error::from)

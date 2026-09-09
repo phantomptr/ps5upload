@@ -4703,9 +4703,19 @@ export async function sdkPatch(
   titleId: string,
   targetSdk: string,
   addr?: string,
+  /** BestPig's libc.prx symbol swap. Off by default and deliberately not
+   *  implicit: it is documented as helping SOME titles, and on hardware
+   *  applying it to a title that did not need it crashed the game after five
+   *  modules where it otherwise loaded seventy and ran. */
+  patchLibc = false,
 ): Promise<SdkPatchResponse> {
   return invoke("sdk_patch", {
-    req: { addr: addr ?? null, title_id: titleId, target_sdk: targetSdk },
+    req: {
+      addr: addr ?? null,
+      title_id: titleId,
+      target_sdk: targetSdk,
+      patch_libc: patchLibc,
+    },
   });
 }
 

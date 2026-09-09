@@ -122,8 +122,12 @@ The standalone Fakelib and SDK Changer screens are removed; this replaces both.
   not half-apply. An SDK downgrade with no libraries produces a title that
   launches and aborts — worse than not starting, because it looks like our bug.
 - Copy fails midway: report which libraries landed; `undo` removes them.
-- Overlay not running: the panel says so before the user launches, since a
-  correct backport with no overlay looks identical to a broken one.
+- Overlay not active: because the overlay lives in our own payload it is live
+  whenever the helper is, so the real cases are (a) the helper is down, which
+  the connection state already reports, and (b) an external BackPork holds the
+  mount, which we must detect and surface rather than silently doing nothing.
+  Both matter because a correct backport with no overlay looks identical to a
+  broken one.
 - Title not patchable (encrypted retail SELF): refuse with the reason.
 
 ## Testing

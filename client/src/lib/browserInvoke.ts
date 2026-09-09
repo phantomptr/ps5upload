@@ -1190,6 +1190,10 @@ export async function browserInvoke<T>(
         addr: args["req"]?.addr,
         title_id: args["req"]?.title_id,
         target_sdk: args["req"]?.target_sdk,
+        // Must be forwarded: dropping it here would silently turn the
+        // opt-in libc patch off for every web-UI user, which is the same
+        // class of bug as the desktop-only calls that no-op in a browser.
+        patch_libc: args["req"]?.patch_libc,
       });
 
     case "sdk_restore":

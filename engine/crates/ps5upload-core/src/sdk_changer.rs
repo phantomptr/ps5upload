@@ -35,6 +35,12 @@ pub struct SdkScanResponse {
 pub struct SdkPatchRequest {
     pub title_id: String,
     pub target_sdk: String,
+    /// BestPig's libc.prx symbol swap. Opt-in: it is documented as helping
+    /// SOME titles, and on hardware applying it to a title that did not need
+    /// it crashed the game after five modules where it otherwise loaded
+    /// seventy. Never send `true` unless the user asked for it.
+    #[serde(default)]
+    pub patch_libc: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,10 +87,16 @@ pub fn sdk_scan(addr: &str) -> Result<SdkScanResponse> {
     Ok(serde_json::from_slice(&resp)?)
 }
 
-pub fn sdk_patch(addr: &str, title_id: &str, target_sdk: &str) -> Result<SdkPatchResponse> {
+pub fn sdk_patch(
+    addr: &str,
+    title_id: &str,
+    target_sdk: &str,
+    patch_libc: bool,
+) -> Result<SdkPatchResponse> {
     let req = SdkPatchRequest {
         title_id: title_id.to_string(),
         target_sdk: target_sdk.to_string(),
+        patch_libc,
     };
     let resp = send_recv(
         addr,

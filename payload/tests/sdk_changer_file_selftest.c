@@ -195,6 +195,19 @@ int main(void) {
      * every working backported title on the test console keeps them at
      * 0x09040001 while its own eboot is patched down to 0x04000031.
      * Rewriting them corrupts a working backport. */
+    /* A libc.prx carrying the symbol BestPig's patch swaps. It must be
+     * rewritten by the same action that downgrades the SDK — a title can
+     * need both, and asking the user to run two tools is how the step gets
+     * missed. */
+    char mod_dir[2048], libc_path[2048];
+    snprintf(mod_dir, sizeof(mod_dir), "%s/sce_module", game);
+    CHECK(mkdir_tree(mod_dir) == 0);
+    snprintf(libc_path, sizeof(libc_path), "%s/libc.prx", mod_dir);
+    unsigned char libc[256];
+    memset(libc, 0x33, sizeof(libc));
+    memcpy(libc + 64, "4h6F1LLbTiw#A#B", 15);
+    CHECK(write_bytes(libc_path, libc, sizeof(libc)) == 0);
+
     char fakelib_dir[2048], fakelib_path[2048];
     snprintf(fakelib_dir, sizeof(fakelib_dir), "%s/fakelib", game);
     CHECK(mkdir_tree(fakelib_dir) == 0);
@@ -213,16 +226,60 @@ int main(void) {
     CHECK(pkg_obj && strstr(pkg_obj, "\"patchable\":false"));
 
     char detail[512] = {0};
-    CHECK(sdk_changer_patch(pkg_title_id, "0x04000031", detail,
+    CHECK(sdk_changer_patch(pkg_title_id, "0x04000031", 1, detail,
                             sizeof(detail)) != 0);
     char pkg_bak[2048];
     snprintf(pkg_bak, sizeof(pkg_bak), "%s.bak", pkg_meta_param);
     CHECK(!exists(pkg_bak));
 
     memset(detail, 0, sizeof(detail));
-    CHECK(sdk_changer_patch(title_id, "0x04000031", detail,
+    CHECK(sdk_changer_patch(title_id, "0x04000031", 1, detail,
                             sizeof(detail)) == 0);
     CHECK(strstr(detail, "ELF sites: 1") != NULL);
+    CHECK(strstr(detail, "libc sites: 1") != NULL);
+    /* And with the flag OFF the libc is left completely alone. Applying it
+     * to a title that does not need it crashed the game after five modules
+     * where it otherwise loaded seventy, so this must never be implicit. */
+    {
+        char detail_off[512] = {0};
+        char libc2[2048], mod2[2048], game2[2048], sce2[2048], app2[2048];
+        snprintf(game2, sizeof(game2), "%s/game2", root);
+        snprintf(sce2, sizeof(sce2), "%s/sce_sys", game2);
+        snprintf(mod2, sizeof(mod2), "%s/sce_module", game2);
+        snprintf(app2, sizeof(app2), "%s/%s", g_test_app_base, "CUSA22222");
+        CHECK(mkdir_tree(sce2) == 0);
+        CHECK(mkdir_tree(mod2) == 0);
+        CHECK(mkdir_tree(app2) == 0);
+        char trk2[2048], par2[2048];
+        snprintf(trk2, sizeof(trk2), "%s/mount.lnk", app2);
+        snprintf(par2, sizeof(par2), "%s/param.json", sce2);
+        CHECK(write_bytes(trk2, game2, strlen(game2)) == 0);
+        const char *p2 = "{\"titleId\":\"CUSA22222\",\"sdkVersion\":\"0x1000000000000000\"}";
+        CHECK(write_bytes(par2, p2, strlen(p2)) == 0);
+        snprintf(libc2, sizeof(libc2), "%s/libc.prx", mod2);
+        unsigned char l2[256];
+        memset(l2, 0x33, sizeof(l2));
+        memcpy(l2 + 64, "4h6F1LLbTiw#A#B", 15);
+        CHECK(write_bytes(libc2, l2, sizeof(l2)) == 0);
+
+        CHECK(sdk_changer_patch("CUSA22222", "0x04000031", 0, detail_off,
+                                sizeof(detail_off)) == 0);
+        CHECK(strstr(detail_off, "libc sites: 0") != NULL);
+        unsigned char back2[256];
+        CHECK(read_bytes(libc2, back2, sizeof(back2), 0) == 0);
+        CHECK(memcmp(back2 + 64, "4h6F1LLbTiw#A#B", 15) == 0);
+        char libc2_bak[2048];
+        snprintf(libc2_bak, sizeof(libc2_bak), "%s.bak", libc2);
+        CHECK(!exists(libc2_bak));
+    }
+    {
+        unsigned char got[256];
+        CHECK(read_bytes(libc_path, got, sizeof(got), 0) == 0);
+        CHECK(memcmp(got + 64, "IWIBBdTHit4#A#B", 15) == 0);
+        /* Same length, so nothing around it moved. */
+        for (size_t i = 0; i < 64; i++) CHECK(got[i] == 0x33);
+        for (size_t i = 64 + 15; i < sizeof(got); i++) CHECK(got[i] == 0x33);
+    }
     CHECK(read_u32_at(elf_path, 0x200 + SCE_PARAM_PS5_SDK_OFFSET) ==
           0x04000031u);
     /* Untouched, and no backup taken for it either. */
@@ -249,15 +306,27 @@ int main(void) {
     CHECK(!exists(signed_bak));
     CHECK(!exists(asset_bak));
 
+    /* libc.prx is backed up too, so restore must put it back with the rest —
+     * a backport that leaves the symbol swapped is not "restored". */
+    char libc_bak[2048];
+    snprintf(libc_bak, sizeof(libc_bak), "%s.bak", libc_path);
+    CHECK(exists(libc_bak));
+
     int restored = 0;
     memset(detail, 0, sizeof(detail));
     CHECK(sdk_changer_restore(title_id, &restored, detail, sizeof(detail)) == 0);
-    CHECK(restored == 3);
+    CHECK(restored == 4);
     CHECK(read_u32_at(elf_path, 0x200 + SCE_PARAM_PS5_SDK_OFFSET) ==
           0x10000000u);
+    {
+        unsigned char back[256];
+        CHECK(read_bytes(libc_path, back, sizeof(back), 0) == 0);
+        CHECK(memcmp(back + 64, "4h6F1LLbTiw#A#B", 15) == 0);
+    }
     CHECK(!exists(source_bak));
     CHECK(!exists(meta_bak));
     CHECK(!exists(elf_bak));
+    CHECK(!exists(libc_bak));
 
     rm_tree(root);
     printf("sdk_changer_file_selftest: %s\n",

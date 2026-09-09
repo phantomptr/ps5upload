@@ -1259,6 +1259,10 @@ pub struct SdkPatchReq {
     pub addr: Option<String>,
     pub title_id: String,
     pub target_sdk: String,
+    /// Opt-in libc.prx symbol swap. Off unless the user asked: it helps some
+    /// titles and breaks others.
+    #[serde(default)]
+    pub patch_libc: bool,
 }
 
 #[tauri::command]

@@ -3106,6 +3106,8 @@ helper_mismatch_go: "Reload helper",
 "pkg.patch_daemon_unavailable": "This update couldn’t be applied because this build has no PS5 update installer to send, so the console never saw the update. Your base game is untouched. Use the released engine build (or the ps5upload-engine Docker image) — a source build without the PS5 payload SDK has no installer image. The update is already on your PS5, so nothing needs uploading again — retry the install from the Packages list. You can also apply the update from the PS5 itself: Settings → System → Debug Settings → Game → Package Installer.",
 "pkg.patch_daemon_no_bringup": "This update couldn’t be applied because the PS5’s update installer never started — nothing answered on port 9040 after it was sent — so the console never saw the update. Your base game is untouched. Restart the PS5, re-run your loader, and try again. The update is already on your PS5, so nothing needs uploading again — retry the install from the Packages list. You can also apply the update from the PS5 itself: Settings → System → Debug Settings → Game → Package Installer.",
 "pkg.patch_regressed": "Re-applying this update removed it — the game has gone back to its base version. The PS5's installer treats a re-applied update as one to undo. Apply the update once more to return to the updated version, and avoid re-installing an update the game already has.",
+"sdk_patch_libc": "Also patch libc.prx",
+"sdk_patch_libc_hint": "A compatibility edit some backported games need — and that stops others from starting. Leave it off unless the game fails to launch without it.",
 };
 
 export default en;
