@@ -499,3 +499,43 @@ Before any measurement, assert the subject reads `backported: true`. The trial
 script aborts otherwise. Then: folder-backed subject (no remount), conditions
 interleaved in randomised order, n>=4 per arm, console kept busy, verdict taken
 from the LAST sample, klog drained every tick.
+
+
+---
+
+## Revision 6, 2026-09-10 — the library set is load-bearing, measured
+
+With the subject verified backported first, the experiment finally measured
+something. Venus Vacation PRISM (PPSA25411), folder-backed on /data:
+
+| arm | libraries | result |
+|---|---|---|
+| control | its own 9 | **RAN 4/4** — 136 threads every time |
+| treatment | Minecraft's 6 | **NO PROCESS 0/4** |
+
+Randomised interleaved order, same title, same SDK pair (asserted before the
+first measurement), no ShadowMount+ remount anywhere, a game launched every
+~90 s so the console never idled toward rest. Permutation test, one-sided
+p = 1/70 ≈ 0.014.
+
+**A mismatched library set stops a backported game from launching.** Installing
+a set WHOLE, never a mixture, is therefore supported by evidence and not only by
+the co-occurrence argument in Revision 1.
+
+Three earlier attempts failed for reasons worth keeping:
+
+  1. one trial per condition, and launching is unreliable enough that a single
+     failure means nothing (Revision 2, refuted in Revision 4);
+  2. unrandomised order on a console drifting into rest, which produced a
+     convincing but spurious "remounts are harmful" effect (Revision 4);
+  3. a subject whose SDK had been restored, so neither arm could run
+     (Revision 5).
+
+### One correction to the diagnosis table
+
+The failing arm produced NO `Call to unpatched function` line in any of its four
+runs, despite lacking libraries the title ships (libkernel, libSceAmpr,
+libScePlayGo among them). So its ABSENCE does not distinguish "wrong libraries"
+from "missing libraries" — the game can die before reaching the call. Only the
+PRESENCE of that line is informative, which is how `combineAttempts` already
+treats it: believed on one sighting, never inferred from silence.
