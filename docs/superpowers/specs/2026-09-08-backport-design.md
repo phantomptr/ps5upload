@@ -149,3 +149,236 @@ PPSA25411 (`backport=0` raw rip, requires FW 11.00) on FW 9.60:
 eboot + both PRXs on the FW 4 pair, `libc.prx` *not* symbol-patched, its own
 `libSceAmpr` + `libScePlayGo` kept, six libraries added from PPSA32785.
 Result: runs, 13.7 GB resident, 137 threads.
+
+---
+
+## Revision, 2026-09-09 — hardware overturned two decisions
+
+Three things in the design above are now known to be wrong. Recorded here
+rather than silently edited, because each was believed on reasonable-looking
+evidence and the reasons matter.
+
+### 1. Libraries come from a local corpus of PROFILES, not from a live donor game
+
+`donor_index` (§2) built its index by listing every installed game's
+`fakelib/` at backport time. That still works, but it makes the set of
+available libraries a function of what the user happens to have installed, and
+it cannot help a user whose only game is the one they are trying to backport.
+
+`scripts/gather-fakelibs.py` now collects the corpus once into `fakelibs/`
+(gitignored — these are Sony binaries):
+
+    fakelibs/
+      manifest.json          34 profiles, 52 distinct builds
+      profiles/<TITLE_ID>/   exactly what that title ships, unmodified
+
+Sources are folder- and image-backed titles alike; an image's `fakelib/` is
+readable straight through its ShadowMount+ mount.
+
+### 2. A "complete set" is actively harmful — install a whole profile
+
+The first version of the corpus did what it seemed obvious to do: one build per
+library name, newest SDK wins, unioned across every game. **Installing it stopped
+a working game from launching.** Red Dead Redemption ran on the 3 libraries its
+ripper shipped and produced no process at all on our 13. The 3 libraries the
+sets shared were byte-identical, so the damage came entirely from the 10 added —
+most likely `libkernel.sprx`, which "newest wins" picked at a FW 13 pair and
+handed to a game whose other libraries are all patched to 4.00.
+
+A synthesised union is a combination no game has ever shipped, so nothing has
+ever tested it. The profile — one real game's set, kept whole — is the only
+unit with evidence behind it.
+
+Nor can the right profile be *derived*. Within one declared SDK major,
+`libSceAgc` has four distinct builds; a library's own embedded SDK pair records
+only whether its ripper patched it. Selection is therefore ranked-and-tried,
+not computed: same SDK major first, then FEWEST libraries (extra libraries are
+what caused the failure), with Undo and "try the next profile" as the real
+workflow. `rankProfiles` orders candidates; it does not claim to answer.
+
+### 3. Eligibility keys on `sdkVersion`, never `requiredSystemSoftwareVersion`
+
+SILENT HILL 2 declares required FW 10.20, was built with SDK 9.00, and runs on
+a 9.60 console with no `fakelib/` at all. Across 31 image-backed titles, every
+title with `sdkVersion` above the console firmware ships a fakelib and every
+title below it does not — no exceptions. `requiredSystemSoftwareVersion`
+predicts nothing and would offer pointless backports.
+
+### Image-backed titles are in scope after all
+
+§4 assumed disk-image titles could not be patched. They can, and it needs no
+payload change — `/mnt/shadowmnt` is already in the payload path allowlist.
+ShadowMount+ supports `image_rw=<image filename>` in its config, and that config
+is live-watched, so:
+
+    1. add `image_rw=<basename>` inside a ps5upload marker block in config.ini
+    2. rename the image WITHIN ITS OWN DIRECTORY, wait for
+       "[IMG][LVD] Source removed, unmounting", rename back  (~45 s)
+    3. patch and copy through the now read-write mount
+    4. strip the block, blip again -> back to read-only
+
+`engine/crates/ps5upload-core/src/smp_image_rw.rs` owns the config rewriting.
+This replaces the `smp_checkout` rename-out-of-the-scan-root flow for editing:
+the image never leaves its directory or crosses a volume, and it is renamed for
+~20 s rather than the whole session. Verified on exfatfs and ufs.
+
+ufs images (`.ffpkg`) need one extra step: they carry real POSIX modes and ship
+0555, so writes fail with EACCES even though the mount really is read-write.
+`fs/chmod` to 0777 first, then restore the mode. exfat fakes 0777 and needs
+nothing. Every one of the 31 images had >=94 MB free, so space is not a
+constraint.
+
+### Still open
+
+- Startup recovery now distinguishes an idle stale session (safe to revert)
+  from a running image-backed game (warn only). The client exposes the
+  on-console journal so an interrupted read-write session remains visible and
+  finishable after an app restart.
+- No image-backed title has yet been backported from a genuinely un-backported
+  starting state — every rip on hand that needs a backport already has one.
+- The "does it work" oracle is still weak for SUCCESS. Thread count misled
+  three times (1 / 18 / 263 threads) and must not be used. "No process N
+  seconds after launch" is sound for FAILURE; success still needs a human
+  looking at the screen.
+
+### Telling the two failure modes apart
+
+Both failures look identical in the process table (no process), but klog
+separates them, and they need opposite fixes:
+
+| klog after launch | meaning | fix |
+|---|---|---|
+| `=== Call to unpatched function is detected!!! ===` | libraries MISSING | a profile with more libraries |
+| `createApp`, then death, no unpatched-function line | libraries WRONG | a different profile, usually a smaller one |
+
+Measured on Red Dead: stripped of all libraries it produced one
+unpatched-function line; loaded with a 13-library synthetic set it produced
+none. The Backport panel should read klog after a trial launch and say which
+of the two happened rather than reporting a bare failure.
+
+
+---
+
+## Revision 2, 2026-09-09 — storage is content-addressed, and the earlier
+## "one set breaks games" result is UNCONFIRMED
+
+### The A/B/C/D trial failed its own control
+
+Red Dead was stripped of libraries and rebuilt four ways. Result:
+
+| step | libraries installed | outcome |
+|---|---|---|
+| A | none | no process, 1 unpatched-function line |
+| B | Ghost of Yotei's set | no process, 0 unpatched lines |
+| C | PRAGMATA's set (different builds) | no process, 0 unpatched lines |
+| D | Red Dead's own set | ran, 9/9 samples, 40 threads |
+
+**B and D installed byte-identical files** (sha256 match, 3 of 3). B failed and D
+worked, so this harness cannot attribute a launch failure to library content.
+That invalidates B and C as evidence about donor compatibility, and it equally
+undermines the earlier single-trial result that a 13-library synthetic set broke
+Red Dead — same rig, same shape of evidence. In both experiments the LAST cycle
+is the one that worked, which points at an uncontrolled variable around
+launching soon after a ShadowMount+ remount.
+
+Nothing about library compatibility should be asserted until a repeated,
+order-randomised trial with the control run more than once. What A does show,
+and is consistent with everything else, is that libraries are required at all
+and that missing ones announce themselves in klog.
+
+### Storage: builds, not per-game directories
+
+The corpus is small and heavily shared — across 34 titles there are **13 library
+names and 52 distinct builds**, and the commonest `libSceAgc` build ships in 13
+of them. One directory per source game stored 15 MiB of real content as 58 MiB
+(3.8x) and buried the thing that actually varies: which BUILD you have.
+
+    fakelibs/
+      manifest.json                 <- libraries[] + observed_sets[]
+      builds/<library>/<sha8>.sprx  <- every distinct build, stored once
+
+`libraries[]` lists each name with its builds and, per build, `shipped_by` —
+the evidence for choosing between them, since a build 13 games use is better
+travelled than a singleton. `observed_sets[]` records which build each real game
+ships, as references. A set is still the unit the UI offers, but it is now
+metadata, so recording every one duplicates nothing and the corpus can express
+sets no single game shipped if evidence ever supports that.
+
+`resolveSets()` turns a manifest into installable sets and validates as it goes:
+title id, library name, sha256, and `path` (which must stay inside `builds/`,
+since it is concatenated into a path we copy from). A set referencing a build
+the corpus lacks, or a build filed under a different name, is dropped whole
+rather than half-installed.
+
+`gather-fakelibs.py --from-existing` re-lays-out a corpus already on disk with
+no console, and the emit step now builds into `fakelibs.new` and swaps: writing
+in place destroyed the corpus once, because `--from-existing` reads its sources
+from inside `fakelibs/` and the old code wiped the directory first.
+
+---
+
+## Revision 3 — which build do you use when a library has several?
+
+Measured across all 34 titles. The answer has three layers, and the first two
+dissolve most of the apparent choice.
+
+### 1. Many "different builds" are the same library, differently stamped
+
+Two `libSceAmpr` builds with different sha256 and identical size differ in
+exactly 36 bytes: a 32-byte digest at `0x510`, and the 8-byte SDK pair in the
+param segment. Mask those two regions and the files are byte-identical.
+
+    82484486 @0x26f50: 01 00 05 08 09 00 00 02   ps4=08050001 ps5=02000009 (unpatched)
+    d906bb7b @0x26f50: 01 00 04 09 31 00 00 04   ps4=09040001 ps5=04000031 (patched to FW4)
+
+So they are one library at two patch states, and our own SDK patcher moves
+either to any pair. The manifest now carries `code_id` per build — the hash
+with those regions masked. **Equal `code_id` means the choice is a non-choice.**
+
+Across the corpus the stamps split roughly evenly: 14 builds at the FW4 pair,
+13 unpatched at `08050001/02000009`, one libkernel at `13090001/12000043`.
+
+### 2. Genuinely different builds travel in HARVESTS, so you pick a harvest
+
+The 13 titles shipping `libSceAgc e1c8f6dc` are *exactly* the 13 shipping
+`libSceAgcDriver d83edb3a` and `libScePsml 6632020e`. Same for the 10-title and
+3-title groups. These are one rip kit's libraries, lifted from one firmware.
+Choosing a build per library independently is what manufactures combinations
+nobody ever shipped. The manifest now derives `harvests[]` from co-occurrence:
+builds shipped by exactly the same title set.
+
+The graphics trio (Agc / AgcDriver / Psml) is harvest-locked. The service
+libraries (Ampr, AppContent, GameUpdate, NpEntitlementAccess, PlayGo) vary
+*within* a harvest — but see (1): much of that variation is stamp-only.
+
+### 3. What does NOT select a build
+
+- **The target game's SDK.** `e1c8f6dc` ships in titles with SDK 0500, 0900,
+  1000 and 1100; `eace8ac1` spans 0400-1200. One SDK (1100) uses four different
+  libSceAgc builds. `rankProfiles` used to sort on "same SDK major first"; that
+  ordering was noise and has been REMOVED (the function no longer takes the
+  target SDK at all).
+- **The build's own SDK pair.** It records what a ripper patched the file to,
+  not where it came from (see 1).
+- **Newest / largest.** The rule that produced the 13-library set picked an
+  FW12 libkernel for an FW11 game.
+
+The only signal with evidence behind it is **popularity**: prefer the harvest
+that the most titles ship, because a combination 13 games run is better
+travelled than a singleton. That is a default, not a prediction.
+
+`rankProfiles` now orders by, in turn: the target's own set (the one
+combination known to work for that exact game), then `setAttestation` — the
+count of titles shipping the set's RAREST build, since a set is only as
+well-travelled as its least common member — then fewest libraries, then title
+id. On the recovered corpus this puts Red Dead's 3-library set first, which is
+the set that actually ran on hardware in step D of the trial.
+
+### Parser fix that changed the data
+
+`sdk_pair` walked the ELF program headers and gave up on files where that walk
+fails, which reported 27 of 52 builds as "sdk unknown" and made every
+SDK-based ranking operate on absent data. The param magic occurs exactly once
+in those files and the 0x20 size field in front of it confirms the hit, so
+`param_site` now falls back to scanning. All 28 builds in the recovered corpus
+now read their pair.

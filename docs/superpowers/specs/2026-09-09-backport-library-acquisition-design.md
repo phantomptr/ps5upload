@@ -119,6 +119,25 @@ threads), and the A/B/C/D trial failed its own byte-identical control. The panel
 says "still running -- does it reach gameplay?" with Keep / Undo, and never
 announces success on its own.
 
+### As implemented
+
+`verdictFrom(samples, klog, titleId)` judges on the END of the sampling window,
+not on whether a process was ever seen. A title that starts and dies had
+threads at some point, so "any sample alive" reports a peak thread count from a
+run that is already over — the same mistake that made thread count useless
+three times. Judging the last sample also tolerates a slow start: a cold start
+from USB showed nothing for 40 seconds and reached 263 threads.
+
+`nextSetsAfter(verdict, failed, ranked)` decides what to offer next, and the
+failed set survives the undo so the proposal honours it. After a
+missing-library failure only LARGER sets are offered, because a smaller one
+cannot supply what was missing and trying it costs a full install-launch-undo
+cycle. When nothing larger remains, that is its own message: no set you have
+can help.
+
+klog is drained before the launch. Otherwise a previous attempt's
+unpatched-function line is read as this attempt's.
+
 ## 4. Managing the corpus (Settings)
 
     Settings > Backport libraries
