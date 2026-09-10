@@ -442,6 +442,7 @@ export function diagnoseLaunchFailure(
 export type VerifyVerdict =
   | { kind: "missing-libraries" }
   | { kind: "wrong-libraries" }
+  | { kind: "not-backported" }
   | { kind: "running"; peakThreads: number }
   | { kind: "unknown" };
 
@@ -501,6 +502,11 @@ export const FAILURE_ATTEMPTS = 3;
 export function combineAttempts(attempts: VerifyVerdict[]): VerifyVerdict {
   const running = attempts.find((v) => v.kind === "running");
   if (running) return running;
+  // Believed immediately and ahead of everything else: it is read from the
+  // eboot rather than inferred from a launch, and while it holds no library set
+  // can possibly work.
+  const unpatched = attempts.find((v) => v.kind === "not-backported");
+  if (unpatched) return unpatched;
   const missing = attempts.find((v) => v.kind === "missing-libraries");
   if (missing) return missing;
   if (attempts.length < FAILURE_ATTEMPTS) return { kind: "unknown" };
@@ -518,6 +524,9 @@ export function nextSetsAfter(
   failed: FakelibSet,
   ranked: FakelibSet[],
 ): FakelibSet[] {
+  // No set helps a title whose eboot was never patched, so offering one sends
+  // the user round a cycle that cannot succeed.
+  if (verdict.kind === "not-backported") return [];
   const remaining = ranked.filter((s) => s.id !== failed.id);
   if (verdict.kind === "missing-libraries") {
     return remaining.filter((s) => s.libraries.length > failed.libraries.length);

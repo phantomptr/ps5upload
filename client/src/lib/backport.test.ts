@@ -487,6 +487,27 @@ describe("believing a failure", () => {
     ).toEqual({ kind: "running", peakThreads: 40 });
   });
 
+  it("puts an un-backported title ahead of any library verdict", () => {
+    // Read from the eboot rather than inferred from a launch, and while it
+    // holds no library set can possibly work. Measured: a title whose SDK had
+    // been restored gave six launches returning ok with no process, in BOTH
+    // arms of a library experiment — which made the libraries look irrelevant
+    // and then made the console look broken.
+    expect(
+      combineAttempts([{ kind: "wrong-libraries" }, { kind: "not-backported" }]).kind,
+    ).toBe("not-backported");
+    // Except that a title which actually ran is still running.
+    expect(
+      combineAttempts([{ kind: "not-backported" }, { kind: "running", peakThreads: 136 }]).kind,
+    ).toBe("running");
+  });
+
+  it("offers no further sets for an un-backported title", () => {
+    const failed = set("failed", "PPSA00001", ["a.sprx"]);
+    const other = set("other", "PPSA00002", ["a.sprx", "b.sprx"]);
+    expect(nextSetsAfter({ kind: "not-backported" }, failed, [failed, other])).toEqual([]);
+  });
+
   it("believes a missing-library failure immediately", () => {
     // It rests on an actual kernel message rather than on absence, so it does
     // not need repeating.

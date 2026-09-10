@@ -329,6 +329,62 @@ fn harvest(addr: &str, title: &ScanTitle) -> anyhow::Result<Vec<IncomingLibrary>
     Ok(out)
 }
 
+// ─── GET /api/ps5/title-sdk-pair ─────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct SdkPairQuery {
+    pub addr: String,
+    /// The title's source directory; `eboot.bin` is read from inside it.
+    pub path: String,
+}
+
+/// The SDK pair actually written in a title's eboot, and whether it is the one
+/// a backport targets.
+///
+/// This exists because an un-backported title is INDISTINGUISHABLE from a wrong
+/// library set: the launch returns ok, the game dies before producing a process,
+/// and there is no `Call to unpatched function` line. Diagnosing that as a
+/// library problem cost a full day. Checking the pair takes two small reads.
+///
+/// Note `param.json`'s `sdkVersion` is a different field and does NOT change
+/// when the eboot is patched, so it cannot answer this.
+pub async fn title_sdk_pair(Query(q): Query<SdkPairQuery>) -> impl IntoResponse {
+    let eboot = format!("{}/eboot.bin", q.path.trim_end_matches('/'));
+    let addr = q.addr.clone();
+    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<(u32, u32)>> {
+        // The ELF walk needs only the header and entry table, so read a small
+        // prefix rather than pulling a 50 MB eboot across the wire for 8 bytes.
+        let header = fs_read(&addr, &eboot, 0, 256 * 1024)?;
+        let Some(site) = ps5upload_core::fakelibs::param_site_from_header(&header) else {
+            return Ok(None);
+        };
+        let chunk = fs_read(&addr, &eboot, site as u64, 0x18)?;
+        Ok(ps5upload_core::fakelibs::sdk_pair_at(&chunk))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(Some(pair))) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ps4": pair.0,
+                "ps5": pair.1,
+                "backported": pair == ps5upload_core::fakelibs::BACKPORT_SDK_PAIR,
+            })),
+        )
+            .into_response(),
+        // Unreadable is not "not backported": saying so would send the user to
+        // re-patch a title that may be fine.
+        Ok(Ok(None)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "ps4": null, "ps5": null, "backported": null })),
+        )
+            .into_response(),
+        Ok(Err(e)) => err(StatusCode::BAD_GATEWAY, format!("{e:#}")),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")),
+    }
+}
+
 fn now_iso() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

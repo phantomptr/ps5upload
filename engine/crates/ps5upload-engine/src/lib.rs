@@ -8869,6 +8869,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         // The app-managed corpus: the user builds it by importing a pack or
         // scanning a console, and every later backport reuses it.
         .route("/api/fakelibs/corpus", get(fakelibs_api::get_corpus))
+        .route("/api/ps5/title-sdk-pair", get(fakelibs_api::title_sdk_pair))
         .route("/api/fakelibs/import", post(fakelibs_api::import))
         .route("/api/fakelibs/scan", post(fakelibs_api::start_scan))
         .route("/api/fakelibs/scan/{id}", get(fakelibs_api::scan_status))

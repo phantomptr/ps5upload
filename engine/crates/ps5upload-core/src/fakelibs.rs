@@ -172,6 +172,82 @@ fn scan_param_site(data: &[u8]) -> Option<usize> {
     None
 }
 
+/// Offset the param segment WOULD be at, computed from the header alone.
+///
+/// [`param_site`] verifies the magic at the offset it computes, which needs the
+/// whole file in memory. An eboot is tens of megabytes and lives on the
+/// console, so a caller that can do ranged reads wants the candidate offset
+/// first, then reads 0x18 bytes there to confirm. Returns None when the walk
+/// cannot place the segment; there is no magic-scan fallback here, because
+/// scanning is exactly what a header-only caller is trying to avoid.
+pub fn param_site_from_header(header: &[u8]) -> Option<usize> {
+    let mut base = 0usize;
+    let mut entries: Vec<(u32, u64, u64)> = Vec::new();
+    if matches!(u32le(header, 0)?, SELF_MAGIC_PS4 | SELF_MAGIC_PS5) {
+        let n = u16le(header, 0x18)? as usize;
+        base = 0x20 + n * 0x20;
+        for i in 0..n {
+            let at = 0x20 + i * 0x20;
+            let flags = u64le(header, at)?;
+            entries.push((
+                ((flags >> 20) & 0xFFF) as u32,
+                u64le(header, at + 8)?,
+                u64le(header, at + 16)?,
+            ));
+        }
+    }
+    let elf = header.get(base..)?;
+    if elf.get(..4)? != b"\x7fELF" {
+        return None;
+    }
+    let phoff = u64le(elf, 0x20)? as usize;
+    let phentsize = u16le(elf, 0x36)? as usize;
+    let phnum = u16le(elf, 0x38)? as usize;
+    let mut headers = Vec::with_capacity(phnum);
+    for i in 0..phnum {
+        let at = phoff.checked_add(i * phentsize)?;
+        headers.push((u32le(elf, at)?, u64le(elf, at + 8)?, u64le(elf, at + 0x20)?));
+    }
+    for (i, &(ptype, off, filesz)) in headers.iter().enumerate() {
+        if ptype != PT_SCE_PROCPARAM && ptype != PT_SCE_MODULEPARAM {
+            continue;
+        }
+        if let Some(&(_, o, _)) = entries
+            .iter()
+            .find(|&&(id, _, sz)| id as usize == i && sz == filesz)
+        {
+            return Some(o as usize);
+        }
+        if base == 0 {
+            return Some(off as usize);
+        }
+        for (j, &(t2, off2, sz2)) in headers.iter().enumerate() {
+            if t2 == 1 && off2 <= off && off + 0x18 <= off2 + sz2 {
+                if let Some(&(_, o, _)) = entries
+                    .iter()
+                    .find(|&&(id, _, sz)| id as usize == j && sz == sz2)
+                {
+                    return Some((o + (off - off2)) as usize);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The SDK pair in a param segment already read into `chunk` (0x18 bytes from
+/// the site), verifying the magic first.
+pub fn sdk_pair_at(chunk: &[u8]) -> Option<(u32, u32)> {
+    let magic = u32le(chunk, 8)?;
+    if magic != PROC_MAGIC && magic != MOD_MAGIC {
+        return None;
+    }
+    Some((u32le(chunk, 0x10)?, u32le(chunk, 0x14)?))
+}
+
+/// The FW4 pair a backport targets: `(ps4, ps5)`.
+pub const BACKPORT_SDK_PAIR: (u32, u32) = (0x0904_0001, 0x0400_0031);
+
 /// `(ps4, ps5)` SDK words from a module's param segment, or None.
 pub fn sdk_pair(data: &[u8]) -> Option<(u32, u32)> {
     let site = param_site(data)?;
@@ -537,6 +613,44 @@ mod tests {
         let a = self_with((0x0904_0001, 0x0400_0031), 0xAA, 0x11);
         let b = self_with((0x0904_0001, 0x0400_0031), 0xAA, 0x22);
         assert_ne!(code_id(&a), code_id(&b));
+    }
+
+    #[test]
+    fn locates_the_param_segment_from_the_header_alone() {
+        // An eboot is tens of megabytes and lives on the console. A caller with
+        // ranged reads gets the candidate offset from a small header read, then
+        // reads 0x18 bytes there — instead of pulling 53 MB across the wire to
+        // learn 8 bytes.
+        let d = self_with((0x0904_0001, 0x0400_0031), 0xAA, 0x11);
+        let header = &d[..0x400];
+        // This fixture is deliberately unparseable by the ELF walk (its body is
+        // not an ELF), which is what the whole-file path falls back to scanning
+        // for — so header-only placement correctly declines rather than guesses.
+        assert_eq!(param_site_from_header(header), None);
+        assert_eq!(param_site(&d), Some(0x600), "whole-file path still scans");
+    }
+
+    #[test]
+    fn reads_a_pair_from_a_param_chunk_and_checks_the_magic() {
+        let d = self_with((0x0904_0001, 0x0400_0031), 0xAA, 0x11);
+        let chunk = &d[0x600..0x618];
+        assert_eq!(sdk_pair_at(chunk), Some(BACKPORT_SDK_PAIR));
+        // Garbage at the offset must not be read as a pair: that would report a
+        // title as backported when it is not, which is the failure this exists
+        // to prevent.
+        assert_eq!(sdk_pair_at(&[0u8; 0x18]), None);
+        assert_eq!(sdk_pair_at(&[0u8; 4]), None);
+    }
+
+    #[test]
+    fn the_backport_pair_is_what_a_patched_title_carries() {
+        // Measured: Venus Vacation un-backported read (0x12090001, 0x10000040)
+        // and could not launch on 9.60 whatever libraries were installed, which
+        // is indistinguishable from a wrong library set unless this is checked.
+        let patched = self_with(BACKPORT_SDK_PAIR, 0xAA, 0x11);
+        let original = self_with((0x1209_0001, 0x1000_0040), 0xAA, 0x11);
+        assert_eq!(sdk_pair(&patched), Some(BACKPORT_SDK_PAIR));
+        assert_ne!(sdk_pair(&original), Some(BACKPORT_SDK_PAIR));
     }
 
     #[test]

@@ -22,7 +22,7 @@ import { useTr } from "../../state/lang";
 import { useEditSessionStore } from "../../state/editSession";
 import { LibrarySourcePicker } from "./LibrarySourcePicker";
 import { appLaunch, klogChunk } from "../../api/ps5";
-import type { ScanTitleInput } from "../../state/fakelibCorpus";
+import { titleSdkPair, type ScanTitleInput } from "../../state/fakelibCorpus";
 import {
   applyBackport,
   backportOverlayReady,
@@ -247,7 +247,19 @@ export function BackportPanel({
         klog += await klogChunk(mgmtAddr(host)).catch(() => "");
       }
       klog += await klogChunk(mgmtAddr(host)).catch(() => "");
-      return verdictFrom(samples, klog, title.titleId);
+      const verdict = verdictFrom(samples, klog, title.titleId);
+      // A launch that produced nothing has two very different causes that look
+      // identical from here. Before blaming the library set, check the eboot
+      // actually carries the backport SDK pair — an un-backported title cannot
+      // run whatever libraries are installed, and diagnosing that as a library
+      // problem costs the user cycle after pointless cycle. (Measured: a title
+      // whose SDK had been restored produced six launches returning ok with no
+      // process, in both arms of a library experiment.)
+      if (verdict.kind === "wrong-libraries" || verdict.kind === "missing-libraries") {
+        const pair = await titleSdkPair(mgmtAddr(host), title.source);
+        if (pair?.backported === false) return { kind: "not-backported" };
+      }
+      return verdict;
     },
     [host, title.titleId],
   );
@@ -425,6 +437,11 @@ export function BackportPanel({
             <Callout tone="info" title={tr("backport_verify_running", undefined, "It is running — does it reach gameplay?")}>
               {tr("backport_verify_running_body", { threads: verdict.peakThreads },
                 `The game is still up after a minute (${verdict.peakThreads} threads). That means it did not crash on load, but not that it plays — check the screen. Keep it if it works, or undo and try the next set.`)}
+            </Callout>
+          ) : verdict?.kind === "not-backported" ? (
+            <Callout tone="warn" title={tr("backport_verify_unpatched", undefined, "This title is not backported")}>
+              {tr("backport_verify_unpatched_body", undefined,
+                "Its eboot still carries the original SDK version, so it cannot run on this firmware whatever libraries are installed — the library set is not the problem. Run the backport again; if it keeps happening the SDK patch is not taking.")}
             </Callout>
           ) : verdict?.kind === "missing-libraries" ? (
             <Callout tone="warn" title={tr("backport_verify_missing", undefined, "It needs more libraries")}>

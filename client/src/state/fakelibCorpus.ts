@@ -163,3 +163,32 @@ export async function pollFakelibScan(id: string): Promise<ScanProgress | null> 
     errors: Array.isArray(b.errors) ? (b.errors as string[]) : [],
   };
 }
+
+export interface TitleSdkPair {
+  ps4: number | null;
+  ps5: number | null;
+  /** True when the eboot carries the FW4 pair a backport targets. Null when the
+   *  eboot could not be parsed — which is NOT the same as "not backported", and
+   *  must not be reported as one. */
+  backported: boolean | null;
+}
+
+/** The SDK pair actually written in a title's eboot.
+ *
+ *  An un-backported title is indistinguishable from a wrong library set: the
+ *  launch returns ok, the game dies before producing a process, and there is no
+ *  missing-function line. Checking this first is the difference between "your
+ *  libraries are wrong" and "this title was never patched".
+ *
+ *  Note it is NOT `param.json`'s `sdkVersion`, which does not change when the
+ *  eboot is patched. */
+export async function titleSdkPair(addr: string, source: string): Promise<TitleSdkPair | null> {
+  try {
+    const q = `addr=${encodeURIComponent(addr)}&path=${encodeURIComponent(source)}`;
+    const response = await fetch(`${getEngineUrl()}/api/ps5/title-sdk-pair?${q}`);
+    if (!response.ok) return null;
+    return (await response.json()) as TitleSdkPair;
+  } catch {
+    return null;
+  }
+}
