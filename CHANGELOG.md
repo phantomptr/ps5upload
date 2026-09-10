@@ -4,6 +4,66 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.17.8
+
+**Backport a game from inside ps5upload — including disk-image titles — plus a
+fix for update failures that blamed the wrong thing.**
+
+### Backporting, without the four-tool ritual
+
+Games built for firmware newer than your console need their SDK version
+lowered and replacement system libraries added. That used to mean a separate
+SDK changer, a separate BackPork, and a folder of libraries you had to source
+yourself. It is now one button in Games, and the pieces it needs are managed
+for you.
+
+- **The libraries come from your own games.** They are Sony files, so
+  ps5upload cannot ship them. The first time you back port something, it offers
+  two ways to get them: import a pack you already have, or scan your console
+  and collect them from games that are already backported. Either way they are
+  kept once and reused for every later backport, and you can add more at any
+  time from Settings → Backport libraries.
+
+- **A library set is installed whole.** Sets are never mixed. Testing on
+  hardware showed a game that runs fine on its own nine libraries fail to start
+  at all on a different game's six — so ps5upload offers you sets that a real
+  game actually shipped, rather than assembling one from parts that have never
+  run together.
+
+- **Disk-image games work too.** Titles that live in a `.exfat`/`.ffpkg` image
+  managed by ShadowMount+ used to be out of reach because the image is mounted
+  read-only. ps5upload now asks ShadowMount+ to remount just that one image
+  writable for the duration, patches it, and puts it back — no payload restart,
+  no moving your game file anywhere.
+
+- **It tells you what happened, and does not pretend to know more than it
+  does.** After installing a set it launches the title and watches. A failed
+  launch is retried, because launching is unreliable enough on its own that one
+  failure proves nothing. If the game is still running afterwards it asks *you*
+  to confirm it reaches gameplay rather than declaring success — and if the
+  title was never patched in the first place, it says so instead of blaming the
+  libraries. Undo puts the game back exactly as it was.
+
+### Update installs
+
+- **Failures now name the reason the console actually gave.** When the PS5
+  declines an update, ps5upload retries through a small installer it sends to
+  the console. If that installer could not be delivered, you used to be told
+  only about the delivery problem — the code the console rejected it with, and
+  the remedy that goes with it, were dropped. Both halves are now reported.
+
+- **No more "re-run your loader" when your loader is running.** That advice was
+  shown whenever port 9021 refused a connection, including to people whose
+  loader process was plainly alive — it had simply stopped listening. When a
+  loader is visible, ps5upload now says so, and suggests loading it again
+  rather than starting it.
+
+  If your PS5 refuses an update this way, the route that works is on the
+  console itself: Settings → System → Debug Settings → Game → Package
+  Installer. Your upload is not wasted — the package is already on the PS5.
+
+---
+
 ## 5.17.7
 
 **One report, four fixes: updates that couldn't reach the console, an error
