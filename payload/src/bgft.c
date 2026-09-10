@@ -50,6 +50,7 @@
 #include <unistd.h>
 
 #include "authid.h"
+#include "bgft_escalate.h"
 #include "bgft.h"
 #include "shellui_rpc.h"
 #include "sony_api_lock.h"
@@ -337,6 +338,115 @@ static int appinst_task_lookup(int32_t task_id, char *out, size_t out_cap) {
  *  fall back to the BGFT path). The "success" return only means
  *  Sony accepted the install request — actual download completion
  *  is observed via appinst_install_status polling. */
+/* ── Experimental: full in-process credential escalation (default OFF) ────────
+ *
+ * The user-facing problem this targets: a PS4 PATCH install rejected in-process
+ * with 0x80B2116F on FW 11, with no way to deliver the DPI daemon (the only
+ * safe fallback) because the console's :9021 ELF loader isn't listening.
+ *
+ * Research finding (2026-09-10): the main payload ALREADY swaps to SYSTEM
+ * authid for FW>=10 installs — the same authid the DPI daemon uses — so authid
+ * is not the difference. What the DPI daemon does that the main payload does
+ * NOT is a FULL ucred escalation (jb_escalate_pid): root uid on every slot,
+ * sandbox escape (rootdir/jaildir -> kernel root vnode), all capability bits,
+ * and the high-attr flag. This applies that same escalation to the main
+ * payload around the InstallByPackage call, then RESTORES every field.
+ *
+ * Safety:
+ *   - Default OFF (env PS5UPLOAD_FULL_ESCALATE=1), mirroring the TIER0 scaffold,
+ *     so shipped behaviour is byte-for-byte unchanged until a hardware session
+ *     opts in.
+ *   - Bounded: every field is snapshotted and restored, and the whole window is
+ *     already inside sony_api_lock + kernel_rw_lock, so no other thread observes
+ *     the escalated state.
+ *   - Cannot wipe a base game: this wraps the Tier-1 InstallByPackage call,
+ *     which is documented non-wiping for patches (only the shellui-rpc tier
+ *     re-registers the content_id and wipes). Worst case is the same rejection
+ *     with the base intact.
+ *
+ * UNVERIFIED: never run on FW 11 hardware. Enable and confirm on a console you
+ * are willing to test with before relying on it or making it default.
+ *
+ * These externs match <ps5/kernel.h>; authid.h already declares the authid
+ * pair, which this deliberately leaves to the existing authid swap. */
+extern uid_t   kernel_get_ucred_uid(pid_t);
+extern int32_t kernel_set_ucred_uid(pid_t, uid_t);
+extern uid_t   kernel_get_ucred_ruid(pid_t);
+extern int32_t kernel_set_ucred_ruid(pid_t, uid_t);
+extern uid_t   kernel_get_ucred_svuid(pid_t);
+extern int32_t kernel_set_ucred_svuid(pid_t, uid_t);
+extern gid_t   kernel_get_ucred_rgid(pid_t);
+extern int32_t kernel_set_ucred_rgid(pid_t, gid_t);
+extern gid_t   kernel_get_ucred_svgid(pid_t);
+extern int32_t kernel_set_ucred_svgid(pid_t, gid_t);
+extern int32_t kernel_get_ucred_caps(pid_t, uint8_t[16]);
+extern int32_t kernel_set_ucred_caps(pid_t, const uint8_t[16]);
+extern int32_t kernel_get_ucred_attrs(pid_t, uint8_t[32]);
+extern int32_t kernel_set_ucred_attrs(pid_t, const uint8_t[32]);
+extern intptr_t kernel_get_root_vnode(void);
+extern intptr_t kernel_get_proc_rootdir(pid_t);
+extern int32_t  kernel_set_proc_rootdir(pid_t, intptr_t);
+extern intptr_t kernel_get_proc_jaildir(pid_t);
+extern int32_t  kernel_set_proc_jaildir(pid_t, intptr_t);
+
+typedef struct {
+    uid_t uid, ruid, svuid;
+    gid_t rgid, svgid;
+    uint8_t caps[16];
+    uint8_t attrs[32];
+    intptr_t rootdir, jaildir;
+    int valid;
+} ucred_snapshot_t;
+
+static void ucred_snapshot(pid_t pid, ucred_snapshot_t *s) {
+    memset(s, 0, sizeof(*s));
+    s->uid     = kernel_get_ucred_uid(pid);
+    s->ruid    = kernel_get_ucred_ruid(pid);
+    s->svuid   = kernel_get_ucred_svuid(pid);
+    s->rgid    = kernel_get_ucred_rgid(pid);
+    s->svgid   = kernel_get_ucred_svgid(pid);
+    kernel_get_ucred_caps(pid, s->caps);
+    kernel_get_ucred_attrs(pid, s->attrs);
+    s->rootdir = kernel_get_proc_rootdir(pid);
+    s->jaildir = kernel_get_proc_jaildir(pid);
+    s->valid   = 1;
+}
+
+/* Escalate to root + sandbox-escaped + all-caps, exactly as the DPI daemon's
+ * jb_escalate_pid does (authid is left to the existing swap). */
+static void ucred_escalate_full(pid_t pid) {
+    kernel_set_ucred_uid(pid, 0);
+    kernel_set_ucred_ruid(pid, 0);
+    kernel_set_ucred_svuid(pid, 0);
+    kernel_set_ucred_rgid(pid, 0);
+    kernel_set_ucred_svgid(pid, 0);
+    intptr_t root = kernel_get_root_vnode();
+    if (root) {
+        kernel_set_proc_rootdir(pid, root);
+        kernel_set_proc_jaildir(pid, root);
+    }
+    uint8_t caps[16];
+    memset(caps, 0xff, sizeof(caps));
+    kernel_set_ucred_caps(pid, caps);
+    uint8_t attrs[32];
+    memset(attrs, 0, sizeof(attrs));
+    attrs[0] = 0x80;
+    kernel_set_ucred_attrs(pid, attrs);
+}
+
+static void ucred_restore(pid_t pid, const ucred_snapshot_t *s) {
+    if (!s->valid) return;
+    kernel_set_ucred_uid(pid, s->uid);
+    kernel_set_ucred_ruid(pid, s->ruid);
+    kernel_set_ucred_svuid(pid, s->svuid);
+    kernel_set_ucred_rgid(pid, s->rgid);
+    kernel_set_ucred_svgid(pid, s->svgid);
+    if (s->rootdir) kernel_set_proc_rootdir(pid, s->rootdir);
+    if (s->jaildir) kernel_set_proc_jaildir(pid, s->jaildir);
+    kernel_set_ucred_caps(pid, s->caps);
+    kernel_set_ucred_attrs(pid, s->attrs);
+}
+
 static int appinst_install_start(const char *url,
                                   const char *content_id,
                                   const char *title,
@@ -458,7 +568,26 @@ static int appinst_install_start(const char *url,
      * same authid. Keep cancel ONLY in the shellui-rpc tier where
      * it's been proven non-destructive. */
 
+    /* Experimental full escalation (default OFF; see helpers above). Snapshot,
+     * escalate, install, restore — all inside the existing lock window so no
+     * other thread sees the escalated ucred. */
+    int escalated = bgft_full_escalate_enabled(fw_major, getenv("PS5UPLOAD_FULL_ESCALATE"));
+    ucred_snapshot_t cred_snap = {0};
+    if (escalated) {
+        pid_t self = getpid();
+        ucred_snapshot(self, &cred_snap);
+        ucred_escalate_full(self);
+        fprintf(stderr, "[bgft] PS5UPLOAD_FULL_ESCALATE: escalated ucred for "
+                        "InstallByPackage (fw_major=%d)\n", fw_major);
+    }
+
     int rc = sceAppInstUtilInstallByPackage(&meta, &pkg_info, &playgo);
+
+    if (escalated) {
+        ucred_restore(getpid(), &cred_snap);
+        fprintf(stderr, "[bgft] PS5UPLOAD_FULL_ESCALATE: restored ucred "
+                        "(InstallByPackage rc=0x%08X)\n", (unsigned)rc);
+    }
 
     authid_release_shellcore(saved_authid, "InstallByPackage");
     pthread_mutex_unlock(&kernel_rw_lock);

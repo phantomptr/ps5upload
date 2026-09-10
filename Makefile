@@ -796,6 +796,10 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/sdk_pairs_selftest.c
 	@/tmp/ps5upload-sdk-pairs-selftest
 	@echo "✓ an SDK downgrade writes both halves of the version pair"
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-bgft-escalate-selftest \
+		$(PAYLOAD_DIR)/tests/bgft_escalate_selftest.c
+	@/tmp/ps5upload-bgft-escalate-selftest
+	@echo "✓ full-escalation patch install is default-off and FW11-gated"
 	@echo "Running libc.prx backport-patch self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-libc-backport-selftest \
 		$(PAYLOAD_DIR)/tests/libc_backport_selftest.c
