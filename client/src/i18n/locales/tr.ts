@@ -2719,6 +2719,8 @@ helper_mismatch_go: "Yardımcıyı yükle",
 "pkg.patch_daemon_unavailable": "Bu güncelleme uygulanamadı çünkü bu derlemede gönderilecek bir PS5 güncelleme yükleyicisi yok; konsol güncellemeyi hiç görmedi. Ana oyuna dokunulmadı. Yayınlanan engine derlemesini (ya da ps5upload-engine Docker imajını) kullan — PS5 payload SDK’si olmadan kaynaktan derlenmiş bir sürümde yükleyici imajı bulunmaz. Güncelleme zaten PS5’inde, yani hiçbir şeyi yeniden yüklemene gerek yok — kurulumu paket listesinden tekrar dene. Güncellemeyi doğrudan PS5 üzerinden de uygulayabilirsin: Settings → System → Debug Settings → Game → Package Installer.",
 "pkg.patch_daemon_no_bringup": "Bu güncelleme uygulanamadı çünkü PS5’in güncelleme yükleyicisi hiç başlamadı — gönderimden sonra 9040 portunda hiçbir yanıt gelmedi — bu yüzden konsol güncellemeyi hiç görmedi. Ana oyuna dokunulmadı. PS5’i yeniden başlat, yükleyiciyi tekrar çalıştır ve yeniden dene. Güncelleme zaten PS5’inde, yani hiçbir şeyi yeniden yüklemene gerek yok — kurulumu paket listesinden tekrar dene. Güncellemeyi doğrudan PS5 üzerinden de uygulayabilirsin: Settings → System → Debug Settings → Game → Package Installer.",
 "pkg.patch_regressed": "Bu güncellemeyi yeniden uygulamak onu kaldırdı — oyun temel sürümüne döndü. PS5’in yükleyicisi yeniden uygulanan bir güncellemeyi geri alınacak bir güncelleme olarak görür. Güncellenmiş sürüme dönmek için güncellemeyi bir kez daha uygula ve oyunda zaten var olan bir güncellemeyi yeniden kurmaktan kaçın.",
+"sdk_patch_libc": "libc.prx dosyasını da yamala",
+"sdk_patch_libc_hint": "Bazı geriye taşınmış oyunların ihtiyaç duyduğu, bazılarının ise açılmasını engelleyen bir uyumluluk düzenlemesi. Oyun onsuz başlamıyorsa açın, aksi halde kapalı bırakın.",
 };
 
 export default tr;

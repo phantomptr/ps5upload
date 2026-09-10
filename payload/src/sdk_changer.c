@@ -2,6 +2,9 @@
 
 #include "sdk_param.h"
 #include "elf_param.h"
+#include "sdk_pairs.h"
+#include "libc_backport.h"
+#include "fakelib_overlay.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -204,11 +207,20 @@ static int patch_binary_sdk(const char *path, uint32_t target_sdk) {
                                      (int)(sizeof(sites) / sizeof(sites[0])),
                                      &status);
 
+    /* A title declares BOTH an SDK pair member per param struct, so a site
+     * needs rewriting when EITHER field disagrees. Checking only the
+     * preferred field is how a half-patched executable — PPR downgraded,
+     * PS4 left at 12.09 — got reported as fully patched. */
+    sdk_pair_t pair;
+    int have_pair = sdk_pair_lookup(target_sdk, &pair);
     int patched = 0;
     for (int i = 0; i < found; i++) {
-        if (elf_rd32(data + sites[i].offset) != target_sdk) {
-            sites[patched++] = sites[i];
-        }
+        size_t base = sites[i].param_offset;
+        int stale = have_pair
+                        ? (elf_rd32(data + base + SCE_PARAM_PS5_SDK_OFFSET) != pair.ps5 ||
+                           elf_rd32(data + base + SCE_PARAM_PS4_SDK_OFFSET) != pair.ps4)
+                        : (elf_rd32(data + sites[i].offset) != target_sdk);
+        if (stale) sites[patched++] = sites[i];
     }
 
     munmap(map, len);
@@ -226,13 +238,41 @@ static int patch_binary_sdk(const char *path, uint32_t target_sdk) {
         return -1;
     }
 
-    unsigned char value[4] = {
-        (unsigned char)(target_sdk & 0xffu),
-        (unsigned char)((target_sdk >> 8) & 0xffu),
-        (unsigned char)((target_sdk >> 16) & 0xffu),
-        (unsigned char)((target_sdk >> 24) & 0xffu),
-    };
     for (int i = 0; i < patched; i++) {
+        if (have_pair) {
+            /* Both halves, always. The kernel prints them together
+             * (`SDK vesion: PS4:09040001 PPR:04000031`) and a title whose
+             * halves disagree launches and then dies. */
+            unsigned char ps5v[4] = {
+                (unsigned char)(pair.ps5 & 0xffu),
+                (unsigned char)((pair.ps5 >> 8) & 0xffu),
+                (unsigned char)((pair.ps5 >> 16) & 0xffu),
+                (unsigned char)((pair.ps5 >> 24) & 0xffu),
+            };
+            unsigned char ps4v[4] = {
+                (unsigned char)(pair.ps4 & 0xffu),
+                (unsigned char)((pair.ps4 >> 8) & 0xffu),
+                (unsigned char)((pair.ps4 >> 16) & 0xffu),
+                (unsigned char)((pair.ps4 >> 24) & 0xffu),
+            };
+            size_t base = sites[i].param_offset;
+            if (fd_pwrite_all(fd, ps5v, sizeof(ps5v),
+                              (off_t)(base + SCE_PARAM_PS5_SDK_OFFSET)) != 0 ||
+                fd_pwrite_all(fd, ps4v, sizeof(ps4v),
+                              (off_t)(base + SCE_PARAM_PS4_SDK_OFFSET)) != 0) {
+                close(fd);
+                return -1;
+            }
+            continue;
+        }
+        /* No known pair for this request: write only the field this
+         * segment declares, exactly as before. */
+        unsigned char value[4] = {
+            (unsigned char)(target_sdk & 0xffu),
+            (unsigned char)((target_sdk >> 8) & 0xffu),
+            (unsigned char)((target_sdk >> 16) & 0xffu),
+            (unsigned char)((target_sdk >> 24) & 0xffu),
+        };
         if (fd_pwrite_all(fd, value, sizeof(value),
                           (off_t)sites[i].offset) != 0) {
             close(fd);
@@ -297,6 +337,52 @@ static int patch_param_json_file(const char *path, uint32_t target_sdk) {
     return changed;
 }
 
+/* Apply BestPig's libc.prx edit, which some titles need before they will
+ * start on a downgraded firmware. Separate from the SDK walk on purpose: it
+ * targets one exact file, it is a same-length symbol swap rather than a
+ * version field, and a libc that does not carry the symbol is the common
+ * case (three of five titles on the test console) and must not read as an
+ * error. Returns the number of occurrences rewritten, 0 for nothing to do,
+ * -1 only when the file exists but could not be backed up or written. */
+static int patch_libc_prx(const char *game_path) {
+    char path[SDK_PATH_MAX];
+    if (snprintf(path, sizeof(path), "%s/sce_module/libc.prx", game_path) < 0)
+        return 0;
+
+    struct stat st;
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) return 0;
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return 0;
+    size_t len = (size_t)st.st_size;
+    void *map = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (map == MAP_FAILED) return 0;
+
+    /* Find the sites first so an already-patched file is never rewritten
+     * (and never gets a fresh backup that would shadow the true original). */
+    unsigned char *copy = (unsigned char *)malloc(len);
+    if (!copy) { munmap(map, len); return 0; }
+    memcpy(copy, map, len);
+    munmap(map, len);
+
+    int n = libc_backport_apply(copy, len);
+    if (n == 0) { free(copy); return 0; }
+
+    if (make_backup(path) != 0) { free(copy); return -1; }
+    fd = open(path, O_WRONLY);
+    if (fd < 0) { free(copy); return -1; }
+    struct stat now;
+    if (fstat(fd, &now) != 0 || (size_t)now.st_size != len) {
+        close(fd); free(copy); return -1;
+    }
+    int rc = fd_write_all(fd, copy, len);
+    if (rc == 0 && fsync(fd) != 0) rc = -1;
+    close(fd);
+    free(copy);
+    return rc == 0 ? n : -1;
+}
+
 static void walk_and_patch(const char *dir_path, uint32_t target_sdk,
                            int *patched_count, int *signed_count,
                            int *error_count) {
@@ -317,6 +403,15 @@ static void walk_and_patch(const char *dir_path, uint32_t target_sdk,
         if (lstat(full, &st) != 0) continue;
 
         if (S_ISDIR(st.st_mode)) {
+            /* Never rewrite `fakelib/`. Those are replacement SYSTEM
+             * libraries a backport supplies, and they are meant to keep
+             * the SDK version of the firmware they came from — every
+             * working backported title on the test console carries them
+             * at 0x09040001 while its own eboot sits at 0x04000031.
+             * Rewriting them to the title's target made a game that
+             * already failed fail differently, and would silently damage
+             * a working one. */
+            if (strcmp(de->d_name, "fakelib") == 0) continue;
             walk_and_patch(full, target_sdk, patched_count, signed_count,
                            error_count);
             continue;
@@ -448,7 +543,10 @@ int sdk_changer_scan(char *buf, size_t cap, size_t *written) {
     }
     closedir(dir);
 
-    int end = snprintf(buf + n, cap - (size_t)n, "]}");
+    char overlay[256];
+    int overlay_n = fakelib_overlay_status_json(overlay, sizeof(overlay));
+    if (overlay_n < 0 || (size_t)overlay_n >= sizeof(overlay)) return -1;
+    int end = snprintf(buf + n, cap - (size_t)n, "],\"overlay\":%s}", overlay);
     if (end < 0 || (size_t)(n + end) >= cap) return -1;
     n += end;
     if (written) *written = (size_t)n;
@@ -569,7 +667,7 @@ static int patch_appmeta_param(const char *title_id, uint32_t target,
 }
 
 int sdk_changer_patch(const char *title_id, const char *target_sdk,
-                      char *err, size_t err_cap) {
+                      int patch_libc, char *err, size_t err_cap) {
     if (!title_id || !target_sdk) {
         if (err) snprintf(err, err_cap, "missing title_id or target_sdk");
         return -1;
@@ -607,7 +705,11 @@ int sdk_changer_patch(const char *title_id, const char *target_sdk,
     int signed_skipped = 0;
     walk_and_patch(game_path, target, &patched, &signed_skipped, &errors);
 
-    int actual_changed = game_json_changed + patched;
+    /* Opt-in only — see sdk_changer.h. */
+    int libc_sites = patch_libc ? patch_libc_prx(game_path) : 0;
+    if (libc_sites < 0) { errors++; libc_sites = 0; }
+
+    int actual_changed = game_json_changed + patched + libc_sites;
     int appmeta_changed = 0;
     if (actual_changed > 0) {
         /* appmeta is only a display cache. Update it after the real source was
@@ -642,10 +744,11 @@ int sdk_changer_patch(const char *title_id, const char *target_sdk,
 
     if (err) {
         snprintf(err, err_cap,
-                 "source param fields: %d, ELF sites: %d, metadata fields: %d, "
-                 "signed skipped: %d, write errors: %d, path=%s",
-                 game_json_changed, patched, appmeta_changed, signed_skipped,
-                 errors, game_path);
+                 "source param fields: %d, ELF sites: %d, libc sites: %d, "
+                 "metadata fields: %d, signed skipped: %d, write errors: %d, "
+                 "path=%s",
+                 game_json_changed, patched, libc_sites, appmeta_changed,
+                 signed_skipped, errors, game_path);
     }
     return 0;
 }

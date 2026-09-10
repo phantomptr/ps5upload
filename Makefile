@@ -786,6 +786,26 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/elf_param_selftest.c
 	@/tmp/ps5upload-elf-param-selftest
 	@echo "✓ SDK patcher targets param segments, not stray magic bytes"
+	@echo "Running sandbox library-overlay unmount self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-sandbox-unmount-selftest \
+		$(PAYLOAD_DIR)/tests/sandbox_unmount_selftest.c
+	@/tmp/ps5upload-sandbox-unmount-selftest
+	@echo "✓ only a game sandbox's unionfs lib overlay may be force-unmounted"
+	@echo "Running SDK version-pair self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-sdk-pairs-selftest \
+		$(PAYLOAD_DIR)/tests/sdk_pairs_selftest.c
+	@/tmp/ps5upload-sdk-pairs-selftest
+	@echo "✓ an SDK downgrade writes both halves of the version pair"
+	@echo "Running libc.prx backport-patch self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-libc-backport-selftest \
+		$(PAYLOAD_DIR)/tests/libc_backport_selftest.c
+	@/tmp/ps5upload-libc-backport-selftest
+	@echo "✓ the libc.prx symbol swap is same-length and idempotent"
+	@echo "Running fakelib overlay path/refusal self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-fakelib-overlay-selftest \
+		$(PAYLOAD_DIR)/tests/fakelib_overlay_selftest.c
+	@/tmp/ps5upload-fakelib-overlay-selftest
+	@echo "✓ fakelib overlay accepts only game sandbox library targets"
 	@echo "Running sys_time settimeofday-fallback self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
 		-o /tmp/ps5upload-sys-time-fallback-selftest \

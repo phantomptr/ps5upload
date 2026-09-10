@@ -45,7 +45,6 @@ import {
   Fan,
   Bell,
   Clock,
-  Layers,
   ShieldAlert,
   Server,
   Network,
@@ -169,14 +168,6 @@ export const NAV_ITEMS: NavItem[] = [
     fallback: "Cheats",
     icon: Gamepad2,
   },
-  { to: "/fakelib", key: "fakelib_title", fallback: "Fakelib", icon: Boxes },
-  {
-    to: "/sdk-changer",
-    key: "sdk_changer_title",
-    fallback: "SDK Changer",
-    icon: Layers,
-  },
-
   // Observe and manage the selected console.
   {
     to: "/console",

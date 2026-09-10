@@ -1259,6 +1259,19 @@ pub struct SdkPatchReq {
     pub addr: Option<String>,
     pub title_id: String,
     pub target_sdk: String,
+    /// Opt-in libc.prx symbol swap. Off unless the user asked: it helps some
+    /// titles and breaks others.
+    #[serde(default)]
+    pub patch_libc: bool,
+}
+
+fn sdk_patch_body(req: &SdkPatchReq) -> JsonValue {
+    serde_json::json!({
+        "addr": req.addr,
+        "title_id": req.title_id,
+        "target_sdk": req.target_sdk,
+        "patch_libc": req.patch_libc,
+    })
 }
 
 #[tauri::command]
@@ -1276,15 +1289,7 @@ pub async fn sdk_scan(req: CheatsAddrReq) -> Result<JsonValue, String> {
 pub async fn sdk_patch(req: SdkPatchReq) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/ps5/sdk/patch");
-    post_json(
-        &url,
-        &serde_json::json!({
-            "addr": req.addr,
-            "title_id": req.title_id,
-            "target_sdk": req.target_sdk,
-        }),
-    )
-    .await
+    post_json(&url, &sdk_patch_body(&req)).await
 }
 
 #[derive(Debug, Deserialize)]

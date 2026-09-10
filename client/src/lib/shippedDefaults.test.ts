@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { fwToSdkHex, PS5_FIRMWARES } from "./sdkVersionHex";
 
 /**
  * Screen sources, read through Vite rather than node:fs — the client
  * tsconfig ships no node types, so a fs import typechecks in vitest but
  * fails `tsc --noEmit`, which is the gate that matters.
  */
-const sources = import.meta.glob("../screens/*/index.tsx", {
+const sources = import.meta.glob("../screens/**/*.tsx", {
   query: "?raw",
   import: "default",
   eager: true,
@@ -37,27 +36,14 @@ function read(rel: string): string {
  * the property under test is "what ships", not "what renders".
  */
 describe("shipped defaults are usable as-is", () => {
-  it("SdkChanger's default firmware is one the picker offers", () => {
-    const src = read("SdkChanger/index.tsx");
-    const m = /useState\("(\d{1,2}\.\d{1,2})"\)/.exec(src);
-    expect(m, "SdkChanger should default to a firmware string").not.toBeNull();
-    const fw = m![1];
-    expect(PS5_FIRMWARES).toContain(fw);
-    // And it must survive the conversion the patch path actually uses.
-    expect(fwToSdkHex(fw)).toMatch(/^0x[0-9a-f]{8}$/);
+  it("Backport ships the approved SDK target", () => {
+    const src = read("InstalledApps/BackportPanel.tsx");
+    expect(src).toContain('sdkPatch(titleId, "0x04000031"');
   });
 
-  it("SdkChanger no longer ships a raw hex default", () => {
-    const src = read("SdkChanger/index.tsx");
-    // Assert on the default itself, not on the file text: the comment
-    // explaining why 0x09060000 was wrong is worth keeping, and a test
-    // that bans the string outright would force it to be deleted.
-    const defaults = [...src.matchAll(/useState\((["'])(.*?)\1\)/g)].map((m) => m[2]);
-    for (const d of defaults) {
-      expect(d, `"${d}" looks like a raw SDK word, not a firmware`).not.toMatch(
-        /^0x[0-9a-fA-F]+$/,
-      );
-    }
+  it("Backport keeps the risky libc patch opt-in", () => {
+    const src = read("InstalledApps/BackportPanel.tsx");
+    expect(src).toContain("useState(false)");
   });
 
   it("SmbBrowser ships an empty server rather than an unusable example", () => {

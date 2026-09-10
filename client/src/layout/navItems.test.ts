@@ -43,6 +43,12 @@ describe("NAV_ITEMS", () => {
   it("keeps every screen reachable from More", () => {
     expect(NAV_ITEMS.map((item) => item.to)).toContain("/install-package");
   });
+
+  it("retires standalone backport screens in favor of Games", () => {
+    expect(NAV_ITEMS.map((item) => item.to)).not.toContain("/fakelib");
+    expect(NAV_ITEMS.map((item) => item.to)).not.toContain("/sdk-changer");
+    expect(NAV_ITEMS.map((item) => item.to)).toContain("/games");
+  });
 });
 
 describe("sidebar favorites", () => {

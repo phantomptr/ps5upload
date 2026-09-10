@@ -32,6 +32,7 @@
 #include "config.h"
 #include "commit_apply.h"
 #include "runtime.h"
+#include "sandbox_unmount.h"
 
 #include "content_db.h"
 #include "register.h"
@@ -8886,8 +8887,32 @@ static int handle_fs_unmount(runtime_state_t *state, int client_fd,
      * the substring form rejected legitimate filenames like
      * `My..Game` that the FS_MOUNT side accepts, leaving the user
      * with a successfully-mounted image they couldn't unmount. */
+    /* 3. A game sandbox's unionfs library overlay. A backport tool
+     *    (BackPork) mounts `fakelib` over `common/lib` at launch and only
+     *    unmounts it when the game exits cleanly — which a game that
+     *    crashes at load never does. The leftover then blocks the shell
+     *    from removing the sandbox AND makes the kernel refuse every
+     *    later mount of the same source, so the title cannot be launched
+     *    again until the console is restarted. There is no tracker file
+     *    for it because we did not create it; the path shape and the
+     *    filesystem type are the consent record instead. See
+     *    include/sandbox_unmount.h for why that is narrow enough. */
+    int sandbox_overlay = 0;
+    if (!legacy_match && !mount_tracker_exists(mount_point) &&
+        !path_has_dotdot_component(mount_point)) {
+        struct statfs *probe = NULL;
+        int nprobe = mntinfo_snapshot(&probe);
+        for (int i = 0; i < nprobe && probe != NULL; i++) {
+            if (strcmp(probe[i].f_mntonname, mount_point) != 0) continue;
+            sandbox_overlay =
+                sandbox_union_unmount_allowed(mount_point, probe[i].f_fstypename);
+            break;
+        }
+        free(probe);
+    }
+
     if (path_has_dotdot_component(mount_point) ||
-        (!legacy_match && !mount_tracker_exists(mount_point))) {
+        (!legacy_match && !sandbox_overlay && !mount_tracker_exists(mount_point))) {
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           "fs_unmount_not_our_mount", 24);
     }
@@ -11003,7 +11028,12 @@ static int handle_sdk_patch(runtime_state_t *state, int client_fd,
     }
 
     char err[256] = {0};
-    int rc = sdk_changer_patch(title_id, target_sdk, err, sizeof(err));
+    /* Optional, default off: the libc.prx symbol swap helps some titles and
+     * breaks others, so it is never applied unless the caller asks. */
+    int patch_libc_flag = 0;
+    (void)extract_json_bool_field(body, "patch_libc", &patch_libc_flag);
+    int rc = sdk_changer_patch(title_id, target_sdk, patch_libc_flag, err,
+                               sizeof(err));
     cheat_inc_cmd_count(state);
 
     char title_id_esc[64];

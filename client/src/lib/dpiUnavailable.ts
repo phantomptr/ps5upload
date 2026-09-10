@@ -51,6 +51,18 @@ const ALREADY_STAGED =
 const SELF_INSTALL_ROUTE =
   "You can also apply the update from the PS5 itself: Settings → System → Debug Settings → Game → Package Installer.";
 
+/** The loader process exists but the port is dead.
+ *
+ *  Four bug reports on 2026-09-09 had `elfldr.elf` in the process list while
+ *  :9021 refused every connection. Telling that user to "re-run the loader"
+ *  reads as plainly wrong when they can see it running, and they concluded the
+ *  app could not help them. Naming the contradiction is the whole value here. */
+export const PKG_PATCH_LOADER_NOT_LISTENING_HINT =
+  "This update couldn’t be applied because your PS5’s payload loader is running but is not accepting connections on port 9021, so the installer it needs was never delivered and the console never saw the update. Your base game is untouched. Load it again from your jailbreak page — a loader process that has already served a payload does not always keep listening. " +
+  ALREADY_STAGED +
+  " " +
+  SELF_INSTALL_ROUTE;
+
 /** The loader on the PS5 didn't take the installer image. Nothing about the
  *  engine or the package is wrong, so the advice is entirely console-side. */
 export const PKG_PATCH_LOADER_UNREACHABLE_HINT =
@@ -84,7 +96,20 @@ export const PKG_PATCH_DAEMON_NO_BRINGUP_HINT =
  */
 export function dpiUnavailableCopy(
   reason: DpiEnsureReason | string | null | undefined,
+  /** True when a loader process is visible on the console. Changes the advice
+   *  from "re-run it" to "it is running but not listening", which is what the
+   *  2026-09-09 reports actually showed. */
+  loaderProcessRunning = false,
 ): DpiUnavailableCopy {
+  if (
+    loaderProcessRunning &&
+    (reason === "loader_unreachable" || reason === "loader_send_failed")
+  ) {
+    return {
+      key: "pkg.patch_loader_not_listening",
+      text: PKG_PATCH_LOADER_NOT_LISTENING_HINT,
+    };
+  }
   switch (reason) {
     case "no_image":
       return {
@@ -103,4 +128,41 @@ export function dpiUnavailableCopy(
         text: PKG_PATCH_DAEMON_NO_BRINGUP_HINT,
       };
   }
+}
+
+/** The whole story of a failed patch install, in one message.
+ *
+ *  Two things must survive into it, and the DP branch used to drop the first:
+ *
+ *    * WHY the console rejected the install (e.g. 0x80B2116F, whose remedy is
+ *      the PS5's own Package Installer). The non-DP branch always reported it;
+ *      the patch branch replaced it with the daemon's transport error, so the
+ *      code that names the real problem never reached the user OR the next bug
+ *      report.
+ *    * why the fallback could not be delivered either, which is a different
+ *      problem with a different fix.
+ *
+ *  Both matter: on the 2026-09-09 reports the first was Sony declining the
+ *  firmware/package combination and the second was a dead :9021, and knowing
+ *  only the second sent the user looking in the wrong place. */
+export function patchInstallFailure(input: {
+  /** The primary rejection, as already formatted for display. */
+  mainErr?: string | null;
+  reason: DpiEnsureReason | string | null | undefined;
+  dpiErr?: string | null;
+  loaderProcessRunning?: boolean;
+  /** Injected so this stays pure and testable; defaults to the English text. */
+  translate?: (key: string, fallback: string) => string;
+}): string {
+  const copy = dpiUnavailableCopy(input.reason, input.loaderProcessRunning ?? false);
+  const hint = input.translate ? input.translate(copy.key, copy.text) : copy.text;
+  const parts: string[] = [];
+  if (input.mainErr) {
+    parts.push(`The PS5 rejected the install (${input.mainErr}).`);
+  }
+  parts.push(hint);
+  // The raw daemon error stays appended: it is what makes the next bug report
+  // diagnosable in one read.
+  if (input.dpiErr) parts.push(`(${input.dpiErr})`);
+  return parts.join(" ");
 }

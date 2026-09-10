@@ -36,6 +36,9 @@ export default function EditSessionBanner({
   const checkout = useEditSessionStore(
     (s) => editSessionForHost(s, host).checkout,
   );
+  const imageRw = useEditSessionStore(
+    (s) => editSessionForHost(s, host).imageRw,
+  );
   const busy = useEditSessionStore((s) => editSessionForHost(s, host).busy);
   const error = useEditSessionStore((s) => editSessionForHost(s, host).error);
   const refresh = useEditSessionStore((s) => s.refresh);
@@ -49,10 +52,11 @@ export default function EditSessionBanner({
     void refresh(host);
   }, [host, payloadStatus, refresh]);
 
-  if (!checkout) return null;
+  const session = imageRw ?? checkout;
+  if (!session) return null;
 
-  const name =
-    checkout.original_path.split("/").pop() ?? checkout.original_path;
+  const imagePath = imageRw?.image_path ?? checkout?.original_path ?? "";
+  const name = imagePath.split("/").pop() ?? imagePath;
 
   const runFinish = async () => {
     try {
@@ -91,13 +95,15 @@ export default function EditSessionBanner({
             {tr("edit_session_title", { name }, `Editing ${name}`)}
           </div>
           <div className="mt-0.5 truncate font-mono text-xs text-[var(--color-muted)]">
-            {checkout.mount_point}
+            {session.mount_point}
           </div>
           <div className="mt-1 text-xs text-[var(--color-muted)]">
             {tr(
               "edit_session_body",
               undefined,
-              "While this is open the game is hidden from the PS5 home screen — ShadowMount+ can't see the image where it is now. Finish editing to put it back.",
+              imageRw
+                ? "This image is temporarily writable. Finish editing to remount it read-only and reduce the risk of accidental image corruption."
+                : "While this is open the game is hidden from the PS5 home screen — ShadowMount+ can't see the image where it is now. Finish editing to put it back.",
             )}
           </div>
         </div>
@@ -112,8 +118,8 @@ export default function EditSessionBanner({
               // navigate does nothing when the user is already on Files —
               // which is where this banner also renders. Seed storage too so
               // the folder sticks for the next visit.
-              saveFsLastPath(host, checkout.mount_point);
-              navigate(`/files?path=${encodeURIComponent(checkout.mount_point)}`);
+              saveFsLastPath(host, session.mount_point);
+              navigate(`/files?path=${encodeURIComponent(session.mount_point)}`);
             }}
             disabled={busy}
           >

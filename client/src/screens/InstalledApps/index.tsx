@@ -23,6 +23,7 @@ import {
   Clock,
   Search,
   X,
+  Layers,
 } from "lucide-react";
 
 import { useNavigate } from "react-router";
@@ -39,8 +40,10 @@ import {
   appKill,
   processKill,
   smpStatus,
+  sdkScan,
   type InstalledTitle,
   type SmpStatus,
+  type SdkScanResponse,
 } from "../../api/ps5";
 import {
   fetchRunningGames,
@@ -75,6 +78,9 @@ import { transferAddr, mgmtAddr, hostOf } from "../../lib/addr";
 import { useImageRetry } from "../../lib/useImageRetry";
 import { transferScreenBusy } from "../../lib/ps5Transfers";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
+import { isBackportEligible } from "../../lib/backport";
+import { BackportPanel } from "./BackportPanel";
+import { EMPTY_CORPUS, loadFakelibCorpus, type FakelibCorpus } from "../../state/fakelibCorpus";
 
 // ── Classification helpers ───────────────────────────────────────────────────
 
@@ -296,6 +302,8 @@ function AppCard({
   onUninstall,
   onLaunch,
   onStop,
+  backportEligible,
+  onBackport,
 }: {
   host: string;
   title: InstalledTitle;
@@ -314,6 +322,8 @@ function AppCard({
   onUninstall: (t: InstalledTitle) => void;
   onLaunch: (t: InstalledTitle) => void;
   onStop: (t: InstalledTitle) => void;
+  backportEligible: boolean;
+  onBackport: (t: InstalledTitle) => void;
   /** Re-issue the launch for an already-running title, which is what brings it
    *  to the screen. Separate from onLaunch so the confirm/patient-launch
    *  bookkeeping around a cold start doesn't run for a foreground nudge. */
@@ -417,6 +427,17 @@ function AppCard({
         </div>
 
         <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
+          {backportEligible ? (
+            <Button
+              variant="secondary"
+              size="md"
+              leftIcon={<Layers size={15} />}
+              className="basis-full min-w-0"
+              onClick={() => onBackport(title)}
+            >
+              {tr("backport_action", undefined, "Backport")}
+            </Button>
+          ) : null}
           {canPlay ? (
             running && !launching ? (
               // The title is running → offer Stop (close the game) instead of
@@ -602,6 +623,35 @@ export default function InstalledAppsScreen({
   const ucredElevated = useConnectionStore((s) => s.ucredElevated);
   const guard = useStaleHostGuard();
   const [titles, setTitles] = useState<InstalledTitle[] | null>(null);
+  const [sdkState, setSdkState] = useState<SdkScanResponse>({ titles: [] });
+  const [backportTitle, setBackportTitle] = useState<InstalledTitle | null>(null);
+  /* The corpus is built by the user from games they own — we cannot ship Sony
+   * libraries — so an empty one is the ordinary state for a new user, and the
+   * panel offers the two ways to fill it rather than reporting a failure.
+   * Reloaded whenever the panel opens, so libraries acquired from inside it
+   * are visible immediately. */
+  const [corpus, setCorpus] = useState<FakelibCorpus>(EMPTY_CORPUS);
+  const refreshCorpus = useCallback(
+    () => loadFakelibCorpus().then(setCorpus),
+    [],
+  );
+  useEffect(() => {
+    if (!backportTitle) return;
+    let cancelled = false;
+    void loadFakelibCorpus().then((next) => { if (!cancelled) setCorpus(next); });
+    return () => { cancelled = true; };
+  }, [backportTitle]);
+  /* What a library scan may walk. Only titles with a source can have a
+   * fakelib/ to read; an empty list disables the scan route rather than
+   * letting it fail on click (which is what happens with the console asleep). */
+  const scanTitles = useMemo(
+    () =>
+      (titles ?? [])
+        .filter((t) => !!t.source && !t.system)
+        .map((t) => ({ title_id: t.titleId, title_name: t.titleName, source: t.source })),
+    [titles],
+  );
+  const ps5Kernel = useConnectionStore((s) => s.ps5Kernel);
   // Tri-state, NOT just SmpStatus|null. "checking" means the probe is in
   // flight; null means it definitively failed/unreachable. The disc-image
   // warning keys off "confirmed not running", so distinguishing "still
@@ -646,6 +696,12 @@ export default function InstalledAppsScreen({
       if (probe.isStale()) return;
       setTitles(res.titles);
       setRegisteredUnavailable(res.registeredUnavailable);
+      try {
+        const sdk = await sdkScan(mgmtAddr(probe.host));
+        if (!probe.isStale()) setSdkState(sdk);
+      } catch {
+        if (!probe.isStale()) setSdkState({ titles: [] });
+      }
       // ShadowMount+ status — best-effort, never blocks the app list.
       try {
         const s = await smpStatus(mgmtAddr(probe.host));
@@ -674,6 +730,8 @@ export default function InstalledAppsScreen({
     setSmp("checking");
     setError(null);
     setRunning(new Map());
+    setSdkState({ titles: [] });
+    setBackportTitle(null);
   }, [host]);
 
   useEffect(() => {
@@ -1042,6 +1100,11 @@ export default function InstalledAppsScreen({
     onUninstall: handleUninstall,
     onLaunch: handleLaunch,
     onStop: handleStop,
+    backportEligible: (() => {
+      const row = sdkState.titles.find((sdk) => sdk.title_id === t.titleId);
+      return isBackportEligible(t, row, ps5Kernel);
+    })(),
+    onBackport: setBackportTitle,
   });
 
   // #116: order/filter the Installed group. Least-played first when sorting
@@ -1066,6 +1129,24 @@ export default function InstalledAppsScreen({
 
   return (
     <div className={`flex flex-col gap-5 ${embedded ? "" : "p-6"}`}>
+      {backportTitle && titles ? (
+        <BackportPanel
+          open
+          host={host}
+          title={backportTitle}
+          titleSdkVersion={
+            sdkState.titles.find((sdk) => sdk.title_id === backportTitle.titleId)?.sdk_version ?? ""
+          }
+          sets={corpus.sets}
+          corpusRoot={corpus.root}
+          corpusError={corpus.error}
+          onCorpusChanged={() => void refreshCorpus()}
+          scanTitles={scanTitles}
+          scan={sdkState}
+          onClose={() => setBackportTitle(null)}
+          onLaunch={(title) => void handleLaunch(title)}
+        />
+      ) : null}
       {!embedded && <PageHeader
         icon={Gamepad2}
         title={tr("installed_apps_title", undefined, "Installed Apps")}

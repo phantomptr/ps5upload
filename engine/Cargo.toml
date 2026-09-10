@@ -13,11 +13,13 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "GPL-3.0-or-later"
-version = "5.17.7"
+version = "5.17.8"
 
 [workspace.dependencies]
 anyhow = "1.0"
-axum = "0.8"
+# "multipart" is for the backport library import (fakelibs_api.rs): users pick
+# library files and upload them as one set. Same crate, just the extractor.
+axum = { version = "0.8", features = ["multipart"] }
 blake3 = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

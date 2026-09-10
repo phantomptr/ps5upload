@@ -1917,6 +1917,37 @@ export async function smpCheckoutFinish(
   return invoke<SmpCheckout>("smp_checkout_finish", { addr });
 }
 
+export interface SmpImageRwSession {
+  title_id: string;
+  image_path: string;
+  temporary_path: string;
+  mount_point: string;
+  restore_root_mode: string | null;
+  started_at_ms: number;
+}
+
+export async function smpImageRwStatus(
+  transferAddr: string,
+): Promise<SmpImageRwSession | null> {
+  const addr = toMgmtAddr(transferAddr);
+  return invoke<SmpImageRwSession | null>("smp_image_rw_status", { addr });
+}
+
+export async function smpImageRwBegin(
+  transferAddr: string,
+  titleId: string,
+): Promise<SmpImageRwSession> {
+  const addr = toMgmtAddr(transferAddr);
+  return invoke<SmpImageRwSession>("smp_image_rw_begin", { addr, titleId });
+}
+
+export async function smpImageRwFinish(
+  transferAddr: string,
+): Promise<SmpImageRwSession> {
+  const addr = toMgmtAddr(transferAddr);
+  return invoke<SmpImageRwSession>("smp_image_rw_finish", { addr });
+}
+
 // ─── USB autoloader wizard ────────────────────────────────────────────
 
 export interface UsbDrive {
@@ -4683,6 +4714,11 @@ export interface SdkTitle {
 
 export interface SdkScanResponse {
   titles: SdkTitle[];
+  overlay?: {
+    state: "idle" | "watching" | "mounted" | "blocked" | "error";
+    title_id?: string;
+    error?: string;
+  };
   error?: string;
 }
 
@@ -4703,9 +4739,19 @@ export async function sdkPatch(
   titleId: string,
   targetSdk: string,
   addr?: string,
+  /** BestPig's libc.prx symbol swap. Off by default and deliberately not
+   *  implicit: it is documented as helping SOME titles, and on hardware
+   *  applying it to a title that did not need it crashed the game after five
+   *  modules where it otherwise loaded seventy and ran. */
+  patchLibc = false,
 ): Promise<SdkPatchResponse> {
   return invoke("sdk_patch", {
-    req: { addr: addr ?? null, title_id: titleId, target_sdk: targetSdk },
+    req: {
+      addr: addr ?? null,
+      title_id: titleId,
+      target_sdk: targetSdk,
+      patch_libc: patchLibc,
+    },
   });
 }
 
