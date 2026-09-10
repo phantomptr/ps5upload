@@ -351,6 +351,9 @@ pub fn run() {
             commands::smp_checkout_status,
             commands::smp_checkout_begin,
             commands::smp_checkout_finish,
+            commands::smp_image_rw_status,
+            commands::smp_image_rw_begin,
+            commands::smp_image_rw_finish,
             // ── USB autoloader wizard ───────────────────────────────
             // Enumerate removable drives + write a curated
             // ps5_autoloader/ folder to one. Cross-platform; pulls

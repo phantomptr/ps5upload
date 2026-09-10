@@ -58,6 +58,33 @@ describe("timeSyncBody", () => {
   });
 });
 
+describe("ShadowMount+ image read-write commands", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("maps status, begin, and finish to the engine API", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      const body = url.includes("/image-rw?") ? { session: null } : { title_id: "PPSA30528" };
+      return { ok: true, status: 200, json: async () => body } as Response;
+    }));
+
+    expect(await browserInvoke("smp_image_rw_status", { addr: "10.0.0.2:9114" })).toBeNull();
+    await browserInvoke("smp_image_rw_begin", { addr: "10.0.0.2:9114", titleId: "PPSA30528" });
+    await browserInvoke("smp_image_rw_finish", { addr: "10.0.0.2:9114" });
+
+    expect(calls.map((c) => c.url)).toEqual([
+      "http://engine.test:19113/api/ps5/smp/image-rw?addr=10.0.0.2%3A9114",
+      "http://engine.test:19113/api/ps5/smp/image-rw/begin",
+      "http://engine.test:19113/api/ps5/smp/image-rw/finish",
+    ]);
+    expect(JSON.parse(calls[1].init?.body as string)).toEqual({
+      addr: "10.0.0.2:9114",
+      title_id: "PPSA30528",
+    });
+  });
+});
+
 
 /**
  * The install cascade's DPI fallback is the only path that lands a game

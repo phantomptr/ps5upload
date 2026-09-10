@@ -949,6 +949,22 @@ export async function browserInvoke<T>(
         addr: args["addr"],
       }).then((r) => r.checkout);
 
+    case "smp_image_rw_status":
+      return getJson<{ session: T }>(
+        addrUrl("/api/ps5/smp/image-rw", args["addr"]),
+      ).then((r) => r.session);
+
+    case "smp_image_rw_begin":
+      return postJson<T>("/api/ps5/smp/image-rw/begin", {
+        addr: args["addr"],
+        title_id: args["titleId"],
+      });
+
+    case "smp_image_rw_finish":
+      return postJson<T>("/api/ps5/smp/image-rw/finish", {
+        addr: args["addr"],
+      });
+
     // ── Local (engine host) filesystem browse ───────────────────────────────
     // Browser-mode counterpart to the Tauri file/folder dialog: browses the
     // ENGINE's own filesystem (e.g. a Docker container's mounted volumes),

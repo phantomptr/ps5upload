@@ -1917,6 +1917,37 @@ export async function smpCheckoutFinish(
   return invoke<SmpCheckout>("smp_checkout_finish", { addr });
 }
 
+export interface SmpImageRwSession {
+  title_id: string;
+  image_path: string;
+  temporary_path: string;
+  mount_point: string;
+  restore_root_mode: string | null;
+  started_at_ms: number;
+}
+
+export async function smpImageRwStatus(
+  transferAddr: string,
+): Promise<SmpImageRwSession | null> {
+  const addr = toMgmtAddr(transferAddr);
+  return invoke<SmpImageRwSession | null>("smp_image_rw_status", { addr });
+}
+
+export async function smpImageRwBegin(
+  transferAddr: string,
+  titleId: string,
+): Promise<SmpImageRwSession> {
+  const addr = toMgmtAddr(transferAddr);
+  return invoke<SmpImageRwSession>("smp_image_rw_begin", { addr, titleId });
+}
+
+export async function smpImageRwFinish(
+  transferAddr: string,
+): Promise<SmpImageRwSession> {
+  const addr = toMgmtAddr(transferAddr);
+  return invoke<SmpImageRwSession>("smp_image_rw_finish", { addr });
+}
+
 // ─── USB autoloader wizard ────────────────────────────────────────────
 
 export interface UsbDrive {
@@ -4683,6 +4714,11 @@ export interface SdkTitle {
 
 export interface SdkScanResponse {
   titles: SdkTitle[];
+  overlay?: {
+    state: "idle" | "watching" | "mounted" | "blocked" | "error";
+    title_id?: string;
+    error?: string;
+  };
   error?: string;
 }
 

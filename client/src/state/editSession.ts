@@ -16,12 +16,16 @@ import { create } from "zustand";
 import {
   smpCheckoutFinish,
   smpCheckoutStatus,
+  smpImageRwFinish,
+  smpImageRwStatus,
+  type SmpImageRwSession,
   type SmpCheckout,
 } from "../api/ps5";
 import { hostOf } from "../lib/addr";
 
 interface EditSessionSlot {
   checkout: SmpCheckout | null;
+  imageRw: SmpImageRwSession | null;
   /** True while a refresh or finish is in flight. */
   busy: boolean;
   error: string | null;
@@ -32,6 +36,7 @@ interface EditSessionSlot {
 
 const IDLE: EditSessionSlot = {
   checkout: null,
+  imageRw: null,
   busy: false,
   error: null,
   lastProbedAt: null,
@@ -40,7 +45,7 @@ const IDLE: EditSessionSlot = {
 interface EditSessionStore {
   byHost: Record<string, EditSessionSlot>;
   refresh: (host: string) => Promise<void>;
-  finish: (host: string) => Promise<SmpCheckout | null>;
+  finish: (host: string) => Promise<SmpCheckout | SmpImageRwSession | null>;
   clearError: (host: string) => void;
 }
 
@@ -69,9 +74,13 @@ export const useEditSessionStore = create<EditSessionStore>((set, get) => {
       if (!host?.trim()) return;
       patch(host, { busy: true });
       try {
-        const checkout = await smpCheckoutStatus(host);
+        const [checkout, imageRw] = await Promise.all([
+          smpCheckoutStatus(host),
+          smpImageRwStatus(host),
+        ]);
         patch(host, {
           checkout,
+          imageRw,
           busy: false,
           error: null,
           lastProbedAt: Date.now(),
@@ -91,9 +100,15 @@ export const useEditSessionStore = create<EditSessionStore>((set, get) => {
       if (!host?.trim()) return null;
       patch(host, { busy: true, error: null });
       try {
-        const done = await smpCheckoutFinish(host);
+        const slot = editSessionForHost(get(), host);
+        const done = slot.imageRw
+          ? await smpImageRwFinish(host)
+          : slot.checkout
+            ? await smpCheckoutFinish(host)
+            : null;
         patch(host, {
           checkout: null,
+          imageRw: null,
           busy: false,
           error: null,
           lastProbedAt: Date.now(),

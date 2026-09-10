@@ -38,6 +38,20 @@ describe("SDK Changer API", () => {
         addr: "192.168.1.50:9021",
         title_id: "CUSA00001_00",
         target_sdk: "0x09060000",
+        patch_libc: false,
+      },
+    });
+  });
+
+  it("sdkPatch carries the opt-in libc choice", async () => {
+    mockedInvoke.mockResolvedValueOnce({ ok: true });
+    await sdkPatch("PPSA25411", "0x04000031", "192.168.1.50:9021", true);
+    expect(mockedInvoke).toHaveBeenCalledWith("sdk_patch", {
+      req: {
+        addr: "192.168.1.50:9021",
+        title_id: "PPSA25411",
+        target_sdk: "0x04000031",
+        patch_libc: true,
       },
     });
   });

@@ -33,6 +33,7 @@ pub async fn smp_status(addr: String) -> Result<SmpStatus, String> {
 
 use ps5upload_core::fs_ops::MountResult;
 use ps5upload_core::smp_checkout::{self, CheckoutState};
+use ps5upload_core::smp_image_rw::{self, ImageRwSession};
 
 /// What, if anything, is currently checked out for editing on this console.
 ///
@@ -87,5 +88,35 @@ pub async fn smp_checkout_finish(addr: String) -> Result<CheckoutState, String> 
     tokio::task::spawn_blocking(move || smp_checkout::finish(&addr))
         .await
         .map_err(|e| format!("smp_checkout_finish task: {e}"))?
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// Read/write image sessions used by one-button backporting. Unlike checkout,
+/// the image stays beside its siblings and is only briefly renamed so SMP
+/// remounts it under a temporary `image_rw=` rule.
+#[tauri::command]
+pub async fn smp_image_rw_status(addr: String) -> Result<Option<ImageRwSession>, String> {
+    tokio::task::spawn_blocking(move || smp_image_rw::read_state(&addr))
+        .await
+        .map_err(|e| format!("smp_image_rw_status task: {e}"))?
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub async fn smp_image_rw_begin(
+    addr: String,
+    title_id: String,
+) -> Result<ImageRwSession, String> {
+    tokio::task::spawn_blocking(move || smp_image_rw::begin(&addr, &title_id))
+        .await
+        .map_err(|e| format!("smp_image_rw_begin task: {e}"))?
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub async fn smp_image_rw_finish(addr: String) -> Result<ImageRwSession, String> {
+    tokio::task::spawn_blocking(move || smp_image_rw::finish(&addr))
+        .await
+        .map_err(|e| format!("smp_image_rw_finish task: {e}"))?
         .map_err(|e| format!("{e:#}"))
 }

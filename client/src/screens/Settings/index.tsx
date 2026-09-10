@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { EMPTY_CORPUS, deleteFakelibSet, loadFakelibCorpus, type FakelibCorpus } from "../../state/fakelibCorpus";
+import { LibrarySourcePicker } from "../InstalledApps/LibrarySourcePicker";
 import {
   Settings as SettingsIcon,
   Moon as SleepIcon,
@@ -39,6 +41,7 @@ import {
   Select,
   Checkbox,
   Toggle,
+  Callout,
 } from "../../components";
 import { SegmentedControl } from "../../components/SegmentedControl";
 import {
@@ -413,6 +416,71 @@ function EngineUrlSection() {
  *  plugged into the console) — full layout is `<path>/<title_id>/
  *  <timestamp>/<title_id>.zip`. Edits commit on blur, same as the
  *  Engine URL field above. */
+/** The backport library corpus.
+ *
+ *  Sony system libraries, which we cannot ship, so the user builds this from
+ *  games they own. The engine owns the location — there is no path to type and
+ *  none to get wrong — so this shows what is there and offers the two ways to
+ *  add more. Reachable at any time, not only when a backport needs it. */
+function FakelibCorpusSection() {
+  const tr = useTr();
+  const [corpus, setCorpus] = useState<FakelibCorpus>(EMPTY_CORPUS);
+  const refresh = useCallback(() => loadFakelibCorpus().then(setCorpus), []);
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  const remove = async (id: string) => {
+    await deleteFakelibSet(id);
+    await refresh();
+  };
+
+  return (
+    <Section title={tr("settings_card_fakelibs", undefined, "Backport libraries")}>
+      {corpus.error ? (
+        <Callout tone="warn" title={tr("fakelibs_unavailable", undefined, "Library corpus unavailable")}>
+          {corpus.error}
+        </Callout>
+      ) : null}
+      <p className="text-sm">
+        {corpus.summary.sets === 0
+          ? tr("fakelibs_empty", undefined,
+              "No libraries yet. Backporting needs replacement system libraries — Sony files ps5upload cannot include, so you supply them once from games you own.")
+          : tr("fakelibs_summary", {
+              sets: corpus.summary.sets,
+              builds: corpus.summary.builds,
+              mb: (corpus.summary.bytes / 1048576).toFixed(1),
+            }, `${corpus.summary.sets} library sets, ${corpus.summary.builds} builds, ${(corpus.summary.bytes / 1048576).toFixed(1)} MB`)}
+      </p>
+
+      {corpus.sets.length > 0 ? (
+        <ul className="max-h-56 divide-y divide-[var(--color-border)] overflow-auto rounded border border-[var(--color-border)]">
+          {corpus.sets.map((set) => (
+            <li key={set.id} className="flex items-center gap-3 p-2 text-xs">
+              <span className="flex-1 truncate">{set.label}</span>
+              <span className="text-[var(--color-muted)]">
+                {tr("fakelibs_set_libs", { count: set.libraries.length }, `${set.libraries.length} libs`)}
+              </span>
+              <button
+                type="button"
+                className="text-[var(--color-muted)] hover:text-[var(--color-danger)]"
+                onClick={() => void remove(set.id)}
+              >
+                {tr("fakelibs_set_remove", undefined, "Remove")}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      <LibrarySourcePicker addr="" consoleName="" scanTitles={[]} onChanged={() => void refresh()} />
+      {corpus.root ? (
+        <p className="text-xs text-[var(--color-muted)]">
+          {tr("fakelibs_root", { path: corpus.root }, `Kept in ${corpus.root}`)}
+        </p>
+      ) : null}
+    </Section>
+  );
+}
+
 function SavePathSection() {
   const tr = useTr();
   const savePath = useSaveSettingsStore((s) => s.savePath);
@@ -617,6 +685,7 @@ export default function SettingsScreen() {
         <EngineUrlSection />
 
         <SavePathSection />
+        <FakelibCorpusSection />
 
         <GroupHeading>
           {tr("settings_group_a11y", undefined, "Accessibility")}
