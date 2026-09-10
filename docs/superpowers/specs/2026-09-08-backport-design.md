@@ -456,3 +456,46 @@ Better witnesses than the process table: ShadowMount+'s `[GAME] started` line
 for whether a launch took at all, and a klog drained throughout the window
 rather than once at the end — it is a 136-line ring buffer that unrelated spam
 can flush.
+
+
+---
+
+## Revision 5, 2026-09-10 — check the SDK pair before believing anything
+
+A second controlled attempt also measured nothing, for a reason that had been
+sitting in plain sight: the subject was not backported.
+
+Venus Vacation PRISM had been swept earlier by a harness that ends each title
+with `sdk/restore`, which puts the ORIGINAL SDK back — i.e. UN-backports the
+game. Its eboot read `ps4=0x12090001 ps5=0x10000040` (FW10) instead of the FW4
+pair. On a 9.60 console it cannot run whatever libraries are present. Result:
+six launches returning `app_launch ok` in an identical 3.4-3.6 s with no
+process, in BOTH arms of the experiment. That made the library set look
+irrelevant, and then made the console's launcher look broken. Neither was true —
+re-patching it (`ELF sites: 3`) brought it back immediately at 136 threads.
+
+**An un-backported title is indistinguishable from a wrong library set.** Same
+silent death, same absent `Call to unpatched function` line, same `ok` from the
+launch. And `param.json`'s `sdkVersion` cannot tell them apart, because it does
+not change when the eboot is patched.
+
+So the eboot's own pair must be read. `GET /api/ps5/title-sdk-pair` does it with
+two small ranged reads — `param_site_from_header` needs only the header and
+entry table, then 0x18 bytes at the computed offset — rather than pulling a
+50 MB eboot across the wire for 8 bytes. Verified both directions on hardware.
+
+`verify()` consults it before reporting any library verdict; `combineAttempts`
+ranks `not-backported` above every library verdict (it is read from the file,
+not inferred from a launch); `nextSetsAfter` returns nothing for it, since no
+set helps.
+
+Note `sdk/patch` reporting `ELF sites: 0` is NOT automatically benign. Red Dead
+reported 0 because it was already patched; a patch that silently does nothing
+reports the same thing and leaves the user in exactly this state.
+
+### The experiment protocol now
+
+Before any measurement, assert the subject reads `backported: true`. The trial
+script aborts otherwise. Then: folder-backed subject (no remount), conditions
+interleaved in randomised order, n>=4 per arm, console kept busy, verdict taken
+from the LAST sample, klog drained every tick.
