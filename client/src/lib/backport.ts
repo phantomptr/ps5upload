@@ -465,6 +465,10 @@ export function verdictFrom(
   samples: VerifySample[],
   klog: string,
   titleId: string,
+  /** True when the eboot has been confirmed at the backport SDK pair. Lets a
+   *  launch that produced nothing at all be attributed to the libraries: the
+   *  other explanation for that symptom has then been positively excluded. */
+  sdkConfirmed = false,
 ): VerifyVerdict {
   // Judged on the END of the window, not on whether a process was ever seen.
   // A title that starts and dies is a failure that happens to have had threads
@@ -478,7 +482,13 @@ export function verdictFrom(
     return { kind: "running", peakThreads };
   }
   const diagnosis = diagnoseLaunchFailure(klog, titleId);
-  return diagnosis === "unknown" ? { kind: "unknown" } : { kind: diagnosis };
+  if (diagnosis !== "unknown") return { kind: diagnosis };
+  // Nothing ran and klog said nothing useful. Measured: a title given a
+  // deliberately mismatched set failed four times out of four with no process
+  // AND no `createApp` line — so requiring that line would leave the very case
+  // this feature exists to catch reported as "could not tell". With the SDK
+  // pair confirmed, the libraries are what is left.
+  return sdkConfirmed ? { kind: "wrong-libraries" } : { kind: "unknown" };
 }
 
 /** How many launches a failure must survive before it is believed.

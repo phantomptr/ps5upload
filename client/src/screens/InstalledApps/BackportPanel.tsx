@@ -247,7 +247,13 @@ export function BackportPanel({
         klog += await klogChunk(mgmtAddr(host)).catch(() => "");
       }
       klog += await klogChunk(mgmtAddr(host)).catch(() => "");
-      const verdict = verdictFrom(samples, klog, title.titleId);
+      // Ask the eboot before judging. Confirmed-backported turns "nothing ran
+      // and klog said nothing" into a library verdict; not-backported settles
+      // it outright, and no library set could have helped.
+      const ranAtAll = samples.some((sample) => sample.threads !== null);
+      const pair = ranAtAll ? null : await titleSdkPair(mgmtAddr(host), title.source);
+      if (pair?.backported === false) return { kind: "not-backported" };
+      const verdict = verdictFrom(samples, klog, title.titleId, pair?.backported === true);
       // A launch that produced nothing has two very different causes that look
       // identical from here. Before blaming the library set, check the eboot
       // actually carries the backport SDK pair — an un-backported title cannot
@@ -255,10 +261,6 @@ export function BackportPanel({
       // problem costs the user cycle after pointless cycle. (Measured: a title
       // whose SDK had been restored produced six launches returning ok with no
       // process, in both arms of a library experiment.)
-      if (verdict.kind === "wrong-libraries" || verdict.kind === "missing-libraries") {
-        const pair = await titleSdkPair(mgmtAddr(host), title.source);
-        if (pair?.backported === false) return { kind: "not-backported" };
-      }
       return verdict;
     },
     [host, title.titleId],
@@ -451,7 +453,7 @@ export function BackportPanel({
           ) : verdict?.kind === "wrong-libraries" ? (
             <Callout tone="warn" title={tr("backport_verify_wrong", undefined, "Wrong libraries for this game")}>
               {tr("backport_verify_wrong_body", { count: nextCandidates.length },
-                `The game started and then stopped, with no missing-function error — the libraries are present but not the ones it needs. ${nextCandidates.length} other set(s) left to try.`)}
+                `This title is patched correctly but did not start with these libraries, so they are not the ones it needs. ${nextCandidates.length} other set(s) left to try.`)}
             </Callout>
           ) : (
             <Callout tone="warn" title={tr("backport_verify_unknown", undefined, "Could not tell whether this worked")}>

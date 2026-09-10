@@ -3126,7 +3126,7 @@ backport_verify_running_body: "The game is still up after a minute ({threads} th
 backport_verify_missing: "It needs more libraries",
 backport_verify_missing_body: "The game called a function none of the installed libraries provide. {count} larger set(s) left to try.",
 backport_verify_wrong: "Wrong libraries for this game",
-backport_verify_wrong_body: "The game started and then stopped, with no missing-function error \u2014 the libraries are present but not the ones it needs. {count} other set(s) left to try.",
+backport_verify_wrong_body: "This title is patched correctly but did not start with these libraries, so they are not the ones it needs. {count} other set(s) left to try.",
 backport_verify_unknown: "Could not tell whether this worked",
 backport_verify_unknown_body: "The launches did not agree, so this says nothing about the libraries \u2014 launching fails on its own often enough that a mixed result is meaningless. Try launching it yourself, and undo if it does not play.",
 backport_get_more: "Get more libraries\u2026",

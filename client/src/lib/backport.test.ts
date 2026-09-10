@@ -441,6 +441,16 @@ describe("verifying a backport", () => {
     expect(verdictFrom([{ threads: null }], "", "PPSA30528").kind).toBe("unknown");
   });
 
+  it("blames the libraries when nothing ran and the SDK is confirmed", () => {
+    // Measured: a deliberately mismatched set failed 4/4 with NO process and no
+    // createApp line either. Requiring createApp would report the very case
+    // this feature exists to catch as "could not tell". Confirming the SDK pair
+    // positively excludes the only other explanation for that symptom.
+    expect(verdictFrom([{ threads: null }], "", "PPSA30528", true).kind).toBe("wrong-libraries");
+    // Without that confirmation it stays honest.
+    expect(verdictFrom([{ threads: null }], "", "PPSA30528", false).kind).toBe("unknown");
+  });
+
   it("offers only LARGER sets after a missing-library failure", () => {
     // Smaller sets cannot supply what was missing, so proposing one wastes a
     // three-minute edit cycle.
