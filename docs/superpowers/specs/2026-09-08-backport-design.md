@@ -423,8 +423,36 @@ cannot run by accident — and a `missing-libraries` verdict is believed
 immediately on the strength of its kernel message. Anything else must be
 unanimous, or the UI says it could not tell rather than blaming the libraries.
 
+### Correction: the remount was not the cause
+
+An earlier reading of this run blamed the ShadowMount+ remount, because phase 2
+(remount, then launch) was 0/3 while phase 1 (plain launch) looked like 2/3.
+Both halves of that were wrong.
+
+SMP's own log reinterprets phase 1: it records `[GAME] started: PPSA30528
+pid=463` for launch #1 and `[KSTUFF] game stopped` twenty seconds later, so #1
+started and DIED rather than running, and there is no `[GAME]` line at all for
+#3 or for any of phase 2. Phase 1 was really one clean run, one start-then-die,
+one never-started.
+
+And the run ended with every payload port on the console closed at once — 2121,
+9114, 9113 and the third-party 9021 — while the host still answered ping. That
+is rest mode, where payloads die. The console was drifting toward rest through a
+long unattended session, which explains why the first two trials worked and
+everything afterwards failed, in every phase, with no reference to remounts.
+
+The successes were simply the earliest trials. Ordering, not treatment.
+
 ### How to test libraries from here
 
-Repeat every configuration at least three times, randomise the order, and re-run
-the known-good control inside the same session. A failure counts only when every
-attempt agrees.
+Repeat every configuration at least three times, RANDOMISE THE ORDER (this run
+did not, which is how a degrading console masqueraded as a treatment effect),
+and re-run the known-good control inside the same session. Keep the console
+awake for the duration. A failure counts only when every attempt agrees, and a
+run of consecutive failures is a reason to check the console is still alive
+before it is a reason to believe anything.
+
+Better witnesses than the process table: ShadowMount+'s `[GAME] started` line
+for whether a launch took at all, and a klog drained throughout the window
+rather than once at the end — it is a 136-line ring buffer that unrelated spam
+can flush.
