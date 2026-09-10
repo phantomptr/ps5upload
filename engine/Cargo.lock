@@ -1138,6 +1138,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sevenz-rust2",
+ "sha2",
  "unrar",
  "ureq",
  "zip",

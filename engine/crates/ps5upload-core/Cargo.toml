@@ -11,6 +11,11 @@ blake3.workspace = true
 # BPS patch checksums (bps.rs). Already in the tree via zip's dependency
 # graph, so this pulls in no new code.
 crc32fast = "1"
+# Content addressing for the backport library corpus (fakelibs.rs). Pure Rust,
+# already in the lockfile via an existing transitive dependency, so this adds
+# no new supply-chain surface and keeps the aarch64-linux-android cross-compile
+# dependency-free.
+sha2 = "0.11"
 ftx2-proto = { path = "../ftx2-proto" }
 libc = "0.2"
 serde.workspace = true
