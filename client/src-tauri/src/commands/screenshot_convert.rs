@@ -48,7 +48,11 @@
 ///
 /// Runs the (CPU-bound) decode+tonemap on a blocking thread so the async
 /// runtime/UI isn't stalled. Returns `dst_path` on success.
-#[cfg(not(any(target_os = "android", target_os = "ios", all(target_os = "windows", target_arch = "aarch64"))))]
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "ios",
+    all(target_os = "windows", target_arch = "aarch64")
+)))]
 #[tauri::command]
 pub async fn screenshot_convert(
     src_path: String,
@@ -73,7 +77,11 @@ pub async fn screenshot_convert(
 /// Mobile fallback: the JPEG XR codec is a desktop-only dependency, so on
 /// Android/iOS the command exists (the shared frontend can always call it)
 /// but reports that conversion isn't available there.
-#[cfg(any(target_os = "android", target_os = "ios", all(target_os = "windows", target_arch = "aarch64")))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "ios",
+    all(target_os = "windows", target_arch = "aarch64")
+))]
 #[tauri::command]
 pub async fn screenshot_convert(
     _src_path: String,
@@ -83,7 +91,11 @@ pub async fn screenshot_convert(
     Err("Screenshot conversion is available in the desktop app only.".into())
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios", all(target_os = "windows", target_arch = "aarch64"))))]
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "ios",
+    all(target_os = "windows", target_arch = "aarch64")
+)))]
 mod desktop {
     use image::{ImageEncoder, ImageError};
     use jpegxr::{ImageDecode, PixelFormat, PixelInfo};

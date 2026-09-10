@@ -60,10 +60,8 @@ export function BackportPanel({
   open,
   host,
   title,
-  titleSdkVersion,
   sets,
   corpusRoot,
-  corpusError,
   onCorpusChanged,
   scanTitles,
   scan,
@@ -73,13 +71,10 @@ export function BackportPanel({
   open: boolean;
   host: string;
   title: InstalledTitle;
-  /** `sdkVersion` from the target's param.json — what it was BUILT against. */
-  titleSdkVersion: string;
   /** Sets from the local fakelibs corpus (manifest.json). */
   sets: FakelibSet[];
   /** Host path holding `<titleId>/<library>` for each set. */
   corpusRoot: string;
-  corpusError?: string | null;
   /** Called after libraries are imported or scanned, so the panel re-reads the
    *  corpus and can propose a set without being closed and reopened. */
   onCorpusChanged: () => void;
@@ -150,7 +145,7 @@ export function BackportPanel({
     } finally {
       setBusy(false);
     }
-  }, [corpusError, host, open, corpusRoot, sets, record, rejected, lastFailure, title, titleSdkVersion, tr]);
+  }, [host, open, corpusRoot, sets, record, rejected, lastFailure, title, tr]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -198,6 +193,7 @@ export function BackportPanel({
     }
     let result: T | undefined;
     let operationError: unknown;
+    let finishError: unknown;
     try {
       result = await operation();
       onCompleted?.(result);
@@ -208,13 +204,19 @@ export function BackportPanel({
         try {
           await smpImageRwFinish(transferAddr(host));
           await useEditSessionStore.getState().refresh(host);
-        } catch (finishError) {
+        } catch (error) {
+          // Never throw from finally (it would mask operationError). Record it
+          // and decide after the block.
           await useEditSessionStore.getState().refresh(host);
-          if (!operationError) throw finishError;
+          finishError = error;
         }
       }
     }
+    // The operation's own failure takes precedence; a failure to close the edit
+    // session (which leaves an image writable) is surfaced only if the
+    // operation itself succeeded.
     if (operationError) throw operationError;
+    if (finishError) throw finishError;
     return result as T;
   };
 
@@ -263,7 +265,7 @@ export function BackportPanel({
       // process, in both arms of a library experiment.)
       return verdict;
     },
-    [host, title.titleId],
+    [host, title.titleId, title.source],
   );
 
   /** Verify, retrying a failure before believing it.

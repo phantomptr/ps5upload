@@ -103,10 +103,7 @@ pub async fn smp_image_rw_status(addr: String) -> Result<Option<ImageRwSession>,
 }
 
 #[tauri::command]
-pub async fn smp_image_rw_begin(
-    addr: String,
-    title_id: String,
-) -> Result<ImageRwSession, String> {
+pub async fn smp_image_rw_begin(addr: String, title_id: String) -> Result<ImageRwSession, String> {
     tokio::task::spawn_blocking(move || smp_image_rw::begin(&addr, &title_id))
         .await
         .map_err(|e| format!("smp_image_rw_begin task: {e}"))?

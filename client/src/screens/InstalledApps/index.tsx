@@ -1134,12 +1134,8 @@ export default function InstalledAppsScreen({
           open
           host={host}
           title={backportTitle}
-          titleSdkVersion={
-            sdkState.titles.find((sdk) => sdk.title_id === backportTitle.titleId)?.sdk_version ?? ""
-          }
           sets={corpus.sets}
           corpusRoot={corpus.root}
-          corpusError={corpus.error}
           onCorpusChanged={() => void refreshCorpus()}
           scanTitles={scanTitles}
           scan={sdkState}
