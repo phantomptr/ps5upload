@@ -17,7 +17,9 @@ version = "5.17.7"
 
 [workspace.dependencies]
 anyhow = "1.0"
-axum = "0.8"
+# "multipart" is for the backport library import (fakelibs_api.rs): users pick
+# library files and upload them as one set. Same crate, just the extractor.
+axum = { version = "0.8", features = ["multipart"] }
 blake3 = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

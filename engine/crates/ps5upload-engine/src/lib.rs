@@ -35,6 +35,7 @@
 
 mod bundled_payload;
 mod engine_log;
+mod fakelibs_api;
 mod icon_cache;
 mod local_fs;
 mod log_dedup;
@@ -2835,6 +2836,45 @@ async fn ps5_fs_read_preview(
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct FakelibManifestReq {
+    /// Host directory holding `manifest.json` and `profiles/<titleId>/`.
+    path: String,
+}
+
+/// GET /api/fakelibs/manifest — read the local fakelib corpus manifest.
+///
+/// The corpus lives on the USER'S machine, not the console: profiles are
+/// gathered from their own games by `scripts/gather-fakelibs.py`. The desktop
+/// build could read it through Tauri, but the browser build cannot touch the
+/// filesystem at all, so it goes through the engine — the same missing-half
+/// problem as fs_read_preview and fs_write_bytes.
+///
+/// Read-only, and confined to the single file the caller names a directory
+/// for: a caller cannot walk it into an arbitrary read, because only
+/// `<path>/manifest.json` is ever opened.
+async fn fakelibs_manifest(
+    axum::extract::Query(req): axum::extract::Query<FakelibManifestReq>,
+) -> impl IntoResponse {
+    let manifest = std::path::Path::new(&req.path).join("manifest.json");
+    match tokio::task::spawn_blocking(move || std::fs::read_to_string(&manifest)).await {
+        Ok(Ok(text)) => match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(json) => (StatusCode::OK, Json(json)).into_response(),
+            Err(e) => json_err(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("manifest.json is not valid JSON: {e}"),
+            )
+            .into_response(),
+        },
+        Ok(Err(e)) => json_err(
+            StatusCode::NOT_FOUND,
+            format!("no fakelib corpus at {}: {e}", req.path),
+        )
+        .into_response(),
+        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+    }
+}
+
 /// GET /api/ps5/focus — which app currently owns the screen.
 ///
 /// Read-only and cheap enough to poll at 1 Hz. The payload answers via
@@ -3105,6 +3145,59 @@ async fn ps5_smp_checkout_finish(
         .and_then(|r| r);
     match r {
         Ok(v) => (StatusCode::OK, Json(serde_json::json!({ "checkout": v }))).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+async fn ps5_smp_image_rw_status(
+    State(state): State<AppState>,
+    Query(q): Query<AddrQuery>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
+    let r = tokio::task::spawn_blocking(move || ps5upload_core::smp_image_rw::read_state(&addr))
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(serde_json::json!({ "session": v }))).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SmpImageRwBeginReq {
+    addr: Option<String>,
+    title_id: String,
+}
+
+async fn ps5_smp_image_rw_begin(
+    State(state): State<AppState>,
+    Json(req): Json<SmpImageRwBeginReq>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
+    let r = tokio::task::spawn_blocking(move || {
+        ps5upload_core::smp_image_rw::begin(&addr, &req.title_id)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+async fn ps5_smp_image_rw_finish(
+    State(state): State<AppState>,
+    Json(q): Json<AddrQuery>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
+    let r = tokio::task::spawn_blocking(move || ps5upload_core::smp_image_rw::finish(&addr))
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
@@ -8772,6 +8865,17 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/proc/list", get(ps5_proc_list))
         .route("/api/ps5/app/lifecycle", post(ps5_app_lifecycle))
         .route("/api/ps5/klog", get(ps5_klog))
+        .route("/api/fakelibs/manifest", get(fakelibs_manifest))
+        // The app-managed corpus: the user builds it by importing a pack or
+        // scanning a console, and every later backport reuses it.
+        .route("/api/fakelibs/corpus", get(fakelibs_api::get_corpus))
+        .route("/api/fakelibs/import", post(fakelibs_api::import))
+        .route("/api/fakelibs/scan", post(fakelibs_api::start_scan))
+        .route("/api/fakelibs/scan/{id}", get(fakelibs_api::scan_status))
+        .route(
+            "/api/fakelibs/set/{id}",
+            axum::routing::delete(fakelibs_api::delete_set),
+        )
         .route("/api/ps5/net/interfaces", get(ps5_net_interfaces))
         .route(
             "/api/cache/artwork",
@@ -8862,6 +8966,12 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route(
             "/api/ps5/smp/checkout/finish",
             post(ps5_smp_checkout_finish),
+        )
+        .route("/api/ps5/smp/image-rw", get(ps5_smp_image_rw_status))
+        .route("/api/ps5/smp/image-rw/begin", post(ps5_smp_image_rw_begin))
+        .route(
+            "/api/ps5/smp/image-rw/finish",
+            post(ps5_smp_image_rw_finish),
         )
         .route("/api/ps5/hw/fan-threshold", post(ps5_hw_set_fan_threshold))
         .route("/api/ps5/fs/chmod", post(ps5_fs_chmod))
