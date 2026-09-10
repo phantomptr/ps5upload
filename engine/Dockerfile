@@ -1,9 +1,13 @@
-# Minimal scratch image for ps5upload-engine. Build context is engine/.
+# Minimal scratch image for ps5upload-engine. Build context is the REPO ROOT
+# (the build COPYs payload/ and third_party/), NOT engine/.
 # Official multi-arch image: docker pull ghcr.io/phantomptr/ps5upload-engine:latest
-#   docker build -t ps5upload-engine engine/
+#   docker build -f engine/Dockerfile -t ps5upload-engine .
 #   docker run --rm -p 19113:19113 -e PS5_ADDR=192.168.1.50:9113 ps5upload-engine
 # Env: PS5UPLOAD_ENGINE_PORT (19113), PS5_ADDR (192.168.137.2:9113),
 #      PS5UPLOAD_ALLOW_IP (comma-separated IPs allowed past the loopback guard),
+#      PS5UPLOAD_PKG_HOST_IP (host LAN IP the PS5 fetches pkg bytes from during a
+#      stream install — REQUIRED on Docker Desktop macOS/Windows, where the
+#      container's own routing guess is a NAT address the PS5 can't reach back),
 #      PS5UPLOAD_PAYLOAD_DIR (directory holding ps5upload.elf +
 #      ezremote-dpi.elf, overriding the images built into this binary —
 #      only needed if you built the image without them).

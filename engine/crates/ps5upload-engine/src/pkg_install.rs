@@ -3451,9 +3451,19 @@ async fn serve_handler(
     // caught the URL-builder mirror bug at the same site of truth).
     let expected_ip = strip_host_port(&session.ps5_mgmt_addr);
     let peer_ip = peer.ip().to_string();
-    if !peer.ip().is_loopback() && !expected_ip.is_empty() && peer_ip != expected_ip {
+    // A peer the operator already declared trusted via PS5UPLOAD_ALLOW_IP is
+    // exempt from the source gate. This is what makes a NAT'd deployment work:
+    // behind Docker port-mapping (Docker Desktop macOS/Windows) the console's
+    // fetch arrives from the gateway address, not its own IP, so the bare-IP
+    // compare below would reject every range request. The operator opens the
+    // control API to that same gateway with PS5UPLOAD_ALLOW_IP; honouring it
+    // here too keeps the two consistent. On a Linux `--network host` box the
+    // real console IP is visible and no allowlist entry is needed.
+    let peer_trusted = peer.ip().is_loopback() || parse_allow_ips_env().contains(&peer.ip());
+    if !peer_trusted && !expected_ip.is_empty() && peer_ip != expected_ip {
         crate::log_warn!(
-            "pkg-host fetch REJECTED: peer={} expected={} session={}",
+            "pkg-host fetch REJECTED: peer={} expected={} session={} \
+             (set PS5UPLOAD_ALLOW_IP to this peer if the console is behind NAT)",
             peer_ip,
             expected_ip,
             session.id,
@@ -3717,6 +3727,17 @@ fn read_split_range(s: &InstallSession, start: u64, end: u64) -> std::io::Result
 /// across multi-NIC machines by asking the OS what local IP it would
 /// use to send a packet to the PS5 — that's the right one to give to
 /// BGFT in the install URL.
+/// The PS5UPLOAD_ALLOW_IP peers, parsed once. The pkg-host source gate is hit
+/// by hundreds of Range requests per install, so cache rather than re-parse the
+/// env on each. The value is fixed at process start (set by the container/host
+/// launcher), so a OnceLock snapshot is correct.
+fn parse_allow_ips_env() -> &'static [IpAddr] {
+    static ALLOW: std::sync::OnceLock<Vec<IpAddr>> = std::sync::OnceLock::new();
+    ALLOW.get_or_init(|| {
+        crate::parse_allow_ips(&std::env::var("PS5UPLOAD_ALLOW_IP").unwrap_or_default())
+    })
+}
+
 pub fn lan_ip_for_ps5(ps5_host: &str) -> std::io::Result<IpAddr> {
     let sock = std::net::UdpSocket::bind("0.0.0.0:0")?;
     // UDP "connect" doesn't actually send anything — it just sets the
@@ -3738,7 +3759,22 @@ pub fn lan_ip_for_ps5(ps5_host: &str) -> std::io::Result<IpAddr> {
 /// (which hands the URL to the DPI daemon instead of a local path).
 fn pkg_host_url_for(ps5_addr: &str, session_id: &str, content_id: &str) -> std::io::Result<String> {
     let ps5_host_only = strip_host_port(ps5_addr);
-    let local_ip = lan_ip_for_ps5(&ps5_host_only)?;
+    // PS5UPLOAD_PKG_HOST_IP lets a deployment pin the IP the console fetches
+    // from, overriding the routing-table guess. Required whenever the engine
+    // can't see a console-reachable source IP for itself — most importantly a
+    // container on Docker Desktop (macOS/Windows), where the daemon runs in a
+    // VM and `lan_ip_for_ps5` returns the container's NAT address that the PS5
+    // can't route back to. Set it to the HOST's LAN IP (the one the PS5 reaches
+    // the published port on). Ignored when empty/unset.
+    let local_ip = match std::env::var("PS5UPLOAD_PKG_HOST_IP") {
+        Ok(v) if !v.trim().is_empty() => v.trim().parse::<IpAddr>().map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("PS5UPLOAD_PKG_HOST_IP='{v}' is not a valid IP: {e}"),
+            )
+        })?,
+        _ => lan_ip_for_ps5(&ps5_host_only)?,
+    };
     let host_port = std::env::var("PS5UPLOAD_ENGINE_PORT")
         .ok()
         .and_then(|s| s.parse::<u16>().ok())
@@ -3988,6 +4024,11 @@ mod loader_route_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // pkg_host_url_for reads process-global env vars (PS5UPLOAD_ENGINE_PORT,
+    // PS5UPLOAD_PKG_HOST_IP). Tests that set them must not run concurrently or
+    // one leaks into another; serialize them on this lock.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn browser_upload_filename_is_a_safe_basename() {
@@ -4421,6 +4462,7 @@ mod tests {
 
     #[test]
     fn pkg_host_url_for_builds_canonical_url() {
+        let _g = ENV_LOCK.lock().unwrap();
         // Loopback always resolves — exercises the full URL assembly
         // (LAN IP lookup, port stamping, filename canonicalisation, path
         // pattern) that both install-start and dpi-direct-install share.
@@ -4444,6 +4486,7 @@ mod tests {
 
     #[test]
     fn pkg_host_url_for_uses_env_port_when_set() {
+        let _g = ENV_LOCK.lock().unwrap();
         // The engine port is overridable via PS5UPLOAD_ENGINE_PORT; the
         // direct-install URL must honour it so the daemon fetches from
         // the same port the engine is actually listening on.
@@ -4453,6 +4496,31 @@ mod tests {
         assert!(
             url.starts_with("http://127.0.0.1:29113/"),
             "URL should use env-overridden port: {url}"
+        );
+    }
+
+    #[test]
+    fn pkg_host_url_for_honours_advertised_ip_override() {
+        let _g = ENV_LOCK.lock().unwrap();
+        // Inside a Docker Desktop container the routing-table guess is a NAT
+        // address the PS5 can't reach; PS5UPLOAD_PKG_HOST_IP pins the host's
+        // LAN IP instead. It must win over lan_ip_for_ps5 regardless of the
+        // ps5_addr, and an empty value must fall through to the guess.
+        std::env::set_var("PS5UPLOAD_PKG_HOST_IP", "192.168.86.199");
+        let url = pkg_host_url_for("192.168.86.100:9114", "s", "IV0001-X").expect("override ip");
+        std::env::remove_var("PS5UPLOAD_PKG_HOST_IP");
+        assert!(
+            url.starts_with("http://192.168.86.199:"),
+            "URL must use the advertised-IP override: {url}"
+        );
+        // An empty override must not be treated as a valid IP.
+        std::env::set_var("PS5UPLOAD_PKG_HOST_IP", "   ");
+        let url2 =
+            pkg_host_url_for("127.0.0.1:9114", "s", "IV0001-X").expect("empty falls through");
+        std::env::remove_var("PS5UPLOAD_PKG_HOST_IP");
+        assert!(
+            url2.starts_with("http://127.0.0.1:"),
+            "empty override should fall back to the routing guess: {url2}"
         );
     }
 
