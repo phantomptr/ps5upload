@@ -21,9 +21,9 @@ use std::sync::{Arc, Mutex};
 
 use axum::{
     body::Body,
-    extract::{Path as AxumPath, Query, State},
+    extract::{DefaultBodyLimit, Path as AxumPath, Query, State},
     http::{header, HeaderMap, Response, StatusCode},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use ps5upload_core::app_lifecycle::{toast_send, ToastRequest};
@@ -146,8 +146,217 @@ pub struct PkgInstallState {
 
 pub type PkgInstallStateHandle = Arc<PkgInstallState>;
 
+/// Where uploaded packages land before a stream install serves them. Beside the
+/// engine's other scratch state; each upload gets a UUID subdir so concurrent
+/// uploads and the same filename don't collide.
+fn pkg_upload_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join("ps5upload-pkg-upload")
+}
+
+/// Browser uploads are temporary engine-side staging, not a package library.
+/// A normal client deletes them after Stream/fallback completes; this sweep
+/// catches browser crashes and engine restarts without racing any realistic
+/// active upload or install.
+const PKG_UPLOAD_STALE_AGE: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 60 * 60);
+
+fn cleanup_stale_pkg_uploads() {
+    let Ok(entries) = std::fs::read_dir(pkg_upload_dir()) else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age >= PKG_UPLOAD_STALE_AGE);
+        if stale {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+fn pkg_upload_path(id: &str) -> Option<std::path::PathBuf> {
+    Uuid::parse_str(id)
+        .ok()
+        .map(|id| pkg_upload_dir().join(id.to_string()))
+}
+
+/// Basename only, with traversal and separators stripped — the client controls
+/// this string, and it becomes a path segment.
+fn sanitize_pkg_filename(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let cleaned: String = base
+        .chars()
+        .filter(|c| !c.is_control() && *c != '/' && *c != '\\')
+        .collect();
+    let trimmed = cleaned.trim_matches('.');
+    if trimmed.is_empty() {
+        "package.pkg".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// POST /api/pkg/upload — receive a .pkg from the browser and stage it on the
+/// engine's own filesystem, returning the path.
+///
+/// This is the one piece the self-hosted web UI / Docker engine was missing for
+/// stream install. The desktop client hands `install/start` a path to a file on
+/// the same machine as the engine; a browser has no such path. It uploads the
+/// bytes here, gets back an engine-side path, and drives the identical
+/// serve_only + DPI flow the desktop uses — no console-side staging.
+///
+/// Streamed to disk field-by-field, never buffered whole: packages run to tens
+/// of gigabytes.
+async fn pkg_upload_handler(mut form: axum::extract::Multipart) -> Response<Body> {
+    use tokio::io::AsyncWriteExt;
+
+    cleanup_stale_pkg_uploads();
+    let id = Uuid::new_v4();
+    let dir = pkg_upload_dir().join(id.to_string());
+    if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+        return json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({ "error": format!("could not create upload dir: {e}") }),
+        );
+    }
+
+    loop {
+        let field = match form.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => {
+                let _ = tokio::fs::remove_dir_all(&dir).await;
+                return json_response(
+                    StatusCode::BAD_REQUEST,
+                    serde_json::json!({ "error": format!("malformed upload: {e}") }),
+                );
+            }
+        };
+        let filename = sanitize_pkg_filename(field.file_name().unwrap_or("package.pkg"));
+        // Only accept a .pkg — the browser could POST anything.
+        if !filename.to_ascii_lowercase().ends_with(".pkg") {
+            continue;
+        }
+        let dest = dir.join(&filename);
+        let mut file = match tokio::fs::File::create(&dest).await {
+            Ok(f) => f,
+            Err(e) => {
+                let _ = tokio::fs::remove_dir_all(&dir).await;
+                return json_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    serde_json::json!({ "error": format!("could not open {}: {e}", dest.display()) }),
+                );
+            }
+        };
+        let mut field = field;
+        let mut written: u64 = 0;
+        loop {
+            match field.chunk().await {
+                Ok(Some(bytes)) => {
+                    if let Err(e) = file.write_all(&bytes).await {
+                        drop(file);
+                        let _ = tokio::fs::remove_dir_all(&dir).await;
+                        return json_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            serde_json::json!({ "error": format!("write failed: {e}") }),
+                        );
+                    }
+                    written += bytes.len() as u64;
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    drop(file);
+                    let _ = tokio::fs::remove_dir_all(&dir).await;
+                    return json_response(
+                        StatusCode::BAD_REQUEST,
+                        serde_json::json!({ "error": format!("upload stream error: {e}") }),
+                    );
+                }
+            }
+        }
+        if let Err(e) = file.flush().await {
+            drop(file);
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+            return json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                serde_json::json!({ "error": format!("flush failed: {e}") }),
+            );
+        }
+        return json_response(
+            StatusCode::OK,
+            serde_json::json!({
+                "upload_id": id.to_string(),
+                "path": dest.to_string_lossy(),
+                "size": written,
+                "filename": filename,
+            }),
+        );
+    }
+
+    // No .pkg field arrived — clean up the empty dir.
+    let _ = tokio::fs::remove_dir_all(&dir).await;
+    json_response(
+        StatusCode::BAD_REQUEST,
+        serde_json::json!({ "error": "no .pkg file in the upload" }),
+    )
+}
+
+#[derive(Debug, Serialize)]
+struct PkgUploadDeleteResponse {
+    upload_id: String,
+    removed: bool,
+}
+
+/// DELETE /api/pkg/upload/:id — discard browser-side temporary staging.
+/// The UUID-only lookup makes it impossible for this endpoint to remove an
+/// arbitrary host path even if a caller supplies separators or `..`.
+async fn pkg_upload_delete_handler(AxumPath(id): AxumPath<String>) -> Response<Body> {
+    let Some(path) = pkg_upload_path(&id) else {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({ "error": "invalid upload id" }),
+        );
+    };
+    let removed = match tokio::fs::remove_dir_all(&path).await {
+        Ok(()) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => {
+            return json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                serde_json::json!({ "error": format!("could not remove upload: {e}") }),
+            )
+        }
+    };
+    json_response(
+        StatusCode::OK,
+        serde_json::json!(PkgUploadDeleteResponse {
+            upload_id: id,
+            removed,
+        }),
+    )
+}
+
+fn json_response(code: StatusCode, body: serde_json::Value) -> Response<Body> {
+    Response::builder()
+        .status(code)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap_or_else(|_| Response::new(Body::empty()))
+}
+
 pub fn router(state: PkgInstallStateHandle) -> Router {
     Router::new()
+        // Packages routinely exceed the app-wide 64 MiB JSON/form limit.
+        // Multipart is consumed incrementally above, so disabling buffering's
+        // size guard for this one route does not put the package in RAM.
+        .route(
+            "/api/pkg/upload",
+            post(pkg_upload_handler).layer(DefaultBodyLimit::disable()),
+        )
+        .route("/api/pkg/upload/{id}", delete(pkg_upload_delete_handler))
         .route("/api/pkg/parse", post(parse_handler))
         .route("/api/pkg/parse-split", post(parse_split_handler))
         // Read-only UFS2 image inspector for .ffpkg / .ufs files.
@@ -3779,6 +3988,25 @@ mod loader_route_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_upload_filename_is_a_safe_basename() {
+        assert_eq!(sanitize_pkg_filename("../../Game.pkg"), "Game.pkg");
+        assert_eq!(
+            sanitize_pkg_filename(r"C:\\Downloads\\Game.pkg"),
+            "Game.pkg"
+        );
+        assert_eq!(sanitize_pkg_filename("..."), "package.pkg");
+        assert_eq!(sanitize_pkg_filename("bad\0name.pkg"), "badname.pkg");
+    }
+
+    #[test]
+    fn browser_upload_cleanup_accepts_only_uuid_directories() {
+        let id = "f983a63c-e6f7-489c-b2d7-14d994eff321";
+        assert_eq!(pkg_upload_path(id), Some(pkg_upload_dir().join(id)));
+        assert_eq!(pkg_upload_path("../not-an-upload"), None);
+        assert_eq!(pkg_upload_path(""), None);
+    }
 
     // ── progress-driven install tracker (the large-pkg data-loss fix) ──
     //

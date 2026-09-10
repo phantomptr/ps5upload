@@ -70,6 +70,10 @@ import { transferAddr, hostOf } from "../../lib/addr";
 import { formatBytes } from "../../lib/format";
 import { acceptPkgDrop } from "../../lib/pkgDropDedupe";
 import { writeClipboard } from "../../lib/clipboard";
+import {
+  deleteBrowserPkgUpload,
+  stageBrowserPkg,
+} from "../../api/pkgUpload";
 
 /* ─── Cover art ────────────────────────────────────────────────────────
  * Thin wrapper over the shared GameIcon (keyed by title id from the
@@ -463,6 +467,7 @@ export default function InstallPackageScreen() {
   const [picking, setPicking] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [dropActive, setDropActive] = useState(false);
+  const browserPkgInputRef = useRef<HTMLInputElement>(null);
   const [alternativeSelections, setAlternativeSelections] =
     useState<PkgAlternativeSelections>(() =>
       loadPkgAlternativeSelections(host),
@@ -652,6 +657,76 @@ export default function InstallPackageScreen() {
   // install when you don't want to wait out the staging upload (or don't
   // have the disk space for it). Shares the `installing` lock with the
   // regular install flow.
+  async function runStreamInstall(sourcePath: string, streamName: string) {
+    setStreamResult(null);
+    const r = await installStream(sourcePath, host);
+    setStreamResult({
+      ok: !!r.ok,
+      warn: !r.ok && !!r.acceptedUnverified,
+      name: streamName,
+      message: r.ok
+        ? tr(
+            "install.stream.done",
+            undefined,
+            "Stream install complete — the package was fetched over HTTP, nothing was staged on the PS5.",
+          )
+        : r.message ||
+          tr("install.stream.failed", undefined, "The install didn't complete."),
+    });
+    if (!r.ok && r.stagedFallbackRecommended) {
+      const fallback = await confirm({
+        title: tr(
+          "pkglib.stream.fallback.title",
+          undefined,
+          "Stream is blocked on this PS5",
+        ),
+        message: `${r.message || "The PS5 couldn't complete the HTTP install."}\n\nUpload the same package to PS5 staging and install it now? This uses the PS5-local file path and does not depend on Sony's HTTP proxy.`,
+        confirmLabel: tr(
+          "pkglib.stream.fallback.confirm",
+          undefined,
+          "Upload & install",
+        ),
+        cancelLabel: tr(
+          "pkglib.stream.fallback.cancel",
+          undefined,
+          "Not now",
+        ),
+      });
+      if (fallback) {
+        setPickError(null);
+        await addAndUpload(sourcePath, host, {
+          installAfterUpload: true,
+          selectVariant: true,
+        });
+        // addAndUpload records an explicit variant choice when needed.
+        setAlternativeSelections(loadPkgAlternativeSelections(host));
+      } else if (r.message) {
+        setPickError(r.message);
+      }
+    } else if (!r.ok && r.message) {
+      setPickError(r.message);
+    }
+  }
+
+  async function handleBrowserStreamFile(file: File) {
+    setPickError(null);
+    setStreaming(true);
+    let uploadId: string | null = null;
+    try {
+      const staged = await stageBrowserPkg(file);
+      uploadId = staged.uploadId;
+      await runStreamInstall(staged.path, staged.filename || file.name);
+    } catch (e) {
+      setPickError(`${e}`);
+    } finally {
+      if (uploadId) {
+        // Best effort: a stale-upload sweep also catches browser crashes.
+        await deleteBrowserPkgUpload(uploadId).catch(() => {});
+      }
+      setStreaming(false);
+    }
+  }
+
   async function handleStreamPick() {
     setPickError(null);
     if (!host?.trim()) {
@@ -661,6 +736,10 @@ export default function InstallPackageScreen() {
           "Set a PS5 host on the Connection tab first.",
         ),
       );
+      return;
+    }
+    if (!isTauriEnv()) {
+      browserPkgInputRef.current?.click();
       return;
     }
     // No beta gate. Stream is the RELIABLE path and is no longer hidden
@@ -688,55 +767,9 @@ export default function InstallPackageScreen() {
           });
       const p = Array.isArray(sel) ? sel[0] : sel;
       if (!p) return;
-      setStreamResult(null);
-      const r = await installStream(p as string, host);
-      const streamName = String(p).split("/").pop() ?? String(p);
-      setStreamResult({
-        ok: !!r.ok,
-        warn: !r.ok && !!r.acceptedUnverified,
-        name: streamName,
-        message: r.ok
-          ? tr(
-              "install.stream.done",
-              undefined,
-              "Stream install complete — the package was fetched over HTTP, nothing was staged on the PS5.",
-            )
-          : r.message ||
-            tr("install.stream.failed", undefined, "The install didn't complete."),
-      });
-      if (!r.ok && r.stagedFallbackRecommended) {
-        const fallback = await confirm({
-          title: tr(
-            "pkglib.stream.fallback.title",
-            undefined,
-            "Stream is blocked on this PS5",
-          ),
-          message: `${r.message || "The PS5 couldn't complete the HTTP install."}\n\nUpload the same package to PS5 staging and install it now? This uses the PS5-local file path and does not depend on Sony's HTTP proxy.`,
-          confirmLabel: tr(
-            "pkglib.stream.fallback.confirm",
-            undefined,
-            "Upload & install",
-          ),
-          cancelLabel: tr(
-            "pkglib.stream.fallback.cancel",
-            undefined,
-            "Not now",
-          ),
-        });
-        if (fallback) {
-          setPickError(null);
-          await addAndUpload(p as string, host, {
-            installAfterUpload: true,
-            selectVariant: true,
-          });
-          // addAndUpload records an explicit variant choice when needed.
-          setAlternativeSelections(loadPkgAlternativeSelections(host));
-        } else if (r.message) {
-          setPickError(r.message);
-        }
-      } else if (!r.ok && r.message) {
-        setPickError(r.message);
-      }
+      const sourcePath = String(p);
+      const streamName = sourcePath.split(/[\\/]/).pop() ?? sourcePath;
+      await runStreamInstall(sourcePath, streamName);
     } catch (e) {
       setPickError(`${e}`);
     } finally {
@@ -1100,59 +1133,71 @@ export default function InstallPackageScreen() {
               </Button>
             )}
             {isTauriEnv() && (
-              <>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  leftIcon={<Plus size={14} />}
-                  onClick={handlePick}
-                  loading={picking}
-                  disabled={!hostReady || installing || installingAll}
-                  title={
-                    !hostReady
+              <Button
+                variant="primary"
+                size="sm"
+                leftIcon={<Plus size={14} />}
+                onClick={handlePick}
+                loading={picking}
+                disabled={!hostReady || installing || installingAll}
+                title={
+                  !hostReady
+                    ? tr(
+                        "install.add.disabledHint",
+                        "Set a PS5 host on the Connection tab first",
+                      )
+                    : installing
                       ? tr(
-                          "install.add.disabledHint",
-                          "Set a PS5 host on the Connection tab first",
+                          "pkglib.add.installingHint",
+                          "Wait for the current install to finish",
                         )
-                      : installing
-                        ? tr(
-                            "pkglib.add.installingHint",
-                            "Wait for the current install to finish",
-                          )
-                        : undefined
-                  }
-                >
-                  {tr("install.add", "Add .pkg")}
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  leftIcon={
-                    streaming ? (
-                      <Spinner size={14} tone="inherit" />
-                    ) : (
-                      <Download size={14} />
-                    )
-                  }
-                  onClick={handleStreamPick}
-                  loading={streaming}
-                  disabled={!hostReady || installing || installingAll}
-                  title={
-                    !hostReady
-                      ? tr(
-                          "install.add.disabledHint",
-                          "Set a PS5 host on the Connection tab first",
-                        )
-                      : tr(
-                          "pkglib.stream.hint",
-                          "Install a .pkg straight from this PC over HTTP — no staging upload. The most reliable path.",
-                        )
-                  }
-                >
-                  {tr("pkglib.stream", undefined, "Stream install")}
-                </Button>
-              </>
+                      : undefined
+                }
+              >
+                {tr("install.add", "Add .pkg")}
+              </Button>
             )}
+            {!isTauriEnv() && (
+              <input
+                ref={browserPkgInputRef}
+                type="file"
+                accept=".pkg"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  // Selecting the same file again must fire another change.
+                  event.currentTarget.value = "";
+                  if (file) void handleBrowserStreamFile(file);
+                }}
+              />
+            )}
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={
+                streaming ? (
+                  <Spinner size={14} tone="inherit" />
+                ) : (
+                  <Download size={14} />
+                )
+              }
+              onClick={handleStreamPick}
+              loading={streaming}
+              disabled={!hostReady || installing || installingAll}
+              title={
+                !hostReady
+                  ? tr(
+                      "install.add.disabledHint",
+                      "Set a PS5 host on the Connection tab first",
+                    )
+                  : tr(
+                      "pkglib.stream.hint",
+                      "Install a .pkg straight from this PC over HTTP — no staging upload. The most reliable path.",
+                    )
+              }
+            >
+              {tr("pkglib.stream", undefined, "Stream install")}
+            </Button>
           </div>
         }
       />
