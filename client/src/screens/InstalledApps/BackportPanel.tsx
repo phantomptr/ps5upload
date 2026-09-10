@@ -37,6 +37,8 @@ import {
   type VerifySample,
   type VerifyVerdict,
   verdictFrom,
+  combineAttempts,
+  FAILURE_ATTEMPTS,
   nextSetsAfter,
   type FakelibSet,
 } from "../../lib/backport";
@@ -222,11 +224,9 @@ export function BackportPanel({
    *  user to go and find out, and because a failed backport should cost one
    *  click to move past rather than a manual launch, a manual close and a
    *  guess about what went wrong. */
-  const verify = useCallback(async (failedSet?: FakelibSet) => {
-    setVerifying(true);
-    setVerdict(null);
-    setError(null);
-    try {
+  /** One launch, watched to the end of the window. */
+  const attempt = useCallback(
+    async (): Promise<VerifyVerdict> => {
       // Drain whatever is already buffered so the diagnosis reads only lines
       // from THIS launch — a previous attempt's unpatched-function line would
       // otherwise be read as this one's.
@@ -240,19 +240,46 @@ export function BackportPanel({
         samples.push({ threads: proc ? proc.threads : null });
       }
       const klog = await klogChunk(mgmtAddr(host)).catch(() => "");
-      const result = verdictFrom(samples, klog, title.titleId);
-      setVerdict(result);
-      if (result.kind === "missing-libraries" || result.kind === "wrong-libraries") {
-        setLastFailure(failedSet ? { set: failedSet, verdict: result } : null);
-      } else {
-        setLastFailure(null);
+      return verdictFrom(samples, klog, title.titleId);
+    },
+    [host, title.titleId],
+  );
+
+  /** Verify, retrying a failure before believing it.
+   *
+   *  Launching is unreliable in the failing direction: an unchanged Red Dead
+   *  ran, ran, then produced no process at all. Acting on one failed launch
+   *  sends the user through an install-launch-undo cycle for nothing. */
+  const verify = useCallback(
+    async (failedSet?: FakelibSet) => {
+      setVerifying(true);
+      setVerdict(null);
+      setError(null);
+      try {
+        const attempts: VerifyVerdict[] = [];
+        for (let i = 0; i < FAILURE_ATTEMPTS; i += 1) {
+          attempts.push(await attempt());
+          const so_far = combineAttempts(attempts);
+          setVerdict(so_far);
+          // Stop as soon as the answer cannot change: a run, or a
+          // missing-library message, both settle it.
+          if (so_far.kind === "running" || so_far.kind === "missing-libraries") break;
+        }
+        const result = combineAttempts(attempts);
+        setVerdict(result);
+        if (result.kind === "missing-libraries" || result.kind === "wrong-libraries") {
+          setLastFailure(failedSet ? { set: failedSet, verdict: result } : null);
+        } else {
+          setLastFailure(null);
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setVerifying(false);
       }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setVerifying(false);
-    }
-  }, [host, title.titleId]);
+    },
+    [attempt],
+  );
 
   const apply = async () => {
     if (!plan) return;
@@ -382,7 +409,7 @@ export function BackportPanel({
             <div className="flex items-center gap-2">
               <Spinner size={16} />
               {tr("backport_verifying", undefined,
-                "Launched it — watching for about a minute to see whether it stays up…")}
+                "Launching and watching — a failed launch is retried, because launching is unreliable enough that one failure proves nothing.")}
             </div>
           ) : verdict?.kind === "running" ? (
             // Deliberately not "success". Thread count has been wrong three
@@ -403,9 +430,9 @@ export function BackportPanel({
                 `The game started and then stopped, with no missing-function error — the libraries are present but not the ones it needs. ${nextCandidates.length} other set(s) left to try.`)}
             </Callout>
           ) : (
-            <Callout tone="warn" title={tr("backport_verify_unknown", undefined, "Could not tell what happened")}>
+            <Callout tone="warn" title={tr("backport_verify_unknown", undefined, "Could not tell whether this worked")}>
               {tr("backport_verify_unknown_body", undefined,
-                "The game never got as far as starting, for a reason that is not about libraries. Check the console is awake and try launching it yourself.")}
+                "The launches did not agree, so this says nothing about the libraries — launching fails on its own often enough that a mixed result is meaningless. Try launching it yourself, and undo if it does not play.")}
             </Callout>
           )
         ) : null}

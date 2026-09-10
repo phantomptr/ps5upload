@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyBackport,
   diagnoseLaunchFailure,
+  combineAttempts,
   nextSetsAfter,
   verdictFrom,
   resolveSets,
@@ -456,5 +457,47 @@ describe("verifying a backport", () => {
     const smaller = set("smaller", "PPSA00002", ["a.sprx"]);
     const next = nextSetsAfter({ kind: "wrong-libraries" }, failed, [failed, smaller]);
     expect(next.map((s) => s.id)).toEqual(["smaller"]);
+  });
+});
+
+describe("believing a failure", () => {
+  // Red Dead, unchanged between runs, gave RUNS / RUNS / NO PROCESS. A single
+  // failed launch is not evidence about libraries.
+  it("does not conclude anything from one failed launch", () => {
+    expect(combineAttempts([{ kind: "wrong-libraries" }]).kind).toBe("unknown");
+    expect(combineAttempts([{ kind: "wrong-libraries" }, { kind: "wrong-libraries" }]).kind)
+      .toBe("unknown");
+  });
+
+  it("believes a failure only when every attempt agrees", () => {
+    expect(
+      combineAttempts([
+        { kind: "wrong-libraries" }, { kind: "wrong-libraries" }, { kind: "wrong-libraries" },
+      ]).kind,
+    ).toBe("wrong-libraries");
+  });
+
+  it("lets any successful launch win outright", () => {
+    // Launching is flaky in the failing direction only: a game cannot run by
+    // accident, so one run beats two failures.
+    expect(
+      combineAttempts([
+        { kind: "wrong-libraries" }, { kind: "running", peakThreads: 40 }, { kind: "wrong-libraries" },
+      ]),
+    ).toEqual({ kind: "running", peakThreads: 40 });
+  });
+
+  it("believes a missing-library failure immediately", () => {
+    // It rests on an actual kernel message rather than on absence, so it does
+    // not need repeating.
+    expect(combineAttempts([{ kind: "missing-libraries" }]).kind).toBe("missing-libraries");
+  });
+
+  it("refuses to guess when attempts disagree", () => {
+    expect(
+      combineAttempts([
+        { kind: "wrong-libraries" }, { kind: "unknown" }, { kind: "wrong-libraries" },
+      ]).kind,
+    ).toBe("unknown");
   });
 });

@@ -480,6 +480,34 @@ export function verdictFrom(
   return diagnosis === "unknown" ? { kind: "unknown" } : { kind: diagnosis };
 }
 
+/** How many launches a failure must survive before it is believed.
+ *
+ *  Measured on hardware: Red Dead, unchanged between runs, launched, launched,
+ *  then produced no process at all — 1 failure in 3 with nothing altered. A
+ *  single failed launch is therefore not evidence about libraries, and acting
+ *  on one sends the user through a pointless install-launch-undo cycle. */
+export const FAILURE_ATTEMPTS = 3;
+
+/** Fold repeated launch attempts into one verdict.
+ *
+ *  Any attempt that ends with the title up wins outright: launching is flaky in
+ *  the failing direction, not the succeeding one — a game cannot run by
+ *  accident.
+ *
+ *  `missing-libraries` is believed from a single attempt because it rests on an
+ *  actual kernel message ("Call to unpatched function"), which is a positive
+ *  signal rather than an absence. Everything else needs every attempt to agree.
+ */
+export function combineAttempts(attempts: VerifyVerdict[]): VerifyVerdict {
+  const running = attempts.find((v) => v.kind === "running");
+  if (running) return running;
+  const missing = attempts.find((v) => v.kind === "missing-libraries");
+  if (missing) return missing;
+  if (attempts.length < FAILURE_ATTEMPTS) return { kind: "unknown" };
+  const first = attempts[0] ?? { kind: "unknown" as const };
+  return attempts.every((v) => v.kind === first.kind) ? first : { kind: "unknown" };
+}
+
 /** Sets worth offering after a verdict, best first.
  *
  *  A missing-library failure wants MORE libraries, so sets smaller than the one
