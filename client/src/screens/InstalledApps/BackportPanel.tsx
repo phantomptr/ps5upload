@@ -21,6 +21,7 @@ import { hostOf, mgmtAddr, transferAddr } from "../../lib/addr";
 import { useTr } from "../../state/lang";
 import { useEditSessionStore } from "../../state/editSession";
 import { LibrarySourcePicker } from "./LibrarySourcePicker";
+import { appLaunch, klogChunk } from "../../api/ps5";
 import type { ScanTitleInput } from "../../state/fakelibCorpus";
 import {
   applyBackport,
@@ -33,6 +34,10 @@ import {
   type BackportPlan,
   type BackportRecord,
   type BackportTransport,
+  type VerifySample,
+  type VerifyVerdict,
+  verdictFrom,
+  nextSetsAfter,
   type FakelibSet,
 } from "../../lib/backport";
 import {
@@ -40,6 +45,14 @@ import {
   removeBackportRecord,
   saveBackportRecord,
 } from "../../state/backportRecords";
+
+/** How long to watch a launched title before judging it.
+ *
+ *  Nine eight-second samples. A cold start from USB can take most of a minute
+ *  to show threads (Nioh 3 looked dead at 18 seconds and reached 263 threads),
+ *  so a short window produces false failures. */
+const VERIFY_SAMPLES = 9;
+const VERIFY_INTERVAL_MS = 8000;
 
 export function BackportPanel({
   open,
@@ -80,6 +93,8 @@ export function BackportPanel({
    * predicts which set a game needs, so working down the ranked list is
    * the actual workflow, not an error path. */
   const [rejected, setRejected] = useState<string[]>([]);
+  const [verdict, setVerdict] = useState<VerifyVerdict | null>(null);
+  const [verifying, setVerifying] = useState(false);
   const [record, setRecord] = useState<BackportRecord | null>(() =>
     loadBackportRecord(host, title.titleId),
   );
@@ -88,6 +103,11 @@ export function BackportPanel({
   const [error, setError] = useState<string | null>(null);
 
   const candidates = rankSets(sets, rejected, title.titleId);
+  /* After a failure, what is still worth trying. A missing-library failure
+   * needs a BIGGER set, so smaller ones are dropped rather than offered and
+   * wasted. */
+  const nextCandidates =
+    verdict && plan ? nextSetsAfter(verdict, plan.set, candidates) : candidates;
 
   const load = useCallback(async () => {
     if (!open || record) return;
@@ -185,6 +205,38 @@ export function BackportPanel({
     return result as T;
   };
 
+  /** Launch the title and watch what happens.
+   *
+   *  Runs automatically after an install because the alternative is asking the
+   *  user to go and find out, and because a failed backport should cost one
+   *  click to move past rather than a manual launch, a manual close and a
+   *  guess about what went wrong. */
+  const verify = useCallback(async () => {
+    setVerifying(true);
+    setVerdict(null);
+    setError(null);
+    try {
+      // Drain whatever is already buffered so the diagnosis reads only lines
+      // from THIS launch — a previous attempt's unpatched-function line would
+      // otherwise be read as this one's.
+      await klogChunk(mgmtAddr(host)).catch(() => "");
+      await appLaunch(transferAddr(host), title.titleId);
+      const samples: VerifySample[] = [];
+      for (let i = 0; i < VERIFY_SAMPLES; i += 1) {
+        await new Promise((r) => setTimeout(r, VERIFY_INTERVAL_MS));
+        const list = await processList(mgmtAddr(host)).catch(() => ({ processes: [] }));
+        const proc = list.processes.find((pr) => pr.title_id === title.titleId);
+        samples.push({ threads: proc ? proc.threads : null });
+      }
+      const klog = await klogChunk(mgmtAddr(host)).catch(() => "");
+      setVerdict(verdictFrom(samples, klog, title.titleId));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setVerifying(false);
+    }
+  }, [host, title.titleId]);
+
   const apply = async () => {
     if (!plan) return;
     setBusy(true);
@@ -199,6 +251,7 @@ export function BackportPanel({
           setRecord(completed);
         },
       );
+      void verify();
     } catch (e) {
       if (e instanceof BackportApplyError) {
         const partial = {
@@ -305,6 +358,38 @@ export function BackportPanel({
             {imageBacked ? <p className="text-xs text-[var(--color-muted)]">{tr("backport_image_cycle", undefined, "This disk image will be stopped if needed, remounted read-write for the edit, then returned to read-only automatically.")}</p> : null}
             <Button variant="primary" onClick={() => void apply()} disabled={busy || !overlayReady} loading={busy}>{tr("backport_action", undefined, "Backport")}</Button>
           </>
+        ) : null}
+        {record && (verifying || verdict) ? (
+          verifying ? (
+            <div className="flex items-center gap-2">
+              <Spinner size={16} />
+              {tr("backport_verifying", undefined,
+                "Launched it — watching for about a minute to see whether it stays up…")}
+            </div>
+          ) : verdict?.kind === "running" ? (
+            // Deliberately not "success". Thread count has been wrong three
+            // times and a byte-identical control both passed and failed, so
+            // the only trustworthy check is a human looking at the screen.
+            <Callout tone="info" title={tr("backport_verify_running", undefined, "It is running — does it reach gameplay?")}>
+              {tr("backport_verify_running_body", { threads: verdict.peakThreads },
+                `The game is still up after a minute (${verdict.peakThreads} threads). That means it did not crash on load, but not that it plays — check the screen. Keep it if it works, or undo and try the next set.`)}
+            </Callout>
+          ) : verdict?.kind === "missing-libraries" ? (
+            <Callout tone="warn" title={tr("backport_verify_missing", undefined, "It needs more libraries")}>
+              {tr("backport_verify_missing_body", { count: nextCandidates.length },
+                `The game called a function none of the installed libraries provide. ${nextCandidates.length} larger set(s) left to try.`)}
+            </Callout>
+          ) : verdict?.kind === "wrong-libraries" ? (
+            <Callout tone="warn" title={tr("backport_verify_wrong", undefined, "Wrong libraries for this game")}>
+              {tr("backport_verify_wrong_body", { count: nextCandidates.length },
+                `The game started and then stopped, with no missing-function error — the libraries are present but not the ones it needs. ${nextCandidates.length} other set(s) left to try.`)}
+            </Callout>
+          ) : (
+            <Callout tone="warn" title={tr("backport_verify_unknown", undefined, "Could not tell what happened")}>
+              {tr("backport_verify_unknown_body", undefined,
+                "The game never got as far as starting, for a reason that is not about libraries. Check the console is awake and try launching it yourself.")}
+            </Callout>
+          )
         ) : null}
         {record ? (
           <>

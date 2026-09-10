@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyBackport,
   diagnoseLaunchFailure,
+  nextSetsAfter,
+  verdictFrom,
   resolveSets,
   backportOverlayReady,
   existingLibraries,
@@ -385,5 +387,50 @@ describe("resolving a content-addressed corpus", () => {
     expect(resolveSets({})).toEqual([]);
     expect(resolveSets({ schema: 4, libraries: "no", sets: [] })).toEqual([]);
     expect(resolveSets({ schema: 2, sets: [] })).toEqual([]);
+  });
+});
+
+describe("verifying a backport", () => {
+  const KLOG_MISSING = "<118>[SceLncService] launchApp(PPSA30528)\n<118># === Call to unpatched function is detected!!! ===";
+  const KLOG_WRONG = "<118>[Syscore App] createApp PPSA30528";
+
+  it("never calls a running process a success", () => {
+    // Thread count misled three times (1 / 18 / 263 threads), and a trial that
+    // installed byte-identical libraries twice got one failure and one
+    // success. A live process is a question for the human, not a verdict.
+    const v = verdictFrom([{ threads: null }, { threads: 40 }, { threads: 39 }], "", "PPSA30528");
+    expect(v).toEqual({ kind: "running", peakThreads: 40 });
+  });
+
+  it("reads a missing-library failure when nothing ever ran", () => {
+    const v = verdictFrom([{ threads: null }, { threads: null }], KLOG_MISSING, "PPSA30528");
+    expect(v.kind).toBe("missing-libraries");
+  });
+
+  it("reads a wrong-library failure when the game was created and died", () => {
+    const v = verdictFrom([{ threads: null }], KLOG_WRONG, "PPSA30528");
+    expect(v.kind).toBe("wrong-libraries");
+  });
+
+  it("does not guess when the launch never got that far", () => {
+    expect(verdictFrom([{ threads: null }], "", "PPSA30528").kind).toBe("unknown");
+  });
+
+  it("offers only LARGER sets after a missing-library failure", () => {
+    // Smaller sets cannot supply what was missing, so proposing one wastes a
+    // three-minute edit cycle.
+    const failed = set("failed", "PPSA00001", ["a.sprx", "b.sprx"]);
+    const smaller = set("smaller", "PPSA00002", ["a.sprx"]);
+    const bigger = set("bigger", "PPSA00003", ["a.sprx", "b.sprx", "c.sprx"]);
+    const next = nextSetsAfter({ kind: "missing-libraries" }, failed, [failed, smaller, bigger]);
+    expect(next.map((s) => s.id)).toEqual(["bigger"]);
+  });
+
+  it("offers any other set after a wrong-library failure", () => {
+    // Wrong lineage, not too few: a smaller set is a perfectly good next try.
+    const failed = set("failed", "PPSA00001", ["a.sprx", "b.sprx"]);
+    const smaller = set("smaller", "PPSA00002", ["a.sprx"]);
+    const next = nextSetsAfter({ kind: "wrong-libraries" }, failed, [failed, smaller]);
+    expect(next.map((s) => s.id)).toEqual(["smaller"]);
   });
 });

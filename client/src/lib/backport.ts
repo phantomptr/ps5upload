@@ -438,6 +438,59 @@ export function diagnoseLaunchFailure(
   return created ? "wrong-libraries" : "unknown";
 }
 
+/** What a verification run concluded. */
+export type VerifyVerdict =
+  | { kind: "missing-libraries" }
+  | { kind: "wrong-libraries" }
+  | { kind: "running"; peakThreads: number }
+  | { kind: "unknown" };
+
+export interface VerifySample {
+  /** Threads reported for the title, or null when it has no process. */
+  threads: number | null;
+}
+
+/** Decide what a launch showed.
+ *
+ *  Deliberately refuses to call a running process a success. Thread count
+ *  misled three separate times (1 / 18 / 263 threads on titles whose real state
+ *  was the opposite), and a trial that installed byte-identical libraries twice
+ *  got a failure and a success. A live process means "ask the human to look at
+ *  the screen", never "it worked".
+ *
+ *  Failure, by contrast, is sound: no process at all after the window, with
+ *  klog saying whether the libraries were missing or merely wrong. */
+export function verdictFrom(
+  samples: VerifySample[],
+  klog: string,
+  titleId: string,
+): VerifyVerdict {
+  const alive = samples.filter((s) => s.threads !== null);
+  if (alive.length > 0) {
+    const peakThreads = alive.reduce((max, s) => Math.max(max, s.threads ?? 0), 0);
+    return { kind: "running", peakThreads };
+  }
+  const diagnosis = diagnoseLaunchFailure(klog, titleId);
+  return diagnosis === "unknown" ? { kind: "unknown" } : { kind: diagnosis };
+}
+
+/** Sets worth offering after a verdict, best first.
+ *
+ *  A missing-library failure wants MORE libraries, so sets smaller than the one
+ *  that failed cannot help and are dropped. A wrong-library failure wants a
+ *  different lineage, so the ranking's own order stands. */
+export function nextSetsAfter(
+  verdict: VerifyVerdict,
+  failed: FakelibSet,
+  ranked: FakelibSet[],
+): FakelibSet[] {
+  const remaining = ranked.filter((s) => s.id !== failed.id);
+  if (verdict.kind === "missing-libraries") {
+    return remaining.filter((s) => s.libraries.length > failed.libraries.length);
+  }
+  return remaining;
+}
+
 export async function undoBackport(
   record: BackportRecord,
   transport: BackportTransport,
