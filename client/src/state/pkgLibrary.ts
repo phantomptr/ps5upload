@@ -1,5 +1,5 @@
 import { trStatic } from "../lib/trStatic";
-import { dpiUnavailableCopy } from "../lib/dpiUnavailable";
+import { patchInstallFailure } from "../lib/dpiUnavailable";
 import { restoreMainPayload } from "../lib/restoreMainPayload";
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
@@ -18,7 +18,7 @@ import {
   consoleReadiness,
   pkgInstalledInventory,
 } from "../api/ps5";
-import type { ExternalPkg } from "../api/ps5";
+import { processList, type ExternalPkg } from "../api/ps5";
 import { formatBytes } from "../lib/format";
 import { hostOf, mgmtAddr, transferAddr } from "../lib/addr";
 import { removableMountRoot } from "../lib/mountPaths";
@@ -1191,6 +1191,25 @@ async function verifyDpiInstalledArtifact(
   return false;
 }
 
+/** Is a payload loader visible in the console's process list?
+ *
+ *  Distinguishes "you never loaded one" from "it is running but not listening
+ *  on :9021". The 2026-09-09 reports were all the second, and the advice for
+ *  the first ("re-run your loader") reads as obviously wrong to someone
+ *  looking at a running loader — which is why that user stopped.
+ *
+ *  Best-effort by construction: a diagnostic must never turn a failed install
+ *  into a thrown error, so every failure answers "not seen".
+ */
+export async function loaderProcessSeen(host: string): Promise<boolean> {
+  try {
+    const { processes } = await processList(mgmtAddr(host));
+    return processes.some((p) => /elfldr|pldmgr|etahen/i.test(p.name ?? ""));
+  } catch {
+    return false;
+  }
+}
+
 async function runDpiInstall(
   host: string,
   localPs5Path: string,
@@ -1651,20 +1670,31 @@ async function runPkgInstallCore(
       // start: a missing image in this build, a console loader that isn't
       // answering on :9021, or a daemon that was sent and never came up.
       // Those have nothing in common but the symptom.
-      const copy = dpiUnavailableCopy(dpi.daemonReason);
+      // Is a loader PROCESS there? Four reports on 2026-09-09 had elfldr.elf
+      // running while :9021 refused, and "re-run your loader" reads as wrong
+      // to someone looking at a running loader. Best-effort: never let this
+      // diagnostic turn a failed install into a thrown error.
+      const loaderProcessRunning = await loaderProcessSeen(host);
       log.error(
         "install",
         `update installer never started: reason=${dpi.daemonReason ?? "unknown"} ` +
+          `loader_process=${loaderProcessRunning} main=${mainErr} ` +
           `err="${dpi.errMessage}"`,
       );
       if (resolvedType.endsWith("DP")) {
-        const hint = trStatic(copy.key, copy.text);
         return {
           installed: false,
           mayNotLaunch,
-          // Keep the raw daemon error appended: it is what makes the next
-          // bug report diagnosable in one read.
-          errMessage: dpi.errMessage ? `${hint} (${dpi.errMessage})` : hint,
+          // Carries BOTH halves: why the console refused the install, and why
+          // the fallback could not be delivered. The first used to be dropped
+          // here, so the code naming the real problem never reached the user.
+          errMessage: patchInstallFailure({
+            mainErr,
+            reason: dpi.daemonReason,
+            dpiErr: dpi.errMessage,
+            loaderProcessRunning,
+            translate: (key, fallback) => trStatic(key, fallback),
+          }),
           stalled,
         };
       }
