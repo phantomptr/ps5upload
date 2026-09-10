@@ -382,3 +382,49 @@ SDK-based ranking operate on absent data. The param magic occurs exactly once
 in those files and the 0x20 size field in front of it confirms the hit, so
 `param_site` now falls back to scanning. All 28 builds in the recovered corpus
 now read their pair.
+
+
+---
+
+## Revision 4, 2026-09-10 — the harness itself is the problem
+
+A controlled run settles the open question from Revision 2. Red Dead Redemption,
+completely unchanged between attempts — no remount, no library change, no config
+change:
+
+    plain launch #1   RUNS (2/9 samples alive, peak 39 thr)
+    plain launch #2   RUNS (9/9 samples alive, peak 39 thr)
+    plain launch #3   NO PROCESS (0/9)
+
+**Launching fails on its own roughly one time in three.** So:
+
+  * The Revision 2 result ("a 13-library synthetic set stopped Red Dead
+    launching") is REFUTED, not merely unconfirmed. It was one trial.
+  * Steps B and C of the A/B/C/D trial say nothing, which was already implied by
+    B failing its own byte-identical control.
+  * Nothing in this document should be read as evidence about which libraries a
+    game needs. The corpus structure, the harvest finding and the stamp-variant
+    finding all rest on file contents rather than on launches, and are unaffected.
+
+What survives about launching: libraries are required at all (stripped of every
+library the game emits `Call to unpatched function` and does not start), and
+that klog line is a positive signal — an actual kernel message rather than an
+absence — so it is trustworthy from a single attempt. Its absence is not.
+
+### Consequences for the product
+
+`verdictFrom` judges the END of the sampling window, not whether any sample saw
+a process: a title that starts and dies still had threads, and reporting its
+peak is the same error that made thread count useless three times.
+
+`combineAttempts` repeats a failure `FAILURE_ATTEMPTS` (3) times before
+believing it. Any attempt ending with the title up wins outright — a game
+cannot run by accident — and a `missing-libraries` verdict is believed
+immediately on the strength of its kernel message. Anything else must be
+unanimous, or the UI says it could not tell rather than blaming the libraries.
+
+### How to test libraries from here
+
+Repeat every configuration at least three times, randomise the order, and re-run
+the known-good control inside the same session. A failure counts only when every
+attempt agrees.
