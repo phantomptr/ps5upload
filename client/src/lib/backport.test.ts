@@ -394,12 +394,36 @@ describe("verifying a backport", () => {
   const KLOG_MISSING = "<118>[SceLncService] launchApp(PPSA30528)\n<118># === Call to unpatched function is detected!!! ===";
   const KLOG_WRONG = "<118>[Syscore App] createApp PPSA30528";
 
+  it("counts a title that started and then died as a failure", () => {
+    // The trap: it had 39 threads at one point, so "any sample alive" would
+    // call it running. It was gone by the end of the window, which is what
+    // matters — and klog says why.
+    const v = verdictFrom(
+      [{ threads: 39 }, { threads: 39 }, { threads: null }, { threads: null }],
+      KLOG_WRONG,
+      "PPSA30528",
+    );
+    expect(v.kind).toBe("wrong-libraries");
+  });
+
+  it("tolerates a slow start, judging only the end of the window", () => {
+    // A cold start from USB showed no process for the first 40 seconds and
+    // went on to reach 263 threads.
+    const v = verdictFrom(
+      [{ threads: null }, { threads: null }, { threads: null }, { threads: 12 }, { threads: 263 }],
+      "",
+      "PPSA30528",
+    );
+    expect(v).toEqual({ kind: "running", peakThreads: 263 });
+  });
+
   it("never calls a running process a success", () => {
     // Thread count misled three times (1 / 18 / 263 threads), and a trial that
     // installed byte-identical libraries twice got one failure and one
     // success. A live process is a question for the human, not a verdict.
     const v = verdictFrom([{ threads: null }, { threads: 40 }, { threads: 39 }], "", "PPSA30528");
     expect(v).toEqual({ kind: "running", peakThreads: 40 });
+    // "running" is a question for the human, never a success claim.
   });
 
   it("reads a missing-library failure when nothing ever ran", () => {

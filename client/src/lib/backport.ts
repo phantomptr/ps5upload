@@ -465,9 +465,15 @@ export function verdictFrom(
   klog: string,
   titleId: string,
 ): VerifyVerdict {
-  const alive = samples.filter((s) => s.threads !== null);
-  if (alive.length > 0) {
-    const peakThreads = alive.reduce((max, s) => Math.max(max, s.threads ?? 0), 0);
+  // Judged on the END of the window, not on whether a process was ever seen.
+  // A title that starts and dies is a failure that happens to have had threads
+  // — reading "peak 39 threads" from a run that was over by the end is exactly
+  // the mistake that made thread count useless three times. Games also start
+  // slowly (a cold start from USB showed nothing for the first 40 seconds), so
+  // the last sample is the one that means anything.
+  const last = samples[samples.length - 1];
+  if (last && last.threads !== null) {
+    const peakThreads = samples.reduce((max, s) => Math.max(max, s.threads ?? 0), 0);
     return { kind: "running", peakThreads };
   }
   const diagnosis = diagnoseLaunchFailure(klog, titleId);
