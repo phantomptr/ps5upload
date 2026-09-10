@@ -233,13 +233,20 @@ export function BackportPanel({
       await klogChunk(mgmtAddr(host)).catch(() => "");
       await appLaunch(transferAddr(host), title.titleId);
       const samples: VerifySample[] = [];
+      // Drain klog on EVERY tick and keep it all. The kernel log is a small
+      // ring buffer — 136 lines on the console this was measured against — and
+      // it can be flooded by unrelated spam (SceSystemTts repeats two lines
+      // continuously). Reading only at the end loses the one line that matters,
+      // and reads its absence as "the libraries are merely wrong".
+      let klog = "";
       for (let i = 0; i < VERIFY_SAMPLES; i += 1) {
         await new Promise((r) => setTimeout(r, VERIFY_INTERVAL_MS));
         const list = await processList(mgmtAddr(host)).catch(() => ({ processes: [] }));
         const proc = list.processes.find((pr) => pr.title_id === title.titleId);
         samples.push({ threads: proc ? proc.threads : null });
+        klog += await klogChunk(mgmtAddr(host)).catch(() => "");
       }
-      const klog = await klogChunk(mgmtAddr(host)).catch(() => "");
+      klog += await klogChunk(mgmtAddr(host)).catch(() => "");
       return verdictFrom(samples, klog, title.titleId);
     },
     [host, title.titleId],
