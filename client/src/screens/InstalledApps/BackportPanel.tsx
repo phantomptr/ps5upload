@@ -94,6 +94,11 @@ export function BackportPanel({
    * the actual workflow, not an error path. */
   const [rejected, setRejected] = useState<string[]>([]);
   const [verdict, setVerdict] = useState<VerifyVerdict | null>(null);
+  /* The set that just failed and how, kept across the undo so the next
+   * proposal can honour it: after a missing-library failure a SMALLER set
+   * cannot supply what was missing, and offering one costs the user a whole
+   * install-launch-undo cycle to learn nothing. */
+  const [lastFailure, setLastFailure] = useState<{ set: FakelibSet; verdict: VerifyVerdict } | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [record, setRecord] = useState<BackportRecord | null>(() =>
     loadBackportRecord(host, title.titleId),
@@ -111,7 +116,10 @@ export function BackportPanel({
 
   const load = useCallback(async () => {
     if (!open || record) return;
-    const candidate = rankSets(sets, rejected, title.titleId)[0];
+    const ranked = rankSets(sets, rejected, title.titleId);
+    const candidate = (lastFailure
+      ? nextSetsAfter(lastFailure.verdict, lastFailure.set, ranked)
+      : ranked)[0];
     if (!candidate) {
       setPlan(null);
       // An empty corpus is not a failure — it is a new user, and the panel's
@@ -119,7 +127,10 @@ export function BackportPanel({
       // dead end worth wording as one.
       setError(sets.length === 0
         ? null
-        : tr("backport_no_more", undefined, "Every available set has been tried for this title."));
+        : lastFailure?.verdict.kind === "missing-libraries"
+          ? tr("backport_no_larger", undefined,
+              "This game needs libraries none of your sets have. Import a more complete pack, or scan another console.")
+          : tr("backport_no_more", undefined, "Every available set has been tried for this title."));
       return;
     }
     setBusy(true);
@@ -137,7 +148,7 @@ export function BackportPanel({
     } finally {
       setBusy(false);
     }
-  }, [corpusError, host, open, corpusRoot, sets, record, rejected, title, titleSdkVersion, tr]);
+  }, [corpusError, host, open, corpusRoot, sets, record, rejected, lastFailure, title, titleSdkVersion, tr]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -211,7 +222,7 @@ export function BackportPanel({
    *  user to go and find out, and because a failed backport should cost one
    *  click to move past rather than a manual launch, a manual close and a
    *  guess about what went wrong. */
-  const verify = useCallback(async () => {
+  const verify = useCallback(async (failedSet?: FakelibSet) => {
     setVerifying(true);
     setVerdict(null);
     setError(null);
@@ -229,7 +240,13 @@ export function BackportPanel({
         samples.push({ threads: proc ? proc.threads : null });
       }
       const klog = await klogChunk(mgmtAddr(host)).catch(() => "");
-      setVerdict(verdictFrom(samples, klog, title.titleId));
+      const result = verdictFrom(samples, klog, title.titleId);
+      setVerdict(result);
+      if (result.kind === "missing-libraries" || result.kind === "wrong-libraries") {
+        setLastFailure(failedSet ? { set: failedSet, verdict: result } : null);
+      } else {
+        setLastFailure(null);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -251,7 +268,7 @@ export function BackportPanel({
           setRecord(completed);
         },
       );
-      void verify();
+      void verify(plan.set);
     } catch (e) {
       if (e instanceof BackportApplyError) {
         const partial = {
@@ -286,6 +303,7 @@ export function BackportPanel({
       setRejected((prev) => prev.includes(record.setId) ? prev : [...prev, record.setId]);
       setRecord(null);
       setPlan(null);
+      setVerdict(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
