@@ -19,6 +19,12 @@ static char g_test_appmeta_base[1024];
 static const char *test_app_base(void) { return g_test_app_base; }
 static const char *test_appmeta_base(void) { return g_test_appmeta_base; }
 
+/* sdk_changer_scan now appends live overlay state. This filesystem test is
+ * about patch/restore and intentionally has no lifecycle thread. */
+int fakelib_overlay_status_json(char *buf, size_t cap) {
+    return snprintf(buf, cap, "{\"state\":\"watching\",\"title_id\":\"\",\"error\":\"\"}");
+}
+
 #define APP_BASE test_app_base()
 #define APPMETA_BASE test_appmeta_base()
 #include "../src/sdk_changer.c"

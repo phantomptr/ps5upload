@@ -801,6 +801,11 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/libc_backport_selftest.c
 	@/tmp/ps5upload-libc-backport-selftest
 	@echo "✓ the libc.prx symbol swap is same-length and idempotent"
+	@echo "Running fakelib overlay path/refusal self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-fakelib-overlay-selftest \
+		$(PAYLOAD_DIR)/tests/fakelib_overlay_selftest.c
+	@/tmp/ps5upload-fakelib-overlay-selftest
+	@echo "✓ fakelib overlay accepts only game sandbox library targets"
 	@echo "Running sys_time settimeofday-fallback self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
 		-o /tmp/ps5upload-sys-time-fallback-selftest \

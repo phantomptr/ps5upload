@@ -17,6 +17,7 @@
 #include "kernel_rw_lock.h"
 #include "hw_info.h"
 #include "wake_watchdog.h"
+#include "fakelib_overlay.h"
 
 /* Sony "debugger" / system-process authid. Setting our process's
  * ucred authid to this value grants the credentials Sony's kernel
@@ -505,6 +506,8 @@ int main(void) {
      * lifetime with negligible overhead (one sleep(5) per cycle). */
     start_wake_watchdog();
     startup_trace("WAKE_WATCHDOG_STARTED");
+    (void)fakelib_overlay_start();
+    startup_trace("FAKELIB_OVERLAY_STARTED");
 
     /* `runtime_reconcile_mounts` is also deliberately not called at
      * startup. It walks `getmntinfo` on potentially-stale entries
@@ -559,6 +562,7 @@ int main(void) {
      * 60s, so a payload swap in between would otherwise drop the current
      * session — which is most of what a short session IS. */
     activity_flush();
+    fakelib_overlay_stop();
 
     runtime_arm_shutdown_watchdog(rc == 0 ? 0 : 1);
 

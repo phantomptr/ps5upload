@@ -4,6 +4,7 @@
 #include "elf_param.h"
 #include "sdk_pairs.h"
 #include "libc_backport.h"
+#include "fakelib_overlay.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -542,7 +543,10 @@ int sdk_changer_scan(char *buf, size_t cap, size_t *written) {
     }
     closedir(dir);
 
-    int end = snprintf(buf + n, cap - (size_t)n, "]}");
+    char overlay[256];
+    int overlay_n = fakelib_overlay_status_json(overlay, sizeof(overlay));
+    if (overlay_n < 0 || (size_t)overlay_n >= sizeof(overlay)) return -1;
+    int end = snprintf(buf + n, cap - (size_t)n, "],\"overlay\":%s}", overlay);
     if (end < 0 || (size_t)(n + end) >= cap) return -1;
     n += end;
     if (written) *written = (size_t)n;

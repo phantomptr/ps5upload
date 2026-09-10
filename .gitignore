@@ -232,3 +232,11 @@ key.properties
 # rather than tracked.
 payload/third_party/sqlite3/
 payload/sqlite3.o
+
+# Local corpus of PS5 system libraries ("fakelibs") gathered from the
+# developer's own console for backport work. NEVER committed: these are Sony
+# binaries, and every comparable project (BackPork, Backport Kitchen,
+# Auto-Backpork, MacPork) refuses to redistribute them for the same reason.
+# Populate with scripts/gather-fakelibs.py; the tool sources them from the
+# user's own games at runtime.
+fakelibs/
