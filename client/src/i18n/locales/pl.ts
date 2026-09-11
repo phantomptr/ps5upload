@@ -3037,6 +3037,10 @@ helper_mismatch_go: "Załaduj pomocnika",
 "cheats_filter_installed_only": "Tylko moje gry",
 "cheats_filter_count": "{shown} z {total}",
 "cheats_filter_none": "Żadne kody nie pasują do tych filtrów. Usuń jeden, aby zobaczyć więcej.",
+"power_action_wake": "Wybudź",
+"power_wake_hint": "Wysyła pakiet Wake-on-LAN na {mac}. Wymaga włączenia na konsoli opcji uruchamiania PS5 przez sieć.",
+"power_wake_sent": "Wysłano sygnał wybudzenia",
+"power_wake_sent_body": "Jeśli konsola się nie włączy, włącz Ustawienia → System → Oszczędzanie energii → Funkcje dostępne w trybie spoczynku → Zezwalaj na włączanie PS5 przez sieć.",
 };
 
 export default pl;

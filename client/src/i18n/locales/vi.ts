@@ -2743,6 +2743,10 @@ helper_mismatch_go: "Tải lại trợ giúp",
 "cheats_filter_installed_only": "Chỉ trò chơi của tôi",
 "cheats_filter_count": "{shown} trên {total}",
 "cheats_filter_none": "Không có cheat nào khớp với các bộ lọc này. Hãy bỏ bớt một bộ lọc để xem thêm.",
+"power_action_wake": "Đánh thức",
+"power_wake_hint": "Gửi gói Wake-on-LAN tới {mac}. Yêu cầu bật tùy chọn khởi động PS5 qua mạng trên máy.",
+"power_wake_sent": "Đã gửi tín hiệu đánh thức",
+"power_wake_sent_body": "Nếu máy không khởi động, hãy bật Cài đặt → Hệ thống → Tiết kiệm điện → Tính năng khả dụng ở Chế độ nghỉ → Cho phép bật PS5 qua mạng.",
 };
 
 export default vi;

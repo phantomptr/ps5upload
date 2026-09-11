@@ -2957,6 +2957,39 @@ async fn ps5_power_control(
 
 /// GET /api/ps5/power/telemetry — lifetime ICC telemetry (operating
 /// seconds, boot cycles, thermal alerts, power-up cause).
+#[derive(Debug, serde::Deserialize)]
+struct PowerWakeReq {
+    /// The console's MAC, recorded while it was awake.
+    mac: String,
+    /// Its last known address, used to aim the broadcast at the right subnet.
+    #[serde(default)]
+    host: String,
+}
+
+/// POST /api/ps5/power/wake — send a Wake-on-LAN magic packet.
+///
+/// The one power action that CANNOT go through the payload: it is not running
+/// when the console is asleep. So this runs on the host and needs a MAC the
+/// caller recorded earlier.
+///
+/// A successful send is not a successful wake. The packet is fire-and-forget
+/// UDP, and the console ignores it unless "Enable turning on PS5 from network"
+/// is on — so this reports what it SENT, and the UI must not claim the console
+/// is coming up.
+async fn ps5_power_wake(Json(req): Json<PowerWakeReq>) -> impl IntoResponse {
+    let mac = req.mac.clone();
+    let host = req.host.clone();
+    match tokio::task::spawn_blocking(move || ps5upload_core::wol::wake(&mac, &host)).await {
+        Ok(Ok(sent)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "ok": true, "packets_sent": sent })),
+        )
+            .into_response(),
+        Ok(Err(e)) => json_err(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
+        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+    }
+}
+
 async fn ps5_power_telemetry(
     State(state): State<AppState>,
     Query(q): Query<AddrQuery>,
@@ -8895,6 +8928,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/process/kill", post(ps5_process_kill))
         .route("/api/ps5/power/control", post(ps5_power_control))
         .route("/api/ps5/power/telemetry", get(ps5_power_telemetry))
+        .route("/api/ps5/power/wake", post(ps5_power_wake))
         .route("/api/ps5/users/list", get(ps5_users_list))
         .route("/api/ps5/users/create", post(user_create_handler))
         .route("/api/ps5/users/delete", post(user_delete_handler))

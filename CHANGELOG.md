@@ -4,6 +4,39 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.19.0
+
+**Cheats tell you what they are and when they fire, and the power controls are
+on the home screen.**
+
+### Cheats
+
+- **Downloaded cheats show the game's name**, with the title ID underneath —
+  including games you do not have installed, which is exactly when a bare ID is
+  least helpful.
+
+- **The console tells you when a cheat takes.** Turn one on while you are
+  playing and a notification appears on the PS5 naming the cheat. You also get
+  one when a game starts with cheats already enabled.
+
+- **Filter the collection** by cheat format, by the game version a cheat was
+  written for, and by "only my games" — which turns thousands of entries into
+  your shelf.
+
+### Power
+
+- **Power controls are on the home dashboard**, not just at the bottom of
+  Manage connections.
+
+- **Wake a sleeping console.** If ps5upload has seen your PS5 before, it can
+  wake it from rest mode. This needs "Enable Turning On PS5 from Network"
+  switched on in the console's power settings — the app tells you so if nothing
+  happens.
+
+Thanks to @realgooseman for both suggestions.
+
+---
+
 ## 5.18.2
 
 - **Backport is no longer greyed out for the wrong reason.** A library-overlay

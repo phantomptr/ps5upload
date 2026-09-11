@@ -2783,6 +2783,10 @@ helper_mismatch_go: "ヘルパーを再読み込み",
 "cheats_filter_installed_only": "自分のゲームのみ",
 "cheats_filter_count": "{total} 件中 {shown} 件",
 "cheats_filter_none": "この条件に一致するチートはありません。フィルターを 1 つ解除してください。",
+"power_action_wake": "起動",
+"power_wake_hint": "{mac} に Wake-on-LAN パケットを送信します。本体側で「ネットワーク経由で PS5 の電源を入れる」を有効にしておく必要があります。",
+"power_wake_sent": "起動信号を送信しました",
+"power_wake_sent_body": "本体が起動しない場合は、設定 → システム → 省電力 → レストモード中の機能 → ネットワーク経由で PS5 の電源を入れる を有効にしてください。",
 };
 
 export default ja;

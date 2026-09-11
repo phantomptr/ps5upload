@@ -2689,6 +2689,10 @@ helper_mismatch_go: "重新載入小幫手",
 "cheats_filter_installed_only": "僅我的遊戲",
 "cheats_filter_count": "{total} 個中的 {shown} 個",
 "cheats_filter_none": "沒有符合這些篩選條件的金手指。取消一個條件即可看到更多。",
+"power_action_wake": "喚醒",
+"power_wake_hint": "向 {mac} 傳送 Wake-on-LAN 封包。需要在主機上啟用透過網路開啟 PS5。",
+"power_wake_sent": "已傳送喚醒訊號",
+"power_wake_sent_body": "如果主機沒有開機，請開啟 設定 → 系統 → 省電 → 休息模式中可使用的功能 → 啟用透過網路開啟 PS5。",
 };
 
 export default zh_TW;

@@ -153,6 +153,11 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
     try {
       const r = await cheatsReposSearch(q);
       setEntries(r.entries ?? []);
+      // A filter from the previous search almost never applies to the next
+      // one: pick version 01.04 for one game, search another, and every row
+      // vanishes behind a "no matches" message that looks like the repo came
+      // back empty.
+      setFilters(NO_CHEAT_FILTERS);
       if (r.error) setError(r.error);
     } catch (e) {
       setError(humanizePs5Error(String(e)));
@@ -168,6 +173,11 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
     try {
       const r = await cheatsReposSearch(query);
       setEntries(r.entries ?? []);
+      // A filter from the previous search almost never applies to the next
+      // one: pick version 01.04 for one game, search another, and every row
+      // vanishes behind a "no matches" message that looks like the repo came
+      // back empty.
+      setFilters(NO_CHEAT_FILTERS);
       if (r.error) setError(r.error);
     } catch (e) {
       setError(humanizePs5Error(String(e)));

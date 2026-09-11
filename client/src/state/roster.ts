@@ -61,6 +61,14 @@ export interface PS5Profile {
    *  No length limit at the type level; UI textarea soft-limits to
    *  ~500 chars to keep the picker tooltip legible. */
   notes?: string | null;
+  /** The console's MAC, learned from `net_interfaces_get` while it was
+   *  awake and kept so it can be woken later.
+   *
+   *  Wake-on-LAN is the one power action that cannot go through the payload —
+   *  the payload is not running when the console is asleep — so the address
+   *  has to be recorded in advance. A profile that has never been connected
+   *  to has none, and Wake is simply not offered for it. */
+  mac?: string | null;
 }
 
 interface RosterState {
@@ -75,6 +83,8 @@ interface RosterState {
   rename: (id: string, name: string) => void;
   updateHost: (id: string, host: string) => void;
   setNotes: (id: string, notes: string) => void;
+  /** Remember the console's MAC so it can be woken from rest mode. */
+  setMac: (id: string, mac: string) => void;
   /** Called by AppShell's status poller when a probe lands a fresh
    *  kernel/payload pair, so the roster row stays current without
    *  the user opening Settings. */
@@ -300,6 +310,17 @@ export const useRosterStore = create<RosterState>((set, get) => ({
     );
     set({ profiles: next });
     persist(next, get().active_id);
+  },
+
+  setMac: (id, mac) => {
+    const clean = mac.trim().toLowerCase();
+    set((st) => {
+      const profiles = st.profiles.map((p) =>
+        p.id === id ? { ...p, mac: clean || null } : p,
+      );
+      persist(profiles, st.active_id);
+      return { profiles };
+    });
   },
   noteSeen: (id, patch) => {
     const now = Math.floor(Date.now() / 1000);

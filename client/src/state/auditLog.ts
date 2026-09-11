@@ -24,6 +24,7 @@ export type AuditKind =
   | "system_reboot"
   | "system_shutdown"
   | "system_standby"
+  | "system_wake"
   | "app_kill"
   | "app_suspend"
   | "app_resume"
