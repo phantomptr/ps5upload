@@ -114,6 +114,9 @@ export async function deleteFakelibSet(id: string): Promise<void> {
 export interface ScanTitleInput {
   title_id: string;
   title_name: string;
+  /** Disk-image (ShadowMount) title. Sent so the sighting records how the
+   *  source game is stored, without a second lookup per title. */
+  image_backed: boolean;
   source: string;
 }
 

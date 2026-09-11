@@ -34,6 +34,13 @@ use sha2::{Digest, Sha256};
 /// user-facing label, and an origin. Schema 3 was never released, so there is
 /// no migration — a corpus is rebuilt by re-scanning, and an unrecognised
 /// schema reads as an empty corpus ("no libraries yet") rather than an error.
+///
+/// Deliberately NOT bumped for `SetEntry::observations`. That "unrecognised
+/// schema reads as empty" rule is exactly why: bumping would make every corpus
+/// already on disk read as having no libraries, silently discarding sets the
+/// user spent real time collecting off their consoles. A defaulted field costs
+/// nothing and leaves old corpora working, so the field defaults and the schema
+/// stays put.
 pub const SCHEMA: u32 = 4;
 
 /// Only these are libraries. A dot-prefixed name never is: copying a game
@@ -292,8 +299,14 @@ pub enum Origin {
     /// Harvested from a game on a console.
     Scan {
         title_id: String,
+        /// The game's name, for showing where a set came from without a
+        /// second lookup. Defaults so corpora written before it survive.
+        #[serde(default)]
+        title_name: String,
         #[serde(default)]
         console: String,
+        #[serde(default)]
+        image_backed: bool,
         at: String,
     },
     /// Uploaded by the user as one pack.
@@ -325,11 +338,193 @@ pub struct LibraryEntry {
     pub builds: Vec<Build>,
 }
 
+/// One sighting of this exact library set: which game shipped it, on which
+/// console, and what that game is.
+///
+/// Sets are content-addressed, so two consoles carrying the same backported
+/// game collapse into ONE entry — and the second sighting used to be thrown
+/// away with the duplicate. Keeping every sighting is what lets the ranking
+/// prefer a combination that two different consoles both actually run over one
+/// seen a single time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Observation {
+    pub title_id: String,
+    #[serde(default)]
+    pub title_name: String,
+    #[serde(default)]
+    pub console: String,
+    /// Disk-image (ShadowMount) title rather than a plain folder. Recorded
+    /// because it changes how the title is edited, not because it ranks.
+    #[serde(default)]
+    pub image_backed: bool,
+    #[serde(default)]
+    pub at: String,
+}
+
+impl Observation {
+    /// The sighting an origin represents, when it is one. An imported pack is
+    /// not a sighting of a game, so it has none.
+    pub fn from_origin(origin: &Origin) -> Option<Self> {
+        match origin {
+            Origin::Scan {
+                title_id,
+                title_name,
+                console,
+                image_backed,
+                at,
+            } => Some(Self {
+                title_id: title_id.clone(),
+                title_name: title_name.clone(),
+                console: console.clone(),
+                image_backed: *image_backed,
+                at: at.clone(),
+            }),
+            Origin::Import { .. } => None,
+        }
+    }
+
+    /// Same game on the same console. Re-scanning must not inflate the
+    /// evidence for a set — only a genuinely different source counts.
+    fn same_source(&self, other: &Self) -> bool {
+        self.title_id == other.title_id && self.console == other.console
+    }
+}
+
+#[cfg(test)]
+mod observation_tests {
+    use super::*;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("fakelibs-obs-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn lib(name: &str, byte: u8) -> IncomingLibrary {
+        IncomingLibrary {
+            name: name.to_string(),
+            data: vec![byte; 64],
+        }
+    }
+
+    fn sighting(title_id: &str, console: &str) -> Origin {
+        Origin::Scan {
+            title_id: title_id.to_string(),
+            title_name: format!("Game {title_id}"),
+            console: console.to_string(),
+            image_backed: true,
+            at: "1".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_second_console_running_the_same_game_is_recorded() {
+        // The point of the whole change: two consoles carrying the same
+        // backported game content-address to ONE set, and the second sighting
+        // used to be discarded with the duplicate — losing exactly the
+        // evidence that makes a set worth trying first.
+        let root = scratch("two-consoles");
+        let mut corpus = Corpus::open(&root);
+        let first = corpus
+            .add_set(
+                "Game A",
+                sighting("PPSA00001", "pro"),
+                vec![lib("libSceAgc.sprx", 1)],
+            )
+            .expect("first add");
+        assert!(first.is_some(), "first sighting creates the set");
+
+        let second = corpus
+            .add_set(
+                "Game A",
+                sighting("PPSA00001", "phat"),
+                vec![lib("libSceAgc.sprx", 1)],
+            )
+            .expect("second add");
+        assert!(second.is_none(), "identical libraries are still one set");
+
+        let set = &corpus.manifest().sets[0];
+        assert_eq!(
+            set.observations.len(),
+            2,
+            "both consoles recorded: {:?}",
+            set.observations
+        );
+        let consoles: Vec<&str> = set
+            .observations
+            .iter()
+            .map(|o| o.console.as_str())
+            .collect();
+        assert!(consoles.contains(&"pro") && consoles.contains(&"phat"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rescanning_the_same_console_does_not_inflate_the_evidence() {
+        // Scanning is explicitly safe to repeat, so a re-scan must not make a
+        // set look better attested than it is.
+        let root = scratch("rescan");
+        let mut corpus = Corpus::open(&root);
+        corpus
+            .add_set(
+                "Game A",
+                sighting("PPSA00001", "pro"),
+                vec![lib("libSceAgc.sprx", 1)],
+            )
+            .expect("first add");
+        corpus
+            .add_set(
+                "Game A",
+                sighting("PPSA00001", "pro"),
+                vec![lib("libSceAgc.sprx", 1)],
+            )
+            .expect("re-scan");
+        assert_eq!(corpus.manifest().sets[0].observations.len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_imported_pack_is_not_a_sighting_of_a_game() {
+        let root = scratch("import");
+        let mut corpus = Corpus::open(&root);
+        corpus
+            .add_set(
+                "Pack",
+                Origin::Import {
+                    source: "pack.zip".to_string(),
+                    at: "1".to_string(),
+                },
+                vec![lib("libSceAgc.sprx", 2)],
+            )
+            .expect("import");
+        assert!(corpus.manifest().sets[0].observations.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_corpus_written_before_observations_still_loads() {
+        // Why this is a defaulted field rather than a schema bump: an
+        // unrecognised schema reads as an EMPTY corpus, so bumping would have
+        // silently discarded every set the user had already collected.
+        let json = r#"{"id":"set-1","label":"A",
+            "origin":{"kind":"scan","title_id":"PPSA00001","at":"1"},
+            "libraries":{"libSceAgc.sprx":"aa"}}"#;
+        let entry: SetEntry = serde_json::from_str(json).expect("old entry parses");
+        assert!(entry.observations.is_empty());
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SetEntry {
     pub id: String,
     pub label: String,
     pub origin: Origin,
+    /// Every sighting of this set, oldest first. Absent on corpora written
+    /// before observations existed, which is why it defaults rather than
+    /// forcing a schema bump: bumping would make every existing corpus read as
+    /// empty and silently discard the user's library sets.
+    #[serde(default)]
+    pub observations: Vec<Observation>,
     /// library name -> sha256 of the build this set ships.
     pub libraries: BTreeMap<String, String>,
 }
@@ -423,8 +618,26 @@ impl Corpus {
         for lib in &libraries {
             mapping.insert(lib.name.clone(), sha256_hex(&lib.data));
         }
-        if let Some(existing) = self.manifest.sets.iter().find(|s| s.libraries == mapping) {
-            let _ = existing;
+        // An identical set already exists. That is the COMMON case once a
+        // second console is scanned, and it used to end here with the sighting
+        // discarded — which threw away exactly the evidence that makes a set
+        // worth trying first ("two different consoles both run this"). Record
+        // the sighting against the existing set instead, unless this same game
+        // on this same console was already counted (re-scanning must not
+        // inflate its own evidence).
+        let incoming = Observation::from_origin(&origin);
+        if let Some(existing) = self
+            .manifest
+            .sets
+            .iter_mut()
+            .find(|s| s.libraries == mapping)
+        {
+            if let Some(obs) = incoming {
+                if !existing.observations.iter().any(|o| o.same_source(&obs)) {
+                    existing.observations.push(obs);
+                    self.write()?;
+                }
+            }
             return Ok(None);
         }
 
@@ -437,6 +650,9 @@ impl Corpus {
             id: id.clone(),
             label: label.to_string(),
             origin,
+            // The set's own first sighting. An imported pack has none — it is
+            // not a game we saw on a console — and ranks on attestation alone.
+            observations: incoming.into_iter().collect(),
             libraries: mapping,
         });
         self.write()?;
@@ -583,7 +799,9 @@ mod tests {
     fn scan_origin() -> Origin {
         Origin::Scan {
             title_id: "PPSA30528".into(),
+            title_name: "Red Dead Redemption".into(),
             console: "PS5-Pro".into(),
+            image_backed: true,
             at: "2026-09-09T00:00:00Z".into(),
         }
     }

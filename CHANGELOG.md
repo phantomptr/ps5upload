@@ -4,6 +4,49 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.17.10
+
+**Backporting can now find a working library set on its own, and scanning a
+second console finally counts for something.**
+
+### Let it try the sets for you
+
+Finding the right library set was always a loop: install, launch, watch, undo,
+pick the next one, repeat. Nothing about that needed a human.
+
+- **"Try sets automatically" does the whole loop.** It installs a set, launches
+  the game, watches it, and if it does not start it undoes the change and moves
+  to the next candidate — stopping as soon as one runs, and leaving that set
+  installed. There is a Stop button; it finishes the set it is on rather than
+  abandoning a half-installed title, so the game is never left in pieces.
+
+- **It stops when trying more cannot help.** If the title's eboot turns out not
+  to be backported at all, no library set can fix it, so it says so once instead
+  of working through every set to reach the same answer a dozen times. And a
+  failure that asked for MORE libraries only tries larger sets afterwards.
+
+- **Every launch is still judged the careful way.** Launching fails on its own
+  roughly one time in three, so a set is only rejected after repeated attempts
+  agree — auto mode uses the same evidence rules as doing it by hand.
+
+### Scanning a second console now makes the next backport smarter
+
+- **Sets remember which game and console they came from.** The same backported
+  game on two consoles stores as one set — and the second console's copy used to
+  be thrown away as a duplicate, taking the evidence with it. Both are now
+  recorded.
+
+- **Sets that more than one console runs are offered first.** A combination two
+  separate machines actually run is a better first guess than one seen once.
+  Your own game's set still comes first when the corpus has it. Re-scanning the
+  same console does not make a set look better attested than it is.
+
+- **Nothing you already collected is lost.** Existing corpora keep working and
+  are counted as one sighting rather than none, so sets you gathered before this
+  release do not sink below newly scanned ones.
+
+---
+
 ## 5.17.9
 
 **Backporting works again: the library scan finds your games, it now collects

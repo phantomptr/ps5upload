@@ -52,6 +52,12 @@ describe("fakelib corpus", () => {
         id: "set-1",
         label: "Red Dead Redemption",
         origin: { kind: "scan", title_id: "PPSA30528", console: "PS5-Pro", at: undefined },
+        // Backfilled from `origin`: this corpus predates observations, and
+        // counting it as zero sightings would rank every set the user already
+        // collected below anything scanned afterwards.
+        observations: [
+          { titleId: "PPSA30528", titleName: "", console: "PS5-Pro", imageBacked: false },
+        ],
         libraries: [
           {
             name: "libSceAgc.sprx",

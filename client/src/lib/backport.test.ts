@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyBackport,
   diagnoseLaunchFailure,
+  distinctSightings,
   combineAttempts,
   nextSetsAfter,
   verdictFrom,
@@ -32,10 +33,19 @@ const set = (
   titleId: string,
   names: string[],
   shippedBy = 1,
+  /** Consoles this exact set was seen on. One by default, which is what a set
+   *  harvested from a single machine looks like. */
+  consoles: string[] = ["console-a"],
 ): FakelibSet => ({
   id,
   label: id,
   origin: { kind: "scan", title_id: titleId },
+  observations: consoles.map((c) => ({
+    titleId,
+    titleName: titleId,
+    console: c,
+    imageBacked: false,
+  })),
   libraries: names.map((n, i) => ({
     ...lib(n, 100 + i),
     path: `builds/${n.replace(/\.(sprx|prx)$/i, "")}/${(i + 10).toString(16)}abcdef.sprx`,
@@ -44,6 +54,83 @@ const set = (
 });
 
 const FW11 = "0x1100000000000000";
+
+describe("prioritising which set to try first", () => {
+  it("prefers a set two consoles both run over one seen once", () => {
+    // The reason a second console is worth scanning at all: the same
+    // backported game on two machines content-addresses to ONE set, and each
+    // machine is a separate sighting. Two independent machines running a
+    // combination is direct evidence it works on hardware.
+    const seenTwice = set("set-2", "PPSA00002", ["libSceAgc.sprx"], 1, ["pro", "phat"]);
+    const seenOnce = set("set-1", "PPSA00001", ["libSceAgc.sprx"], 1, ["pro"]);
+    const ranked = rankSets([seenOnce, seenTwice], [], "PPSA09999");
+    expect(ranked[0].id).toBe("set-2");
+  });
+
+  it("still puts the target's own set first, ahead of better-travelled ones", () => {
+    // A set harvested from THIS game is the one combination known to work for
+    // this exact title, which beats popularity.
+    const own = set("set-own", "PPSA00001", ["libSceAgc.sprx"], 1, ["pro"]);
+    const popular = set("set-pop", "PPSA00002", ["libSceAgc.sprx"], 9, ["pro", "phat", "third"]);
+    const ranked = rankSets([popular, own], [], "PPSA00001");
+    expect(ranked[0].id).toBe("set-own");
+  });
+
+  it("counts a console only once however often it is re-scanned", () => {
+    // Scanning is explicitly safe to repeat, so a re-scan must not make a set
+    // look better attested than it is.
+    const rescanned = set("set-a", "PPSA00001", ["libSceAgc.sprx"], 1, ["pro", "pro", "pro"]);
+    expect(distinctSightings(rescanned)).toBe(1);
+  });
+
+  it("backfills a sighting for corpora written before observations existed", () => {
+    // Otherwise every set the user already collected would rank below anything
+    // scanned afterwards, purely because the older entry predates the field.
+    const resolved = resolveSets({
+      libraries: [
+        {
+          name: "libSceAgc.sprx",
+          builds: [
+            { sha256: "a".repeat(64), size: 10, path: "builds/libSceAgc/aa.sprx", shipped_by: ["set-1"] },
+          ],
+        },
+      ],
+      sets: [
+        {
+          id: "set-1",
+          label: "Old",
+          origin: { kind: "scan", title_id: "PPSA00001", console: "pro" },
+          libraries: { "libSceAgc.sprx": "a".repeat(64) },
+        },
+      ],
+    });
+    expect(resolved).toHaveLength(1);
+    expect(distinctSightings(resolved[0])).toBe(1);
+    expect(resolved[0].observations[0].console).toBe("pro");
+  });
+
+  it("gives an imported pack no sightings, so it ranks on attestation alone", () => {
+    const resolved = resolveSets({
+      libraries: [
+        {
+          name: "libSceAgc.sprx",
+          builds: [
+            { sha256: "b".repeat(64), size: 10, path: "builds/libSceAgc/bb.sprx", shipped_by: ["set-1"] },
+          ],
+        },
+      ],
+      sets: [
+        {
+          id: "set-1",
+          label: "Pack",
+          origin: { kind: "import", source: "pack.zip" },
+          libraries: { "libSceAgc.sprx": "b".repeat(64) },
+        },
+      ],
+    });
+    expect(distinctSightings(resolved[0])).toBe(0);
+  });
+});
 
 describe("deciding whether a title needs a backport", () => {
   it("keys on the SDK a title was built with, not its declared required firmware", () => {

@@ -118,7 +118,12 @@ export function LibrarySourcePicker({
           const apps = await appsInstalled(transferAddr(target.host));
           titles = apps.titles
             .filter((t) => !!t.source && !t.system)
-            .map((t) => ({ title_id: t.titleId, title_name: t.titleName, source: t.source }));
+            .map((t) => ({
+              title_id: t.titleId,
+              title_name: t.titleName,
+              image_backed: t.imageBacked,
+              source: t.source,
+            }));
         } catch {
           // One console being asleep must not abort the sweep — the others
           // still contribute. Name it so the user knows what was skipped.

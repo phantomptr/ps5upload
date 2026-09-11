@@ -182,6 +182,11 @@ pub struct ScanTitle {
     pub title_id: String,
     #[serde(default)]
     pub title_name: String,
+    /// Disk-image (ShadowMount) title. Recorded with the sighting because it
+    /// is free here — the client already has it — and it says how the source
+    /// game is stored without a second lookup.
+    #[serde(default)]
+    pub image_backed: bool,
     pub source: String,
 }
 
@@ -321,7 +326,9 @@ fn run_scan(req: ScanRequest, state: Arc<Mutex<ScanState>>) {
                 };
                 let origin = Origin::Scan {
                     title_id: title.title_id.clone(),
+                    title_name: title.title_name.clone(),
                     console: req.console.clone(),
+                    image_backed: title.image_backed,
                     at: now_iso(),
                 };
                 match corpus.add_set(&label, origin, libs) {

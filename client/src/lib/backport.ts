@@ -52,15 +52,18 @@ export interface FakelibLibraryEntry {
   builds: FakelibBuild[];
 }
 
-/** What one real game ships, as references into the build store. A combination
- *  known to work somewhere — recorded as metadata, duplicating no bytes. */
-export interface ObservedSet {
-  title_id: string;
-  title_name: string;
-  sdk_version: string;
-  image_backed: boolean;
-  /** library name -> sha256 of the build that game ships. */
-  libraries: Record<string, string>;
+/** One sighting of a set: a game that ships exactly these libraries, and the
+ *  console it was seen on.
+ *
+ *  Sets are content-addressed, so the same backported game on two consoles is
+ *  ONE set — and each console is a separate sighting of it. That count is
+ *  evidence: a combination two machines independently run is a better first
+ *  guess than one seen once. */
+export interface SetObservation {
+  titleId: string;
+  titleName: string;
+  console: string;
+  imageBacked: boolean;
 }
 
 /** Where a set came from. A pack the user imported and a game harvested from a
@@ -78,6 +81,9 @@ export interface FakelibSet {
   id: string;
   label: string;
   origin: SetOrigin;
+  /** Every game/console this exact set was seen on. Empty for imported packs,
+   *  which are not sightings of a game. */
+  observations: SetObservation[];
   libraries: BackportLibrary[];
 }
 
@@ -89,7 +95,6 @@ export function sourceTitleId(set: FakelibSet): string | null {
 export interface FakelibManifest {
   schema: number;
   libraries: FakelibLibraryEntry[];
-  observed_sets: ObservedSet[];
 }
 
 /* A corpus is read off disk and may be hand-edited, so every field is checked
@@ -151,7 +156,13 @@ export function resolveSets(manifest: unknown): FakelibSet[] {
 
     libraries.sort((a, b) => a.name.localeCompare(b.name));
     const label = typeof set.label === "string" && set.label.trim() ? set.label : set.id;
-    out.push({ id: set.id, label, origin, libraries });
+    out.push({
+      id: set.id,
+      label,
+      origin,
+      observations: parseObservations(set.observations, origin),
+      libraries,
+    });
   }
   return out;
 }
@@ -170,6 +181,49 @@ function parseOrigin(value: unknown): SetOrigin | null {
              at: typeof o.at === "string" ? o.at : undefined };
   }
   return null;
+}
+
+/** Sightings of a set, from the manifest.
+ *
+ *  A corpus collected before observations existed has none recorded, but its
+ *  `origin` IS one sighting — so it is backfilled rather than counted as zero.
+ *  Without that, every set a user already had would rank below anything
+ *  scanned afterwards, purely because the older entry predates the field. */
+function parseObservations(value: unknown, origin: SetOrigin): SetObservation[] {
+  const out: SetObservation[] = [];
+  if (Array.isArray(value)) {
+    for (const raw of value) {
+      if (!raw || typeof raw !== "object") continue;
+      const o = raw as Record<string, unknown>;
+      if (typeof o.title_id !== "string" || !o.title_id) continue;
+      out.push({
+        titleId: o.title_id,
+        titleName: typeof o.title_name === "string" ? o.title_name : "",
+        console: typeof o.console === "string" ? o.console : "",
+        imageBacked: o.image_backed === true,
+      });
+    }
+  }
+  if (out.length === 0 && origin.kind === "scan") {
+    out.push({
+      titleId: origin.title_id,
+      titleName: "",
+      console: origin.console ?? "",
+      imageBacked: false,
+    });
+  }
+  return out;
+}
+
+/** How many DISTINCT sources have been seen shipping this exact set.
+ *
+ *  Distinct by game+console: re-scanning one console must not make a set look
+ *  better travelled than it is. Two different machines independently running
+ *  the same combination is real evidence; the same machine scanned twice is
+ *  not. */
+export function distinctSightings(set: FakelibSet): number {
+  const seen = new Set(set.observations.map((o) => `${o.titleId}@${o.console}`));
+  return seen.size;
 }
 
 
@@ -312,6 +366,12 @@ export function rankSets(
         // known to work for this exact game.
         Number(sourceTitleId(b) === targetTitleId) -
           Number(sourceTitleId(a) === targetTitleId) ||
+        // Then how many DIFFERENT sources ship it. Two consoles independently
+        // running the same combination is direct evidence that it works on
+        // hardware, and it is the one signal that gets stronger as the user
+        // scans more machines — which is the whole reason a second console is
+        // worth scanning at all.
+        distinctSightings(b) - distinctSightings(a) ||
         // Then attestation. Measured across 34 titles, the target's SDK does
         // NOT predict the build: one libSceAgc build ships in titles declaring
         // SDK 0500, 0900, 1000 and 1100, while a single SDK (1100) uses four

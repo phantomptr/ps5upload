@@ -2,6 +2,14 @@
   "ar": {
     "missing": [
       "backport_action",
+      "backport_auto",
+      "backport_auto_exhausted",
+      "backport_auto_hint",
+      "backport_auto_running",
+      "backport_auto_stop",
+      "backport_auto_stopped",
+      "backport_auto_stopping",
+      "backport_auto_worked",
       "backport_candidates",
       "backport_failed",
       "backport_get_more",
@@ -127,6 +135,14 @@
   "bn": {
     "missing": [
       "backport_action",
+      "backport_auto",
+      "backport_auto_exhausted",
+      "backport_auto_hint",
+      "backport_auto_running",
+      "backport_auto_stop",
+      "backport_auto_stopped",
+      "backport_auto_stopping",
+      "backport_auto_worked",
       "backport_candidates",
       "backport_failed",
       "backport_get_more",
@@ -253,6 +269,14 @@
   "de": {
     "missing": [
       "backport_action",
+      "backport_auto",
+      "backport_auto_exhausted",
+      "backport_auto_hint",
+      "backport_auto_running",
+      "backport_auto_stop",
+      "backport_auto_stopped",
+      "backport_auto_stopping",
+      "backport_auto_worked",
       "backport_candidates",
       "backport_failed",
       "backport_get_more",
@@ -385,6 +409,14 @@
   "es": {
     "missing": [
       "backport_action",
+      "backport_auto",
+      "backport_auto_exhausted",
+      "backport_auto_hint",
+      "backport_auto_running",
+      "backport_auto_stop",
+      "backport_auto_stopped",
+      "backport_auto_stopping",
+      "backport_auto_worked",
       "backport_candidates",
       "backport_failed",
       "backport_get_more",
@@ -513,6 +545,14 @@
   "fr": {
     "missing": [
       "backport_action",
+      "backport_auto",
+      "backport_auto_exhausted",
+      "backport_auto_hint",
+      "backport_auto_running",
+      "backport_auto_stop",
+      "backport_auto_stopped",
+      "backport_auto_stopping",
+      "backport_auto_worked",
       "backport_candidates",
       "backport_failed",
       "backport_get_more",
@@ -643,6 +683,14 @@
   "hi": {
     "missing": [
       "backport_action",
+      "backport_auto",
+      "backport_auto_exhausted",
+      "backport_auto_hint",
+      "backport_auto_running",
+      "backport_auto_stop",
+      "backport_auto_stopped",
+      "backport_auto_stopping",
+      "backport_auto_worked",
       "backport_candidates",
       "backport_failed",
       "backport_get_more",
@@ -769,6 +817,14 @@
   "id": {
     "missing": [
       "backport_action",
+      "backport_auto",
+      "backport_auto_exhausted",
+      "backport_auto_hint",
+      "backport_auto_running",
+      "backport_auto_stop",
+      "backport_auto_stopped",
+      "backport_auto_stopping",
+      "backport_auto_worked",
       "backport_candidates",
       "backport_failed",
       "backport_get_more",
@@ -900,6 +956,14 @@
   "it": {
     "missing": [
       "backport_action",
+      "backport_auto",
+      "backport_auto_exhausted",
+      "backport_auto_hint",
+      "backport_auto_running",
+      "backport_auto_stop",
+      "backport_auto_stopped",
+      "backport_auto_stopping",
+      "backport_auto_worked",
       "backport_candidates",
       "backport_failed",
       "backport_get_more",
@@ -1030,6 +1094,14 @@
   "ja": {
     "missing": [
       "backport_action",
+      "backport_auto",
+      "backport_auto_exhausted",
+      "backport_auto_hint",
+      "backport_auto_running",
+      "backport_auto_stop",
+      "backport_auto_stopped",
+      "backport_auto_stopping",
+      "backport_auto_worked",
       "backport_candidates",
       "backport_failed",
       "backport_get_more",
@@ -1158,6 +1230,14 @@
   "ko": {
     "missing": [
       "backport_action",
+      "backport_auto",
+      "backport_auto_exhausted",
+      "backport_auto_hint",
+      "backport_auto_running",
+      "backport_auto_stop",
+      "backport_auto_stopped",
+      "backport_auto_stopping",
+      "backport_auto_worked",
       "backport_candidates",
       "backport_failed",
       "backport_get_more",
@@ -1284,6 +1364,14 @@
   "pl": {
     "missing": [
       "backport_action",
+      "backport_auto",
+      "backport_auto_exhausted",
+      "backport_auto_hint",
+      "backport_auto_running",
+      "backport_auto_stop",
+      "backport_auto_stopped",
+      "backport_auto_stopping",
+      "backport_auto_worked",
       "backport_candidates",
       "backport_failed",
       "backport_get_more",
@@ -1410,6 +1498,14 @@
   "pt-BR": {
     "missing": [
       "backport_action",
+      "backport_auto",
+      "backport_auto_exhausted",
+      "backport_auto_hint",
+      "backport_auto_running",
+      "backport_auto_stop",
+      "backport_auto_stopped",
+      "backport_auto_stopping",
+      "backport_auto_worked",
       "backport_candidates",
       "backport_failed",
       "backport_get_more",
@@ -1541,6 +1637,14 @@
   "ru": {
     "missing": [
       "backport_action",
+      "backport_auto",
+      "backport_auto_exhausted",
+      "backport_auto_hint",
+      "backport_auto_running",
+      "backport_auto_stop",
+      "backport_auto_stopped",
+      "backport_auto_stopping",
+      "backport_auto_worked",
       "backport_candidates",
       "backport_failed",
       "backport_get_more",
@@ -1667,6 +1771,14 @@
   "th": {
     "missing": [
       "backport_action",
+      "backport_auto",
+      "backport_auto_exhausted",
+      "backport_auto_hint",
+      "backport_auto_running",
+      "backport_auto_stop",
+      "backport_auto_stopped",
+      "backport_auto_stopping",
+      "backport_auto_worked",
       "backport_candidates",
       "backport_failed",
       "backport_get_more",
@@ -1793,6 +1905,14 @@
   "tr": {
     "missing": [
       "backport_action",
+      "backport_auto",
+      "backport_auto_exhausted",
+      "backport_auto_hint",
+      "backport_auto_running",
+      "backport_auto_stop",
+      "backport_auto_stopped",
+      "backport_auto_stopping",
+      "backport_auto_worked",
       "backport_candidates",
       "backport_failed",
       "backport_get_more",
@@ -1920,6 +2040,14 @@
   "vi": {
     "missing": [
       "backport_action",
+      "backport_auto",
+      "backport_auto_exhausted",
+      "backport_auto_hint",
+      "backport_auto_running",
+      "backport_auto_stop",
+      "backport_auto_stopped",
+      "backport_auto_stopping",
+      "backport_auto_worked",
       "backport_candidates",
       "backport_failed",
       "backport_get_more",
@@ -2048,6 +2176,14 @@
   "zh-CN": {
     "missing": [
       "backport_action",
+      "backport_auto",
+      "backport_auto_exhausted",
+      "backport_auto_hint",
+      "backport_auto_running",
+      "backport_auto_stop",
+      "backport_auto_stopped",
+      "backport_auto_stopping",
+      "backport_auto_worked",
       "backport_candidates",
       "backport_failed",
       "backport_get_more",
@@ -2174,6 +2310,14 @@
   "zh-TW": {
     "missing": [
       "backport_action",
+      "backport_auto",
+      "backport_auto_exhausted",
+      "backport_auto_hint",
+      "backport_auto_running",
+      "backport_auto_stop",
+      "backport_auto_stopped",
+      "backport_auto_stopping",
+      "backport_auto_worked",
       "backport_candidates",
       "backport_failed",
       "backport_get_more",

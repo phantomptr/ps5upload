@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Layers, Play, RotateCcw } from "lucide-react";
 import { Button, Callout, Modal, Spinner } from "../../components";
 import {
@@ -103,6 +103,16 @@ export function BackportPanel({
   const [patchLibc, setPatchLibc] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /* Auto mode: install → launch → judge → undo → next, without making the user
+   * drive each cycle by hand. Working down the ranked list IS the workflow, so
+   * the only thing the manual flow really asked of the user was patience. */
+  const [autoRunning, setAutoRunning] = useState(false);
+  const [autoProgress, setAutoProgress] =
+    useState<{ label: string; index: number; total: number } | null>(null);
+  const [autoNote, setAutoNote] = useState<string | null>(null);
+  /* A ref, not state: the loop reads it between phases, and a state read would
+   * be the value captured when the run started. */
+  const cancelAuto = useRef(false);
 
   const candidates = rankSets(sets, rejected, title.titleId);
   /* After a failure, what is still worth trying. A missing-library failure
@@ -112,7 +122,10 @@ export function BackportPanel({
     verdict && plan ? nextSetsAfter(verdict, plan.set, candidates) : candidates;
 
   const load = useCallback(async () => {
-    if (!open || record) return;
+    // Auto mode owns the plan while it runs. Without this guard the effect
+    // fires in the window after each undo (when `record` is briefly null) and
+    // re-proposes a set underneath the loop that is already choosing one.
+    if (!open || record || autoRunning) return;
     const ranked = rankSets(sets, rejected, title.titleId);
     const candidate = (lastFailure
       ? nextSetsAfter(lastFailure.verdict, lastFailure.set, ranked)
@@ -145,7 +158,7 @@ export function BackportPanel({
     } finally {
       setBusy(false);
     }
-  }, [host, open, corpusRoot, sets, record, rejected, lastFailure, title, tr]);
+  }, [host, open, corpusRoot, sets, record, rejected, lastFailure, title, tr, autoRunning]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -339,6 +352,149 @@ export function BackportPanel({
     }
   };
 
+  /** Install, launch, judge, undo, move on — until a set runs or none is left.
+   *
+   *  Driven from LOCAL copies of the tried list and the last failure rather
+   *  than from React state: a loop cannot observe its own setState between
+   *  iterations, so reading state here would re-propose the set that just
+   *  failed, forever. State is synced once at the end for the panel to show.
+   *
+   *  Stops the moment something runs — leaving that set installed, because it
+   *  is the answer — and on `not-backported`, where no library set can help and
+   *  working through the rest would reach the same verdict a dozen times. */
+  const runAuto = async () => {
+    if (!overlayReady || autoRunning) return;
+    cancelAuto.current = false;
+    setAutoRunning(true);
+    setAutoNote(null);
+    setError(null);
+    setVerdict(null);
+
+    const triedIds = [...rejected];
+    let failure = lastFailure;
+    let liveRecord = record;
+    let tried = 0;
+    const stopped = () => cancelAuto.current;
+
+    try {
+      // Search starts from a clean title: anything already installed is a set
+      // that has not been shown to work, so take it off before trying more.
+      if (liveRecord) {
+        const installed = liveRecord;
+        await withWritableTitle(
+          () => undoBackport(installed, transport),
+          () => removeBackportRecord(host, title.titleId),
+        );
+        if (!triedIds.includes(installed.setId)) triedIds.push(installed.setId);
+        setRecord(null);
+        liveRecord = null;
+      }
+
+      for (;;) {
+        if (stopped()) break;
+
+        const ranked = rankSets(sets, triedIds, title.titleId);
+        const pool = failure ? nextSetsAfter(failure.verdict, failure.set, ranked) : ranked;
+        const candidate = pool[0];
+        if (!candidate) {
+          setAutoNote(tr("backport_auto_exhausted", undefined,
+            "Tried every available set — none of them started this game."));
+          break;
+        }
+        setAutoProgress({ label: candidate.label, index: tried + 1, total: tried + pool.length });
+
+        let present: Awaited<ReturnType<typeof fsListDir>> = [];
+        try {
+          present = await fsListDir(transferAddr(host), `${title.source}/fakelib`);
+        } catch {
+          present = [];
+        }
+        const next = planBackport(title, candidate, existingLibraries(present), corpusRoot);
+        setPlan(next);
+
+        try {
+          liveRecord = await withWritableTitle(
+            () => applyBackport(next, transport, patchLibc),
+            (completed) => {
+              saveBackportRecord(host, completed);
+              setRecord(completed);
+            },
+          );
+        } catch (e) {
+          // A half-applied set must still be recorded, or Undo has nothing to
+          // work from — the same contract the manual path keeps.
+          if (e instanceof BackportApplyError) {
+            const partial = {
+              titleId: title.titleId,
+              setId: next.set.id,
+              targetSource: title.source,
+              copiedPaths: e.copiedPaths,
+              replaced: e.replaced,
+              stashDir: next.stashDir,
+              complete: false,
+            };
+            saveBackportRecord(host, partial);
+            setRecord(partial);
+          }
+          throw e;
+        }
+        tried += 1;
+
+        setVerifying(true);
+        const attempts: VerifyVerdict[] = [];
+        for (let i = 0; i < FAILURE_ATTEMPTS; i += 1) {
+          attempts.push(await attempt());
+          const soFar = combineAttempts(attempts);
+          setVerdict(soFar);
+          if (soFar.kind === "running" || soFar.kind === "missing-libraries") break;
+          if (stopped()) break;
+        }
+        setVerifying(false);
+        const result = combineAttempts(attempts);
+        setVerdict(result);
+
+        if (result.kind === "running") {
+          setAutoNote(tr("backport_auto_worked", { label: candidate.label },
+            `${candidate.label} works — the game started.`));
+          failure = null;
+          break;
+        }
+        if (result.kind === "not-backported") break;
+
+        if (liveRecord) {
+          const toUndo = liveRecord;
+          await withWritableTitle(
+            () => undoBackport(toUndo, transport),
+            () => removeBackportRecord(host, title.titleId),
+          );
+          setRecord(null);
+          liveRecord = null;
+        }
+        triedIds.push(candidate.id);
+        failure =
+          result.kind === "missing-libraries" || result.kind === "wrong-libraries"
+            ? { set: candidate, verdict: result }
+            : null;
+        setPlan(null);
+      }
+
+      if (stopped()) {
+        setAutoNote(tr("backport_auto_stopped", { tried },
+          `Stopped after trying ${tried} set(s).`));
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setVerifying(false);
+      setAutoRunning(false);
+      setAutoProgress(null);
+      // Sync once, at the end: the panel's manual controls carry on from
+      // wherever the run stopped.
+      setRejected(triedIds);
+      setLastFailure(failure);
+    }
+  };
+
   const undo = async () => {
     if (!record) return;
     setBusy(true);
@@ -424,8 +580,38 @@ export function BackportPanel({
               <span><strong>{tr("sdk_patch_libc", undefined, "Also patch libc.prx")}</strong><br /><span className="text-[var(--color-muted)]">{tr("sdk_patch_libc_hint", undefined, "Helps some titles and stops others from launching. Leave off unless needed.")}</span></span>
             </label>
             {imageBacked ? <p className="text-xs text-[var(--color-muted)]">{tr("backport_image_cycle", undefined, "This disk image will be stopped if needed, remounted read-write for the edit, then returned to read-only automatically.")}</p> : null}
-            <Button variant="primary" onClick={() => void apply()} disabled={busy || !overlayReady} loading={busy}>{tr("backport_action", undefined, "Backport")}</Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="primary" onClick={() => void apply()} disabled={busy || autoRunning || !overlayReady} loading={busy}>{tr("backport_action", undefined, "Backport")}</Button>
+              <Button variant="secondary" onClick={() => void runAuto()} disabled={busy || autoRunning || !overlayReady}>{tr("backport_auto", undefined, "Try sets automatically")}</Button>
+            </div>
+            <p className="text-xs text-[var(--color-muted)]">{tr("backport_auto_hint", undefined, "Installs a set, launches the game, and if it does not start, undoes it and moves to the next one — until one works or the sets run out.")}</p>
           </>
+        ) : null}
+        {autoRunning || autoNote ? (
+          <div className="space-y-2">
+            {autoRunning ? (
+              <div className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
+                <Spinner size={16} />
+                <span className="flex-1">
+                  {autoProgress
+                    ? tr("backport_auto_running",
+                        { label: autoProgress.label, index: autoProgress.index, total: autoProgress.total },
+                        `Trying ${autoProgress.label} — set ${autoProgress.index} of ${autoProgress.total}…`)
+                    : tr("backport_auto_stopping", undefined, "Finishing the current set…")}
+                </span>
+                {/* The loop can only stop between phases — it will not abandon
+                    a half-installed set — so clear the progress line at once to
+                    show the click registered. */}
+                <Button
+                  variant="secondary"
+                  onClick={() => { cancelAuto.current = true; setAutoProgress(null); }}
+                >
+                  {tr("backport_auto_stop", undefined, "Stop")}
+                </Button>
+              </div>
+            ) : null}
+            {!autoRunning && autoNote ? <Callout tone="info" title={autoNote} /> : null}
+          </div>
         ) : null}
         {record && (verifying || verdict) ? (
           verifying ? (
