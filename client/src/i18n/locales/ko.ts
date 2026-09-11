@@ -2779,6 +2779,10 @@ helper_mismatch_go: "헬퍼 다시 불러오기",
 "cheats_filter_installed_only": "내 게임만",
 "cheats_filter_count": "{total}개 중 {shown}개",
 "cheats_filter_none": "이 필터와 일치하는 치트가 없습니다. 필터를 하나 해제해 보세요.",
+"power_action_wake": "켜기",
+"power_wake_hint": "{mac} 으로 Wake-on-LAN 패킷을 보냅니다. 본체에서 네트워크로 PS5 켜기가 활성화되어 있어야 합니다.",
+"power_wake_sent": "켜기 신호를 보냈습니다",
+"power_wake_sent_body": "본체가 켜지지 않으면 설정 → 시스템 → 절전 → 휴식 모드 중 사용 가능한 기능 → 네트워크로 PS5 켜기를 활성화하세요.",
 };
 
 export default ko;

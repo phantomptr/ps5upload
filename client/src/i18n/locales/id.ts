@@ -2750,6 +2750,10 @@ helper_mismatch_go: "Muat ulang helper",
 "cheats_filter_installed_only": "Hanya gim saya",
 "cheats_filter_count": "{shown} dari {total}",
 "cheats_filter_none": "Tidak ada cheat yang cocok dengan filter ini. Hapus satu untuk melihat lebih banyak.",
+"power_action_wake": "Bangunkan",
+"power_wake_hint": "Mengirim paket Wake-on-LAN ke {mac}. Memerlukan opsi menyalakan PS5 dari jaringan aktif di konsol.",
+"power_wake_sent": "Sinyal bangun terkirim",
+"power_wake_sent_body": "Jika konsol tidak menyala, aktifkan Pengaturan → Sistem → Hemat Daya → Fitur yang Tersedia dalam Mode Istirahat → Aktifkan Menyalakan PS5 dari Jaringan.",
 };
 
 export default id;

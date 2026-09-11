@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import PowerControl from "../Connection/PowerControl";
 import { Link } from "react-router";
 import {
   Activity as ActivityIcon,
@@ -141,6 +142,22 @@ export default function HomeScreen() {
           <ArrowRight size={14} aria-hidden />
         </Link>
       </section>
+
+      {/* Power, right under the hero — issue #316. These lived only at the
+          bottom of Manage connections, which is several clicks away from the
+          screen people actually sit on. Same component as that page rather
+          than a copy, so the confirmations and the Wake button cannot drift
+          apart between the two places.
+
+          Shown whenever a host is configured, not only when connected: Wake
+          is precisely the action you want when the console is NOT reachable,
+          and hiding the panel then would remove it at the one moment it is
+          the point. */}
+      {host ? (
+        <div className="mb-4">
+          <PowerControl host={host} />
+        </div>
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-12">
         <Card className="xl:col-span-7">

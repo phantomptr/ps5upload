@@ -2094,6 +2094,35 @@ export async function powerShutdown(addr: string): Promise<PowerControlAck> {
   return invoke<PowerControlAck>("power_shutdown", { addr });
 }
 
+/** Wake a sleeping console with a Wake-on-LAN magic packet.
+ *
+ *  A direct engine call rather than a Tauri command, because it is the one
+ *  power action that has nothing to do with the payload: the payload is not
+ *  running when the console is asleep, so the packet goes out from the host.
+ *  Direct fetch also means the browser build gets it for free.
+ *
+ *  A resolved promise means the packet was SENT, not that the console woke.
+ *  Wake-on-LAN is fire-and-forget UDP and the console ignores it unless
+ *  "Enable turning on PS5 from network" is switched on, so callers must not
+ *  report success as "it is waking up". */
+export async function powerWake(
+  mac: string,
+  lastKnownHost: string,
+): Promise<{ ok: boolean; packets_sent?: number; error?: string }> {
+  const res = await fetch(`${getEngineUrl()}/api/ps5/power/wake`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mac, host: lastKnownHost }),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    packets_sent?: number;
+    error?: string;
+  };
+  if (!res.ok) throw new Error(body.error || `wake failed (${res.status})`);
+  return { ok: !!body.ok, packets_sent: body.packets_sent };
+}
+
 /** One row in the process manager. `kind` drives the UI's filter + kill
  *  guard: "app" (user game/app), "payload" (user .elf homebrew), or
  *  "system" (Sce* daemons + Sony NPXS apps — hidden by default, killing

@@ -2778,6 +2778,10 @@ helper_mismatch_go: "हेल्पर फिर लोड करें",
 "cheats_filter_installed_only": "केवल मेरे गेम",
 "cheats_filter_count": "{total} में से {shown}",
 "cheats_filter_none": "इन फ़िल्टरों से कोई चीट मेल नहीं खाती। अधिक देखने के लिए कोई एक फ़िल्टर हटाएँ।",
+"power_action_wake": "चालू करें",
+"power_wake_hint": "{mac} पर Wake-on-LAN पैकेट भेजता है। कंसोल पर नेटवर्क से PS5 चालू करने का विकल्प सक्षम होना चाहिए।",
+"power_wake_sent": "चालू करने का संकेत भेजा गया",
+"power_wake_sent_body": "यदि कंसोल चालू न हो, तो सेटिंग्स → सिस्टम → पावर सेविंग → रेस्ट मोड में उपलब्ध सुविधाएँ → नेटवर्क से PS5 चालू करना सक्षम करें।",
 };
 
 export default hi;

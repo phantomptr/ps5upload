@@ -2748,6 +2748,10 @@ helper_mismatch_go: "Yardımcıyı yükle",
 "cheats_filter_installed_only": "Yalnızca benim oyunlarım",
 "cheats_filter_count": "{total} içinden {shown}",
 "cheats_filter_none": "Bu filtrelerle eşleşen hile yok. Daha fazlasını görmek için birini kaldırın.",
+"power_action_wake": "Uyandır",
+"power_wake_hint": "{mac} adresine bir Wake-on-LAN paketi gönderir. Konsolda PS5 i ağ üzerinden açma seçeneğinin etkin olması gerekir.",
+"power_wake_sent": "Uyandırma sinyali gönderildi",
+"power_wake_sent_body": "Konsol açılmazsa Ayarlar → Sistem → Güç Tasarrufu → Dinlenme Modunda Kullanılabilir Özellikler → PS5 i Ağ Üzerinden Açmayı Etkinleştir seçeneğini açın.",
 };
 
 export default tr;

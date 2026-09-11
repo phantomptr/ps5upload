@@ -2776,6 +2776,10 @@ helper_mismatch_go: "Recarregar auxiliar",
 "cheats_filter_installed_only": "Somente meus jogos",
 "cheats_filter_count": "{shown} de {total}",
 "cheats_filter_none": "Nenhum truque corresponde a esses filtros. Remova um para ver mais.",
+"power_action_wake": "Ligar",
+"power_wake_hint": "Envia um pacote Wake-on-LAN para {mac}. Requer que ligar o PS5 pela rede esteja ativado no console.",
+"power_wake_sent": "Sinal de ativação enviado",
+"power_wake_sent_body": "Se o console não ligar, ative Ajustes → Sistema → Economia de energia → Recursos disponíveis no modo de descanso → Permitir ligar o PS5 pela rede.",
 };
 
 export default pt_BR;

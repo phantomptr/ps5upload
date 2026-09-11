@@ -39,7 +39,18 @@ import {
   cheatsReposSearch,
 } from "../../api/ps5";
 import { RepoBrowser } from "./RepoBrowser";
-import { namesFromRepoEntries, resolveCheatName } from "../../lib/cheatBrowse";
+import {
+  isUsableGameTitle,
+  namesFromRepoEntries,
+  resolveCheatName,
+} from "../../lib/cheatBrowse";
+
+/** Repo names live for the session, not the component.
+ *
+ *  The index is a few hundred KB across three repos and changes about as often
+ *  as somebody publishes a cheat, so re-fetching it every time the user opens
+ *  the Cheats screen is pure latency. */
+let repoNameCache = new Map<string, string>();
 
 export default function CheatsScreen() {
   const tr = useTr();
@@ -66,25 +77,6 @@ export default function CheatsScreen() {
     })();
   }, [addr, payloadStatus]);
 
-  /* Names from the cheat repos, for games that are NOT installed here.
-   *
-   * The installed list above only covers games on this console, so a cheat
-   * downloaded for anything else showed a bare title id — the complaint in
-   * issue #315. The repo index already maps every published cheat's title id
-   * to its game name, so ask it once and keep the answer for the session;
-   * it is one fetch of data the browser downloads anyway. */
-  const [repoNames, setRepoNames] = useState<Map<string, string>>(new Map());
-  useEffect(() => {
-    void (async () => {
-      try {
-        const r = await cheatsReposSearch("");
-        setRepoNames(namesFromRepoEntries(r.entries ?? []));
-      } catch {
-        // Offline or a repo is down. Names simply fall back as before —
-        // never a reason to show an error on a screen about cheats.
-      }
-    })();
-  }, []);
 
   const namesByTitleId = useMemo(() => {
     const m = new Map<string, string>();
@@ -97,6 +89,38 @@ export default function CheatsScreen() {
   const [titles, setTitles] = useState<CheatTitle[]>([]);
   const [status, setStatus] = useState<CheatsStatusResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  /* Names from the cheat repos, for games that are NOT installed here.
+   *
+   * The installed list above only covers games on this console, so a cheat
+   * downloaded for anything else showed a bare title id — the complaint in
+   * issue #315. The repo index already maps every published cheat's title id
+   * to its game name, so ask it once and keep the answer for the session;
+   * it is one fetch of data the browser downloads anyway. */
+  const [repoNames, setRepoNames] = useState<Map<string, string>>(repoNameCache);
+  useEffect(() => {
+    // Only worth a network round trip when something is ACTUALLY unnamed.
+    // Most users have the game installed, in which case the console already
+    // told us its name and fetching three repo indexes would be a stall that
+    // bought nothing. Cached for the session so revisiting the screen is free.
+    const unresolved = titles.some(
+      (t) =>
+        !isUsableGameTitle(t.name) &&
+        !isUsableGameTitle(namesByTitleId.get(t.title_id.toUpperCase())) &&
+        !repoNameCache.has(t.title_id.toUpperCase()),
+    );
+    if (!unresolved || repoNameCache.size > 0) return;
+    void (async () => {
+      try {
+        const r = await cheatsReposSearch("");
+        repoNameCache = namesFromRepoEntries(r.entries ?? []);
+        setRepoNames(repoNameCache);
+      } catch {
+        // Offline or a repo is down. Names simply fall back as before —
+        // never a reason to show an error on a screen about cheats.
+      }
+    })();
+  }, [titles, namesByTitleId]);
+
   const [error, setError] = useState<string | null>(null);
   const [selectedTitle, setSelectedTitle] = useState<string | null>(null);
   const [mods, setMods] = useState<CheatMod[]>([]);

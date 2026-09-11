@@ -2741,6 +2741,10 @@ helper_mismatch_go: "إعادة تحميل المساعد",
 "cheats_filter_installed_only": "ألعابي فقط",
 "cheats_filter_count": "{shown} من {total}",
 "cheats_filter_none": "لا توجد أكواد غش تطابق هذه المرشحات. أزل أحدها لعرض المزيد.",
+"power_action_wake": "تشغيل",
+"power_wake_hint": "يرسل حزمة Wake-on-LAN إلى {mac}. يتطلب تفعيل تشغيل PS5 عبر الشبكة على الجهاز.",
+"power_wake_sent": "تم إرسال إشارة التشغيل",
+"power_wake_sent_body": "إذا لم يعمل الجهاز، فعّل الإعدادات ← النظام ← توفير الطاقة ← الميزات المتاحة في وضع الراحة ← تمكين تشغيل PS5 عبر الشبكة.",
 };
 
 export default ar;

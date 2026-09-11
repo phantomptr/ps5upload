@@ -2741,6 +2741,10 @@ helper_mismatch_go: "হেল্পার লোড করুন",
 "cheats_filter_installed_only": "শুধু আমার গেম",
 "cheats_filter_count": "{total} এর মধ্যে {shown}",
 "cheats_filter_none": "এই ফিল্টারগুলির সঙ্গে কোনো চিট মেলেনি। আরও দেখতে একটি ফিল্টার সরান।",
+"power_action_wake": "চালু করুন",
+"power_wake_hint": "{mac} ঠিকানায় একটি Wake-on-LAN প্যাকেট পাঠায়। কনসোলে নেটওয়ার্ক থেকে PS5 চালু করার সুবিধা সক্রিয় থাকতে হবে।",
+"power_wake_sent": "চালু করার সংকেত পাঠানো হয়েছে",
+"power_wake_sent_body": "কনসোল চালু না হলে সেটিংস → সিস্টেম → পাওয়ার সেভিং → রেস্ট মোডে উপলব্ধ বৈশিষ্ট্য → নেটওয়ার্ক থেকে PS5 চালু করা সক্রিয় করুন।",
 };
 
 export default bn;

@@ -2778,6 +2778,10 @@ helper_mismatch_go: "Recharger l'assistant",
 "cheats_filter_installed_only": "Seulement mes jeux",
 "cheats_filter_count": "{shown} sur {total}",
 "cheats_filter_none": "Aucun code ne correspond à ces filtres. Retirez-en un pour en voir plus.",
+"power_action_wake": "Réveiller",
+"power_wake_hint": "Envoie un paquet Wake-on-LAN à {mac}. Nécessite l activation du démarrage de la PS5 via le réseau sur la console.",
+"power_wake_sent": "Signal de réveil envoyé",
+"power_wake_sent_body": "Si la console ne démarre pas, activez Paramètres → Système → Économie d énergie → Fonctionnalités disponibles en mode repos → Autoriser le démarrage de la PS5 via le réseau.",
 };
 
 export default fr;

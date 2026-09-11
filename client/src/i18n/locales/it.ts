@@ -2688,6 +2688,10 @@ helper_mismatch_go: "Ricarica helper",
 "cheats_filter_installed_only": "Solo i miei giochi",
 "cheats_filter_count": "{shown} di {total}",
 "cheats_filter_none": "Nessun trucco corrisponde a questi filtri. Rimuovine uno per vederne altri.",
+"power_action_wake": "Accendi",
+"power_wake_hint": "Invia un pacchetto Wake-on-LAN a {mac}. Richiede che sulla console sia attivata l accensione della PS5 dalla rete.",
+"power_wake_sent": "Segnale di accensione inviato",
+"power_wake_sent_body": "Se la console non si accende, attiva Impostazioni → Sistema → Risparmio energetico → Funzioni disponibili in modalità riposo → Consenti accensione della PS5 dalla rete.",
 };
 
 export default it;

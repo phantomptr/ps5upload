@@ -1511,6 +1511,24 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
             mod->enabled = turn_on;
             save_state(title_id, target_cf, 1);
         }
+
+        /* Confirm on the console.
+         *
+         * This is the moment issue #315 actually describes — "you load a
+         * cheat, it works in-game, but there is no notification". Toggling
+         * requires a running game and applies the patch live, so it is the
+         * one place the player is looking at the TV rather than the app.
+         * Naming the cheat matters more than naming the game here: the
+         * player already knows what they are playing, and what they need
+         * confirmed is WHICH cheat took. */
+        char msg[256];
+        const char *label = mod->name[0] ? mod->name : "Cheat";
+        if (strcmp(mod->type, "button") == 0) {
+            snprintf(msg, sizeof(msg), "%s applied", label);
+        } else {
+            snprintf(msg, sizeof(msg), "%s %s", label, turn_on ? "on" : "off");
+        }
+        notif_send(msg, NOTIF_LEVEL_INFO);
     }
 
     free(target_cf);
