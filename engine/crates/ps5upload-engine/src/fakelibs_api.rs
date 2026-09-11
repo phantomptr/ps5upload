@@ -388,6 +388,136 @@ fn harvest(addr: &str, title: &ScanTitle) -> anyhow::Result<Vec<IncomingLibrary>
     Ok(out)
 }
 
+// ─── Backport packs ──────────────────────────────────────────────────────────
+//
+// A "pack" is how backports are actually distributed: `fakelib/` plus an
+// eboot.bin that is ALREADY patched to the backport SDK pair, plus replacement
+// `sce_module/` modules. Both endpoints take a HOST PATH rather than an upload
+// because a pack eboot runs to hundreds of megabytes — pushing that through
+// multipart into the engine, only to send it straight back out to the console,
+// would double the transfer for no gain.
+
+#[derive(Debug, Deserialize)]
+pub struct PackQuery {
+    pub path: String,
+}
+
+/// GET /api/backport/pack?path=... — what is in this folder?
+///
+/// Read-only: it never touches the corpus. The UI needs to show the user what
+/// was recognised BEFORE anything is installed, because installing a pack
+/// replaces the title's eboot.
+pub async fn inspect_pack(Query(q): Query<PackQuery>) -> impl IntoResponse {
+    let dir = PathBuf::from(q.path);
+    match tokio::task::spawn_blocking(move || ps5upload_core::backport_pack::inspect(&dir)).await {
+        Ok(Ok(c)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "is_pack": c.is_pack(),
+                "title_id_hint": c.title_id_hint,
+                "libraries": c.libraries,
+                "eboot": c.eboot,
+                "sce_modules": c.sce_modules,
+                "game_prx": c.game_prx,
+                "sce_sys": c.sce_sys,
+                "other": c.other,
+                "total_bytes": c.total_bytes(),
+            })),
+        )
+            .into_response(),
+        Ok(Err(e)) => err(StatusCode::BAD_REQUEST, format!("{e:#}")),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportPackReq {
+    pub path: String,
+    #[serde(default)]
+    pub label: String,
+}
+
+/// POST /api/backport/pack/import — take ONLY `fakelib/` into the corpus.
+///
+/// Deliberately partial. The eboot and `sce_module/` are title-specific and
+/// enormous; content-addressing them would bloat the store with bytes no other
+/// game can ever reuse. They are installed straight from the folder instead.
+pub async fn import_pack(Json(req): Json<ImportPackReq>) -> impl IntoResponse {
+    let Some(root) = corpus_root() else {
+        return no_home();
+    };
+    let dir = PathBuf::from(&req.path);
+    let label_in = req.label.trim().to_string();
+    let read = tokio::task::spawn_blocking(
+        move || -> anyhow::Result<(Vec<IncomingLibrary>, String, Option<String>)> {
+            let c = ps5upload_core::backport_pack::inspect(&dir)?;
+            if !c.is_pack() {
+                // Naming what WAS found turns "nothing happened" into a
+                // pointer at the mistake: the user usually picked the parent
+                // folder, or a pack whose libraries sit one level deeper.
+                return Err(anyhow::anyhow!(
+                    "no fakelib/ folder here, so this is not a backport pack ({} other file(s) seen)",
+                    c.other.len() + c.sce_modules.len()
+                ));
+            }
+            let mut libraries = Vec::new();
+            for f in &c.libraries {
+                let name = f
+                    .rel_path
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&f.rel_path)
+                    .to_string();
+                let data = std::fs::read(dir.join(&f.rel_path))
+                    .map_err(|e| anyhow::anyhow!("reading {}: {e}", f.rel_path))?;
+                libraries.push(IncomingLibrary { name, data });
+            }
+            let folder = dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("pack")
+                .to_string();
+            Ok((libraries, folder, c.title_id_hint))
+        },
+    )
+    .await;
+
+    let (libraries, folder, hint) = match read {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => return err(StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")),
+    };
+
+    // The title id is the name worth carrying: a downloaded folder is usually
+    // called something like "[SITE]-FW 4xx PPSA19534 (v01.000.016)", which is
+    // noise in a set list.
+    let label = if !label_in.is_empty() {
+        label_in
+    } else {
+        hint.clone().unwrap_or_else(|| folder.clone())
+    };
+    let origin = Origin::Import {
+        source: folder,
+        at: now_iso(),
+    };
+    let mut corpus = Corpus::open(&root);
+    match corpus.add_set(&label, origin, libraries) {
+        Ok(Some(id)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "ok": true, "set_id": id, "title_id_hint": hint })),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true, "set_id": null, "duplicate": true, "title_id_hint": hint
+            })),
+        )
+            .into_response(),
+        Err(e) => err(StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")),
+    }
+}
+
 // ─── GET /api/ps5/title-sdk-pair ─────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]

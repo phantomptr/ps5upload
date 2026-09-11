@@ -8871,6 +8871,11 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/fakelibs/corpus", get(fakelibs_api::get_corpus))
         .route("/api/ps5/title-sdk-pair", get(fakelibs_api::title_sdk_pair))
         .route("/api/fakelibs/import", post(fakelibs_api::import))
+        // Backport packs: inspect a folder the user downloaded, and take its
+        // fakelib/ into the corpus. Path-based — a pack eboot is far too big
+        // to push through an upload and straight back out again.
+        .route("/api/backport/pack", get(fakelibs_api::inspect_pack))
+        .route("/api/backport/pack/import", post(fakelibs_api::import_pack))
         .route("/api/fakelibs/scan", post(fakelibs_api::start_scan))
         .route("/api/fakelibs/scan/{id}", get(fakelibs_api::scan_status))
         .route(

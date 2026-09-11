@@ -21,6 +21,7 @@ import { hostOf, mgmtAddr, transferAddr } from "../../lib/addr";
 import { useTr } from "../../state/lang";
 import { useEditSessionStore } from "../../state/editSession";
 import { LibrarySourcePicker } from "./LibrarySourcePicker";
+import { BackportPackCard } from "./BackportPackCard";
 import { appLaunch, klogChunk } from "../../api/ps5";
 import { titleSdkPair, type ScanTitleInput } from "../../state/fakelibCorpus";
 import {
@@ -536,6 +537,25 @@ export function BackportPanel({
         ) : null}
         {error ? <Callout tone="error" title={tr("backport_failed", undefined, "Backport could not be completed")}>{error}</Callout> : null}
         {busy && !plan && !record ? <div className="flex items-center gap-2"><Spinner size={16} />{tr("backport_inspecting", undefined, "Inspecting installed library families…")}</div> : null}
+        {/* A downloaded pack is an alternative to the set flow, not a step in
+            it: it carries its own pre-patched eboot, so it needs no SDK patch
+            and no set chosen. Offered whatever the corpus holds — a pack is
+            often the only thing that fixes a title the corpus cannot. */}
+        {!record ? (
+          <details className="rounded border border-[var(--color-border)] p-2">
+            <summary className="cursor-pointer text-xs">
+              {tr("pack_disclosure", undefined, "Have a downloaded backport pack? Install it instead…")}
+            </summary>
+            <div className="pt-3">
+              <BackportPackCard
+                host={host}
+                title={title}
+                disabled={!overlayReady}
+                onCorpusChanged={onCorpusChanged}
+              />
+            </div>
+          </details>
+        ) : null}
         {!record && sets.length === 0 ? (
           <>
             <p>

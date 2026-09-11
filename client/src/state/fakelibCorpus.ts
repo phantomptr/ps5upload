@@ -1,4 +1,5 @@
 import { resolveSets, type FakelibSet } from "../lib/backport";
+import type { BackportPack, PackFile } from "../lib/backportPack";
 import { getEngineUrl } from "./engine";
 
 /* The backport library corpus.
@@ -101,6 +102,67 @@ export async function importFakelibSet(
     setId: body.set_id ?? null,
     duplicate: !!body.duplicate,
     ignored: body.ignored ?? [],
+  };
+}
+
+/** Ask the engine what is inside a folder the user downloaded.
+ *
+ *  Path-based, not an upload: a pack eboot runs to hundreds of megabytes, and
+ *  pushing that through the engine only to send it back out to the console
+ *  would double the transfer. That does mean the folder must be reachable by
+ *  the ENGINE — the same machine for the desktop app, and a mounted volume for
+ *  a container.
+ */
+export async function inspectBackportPack(path: string): Promise<BackportPack> {
+  const response = await fetch(
+    `${getEngineUrl()}/api/backport/pack?path=${encodeURIComponent(path)}`,
+  );
+  if (!response.ok) throw new Error(await errorText(response));
+  const b = (await response.json()) as Record<string, never>;
+  const files = (v: unknown): PackFile[] =>
+    Array.isArray(v)
+      ? v.map((f) => ({ relPath: String(f.rel_path ?? ""), size: Number(f.size ?? 0) }))
+      : [];
+  const eboot = (b as Record<string, unknown>).eboot as
+    | { rel_path?: string; size?: number }
+    | null
+    | undefined;
+  const raw = b as Record<string, unknown>;
+  return {
+    isPack: !!raw.is_pack,
+    titleIdHint: (raw.title_id_hint as string | null) ?? null,
+    libraries: files(raw.libraries),
+    eboot: eboot ? { relPath: String(eboot.rel_path ?? ""), size: Number(eboot.size ?? 0) } : null,
+    sceModules: files(raw.sce_modules),
+    gamePrx: files(raw.game_prx),
+    sceSys: files(raw.sce_sys),
+    other: files(raw.other),
+    totalBytes: Number(raw.total_bytes ?? 0),
+  };
+}
+
+/** Take a pack's `fakelib/` into the corpus. Only that part: the eboot and
+ *  `sce_module/` are title-specific and huge, so content-addressing them would
+ *  bloat the store with bytes no other game can reuse. */
+export async function importBackportPack(
+  path: string,
+  label?: string,
+): Promise<{ setId: string | null; duplicate: boolean; titleIdHint: string | null }> {
+  const response = await fetch(`${getEngineUrl()}/api/backport/pack/import`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path, label: label ?? "" }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  const b = (await response.json()) as {
+    set_id?: string | null;
+    duplicate?: boolean;
+    title_id_hint?: string | null;
+  };
+  return {
+    setId: b.set_id ?? null,
+    duplicate: !!b.duplicate,
+    titleIdHint: b.title_id_hint ?? null,
   };
 }
 
