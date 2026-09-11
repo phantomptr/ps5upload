@@ -28,6 +28,7 @@ import {
   applyBackport,
   backportOverlayReady,
   overlayBlockedReason,
+  overlayBlocksTitle,
   BackportApplyError,
   existingLibraries,
   planBackport,
@@ -520,8 +521,12 @@ export function BackportPanel({
   };
 
   const overlay = scan.overlay;
-  const overlayBlocked = overlay?.state === "blocked" || overlay?.state === "error";
-  const overlayReady = backportOverlayReady(overlay);
+  // A block only counts when it names THIS title (or names none, which is the
+  // payload-wide "an external BackPork is running" case). The state records the
+  // last game that launched, and treating another title's block as our own
+  // disables Backport for no reason.
+  const overlayBlocked = overlayBlocksTitle(overlay, title.titleId);
+  const overlayReady = backportOverlayReady(overlay) || !overlayBlocked;
 
   return (
     <Modal open={open} onClose={onClose} title={tr("backport_title", { name: title.titleName }, `Backport ${title.titleName}`)} titleIcon={<Layers size={16} />} size="lg">

@@ -8,6 +8,7 @@ import {
   verdictFrom,
   resolveSets,
   backportOverlayReady,
+  overlayBlocksTitle,
   existingLibraries,
   isBackportEligible,
   planBackport,
@@ -662,5 +663,37 @@ describe("setCoversTitle", () => {
     // Both cover the title now, so the tiebreak is sightings: the set two
     // different games run beats the singleton.
     expect(ranked[0].id).toBe("set-4");
+  });
+});
+
+describe("overlayBlocksTitle", () => {
+  it("blocks the title it names", () => {
+    expect(overlayBlocksTitle(
+      { state: "blocked", title_id: "PPSA25411" }, "PPSA25411")).toBe(true);
+  });
+
+  it("does not block a different title", () => {
+    // Measured on hardware: launching Battlefield 6 reported
+    // blocked/PPSA19534 for ~6s before mounting cleanly. Backporting some
+    // other game must not be disabled by that.
+    expect(overlayBlocksTitle(
+      { state: "blocked", title_id: "PPSA19534" }, "PPSA25411")).toBe(false);
+  });
+
+  it("blocks everything when no title is named", () => {
+    // The payload-wide case: an external BackPork is running.
+    expect(overlayBlocksTitle({ state: "blocked", title_id: "" }, "PPSA25411")).toBe(true);
+    expect(overlayBlocksTitle({ state: "blocked" }, "PPSA25411")).toBe(true);
+  });
+
+  it("treats a healthy or absent overlay as no obstacle", () => {
+    expect(overlayBlocksTitle({ state: "watching", title_id: "" }, "PPSA25411")).toBe(false);
+    expect(overlayBlocksTitle({ state: "mounted", title_id: "PPSA19534" }, "PPSA25411")).toBe(false);
+    expect(overlayBlocksTitle(null, "PPSA25411")).toBe(false);
+  });
+
+  it("counts an error state for this title as blocking", () => {
+    expect(overlayBlocksTitle(
+      { state: "error", title_id: "PPSA25411" }, "PPSA25411")).toBe(true);
   });
 });

@@ -507,6 +507,27 @@ export function overlayBlockedReason(error: string | undefined): OverlayBlockedR
   return "unknown";
 }
 
+/** Does the overlay's current state actually stand in the way of THIS title?
+ *
+ *  The state is a record of the last game that launched, not a global health
+ *  flag. Measured on hardware: a game execs several times while starting, each
+ *  exec resolves its own run directory, and one of them found a stale unionfs
+ *  left by an earlier payload instance — so the overlay read `blocked` for
+ *  about six seconds and then mounted cleanly and the game ran. Disabling
+ *  Backport for a DIFFERENT title on the strength of that is a false negative,
+ *  and for this title it is transient. A block only speaks for the title it
+ *  names. */
+export function overlayBlocksTitle(
+  status: { state?: string; title_id?: string } | null | undefined,
+  titleId: string,
+): boolean {
+  if (!status) return false;
+  if (status.state !== "blocked" && status.state !== "error") return false;
+  // A block with no title named is the payload-wide case (an external BackPork
+  // is running), which really does affect everything.
+  return !status.title_id || status.title_id === titleId;
+}
+
 export function backportOverlayReady(
   status: { state?: string } | null | undefined,
 ): boolean {
