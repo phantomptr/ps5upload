@@ -45,6 +45,18 @@ client/coverage/
 .vscode/
 .idea/
 .DS_Store
+# Dev screenshots dropped at the repo root. They are gitignored, but a
+# local stray still lands in the build context and ships bytes nobody
+# asked for. Anchored, so real assets under client/ are untouched.
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.webp
+/*.mp4
+/*.mov
+!/logo.png
+
 *.swp
 *.swo
 

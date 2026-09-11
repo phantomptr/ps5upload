@@ -151,16 +151,27 @@ test-results/
 /.playwright-cli/
 
 # ─── Dev screenshots / debug captures ────────────────────────────────────
-# Screenshots taken during UI debugging end up at the repo root.
-# /logo.png is explicitly tracked (anchored under client/public + root).
-disk-usage-fixed.png
-dashboard.png
-library-narrow.png
-settings-narrow.png
-shell-now.png
-klog-filtered.png
-debug-*.png
-ui-debug-*.png
+# Screenshots taken while debugging the UI land at the repo ROOT, and this
+# used to be a list of the exact filenames people had happened to use
+# (dashboard.png, shell-now.png, …). That only ever catches the capture
+# someone already made: `.search.png`, `connection-448.png` and
+# `desktop-hardware-1280.jpeg` all got committed to a PUBLIC repo because
+# they were not on the list.
+#
+# So ignore image/video files AT THE ROOT by default and name the
+# exceptions. Anchored with a leading slash, so real assets under
+# client/icons/, client/public/ and client/src-tauri/icons/ are untouched.
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.webp
+/*.bmp
+/*.mp4
+/*.mov
+/*.webm
+# The one root image that belongs here — README.md renders it.
+!/logo.png
 
 # ─── Local /tmp helpers + diagnostic scripts ─────────────────────────────
 # Ad-hoc Python scripts written during debugging sessions
