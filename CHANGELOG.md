@@ -4,6 +4,21 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.18.1
+
+**The new backport-pack screens now speak every language ps5upload supports.**
+
+- The 22 strings added for installing a backport pack — and for the clearer
+  overlay and scan messages — shipped in English for everyone. They are now
+  translated into all 18 languages, placeholders and all, and checked by the
+  coverage gate rather than excused from it.
+
+- Translated by hand, because several of them are instructions. "Restart the
+  console, because closing the payload that made the mount does not remove it"
+  is not a sentence worth guessing at.
+
+---
+
 ## 5.18.0
 
 **ps5upload can install a whole downloaded backport pack, and the library
