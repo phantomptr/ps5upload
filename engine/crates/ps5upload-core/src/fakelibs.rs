@@ -255,6 +255,47 @@ pub fn sdk_pair_at(chunk: &[u8]) -> Option<(u32, u32)> {
 /// The FW4 pair a backport targets: `(ps4, ps5)`.
 pub const BACKPORT_SDK_PAIR: (u32, u32) = (0x0904_0001, 0x0400_0031);
 
+/// Every `(ps4, ps5)` SDK pair a title can legally declare.
+///
+/// The pairings are NOT derivable — they are a fixed table, and writing one
+/// half without the other produces a title that passes the launch gate and
+/// then dies. Mirrors `payload/include/sdk_pairs.h`, which in turn matches
+/// idlesauce's `ps5_elf_sdk_downgrade.py`; the core copy exists so the engine
+/// can reason about a pair without asking the console.
+pub const SDK_PAIRS: [(u32, u32); 10] = [
+    (0x0759_0001, 0x0100_0050), // FW 1
+    (0x0805_0001, 0x0200_0009), // FW 2
+    (0x0854_0001, 0x0300_0027), // FW 3
+    (0x0904_0001, 0x0400_0031), // FW 4 — what shipped backports use
+    (0x0959_0001, 0x0500_0033), // FW 5
+    (0x1009_0001, 0x0600_0038), // FW 6
+    (0x1059_0001, 0x0700_0038), // FW 7
+    (0x1109_0001, 0x0800_0041), // FW 8
+    (0x1159_0001, 0x0900_0040), // FW 9
+    (0x1209_0001, 0x1000_0040), // FW 10
+];
+
+/// Is this pair one Sony actually ships?
+pub fn is_known_sdk_pair(pair: (u32, u32)) -> bool {
+    SDK_PAIRS.contains(&pair)
+}
+
+/// Does a title's eboot pair say it has been DOWNGRADED?
+///
+/// A scan harvests `fakelib/` from titles "that are already backported", but
+/// it never checked — so a raw FW-11 rip that merely happened to have a
+/// `fakelib/` folder was recorded as a library set. Measured: PPSA25411 on a
+/// FW 5.10 console was a `backport=0` dump whose two leftover libraries became
+/// a corpus set, and the ranking then offered that set FIRST for the very
+/// title it came from, which could never work.
+///
+/// A downgraded title carries a known pair below FW 10. FW 10 is the top of
+/// the table and is what an un-downgraded modern title declares, so it is
+/// excluded; anything not in the table at all is not a backport either.
+pub fn looks_backported(pair: (u32, u32)) -> bool {
+    is_known_sdk_pair(pair) && (pair.1 >> 24) < 0x10
+}
+
 /// `(ps4, ps5)` SDK words from a module's param segment, or None.
 pub fn sdk_pair(data: &[u8]) -> Option<(u32, u32)> {
     let site = param_site(data)?;
@@ -305,6 +346,10 @@ pub enum Origin {
         title_name: String,
         #[serde(default)]
         console: String,
+        /// Stable identity of the console — its host — as opposed to the
+        /// display name above, which the user can rename at will.
+        #[serde(default)]
+        console_key: String,
         #[serde(default)]
         image_backed: bool,
         at: String,
@@ -353,6 +398,15 @@ pub struct Observation {
     pub title_name: String,
     #[serde(default)]
     pub console: String,
+    /// Stable identity of the console it was seen on.
+    ///
+    /// `console` is a DISPLAY name and is not stable: the same machine was
+    /// recorded as `phat-5.10` by one scan and `192.168.86.99` by the next,
+    /// which made `same_source` treat one console as two and inflate a set's
+    /// own evidence. The host does not change when the user renames a roster
+    /// entry, so the dedupe keys on this when both sides have it.
+    #[serde(default)]
+    pub console_key: String,
     /// Disk-image (ShadowMount) title rather than a plain folder. Recorded
     /// because it changes how the title is edited, not because it ranks.
     #[serde(default)]
@@ -370,12 +424,14 @@ impl Observation {
                 title_id,
                 title_name,
                 console,
+                console_key,
                 image_backed,
                 at,
             } => Some(Self {
                 title_id: title_id.clone(),
                 title_name: title_name.clone(),
                 console: console.clone(),
+                console_key: console_key.clone(),
                 image_backed: *image_backed,
                 at: at.clone(),
             }),
@@ -386,7 +442,17 @@ impl Observation {
     /// Same game on the same console. Re-scanning must not inflate the
     /// evidence for a set — only a genuinely different source counts.
     fn same_source(&self, other: &Self) -> bool {
-        self.title_id == other.title_id && self.console == other.console
+        if self.title_id != other.title_id {
+            return false;
+        }
+        // Prefer the stable host. Fall back to the display name only when one
+        // side predates `console_key` — an old sighting and a new one for the
+        // same machine can still count twice, which is a one-off cost of the
+        // data already on disk, not a reason to keep comparing display names.
+        if !self.console_key.is_empty() && !other.console_key.is_empty() {
+            return self.console_key == other.console_key;
+        }
+        self.console == other.console
     }
 }
 
@@ -408,10 +474,17 @@ mod observation_tests {
     }
 
     fn sighting(title_id: &str, console: &str) -> Origin {
+        sighting_on(title_id, console, console)
+    }
+
+    /// A sighting whose display name and stable host differ — the shape that
+    /// used to make one console count as two.
+    fn sighting_on(title_id: &str, console: &str, console_key: &str) -> Origin {
         Origin::Scan {
             title_id: title_id.to_string(),
             title_name: format!("Game {title_id}"),
             console: console.to_string(),
+            console_key: console_key.to_string(),
             image_backed: true,
             at: "1".to_string(),
         }
@@ -480,6 +553,58 @@ mod observation_tests {
             )
             .expect("re-scan");
         assert_eq!(corpus.manifest().sets[0].observations.len(), 1);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn renaming_a_console_does_not_make_it_count_twice() {
+        // Measured: one machine was recorded as `phat-5.10` by one scan and
+        // `192.168.86.99` by the next, and the dedupe — keyed on the DISPLAY
+        // name — treated them as two consoles. `distinctSightings` is a
+        // ranking signal, so that inflated a set's own evidence.
+        let root = scratch("rename");
+        let mut corpus = Corpus::open(&root);
+        corpus
+            .add_set(
+                "Game A",
+                sighting_on("PPSA00001", "phat-5.10", "192.168.86.99"),
+                vec![lib("libSceAgc.sprx", 1)],
+            )
+            .expect("first add");
+        corpus
+            .add_set(
+                "Game A",
+                sighting_on("PPSA00001", "192.168.86.99", "192.168.86.99"),
+                vec![lib("libSceAgc.sprx", 1)],
+            )
+            .expect("re-scan under a different display name");
+        assert_eq!(
+            corpus.manifest().sets[0].observations.len(),
+            1,
+            "same host, so one sighting"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn two_different_consoles_still_count_separately() {
+        let root = scratch("twohosts");
+        let mut corpus = Corpus::open(&root);
+        corpus
+            .add_set(
+                "Game A",
+                sighting_on("PPSA00001", "pro", "192.168.86.100"),
+                vec![lib("libSceAgc.sprx", 1)],
+            )
+            .expect("first");
+        corpus
+            .add_set(
+                "Game A",
+                sighting_on("PPSA00001", "phat", "192.168.86.99"),
+                vec![lib("libSceAgc.sprx", 1)],
+            )
+            .expect("second console");
+        assert_eq!(corpus.manifest().sets[0].observations.len(), 2);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -801,9 +926,38 @@ mod tests {
             title_id: "PPSA30528".into(),
             title_name: "Red Dead Redemption".into(),
             console: "PS5-Pro".into(),
+            console_key: "192.168.86.100".into(),
             image_backed: true,
             at: "2026-09-09T00:00:00Z".into(),
         }
+    }
+
+    #[test]
+    fn the_sdk_pair_table_matches_the_payloads() {
+        // Mirrors payload/include/sdk_pairs.h. Writing one half of a pair
+        // produces a title that passes the launch gate and then dies, so the
+        // two copies must not drift.
+        assert_eq!(SDK_PAIRS.len(), 10);
+        assert_eq!(SDK_PAIRS[3], BACKPORT_SDK_PAIR);
+        assert!(is_known_sdk_pair((0x0959_0001, 0x0500_0033)));
+        assert!(
+            !is_known_sdk_pair((0x0904_0001, 0x0500_0033)),
+            "halves must match"
+        );
+    }
+
+    #[test]
+    fn only_a_downgraded_pair_looks_backported() {
+        // FW 4 is what shipped backports use; FW 5 is a legitimate target for
+        // a 5.x console.
+        assert!(looks_backported(BACKPORT_SDK_PAIR));
+        assert!(looks_backported((0x0959_0001, 0x0500_0033)));
+        // The measured case: PPSA25411 was a raw FW-11 rip declaring FW 10,
+        // and its leftover libraries became a corpus set that ranked FIRST for
+        // the very title it came from.
+        assert!(!looks_backported((0x1209_0001, 0x1000_0040)));
+        // Not a Sony pair at all.
+        assert!(!looks_backported((0xDEAD_BEEF, 0x1234_5678)));
     }
 
     #[test]

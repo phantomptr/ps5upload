@@ -9,12 +9,14 @@ const totals = (
     added: [string, number][];
     skipped: number;
     withoutLibraries: number;
+    notBackported: number;
     errors: string[];
   }> = {},
 ) => ({
   added: [] as [string, number][],
   skipped: 0,
   withoutLibraries: 0,
+  notBackported: 0,
   errors: [] as string[],
   ...over,
 });
@@ -38,6 +40,15 @@ describe("summariseSweep", () => {
   it("separates 'already have everything' from 'found nothing'", () => {
     expect(summariseSweep(totals({ skipped: 34 }), 1, tr)).toMatch(/Nothing new/i);
     expect(summariseSweep(totals(), 1, tr)).toMatch(/No backported games found/i);
+  });
+
+  it("says why a console with fakelib folders still yielded nothing", () => {
+    // Measured: a raw FW-11 rip carrying two leftover libraries. The scan now
+    // refuses to harvest it, and reporting that as "no backported games found"
+    // would read as the broken-scan bug all over again.
+    const msg = summariseSweep(totals({ notBackported: 2 }), 1, tr);
+    expect(msg).toMatch(/never downgraded/i);
+    expect(msg).not.toMatch(/No backported games found/i);
   });
 
   it("prefers the added count even when other consoles contributed nothing", () => {

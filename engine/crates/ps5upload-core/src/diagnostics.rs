@@ -10,6 +10,13 @@ use crate::connection::Connection;
 
 /// Read up to `max_bytes` of currently-buffered kernel log. Empty
 /// response = nothing in the buffer (poll again later).
+///
+/// DESTRUCTIVE: `/dev/klog` is a consuming read, so whatever this returns is
+/// gone from the console's buffer. A caller that reads a "baseline" before an
+/// operation therefore DELETES the very history it wanted to diff against —
+/// measured while chasing a launch crash, where a baseline read made the next
+/// capture come back empty and the run read as "no crash". Read once, after
+/// the thing you care about, and keep the text.
 pub fn klog_read(addr: &str, max_bytes: u32) -> Result<String> {
     let body = serde_json::json!({ "max_bytes": max_bytes });
     let body = serde_json::to_vec(&body)?;

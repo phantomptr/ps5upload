@@ -193,6 +193,9 @@ export interface ScanProgress {
   skipped: number;
   /** Titles with no fakelib/ — not backported, nothing to harvest. */
   withoutLibraries: number;
+  /** Titles that HAVE a fakelib/ but whose eboot was never downgraded. What is
+   *  in that folder is not a backport, so it must not enter the corpus. */
+  notBackported: number;
   errors: string[];
 }
 
@@ -200,11 +203,20 @@ export async function startFakelibScan(
   addr: string,
   consoleName: string,
   titles: ScanTitleInput[],
+  /** Stable identity of the console — its host. `consoleName` is a display
+   *  name the user can rename, and keying the sighting dedupe on it made one
+   *  machine count as two. */
+  consoleKey = "",
 ): Promise<string> {
   const response = await fetch(`${getEngineUrl()}/api/fakelibs/scan`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ addr, console: consoleName, titles }),
+    body: JSON.stringify({
+      addr,
+      console: consoleName,
+      console_key: consoleKey || consoleName,
+      titles,
+    }),
   });
   if (!response.ok) throw new Error(await errorText(response));
   const body = (await response.json()) as { scan_id: string };
@@ -225,6 +237,7 @@ export async function pollFakelibScan(id: string): Promise<ScanProgress | null> 
     added: Array.isArray(b.added) ? (b.added as [string, number][]) : [],
     skipped: Number(b.skipped ?? 0),
     withoutLibraries: Number(b.without_libraries ?? 0),
+    notBackported: Number(b.not_backported ?? 0),
     errors: Array.isArray(b.errors) ? (b.errors as string[]) : [],
   };
 }

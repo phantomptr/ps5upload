@@ -12,6 +12,7 @@ import {
   isBackportEligible,
   planBackport,
   rankSets,
+  setCoversTitle,
   setAttestation,
   requiresBackport,
   undoBackport,
@@ -617,5 +618,49 @@ describe("believing a failure", () => {
         { kind: "wrong-libraries" }, { kind: "unknown" }, { kind: "wrong-libraries" },
       ]).kind,
     ).toBe("unknown");
+  });
+});
+
+describe("setCoversTitle", () => {
+  const set = (
+    id: string,
+    originTitle: string,
+    observed: string[],
+  ): FakelibSet => ({
+    id,
+    label: id,
+    origin: { kind: "scan", title_id: originTitle, console: "pro" },
+    observations: observed.map((t) => ({
+      titleId: t, titleName: t, console: "pro", imageBacked: false,
+    })),
+    libraries: [lib("libSceAgc.sprx", 10)],
+  });
+
+  it("counts a set seen running the title on another console", () => {
+    // The measured case: set-4's origin is Battlefield 6, but the corpus
+    // records it running PPSA25411 on the user's Pro.
+    expect(setCoversTitle(set("set-4", "PPSA19534", ["PPSA25411"]), "PPSA25411")).toBe(true);
+  });
+
+  it("still counts the set harvested from the title itself", () => {
+    expect(setCoversTitle(set("set-9", "PPSA25411", []), "PPSA25411")).toBe(true);
+  });
+
+  it("is false for an unrelated set, and for no target", () => {
+    expect(setCoversTitle(set("set-1", "PPSA00001", ["PPSA00002"]), "PPSA25411")).toBe(false);
+    expect(setCoversTitle(set("set-1", "PPSA00001", []), undefined)).toBe(false);
+  });
+
+  it("ranks a set observed running the title above one merely harvested from it", () => {
+    // set-28 in the real corpus: two junk libraries scraped off the SAME
+    // game's un-backported copy. Its origin matched, so it ranked FIRST for
+    // the very title it could never run.
+    const junk = set("set-28", "PPSA25411", ["PPSA25411"]);
+    junk.libraries = [lib("libSceAmpr.sprx", 1), lib("libScePlayGo.sprx", 2)];
+    const proven = set("set-4", "PPSA19534", ["PPSA19534", "PPSA25411"]);
+    const ranked = rankSets([junk, proven], [], "PPSA25411");
+    // Both cover the title now, so the tiebreak is sightings: the set two
+    // different games run beats the singleton.
+    expect(ranked[0].id).toBe("set-4");
   });
 });

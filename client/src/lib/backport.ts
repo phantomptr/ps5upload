@@ -92,6 +92,21 @@ export function sourceTitleId(set: FakelibSet): string | null {
   return set.origin.kind === "scan" ? set.origin.title_id : null;
 }
 
+/** Is this set known to have run `titleId` — anywhere?
+ *
+ *  `sourceTitleId` answers only "was it HARVESTED from that title", which is
+ *  the wrong question once sets are content-addressed. Measured: the corpus
+ *  recorded set-4 as running PPSA25411 on a Pro, but its ORIGIN is Battlefield
+ *  6, so the ranking gave it no preference for PPSA25411 — while a 2-library
+ *  set scraped off the same game's un-backported copy, whose origin did match,
+ *  ranked first and could never work. Observations are exactly the evidence
+ *  that makes a second console worth scanning, so the boost must read them. */
+export function setCoversTitle(set: FakelibSet, titleId: string | undefined): boolean {
+  if (!titleId) return false;
+  if (sourceTitleId(set) === titleId) return true;
+  return set.observations.some((o) => o.titleId === titleId);
+}
+
 export interface FakelibManifest {
   schema: number;
   libraries: FakelibLibraryEntry[];
@@ -362,10 +377,12 @@ export function rankSets(
     .filter((p) => !skip.has(p.id) && p.libraries.length > 0)
     .sort(
       (a, b) =>
-        // The target's own set, when the corpus has it, is the one combination
-        // known to work for this exact game.
-        Number(sourceTitleId(b) === targetTitleId) -
-          Number(sourceTitleId(a) === targetTitleId) ||
+        // A set KNOWN to have run this exact game is the best first guess —
+        // whether it was harvested from the title or merely seen running it on
+        // another console. Reading only the origin is what let a junk set rank
+        // above one the user's other console actually runs.
+        Number(setCoversTitle(b, targetTitleId)) -
+          Number(setCoversTitle(a, targetTitleId)) ||
         // Then how many DIFFERENT sources ship it. Two consoles independently
         // running the same combination is direct evidence that it works on
         // hardware, and it is the one signal that gets stronger as the user
@@ -470,6 +487,25 @@ export async function applyBackport(
  *  already holds the mount: two overlays on one target make the kernel refuse
  *  the second (EDEADLK), and the game then starts without its libraries. */
 export type BackportOverlayState = "idle" | "watching" | "mounted" | "blocked";
+
+/** Why the overlay refused, when it did.
+ *
+ *  The payload used to report one reason for two very different situations,
+ *  and the fixes are opposite: stop a payload that is running, versus clear a
+ *  mount left behind by one that is not. Worse, the old message named BackPork
+ *  even when the mount was OUR OWN second attempt, which sent a user hunting
+ *  for a process that had already been killed. */
+export type OverlayBlockedReason = "external-backpork" | "foreign-mount" | "unknown";
+
+export function overlayBlockedReason(error: string | undefined): OverlayBlockedReason {
+  if (!error) return "unknown";
+  if (/external_backpork_running/.test(error)) return "external-backpork";
+  if (/foreign_unionfs_on_target/.test(error)) return "foreign-mount";
+  // Older payloads reported both as one string. Treat it as the BackPork case:
+  // that is the actionable half, and the message says to check for it.
+  if (/external_backpork_or_unionfs_active/.test(error)) return "external-backpork";
+  return "unknown";
+}
 
 export function backportOverlayReady(
   status: { state?: string } | null | undefined,

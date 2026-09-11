@@ -195,6 +195,11 @@ pub struct ScanRequest {
     pub addr: String,
     #[serde(default)]
     pub console: String,
+    /// Stable identity of the console (its host). `console` is a display name
+    /// the user can change; keying the sighting dedupe on it made one machine
+    /// count as two.
+    #[serde(default)]
+    pub console_key: String,
     /// Titles to walk. Supplied by the client, which already has them from
     /// /api/ps5/apps/installed — enumerating them again here would duplicate a
     /// large handler for no gain.
@@ -212,6 +217,9 @@ pub struct ScanState {
     pub added: Vec<(String, usize)>,
     /// Titles whose libraries the corpus already had.
     pub skipped: usize,
+    /// Titles that HAVE a fakelib/ but whose eboot was never downgraded, so
+    /// what is in that folder is not a backport and must not enter the corpus.
+    pub not_backported: usize,
     /// Titles with no fakelib/ at all — not backported, nothing to harvest.
     pub without_libraries: usize,
     pub errors: Vec<String>,
@@ -315,6 +323,20 @@ fn run_scan(req: ScanRequest, state: Arc<Mutex<ScanState>>) {
                 title.title_name.clone()
             };
         }
+        // A `fakelib/` folder is not proof of a backport. PPSA25411 was a
+        // raw FW-11 rip carrying two leftover libraries; the scan recorded
+        // them as a set, and the ranking then offered that set FIRST for the
+        // very title it came from — a combination that could never work.
+        // Read the eboot pair and skip anything still declaring its original
+        // SDK. Unreadable is NOT "not backported": that would resurrect the
+        // bug where an unreachable console scanned as an empty one, so an
+        // unreadable eboot falls through to the old behaviour.
+        if title_backport_state(&addr, &title.source) == Some(false) {
+            let mut s = state.lock().unwrap();
+            s.not_backported += 1;
+            s.titles_done += 1;
+            continue;
+        }
         match harvest(&addr, title) {
             Ok(libs) if libs.is_empty() => state.lock().unwrap().without_libraries += 1,
             Ok(libs) => {
@@ -328,6 +350,7 @@ fn run_scan(req: ScanRequest, state: Arc<Mutex<ScanState>>) {
                     title_id: title.title_id.clone(),
                     title_name: title.title_name.clone(),
                     console: req.console.clone(),
+                    console_key: req.console_key.clone(),
                     image_backed: title.image_backed,
                     at: now_iso(),
                 };
@@ -349,6 +372,24 @@ fn run_scan(req: ScanRequest, state: Arc<Mutex<ScanState>>) {
     let mut s = state.lock().unwrap();
     s.current.clear();
     s.done = true;
+}
+
+/// Has this title's eboot been downgraded?
+///
+/// `Some(true)` backported, `Some(false)` still at its shipped SDK, `None`
+/// when the eboot could not be read or parsed. The caller must treat `None` as
+/// "carry on" rather than "skip": reporting an unreadable console as
+/// un-backported is exactly the failure that once made a fully backported
+/// machine scan as empty.
+fn title_backport_state(addr: &str, source: &str) -> Option<bool> {
+    let eboot = format!("{}/eboot.bin", source.trim_end_matches('/'));
+    // Same small prefix the SDK-pair probe reads: the ELF walk needs only the
+    // header and entry table, not a 50 MB file.
+    let header = fs_read(addr, &eboot, 0, 256 * 1024).ok()?;
+    let site = ps5upload_core::fakelibs::param_site_from_header(&header)?;
+    let chunk = fs_read(addr, &eboot, site as u64, 0x18).ok()?;
+    let pair = ps5upload_core::fakelibs::sdk_pair_at(&chunk)?;
+    Some(ps5upload_core::fakelibs::looks_backported(pair))
 }
 
 /// Read one title's `fakelib/`. A title without one is not an error — it simply

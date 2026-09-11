@@ -27,6 +27,7 @@ import { titleSdkPair, type ScanTitleInput } from "../../state/fakelibCorpus";
 import {
   applyBackport,
   backportOverlayReady,
+  overlayBlockedReason,
   BackportApplyError,
   existingLibraries,
   planBackport,
@@ -527,7 +528,14 @@ export function BackportPanel({
       <div className="space-y-4 p-4 text-sm">
         {overlayBlocked ? (
           <Callout tone="warn" title={tr("backport_overlay_unavailable", undefined, "Library overlay is not available")}>
-            {overlay?.error || tr("backport_overlay_external", undefined, "An external BackPork/unionfs overlay is already active.")}
+            {overlayBlockedReason(overlay?.error) === "external-backpork"
+              ? tr("backport_overlay_backpork", undefined,
+                  "The BackPork payload is running and holds the library overlay. Stop it, then resend ps5upload.")
+              : overlayBlockedReason(overlay?.error) === "foreign-mount"
+                ? tr("backport_overlay_foreign_mount", undefined,
+                    "Another overlay is already mounted on this game's library folder. Restart the console to clear it — killing the payload that made it does not unmount it.")
+                : overlay?.error || tr("backport_overlay_external", undefined,
+                    "An external BackPork/unionfs overlay is already active.")}
           </Callout>
         ) : null}
         {!overlayBlocked && !overlayReady ? (
@@ -683,7 +691,9 @@ export function BackportPanel({
             </div>
           </>
         ) : null}
-        {overlay?.state === "blocked" ? <div className="flex gap-2 text-xs text-[var(--color-warn)]"><AlertTriangle size={14} />{tr("backport_stop_external", undefined, "Stop the external BackPork payload, then resend ps5upload.")}</div> : null}
+        {overlay?.state === "blocked" && overlayBlockedReason(overlay?.error) === "external-backpork"
+          ? <div className="flex gap-2 text-xs text-[var(--color-warn)]"><AlertTriangle size={14} />{tr("backport_stop_external", undefined, "Stop the external BackPork payload, then resend ps5upload.")}</div>
+          : null}
       </div>
     </Modal>
   );

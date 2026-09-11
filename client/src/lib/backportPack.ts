@@ -181,6 +181,29 @@ export function planPackInstall(
   };
 }
 
+/** Bytes this install needs free on the console.
+ *
+ *  Everything the pack writes, PLUS the originals it sets aside first: the
+ *  stash is a copy, not a move, so replacing a 256 MB eboot briefly needs room
+ *  for two of them. Backup sizes are not known here (the caller only listed
+ *  names), so each displaced file is charged at the size of its replacement —
+ *  close enough for a preflight, and wrong in the safe direction for an eboot,
+ *  which is the only file big enough to matter. */
+export function packRequiresBytes(plan: PackInstallPlan): number {
+  const replaced = new Set(plan.stashed.map((s) => s.live));
+  const backupBytes = plan.copies
+    .filter((c) => replaced.has(c.to))
+    .reduce((sum, c) => sum + c.size, 0);
+  return plan.totalBytes + backupBytes;
+}
+
+/** Is there room? `freeBytes` null means the check could not run — which must
+ *  never block an install, only skip the warning. */
+export function packFits(plan: PackInstallPlan, freeBytes: number | null): boolean {
+  if (freeBytes === null) return true;
+  return freeBytes >= packRequiresBytes(plan);
+}
+
 export async function applyPackInstall(
   plan: PackInstallPlan,
   transport: PackTransport,

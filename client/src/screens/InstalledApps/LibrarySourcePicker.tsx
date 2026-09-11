@@ -104,6 +104,7 @@ export function LibrarySourcePicker({
         added: [] as [string, number][],
         skipped: 0,
         withoutLibraries: 0,
+        notBackported: 0,
         errors: [] as string[],
       };
       let reached = 0;
@@ -134,7 +135,12 @@ export function LibrarySourcePicker({
         reached += 1;
         if (titles.length === 0) continue;
 
-        const id = await startFakelibScan(target.host, target.name, titles);
+        // Pass the HOST as the stable key: the display name comes from the
+        // roster and changes when the user renames a console, which used to
+        // make one machine count as two sightings.
+        const id = await startFakelibScan(
+          target.host, target.name, titles, hostOf(target.host),
+        );
         // Poll rather than block: reading every library off a console takes
         // on the order of a minute, and a silent wait that long reads as a hang.
         for (;;) {
@@ -294,7 +300,13 @@ export function summarise(p: ScanProgress, tr: (k: string, v?: Record<string, un
  *  "nothing could be asked" are different results, and reporting the second as
  *  the first is the bug that made a broken scan look like an empty console. */
 export function summariseSweep(
-  totals: { added: [string, number][]; skipped: number; withoutLibraries: number; errors: string[] },
+  totals: {
+    added: [string, number][];
+    skipped: number;
+    withoutLibraries: number;
+    notBackported: number;
+    errors: string[];
+  },
   reached: number,
   tr: (k: string, v?: Record<string, unknown>, f?: string) => string,
 ): string {
@@ -309,6 +321,13 @@ export function summariseSweep(
   if (totals.skipped > 0) {
     return tr("fakelibs_scan_none_new", undefined,
       "Nothing new — you already have every set these consoles offer.");
+  }
+  // Worth its own line: "no backported games found" on a console that plainly
+  // HAS fakelib folders reads as a broken scan, when in fact those titles were
+  // never downgraded and what is in them is not a backport.
+  if (totals.notBackported > 0) {
+    return tr("fakelibs_scan_not_backported", { count: totals.notBackported },
+      `${totals.notBackported} game(s) have a fakelib/ but were never downgraded, so their files are not a backport and were skipped.`);
   }
   return tr("fakelibs_scan_none", undefined,
     "No backported games found, so there were no libraries to collect.");

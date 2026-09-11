@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyPackInstall,
   planPackInstall,
+  packFits,
+  packRequiresBytes,
   undoPackInstall,
   PackInstallError,
   type BackportPack,
@@ -266,5 +268,34 @@ describe("undoPackInstall", () => {
       if (p === "/data/ps5upload/backport/PPSA19534") throw new Error("busy");
     });
     await expect(undoPackInstall(record(), transport)).resolves.toBeUndefined();
+  });
+});
+
+describe("free-space preflight", () => {
+  it("charges for the backup copy as well as the new file", () => {
+    // The stash is a copy, not a move: replacing a 256 MB eboot needs room
+    // for two of them at once.
+    const plan = planPackInstall(pack(), title("PPSA19534"), "/dl/pack", {
+      fakelib: [], sceModule: [], gamePrx: [], sceSys: [], eboot: true,
+    });
+    expect(packRequiresBytes(plan)).toBe(plan.totalBytes + 256107618);
+  });
+
+  it("needs only the written bytes when nothing is displaced", () => {
+    const plan = planPackInstall(pack(), title("PPSA19534"), "/dl/pack", nothingThere);
+    expect(packRequiresBytes(plan)).toBe(plan.totalBytes);
+  });
+
+  it("never blocks when free space could not be read", () => {
+    // A check that cannot run must not stop the user doing the thing.
+    const plan = planPackInstall(pack(), title("PPSA19534"), "/dl/pack", nothingThere);
+    expect(packFits(plan, null)).toBe(true);
+  });
+
+  it("fits exactly at the boundary, and not one byte below", () => {
+    const plan = planPackInstall(pack(), title("PPSA19534"), "/dl/pack", nothingThere);
+    const need = packRequiresBytes(plan);
+    expect(packFits(plan, need)).toBe(true);
+    expect(packFits(plan, need - 1)).toBe(false);
   });
 });

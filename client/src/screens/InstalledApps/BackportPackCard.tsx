@@ -6,6 +6,7 @@ import {
   fsDelete,
   fsListDir,
   fsMkdir,
+  installFreeBytes,
   startTransferFile,
   waitForJob,
   type InstalledTitle,
@@ -16,6 +17,8 @@ import { useTr } from "../../state/lang";
 import { inspectBackportPack, importBackportPack } from "../../state/fakelibCorpus";
 import {
   applyPackInstall,
+  packFits,
+  packRequiresBytes,
   planPackInstall,
   undoPackInstall,
   PackInstallError,
@@ -57,6 +60,8 @@ export function BackportPackCard({
   const [plan, setPlan] = useState<PackInstallPlan | null>(null);
   const [record, setRecord] = useState<PackInstallRecord | null>(null);
   const [busy, setBusy] = useState<null | "inspect" | "install" | "undo">(null);
+  /** null = the check could not run, which must never block the install. */
+  const [freeBytes, setFreeBytes] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
@@ -108,6 +113,7 @@ export function BackportPackCard({
           return [];
         }
       };
+      setFreeBytes(await installFreeBytes(transferAddr(host)).catch(() => null));
       const [fakelib, sceModule, gamePrx, sceSys, root] = await Promise.all([
         listing(`${dest}/fakelib`),
         listing(`${dest}/sce_module`),
@@ -219,6 +225,13 @@ export function BackportPackCard({
         </div>
       ) : null}
 
+      {plan && !packFits(plan, freeBytes) ? (
+        <Callout tone="warn" title={tr("pack_no_room_title", undefined, "Not enough free space")}>
+          {tr("pack_no_room_body", { need: gb(packRequiresBytes(plan)), free: gb(freeBytes ?? 0) },
+            `This needs ${gb(packRequiresBytes(plan))} free — the pack itself plus a backup of everything it replaces — and the console has ${gb(freeBytes ?? 0)}.`)}
+        </Callout>
+      ) : null}
+
       {plan?.titleMismatch ? (
         <Callout tone="warn" title={tr("pack_mismatch_title", undefined, "This pack names a different game")}>
           {tr("pack_mismatch_body", { pack: pack?.titleIdHint ?? "", target: title.titleId },
@@ -237,7 +250,7 @@ export function BackportPackCard({
         <Button
           variant="primary"
           onClick={() => void install()}
-          disabled={!plan || busy !== null || !!disabled || !!record}
+          disabled={!plan || busy !== null || !!disabled || !!record || !packFits(plan, freeBytes)}
           loading={busy === "install"}
         >
           {tr("pack_install", undefined, "Install pack")}

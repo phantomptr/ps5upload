@@ -123,6 +123,35 @@ static void cleanup_mount(void) {
     if (target[0]) (void)unmount(target, MNT_FORCE);
 }
 
+/* Is the unionfs already on `target` the one WE mounted?
+ *
+ * A game execs more than once per launch, so the second pass sees the overlay
+ * the first pass created. Reporting that as "an external BackPork is active"
+ * sent a user hunting for a payload that was not running: the kernel line
+ * `unionfs_domount: The same unionfs mount is prohibited` is OUR second
+ * attempt, and it is benign — titles that log it launch fine. */
+static int overlay_is_ours(const char *target) {
+    int ours;
+    pthread_mutex_lock(&g_overlay.mutex);
+    ours = g_overlay.mounted_on[0] && strcmp(g_overlay.mounted_on, target) == 0;
+    pthread_mutex_unlock(&g_overlay.mutex);
+    return ours;
+}
+
+/* Ask to be told when this process exits.
+ *
+ * Registered on EVERY path that identifies a game, not just the one that
+ * mounts. `blocked` and `error` used to return before this, and since the exit
+ * event is the only thing that puts the state back to `watching`, a single
+ * blocked launch left the UI reporting "overlay unavailable" until the payload
+ * was reloaded — long after the cause was gone. */
+static void watch_for_exit(int kq, pid_t pid) {
+    struct kevent exit_event;
+    EV_SET(&exit_event, (uintptr_t)pid, EVFILT_PROC, EV_ADD | EV_ENABLE | EV_CLEAR,
+           NOTE_EXIT, 0, NULL);
+    (void)kevent(kq, &exit_event, 1, NULL, 0, NULL);
+}
+
 static void handle_exec(int kq, pid_t pid) {
     app_info_t info;
     char title_id[10];
@@ -138,22 +167,36 @@ static void handle_exec(int kq, pid_t pid) {
         usleep(100000);
     }
     if (!source[0] || !target[0]) return;
-    if (proc_find_pid_by_name("backpork.elf") > 0 || target_is_unionfs(target)) {
-        set_state("blocked", title_id, "external_backpork_or_unionfs_active");
+    /* Our own overlay, seen again on a later exec of the same launch. The
+     * libraries ARE mounted, so say so rather than crying foul. */
+    if (overlay_is_ours(target)) {
+        set_state("mounted", title_id, NULL);
+        watch_for_exit(kq, pid);
+        return;
+    }
+    /* Only these two are genuinely somebody else's. Naming which one is the
+     * difference between "stop the other payload" and "reboot to clear a
+     * stale mount", and the user cannot tell them apart from one message. */
+    if (proc_find_pid_by_name("backpork.elf") > 0) {
+        set_state("blocked", title_id, "external_backpork_running");
+        watch_for_exit(kq, pid);
+        return;
+    }
+    if (target_is_unionfs(target)) {
+        set_state("blocked", title_id, "foreign_unionfs_on_target");
+        watch_for_exit(kq, pid);
         return;
     }
     if (mount_overlay(source, target) != 0) {
         set_state("error", title_id, strerror(errno));
+        watch_for_exit(kq, pid);
         return;
     }
     pthread_mutex_lock(&g_overlay.mutex);
     snprintf(g_overlay.mounted_on, sizeof(g_overlay.mounted_on), "%s", target);
     pthread_mutex_unlock(&g_overlay.mutex);
     set_state("mounted", title_id, NULL);
-    struct kevent exit_event;
-    EV_SET(&exit_event, (uintptr_t)pid, EVFILT_PROC, EV_ADD | EV_ENABLE | EV_CLEAR,
-           NOTE_EXIT, 0, NULL);
-    (void)kevent(kq, &exit_event, 1, NULL, 0, NULL);
+    watch_for_exit(kq, pid);
 }
 
 static void *overlay_main(void *unused) {
