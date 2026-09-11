@@ -4,6 +4,20 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.18.2
+
+- **Backport is no longer greyed out for the wrong reason.** A library-overlay
+  problem reported while one game was starting could disable backporting for a
+  completely different game, and a brief hiccup during a normal launch could
+  disable it for that game too. A problem now only counts against the game it
+  actually concerns.
+
+- Housekeeping: removed some stray development screenshots that had been
+  committed by accident, and tightened the ignore rules so the next ones cannot
+  follow them in.
+
+---
+
 ## 5.18.1
 
 **The new backport-pack screens now speak every language ps5upload supports.**
