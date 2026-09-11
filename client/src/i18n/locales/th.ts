@@ -2763,6 +2763,11 @@ helper_mismatch_go: "โหลดตัวช่วยใหม่",
 "backport_overlay_backpork": "เพย์โหลด BackPork กำลังทำงานอยู่และครองโอเวอร์เลย์ไลบรารี ให้หยุดมันก่อน แล้วส่ง ps5upload อีกครั้ง",
 "backport_overlay_foreign_mount": "มีโอเวอร์เลย์อื่นเมาต์อยู่บนโฟลเดอร์ไลบรารีของเกมนี้แล้ว ให้รีสตาร์ทเครื่องเพื่อล้างมัน การปิดเพย์โหลดที่สร้างมันไว้ไม่ได้ยกเลิกการเมาต์",
 "fakelibs_scan_not_backported": "มีเกม {count} เกมที่มี fakelib/ แต่ไม่เคยถูกลดเวอร์ชัน ไฟล์ของเกมเหล่านั้นจึงไม่ใช่แบ็กพอร์ตและถูกข้ามไป",
+"cheats_filter_any_format": "ทุกรูปแบบ",
+"cheats_filter_any_version": "ทุกเวอร์ชันของเกม",
+"cheats_filter_installed_only": "เฉพาะเกมของฉัน",
+"cheats_filter_count": "{shown} จาก {total}",
+"cheats_filter_none": "ไม่มีสูตรโกงที่ตรงกับตัวกรองเหล่านี้ ลองเอาตัวกรองออกสักอันเพื่อดูเพิ่มเติม",
 };
 
 export default th;

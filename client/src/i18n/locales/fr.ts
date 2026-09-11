@@ -2773,6 +2773,11 @@ helper_mismatch_go: "Recharger l'assistant",
 "backport_overlay_backpork": "Le payload BackPork est en cours d exécution et occupe la superposition de bibliothèques. Arrêtez-le, puis renvoyez ps5upload.",
 "backport_overlay_foreign_mount": "Une autre superposition est déjà montée sur le dossier de bibliothèques de ce jeu. Redémarrez la console pour la libérer : arrêter le payload qui l a créée ne la démonte pas.",
 "fakelibs_scan_not_backported": "{count} jeu(x) possèdent un fakelib/ mais n ont jamais été rétroportés ; leurs fichiers ne sont pas un rétroportage et ont été ignorés.",
+"cheats_filter_any_format": "Tous les formats",
+"cheats_filter_any_version": "Toutes les versions du jeu",
+"cheats_filter_installed_only": "Seulement mes jeux",
+"cheats_filter_count": "{shown} sur {total}",
+"cheats_filter_none": "Aucun code ne correspond à ces filtres. Retirez-en un pour en voir plus.",
 };
 
 export default fr;

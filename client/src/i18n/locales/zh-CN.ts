@@ -2689,6 +2689,11 @@ helper_mismatch_go: "重新加载助手",
 "backport_overlay_backpork": "BackPork 载荷正在运行并占用库覆盖层。请先停止它，然后重新发送 ps5upload。",
 "backport_overlay_foreign_mount": "这款游戏的库文件夹上已挂载了另一个覆盖层。请重启主机来清除它——关闭创建它的载荷并不会卸载它。",
 "fakelibs_scan_not_backported": "有 {count} 款游戏带有 fakelib/，但从未降级，因此其文件并非向下移植内容，已跳过。",
+"cheats_filter_any_format": "任意格式",
+"cheats_filter_any_version": "任意游戏版本",
+"cheats_filter_installed_only": "仅我的游戏",
+"cheats_filter_count": "{total} 个中的 {shown} 个",
+"cheats_filter_none": "没有符合这些筛选条件的金手指。取消一个条件即可看到更多。",
 };
 
 export default zh_CN;

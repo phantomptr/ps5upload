@@ -2774,6 +2774,11 @@ helper_mismatch_go: "헬퍼 다시 불러오기",
 "backport_overlay_backpork": "BackPork 페이로드가 실행 중이며 라이브러리 오버레이를 점유하고 있습니다. 중지한 뒤 ps5upload 를 다시 보내세요.",
 "backport_overlay_foreign_mount": "이 게임의 라이브러리 폴더에 다른 오버레이가 이미 마운트되어 있습니다. 본체를 재시작해 해제하세요. 오버레이를 만든 페이로드를 종료해도 마운트는 해제되지 않습니다.",
 "fakelibs_scan_not_backported": "{count}개의 게임에 fakelib/ 가 있지만 다운그레이드된 적이 없어, 그 파일은 백포트가 아니므로 건너뛰었습니다.",
+"cheats_filter_any_format": "모든 형식",
+"cheats_filter_any_version": "모든 게임 버전",
+"cheats_filter_installed_only": "내 게임만",
+"cheats_filter_count": "{total}개 중 {shown}개",
+"cheats_filter_none": "이 필터와 일치하는 치트가 없습니다. 필터를 하나 해제해 보세요.",
 };
 
 export default ko;

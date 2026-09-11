@@ -19,6 +19,7 @@
  */
 
 #include "cheats.h"
+#include "notif.h"
 
 #include <ps5/kernel.h>
 
@@ -1090,8 +1091,12 @@ static int apply_mod(pid_t pid, intptr_t base, cheat_mod_t *mod,
 
 /* ── Background watcher thread ───────────────────────────────────── */
 
-static void apply_patches_for_game(pid_t pid, intptr_t base,
-                                   const char *title_id) {
+/* Returns how many memory writes actually landed, and fills `name_out` with
+ * the game's own name when a cheat file carries one — the console
+ * notification reads far better as the game's title than as a title id. */
+static int apply_patches_for_game(pid_t pid, intptr_t base,
+                                  const char *title_id,
+                                  char *name_out, size_t name_cap) {
     found_file_t files[16];
     int n = find_cheat_files(title_id, files, 16, 1 /* patches */);
 
@@ -1106,7 +1111,10 @@ static void apply_patches_for_game(pid_t pid, intptr_t base,
 
         if (pt_attach(pid) != 0) {
             free(cf);
-            return;
+            return total_writes;
+        }
+        if (name_out && name_cap && !name_out[0] && cf->game_name[0]) {
+            snprintf(name_out, name_cap, "%s", cf->game_name);
         }
         for (int m = 0; m < cf->mod_count; m++) {
             char err[128];
@@ -1120,10 +1128,14 @@ static void apply_patches_for_game(pid_t pid, intptr_t base,
     }
     atomic_store(&g_patches_last, n);
     atomic_fetch_add(&g_patches_total, total_writes);
+    return total_writes;
 }
 
-static void reapply_enabled_for_game(pid_t pid, intptr_t base,
-                                     const char *title_id) {
+/* Returns how many enabled cheats were re-applied. See the note above on
+ * `name_out`. */
+static int reapply_enabled_for_game(pid_t pid, intptr_t base,
+                                    const char *title_id,
+                                    char *name_out, size_t name_cap) {
     found_file_t files[16];
     int n = find_cheat_files(title_id, files, 16, 0 /* cheats */);
 
@@ -1142,17 +1154,24 @@ static void reapply_enabled_for_game(pid_t pid, intptr_t base,
         }
         if (!has_enabled) { free(cf); continue; }
 
-        if (pt_attach(pid) != 0) { free(cf); return; }
+        if (pt_attach(pid) != 0) { free(cf); return 0; }
+        if (name_out && name_cap && !name_out[0] && cf->game_name[0]) {
+            snprintf(name_out, name_cap, "%s", cf->game_name);
+        }
+        int applied = 0;
         for (int m = 0; m < cf->mod_count; m++) {
             if (cf->mods[m].enabled) {
                 char err[128];
-                apply_mod(pid, base, &cf->mods[m], 1, err, sizeof(err));
+                if (apply_mod(pid, base, &cf->mods[m], 1, err, sizeof(err)) == 0) {
+                    applied++;
+                }
             }
         }
         pt_detach(pid, 0);
         free(cf);
-        return; /* Only process the first matching file */
+        return applied; /* Only process the first matching file */
     }
+    return 0;
 }
 
 static void *watcher_thread(void *arg) {
@@ -1182,8 +1201,28 @@ static void *watcher_thread(void *arg) {
         invalidate_rg_cache();
 
         /* Auto-apply patches + re-apply user-toggled cheats */
-        apply_patches_for_game(pid, base, title);
-        reapply_enabled_for_game(pid, base, title);
+        char game_name[MAX_CHEAT_NAME] = "";
+        int applied = apply_patches_for_game(pid, base, title,
+                                             game_name, sizeof(game_name));
+        applied += reapply_enabled_for_game(pid, base, title,
+                                            game_name, sizeof(game_name));
+
+        /* Tell the player on the console. Without this the engine works
+         * silently and there is no way to know a cheat actually took — the
+         * request most asked for in issue #315.
+         *
+         * Fired here rather than per mod: this block runs once per game
+         * session (the `pid == last_pid` guard above), so the player gets one
+         * notification when the game starts rather than a burst of them. Only
+         * when something actually landed — announcing "0 cheats" on every
+         * launch of every game would be noise. */
+        if (applied > 0) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "%d cheat%s applied to %s",
+                     applied, applied == 1 ? "" : "s",
+                     game_name[0] ? game_name : title);
+            notif_send(msg, NOTIF_LEVEL_INFO);
+        }
     }
     return NULL;
 }
@@ -1520,8 +1559,26 @@ int cheats_reload(char *err, size_t err_cap) {
         return -1;
     }
 
-    apply_patches_for_game(pid, base, title);
-    reapply_enabled_for_game(pid, base, title);
+    char game_name[MAX_CHEAT_NAME] = "";
+    int applied = apply_patches_for_game(pid, base, title,
+                                         game_name, sizeof(game_name));
+    applied += reapply_enabled_for_game(pid, base, title,
+                                        game_name, sizeof(game_name));
+
+    /* A reload is something the player asked for, so confirm it on the
+     * console the same way an automatic apply does. Saying so when nothing
+     * landed matters here — unlike the watcher, a silent reload leaves the
+     * player unsure whether they had toggled anything at all. */
+    char msg[256];
+    if (applied > 0) {
+        snprintf(msg, sizeof(msg), "%d cheat%s applied to %s",
+                 applied, applied == 1 ? "" : "s",
+                 game_name[0] ? game_name : title);
+    } else {
+        snprintf(msg, sizeof(msg), "No cheats enabled for %s",
+                 game_name[0] ? game_name : title);
+    }
+    notif_send(msg, NOTIF_LEVEL_INFO);
 
     return 0;
 }

@@ -2683,6 +2683,11 @@ helper_mismatch_go: "Перезагрузить помощник",
 "backport_overlay_backpork": "Полезная нагрузка BackPork запущена и занимает наложение библиотек. Остановите её и отправьте ps5upload заново.",
 "backport_overlay_foreign_mount": "На папку библиотек этой игры уже смонтировано другое наложение. Перезапустите консоль, чтобы снять его: завершение создавшей его нагрузки не размонтирует его.",
 "fakelibs_scan_not_backported": "У {count} игр(ы) есть fakelib/, но версия никогда не понижалась, поэтому их файлы не являются бэкпортом и были пропущены.",
+"cheats_filter_any_format": "Любой формат",
+"cheats_filter_any_version": "Любая версия игры",
+"cheats_filter_installed_only": "Только мои игры",
+"cheats_filter_count": "{shown} из {total}",
+"cheats_filter_none": "Ни один чит не подходит под эти фильтры. Снимите один, чтобы увидеть больше.",
 };
 
 export default ru;

@@ -2745,6 +2745,11 @@ helper_mismatch_go: "Muat ulang helper",
 "backport_overlay_backpork": "Payload BackPork sedang berjalan dan menguasai hamparan pustaka. Hentikan dulu, lalu kirim ulang ps5upload.",
 "backport_overlay_foreign_mount": "Hamparan lain sudah terpasang pada folder pustaka gim ini. Mulai ulang konsol untuk membersihkannya — menutup payload yang membuatnya tidak melepas pemasangan itu.",
 "fakelibs_scan_not_backported": "{count} gim memiliki fakelib/ tetapi versinya tidak pernah diturunkan, jadi berkasnya bukan backport dan dilewati.",
+"cheats_filter_any_format": "Format apa saja",
+"cheats_filter_any_version": "Versi gim apa saja",
+"cheats_filter_installed_only": "Hanya gim saya",
+"cheats_filter_count": "{shown} dari {total}",
+"cheats_filter_none": "Tidak ada cheat yang cocok dengan filter ini. Hapus satu untuk melihat lebih banyak.",
 };
 
 export default id;

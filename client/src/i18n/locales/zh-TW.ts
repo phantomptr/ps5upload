@@ -2684,6 +2684,11 @@ helper_mismatch_go: "重新載入小幫手",
 "backport_overlay_backpork": "BackPork 酬載正在執行並占用程式庫覆蓋層。請先停止它，然後重新傳送 ps5upload。",
 "backport_overlay_foreign_mount": "這款遊戲的程式庫資料夾上已掛載另一個覆蓋層。請重新啟動主機來清除它——關閉建立它的酬載並不會卸載它。",
 "fakelibs_scan_not_backported": "有 {count} 款遊戲帶有 fakelib/，但從未降版，因此其檔案並非向下移植內容，已略過。",
+"cheats_filter_any_format": "任意格式",
+"cheats_filter_any_version": "任意遊戲版本",
+"cheats_filter_installed_only": "僅我的遊戲",
+"cheats_filter_count": "{total} 個中的 {shown} 個",
+"cheats_filter_none": "沒有符合這些篩選條件的金手指。取消一個條件即可看到更多。",
 };
 
 export default zh_TW;

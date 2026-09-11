@@ -2736,6 +2736,11 @@ helper_mismatch_go: "হেল্পার লোড করুন",
 "backport_overlay_backpork": "BackPork পেলোড চলছে এবং লাইব্রেরি ওভারলে দখল করে আছে। সেটি বন্ধ করুন, তারপর ps5upload আবার পাঠান।",
 "backport_overlay_foreign_mount": "এই গেমের লাইব্রেরি ফোল্ডারে ইতিমধ্যেই অন্য একটি ওভারলে মাউন্ট করা আছে। এটি সরাতে কনসোল পুনরায় চালু করুন — যে পেলোড এটি তৈরি করেছে তা বন্ধ করলে আনমাউন্ট হয় না।",
 "fakelibs_scan_not_backported": "{count} টি গেমে fakelib/ আছে কিন্তু কখনও ডাউনগ্রেড করা হয়নি, তাই সেগুলির ফাইল ব্যাকপোর্ট নয় এবং বাদ দেওয়া হয়েছে।",
+"cheats_filter_any_format": "যেকোনো ফরম্যাট",
+"cheats_filter_any_version": "যেকোনো গেম সংস্করণ",
+"cheats_filter_installed_only": "শুধু আমার গেম",
+"cheats_filter_count": "{total} এর মধ্যে {shown}",
+"cheats_filter_none": "এই ফিল্টারগুলির সঙ্গে কোনো চিট মেলেনি। আরও দেখতে একটি ফিল্টার সরান।",
 };
 
 export default bn;

@@ -250,6 +250,48 @@ pub struct CheatRepoEntry {
     pub format: String,
     /// Repo ID this entry came from.
     pub repo_id: String,
+    /// Title id parsed out of the filename (`CUSA09193_01.05_2.json` →
+    /// `CUSA09193`). Empty when the name does not follow the convention.
+    #[serde(default)]
+    pub title_id: String,
+    /// Game version the cheat was authored against (`01.05`), parsed from the
+    /// same filename. Empty when absent. Cheats are version-specific, so this
+    /// is the difference between "a cheat for this game" and "a cheat that
+    /// will work".
+    #[serde(default)]
+    pub game_version: String,
+}
+
+/// Split a repo filename into `(title_id, game_version)`.
+///
+/// Every published index uses `<TITLE_ID>_<VERSION>[_<variant>].<ext>`, e.g.
+/// `CUSA15438_01.00.json`, `CUSA09193_01.05_2.json` (a second cheat for the
+/// same build) and `CUSA34394_05.01.json`. Returning empty strings rather than
+/// an Option keeps the caller honest: a name that does not follow the
+/// convention still lists, it just cannot be filtered.
+pub fn parse_cheat_filename(filename: &str) -> (String, String) {
+    let stem = filename.rsplit_once('.').map_or(filename, |(head, _)| head);
+    let mut parts = stem.split('_');
+    let Some(title) = parts.next() else {
+        return (String::new(), String::new());
+    };
+    // A title id is four letters then five digits (CUSA12345 / PPSA12345).
+    let looks_like_title = title.len() == 9
+        && title[..4].chars().all(|c| c.is_ascii_alphabetic())
+        && title[4..].chars().all(|c| c.is_ascii_digit());
+    if !looks_like_title {
+        return (String::new(), String::new());
+    }
+    // The version is the next segment when it looks like one; the `_2` that
+    // sometimes follows is a variant counter, not a version.
+    let version = parts
+        .next()
+        .filter(|v| {
+            !v.is_empty() && v.chars().all(|c| c.is_ascii_digit() || c == '.') && v.contains('.')
+        })
+        .unwrap_or("")
+        .to_string();
+    (title.to_ascii_uppercase(), version)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -497,11 +539,14 @@ pub fn cheats_repo_search(query: &str) -> Result<CheatRepoSearchResponse> {
                     if !matches || !seen.insert(filename.clone()) {
                         return;
                     }
+                    let (title_id, game_version) = parse_cheat_filename(&filename);
                     entries.push(CheatRepoEntry {
                         filename,
                         game_title,
                         format,
                         repo_id: repo_id.clone(),
+                        title_id,
+                        game_version,
                     });
                 };
 
@@ -951,5 +996,64 @@ mod tests {
         let p = cheat_install_path("../../../etc/passwd", "json");
         assert!(!p.contains(".."));
         assert!(p.starts_with("/data/ps5upload/cheats/json/"));
+    }
+}
+
+#[cfg(test)]
+mod cheat_filename_tests {
+    use super::parse_cheat_filename;
+
+    #[test]
+    fn reads_the_title_and_version_from_a_published_name() {
+        // Shapes taken verbatim from the etaHEN and GoldHEN indexes.
+        assert_eq!(
+            parse_cheat_filename("CUSA15438_01.00.json"),
+            ("CUSA15438".into(), "01.00".into())
+        );
+        assert_eq!(
+            parse_cheat_filename("CUSA34394_05.01.json"),
+            ("CUSA34394".into(), "05.01".into())
+        );
+        assert_eq!(
+            parse_cheat_filename("PPSA01234_02.10.mc4"),
+            ("PPSA01234".into(), "02.10".into())
+        );
+    }
+
+    #[test]
+    fn a_variant_counter_is_not_a_version() {
+        // `_2` marks a second cheat for the SAME build; reading it as the
+        // version would split one game's cheats across two filter values.
+        assert_eq!(
+            parse_cheat_filename("CUSA09193_01.05_2.json"),
+            ("CUSA09193".into(), "01.05".into())
+        );
+    }
+
+    #[test]
+    fn a_name_that_breaks_the_convention_still_lists() {
+        // Empty rather than an error: such an entry must still appear in the
+        // browser, it just cannot be filtered on.
+        assert_eq!(
+            parse_cheat_filename("readme.md"),
+            (String::new(), String::new())
+        );
+        assert_eq!(
+            parse_cheat_filename("CUSA1.json"),
+            (String::new(), String::new())
+        );
+        assert_eq!(parse_cheat_filename(""), (String::new(), String::new()));
+        // Title id but no version segment.
+        assert_eq!(
+            parse_cheat_filename("CUSA15438.json"),
+            ("CUSA15438".into(), String::new())
+        );
+    }
+
+    #[test]
+    fn the_title_id_is_normalised_for_matching() {
+        // The installed-apps list reports upper case; a lower-case filename
+        // must still match it.
+        assert_eq!(parse_cheat_filename("cusa15438_01.00.json").0, "CUSA15438");
     }
 }

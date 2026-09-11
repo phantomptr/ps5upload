@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  cheatFilterOptions,
+  filterCheatEntries,
+  NO_CHEAT_FILTERS,
+  type CheatFilters,
+} from "../../lib/cheatBrowse";
+import {
   Search,
   Download,
   X,
@@ -78,6 +84,7 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [games, setGames] = useState<InstalledTitle[]>([]);
   const [loadingGames, setLoadingGames] = useState(false);
+  const [filters, setFilters] = useState<CheatFilters>(NO_CHEAT_FILTERS);
 
   /* Names for the games on this console, keyed by title id. Cheat files
    * are named by title id, so this turns "PPSA01234" into the game's
@@ -89,6 +96,18 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
     }
     return m;
   }, [games]);
+
+  const installedTitleIds = useMemo(
+    () => new Set(games.map((g) => (g.titleId || "").toUpperCase()).filter(Boolean)),
+    [games],
+  );
+  // Options come from the rows actually fetched, so a repo that starts
+  // publishing a new format or version needs no code change here.
+  const options = useMemo(() => cheatFilterOptions(entries), [entries]);
+  const visible = useMemo(
+    () => filterCheatEntries(entries, filters, installedTitleIds),
+    [entries, filters, installedTitleIds],
+  );
 
   useEffect(() => {
     void (async () => {
@@ -292,12 +311,52 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
             </Button>
           </div>
 
+          {/* Only shown once there is something to narrow. Cheats are
+              version-specific, so version is the filter that decides whether a
+              download will work at all — not a nicety. */}
+          {entries.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <select
+                className="input py-1 text-xs"
+                value={filters.format}
+                onChange={(ev) => setFilters((f) => ({ ...f, format: ev.target.value }))}
+              >
+                <option value="">{tr("cheats_filter_any_format", undefined, "Any format")}</option>
+                {options.formats.map((f) => (
+                  <option key={f} value={f}>{f.toUpperCase()}</option>
+                ))}
+              </select>
+              <select
+                className="input py-1 text-xs"
+                value={filters.version}
+                onChange={(ev) => setFilters((f) => ({ ...f, version: ev.target.value }))}
+              >
+                <option value="">{tr("cheats_filter_any_version", undefined, "Any game version")}</option>
+                {options.versions.map((v) => (
+                  <option key={v} value={v}>{v}</option>
+                ))}
+              </select>
+              <label className="flex items-center gap-1.5">
+                <input
+                  type="checkbox"
+                  checked={filters.installedOnly}
+                  onChange={(ev) => setFilters((f) => ({ ...f, installedOnly: ev.target.checked }))}
+                />
+                {tr("cheats_filter_installed_only", undefined, "Only my games")}
+              </label>
+              <span className="text-[var(--color-muted)]">
+                {tr("cheats_filter_count", { shown: visible.length, total: entries.length },
+                  `${visible.length} of ${entries.length}`)}
+              </span>
+            </div>
+          )}
+
           {error && <ErrorCard title={error} />}
           {downloadError && <ErrorCard title={downloadError} />}
 
-          {entries.length > 0 && (
+          {visible.length > 0 && (
             <div className="space-y-1.5">
-              {entries.map((e) => (
+              {visible.map((e) => (
                 <Card key={e.filename}>
                   <div className="flex items-center justify-between gap-3 p-3">
                     <div className="min-w-0 flex-1">
@@ -339,6 +398,13 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
                   </div>
                 </Card>
               ))}
+            </div>
+          )}
+
+          {!searching && entries.length > 0 && visible.length === 0 && (
+            <div className="p-4 text-center text-sm text-[var(--color-muted)]">
+              {tr("cheats_filter_none", undefined,
+                "No cheats match these filters. Clear one to see more.")}
             </div>
           )}
 

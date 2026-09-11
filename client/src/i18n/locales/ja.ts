@@ -2778,6 +2778,11 @@ helper_mismatch_go: "ヘルパーを再読み込み",
 "backport_overlay_backpork": "BackPork ペイロードが動作していてライブラリオーバーレイを占有しています。停止してから ps5upload を再送信してください。",
 "backport_overlay_foreign_mount": "このゲームのライブラリフォルダーには別のオーバーレイがすでにマウントされています。本体を再起動して解除してください。作成したペイロードを終了してもアンマウントされません。",
 "fakelibs_scan_not_backported": "{count} 本のゲームに fakelib/ はありますが、ダウングレードされていないため、その中身はバックポートではなくスキップしました。",
+"cheats_filter_any_format": "すべての形式",
+"cheats_filter_any_version": "すべてのゲームバージョン",
+"cheats_filter_installed_only": "自分のゲームのみ",
+"cheats_filter_count": "{total} 件中 {shown} 件",
+"cheats_filter_none": "この条件に一致するチートはありません。フィルターを 1 つ解除してください。",
 };
 
 export default ja;

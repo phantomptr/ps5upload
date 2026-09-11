@@ -4626,6 +4626,13 @@ export interface CheatRepoEntry {
    *  it; the type omitted it, so the download call hardcoded "etahen"
    *  and could not fetch anything found only in another repo. */
   repo_id: string;
+  /** Title id parsed from the filename (`CUSA09193_01.05_2.json` →
+   *  `CUSA09193`). Empty when the name breaks the convention. */
+  title_id?: string;
+  /** Game version the cheat was authored against (`01.05`). Cheats are
+   *  version-specific, so this is the difference between "a cheat for this
+   *  game" and "a cheat that will work". */
+  game_version?: string;
 }
 
 export interface CheatRepoSearchResponse {

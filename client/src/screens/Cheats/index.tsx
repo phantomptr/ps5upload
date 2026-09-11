@@ -36,8 +36,10 @@ import {
   type CheatTitle,
   type CheatMod,
   type CheatsStatusResponse,
+  cheatsReposSearch,
 } from "../../api/ps5";
 import { RepoBrowser } from "./RepoBrowser";
+import { namesFromRepoEntries, resolveCheatName } from "../../lib/cheatBrowse";
 
 export default function CheatsScreen() {
   const tr = useTr();
@@ -63,6 +65,26 @@ export default function CheatsScreen() {
       }
     })();
   }, [addr, payloadStatus]);
+
+  /* Names from the cheat repos, for games that are NOT installed here.
+   *
+   * The installed list above only covers games on this console, so a cheat
+   * downloaded for anything else showed a bare title id — the complaint in
+   * issue #315. The repo index already maps every published cheat's title id
+   * to its game name, so ask it once and keep the answer for the session;
+   * it is one fetch of data the browser downloads anyway. */
+  const [repoNames, setRepoNames] = useState<Map<string, string>>(new Map());
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await cheatsReposSearch("");
+        setRepoNames(namesFromRepoEntries(r.entries ?? []));
+      } catch {
+        // Offline or a repo is down. Names simply fall back as before —
+        // never a reason to show an error on a screen about cheats.
+      }
+    })();
+  }, []);
 
   const namesByTitleId = useMemo(() => {
     const m = new Map<string, string>();
@@ -314,9 +336,11 @@ export default function CheatsScreen() {
                   >
                     <div className="min-w-0">
                       <div className="truncate font-medium">
-                        {t.name ||
-                          namesByTitleId.get(t.title_id.toUpperCase()) ||
-                          t.title_id}
+                        {resolveCheatName(t.title_id, {
+                          fromCheatFile: t.name,
+                          installed: namesByTitleId,
+                          fromRepoIndex: repoNames,
+                        })}
                       </div>
                       <div className="font-mono text-xs text-[var(--color-muted)]">
                         {t.title_id}

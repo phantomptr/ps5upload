@@ -2736,6 +2736,11 @@ helper_mismatch_go: "إعادة تحميل المساعد",
 "backport_overlay_backpork": "حمولة BackPork قيد التشغيل وتحتجز طبقة المكتبات. أوقفها ثم أعد إرسال ps5upload.",
 "backport_overlay_foreign_mount": "هناك طبقة أخرى مركّبة بالفعل على مجلد مكتبات هذه اللعبة. أعد تشغيل الجهاز لإزالتها — إنهاء الحمولة التي أنشأتها لا يفكّ تركيبها.",
 "fakelibs_scan_not_backported": "هناك {count} لعبة تحتوي على fakelib/ لكنها لم تُخفَّض إصداراتها قط، لذا فملفاتها ليست نقلاً خلفياً وقد تم تخطيها.",
+"cheats_filter_any_format": "أي صيغة",
+"cheats_filter_any_version": "أي إصدار للعبة",
+"cheats_filter_installed_only": "ألعابي فقط",
+"cheats_filter_count": "{shown} من {total}",
+"cheats_filter_none": "لا توجد أكواد غش تطابق هذه المرشحات. أزل أحدها لعرض المزيد.",
 };
 
 export default ar;

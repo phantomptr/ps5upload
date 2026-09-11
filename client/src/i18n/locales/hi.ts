@@ -2773,6 +2773,11 @@ helper_mismatch_go: "हेल्पर फिर लोड करें",
 "backport_overlay_backpork": "BackPork पेलोड चल रहा है और लाइब्रेरी ओवरले को रोके हुए है। उसे रोकें, फिर ps5upload दोबारा भेजें।",
 "backport_overlay_foreign_mount": "इस गेम के लाइब्रेरी फ़ोल्डर पर पहले से ही कोई दूसरा ओवरले माउंट है। उसे हटाने के लिए कंसोल पुनः चालू करें — जिस पेलोड ने उसे बनाया उसे बंद करने से वह अनमाउंट नहीं होता।",
 "fakelibs_scan_not_backported": "{count} गेम में fakelib/ है लेकिन उनका संस्करण कभी नीचे नहीं किया गया, इसलिए उनकी फ़ाइलें बैकपोर्ट नहीं हैं और उन्हें छोड़ दिया गया।",
+"cheats_filter_any_format": "कोई भी प्रारूप",
+"cheats_filter_any_version": "कोई भी गेम संस्करण",
+"cheats_filter_installed_only": "केवल मेरे गेम",
+"cheats_filter_count": "{total} में से {shown}",
+"cheats_filter_none": "इन फ़िल्टरों से कोई चीट मेल नहीं खाती। अधिक देखने के लिए कोई एक फ़िल्टर हटाएँ।",
 };
 
 export default hi;

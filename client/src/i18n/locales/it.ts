@@ -2683,6 +2683,11 @@ helper_mismatch_go: "Ricarica helper",
 "backport_overlay_backpork": "Il payload BackPork è in esecuzione e occupa l overlay delle librerie. Fermalo, poi invia di nuovo ps5upload.",
 "backport_overlay_foreign_mount": "Un altro overlay è già montato sulla cartella delle librerie di questo gioco. Riavvia la console per liberarla: chiudere il payload che l ha creato non lo smonta.",
 "fakelibs_scan_not_backported": "{count} gioco/giochi hanno una cartella fakelib/ ma non sono mai stati retrocessi, quindi i loro file non sono un backport e sono stati saltati.",
+"cheats_filter_any_format": "Qualsiasi formato",
+"cheats_filter_any_version": "Qualsiasi versione del gioco",
+"cheats_filter_installed_only": "Solo i miei giochi",
+"cheats_filter_count": "{shown} di {total}",
+"cheats_filter_none": "Nessun trucco corrisponde a questi filtri. Rimuovine uno per vederne altri.",
 };
 
 export default it;

@@ -2738,6 +2738,11 @@ helper_mismatch_go: "Tải lại trợ giúp",
 "backport_overlay_backpork": "Payload BackPork đang chạy và chiếm lớp phủ thư viện. Hãy dừng nó rồi gửi lại ps5upload.",
 "backport_overlay_foreign_mount": "Một lớp phủ khác đã được gắn lên thư mục thư viện của trò chơi này. Hãy khởi động lại máy để gỡ nó — tắt payload đã tạo ra nó không gỡ gắn kết.",
 "fakelibs_scan_not_backported": "{count} trò chơi có fakelib/ nhưng chưa từng được hạ phiên bản, nên các tệp của chúng không phải bản backport và đã bị bỏ qua.",
+"cheats_filter_any_format": "Mọi định dạng",
+"cheats_filter_any_version": "Mọi phiên bản trò chơi",
+"cheats_filter_installed_only": "Chỉ trò chơi của tôi",
+"cheats_filter_count": "{shown} trên {total}",
+"cheats_filter_none": "Không có cheat nào khớp với các bộ lọc này. Hãy bỏ bớt một bộ lọc để xem thêm.",
 };
 
 export default vi;

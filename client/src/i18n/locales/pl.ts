@@ -3032,6 +3032,11 @@ helper_mismatch_go: "Załaduj pomocnika",
 "backport_overlay_backpork": "Payload BackPork działa i zajmuje nakładkę bibliotek. Zatrzymaj go, a potem wyślij ps5upload ponownie.",
 "backport_overlay_foreign_mount": "Na folderze bibliotek tej gry zamontowana jest już inna nakładka. Uruchom konsolę ponownie, aby ją zwolnić — zamknięcie payloadu, który ją utworzył, nie odmontuje jej.",
 "fakelibs_scan_not_backported": "{count} gra/gry mają folder fakelib/, ale nigdy nie zostały obniżone, więc ich pliki nie są backportem i zostały pominięte.",
+"cheats_filter_any_format": "Dowolny format",
+"cheats_filter_any_version": "Dowolna wersja gry",
+"cheats_filter_installed_only": "Tylko moje gry",
+"cheats_filter_count": "{shown} z {total}",
+"cheats_filter_none": "Żadne kody nie pasują do tych filtrów. Usuń jeden, aby zobaczyć więcej.",
 };
 
 export default pl;

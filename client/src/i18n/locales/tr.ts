@@ -2743,6 +2743,11 @@ helper_mismatch_go: "Yardımcıyı yükle",
 "backport_overlay_backpork": "BackPork yükü çalışıyor ve kitaplık kaplamasını tutuyor. Onu durdurun, sonra ps5upload dosyasını yeniden gönderin.",
 "backport_overlay_foreign_mount": "Bu oyunun kitaplık klasörüne zaten başka bir kaplama bağlanmış. Temizlemek için konsolu yeniden başlatın — onu oluşturan yükü kapatmak bağlantıyı kaldırmaz.",
 "fakelibs_scan_not_backported": "{count} oyunda fakelib/ var ama sürümleri hiç düşürülmemiş, bu yüzden dosyaları bir geri taşıma değil ve atlandı.",
+"cheats_filter_any_format": "Herhangi bir biçim",
+"cheats_filter_any_version": "Herhangi bir oyun sürümü",
+"cheats_filter_installed_only": "Yalnızca benim oyunlarım",
+"cheats_filter_count": "{total} içinden {shown}",
+"cheats_filter_none": "Bu filtrelerle eşleşen hile yok. Daha fazlasını görmek için birini kaldırın.",
 };
 
 export default tr;
