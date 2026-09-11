@@ -4,6 +4,69 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.18.0
+
+**ps5upload can install a whole downloaded backport pack, and the library
+corpus stops learning things that were never true.**
+
+### Install a backport pack, not just a third of one
+
+Backports circulate as a folder — `fakelib/` plus an `eboot.bin` that is
+already patched, replacement `sce_module/` files, and the game's own engine
+plugins. Until now ps5upload could only ever apply the `fakelib/` part, so a
+pack that fixed a game anywhere else could not be used here at all.
+
+- **Point it at the folder and it installs the lot.** Everything it replaces is
+  backed up first, so Undo puts the game back exactly as it was. The eboot is
+  written last: if anything goes wrong before that, the game still starts
+  exactly as it did.
+
+- **No SDK patch is applied.** A pack's eboot arrives already downgraded, and
+  patching it again would rewrite a correct field and break the signature it
+  shipped with.
+
+- **Only the libraries are kept for later.** They are the reusable part and go
+  into the corpus for every future backport; the eboot and modules belong to
+  one game and are installed straight from the folder rather than stored.
+
+- **It warns before it runs out of room.** The backup is a copy, so replacing a
+  256 MB eboot briefly needs space for two.
+
+- **Pointing the old import at a pack used to make a mess.** Every pack carries
+  `.prx` files outside `fakelib/`, and all of them were swept into one library
+  set — a combination no game has ever run. Files are now recognised by where
+  they sit in the pack, not by their extension.
+
+### The corpus stops collecting things that are not backports
+
+- **A `fakelib/` folder is no longer taken as proof.** A game that was dumped
+  but never downgraded can still have one, and its leftover files were being
+  recorded as a library set — which the app then offered FIRST for that very
+  game, where it could never work. Those titles are now skipped and counted, so
+  a scan that finds nothing says why instead of looking broken.
+
+- **Sets are offered based on what actually ran.** A set your other console is
+  recorded running for a game is now preferred for that game, even when the set
+  was originally harvested from something else entirely.
+
+- **One console stops counting as two.** Sightings were told apart by the name
+  you gave a console, so renaming it — or the app using its address once and its
+  name the next time — made a single machine look like corroborating evidence
+  from two.
+
+### Backporting explains itself better
+
+- **"An external BackPork is active" was often us.** A game starts more than
+  once as it launches, and the second pass was seeing the overlay the first pass
+  had just created. It now recognises its own work, and tells apart "BackPork is
+  running, stop it" from "something left a mount behind, restart the console" —
+  which need opposite fixes.
+
+- **A blocked launch no longer sticks.** The warning used to stay up until the
+  payload was reloaded, long after the cause was gone.
+
+---
+
 ## 5.17.10
 
 **Backporting can now find a working library set on its own, and scanning a
