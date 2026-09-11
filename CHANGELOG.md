@@ -4,6 +4,52 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.17.9
+
+**Backporting works again: the library scan finds your games, it now collects
+from every console you own, and the Backport button is no longer stuck behind a
+warning that was not true.**
+
+### The scan finds your backported games again
+
+Scanning a console for backport libraries reported "No backported games found"
+even on a console full of them, which left you with an empty library corpus and
+no way to back anything port.
+
+- **The scan was talking to the wrong port.** It asked the console for each
+  game's `fakelib/` folder on the transfer port instead of the management port,
+  so every single lookup failed. Measured on a 9.60 console: all 40 titles came
+  back as "not backported" before, 34 library sets after.
+
+- **A failed scan no longer looks like an empty console.** Any error reading a
+  game — console asleep, unreachable, permissions — was reported identically to
+  "this game was never backported", and the summary said zero errors. It now
+  tells those apart and says which console it could not reach.
+
+### One library corpus, fed by every console
+
+- **Scan collects from all your consoles at once.** The button used to read
+  only the console you had selected. It now sweeps every console you have set
+  up, skips any that are asleep (naming them), and files everything into the
+  one shared library corpus. Libraries harvested from one console are usable
+  when backporting on any other.
+
+### The Backport button is no longer falsely blocked
+
+- **"Library overlay is not available — send the current ps5upload payload"
+  was wrong.** The payload was reporting its overlay status correctly all
+  along; the engine was silently dropping that status before it reached the
+  screen, so the button stayed disabled no matter how current your payload was.
+  Backport is available again on a console running a current payload.
+
+### Smaller things
+
+- The backport summary showed a literal `{profile}` instead of the set name.
+- Backport wording now says "set" throughout, matching what the corpus actually
+  stores, instead of the older "profile".
+
+---
+
 ## 5.17.8
 
 **Backport a game from inside ps5upload — including disk-image titles — plus a

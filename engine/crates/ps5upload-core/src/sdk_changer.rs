@@ -23,12 +23,77 @@ pub struct SdkTitle {
     pub source: String,
 }
 
+/// The payload's fakelib-overlay status, forwarded verbatim from the SdkScan
+/// ack (`fakelib_overlay_status_json`).
+///
+/// This MUST be declared here even though nothing in the engine reads it: the
+/// handler deserializes the payload's ack into `SdkScanResponse` and then
+/// re-serializes it for the client, so any field missing from this struct is
+/// silently dropped in transit. It was missing, so `overlay` never reached the
+/// UI, `backportOverlayReady()` saw `undefined`, and the Backport button stayed
+/// disabled behind "Library overlay is not available — send the current
+/// payload" on consoles already running the current payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SdkOverlayStatus {
+    /// "idle" | "watching" | "mounted" | "blocked" | "error".
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub title_id: String,
+    #[serde(default)]
+    pub error: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SdkScanResponse {
     #[serde(default)]
     pub titles: Vec<SdkTitle>,
+    /// Absent on payloads older than the overlay work; `None` then, which the
+    /// UI treats as "not available" — the same thing it showed before, but now
+    /// for the real reason rather than because the engine ate the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlay: Option<SdkOverlayStatus>,
     #[serde(default)]
     pub error: Option<String>,
+}
+
+#[cfg(test)]
+mod overlay_passthrough_tests {
+    use super::*;
+
+    /// The engine parses the payload's ack into `SdkScanResponse` and then
+    /// re-serializes it for the client, so any field this struct does not
+    /// declare is silently dropped in transit. `overlay` was exactly that: the
+    /// payload sent it, the engine ate it, the UI saw `undefined`, and the
+    /// Backport button stayed disabled behind "send the current payload" on a
+    /// console already running the current payload.
+    #[test]
+    fn overlay_survives_the_round_trip() {
+        let ack = r#"{"titles":[],"overlay":{"state":"watching","title_id":"","error":""}}"#;
+        let parsed: SdkScanResponse = serde_json::from_str(ack).expect("ack parses");
+        assert_eq!(
+            parsed.overlay.as_ref().expect("overlay kept").state,
+            "watching"
+        );
+        let out = serde_json::to_string(&parsed).expect("serializes");
+        assert!(
+            out.contains("\"overlay\""),
+            "overlay must reach the UI: {out}"
+        );
+        assert!(out.contains("watching"), "state must survive: {out}");
+    }
+
+    /// A payload older than the overlay work sends no such field. That must
+    /// still parse, and must be omitted rather than emitted as null so the UI
+    /// keeps its single "not available" path.
+    #[test]
+    fn missing_overlay_is_omitted_not_null() {
+        let parsed: SdkScanResponse =
+            serde_json::from_str(r#"{"titles":[]}"#).expect("older ack parses");
+        assert!(parsed.overlay.is_none());
+        let out = serde_json::to_string(&parsed).expect("serializes");
+        assert!(!out.contains("overlay"), "omit, never null: {out}");
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

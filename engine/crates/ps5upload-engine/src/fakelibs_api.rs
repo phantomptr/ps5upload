@@ -261,9 +261,46 @@ pub async fn scan_status(AxumPath(id): AxumPath<String>) -> impl IntoResponse {
     }
 }
 
+/// The address the payload's filesystem RPCs answer on.
+///
+/// Callers hand us whatever they hold: a bare host (the Backport panel passes
+/// `addr={host}`) or a transfer address (`:9113`). `list_dir`/`fs_read` only
+/// answer on the mgmt port, so both have to be normalised. This lives in one
+/// named place on purpose — while it was inlined, the scan path simply forgot
+/// it, every listing failed, and a console full of backported games reported
+/// "No backported games found" with zero errors.
+fn fs_addr(addr: &str) -> String {
+    crate::mgmt_addr_for(addr)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fs_addr_normalises_to_the_mgmt_port() {
+        // The scan regression: a bare host and a transfer address must BOTH
+        // land on the mgmt port. When they did not, `harvest` silently
+        // reported every title as "not backported".
+        assert_eq!(fs_addr("192.168.1.50"), "192.168.1.50:9114");
+        assert_eq!(fs_addr("192.168.1.50:9113"), "192.168.1.50:9114");
+        assert_eq!(fs_addr("192.168.1.50:9114"), "192.168.1.50:9114");
+    }
+}
+
 fn run_scan(req: ScanRequest, state: Arc<Mutex<ScanState>>) {
     let Some(root) = corpus_root() else { return };
     let mut corpus = Corpus::open(&root);
+    // The payload's filesystem RPCs answer on the MGMT port. Callers hand us a
+    // bare host (the Backport panel passes `addr={host}`) or a transfer
+    // address (:9113); every other handler normalises through
+    // mgmt_addr_or_default, and this one did not. The result was that
+    // `list_dir` failed for EVERY title, harvest() swallowed the error as
+    // "no fakelib here", and a console full of backported games scanned as
+    // "No backported games found" with zero errors reported. Measured on a
+    // 9.60 console: bare/:9113 → 40 of 40 "without libraries"; :9114 → 34
+    // sets found.
+    let addr = fs_addr(&req.addr);
     for title in &req.titles {
         {
             let mut s = state.lock().unwrap();
@@ -273,7 +310,7 @@ fn run_scan(req: ScanRequest, state: Arc<Mutex<ScanState>>) {
                 title.title_name.clone()
             };
         }
-        match harvest(&req.addr, title) {
+        match harvest(&addr, title) {
             Ok(libs) if libs.is_empty() => state.lock().unwrap().without_libraries += 1,
             Ok(libs) => {
                 let count = libs.len();
@@ -313,7 +350,22 @@ fn harvest(addr: &str, title: &ScanTitle) -> anyhow::Result<Vec<IncomingLibrary>
     let dir = format!("{}/fakelib", title.source.trim_end_matches('/'));
     let listing = match list_dir(addr, &dir, ListDirOptions::default()) {
         Ok(l) => l,
-        Err(_) => return Ok(Vec::new()),
+        Err(e) => {
+            // A title with no `fakelib/` is the normal case — it simply has not
+            // been backported. But ANY other failure (console unreachable,
+            // wrong port, permission) used to return the same empty vec, so a
+            // scan that could not talk to the console at all reported every
+            // title as "not backported" and surfaced zero errors. That is how
+            // a fully-backported console scanned as "No backported games
+            // found". Tell the two apart by probing the title's own directory:
+            // if that lists, `fakelib/` is genuinely absent; if it does not,
+            // the console is the problem and the error must be reported.
+            let parent = title.source.trim_end_matches('/');
+            return match list_dir(addr, parent, ListDirOptions::default()) {
+                Ok(_) => Ok(Vec::new()),
+                Err(_) => Err(e.context(format!("listing {dir}"))),
+            };
+        }
     };
     let mut out = Vec::new();
     for entry in listing.entries {
@@ -350,7 +402,10 @@ pub struct SdkPairQuery {
 /// when the eboot is patched, so it cannot answer this.
 pub async fn title_sdk_pair(Query(q): Query<SdkPairQuery>) -> impl IntoResponse {
     let eboot = format!("{}/eboot.bin", q.path.trim_end_matches('/'));
-    let addr = q.addr.clone();
+    // Same contract as the scan: fs_read answers on the mgmt port, and callers
+    // pass a bare host or a :9113 transfer address. Without this the SDK-pair
+    // probe silently failed and every title looked "not backported".
+    let addr = fs_addr(&q.addr);
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<(u32, u32)>> {
         // The ELF walk needs only the header and entry table, so read a small
         // prefix rather than pulling a 50 MB eboot across the wire for 8 bytes.
