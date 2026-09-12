@@ -146,6 +146,10 @@ function useStatusPolling() {
   // that flap would re-fire the auto-loader in a loop. One fire per cooldown
   // window per host; a genuine later reconnect (past the window) fires again.
   const autoLoaderFiredAtRef = useRef<Record<string, number>>({});
+  // Wake-recovery upload resume: last ms we auto-resumed a host's failed
+  // uploads on its down→up edge. Same cooldown discipline as the auto-loader
+  // — a flapping helper must not loop-restart the queue.
+  const uploadResumeFiredAtRef = useRef<Record<string, number>>({});
   useEffect(() => {
     void getAppVersion()
       .then((v) => {
@@ -320,6 +324,32 @@ function useStatusPolling() {
                 "connection",
                 `auto-loader skipped on ${probedHost}: ${why}`,
               );
+            }
+
+            // Wake-recovery upload resume. The helper just came back (a real
+            // reconnect edge — the `prev !== "unknown"` guard above excludes
+            // app launch). A standby that outlasted the queue's own in-loop
+            // recovery budget (3 attempts, ~2 min) left rows terminally
+            // failed; re-drive the connection-class ones now that the console
+            // answers again, so an overnight-interrupted upload finishes on
+            // wake with no manual Retry. Gated by a per-host cooldown (a
+            // flapping helper must not loop the queue) and skipped while a
+            // transfer is live, matching the redeploy guard. The store no-ops
+            // unless the `autoResume` setting is on.
+            const resumedAt = uploadResumeFiredAtRef.current[key] ?? 0;
+            const resumeCooling = Date.now() - resumedAt < AUTO_LOADER_COOLDOWN_MS;
+            if (!resumeCooling && !transferScreenBusy(probedHost)) {
+              uploadResumeFiredAtRef.current[key] = Date.now();
+              void useUploadQueueStore
+                .getState()
+                .resumeFailedRecoverable(probedHost)
+                .then((n) => {
+                  if (n > 0)
+                    log.info(
+                      "connection",
+                      `wake resume: re-driving ${n} interrupted upload(s) on ${probedHost}`,
+                    );
+                });
             }
           }
         }

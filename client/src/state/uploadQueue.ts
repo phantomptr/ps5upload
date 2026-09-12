@@ -56,6 +56,7 @@ import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import { effectiveUploadStreams } from "../lib/uploadStreams";
 import {
   autoRecoverBackoffMs,
+  isAutoRecoverable,
   MAX_AUTO_RECOVER_ATTEMPTS,
   PostUploadStepError,
   shouldAutoRecover,
@@ -284,6 +285,17 @@ interface QueueState {
   retryFailed: () => void;
   /** Retry one failed row. Returns false when the row is missing/not failed. */
   retryItem: (id: string) => boolean;
+  /** Re-drive one console's uploads that FAILED on a recoverable
+   *  (connection-class) error, then restart that console's drain loop.
+   *  This is the "slept past the in-loop recovery budget" case: a standby
+   *  outlasts the 3-attempt window, the row goes terminally failed, and the
+   *  helper is later restored on wake — but nothing re-runs the upload. Called
+   *  on the wake-recovery edge, it resumes those rows with no manual Retry.
+   *  Fatal failures (no-space, bad path) and post-commit failures are left
+   *  alone (same `isAutoRecoverable` policy the in-loop recovery uses), and
+   *  the whole thing no-ops unless the `autoResume` setting is on. Returns how
+   *  many rows it re-drove. */
+  resumeFailedRecoverable: (host: string) => Promise<number>;
   setContinueOnFailure: (b: boolean) => void;
   /** Start every console that has pending work, each in its own parallel
    *  drain loop (== "Start all"). */
@@ -1341,6 +1353,26 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
       }));
       scheduleSave();
       return true;
+    },
+
+    async resumeFailedRecoverable(host) {
+      if (!useUploadSettingsStore.getState().autoResume) return 0;
+      const h = hostOf(host);
+      const candidates = get().items.filter(
+        (it) =>
+          hostOf(it.addr) === h &&
+          it.status === "failed" &&
+          isAutoRecoverable(it.errorReason, it.error),
+      );
+      let resumed = 0;
+      for (const it of candidates) {
+        if (get().retryItem(it.id)) resumed += 1;
+      }
+      // Only spin up the drain loop when we actually reset a row — never
+      // start uploads a user merely queued but hasn't launched. startHost is
+      // guarded by its own generation counter, so a redundant call is a no-op.
+      if (resumed > 0) await get().startHost(host);
+      return resumed;
     },
 
     setContinueOnFailure(b) {

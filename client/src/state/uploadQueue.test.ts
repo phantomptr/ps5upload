@@ -1069,3 +1069,106 @@ describe("upload runner — ShadowMount+ hand-off (image + mountAfterUpload)", (
     expect(itemsByStatus("done")).toHaveLength(1);
   });
 });
+
+describe("resumeFailedRecoverable", () => {
+  beforeEach(() => {
+    installLocalStorageStub();
+    useUploadQueueStore.setState({
+      items: [],
+      running: false,
+      runningHosts: {},
+      loaded: true,
+    });
+    useUploadSettingsStore.setState({ autoResume: true });
+  });
+
+  /** Add a row, then force it to a failed state with the given failure
+   *  classification, and return its id. */
+  function failItem(
+    addr: string,
+    name: string,
+    opts: { reason?: string | null; message?: string | null },
+  ): string {
+    addItem(addr, name);
+    const item = useUploadQueueStore
+      .getState()
+      .items.find((i) => i.displayName === name)!;
+    useUploadQueueStore.setState((s) => ({
+      items: s.items.map((i) =>
+        i.id === item.id
+          ? {
+              ...i,
+              status: "failed" as const,
+              errorReason: opts.reason ?? null,
+              error: opts.message ?? null,
+            }
+          : i,
+      ),
+    }));
+    return item.id;
+  }
+
+  const byId = (id: string) =>
+    useUploadQueueStore.getState().items.find((i) => i.id === id)!;
+
+  it("re-drives only connection-class failures for the target host, then restarts it", async () => {
+    const startHost = vi.fn(async () => {});
+    useUploadQueueStore.setState({ startHost });
+
+    const recoverA = failItem("192.168.1.10:9113", "A-net", {
+      message: "connection refused",
+    });
+    const fatalA = failItem("192.168.1.10:9113", "A-space", {
+      reason: "no_space",
+    });
+    const recoverB = failItem("192.168.1.20:9113", "B-net", {
+      message: "connection reset",
+    });
+
+    const n = await useUploadQueueStore
+      .getState()
+      .resumeFailedRecoverable("192.168.1.10:9113");
+
+    expect(n).toBe(1);
+    expect(byId(recoverA).status).toBe("pending"); // resumed
+    expect(byId(fatalA).status).toBe("failed"); // fatal → left alone
+    expect(byId(recoverB).status).toBe("failed"); // other host → untouched
+    expect(startHost).toHaveBeenCalledTimes(1);
+    expect(startHost).toHaveBeenCalledWith("192.168.1.10:9113");
+  });
+
+  it("no-ops and never starts the queue when autoResume is off", async () => {
+    const startHost = vi.fn(async () => {});
+    useUploadQueueStore.setState({ startHost });
+    useUploadSettingsStore.setState({ autoResume: false });
+
+    const id = failItem("192.168.1.10:9113", "A", {
+      message: "connection refused",
+    });
+
+    const n = await useUploadQueueStore
+      .getState()
+      .resumeFailedRecoverable("192.168.1.10:9113");
+
+    expect(n).toBe(0);
+    expect(byId(id).status).toBe("failed");
+    expect(startHost).not.toHaveBeenCalled();
+  });
+
+  it("does not restart the drain when only fatal failures remain", async () => {
+    const startHost = vi.fn(async () => {});
+    useUploadQueueStore.setState({ startHost });
+
+    const id = failItem("192.168.1.10:9113", "A", {
+      reason: "path_not_allowed",
+    });
+
+    const n = await useUploadQueueStore
+      .getState()
+      .resumeFailedRecoverable("192.168.1.10:9113");
+
+    expect(n).toBe(0);
+    expect(byId(id).status).toBe("failed");
+    expect(startHost).not.toHaveBeenCalled();
+  });
+});
