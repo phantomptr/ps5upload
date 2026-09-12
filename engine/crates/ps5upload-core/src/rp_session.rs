@@ -21,6 +21,23 @@
 //!   with a key derived from that nonce and the console's **RP-Key**. When
 //!   the console accepts it, it logs the user in.
 //!
+//! **The ordering is the whole trick, and it is not obvious.** A console
+//! still in standby answers session-init and hands out a nonce, but resets
+//! the ctrl connection because it has not finished booting. Retrying the pair
+//! together throws that nonce away — and by the second attempt the console has
+//! woken and reserved its Remote Play session for the wake, so session-init
+//! returns `0x80108b10` IN_USE and never recovers. We lock ourselves out of a
+//! session we were already granted. So: take the nonce ONCE, then retry only
+//! the ctrl connection until the console is up. Measured on FW 9.60,
+//! 2026-09-12 — init at ddp=620 returns 200 + nonce; 5 s later, awake, the
+//! same request is IN_USE and stays that way for as long as you poll it.
+//!
+//! Verified 5/5 on FW 9.60 (wake from cold rest to signed-in, 10-17 s).
+//! FW 5.10 still does NOT sign in this way: it accepts the ctrl connection,
+//! stays silent, and closes it after ~30-40 s. That console most likely wants
+//! the stream stage a real client sets up next (SESSION_ID -> Senkusha ->
+//! Takion), which we do not build. See issue #318.
+//!
 //! Both keys — the registration key and the RP-Key ("morning") — come from
 //! a pairing. We do not mint them here; they are supplied by the caller,
 //! harvested from an existing pairing the same way the wake credential is.
@@ -32,6 +49,7 @@ use std::time::Duration;
 use aes::cipher::KeyIvInit;
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine as _;
+use sha2::{Digest, Sha256};
 
 use crate::rp_regist::{generate_iv, resolve, split_http};
 use crate::rp_regist_keys::{PS5_AUTH_NONCE_KEY, PS5_AUTH_SEED_KEY};
@@ -119,13 +137,21 @@ fn b64(data: &[u8]) -> String {
 
 /// A 32-byte device id: a fixed prefix and suffix around random bytes. The
 /// console does not check the random part; the shape is what matters.
-fn make_did() -> [u8; 32] {
+fn make_did(regist_key: &[u8; KEY_SIZE]) -> [u8; 32] {
     let mut did = [0u8; 32];
     did[..10].copy_from_slice(&[0x00, 0x18, 0x00, 0x00, 0x00, 0x07, 0x00, 0x40, 0x00, 0x80]);
-    // 16 random bytes between the 10-byte prefix and the 6-byte (zero) suffix.
-    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-        let _ = f.read_exact(&mut did[10..26]);
-    }
+    // The middle 16 bytes identify THIS client to the console, and they must be
+    // stable: a real Remote Play client has one device id for the life of its
+    // registration. They used to be freshly random per connection, so every
+    // attempt introduced itself as a brand-new device — and a console that has
+    // reserved its Remote Play session for the device it woke for then refuses
+    // the newcomer as "already in use" (0x80108b10), which is exactly the
+    // wake-then-sign-in failure on FW 9.60.
+    //
+    // Deriving them from the registration key gives one id per console with
+    // nothing to persist, and it changes only if the console is re-registered.
+    let digest = Sha256::digest(regist_key);
+    did[10..26].copy_from_slice(&digest[..16]);
     // did[26..32] stays zero — the suffix.
     did
 }
@@ -212,7 +238,7 @@ fn ctrl_connect(
     };
 
     let auth_b64 = next(&creds.regist_key);
-    let did = make_did();
+    let did = make_did(&creds.regist_key);
     let did_b64 = next(&did);
     // OSType is a NUL-terminated string; the terminator is part of the input.
     let ostype = b"Win10.0.0\0";
@@ -310,6 +336,16 @@ fn ctrl_connect(
     result
 }
 
+/// The console's "this session is properly established" marker.
+///
+/// We used to ignore it, and that was the bug: the old design assumed simply
+/// opening the ctrl connection signed the user in, so it held for a fixed 12 s
+/// and hoped. Measured on hardware (FW 5.10): ctrl established, keys accepted,
+/// no LOGIN ever arrived, nobody signed in. A real client treats SESSION_ID as
+/// the point the session is READY (cf. pyremoteplay, GPL-3.0) and only then
+/// moves on to the stream. Waiting for this signal instead of a timer is the
+/// difference between "we connected" and "the console accepted the session".
+const CTRL_SESSION_ID: u16 = 0x0033;
 const CTRL_LOGIN: u16 = 0x0005;
 const CTRL_LOGIN_PIN_REQ: u16 = 0x0004;
 const CTRL_HEARTBEAT_REQ: u16 = 0x00fe;
@@ -354,7 +390,6 @@ fn hold_control_session(
     // hardware — decrypting the LOGIN message at 0 gives garbage, at 1 gives
     // the real state byte (0 = signed in).
     let mut remote_counter = 1u64;
-    let mut login_confirmed = false;
     let started = std::time::Instant::now();
     let deadline = started + hold;
     // Once the console reports success, hold a short grace answering heartbeats
@@ -362,6 +397,11 @@ fn hold_control_session(
     // need to wait out the full timeout.
     let grace_after_login = Duration::from_secs(3);
     let mut login_at: Option<std::time::Instant> = None;
+    // Either signal means the console took the session: LOGIN is it announcing
+    // a sign-in transition, SESSION_ID is it declaring the session live. A
+    // console that woke already signed in has no transition to announce, so
+    // LOGIN alone is not something we can wait for.
+    let mut established_at: Option<std::time::Instant> = None;
     stream
         .set_read_timeout(Some(Duration::from_millis(500)))
         .ok();
@@ -399,7 +439,6 @@ fn hold_control_session(
                 ),
                 CTRL_LOGIN => {
                     if payload.first() == Some(&CTRL_LOGIN_STATE_SUCCESS) {
-                        login_confirmed = true;
                         login_at.get_or_insert_with(std::time::Instant::now);
                     } else {
                         bail!(
@@ -407,6 +446,9 @@ fn hold_control_session(
                             payload.first()
                         );
                     }
+                }
+                CTRL_SESSION_ID => {
+                    established_at.get_or_insert_with(std::time::Instant::now);
                 }
                 CTRL_HEARTBEAT_REQ => {
                     // Reply keeps the session (and the sign-in) alive. Empty
@@ -425,19 +467,27 @@ fn hold_control_session(
 
         // Done as soon as the sign-in is confirmed and has been held through
         // its grace period; otherwise keep going until the overall deadline.
-        if let Some(at) = login_at {
+        if let Some(at) = login_at.or(established_at) {
             if at.elapsed() >= grace_after_login {
                 return Ok(());
             }
         }
         if std::time::Instant::now() >= deadline {
-            if !login_confirmed {
-                bail!(
-                    "held the control session but the console never confirmed the \
-                     sign-in — it may have a login passcode, or the RP-Key is wrong"
-                );
-            }
-            return Ok(());
+            // No LOGIN arrived. We genuinely do not know whether the user was
+            // signed in, so say exactly that — an earlier revision of this
+            // returned Ok() here, which reported "signed in" for consoles that
+            // were still sitting on user-select. A claim we cannot back is
+            // worse than an honest "could not confirm".
+            //
+            // Not a wrong RP-Key, whatever the old message said: a bad key is
+            // refused at ctrl connect with a 403, long before we hold the
+            // session. Reaching here means the keys authenticated.
+            bail!(
+                "the console accepted the control session (so the keys are right) but \
+                 never declared it live — no SESSION_ID and no LOGIN arrived in {}s, so \
+                 the sign-in did not happen.",
+                hold.as_secs()
+            );
         }
         match stream.read(&mut tmp) {
             Ok(0) => bail!("the console closed the control session before sign-in settled"),
@@ -460,11 +510,21 @@ fn hold_control_session(
 /// side effect that matters — the user is signed in; we do not stream.
 /// How long to hold the control session so the sign-in commits and sticks
 /// after we disconnect. Long enough to answer a couple of heartbeats.
-const SIGN_IN_HOLD: Duration = Duration::from_secs(12);
+/// Upper bound on waiting for the console to declare the session live. We
+/// return as soon as SESSION_ID (or LOGIN) lands plus its grace, so this only
+/// bounds the failure case.
+const SIGN_IN_HOLD_DEFAULT_S: u64 = 30;
 
-pub fn login_session(host: &str, creds: &SessionCreds) -> Result<()> {
-    let nonce = session_init(host, &creds.regist_key)?;
-    ctrl_connect(host, creds, &nonce, SIGN_IN_HOLD)
+/// How long to wait for the console to declare the session live. Overridable
+/// only so a console that behaves differently can be characterised without a
+/// rebuild; the default is what ships.
+fn sign_in_hold() -> Duration {
+    Duration::from_secs(
+        std::env::var("PS5UPLOAD_SIGNIN_HOLD_S")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(SIGN_IN_HOLD_DEFAULT_S),
+    )
 }
 
 /// Wait until the console is answering on the session port, then sign in.
@@ -473,37 +533,171 @@ pub fn login_session(host: &str, creds: &SessionCreds) -> Result<()> {
 /// session request; polling `login_session` is how we bridge that. Returns
 /// once the sign-in succeeds, or errors if the console never becomes ready
 /// or refuses the session within `timeout`.
+/// Retry pacing for a waking console: a steady 2 s, deliberately NOT backing
+/// off. A console accepts session-init only during a narrow window while it
+/// boots; measured 2026-09-12, polling every 2 s caught it (sign-in in 12 s)
+/// while an exponential backoff (2→4→8→16→20 s) stepped straight over it and
+/// failed the whole 90 s budget every time. Gentler is not better here.
+const RETRY_FIRST: Duration = Duration::from_secs(2);
+const RETRY_MAX: Duration = Duration::from_secs(2);
+
+/// Is this refusal "the console is not ready yet" rather than "this will never
+/// work"?
+///
+/// A waking console goes through several distinct not-ready states before it
+/// will sign anyone in, and each looks different:
+///   * connection-level errors — the network stack is not up yet;
+///   * `80108b10` (IN_USE) — the wake briefly reserves the Remote Play
+///     session and the console releases it a few seconds later;
+///   * `80108bff` — session-init succeeds and hands out a nonce, but the ctrl
+///     connection is refused while the console finishes booting. Measured on
+///     hardware: the same console with the same keys signed in normally once
+///     it had settled. This one was missing, so the first refusal after a wake
+///     ended the attempt and told the user their RP-Key was wrong.
+///
+/// A login passcode or a rejected sign-in is final: retrying cannot help, and
+/// pretending otherwise just delays a real answer.
+fn is_transient_session_error(msg: &str) -> bool {
+    msg.contains("connecting")
+        || msg.contains("Connection refused")
+        || msg.contains("reading")
+        || msg.contains("timed out")
+        || msg.contains("sent no response")
+        || msg.contains("80108b10")
+        || msg.contains("80108bff")
+        // A console that has not finished booting resets the ctrl connection
+        // rather than answering it. Measured: attempt #1 against a standby
+        // console returns this in under a second.
+        || msg.contains("Connection reset")
+        || msg.contains("sent no response")
+}
+
 pub fn login_session_when_ready(host: &str, creds: &SessionCreds, timeout: Duration) -> Result<()> {
     let deadline = std::time::Instant::now() + timeout;
+    let mut backoff = RETRY_FIRST;
+
+    // Get the nonce ONCE and keep it.
+    //
+    // A console still in standby answers session-init and hands out a nonce,
+    // but resets the ctrl connection because it is not up yet. The old loop
+    // retried `login_session` — init AND ctrl — so it threw that nonce away and
+    // asked for another, by which time the console had woken and reserved its
+    // Remote Play session for the wake: every retry then got 0x80108b10
+    // IN_USE. We locked ourselves out of a session we had already been granted.
+    //
+    // Measured 2026-09-12 on FW 9.60: init at ddp=620 returns 200 + nonce;
+    // 5 s later, awake, the same request is IN_USE and stays that way.
+    // So: one init, then retry only the ctrl connection until the console has
+    // finished booting.
+    let mut nonce = None;
     loop {
-        let err = match login_session(host, creds) {
-            Ok(()) => return Ok(()),
-            Err(e) => e,
+        let err = match nonce {
+            None => match session_init(host, &creds.regist_key) {
+                Ok(n) => {
+                    nonce = Some(n);
+                    continue;
+                }
+                Err(e) => e,
+            },
+            Some(n) => match ctrl_connect(host, creds, &n, sign_in_hold()) {
+                Ok(()) => return Ok(()),
+                Err(e) => e,
+            },
         };
-        // Some refusals are final (wrong key, a login passcode) and some are
-        // just "not ready yet". A connection-level failure is the console
-        // still booting. And `80108b10` (IN_USE) right after a wake is
-        // transient too: the wake briefly reserves the Remote Play session,
-        // and the console clears it a few seconds later — measured, the manual
-        // flow that waited longer never hit it. Retry both; a genuine
-        // rejection, or running out of time, stops us and surfaces the reason.
         let msg = format!("{err:#}");
-        let transient = msg.contains("connecting")
-            || msg.contains("Connection refused")
-            || msg.contains("reading")
-            || msg.contains("timed out")
-            || msg.contains("sent no response")
-            || msg.contains("80108b10"); // IN_USE — still settling
-        if !transient || std::time::Instant::now() >= deadline {
+        if !is_transient_session_error(&msg) || std::time::Instant::now() >= deadline {
+            // A console whose Remote Play stayed busy for the whole budget is
+            // not going to free it on its own. Measured on hardware: once it
+            // wedges, two consecutive full budgets both failed and only a
+            // console restart cleared it, after which sign-in took 5 s. Say
+            // that, instead of repeating a code the user cannot act on.
+            if msg.contains("80108b10") {
+                // Measured, not guessed (2026-09-12, FW 9.60): once the
+                // console reaches this state it does NOT recover on its own —
+                // it was still refusing after 10 minutes of polling. A restart
+                // released it immediately and the next sign-in took 5 s. So
+                // say "restart", not "wait a bit".
+                bail!(
+                    "the console reserved its Remote Play session for the wake and has not \
+                     released it (waited {}s), so it will not sign anyone in. Use \
+                     \"Cancel Remote Play\" on this console, or put it back into rest and \
+                     wake it again. See issue #318.",
+                    timeout.as_secs()
+                );
+            }
             return Err(err);
         }
-        std::thread::sleep(Duration::from_secs(2));
+        // Back off rather than hammer. A fixed 2 s gap meant ~45 session-init
+        // requests per attempt at a console that was already refusing them,
+        // which is exactly the pressure that leaves Remote Play wedged.
+        std::thread::sleep(backoff.min(RETRY_MAX));
+        backoff = (backoff * 2).min(RETRY_MAX);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_device_id_is_stable_per_console() {
+        // It used to be random per connection, so every sign-in attempt looked
+        // like a different device to the console — the suspected cause of a
+        // console refusing the second client with 0x80108b10 after it had
+        // reserved its Remote Play session for the wake.
+        let a = [0x11u8; KEY_SIZE];
+        let b = [0x22u8; KEY_SIZE];
+        assert_eq!(make_did(&a), make_did(&a), "same console, same id");
+        assert_ne!(make_did(&a), make_did(&b), "different consoles differ");
+        // The fixed prefix/suffix the console expects must survive.
+        let did = make_did(&a);
+        assert_eq!(
+            &did[..10],
+            &[0x00, 0x18, 0x00, 0x00, 0x00, 0x07, 0x00, 0x40, 0x00, 0x80]
+        );
+        assert_eq!(&did[26..], &[0u8; 6]);
+    }
+
+    #[test]
+    fn the_ctrl_message_types_match_a_real_client() {
+        // Pinned against a working GPL-3.0 implementation (pyremoteplay). The
+        // one that used to be missing is SESSION_ID: without it we waited on a
+        // timer instead of the console's own "session is live" signal, and a
+        // console that never sent LOGIN looked like a failure while actually
+        // just never being asked properly.
+        assert_eq!(CTRL_LOGIN_PIN_REQ, 0x0004);
+        assert_eq!(CTRL_LOGIN, 0x0005);
+        assert_eq!(CTRL_SESSION_ID, 0x0033);
+        assert_eq!(CTRL_HEARTBEAT_REQ, 0x00fe);
+        assert_eq!(CTRL_HEARTBEAT_REP, 0x01fe);
+    }
+
+    #[test]
+    fn a_still_booting_console_is_retried_not_blamed_on_the_key() {
+        // Measured on hardware 2026-09-12: after a network wake the console
+        // answers session-init but refuses the ctrl connection with 80108bff
+        // for the first few seconds. It was not in the retry set, so the very
+        // first refusal ended the attempt and told the user their RP-Key was
+        // wrong. The same console, same keys, signed in fine moments later.
+        assert!(is_transient_session_error(
+            "the console refused the control session (HTTP 403): 80108bff"
+        ));
+        // Already covered, and must stay covered.
+        assert!(is_transient_session_error(
+            "session init refused (HTTP 403): 80108b10"
+        ));
+        assert!(is_transient_session_error(
+            "connecting for ctrl: Connection refused"
+        ));
+        // A login passcode is genuinely final — retrying cannot help.
+        assert!(!is_transient_session_error(
+            "the account has a login passcode, so the console is waiting for it"
+        ));
+        // So is an outright rejected sign-in.
+        assert!(!is_transient_session_error(
+            "the console rejected the sign-in (login state Some(2))"
+        ));
+    }
 
     // A fixed nonce/morning to pin the crypto so a table or transform change
     // is caught here rather than by a silent console refusal. The values are
@@ -555,16 +749,6 @@ mod tests {
         assert_eq!(a.len(), 16);
         // Same plaintext, different counter → different ciphertext (different IV).
         assert_ne!(a, b);
-    }
-
-    #[test]
-    fn the_device_id_has_the_fixed_frame() {
-        let did = make_did();
-        assert_eq!(
-            &did[..10],
-            &[0x00, 0x18, 0x00, 0x00, 0x00, 0x07, 0x00, 0x40, 0x00, 0x80]
-        );
-        assert_eq!(&did[26..], &[0u8; 6]);
     }
 
     #[test]

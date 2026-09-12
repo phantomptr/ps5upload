@@ -3021,7 +3021,12 @@ async fn ps5_power_wake_login(Json(req): Json<PowerWakeLoginReq>) -> impl IntoRe
         ps5upload_core::rp_session::login_session_when_ready(
             &host,
             &creds,
-            std::time::Duration::from_secs(90),
+            std::time::Duration::from_secs(
+                std::env::var("PS5UPLOAD_SIGNIN_BUDGET_S")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(90),
+            ),
         )
     })
     .await
