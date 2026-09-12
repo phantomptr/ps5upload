@@ -12,10 +12,10 @@
 //! importer at a pack folder silently produced a set mixing all of them
 //! together, which is a combination no game has ever run.
 //!
-//! The roles were widened after a SECOND pack was examined. The first sample
-//! (PPSA19534) had only `fakelib/`, `eboot.bin` and `sce_module/`; the second
-//! (PPSA29343) also ships 26 Wwise plugins under `prx/`. A classifier built
-//! from one pack dropped all of them.
+//! Packs vary in what they carry: some ship only `fakelib/`, `eboot.bin` and
+//! `sce_module/`, others add dozens of engine plugins under `prx/`. Every
+//! installable role below has to be recognised or those files are silently
+//! left behind.
 
 use std::path::{Path, PathBuf};
 
@@ -224,8 +224,8 @@ mod tests {
 
     #[test]
     fn only_fakelib_contents_are_libraries() {
-        // The whole point: every one of these ends in .sprx/.prx, and the
-        // extension-only check that predates this counted them all.
+        // Every one of these ends in .sprx/.prx, so an extension-only check
+        // would sweep them all into the library set.
         assert_eq!(classify("fakelib/libSceAgc.sprx"), PackRole::Library);
         assert_eq!(classify("sce_module/libc.prx"), PackRole::SceModule);
         assert_eq!(
@@ -240,8 +240,8 @@ mod tests {
 
     #[test]
     fn game_plugins_under_prx_are_installed_not_dropped() {
-        // Found by examining a SECOND pack: PPSA29343 ships 26 of these, and
-        // the first classifier put every one in `other`, i.e. never installed.
+        // Some packs ship dozens of these; they must be installed, not
+        // dropped as unrecognised.
         assert_eq!(classify("prx/akdelay.prx"), PackRole::GamePrx);
         assert_eq!(classify("prx/masteringsuite.prx"), PackRole::GamePrx);
         assert!(PackRole::GamePrx.is_installable());
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn inspect_sorts_a_real_pack_layout() {
-        // Shaped like PPSA29343, the richer of the two real packs.
+        // The richer pack shape: every role present at once.
         let dir = std::env::temp_dir().join(format!("packtest-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         for sub in ["fakelib", "sce_module", "prx", "sce_sys/about"] {

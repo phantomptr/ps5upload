@@ -2744,9 +2744,14 @@ helper_mismatch_go: "Tải lại trợ giúp",
 "cheats_filter_count": "{shown} trên {total}",
 "cheats_filter_none": "Không có cheat nào khớp với các bộ lọc này. Hãy bỏ bớt một bộ lọc để xem thêm.",
 "power_action_wake": "Đánh thức",
-"power_wake_hint": "Gửi gói Wake-on-LAN tới {mac}. Yêu cầu bật tùy chọn khởi động PS5 qua mạng trên máy.",
 "power_wake_sent": "Đã gửi tín hiệu đánh thức",
-"power_wake_sent_body": "Nếu máy không khởi động, hãy bật Cài đặt → Hệ thống → Tiết kiệm điện → Tính năng khả dụng ở Chế độ nghỉ → Cho phép bật PS5 qua mạng.",
+"cheats_format_unsupported": "Chưa hỗ trợ",
+"cheats_format_unsupported_hint": "Cheat {format} được mã hóa và chưa thể đọc được. Cài đặt sẽ chỉ hiện «không tìm thấy cheat».",
+"power_wake_credential_placeholder": "user-credential",
+"power_wake_needs_credential": "Để đánh thức máy này, hãy dán user-credential Remote Play của nó:",
+"power_wake_save_credential": "Lưu",
+"power_wake_hint": "Đánh thức máy qua giao thức khám phá của Sony. Máy phải bật Remote Play.",
+"power_wake_sent_body": "Máy không xác nhận việc đánh thức. Nếu vẫn tắt, hãy kiểm tra Cài đặt → Hệ thống → Remote Play → Bật Remote Play.",
 };
 
 export default vi;

@@ -2689,9 +2689,14 @@ helper_mismatch_go: "Перезагрузить помощник",
 "cheats_filter_count": "{shown} из {total}",
 "cheats_filter_none": "Ни один чит не подходит под эти фильтры. Снимите один, чтобы увидеть больше.",
 "power_action_wake": "Включить",
-"power_wake_hint": "Отправляет пакет Wake-on-LAN на {mac}. На консоли должно быть включено включение PS5 по сети.",
 "power_wake_sent": "Сигнал включения отправлен",
-"power_wake_sent_body": "Если консоль не включилась, включите Настройки → Система → Энергосбережение → Функции, доступные в режиме покоя → Разрешить включение PS5 по сети.",
+"cheats_format_unsupported": "Пока не поддерживается",
+"cheats_format_unsupported_hint": "Читы {format} зашифрованы и пока не читаются. Установка покажет только «читы не найдены».",
+"power_wake_credential_placeholder": "user-credential",
+"power_wake_needs_credential": "Чтобы включить эту консоль, вставьте её user-credential из Remote Play:",
+"power_wake_save_credential": "Сохранить",
+"power_wake_hint": "Включает консоль по протоколу обнаружения Sony. На консоли должен быть включён Remote Play.",
+"power_wake_sent_body": "Консоль не подтверждает включение. Если она не включилась, проверьте Настройки → Система → Remote Play → Включить Remote Play.",
 };
 
 export default ru;

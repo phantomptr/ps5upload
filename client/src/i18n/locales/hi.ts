@@ -2779,9 +2779,14 @@ helper_mismatch_go: "हेल्पर फिर लोड करें",
 "cheats_filter_count": "{total} में से {shown}",
 "cheats_filter_none": "इन फ़िल्टरों से कोई चीट मेल नहीं खाती। अधिक देखने के लिए कोई एक फ़िल्टर हटाएँ।",
 "power_action_wake": "चालू करें",
-"power_wake_hint": "{mac} पर Wake-on-LAN पैकेट भेजता है। कंसोल पर नेटवर्क से PS5 चालू करने का विकल्प सक्षम होना चाहिए।",
 "power_wake_sent": "चालू करने का संकेत भेजा गया",
-"power_wake_sent_body": "यदि कंसोल चालू न हो, तो सेटिंग्स → सिस्टम → पावर सेविंग → रेस्ट मोड में उपलब्ध सुविधाएँ → नेटवर्क से PS5 चालू करना सक्षम करें।",
+"cheats_format_unsupported": "अभी समर्थित नहीं",
+"cheats_format_unsupported_hint": "{format} चीट एन्क्रिप्टेड हैं और अभी पढ़ी नहीं जा सकतीं। इंस्टॉल करने पर केवल «कोई चीट नहीं मिली» दिखेगा।",
+"power_wake_credential_placeholder": "user-credential",
+"power_wake_needs_credential": "इस कंसोल को चालू करने के लिए, इसका Remote Play user-credential पेस्ट करें:",
+"power_wake_save_credential": "सहेजें",
+"power_wake_hint": "सोनी के डिस्कवरी प्रोटोकॉल से कंसोल चालू करता है। कंसोल पर Remote Play सक्षम होना चाहिए।",
+"power_wake_sent_body": "कंसोल चालू होने की पुष्टि नहीं करता। अगर यह बंद ही रहे, तो सेटिंग्स → सिस्टम → Remote Play → Remote Play सक्षम करें देखें।",
 };
 
 export default hi;

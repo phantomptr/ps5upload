@@ -2780,9 +2780,14 @@ helper_mismatch_go: "헬퍼 다시 불러오기",
 "cheats_filter_count": "{total}개 중 {shown}개",
 "cheats_filter_none": "이 필터와 일치하는 치트가 없습니다. 필터를 하나 해제해 보세요.",
 "power_action_wake": "켜기",
-"power_wake_hint": "{mac} 으로 Wake-on-LAN 패킷을 보냅니다. 본체에서 네트워크로 PS5 켜기가 활성화되어 있어야 합니다.",
 "power_wake_sent": "켜기 신호를 보냈습니다",
-"power_wake_sent_body": "본체가 켜지지 않으면 설정 → 시스템 → 절전 → 휴식 모드 중 사용 가능한 기능 → 네트워크로 PS5 켜기를 활성화하세요.",
+"cheats_format_unsupported": "아직 지원되지 않음",
+"cheats_format_unsupported_hint": "{format} 치트는 암호화되어 있어 아직 읽을 수 없습니다. 설치해도 «치트를 찾을 수 없음»만 표시됩니다.",
+"power_wake_credential_placeholder": "user-credential",
+"power_wake_needs_credential": "이 본체를 켜려면 리모트 플레이의 user-credential 을 붙여넣으세요:",
+"power_wake_save_credential": "저장",
+"power_wake_hint": "소니의 검색 프로토콜로 본체를 켭니다. 본체에서 리모트 플레이가 켜져 있어야 합니다.",
+"power_wake_sent_body": "본체는 켜짐을 알려주지 않습니다. 켜지지 않으면 설정 → 시스템 → 리모트 플레이 → 리모트 플레이 사용을 확인하세요.",
 };
 
 export default ko;

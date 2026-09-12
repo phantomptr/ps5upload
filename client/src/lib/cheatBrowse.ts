@@ -1,12 +1,9 @@
 /** Browsing and naming for the cheats collection.
  *
- *  Two problems reported together in issue #315, with one shared cause: the
- *  repo index already knows far more than the UI was using. Every published
- *  index line is `<TITLE_ID>_<VERSION>[_variant].<ext>=<game name>`, so the
- *  game's name, its title id and the version a cheat was written for are all
- *  sitting there — the browser was showing the filename and the installed
- *  list was showing a bare title id.
- */
+ *  Every published index line is
+ *  `<TITLE_ID>_<VERSION>[_variant].<ext>=<game name>`, so the game's name, its
+ *  title id and the version a cheat targets are all derivable from the index
+ *  the browser already fetches. */
 
 import type { CheatRepoEntry } from "../api/ps5";
 
@@ -44,9 +41,8 @@ export function isUsableGameTitle(title: string | undefined): boolean {
  *
  *  1. the cheat file's own name — written by whoever made the cheat
  *  2. the game as installed on THIS console — matches what the player sees
- *  3. the repo index — covers games that are not installed, which is the
- *     case the reporter hit and the reason a name was missing at all
- *  4. the title id, unchanged from before
+ *  3. the repo index — covers games that are not installed on this console
+ *  4. the title id, when nothing better exists
  */
 export function resolveCheatName(
   titleId: string,
@@ -100,6 +96,18 @@ export function cheatFilterOptions(entries: CheatRepoEntry[]): {
     // their game could be on.
     versions: [...versions].sort().reverse(),
   };
+}
+
+/** Formats the console can actually read.
+ *
+ *  MC4 is encrypted XML and the payload has no decryption for it, so a
+ *  downloaded .mc4 installs fine and then shows "no cheats found" — which is
+ *  indistinguishable from a broken download. Roughly a quarter of the
+ *  published collection is MC4, so this is not a rare corner. */
+export const SUPPORTED_CHEAT_FORMATS = ["json", "shn"];
+
+export function isSupportedCheatFormat(format: string | undefined): boolean {
+  return SUPPORTED_CHEAT_FORMATS.includes((format ?? "").toLowerCase());
 }
 
 export function filterCheatEntries(

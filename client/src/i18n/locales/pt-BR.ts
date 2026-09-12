@@ -2777,9 +2777,14 @@ helper_mismatch_go: "Recarregar auxiliar",
 "cheats_filter_count": "{shown} de {total}",
 "cheats_filter_none": "Nenhum truque corresponde a esses filtros. Remova um para ver mais.",
 "power_action_wake": "Ligar",
-"power_wake_hint": "Envia um pacote Wake-on-LAN para {mac}. Requer que ligar o PS5 pela rede esteja ativado no console.",
 "power_wake_sent": "Sinal de ativação enviado",
-"power_wake_sent_body": "Se o console não ligar, ative Ajustes → Sistema → Economia de energia → Recursos disponíveis no modo de descanso → Permitir ligar o PS5 pela rede.",
+"cheats_format_unsupported": "Ainda não compatível",
+"cheats_format_unsupported_hint": "Truques {format} são criptografados e ainda não podem ser lidos. Instalar um mostraria apenas «nenhum truque encontrado».",
+"power_wake_credential_placeholder": "user-credential",
+"power_wake_needs_credential": "Para ligar este console, cole o user-credential do Remote Play:",
+"power_wake_save_credential": "Salvar",
+"power_wake_hint": "Liga o console pelo protocolo de descoberta da Sony. Requer Remote Play ativado no console.",
+"power_wake_sent_body": "O console não confirma a ativação. Se continuar desligado, verifique Ajustes → Sistema → Remote Play → Ativar Remote Play.",
 };
 
 export default pt_BR;

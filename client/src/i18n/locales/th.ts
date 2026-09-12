@@ -2769,9 +2769,14 @@ helper_mismatch_go: "โหลดตัวช่วยใหม่",
 "cheats_filter_count": "{shown} จาก {total}",
 "cheats_filter_none": "ไม่มีสูตรโกงที่ตรงกับตัวกรองเหล่านี้ ลองเอาตัวกรองออกสักอันเพื่อดูเพิ่มเติม",
 "power_action_wake": "ปลุกเครื่อง",
-"power_wake_hint": "ส่งแพ็กเก็ต Wake-on-LAN ไปยัง {mac} ต้องเปิดตัวเลือกเปิดเครื่อง PS5 ผ่านเครือข่ายบนเครื่องก่อน",
 "power_wake_sent": "ส่งสัญญาณปลุกแล้ว",
-"power_wake_sent_body": "หากเครื่องไม่เปิด ให้เปิด การตั้งค่า → ระบบ → การประหยัดพลังงาน → คุณสมบัติที่ใช้ได้ในโหมดพัก → เปิดใช้งานการเปิด PS5 ผ่านเครือข่าย",
+"cheats_format_unsupported": "ยังไม่รองรับ",
+"cheats_format_unsupported_hint": "สูตรโกงแบบ {format} ถูกเข้ารหัสและยังอ่านไม่ได้ การติดตั้งจะขึ้นว่า «ไม่พบสูตรโกง» เท่านั้น",
+"power_wake_credential_placeholder": "user-credential",
+"power_wake_needs_credential": "หากต้องการปลุกเครื่องนี้ ให้วาง user-credential ของ Remote Play:",
+"power_wake_save_credential": "บันทึก",
+"power_wake_hint": "ปลุกเครื่องผ่านโปรโตคอลค้นหาอุปกรณ์ของ Sony ต้องเปิด Remote Play บนเครื่องก่อน",
+"power_wake_sent_body": "เครื่องจะไม่ยืนยันการปลุก หากยังไม่เปิด ให้ตรวจสอบ การตั้งค่า → ระบบ → Remote Play → เปิดใช้งาน Remote Play",
 };
 
 export default th;

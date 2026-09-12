@@ -18,7 +18,7 @@ import { Button, Spinner } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useTr } from "../../state/lang";
 import { useEffect } from "react";
-import { netInterfacesGet, powerWake } from "../../api/ps5";
+import { ddpStatus, powerWake, type DdpStatus } from "../../api/ps5";
 import { useRosterStore } from "../../state/roster";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
@@ -44,52 +44,54 @@ export default function PowerControl({ host }: { host: string }) {
 
   const addr = mgmtAddr(host);
 
-  /* Learn the console's MAC while it is awake, so it can be woken later.
+  /* Whether the console is awake, asleep, or not answering.
    *
-   * Wake-on-LAN is the one power action the payload cannot perform — it is
-   * not running once the console suspends. The address therefore has to be
-   * captured in advance, and here is the natural place: this panel is on
-   * screen exactly when the console is reachable. Recorded once per profile;
-   * a failure is silent because nothing the user did has gone wrong. */
+   * Asked over the discovery protocol, which needs neither the payload nor a
+   * credential — so it can tell "the console is in standby" apart from "the
+   * helper is not running", which nothing else here can. */
   const profiles = useRosterStore((st) => st.profiles);
   const activeId = useRosterStore((st) => st.active_id);
-  const setMac = useRosterStore((st) => st.setMac);
+  const setWakeCredential = useRosterStore((st) => st.setWakeCredential);
   const profile = profiles.find((p) => p.id === activeId) ?? null;
-  const knownMac = profile?.mac ?? "";
+  const credential = profile?.wake_credential ?? "";
+  const [ddp, setDdp] = useState<DdpStatus | null>(null);
+  const [credentialDraft, setCredentialDraft] = useState("");
 
   useEffect(() => {
-    if (!host || !profile || knownMac) return;
-    void (async () => {
+    if (!host) return;
+    let cancelled = false;
+    const tick = async () => {
       try {
-        const r = await netInterfacesGet(mgmtAddr(host));
-        const wired = (r.interfaces ?? []).find(
-          (i) => i.mac && i.mac !== "00:00:00:00:00:00" && i.ipv4 && i.ipv4 !== "0.0.0.0",
-        );
-        if (wired?.mac) setMac(profile.id, wired.mac);
+        const s = await ddpStatus(host);
+        if (!cancelled) setDdp(s);
       } catch {
-        // Console asleep or payload down — nothing to record, and nothing
-        // the user needs told about.
+        if (!cancelled) setDdp(null);
       }
-    })();
-  }, [host, profile, knownMac, setMac]);
+    };
+    void tick();
+    const id = setInterval(() => void tick(), 15000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [host]);
+
+  const inStandby = ddp?.code === 620;
 
   async function runWake() {
-    if (!knownMac) return;
+    if (!credential) return;
     setBusy("wake");
     setError(null);
     try {
-      const r = await powerWake(knownMac, host);
-      // Deliberately not "waking up": the packet is fire-and-forget UDP and
-      // the console ignores it unless the user enabled waking from network.
+      await powerWake(host, credential);
+      // Not "waking up": the console never acknowledges, and ignores the
+      // request entirely unless Remote Play is enabled.
       pushNotification(
         "info",
         tr("power_wake_sent", undefined, "Wake signal sent"),
         {
           body: tr("power_wake_sent_body", undefined,
-            "If the console does not come up, turn on Settings → System → Power Saving → Features Available in Rest Mode → Enable Turning On PS5 from Network."),
+            "The console does not confirm a wake. If it stays asleep, check Settings → System → Remote Play → Enable Remote Play."),
         },
       );
-      audit("system_wake", withConsolePrefix(host, `wake packet sent (${r.packets_sent ?? 0})`));
+      audit("system_wake", withConsolePrefix(host, "wake request sent"));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -200,7 +202,7 @@ export default function PowerControl({ host }: { host: string }) {
         {/* Wake is offered only once we have recorded a MAC, which happens
             the first time the console is reachable. Showing a dead button
             before then would promise something that cannot work. */}
-        {knownMac ? (
+        {inStandby && credential ? (
           <Button
             variant="secondary"
             size="sm"
@@ -209,8 +211,8 @@ export default function PowerControl({ host }: { host: string }) {
             leftIcon={
               busy === "wake" ? <Spinner size={12} tone="inherit" /> : <Power size={12} />
             }
-            title={tr("power_wake_hint", { mac: knownMac },
-              `Sends a Wake-on-LAN packet to ${knownMac}. Requires "Enable Turning On PS5 from Network" on the console.`)}
+            title={tr("power_wake_hint", undefined,
+              "Wakes the console over Sony's discovery protocol. Requires Remote Play enabled on the console.")}
           >
             {tr("power_action_wake", undefined, "Wake")}
           </Button>
@@ -291,6 +293,36 @@ export default function PowerControl({ host }: { host: string }) {
           {tr("power_action_shutdown", undefined, "Shut down")}
         </Button>
       </div>
+
+      {/* Only when it can change the outcome: the console is asleep and we
+          have no way to wake it. A credential cannot be derived — it has to
+          be read out of the Remote Play app's own traffic. */}
+      {inStandby && !credential ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-[var(--color-muted)]">
+            {tr("power_wake_needs_credential", undefined,
+              "To wake this console, paste its Remote Play user-credential:")}
+          </span>
+          <input
+            className="input py-1 text-xs"
+            style={{ width: "auto", minWidth: "12rem" }}
+            placeholder={tr("power_wake_credential_placeholder", undefined, "user-credential")}
+            value={credentialDraft}
+            onChange={(e) => setCredentialDraft(e.target.value)}
+          />
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={!credentialDraft.trim() || !profile}
+            onClick={() => {
+              if (profile) setWakeCredential(profile.id, credentialDraft);
+              setCredentialDraft("");
+            }}
+          >
+            {tr("power_wake_save_credential", undefined, "Save")}
+          </Button>
+        </div>
+      ) : null}
       {last && (
         <div className="mt-2 flex items-start gap-1.5 text-xs">
           <CheckCircle2

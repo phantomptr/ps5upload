@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   cheatFilterOptions,
   filterCheatEntries,
+  isSupportedCheatFormat,
   NO_CHEAT_FILTERS,
   type CheatFilters,
 } from "../../lib/cheatBrowse";
@@ -385,7 +386,15 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
                         {e.format}
                       </span>
                     </div>
-                    {downloaded.has(e.filename) ? (
+                    {!isSupportedCheatFormat(e.format) ? (
+                      <span
+                        className="flex-shrink-0 text-xs text-[var(--color-muted)]"
+                        title={tr("cheats_format_unsupported_hint", { format: e.format.toUpperCase() },
+                          `${e.format.toUpperCase()} cheats are encrypted and cannot be read yet. Installing one would show "no cheats found".`)}
+                      >
+                        {tr("cheats_format_unsupported", undefined, "Not supported yet")}
+                      </span>
+                    ) : downloaded.has(e.filename) ? (
                       <span className="flex flex-shrink-0 items-center gap-1.5 text-sm font-medium text-[var(--color-good)]">
                         <CheckCircle2 size={16} />
                         {tr("cheats_installed", undefined, "Installed")}

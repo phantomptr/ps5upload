@@ -151,9 +151,8 @@ export function planPackInstall(
     const name = base(mod.relPath);
     add(mod, `${dest}/sce_module/${name}`, existing.sceModule.includes(name), `sce_module__${name}`);
   }
-  // Found by inspecting a second real pack: the first one shipped none of
-  // these, and a classifier built from that single sample dropped all 26 of
-  // the next pack's engine plugins on the floor.
+  // The game's own engine plugins. A pack that ships them expects them
+  // installed alongside the libraries.
   for (const plugin of pack.gamePrx) {
     const name = base(plugin.relPath);
     add(plugin, `${dest}/prx/${name}`, existing.gamePrx.includes(name), `prx__${name}`);

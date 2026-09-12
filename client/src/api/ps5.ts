@@ -2094,33 +2094,50 @@ export async function powerShutdown(addr: string): Promise<PowerControlAck> {
   return invoke<PowerControlAck>("power_shutdown", { addr });
 }
 
-/** Wake a sleeping console with a Wake-on-LAN magic packet.
+/** Wake a console in standby, over Sony's Device Discovery Protocol.
  *
- *  A direct engine call rather than a Tauri command, because it is the one
- *  power action that has nothing to do with the payload: the payload is not
- *  running when the console is asleep, so the packet goes out from the host.
- *  Direct fetch also means the browser build gets it for free.
+ *  Not Wake-on-LAN — a PS5 does not wake from a magic packet. This speaks the
+ *  protocol the PS Remote Play app uses, which needs a `user-credential` the
+ *  user captures from that app, and "Enable Remote Play" on the console.
  *
- *  A resolved promise means the packet was SENT, not that the console woke.
- *  Wake-on-LAN is fire-and-forget UDP and the console ignores it unless
- *  "Enable turning on PS5 from network" is switched on, so callers must not
- *  report success as "it is waking up". */
+ *  A resolved promise means the datagram was sent. The console never
+ *  acknowledges a wake, so callers must not report it as "waking up". */
 export async function powerWake(
-  mac: string,
-  lastKnownHost: string,
-): Promise<{ ok: boolean; packets_sent?: number; error?: string }> {
+  host: string,
+  credential: string,
+): Promise<{ ok: boolean; error?: string }> {
   const res = await fetch(`${getEngineUrl()}/api/ps5/power/wake`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ mac, host: lastKnownHost }),
+    body: JSON.stringify({ host, credential }),
   });
-  const body = (await res.json().catch(() => ({}))) as {
-    ok?: boolean;
-    packets_sent?: number;
-    error?: string;
-  };
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
   if (!res.ok) throw new Error(body.error || `wake failed (${res.status})`);
-  return { ok: !!body.ok, packets_sent: body.packets_sent };
+  return { ok: !!body.ok };
+}
+
+/** Is the console awake, in standby, or not answering?
+ *
+ *  Needs neither a credential nor the payload, so it can tell "console is
+ *  asleep" apart from "the helper is not running" — which nothing else can. */
+export interface DdpStatus {
+  code: number;
+  status_text: string;
+  host_id: string;
+  host_name: string;
+  host_type: string;
+  system_version: string;
+  running_app_name: string;
+  running_app_titleid: string;
+  error?: string;
+}
+
+export async function ddpStatus(host: string): Promise<DdpStatus> {
+  const res = await fetch(
+    `${getEngineUrl()}/api/ps5/power/ddp-status?host=${encodeURIComponent(host)}`,
+  );
+  if (!res.ok) throw new Error(`ddp status failed (${res.status})`);
+  return (await res.json()) as DdpStatus;
 }
 
 /** One row in the process manager. `kind` drives the UI's filter + kill

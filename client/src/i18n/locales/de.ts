@@ -2750,9 +2750,14 @@ helper_mismatch_go: "Helfer neu laden",
 "cheats_filter_count": "{shown} von {total}",
 "cheats_filter_none": "Keine Cheats passen zu diesen Filtern. Entferne einen, um mehr zu sehen.",
 "power_action_wake": "Aufwecken",
-"power_wake_hint": "Sendet ein Wake-on-LAN-Paket an {mac}. Erfordert, dass auf der Konsole das Einschalten der PS5 über das Netzwerk aktiviert ist.",
 "power_wake_sent": "Aufwecksignal gesendet",
-"power_wake_sent_body": "Falls die Konsole nicht startet, aktiviere Einstellungen → System → Energiesparen → Im Ruhemodus verfügbare Funktionen → Einschalten der PS5 über das Netzwerk.",
+"cheats_format_unsupported": "Noch nicht unterstützt",
+"cheats_format_unsupported_hint": "{format}-Cheats sind verschlüsselt und können noch nicht gelesen werden. Eine Installation würde nur „keine Cheats gefunden“ anzeigen.",
+"power_wake_credential_placeholder": "user-credential",
+"power_wake_needs_credential": "Zum Aufwecken dieser Konsole die Remote-Play-user-credential einfügen:",
+"power_wake_save_credential": "Speichern",
+"power_wake_hint": "Weckt die Konsole über Sonys Discovery-Protokoll. Remote Play muss auf der Konsole aktiviert sein.",
+"power_wake_sent_body": "Die Konsole bestätigt ein Aufwecken nicht. Bleibt sie aus, prüfe Einstellungen → System → Remote Play → Remote Play aktivieren.",
 };
 
 export default de;

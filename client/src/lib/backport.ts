@@ -94,13 +94,10 @@ export function sourceTitleId(set: FakelibSet): string | null {
 
 /** Is this set known to have run `titleId` — anywhere?
  *
- *  `sourceTitleId` answers only "was it HARVESTED from that title", which is
- *  the wrong question once sets are content-addressed. Measured: the corpus
- *  recorded set-4 as running PPSA25411 on a Pro, but its ORIGIN is Battlefield
- *  6, so the ranking gave it no preference for PPSA25411 — while a 2-library
- *  set scraped off the same game's un-backported copy, whose origin did match,
- *  ranked first and could never work. Observations are exactly the evidence
- *  that makes a second console worth scanning, so the boost must read them. */
+ *  `sourceTitleId` answers only "was it harvested from that title", which is
+ *  the wrong question once sets are content-addressed: the set a second
+ *  console runs for a game is just as much evidence as the one scraped from
+ *  it, and often better. Ranking reads both. */
 export function setCoversTitle(set: FakelibSet, titleId: string | undefined): boolean {
   if (!titleId) return false;
   if (sourceTitleId(set) === titleId) return true;

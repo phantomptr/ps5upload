@@ -61,14 +61,14 @@ export interface PS5Profile {
    *  No length limit at the type level; UI textarea soft-limits to
    *  ~500 chars to keep the picker tooltip legible. */
   notes?: string | null;
-  /** The console's MAC, learned from `net_interfaces_get` while it was
-   *  awake and kept so it can be woken later.
+  /** `user-credential` for waking this console from standby.
    *
-   *  Wake-on-LAN is the one power action that cannot go through the payload —
-   *  the payload is not running when the console is asleep — so the address
-   *  has to be recorded in advance. A profile that has never been connected
-   *  to has none, and Wake is simply not offered for it. */
-  mac?: string | null;
+   *  Waking is the one power action that cannot go through the payload, since
+   *  the payload is not running while the console sleeps. It goes over Sony's
+   *  discovery protocol instead, which requires this value — captured by the
+   *  user from the PS Remote Play app. A profile without one is not offered a
+   *  Wake button, because pressing it could do nothing. */
+  wake_credential?: string | null;
 }
 
 interface RosterState {
@@ -83,8 +83,8 @@ interface RosterState {
   rename: (id: string, name: string) => void;
   updateHost: (id: string, host: string) => void;
   setNotes: (id: string, notes: string) => void;
-  /** Remember the console's MAC so it can be woken from rest mode. */
-  setMac: (id: string, mac: string) => void;
+  /** Store the credential that lets this console be woken from standby. */
+  setWakeCredential: (id: string, credential: string) => void;
   /** Called by AppShell's status poller when a probe lands a fresh
    *  kernel/payload pair, so the roster row stays current without
    *  the user opening Settings. */
@@ -312,11 +312,11 @@ export const useRosterStore = create<RosterState>((set, get) => ({
     persist(next, get().active_id);
   },
 
-  setMac: (id, mac) => {
-    const clean = mac.trim().toLowerCase();
+  setWakeCredential: (id, credential) => {
+    const clean = credential.trim();
     set((st) => {
       const profiles = st.profiles.map((p) =>
-        p.id === id ? { ...p, mac: clean || null } : p,
+        p.id === id ? { ...p, wake_credential: clean || null } : p,
       );
       persist(profiles, st.active_id);
       return { profiles };

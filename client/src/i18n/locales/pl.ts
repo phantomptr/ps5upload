@@ -3038,9 +3038,14 @@ helper_mismatch_go: "Załaduj pomocnika",
 "cheats_filter_count": "{shown} z {total}",
 "cheats_filter_none": "Żadne kody nie pasują do tych filtrów. Usuń jeden, aby zobaczyć więcej.",
 "power_action_wake": "Wybudź",
-"power_wake_hint": "Wysyła pakiet Wake-on-LAN na {mac}. Wymaga włączenia na konsoli opcji uruchamiania PS5 przez sieć.",
 "power_wake_sent": "Wysłano sygnał wybudzenia",
-"power_wake_sent_body": "Jeśli konsola się nie włączy, włącz Ustawienia → System → Oszczędzanie energii → Funkcje dostępne w trybie spoczynku → Zezwalaj na włączanie PS5 przez sieć.",
+"cheats_format_unsupported": "Jeszcze nieobsługiwane",
+"cheats_format_unsupported_hint": "Kody {format} są zaszyfrowane i nie da się ich jeszcze odczytać. Instalacja pokazałaby tylko „nie znaleziono kodów”.",
+"power_wake_credential_placeholder": "user-credential",
+"power_wake_needs_credential": "Aby wybudzić tę konsolę, wklej jej user-credential z Remote Play:",
+"power_wake_save_credential": "Zapisz",
+"power_wake_hint": "Wybudza konsolę przez protokół wykrywania Sony. Wymaga włączonego Remote Play na konsoli.",
+"power_wake_sent_body": "Konsola nie potwierdza wybudzenia. Jeśli się nie włączy, sprawdź Ustawienia → System → Remote Play → Włącz Remote Play.",
 };
 
 export default pl;

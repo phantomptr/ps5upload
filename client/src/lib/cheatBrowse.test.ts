@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   cheatFilterOptions,
   filterCheatEntries,
+  isSupportedCheatFormat,
   isUsableGameTitle,
   namesFromRepoEntries,
   resolveCheatName,
@@ -123,5 +124,21 @@ describe("filterCheatEntries", () => {
       real, { ...NO_CHEAT_FILTERS, installedOnly: true }, installedIds,
     );
     expect(narrowed.some((x) => x.filename === "readme.md")).toBe(false);
+  });
+});
+
+describe("isSupportedCheatFormat", () => {
+  it("accepts what the payload can parse", () => {
+    expect(isSupportedCheatFormat("json")).toBe(true);
+    expect(isSupportedCheatFormat("shn")).toBe(true);
+    expect(isSupportedCheatFormat("SHN")).toBe(true);
+  });
+
+  it("rejects mc4, which installs and then shows nothing", () => {
+    // The payload has no AES decryption for MC4, so a downloaded .mc4 lands on
+    // disk and the title then reports "no cheats found".
+    expect(isSupportedCheatFormat("mc4")).toBe(false);
+    expect(isSupportedCheatFormat("")).toBe(false);
+    expect(isSupportedCheatFormat(undefined)).toBe(false);
   });
 });

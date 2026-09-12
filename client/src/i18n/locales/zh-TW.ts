@@ -2690,9 +2690,14 @@ helper_mismatch_go: "重新載入小幫手",
 "cheats_filter_count": "{total} 個中的 {shown} 個",
 "cheats_filter_none": "沒有符合這些篩選條件的金手指。取消一個條件即可看到更多。",
 "power_action_wake": "喚醒",
-"power_wake_hint": "向 {mac} 傳送 Wake-on-LAN 封包。需要在主機上啟用透過網路開啟 PS5。",
 "power_wake_sent": "已傳送喚醒訊號",
-"power_wake_sent_body": "如果主機沒有開機，請開啟 設定 → 系統 → 省電 → 休息模式中可使用的功能 → 啟用透過網路開啟 PS5。",
+"cheats_format_unsupported": "暫不支援",
+"cheats_format_unsupported_hint": "{format} 金手指是加密的，目前無法讀取。安裝後只會顯示「找不到金手指」。",
+"power_wake_credential_placeholder": "user-credential",
+"power_wake_needs_credential": "要喚醒這台主機，請貼上它的 Remote Play user-credential：",
+"power_wake_save_credential": "儲存",
+"power_wake_hint": "透過索尼的裝置探索協定喚醒主機。需要在主機上啟用 Remote Play。",
+"power_wake_sent_body": "主機不會確認喚醒。如果仍未開機，請檢查 設定 → 系統 → Remote Play → 啟用 Remote Play。",
 };
 
 export default zh_TW;

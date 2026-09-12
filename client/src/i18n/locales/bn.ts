@@ -2742,9 +2742,14 @@ helper_mismatch_go: "হেল্পার লোড করুন",
 "cheats_filter_count": "{total} এর মধ্যে {shown}",
 "cheats_filter_none": "এই ফিল্টারগুলির সঙ্গে কোনো চিট মেলেনি। আরও দেখতে একটি ফিল্টার সরান।",
 "power_action_wake": "চালু করুন",
-"power_wake_hint": "{mac} ঠিকানায় একটি Wake-on-LAN প্যাকেট পাঠায়। কনসোলে নেটওয়ার্ক থেকে PS5 চালু করার সুবিধা সক্রিয় থাকতে হবে।",
 "power_wake_sent": "চালু করার সংকেত পাঠানো হয়েছে",
-"power_wake_sent_body": "কনসোল চালু না হলে সেটিংস → সিস্টেম → পাওয়ার সেভিং → রেস্ট মোডে উপলব্ধ বৈশিষ্ট্য → নেটওয়ার্ক থেকে PS5 চালু করা সক্রিয় করুন।",
+"cheats_format_unsupported": "এখনও সমর্থিত নয়",
+"cheats_format_unsupported_hint": "{format} চিট এনক্রিপ্ট করা এবং এখনও পড়া যায় না। ইনস্টল করলে কেবল «কোনো চিট পাওয়া যায়নি» দেখাবে।",
+"power_wake_credential_placeholder": "user-credential",
+"power_wake_needs_credential": "এই কনসোল চালু করতে, এর Remote Play user-credential পেস্ট করুন:",
+"power_wake_save_credential": "সংরক্ষণ",
+"power_wake_hint": "সনির ডিসকভারি প্রোটোকলের মাধ্যমে কনসোল চালু করে। কনসোলে Remote Play সক্রিয় থাকতে হবে।",
+"power_wake_sent_body": "কনসোল চালু হওয়ার নিশ্চয়তা দেয় না। বন্ধ থাকলে সেটিংস → সিস্টেম → Remote Play → Remote Play সক্রিয় করুন দেখুন।",
 };
 
 export default bn;

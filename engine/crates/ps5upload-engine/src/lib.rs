@@ -2959,33 +2959,62 @@ async fn ps5_power_control(
 /// seconds, boot cycles, thermal alerts, power-up cause).
 #[derive(Debug, serde::Deserialize)]
 struct PowerWakeReq {
-    /// The console's MAC, recorded while it was awake.
-    mac: String,
-    /// Its last known address, used to aim the broadcast at the right subnet.
-    #[serde(default)]
+    /// The console's address. DDP is spoken to the console directly.
     host: String,
+    /// `user-credential` captured from the PS Remote Play app. Without it the
+    /// console silently ignores the request.
+    #[serde(default)]
+    credential: String,
 }
 
-/// POST /api/ps5/power/wake — send a Wake-on-LAN magic packet.
+/// POST /api/ps5/power/wake — wake a console in standby over Sony's DDP.
 ///
-/// The one power action that CANNOT go through the payload: it is not running
-/// when the console is asleep. So this runs on the host and needs a MAC the
-/// caller recorded earlier.
+/// Not Wake-on-LAN: a PS5 does not wake from a magic packet (measured — nine
+/// datagrams across every plausible port and address did nothing to a sleeping
+/// console). This speaks the protocol the Remote Play app uses.
 ///
-/// A successful send is not a successful wake. The packet is fire-and-forget
-/// UDP, and the console ignores it unless "Enable turning on PS5 from network"
-/// is on — so this reports what it SENT, and the UI must not claim the console
-/// is coming up.
+/// Fire-and-forget: the console never acknowledges a WAKEUP, so a 200 here
+/// means the datagram was sent and nothing more. It also requires "Enable
+/// Remote Play" on the console; with that off nothing is listening at all.
 async fn ps5_power_wake(Json(req): Json<PowerWakeReq>) -> impl IntoResponse {
-    let mac = req.mac.clone();
     let host = req.host.clone();
-    match tokio::task::spawn_blocking(move || ps5upload_core::wol::wake(&mac, &host)).await {
-        Ok(Ok(sent)) => (
+    let cred = req.credential.clone();
+    match tokio::task::spawn_blocking(move || ps5upload_core::ddp::wake(&host, &cred)).await {
+        Ok(Ok(())) => (
             StatusCode::OK,
-            Json(serde_json::json!({ "ok": true, "packets_sent": sent })),
+            Json(serde_json::json!({ "ok": true, "sent": true })),
         )
             .into_response(),
         Ok(Err(e)) => json_err(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
+        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DdpStatusQuery {
+    host: String,
+}
+
+/// GET /api/ps5/power/ddp-status — is the console awake, in standby, or gone?
+///
+/// Needs no credential and no payload: it answers whether the console is
+/// reachable at all, which is exactly the question the app cannot otherwise
+/// tell apart from "the helper is not running".
+async fn ps5_power_ddp_status(Query(q): Query<DdpStatusQuery>) -> impl IntoResponse {
+    let host = q.host.clone();
+    let r = tokio::task::spawn_blocking(move || {
+        ps5upload_core::ddp::probe(&host, std::time::Duration::from_secs(3))
+    })
+    .await;
+    match r {
+        Ok(Ok(status)) => (StatusCode::OK, Json(status)).into_response(),
+        // Not an error the user can act on beyond the hint in the message:
+        // a console that is off, or has Remote Play disabled, is silent.
+        Ok(Err(e)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "code": 0, "status_text": "", "error": format!("{e:#}") })),
+        )
+            .into_response(),
         Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
     }
 }
@@ -8929,6 +8958,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/power/control", post(ps5_power_control))
         .route("/api/ps5/power/telemetry", get(ps5_power_telemetry))
         .route("/api/ps5/power/wake", post(ps5_power_wake))
+        .route("/api/ps5/power/ddp-status", get(ps5_power_ddp_status))
         .route("/api/ps5/users/list", get(ps5_users_list))
         .route("/api/ps5/users/create", post(user_create_handler))
         .route("/api/ps5/users/delete", post(user_delete_handler))

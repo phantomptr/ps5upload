@@ -2742,9 +2742,14 @@ helper_mismatch_go: "إعادة تحميل المساعد",
 "cheats_filter_count": "{shown} من {total}",
 "cheats_filter_none": "لا توجد أكواد غش تطابق هذه المرشحات. أزل أحدها لعرض المزيد.",
 "power_action_wake": "تشغيل",
-"power_wake_hint": "يرسل حزمة Wake-on-LAN إلى {mac}. يتطلب تفعيل تشغيل PS5 عبر الشبكة على الجهاز.",
 "power_wake_sent": "تم إرسال إشارة التشغيل",
-"power_wake_sent_body": "إذا لم يعمل الجهاز، فعّل الإعدادات ← النظام ← توفير الطاقة ← الميزات المتاحة في وضع الراحة ← تمكين تشغيل PS5 عبر الشبكة.",
+"cheats_format_unsupported": "غير مدعوم بعد",
+"cheats_format_unsupported_hint": "أكواد الغش من نوع {format} مشفّرة ولا يمكن قراءتها بعد. تثبيتها سيعرض «لم يتم العثور على أكواد غش» فقط.",
+"power_wake_credential_placeholder": "user-credential",
+"power_wake_needs_credential": "لتشغيل هذا الجهاز، الصق قيمة user-credential الخاصة بـ Remote Play:",
+"power_wake_save_credential": "حفظ",
+"power_wake_hint": "يشغّل الجهاز عبر بروتوكول الاكتشاف من Sony. يجب تفعيل Remote Play على الجهاز.",
+"power_wake_sent_body": "لا يؤكد الجهاز التشغيل. إذا بقي مطفأً، تحقّق من الإعدادات ← النظام ← Remote Play ← تفعيل Remote Play.",
 };
 
 export default ar;

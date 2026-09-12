@@ -6,6 +6,7 @@ pub mod bps;
 pub mod cheats;
 pub mod cleanup;
 pub mod connection;
+pub mod ddp;
 pub mod diagnostics;
 pub mod download;
 pub mod excludes;
@@ -41,7 +42,6 @@ pub mod tmdb;
 pub mod transfer;
 pub mod users;
 pub mod volumes;
-pub mod wol;
 pub mod zip_cd;
 
 /// Compute the BLAKE3-256 digest of a shard's raw bytes.
