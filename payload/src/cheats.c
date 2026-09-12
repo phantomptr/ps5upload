@@ -1091,6 +1091,27 @@ static int apply_mod(pid_t pid, intptr_t base, cheat_mod_t *mod,
 
 /* ── Background watcher thread ───────────────────────────────────── */
 
+/* Is this cheat file's "name" actually a game's name?
+ *
+ * Measured against the published repos: plenty of cheat files carry a title id
+ * ("PPSA21564") or a content id ("PPSA23226_00-GAME000000000000") in the name
+ * field. Announcing "1 cheat applied to PPSA23226_00-GAME000000000000" on the
+ * player's TV is worse than announcing the title id, because it reads as
+ * corruption rather than as a missing name. The client applies the same test
+ * to what it displays. */
+static int is_usable_game_name(const char *name, const char *title_id) {
+    if (!name || !name[0]) return 0;
+    /* A bare title id tells the player nothing they do not have already. */
+    if (title_id && title_id[0] && strcasecmp(name, title_id) == 0) return 0;
+    /* Content ids embed the title id followed by '_' or '-'. */
+    if (title_id && title_id[0]) {
+        size_t n = strlen(title_id);
+        if (strncasecmp(name, title_id, n) == 0 &&
+            (name[n] == '_' || name[n] == '-')) return 0;
+    }
+    return 1;
+}
+
 /* Returns how many memory writes actually landed, and fills `name_out` with
  * the game's own name when a cheat file carries one — the console
  * notification reads far better as the game's title than as a title id. */
@@ -1113,7 +1134,8 @@ static int apply_patches_for_game(pid_t pid, intptr_t base,
             free(cf);
             return total_writes;
         }
-        if (name_out && name_cap && !name_out[0] && cf->game_name[0]) {
+        if (name_out && name_cap && !name_out[0] &&
+            is_usable_game_name(cf->game_name, title_id)) {
             snprintf(name_out, name_cap, "%s", cf->game_name);
         }
         for (int m = 0; m < cf->mod_count; m++) {
@@ -1155,7 +1177,8 @@ static int reapply_enabled_for_game(pid_t pid, intptr_t base,
         if (!has_enabled) { free(cf); continue; }
 
         if (pt_attach(pid) != 0) { free(cf); return 0; }
-        if (name_out && name_cap && !name_out[0] && cf->game_name[0]) {
+        if (name_out && name_cap && !name_out[0] &&
+            is_usable_game_name(cf->game_name, title_id)) {
             snprintf(name_out, name_cap, "%s", cf->game_name);
         }
         int applied = 0;
