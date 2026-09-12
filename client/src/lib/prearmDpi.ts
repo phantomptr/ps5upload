@@ -59,9 +59,40 @@ export interface PrearmResult {
  */
 const attempts = new Map<string, Promise<PrearmResult>>();
 
+/** Hosts where DPI is believed to be up right now (last attempt was
+ *  `armed` or `already-up`). Drives the poller's "re-arm when it drops"
+ *  decision: only a console we actually got DPI onto is worth re-probing, so
+ *  a loader that declined isn't polled forever. Survives `invalidatePrearm`
+ *  (which only clears the once-per-session memo) — the belief is corrected by
+ *  the next attempt's outcome, not by the invalidation. */
+const armedHosts = new Set<string>();
+
 /** Test seam — the memo is module state that would leak between cases. */
 export function resetPrearmMemoForTests(): void {
   attempts.clear();
+  armedHosts.clear();
+}
+
+/** True when DPI was last seen up on this host — i.e. it is worth watching
+ *  for a later drop. */
+export function dpiWasArmed(host: string): boolean {
+  return armedHosts.has(hostOf(host));
+}
+
+/** Clear the once-per-session pre-arm memo for a host so the next
+ *  `prearmDpiDaemon` call actually re-attempts.
+ *
+ *  DPI is resident, so a single arm normally lasts the console's uptime and
+ *  the memo is right to fire once. But a resident daemon still dies when its
+ *  process dies — a rest/wake cycle tears down userspace (the payload goes
+ *  with it, and so does DPI), and the loader that hosts it can flake
+ *  mid-session. After any of those DPI is gone but the memo still says
+ *  "handled", so "arm early" silently stops holding. Call this on a death
+ *  signal (the wake-recovery edge, or an observed :9040 drop) to re-open the
+ *  arming path; the next attempt re-probes and re-sends only if needed
+ *  (dpi_ensure is idempotent). */
+export function invalidatePrearm(host: string): void {
+  attempts.delete(hostOf(host));
 }
 
 export function prearmDpiDaemon(host: string): Promise<PrearmResult> {
@@ -91,7 +122,10 @@ async function attemptPrearm(ip: string): Promise<PrearmResult> {
 
   if (!ens.ok) {
     // Not an error the user should see now — the update-install path reports
-    // it with the right guidance if and when it actually matters.
+    // it with the right guidance if and when it actually matters. Forget any
+    // prior belief that DPI is up: a loader that just declined isn't a
+    // console the poller should keep re-probing.
+    armedHosts.delete(ip);
     log.info(
       "payload",
       `DPI pre-arm on ${ip} declined: reason=${ens.reason ?? "unknown"}` +
@@ -101,6 +135,7 @@ async function attemptPrearm(ip: string): Promise<PrearmResult> {
   }
 
   if (!ens.sent) {
+    armedHosts.add(ip);
     log.info("payload", `DPI daemon already listening on ${ip}:9040`);
     return { outcome: "already-up" };
   }
@@ -116,6 +151,7 @@ async function attemptPrearm(ip: string): Promise<PrearmResult> {
     payloadAlive = false;
   }
   if (payloadAlive) {
+    armedHosts.add(ip);
     log.info("payload", `DPI daemon armed on ${ip}:9040 (helper intact)`);
     return { outcome: "armed" };
   }

@@ -11,7 +11,13 @@ import {
   EMPTY_HOST_RUNTIME,
   PS5_LOADER_PORT,
   PS5_PAYLOAD_PORT,
+  PS5_DPI_PORT,
 } from "../state/connection";
+import {
+  prearmDpiDaemon,
+  invalidatePrearm,
+  dpiWasArmed,
+} from "../lib/prearmDpi";
 import { usePayloadPlaylistsStore } from "../state/payloadPlaylists";
 import { log } from "../state/logs";
 import { useUpdateStore } from "../state/update";
@@ -99,6 +105,13 @@ const AUTO_LOADER_COOLDOWN_MS = 90_000;
  *  enough to be cheap while the PS5 is asleep. */
 const AUTO_REDEPLOY_INTERVAL_MS = 30_000;
 
+/** How often to verify the DPI daemon (:9040) is still alive on a console it
+ *  was armed on. DPI is resident and rarely dies while the console stays
+ *  awake, so this is deliberately far slower than the 10s status poll — one
+ *  extra connect a minute, and only for armed hosts — enough to notice a
+ *  mid-session loader death and re-arm before an install needs it. */
+const DPI_CHECK_INTERVAL_MS = 60_000;
+
 function useStatusPolling() {
   const setStatus = useConnectionStore((s) => s.setStatus);
   const setHostStatus = useConnectionStore((s) => s.setHostStatus);
@@ -150,6 +163,11 @@ function useStatusPolling() {
   // uploads on its down→up edge. Same cooldown discipline as the auto-loader
   // — a flapping helper must not loop-restart the queue.
   const uploadResumeFiredAtRef = useRef<Record<string, number>>({});
+  // DPI liveness: last ms we probed :9040 for a host. The check runs on a
+  // slower cadence than the 10s poll (a resident daemon rarely dies) so it
+  // adds at most one extra connect per DPI_CHECK_INTERVAL_MS, and only for a
+  // console DPI was actually armed on.
+  const lastDpiCheckRef = useRef<Record<string, number>>({});
   useEffect(() => {
     void getAppVersion()
       .then((v) => {
@@ -351,6 +369,16 @@ function useStatusPolling() {
                     );
                 });
             }
+
+            // Re-arm the DPI install daemon. A wake tore down userspace, so
+            // DPI is gone with the payload — but its once-per-session pre-arm
+            // memo still says "handled", so nothing would bring it back until
+            // an install discovered it dead. Clear the memo on this recovery
+            // edge and arm again now, while we have just proven the loader is
+            // alive (dpi_ensure is idempotent: a probe if it's somehow still
+            // up, a re-send otherwise).
+            invalidatePrearm(probedHost);
+            void prearmDpiDaemon(probedHost);
           }
         }
         setHostStatus(probedHost, {
@@ -400,6 +428,35 @@ function useStatusPolling() {
             }
           } catch {
             // portCheck best-effort — leave transferAlive unchanged.
+          }
+
+          // DPI daemon (:9040) liveness — re-arm a resident daemon that died
+          // while the console stayed awake. The motivating shape (2026-09-08):
+          // the loader accepted our ELF, then refused connections 255s later
+          // in the same session, so an update could never be installed. Only
+          // probed for a host DPI was actually armed on, and throttled to
+          // DPI_CHECK_INTERVAL_MS so it costs at most one extra connect a
+          // minute. (The wake case — DPI torn down with userspace — is handled
+          // on the recovery edge above; this is the awake case.)
+          if (dpiWasArmed(probedHost)) {
+            const lastDpi = lastDpiCheckRef.current[key] ?? 0;
+            if (Date.now() - lastDpi >= DPI_CHECK_INTERVAL_MS) {
+              lastDpiCheckRef.current[key] = Date.now();
+              try {
+                const dpiUp = await portCheck(probedHost, PS5_DPI_PORT);
+                if (cancelled) return;
+                if (!dpiUp) {
+                  log.warn(
+                    "connection",
+                    `DPI daemon :${PS5_DPI_PORT} DOWN on ${probedHost} (helper up) — re-arming`,
+                  );
+                  invalidatePrearm(probedHost);
+                  void prearmDpiDaemon(probedHost);
+                }
+              } catch {
+                // best-effort; re-check next interval.
+              }
+            }
           }
         } else if (!s.reachable) {
           // mgmt down ⇒ transfer port state unknown; clear so the next

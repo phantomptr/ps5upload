@@ -49,6 +49,10 @@ function persistHost(host: string) {
 /** TCP port our payload listens on for FTX2 transfers. Also constant. */
 export const PS5_PAYLOAD_PORT = 9113;
 
+/** TCP port the standalone DPI install daemon listens on once armed. Probed
+ *  to detect a DPI that has died mid-session so it can be re-armed. */
+export const PS5_DPI_PORT = 9040;
+
 export type ProbeStatus = "up" | "down" | "unknown";
 
 /**

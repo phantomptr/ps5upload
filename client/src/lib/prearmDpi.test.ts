@@ -15,7 +15,12 @@ vi.mock("../state/logs", () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { prearmDpiDaemon, resetPrearmMemoForTests } from "./prearmDpi";
+import {
+  prearmDpiDaemon,
+  resetPrearmMemoForTests,
+  invalidatePrearm,
+  dpiWasArmed,
+} from "./prearmDpi";
 
 beforeEach(() => {
   resetPrearmMemoForTests();
@@ -107,5 +112,39 @@ describe("prearmDpiDaemon", () => {
     expect(invokeMock).toHaveBeenCalledTimes(2);
     expect(invokeMock).toHaveBeenNthCalledWith(1, "dpi_ensure", { ip: "10.0.0.5" });
     expect(invokeMock).toHaveBeenNthCalledWith(2, "dpi_ensure", { ip: "10.0.0.6" });
+  });
+});
+
+describe("invalidatePrearm + dpiWasArmed (mid-session / wake re-arm)", () => {
+  it("re-attempts after invalidation so a dead DPI can be brought back", async () => {
+    invokeMock.mockResolvedValue({ ok: true, listening: false, sent: true });
+    payloadCheckMock.mockResolvedValue({ reachable: true });
+
+    expect((await prearmDpiDaemon("10.0.0.5")).outcome).toBe("armed");
+    // Second call is memoized — the once-per-session guard.
+    expect((await prearmDpiDaemon("10.0.0.5")).outcome).toBe("skipped");
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+
+    // A death signal (wake edge / observed :9040 drop) clears the memo, and
+    // the next call genuinely re-arms instead of returning "skipped".
+    invalidatePrearm("10.0.0.5:9114");
+    expect((await prearmDpiDaemon("10.0.0.5")).outcome).toBe("armed");
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks a host armed when DPI is up, so the poller knows to watch it", async () => {
+    expect(dpiWasArmed("10.0.0.5")).toBe(false);
+    invokeMock.mockResolvedValue({ ok: true, listening: true, sent: false });
+    await prearmDpiDaemon("10.0.0.5:9114");
+    expect(dpiWasArmed("10.0.0.5")).toBe(true);
+    // Keyed on host, not the probed address.
+    expect(dpiWasArmed("10.0.0.5:9040")).toBe(true);
+  });
+
+  it("does not mark a host with a dead loader as armed (nothing to watch)", async () => {
+    invokeMock.mockResolvedValue({ ok: false, reason: "no_bringup" });
+    const r = await prearmDpiDaemon("10.0.0.9");
+    expect(r.outcome).toBe("unavailable");
+    expect(dpiWasArmed("10.0.0.9")).toBe(false);
   });
 });
