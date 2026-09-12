@@ -4,6 +4,27 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.23.0
+
+**Waking your PS5 now signs you in on PS5 firmware 9.60.**
+
+### Wake & sign in
+
+- **Wake-from-standby lands on your user, not the user-select screen** — on
+  consoles running firmware 9.60, verified repeatedly from a cold rest. It
+  takes about 10-15 seconds.
+- **Honest errors when it doesn't work.** ps5upload used to blame your RP-Key
+  for failures that had nothing to do with it, and in one case reported
+  "signed in" for a console still sitting on the user-select screen. It now
+  says what actually happened.
+
+### Known limitation
+
+- **Firmware 5.10 consoles still stop at user-select after a wake.** Signing
+  in works normally on those consoles once they're already awake. This needs a
+  further piece of Sony's Remote Play protocol that ps5upload doesn't yet
+  implement — tracked in issue #318.
+
 ## 5.22.0
 
 **Wake and sign-in set themselves up, and installs stop reporting success as
