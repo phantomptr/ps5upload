@@ -4626,6 +4626,9 @@ export async function notifClear(addr?: string): Promise<NotifClearResult> {
 export interface CheatTitle {
   title_id: string;
   name: string;
+  /** Game version the downloaded cheat targets, parsed from its filename
+   *  (e.g. "01.08"). Empty when the filename carries no version. */
+  version?: string;
   running: boolean;
 }
 

@@ -368,6 +368,12 @@ export default function CheatsScreen() {
                       </div>
                       <div className="font-mono text-xs text-[var(--color-muted)]">
                         {t.title_id}
+                        {t.version && (
+                          <span className="ml-1.5 opacity-80">
+                            {tr("cheats_version_label", undefined, "v")}
+                            {t.version}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">

@@ -714,6 +714,12 @@ test-payload: payload
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-tmdb-id-selftest \
 		$(PAYLOAD_DIR)/tests/tmdb_id_selftest.c
 	@/tmp/ps5upload-tmdb-id-selftest
+	@echo "Running cheat XML UTF-16 normalizer self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-xml-encoding-selftest \
+		$(PAYLOAD_DIR)/tests/xml_encoding_selftest.c
+	@/tmp/ps5upload-xml-encoding-selftest
+	@echo "✓ UTF-16 SHN/MC4 cheat files convert so their cheats appear"
 	@echo "Checking per-console isolation..."
 	@./scripts/check-per-console-isolation.sh
 	@echo "✓ one console's data cannot be shown under another's name"

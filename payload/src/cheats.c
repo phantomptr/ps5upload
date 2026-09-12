@@ -43,6 +43,7 @@
 #include "proc_list.h"
 #include "ptrace_remote.h"
 #include "aes.h" /* tiny-AES, vendored — MC4 cheat decryption */
+#include "xml_encoding.h" /* UTF-16 → UTF-8 for SHN/MC4 trainer XML (#317) */
 
 /* ── Constants ───────────────────────────────────────────────────── */
 
@@ -953,7 +954,13 @@ static int parse_mc4_file(const char *encoded, size_t enc_len, cheat_file_t *cf)
     if (!xml) { free(bin); return -1; }
     xml[bin_len] = '\0';
 
-    int rc = parse_shn_file(xml, (size_t)bin_len, cf);
+    /* The decrypted XML can itself be UTF-16 (same trainer tools) — normalise
+     * it before handing off to the ASCII-oriented SHN parser. */
+    size_t clen = 0;
+    char *conv = xml_to_utf8(xml, (size_t)bin_len, &clen);
+    int rc = conv ? parse_shn_file(conv, clen, cf)
+                  : parse_shn_file(xml, (size_t)bin_len, cf);
+    free(conv);
     free(xml);
     return rc;
 }
@@ -983,7 +990,16 @@ static int load_cheat_file(const char *path, int format, cheat_file_t *cf) {
     if (format == 1) {
         rc = parse_json_file(buf, (size_t)rd, cf);
     } else if (format == 2) {
-        rc = parse_shn_file(buf, (size_t)rd, cf);
+        /* SHN trainer XML is sometimes saved UTF-16; the ASCII tag scan in
+         * parse_shn_file can't see tags there, so down-convert first. */
+        size_t clen = 0;
+        char *conv = xml_to_utf8(buf, (size_t)rd, &clen);
+        if (conv) {
+            rc = parse_shn_file(conv, clen, cf);
+            free(conv);
+        } else {
+            rc = parse_shn_file(buf, (size_t)rd, cf);
+        }
     } else if (format == 3) {
         /* MC4 = base64 + AES-256-CBC over SHN-shaped XML. */
         rc = parse_mc4_file(buf, (size_t)rd, cf);
@@ -1378,6 +1394,34 @@ int cheats_patches_total_writes(void) {
 /* ── Public API implementations ──────────────────────────────────── */
 
 /* List all titles that have cheat files. */
+/* Pull the target game version out of a cheat filename, mirroring the
+ * client's parse: strip the extension, split on '_', and take the second
+ * segment when it looks like a version (digits and dots, at least one dot).
+ * `CUSA25234_01.08.shn` -> "01.08", `CUSA00018_01.21_default.elf.json` ->
+ * "01.21". Leaves `out` empty for names that carry no version. */
+static void extract_cheat_version(const char *filename, char *out, size_t cap) {
+    if (cap) out[0] = '\0';
+    const char *dot = strrchr(filename, '.');
+    size_t stem_len = dot ? (size_t)(dot - filename) : strlen(filename);
+    const char *us = memchr(filename, '_', stem_len);
+    if (!us) return;
+    const char *v = us + 1;
+    const char *stem_end = filename + stem_len;
+    const char *vend = v;
+    while (vend < stem_end && *vend != '_') vend++;
+    size_t vlen = (size_t)(vend - v);
+    if (vlen == 0 || vlen >= cap) return;
+    int has_dot = 0;
+    for (size_t i = 0; i < vlen; i++) {
+        char c = v[i];
+        if (c == '.') has_dot = 1;
+        else if (c < '0' || c > '9') return; /* not a version segment */
+    }
+    if (!has_dot) return;
+    memcpy(out, v, vlen);
+    out[vlen] = '\0';
+}
+
 int cheats_list_titles(char *buf, size_t cap, size_t *written) {
     if (!buf || cap == 0) return -1;
     /* Running game info (resolve once so we can mark the active title) */
@@ -1429,9 +1473,13 @@ int cheats_list_titles(char *buf, size_t cap, size_t *written) {
             int is_running = (rg_pid > 0 &&
                               strcasecmp(rg_title, title) == 0);
 
+            char version[32] = "";
+            extract_cheat_version(de->d_name, version, sizeof(version));
+
             if (!first) jb_raw(&jb, ",");
-            JB_PRINTF(&jb, "{\"title_id\":\"%s\",\"name\":\"%s\",\"running\":%s}",
-                      title, title,
+            JB_PRINTF(&jb,
+                      "{\"title_id\":\"%s\",\"name\":\"%s\",\"version\":\"%s\",\"running\":%s}",
+                      title, title, version,
                       is_running ? "true" : "false");
             first = 0;
         }
