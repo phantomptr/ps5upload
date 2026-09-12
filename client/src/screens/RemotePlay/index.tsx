@@ -97,7 +97,9 @@ function ReadinessPanel({
   }[] = [
     {
       key: "user",
-      ok: readiness.foreground_uid !== 0,
+      // account_uid, not foreground_uid: a console with nobody on screen
+      // reports -1 there, which is !== 0 and so used to read as a pass.
+      ok: readiness.account_uid > 0,
       label: tr("remotePlay_check_user", undefined, "Someone is signed in"),
       detail:
         readiness.user_slot > 0
@@ -106,7 +108,7 @@ function ReadinessPanel({
       hint: tr(
         "remotePlay_check_user_hint",
         undefined,
-        "Sign in on the console — Remote Play pairs with whoever is on screen.",
+        "Sign in on the console. Nobody has to be on screen — a signed-in account is enough.",
       ),
     },
     {

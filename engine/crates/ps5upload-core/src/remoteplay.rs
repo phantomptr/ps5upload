@@ -99,8 +99,17 @@ pub struct RemotePlayReadiness {
     pub fw_magic: u32,
     #[serde(default)]
     pub has_per_user: u8,
+    /// The user in the foreground, or -1 when there is none. Reported
+    /// literally — a console can sit signed in with nobody in front.
     #[serde(default)]
     pub foreground_uid: i64,
+    /// The user whose account pairing will actually use. Usually the
+    /// foreground one; falls back to the first signed-in activated user.
+    #[serde(default)]
+    pub account_uid: i64,
+    /// How `account_uid` was chosen: `foreground`, `login-list`, `none`.
+    #[serde(default)]
+    pub account_via: String,
     #[serde(default)]
     pub user_slot: i32,
     #[serde(default)]
@@ -157,10 +166,14 @@ impl RemotePlayReadiness {
         self.account_id_raw != 0 && self.account_type == "np"
     }
     /// Everything Remote Play needs is in place.
+    ///
+    /// Gated on `account_uid`, not `foreground_uid`: a console with a
+    /// signed-in user but nobody in the foreground can pair perfectly
+    /// well, and gating on the foreground reported those as unusable.
     pub fn ready_to_pair(&self) -> bool {
         self.registry_ok()
             && self.symbols_ok != 0
-            && self.foreground_uid != 0
+            && self.account_uid > 0
             && self.activated()
             && self.service_on()
             && (!self.needs_per_user() || self.user_on())
@@ -250,6 +263,8 @@ mod firmware_tests {
             fw_magic,
             has_per_user: 0,
             foreground_uid: 0,
+            account_uid: 0,
+            account_via: String::new(),
             user_slot: 0,
             account_id_b64: String::new(),
             account_id_raw: 0,

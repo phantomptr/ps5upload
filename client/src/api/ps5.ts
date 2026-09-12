@@ -4317,7 +4317,12 @@ export async function remoteplayStatus(
 export interface RemotePlayReadiness {
   fw_magic: number;
   has_per_user: number;
+  /** The user in the foreground, or -1 when nobody is. */
   foreground_uid: number;
+  /** The user whose account pairing will use — not always the foreground one. */
+  account_uid: number;
+  /** How account_uid was chosen: "foreground" | "login-list" | "none". */
+  account_via: string;
   user_slot: number;
   account_id_b64: string;
   account_id_raw: number;

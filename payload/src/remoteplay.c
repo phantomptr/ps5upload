@@ -41,6 +41,11 @@ static int rp_readiness_json_locked(char *out, size_t out_size);
  * Makefile) so a plain extern declaration is enough; dlsym(RTLD_DEFAULT)
  * resolves it at runtime. Same pattern as runtime.c line 9516. */
 extern int sceUserServiceGetForegroundUser(int *user_id);
+/* Every signed-in user, Sony-filled with -1 in the unused slots. Needed
+ * because a console can have a user logged in with no user in the
+ * foreground — see rp_resolve_account_slot(). */
+extern int sceUserServiceGetLoginUserIdList(int *id_list);
+#define RP_MAX_LOGIN_USERS 16
 /* Must be called before any other user-service query, or
  * GetForegroundUser fails 0x80960002 even with a user logged in. Other
  * call sites in this tree already do it; Remote Play did not, which is
@@ -200,15 +205,74 @@ static int rp_slot_for_user(int uid) {
     return -1;
 }
 
+/* Does this slot hold an activated PSN account?
+ *
+ * An all-zero account id means the slot exists but was never activated —
+ * a local-only user. Registration would be refused, so such a slot is no
+ * better than no slot at all. */
+static int rp_slot_has_account(int slot) {
+    if (slot < 1) return 0;
+    uint8_t raw[8] = {0};
+    if (sys_registry_get_bin(rp_key_account_id((uint32_t)slot), raw,
+                             sizeof(raw), NULL) != 0) {
+        return 0;
+    }
+    for (size_t i = 0; i < sizeof(raw); i++) {
+        if (raw[i]) return 1;
+    }
+    return 0;
+}
+
+/* The registry slot we should read the account id from, or -1.
+ *
+ * The foreground user is the right answer when there is one, but a
+ * console can sit with a user signed in and nobody in the foreground:
+ * measured on a PS5 Pro at FW 9.60 sitting on the dashboard, where
+ * sceUserServiceGetForegroundUser SUCCEEDS and reports -1 while the
+ * login list still contains the (activated) user. Asking only the
+ * foreground made Remote Play look unavailable on a console that was
+ * perfectly able to pair.
+ *
+ * So: prefer the foreground user, then fall back to the first signed-in
+ * user with an activated account. `*via` reports which, because a
+ * fallback is a guess on a multi-user console and the UI should be able
+ * to say whose account it used rather than silently picking one. */
+static int rp_resolve_account_slot(int *uid_out, const char **via) {
+    if (uid_out) *uid_out = 0;
+    if (via) *via = "none";
+    rp_user_service_ready();
+
+    int uid = 0;
+    if (sceUserServiceGetForegroundUser(&uid) == 0 && uid > 0) {
+        int slot = rp_slot_for_user(uid);
+        if (slot > 0 && rp_slot_has_account(slot)) {
+            if (uid_out) *uid_out = uid;
+            if (via) *via = "foreground";
+            return slot;
+        }
+    }
+
+    int ids[RP_MAX_LOGIN_USERS];
+    for (int i = 0; i < RP_MAX_LOGIN_USERS; i++) ids[i] = -1;
+    if (sceUserServiceGetLoginUserIdList(ids) != 0) return -1;
+
+    for (int i = 0; i < RP_MAX_LOGIN_USERS; i++) {
+        if (ids[i] <= 0) continue; /* Sony pads with -1, not contiguously */
+        int slot = rp_slot_for_user(ids[i]);
+        if (slot > 0 && rp_slot_has_account(slot)) {
+            if (uid_out) *uid_out = ids[i];
+            if (via) *via = "login-list";
+            return slot;
+        }
+    }
+    return -1;
+}
+
 static void rp_get_account_id(char *out, size_t out_sz) {
     if (!out || out_sz == 0) return;
     out[0] = '\0';
 
-    int uid = 0;
-    rp_user_service_ready();
-    if (sceUserServiceGetForegroundUser(&uid) != 0 || uid <= 0) return;
-
-    int slot = rp_slot_for_user(uid);
+    int slot = rp_resolve_account_slot(NULL, NULL);
     if (slot < 0) return;
 
     uint8_t raw[8] = {0};
@@ -323,9 +387,14 @@ static int rp_readiness_json_locked(char *out, size_t out_size) {
     char acct_type[24] = "";
     char acct_type_esc[64] = "";
 
-    rp_user_service_ready();
-    if (sceUserServiceGetForegroundUser(&uid) != 0) uid = 0;
-    int slot = rp_slot_for_user(uid);
+    /* Resolve exactly the way pairing will, or readiness would report a
+     * console as unable to pair that pairing then succeeds on. `uid` is
+     * the account we would actually use, which is NOT necessarily the
+     * foreground one — that is reported separately and stays literal. */
+    const char *acct_via = "none";
+    int slot = rp_resolve_account_slot(&uid, &acct_via);
+    int fg_uid = -1;
+    if (sceUserServiceGetForegroundUser(&fg_uid) != 0) fg_uid = -1;
 
     if (slot > 0) {
         uint8_t raw[8] = {0};
@@ -359,11 +428,12 @@ static int rp_readiness_json_locked(char *out, size_t out_size) {
 
     return snprintf(out, out_size,
                     "{\"fw_magic\":%u,\"has_per_user\":%d,"
-                    "\"foreground_uid\":%d,\"user_slot\":%d,"
+                    "\"foreground_uid\":%d,\"account_uid\":%d,"
+                    "\"account_via\":\"%s\",\"user_slot\":%d,"
                     "\"account_id_b64\":\"%s\",\"account_id_raw\":%llu,"
                     "\"account_type\":\"%s\",\"service_enabled\":%d,"
                     "\"user_enabled\":%d,\"symbols_ok\":%d,\"registry_err\":%u}",
-                    fw, has_per_user, uid, slot, acct_b64,
+                    fw, has_per_user, fg_uid, uid, acct_via, slot, acct_b64,
                     (unsigned long long)acct_raw, acct_type_esc,
                     svc ? 1 : 0, usr ? 1 : 0, g_resolved ? 1 : 0, svc_ec);
 }
@@ -513,17 +583,22 @@ static int rp_request_locked(const char *manual_account_id) {
         return -1;
     }
 
-    /* Get the foreground user id. sceUserServiceGetForegroundUser is
-     * link-time bound via -lSceUserService, so the extern declaration
-     * above resolves directly. A uid <= 0 means no user is logged in. */
+    /* Require a signed-in user with an activated account.
+     *
+     * This used to demand a FOREGROUND user, which refused to generate a
+     * PIN on a console sitting on the dashboard with nobody on screen
+     * (measured on a PS5 Pro at FW 9.60: rc=0 and uid=-1, i.e. the call
+     * succeeded and honestly reported "nobody"). The uid is not passed to
+     * sceRemoteplayGeneratePinCode — it takes only the out-param — so the
+     * foreground was never a functional requirement, just a gate that
+     * happened to be true on the console it was written against. */
     int uid = 0;
-    rp_user_service_ready();
-    rc = sceUserServiceGetForegroundUser(&uid);
-    if (rc != 0 || uid <= 0) {
+    const char *via = "none";
+    if (rp_resolve_account_slot(&uid, &via) < 0) {
         pthread_mutex_lock(&g_rp_mtx);
         g_rp_state = RP_STATE_FAILED;
         snprintf(g_rp_err, sizeof(g_rp_err),
-                 "no foreground user (rc=0x%08X uid=%d)", (unsigned)rc, uid);
+                 "no signed-in user with an activated PSN account");
         pthread_mutex_unlock(&g_rp_mtx);
         return -1;
     }
