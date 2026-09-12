@@ -62,16 +62,6 @@ static inline uint32_t rp_key_regist_key(uint32_t slot) {
     return rp_ent_num(slot, 32, 65536, 1090585088u, 1092682240u);
 }
 
-/* The one BINARY entry in a pairing record, 16 bytes wide.
- *
- * Confirmed by probing a live console: of the entries in a record, only
- * this one accepts a binary read, and it reads back 16 bytes. The other
- * three are integers. Which of the two 16-byte pairing secrets (regist key
- * or AES key) this holds is not yet established. */
-static inline uint32_t rp_key_regist_blob(uint32_t slot) {
-    return rp_ent_num(slot, 32, 65536, 1090585344u, 1092682496u);
-}
-
 static inline uint32_t rp_key_regist_client_type(uint32_t slot) {
     return rp_ent_num(slot, 32, 65536, 1090585600u, 1092682752u);
 }

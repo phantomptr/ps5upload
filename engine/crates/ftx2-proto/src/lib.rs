@@ -588,11 +588,6 @@ pub enum FrameType {
     RemotePlayEnable = 249,
     /// Paired devices from the 32-slot registration table.
     RemotePlayDevices = 250,
-    /// Read-only layout probe of the pairing table. Reports field shape and
-    /// error codes, never the pairing secrets themselves.
-    RemotePlayRegistProbe = 242,
-    /// EXPERIMENTAL: write one pairing record directly into the registry.
-    RemotePlayRegistWrite = 243,
 
     // ── Fan Curve Editor (v4.1) ────────────────────────────────────────
     /// Set a multi-point fan curve.
@@ -916,8 +911,6 @@ impl FrameType {
             248 => Ok(Self::RemotePlayReadiness),
             249 => Ok(Self::RemotePlayEnable),
             250 => Ok(Self::RemotePlayDevices),
-            242 => Ok(Self::RemotePlayRegistProbe),
-            243 => Ok(Self::RemotePlayRegistWrite),
             196 => Ok(Self::HwFanCurveSet),
             197 => Ok(Self::HwFanCurveSetAck),
             198 => Ok(Self::NotifList),

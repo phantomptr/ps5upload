@@ -29,31 +29,6 @@ int remoteplay_readiness_json(char *out, size_t out_size);
  * secrets are never included. Returns the length written. */
 int remoteplay_devices_json(char *out, size_t out_size);
 
-/* Read-only layout probe of one pairing record.
- *
- * Reports each entry's type and width, never its contents — the regist and
- * AES keys are pairing secrets and this project is public. Exists so that
- * nothing has to write to the table while guessing its shape. */
-int remoteplay_regist_probe_json(char *out, size_t out_size);
-
-/* EXPERIMENTAL. Write one pairing record directly into the registry.
- *
- * The console's paired-device table is what a DDP WAKEUP is validated
- * against, so planting a record with a key we chose would give us a wake
- * credential without completing Sony's registration handshake. Whether the
- * console accepts a record it did not create itself is exactly the open
- * question this exists to answer.
- *
- * `key_text` is the regist key as ASCII (at most 8 characters — the
- * credential is that text parsed as a hex number); the field is NUL-padded
- * to its 16-byte width. Pass user_id -1 and an empty key_text to put a
- * slot back the way an unused one looks.
- *
- * Reports per-field results as JSON. Returns the length written. */
-int remoteplay_regist_write(unsigned slot, int user_id, int key_type,
-                            int client_type, const char *key_text,
-                            char *out, size_t out_size);
-
 /* Enable Remote Play. user_scope=0 is the system service toggle,
  * user_scope=1 is per-user permission (FW 10.00+). Writes the re-read
  * readiness snapshot to `out`. Returns >=0 on success, -1 write failed,
