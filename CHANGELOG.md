@@ -4,6 +4,25 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.20.0
+
+**Wake your PS5 from standby — and wake it straight into your user.**
+
+### Power
+
+- **Wake from standby over the network.** When the console is asleep, a Wake
+  button brings it back on, using Sony's discovery protocol (a PS5 does not
+  answer Wake-on-LAN). The setup panel spells out the three console settings
+  wake needs — Remote Play, plus *Stay Connected to the Internet* and *Enable
+  Turning On PS5 from Network* — because without any one of them the wake
+  fails silently.
+
+- **Wake & sign in.** A plain wake stops at the user-select screen. Give the
+  console its Remote Play session keys and the wake also signs your user in,
+  bringing the console up on the home screen the way the official Remote Play
+  app does. If the account has a login passcode, the app says so rather than
+  hanging.
+
 ## 5.19.0
 
 **Cheats tell you what they are and when they fire, and the power controls are

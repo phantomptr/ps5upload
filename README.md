@@ -83,6 +83,15 @@
   console. Some readings on that panel are simply not available on retail
   firmware and show `—`: SoC clock, SoC power, CPU usage, fan duty, and
   the per-drive sensor list. Storage totals and temperatures do work.
+- **Power control & wake** — reboot, rest mode, or shut down the PS5 from
+  the app, and **wake it from standby** over the network (Sony's discovery
+  protocol — a PS5 does not respond to Wake-on-LAN). With the console's
+  Remote Play session keys stored, **Wake & sign in** brings it up straight
+  on your user's home screen instead of the user-select screen, the way the
+  PS Remote Play app does. Waking needs three console settings enabled
+  (Remote Play, plus *Stay Connected to the Internet* and *Enable Turning On
+  PS5 from Network* under Rest Mode) — the app spells them out, since without
+  them the wake fails silently.
 - **Send any payload** — push `.elf`, `.bin`, `.js`, `.lua`, or
   `.jar` files to the PS5's loader port (typical defaults: `.elf` →
   9021 elfldr, `.js` → 50000 WebKit-stage, `.lua` → 9026, `.jar` →

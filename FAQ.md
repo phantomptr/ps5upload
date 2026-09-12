@@ -779,6 +779,30 @@ button) still works immediately — the app only defers the *idle* timer,
 it never blocks an explicit rest request. Closing the app returns the
 console to its normal power schedule.
 
+**Q: Can I wake the PS5 from standby, or turn it off, from the app?**
+Yes. The Connection screen has **Rest mode**, **Reboot**, and **Shut down**
+buttons, and — when the console is asleep — a **Wake** button.
+
+Waking uses Sony's own discovery protocol (a PS5 ignores Wake-on-LAN magic
+packets), and it only works if three settings are enabled on the console
+first — the app lists them, because without any one of them the wake just
+fails silently:
+
+- **Enable Remote Play** — Settings › System › Remote Play
+- **Stay Connected to the Internet** — Settings › System › Power Saving ›
+  Features Available in Rest Mode
+- **Enable Turning On PS5 from Network** — same menu
+
+Wake needs a one-time **wake code** (your console's Remote Play registration
+key as a number). Enter it once in the wake-setup panel and it's remembered.
+
+A plain wake powers the console on to the *user-select* screen. If you also
+provide the console's two Remote Play **session keys** (registration key +
+RP-Key, in the panel's advanced section), the button becomes **Wake & sign
+in** and brings the console up straight on your user's home screen — the same
+thing the official Remote Play app does. (If your user has a login passcode,
+the console will stop to ask for it, so sign-in needs a passcode-free user.)
+
 **Q: Do I still have to "Register" a game after uploading it?**
 Not anymore. When you upload a game folder, **"Add to PS5 home screen
 when done"** is on by default — the game is registered automatically the
