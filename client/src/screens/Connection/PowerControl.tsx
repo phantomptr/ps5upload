@@ -18,11 +18,13 @@ import { Button, Spinner } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useTr } from "../../state/lang";
 import { useEffect } from "react";
-import { ddpStatus, pairForWake, powerWake, type DdpStatus } from "../../api/ps5";
+import { ddpStatus, powerWake, type DdpStatus } from "../../api/ps5";
 import { useRosterStore } from "../../state/roster";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import { audit } from "../../state/auditLog";
+import { powerStateFromDdp, wakeUi } from "../../lib/wakeState";
+import WakeSetup from "./WakeSetup";
 
 /**
  * Compact power-control panel — one row of buttons (reboot, standby,
@@ -51,16 +53,9 @@ export default function PowerControl({ host }: { host: string }) {
    * helper is not running", which nothing else here can. */
   const profiles = useRosterStore((st) => st.profiles);
   const activeId = useRosterStore((st) => st.active_id);
-  const setWakeCredential = useRosterStore((st) => st.setWakeCredential);
   const profile = profiles.find((p) => p.id === activeId) ?? null;
   const credential = profile?.wake_credential ?? "";
   const [ddp, setDdp] = useState<DdpStatus | null>(null);
-  const [credentialDraft, setCredentialDraft] = useState("");
-  const [pairing, setPairing] = useState(false);
-  /* Only shown after pairing has actually failed. Until then, offering a
-     field for a value that takes a packet capture to obtain would be
-     noise — the one-click path is expected to work. */
-  const [pairError, setPairError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!host) return;
@@ -78,34 +73,11 @@ export default function PowerControl({ host }: { host: string }) {
     return () => { cancelled = true; clearInterval(id); };
   }, [host]);
 
-  const inStandby = ddp?.code === 620;
-  /* Pairing talks to the payload and to Sony's Remote Play service, so the
-     console has to be ON — the opposite of when waking is useful. Setup is
-     therefore offered while it is awake, not while it is asleep. */
-  const isAwake = ddp?.code === 200;
-
-  async function runPair() {
-    if (!profile) return;
-    setPairing(true);
-    setPairError(null);
-    try {
-      const r = await pairForWake(host, addr);
-      setWakeCredential(profile.id, r.credential);
-      pushNotification(
-        "success",
-        tr("power_pair_done", undefined, "This console can now be woken"),
-        {
-          body: tr("power_pair_done_body", undefined,
-            "Paired with the console. Wake will work from standby from now on."),
-        },
-      );
-      audit("system_wake", withConsolePrefix(host, "paired for wake"));
-    } catch (e) {
-      setPairError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setPairing(false);
-    }
-  }
+  /* The console state and the stored credential together decide what the UI
+     may offer — kept in one testable place rather than as scattered JSX
+     conditionals. */
+  const power = powerStateFromDdp(ddp?.code);
+  const ui = wakeUi(power, !!credential);
 
   async function runWake() {
     if (!credential) return;
@@ -120,7 +92,7 @@ export default function PowerControl({ host }: { host: string }) {
         tr("power_wake_sent", undefined, "Wake signal sent"),
         {
           body: tr("power_wake_sent_body", undefined,
-            "The console does not confirm a wake. If it stays asleep, check Settings → System → Remote Play → Enable Remote Play."),
+            "The console doesn't confirm a wake. If it stays asleep, check that Remote Play, Stay Connected to the Internet, and Turning On PS5 from Network are all enabled on the console."),
         },
       );
       audit("system_wake", withConsolePrefix(host, "wake request sent"));
@@ -231,10 +203,10 @@ export default function PowerControl({ host }: { host: string }) {
         {tr("power_control_title", undefined, "PS5 power")}
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        {/* Wake is offered only once we have recorded a MAC, which happens
-            the first time the console is reachable. Showing a dead button
-            before then would promise something that cannot work. */}
-        {inStandby && credential ? (
+        {/* Only when it can actually work: the console is asleep and a wake
+            credential is stored. Every other state hides it rather than
+            offer a button that does nothing. */}
+        {ui.showWakeButton ? (
           <Button
             variant="secondary"
             size="sm"
@@ -326,64 +298,19 @@ export default function PowerControl({ host }: { host: string }) {
         </Button>
       </div>
 
-      {/* Wake has to be set up before it is needed, and setup needs the
-          console ON. So this is offered while it is awake — the moment it
-          is asleep is too late, and saying so then would just be a taunt. */}
-      {!credential && isAwake ? (
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-[var(--color-muted)]">
-            {tr("power_pair_offer", undefined,
-              "Set this console up so it can be woken from standby.")}
-          </span>
-          <Button variant="secondary" size="sm" disabled={pairing || !profile} onClick={() => void runPair()}>
-            {pairing
-              ? tr("power_pair_working", undefined, "Pairing…")
-              : tr("power_pair_action", undefined, "Set up wake")}
-          </Button>
-        </div>
-      ) : null}
-
-      {/* Asleep, never set up: nothing can be done from here, so say what
-          to do rather than offer a control that cannot work. */}
-      {!credential && inStandby ? (
-        <div className="mt-2 text-xs text-[var(--color-muted)]">
-          {tr("power_pair_needs_console_on", undefined,
-            "Turn the console on once to set up wake — it has to be awake to pair.")}
-        </div>
-      ) : null}
-
-      {/* The manual escape hatch, surfaced only once the automatic path has
-          failed. The credential has to be read out of the Remote Play app's
-          own traffic, so this is a last resort, not an alternative. */}
-      {pairError ? (
-        <div className="mt-2 flex flex-col gap-2 text-xs">
-          <span className="text-[var(--color-bad)]">{pairError}</span>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[var(--color-muted)]">
-              {tr("power_wake_needs_credential", undefined,
-                "To wake this console, paste its Remote Play user-credential:")}
-            </span>
-            <input
-              className="input py-1 text-xs"
-              style={{ width: "auto", minWidth: "12rem" }}
-              placeholder={tr("power_wake_credential_placeholder", undefined, "user-credential")}
-              value={credentialDraft}
-              onChange={(e) => setCredentialDraft(e.target.value)}
-            />
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={!credentialDraft.trim() || !profile}
-              onClick={() => {
-                if (profile) setWakeCredential(profile.id, credentialDraft);
-                setCredentialDraft("");
-                setPairError(null);
-              }}
-            >
-              {tr("power_wake_save_credential", undefined, "Save")}
-            </Button>
-          </div>
-        </div>
+      {/* Wake setup: the console-side settings and this console's wake code.
+          Shown whenever there is no credential yet, and (collapsed) once
+          there is, so the settings stay discoverable if wake stops working.
+          Offline consoles are skipped — nothing here can be done or checked
+          when we cannot see the console at all. */}
+      {power !== "offline" && (ui.showSetup || credential) ? (
+        <WakeSetup
+          host={host}
+          addr={addr}
+          profileId={profile?.id ?? null}
+          credential={credential}
+          ui={ui}
+        />
       ) : null}
       {last && (
         <div className="mt-2 flex items-start gap-1.5 text-xs">
