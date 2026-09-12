@@ -4,9 +4,32 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 5.21.0
 
-**Installs and uploads survive a standby, and patch failures explain themselves.**
+**Cheats show up for every game, patch installs are honest, and interrupted work
+recovers on its own.**
+
+### Cheats
+
+- **Downloaded cheats now appear for every game.** Some cheat files are saved in
+  UTF-16, which the on-console reader couldn't see — so those games showed "No
+  cheats found" even though the file was there. They're now read correctly.
+- **Cheat versions are shown in the list**, so it's easy to pick a cheat that
+  matches your installed game build.
+
+### Installs
+
+- **Patch failures explain themselves.** When a patch or DLC can't install, you
+  get the real reason — base game missing, wrong version, content-id mismatch,
+  not enough space, console busy — instead of a silent stall or a false success.
+- **Patch and DLC installs check for the base game first.** Installing an update
+  or add-on whose base game isn't on the console used to accept the job and
+  stall for ten minutes before failing. Now it's rejected instantly with a clear
+  "install the base game first."
+- **The update installer is kept ready.** The install daemon is re-armed
+  automatically after a standby, and if it dies while the console stays awake —
+  so applying an update no longer fails by discovering, minutes in, that the
+  installer was never there.
 
 ### Reliability
 
@@ -15,16 +38,8 @@ What's new in ps5upload, written for humans.
   once the console wakes and the helper is back, the upload picks up where it
   left off on its own — only for connection-class interruptions, never for a
   real failure like out-of-space.
-
-- **The update installer is kept ready.** The DPI install daemon is re-armed
-  automatically after a standby, and re-armed if it dies while the console
-  stays awake — so applying an update no longer fails by discovering, minutes
-  in, that the installer was never there.
-
-- **Patch and DLC installs check for the base game first.** Installing an
-  update or add-on whose base game isn't on the console used to accept the job
-  and stall for ten minutes before failing. Now it's rejected instantly with a
-  clear "install the base game first."
+- **Cleaner wake sign-in teardown**, closing the Remote Play control session
+  gracefully after signing your user in.
 
 ## 5.20.0
 
