@@ -853,6 +853,62 @@ static int rp_regist_probe_json_locked(char *out, size_t out_size) {
 /* Serialized like every other entry point here. The first version of this
  * probe called sceRegMgr WITHOUT the lock and took a console down with it;
  * the invariant in sony_api_lock.h is not advisory. */
+/* EXPERIMENTAL — see remoteplay.h.
+ *
+ * Deliberately takes every field as a parameter rather than deciding any
+ * of them here: only +0 and +768 have known meanings, and the caller needs
+ * to vary the unknowns to find out what the console will accept. */
+static int rp_regist_write_locked(unsigned slot, int user_id, int key_type,
+                                  int client_type, const char *key_text,
+                                  char *out, size_t out_size) {
+    if (slot < 1 || slot > 32) {
+        return snprintf(out, out_size,
+                        "{\"ok\":false,\"err\":\"slot out of range\"}");
+    }
+
+    /* The field is a fixed 16 bytes. Anything shorter is NUL-padded, which
+     * is how the console itself stores it — the credential is the text
+     * before the first NUL. */
+    uint8_t blob[16];
+    memset(blob, 0, sizeof(blob));
+    if (key_text && key_text[0]) {
+        size_t n = strlen(key_text);
+        if (n > sizeof(blob)) n = sizeof(blob);
+        memcpy(blob, key_text, n);
+    }
+
+    uint32_t ec_uid = 0, ec_kt = 0, ec_blob = 0, ec_ct = 0;
+    int rc_uid = sys_registry_set_int(rp_key_regist_user_id(slot), user_id,
+                                      &ec_uid);
+    int rc_kt = sys_registry_set_int(rp_key_regist_user_id(slot) + 256,
+                                     key_type, &ec_kt);
+    int rc_blob = sys_registry_set_bin(rp_key_regist_blob(slot), blob,
+                                       sizeof(blob), &ec_blob);
+    int rc_ct = sys_registry_set_int(rp_key_regist_client_type(slot),
+                                     client_type, &ec_ct);
+
+    return snprintf(out, out_size,
+                    "{\"ok\":%s,\"slot\":%u,"
+                    "\"user_id\":{\"rc\":%d,\"err\":%u},"
+                    "\"key_type\":{\"rc\":%d,\"err\":%u},"
+                    "\"blob\":{\"rc\":%d,\"err\":%u},"
+                    "\"client_type\":{\"rc\":%d,\"err\":%u}}",
+                    (rc_uid == 0 && rc_kt == 0 && rc_blob == 0 && rc_ct == 0)
+                        ? "true" : "false",
+                    slot, rc_uid, ec_uid, rc_kt, ec_kt, rc_blob, ec_blob,
+                    rc_ct, ec_ct);
+}
+
+int remoteplay_regist_write(unsigned slot, int user_id, int key_type,
+                            int client_type, const char *key_text,
+                            char *out, size_t out_size) {
+    pthread_mutex_lock(&sony_api_lock);
+    int rc = rp_regist_write_locked(slot, user_id, key_type, client_type,
+                                    key_text, out, out_size);
+    pthread_mutex_unlock(&sony_api_lock);
+    return rc;
+}
+
 int remoteplay_regist_probe_json(char *out, size_t out_size) {
     pthread_mutex_lock(&sony_api_lock);
     int rc = rp_regist_probe_json_locked(out, out_size);

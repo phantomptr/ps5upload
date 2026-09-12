@@ -404,6 +404,7 @@ extern int posix_fallocate(int fd, off_t offset, off_t len);
 /* Read-only readiness snapshot — every precondition Remote Play needs. */
 #define FTX2_FRAME_REMOTEPLAY_READINESS  248u
 #define FTX2_FRAME_REMOTEPLAY_REGIST_PROBE 242u
+#define FTX2_FRAME_REMOTEPLAY_REGIST_WRITE 243u
 #define FTX2_FRAME_REMOTEPLAY_ENABLE     249u
 #define FTX2_FRAME_REMOTEPLAY_DEVICES    250u
 /* v4.1: Fan curve editor (set + get) */
@@ -16291,6 +16292,30 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
                               "regist_probe_overflow", 21);
         }
         return send_frame(client_fd, FTX2_FRAME_REMOTEPLAY_REGIST_PROBE, 0,
+                          hdr.trace_id, body, (uint64_t)n);
+    }
+    if (hdr.frame_type == FTX2_FRAME_REMOTEPLAY_REGIST_WRITE) {
+        /* Numbers arrive as strings: the JSON helpers here only decode
+         * unsigned values, and a free slot stores -1. */
+        char slot_s[16] = "", uid_s[24] = "", kt_s[16] = "", ct_s[16] = "";
+        char key_s[24] = "";
+        extract_json_string_field(request_body, "slot", slot_s, sizeof(slot_s));
+        extract_json_string_field(request_body, "user_id", uid_s, sizeof(uid_s));
+        extract_json_string_field(request_body, "key_type", kt_s, sizeof(kt_s));
+        extract_json_string_field(request_body, "client_type", ct_s, sizeof(ct_s));
+        extract_json_string_field(request_body, "regist_key", key_s, sizeof(key_s));
+        char body[512];
+        int n = remoteplay_regist_write(
+            (unsigned)strtoul(slot_s[0] ? slot_s : "0", NULL, 10),
+            (int)strtol(uid_s[0] ? uid_s : "-1", NULL, 10),
+            (int)strtol(kt_s[0] ? kt_s : "-1", NULL, 10),
+            (int)strtol(ct_s[0] ? ct_s : "0", NULL, 10),
+            key_s, body, sizeof(body));
+        if (n < 0 || (size_t)n >= sizeof(body)) {
+            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
+                              "regist_write_overflow", 21);
+        }
+        return send_frame(client_fd, FTX2_FRAME_REMOTEPLAY_REGIST_WRITE, 0,
                           hdr.trace_id, body, (uint64_t)n);
     }
     if (hdr.frame_type == FTX2_FRAME_REMOTEPLAY_ENABLE) {

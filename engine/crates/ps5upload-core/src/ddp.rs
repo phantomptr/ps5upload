@@ -148,9 +148,15 @@ pub fn wake(host: &str, credential: &str) -> Result<()> {
     let socket = UdpSocket::bind("0.0.0.0:0").map_err(|e| anyhow!("binding a socket: {e}"))?;
     socket.set_broadcast(true)?;
 
+    // Byte-for-byte what chiaki-ng sends, which is the client verified to
+    // wake these consoles. Two details matter and both were wrong before:
+    // `model:w` (not `m`), and the trailing NUL — chiaki transmits the
+    // formatted string *plus* its terminator (`len + 1` bytes). Without the
+    // NUL the console's standby responder reads past the datagram and stops
+    // answering discovery entirely, rather than waking.
     let pkt = format!(
-        "WAKEUP * HTTP/1.1\nclient-type:vr\nauth-type:R\nmodel:m\napp-type:r\n\
-         user-credential:{}\ndevice-discovery-protocol-version:{DDP_VERSION}\n",
+        "WAKEUP * HTTP/1.1\nclient-type:vr\nauth-type:R\nmodel:w\napp-type:r\n\
+         user-credential:{}\ndevice-discovery-protocol-version:{DDP_VERSION}\n\0",
         credential.trim()
     );
     socket

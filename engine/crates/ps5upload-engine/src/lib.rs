@@ -6066,6 +6066,28 @@ async fn remoteplay_regist_probe_handler(
     }
 }
 
+/// POST /api/ps5/remoteplay/regist-write — EXPERIMENTAL. Body is passed
+/// through to the payload verbatim so fields can be varied while probing.
+async fn remoteplay_regist_write_handler(
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(
+        body.get("addr").and_then(|v| v.as_str()).map(str::to_string),
+        &state.default_ps5_addr,
+    );
+    let r = tokio::task::spawn_blocking(move || {
+        ps5upload_core::remoteplay::remoteplay_regist_write(&addr, &body)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
 async fn remoteplay_status_handler(
     State(state): State<AppState>,
     Query(q): Query<AddrQuery>,
@@ -9038,6 +9060,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route(
             "/api/ps5/remoteplay/regist-probe",
             get(remoteplay_regist_probe_handler),
+        )
+        .route(
+            "/api/ps5/remoteplay/regist-write",
+            post(remoteplay_regist_write_handler),
         )
         .route(
             "/api/ps5/remoteplay/readiness",
