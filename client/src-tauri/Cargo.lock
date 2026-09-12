@@ -612,6 +612,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cfb-mode"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac64b0984be8510caae81455ea2c8c23e5af6be61c36129df62f3380d5d64e1f"
+dependencies = [
+ "cipher",
+]
+
+[[package]]
 name = "cfg-expr"
 version = "0.15.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3294,11 +3303,14 @@ dependencies = [
 name = "ps5upload-core"
 version = "5.19.0"
 dependencies = [
+ "aes",
  "anyhow",
  "base64 0.23.1",
  "blake3",
+ "cfb-mode",
  "crc32fast",
  "ftx2-proto",
+ "hmac",
  "image",
  "libc",
  "serde",
