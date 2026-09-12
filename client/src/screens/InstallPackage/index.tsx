@@ -678,7 +678,7 @@ export default function InstallPackageScreen() {
         title: tr(
           "pkglib.stream.fallback.title",
           undefined,
-          "Stream is blocked on this PS5",
+          "Retry from PS5 staging?",
         ),
         message: `${r.message || "The PS5 couldn't complete the HTTP install."}\n\nUpload the same package to PS5 staging and install it now? This uses the PS5-local file path and does not depend on Sony's HTTP proxy.`,
         confirmLabel: tr(

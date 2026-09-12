@@ -1011,7 +1011,7 @@ export const PKG_PATCH_REGRESSED_HINT =
   "Re-applying this update removed it — the game has gone back to its base version. The PS5's installer treats a re-applied update as one to undo. Apply the update once more to return to the updated version, and avoid re-installing an update the game already has.";
 
 export const PKG_PATCH_REJECTED_HINT =
-  "This update couldn’t be applied. ps5upload installs updates through the PS5’s safe install path (never one that could delete your base game), and on this console the PS5 declined it — most often because the update doesn’t match your installed version of the game, or the base game isn’t installed yet. Your base game is untouched. If you have the right update, you can also apply it from the PS5 itself: Settings → System → Debug Settings → Game → Package Installer.";
+  "This update couldn’t be applied. The PS5 itself declined it — most often because the update doesn’t match your installed version of the game, or the base game isn’t installed yet. Your base game is untouched. Check that this update is meant for the version you have installed, and that the base game is installed first.";
 
 /** What the install tracker concludes. */
 interface VerifyOutcome {
@@ -1220,6 +1220,7 @@ async function runDpiInstall(
   verify?: { titleId?: string; packageAppVer?: string },
 ): Promise<{
   ok: boolean;
+  ambiguous: boolean;
   errMessage: string;
   daemonFailed: boolean;
   /** Machine-readable cause when `daemonFailed` — see `dpiUnavailableCopy`. */
@@ -1257,6 +1258,7 @@ async function runDpiInstall(
     await restoreMainPayload(ip);
     return {
       ok: false,
+      ambiguous: false,
       daemonFailed: true,
       // The bridge, not the console, is what failed here — no reason code
       // applies, so the neutral fallback copy is the honest one.
@@ -1277,6 +1279,7 @@ async function runDpiInstall(
     if (ens.sent) await restoreMainPayload(ip);
     return {
       ok: false,
+      ambiguous: false,
       daemonFailed: true,
       daemonReason: ens.reason,
       rc: 0,
@@ -1290,6 +1293,7 @@ async function runDpiInstall(
     ok?: boolean;
     rc?: number;
     err_message?: string;
+    ambiguous?: boolean;
     patch_verdict?: string;
     app_ver_before?: string;
     app_ver_after?: string;
@@ -1304,7 +1308,12 @@ async function runDpiInstall(
           packageAppVer: verify?.packageAppVer,
         })) as typeof resp;
       } catch (e) {
-        resp = { ok: false, rc: 0, err_message: pkgError(e) };
+        resp = {
+          ok: false,
+          ambiguous: true,
+          rc: -1,
+          err_message: pkgError(e),
+        };
       }
       const rcNow = (resp.rc ?? 0) >>> 0;
       if (
@@ -1330,6 +1339,7 @@ async function runDpiInstall(
   const rc = (resp.rc ?? 0) >>> 0;
   return {
     ok,
+    ambiguous: !!resp.ambiguous,
     daemonFailed: false,
     rc,
     errMessage: ok
@@ -1366,6 +1376,7 @@ async function runDpiDirectInstall(
   onStatus?: (msg: string) => void,
 ): Promise<{
   ok: boolean;
+  ambiguous: boolean;
   errMessage: string;
   daemonFailed: boolean;
   rc: number;
@@ -1390,6 +1401,7 @@ async function runDpiDirectInstall(
     await restoreMainPayload(ip);
     return {
       ok: false,
+      ambiguous: false,
       daemonFailed: true,
       rc: 0,
       requestsServed: 0,
@@ -1407,6 +1419,7 @@ async function runDpiDirectInstall(
     if (ens.sent) await restoreMainPayload(ip);
     return {
       ok: false,
+      ambiguous: false,
       daemonFailed: true,
       rc: 0,
       requestsServed: 0,
@@ -1418,6 +1431,7 @@ async function runDpiDirectInstall(
     ok?: boolean;
     rc?: number;
     err_message?: string;
+    ambiguous?: boolean;
     requests_served?: number;
     bytes_served?: number;
   } = {};
@@ -1429,7 +1443,12 @@ async function runDpiDirectInstall(
           sessionId,
         })) as typeof resp;
       } catch (e) {
-        resp = { ok: false, rc: 0, err_message: pkgError(e) };
+        resp = {
+          ok: false,
+          ambiguous: true,
+          rc: -1,
+          err_message: pkgError(e),
+        };
       }
       const rcNow = (resp.rc ?? 0) >>> 0;
       if (
@@ -1453,6 +1472,7 @@ async function runDpiDirectInstall(
   const rc = (resp.rc ?? 0) >>> 0;
   return {
     ok,
+    ambiguous: !!resp.ambiguous,
     daemonFailed: false,
     rc,
     requestsServed: resp.requests_served ?? 0,
@@ -1702,7 +1722,24 @@ async function runPkgInstallCore(
         `Main-payload install failed (${mainErr}) and ${dpi.errMessage}`,
       );
     }
-    if (dpi.patchVerdict === "regressed") {
+    if (dpi.ambiguous) {
+      // FW 9.60 can close the DPI connection, or return the daemon's
+      // 0xffffffff sentinel, after the package has already landed. A missing
+      // acknowledgement is not a Sony rejection: restore happened in
+      // runDpiInstall, so ask the main payload for the exact category/size/
+      // fingerprint before saying anything failed.
+      installed = await verifyDpiInstalledArtifact(
+        host,
+        contentId,
+        resolvedType,
+        expected,
+        onStatus,
+      );
+      acceptedUnverified = !installed;
+      mainErr = installed
+        ? ""
+        : "The installer connection ended before the PS5 acknowledged the result. ps5upload could not find the exact package afterward, so the outcome is still unverified. The staged package was kept for a safe retry.";
+    } else if (dpi.patchVerdict === "regressed") {
       // Re-applying an already-installed update makes the console DELETE it:
       // hardware-observed on FW 5.10, /user/patch/<TID>/ removed and the title
       // back from 01.09 to 01.00. Never report that as success.
@@ -1720,8 +1757,7 @@ async function runPkgInstallCore(
           PKG_PATCH_REGRESSED_HINT,
         ),
       };
-    }
-    if (dpi.patchVerdict === "did_not_apply") {
+    } else if (dpi.patchVerdict === "did_not_apply") {
       // The engine watched APP_VER and it never moved: Sony accepted the
       // package and copied nothing. Proven on hardware — the same patch that
       // no-ops over a base installed by another tool applies in 150 s once
@@ -1744,8 +1780,7 @@ async function runPkgInstallCore(
           PKG_PATCH_DID_NOT_APPLY_HINT,
         ),
       };
-    }
-    if (dpi.ok) {
+    } else if (dpi.ok) {
       // DPI's rc=0 proves only that Sony accepted InstallByPackage. Confirm the
       // exact category-specific artifact after the main payload comes back.
       // This distinguishes same-version alternatives (Optional Fix/Backport)
@@ -1882,7 +1917,7 @@ function showInstallFailureToast(name: string, detail: string): void {
     action: {
       label: "Open Tasks",
       onClick: () => {
-        window.history.pushState({}, "", "/activity");
+        window.history.pushState({}, "", "/tasks");
         window.dispatchEvent(new PopStateEvent("popstate"));
       },
     },
@@ -2690,6 +2725,48 @@ const makePkgLibraryStore = () =>
       if (get().installing) {
         return { ok: false, message: "Another install is in progress." };
       }
+      const tasks = useTaskStore.getState();
+      const taskId = tasks.registerTask({
+        kind: "pkg-dpi-install",
+        origin: "pkg.stream-install",
+        label: `Stream-installing ${basenameOf(localPcPath) || "package"}`,
+        detail: "Waiting to prepare the package…",
+        consoleId: host,
+        payload: { localPcPath },
+        status: "queued",
+      });
+      let taskFinished = false;
+      const finishStreamTask = <T extends { ok: boolean; message?: string }>(
+        result: T,
+        cancelled = false,
+      ): T => {
+        if (taskFinished) return result;
+        taskFinished = true;
+        if (result.ok) {
+          const progress = useTaskStore.getState().getTask(taskId)?.progress;
+          useTaskStore.getState().finishTask(taskId, "done", {
+            detail: "Installed and verified on the PS5.",
+            progress: progress
+              ? { ...progress, current: progress.total }
+              : undefined,
+          });
+        } else if (cancelled) {
+          useTaskStore.getState().finishTask(taskId, "cancelled", {
+            detail: result.message || "Cancelled.",
+          });
+        } else {
+          const message = result.message || "The install didn't complete.";
+          useTaskStore.getState().finishTask(taskId, "failed", {
+            detail: message,
+            lastError: {
+              code: "STREAM_INSTALL_FAILED",
+              message,
+              recoverable: true,
+            },
+          });
+        }
+        return result;
+      };
       set({ installing: true, busyNotice: null, installPending: false });
       const clearBusy = () =>
         set({ installing: false, busyNotice: null, installPending: false });
@@ -2709,12 +2786,21 @@ const makePkgLibraryStore = () =>
               "Waiting for the current upload to finish before installing…",
           });
           while (transfersActive()) {
-            if (!get().installing) return { ok: false, message: "Cancelled." };
+            if (!get().installing) {
+              return finishStreamTask(
+                { ok: false, message: "Cancelled." },
+                true,
+              );
+            }
             await sleep(400);
           }
           set({ installPending: false, busyNotice: null });
         }
         set({ installPending: false });
+        useTaskStore.getState().updateTask(taskId, {
+          status: "running",
+          detail: "Reading package metadata…",
+        });
 
         // 1. Parse the PC-side pkg header for content_id + category. The
         //    engine needs the content_id to canonicalise the pkg-host URL
@@ -2725,20 +2811,29 @@ const makePkgLibraryStore = () =>
             path: localPcPath,
           })) as SplitParseResponse;
         } catch (e) {
-          return {
+          return finishStreamTask({
             ok: false,
             message: `Couldn't read .pkg header: ${pkgError(e)}`,
-          };
+          });
         }
         if ((meta.parts?.length ?? 1) > 1) {
-          return {
+          return finishStreamTask({
             ok: false,
             message:
               "Split .pkg sets aren't supported by the streaming installer — pick the single lead .pkg.",
-          };
+          });
         }
         const contentId = meta.head?.content_id ?? "";
         const label = meta.head?.title || contentId || basenameOf(localPcPath);
+        const totalBytes = meta.total_size ?? 0;
+        useTaskStore.getState().updateTask(taskId, {
+          label: `Stream-installing ${label}`,
+          detail: "Preparing the PS5 installer…",
+          progress:
+            totalBytes > 0
+              ? { current: 0, total: totalBytes, unit: "bytes" }
+              : undefined,
+        });
 
         set({
           busyNotice: `Stream-installing ${label} (beta) — the PS5 pulls the pkg directly over HTTP, no staging upload…`,
@@ -2748,7 +2843,10 @@ const makePkgLibraryStore = () =>
         //    null` + a PC `path` makes the engine create a pkg-host serving
         //    session WITHOUT expecting a staged file on the PS5. The URL
         //    the engine builds is what the DPI daemon will fetch.
-        const onStatus = (msg: string) => set({ busyNotice: msg });
+        const onStatus = (msg: string) => {
+          set({ busyNotice: msg });
+          useTaskStore.getState().updateTask(taskId, { detail: msg });
+        };
         const startResp = (await invoke("pkg_install_start", {
           ps5Addr: mgmtAddr(host),
           path: localPcPath,
@@ -2780,26 +2878,69 @@ const makePkgLibraryStore = () =>
         // rejects (rc != 0) — but without a session_id there's nothing for
         // the daemon to fetch, so this is a hard fail.
         if (!sessionId) {
-          return {
+          return finishStreamTask({
             ok: false,
             message:
               startResp.err_message ||
               `The engine wouldn't start a serving session (0x${rc.toString(16).padStart(8, "0")}).`,
-          };
+          });
         }
         servingSession = sessionId;
+        useTaskStore.getState().updateTask(taskId, {
+          engineJobId: sessionId,
+          detail: "The PS5 is fetching the package from this computer…",
+        });
 
         // 3. Hand the session's pkg-host URL to the DPI daemon. The daemon
         //    pulls the pkg over HTTP; no staging copy lands on the PS5.
         const dpi = await runDpiDirectInstall(host, sessionId, onStatus);
+        if (totalBytes > 0 && dpi.bytesServed > 0) {
+          useTaskStore.getState().updateTask(taskId, {
+            progress: {
+              current: Math.min(dpi.bytesServed, totalBytes),
+              total: totalBytes,
+              unit: "bytes",
+            },
+          });
+        }
         if (dpi.daemonFailed) {
-          return {
+          return finishStreamTask({
             ok: false,
             message: `${dpi.errMessage}. Upload & install can still use the PS5-local staged path instead.`,
             stagedFallbackRecommended: true,
             rc: dpi.rc,
             requestsServed: dpi.requestsServed,
-          };
+          });
+        }
+        if (dpi.ambiguous) {
+          useTaskStore.getState().updateTask(taskId, {
+            detail:
+              "The installer acknowledgement was lost; verifying the exact package on the PS5…",
+          });
+          const exactInstalled = await verifyDpiInstalledArtifact(
+            host,
+            contentId || null,
+            pkgTypeForCategory(meta.head?.category) || "PS4GD",
+            {
+              size: totalBytes || undefined,
+              fingerprint: meta.head?.fingerprint || undefined,
+            },
+          );
+          if (exactInstalled) {
+            pushNotification("success", `Installed ${label}`, {
+              body: "The installer acknowledgement was lost, but the exact package was verified on the PS5.",
+            });
+            return finishStreamTask({ ok: true, mayNotLaunch: false });
+          }
+          return finishStreamTask({
+            ok: false,
+            acceptedUnverified: true,
+            stagedFallbackRecommended: true,
+            rc: dpi.rc,
+            requestsServed: dpi.requestsServed,
+            message:
+              "The PS5 fetched the package, but its installer connection ended before acknowledgement and ps5upload could not verify the exact installed artifact. Upload & install can retry from PS5-local staging.",
+          });
         }
         if (!dpi.ok) {
           const rcHex = `0x${dpi.rc.toString(16).padStart(8, "0")}`;
@@ -2809,13 +2950,13 @@ const makePkgLibraryStore = () =>
             proxyRejected || blockedBeforeFetch
               ? `Stream was blocked before the PS5 requested any package data (${rcHex}${proxyRejected ? ", SCE_HTTP_ERROR_PROXY" : ""}). In the PS5 network's Advanced Settings, set Proxy Server to “Do Not Use”, or use Upload & install. Staged install reads the package from PS5-local storage and bypasses this HTTP/proxy path.`
               : `${dpi.errMessage} (${rcHex}) after ${dpi.requestsServed} package request${dpi.requestsServed === 1 ? "" : "s"} reached this computer. Upload & install uses the more reliable PS5-local staged path.`;
-          return {
+          return finishStreamTask({
             ok: false,
             message: detail,
             stagedFallbackRecommended: true,
             rc: dpi.rc,
             requestsServed: dpi.requestsServed,
-          };
+          });
         }
 
         // 4. Verify the title actually landed (DPI's `ok` alone isn't
@@ -2827,11 +2968,11 @@ const makePkgLibraryStore = () =>
           pushNotification("success", `Installed ${label}`, {
             body: "Stream-install complete. The pkg was fetched over HTTP — nothing was staged on the PS5.",
           });
-          return { ok: true, mayNotLaunch: false };
+          return finishStreamTask({ ok: true, mayNotLaunch: false });
         }
         // Stall / async failure. Nothing was staged on the PS5 so there's
         // no pkg to keep — the pkg-host session is engine-side only.
-        return {
+        return finishStreamTask({
           ok: false,
           acceptedUnverified: verdict.acceptedUnverified,
           stagedFallbackRecommended: true,
@@ -2840,9 +2981,9 @@ const makePkgLibraryStore = () =>
           message: verdict.acceptedUnverified
             ? "The PS5 accepted the stream-install request, but ps5upload couldn’t verify completion. Check the PS5 home screen and Notifications / Downloads; the original package on your computer is unchanged."
             : verdict.message || "The install didn't complete.",
-        };
+        });
       } catch (e) {
-        return { ok: false, message: pkgError(e) };
+        return finishStreamTask({ ok: false, message: pkgError(e) });
       } finally {
         if (servingSession) {
           try {
@@ -2850,6 +2991,12 @@ const makePkgLibraryStore = () =>
           } catch {
             /* best-effort; the engine also age-GCs sessions */
           }
+        }
+        if (!taskFinished) {
+          finishStreamTask({
+            ok: false,
+            message: "The stream install ended without a result.",
+          });
         }
         clearBusy();
       }

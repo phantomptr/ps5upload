@@ -387,6 +387,7 @@ describe("installStream — DPI lifecycle and HTTP fallback", () => {
   const host = "192.168.55.9";
   const localPath = "/tmp/game.pkg";
   const mockedInvoke = vi.mocked(invoke);
+  const mockedInventory = vi.mocked(pkgInstalledInventory);
   const metadata = {
     parts: [localPath],
     total_size: 8_192_000,
@@ -402,6 +403,11 @@ describe("installStream — DPI lifecycle and HTTP fallback", () => {
     vi.useRealTimers();
     mockedInvoke.mockReset();
     evictPkgLibraryStore(host);
+  });
+
+  beforeEach(() => {
+    useTaskStore.setState({ tasks: [] });
+    mockedInventory.mockReset().mockResolvedValue([]);
   });
 
   it("restores the main payload and closes the host session when DPI was sent but never became ready", async () => {
@@ -502,9 +508,58 @@ describe("installStream — DPI lifecycle and HTTP fallback", () => {
     const result = await pending;
 
     expect(result.ok).toBe(true);
+    const task = useTaskStore
+      .getState()
+      .tasks.find((candidate) => candidate.kind === "pkg-dpi-install");
+    expect(task?.status).toBe("done");
+    expect(task?.engineJobId).toBe("stream-ok");
     expect(mockedInvoke).toHaveBeenCalledWith("pkg_install_cancel", {
       session: "stream-ok",
     });
+  });
+
+  it("verifies the exact streamed artifact when FW 9.60 loses the daemon acknowledgement", async () => {
+    const fingerprint = metadata.head.fingerprint;
+    mockedInventory.mockResolvedValue([
+      {
+        kind: "base",
+        path: "/mnt/ext1/user/app/CUSA33334/app.pkg",
+        size: metadata.total_size,
+        fingerprint,
+        contentId: metadata.head.content_id,
+      },
+    ]);
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_metadata_split") return metadata;
+      if (cmd === "pkg_install_start") {
+        return { err_code: 0, session_id: "stream-ambiguous" };
+      }
+      if (cmd === "dpi_ensure") return { ok: true, sent: true };
+      if (cmd === "pkg_dpi_direct_install") {
+        return {
+          ok: false,
+          ambiguous: true,
+          rc: -1,
+          requests_served: 23,
+          bytes_served: metadata.total_size,
+        };
+      }
+      if (cmd === "payload_bundled_path") {
+        return { ok: true, path: "/tmp/ps5upload.elf" };
+      }
+      return {};
+    });
+
+    const result = await pkgLibraryStore(host)
+      .getState()
+      .installStream(localPath, host);
+
+    expect(result.ok).toBe(true);
+    expect(mockedInventory).toHaveBeenCalledWith(
+      `${host}:9113`,
+      "CUSA33334",
+    );
+    expect(useTaskStore.getState().tasks[0]?.status).toBe("done");
   });
 });
 
@@ -1198,6 +1253,62 @@ describe("runPkgInstall — forwards deleteStaging to the engine", () => {
     expect(mockedInventory).toHaveBeenCalledWith(
       "192.168.1.50:9113",
       "CUSA33334",
+    );
+  });
+
+  it("FW 9.60: verifies an exact patch after the daemon returns 0xffffffff", async () => {
+    const fingerprint = "8".repeat(64);
+    const contentId = "UP9000-CUSA07842_00-SCUS974290000001";
+    mockedInventory.mockResolvedValue([
+      {
+        kind: "patch",
+        path: "/mnt/ext1/user/patch/CUSA07842/patch.pkg",
+        size: 22_347_776,
+        fingerprint,
+        contentId,
+      },
+    ]);
+    mockedInvoke.mockReset();
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_install_start") {
+        return {
+          err_code: 0x80b2116f,
+          register_path: "none",
+          package_type: "PS4DP",
+        };
+      }
+      if (cmd === "dpi_ensure") return { ok: true };
+      if (cmd === "pkg_dpi_install") {
+        return {
+          ok: false,
+          ambiguous: true,
+          rc: -1,
+          err_message: "installer acknowledgement was inconclusive",
+        };
+      }
+      if (cmd === "payload_bundled_path") {
+        return { ok: true, path: "/tmp/p.elf" };
+      }
+      return {};
+    });
+
+    const result = await runPkgInstall(
+      "192.168.86.100",
+      "/user/data/ps5upload/pkg_library/updates/fp/CID.pkg",
+      contentId,
+      "PS4DP",
+      false,
+      undefined,
+      undefined,
+      { size: 22_347_776, fingerprint },
+      "01.04",
+    );
+
+    expect(result.installed).toBe(true);
+    expect(result.acceptedUnverified).toBe(false);
+    expect(mockedInventory).toHaveBeenCalledWith(
+      "192.168.86.100:9113",
+      "CUSA07842",
     );
   });
 

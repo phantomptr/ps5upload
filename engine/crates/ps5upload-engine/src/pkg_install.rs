@@ -2833,6 +2833,12 @@ pub struct DpiInstallResponse {
     /// fallback mode and retrying will likely fail the same way until
     /// the underlying IPMI/kstuff issue resolves.
     pub init_failed: bool,
+    /// The installer connection ended without a trustworthy Sony result.
+    /// This is deliberately distinct from `ok: false`: callers must restore
+    /// the main payload and verify the exact installed artifact before showing
+    /// a failure. FW 9.60 can close the DPI socket (or report the daemon's
+    /// internal -1 sentinel as 0xffffffff) after the package already landed.
+    pub ambiguous: bool,
     pub err_message: Option<String>,
     /// pkg-host evidence for Stream installs. Always zero for staged paths.
     pub requests_served: u64,
@@ -3066,15 +3072,27 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
     let res = tokio::task::spawn_blocking(move || dpi_send(&ps5_ip_for_send, &path)).await;
     match res {
         Ok(Ok(reply)) => {
-            let (ok, rc, init_failed, err_message) = match reply {
-                DpiReply::Ok => (true, 0, false, None),
+            let (ok, rc, init_failed, ambiguous, err_message) = match reply {
+                DpiReply::Ok => (true, 0, false, false, None),
                 DpiReply::InstallReject(rc) => {
-                    crate::log_warn!("dpi-install rejected rc=0x{:08x}", rc as u32);
+                    let ambiguous = rc == -1;
+                    if ambiguous {
+                        crate::log_warn!(
+                            "dpi-install returned daemon sentinel 0xffffffff; verifying artifact"
+                        );
+                    } else {
+                        crate::log_warn!("dpi-install rejected rc=0x{:08x}", rc as u32);
+                    }
                     (
                         false,
                         rc,
                         false,
-                        err_code_message(rc as u32).map(|s| s.to_string()),
+                        ambiguous,
+                        if ambiguous {
+                            Some("installer acknowledgement was inconclusive".to_string())
+                        } else {
+                            err_code_message(rc as u32).map(|s| s.to_string())
+                        },
                     )
                 }
                 DpiReply::InitFailed(Some(rc)) => {
@@ -3083,6 +3101,7 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
                         false,
                         -1,
                         true,
+                        false,
                         Some(format!(
                             "sceAppInstUtilInitialize failed: 0x{:08X}",
                             rc as u32
@@ -3095,6 +3114,7 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
                         false,
                         -1,
                         true,
+                        false,
                         Some(
                             "sceAppInstUtilInitialize timed out (IPMI backend not ready)"
                                 .to_string(),
@@ -3107,6 +3127,7 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
                         false,
                         -1,
                         false,
+                        false,
                         Some("daemon rejected the path (unsafe)".to_string()),
                     )
                 }
@@ -3115,6 +3136,7 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
                     (
                         false,
                         -1,
+                        false,
                         false,
                         Some("daemon received no valid input".to_string()),
                     )
@@ -3125,6 +3147,7 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
                         false,
                         -1,
                         false,
+                        true,
                         Some(format!("unexpected daemon reply: {s}")),
                     )
                 }
@@ -3204,6 +3227,7 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
                 ok,
                 rc,
                 init_failed,
+                ambiguous,
                 err_message,
                 requests_served: 0,
                 bytes_served: 0,
@@ -3212,10 +3236,23 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
                 app_ver_after,
             })
         }
-        Ok(Err(e)) => json_err(
-            StatusCode::BAD_GATEWAY,
-            &format!("DPI daemon (:9040) not reachable / errored: {e}"),
-        ),
+        Ok(Err(e)) => {
+            crate::log_warn!("dpi-install connection ended ambiguously: {e}");
+            json_ok(&DpiInstallResponse {
+                ok: false,
+                rc: -1,
+                init_failed: false,
+                ambiguous: true,
+                err_message: Some(format!(
+                    "DPI installer connection ended before acknowledgement: {e}"
+                )),
+                requests_served: 0,
+                bytes_served: 0,
+                patch_verdict: None,
+                app_ver_before,
+                app_ver_after: None,
+            })
+        }
         Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("task: {e}")),
     }
 }
@@ -3293,15 +3330,27 @@ async fn dpi_direct_install_handler(
     };
     match res {
         Ok(Ok(reply)) => {
-            let (ok, rc, init_failed, err_message) = match reply {
-                DpiReply::Ok => (true, 0, false, None),
+            let (ok, rc, init_failed, ambiguous, err_message) = match reply {
+                DpiReply::Ok => (true, 0, false, false, None),
                 DpiReply::InstallReject(rc) => {
-                    crate::log_warn!("dpi-direct-install rejected rc=0x{:08x}", rc as u32);
+                    let ambiguous = rc == -1;
+                    if ambiguous {
+                        crate::log_warn!(
+                            "dpi-direct-install returned daemon sentinel 0xffffffff; verifying artifact"
+                        );
+                    } else {
+                        crate::log_warn!("dpi-direct-install rejected rc=0x{:08x}", rc as u32);
+                    }
                     (
                         false,
                         rc,
                         false,
-                        err_code_message(rc as u32).map(|s| s.to_string()),
+                        ambiguous,
+                        if ambiguous {
+                            Some("installer acknowledgement was inconclusive".to_string())
+                        } else {
+                            err_code_message(rc as u32).map(|s| s.to_string())
+                        },
                     )
                 }
                 DpiReply::InitFailed(Some(rc)) => {
@@ -3310,6 +3359,7 @@ async fn dpi_direct_install_handler(
                         false,
                         -1,
                         true,
+                        false,
                         Some(format!(
                             "sceAppInstUtilInitialize failed: 0x{:08X}",
                             rc as u32
@@ -3322,6 +3372,7 @@ async fn dpi_direct_install_handler(
                         false,
                         -1,
                         true,
+                        false,
                         Some(
                             "sceAppInstUtilInitialize timed out (IPMI backend not ready)"
                                 .to_string(),
@@ -3334,6 +3385,7 @@ async fn dpi_direct_install_handler(
                         false,
                         -1,
                         false,
+                        false,
                         Some("daemon rejected the URL (unsafe)".to_string()),
                     )
                 }
@@ -3342,6 +3394,7 @@ async fn dpi_direct_install_handler(
                     (
                         false,
                         -1,
+                        false,
                         false,
                         Some("daemon received no valid input".to_string()),
                     )
@@ -3352,6 +3405,7 @@ async fn dpi_direct_install_handler(
                         false,
                         -1,
                         false,
+                        true,
                         Some(format!("unexpected daemon reply: {s}")),
                     )
                 }
@@ -3363,6 +3417,7 @@ async fn dpi_direct_install_handler(
                 ok,
                 rc,
                 init_failed,
+                ambiguous,
                 err_message,
                 requests_served,
                 bytes_served,
@@ -3373,10 +3428,23 @@ async fn dpi_direct_install_handler(
                 app_ver_after: None,
             })
         }
-        Ok(Err(e)) => json_err(
-            StatusCode::BAD_GATEWAY,
-            &format!("DPI daemon (:9040) not reachable / errored: {e}"),
-        ),
+        Ok(Err(e)) => {
+            crate::log_warn!("dpi-direct-install connection ended ambiguously: {e}");
+            json_ok(&DpiInstallResponse {
+                ok: false,
+                rc: -1,
+                init_failed: false,
+                ambiguous: true,
+                err_message: Some(format!(
+                    "DPI installer connection ended before acknowledgement: {e}"
+                )),
+                requests_served,
+                bytes_served,
+                patch_verdict: None,
+                app_ver_before: None,
+                app_ver_after: None,
+            })
+        }
         Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("task: {e}")),
     }
 }
@@ -4792,6 +4860,13 @@ mod tests {
         assert!(matches!(
             parse_dpi_reply("error:0x80b21106\n"),
             DpiReply::InstallReject(rc) if rc as u32 == 0x80B21106
+        ));
+        // The daemon historically leaked its internal -1 sentinel in this
+        // form. Handlers classify it as ambiguous and verify the installed
+        // artifact; it must never be presented as a Sony error code.
+        assert!(matches!(
+            parse_dpi_reply("error:0xffffffff"),
+            DpiReply::InstallReject(-1)
         ));
     }
 

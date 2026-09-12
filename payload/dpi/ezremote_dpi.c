@@ -248,47 +248,28 @@ static const char *install_error_hint(unsigned code) {
     }
 }
 
-/* After InstallByPackage queues a task (rc == 0), watch its real outcome for
- * a short window and return the async error, or 0 for success / still-going.
+/* DO NOT poll sceAppInstUtilGetInstallStatus() from this daemon.
  *
- * The point is patches: they fail *validation* early (wrong base, content-id
- * mismatch, invalid patch), so a brief poll surfaces the real reason instead
- * of the old "queued == success". A base game that is genuinely transferring
- * has not failed and stays 0 (queued) rather than blocking the caller for the
- * whole download.
+ * A previous revision called it here to turn "queued" into a real async
+ * outcome. It KILLS this process. Measured 2026-09-12 on both test consoles
+ * (Pro FW 9.60 and Phat FW 5.10) with the same package, A/B against an
+ * otherwise identical build:
  *
- * Polling GetInstallStatus is safe here because this daemon is the process
- * that started the install — Sony only segfaults a *cross-process* poller,
- * which is exactly why the main payload cannot do this and the DPI daemon
- * can. `content_id` comes back from InstallByPackage in pkg_info.
+ *   with the poll: stderr stops after IpcFacade::appInstallByPackage, the
+ *                  "[dpi] InstallByPackage ok" line never prints, :9040 goes
+ *                  dead, and the host reads a zero-byte reply -> rc 0xffffffff
+ *                  -> a *successful* install reported as a rejection. 2/2.
+ *   without it:    rc 0, daemon stays up. 1/1.
+ *
+ * The old comment here claimed only a *cross-process* poller segfaults, so the
+ * daemon that started the install could poll safely. That is wrong: it dies
+ * in-process too, on both firmwares.
+ *
+ * Async outcomes are the HOST's job, and it already does them: the engine
+ * re-verifies the exact installed artifact (category + size + fingerprint) and
+ * watches APP_VER move for patches (verify_patch_after_install). Neither can
+ * crash the console.
  */
-static int poll_install_outcome(const char *content_id) {
-    /* No content id means we cannot key a status query — treat as queued. */
-    if (content_id == NULL || content_id[0] == '\0') return 0;
-
-    const int window_ms = 8000;   /* long enough for validation, short enough
-                                     not to stall a real transfer */
-    const int step_ms = 400;
-    for (int waited = 0; waited < window_ms; waited += step_ms) {
-        SceAppInstallStatusInstalled st;
-        memset(&st, 0, sizeof(st));
-        int rc = sceAppInstUtilGetInstallStatus(content_id, &st);
-        if (rc == 0) {
-            /* "error"/"none" is a terminal failure; report its code. */
-            if (strcmp(st.status, "error") == 0 || strcmp(st.status, "none") == 0) {
-                unsigned code = (unsigned)st.error_info.error_code;
-                return code != 0 ? (int)code : -1;
-            }
-            /* "playable" means it finished within the window — clean success. */
-            if (strcmp(st.status, "playable") == 0) return 0;
-            /* otherwise still "installing"/transferring — keep watching */
-        }
-        struct timespec ts = { step_ms / 1000, (step_ms % 1000) * 1000000L };
-        nanosleep(&ts, NULL);
-    }
-    /* Still going after the window: not a failure, just a real download. */
-    return 0;
-}
 
 int main(void) {
     int server_fd, new_socket, ret;
@@ -500,30 +481,21 @@ int main(void) {
                 kernel_set_ucred_authid(me, saved_authid);
             }
             if (ret != 0) {
-                fprintf(stderr, "[dpi] InstallByPackage rc=0x%08X\n", (unsigned)ret);
-                notify("ezRemote DPI install failed\nError Code: 0x%08X",
-                       (unsigned)ret);
-            } else {
-                /* The task was accepted; watch its real outcome briefly so a
-                 * patch that fails validation reports the true reason instead
-                 * of a false "ok". Success and long-running transfers keep
-                 * ret == 0. */
-                int async = poll_install_outcome(pkg_info.content_id);
-                if (async != 0) {
-                    ret = async;
-                    const char *hint = install_error_hint((unsigned)ret);
-                    fprintf(stderr, "[dpi] install failed async rc=0x%08X (%s)\n",
-                            (unsigned)ret, hint ? hint : "");
-                    if (hint) {
-                        notify("ezRemote DPI install failed\n%s\nError Code: 0x%08X",
-                               hint, (unsigned)ret);
-                    } else {
-                        notify("ezRemote DPI install failed\nError Code: 0x%08X",
-                               (unsigned)ret);
-                    }
+                const char *hint = install_error_hint((unsigned)ret);
+                fprintf(stderr, "[dpi] InstallByPackage rc=0x%08X (%s)\n",
+                        (unsigned)ret, hint ? hint : "no hint");
+                if (hint) {
+                    notify("ezRemote DPI install failed\n%s\nError Code: 0x%08X",
+                           hint, (unsigned)ret);
                 } else {
-                    fprintf(stderr, "[dpi] InstallByPackage ok\n");
+                    notify("ezRemote DPI install failed\nError Code: 0x%08X",
+                           (unsigned)ret);
                 }
+            } else {
+                /* Queued. Sony finishes the install asynchronously; the
+                 * host verifies the result. See the note above sceAppInstUtil
+                 * polling -- doing it here kills this daemon. */
+                fprintf(stderr, "[dpi] InstallByPackage ok (queued)\n");
             }
         }
 
