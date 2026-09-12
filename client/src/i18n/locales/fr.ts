@@ -2787,6 +2787,12 @@ helper_mismatch_go: "Recharger l'assistant",
 "power_wake_save_credential": "Enregistrer",
 "power_wake_hint": "Réveille la console via le protocole de découverte de Sony. Remote Play doit être activé sur la console.",
 "power_wake_sent_body": "La console ne confirme pas un réveil. Si elle reste éteinte, vérifiez Paramètres → Système → Remote Play → Activer Remote Play.",
+"power_pair_offer": "Configurez cette console pour pouvoir la réveiller depuis la veille.",
+"power_pair_action": "Configurer le réveil",
+"power_pair_working": "Association…",
+"power_pair_done": "Cette console peut désormais être réveillée",
+"power_pair_done_body": "Associée à la console. Le réveil depuis la veille fonctionnera désormais.",
+"power_pair_needs_console_on": "Allumez la console une fois pour configurer le réveil — elle doit être allumée pour s associer.",
 };
 
 export default fr;

@@ -2697,6 +2697,12 @@ helper_mismatch_go: "Recargar asistente",
 "power_wake_save_credential": "Guardar",
 "power_wake_hint": "Enciende la consola mediante el protocolo de descubrimiento de Sony. Requiere Remote Play activado en la consola.",
 "power_wake_sent_body": "La consola no confirma el encendido. Si sigue apagada, revisa Ajustes → Sistema → Remote Play → Habilitar Remote Play.",
+"power_pair_offer": "Configura esta consola para poder encenderla desde el reposo.",
+"power_pair_action": "Configurar encendido",
+"power_pair_working": "Vinculando…",
+"power_pair_done": "Ya puedes encender esta consola",
+"power_pair_done_body": "Vinculada con la consola. A partir de ahora podrás encenderla desde el reposo.",
+"power_pair_needs_console_on": "Enciende la consola una vez para configurarlo: debe estar encendida para vincularse.",
 };
 
 export default es;

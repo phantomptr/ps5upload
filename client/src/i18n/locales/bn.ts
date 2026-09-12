@@ -2750,6 +2750,12 @@ helper_mismatch_go: "হেল্পার লোড করুন",
 "power_wake_save_credential": "সংরক্ষণ",
 "power_wake_hint": "সনির ডিসকভারি প্রোটোকলের মাধ্যমে কনসোল চালু করে। কনসোলে Remote Play সক্রিয় থাকতে হবে।",
 "power_wake_sent_body": "কনসোল চালু হওয়ার নিশ্চয়তা দেয় না। বন্ধ থাকলে সেটিংস → সিস্টেম → Remote Play → Remote Play সক্রিয় করুন দেখুন।",
+"power_pair_offer": "এই কনসোলটি সেট করুন যাতে স্ট্যান্ডবাই থেকে চালু করা যায়।",
+"power_pair_action": "চালু করা সেট করুন",
+"power_pair_working": "পেয়ার হচ্ছে…",
+"power_pair_done": "এই কনসোল এখন চালু করা যাবে",
+"power_pair_done_body": "কনসোলের সঙ্গে পেয়ার হয়েছে। এখন থেকে স্ট্যান্ডবাই থেকে চালু করা যাবে।",
+"power_pair_needs_console_on": "সেট করতে কনসোলটি একবার চালু করুন — পেয়ার করতে এটি চালু থাকতে হবে।",
 };
 
 export default bn;

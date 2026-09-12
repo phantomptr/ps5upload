@@ -2788,6 +2788,12 @@ helper_mismatch_go: "헬퍼 다시 불러오기",
 "power_wake_save_credential": "저장",
 "power_wake_hint": "소니의 검색 프로토콜로 본체를 켭니다. 본체에서 리모트 플레이가 켜져 있어야 합니다.",
 "power_wake_sent_body": "본체는 켜짐을 알려주지 않습니다. 켜지지 않으면 설정 → 시스템 → 리모트 플레이 → 리모트 플레이 사용을 확인하세요.",
+"power_pair_offer": "이 본체를 대기 모드에서 켤 수 있도록 설정합니다.",
+"power_pair_action": "켜기 설정",
+"power_pair_working": "페어링 중…",
+"power_pair_done": "이제 이 본체를 켤 수 있습니다",
+"power_pair_done_body": "본체와 페어링했습니다. 이제 대기 모드에서 켤 수 있습니다.",
+"power_pair_needs_console_on": "설정하려면 본체를 한 번 켜주세요 — 페어링하려면 본체가 켜져 있어야 합니다.",
 };
 
 export default ko;

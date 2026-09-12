@@ -2792,6 +2792,12 @@ helper_mismatch_go: "ヘルパーを再読み込み",
 "power_wake_save_credential": "保存",
 "power_wake_hint": "ソニーのディスカバリープロトコルで本体を起動します。本体側でリモートプレイを有効にしておく必要があります。",
 "power_wake_sent_body": "本体は起動を通知しません。起動しない場合は、設定 → システム → リモートプレイ → リモートプレイを有効にする を確認してください。",
+"power_pair_offer": "この本体をスタンバイから起動できるように設定します。",
+"power_pair_action": "起動を設定",
+"power_pair_working": "ペアリング中…",
+"power_pair_done": "この本体を起動できるようになりました",
+"power_pair_done_body": "本体とペアリングしました。今後はスタンバイからの起動が使えます。",
+"power_pair_needs_console_on": "設定するには本体を一度オンにしてください。ペアリングには本体が起動している必要があります。",
 };
 
 export default ja;

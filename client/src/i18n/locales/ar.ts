@@ -2750,6 +2750,12 @@ helper_mismatch_go: "إعادة تحميل المساعد",
 "power_wake_save_credential": "حفظ",
 "power_wake_hint": "يشغّل الجهاز عبر بروتوكول الاكتشاف من Sony. يجب تفعيل Remote Play على الجهاز.",
 "power_wake_sent_body": "لا يؤكد الجهاز التشغيل. إذا بقي مطفأً، تحقّق من الإعدادات ← النظام ← Remote Play ← تفعيل Remote Play.",
+"power_pair_offer": "جهّز هذا الجهاز ليصبح بالإمكان تشغيله من وضع السكون.",
+"power_pair_action": "إعداد التشغيل",
+"power_pair_working": "جارٍ الاقتران…",
+"power_pair_done": "يمكن الآن تشغيل هذا الجهاز",
+"power_pair_done_body": "تم الاقتران بالجهاز. سيعمل التشغيل من وضع السكون من الآن فصاعداً.",
+"power_pair_needs_console_on": "شغّل الجهاز مرة واحدة لإتمام الإعداد — يجب أن يكون قيد التشغيل للاقتران.",
 };
 
 export default ar;

@@ -24,7 +24,7 @@ pub struct RemotePlayStatus {
     pub err: String,
 }
 
-pub fn remoteplay_request(addr: &str, manual_account_id: Option<&str>) -> Result<()> {
+pub fn remoteplay_request(addr: &str, manual_account_id: Option<&str>) -> Result<PinSnapshot> {
     let mut c = Connection::connect(addr)?;
     let body = serde_json::json!({ "manual_account_id": manual_account_id.unwrap_or("") });
     c.send_frame(FrameType::RemotePlayRequest, &serde_json::to_vec(&body)?)?;
@@ -46,13 +46,29 @@ pub fn remoteplay_request(addr: &str, manual_account_id: Option<&str>) -> Result
     struct RequestAck {
         #[serde(default)]
         ok: bool,
+        #[serde(default)]
+        snapshot: Option<PinSnapshot>,
     }
     let ack: RequestAck = serde_json::from_slice(&resp)
         .map_err(|e| anyhow::anyhow!("bad REMOTEPLAY_REQUEST ack: {e}"))?;
     if !ack.ok {
         bail!("payload reports the Remote Play request failed on-console");
     }
-    Ok(())
+    Ok(ack.snapshot.unwrap_or_default())
+}
+
+/// The PIN and account id, read without probing for pairing completion.
+///
+/// `remoteplay_status` drives `sceRemoteplayConfirmDeviceRegist` as a side
+/// effect, which finalises a pending registration on the console. Anything
+/// that intends to perform the registration itself must take the PIN from
+/// here instead, or it consumes the pairing it is about to attempt.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PinSnapshot {
+    #[serde(default)]
+    pub pin: String,
+    #[serde(default)]
+    pub account_id: String,
 }
 
 pub fn remoteplay_status(addr: &str) -> Result<RemotePlayStatus> {

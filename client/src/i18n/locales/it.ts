@@ -2697,6 +2697,12 @@ helper_mismatch_go: "Ricarica helper",
 "power_wake_save_credential": "Salva",
 "power_wake_hint": "Accende la console tramite il protocollo di individuazione di Sony. Richiede Remote Play attivo sulla console.",
 "power_wake_sent_body": "La console non conferma l accensione. Se resta spenta, controlla Impostazioni → Sistema → Remote Play → Abilita Remote Play.",
+"power_pair_offer": "Configura questa console per poterla accendere dallo standby.",
+"power_pair_action": "Configura accensione",
+"power_pair_working": "Associazione…",
+"power_pair_done": "Ora questa console può essere accesa",
+"power_pair_done_body": "Associata alla console. D ora in poi l accensione dallo standby funzionerà.",
+"power_pair_needs_console_on": "Accendi la console una volta per configurarla: per associarla deve essere accesa.",
 };
 
 export default it;

@@ -10,6 +10,15 @@ int remoteplay_request(const char *manual_account_id);
 
 int remoteplay_get_status(char *buf, size_t cap);
 
+/* The current PIN and account id, with NO pairing-completion probing.
+ *
+ * remoteplay_get_status() drives sceRemoteplayConfirmDeviceRegist as a
+ * side effect, which finalises a pending registration on the console. A
+ * client that is about to perform the registration itself must therefore
+ * never poll status to learn the PIN — it would consume the very pairing
+ * it is trying to complete. This is that read, and nothing else. */
+int remoteplay_pin_snapshot(char *out, size_t out_size);
+
 int remoteplay_cancel(void);
 
 /* Read-only readiness snapshot as JSON. Returns the snprintf length, or

@@ -3046,6 +3046,12 @@ helper_mismatch_go: "Załaduj pomocnika",
 "power_wake_save_credential": "Zapisz",
 "power_wake_hint": "Wybudza konsolę przez protokół wykrywania Sony. Wymaga włączonego Remote Play na konsoli.",
 "power_wake_sent_body": "Konsola nie potwierdza wybudzenia. Jeśli się nie włączy, sprawdź Ustawienia → System → Remote Play → Włącz Remote Play.",
+"power_pair_offer": "Skonfiguruj tę konsolę, aby można ją było wybudzać z trybu czuwania.",
+"power_pair_action": "Skonfiguruj wybudzanie",
+"power_pair_working": "Parowanie…",
+"power_pair_done": "Tę konsolę można teraz wybudzać",
+"power_pair_done_body": "Sparowano z konsolą. Wybudzanie z trybu czuwania będzie już działać.",
+"power_pair_needs_console_on": "Włącz konsolę raz, aby skonfigurować wybudzanie — do sparowania musi być włączona.",
 };
 
 export default pl;

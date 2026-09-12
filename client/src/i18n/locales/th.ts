@@ -2777,6 +2777,12 @@ helper_mismatch_go: "โหลดตัวช่วยใหม่",
 "power_wake_save_credential": "บันทึก",
 "power_wake_hint": "ปลุกเครื่องผ่านโปรโตคอลค้นหาอุปกรณ์ของ Sony ต้องเปิด Remote Play บนเครื่องก่อน",
 "power_wake_sent_body": "เครื่องจะไม่ยืนยันการปลุก หากยังไม่เปิด ให้ตรวจสอบ การตั้งค่า → ระบบ → Remote Play → เปิดใช้งาน Remote Play",
+"power_pair_offer": "ตั้งค่าเครื่องนี้เพื่อให้ปลุกจากโหมดพักได้",
+"power_pair_action": "ตั้งค่าการปลุก",
+"power_pair_working": "กำลังจับคู่…",
+"power_pair_done": "ตอนนี้ปลุกเครื่องนี้ได้แล้ว",
+"power_pair_done_body": "จับคู่กับเครื่องแล้ว ต่อจากนี้จะปลุกจากโหมดพักได้",
+"power_pair_needs_console_on": "เปิดเครื่องสักครั้งเพื่อตั้งค่าการปลุก — ต้องเปิดเครื่องอยู่จึงจะจับคู่ได้",
 };
 
 export default th;

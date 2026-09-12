@@ -2698,6 +2698,12 @@ helper_mismatch_go: "重新載入小幫手",
 "power_wake_save_credential": "儲存",
 "power_wake_hint": "透過索尼的裝置探索協定喚醒主機。需要在主機上啟用 Remote Play。",
 "power_wake_sent_body": "主機不會確認喚醒。如果仍未開機，請檢查 設定 → 系統 → Remote Play → 啟用 Remote Play。",
+"power_pair_offer": "設定這台主機，使其可以從待機狀態喚醒。",
+"power_pair_action": "設定喚醒",
+"power_pair_working": "正在配對…",
+"power_pair_done": "現在可以喚醒這台主機了",
+"power_pair_done_body": "已與主機配對。日後可以從待機狀態喚醒它。",
+"power_pair_needs_console_on": "請先將主機開機一次以完成設定 — 配對時主機必須處於開機狀態。",
 };
 
 export default zh_TW;

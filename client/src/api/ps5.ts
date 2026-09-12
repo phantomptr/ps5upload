@@ -2116,6 +2116,36 @@ export async function powerWake(
   return { ok: !!body.ok };
 }
 
+export interface PairForWakeResult {
+  /** The wake credential. Store it against the console and wake works. */
+  credential: string;
+  nickname: string;
+  mac: string;
+  account_id_b64: string;
+  /** "foreground" | "login-list" — how the console picked the account. */
+  account_via: string;
+}
+
+/** Pair with a console so it can be woken later.
+ *
+ *  Nothing is asked of the user: the payload reads the PSN account id off the
+ *  console and has Sony's own API mint the pairing PIN, and the engine runs
+ *  the Remote Play registration handshake with them.
+ *
+ *  The console must be AWAKE with the payload running — which is the opposite
+ *  of when waking is useful, so this is a one-time setup step to be offered
+ *  while the console is on. */
+export async function pairForWake(host: string, addr?: string): Promise<PairForWakeResult> {
+  const res = await fetch(`${getEngineUrl()}/api/ps5/power/pair`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ host, addr }),
+  });
+  const body = (await res.json().catch(() => ({}))) as PairForWakeResult & { error?: string };
+  if (!res.ok) throw new Error(body.error || `pairing failed (${res.status})`);
+  return body;
+}
+
 /** Is the console awake, in standby, or not answering?
  *
  *  Needs neither a credential nor the payload, so it can tell "console is

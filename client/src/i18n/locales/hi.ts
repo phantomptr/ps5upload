@@ -2787,6 +2787,12 @@ helper_mismatch_go: "हेल्पर फिर लोड करें",
 "power_wake_save_credential": "सहेजें",
 "power_wake_hint": "सोनी के डिस्कवरी प्रोटोकॉल से कंसोल चालू करता है। कंसोल पर Remote Play सक्षम होना चाहिए।",
 "power_wake_sent_body": "कंसोल चालू होने की पुष्टि नहीं करता। अगर यह बंद ही रहे, तो सेटिंग्स → सिस्टम → Remote Play → Remote Play सक्षम करें देखें।",
+"power_pair_offer": "इस कंसोल को सेट करें ताकि इसे स्टैंडबाय से चालू किया जा सके।",
+"power_pair_action": "चालू करना सेट करें",
+"power_pair_working": "पेयर हो रहा है…",
+"power_pair_done": "अब यह कंसोल चालू किया जा सकता है",
+"power_pair_done_body": "कंसोल के साथ पेयर हो गया। अब इसे स्टैंडबाय से चालू किया जा सकेगा।",
+"power_pair_needs_console_on": "सेट करने के लिए कंसोल को एक बार चालू करें — पेयर करने के लिए इसका चालू रहना ज़रूरी है।",
 };
 
 export default hi;

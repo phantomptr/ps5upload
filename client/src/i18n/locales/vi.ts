@@ -2752,6 +2752,12 @@ helper_mismatch_go: "Tải lại trợ giúp",
 "power_wake_save_credential": "Lưu",
 "power_wake_hint": "Đánh thức máy qua giao thức khám phá của Sony. Máy phải bật Remote Play.",
 "power_wake_sent_body": "Máy không xác nhận việc đánh thức. Nếu vẫn tắt, hãy kiểm tra Cài đặt → Hệ thống → Remote Play → Bật Remote Play.",
+"power_pair_offer": "Thiết lập máy này để có thể đánh thức từ chế độ nghỉ.",
+"power_pair_action": "Thiết lập đánh thức",
+"power_pair_working": "Đang ghép nối…",
+"power_pair_done": "Máy này giờ có thể được đánh thức",
+"power_pair_done_body": "Đã ghép nối với máy. Từ giờ có thể đánh thức máy từ chế độ nghỉ.",
+"power_pair_needs_console_on": "Hãy bật máy một lần để thiết lập — máy phải đang bật thì mới ghép nối được.",
 };
 
 export default vi;

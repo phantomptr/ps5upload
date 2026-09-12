@@ -2758,6 +2758,12 @@ helper_mismatch_go: "Helfer neu laden",
 "power_wake_save_credential": "Speichern",
 "power_wake_hint": "Weckt die Konsole über Sonys Discovery-Protokoll. Remote Play muss auf der Konsole aktiviert sein.",
 "power_wake_sent_body": "Die Konsole bestätigt ein Aufwecken nicht. Bleibt sie aus, prüfe Einstellungen → System → Remote Play → Remote Play aktivieren.",
+"power_pair_offer": "Diese Konsole einrichten, damit sie aus dem Ruhezustand geweckt werden kann.",
+"power_pair_action": "Wecken einrichten",
+"power_pair_working": "Kopplung läuft…",
+"power_pair_done": "Diese Konsole kann jetzt geweckt werden",
+"power_pair_done_body": "Mit der Konsole gekoppelt. Das Wecken aus dem Ruhezustand funktioniert ab sofort.",
+"power_pair_needs_console_on": "Schalte die Konsole einmal ein, um das Wecken einzurichten — zum Koppeln muss sie an sein.",
 };
 
 export default de;

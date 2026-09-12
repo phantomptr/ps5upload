@@ -2991,6 +2991,44 @@ async fn ps5_power_wake(Json(req): Json<PowerWakeReq>) -> impl IntoResponse {
 }
 
 #[derive(Debug, serde::Deserialize)]
+struct PowerPairReq {
+    /// The payload's management address. Optional — falls back to the
+    /// engine's configured console, like every other payload call.
+    addr: Option<String>,
+    /// The console's address. Registration and wake use their own ports,
+    /// so this is the bare host, not the management address.
+    host: String,
+}
+
+/// POST /api/ps5/power/pair — pair with a console so it can be woken.
+///
+/// One call, nothing asked of the user: the payload supplies the PSN
+/// account id and mints the PIN, and the engine runs the registration
+/// handshake. Returns the wake credential for the client to store.
+///
+/// The console has to be awake with the payload running. That is not a
+/// limitation worth working around — pairing happens once, and what it
+/// buys is the ability to wake the console later, when it is not.
+async fn ps5_power_pair(
+    State(state): State<AppState>,
+    Json(req): Json<PowerPairReq>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
+    let host = req.host.clone();
+    crate::log_info!("power_pair: addr={addr} host={host}");
+    let r = tokio::task::spawn_blocking(move || {
+        ps5upload_core::rp_regist::pair_with_console(&addr, &host)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r);
+    match r {
+        Ok(p) => (StatusCode::OK, Json(p)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
 struct DdpStatusQuery {
     host: String,
 }
@@ -5998,7 +6036,11 @@ async fn remoteplay_request_handler(
     .map_err(anyhow::Error::from)
     .and_then(|r| r);
     match r {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+        Ok(snap) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"ok": true, "pin": snap.pin, "account_id": snap.account_id})),
+        )
+            .into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
@@ -8959,6 +9001,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/power/telemetry", get(ps5_power_telemetry))
         .route("/api/ps5/power/wake", post(ps5_power_wake))
         .route("/api/ps5/power/ddp-status", get(ps5_power_ddp_status))
+        .route("/api/ps5/power/pair", post(ps5_power_pair))
         .route("/api/ps5/users/list", get(ps5_users_list))
         .route("/api/ps5/users/create", post(user_create_handler))
         .route("/api/ps5/users/delete", post(user_delete_handler))

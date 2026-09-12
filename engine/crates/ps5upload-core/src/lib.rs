@@ -29,6 +29,8 @@ pub mod process_mgr;
 pub mod profile;
 pub mod rar_stream;
 pub mod remoteplay;
+pub mod rp_regist;
+mod rp_regist_keys;
 pub mod saves;
 pub mod sdk_changer;
 pub mod search_index;

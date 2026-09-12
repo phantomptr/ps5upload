@@ -18,7 +18,7 @@ import { Button, Spinner } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useTr } from "../../state/lang";
 import { useEffect } from "react";
-import { ddpStatus, powerWake, type DdpStatus } from "../../api/ps5";
+import { ddpStatus, pairForWake, powerWake, type DdpStatus } from "../../api/ps5";
 import { useRosterStore } from "../../state/roster";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
@@ -56,6 +56,11 @@ export default function PowerControl({ host }: { host: string }) {
   const credential = profile?.wake_credential ?? "";
   const [ddp, setDdp] = useState<DdpStatus | null>(null);
   const [credentialDraft, setCredentialDraft] = useState("");
+  const [pairing, setPairing] = useState(false);
+  /* Only shown after pairing has actually failed. Until then, offering a
+     field for a value that takes a packet capture to obtain would be
+     noise — the one-click path is expected to work. */
+  const [pairError, setPairError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!host) return;
@@ -74,6 +79,33 @@ export default function PowerControl({ host }: { host: string }) {
   }, [host]);
 
   const inStandby = ddp?.code === 620;
+  /* Pairing talks to the payload and to Sony's Remote Play service, so the
+     console has to be ON — the opposite of when waking is useful. Setup is
+     therefore offered while it is awake, not while it is asleep. */
+  const isAwake = ddp?.code === 200;
+
+  async function runPair() {
+    if (!profile) return;
+    setPairing(true);
+    setPairError(null);
+    try {
+      const r = await pairForWake(host, addr);
+      setWakeCredential(profile.id, r.credential);
+      pushNotification(
+        "success",
+        tr("power_pair_done", undefined, "This console can now be woken"),
+        {
+          body: tr("power_pair_done_body", undefined,
+            "Paired with the console. Wake will work from standby from now on."),
+        },
+      );
+      audit("system_wake", withConsolePrefix(host, "paired for wake"));
+    } catch (e) {
+      setPairError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPairing(false);
+    }
+  }
 
   async function runWake() {
     if (!credential) return;
@@ -294,33 +326,63 @@ export default function PowerControl({ host }: { host: string }) {
         </Button>
       </div>
 
-      {/* Only when it can change the outcome: the console is asleep and we
-          have no way to wake it. A credential cannot be derived — it has to
-          be read out of the Remote Play app's own traffic. */}
-      {inStandby && !credential ? (
+      {/* Wake has to be set up before it is needed, and setup needs the
+          console ON. So this is offered while it is awake — the moment it
+          is asleep is too late, and saying so then would just be a taunt. */}
+      {!credential && isAwake ? (
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
           <span className="text-[var(--color-muted)]">
-            {tr("power_wake_needs_credential", undefined,
-              "To wake this console, paste its Remote Play user-credential:")}
+            {tr("power_pair_offer", undefined,
+              "Set this console up so it can be woken from standby.")}
           </span>
-          <input
-            className="input py-1 text-xs"
-            style={{ width: "auto", minWidth: "12rem" }}
-            placeholder={tr("power_wake_credential_placeholder", undefined, "user-credential")}
-            value={credentialDraft}
-            onChange={(e) => setCredentialDraft(e.target.value)}
-          />
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={!credentialDraft.trim() || !profile}
-            onClick={() => {
-              if (profile) setWakeCredential(profile.id, credentialDraft);
-              setCredentialDraft("");
-            }}
-          >
-            {tr("power_wake_save_credential", undefined, "Save")}
+          <Button variant="secondary" size="sm" disabled={pairing || !profile} onClick={() => void runPair()}>
+            {pairing
+              ? tr("power_pair_working", undefined, "Pairing…")
+              : tr("power_pair_action", undefined, "Set up wake")}
           </Button>
+        </div>
+      ) : null}
+
+      {/* Asleep, never set up: nothing can be done from here, so say what
+          to do rather than offer a control that cannot work. */}
+      {!credential && inStandby ? (
+        <div className="mt-2 text-xs text-[var(--color-muted)]">
+          {tr("power_pair_needs_console_on", undefined,
+            "Turn the console on once to set up wake — it has to be awake to pair.")}
+        </div>
+      ) : null}
+
+      {/* The manual escape hatch, surfaced only once the automatic path has
+          failed. The credential has to be read out of the Remote Play app's
+          own traffic, so this is a last resort, not an alternative. */}
+      {pairError ? (
+        <div className="mt-2 flex flex-col gap-2 text-xs">
+          <span className="text-[var(--color-bad)]">{pairError}</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[var(--color-muted)]">
+              {tr("power_wake_needs_credential", undefined,
+                "To wake this console, paste its Remote Play user-credential:")}
+            </span>
+            <input
+              className="input py-1 text-xs"
+              style={{ width: "auto", minWidth: "12rem" }}
+              placeholder={tr("power_wake_credential_placeholder", undefined, "user-credential")}
+              value={credentialDraft}
+              onChange={(e) => setCredentialDraft(e.target.value)}
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!credentialDraft.trim() || !profile}
+              onClick={() => {
+                if (profile) setWakeCredential(profile.id, credentialDraft);
+                setCredentialDraft("");
+                setPairError(null);
+              }}
+            >
+              {tr("power_wake_save_credential", undefined, "Save")}
+            </Button>
+          </div>
         </div>
       ) : null}
       {last && (

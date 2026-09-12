@@ -2757,6 +2757,12 @@ helper_mismatch_go: "Yardımcıyı yükle",
 "power_wake_save_credential": "Kaydet",
 "power_wake_hint": "Konsolu Sony nin keşif protokolüyle uyandırır. Konsolda Remote Play etkin olmalıdır.",
 "power_wake_sent_body": "Konsol uyandırmayı onaylamaz. Açılmazsa Ayarlar → Sistem → Remote Play → Remote Play i Etkinleştir seçeneğini kontrol edin.",
+"power_pair_offer": "Bu konsolu bekleme modundan uyandırılabilecek şekilde ayarlayın.",
+"power_pair_action": "Uyandırmayı ayarla",
+"power_pair_working": "Eşleştiriliyor…",
+"power_pair_done": "Bu konsol artık uyandırılabilir",
+"power_pair_done_body": "Konsolla eşleştirildi. Bundan sonra bekleme modundan uyandırma çalışacak.",
+"power_pair_needs_console_on": "Uyandırmayı ayarlamak için konsolu bir kez açın — eşleştirme için açık olmalı.",
 };
 
 export default tr;

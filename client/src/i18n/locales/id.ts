@@ -2759,6 +2759,12 @@ helper_mismatch_go: "Muat ulang helper",
 "power_wake_save_credential": "Simpan",
 "power_wake_hint": "Membangunkan konsol lewat protokol penemuan Sony. Remote Play harus aktif di konsol.",
 "power_wake_sent_body": "Konsol tidak mengonfirmasi pembangunan. Jika tetap mati, periksa Pengaturan → Sistem → Remote Play → Aktifkan Remote Play.",
+"power_pair_offer": "Siapkan konsol ini agar bisa dibangunkan dari mode siaga.",
+"power_pair_action": "Siapkan pembangunan",
+"power_pair_working": "Memasangkan…",
+"power_pair_done": "Konsol ini sekarang bisa dibangunkan",
+"power_pair_done_body": "Sudah dipasangkan dengan konsol. Membangunkan dari mode siaga kini akan berfungsi.",
+"power_pair_needs_console_on": "Nyalakan konsol sekali untuk menyiapkannya — konsol harus menyala agar bisa dipasangkan.",
 };
 
 export default id;

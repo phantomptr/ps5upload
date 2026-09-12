@@ -2703,6 +2703,12 @@ helper_mismatch_go: "重新加载助手",
 "power_wake_save_credential": "保存",
 "power_wake_hint": "通过索尼的设备发现协议唤醒主机。需要在主机上启用 Remote Play。",
 "power_wake_sent_body": "主机不会确认唤醒。如果仍未开机，请检查 设置 → 系统 → Remote Play → 启用 Remote Play。",
+"power_pair_offer": "设置这台主机，使其可以从待机状态唤醒。",
+"power_pair_action": "设置唤醒",
+"power_pair_working": "正在配对…",
+"power_pair_done": "现在可以唤醒这台主机了",
+"power_pair_done_body": "已与主机配对。今后可以从待机状态唤醒它。",
+"power_pair_needs_console_on": "请先把主机开机一次以完成设置 — 配对时主机必须处于开机状态。",
 };
 
 export default zh_CN;

@@ -10635,9 +10635,23 @@ static int handle_remoteplay_request(runtime_state_t *state, int client_fd,
     char acct[64] = {0};
     extract_json_string_field(body, "manual_account_id", acct, sizeof(acct));
     int rc = remoteplay_request(acct[0] ? acct : NULL);
-    char resp[64];
-    int len = snprintf(resp, sizeof(resp), "{\"ok\":%s}",
+    /* Carry the PIN back in the ack.
+     *
+     * A caller that is about to run the registration handshake itself must
+     * not learn the PIN by polling status: that call probes
+     * sceRemoteplayConfirmDeviceRegist, which finalises the pending
+     * registration on the console and makes the handshake that follows be
+     * refused. Returning it here removes the need to poll at all. */
+    char snap[192] = "";
+    if (rc == 0) (void)remoteplay_pin_snapshot(snap, sizeof(snap));
+    char resp[256];
+    int len;
+    if (rc == 0 && snap[0]) {
+        len = snprintf(resp, sizeof(resp), "{\"ok\":true,\"snapshot\":%s}", snap);
+    } else {
+        len = snprintf(resp, sizeof(resp), "{\"ok\":%s}",
                        rc == 0 ? "true" : "false");
+    }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);

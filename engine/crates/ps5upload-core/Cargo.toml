@@ -16,6 +16,9 @@ crc32fast = "1"
 # no new supply-chain surface and keeps the aarch64-linux-android cross-compile
 # dependency-free.
 sha2 = "0.11"
+hmac = "0.13"
+aes = "0.9"
+cfb-mode = "0.9"
 ftx2-proto = { path = "../ftx2-proto" }
 libc = "0.2"
 serde.workspace = true

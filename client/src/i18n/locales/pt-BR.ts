@@ -2785,6 +2785,12 @@ helper_mismatch_go: "Recarregar auxiliar",
 "power_wake_save_credential": "Salvar",
 "power_wake_hint": "Liga o console pelo protocolo de descoberta da Sony. Requer Remote Play ativado no console.",
 "power_wake_sent_body": "O console não confirma a ativação. Se continuar desligado, verifique Ajustes → Sistema → Remote Play → Ativar Remote Play.",
+"power_pair_offer": "Configure este console para poder ligá-lo a partir do repouso.",
+"power_pair_action": "Configurar ativação",
+"power_pair_working": "Pareando…",
+"power_pair_done": "Este console já pode ser ligado",
+"power_pair_done_body": "Pareado com o console. A partir de agora será possível ligá-lo do repouso.",
+"power_pair_needs_console_on": "Ligue o console uma vez para configurar — ele precisa estar ligado para parear.",
 };
 
 export default pt_BR;
