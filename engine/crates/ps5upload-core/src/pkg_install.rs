@@ -671,6 +671,15 @@ pub fn err_code_message(code: u32) -> Option<&'static str> {
         0x80A3_000D => Some("The console firmware is too old for this package"),
         0x80A3_000C => Some("Close the game on the PS5 before installing this patch"),
         0x80A3_0008 | 0x80A3_0009 => Some("The package is broken or the wrong content type"),
+        // Remaining actionable AppInstaller codes from OnionHEN's full enum.
+        0x80A3_0002 => Some("PS5 reports not enough free space — free up space, then retry"),
+        0x80A3_0006 => Some("Wrong DRM type — this package isn't valid for this console"),
+        0x80A3_0007 => Some("PS5 ran out of memory during install — restart the console and retry"),
+        0x80A3_000B => Some("The add-on package is broken — re-download it"),
+        0x80A3_0012 => Some("The PS5 app database is disabled — rebuild it from Safe Mode, then retry"),
+        0x80A3_0015 => Some("The PS5 installer is busy — wait for the current install to finish, then retry"),
+        0x80A3_0016 => Some("This title is already installed"),
+        0x80A3_0018 => Some("A host tool still has this app mounted — unmount it on the PS5 first"),
         // SCE_HTTP_ERROR_PROXY. Hardware-observed when Stream install asks
         // Sony's HTTP stack to reach the desktop but the console's configured
         // proxy/network path cannot connect. The DPI daemon rejects before a
