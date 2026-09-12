@@ -1118,42 +1118,43 @@ async fn install_start_handler(
         }
     }
 
-    // ── Patch-without-base pre-flight ───────────────────────────────────
-    // A patch whose base game isn't installed cannot install: Sony's
-    // installer accepts the request, writes nothing, and the progress tracker
-    // eventually calls it a stall — after ~10 MINUTES of a spinner. Measured:
-    // a Toy Story 2 backport (category `gp`) aimed at a console without
-    // CUSA33334 sat for 604s before reporting "0 of 15335424 bytes written".
+    // ── Patch/add-on-without-base pre-flight ────────────────────────────
+    // A patch or add-on whose base game isn't installed cannot install:
+    // Sony's installer accepts the request, writes nothing, and the progress
+    // tracker eventually calls it a stall — after ~10 MINUTES of a spinner.
+    // Measured: a Toy Story 2 backport (category `gp`) aimed at a console
+    // without CUSA33334 sat for 604s before reporting "0 of 15335424 bytes
+    // written". An add-on (`ac`) against a missing base fails the same way.
     //
     // The answer is knowable instantly, so check it instantly. Only a
     // DEFINITE absence fails: an enumeration that errors leaves the install
     // to proceed exactly as before, because a check we cannot perform must
-    // never block a legitimate install.
-    if package_type.ends_with("DP") {
-        if let Some(title_id) =
-            ps5upload_core::pkg_install::title_id_from_content_id(&head_meta.content_id)
-        {
-            let addr = req.ps5_addr.clone();
-            let tid = title_id.clone();
-            let check = tokio::task::spawn_blocking(move || {
-                ps5upload_core::pkg_install::verify_title_registered(&addr, &tid)
-            })
-            .await
-            .unwrap_or(ps5upload_core::pkg_install::LaunchCheck::Unsupported);
-            if matches!(check, ps5upload_core::pkg_install::LaunchCheck::Absent) {
-                crate::log_warn!(
-                    "install rejected: patch {} has no installed base {} on {}",
-                    head_meta.content_id,
-                    title_id,
-                    req.ps5_addr
-                );
-                return json_err(
-                    StatusCode::BAD_REQUEST,
-                    &format!(
-                        "This is an update/patch for {title_id}, but that game isn't installed on this PS5. Install the base game first, then apply the patch."
-                    ),
-                );
-            }
+    // never block a legitimate install. The category-gating and the "never
+    // block on uncertainty" rule live in core::preflight_patch_install.
+    let category = if package_type.ends_with("DP") {
+        "gp"
+    } else if package_type.ends_with("AC") {
+        "ac"
+    } else {
+        "gd"
+    };
+    {
+        let addr = req.ps5_addr.clone();
+        let content_id = head_meta.content_id.clone();
+        let cat = category;
+        let preflight = tokio::task::spawn_blocking(move || {
+            ps5upload_core::pkg_install::preflight_patch_install(&addr, &content_id, cat)
+        })
+        .await
+        .unwrap_or(None);
+        if let Some(message) = preflight {
+            crate::log_warn!(
+                "install rejected: {} {} has no installed base on {}",
+                category,
+                head_meta.content_id,
+                req.ps5_addr
+            );
+            return json_err(StatusCode::BAD_REQUEST, &message);
         }
     }
 

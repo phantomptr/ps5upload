@@ -398,6 +398,45 @@ pub fn verify_launchable(addr: &str, content_id: &str) -> LaunchCheck {
     }
 }
 
+/// Pre-flight for a patch / add-on install: is the base game already on the
+/// console?
+///
+/// A patch (`gp`) or add-on (`ac`) shares the base game's content_id and can
+/// only install onto an already-present base — otherwise Sony's installer
+/// fails late with `APP_NOT_FOUND` (0x80A30004), which the DPI async poll now
+/// surfaces but only after the attempt. Checking first turns the most common
+/// patch failure into a clear "install the base game first" up front.
+///
+/// Returns `Some(message)` to warn/block, or `None` to proceed. A base game
+/// (`gd`) never depends on anything, and an unverifiable console never blocks
+/// — pre-flight only speaks when it is *sure* the base is missing, matching
+/// SSPI's "reject a patch built against a different base" without ever
+/// blocking on uncertainty.
+pub fn preflight_patch_install(addr: &str, content_id: &str, category: &str) -> Option<String> {
+    let cat = category.trim().to_lowercase();
+    // Only patches and add-ons depend on a base being present.
+    let kind = match cat.as_str() {
+        "gp" => "update/patch",
+        "ac" => "add-on (DLC)",
+        _ => return None, // gd (base) or unknown — nothing to pre-check
+    };
+    match verify_launchable(addr, content_id) {
+        // Definitely not installed → the one case worth stopping for. Name
+        // the base title when we can derive it, so the message points at the
+        // exact game to install first rather than at "the base game".
+        LaunchCheck::Absent => {
+            let base = title_id_from_content_id(content_id).unwrap_or_else(|| "that game".into());
+            Some(format!(
+                "This is an {kind} for {base}, but that game isn't installed on this PS5. \
+                 Install the base game first, then install this {kind}."
+            ))
+        }
+        // Registered → good. Unsupported / PlaceholderTitleId → cannot be
+        // sure, so never block: the install (and the DPI poll) still runs.
+        _ => None,
+    }
+}
+
 /// True when the content_id still carries Sony's in-flight `FAKE…`
 /// placeholder title id.
 ///
@@ -700,6 +739,26 @@ pub fn err_code_message(code: u32) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preflight_only_gates_patches_and_addons() {
+        // A base game (gd) or an unknown/missing category never triggers a
+        // base check — so these return None without touching the network,
+        // regardless of the (here unreachable) address.
+        let addr = "203.0.113.1:9114"; // TEST-NET-3, never connects
+        assert_eq!(
+            preflight_patch_install(addr, "EP4361-PPSA01234_00-REDEMPTION000002", "gd"),
+            None
+        );
+        assert_eq!(
+            preflight_patch_install(addr, "EP4361-PPSA01234_00-REDEMPTION000002", ""),
+            None
+        );
+        assert_eq!(
+            preflight_patch_install(addr, "EP4361-PPSA01234_00-REDEMPTION000002", "GD"),
+            None
+        );
+    }
 
     #[test]
     fn known_err_codes_have_messages() {
