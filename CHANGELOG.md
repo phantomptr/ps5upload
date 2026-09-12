@@ -4,6 +4,28 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+**Installs and uploads survive a standby, and patch failures explain themselves.**
+
+### Reliability
+
+- **Interrupted uploads resume on wake.** If the console rests part-way through
+  an upload, the transfer used to give up and wait for you to click Retry. Now,
+  once the console wakes and the helper is back, the upload picks up where it
+  left off on its own — only for connection-class interruptions, never for a
+  real failure like out-of-space.
+
+- **The update installer is kept ready.** The DPI install daemon is re-armed
+  automatically after a standby, and re-armed if it dies while the console
+  stays awake — so applying an update no longer fails by discovering, minutes
+  in, that the installer was never there.
+
+- **Patch and DLC installs check for the base game first.** Installing an
+  update or add-on whose base game isn't on the console used to accept the job
+  and stall for ten minutes before failing. Now it's rejected instantly with a
+  clear "install the base game first."
+
 ## 5.20.0
 
 **Wake your PS5 from standby — and wake it straight into your user.**
