@@ -4,6 +4,41 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.22.0
+
+**Wake and sign-in set themselves up, and installs stop reporting success as
+failure.**
+
+### Wake & sign in
+
+- **One button now sets up wake-from-standby.** ps5upload reads what it needs
+  from the console itself — you no longer have to hunt down a wake code, a
+  registration key and an RP-Key, and you no longer need Chiaki or any other app
+  to get them. Typing them by hand is still there as a fallback, tucked away.
+- **Remote Play is switched on for you** as part of that setup, instead of the
+  attempt failing with "Remote Play is turned off on the console".
+- **Setting up used to silently save nothing.** The keys the console returns
+  were a different length than the app expected, so a setup that looked
+  successful left sign-in unconfigured. Fixed.
+- **The panel says what's happening** — whether it's ready, part-way (wake works
+  but stops at user-select), busy, or waiting for you to turn the console on.
+
+### Installs
+
+- **Successful installs are no longer reported as failures.** The install helper
+  on the console was crashing right after it queued the work, so the app never
+  heard back and said the install had failed — while the game or patch was
+  installing normally. Packages that looked broken were fine all along.
+- **Package installs show up in Tasks** with progress, like uploads do, instead
+  of leaving you guessing whether anything was happening.
+- **Better advice when a patch really is refused.** The old message pointed at
+  the console's own Package Installer, which is the same path ps5upload already
+  uses, so it could not have helped.
+
+### Fixes
+
+- The app no longer risks a blank screen on older Android WebViews.
+
 ## 5.21.0
 
 **Cheats show up for every game, patch installs are honest, and interrupted work
