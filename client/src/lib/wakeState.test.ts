@@ -6,6 +6,7 @@ import {
   WAKE_REQUIREMENTS,
   credentialFromRegistKeyHex,
   isValidSessionKey,
+  wakeSetupStage,
 } from "./wakeState";
 
 describe("powerStateFromDdp", () => {
@@ -60,6 +61,18 @@ describe("isValidWakeCredential", () => {
     expect(isValidWakeCredential("0")).toBe(false);
     expect(isValidWakeCredential("18446744073709551616")).toBe(false); // u64 max + 1
   });
+  // The range check is string arithmetic, not BigInt (ES2020 can't be
+  // down-levelled for the old-WebView build target), so pin the boundary.
+  it("accepts u64 max exactly and rejects just past it", () => {
+    expect(isValidWakeCredential("18446744073709551615")).toBe(true);
+    expect(isValidWakeCredential("18446744073709551620")).toBe(false);
+    expect(isValidWakeCredential("99999999999999999999")).toBe(false);
+    expect(isValidWakeCredential("184467440737095516150")).toBe(false); // longer
+  });
+  it("treats padded zeros as the number they spell", () => {
+    expect(isValidWakeCredential("0000000000")).toBe(false);
+    expect(isValidWakeCredential("0000001499970515")).toBe(true);
+  });
 });
 
 describe("WAKE_REQUIREMENTS", () => {
@@ -93,6 +106,26 @@ describe("credentialFromRegistKeyHex", () => {
     expect(credentialFromRegistKeyHex("not hex")).toBe("");
     expect(credentialFromRegistKeyHex("abc")).toBe(""); // odd length
   });
+  // Hand-converted boundaries for the BigInt-free base conversion.
+  it("converts the full 16-hex-digit range exactly", () => {
+    // "ffffffffffffffff" (16 chars) NUL-padded → u64 max.
+    expect(credentialFromRegistKeyHex("66".repeat(16))).toBe(
+      "18446744073709551615",
+    );
+    // "1" → 1, the smallest usable credential.
+    expect(credentialFromRegistKeyHex("31" + "00".repeat(15))).toBe("1");
+    // "deadbeef" → 3735928559.
+    expect(credentialFromRegistKeyHex("6465616462656566" + "00".repeat(8))).toBe(
+      "3735928559",
+    );
+  });
+  it("rejects a value wider than u64 and an all-zero key", () => {
+    // 17 significant hex digits ("1" + 16 × "f") does not fit in u64.
+    expect(
+      credentialFromRegistKeyHex("31" + "66".repeat(16)),
+    ).toBe("");
+    expect(credentialFromRegistKeyHex("30".repeat(8) + "00".repeat(8))).toBe("");
+  });
 });
 
 describe("isValidSessionKey", () => {
@@ -113,5 +146,33 @@ describe("wakeUi with session keys", () => {
   });
   it("hides setup once session keys exist", () => {
     expect(wakeUi("awake", false, true).showSetup).toBe(false);
+  });
+});
+
+describe("wakeSetupStage", () => {
+  it("offers one-click setup when the console is awake and unpaired", () => {
+    const s = wakeSetupStage("awake", false, false, false);
+    expect(s).toBe("offer");
+  });
+  it("cannot pair a console it cannot reach", () => {
+    // Pairing registers over the network, so the console must be on. Saying
+    // so beats today's silently-hidden button.
+    expect(wakeSetupStage("standby", false, false, false)).toBe("unreachable");
+    expect(wakeSetupStage("offline", false, false, false)).toBe("unreachable");
+  });
+  it("reports the working state while pairing, whatever the power state", () => {
+    expect(wakeSetupStage("awake", false, false, true)).toBe("working");
+    expect(wakeSetupStage("offline", false, false, true)).toBe("working");
+  });
+  it("separates a wake-only pairing from a full sign-in pairing", () => {
+    // Credential alone wakes to user-select; session keys wake into the user.
+    expect(wakeSetupStage("awake", true, false, false)).toBe("wake-only");
+    expect(wakeSetupStage("awake", true, true, false)).toBe("done");
+    // Session keys imply the credential, so they alone are a complete setup.
+    expect(wakeSetupStage("standby", false, true, false)).toBe("done");
+  });
+  it("keeps showing the finished state when the console sleeps", () => {
+    expect(wakeSetupStage("standby", true, true, false)).toBe("done");
+    expect(wakeSetupStage("offline", true, true, false)).toBe("done");
   });
 });

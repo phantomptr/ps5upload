@@ -77,6 +77,27 @@ pub struct Registration {
 /// do exactly this: read the hex into bytes, read *those bytes* as ASCII,
 /// then parse that text as a hexadecimal number. playactor's author left a
 /// "this is so bizarre, but here it is" next to it.
+/// NUL-pad a key the console reported as bare text out to the 16-byte form.
+///
+/// `PS5-RegistKey` arrives as the ASCII characters only (e.g. 16 hex chars for
+/// 8 bytes), but a session key is always 16 bytes; `rp_session` truncates at
+/// the first NUL when it needs the text back. Anything already 32 chars (or
+/// longer, or not hex) is returned unchanged so this can never corrupt a value
+/// that was already in the right shape.
+fn pad_session_key_hex(hex: &str) -> String {
+    const WANT: usize = 32; // 16 bytes
+    let t = hex.trim();
+    if t.len() >= WANT || t.is_empty() || !t.chars().all(|c| c.is_ascii_hexdigit()) {
+        return t.to_string();
+    }
+    let mut out = String::with_capacity(WANT);
+    out.push_str(t);
+    while out.len() < WANT {
+        out.push('0');
+    }
+    out
+}
+
 pub fn credential_from_regist_key(regist_key_hex: &str) -> Result<u64> {
     let bytes = parse_hex(regist_key_hex)
         .ok_or_else(|| anyhow!("regist key is not hex: {regist_key_hex:?}"))?;
@@ -287,6 +308,11 @@ pub(crate) fn split_http(raw: &[u8]) -> Result<HttpReply> {
 fn reason_text(code: &str) -> &'static str {
     match code.to_ascii_lowercase().as_str() {
         "80108b09" => "the PIN was wrong or has expired",
+        // Hit when a pending registration was already finalised on the
+        // console — polling Remote Play status probes
+        // sceRemoteplayConfirmDeviceRegist, which does exactly that. Retrying
+        // from a clean state is the fix, so say so.
+        "80108b03" => "a previous pairing attempt is still pending — try again",
         "80108b02" => "the console rejected the PSN account",
         "80108b10" => "Remote Play is already in use",
         "80108b15" => "Remote Play crashed on the console",
@@ -420,6 +446,30 @@ fn getrandom_bytes(buf: &mut [u8]) -> Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn session_keys_are_padded_to_sixteen_bytes() {
+        // Hardware (Pro FW 9.60): a real PS5 reports PS5-RegistKey as the
+        // ASCII text alone (16 hex chars). The client requires exactly 32 and
+        // drops anything else, so an unpadded value silently disabled
+        // wake-into-user while appearing to pair successfully.
+        assert_eq!(
+            pad_session_key_hex("3539363762626433"),
+            "35393637626264330000000000000000"
+        );
+        // An RP-Key is already 16 bytes and must pass through untouched.
+        let rp = "1395c8cc7eca16fe982eb22e527ba3da";
+        assert_eq!(pad_session_key_hex(rp), rp);
+        // Never mangle something that is not a plain hex key.
+        assert_eq!(pad_session_key_hex(""), "");
+        assert_eq!(pad_session_key_hex("not hex"), "not hex");
+        // The padded output is exactly what the session parser accepts.
+        assert!(crate::rp_session::SessionCreds::from_hex(
+            &pad_session_key_hex("3539363762626433"),
+            rp
+        )
+        .is_ok());
+    }
+
     /// Vector from playactor's own test suite. If this drifts, the port of
     /// the key table or the PIN mixing is wrong.
     #[test]
@@ -551,6 +601,17 @@ mod tests {
     }
 
     #[test]
+    fn the_pending_registration_refusal_is_named() {
+        // 80108b03 used to fall through to the generic "the console refused",
+        // which reads as unfixable. It is fixable: retry from a clean state.
+        assert_eq!(
+            reason_text("80108b03"),
+            "a previous pairing attempt is still pending — try again"
+        );
+        assert_eq!(reason_text("80108B03"), reason_text("80108b03"));
+    }
+
+    #[test]
     fn refusal_codes_become_something_actionable() {
         assert!(reason_text("80108b09").contains("PIN"));
         assert!(reason_text("80108B09").contains("PIN"));
@@ -563,6 +624,17 @@ mod tests {
 pub struct PairResult {
     /// The number a WAKEUP carries. This is the whole point.
     pub credential: String,
+    /// Session credentials returned by the same registration handshake.
+    /// Keeping these in the result lets the client configure Wake & sign in
+    /// without asking the user to copy secrets out of Chiaki manually.
+    ///
+    /// Both are the 16-byte form as 32 hex characters — what
+    /// [`crate::rp_session::SessionCreds::from_hex`] parses and what the UI
+    /// stores. The console reports the regist key as the ASCII text alone
+    /// (16 hex chars), so it is NUL-padded here: an unpadded value fails the
+    /// client's 32-hex check and the sign-in keys are silently dropped.
+    pub regist_key: String,
+    pub rp_key: String,
     pub nickname: String,
     pub mac: String,
     /// Which account the console paired with, and how it was chosen —
@@ -583,7 +655,7 @@ pub struct PairResult {
 /// `mgmt_addr` is the payload's management port; `host` is the console's
 /// address, which the registration and wake traffic use on their own ports.
 pub fn pair_with_console(mgmt_addr: &str, host: &str) -> Result<PairResult> {
-    let readiness = crate::remoteplay::remoteplay_readiness(mgmt_addr)
+    let mut readiness = crate::remoteplay::remoteplay_readiness(mgmt_addr)
         .context("asking the console whether it can pair")?;
 
     // Check preconditions here rather than let registration fail with a
@@ -603,8 +675,25 @@ pub fn pair_with_console(mgmt_addr: &str, host: &str) -> Result<PairResult> {
              then try again"
         );
     }
+    // Remote Play has to be on before a pairing can happen. We can turn it
+    // on, and someone who started setup has already asked for exactly that,
+    // so do it instead of sending them into the console's menus and making
+    // them come back. Two scopes because FW 10.00 split the system-wide
+    // service from per-user permission; a console can have the service on
+    // while the account in use is not permitted, which pairs fine and then
+    // refuses every session.
     if !readiness.service_on() {
-        bail!("Remote Play is turned off on the console");
+        readiness = crate::remoteplay::remoteplay_enable(mgmt_addr, "service")
+            .context("turning Remote Play on")?;
+    }
+    if readiness.needs_per_user() && !readiness.user_on() {
+        readiness = crate::remoteplay::remoteplay_enable(mgmt_addr, "user")
+            .context("allowing this user to use Remote Play")?;
+    }
+    // `remoteplay_enable` re-reads the console rather than reporting a bare
+    // ok, so this is the console's own answer, not our assumption.
+    if !readiness.service_on() {
+        bail!("Remote Play is off and the console would not turn it on");
     }
 
     let account_id = readiness.account_id_b64.clone();
@@ -640,6 +729,8 @@ pub fn pair_with_console(mgmt_addr: &str, host: &str) -> Result<PairResult> {
 
     Ok(PairResult {
         credential: credential.to_string(),
+        regist_key: pad_session_key_hex(&reg.regist_key),
+        rp_key: pad_session_key_hex(&reg.rp_key),
         nickname: reg.nickname,
         mac: reg.mac,
         account_id_b64: account_id,

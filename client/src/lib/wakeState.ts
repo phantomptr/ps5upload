@@ -45,6 +45,84 @@ export function wakeUi(
   };
 }
 
+/** u64 max, as the decimal string the console's credential is bounded by. */
+const U64_MAX_DEC = "18446744073709551615";
+
+/* The two helpers below deliberately avoid BigInt.
+ *
+ * The Vite build target is safari13 (~ES2019) so the app survives old Android
+ * System WebViews (see vite.config.ts). BigInt is ES2020 and, unlike `?.` or
+ * `??=`, it CANNOT be down-levelled — rolldown passes the literals through and
+ * warns TOLERATED_TRANSFORM. On a WebView without BigInt that is a parse-time
+ * SyntaxError for the whole chunk, so it would take out the entire bundle, not
+ * just wake setup: exactly the "opens then terminates" failure the conservative
+ * target exists to prevent. Plain string arithmetic is exact here and portable.
+ */
+
+/** Is a digits-only decimal string larger than u64 max? */
+function decExceedsU64(dec: string): boolean {
+  const d = dec.replace(/^0+/, "");
+  if (d.length !== U64_MAX_DEC.length) return d.length > U64_MAX_DEC.length;
+  // Equal length, digits only — lexicographic order is numeric order.
+  return d > U64_MAX_DEC;
+}
+
+/** Hex string → decimal string, schoolbook base conversion over digit arrays.
+ *  Caller guarantees `hex` is non-empty, lowercase, and at most 16 digits. */
+function hexToDec(hex: string): string {
+  const digits = [0]; // little-endian decimal digits
+  for (let h = 0; h < hex.length; h++) {
+    let carry = parseInt(hex[h], 16);
+    for (let i = 0; i < digits.length; i++) {
+      const v = digits[i] * 16 + carry;
+      digits[i] = v % 10;
+      carry = (v / 10) | 0;
+    }
+    while (carry > 0) {
+      digits.push(carry % 10);
+      carry = (carry / 10) | 0;
+    }
+  }
+  return digits.reverse().join("").replace(/^0+(?=\d)/, "");
+}
+
+/** Which face the setup panel shows.
+ *
+ *  One value drives the whole panel so the states stay mutually exclusive —
+ *  the old version derived each piece of UI from its own boolean and could
+ *  show a "set up" button and a "you're set up" tick at the same time.
+ *
+ *  - `working`     — pairing is in flight; outranks everything so the panel
+ *                    does not flicker between states as power state updates.
+ *  - `done`        — wake AND sign-in are configured. Nothing left to do.
+ *  - `wake-only`   — a credential but no session keys: wake lands on
+ *                    user-select. Worth offering the upgrade.
+ *  - `offer`       — nothing stored and the console is awake: one click away.
+ *  - `unreachable` — nothing stored and we cannot reach the console. Pairing
+ *                    registers over the network, so it genuinely cannot run;
+ *                    say so rather than hide the button with no explanation.
+ */
+export type WakeSetupStage =
+  | "working"
+  | "done"
+  | "wake-only"
+  | "offer"
+  | "unreachable";
+
+export function wakeSetupStage(
+  state: PowerState,
+  hasCredential: boolean,
+  hasSessionKeys: boolean,
+  pairing: boolean,
+): WakeSetupStage {
+  if (pairing) return "working";
+  // Session keys imply the credential (it derives from the regist key), so
+  // they alone are a complete setup even if no credential was stored.
+  if (hasSessionKeys) return "done";
+  if (hasCredential) return "wake-only";
+  return state === "awake" ? "offer" : "unreachable";
+}
+
 /** The wake credential (a decimal number) derived from the registration key.
  *
  *  The regist key is 16 hex-encoded bytes, NUL-padded; the credential is the
@@ -64,13 +142,12 @@ export function credentialFromRegistKeyHex(registKeyHex: string): string {
   }
   // That text is itself hex; parse it as a number.
   if (!/^[0-9a-f]+$/.test(text)) return "";
-  try {
-    const n = BigInt(`0x${text}`);
-    if (n <= 0n || n > 18446744073709551615n) return "";
-    return n.toString(10);
-  } catch {
-    return "";
-  }
+  const stripped = text.replace(/^0+/, "");
+  // All zeros is not a usable credential (the old BigInt form rejected n <= 0).
+  if (stripped === "") return "";
+  // 16 hex digits is exactly u64 max, so a shorter-or-equal value is in range.
+  if (stripped.length > 16) return "";
+  return hexToDec(stripped);
 }
 
 /** A 16-byte key as exactly 32 hex characters. */
@@ -86,12 +163,8 @@ export function isValidSessionKey(hex: string): boolean {
 export function isValidWakeCredential(value: string): boolean {
   const t = value.trim();
   if (!/^\d+$/.test(t)) return false;
-  try {
-    const n = BigInt(t);
-    return n > 0n && n <= 18446744073709551615n; // u64 max
-  } catch {
-    return false;
-  }
+  if (t.replace(/^0+/, "") === "") return false; // zero
+  return !decExceedsU64(t);
 }
 
 /** The console settings that must be on, or wake fails with no feedback.

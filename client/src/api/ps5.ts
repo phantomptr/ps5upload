@@ -2119,6 +2119,9 @@ export async function powerWake(
 export interface PairForWakeResult {
   /** The wake credential. Store it against the console and wake works. */
   credential: string;
+  /** Remote Play session keys returned by the same pairing handshake. */
+  regist_key: string;
+  rp_key: string;
   nickname: string;
   mac: string;
   account_id_b64: string;

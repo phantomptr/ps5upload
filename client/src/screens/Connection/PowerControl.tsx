@@ -336,6 +336,7 @@ export default function PowerControl({ host }: { host: string }) {
           addr={addr}
           profileId={profile?.id ?? null}
           credential={credential}
+          power={power}
           ui={ui}
         />
       ) : null}
