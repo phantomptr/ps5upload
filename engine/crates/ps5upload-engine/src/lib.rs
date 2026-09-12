@@ -3001,11 +3001,22 @@ async fn ps5_power_wake_login(Json(req): Json<PowerWakeLoginReq>) -> impl IntoRe
             Ok(c) => c,
             Err(e) => return json_err(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
         };
+    let regist_key = req.regist_key.clone();
     let r = tokio::task::spawn_blocking(move || {
+        // The wake credential is the registration key as a number, so derive
+        // it from the regist key when the client did not send one — a console
+        // with sign-in keys can then always be woken, not just signed in.
+        let credential = if cred.trim().is_empty() {
+            ps5upload_core::rp_regist::credential_from_regist_key(&regist_key)
+                .map(|n| n.to_string())
+                .unwrap_or_default()
+        } else {
+            cred
+        };
         // Wake first (harmless if already awake), then wait for the session
         // port and sign in.
-        if !cred.trim().is_empty() {
-            ps5upload_core::ddp::wake(&host, &cred)?;
+        if !credential.trim().is_empty() {
+            ps5upload_core::ddp::wake(&host, &credential)?;
         }
         ps5upload_core::rp_session::login_session_when_ready(
             &host,

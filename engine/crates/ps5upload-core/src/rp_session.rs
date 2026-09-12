@@ -37,6 +37,7 @@ use crate::rp_regist::{generate_iv, resolve, split_http};
 use crate::rp_regist_keys::{PS5_AUTH_NONCE_KEY, PS5_AUTH_SEED_KEY};
 
 type Aes128CfbEnc = cfb_mode::Encryptor<aes::Aes128>;
+type Aes128CfbDec = cfb_mode::Decryptor<aes::Aes128>;
 
 /// Session and ctrl share the registration port.
 const SESSION_PORT: u16 = 9295;
@@ -193,7 +194,12 @@ fn session_init(host: &str, regist_key: &[u8; KEY_SIZE]) -> Result<[u8; KEY_SIZE
 
 /// Stage 2: the encrypted ctrl connection. Establishing it is what signs the
 /// registered user in on the console.
-fn ctrl_connect(host: &str, creds: &SessionCreds, nonce: &[u8; KEY_SIZE]) -> Result<()> {
+fn ctrl_connect(
+    host: &str,
+    creds: &SessionCreds,
+    nonce: &[u8; KEY_SIZE],
+    hold: Duration,
+) -> Result<()> {
     let amb = ambassador(nonce);
     let brt = bright(nonce, &creds.morning);
 
@@ -245,8 +251,7 @@ fn ctrl_connect(host: &str, creds: &SessionCreds, nonce: &[u8; KEY_SIZE]) -> Res
 
     // The console answers the ctrl GET with an HTTP status before the
     // connection turns into the binary ctrl protocol. 200 means it accepted
-    // the auth and the session is up — which is the moment it logs the user
-    // in. We only need that far, so read just the header and close.
+    // the auth; the sign-in itself is confirmed over the ctrl stream below.
     let mut raw = Vec::new();
     let mut buf = [0u8; 1024];
     loop {
@@ -279,62 +284,165 @@ fn ctrl_connect(host: &str, creds: &SessionCreds, nonce: &[u8; KEY_SIZE]) -> Res
         );
     }
 
-    // The HTTP 200 already means the auth was accepted and the session is
-    // up. Read a little of the ctrl stream that follows to classify the
-    // outcome precisely: the 8-byte message headers (size + type) are in the
-    // clear, so a LOGIN_PIN_REQ (0x4) — meaning the account has a login
-    // passcode and the console is waiting for it, which we cannot supply —
-    // is distinguishable from an ordinary established session.
+    // The HTTP 200 means the auth was accepted, but the console only *keeps*
+    // the user signed in while the control session is live: it sends periodic
+    // heartbeats and tears the session down — reverting to user-select — if
+    // the client stops answering them. So the connection has to be held and
+    // its heartbeats answered for long enough for the sign-in to commit.
     //
-    // The body may already hold bytes read alongside the header; keep
-    // reading briefly for more.
+    // Everything needed is in the clear: each ctrl message is `[u32 size][u16
+    // type][2 bytes][payload]` with only the type read here, and a heartbeat
+    // reply is an empty message — just its 8-byte header, no encryption. So
+    // the session is maintained without the streaming crypto layer.
     let header_end = raw
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
         .map(|i| i + 4)
         .unwrap_or(raw.len());
-    let mut stream_bytes = raw[header_end..].to_vec();
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
-    let mut buf = [0u8; 2048];
+    hold_control_session(&mut stream, raw[header_end..].to_vec(), &brt, &amb, hold)
+}
+
+const CTRL_LOGIN: u16 = 0x0005;
+const CTRL_LOGIN_PIN_REQ: u16 = 0x0004;
+const CTRL_HEARTBEAT_REQ: u16 = 0x00fe;
+const CTRL_HEARTBEAT_REP: u16 = 0x01fe;
+/// The state byte in a LOGIN message: 0 = signed in.
+const CTRL_LOGIN_STATE_SUCCESS: u8 = 0x00;
+
+/// Decrypt a received ctrl payload. The console encrypts with the same key
+/// and IV scheme as our request fields, on its own counter that advances once
+/// per payload-bearing message it sends, starting at zero.
+fn auth_decrypt(bright: &[u8; 16], ambassador: &[u8; 16], counter: u64, data: &[u8]) -> Vec<u8> {
+    let iv = generate_iv(ambassador, counter);
+    let mut buf = data.to_vec();
+    Aes128CfbDec::new(bright.into(), &iv.into()).decrypt(&mut buf);
+    buf
+}
+
+/// Keep the control session alive for `hold`, answering heartbeats, and
+/// confirm the sign-in.
+///
+/// The console holds the user signed in only while this session is live: it
+/// heartbeats, and reverts to user-select if the client stops replying. So
+/// the connection is held and its heartbeats answered long enough for the
+/// sign-in to commit and stick after we disconnect — a video stream is not
+/// required.
+///
+/// The console also announces the outcome: a `LOGIN` message whose one-byte
+/// (encrypted) payload is the login state. Decrypting it turns "we held the
+/// session" into "the console reported the user signed in". A `LOGIN_PIN_REQ`
+/// means the account has a login passcode we cannot supply.
+fn hold_control_session(
+    stream: &mut TcpStream,
+    initial: Vec<u8>,
+    bright: &[u8; 16],
+    ambassador: &[u8; 16],
+    hold: Duration,
+) -> Result<()> {
+    let mut buf = initial;
+    let mut tmp = [0u8; 2048];
+    // The console's send counter starts at 1, not 0: it advances once over the
+    // ctrl auth exchange before sending its first message. Verified on
+    // hardware — decrypting the LOGIN message at 0 gives garbage, at 1 gives
+    // the real state byte (0 = signed in).
+    let mut remote_counter = 1u64;
+    let mut login_confirmed = false;
+    let started = std::time::Instant::now();
+    let deadline = started + hold;
+    // Once the console reports success, hold a short grace answering heartbeats
+    // so the sign-in commits and sticks after we disconnect, then stop — no
+    // need to wait out the full timeout.
+    let grace_after_login = Duration::from_secs(3);
+    let mut login_at: Option<std::time::Instant> = None;
     stream
         .set_read_timeout(Some(Duration::from_millis(500)))
         .ok();
-    while std::time::Instant::now() < deadline {
-        match stream.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => stream_bytes.extend_from_slice(&buf[..n]),
-            Err(_) => break, // timeout — the console has gone quiet, which is fine
+
+    loop {
+        // Drain every complete message currently buffered.
+        while buf.len() >= 8 {
+            let size = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+            // Ctrl control messages are tiny; a huge length means the stream
+            // has desynced (usually a decryption/counter mismatch), so stop
+            // rather than wait forever for bytes that will not come.
+            if size > 8192 {
+                bail!("control stream desynced (implausible message size {size})");
+            }
+            if buf.len() < 8 + size {
+                break; // partial message — wait for the rest
+            }
+            let msg_type = u16::from_be_bytes([buf[4], buf[5]]);
+
+            // Decrypt the payload if there is one, keeping the console's
+            // counter in step so later messages decrypt correctly.
+            let payload = if size > 0 {
+                let p = auth_decrypt(bright, ambassador, remote_counter, &buf[8..8 + size]);
+                remote_counter += 1;
+                p
+            } else {
+                Vec::new()
+            };
+
+            match msg_type {
+                CTRL_LOGIN_PIN_REQ => bail!(
+                    "the account has a login passcode, so the console is waiting for \
+                     a PIN we cannot supply. Remove it (Settings › Users and Accounts \
+                     › Login Settings) to wake straight to this user."
+                ),
+                CTRL_LOGIN => {
+                    if payload.first() == Some(&CTRL_LOGIN_STATE_SUCCESS) {
+                        login_confirmed = true;
+                        login_at.get_or_insert_with(std::time::Instant::now);
+                    } else {
+                        bail!(
+                            "the console rejected the sign-in (login state {:?})",
+                            payload.first()
+                        );
+                    }
+                }
+                CTRL_HEARTBEAT_REQ => {
+                    // Reply keeps the session (and the sign-in) alive. Empty
+                    // body, so just the header — no encryption, no counter.
+                    let mut hdr = [0u8; 8];
+                    hdr[4..6].copy_from_slice(&CTRL_HEARTBEAT_REP.to_be_bytes());
+                    stream
+                        .write_all(&hdr)
+                        .map_err(|e| anyhow!("answering a heartbeat: {e}"))?;
+                    stream.flush().ok();
+                }
+                _ => {}
+            }
+            buf.drain(0..8 + size);
+        }
+
+        // Done as soon as the sign-in is confirmed and has been held through
+        // its grace period; otherwise keep going until the overall deadline.
+        if let Some(at) = login_at {
+            if at.elapsed() >= grace_after_login {
+                return Ok(());
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            if !login_confirmed {
+                bail!(
+                    "held the control session but the console never confirmed the \
+                     sign-in — it may have a login passcode, or the RP-Key is wrong"
+                );
+            }
+            return Ok(());
+        }
+        match stream.read(&mut tmp) {
+            Ok(0) => bail!("the console closed the control session before sign-in settled"),
+            Ok(n) => buf.extend_from_slice(&tmp[..n]),
+            Err(ref e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                // Quiet gap between heartbeats — keep holding until the deadline.
+            }
+            Err(e) => return Err(anyhow!("reading the control session: {e}")),
         }
     }
-
-    if ctrl_stream_needs_login_pin(&stream_bytes) {
-        bail!(
-            "the console signed in but the account has a login passcode, so it \
-             is waiting for a PIN we cannot provide. Remove the passcode \
-             (Settings › Users and Accounts › Login Settings) to wake straight \
-             to this user."
-        );
-    }
-    Ok(())
-}
-
-/// Scan the plaintext ctrl message headers for a LOGIN_PIN_REQ (0x4).
-///
-/// Each ctrl message is `[u32 big-endian payload size][u16 big-endian type]
-/// [2 bytes][payload]`. Only the type is needed, and it is not encrypted.
-fn ctrl_stream_needs_login_pin(body: &[u8]) -> bool {
-    const CTRL_LOGIN_PIN_REQ: u16 = 0x4;
-    let mut off = 0;
-    while off + 8 <= body.len() {
-        let size =
-            u32::from_be_bytes([body[off], body[off + 1], body[off + 2], body[off + 3]]) as usize;
-        let msg_type = u16::from_be_bytes([body[off + 4], body[off + 5]]);
-        if msg_type == CTRL_LOGIN_PIN_REQ {
-            return true;
-        }
-        off += 8 + size;
-    }
-    false
 }
 
 /// Wake-then-login: open a control session so the console lands on its user.
@@ -342,9 +450,13 @@ fn ctrl_stream_needs_login_pin(body: &[u8]) -> bool {
 /// Runs after the wake, against an awake (or waking) console. Needs both the
 /// registration key and the RP-Key. Establishing the ctrl connection is the
 /// side effect that matters — the user is signed in; we do not stream.
+/// How long to hold the control session so the sign-in commits and sticks
+/// after we disconnect. Long enough to answer a couple of heartbeats.
+const SIGN_IN_HOLD: Duration = Duration::from_secs(12);
+
 pub fn login_session(host: &str, creds: &SessionCreds) -> Result<()> {
     let nonce = session_init(host, &creds.regist_key)?;
-    ctrl_connect(host, creds, &nonce)
+    ctrl_connect(host, creds, &nonce, SIGN_IN_HOLD)
 }
 
 /// Wait until the console is answering on the session port, then sign in.
@@ -445,19 +557,6 @@ mod tests {
             &[0x00, 0x18, 0x00, 0x00, 0x00, 0x07, 0x00, 0x40, 0x00, 0x80]
         );
         assert_eq!(&did[26..], &[0u8; 6]);
-    }
-
-    #[test]
-    fn detects_a_login_pin_request_in_the_ctrl_stream() {
-        // One ctrl message: size=0, type=0x0004 (LOGIN_PIN_REQ), 2 pad bytes.
-        let pin_req = [0u8, 0, 0, 0, 0x00, 0x04, 0, 0];
-        assert!(ctrl_stream_needs_login_pin(&pin_req));
-        // A different type (0x33 SESSION_ID) is not a pin request.
-        let session_id = [0u8, 0, 0, 0, 0x00, 0x33, 0, 0];
-        assert!(!ctrl_stream_needs_login_pin(&session_id));
-        // Empty / truncated streams do not false-positive.
-        assert!(!ctrl_stream_needs_login_pin(&[]));
-        assert!(!ctrl_stream_needs_login_pin(&[0, 0, 0]));
     }
 
     #[test]
