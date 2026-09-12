@@ -299,7 +299,15 @@ fn ctrl_connect(
         .position(|w| w == b"\r\n\r\n")
         .map(|i| i + 4)
         .unwrap_or(raw.len());
-    hold_control_session(&mut stream, raw[header_end..].to_vec(), &brt, &amb, hold)
+    let result = hold_control_session(&mut stream, raw[header_end..].to_vec(), &brt, &amb, hold);
+    // Close the control session cleanly. Dropping the socket closes it too, but
+    // an explicit graceful shutdown gives the console an unambiguous "the client
+    // is leaving" FIN instead of a half-open session it must time out — a
+    // candidate mitigation for a console that otherwise stays in a headless
+    // Remote-Play state after sign-in (#318). Harmless on the paths that already
+    // work: a well-behaved client closes this way regardless.
+    let _ = stream.shutdown(Shutdown::Both);
+    result
 }
 
 const CTRL_LOGIN: u16 = 0x0005;
