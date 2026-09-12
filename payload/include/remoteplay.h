@@ -29,6 +29,13 @@ int remoteplay_readiness_json(char *out, size_t out_size);
  * secrets are never included. Returns the length written. */
 int remoteplay_devices_json(char *out, size_t out_size);
 
+/* Read-only layout probe of one pairing record.
+ *
+ * Reports each entry's type and width, never its contents — the regist and
+ * AES keys are pairing secrets and this project is public. Exists so that
+ * nothing has to write to the table while guessing its shape. */
+int remoteplay_regist_probe_json(char *out, size_t out_size);
+
 /* Enable Remote Play. user_scope=0 is the system service toggle,
  * user_scope=1 is per-user permission (FW 10.00+). Writes the re-read
  * readiness snapshot to `out`. Returns >=0 on success, -1 write failed,

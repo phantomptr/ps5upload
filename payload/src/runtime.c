@@ -403,6 +403,7 @@ extern int posix_fallocate(int fd, off_t offset, off_t len);
 #define FTX2_FRAME_REMOTEPLAY_CANCEL_ACK 191u
 /* Read-only readiness snapshot — every precondition Remote Play needs. */
 #define FTX2_FRAME_REMOTEPLAY_READINESS  248u
+#define FTX2_FRAME_REMOTEPLAY_REGIST_PROBE 242u
 #define FTX2_FRAME_REMOTEPLAY_ENABLE     249u
 #define FTX2_FRAME_REMOTEPLAY_DEVICES    250u
 /* v4.1: Fan curve editor (set + get) */
@@ -16280,6 +16281,16 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
                               "readiness_overflow", 18);
         }
         return send_frame(client_fd, FTX2_FRAME_REMOTEPLAY_READINESS, 0,
+                          hdr.trace_id, body, (uint64_t)n);
+    }
+    if (hdr.frame_type == FTX2_FRAME_REMOTEPLAY_REGIST_PROBE) {
+        char body[1536];
+        int n = remoteplay_regist_probe_json(body, sizeof(body));
+        if (n < 0 || (size_t)n >= sizeof(body)) {
+            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
+                              "regist_probe_overflow", 21);
+        }
+        return send_frame(client_fd, FTX2_FRAME_REMOTEPLAY_REGIST_PROBE, 0,
                           hdr.trace_id, body, (uint64_t)n);
     }
     if (hdr.frame_type == FTX2_FRAME_REMOTEPLAY_ENABLE) {

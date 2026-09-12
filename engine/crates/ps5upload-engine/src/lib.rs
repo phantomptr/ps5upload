@@ -6045,6 +6045,27 @@ async fn remoteplay_request_handler(
     }
 }
 
+/// GET /api/ps5/remoteplay/regist-probe — what shape is a pairing record?
+///
+/// Read-only, and deliberately reports no pairing secrets. Exists to settle
+/// the layout of the registration table before anything writes to it.
+async fn remoteplay_regist_probe_handler(
+    State(state): State<AppState>,
+    Query(q): Query<AddrQuery>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
+    let r = tokio::task::spawn_blocking(move || {
+        ps5upload_core::remoteplay::remoteplay_regist_probe(&addr)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
 async fn remoteplay_status_handler(
     State(state): State<AppState>,
     Query(q): Query<AddrQuery>,
@@ -9014,6 +9035,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             post(remoteplay_request_handler),
         )
         .route("/api/ps5/remoteplay/status", get(remoteplay_status_handler))
+        .route(
+            "/api/ps5/remoteplay/regist-probe",
+            get(remoteplay_regist_probe_handler),
+        )
         .route(
             "/api/ps5/remoteplay/readiness",
             get(remoteplay_readiness_handler),

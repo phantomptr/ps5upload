@@ -772,6 +772,94 @@ static int rp_cancel_locked(void) {
  * `sony_api_lock` is not recursive, so calling a public wrapper from
  * inside another core would deadlock. */
 
+/* What type and width is this registry entry?
+ *
+ * Sony's regmgr distinguishes "wrong type for this read" (0x800D0207) from
+ * "no such entry" (0x800D0203), so trying each accessor in turn maps a
+ * record without ever reading a value out. Contents are never reported —
+ * only shape, and whether the field is all zeroes, because the regist and
+ * AES keys are pairing secrets and this repo is public. */
+static int rp_probe_entry(char *out, size_t cap, const char *name,
+                          uint32_t key) {
+    uint32_t ec = 0;
+
+    int as_int = 0;
+    if (sys_registry_get_int(key, &as_int, &ec) == 0) {
+        /* Integer entries are reported with their value: the ones in a
+         * pairing record are the user id and the client type, both of
+         * which remoteplay_devices_json already publishes. The 16-byte
+         * blob is the secret, and it is never printed. */
+        return snprintf(out, cap,
+                        "{\"at\":\"%s\",\"key\":%u,\"type\":\"int\","
+                        "\"size\":4,\"value\":%d,\"all_zero\":%d,\"err\":0}",
+                        name, key, as_int, as_int == 0);
+    }
+
+    /* Widths these tables actually use. Every miss is a wasted regmgr
+     * call, so the list stays short. */
+    static const size_t widths[] = { 16, 32, 64 };
+    char sbuf[72];
+    for (size_t i = 0; i < sizeof(widths) / sizeof(widths[0]); i++) {
+        if (sys_registry_get_str(key, sbuf, widths[i], &ec) == 0) {
+            return snprintf(out, cap,
+                            "{\"at\":\"%s\",\"key\":%u,\"type\":\"str\","
+                            "\"size\":%d,\"all_zero\":%d,\"err\":0}",
+                            name, key, (int)widths[i], sbuf[0] == 0);
+        }
+    }
+
+    uint8_t bbuf[64];
+    for (size_t i = 0; i < sizeof(widths) / sizeof(widths[0]); i++) {
+        if (sys_registry_get_bin(key, bbuf, widths[i], &ec) == 0) {
+            int all_zero = 1;
+            for (size_t j = 0; j < widths[i]; j++) {
+                if (bbuf[j]) { all_zero = 0; break; }
+            }
+            return snprintf(out, cap,
+                            "{\"at\":\"%s\",\"key\":%u,\"type\":\"bin\","
+                            "\"size\":%d,\"all_zero\":%d,\"err\":0}",
+                            name, key, (int)widths[i], all_zero);
+        }
+    }
+
+    return snprintf(out, cap,
+                    "{\"at\":\"%s\",\"key\":%u,\"type\":\"none\","
+                    "\"size\":-1,\"all_zero\":-1,\"err\":%u}",
+                    name, key, ec);
+}
+
+/* Walk the entries of one pairing record. Slot 1 only: the slot stride is
+ * already known, and hammering regmgr is what took a console down when an
+ * earlier version of this ran without the Sony API lock. */
+static int rp_regist_probe_json_locked(char *out, size_t out_size) {
+    const uint32_t base = rp_key_regist_user_id(1);
+    size_t n = 0;
+    n += (size_t)snprintf(out + n, out_size - n,
+                          "{\"base\":%u,\"entries\":[", base);
+    int first = 1;
+    for (uint32_t off = 0; off <= 1280 && n + 160 < out_size; off += 256) {
+        char one[176];
+        char name[24];
+        snprintf(name, sizeof(name), "+%u", off);
+        (void)rp_probe_entry(one, sizeof(one), name, base + off);
+        n += (size_t)snprintf(out + n, out_size - n, "%s%s",
+                              first ? "" : ",", one);
+        first = 0;
+    }
+    n += (size_t)snprintf(out + n, out_size - n, "]}");
+    return (int)n;
+}
+
+/* Serialized like every other entry point here. The first version of this
+ * probe called sceRegMgr WITHOUT the lock and took a console down with it;
+ * the invariant in sony_api_lock.h is not advisory. */
+int remoteplay_regist_probe_json(char *out, size_t out_size) {
+    pthread_mutex_lock(&sony_api_lock);
+    int rc = rp_regist_probe_json_locked(out, out_size);
+    pthread_mutex_unlock(&sony_api_lock);
+    return rc;
+}
+
 int remoteplay_devices_json(char *out, size_t out_size) {
     pthread_mutex_lock(&sony_api_lock);
     int rc = rp_devices_json_locked(out, out_size);

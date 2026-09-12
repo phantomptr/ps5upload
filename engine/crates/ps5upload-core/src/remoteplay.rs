@@ -270,6 +270,26 @@ pub fn remoteplay_devices(addr: &str) -> Result<RemotePlayDevices> {
     Ok(serde_json::from_slice(&resp)?)
 }
 
+/// Read-only layout probe of the console's pairing table.
+///
+/// Answers "what shape is a pairing record" without disclosing one: the
+/// regist key and AES key are pairing secrets, so the payload reports each
+/// field's return code, error code and whether it read back as all zeroes,
+/// and never the bytes.
+pub fn remoteplay_regist_probe(addr: &str) -> Result<serde_json::Value> {
+    let mut c = Connection::connect(addr)?;
+    c.send_frame(FrameType::RemotePlayRegistProbe, &[])?;
+    let (hdr, resp) = c.recv_frame()?;
+    let ft = hdr.frame_type().unwrap_or(FrameType::Error);
+    if ft == FrameType::Error {
+        bail!(
+            "payload rejected RemotePlayRegistProbe: {}",
+            String::from_utf8_lossy(&resp)
+        );
+    }
+    Ok(serde_json::from_slice(&resp)?)
+}
+
 #[cfg(test)]
 mod firmware_tests {
     use super::RemotePlayReadiness;
