@@ -2804,6 +2804,17 @@ helper_mismatch_go: "Recharger l'assistant",
 "power_wake_auto_working": "Configuration…",
 "power_wake_auto_hint": "peut ne pas fonctionner sur toutes les consoles",
 "power_wake_auto_failed": "La configuration automatique n'a pas fonctionné — saisissez plutôt le code de réveil ci-dessus.",
+"power_wake_signedin": "Réveillée et connectée",
+"power_wake_signedin_body": "La console est allumée et connectée à votre utilisateur.",
+"power_wake_signin_hint": "Réveille la console et connecte votre utilisateur, pour qu'elle arrive sur l'écran d'accueil plutôt que la sélection d'utilisateur.",
+"power_action_wake_signin": "Réveiller et connecter",
+"power_action_wake_signin_busy": "Réveil et connexion…",
+"power_wake_signin_setup": "Avancé : réveiller directement sur votre utilisateur (connexion)",
+"power_wake_signin_setup_hint": "Un réveil simple s'arrête à la sélection d'utilisateur. Avec les deux clés de session de votre console (clé d'enregistrement et RP-Key, 32 caractères hex chacune), le réveil connecte aussi votre utilisateur. Les utilisateurs de Chiaki ont les deux dans les réglages de la console enregistrée.",
+"power_wake_signin_regist": "Clé d'enregistrement (hex)",
+"power_wake_signin_rpkey": "RP-Key (hex)",
+"power_wake_signin_save": "Enregistrer les clés de connexion",
+"power_wake_signin_ready": "Réveille directement sur votre utilisateur",
 };
 
 export default fr;

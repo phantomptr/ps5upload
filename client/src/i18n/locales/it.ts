@@ -2714,6 +2714,17 @@ helper_mismatch_go: "Ricarica helper",
 "power_wake_auto_working": "Configurazione…",
 "power_wake_auto_hint": "potrebbe non funzionare su tutte le console",
 "power_wake_auto_failed": "La configurazione automatica non ha funzionato — inserisci invece il codice di accensione qui sopra.",
+"power_wake_signedin": "Accesa e con accesso eseguito",
+"power_wake_signedin_body": "La console è accesa e con l'accesso eseguito al tuo utente.",
+"power_wake_signin_hint": "Accende la console ed esegue l'accesso del tuo utente, così si avvia nella schermata Home invece della selezione utente.",
+"power_action_wake_signin": "Accendi e accedi",
+"power_action_wake_signin_busy": "Accensione e accesso…",
+"power_wake_signin_setup": "Avanzato: accendi direttamente sul tuo utente (accesso)",
+"power_wake_signin_setup_hint": "Una semplice accensione si ferma alla selezione utente. Con le due chiavi di sessione della console (chiave di registrazione e RP-Key, 32 caratteri esadecimali ciascuna), l'accensione esegue anche l'accesso del tuo utente. Gli utenti Chiaki le hanno entrambe nelle impostazioni della console registrata.",
+"power_wake_signin_regist": "Chiave di registrazione (esadecimale)",
+"power_wake_signin_rpkey": "RP-Key (esadecimale)",
+"power_wake_signin_save": "Salva chiavi di accesso",
+"power_wake_signin_ready": "Si accende direttamente sul tuo utente",
 };
 
 export default it;

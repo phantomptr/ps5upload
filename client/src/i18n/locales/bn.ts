@@ -2767,6 +2767,17 @@ helper_mismatch_go: "হেল্পার লোড করুন",
 "power_wake_auto_working": "সেট আপ হচ্ছে…",
 "power_wake_auto_hint": "সব কনসোলে কাজ নাও করতে পারে",
 "power_wake_auto_failed": "স্বয়ংক্রিয় সেটআপ কাজ করেনি — পরিবর্তে উপরে ওয়েক কোড লিখুন।",
+"power_wake_signedin": "চালু ও সাইন ইন হয়েছে",
+"power_wake_signedin_body": "কনসোল চালু আছে এবং আপনার ব্যবহারকারীতে সাইন ইন করা আছে।",
+"power_wake_signin_hint": "কনসোল চালু করে এবং আপনার ব্যবহারকারীতে সাইন ইন করে, যাতে এটি ব্যবহারকারী-নির্বাচনের বদলে হোম স্ক্রিনে আসে।",
+"power_action_wake_signin": "চালু করুন ও সাইন ইন করুন",
+"power_action_wake_signin_busy": "চালু ও সাইন ইন হচ্ছে…",
+"power_wake_signin_setup": "উন্নত: সরাসরি আপনার ব্যবহারকারীতে চালু করুন (সাইন ইন)",
+"power_wake_signin_setup_hint": "সাধারণ ওয়েক ব্যবহারকারী-নির্বাচনে থেমে যায়। কনসোলের দুটি সেশন কী (রেজিস্ট্রেশন কী ও RP-Key, প্রতিটি ৩২ হেক্স অক্ষর) থাকলে ওয়েক আপনার ব্যবহারকারীকেও সাইন ইন করায়। Chiaki ব্যবহারকারীদের দুটোই নিবন্ধিত কনসোল সেটিংসে থাকে।",
+"power_wake_signin_regist": "রেজিস্ট্রেশন কী (হেক্স)",
+"power_wake_signin_rpkey": "RP-Key (হেক্স)",
+"power_wake_signin_save": "সাইন-ইন কী সংরক্ষণ করুন",
+"power_wake_signin_ready": "সরাসরি আপনার ব্যবহারকারীতে চালু হয়",
 };
 
 export default bn;

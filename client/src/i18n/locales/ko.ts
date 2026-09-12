@@ -2805,6 +2805,17 @@ helper_mismatch_go: "헬퍼 다시 불러오기",
 "power_wake_auto_working": "설정 중…",
 "power_wake_auto_hint": "모든 본체에서 작동하지 않을 수 있습니다",
 "power_wake_auto_failed": "자동 설정이 작동하지 않았습니다 — 대신 위의 켜기 코드를 입력하세요.",
+"power_wake_signedin": "켜고 로그인함",
+"power_wake_signedin_body": "본체가 켜졌고 사용자로 로그인되었습니다.",
+"power_wake_signin_hint": "본체를 켜고 사용자로 로그인하여, 사용자 선택 대신 홈 화면으로 시작합니다.",
+"power_action_wake_signin": "켜고 로그인",
+"power_action_wake_signin_busy": "켜고 로그인 중…",
+"power_wake_signin_setup": "고급: 사용자로 바로 켜기(로그인)",
+"power_wake_signin_setup_hint": "일반 켜기는 사용자 선택 화면에서 멈춥니다. 본체의 두 세션 키(등록 키와 RP-Key, 각각 32자 16진수)가 있으면 켤 때 사용자도 로그인됩니다. Chiaki 사용자는 등록된 본체 설정에 둘 다 있습니다.",
+"power_wake_signin_regist": "등록 키(16진)",
+"power_wake_signin_rpkey": "RP-Key(16진)",
+"power_wake_signin_save": "로그인 키 저장",
+"power_wake_signin_ready": "사용자로 바로 켜집니다",
 };
 
 export default ko;

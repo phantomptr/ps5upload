@@ -2769,6 +2769,17 @@ helper_mismatch_go: "Tải lại trợ giúp",
 "power_wake_auto_working": "Đang thiết lập…",
 "power_wake_auto_hint": "có thể không hoạt động trên mọi máy",
 "power_wake_auto_failed": "Thiết lập tự động không thành công — hãy nhập mã bật ở trên.",
+"power_wake_signedin": "Đã bật và đăng nhập",
+"power_wake_signedin_body": "Máy đã bật và đăng nhập vào người dùng của bạn.",
+"power_wake_signin_hint": "Bật máy và đăng nhập người dùng của bạn, để máy vào màn hình chính thay vì màn hình chọn người dùng.",
+"power_action_wake_signin": "Bật & đăng nhập",
+"power_action_wake_signin_busy": "Đang bật & đăng nhập…",
+"power_wake_signin_setup": "Nâng cao: bật thẳng vào người dùng của bạn (đăng nhập)",
+"power_wake_signin_setup_hint": "Bật thường sẽ dừng ở màn hình chọn người dùng. Với hai khóa phiên của máy (khóa đăng ký và RP-Key, mỗi khóa 32 ký tự hex), việc bật cũng đăng nhập người dùng của bạn. Người dùng Chiaki có cả hai trong cài đặt máy đã đăng ký.",
+"power_wake_signin_regist": "Khóa đăng ký (hex)",
+"power_wake_signin_rpkey": "RP-Key (hex)",
+"power_wake_signin_save": "Lưu khóa đăng nhập",
+"power_wake_signin_ready": "Bật thẳng vào người dùng của bạn",
 };
 
 export default vi;

@@ -2720,6 +2720,17 @@ helper_mismatch_go: "重新加载助手",
 "power_wake_auto_working": "正在设置…",
 "power_wake_auto_hint": "可能并非在所有主机上都有效",
 "power_wake_auto_failed": "自动设置未成功——请改为在上方输入唤醒码。",
+"power_wake_signedin": "已唤醒并登录",
+"power_wake_signedin_body": "主机已开机并登录到你的用户。",
+"power_wake_signin_hint": "唤醒主机并登录到你的用户，使其进入主界面而不是用户选择界面。",
+"power_action_wake_signin": "唤醒并登录",
+"power_action_wake_signin_busy": "正在唤醒并登录…",
+"power_wake_signin_setup": "高级：直接唤醒进入你的用户（登录）",
+"power_wake_signin_setup_hint": "普通唤醒会停在用户选择界面。有了主机的两个会话密钥（注册密钥和 RP-Key，各 32 个十六进制字符），唤醒时也会登录你的用户。Chiaki 用户可在已注册主机的设置中找到这两者。",
+"power_wake_signin_regist": "注册密钥（十六进制）",
+"power_wake_signin_rpkey": "RP-Key（十六进制）",
+"power_wake_signin_save": "保存登录密钥",
+"power_wake_signin_ready": "直接唤醒进入你的用户",
 };
 
 export default zh_CN;

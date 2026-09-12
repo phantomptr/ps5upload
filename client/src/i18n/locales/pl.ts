@@ -3063,6 +3063,17 @@ helper_mismatch_go: "Załaduj pomocnika",
 "power_wake_auto_working": "Konfigurowanie…",
 "power_wake_auto_hint": "może nie działać na wszystkich konsolach",
 "power_wake_auto_failed": "Konfiguracja automatyczna nie zadziałała — wpisz kod wybudzania powyżej.",
+"power_wake_signedin": "Wybudzono i zalogowano",
+"power_wake_signedin_body": "Konsola jest włączona i zalogowana na Twoim użytkowniku.",
+"power_wake_signin_hint": "Wybudza konsolę i loguje Twojego użytkownika, aby uruchomiła się na ekranie głównym, a nie na wyborze użytkownika.",
+"power_action_wake_signin": "Wybudź i zaloguj",
+"power_action_wake_signin_busy": "Wybudzanie i logowanie…",
+"power_wake_signin_setup": "Zaawansowane: wybudź prosto na swojego użytkownika (logowanie)",
+"power_wake_signin_setup_hint": "Zwykłe wybudzenie zatrzymuje się na wyborze użytkownika. Z dwoma kluczami sesji konsoli (klucz rejestracji i RP-Key, po 32 znaki szesnastkowe) wybudzenie loguje też Twojego użytkownika. Użytkownicy Chiaki mają oba w ustawieniach zarejestrowanej konsoli.",
+"power_wake_signin_regist": "Klucz rejestracji (hex)",
+"power_wake_signin_rpkey": "RP-Key (hex)",
+"power_wake_signin_save": "Zapisz klucze logowania",
+"power_wake_signin_ready": "Wybudza prosto na Twojego użytkownika",
 };
 
 export default pl;

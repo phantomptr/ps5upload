@@ -31,6 +31,7 @@ pub mod rar_stream;
 pub mod remoteplay;
 pub mod rp_regist;
 mod rp_regist_keys;
+pub mod rp_session;
 pub mod saves;
 pub mod sdk_changer;
 pub mod search_index;

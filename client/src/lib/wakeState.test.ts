@@ -4,6 +4,8 @@ import {
   wakeUi,
   isValidWakeCredential,
   WAKE_REQUIREMENTS,
+  credentialFromRegistKeyHex,
+  isValidSessionKey,
 } from "./wakeState";
 
 describe("powerStateFromDdp", () => {
@@ -73,5 +75,43 @@ describe("WAKE_REQUIREMENTS", () => {
     );
     expect(restMode).toHaveLength(2);
     expect(new Set(restMode.map((r) => r.pathKey)).size).toBe(1);
+  });
+});
+
+describe("credentialFromRegistKeyHex", () => {
+  it("derives the wake credential the way the console does", () => {
+    // "5967bbd3" ASCII, NUL-padded to 16 bytes → 0x5967bbd3 → decimal.
+    expect(credentialFromRegistKeyHex("35393637626264330000000000000000")).toBe(
+      "1499970515",
+    );
+    expect(credentialFromRegistKeyHex("61663838393933310000000000000000")).toBe(
+      "2944964913",
+    );
+  });
+  it("rejects non-hex or empty input", () => {
+    expect(credentialFromRegistKeyHex("")).toBe("");
+    expect(credentialFromRegistKeyHex("not hex")).toBe("");
+    expect(credentialFromRegistKeyHex("abc")).toBe(""); // odd length
+  });
+});
+
+describe("isValidSessionKey", () => {
+  it("requires exactly 32 hex chars (16 bytes)", () => {
+    expect(isValidSessionKey("1395c8cc7eca16fe982eb22e527ba3da")).toBe(true);
+    expect(isValidSessionKey(" 1395C8CC7ECA16FE982EB22E527BA3DA ")).toBe(true);
+    expect(isValidSessionKey("1395c8cc")).toBe(false);
+    expect(isValidSessionKey("")).toBe(false);
+    expect(isValidSessionKey("zz95c8cc7eca16fe982eb22e527ba3da")).toBe(false);
+  });
+});
+
+describe("wakeUi with session keys", () => {
+  it("enables wake from session keys even without a separate credential", () => {
+    expect(wakeUi("standby", false, true).showWakeButton).toBe(true);
+    expect(wakeUi("standby", false, true).canSignIn).toBe(true);
+    expect(wakeUi("standby", false, false).showWakeButton).toBe(false);
+  });
+  it("hides setup once session keys exist", () => {
+    expect(wakeUi("awake", false, true).showSetup).toBe(false);
   });
 });

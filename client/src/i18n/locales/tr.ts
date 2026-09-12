@@ -2774,6 +2774,17 @@ helper_mismatch_go: "Yardımcıyı yükle",
 "power_wake_auto_working": "Ayarlanıyor…",
 "power_wake_auto_hint": "her konsolda çalışmayabilir",
 "power_wake_auto_failed": "Otomatik kurulum işe yaramadı — bunun yerine yukarıdaki uyandırma kodunu gir.",
+"power_wake_signedin": "Uyandırıldı ve oturum açıldı",
+"power_wake_signedin_body": "Konsol açık ve kullanıcınızda oturum açılmış durumda.",
+"power_wake_signin_hint": "Konsolu uyandırır ve kullanıcınızda oturum açar, böylece kullanıcı seçimi yerine ana ekranda açılır.",
+"power_action_wake_signin": "Uyandır ve oturum aç",
+"power_action_wake_signin_busy": "Uyandırılıyor ve oturum açılıyor…",
+"power_wake_signin_setup": "Gelişmiş: doğrudan kullanıcınıza uyandır (oturum aç)",
+"power_wake_signin_setup_hint": "Basit bir uyandırma kullanıcı seçiminde durur. Konsolunuzun iki oturum anahtarıyla (kayıt anahtarı ve RP-Key, her biri 32 onaltılık karakter) uyandırma kullanıcınızda da oturum açar. Chiaki kullanıcıları ikisini de kayıtlı konsol ayarlarında bulur.",
+"power_wake_signin_regist": "Kayıt anahtarı (hex)",
+"power_wake_signin_rpkey": "RP-Key (hex)",
+"power_wake_signin_save": "Oturum anahtarlarını kaydet",
+"power_wake_signin_ready": "Doğrudan kullanıcınıza uyandırır",
 };
 
 export default tr;

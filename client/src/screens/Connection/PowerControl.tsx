@@ -18,7 +18,7 @@ import { Button, Spinner } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useTr } from "../../state/lang";
 import { useEffect } from "react";
-import { ddpStatus, powerWake, type DdpStatus } from "../../api/ps5";
+import { ddpStatus, powerWake, wakeAndSignIn, type DdpStatus } from "../../api/ps5";
 import { useRosterStore } from "../../state/roster";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
@@ -55,6 +55,9 @@ export default function PowerControl({ host }: { host: string }) {
   const activeId = useRosterStore((st) => st.active_id);
   const profile = profiles.find((p) => p.id === activeId) ?? null;
   const credential = profile?.wake_credential ?? "";
+  const registKey = profile?.wake_regist_key ?? "";
+  const rpKey = profile?.wake_rp_key ?? "";
+  const hasSessionKeys = !!registKey && !!rpKey;
   const [ddp, setDdp] = useState<DdpStatus | null>(null);
 
   useEffect(() => {
@@ -77,13 +80,28 @@ export default function PowerControl({ host }: { host: string }) {
      may offer — kept in one testable place rather than as scattered JSX
      conditionals. */
   const power = powerStateFromDdp(ddp?.code);
-  const ui = wakeUi(power, !!credential);
+  const ui = wakeUi(power, !!credential, hasSessionKeys);
 
   async function runWake() {
-    if (!credential) return;
     setBusy("wake");
     setError(null);
     try {
+      if (ui.canSignIn) {
+        // Wake AND sign the user in — a longer, confirmed operation: it waits
+        // for the console to boot, then establishes the control session.
+        await wakeAndSignIn(host, credential, registKey, rpKey);
+        pushNotification(
+          "success",
+          tr("power_wake_signedin", undefined, "Woken and signed in"),
+          {
+            body: tr("power_wake_signedin_body", undefined,
+              "The console is on and signed in to your user."),
+          },
+        );
+        audit("system_wake", withConsolePrefix(host, "woken and signed in"));
+        return;
+      }
+      if (!credential) return;
       await powerWake(host, credential);
       // Not "waking up": the console never acknowledges, and ignores the
       // request entirely unless Remote Play is enabled.
@@ -215,10 +233,19 @@ export default function PowerControl({ host }: { host: string }) {
             leftIcon={
               busy === "wake" ? <Spinner size={12} tone="inherit" /> : <Power size={12} />
             }
-            title={tr("power_wake_hint", undefined,
-              "Wakes the console over Sony's discovery protocol. Requires Remote Play enabled on the console.")}
+            title={
+              ui.canSignIn
+                ? tr("power_wake_signin_hint", undefined,
+                    "Wakes the console and signs in to your user, so it comes up on the home screen instead of user-select.")
+                : tr("power_wake_hint", undefined,
+                    "Wakes the console over Sony's discovery protocol. Requires Remote Play enabled on the console.")
+            }
           >
-            {tr("power_action_wake", undefined, "Wake")}
+            {busy === "wake" && ui.canSignIn
+              ? tr("power_action_wake_signin_busy", undefined, "Waking & signing in…")
+              : ui.canSignIn
+                ? tr("power_action_wake_signin", undefined, "Wake & sign in")
+                : tr("power_action_wake", undefined, "Wake")}
           </Button>
         ) : null}
         <Button

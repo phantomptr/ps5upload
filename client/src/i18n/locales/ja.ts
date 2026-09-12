@@ -2809,6 +2809,17 @@ helper_mismatch_go: "ヘルパーを再読み込み",
 "power_wake_auto_working": "セットアップ中…",
 "power_wake_auto_hint": "すべての本体で動作するとは限りません",
 "power_wake_auto_failed": "自動セットアップに失敗しました — 代わりに上の起動コードを入力してください。",
+"power_wake_signedin": "起動してサインインしました",
+"power_wake_signedin_body": "本体はオンになり、あなたのユーザーにサインインしています。",
+"power_wake_signin_hint": "本体を起動してあなたのユーザーにサインインし、ユーザー選択ではなくホーム画面で立ち上がります。",
+"power_action_wake_signin": "起動してサインイン",
+"power_action_wake_signin_busy": "起動してサインイン中…",
+"power_wake_signin_setup": "詳細: あなたのユーザーへ直接起動（サインイン）",
+"power_wake_signin_setup_hint": "通常の起動はユーザー選択で止まります。本体の2つのセッションキー（登録キーとRP-Key、どちらも16進32文字）があれば、起動時にあなたのユーザーにもサインインします。Chiakiユーザーは登録済み本体の設定に両方あります。",
+"power_wake_signin_regist": "登録キー（16進）",
+"power_wake_signin_rpkey": "RP-Key（16進）",
+"power_wake_signin_save": "サインインキーを保存",
+"power_wake_signin_ready": "あなたのユーザーへ直接起動します",
 };
 
 export default ja;

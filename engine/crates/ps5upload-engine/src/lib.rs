@@ -2976,6 +2976,56 @@ struct PowerWakeReq {
 /// Fire-and-forget: the console never acknowledges a WAKEUP, so a 200 here
 /// means the datagram was sent and nothing more. It also requires "Enable
 /// Remote Play" on the console; with that off nothing is listening at all.
+#[derive(Debug, serde::Deserialize)]
+struct PowerWakeLoginReq {
+    host: String,
+    #[serde(default)]
+    credential: String,
+    /// Both hex, harvested from a pairing. Required — signing in needs the
+    /// full session keys, not just the wake credential.
+    regist_key: String,
+    rp_key: String,
+}
+
+/// POST /api/ps5/power/wake-login — wake the console AND sign its user in.
+///
+/// A bare wake lands at user-select; this follows the wake with a Remote
+/// Play control session so the console comes up on the user's home screen,
+/// the way the official app does. Long-running: it waits for the console to
+/// boot before signing in.
+async fn ps5_power_wake_login(Json(req): Json<PowerWakeLoginReq>) -> impl IntoResponse {
+    let host = req.host.clone();
+    let cred = req.credential.clone();
+    let creds =
+        match ps5upload_core::rp_session::SessionCreds::from_hex(&req.regist_key, &req.rp_key) {
+            Ok(c) => c,
+            Err(e) => return json_err(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
+        };
+    let r = tokio::task::spawn_blocking(move || {
+        // Wake first (harmless if already awake), then wait for the session
+        // port and sign in.
+        if !cred.trim().is_empty() {
+            ps5upload_core::ddp::wake(&host, &cred)?;
+        }
+        ps5upload_core::rp_session::login_session_when_ready(
+            &host,
+            &creds,
+            std::time::Duration::from_secs(90),
+        )
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r);
+    match r {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "ok": true, "signed_in": true })),
+        )
+            .into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
 async fn ps5_power_wake(Json(req): Json<PowerWakeReq>) -> impl IntoResponse {
     let host = req.host.clone();
     let cred = req.credential.clone();
@@ -9000,6 +9050,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/power/control", post(ps5_power_control))
         .route("/api/ps5/power/telemetry", get(ps5_power_telemetry))
         .route("/api/ps5/power/wake", post(ps5_power_wake))
+        .route("/api/ps5/power/wake-login", post(ps5_power_wake_login))
         .route("/api/ps5/power/ddp-status", get(ps5_power_ddp_status))
         .route("/api/ps5/power/pair", post(ps5_power_pair))
         .route("/api/ps5/users/list", get(ps5_users_list))

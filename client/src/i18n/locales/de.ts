@@ -2775,6 +2775,17 @@ helper_mismatch_go: "Helfer neu laden",
 "power_wake_auto_working": "Wird eingerichtet…",
 "power_wake_auto_hint": "funktioniert möglicherweise nicht auf allen Konsolen",
 "power_wake_auto_failed": "Die automatische Einrichtung hat nicht funktioniert — gib stattdessen oben den Aufweck-Code ein.",
+"power_wake_signedin": "Geweckt und angemeldet",
+"power_wake_signedin_body": "Die Konsole ist an und bei deinem Benutzer angemeldet.",
+"power_wake_signin_hint": "Weckt die Konsole und meldet deinen Benutzer an, sodass sie auf dem Startbildschirm statt der Benutzerauswahl startet.",
+"power_action_wake_signin": "Wecken & anmelden",
+"power_action_wake_signin_busy": "Wecken & anmelden…",
+"power_wake_signin_setup": "Erweitert: direkt zu deinem Benutzer wecken (Anmeldung)",
+"power_wake_signin_setup_hint": "Ein einfaches Wecken bleibt bei der Benutzerauswahl stehen. Mit den beiden Session-Schlüsseln deiner Konsole (Registrierungsschlüssel und RP-Key, je 32 Hex-Zeichen) meldet das Wecken auch deinen Benutzer an. Chiaki-Nutzer haben beide in den Einstellungen der registrierten Konsole.",
+"power_wake_signin_regist": "Registrierungsschlüssel (hex)",
+"power_wake_signin_rpkey": "RP-Key (hex)",
+"power_wake_signin_save": "Anmelde-Schlüssel speichern",
+"power_wake_signin_ready": "Weckt direkt zu deinem Benutzer",
 };
 
 export default de;

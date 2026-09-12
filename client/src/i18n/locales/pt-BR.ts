@@ -2802,6 +2802,17 @@ helper_mismatch_go: "Recarregar auxiliar",
 "power_wake_auto_working": "Configurando…",
 "power_wake_auto_hint": "pode não funcionar em todos os consoles",
 "power_wake_auto_failed": "A configuração automática não funcionou — insira o código de ativação acima.",
+"power_wake_signedin": "Ligado e com login feito",
+"power_wake_signedin_body": "O console está ligado e com login no seu usuário.",
+"power_wake_signin_hint": "Liga o console e faz login no seu usuário, para que ele apareça na tela inicial em vez da seleção de usuário.",
+"power_action_wake_signin": "Ligar e entrar",
+"power_action_wake_signin_busy": "Ligando e entrando…",
+"power_wake_signin_setup": "Avançado: ligar direto no seu usuário (login)",
+"power_wake_signin_setup_hint": "Uma ligação simples para na seleção de usuário. Com as duas chaves de sessão do console (chave de registro e RP-Key, 32 caracteres hex cada), a ligação também faz login no seu usuário. Usuários do Chiaki têm ambas nas configurações do console registrado.",
+"power_wake_signin_regist": "Chave de registro (hex)",
+"power_wake_signin_rpkey": "RP-Key (hex)",
+"power_wake_signin_save": "Salvar chaves de login",
+"power_wake_signin_ready": "Liga direto no seu usuário",
 };
 
 export default pt_BR;

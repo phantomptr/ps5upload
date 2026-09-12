@@ -2715,6 +2715,17 @@ helper_mismatch_go: "重新載入小幫手",
 "power_wake_auto_working": "正在設定…",
 "power_wake_auto_hint": "可能並非在所有主機上都有效",
 "power_wake_auto_failed": "自動設定未成功——請改為在上方輸入喚醒碼。",
+"power_wake_signedin": "已喚醒並登入",
+"power_wake_signedin_body": "主機已開機並登入你的使用者。",
+"power_wake_signin_hint": "喚醒主機並登入你的使用者，使其進入主畫面而非使用者選擇畫面。",
+"power_action_wake_signin": "喚醒並登入",
+"power_action_wake_signin_busy": "正在喚醒並登入…",
+"power_wake_signin_setup": "進階：直接喚醒進入你的使用者（登入）",
+"power_wake_signin_setup_hint": "一般喚醒會停在使用者選擇畫面。有了主機的兩個工作階段金鑰（註冊金鑰和 RP-Key，各 32 個十六進位字元），喚醒時也會登入你的使用者。Chiaki 使用者可在已註冊主機的設定中找到這兩者。",
+"power_wake_signin_regist": "註冊金鑰（十六進位）",
+"power_wake_signin_rpkey": "RP-Key（十六進位）",
+"power_wake_signin_save": "儲存登入金鑰",
+"power_wake_signin_ready": "直接喚醒進入你的使用者",
 };
 
 export default zh_TW;

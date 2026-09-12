@@ -235,7 +235,7 @@ fn regist_search(host: &str, timeout: Duration) -> Result<()> {
     Ok(())
 }
 
-fn resolve(host: &str, port: u16) -> Result<std::net::SocketAddr> {
+pub(crate) fn resolve(host: &str, port: u16) -> Result<std::net::SocketAddr> {
     let bare = host.split(':').next().unwrap_or(host);
     format!("{bare}:{port}")
         .to_socket_addrs()
@@ -245,16 +245,16 @@ fn resolve(host: &str, port: u16) -> Result<std::net::SocketAddr> {
 }
 
 /// A raw HTTP reply, taken apart.
-struct HttpReply {
-    code: u16,
+pub(crate) struct HttpReply {
+    pub(crate) code: u16,
     /// Header names lower-cased, so lookups do not have to guess the case
     /// the console used.
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
+    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) body: Vec<u8>,
 }
 
 /// Split a raw HTTP response into its status code, headers and body.
-fn split_http(raw: &[u8]) -> Result<HttpReply> {
+pub(crate) fn split_http(raw: &[u8]) -> Result<HttpReply> {
     let split = raw
         .windows(4)
         .position(|w| w == b"\r\n\r\n")

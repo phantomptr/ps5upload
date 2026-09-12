@@ -69,6 +69,14 @@ export interface PS5Profile {
    *  user from the PS Remote Play app. A profile without one is not offered a
    *  Wake button, because pressing it could do nothing. */
   wake_credential?: string | null;
+  /** Full Remote Play session keys, for waking *into the user* rather than
+   *  the sign-in screen. A bare wake powers the console on but leaves it at
+   *  user-select; establishing a control session with these signs the user
+   *  in. Both are hex; they come together from a pairing (harvested the same
+   *  way as the wake credential). Optional — a profile with only a
+   *  wake_credential still wakes, just to user-select. */
+  wake_regist_key?: string | null;
+  wake_rp_key?: string | null;
 }
 
 interface RosterState {
@@ -85,6 +93,8 @@ interface RosterState {
   setNotes: (id: string, notes: string) => void;
   /** Store the credential that lets this console be woken from standby. */
   setWakeCredential: (id: string, credential: string) => void;
+  /** Store or clear the sign-in keys (both hex, or both empty to clear). */
+  setWakeSessionKeys: (id: string, registKey: string, rpKey: string) => void;
   /** Called by AppShell's status poller when a probe lands a fresh
    *  kernel/payload pair, so the roster row stays current without
    *  the user opening Settings. */
@@ -310,6 +320,20 @@ export const useRosterStore = create<RosterState>((set, get) => ({
     );
     set({ profiles: next });
     persist(next, get().active_id);
+  },
+
+  setWakeSessionKeys: (id, registKey, rpKey) => {
+    const rk = registKey.trim().toLowerCase();
+    const rp = rpKey.trim().toLowerCase();
+    set((st) => {
+      const profiles = st.profiles.map((p) =>
+        p.id === id
+          ? { ...p, wake_regist_key: rk || null, wake_rp_key: rp || null }
+          : p,
+      );
+      persist(profiles, st.active_id);
+      return { profiles };
+    });
   },
 
   setWakeCredential: (id, credential) => {

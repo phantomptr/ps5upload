@@ -2767,6 +2767,17 @@ helper_mismatch_go: "إعادة تحميل المساعد",
 "power_wake_auto_working": "جارٍ الإعداد…",
 "power_wake_auto_hint": "قد لا يعمل على جميع الأجهزة",
 "power_wake_auto_failed": "لم ينجح الإعداد التلقائي — أدخل رمز التشغيل أعلاه بدلاً من ذلك.",
+"power_wake_signedin": "تم التشغيل وتسجيل الدخول",
+"power_wake_signedin_body": "الجهاز قيد التشغيل ومُسجَّل الدخول إلى مستخدمك.",
+"power_wake_signin_hint": "يشغّل الجهاز ويسجّل دخول مستخدمك، ليبدأ على الشاشة الرئيسية بدلاً من اختيار المستخدم.",
+"power_action_wake_signin": "تشغيل وتسجيل دخول",
+"power_action_wake_signin_busy": "جارٍ التشغيل وتسجيل الدخول…",
+"power_wake_signin_setup": "متقدّم: التشغيل مباشرةً إلى مستخدمك (تسجيل الدخول)",
+"power_wake_signin_setup_hint": "التشغيل العادي يتوقف عند اختيار المستخدم. باستخدام مفتاحي الجلسة الخاصين بجهازك (مفتاح التسجيل وRP-Key، كل منهما 32 حرفاً سداسياً عشرياً) يسجّل التشغيل دخول مستخدمك أيضاً. مستخدمو Chiaki لديهم كلاهما في إعدادات الجهاز المسجَّل.",
+"power_wake_signin_regist": "مفتاح التسجيل (سداسي عشري)",
+"power_wake_signin_rpkey": "RP-Key (سداسي عشري)",
+"power_wake_signin_save": "حفظ مفاتيح تسجيل الدخول",
+"power_wake_signin_ready": "يشغّل مباشرةً إلى مستخدمك",
 };
 
 export default ar;

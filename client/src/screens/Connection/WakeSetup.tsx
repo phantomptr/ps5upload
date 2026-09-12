@@ -9,8 +9,15 @@ import { audit } from "../../state/auditLog";
 import {
   WAKE_REQUIREMENTS,
   isValidWakeCredential,
+  isValidSessionKey,
+  credentialFromRegistKeyHex,
   type WakeUi,
 } from "../../lib/wakeState";
+
+// Example key values shown as input placeholders — illustrative hex, not
+// translatable copy, so kept as constants rather than i18n strings.
+const EXAMPLE_REGIST_KEY = "35393637626264330000000000000000";
+const EXAMPLE_RP_KEY = "1395c8cc7eca16fe982eb22e527ba3da";
 
 /** The three console settings that must be on, or wake fails silently.
  *
@@ -76,11 +83,30 @@ export default function WakeSetup({
 }: WakeSetupProps) {
   const tr = useTr();
   const setWakeCredential = useRosterStore((st) => st.setWakeCredential);
+  const setWakeSessionKeys = useRosterStore((st) => st.setWakeSessionKeys);
 
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
   const [pairing, setPairing] = useState(false);
   const [pairError, setPairError] = useState<string | null>(null);
+
+  // Advanced: the two session keys that let the wake sign the user in.
+  const [showSignIn, setShowSignIn] = useState(false);
+  const [registDraft, setRegistDraft] = useState("");
+  const [rpDraft, setRpDraft] = useState("");
+  const sessionKeysValid = isValidSessionKey(registDraft) && isValidSessionKey(rpDraft);
+
+  function saveSessionKeys() {
+    if (!profileId || !sessionKeysValid) return;
+    setWakeSessionKeys(profileId, registDraft, rpDraft);
+    // The wake credential derives from the regist key, so storing the keys is
+    // enough to also enable the plain wake — set it so both paths work.
+    const derived = credentialFromRegistKeyHex(registDraft);
+    if (derived) setWakeCredential(profileId, derived);
+    setRegistDraft("");
+    setRpDraft("");
+    setShowSignIn(false);
+  }
 
   const draftValid = isValidWakeCredential(draft);
 
@@ -137,6 +163,24 @@ export default function WakeSetup({
             {tr("power_wake_change", undefined, "Change")}
           </button>
         </div>
+        {ui.canSignIn ? (
+          <div className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
+            <CheckCircle2 size={12} className="shrink-0 text-[var(--color-good)]" />
+            {tr("power_wake_signin_ready", undefined, "Wakes straight into your user")}
+          </div>
+        ) : (
+          <SignInSection
+            show={showSignIn}
+            setShow={setShowSignIn}
+            registDraft={registDraft}
+            setRegistDraft={setRegistDraft}
+            rpDraft={rpDraft}
+            setRpDraft={setRpDraft}
+            valid={sessionKeysValid}
+            onSave={saveSessionKeys}
+            canSave={!!profileId}
+          />
+        )}
         <Requirements defaultOpen={false} />
       </div>
     );
@@ -229,6 +273,89 @@ export default function WakeSetup({
           {" "}
           {pairError}
         </span>
+      ) : null}
+
+      <SignInSection
+        show={showSignIn}
+        setShow={setShowSignIn}
+        registDraft={registDraft}
+        setRegistDraft={setRegistDraft}
+        rpDraft={rpDraft}
+        setRpDraft={setRpDraft}
+        valid={sessionKeysValid}
+        onSave={saveSessionKeys}
+        canSave={!!profileId}
+      />
+    </div>
+  );
+}
+
+/** Optional: the two session keys that let a wake sign the user in, so the
+ *  console lands on the home screen rather than user-select. A power-user
+ *  step — both keys come together from a pairing and have to be harvested —
+ *  so it is tucked behind a disclosure and never in the main path. */
+function SignInSection(props: {
+  show: boolean;
+  setShow: (v: boolean) => void;
+  registDraft: string;
+  setRegistDraft: (v: string) => void;
+  rpDraft: string;
+  setRpDraft: (v: string) => void;
+  valid: boolean;
+  onSave: () => void;
+  canSave: boolean;
+}) {
+  const tr = useTr();
+  const {
+    show, setShow, registDraft, setRegistDraft, rpDraft, setRpDraft, valid, onSave, canSave,
+  } = props;
+  return (
+    <div className="mt-1 border-t border-[var(--color-border)] pt-2">
+      <button
+        type="button"
+        className="flex items-center gap-1.5 text-xs text-[var(--color-muted)] hover:text-[var(--color-fg)]"
+        onClick={() => setShow(!show)}
+      >
+        {show ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        {tr("power_wake_signin_setup", undefined,
+          "Advanced: wake straight into your user (sign in)")}
+      </button>
+      {show ? (
+        <div className="mt-2 flex flex-col gap-2">
+          <span className="text-xs text-[var(--color-muted)]">
+            {tr("power_wake_signin_setup_hint", undefined,
+              "A plain wake stops at user-select. With your console's two session keys (registration key and RP-Key, both 32 hex characters), the wake also signs your user in. Chiaki users have both in their registered-console settings.")}
+          </span>
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="text-[var(--color-muted)]">
+              {tr("power_wake_signin_regist", undefined, "Registration key (hex)")}
+            </span>
+            <input
+              className="input py-1 font-mono text-xs"
+              spellCheck={false}
+              placeholder={EXAMPLE_REGIST_KEY}
+              value={registDraft}
+              onChange={(e) => setRegistDraft(e.target.value)}
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="text-[var(--color-muted)]">
+              {tr("power_wake_signin_rpkey", undefined, "RP-Key (hex)")}
+            </span>
+            <input
+              className="input py-1 font-mono text-xs"
+              spellCheck={false}
+              placeholder={EXAMPLE_RP_KEY}
+              value={rpDraft}
+              onChange={(e) => setRpDraft(e.target.value)}
+            />
+          </label>
+          <div>
+            <Button variant="secondary" size="sm" disabled={!valid || !canSave} onClick={onSave}>
+              {tr("power_wake_signin_save", undefined, "Save sign-in keys")}
+            </Button>
+          </div>
+        </div>
       ) : null}
     </div>
   );

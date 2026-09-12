@@ -25,14 +25,57 @@ export interface WakeUi {
    *  awake — the opposite of when waking is useful, so it is only offered
    *  while the console is on. */
   canAutoSetup: boolean;
+  /** The full session keys are stored, so the wake can sign the user in
+   *  rather than land at user-select. Changes the wake action's meaning. */
+  canSignIn: boolean;
 }
 
-export function wakeUi(state: PowerState, hasCredential: boolean): WakeUi {
+export function wakeUi(
+  state: PowerState,
+  hasCredential: boolean,
+  hasSessionKeys = false,
+): WakeUi {
   return {
-    showWakeButton: state === "standby" && hasCredential,
-    showSetup: !hasCredential,
+    // Session keys imply a wake credential (it derives from the regist key),
+    // so either is enough to enable the wake button.
+    showWakeButton: state === "standby" && (hasCredential || hasSessionKeys),
+    showSetup: !hasCredential && !hasSessionKeys,
     canAutoSetup: state === "awake",
+    canSignIn: hasSessionKeys,
   };
+}
+
+/** The wake credential (a decimal number) derived from the registration key.
+ *
+ *  The regist key is 16 hex-encoded bytes, NUL-padded; the credential is the
+ *  ASCII text before the first NUL read as a hexadecimal number. This is the
+ *  same derivation the console applies when it matches a WAKEUP, so storing
+ *  the session keys is enough to also wake — no separate credential paste.
+ *  Returns "" if the input is not a usable regist key. */
+export function credentialFromRegistKeyHex(registKeyHex: string): string {
+  const hex = registKeyHex.trim().toLowerCase();
+  if (!/^[0-9a-f]+$/.test(hex) || hex.length % 2 !== 0) return "";
+  // hex → bytes → text up to the first NUL.
+  let text = "";
+  for (let i = 0; i < hex.length; i += 2) {
+    const byte = parseInt(hex.slice(i, i + 2), 16);
+    if (byte === 0) break;
+    text += String.fromCharCode(byte);
+  }
+  // That text is itself hex; parse it as a number.
+  if (!/^[0-9a-f]+$/.test(text)) return "";
+  try {
+    const n = BigInt(`0x${text}`);
+    if (n <= 0n || n > 18446744073709551615n) return "";
+    return n.toString(10);
+  } catch {
+    return "";
+  }
+}
+
+/** A 16-byte key as exactly 32 hex characters. */
+export function isValidSessionKey(hex: string): boolean {
+  return /^[0-9a-fA-F]{32}$/.test(hex.trim());
 }
 
 /** A wake credential is the registration key rendered as a decimal number.

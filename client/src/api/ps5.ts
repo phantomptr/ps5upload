@@ -2146,6 +2146,31 @@ export async function pairForWake(host: string, addr?: string): Promise<PairForW
   return body;
 }
 
+/** Wake a console AND sign its user in.
+ *
+ *  A bare wake lands at the user-select screen; this follows it with a
+ *  Remote Play control session so the console comes up on the user's home
+ *  screen. Needs the full session keys (regist + rp, both hex) as well as
+ *  the wake credential. Long-running — it waits for the console to boot.
+ *
+ *  Resolves when the user is signed in; rejects with the console's reason
+ *  (wrong keys, or a login passcode blocking sign-in). */
+export async function wakeAndSignIn(
+  host: string,
+  credential: string,
+  registKey: string,
+  rpKey: string,
+): Promise<{ ok: boolean }> {
+  const res = await fetch(`${getEngineUrl()}/api/ps5/power/wake-login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ host, credential, regist_key: registKey, rp_key: rpKey }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+  if (!res.ok) throw new Error(body.error || `wake + sign-in failed (${res.status})`);
+  return { ok: !!body.ok };
+}
+
 /** Is the console awake, in standby, or not answering?
  *
  *  Needs neither a credential nor the payload, so it can tell "console is

@@ -2776,6 +2776,17 @@ helper_mismatch_go: "Muat ulang helper",
 "power_wake_auto_working": "Menyiapkan…",
 "power_wake_auto_hint": "mungkin tidak berhasil di semua konsol",
 "power_wake_auto_failed": "Penyiapan otomatis tidak berhasil — masukkan kode pengaktifan di atas.",
+"power_wake_signedin": "Dinyalakan dan masuk",
+"power_wake_signedin_body": "Konsol menyala dan masuk ke pengguna Anda.",
+"power_wake_signin_hint": "Menyalakan konsol dan masuk ke pengguna Anda, sehingga muncul di layar beranda alih-alih pemilihan pengguna.",
+"power_action_wake_signin": "Nyalakan & masuk",
+"power_action_wake_signin_busy": "Menyalakan & masuk…",
+"power_wake_signin_setup": "Lanjutan: nyalakan langsung ke pengguna Anda (masuk)",
+"power_wake_signin_setup_hint": "Penyalaan biasa berhenti di pemilihan pengguna. Dengan dua kunci sesi konsol (kunci registrasi dan RP-Key, masing-masing 32 karakter heks), penyalaan juga memasukkan pengguna Anda. Pengguna Chiaki punya keduanya di pengaturan konsol terdaftar.",
+"power_wake_signin_regist": "Kunci registrasi (heks)",
+"power_wake_signin_rpkey": "RP-Key (heks)",
+"power_wake_signin_save": "Simpan kunci masuk",
+"power_wake_signin_ready": "Menyala langsung ke pengguna Anda",
 };
 
 export default id;

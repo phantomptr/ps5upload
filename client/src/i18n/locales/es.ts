@@ -2714,6 +2714,17 @@ helper_mismatch_go: "Recargar asistente",
 "power_wake_auto_working": "Configurando…",
 "power_wake_auto_hint": "puede que no funcione en todas las consolas",
 "power_wake_auto_failed": "La configuración automática no funcionó: introduce el código de encendido de arriba.",
+"power_wake_signedin": "Encendida e iniciada sesión",
+"power_wake_signedin_body": "La consola está encendida y con la sesión de tu usuario iniciada.",
+"power_wake_signin_hint": "Enciende la consola e inicia sesión con tu usuario, para que aparezca en la pantalla de inicio en vez de la selección de usuario.",
+"power_action_wake_signin": "Encender e iniciar sesión",
+"power_action_wake_signin_busy": "Encendiendo e iniciando sesión…",
+"power_wake_signin_setup": "Avanzado: encender directamente en tu usuario (iniciar sesión)",
+"power_wake_signin_setup_hint": "Un encendido normal se detiene en la selección de usuario. Con las dos claves de sesión de tu consola (clave de registro y RP-Key, ambas de 32 caracteres hex), el encendido también inicia la sesión de tu usuario. Los usuarios de Chiaki tienen ambas en los ajustes de la consola registrada.",
+"power_wake_signin_regist": "Clave de registro (hex)",
+"power_wake_signin_rpkey": "RP-Key (hex)",
+"power_wake_signin_save": "Guardar claves de inicio de sesión",
+"power_wake_signin_ready": "Enciende directamente en tu usuario",
 };
 
 export default es;
