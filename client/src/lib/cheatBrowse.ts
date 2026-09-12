@@ -100,11 +100,11 @@ export function cheatFilterOptions(entries: CheatRepoEntry[]): {
 
 /** Formats the console can actually read.
  *
- *  MC4 is encrypted XML and the payload has no decryption for it, so a
- *  downloaded .mc4 installs fine and then shows "no cheats found" — which is
- *  indistinguishable from a broken download. Roughly a quarter of the
- *  published collection is MC4, so this is not a rare corner. */
-export const SUPPORTED_CHEAT_FORMATS = ["json", "shn"];
+ *  MC4 is encrypted XML — base64 over AES-256-CBC with a fixed key baked into
+ *  the format — that decrypts to the same trainer XML as SHN. The payload now
+ *  decrypts and parses it, so it is offered like any other format. (Roughly a
+ *  quarter of the published collection is MC4.) */
+export const SUPPORTED_CHEAT_FORMATS = ["json", "shn", "mc4"];
 
 export function isSupportedCheatFormat(format: string | undefined): boolean {
   return SUPPORTED_CHEAT_FORMATS.includes((format ?? "").toLowerCase());

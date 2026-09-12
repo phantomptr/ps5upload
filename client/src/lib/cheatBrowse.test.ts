@@ -132,12 +132,14 @@ describe("isSupportedCheatFormat", () => {
     expect(isSupportedCheatFormat("json")).toBe(true);
     expect(isSupportedCheatFormat("shn")).toBe(true);
     expect(isSupportedCheatFormat("SHN")).toBe(true);
+    // MC4 is now decrypted (base64 + AES-256-CBC) into the same trainer XML
+    // as SHN and parsed on the console.
+    expect(isSupportedCheatFormat("mc4")).toBe(true);
+    expect(isSupportedCheatFormat("MC4")).toBe(true);
   });
 
-  it("rejects mc4, which installs and then shows nothing", () => {
-    // The payload has no AES decryption for MC4, so a downloaded .mc4 lands on
-    // disk and the title then reports "no cheats found".
-    expect(isSupportedCheatFormat("mc4")).toBe(false);
+  it("still rejects an unknown/encrypted format the payload can't read", () => {
+    expect(isSupportedCheatFormat("shnext")).toBe(false);
     expect(isSupportedCheatFormat("")).toBe(false);
     expect(isSupportedCheatFormat(undefined)).toBe(false);
   });

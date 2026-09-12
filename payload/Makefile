@@ -73,7 +73,7 @@ SQLITE_CFLAGS := -Os -g0 \
                  -DSQLITE_DQS=0 \
                  -DSQLITE_UNTESTABLE=1
 
-INCLUDES := -Iinclude -I$(BLAKE3_DIR) -I$(SQLITE_DIR)
+INCLUDES := -Iinclude -I$(BLAKE3_DIR) -I$(SQLITE_DIR) -Ithird_party/tiny_aes
 CFLAGS := -Wall -Wextra -Werror -g $(INCLUDES)
 
 # Sony sprx linkage. The payload calls sceLncUtilLaunchApp +
@@ -129,6 +129,7 @@ SRCS := src/main.c src/runtime.c src/shell_builtin.c src/takeover.c src/register
         src/wake_watchdog.c src/cheats.c src/activity.c src/sdk_changer.c src/fakelib_overlay.c \
         src/tmdb.c src/fw_spoof.c src/ftp_server.c src/focus_probe.c \
         src/content_db.c \
+        third_party/tiny_aes/aes.c \
         $(BLAKE3_SRCS)
 
 # Headers as Make prerequisites so editing a .h triggers a rebuild. This

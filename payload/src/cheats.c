@@ -3,9 +3,9 @@
  * running PS5 games.
  *
  * Architecture:
- *   - Three file formats: JSON (native), SHN (XML trainer), MC4 (encrypted
- *     XML). All parsed into a common in-memory representation. MC4 is
- *     deferred (requires AES-256-CBC; will be added in a follow-up).
+ *   - Three file formats: JSON (native), SHN (XML trainer), MC4 (base64 over
+ *     AES-256-CBC, decrypting to the same XML as SHN). All parsed into a
+ *     common in-memory representation.
  *   - Memory writes via ptrace (PT_ATTACH + PT_IO), with kernel_mprotect
  *     to flip execute-only pages to RWX temporarily.
  *   - A background watcher thread polls every 3s for new game processes
@@ -42,6 +42,7 @@
 #include "notif.h"
 #include "proc_list.h"
 #include "ptrace_remote.h"
+#include "aes.h" /* tiny-AES, vendored — MC4 cheat decryption */
 
 /* ── Constants ───────────────────────────────────────────────────── */
 
@@ -883,6 +884,80 @@ static int find_cheat_files(const char *title_id,
     return count;
 }
 
+/* ── MC4 (encrypted XML) ─────────────────────────────────────────────
+ *
+ * An MC4 file is base64 text of an AES-256-CBC ciphertext; decrypted it is
+ * the same <Trainer>/<Cheat>/<Cheatline> XML as SHN, so it is handed to the
+ * SHN parser once decrypted. The key and IV are fixed constants baked into
+ * the format (public, not console-derived), so no device secrets are needed.
+ * Recovered from OnionHEN's mc4_cheat_parser and verified against its fixture.
+ */
+/* The 32-byte key and 16-byte IV are the ASCII bytes of these literals; the
+ * arrays are auto-sized (a trailing NUL rides along, which AES never reads). */
+static const uint8_t MC4_AES_KEY[] = "304c6528f659c766110239a51cl5dd9c";
+static const uint8_t MC4_AES_IV[] = "u@}kzW2u[u(8DWar";
+
+/* Standard base64 decode. Ignores whitespace; returns bytes written, or -1
+ * on a malformed character. `out` must hold at least `3*(in_len/4)` bytes. */
+static int mc4_base64_decode(const char *in, size_t in_len, uint8_t *out, size_t out_cap) {
+    static const int8_t T[256] = {
+        ['A']=0,['B']=1,['C']=2,['D']=3,['E']=4,['F']=5,['G']=6,['H']=7,['I']=8,
+        ['J']=9,['K']=10,['L']=11,['M']=12,['N']=13,['O']=14,['P']=15,['Q']=16,
+        ['R']=17,['S']=18,['T']=19,['U']=20,['V']=21,['W']=22,['X']=23,['Y']=24,
+        ['Z']=25,['a']=26,['b']=27,['c']=28,['d']=29,['e']=30,['f']=31,['g']=32,
+        ['h']=33,['i']=34,['j']=35,['k']=36,['l']=37,['m']=38,['n']=39,['o']=40,
+        ['p']=41,['q']=42,['r']=43,['s']=44,['t']=45,['u']=46,['v']=47,['w']=48,
+        ['x']=49,['y']=50,['z']=51,['0']=52,['1']=53,['2']=54,['3']=55,['4']=56,
+        ['5']=57,['6']=58,['7']=59,['8']=60,['9']=61,['+']=62,['/']=63,
+    };
+    size_t o = 0;
+    uint32_t acc = 0;
+    int bits = 0;
+    for (size_t i = 0; i < in_len; i++) {
+        unsigned char c = (unsigned char)in[i];
+        if (c == '=' ) break;
+        if (c == '\r' || c == '\n' || c == ' ' || c == '\t') continue;
+        int8_t v = T[c];
+        if (v < 0 && c != 'A') return -1; /* 'A' legitimately maps to 0 */
+        acc = (acc << 6) | (uint32_t)v;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            if (o >= out_cap) return -1;
+            out[o++] = (uint8_t)((acc >> bits) & 0xFF);
+        }
+    }
+    return (int)o;
+}
+
+/* Decrypt an MC4 file in place-ish and parse it as SHN XML. */
+static int parse_mc4_file(const char *encoded, size_t enc_len, cheat_file_t *cf) {
+    /* base64 → binary */
+    size_t cap = (enc_len / 4 + 1) * 3 + 16;
+    uint8_t *bin = (uint8_t *)malloc(cap);
+    if (!bin) return -1;
+    int bin_len = mc4_base64_decode(encoded, enc_len, bin, cap);
+    /* AES-256-CBC works on whole 16-byte blocks. */
+    if (bin_len <= 0 || (bin_len % 16) != 0) {
+        free(bin);
+        return -1;
+    }
+
+    struct AES_ctx ctx;
+    AES_init_ctx_iv(&ctx, MC4_AES_KEY, MC4_AES_IV);
+    AES_CBC_decrypt_buffer(&ctx, bin, (size_t)bin_len);
+
+    /* The plaintext is NUL-terminated XML; PKCS pad bytes at the tail are
+     * harmless — the SHN parser stops at the closing tags. */
+    char *xml = (char *)realloc(bin, (size_t)bin_len + 1);
+    if (!xml) { free(bin); return -1; }
+    xml[bin_len] = '\0';
+
+    int rc = parse_shn_file(xml, (size_t)bin_len, cf);
+    free(xml);
+    return rc;
+}
+
 /* Load and parse a cheat file from disk. Returns 0 on success. */
 static int load_cheat_file(const char *path, int format, cheat_file_t *cf) {
     int fd = open(path, O_RDONLY);
@@ -910,9 +985,8 @@ static int load_cheat_file(const char *path, int format, cheat_file_t *cf) {
     } else if (format == 2) {
         rc = parse_shn_file(buf, (size_t)rd, cf);
     } else if (format == 3) {
-        /* MC4 (encrypted XML) — not yet supported. Would require
-         * AES-256-CBC decryption. Mark as unsupported format. */
-        rc = -1;
+        /* MC4 = base64 + AES-256-CBC over SHN-shaped XML. */
+        rc = parse_mc4_file(buf, (size_t)rd, cf);
     }
 
     free(buf);
