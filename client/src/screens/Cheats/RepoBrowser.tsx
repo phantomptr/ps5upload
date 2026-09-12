@@ -328,6 +328,10 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <select
                 className="input py-1 text-xs"
+                // `.input` is plain CSS with width:100%, which a utility class cannot
+                // beat — without this the two dropdowns stack full-width instead of
+                // reading as one row of controls.
+                style={{ width: "auto", minWidth: "9rem" }}
                 value={filters.format}
                 onChange={(ev) => setFilters((f) => ({ ...f, format: ev.target.value }))}
               >
@@ -338,6 +342,7 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
               </select>
               <select
                 className="input py-1 text-xs"
+                style={{ width: "auto", minWidth: "11rem" }}
                 value={filters.version}
                 onChange={(ev) => setFilters((f) => ({ ...f, version: ev.target.value }))}
               >
