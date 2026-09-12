@@ -20,6 +20,13 @@ pub struct ActivityEntry {
     pub last_seen_ts: i64,
     #[serde(default)]
     pub session_active: bool,
+    /// Installed-title name, joined from app.db by the payload. Absent
+    /// when the title is no longer installed -- play time outlives the
+    /// game. Every field here is `serde(default)`, so a payload that
+    /// spells a key differently reads as a default rather than an error;
+    /// the payload's activity_json selftest pins the wire spellings.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,6 +156,33 @@ mod tests {
         assert_eq!(resp.titles[0].title_id, "CUSA00001");
         assert_eq!(resp.titles[0].launches, 5);
         assert_eq!(resp.current_title, "CUSA00002");
+    }
+
+    /// The payload joins an installed-title name onto every tracked entry.
+    /// Pinned here because `ActivityEntry` is `serde(default)` throughout:
+    /// a key the payload spells differently deserializes to a default
+    /// rather than an error, which is how "last_played"/"active" went
+    /// unnoticed. The wire spellings themselves are pinned on the payload
+    /// side, in payload/tests/activity_json_selftest.c.
+    #[test]
+    fn tracked_entry_carries_a_joined_title_name() {
+        let json = r#"{
+            "titles": [
+                {"title_id":"CUSA00900","launches":1,"total_seconds":60,
+                 "last_launch_ts":1700000000,"last_seen_ts":1700000060,
+                 "session_active":true,"name":"Bloodborne"},
+                {"title_id":"CUSA11111","launches":1,"total_seconds":60,
+                 "last_launch_ts":1700000000,"last_seen_ts":1700000060,
+                 "session_active":false}
+            ],
+            "current_title": ""
+        }"#;
+        let resp: ActivityGetResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.titles[0].name.as_deref(), Some("Bloodborne"));
+        // A deleted game keeps its play time but has no name to join.
+        assert_eq!(resp.titles[1].name, None);
+        assert!(resp.titles[0].session_active);
+        assert_eq!(resp.titles[0].last_launch_ts, 1_700_000_000);
     }
 
     #[test]

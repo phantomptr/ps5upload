@@ -65,4 +65,51 @@ extern int sceAppInstUtilInstallByPackage(MetaInfo *meta,
 extern int sceAppInstUtilAppInstallPkg(const char *path,
                                        SceAppInstallPkgInfo *pkg_info);
 
+/* Async install status, keyed by content_id.
+ *
+ * InstallByPackage returns as soon as the task is *queued* (rc == 0). The
+ * real outcome — especially a patch validation failure — arrives later on
+ * this channel. Only the process that started the install may poll it (Sony
+ * segfaults a cross-process poller), which is why polling lives here in the
+ * DPI daemon and not in the main payload. Layout is the documented Sony ABI
+ * (cf. OnionHEN's PS5 install writeup). */
+typedef struct {
+    int32_t error_code;
+    int32_t version;
+    char    description[512];
+    char    type[9];
+} SceAppInstallErrorInfo;
+
+typedef struct {
+    char                   status[16];  /* "installing" | "playable" | "error" | "none" */
+    char                   src_type[8];
+    uint32_t               remain_time;
+    uint64_t               downloaded_size;
+    uint64_t               initial_chunk_size;
+    uint64_t               total_size;
+    uint32_t               promote_progress;
+    SceAppInstallErrorInfo error_info;
+    int32_t                local_copy_percent;
+    unsigned char          is_copy_only;
+} SceAppInstallStatusInstalled;
+
+extern int sceAppInstUtilGetInstallStatus(const char *content_id,
+                                          SceAppInstallStatusInstalled *status);
+
+/* SCE_APP_INSTALLER_ERROR_* — ShellUI's values. Base UNKNOWN = 0x80A30001;
+ * PARAM = 0x80A30003 matches ps5upload's own hardware-observed code, which is
+ * how the facility (0x80A3, not 0x80A2) was pinned. The patch-relevant ones
+ * turn "patch mostly fails" into a real reason. */
+#define SCE_APP_INSTALLER_ERROR_NOSPACE             0x80A30002u
+#define SCE_APP_INSTALLER_ERROR_APP_NOT_FOUND       0x80A30004u /* base not installed */
+#define SCE_APP_INSTALLER_ERROR_APP_BROKEN          0x80A30008u
+#define SCE_APP_INSTALLER_ERROR_PKG_INVALID_CONTENT_TYPE 0x80A30009u
+#define SCE_APP_INSTALLER_ERROR_USED_APP_NOT_FOUND  0x80A3000Au
+#define SCE_APP_INSTALLER_ERROR_APP_IS_RUNNING      0x80A3000Cu /* close the game first */
+#define SCE_APP_INSTALLER_ERROR_SYSTEM_VERSION      0x80A3000Du /* patch needs newer FW */
+#define SCE_APP_INSTALLER_ERROR_CONTENT_ID_DISAGREE 0x80A3000Fu /* patch != base */
+#define SCE_APP_INSTALLER_ERROR_APP_VER             0x80A30011u /* base is the wrong version */
+#define SCE_APP_INSTALLER_ERROR_NEED_ADDCONT_INSTALL 0x80A30017u
+#define SCE_APP_INSTALLER_ERROR_INVALID_PATCH_PKG   0x80A30019u
+
 #endif /* PS5UPLOAD_DPI_SCE_APP_INST_UTIL_H */

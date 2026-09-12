@@ -22,6 +22,25 @@ function formatDuration(seconds: number): string {
   return `${hours}h ${remMins}m`;
 }
 
+/* All three tabs identify a title the same way: the game's name when the
+ * payload could resolve one from app.db, with the title id demoted to a
+ * subtitle. When there is no name -- a title that has been deleted, or a
+ * console whose app.db would not open -- the title id stays the heading,
+ * so those rows look exactly as they did before rather than going blank. */
+function TitleHeading({ titleId, name }: { titleId: string; name?: string }) {
+  if (!name) {
+    return <div className="truncate font-mono font-semibold">{titleId}</div>;
+  }
+  return (
+    <>
+      <div className="truncate font-semibold">{name}</div>
+      <div className="truncate font-mono text-xs text-[var(--color-muted)]">
+        {titleId}
+      </div>
+    </>
+  );
+}
+
 function formatDate(ts: number): string {
   if (!ts) return "—";
   return new Date(ts * 1000).toLocaleDateString(undefined, {
@@ -172,7 +191,14 @@ export default function GameActivityScreen() {
                     <div className="text-sm text-[var(--color-muted)]">
                       {tr("game_activity_now_playing", undefined, "Currently playing")}
                     </div>
-                    <div className="font-mono font-bold">{currentTitle}</div>
+                    <div className="min-w-0">
+                      <TitleHeading
+                        titleId={currentTitle}
+                        name={
+                          entries.find((e) => e.title_id === currentTitle)?.name
+                        }
+                      />
+                    </div>
                   </div>
                 </Card>
               )}
@@ -182,8 +208,8 @@ export default function GameActivityScreen() {
                 .map((e) => (
                   <Card key={e.title_id} className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="min-w-0 flex-1">
-                      <div className="font-mono font-semibold">{e.title_id}</div>
-                      <div className="text-sm text-[var(--color-muted)]">
+                      <TitleHeading titleId={e.title_id} name={e.name} />
+                      <div className="mt-1 text-sm text-[var(--color-muted)]">
                         {e.launches} {tr("game_activity_launches", undefined, "launches")} ·{" "}
                         {tr("game_activity_last", undefined, "Last")}: {formatDate(e.last_launch_ts)}
                       </div>
@@ -226,8 +252,7 @@ export default function GameActivityScreen() {
             {dbRows.map((r, i) => (
               <Card key={`${r.title_id}-${i}`} className="flex items-center justify-between p-3">
                 <div className="min-w-0">
-                  <span className="font-mono font-semibold">{r.title_id}</span>
-                  {r.name && <span className="ml-3 text-[var(--color-muted)]">{r.name}</span>}
+                  <TitleHeading titleId={r.title_id} name={r.name} />
                 </div>
                 {r.total_seconds != null && (
                   <div className="shrink-0 text-sm font-bold">{formatDuration(r.total_seconds)}</div>

@@ -759,6 +759,23 @@ test-payload: payload
 		/tmp/ps5upload-cdb/sqlite3.o
 	@/tmp/ps5upload-content-db-selftest
 	@echo "✓ content databases read via SQL, with guarded writes"
+	@echo "Running Game Activity JSON self-test (host build)..."
+	@mkdir -p /tmp/ps5upload-actjson
+	@cc -O2 -Wall -Wextra -Werror -pthread \
+		-I$(PAYLOAD_DIR)/include -I$(PAYLOAD_DIR)/tests/hostshim \
+		-I$(PAYLOAD_DIR)/third_party/sqlite3 \
+		-DKERN_PROC_PROC=8 \
+		-DCONTENT_DB_APP='"/tmp/ps5upload-actjson/app.db"' \
+		-DCONTENT_DB_APPINFO='"/tmp/ps5upload-actjson/appinfo.db"' \
+		-DACTIVITY_FILE='"/tmp/ps5upload-actjson/activity.json"' \
+		-DACTIVITY_DIR='"/tmp/ps5upload-actjson"' \
+		-DACTIVITY_SL2_DB='"/tmp/ps5upload-actjson/sl2_log.db"' \
+		-o /tmp/ps5upload-actjson/selftest \
+		$(PAYLOAD_DIR)/src/content_db.c \
+		$(PAYLOAD_DIR)/tests/activity_json_selftest.c \
+		/tmp/ps5upload-cdb/sqlite3.o
+	@/tmp/ps5upload-actjson/selftest
+	@echo "✓ every Game Activity tab names its titles, in the keys the engine reads"
 	@echo "Running FTP wire-format self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-ftp-format-selftest \
 		$(PAYLOAD_DIR)/tests/ftp_format_selftest.c

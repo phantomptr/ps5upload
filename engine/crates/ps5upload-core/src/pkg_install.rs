@@ -614,6 +614,24 @@ pub fn err_code_message(code: u32) -> Option<&'static str> {
         0x80A3_0003 => Some(
             "PS5 rejected the package path or parameters — the local path may be too long; re-add it to the Package Library so ps5upload can use a bounded install path",
         ),
+        // SCE_APP_INSTALLER patch/DLC failures (facility 0x80A3). These are the
+        // reasons a patch install fails after the task is accepted — the DPI
+        // daemon now polls the async status and surfaces these instead of a
+        // false success. Cross-checked against OnionHEN's PS5 install writeup.
+        0x80A3_0004 | 0x80A3_000A => Some(
+            "PS5 needs the base game installed first — install the base, then this patch/DLC",
+        ),
+        0x80A3_000F => Some(
+            "This patch is for a different game (content-id mismatch) — check it matches the installed title",
+        ),
+        0x80A3_0011 => Some(
+            "The installed base game is the wrong version for this patch — install the matching base version first",
+        ),
+        0x80A3_0019 => Some("The patch package is invalid or corrupt — re-download it"),
+        0x80A3_0017 => Some("This DLC needs its base content installed first"),
+        0x80A3_000D => Some("The console firmware is too old for this package"),
+        0x80A3_000C => Some("Close the game on the PS5 before installing this patch"),
+        0x80A3_0008 | 0x80A3_0009 => Some("The package is broken or the wrong content type"),
         // SCE_HTTP_ERROR_PROXY. Hardware-observed when Stream install asks
         // Sony's HTTP stack to reach the desktop but the console's configured
         // proxy/network path cannot connect. The DPI daemon rejects before a
@@ -815,9 +833,15 @@ mod tests {
         assert!(err_code_message(0x80020005).is_some());
         assert!(err_code_message(0x80431084).is_some());
         assert!(err_code_message(0x80A30003).is_some());
-        // Added during v2.16.1 hardware test against an NPXS pkg on
-        // FW 9.60 — all 3 tiers returned these and the UI was showing
-        // raw hex with no actionable copy.
+        // Patch/DLC install failures the DPI async poll now surfaces.
+        assert!(err_code_message(0x80A30004).is_some()); // base not installed
+        assert!(err_code_message(0x80A3000F).is_some()); // content-id mismatch
+        assert!(err_code_message(0x80A30011).is_some()); // base wrong version
+        assert!(err_code_message(0x80A30019).is_some()); // invalid patch pkg
+        assert!(err_code_message(0x80A30017).is_some()); // needs base content
+                                                         // Added during v2.16.1 hardware test against an NPXS pkg on
+                                                         // FW 9.60 — all 3 tiers returned these and the UI was showing
+                                                         // raw hex with no actionable copy.
         assert!(err_code_message(0x80B2116F).is_some());
         assert!(err_code_message(0x80B2150F).is_some());
         assert!(err_code_message(0x80B21401).is_some());

@@ -22,8 +22,14 @@
 
 #define MAX_TITLES 512
 #define TITLE_ID_LEN 16
+/* Overridable so the host selftest can point them at a temp directory;
+ * the payload always builds with the real console paths. */
+#ifndef ACTIVITY_FILE
 #define ACTIVITY_FILE "/data/ps5upload/activity.json"
+#endif
+#ifndef ACTIVITY_DIR
 #define ACTIVITY_DIR "/data/ps5upload"
+#endif
 #define POLL_INTERVAL_SEC 30
 #define LAUNCH_DEBOUNCE_SEC 5
 
@@ -427,7 +433,76 @@ void activity_init(void) {
     }
 }
 
+/* ── title_id -> name ────────────────────────────────────────────────
+ *
+ * Only the recently-played query was ever sourced from app.db, so it was
+ * the only one of the three that could show a title name. The other two
+ * sources do not carry one: the process watcher sees a title id and the
+ * system logger records appTitleId, and nothing else identifies the game.
+ *
+ * So the join happens here, once per request, against the same
+ * content_db_apps() the recently-played query already uses -- one
+ * schema-discovery implementation, not a second guess at app.db's shape.
+ * A console whose database will not open falls back to the byte scanner
+ * inside content_db_apps(); if even that yields nothing, callers simply
+ * get no name and the client keeps showing the title id. */
+#define NAME_MAP_MAX 512
+
+typedef struct {
+    content_db_app_t *rows;
+    int count;
+} name_map_t;
+
+static void name_map_load(name_map_t *m) {
+    m->rows = NULL;
+    m->count = 0;
+    content_db_app_t *rows =
+        (content_db_app_t *)malloc(sizeof(content_db_app_t) * NAME_MAP_MAX);
+    if (!rows) return;
+    int n = content_db_apps(rows, NAME_MAP_MAX, NULL);
+    if (n <= 0) {
+        free(rows);
+        return;
+    }
+    m->rows = rows;
+    m->count = n;
+}
+
+static void name_map_free(name_map_t *m) {
+    free(m->rows);
+    m->rows = NULL;
+    m->count = 0;
+}
+
+/* NULL when the title is not installed -- a game can have play time
+ * recorded and then be deleted. Callers omit the field entirely in that
+ * case rather than emitting an empty string, so the client can tell
+ * "no name known" from "the name is blank". */
+static const char *name_map_find(const name_map_t *m, const char *title_id) {
+    for (int i = 0; i < m->count; i++) {
+        if (strcmp(m->rows[i].title_id, title_id) == 0)
+            return m->rows[i].name[0] ? m->rows[i].name : NULL;
+    }
+    return NULL;
+}
+
+/* Append ,"name":"..." when one is known, or nothing at all. Returns the
+ * bytes written, or -1 if it would not fit. */
+static int append_name_field(char *buf, size_t cap, const char *name) {
+    if (!name) return 0;
+    char esc[512];
+    json_escape(name, esc, sizeof(esc));
+    int n = snprintf(buf, cap, ",\"name\":\"%s\"", esc);
+    if (n < 0 || (size_t)n >= cap) return -1;
+    return n;
+}
+
 int activity_get_json(char *buf, size_t cap, size_t *written) {
+    /* Read app.db before taking the lock: it is a SQLite open plus a
+     * query, and the watcher thread should not wait on it. */
+    name_map_t names;
+    name_map_load(&names);
+
     pthread_mutex_lock(&g_lock);
 
     int64_t now = now_ts();
@@ -440,7 +515,11 @@ int activity_get_json(char *buf, size_t cap, size_t *written) {
     int n = snprintf(buf, cap,
                      "{\"now_ts\":%lld,\"current_title\":\"%s\",\"titles\":[",
                      (long long)now, cur_esc);
-    if (n < 0 || (size_t)n >= cap) { pthread_mutex_unlock(&g_lock); return -1; }
+    if (n < 0 || (size_t)n >= cap) {
+        pthread_mutex_unlock(&g_lock);
+        name_map_free(&names);
+        return -1;
+    }
 
     int first = 1;
     for (int i = 0; i < g_count; i++) {
@@ -471,28 +550,46 @@ int activity_get_json(char *buf, size_t cap, size_t *written) {
         const char *sep = first ? "" : ",";
         first = 0;
 
+        /* Field names are the client's, not this file's. They used to be
+         * "last_played" and "active" here while the engine's
+         * ActivityEntry declared last_launch_ts and session_active --
+         * and because every field there is #[serde(default)], the
+         * mismatch parsed cleanly into zeros instead of failing. The UI
+         * showed no last-played date and never lit the Active badge. */
         int more = snprintf(buf + n, cap - (size_t)n,
                 "%s{\"title_id\":\"%s\",\"launches\":%llu,"
-                "\"total_seconds\":%llu,\"last_played\":%lld,"
-                "\"active\":%s}",
+                "\"total_seconds\":%llu,\"last_launch_ts\":%lld,"
+                "\"last_seen_ts\":%lld,\"session_active\":%s",
                 sep, esc,
                 (unsigned long long)e->launches,
                 (unsigned long long)live_total,
                 (long long)e->last_launch_ts,
+                (long long)e->last_seen_ts,
                 active ? "true" : "false");
         if (more < 0 || (size_t)(n + more) >= cap) break;
         n += more;
+
+        int nm = append_name_field(buf + n, cap - (size_t)n,
+                                   name_map_find(&names, e->title_id));
+        if (nm < 0) break;
+        n += nm;
+
+        int close = snprintf(buf + n, cap - (size_t)n, "}");
+        if (close < 0 || (size_t)(n + close) >= cap) break;
+        n += close;
     }
 
     int end = snprintf(buf + n, cap - (size_t)n, "]}");
     if (end < 0 || (size_t)(n + end) >= cap) {
         pthread_mutex_unlock(&g_lock);
+        name_map_free(&names);
         return -1;
     }
     n += end;
 
     if (written) *written = (size_t)n;
     pthread_mutex_unlock(&g_lock);
+    name_map_free(&names);
     return 0;
 }
 
@@ -568,6 +665,12 @@ static int recently_played_json(char *buf, size_t cap, size_t *written) {
  */
 #define PLAYTIME_MAX_TITLES 128
 
+/* Overridable for the host selftest, like the content-database paths. */
+#ifndef ACTIVITY_SL2_DB
+#define ACTIVITY_SL2_DB \
+    "/system_data/priv/system_logger2/nobackup/database/sl2_log.db"
+#endif
+
 typedef struct {
     char  *buf;
     size_t cap;
@@ -581,6 +684,9 @@ typedef struct {
      * that must not be added or they would double-count. */
     char   seen[PLAYTIME_MAX_TITLES][16];
     int    nseen;
+    /* Installed-title names, so a play-time row can say "Bloodborne"
+     * rather than "CUSA00900". The log document has no name field. */
+    const name_map_t *names;
 } playtime_ctx_t;
 
 static int playtime_row(void *ctx_, int ncol, const char *const *vals) {
@@ -614,30 +720,54 @@ static int playtime_row(void *ctx_, int ncol, const char *const *vals) {
     char esc[32];
     json_escape(tid, esc, sizeof(esc));
     int more = snprintf(ctx->buf + ctx->n, ctx->cap - (size_t)ctx->n,
-                        "%s{\"title_id\":\"%s\",\"total_seconds\":%lld}",
+                        "%s{\"title_id\":\"%s\",\"total_seconds\":%lld",
                         ctx->emitted ? "," : "", esc, fg_time);
     if (more < 0 || (size_t)(ctx->n + more) + 32 >= ctx->cap) {
         ctx->overflow = 1;
         return 1; /* stop */
     }
     ctx->n += more;
+
+    int nm = append_name_field(ctx->buf + ctx->n, ctx->cap - (size_t)ctx->n,
+                               name_map_find(ctx->names, tid));
+    if (nm < 0 || (size_t)(ctx->n + nm) + 32 >= ctx->cap) {
+        ctx->overflow = 1;
+        return 1;
+    }
+    ctx->n += nm;
+
+    int close = snprintf(ctx->buf + ctx->n, ctx->cap - (size_t)ctx->n, "}");
+    if (close < 0 || (size_t)(ctx->n + close) + 32 >= ctx->cap) {
+        ctx->overflow = 1;
+        return 1;
+    }
+    ctx->n += close;
     ctx->emitted++;
     return 0;
 }
 
 static int play_time_json(char *buf, size_t cap, size_t *written) {
+    name_map_t names;
+    name_map_load(&names);
+
     playtime_ctx_t ctx;
     memset(&ctx, 0, sizeof(ctx));
     ctx.buf = buf;
     ctx.cap = cap;
+    ctx.names = &names;
     ctx.n = snprintf(buf, cap, "{\"rows\":[");
-    if (ctx.n < 0 || (size_t)ctx.n >= cap) return -1;
+    if (ctx.n < 0 || (size_t)ctx.n >= cap) {
+        name_map_free(&names);
+        return -1;
+    }
 
     int rows = content_db_select_text(
-        "/system_data/priv/system_logger2/nobackup/database/sl2_log.db",
+        ACTIVITY_SL2_DB,
         "SELECT log FROM tbl_log WHERE event_id = "
         "'ApplicationSessionEndBi' ORDER BY rowid DESC LIMIT 200",
         200, &ctx, playtime_row);
+
+    name_map_free(&names);
 
     if (rows < 0)
         return db_query_err(buf, cap, written,

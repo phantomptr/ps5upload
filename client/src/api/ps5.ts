@@ -4783,6 +4783,8 @@ export interface ActivityEntry {
   last_launch_ts: number;
   last_seen_ts: number;
   session_active: boolean;
+  /** Joined from app.db by the payload; absent once a game is deleted. */
+  name?: string;
 }
 
 export interface ActivityGetResponse {

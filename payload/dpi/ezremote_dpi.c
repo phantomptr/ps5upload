@@ -219,6 +219,77 @@ static void rewrite_path_for_install(const char *in, char *out, size_t out_size)
     out[out_size - 1] = '\0';
 }
 
+/* A short, human note for the install errors people actually hit — patches
+ * most of all. Anything else falls through to the bare code. */
+static const char *install_error_hint(unsigned code) {
+    switch (code) {
+        case SCE_APP_INSTALLER_ERROR_APP_NOT_FOUND:
+        case SCE_APP_INSTALLER_ERROR_USED_APP_NOT_FOUND:
+            return "install the base game first";
+        case SCE_APP_INSTALLER_ERROR_CONTENT_ID_DISAGREE:
+            return "this patch is for a different game";
+        case SCE_APP_INSTALLER_ERROR_APP_VER:
+            return "the base game is the wrong version for this patch";
+        case SCE_APP_INSTALLER_ERROR_INVALID_PATCH_PKG:
+            return "the patch package is invalid or corrupt";
+        case SCE_APP_INSTALLER_ERROR_NEED_ADDCONT_INSTALL:
+            return "this DLC needs its base content installed";
+        case SCE_APP_INSTALLER_ERROR_SYSTEM_VERSION:
+            return "the console firmware is too old for this package";
+        case SCE_APP_INSTALLER_ERROR_APP_IS_RUNNING:
+            return "close the game before installing";
+        case SCE_APP_INSTALLER_ERROR_NOSPACE:
+            return "not enough free space";
+        case SCE_APP_INSTALLER_ERROR_APP_BROKEN:
+        case SCE_APP_INSTALLER_ERROR_PKG_INVALID_CONTENT_TYPE:
+            return "the package is broken or the wrong type";
+        default:
+            return NULL;
+    }
+}
+
+/* After InstallByPackage queues a task (rc == 0), watch its real outcome for
+ * a short window and return the async error, or 0 for success / still-going.
+ *
+ * The point is patches: they fail *validation* early (wrong base, content-id
+ * mismatch, invalid patch), so a brief poll surfaces the real reason instead
+ * of the old "queued == success". A base game that is genuinely transferring
+ * has not failed and stays 0 (queued) rather than blocking the caller for the
+ * whole download.
+ *
+ * Polling GetInstallStatus is safe here because this daemon is the process
+ * that started the install — Sony only segfaults a *cross-process* poller,
+ * which is exactly why the main payload cannot do this and the DPI daemon
+ * can. `content_id` comes back from InstallByPackage in pkg_info.
+ */
+static int poll_install_outcome(const char *content_id) {
+    /* No content id means we cannot key a status query — treat as queued. */
+    if (content_id == NULL || content_id[0] == '\0') return 0;
+
+    const int window_ms = 8000;   /* long enough for validation, short enough
+                                     not to stall a real transfer */
+    const int step_ms = 400;
+    for (int waited = 0; waited < window_ms; waited += step_ms) {
+        SceAppInstallStatusInstalled st;
+        memset(&st, 0, sizeof(st));
+        int rc = sceAppInstUtilGetInstallStatus(content_id, &st);
+        if (rc == 0) {
+            /* "error"/"none" is a terminal failure; report its code. */
+            if (strcmp(st.status, "error") == 0 || strcmp(st.status, "none") == 0) {
+                unsigned code = (unsigned)st.error_info.error_code;
+                return code != 0 ? (int)code : -1;
+            }
+            /* "playable" means it finished within the window — clean success. */
+            if (strcmp(st.status, "playable") == 0) return 0;
+            /* otherwise still "installing"/transferring — keep watching */
+        }
+        struct timespec ts = { step_ms / 1000, (step_ms % 1000) * 1000000L };
+        nanosleep(&ts, NULL);
+    }
+    /* Still going after the window: not a failure, just a real download. */
+    return 0;
+}
+
 int main(void) {
     int server_fd, new_socket, ret;
     struct sockaddr_in address;
@@ -433,7 +504,26 @@ int main(void) {
                 notify("ezRemote DPI install failed\nError Code: 0x%08X",
                        (unsigned)ret);
             } else {
-                fprintf(stderr, "[dpi] InstallByPackage ok\n");
+                /* The task was accepted; watch its real outcome briefly so a
+                 * patch that fails validation reports the true reason instead
+                 * of a false "ok". Success and long-running transfers keep
+                 * ret == 0. */
+                int async = poll_install_outcome(pkg_info.content_id);
+                if (async != 0) {
+                    ret = async;
+                    const char *hint = install_error_hint((unsigned)ret);
+                    fprintf(stderr, "[dpi] install failed async rc=0x%08X (%s)\n",
+                            (unsigned)ret, hint ? hint : "");
+                    if (hint) {
+                        notify("ezRemote DPI install failed\n%s\nError Code: 0x%08X",
+                               hint, (unsigned)ret);
+                    } else {
+                        notify("ezRemote DPI install failed\nError Code: 0x%08X",
+                               (unsigned)ret);
+                    }
+                } else {
+                    fprintf(stderr, "[dpi] InstallByPackage ok\n");
+                }
             }
         }
 
