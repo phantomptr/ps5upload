@@ -9,6 +9,7 @@ use std::path::Path;
 pub mod cnt;
 pub mod crypto;
 pub mod fih;
+pub mod outer;
 pub mod si;
 pub mod xts;
 
@@ -39,6 +40,10 @@ pub(crate) fn le16(b: &[u8], at: usize) -> u16 {
 
 pub(crate) fn le32(b: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(b[at..at + 4].try_into().unwrap())
+}
+
+pub(crate) fn i32le(b: &[u8], at: usize) -> i32 {
+    i32::from_le_bytes(b[at..at + 4].try_into().unwrap())
 }
 
 pub(crate) fn le64(b: &[u8], at: usize) -> u64 {
