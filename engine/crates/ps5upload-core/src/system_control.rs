@@ -351,3 +351,28 @@ mod tests {
         assert_eq!(parsed.err, None);
     }
 }
+
+#[cfg(test)]
+mod telemetry_parse_tests {
+    use super::*;
+
+    #[test]
+    fn a_payload_reply_carries_its_status_through() {
+        // Exactly what handle_power_telemetry emits on FW 5.10: one value
+        // readable, three not, plus the diagnostic lines. If status is lost
+        // here the client can only render four dashes, which reads as a bug
+        // rather than a firmware limit.
+        let body = b"operating_seconds=err\nboot_cycles=16842752\nthermal_alert_flags=err\npower_up_cause=err\nsymbols_resolved=4\nvalues_ok=1\nstatus=partial\n";
+        let t = parse_power_telemetry(body);
+        assert_eq!(t.symbols_resolved, Some(4));
+        assert_eq!(t.status.as_deref(), Some("partial"));
+        assert_eq!(t.boot_cycles, Some(16842752));
+    }
+
+    #[test]
+    fn no_symbols_resolved_is_reported_as_unsupported_firmware() {
+        let body = b"operating_seconds=err\nboot_cycles=err\nthermal_alert_flags=err\npower_up_cause=err\nsymbols_resolved=0\nvalues_ok=0\nstatus=unsupported_firmware\n";
+        let t = parse_power_telemetry(body);
+        assert_eq!(t.status.as_deref(), Some("unsupported_firmware"));
+    }
+}

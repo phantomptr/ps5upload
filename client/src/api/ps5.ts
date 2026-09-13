@@ -2273,6 +2273,18 @@ export interface PowerTelemetry {
   thermal_alert_flags: number | null;
   /** Power-up cause code (Sony-internal codes — surfaced raw). */
   power_up_cause: number | null;
+  /** Why the values above may be empty. Absent from payloads older than
+   *  5.1.1, which is why every field here is optional: "we don't know" must
+   *  not be rendered as "your firmware doesn't support it".
+   *    `ok`                   all four read
+   *    `partial`              some read, some failed
+   *    `calls_failed`         symbols exist but every call errored
+   *    `unsupported_firmware` no sceKernelIccGet* symbol resolves */
+  status?: string | null;
+  /** How many of the four ICC symbols resolved on this firmware. */
+  symbols_resolved?: number | null;
+  /** How many values actually arrived. */
+  values_ok?: number | null;
 }
 
 /** Fetch lifetime ICC telemetry (operating seconds, boot count,

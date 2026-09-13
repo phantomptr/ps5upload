@@ -83,11 +83,7 @@ export default function PowerTelemetryPanel({ mgmtAddr }: { mgmtAddr: string }) 
           <dt className="text-[var(--color-muted)]">
             {tr("power_telemetry_cycles", undefined, "Boot cycles")}
           </dt>
-          <dd>
-            {data.boot_cycles !== null
-              ? data.boot_cycles.toLocaleString()
-              : "—"}
-          </dd>
+          <dd>{formatBootCycles(data.boot_cycles)}</dd>
           <dt className="text-[var(--color-muted)]">
             {tr("power_telemetry_thermal", undefined, "Thermal alerts")}
           </dt>
@@ -98,15 +94,62 @@ export default function PowerTelemetryPanel({ mgmtAddr }: { mgmtAddr: string }) 
           <dd>{data.power_up_cause !== null ? `code ${data.power_up_cause}` : "—"}</dd>
         </dl>
       )}
+      {/* Say WHY the readout is empty. Four em-dashes under a paragraph about
+          failing fans reads as a broken feature; on most retail firmware the
+          console simply does not expose these counters. The payload reports
+          which of the four ICC symbols resolved, so use it rather than
+          guessing from the nulls. */}
+      {data && unavailableNote(data) && (
+        <p className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-muted)]">
+          {tr(
+            `power_telemetry_note_${data.status}`,
+            undefined,
+            unavailableNote(data) as string,
+          )}
+        </p>
+      )}
       <p className="mt-3 text-xs text-[var(--color-muted)]">
         {tr(
           "power_telemetry_explainer",
           undefined,
-          "Read from the Integrated Circuit Controller (ICC). High thermal-alert counts on a relatively new console can signal a failing fan or thermal paste; high boot-cycle counts may indicate frequent power loss.",
+          "Read from the Integrated Circuit Controller (ICC). Where a console reports them, high thermal-alert counts on a relatively new console can signal a failing fan or thermal paste, and high boot-cycle counts may indicate frequent power loss.",
         )}
       </p>
     </section>
   );
+}
+
+/** A boot count the console cannot plausibly have reached.
+ *
+ *  FW 5.10 returns 0x01010000 (16,842,752) here — roughly 500 boots a day for
+ *  a century. That is a misread field, not a reading, and showing it as fact
+ *  is worse than showing nothing: it is the one number on this panel a user
+ *  might act on. Anything above the cap renders as unavailable. */
+const BOOT_CYCLES_MAX = 1_000_000;
+
+export function formatBootCycles(n: number | null | undefined): string {
+  if (n === null || n === undefined) return "—";
+  if (n < 0 || n > BOOT_CYCLES_MAX) return "—";
+  return n.toLocaleString();
+}
+
+/** One sentence explaining an empty readout, or null when there is nothing to
+ *  explain (everything read, or the payload is too old to tell us). */
+export function unavailableNote(data: {
+  status?: string | null;
+}): string | null {
+  switch (data.status) {
+    case "unsupported_firmware":
+      return "This console's firmware doesn't expose the ICC health counters, so there is nothing to read. Nothing is wrong with the console or with ps5upload.";
+    case "calls_failed":
+      return "The console exposes these counters but refused to read them. This usually clears after a reboot.";
+    case "partial":
+      return "This console reports only some of these counters. The blank rows aren't errors — its firmware doesn't provide them.";
+    default:
+      // "ok", or an older payload that cannot tell us. Saying nothing beats
+      // inventing a reason.
+      return null;
+  }
 }
 
 function formatSeconds(s: number | null): string {
