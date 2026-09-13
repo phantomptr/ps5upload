@@ -1772,6 +1772,43 @@ mod tests {
         assert_eq!(meta.package_type.as_deref(), Some("PS5DP"));
     }
 
+    /// Real debug FPKGs (FIH, signed byte 0x00). 5.26 read these as PS4GD with a
+    /// filename-derived content id, so staged installs could never verify (#319).
+    #[test]
+    fn real_debug_fpkg_samples_parse_content_id() {
+        let dir = std::env::var("PS5UPLOAD_SAMPLE_PKGS")
+            .unwrap_or_else(|_| "/Volumes/Storage/PS5/pkgs".into());
+        let samples = [
+            ("webbrowser.pkg", "IV9999-WEBB00002_00-XXXXXXXXXXXXXXXX"),
+            (
+                "EP7579-PPSA17599_00-EXP33DLC10000PS5.pkg",
+                "EP7579-PPSA17599_00-EXP33DLC10000PS5",
+            ),
+        ];
+        let mut checked = 0;
+        for (name, cid) in samples {
+            let path = std::path::Path::new(&dir).join(name);
+            let Ok(bytes) = std::fs::read(&path) else {
+                eprintln!("skip: {} not present", path.display());
+                continue;
+            };
+            let meta = parse_pkg(&path).unwrap();
+            assert_eq!(meta.content_id, cid, "{name} via parse_pkg");
+            assert_eq!(meta.authenticity, PkgAuthenticity::FakeDebug, "{name}");
+
+            let rm = metadata_from_reader(|off, len| {
+                let start = off as usize;
+                let end = (off + len).min(bytes.len() as u64) as usize;
+                (start < end).then(|| bytes[start..end].to_vec())
+            })
+            .expect("reader metadata");
+            assert_eq!(rm.content_id, cid, "{name} via metadata_from_reader");
+            assert_eq!(rm.platform, "ps5", "{name}");
+            checked += 1;
+        }
+        eprintln!("checked {checked} real sample(s)");
+    }
+
     fn tempdir() -> std::path::PathBuf {
         let mut d = std::env::temp_dir();
         d.push(format!("ps5upload-pkg-test-{}", std::process::id()));
