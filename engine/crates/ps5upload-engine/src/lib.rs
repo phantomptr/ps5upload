@@ -4067,14 +4067,13 @@ pub fn scan_external_pkgs(addr: &str) -> anyhow::Result<Vec<ExternalPkg>> {
                 Err(_) => continue,
             };
             for e in listing.entries {
+                let lower = e.name.to_ascii_lowercase();
+                let is_package = lower.ends_with(".pkg") || lower.ends_with(".fpkg");
                 if e.kind == "dir" {
                     if depth + 1 < MAX_DEPTH {
                         stack.push((join(&dir, &e.name), depth + 1));
                     }
-                } else if {
-                    let lower = e.name.to_ascii_lowercase();
-                    lower.ends_with(".pkg") || lower.ends_with(".fpkg")
-                } {
+                } else if is_package {
                     if out.len() >= MAX_PKGS {
                         break;
                     }
