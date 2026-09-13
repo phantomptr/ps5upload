@@ -2473,6 +2473,11 @@ roster_order_hint: "This order sets the console tabs and the picker.",
   "pkglib.baseMissing.title": "Base game isn't installed",
   "pkglib.stream.hint":
     "Install a .pkg straight from this PC over HTTP — no staging upload. The most reliable path.",
+  "pkglib.stream.pickServer": "Choose a package on the server",
+  "pkglib.stream.notPkg": "Pick a .pkg or .fpkg file.",
+  "pkglib.stream.fromDevice": "From this device",
+  "pkglib.stream.fromDevice.hint":
+    "Upload a package from the device this browser is running on, then stream it.",
   "pkglib.stream.fwLow.hint":
     "Stream install needs firmware 11+ — yours is {fw}.x. The HTTP path hangs on older firmware. Use Upload → Install (staged) instead.",
   "pkglib.stream.fwLow.message":
@@ -3294,6 +3299,10 @@ backport_image_cycle: "This disk image will be stopped if needed, remounted read
 backport_launch: "Launch",
 backport_undo: "Undo",
 backport_stop_external: "Stop the external BackPork payload, then resend ps5upload.",
+"pkglib.auth.fake.title": "Debug/fake-signed package, identified from the PS5 FIH envelope.",
+"pkglib.auth.fake": "fake/debug",
+"pkglib.auth.retail.title": "Retail-signed package. Installing it does not grant a license; the console still needs a valid entitlement to launch it.",
+"pkglib.auth.retail": "retail",
 };
 
 export default en;

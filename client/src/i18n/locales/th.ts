@@ -2808,6 +2808,14 @@ helper_mismatch_go: "โหลดตัวช่วยใหม่",
 "power_wake_signin_ready": "ปลุกเข้าสู่ผู้ใช้ของคุณโดยตรง",
 "profile.username.accountsTitle": "บัญชี",
 "profile.accountId.b64_label": "สำหรับ Remote Play",
+"pkglib.stream.pickServer": "เลือกแพ็กเกจบนเซิร์ฟเวอร์",
+"pkglib.stream.notPkg": "เลือกไฟล์ .pkg หรือ .fpkg",
+"pkglib.stream.fromDevice": "จากอุปกรณ์นี้",
+"pkglib.stream.fromDevice.hint": "อัปโหลดแพ็กเกจจากอุปกรณ์ที่เบราว์เซอร์นี้ทำงานอยู่ แล้วติดตั้งแบบสตรีม",
+"pkglib.auth.fake.title": "แพ็กเกจดีบัก/ลงนามปลอม ระบุจากเอนเวโลป FIH ของ PS5",
+"pkglib.auth.fake": "ปลอม/ดีบัก",
+"pkglib.auth.retail.title": "แพ็กเกจที่ลงนามแบบรีเทล การติดตั้งไม่ได้ให้สิทธิ์การใช้งาน คอนโซลยังต้องมีสิทธิ์ที่ถูกต้องจึงจะเปิดได้",
+"pkglib.auth.retail": "รีเทล",
 };
 
 export default th;

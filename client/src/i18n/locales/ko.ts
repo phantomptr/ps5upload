@@ -2819,6 +2819,14 @@ helper_mismatch_go: "헬퍼 다시 불러오기",
 "power_wake_signin_ready": "사용자로 바로 켜집니다",
 "profile.username.accountsTitle": "계정",
 "profile.accountId.b64_label": "리모트 플레이용",
+"pkglib.stream.pickServer": "서버에서 패키지 선택",
+"pkglib.stream.notPkg": ".pkg 또는 .fpkg 파일을 선택하세요.",
+"pkglib.stream.fromDevice": "이 기기에서",
+"pkglib.stream.fromDevice.hint": "이 브라우저가 실행 중인 기기에서 패키지를 업로드한 다음 스트리밍으로 설치합니다.",
+"pkglib.auth.fake.title": "디버그/가짜 서명 패키지로, PS5 FIH 엔벨로프에서 식별되었습니다.",
+"pkglib.auth.fake": "가짜/디버그",
+"pkglib.auth.retail.title": "리테일 서명 패키지입니다. 설치해도 라이선스가 부여되지 않으며, 실행하려면 콘솔에 유효한 권한이 필요합니다.",
+"pkglib.auth.retail": "리테일",
 };
 
 export default ko;

@@ -41,6 +41,7 @@ import { openInFileSystem } from "../../state/fsNavigation";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
+import { pickLocalPath } from "../../state/localPicker";
 import {
   usePkgLibrary,
   isFinishedPkg,
@@ -790,7 +791,35 @@ export default function InstallPackageScreen() {
       return;
     }
     if (!isTauriEnv()) {
-      browserPkgInputRef.current?.click();
+      // The web UI runs against a server (often a NAS or Docker host) that
+      // already holds the library. Browse that disk, exactly like Upload
+      // does, so a 50 GB package is served in place instead of being
+      // uploaded from the viewer's device first. "From this device" keeps
+      // the old upload path.
+      const picked = await pickLocalPath({
+        mode: "file",
+        title: tr(
+          "pkglib.stream.pickServer",
+          undefined,
+          "Choose a package on the server",
+        ),
+      });
+      if (!picked) return;
+      if (!isInstallPackagePath(picked)) {
+        setPickError(
+          tr("pkglib.stream.notPkg", undefined, "Pick a .pkg or .fpkg file."),
+        );
+        return;
+      }
+      setStreaming(true);
+      try {
+        const name = picked.split(/[\\/]/).pop() ?? picked;
+        await runStreamInstall(picked, name);
+      } catch (e) {
+        setPickError(`${e}`);
+      } finally {
+        setStreaming(false);
+      }
       return;
     }
     // No beta gate. Stream is the RELIABLE path and is no longer hidden
@@ -1216,6 +1245,21 @@ export default function InstallPackageScreen() {
                   if (file) void handleBrowserStreamFile(file);
                 }}
               />
+            )}
+            {!isTauriEnv() && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => browserPkgInputRef.current?.click()}
+                disabled={!hostReady || installing || installingAll || streaming}
+                title={tr(
+                  "pkglib.stream.fromDevice.hint",
+                  undefined,
+                  "Upload a package from the device this browser is running on, then stream it.",
+                )}
+              >
+                {tr("pkglib.stream.fromDevice", undefined, "From this device")}
+              </Button>
             )}
             <Button
               variant="secondary"

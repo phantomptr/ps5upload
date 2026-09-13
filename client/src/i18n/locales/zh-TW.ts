@@ -2729,6 +2729,14 @@ helper_mismatch_go: "重新載入小幫手",
 "power_wake_signin_ready": "直接喚醒進入你的使用者",
 "profile.username.accountsTitle": "帳號",
 "profile.accountId.b64_label": "用於遠端遊玩",
+"pkglib.stream.pickServer": "在伺服器上選擇安裝包",
+"pkglib.stream.notPkg": "請選擇 .pkg 或 .fpkg 檔案。",
+"pkglib.stream.fromDevice": "從此裝置",
+"pkglib.stream.fromDevice.hint": "從執行此瀏覽器的裝置上傳安裝包，然後以串流方式安裝。",
+"pkglib.auth.fake.title": "除錯/偽簽名安裝包，透過 PS5 FIH 封裝識別。",
+"pkglib.auth.fake": "偽簽名/除錯",
+"pkglib.auth.retail.title": "零售簽名安裝包。安裝它不會授予授權；主機仍需有效的權利才能啟動。",
+"pkglib.auth.retail": "零售",
 };
 
 export default zh_TW;

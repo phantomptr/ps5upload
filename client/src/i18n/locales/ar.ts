@@ -2781,6 +2781,14 @@ helper_mismatch_go: "إعادة تحميل المساعد",
 "power_wake_signin_ready": "يشغّل مباشرةً إلى مستخدمك",
 "profile.username.accountsTitle": "الحسابات",
 "profile.accountId.b64_label": "لـ اللعب عن بُعد",
+"pkglib.stream.pickServer": "اختر حزمة على الخادم",
+"pkglib.stream.notPkg": "اختر ملف ‎.pkg أو ‎.fpkg.",
+"pkglib.stream.fromDevice": "من هذا الجهاز",
+"pkglib.stream.fromDevice.hint": "ارفع حزمة من الجهاز الذي يعمل عليه هذا المتصفح، ثم ثبّتها بالبث.",
+"pkglib.auth.fake.title": "حزمة تصحيح/موقّعة توقيعًا مزيفًا، تم التعرّف عليها من غلاف FIH الخاص بـ PS5.",
+"pkglib.auth.fake": "مزيفة/تصحيح",
+"pkglib.auth.retail.title": "حزمة بتوقيع تجاري. تثبيتها لا يمنح ترخيصًا؛ لا يزال الجهاز بحاجة إلى استحقاق صالح لتشغيلها.",
+"pkglib.auth.retail": "تجارية",
 };
 
 export default ar;

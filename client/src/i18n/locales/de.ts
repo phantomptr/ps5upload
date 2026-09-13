@@ -2789,6 +2789,14 @@ helper_mismatch_go: "Helfer neu laden",
 "power_wake_signin_ready": "Weckt direkt zu deinem Benutzer",
 "profile.username.accountsTitle": "Konten",
 "profile.accountId.b64_label": "für Remote Play",
+"pkglib.stream.pickServer": "Paket auf dem Server auswählen",
+"pkglib.stream.notPkg": "Wähle eine .pkg- oder .fpkg-Datei.",
+"pkglib.stream.fromDevice": "Von diesem Gerät",
+"pkglib.stream.fromDevice.hint": "Lade ein Paket von dem Gerät hoch, auf dem dieser Browser läuft, und streame es dann.",
+"pkglib.auth.fake.title": "Debug-/Fake-signiertes Paket, erkannt am FIH-Umschlag der PS5.",
+"pkglib.auth.fake": "Fake/Debug",
+"pkglib.auth.retail.title": "Retail-signiertes Paket. Die Installation gewährt keine Lizenz; die Konsole benötigt weiterhin eine gültige Berechtigung, um es zu starten.",
+"pkglib.auth.retail": "Retail",
 };
 
 export default de;

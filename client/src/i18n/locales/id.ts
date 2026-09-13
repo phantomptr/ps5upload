@@ -2790,6 +2790,14 @@ helper_mismatch_go: "Muat ulang helper",
 "power_wake_signin_ready": "Menyala langsung ke pengguna Anda",
 "profile.username.accountsTitle": "Akun",
 "profile.accountId.b64_label": "untuk Remote Play",
+"pkglib.stream.pickServer": "Pilih paket di server",
+"pkglib.stream.notPkg": "Pilih file .pkg atau .fpkg.",
+"pkglib.stream.fromDevice": "Dari perangkat ini",
+"pkglib.stream.fromDevice.hint": "Unggah paket dari perangkat tempat browser ini berjalan, lalu pasang lewat stream.",
+"pkglib.auth.fake.title": "Paket debug/bertanda tangan palsu, dikenali dari amplop FIH PS5.",
+"pkglib.auth.fake": "palsu/debug",
+"pkglib.auth.retail.title": "Paket bertanda tangan retail. Memasangnya tidak memberikan lisensi; konsol tetap memerlukan hak yang sah untuk menjalankannya.",
+"pkglib.auth.retail": "retail",
 };
 
 export default id;

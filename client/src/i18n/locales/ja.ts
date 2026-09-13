@@ -2823,6 +2823,14 @@ helper_mismatch_go: "ヘルパーを再読み込み",
 "power_wake_signin_ready": "あなたのユーザーへ直接起動します",
 "profile.username.accountsTitle": "アカウント",
 "profile.accountId.b64_label": "リモートプレイ用",
+"pkglib.stream.pickServer": "サーバー上のパッケージを選択",
+"pkglib.stream.notPkg": ".pkg または .fpkg ファイルを選んでください。",
+"pkglib.stream.fromDevice": "このデバイスから",
+"pkglib.stream.fromDevice.hint": "このブラウザーを実行しているデバイスからパッケージをアップロードし、ストリームインストールします。",
+"pkglib.auth.fake.title": "デバッグ/フェイク署名パッケージ（PS5 の FIH エンベロープから判定）。",
+"pkglib.auth.fake": "フェイク/デバッグ",
+"pkglib.auth.retail.title": "リテール署名パッケージです。インストールしてもライセンスは付与されません。起動には引き続き有効な権利が必要です。",
+"pkglib.auth.retail": "リテール",
 };
 
 export default ja;

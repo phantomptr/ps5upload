@@ -2788,6 +2788,14 @@ helper_mismatch_go: "Yardımcıyı yükle",
 "power_wake_signin_ready": "Doğrudan kullanıcınıza uyandırır",
 "profile.username.accountsTitle": "Hesaplar",
 "profile.accountId.b64_label": "Remote Play için",
+"pkglib.stream.pickServer": "Sunucuda bir paket seç",
+"pkglib.stream.notPkg": "Bir .pkg veya .fpkg dosyası seçin.",
+"pkglib.stream.fromDevice": "Bu cihazdan",
+"pkglib.stream.fromDevice.hint": "Bu tarayıcının çalıştığı cihazdan bir paket yükleyin, ardından akışla kurun.",
+"pkglib.auth.fake.title": "Hata ayıklama/sahte imzalı paket, PS5 FIH zarfından tanımlandı.",
+"pkglib.auth.fake": "sahte/hata ayıklama",
+"pkglib.auth.retail.title": "Perakende imzalı paket. Kurmak lisans vermez; konsolun başlatmak için yine geçerli bir hakka ihtiyacı var.",
+"pkglib.auth.retail": "perakende",
 };
 
 export default tr;

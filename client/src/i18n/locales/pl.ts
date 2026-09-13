@@ -3077,6 +3077,14 @@ helper_mismatch_go: "Załaduj pomocnika",
 "power_wake_signin_ready": "Wybudza prosto na Twojego użytkownika",
 "profile.username.accountsTitle": "Konta",
 "profile.accountId.b64_label": "dla Remote Play",
+"pkglib.stream.pickServer": "Wybierz pakiet na serwerze",
+"pkglib.stream.notPkg": "Wybierz plik .pkg lub .fpkg.",
+"pkglib.stream.fromDevice": "Z tego urządzenia",
+"pkglib.stream.fromDevice.hint": "Prześlij pakiet z urządzenia, na którym działa ta przeglądarka, a następnie zainstaluj go strumieniowo.",
+"pkglib.auth.fake.title": "Pakiet debug/z fałszywym podpisem, rozpoznany po kopercie FIH PS5.",
+"pkglib.auth.fake": "fałszywy/debug",
+"pkglib.auth.retail.title": "Pakiet z podpisem detalicznym. Instalacja nie daje licencji; konsola nadal potrzebuje ważnego uprawnienia, aby go uruchomić.",
+"pkglib.auth.retail": "detaliczny",
 };
 
 export default pl;

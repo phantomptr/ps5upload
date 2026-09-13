@@ -2728,6 +2728,14 @@ helper_mismatch_go: "Перезагрузить помощник",
 "power_wake_signin_ready": "Включает сразу в вашего пользователя",
 "profile.username.accountsTitle": "Аккаунты",
 "profile.accountId.b64_label": "для Remote Play",
+"pkglib.stream.pickServer": "Выбрать пакет на сервере",
+"pkglib.stream.notPkg": "Выберите файл .pkg или .fpkg.",
+"pkglib.stream.fromDevice": "С этого устройства",
+"pkglib.stream.fromDevice.hint": "Загрузите пакет с устройства, на котором запущен этот браузер, затем установите его потоком.",
+"pkglib.auth.fake.title": "Отладочный пакет или пакет с поддельной подписью, определён по оболочке FIH PS5.",
+"pkglib.auth.fake": "поддельный/отладка",
+"pkglib.auth.retail.title": "Пакет с розничной подписью. Установка не даёт лицензию: для запуска консоли всё равно нужно действующее право.",
+"pkglib.auth.retail": "розничный",
 };
 
 export default ru;

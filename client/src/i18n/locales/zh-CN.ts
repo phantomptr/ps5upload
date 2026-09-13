@@ -2734,6 +2734,14 @@ helper_mismatch_go: "重新加载助手",
 "power_wake_signin_ready": "直接唤醒进入你的用户",
 "profile.username.accountsTitle": "账号",
 "profile.accountId.b64_label": "用于远程游玩",
+"pkglib.stream.pickServer": "在服务器上选择安装包",
+"pkglib.stream.notPkg": "请选择 .pkg 或 .fpkg 文件。",
+"pkglib.stream.fromDevice": "从此设备",
+"pkglib.stream.fromDevice.hint": "从运行此浏览器的设备上传安装包，然后以串流方式安装。",
+"pkglib.auth.fake.title": "调试/伪签名安装包，通过 PS5 FIH 封装识别。",
+"pkglib.auth.fake": "伪签名/调试",
+"pkglib.auth.retail.title": "零售签名安装包。安装它不会授予许可证；主机仍需有效的授权才能启动。",
+"pkglib.auth.retail": "零售",
 };
 
 export default zh_CN;

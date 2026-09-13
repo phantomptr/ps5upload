@@ -2781,6 +2781,14 @@ helper_mismatch_go: "হেল্পার লোড করুন",
 "power_wake_signin_ready": "সরাসরি আপনার ব্যবহারকারীতে চালু হয়",
 "profile.username.accountsTitle": "অ্যাকাউন্ট",
 "profile.accountId.b64_label": "রিমোট প্লে-র জন্য",
+"pkglib.stream.pickServer": "সার্ভারে একটি প্যাকেজ বেছে নিন",
+"pkglib.stream.notPkg": "একটি .pkg বা .fpkg ফাইল বেছে নিন।",
+"pkglib.stream.fromDevice": "এই ডিভাইস থেকে",
+"pkglib.stream.fromDevice.hint": "এই ব্রাউজারটি যে ডিভাইসে চলছে সেখান থেকে একটি প্যাকেজ আপলোড করুন, তারপর স্ট্রিম করুন।",
+"pkglib.auth.fake.title": "ডিবাগ/ফেক-সাইনড প্যাকেজ, PS5 FIH এনভেলপ থেকে শনাক্ত করা হয়েছে।",
+"pkglib.auth.fake": "ফেক/ডিবাগ",
+"pkglib.auth.retail.title": "রিটেইল-সাইনড প্যাকেজ। এটি ইনস্টল করলে লাইসেন্স পাওয়া যায় না; চালু করতে কনসোলের এখনও একটি বৈধ এনটাইটেলমেন্ট প্রয়োজন।",
+"pkglib.auth.retail": "রিটেইল",
 };
 
 export default bn;

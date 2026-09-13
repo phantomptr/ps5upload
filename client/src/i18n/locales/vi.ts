@@ -2783,6 +2783,14 @@ helper_mismatch_go: "Tải lại trợ giúp",
 "power_wake_signin_ready": "Bật thẳng vào người dùng của bạn",
 "profile.username.accountsTitle": "Tài khoản",
 "profile.accountId.b64_label": "cho Remote Play",
+"pkglib.stream.pickServer": "Chọn gói trên máy chủ",
+"pkglib.stream.notPkg": "Hãy chọn tệp .pkg hoặc .fpkg.",
+"pkglib.stream.fromDevice": "Từ thiết bị này",
+"pkglib.stream.fromDevice.hint": "Tải lên gói từ thiết bị đang chạy trình duyệt này, rồi cài đặt qua stream.",
+"pkglib.auth.fake.title": "Gói gỡ lỗi/ký giả, được nhận diện từ vỏ FIH của PS5.",
+"pkglib.auth.fake": "giả/gỡ lỗi",
+"pkglib.auth.retail.title": "Gói ký bản bán lẻ. Cài đặt không cấp giấy phép; máy vẫn cần quyền hợp lệ để khởi chạy.",
+"pkglib.auth.retail": "bán lẻ",
 };
 
 export default vi;

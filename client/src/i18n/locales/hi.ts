@@ -2818,6 +2818,14 @@ helper_mismatch_go: "हेल्पर फिर लोड करें",
 "power_wake_signin_ready": "सीधे आपके उपयोगकर्ता में चालू होता है",
 "profile.username.accountsTitle": "खाते",
 "profile.accountId.b64_label": "रिमोट प्ले के लिए",
+"pkglib.stream.pickServer": "सर्वर पर एक पैकेज चुनें",
+"pkglib.stream.notPkg": ".pkg या .fpkg फ़ाइल चुनें।",
+"pkglib.stream.fromDevice": "इस डिवाइस से",
+"pkglib.stream.fromDevice.hint": "जिस डिवाइस पर यह ब्राउज़र चल रहा है, वहाँ से पैकेज अपलोड करें, फिर उसे स्ट्रीम करें।",
+"pkglib.auth.fake.title": "डीबग/फ़ेक-साइन किया गया पैकेज, PS5 FIH एनवेलप से पहचाना गया।",
+"pkglib.auth.fake": "फ़ेक/डीबग",
+"pkglib.auth.retail.title": "रिटेल-साइन किया गया पैकेज। इसे इंस्टॉल करने से लाइसेंस नहीं मिलता; इसे चलाने के लिए कंसोल को अब भी एक वैध एंटाइटलमेंट चाहिए।",
+"pkglib.auth.retail": "रिटेल",
 };
 
 export default hi;

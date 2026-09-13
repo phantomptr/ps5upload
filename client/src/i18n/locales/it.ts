@@ -2728,6 +2728,14 @@ helper_mismatch_go: "Ricarica helper",
 "power_wake_signin_ready": "Si accende direttamente sul tuo utente",
 "profile.username.accountsTitle": "Account",
 "profile.accountId.b64_label": "per Remote Play",
+"pkglib.stream.pickServer": "Scegli un pacchetto sul server",
+"pkglib.stream.notPkg": "Scegli un file .pkg o .fpkg.",
+"pkglib.stream.fromDevice": "Da questo dispositivo",
+"pkglib.stream.fromDevice.hint": "Carica un pacchetto dal dispositivo su cui è in esecuzione questo browser, poi installalo in streaming.",
+"pkglib.auth.fake.title": "Pacchetto di debug/con firma falsa, identificato dall'involucro FIH della PS5.",
+"pkglib.auth.fake": "falso/debug",
+"pkglib.auth.retail.title": "Pacchetto con firma retail. Installarlo non concede una licenza; la console ha comunque bisogno di un diritto valido per avviarlo.",
+"pkglib.auth.retail": "retail",
 };
 
 export default it;
