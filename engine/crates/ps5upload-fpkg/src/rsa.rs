@@ -49,21 +49,21 @@ fn cmp(a: &[u64], b: &[u64]) -> Ordering {
 /// `a - b` in place; `a` must be at least `b`.
 fn sub_assign(a: &mut [u64], b: &[u64]) {
     let mut borrow = 0u64;
-    for i in 0..a.len() {
-        let (x, b1) = a[i].overflowing_sub(b.get(i).copied().unwrap_or(0));
-        let (x, b2) = x.overflowing_sub(borrow);
-        a[i] = x;
+    for (x, y) in a.iter_mut().zip(b) {
+        let (diff, b1) = x.overflowing_sub(*y);
+        let (diff, b2) = diff.overflowing_sub(borrow);
+        *x = diff;
         borrow = u64::from(b1 || b2);
     }
 }
 
-/// `a + b` mod `n`, both shorter than `n`.
+/// `a + b` mod `n`; `a` and `b` hold `n.len()` limbs.
 fn add_mod(a: &Limbs, b: &Limbs, n: &Limbs) -> Limbs {
-    let mut out = vec![0u64; a.len()];
+    let mut out = vec![0u64; n.len()];
     let mut carry = 0u64;
-    for i in 0..a.len() {
-        let sum = a[i] as u128 + b.get(i).copied().unwrap_or(0) as u128 + carry as u128;
-        out[i] = sum as u64;
+    for ((slot, x), y) in out.iter_mut().zip(a).zip(b) {
+        let sum = *x as u128 + *y as u128 + carry as u128;
+        *slot = sum as u64;
         carry = (sum >> 64) as u64;
     }
     if carry != 0 || cmp(&out, n) != Ordering::Less {
