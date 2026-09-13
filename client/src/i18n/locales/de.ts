@@ -2787,6 +2787,8 @@ helper_mismatch_go: "Helfer neu laden",
 "power_wake_signin_rpkey": "RP-Key (hex)",
 "power_wake_signin_save": "Anmelde-Schlüssel speichern",
 "power_wake_signin_ready": "Weckt direkt zu deinem Benutzer",
+"profile.username.accountsTitle": "Konten",
+"profile.accountId.b64_label": "für Remote Play",
 };
 
 export default de;

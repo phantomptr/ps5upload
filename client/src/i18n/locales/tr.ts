@@ -2786,6 +2786,8 @@ helper_mismatch_go: "Yardımcıyı yükle",
 "power_wake_signin_rpkey": "RP-Key (hex)",
 "power_wake_signin_save": "Oturum anahtarlarını kaydet",
 "power_wake_signin_ready": "Doğrudan kullanıcınıza uyandırır",
+"profile.username.accountsTitle": "Hesaplar",
+"profile.accountId.b64_label": "Remote Play için",
 };
 
 export default tr;

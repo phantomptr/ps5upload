@@ -2821,6 +2821,8 @@ helper_mismatch_go: "ヘルパーを再読み込み",
 "power_wake_signin_rpkey": "RP-Key（16進）",
 "power_wake_signin_save": "サインインキーを保存",
 "power_wake_signin_ready": "あなたのユーザーへ直接起動します",
+"profile.username.accountsTitle": "アカウント",
+"profile.accountId.b64_label": "リモートプレイ用",
 };
 
 export default ja;

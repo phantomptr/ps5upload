@@ -2806,6 +2806,8 @@ helper_mismatch_go: "โหลดตัวช่วยใหม่",
 "power_wake_signin_rpkey": "RP-Key (ฐานสิบหก)",
 "power_wake_signin_save": "บันทึกคีย์ลงชื่อเข้าใช้",
 "power_wake_signin_ready": "ปลุกเข้าสู่ผู้ใช้ของคุณโดยตรง",
+"profile.username.accountsTitle": "บัญชี",
+"profile.accountId.b64_label": "สำหรับ Remote Play",
 };
 
 export default th;

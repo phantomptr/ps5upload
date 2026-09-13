@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseAccountId, formatAccountId } from "./index";
+import { parseAccountId, formatAccountId, accountIdToB64 } from "./index";
 
 describe("parseAccountId", () => {
   it("accepts hex with or without the 0x prefix, any case", () => {
@@ -72,5 +72,73 @@ describe("64-bit exactness", () => {
     // 2^53 + 1 — the first integer a double cannot represent.
     expect(formatAccountId("9007199254740993")).toBe("0x20000000000001");
     expect(parseAccountId("0x20000000000001")).toBe("0x20000000000001");
+  });
+});
+
+describe("the wire format the payload actually sends", () => {
+  // runtime.c emits "\"id\":\"0x%016llx\"", and these tests previously only
+  // ever fed formatAccountId decimal — so a fixture disagreeing with the
+  // wire let the screen render "—" for every console with an account.
+  const WIRE = "0x7a356e99a9e2205c";
+
+  it("formats the 0x-hex the payload sends", () => {
+    expect(formatAccountId(WIRE)).toBe("0x7a356e99a9e2205c");
+  });
+
+  it("still formats decimal, which older builds sent", () => {
+    expect(formatAccountId("8806066252652093532")).toBe("0x7a356e99a9e2205c");
+  });
+
+  it("strips leading zeros from a zero-padded wire value", () => {
+    expect(formatAccountId("0x000000000000beef")).toBe("0xbeef");
+  });
+
+  it("rejects a value that is neither hex nor decimal", () => {
+    expect(formatAccountId("0xnothex")).toBe("—");
+    expect(formatAccountId("0x")).toBe("—");
+    expect(formatAccountId("0x00000000000000000")).toBe("—"); // 17 digits
+  });
+});
+
+describe("accountIdToB64", () => {
+  // Ground truth: both consoles report account_id_b64 "XCDiqZluNXo=" for
+  // the account whose id reads 0x7a356e99a9e2205c. Bytes are emitted low
+  // byte first because offact reads them straight into a uint64_t on a
+  // little-endian CPU.
+  it("matches what the console reports for the same account", () => {
+    expect(accountIdToB64("0x7a356e99a9e2205c")).toBe("XCDiqZluNXo=");
+    expect(accountIdToB64("8806066252652093532")).toBe("XCDiqZluNXo=");
+  });
+
+  it("always decodes to exactly 8 bytes, which pairing requires", () => {
+    for (const id of [
+      "0x1",
+      "0xbeef",
+      "0xffffffffffffffff",
+      "0x7a356e99a9e2205c",
+    ]) {
+      expect(atob(accountIdToB64(id))).toHaveLength(8);
+    }
+  });
+
+  it("zero-pads a short id rather than shifting the bytes", () => {
+    expect(accountIdToB64("0x1")).toBe(
+      btoa("\x01\x00\x00\x00\x00\x00\x00\x00"),
+    );
+  });
+
+  it("returns empty for no id, zero, or junk", () => {
+    expect(accountIdToB64(null)).toBe("");
+    expect(accountIdToB64("")).toBe("");
+    expect(accountIdToB64("0x0")).toBe("");
+    expect(accountIdToB64("nope")).toBe("");
+  });
+
+  it("does not round a 64-bit id the way a Number would", () => {
+    // 8806066252652093532 is above 2^53; via Number it becomes ...094000,
+    // which is 8 valid bytes of a DIFFERENT account.
+    const viaNumber = accountIdToB64(String(Number("8806066252652093532")));
+    expect(viaNumber).not.toBe("XCDiqZluNXo=");
+    expect(accountIdToB64("8806066252652093532")).toBe("XCDiqZluNXo=");
   });
 });

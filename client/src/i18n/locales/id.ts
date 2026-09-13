@@ -2788,6 +2788,8 @@ helper_mismatch_go: "Muat ulang helper",
 "power_wake_signin_rpkey": "RP-Key (heks)",
 "power_wake_signin_save": "Simpan kunci masuk",
 "power_wake_signin_ready": "Menyala langsung ke pengguna Anda",
+"profile.username.accountsTitle": "Akun",
+"profile.accountId.b64_label": "untuk Remote Play",
 };
 
 export default id;

@@ -2732,6 +2732,8 @@ helper_mismatch_go: "重新加载助手",
 "power_wake_signin_rpkey": "RP-Key（十六进制）",
 "power_wake_signin_save": "保存登录密钥",
 "power_wake_signin_ready": "直接唤醒进入你的用户",
+"profile.username.accountsTitle": "账号",
+"profile.accountId.b64_label": "用于远程游玩",
 };
 
 export default zh_CN;

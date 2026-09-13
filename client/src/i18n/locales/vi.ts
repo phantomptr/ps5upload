@@ -2781,6 +2781,8 @@ helper_mismatch_go: "Tải lại trợ giúp",
 "power_wake_signin_rpkey": "RP-Key (hex)",
 "power_wake_signin_save": "Lưu khóa đăng nhập",
 "power_wake_signin_ready": "Bật thẳng vào người dùng của bạn",
+"profile.username.accountsTitle": "Tài khoản",
+"profile.accountId.b64_label": "cho Remote Play",
 };
 
 export default vi;

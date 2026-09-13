@@ -7,6 +7,7 @@ import {
   Maximize2,
   UserPen,
   Check,
+  Copy,
   Info,
   UserPlus,
   Trash2,
@@ -28,6 +29,7 @@ import { useTr } from "../../state/lang";
 import { useConnectionStore } from "../../state/connection";
 import { mgmtAddr } from "../../lib/addr";
 import { pickPath } from "../../lib/pickPath";
+import { writeClipboard } from "../../lib/clipboard";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import {
   profileInfo,
@@ -357,13 +359,12 @@ function AvatarSection({
               setTargetUid(e.target.value ? Number(e.target.value) : null)
             }
           >
-            {foreground != null &&
-              !users.some((u) => u.uid === foreground) && (
-                <option value={foreground}>
-                  {userLabel(info?.uid_hex ?? "", info?.username ?? "")} (
-                  {tr("profile.avatar.foreground", "active")})
-                </option>
-              )}
+            {foreground != null && !users.some((u) => u.uid === foreground) && (
+              <option value={foreground}>
+                {userLabel(info?.uid_hex ?? "", info?.username ?? "")} (
+                {tr("profile.avatar.foreground", "active")})
+              </option>
+            )}
             {users.map((u) => (
               <option key={u.uid} value={u.uid}>
                 {userLabel(u.uid_hex, u.username)}
@@ -518,12 +519,18 @@ function UsernameSection({
         </div>
       )}
 
-      {/* Offline-account slots are an advanced case — only shown when the
-          console actually has them. */}
+      {/* These rows ARE the account on a normal console — a PSN-linked
+          profile lives in slot 1 like any other. Calling the section
+          "Offline-account slots" filed everyone's real account under an
+          advanced case, which is how the account id ended up looking like
+          something only offline activation cared about. Only say "offline"
+          when one of the slots actually was activated that way. */}
       {slots.length > 0 && (
         <div className="mt-5 border-t border-[var(--color-border)] pt-4">
           <h3 className="mb-2 text-xs font-semibold text-[var(--color-muted)]">
-            {tr("profile.username.slotsTitle", "Offline-account slots")}
+            {slots.some((s) => s.offline_activated)
+              ? tr("profile.username.slotsTitle", "Offline-account slots")
+              : tr("profile.username.accountsTitle", "Accounts")}
           </h3>
           <div className="space-y-2">
             {slots.map((s) => (
@@ -596,7 +603,10 @@ function UserRow({
         { name, uid },
         `Delete user "${name}" (uid ${uid})? This cannot be undone.`,
       ),
-      { title: tr("profile.username.deleteTitle", "Delete User"), kind: "warning" },
+      {
+        title: tr("profile.username.deleteTitle", "Delete User"),
+        kind: "warning",
+      },
     );
     if (!confirmed) return;
     setDeleting(true);
@@ -649,11 +659,7 @@ function UserRow({
           title={tr("profile.username.deleteTitle", "Delete User")}
           className="shrink-0 rounded-md border border-[var(--color-border)] p-1.5 text-[var(--color-warn)] hover:bg-[var(--color-surface-3)] disabled:opacity-50"
         >
-          {deleting ? (
-            <Spinner size={14} />
-          ) : (
-            <Trash2 size={14} />
-          )}
+          {deleting ? <Spinner size={14} /> : <Trash2 size={14} />}
         </button>
       </div>
       {error && <p className="mt-1 text-xs text-[var(--color-bad)]">{error}</p>}
@@ -707,10 +713,7 @@ function CreateUserRow({
           className="min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-sm"
           value={name}
           maxLength={16}
-          placeholder={tr(
-            "profile.username.newPlaceholder",
-            "New user name",
-          )}
+          placeholder={tr("profile.username.newPlaceholder", "New user name")}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") void create();
@@ -787,17 +790,91 @@ export function parseAccountId(raw: string): string | null {
   return "0x" + significant;
 }
 
+/** Normalise whatever the API sent into bare lower-case hex digits, or null.
+ *
+ *  The payload sends the id as 0x-prefixed hex ("0x%016llx" — see
+ *  runtime.c), which is also how offact and every other tool talk about it.
+ *  Decimal is accepted too: older builds sent it that way, and favourites
+ *  and saved values outlive the build that wrote them.
+ *
+ *  Never goes through Number or BigInt — an account id is 64-bit, so the
+ *  first would round it and the second does not exist on the WebViews we
+ *  target. Hex is handled as text and decimal by long division. */
+function accountIdHexDigits(id: string | null | undefined): string | null {
+  if (!id) return null;
+  const t = id.trim().toLowerCase();
+  if (/^0x[0-9a-f]{1,16}$/.test(t)) return t.slice(2);
+  if (/^\d+$/.test(t)) return decimalToHex(t);
+  return null;
+}
+
 /** Render an id for display: 0x-prefixed lower-case hex, no padding.
  *
- *  The API sends the id as a DECIMAL string; the console and every other tool
- *  talk about it in hex, so showing decimal would be unreadable. "—" when the
- *  slot has no id, which is a real state and not an error. */
+ *  "—" when the slot has no id, which is a real state and not an error. */
 export function formatAccountId(id: string | null | undefined): string {
-  if (!id) return "—";
-  const hex = decimalToHex(id);
+  const hex = accountIdHexDigits(id);
   if (hex === null) return "—";
   const significant = hex.replace(/^0+/, "");
   return significant === "" ? "—" : "0x" + significant;
+}
+
+/** Convert an account id to the base64 form Remote Play pairing wants.
+ *
+ *  Both are renderings of the same 8 registry bytes. offact reads those
+ *  bytes straight into a `uint64_t` (offact.c:63) — on the console's x86-64
+ *  that IS the little-endian reading — and the base64 is taken over the
+ *  bytes in memory order, so the hex digits are emitted low byte first.
+ *  Verified against both consoles: 0x7a356e99a9e2205c -> "XCDiqZluNXo=".
+ *
+ *  Bytes only, never a number: pairing rejects anything that does not
+ *  decode to exactly 8 bytes, and a rounded id would decode to 8 perfectly
+ *  valid bytes of the WRONG account. Returns "" when there is no id. */
+export function accountIdToB64(id: string | null | undefined): string {
+  const hex = accountIdHexDigits(id);
+  if (hex === null || hex.replace(/^0+/, "") === "") return "";
+  const padded = hex.padStart(16, "0");
+  let bin = "";
+  for (let i = 14; i >= 0; i -= 2) {
+    bin += String.fromCharCode(parseInt(padded.slice(i, i + 2), 16));
+  }
+  try {
+    return btoa(bin);
+  } catch {
+    return "";
+  }
+}
+
+/** A monospace id with a copy button. "—" is a real state, not a value, so
+ *  it renders plainly with nothing to copy. */
+function CopyableId({
+  value,
+  tr,
+}: {
+  value: string;
+  tr: ReturnType<typeof useTr>;
+}) {
+  const [copied, setCopied] = useState(false);
+  if (!value || value === "—")
+    return <span className="font-mono">{value || "—"}</span>;
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className="font-mono">{value}</span>
+      <button
+        type="button"
+        title={tr("copy", undefined, "Copy")}
+        className="text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+        onClick={() => {
+          void writeClipboard(value).then((ok) => {
+            if (!ok) return;
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          });
+        }}
+      >
+        {copied ? <Check size={12} /> : <Copy size={12} />}
+      </button>
+    </span>
+  );
 }
 
 function SlotRow({
@@ -875,7 +952,10 @@ function SlotRow({
             { slot: String(slot), next },
             `Set slot ${slot}'s account ID to ${next}?\n\nThis activates the offline account. Saves made from now on are tied to this ID — if you change it later they will stop being recognised until you set it back.`,
           ),
-      { title: tr("profile.accountId.confirm_title", "Change account ID?"), kind: "warning" },
+      {
+        title: tr("profile.accountId.confirm_title", "Change account ID?"),
+        kind: "warning",
+      },
     );
     if (!ok) return;
     setIdBusy(true);
@@ -972,12 +1052,29 @@ function SlotRow({
           </>
         ) : (
           <>
-            <span className="font-mono">{formatAccountId(accountId)}</span>
+            <CopyableId value={formatAccountId(accountId)} tr={tr} />
+            {/* The same 8 bytes in the encoding Remote Play pairing wants.
+                Two screens in this app both say "account ID" and want
+                different encodings, so pasting the hex into the Remote Play
+                field fails — showing both here is what makes that
+                survivable without explaining it. */}
+            {accountIdToB64(accountId) && (
+              <>
+                <span className="text-[var(--color-muted)]">
+                  {tr("profile.accountId.b64_label", "for Remote Play")}
+                </span>
+                <CopyableId value={accountIdToB64(accountId)} tr={tr} />
+              </>
+            )}
             <button
               type="button"
               className="text-[var(--color-accent)] hover:underline"
               onClick={() => {
-                setIdDraft(formatAccountId(accountId) === "—" ? "" : formatAccountId(accountId));
+                setIdDraft(
+                  formatAccountId(accountId) === "—"
+                    ? ""
+                    : formatAccountId(accountId),
+                );
                 setEditingId(true);
               }}
             >

@@ -2779,6 +2779,8 @@ helper_mismatch_go: "হেল্পার লোড করুন",
 "power_wake_signin_rpkey": "RP-Key (হেক্স)",
 "power_wake_signin_save": "সাইন-ইন কী সংরক্ষণ করুন",
 "power_wake_signin_ready": "সরাসরি আপনার ব্যবহারকারীতে চালু হয়",
+"profile.username.accountsTitle": "অ্যাকাউন্ট",
+"profile.accountId.b64_label": "রিমোট প্লে-র জন্য",
 };
 
 export default bn;

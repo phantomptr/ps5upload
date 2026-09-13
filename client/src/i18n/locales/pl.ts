@@ -3075,6 +3075,8 @@ helper_mismatch_go: "Załaduj pomocnika",
 "power_wake_signin_rpkey": "RP-Key (hex)",
 "power_wake_signin_save": "Zapisz klucze logowania",
 "power_wake_signin_ready": "Wybudza prosto na Twojego użytkownika",
+"profile.username.accountsTitle": "Konta",
+"profile.accountId.b64_label": "dla Remote Play",
 };
 
 export default pl;

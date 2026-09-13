@@ -176,8 +176,12 @@ export interface ProfileSlot {
   name: string;
   type: string;
   flags: number;
+  /** 0x-prefixed 64-bit hex. A STRING because the value exceeds 2^53. */
   id: string;
   activated: boolean;
+  /** Activated by our offline flow (flags 0x1002) rather than a real PSN
+   *  link. `activated` says it works; this says how it got there. */
+  offline_activated: boolean;
 }
 
 /** A local console user (from /user/home enumeration). */
@@ -1159,7 +1163,9 @@ export async function fsListDir(
     }>("ps5_list_dir", { addr, path, offset, limit: PAGE });
     const page = (res.entries ?? [])
       .filter(
-        (e): e is {
+        (
+          e,
+        ): e is {
           name: string;
           kind?: string;
           size?: number;
@@ -2116,7 +2122,10 @@ export async function powerWake(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ host, credential }),
   });
-  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+  const body = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    error?: string;
+  };
   if (!res.ok) throw new Error(body.error || `wake failed (${res.status})`);
   return { ok: !!body.ok };
 }
@@ -2143,13 +2152,18 @@ export interface PairForWakeResult {
  *  The console must be AWAKE with the payload running — which is the opposite
  *  of when waking is useful, so this is a one-time setup step to be offered
  *  while the console is on. */
-export async function pairForWake(host: string, addr?: string): Promise<PairForWakeResult> {
+export async function pairForWake(
+  host: string,
+  addr?: string,
+): Promise<PairForWakeResult> {
   const res = await fetch(`${getEngineUrl()}/api/ps5/power/pair`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ host, addr }),
   });
-  const body = (await res.json().catch(() => ({}))) as PairForWakeResult & { error?: string };
+  const body = (await res.json().catch(() => ({}))) as PairForWakeResult & {
+    error?: string;
+  };
   if (!res.ok) throw new Error(body.error || `pairing failed (${res.status})`);
   return body;
 }
@@ -2172,10 +2186,19 @@ export async function wakeAndSignIn(
   const res = await fetch(`${getEngineUrl()}/api/ps5/power/wake-login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ host, credential, regist_key: registKey, rp_key: rpKey }),
+    body: JSON.stringify({
+      host,
+      credential,
+      regist_key: registKey,
+      rp_key: rpKey,
+    }),
   });
-  const body = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
-  if (!res.ok) throw new Error(body.error || `wake + sign-in failed (${res.status})`);
+  const body = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    error?: string;
+  };
+  if (!res.ok)
+    throw new Error(body.error || `wake + sign-in failed (${res.status})`);
   return { ok: !!body.ok };
 }
 
@@ -4042,7 +4065,6 @@ export class UploadJobError extends Error {
   }
 }
 
-
 /** Humanize a payload's `error_reason` token into a one-line message
  *  the user can act on. Returns `null` when the reason is unknown
  *  (caller falls back to the raw `error` field). The hint is paired
@@ -4062,36 +4084,66 @@ export function humanizeJobErrorReason(
       reason === "fs_write_failed_errno_28" ||
       reason === "fs_write_failed_errno_27"
     ) {
-      return trStatic("joberr.fs_write_failed_no_space", "The destination drive ran out of space (or the file is too big for that filesystem). Free space on the PS5 / external drive — or pick a different destination — then click Retry.");
+      return trStatic(
+        "joberr.fs_write_failed_no_space",
+        "The destination drive ran out of space (or the file is too big for that filesystem). Free space on the PS5 / external drive — or pick a different destination — then click Retry.",
+      );
     }
-    return trStatic("joberr.fs_write_failed", "The PS5 couldn't write to the destination mid-transfer — most often the drive filled up or an external drive disconnected. Check free space / reconnect the drive, then click Retry (the upload resumes from where it stopped).");
+    return trStatic(
+      "joberr.fs_write_failed",
+      "The PS5 couldn't write to the destination mid-transfer — most often the drive filled up or an external drive disconnected. Check free space / reconnect the drive, then click Retry (the upload resumes from where it stopped).",
+    );
   }
   switch (reason) {
     case "preflight_insufficient_space":
-      return trStatic("joberr.preflight_insufficient_space", "The destination drive doesn't have enough free space for this file. Free up space on the PS5 (Settings → Storage) or pick a different destination, then click Retry.");
+      return trStatic(
+        "joberr.preflight_insufficient_space",
+        "The destination drive doesn't have enough free space for this file. Free up space on the PS5 (Settings → Storage) or pick a different destination, then click Retry.",
+      );
     case "direct_staged_file_missing":
-      return trStatic("joberr.direct_staged_file_missing", "This upload had already finished, so there was nothing left to publish — and the file on the PS5 is now missing or the wrong size. Upload it again and choose Override rather than Resume.");
+      return trStatic(
+        "joberr.direct_staged_file_missing",
+        "This upload had already finished, so there was nothing left to publish — and the file on the PS5 is now missing or the wrong size. Upload it again and choose Override rather than Resume.",
+      );
     case "direct_writer_io_error":
-      return trStatic("joberr.direct_writer_io_error", "The PS5 ran out of free space (or an external drive disconnected) while writing the file. Free up space on the destination drive and click Retry — the upload resumes from where it stopped.");
+      return trStatic(
+        "joberr.direct_writer_io_error",
+        "The PS5 ran out of free space (or an external drive disconnected) while writing the file. Free up space on the destination drive and click Retry — the upload resumes from where it stopped.",
+      );
     case "direct_tx_corrupt":
-      return trStatic("joberr.direct_tx_corrupt", "The PS5 detected protocol corruption on this transfer. Restart the payload from the Send Payload tab and retry.");
+      return trStatic(
+        "joberr.direct_tx_corrupt",
+        "The PS5 detected protocol corruption on this transfer. Restart the payload from the Send Payload tab and retry.",
+      );
     case "packed_unsupported":
-      return trStatic("joberr.packed_unsupported", "The PS5 helper rejected a packed transfer — this happens with an outdated payload when a folder upload comes down to a single small file (e.g. a Resume of a game with many tiny files). Update ps5upload to the latest version, re-send the payload from the Send Payload tab, then retry.");
+      return trStatic(
+        "joberr.packed_unsupported",
+        "The PS5 helper rejected a packed transfer — this happens with an outdated payload when a folder upload comes down to a single small file (e.g. a Resume of a game with many tiny files). Update ps5upload to the latest version, re-send the payload from the Send Payload tab, then retry.",
+      );
     case "size_mismatch":
     case "shards_incomplete":
     case "spool_apply_failed":
-      return trStatic("joberr.size_mismatch", "The transfer didn't finish before being interrupted — a file on the PS5 is incomplete, so it wasn't published (your old copy, if any, is untouched). This usually means the PS5 went into rest mode or lost power mid-upload. Keep the console awake (Settings → System → Power Saving → Set Time Until PS5 Turns Off), then re-run this item — Resume now re-sends only the missing files, or choose Override for a clean copy.");
+      return trStatic(
+        "joberr.size_mismatch",
+        "The transfer didn't finish before being interrupted — a file on the PS5 is incomplete, so it wasn't published (your old copy, if any, is untouched). This usually means the PS5 went into rest mode or lost power mid-upload. Keep the console awake (Settings → System → Power Saving → Set Time Until PS5 Turns Off), then re-run this item — Resume now re-sends only the missing files, or choose Override for a clean copy.",
+      );
     case "fs_delete_path_not_allowed":
     case "fs_mkdir_path_not_allowed":
     case "fs_list_dir_path_denied":
-      return trStatic("joberr.fs_delete_path_not_allowed", "PS5 refused access to that path. Use /data/, /user/, or a mounted /mnt/ext*, /mnt/usb* path.");
+      return trStatic(
+        "joberr.fs_delete_path_not_allowed",
+        "PS5 refused access to that path. Use /data/, /user/, or a mounted /mnt/ext*, /mnt/usb* path.",
+      );
     case "fs_read_path_not_allowed":
       return trStatic(
         "joberr.fs_read_path_not_allowed",
         'This file is in a read-only system partition that\'s normally blocked. Enable Settings → "Allow downloading system files" to download from /system, /system_data, and other protected paths.',
       );
     case "tx_table_full":
-      return trStatic("joberr.tx_table_full", "Too many simultaneous transfers in flight on the PS5. Wait for some to finish or restart the payload.");
+      return trStatic(
+        "joberr.tx_table_full",
+        "Too many simultaneous transfers in flight on the PS5. Wait for some to finish or restart the payload.",
+      );
     default:
       return null;
   }
@@ -4424,19 +4476,11 @@ export interface RemotePlayDevice {
 export type HealthStatus = "pass" | "warn" | "fail" | "skip";
 
 export type HealthCategory =
-  | "connectivity"
-  | "runtime"
-  | "storage"
-  | "system"
-  | "remoteplay"
-  | "hygiene";
+  "connectivity" | "runtime" | "storage" | "system" | "remoteplay" | "hygiene";
 
 /** Repairs the engine can perform. Closed set -- the UI names one. */
 export type HealthFixAction =
-  | "create_tool_dirs"
-  | "clean_junk"
-  | "enable_remote_play"
-  | "sync_clock";
+  "create_tool_dirs" | "clean_junk" | "enable_remote_play" | "sync_clock";
 
 export interface HealthCheck {
   id: string;
@@ -5001,7 +5045,6 @@ export async function ftpStatus(addr?: string): Promise<FtpStatusResponse> {
   return invoke("ftp_status", { req: { addr: addr ?? null } });
 }
 
-
 // ── BPS patching (backport helper) ────────────────────────────────────
 export interface BpsInfo {
   ok: boolean;
@@ -5029,7 +5072,11 @@ export async function bpsApply(
   destPath: string,
 ): Promise<{ ok: boolean; bytes: number; dest: string }> {
   return invoke("bps_apply", {
-    req: { source_path: sourcePath, patch_path: patchPath, dest_path: destPath },
+    req: {
+      source_path: sourcePath,
+      patch_path: patchPath,
+      dest_path: destPath,
+    },
   });
 }
 

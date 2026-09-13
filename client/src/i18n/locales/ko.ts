@@ -2817,6 +2817,8 @@ helper_mismatch_go: "헬퍼 다시 불러오기",
 "power_wake_signin_rpkey": "RP-Key(16진)",
 "power_wake_signin_save": "로그인 키 저장",
 "power_wake_signin_ready": "사용자로 바로 켜집니다",
+"profile.username.accountsTitle": "계정",
+"profile.accountId.b64_label": "리모트 플레이용",
 };
 
 export default ko;

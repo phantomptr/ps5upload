@@ -2726,6 +2726,8 @@ helper_mismatch_go: "Перезагрузить помощник",
 "power_wake_signin_rpkey": "RP-Key (hex)",
 "power_wake_signin_save": "Сохранить ключи входа",
 "power_wake_signin_ready": "Включает сразу в вашего пользователя",
+"profile.username.accountsTitle": "Аккаунты",
+"profile.accountId.b64_label": "для Remote Play",
 };
 
 export default ru;

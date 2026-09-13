@@ -2726,6 +2726,8 @@ helper_mismatch_go: "Recargar asistente",
 "power_wake_signin_rpkey": "RP-Key (hex)",
 "power_wake_signin_save": "Guardar claves de inicio de sesión",
 "power_wake_signin_ready": "Enciende directamente en tu usuario",
+"profile.username.accountsTitle": "Cuentas",
+"profile.accountId.b64_label": "para Remote Play",
 };
 
 export default es;

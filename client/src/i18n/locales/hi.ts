@@ -2816,6 +2816,8 @@ helper_mismatch_go: "हेल्पर फिर लोड करें",
 "power_wake_signin_rpkey": "RP-Key (हेक्स)",
 "power_wake_signin_save": "साइन-इन कुंजियाँ सहेजें",
 "power_wake_signin_ready": "सीधे आपके उपयोगकर्ता में चालू होता है",
+"profile.username.accountsTitle": "खाते",
+"profile.accountId.b64_label": "रिमोट प्ले के लिए",
 };
 
 export default hi;

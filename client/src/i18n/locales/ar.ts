@@ -2779,6 +2779,8 @@ helper_mismatch_go: "إعادة تحميل المساعد",
 "power_wake_signin_rpkey": "RP-Key (سداسي عشري)",
 "power_wake_signin_save": "حفظ مفاتيح تسجيل الدخول",
 "power_wake_signin_ready": "يشغّل مباشرةً إلى مستخدمك",
+"profile.username.accountsTitle": "الحسابات",
+"profile.accountId.b64_label": "لـ اللعب عن بُعد",
 };
 
 export default ar;
