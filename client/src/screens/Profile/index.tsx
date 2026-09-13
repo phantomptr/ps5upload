@@ -740,26 +740,64 @@ function CreateUserRow({
   );
 }
 
-/** A console account id is a 64-bit value, shown and entered as hex. Accepts
- *  an optional 0x prefix and any case; rejects anything that is not 1-16 hex
- *  digits, or zero (zero is "no account", which is what Clear is for). */
-export function parseAccountId(raw: string): bigint | null {
-  const t = raw.trim().replace(/^0x/i, "");
-  if (!/^[0-9a-fA-F]{1,16}$/.test(t)) return null;
-  const v = BigInt("0x" + t);
-  return v === 0n ? null : v;
+/* An account id is 64 bits, so BigInt is the obvious tool and the wrong one:
+ * the Vite build targets safari13 for old Android WebViews, and BigInt
+ * literals are ES2020 that CANNOT be down-levelled — rolldown emits them
+ * as-is with a TOLERATED_TRANSFORM warning, and on a WebView without BigInt
+ * that is a parse-time SyntaxError for the whole chunk, taking out the entire
+ * bundle rather than just this screen. (Same trap as lib/wakeState.ts; there
+ * is now a lint rule so it cannot be walked into a third time.)
+ *
+ * These are string-to-string conversions, which are exact at any width.
+ */
+
+/** Decimal string -> lower-case hex, no prefix. Schoolbook repeated division,
+ *  so it is exact for values far beyond 2^53. Null when not a decimal. */
+function decimalToHex(dec: string): string | null {
+  const trimmed = dec.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  let digits = trimmed.split("").map((c) => c.charCodeAt(0) - 48);
+  const out: string[] = [];
+  while (digits.length > 0) {
+    let remainder = 0;
+    const next: number[] = [];
+    for (const d of digits) {
+      const cur = remainder * 10 + d;
+      const q = Math.floor(cur / 16);
+      remainder = cur % 16;
+      if (next.length > 0 || q > 0) next.push(q);
+    }
+    out.push("0123456789abcdef"[remainder]);
+    digits = next;
+  }
+  return out.length > 0 ? out.reverse().join("") : "0";
 }
 
-/** Render an id for display: 0x-prefixed, lower-case, no padding. "—" when
- *  the slot has no id, which is a real state and not an error. */
+/** Validate what the user typed and return it canonically as "0x…".
+ *
+ *  Accepts an optional 0x prefix and any case; rejects anything that is not
+ *  1-16 hex digits, and rejects zero (zero means "no account", which is what
+ *  clearing a slot is for). Returns a string rather than a number so a full
+ *  64-bit id survives — see the note above. */
+export function parseAccountId(raw: string): string | null {
+  const t = raw.trim().replace(/^0x/i, "").toLowerCase();
+  if (!/^[0-9a-f]{1,16}$/.test(t)) return null;
+  const significant = t.replace(/^0+/, "");
+  if (significant === "") return null;
+  return "0x" + significant;
+}
+
+/** Render an id for display: 0x-prefixed lower-case hex, no padding.
+ *
+ *  The API sends the id as a DECIMAL string; the console and every other tool
+ *  talk about it in hex, so showing decimal would be unreadable. "—" when the
+ *  slot has no id, which is a real state and not an error. */
 export function formatAccountId(id: string | null | undefined): string {
   if (!id) return "—";
-  try {
-    const v = BigInt(id);
-    return v === 0n ? "—" : "0x" + v.toString(16);
-  } catch {
-    return "—";
-  }
+  const hex = decimalToHex(id);
+  if (hex === null) return "—";
+  const significant = hex.replace(/^0+/, "");
+  return significant === "" ? "—" : "0x" + significant;
 }
 
 function SlotRow({
@@ -821,9 +859,8 @@ function SlotRow({
    *  the old value: it is the only copy the user will get.
    */
   async function saveAccountId() {
-    const parsed = parseAccountId(idDraft);
-    if (parsed === null) return;
-    const next = "0x" + parsed.toString(16);
+    const next = parseAccountId(idDraft);
+    if (next === null) return;
     const current = formatAccountId(accountId);
     const hadId = current !== "—";
     const ok = await confirm(

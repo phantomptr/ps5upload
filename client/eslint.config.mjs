@@ -67,6 +67,25 @@ export default tseslint.config(
       ...reactHooks.configs.recommended.rules,
       "react-hooks/immutability": "off",
       "react-hooks/set-state-in-effect": "off",
+      // No BigInt literals. The build targets safari13 (see vite.config.ts)
+      // so the app survives old Android System WebViews, and BigInt is ES2020
+      // that — unlike `?.` or `??=` — CANNOT be down-levelled. Rolldown emits
+      // the literal as-is with a TOLERATED_TRANSFORM warning, which is easy to
+      // miss because the build still succeeds; on a WebView without BigInt it
+      // is a parse-time SyntaxError for the whole chunk, so it takes out the
+      // entire bundle rather than the one feature that used it.
+      //
+      // This has been walked into twice (lib/wakeState.ts, then
+      // screens/Profile). Both times the fix was exact string arithmetic,
+      // which is what this rule points you at.
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "Literal[bigint]",
+          message:
+            "BigInt literals cannot be down-levelled for the safari13 build target and will break the whole bundle on old WebViews. Use string arithmetic instead (see decimalToHex in screens/Profile, or lib/wakeState).",
+        },
+      ],
       // Enforcement gate: every user-visible string must go through
       // useTr()/tr(). The locale-parity gate (scripts/i18n-coverage.mjs)
       // can only see keys that already exist — this catches strings
