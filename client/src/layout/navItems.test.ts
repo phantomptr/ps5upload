@@ -6,6 +6,7 @@ import {
   HOME_NAV_ITEM,
   ABOUT_NAV_ITEM,
   PERMANENT_NAV_ITEMS,
+  sidebarNavItems,
   resolveFavorites,
   groupNavItems,
   filterNavItems,
@@ -70,9 +71,9 @@ describe("sidebar favorites", () => {
   it("drops paths that no longer exist", () => {
     // Favorites outlive the build that wrote them, so a screen removed or
     // renamed in a later version must not leave a dead row linking nowhere.
-    expect(resolveFavorites(["/files", "/screen-that-was-removed"]).map(
-      (i) => i.to,
-    )).toEqual(["/files"]);
+    expect(
+      resolveFavorites(["/files", "/screen-that-was-removed"]).map((i) => i.to),
+    ).toEqual(["/files"]);
   });
 
   it("never lets Home appear twice", () => {
@@ -119,9 +120,21 @@ describe("sidebar favorites", () => {
 describe("groupNavItems", () => {
   it("groups items under the preceding section header", () => {
     const groups = groupNavItems([
-      { to: "/a", key: "a", fallback: "A", icon, section: { key: "s1", fallback: "S1" } },
+      {
+        to: "/a",
+        key: "a",
+        fallback: "A",
+        icon,
+        section: { key: "s1", fallback: "S1" },
+      },
       { to: "/b", key: "b", fallback: "B", icon },
-      { to: "/c", key: "c", fallback: "C", icon, section: { key: "s2", fallback: "S2" } },
+      {
+        to: "/c",
+        key: "c",
+        fallback: "C",
+        icon,
+        section: { key: "s2", fallback: "S2" },
+      },
     ]);
     expect(groups).toHaveLength(2);
     expect(groups[0].section.key).toBe("s1");
@@ -136,7 +149,13 @@ describe("groupNavItems", () => {
   it("drops leading items that precede any section header", () => {
     const groups = groupNavItems([
       { to: "/orphan", key: "o", fallback: "O", icon },
-      { to: "/a", key: "a", fallback: "A", icon, section: { key: "s1", fallback: "S1" } },
+      {
+        to: "/a",
+        key: "a",
+        fallback: "A",
+        icon,
+        section: { key: "s1", fallback: "S1" },
+      },
     ]);
     expect(groups).toHaveLength(1);
     expect(groups[0].items.map((i) => i.to)).toEqual(["/a"]);
@@ -184,12 +203,12 @@ describe("filterNavItems", () => {
 
   it("ignores diacritics in both query and label", () => {
     const frTr = (k: string) => (k === "saves" ? "Sauvegardés" : k);
-    expect(filterNavItems(items, "sauvegardes", frTr).map((i) => i.to)).toEqual([
-      "/saves",
-    ]);
-    expect(filterNavItems(items, "Sauvegardés", frTr).map((i) => i.to)).toEqual([
-      "/saves",
-    ]);
+    expect(filterNavItems(items, "sauvegardes", frTr).map((i) => i.to)).toEqual(
+      ["/saves"],
+    );
+    expect(filterNavItems(items, "Sauvegardés", frTr).map((i) => i.to)).toEqual(
+      ["/saves"],
+    );
   });
 
   it("returns an empty array when nothing matches", () => {
@@ -203,10 +222,40 @@ describe("filterNavItems", () => {
   });
 });
 
-
 describe("permanent sidebar rows", () => {
-  it("pins Home and About, in that order", () => {
-    expect(PERMANENT_NAV_ITEMS.map((i) => i.to)).toEqual(["/home", "/about"]);
+  it("pins Home and About", () => {
+    expect([...PERMANENT_NAV_ITEMS].map((i) => i.to).sort()).toEqual([
+      "/about",
+      "/home",
+    ]);
+  });
+
+  it("renders Home first and About last, whatever is starred", () => {
+    expect(sidebarNavItems([]).map((i) => i.to)).toEqual(["/home", "/about"]);
+    expect(sidebarNavItems(["/settings", "/logs"]).map((i) => i.to)).toEqual([
+      "/home",
+      "/settings",
+      "/logs",
+      "/about",
+    ]);
+  });
+
+  it("keeps About last even when it is stored as a favorite", () => {
+    expect(sidebarNavItems(["/about", "/settings"]).map((i) => i.to)).toEqual([
+      "/home",
+      "/settings",
+      "/about",
+    ]);
+  });
+
+  it("puts every row in one group, with About in it", () => {
+    const groups = groupNavItems(sidebarNavItems(["/settings"]));
+    expect(groups).toHaveLength(1);
+    expect(groups[0].items.map((i) => i.to)).toEqual([
+      "/home",
+      "/settings",
+      "/about",
+    ]);
   });
 
   it("only the first permanent row opens the section", () => {

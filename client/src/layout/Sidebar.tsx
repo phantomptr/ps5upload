@@ -10,7 +10,7 @@ import { useUpdateStore } from "../state/update";
 import { useNavFavoritesStore } from "../state/navFavorites";
 import NotificationInbox from "./NotificationInbox";
 import RosterPicker from "./RosterPicker";
-import { PERMANENT_NAV_ITEMS, groupNavItems, resolveFavorites } from "./navItems";
+import { groupNavItems, sidebarNavItems } from "./navItems";
 
 const COLLAPSED_KEY = "ps5upload.desktop-sidebar.collapsed.v1";
 
@@ -51,9 +51,10 @@ export default function Sidebar() {
   const favorites = useNavFavoritesStore((s) => s.favorites);
   const hintDismissed = useNavFavoritesStore((s) => s.hintDismissed);
   const dismissHint = useNavFavoritesStore((s) => s.dismissHint);
-  // Home and About first and always; the rest is whatever the user starred.
+  // Home pinned at the top, About pinned at the bottom, the user's starred
+  // screens in between — see `sidebarNavItems`.
   const groups = useMemo(
-    () => groupNavItems([...PERMANENT_NAV_ITEMS, ...resolveFavorites(favorites)]),
+    () => groupNavItems(sidebarNavItems(favorites)),
     [favorites],
   );
   const showFavoritesHint = favorites.length === 0 && !hintDismissed;

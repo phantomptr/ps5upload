@@ -279,10 +279,12 @@ export const HOME_NAV_ITEM: NavItem = {
   section: { key: "nav_section_favorites", fallback: "Favorites" },
 };
 
-/** Pinned beside Home. About carries the project links (GitHub, Discord, X),
- *  the changelog and the disclaimer — the things someone new needs to find
- *  without first learning that More exists. No `section`: it joins the group
- *  Home opens rather than starting another. */
+/** Pinned at the BOTTOM of the sidebar. About carries the project links
+ *  (GitHub, Discord, X), the changelog and the disclaimer — the things
+ *  someone new needs to find without first learning that More exists — but it
+ *  is reference material, so it sits below the user's favourites rather than
+ *  pushing them down. No `section`: it joins the group Home opens rather than
+ *  starting another, which is what keeps it inside the same list. */
 export const ABOUT_NAV_ITEM: NavItem = {
   to: "/about",
   key: "about",
@@ -290,7 +292,8 @@ export const ABOUT_NAV_ITEM: NavItem = {
   icon: Info,
 };
 
-/** The rows that are always present, in order. */
+/** The rows that are always present. Order here is for de-duplication only —
+ *  the sidebar composes the render order itself (Home, favourites, About). */
 export const PERMANENT_NAV_ITEMS: readonly NavItem[] = [
   HOME_NAV_ITEM,
   ABOUT_NAV_ITEM,
@@ -322,6 +325,20 @@ export function resolveFavorites(paths: readonly string[]): NavItem[] {
     out.push(rest);
   }
   return out;
+}
+
+/**
+ * The sidebar's Favorites list, in render order: Home first, the user's
+ * starred screens in the order they starred them, About last.
+ *
+ * About is pinned to the BOTTOM rather than beside Home because it is
+ * reference material — you go there once to find the links and the
+ * changelog, not on the way to anything else — so it should not push the
+ * favourites down. It carries no `section`, which is what keeps it inside
+ * the group Home opens instead of starting a second one.
+ */
+export function sidebarNavItems(favorites: readonly string[]): NavItem[] {
+  return [HOME_NAV_ITEM, ...resolveFavorites(favorites), ABOUT_NAV_ITEM];
 }
 
 /**

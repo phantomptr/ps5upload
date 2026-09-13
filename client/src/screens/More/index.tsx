@@ -32,7 +32,7 @@ import RosterPicker from "../../layout/RosterPicker";
 import NotificationInbox from "../../layout/NotificationInbox";
 import {
   NAV_ITEMS,
-  HOME_NAV_ITEM,
+  PERMANENT_NAV_ITEMS,
   groupNavItems,
   filterNavItems,
   resolveFavorites,
@@ -118,7 +118,11 @@ export default function MoreScreen() {
                 <button
                   type="button"
                   onClick={() => setQuery("")}
-                  aria-label={tr("more_search_clear", undefined, "Clear search")}
+                  aria-label={tr(
+                    "more_search_clear",
+                    undefined,
+                    "Clear search",
+                  )}
                   className="flex h-11 w-11 items-center justify-center rounded-md text-[var(--color-muted)] hover:text-[var(--color-text)]"
                 >
                   <X size={18} />
@@ -169,7 +173,10 @@ export default function MoreScreen() {
           {favoriteItems.length > 0 && (
             <section className="mt-1">
               <h2 className="flex items-center gap-1.5 px-1 pb-1 text-xs font-semibold uppercase tracking-wider text-[var(--color-muted)]">
-                <Star size={12} className="fill-current text-[var(--color-accent)]" />
+                <Star
+                  size={12}
+                  className="fill-current text-[var(--color-accent)]"
+                />
                 {tr("nav_section_favorites", undefined, "Favorites")}
               </h2>
               <ul className="surface-panel overflow-hidden divide-y divide-[var(--color-border)]">
@@ -185,20 +192,20 @@ export default function MoreScreen() {
             </section>
           )}
           {groups.map((group) => (
-          <section key={group.section.key} className="mt-4 first:mt-1">
-            <h2 className="px-1 pb-1 text-xs font-semibold uppercase tracking-wider text-[var(--color-muted)]">
-              {tr(group.section.key, undefined, group.section.fallback)}
-            </h2>
-            <ul className="surface-panel overflow-hidden divide-y divide-[var(--color-border)]">
-              {group.items.map((item) => (
-                <MoreRow
-                  key={item.to}
-                  item={item}
-                  errorCount={errorCount}
-                  updateAvailable={updateAvailable}
-                />
-              ))}
-            </ul>
+            <section key={group.section.key} className="mt-4 first:mt-1">
+              <h2 className="px-1 pb-1 text-xs font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+                {tr(group.section.key, undefined, group.section.fallback)}
+              </h2>
+              <ul className="surface-panel overflow-hidden divide-y divide-[var(--color-border)]">
+                {group.items.map((item) => (
+                  <MoreRow
+                    key={item.to}
+                    item={item}
+                    errorCount={errorCount}
+                    updateAvailable={updateAvailable}
+                  />
+                ))}
+              </ul>
             </section>
           ))}
         </>
@@ -254,8 +261,9 @@ function MoreRow({
   const favorites = useNavFavoritesStore((s) => s.favorites);
   const toggleFavorite = useNavFavoritesStore((s) => s.toggle);
   const starred = favorites.includes(item.to);
-  // Home is permanently in the sidebar, so offering to pin it is a lie.
-  const canFavorite = item.to !== HOME_NAV_ITEM.to;
+  // Home and About are permanently in the sidebar, so offering to pin
+  // either is a lie — `resolveFavorites` filters them back out.
+  const canFavorite = !PERMANENT_NAV_ITEMS.some((p) => p.to === item.to);
   const label = tr(item.key, undefined, item.fallback);
   return (
     <li className="flex items-center">
