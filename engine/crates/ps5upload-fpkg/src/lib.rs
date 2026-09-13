@@ -6,7 +6,9 @@
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
+pub mod cnt;
 pub mod crypto;
+pub mod fih;
 pub mod xts;
 
 /// Every PFS and finalized-image block is 64 KiB.
@@ -22,7 +24,22 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[allow(dead_code)]
+pub(crate) fn be32(b: &[u8], at: usize) -> u32 {
+    u32::from_be_bytes(b[at..at + 4].try_into().unwrap())
+}
+
+pub(crate) fn be64(b: &[u8], at: usize) -> u64 {
+    u64::from_be_bytes(b[at..at + 8].try_into().unwrap())
+}
+
+pub(crate) fn le16(b: &[u8], at: usize) -> u16 {
+    u16::from_le_bytes(b[at..at + 2].try_into().unwrap())
+}
+
+pub(crate) fn le64(b: &[u8], at: usize) -> u64 {
+    u64::from_le_bytes(b[at..at + 8].try_into().unwrap())
+}
+
 pub(crate) fn format_err<T>(msg: impl Into<String>) -> Result<T> {
     Err(Error::Format(msg.into()))
 }
