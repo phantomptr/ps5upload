@@ -135,6 +135,12 @@ int hw_guard_try_recover(int sig) {
  * disable the watcher (0 would spin-loop) or make it effectively
  * dormant (>300 s risks a game-launch reset going uncountered). */
 #define FAN_REAPPLY_DEFAULT_SEC  15
+/* Physical bounds for the SoC power rails. A single rail drawing over 200 W,
+ * or a total over 500 W, is not a real reading on this hardware — report 0
+ * ("unavailable") rather than a fabricated number. */
+#define HW_POWER_RAIL_MAX_MW   200000u
+#define HW_POWER_TOTAL_MAX_MW  500000u
+
 #define FAN_REAPPLY_MIN_SEC       1
 #define FAN_REAPPLY_MAX_SEC     300
 
@@ -163,15 +169,38 @@ typedef int     (*sceKernelGetCpuTemperature_fn)(int *temperature);
 typedef int     (*sceKernelGetSocSensorTemperature_fn)(int sensor_id, int *temperature);
 typedef long    (*sceKernelGetCpuFrequency_fn)(void);
 typedef size_t  (*sceKernelGetDirectMemorySize_fn)(void);
-/* Correct ABI is (uint64_t *out, double reserved) — confirmed against a
- * working reference impl (Elf Arsenal) that reads this successfully. Our
- * earlier `(uint32_t *)` declaration was wrong on two counts: the out
- * pointer is 64-bit (a uint32 target takes an 8-byte write = a 4-byte
- * stack overflow), and the trailing double arg was missing. That UB is a
- * strong candidate for the "hang/disconnect" we previously blamed on the
- * API. Signature fixed; the call stays gated below (see hw_temps_get_text)
- * pending a hardware retest. */
-typedef int     (*sceKernelGetSocPowerConsumption_fn)(uint64_t *out, double reserved);
+/* ABI: int sceKernelGetSocPowerConsumption(void *out_raw) — ONE argument,
+ * and it writes a 0x70-byte (112) sample block. Cross-checked against
+ * drakmor/ps5-hwinfo, which reads it successfully and decodes the layout.
+ *
+ * This was declared wrong twice, each time a stack overflow on the caller:
+ *   (uint32_t *)                 -> kernel writes 112 bytes into 4   (-108)
+ *   (uint64_t *, double)         -> kernel writes 112 bytes into 8   (-104)
+ * The second was committed as "the corrected ABI"; it was not. It moved the
+ * overflow from 108 bytes to 104 and kept a trailing `double` the function
+ * does not take. Smashing ~100 bytes of the stack frame on the management
+ * request thread is the "hang/disconnect on FW 9.60 Pro" we kept blaming on
+ * the API — undefined behaviour lands on different things per build and per
+ * firmware, which is exactly why it looked firmware-specific and why some
+ * consoles survived it.
+ *
+ * The destination MUST be at least sizeof(soc_power_sample_t). Never pass a
+ * scalar. */
+typedef int     (*sceKernelGetSocPowerConsumption_fn)(void *out_raw);
+
+/* The 0x70-byte block the call fills: 8 power rails of
+ * {power_mW, voltage_mV, current_mA} as uint32, then auxiliary data from
+ * index 24 on. Values are ALREADY in milli-units — there is nothing to
+ * guess or normalise. Rail order (per the reference): GPU Core, GPU IO,
+ * CPU + SoC, CPU IO, GDDR6 Ch 0-1, Ch 2-3, Ch 4-5, Ch 6-7. */
+#define SOC_POWER_SAMPLE_BYTES  0x70
+#define SOC_POWER_RAILS         8
+#define SOC_POWER_FIELDS        3   /* power_mW, voltage_mV, current_mA */
+typedef union {
+    uint8_t  bytes[SOC_POWER_SAMPLE_BYTES];
+    uint32_t u32[SOC_POWER_SAMPLE_BYTES / sizeof(uint32_t)];
+    uint64_t u64[SOC_POWER_SAMPLE_BYTES / sizeof(uint64_t)];
+} soc_power_sample_t;
 /* Extra telemetry getters, ABI per the Elf Arsenal reference impl. All
  * three are resolved lazily and called ONLY from the on-demand HW_TEMPS
  * path (never the always-on HW_INFO poll), so a wedge on an untested SKU
@@ -576,31 +605,36 @@ int hw_temps_get_text_ex(int flags, char *out, size_t out_cap,
      * Reached only for an explicit "Read sensors" request (flags != 0);
      * the Dashboard auto-poll calls with flags=0 and never trips these.
      * Each getter is gated on its own HW_EXT_* bit so a firmware that
-     * wedges on ONE (FW 9.60 Pro hangs on SoC power, HW-confirmed) can be
-     * served the rest by excluding just that bit. */
+     * misbehaves on ONE can be served the rest by excluding just that bit.
+     *
+     * The long-standing "FW 9.60 Pro hangs on SoC power" was never the
+     * firmware: we were handing the kernel a stack slot ~100 bytes too
+     * small and it wrote over the caller's frame. See the ABI note by the
+     * typedef. The gate stays because it is useful, not because this call
+     * is known-bad. */
     if (flags) {
-        /* SoC power draw. Re-enabled with the CORRECTED ABI
-         *   int sceKernelGetSocPowerConsumption(uint64_t *out, double reserved)
-         * (was wrongly declared (uint32_t *) — a 32-bit out pointer let the
-         * kernel write 8 bytes into a 4-byte stack slot = corruption, and
-         * the missing `double` arg left a garbage register; that UB is the
-         * likely real cause of the "hang/disconnect" we'd blamed on the API
-         * on FW 9.60 Pro).
-         *
-         * Units: the reference impl labels the result a "W guess", so we
-         * normalise defensively. A plausible value <=1000 is taken as
-         * watts → mW; a larger one (<=1e6) is taken as already-mW; anything
-         * else is rejected. The engine + UI re-validate against the
-         * SENSOR_POWER_MAX_MW (=500 W) ceiling, so a wrong guess can only
-         * under-report, never render garbage. */
-        uint64_t soc_pw = 0;
+        /* SoC power draw: sum of the 8 rails, already in milliwatts. No
+         * unit guessing — the old "is it W or mW?" heuristic existed only
+         * because we were reading a rail's power packed against its voltage
+         * and treating the pair as one scalar. */
+        soc_power_sample_t soc_pw;
+        memset(&soc_pw, 0, sizeof(soc_pw));
         if ((flags & HW_EXT_POWER) && g_hw.soc_power &&
-            g_hw.soc_power(&soc_pw, 0.0) == 0 && soc_pw > 0) {
-            if (soc_pw <= 1000ULL) {
-                power_mw = (uint32_t)(soc_pw * 1000ULL);     /* watts → mW */
-            } else if (soc_pw <= 1000000ULL) {
-                power_mw = (uint32_t)soc_pw;                 /* already mW */
-            }                                                /* else implausible → 0 */
+            g_hw.soc_power(&soc_pw) == 0) {
+            /* Total SoC draw is the sum of the rails. Each rail's triplet is
+             * zero when that rail reports nothing, so summing skips them for
+             * free. Range-check per rail so one implausible entry cannot
+             * inflate the total. */
+            uint64_t total_mw = 0;
+            for (int rail = 0; rail < SOC_POWER_RAILS; ++rail) {
+                uint32_t rail_mw = soc_pw.u32[rail * SOC_POWER_FIELDS];
+                if (rail_mw <= HW_POWER_RAIL_MAX_MW) {
+                    total_mw += rail_mw;
+                }
+            }
+            if (total_mw > 0 && total_mw <= HW_POWER_TOTAL_MAX_MW) {
+                power_mw = (uint32_t)total_mw;
+            }                                   /* else implausible -> 0 */
         }
 
         /* CPU usage — average across the reported cores (0..100 %). The API
