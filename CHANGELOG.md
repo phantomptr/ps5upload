@@ -4,6 +4,20 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.24.0
+
+**Choose whether you get early releases or only verified ones.**
+
+### Updates
+
+- **New setting: "Get pre-release versions"** (Settings → Updates). Off by
+  default, and your choice is remembered.
+- **Releases are now checked on real hardware before they're offered to you.**
+  Every release is published as a pre-release first and promoted by hand once
+  it has been verified, so leaving the new setting off means you're only
+  offered builds that someone has actually run on a console.
+- Turn it on to be offered new releases as soon as they're published.
+
 ## 5.23.0
 
 **Waking your PS5 now signs you in on PS5 firmware 9.60.**
