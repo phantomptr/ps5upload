@@ -104,6 +104,39 @@ static runtime_state_t *g_state = NULL;
  */
 volatile int g_ucred_elevation_rc = -1;
 
+/* Append an unsigned decimal to `buf` at `*pos`. Async-signal-safe. */
+static void fatal_put_uint(char *buf, size_t cap, size_t *pos, unsigned int v) {
+    char tmp[12];
+    size_t n = 0;
+    do {
+        tmp[n++] = (char)('0' + (v % 10));
+        v /= 10;
+    } while (v && n < sizeof(tmp));
+    while (n && *pos < cap) buf[(*pos)++] = tmp[--n];
+}
+
+static void fatal_put_str(char *buf, size_t cap, size_t *pos, const char *s) {
+    while (*s && *pos < cap) buf[(*pos)++] = *s++;
+}
+
+/* "[fatal] signal 11 while serving frame 68\n", or "... outside any request"
+ * for a background thread (watchdog, fan reapply, activity tracker). The
+ * frame number maps to FTX2_FRAME_* in runtime.c. */
+static void write_fatal_breadcrumb(int sig, unsigned int frame) {
+    char buf[96];
+    size_t pos = 0;
+    fatal_put_str(buf, sizeof(buf), &pos, "[fatal] signal ");
+    fatal_put_uint(buf, sizeof(buf), &pos, (unsigned int)sig);
+    if (frame) {
+        fatal_put_str(buf, sizeof(buf), &pos, " while serving frame ");
+        fatal_put_uint(buf, sizeof(buf), &pos, frame);
+    } else {
+        fatal_put_str(buf, sizeof(buf), &pos, " outside any request");
+    }
+    fatal_put_str(buf, sizeof(buf), &pos, "\n");
+    (void)write(STDERR_FILENO, buf, pos);
+}
+
 static void handle_fatal(int sig) {
     /* First: if this thread faulted INSIDE a guarded Sony hardware getter,
      * recover instead of dying — hw_guard_try_recover() siglongjmp's back to
@@ -112,6 +145,14 @@ static void handle_fatal(int sig) {
      * to "unavailable" rather than dropping the whole helper. Returns 0 (and
      * we fall through to normal fatal handling) for any non-guarded crash. */
     if (hw_guard_try_recover(sig)) return; /* unreachable when it recovers */
+
+    /* Name what we died doing, before anything else can fail. Only write(2)
+     * and hand-rolled formatting: snprintf and stderr stdio are not
+     * async-signal-safe, and a handler that deadlocks on the stdio lock
+     * loses the one line that matters. stderr is the persisted
+     * /data/ps5upload/stderr.log (redirect_stderr_to_file), unbuffered, so
+     * this survives the process and lands in the next bug report. */
+    write_fatal_breadcrumb(sig, g_inflight_frame_type);
 
     /* If we crashed mid-RPC, we may be holding a ptrace attach to
      * SceShellUI. Without a detach the kernel keeps ShellUI in
@@ -536,8 +577,27 @@ int main(void) {
     /* Spawn the management listener thread BEFORE entering the transfer
      * loop. The mgmt loop owns :9114 and answers STATUS/TAKEOVER/etc.
      * while the transfer loop is busy inside a long upload on :9113. */
-    if (pthread_create(&state.mgmt_thread, NULL,
-                       runtime_mgmt_server_loop, &state) != 0) {
+    /* Explicit 512 KiB stack. With NULL attrs this thread got whatever
+     * default the HOST process uses — which differs by loader — while a
+     * comment in runtime.c's create_worker_thread claimed it was "proven" at
+     * 512 KiB. It matters more than an accept loop normally would: once
+     * PS5UPLOAD2_MAX_MGMT_THREADS handlers are busy, further clients are
+     * served INLINE on this thread, so every handler's stack budget is
+     * whatever this thread was given. Falls back to the default if attr
+     * setup fails, so it can never regress. */
+    pthread_attr_t mgmt_attr;
+    pthread_attr_t *mgmt_attr_p = NULL;
+    if (pthread_attr_init(&mgmt_attr) == 0) {
+        if (pthread_attr_setstacksize(&mgmt_attr, 512u * 1024u) == 0) {
+            mgmt_attr_p = &mgmt_attr;
+        } else {
+            pthread_attr_destroy(&mgmt_attr);
+        }
+    }
+    int mgmt_rc = pthread_create(&state.mgmt_thread, mgmt_attr_p,
+                                 runtime_mgmt_server_loop, &state);
+    if (mgmt_attr_p) pthread_attr_destroy(mgmt_attr_p);
+    if (mgmt_rc != 0) {
         startup_trace("MGMT_THREAD_FAILED");
         fprintf(stderr, "pthread_create(mgmt) failed\n");
         pop_notification("PS5Upload failed: cannot start management thread");

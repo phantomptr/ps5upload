@@ -21,7 +21,8 @@ CFLAGS := -Wall -Wextra -Werror -g -I../include
 # supported FW) guarantees the dependency graph resolves.
 # -lpthread is needed for the timed_init thread (boot-timing fix for the
 # FW-10.40 helper-death symptom, issue #152).
-LIBS := -lSceSystemService -lSceUserService -lSceAppInstUtil \
+# -lSceIpmi before -lSceAppInstUtil: see the note in ../Makefile (sdk#26).
+LIBS := -lSceSystemService -lSceUserService -lSceIpmi -lSceAppInstUtil \
         -lSceNotification -lkernel_sys -lpthread
 
 SRCS := ezremote_dpi.c
@@ -29,7 +30,11 @@ HEADERS := sceAppInstUtil.h ../include/authid.h
 
 all: $(ELF) $(ELF).gz
 
-$(ELF): $(SRCS) $(HEADERS)
+# The Makefile itself is a prerequisite: LIBS and CFLAGS live here, and
+# without this a change to either printed "Built" while leaving the previous
+# link in place. Adding -lSceIpmi did exactly that — the stale ELF had no
+# libSceIpmi in DT_NEEDED until the sources were touched.
+$(ELF): $(SRCS) $(HEADERS) Makefile
 	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LIBS)
 
 # Gzipped copy for the host bundle (same rationale as the main payload:

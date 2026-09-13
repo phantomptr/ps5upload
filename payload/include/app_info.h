@@ -5,24 +5,27 @@
  *
  * ── Why this header exists ──────────────────────────────────────────
  *
- * This struct was copy-pasted into four files, and every copy had the
- * layout wrong in one of two ways:
+ * The struct was once copy-pasted into four files with two different
+ * layouts; activity.c used `uint8_t unk[0x40]` and read title_id at
+ * offset 64. This is now the single definition.
  *
- *   - proc_list.c, cheats.c, wake_watchdog.c omitted `app_type`, which
- *     put `title_id` at offset 16 instead of 20.
- *   - activity.c used `uint8_t unk[0x40]` and put it at offset 64.
+ * ── title_id is at offset 16, measured on hardware. ─────────────────
  *
- * Offset 16 lands on `app_type`. For an ordinary process that field is
- * zero, so the first byte read as `title_id` is NUL and every title id
- * came back as the empty string. That is why listing processes reported
- * no title ids at all, why the cheat engine could not identify the
- * running game, and why play-time tracking never recorded anything: all
- * three ask this question and all three got "" for every process.
+ * 5.4.5 moved title_id to offset 20, because etaHEN, one onionHEN copy and
+ * the SDK's `ps` sample declare a `uint32_t app_type` before it. That change
+ * was justified by "82 processes, zero title ids" — measured against
+ * PROC_LIST (74), which returns only pid and name and never carried a title
+ * id at all. Wrong endpoint, confident wrong conclusion.
  *
- * The layout below (title_id at offset 20) is what etaHEN, onionHEN and
- * the payload SDK's own `ps` sample all use. One SDK sample disagrees
- * (samples/test_privileges), and prints a title id it would never
- * actually read correctly — treat that copy as the outlier it is.
+ * Measured properly against PROCESS_LIST (162) on FW 5.10 and FW 9.60,
+ * offset 20 returned "40087" for "NPXS40087" and "19534" for "PPSA19534" —
+ * the last five characters, exactly a four-byte overshoot. f1ffeb65 reverted
+ * to 16 and the _Static_assert below pins it. onionHEN (four of its five
+ * copies) and kstuff-lite also use offset 16.
+ *
+ * Whichever layout, the struct is 0x60 bytes — the same size every one of
+ * those references passes to sceKernelGetAppInfo — so the kernel's write
+ * cannot overflow it. It is not a stack-overflow risk.
  *
  * A returned value of non-zero means the pid is not a registered app
  * (a daemon or system process); the struct contents are meaningless in

@@ -545,30 +545,39 @@ int hw_temps_get_text_ex(int flags, char *out, size_t out_cap,
                 cpu_temp = t;
             }
         }
-        /* SoC thermal sensors. Sweep channels 0–7 rather than reading only
-         * channel 0: the canonical SoC junction sensor is channel 0 on the
-         * phat + Pro (hardware-confirmed), but the channel layout isn't
-         * guaranteed across SoC revisions — a Slim or other SKU may surface
-         * its usable reading on a different channel. The first in-range
-         * channel wins for soc_temp, so on any console where channel 0 is
-         * valid (phat/Pro) the result is byte-identical to the old code.
+        /* SoC thermal sensors — channels 0 and 2 ONLY.
          *
-         * Channel 2 is the M.2 NVMe expansion slot sensor (per elf-arsenal's
-         * sensors.c mapping). An empty slot returns 0, so require >= 20 to
-         * treat as populated. Captured alongside soc_temp in the same sweep
-         * — no extra API calls. */
+         * Channel 0 is the SoC junction sensor (hardware-confirmed on the
+         * phat + Pro; it is the only channel drakmor/ps5-hwinfo and onionHEN
+         * ever read). Channel 2 is the M.2 slot sensor per elf-arsenal's
+         * sensors.c; an empty slot reads 0, so require >= 20 for "populated".
+         *
+         * This used to sweep channels 0-7 in case a Slim or another SoC
+         * revision surfaced its reading elsewhere. No reference implementation
+         * reads 1, 3, 4, 5, 6 or 7, and this runs on the ALWAYS-ON poll of
+         * the screen the app lands on — seconds after connecting, with no
+         * click. Probing channels nobody else probes, on firmware we have
+         * never tested, is exactly the kind of call that can fault or wedge a
+         * helper on one console and not another. A missing reading on an
+         * unusual SKU is a far better failure than a dropped connection.
+         *
+         * One HW_GUARD per call, and every value that crosses the guard is
+         * volatile: a value assigned between sigsetjmp and a fault-driven
+         * siglongjmp is indeterminate unless it is volatile, so the old
+         * sweep's plain `soc_temp`/`m2_temp` could come back as garbage after
+         * a recovered fault. */
         if (g_hw.soc_temp) {
-            HW_GUARD("sceKernelGetSocSensorTemperature", {
-                for (int ch = 0; ch < 8; ch++) {
-                    int st = 0;
-                    if (g_hw.soc_temp(ch, &st) == 0 &&
-                        st >= HW_TEMP_MIN_C && st <= HW_TEMP_MAX_C) {
-                        if (soc_temp == 0) soc_temp = st;
-                        if (ch == 2 && st >= 20) m2_temp = st;
-                        if (soc_temp != 0 && m2_temp != 0) break;
-                    }
-                }
-            });
+            static const int k_soc_channels[] = { 0, 2 };
+            for (size_t i = 0; i < sizeof(k_soc_channels) / sizeof(k_soc_channels[0]); i++) {
+                const int ch = k_soc_channels[i];
+                int st = 0;
+                volatile int got = 0;
+                HW_GUARD("sceKernelGetSocSensorTemperature",
+                         got = (g_hw.soc_temp(ch, &st) == 0));
+                if (!got || st < HW_TEMP_MIN_C || st > HW_TEMP_MAX_C) continue;
+                if (ch == 0) soc_temp = st;
+                if (ch == 2 && st >= 20) m2_temp = st;
+            }
         }
         if (g_hw.cpu_freq) {
             volatile long hz = 0;

@@ -244,4 +244,15 @@ extern volatile int g_ucred_elevation_rc;
  * (there's no symlink to follow yet). */
 int is_path_allowed(const char *p);
 
+/* The FTX2 frame type this thread is currently dispatching, or 0 when it is
+ * not inside a request. Thread-local and written only by its own thread, so
+ * the fatal-signal handler can read it without a lock.
+ *
+ * Why it exists: when the helper dies, the persisted stderr.log used to name
+ * the faulting call only if it was one of the fault-guarded hardware getters.
+ * A crash anywhere else left no trace of what was running. Recording the
+ * frame type turns "the helper disconnected" into "the helper died on
+ * SIGSEGV while serving frame 68" for EVERY request. */
+extern __thread volatile unsigned int g_inflight_frame_type;
+
 #endif

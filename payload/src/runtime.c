@@ -15863,9 +15863,26 @@ abort_done:
 }
 
 
+__thread volatile unsigned int g_inflight_frame_type = 0;
+
+static int handle_binary_frame_impl(runtime_state_t *state, int client_fd,
+                                    int is_transfer_port,
+                                    conn_tx_ctx_t *tx_ctx);
+
+/* Wrapper so the in-flight marker is cleared on EVERY return path of the
+ * dispatcher (it has dozens) without touching each one. The impl sets the
+ * marker as soon as the header is parsed. */
 static int handle_binary_frame(runtime_state_t *state, int client_fd,
                                int is_transfer_port,
                                conn_tx_ctx_t *tx_ctx) {
+    int rc = handle_binary_frame_impl(state, client_fd, is_transfer_port, tx_ctx);
+    g_inflight_frame_type = 0;
+    return rc;
+}
+
+static int handle_binary_frame_impl(runtime_state_t *state, int client_fd,
+                                    int is_transfer_port,
+                                    conn_tx_ctx_t *tx_ctx) {
     unsigned char hdr_bytes[FTX2_HEADER_LEN];
     char body[2048]; /* large enough for QUERY_TX: outer JSON (~100B) + embedded record (~512B) */
     char request_body[1024];
@@ -15880,6 +15897,11 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
     hdr.flags      = read_le32(hdr_bytes + 8);
     hdr.body_len   = read_le64(hdr_bytes + 12);
     hdr.trace_id   = read_le64(hdr_bytes + 20);
+    /* Set before ANY work on the frame — including the per-frame ucred
+     * elevation below, which does kernel writes and is itself a candidate
+     * for a firmware-specific crash. No frame type is 0 (HELLO is 1), so 0
+     * stays unambiguous as "not in a request". */
+    g_inflight_frame_type = (unsigned int)hdr.frame_type;
 
     if (hdr.magic != FTX2_MAGIC) {
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id, "bad_magic", 9);

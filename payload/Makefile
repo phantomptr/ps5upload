@@ -117,8 +117,20 @@ CFLAGS := -Wall -Wextra -Werror -g $(INCLUDES)
 # the user-slot table read back empty and Remote Play could never find the
 # logged-in user. The registry is core to the system (unlike the optional
 # libSceRemoteplay), so the DT_NEEDED entry is safe.
-LIBS := -lSceSystemService -lSceUserService -lSceAppInstUtil -lSceNotification \
-        -lSceRegMgr -lkernel_sys
+# libSceIpmi is linked BEFORE libSceAppInstUtil on upstream's explicit
+# instruction: ps5-payload-dev/sdk#26 (still open) — "you need to explicitly
+# link with -lSceIpmi ... put -lSceIpmi before -lSceAppInstUtil, the order is
+# important". The maintainer treats it as a bug in Sony's rtld: AppInstUtil
+# depends on Ipmi, and without Ipmi loaded first the executable "does not work
+# correctly". The SDK's own samples/install_app links it exactly this way.
+#
+# Why it is easy to miss: when the HOST process a loader injects into already
+# has libSceIpmi loaded, the missing dependency is invisible — so a payload can
+# work under one loader and break under another. Several popular payloads omit
+# it and work, so this is hardening that follows upstream, not a proven cause
+# of any specific report.
+LIBS := -lSceSystemService -lSceUserService -lSceIpmi -lSceAppInstUtil \
+        -lSceNotification -lSceRegMgr -lkernel_sys
 
 SRCS := src/main.c src/runtime.c src/shell_builtin.c src/takeover.c src/register.c src/hw_info.c \
         src/drive_sensors.c \
@@ -152,7 +164,11 @@ $(SQLITE_DIR)/sqlite3.c $(SQLITE_DIR)/sqlite3.h:
 	@echo "       Run scripts/install-ps5-sdk.sh to fetch them." >&2
 	@false
 
-$(ELF): $(SRCS) $(HEADERS) $(SQLITE_OBJ)
+# The Makefile itself is a prerequisite: LIBS and CFLAGS live here, and
+# without this a change to either printed "Built" while leaving the previous
+# link in place. Adding -lSceIpmi did exactly that — the stale ELF had no
+# libSceIpmi in DT_NEEDED until the sources were touched.
+$(ELF): $(SRCS) $(HEADERS) $(SQLITE_OBJ) Makefile
 	$(CC) $(CFLAGS) -o $@ $(SRCS) $(SQLITE_OBJ) $(LIBS)
 
 # Gzipped copy for the Tauri bundle resource. linuxdeploy (Linux
