@@ -194,7 +194,7 @@ virtual package later.
 Nothing here can be declared working without evidence, so the build proceeds
 through gates. A gate failing stops the next one.
 
-- **G0 — reader proves understanding.** Our `reader` fully opens both local
+- **G0 — reader proves understanding.** ✅ **Passed 2026-09-13** (`ps5upload-fpkg`, `verify_package`): all 40 checks on `webbrowser.pkg`, all 38 on the EP7579 DLC, and a single flipped byte fails. Not yet covered: the inner image (the samples compress it with Kraken), `naps_meta_*`, the RSA signature, the FLT path hash. Our `reader` fully opens both local
   debug samples: decrypts the outer image, walks outer and inner PFS, extracts
   every file, and recomputes **every** digest (game, imagedigs, dinode, ICV,
   CNT per-entry, GeneralDigests, package digest, `playgo-chunk.crc`) with all
