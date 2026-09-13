@@ -743,5 +743,10 @@ jobs:
           name: ${{ steps.tag.outputs.tag }}
           body_path: ${{ runner.temp }}/RELEASE_NOTES.md
           draft: false
-          prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
+          # Every release ships as a PRE-RELEASE and is promoted by hand on
+          # GitHub once it has been checked on real hardware. The old rule
+          # (prerelease only when the tag had a "-") meant a plain vX.Y.Z tag
+          # went straight to "Latest" the moment CI finished, with nobody
+          # having run it on a console.
+          prerelease: true
           files: release/*
