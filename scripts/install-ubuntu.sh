@@ -8,7 +8,7 @@
 #     libxdo, libssl, build-essential, file, curl, wget, unzip, pkg-config, python3)
 #   - Rust toolchain (rustup, stable, default profile)
 #   - Node.js 22 LTS via NodeSource (only if `node` is missing — keeps existing installs)
-#   - Repository-pinned PS5 Payload SDK (currently v0.43) → $PS5_PAYLOAD_SDK
+#   - Repository-pinned PS5 Payload SDK (currently v0.42) → $PS5_PAYLOAD_SDK
 #     (default $HOME/ps5-payload-sdk)
 #
 # After it finishes, the script prints the env exports you need to add to ~/.bashrc
@@ -43,7 +43,7 @@ APT_DEPS=(
   python3
   # LLVM 22 toolchain — required by the PS5 SDK's `prospero-clang` wrapper,
   # which dispatches into `${llvm-bindir}/clang` + `${llvm-bindir}/ld.lld`.
-  # SDK v0.43 (toolchain unchanged since v0.42) supports llvm 16–22; we pin to 22 to match macOS's
+  # SDK v0.42 supports llvm 16–22; we pin to 22 to match macOS's
   # macOS `LLVM_CONFIG` so both platforms use the same major. Ubuntu 24.04
   # doesn't ship llvm-22 in its own repos, so we add apt.llvm.org below
   # before installing these.
