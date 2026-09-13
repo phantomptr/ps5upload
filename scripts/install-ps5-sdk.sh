@@ -3,10 +3,11 @@
 #
 # The release archive is checksum-verified before extraction. Existing SDKs
 # without the matching version marker are moved aside, not deleted, so an
-# upgrade can be rolled back. The v0.42 archive was assembled on Linux and
-# contains a Linux/x86-64 prospero-nid binary even though the upstream source
-# is portable Python; install that exact tagged source implementation so the
-# SDK also works on macOS and ARM Linux.
+# upgrade can be rolled back. The v0.42 archive shipped a Linux/x86-64
+# prospero-nid binary even though the upstream source is portable Python
+# (v0.43 ships the Python script itself). The portable implementation is still
+# installed over whatever the archive carries, so the SDK works on macOS and
+# ARM Linux regardless of which tag assembled it.
 
 set -euo pipefail
 

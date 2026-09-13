@@ -189,7 +189,7 @@ jobs:
       - name: Build payload ELFs
         env:
           PS5_PAYLOAD_SDK: /opt/ps5-payload-sdk
-          # SDK v0.42's prospero-llvm-config candidate search maxes at 21,
+          # SDK v0.43's prospero-llvm-config (unchanged since v0.42) candidate search maxes at 21,
           # so point it at the CI-installed LLVM 22 explicitly.
           LLVM_CONFIG: /usr/bin/llvm-config-22
         run: make payload

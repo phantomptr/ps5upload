@@ -106,8 +106,8 @@ function checkSdkPin() {
   ];
   for (const file of currentFiles) {
     const content = fs.readFileSync(path.join(repoRoot, file), "utf8");
-    if (content.includes("SDK v0.41") || content.includes("SDK_TAG=\"v0.41\"")) {
-      failures.push(`${file} still references the previous SDK v0.41 pin`);
+    if (content.includes("SDK v0.42") || content.includes("SDK_TAG=\"v0.42\"")) {
+      failures.push(`${file} still references the previous SDK v0.42 pin`);
     }
   }
   for (const file of ["README.md", "FAQ.md"]) {

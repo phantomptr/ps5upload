@@ -108,7 +108,7 @@ Game pkgs (UP / EP / JP / HP / CUSA / PPSA / PCSA / etc.) work fine.
 There is no 32-bit x86 (i386 / i686) build for any desktop OS.
 
 **Q: Which PS5 firmware works?**
-ps5upload is built against PS5 Payload SDK v0.42, which resolves
+ps5upload is built against PS5 Payload SDK v0.43, which resolves
 kernel offsets at startup for every firmware it knows about. The
 same binary runs on the full range **1.00 – 13.60**.
 

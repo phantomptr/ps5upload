@@ -8,7 +8,7 @@
 #   - Visual Studio 2022 Build Tools w/ C++ workload (MSVC + Windows SDK)
 #   - 7zip (used to extract the PS5 SDK zip in CI-clean way)
 #   - Microsoft Edge WebView2 Runtime (preinstalled on Win11; verified)
-#   - Repository-pinned PS5 Payload SDK (currently v0.42)
+#   - Repository-pinned PS5 Payload SDK (currently v0.43)
 #     → $env:USERPROFILE\ps5-payload-sdk
 #
 # Run from an elevated PowerShell:

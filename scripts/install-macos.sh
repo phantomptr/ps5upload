@@ -9,7 +9,7 @@
 #     (the Makefile discovers Homebrew's current LLVM prefix automatically)
 #   - Rust toolchain (rustup, stable, default profile)
 #   - Repository-pinned PS5 Payload SDK → $PS5_PAYLOAD_SDK
-#     (currently v0.42; default $HOME/ps5-payload-sdk)
+#     (currently v0.43; default $HOME/ps5-payload-sdk)
 #
 # After it finishes the script prints the env exports you need to add to ~/.zshrc
 # (or ~/.bash_profile) so `make build` and `make run-client` work in any new shell.
@@ -101,8 +101,8 @@ fi
 
 # ─── 5. PS5 Payload SDK ────────────────────────────────────────────────────────
 # The shared installer verifies the release checksum, upgrades stale/unmarked
-# SDKs recoverably, and replaces v0.42's Linux-only prospero-nid binary with the
-# exact portable implementation from the same upstream tag.
+# SDKs recoverably, and installs the portable prospero-nid over whatever the
+# archive ships (v0.42 carried a Linux-only binary; v0.43 ships the script).
 PS5_SDK_INSTALL_DIR="$SDK_DIR" "$REPO_ROOT/scripts/install-ps5-sdk.sh"
 
 # ─── 6. client npm deps ────────────────────────────────────────────────────────
