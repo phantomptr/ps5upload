@@ -13,6 +13,10 @@ const DIRECT_AT: usize = 0x64;
 /// The samples never use indirect blocks, so this offset is structural, not measured.
 const INDIRECT_AT: usize = DIRECT_AT + 12 * 36;
 const BLOCK_SIG_LEN: usize = 36;
+/// Direct slots in a dinode.
+pub const DIRECT_SLOTS: usize = 12;
+/// `{SHA3-256(plaintext), block u32}` records per indirect block: 64 KiB / 36.
+pub const PER_INDIRECT: usize = BLOCK as usize / 36;
 const SUPERBLOCK_MAGIC: u64 = 20_130_315;
 const ICV: std::ops::Range<usize> = 0x380..0x3A0;
 const SIGNED_REGION: usize = 0x5A0;
@@ -195,6 +199,43 @@ impl OuterImage {
                 }
             })
             .collect()
+    }
+
+    /// A dinode's file bytes: the direct blocks, then the indirect block tables, bounded
+    /// by the inode's size.
+    pub fn file_data(&self, node: &Dinode) -> Vec<u8> {
+        let mut out = Vec::new();
+        for d in node
+            .direct
+            .iter()
+            .take((node.blocks as usize).min(DIRECT_SLOTS))
+        {
+            match self.plaintext.get(d.block as usize) {
+                Some(block) => out.extend_from_slice(block),
+                None => return out,
+            }
+        }
+        for table in &node.indirect {
+            if out.len() as u64 >= node.size {
+                break;
+            }
+            let Some(block) = self.plaintext.get(table.block as usize) else {
+                break;
+            };
+            for slot in 0..PER_INDIRECT {
+                if out.len() as u64 >= node.size {
+                    break;
+                }
+                let at = slot * BLOCK_SIG_LEN;
+                let index = le32(block, at + 32) as usize;
+                match self.plaintext.get(index) {
+                    Some(data) => out.extend_from_slice(data),
+                    None => break,
+                }
+            }
+        }
+        out.truncate(node.size as usize);
+        out
     }
 
     /// Directory entries in a directory inode's first block.

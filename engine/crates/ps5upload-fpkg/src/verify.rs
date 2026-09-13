@@ -8,12 +8,14 @@ use crate::crypto::sha3;
 use crate::outer::{self, BlockKind};
 use crate::{fih, flt, le32, si, PkgFile, Result};
 
+#[derive(Debug)]
 pub struct Check {
     pub name: String,
     pub ok: bool,
     pub detail: String,
 }
 
+#[derive(Debug)]
 pub struct Report {
     pub content_id: String,
     pub checks: Vec<Check>,
@@ -46,17 +48,7 @@ impl fmt::Display for Report {
 
 /// A dinode's file bytes, gathered from the plaintext blocks it points at.
 fn file_data(img: &outer::OuterImage, node: Option<&outer::Dinode>) -> Vec<u8> {
-    let Some(n) = node else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for d in n.direct.iter().take(n.blocks.min(12) as usize) {
-        if let Some(block) = img.plaintext.get(d.block as usize) {
-            out.extend_from_slice(block);
-        }
-    }
-    out.truncate(n.size as usize);
-    out
+    node.map(|n| img.file_data(n)).unwrap_or_default()
 }
 
 pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
@@ -147,11 +139,19 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
     r.push("outer inode table digest", table_ok, "");
     let nodes = img.dinodes();
     for (ino, n) in nodes.iter().enumerate() {
-        let ok = n.direct.iter().take(n.blocks.min(12) as usize).all(|d| {
-            img.plaintext
-                .get(d.block as usize)
-                .is_some_and(|b| sha3(b) == d.digest)
-        });
+        let used_indirect = (n.blocks as usize)
+            .saturating_sub(outer::DIRECT_SLOTS)
+            .div_ceil(outer::PER_INDIRECT);
+        let ok = n
+            .direct
+            .iter()
+            .take((n.blocks as usize).min(outer::DIRECT_SLOTS))
+            .chain(n.indirect.iter().take(used_indirect))
+            .all(|d| {
+                img.plaintext
+                    .get(d.block as usize)
+                    .is_some_and(|b| sha3(b) == d.digest)
+            });
         r.push(
             format!("outer inode {ino} block signatures"),
             ok,

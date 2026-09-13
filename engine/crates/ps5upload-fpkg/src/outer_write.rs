@@ -18,6 +18,14 @@ pub const DINODES: usize = 5;
 const DINODE_LEN: usize = 0x2C8;
 /// First direct block signature (32-byte digest + u32 block = 36-byte stride).
 const DIRECT_AT: usize = 0x64;
+/// Direct slots in a dinode.
+const DIRECT_SLOTS: usize = 12;
+/// Indirect slots in a dinode.
+const INDIRECT_SLOTS: usize = 5;
+/// First indirect block signature; the 36-byte stride continues past the direct slots.
+const INDIRECT_AT: usize = DIRECT_AT + DIRECT_SLOTS * 36;
+/// `{SHA3-256(plaintext), block u32}` records per indirect block: 64 KiB / 36.
+const PER_INDIRECT: usize = BLOCK as usize / 36;
 
 pub struct OuterImage {
     /// The encrypted image, block-aligned.
@@ -41,6 +49,10 @@ struct DinodeRecord {
     size_stored: u64,
     /// `(block index, SHA3-256(plaintext block))` per direct block.
     direct: Vec<(u32, [u8; 32])>,
+    /// `(block index, SHA3-256(plaintext block))` per indirect block.
+    indirect: Vec<(u64, [u8; 32])>,
+    /// Total block count when it exceeds the direct slots.
+    blocks: Option<u32>,
 }
 
 fn write_dinode(table: &mut [u8], rec: &DinodeRecord, time: (i64, u32)) {
@@ -57,11 +69,17 @@ fn write_dinode(table: &mut [u8], rec: &DinodeRecord, time: (i64, u32)) {
     for t in 0..4 {
         ino[0x38 + t * 4..0x3C + t * 4].copy_from_slice(&time.1.to_le_bytes());
     }
-    ino[0x60..0x64].copy_from_slice(&(rec.direct.len() as u32).to_le_bytes());
+    let blocks = rec.blocks.unwrap_or(rec.direct.len() as u32);
+    ino[0x60..0x64].copy_from_slice(&blocks.to_le_bytes());
     for (i, (block, digest)) in rec.direct.iter().enumerate() {
         let at = DIRECT_AT + i * 36;
         ino[at..at + 32].copy_from_slice(digest);
-        ino[at + 32..at + 36].copy_from_slice(&block.to_le_bytes());
+        ino[at + 32..at + 36].copy_from_slice(&(block).to_le_bytes());
+    }
+    for (i, (block, digest)) in rec.indirect.iter().enumerate() {
+        let at = INDIRECT_AT + i * 36;
+        ino[at..at + 32].copy_from_slice(digest);
+        ino[at + 32..at + 36].copy_from_slice(&(*block as u32).to_le_bytes());
     }
 }
 
@@ -84,18 +102,21 @@ pub fn write(
         return format_err("naps_pkg_layout.dat does not fit one block");
     }
     let inner_blocks = inner.len() as u64 / BLOCK;
-    if inner_blocks > 12 {
-        return format_err(
-            "inner images past 12 data blocks need the indirect-block layout (gate G1)",
-        );
+    let indirect_needed = (inner_blocks as usize).saturating_sub(DIRECT_SLOTS);
+    if indirect_needed > PER_INDIRECT * INDIRECT_SLOTS {
+        return format_err(format!(
+            "an inner image of {inner_blocks} blocks needs more indirect slots than a dinode has"
+        ));
     }
+    let indirect_blocks = indirect_needed.div_ceil(PER_INDIRECT);
     let naps_block = inner_blocks;
     let superblock_block = inner_blocks + 1;
     let table_block = inner_blocks + 2;
     let root_block = inner_blocks + 3;
     let flt_block = inner_blocks + 4;
     let uroot_block = inner_blocks + 5;
-    let ndblock = inner_blocks + 6;
+    let first_indirect_block = inner_blocks + 6;
+    let ndblock = inner_blocks + 6 + indirect_blocks as u64;
 
     let mut blocks: Vec<Vec<u8>> = Vec::with_capacity(ndblock as usize);
     for i in 0..inner_blocks {
@@ -137,6 +158,27 @@ pub fn write(
         .map(|b| sha3(b))
         .collect();
     let naps_digest = sha3(&blocks[naps_block as usize]);
+
+    // Indirect blocks: `{SHA3(plaintext), block}` records at the dinode's 36-byte stride,
+    // covering the data blocks past the twelve direct slots (1820 blocks each). They are
+    // laid out after the uroot dirents, so they are built here and appended there.
+    let mut indirect: Vec<(u64, [u8; 32])> = Vec::new();
+    let mut indirect_blocks_extra: Vec<Vec<u8>> = Vec::new();
+    for chunk in 0..indirect_blocks {
+        let mut block = vec![0u8; BLOCK as usize];
+        for slot in 0..PER_INDIRECT {
+            let index = DIRECT_SLOTS + chunk * PER_INDIRECT + slot;
+            if index >= inner_blocks as usize {
+                break;
+            }
+            let at = slot * 36;
+            block[at..at + 32].copy_from_slice(&inner_digests[index]);
+            block[at + 32..at + 36].copy_from_slice(&(index as u32).to_le_bytes());
+        }
+        let index = first_indirect_block + chunk as u64;
+        indirect.push((index, sha3(&block)));
+        indirect_blocks_extra.push(block);
+    }
     let mut flt_entries: Vec<(u64, u64)> = Vec::new();
     for (i, name) in ["pfs_image.dat", "naps_pkg_layout.dat"].iter().enumerate() {
         flt_entries.push((
@@ -145,6 +187,18 @@ pub fn write(
         ));
     }
     let flt_bytes = flt::write(&flt_entries);
+    let root_dirents = vec![
+        ("inode_flat_path_table".to_string(), 1u32, plan::DIRENT_FILE),
+        ("uroot".to_string(), 2u32, plan::DIRENT_DIR),
+    ];
+    let root_bytes = padded(crate::inner::dirents_bytes(&root_dirents))?;
+    let uroot_dirents = vec![
+        (".".to_string(), 2u32, plan::DIRENT_DOT),
+        ("..".to_string(), 2u32, plan::DIRENT_DOTDOT),
+        ("pfs_image.dat".to_string(), 3u32, plan::DIRENT_FILE),
+        ("naps_pkg_layout.dat".to_string(), 4u32, plan::DIRENT_FILE),
+    ];
+    let uroot_bytes = padded(crate::inner::dirents_bytes(&uroot_dirents))?;
 
     let mut table = vec![0u8; BLOCK as usize];
     let mut flt_block_bytes = flt_bytes.clone();
@@ -157,7 +211,9 @@ pub fn write(
             flags: 0x2000C,
             size: BLOCK,
             size_stored: BLOCK,
-            direct: vec![(root_block as u32, [0u8; 32])],
+            direct: vec![(root_block as u32, sha3(&root_bytes))],
+            blocks: None,
+            indirect: Vec::new(),
         },
         DinodeRecord {
             index: 1,
@@ -167,6 +223,8 @@ pub fn write(
             size: flt_bytes.len() as u64,
             size_stored: flt_bytes.len() as u64,
             direct: vec![(flt_block as u32, sha3(&flt_block_bytes))],
+            blocks: None,
+            indirect: Vec::new(),
         },
         DinodeRecord {
             index: 2,
@@ -175,7 +233,9 @@ pub fn write(
             flags: 0xC,
             size: BLOCK,
             size_stored: BLOCK,
-            direct: vec![(uroot_block as u32, [0u8; 32])],
+            direct: vec![(uroot_block as u32, sha3(&uroot_bytes))],
+            blocks: None,
+            indirect: Vec::new(),
         },
         DinodeRecord {
             index: 3,
@@ -186,9 +246,12 @@ pub fn write(
             size_stored: inner.len() as u64,
             direct: inner_digests
                 .iter()
+                .take(DIRECT_SLOTS)
                 .enumerate()
                 .map(|(i, d)| (i as u32, *d))
                 .collect(),
+            indirect,
+            blocks: Some(inner_blocks as u32),
         },
         DinodeRecord {
             index: 4,
@@ -198,6 +261,8 @@ pub fn write(
             size: naps.len() as u64,
             size_stored: naps.len() as u64,
             direct: vec![(naps_block as u32, naps_digest)],
+            indirect: Vec::new(),
+            blocks: None,
         },
     ];
     for rec in &records {
@@ -224,6 +289,10 @@ pub fn write(
         ("naps_pkg_layout.dat".to_string(), 4u32, plan::DIRENT_FILE),
     ];
     blocks.push(padded(crate::inner::dirents_bytes(&uroot_dirents))?);
+
+    for block in indirect_blocks_extra {
+        blocks.push(block);
+    }
     if blocks.len() as u64 != ndblock {
         return format_err("outer layout block count is inconsistent");
     }
@@ -283,6 +352,46 @@ pub fn superblock_absolute(outer: &OuterImage) -> u64 {
 mod tests {
     use super::*;
     use crate::crypto::DEFAULT_PASSCODE;
+
+    /// An image past the twelve direct slots exercises the indirect tables.
+    #[test]
+    fn a_large_image_uses_indirect_blocks() {
+        let inner = vec![0x5Au8; 20 * BLOCK as usize];
+        let naps = vec![9u8; 432];
+        let outer = write(
+            &inner,
+            &naps,
+            [0x22; 16],
+            "UP0000-PPSA01234_00-TESTGAME00000000",
+            DEFAULT_PASSCODE,
+            (1_700_000_000, 0),
+        )
+        .unwrap();
+        assert_eq!(outer.image.len() as u64, 27 * BLOCK);
+        let cnt = crate::cnt::test_support::minimal_cnt(
+            "UP0000-PPSA01234_00-TESTGAME00000000",
+            &outer.plaintext_digests,
+        );
+        let path = std::env::temp_dir().join(format!("outer-big-{}.bin", std::process::id()));
+        std::fs::write(&path, &outer.image).unwrap();
+        let mut file = crate::PkgFile::open(&path).unwrap();
+        let fih = crate::fih::Fih {
+            signed_byte: 0,
+            format_version: 3,
+            pfs_offset: 0,
+            pfs_size: outer.image.len() as u64,
+            game_digest: outer.plaintext_digests[outer.superblock_block as usize],
+            cnt_offset: outer.image.len() as u64,
+        };
+        let parsed = crate::cnt::Cnt::from_bytes(cnt).unwrap();
+        let img = crate::outer::open(&mut file, &fih, &parsed, DEFAULT_PASSCODE).unwrap();
+        std::fs::remove_file(&path).ok();
+        let nodes = img.dinodes();
+        let data = img.file_data(&nodes[3]);
+        assert_eq!(data, inner, "the indirect tables must recover every block");
+        assert_eq!(nodes[3].blocks, 20);
+        assert_eq!(nodes[3].indirect[0].block, 26);
+    }
 
     #[test]
     fn writes_and_reads_back_the_template() {
