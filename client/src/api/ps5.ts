@@ -4270,8 +4270,10 @@ export interface UpdateDownload {
  *  current version. Returns `available:false` when we're current.
  *  Throws on network failure — the UI surfaces that as "Couldn't
  *  check for updates" with the error in a tooltip. */
-export async function updateCheck(): Promise<UpdateCheck> {
-  return invoke<UpdateCheck>("update_check");
+export async function updateCheck(
+  channel: "stable" | "prerelease" = "stable",
+): Promise<UpdateCheck> {
+  return invoke<UpdateCheck>("update_check", { channel });
 }
 
 /** Stream the update archive into the user's Downloads folder and

@@ -35,6 +35,11 @@ const CACHE_KEY = "ps5upload.update-check-v2";
 // the "already told the user about vX" marker must persist so reopening the
 // app doesn't re-fire the same update notification every launch.
 const AUTOCHECK_KEY = "ps5upload.update.autocheck";
+// Which releases the updater will offer. Every release is published as a
+// pre-release and promoted by hand once it has been checked on hardware, so
+// "stable" means a human signed it off. Default stable; opting in is explicit
+// and must survive a restart, hence localStorage rather than the session cache.
+const CHANNEL_KEY = "ps5upload.update.channel";
 const NOTIFIED_KEY = "ps5upload.update.notified-version";
 
 /** Read the auto-check preference. Defaults to ON when unset (first run) —
@@ -42,6 +47,21 @@ const NOTIFIED_KEY = "ps5upload.update.notified-version";
 function loadAutoCheck(): boolean {
   if (typeof localStorage === "undefined") return true;
   return safeGetItem(AUTOCHECK_KEY) !== "0";
+}
+
+export type UpdateChannel = "stable" | "prerelease";
+
+/** Read the update channel. Anything unrecognised — absent, corrupt, written
+ *  by an older build — means stable: an unknown value must never silently opt
+ *  someone into pre-releases. */
+function loadChannel(): UpdateChannel {
+  if (typeof localStorage === "undefined") return "stable";
+  return safeGetItem(CHANNEL_KEY) === "prerelease" ? "prerelease" : "stable";
+}
+
+function saveChannel(channel: UpdateChannel) {
+  if (typeof localStorage === "undefined") return;
+  safeSetItem(CHANNEL_KEY, channel);
 }
 
 function saveAutoCheck(enabled: boolean) {
@@ -131,6 +151,12 @@ interface UpdateStore {
   autoCheckEnabled: boolean;
   /** Toggle the auto-check-on-launch preference (Settings → Updates). */
   setAutoCheckEnabled: (enabled: boolean) => void;
+  /** Which releases to offer. Persisted; defaults to "stable". */
+  channel: UpdateChannel;
+  /** Switch channel. Clears the cached result and re-checks immediately —
+   *  the cached answer belongs to the other channel and would otherwise sit
+   *  there looking authoritative. */
+  setChannel: (channel: UpdateChannel) => void;
   /** Kick a check now if we haven't done one recently. No-op when a
    *  recent result is cached and still inside TTL, or when the user has
    *  turned auto-check off. */
@@ -200,7 +226,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
     if (prior.kind === "downloading") return;
     set({ phase: { kind: "checking" } });
     try {
-      const result = await updateCheck();
+      const result = await updateCheck(get().channel);
       saveCache(result);
       set({
         phase: phaseFromResult(result),
@@ -225,10 +251,24 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
     phase: initialPhase,
     lastCheckedMs: initialLastChecked,
     autoCheckEnabled: loadAutoCheck(),
+    channel: loadChannel(),
 
     setAutoCheckEnabled(enabled: boolean) {
       saveAutoCheck(enabled);
       set({ autoCheckEnabled: enabled });
+    },
+
+    setChannel(channel: UpdateChannel) {
+      if (get().channel === channel) return;
+      saveChannel(channel);
+      // Drop the cached result: it answered a different question.
+      try {
+        sessionStorage.removeItem(CACHE_KEY);
+      } catch {
+        /* private mode / storage disabled — the TTL check just re-fetches */
+      }
+      set({ channel, phase: { kind: "idle" }, lastCheckedMs: 0 });
+      void get().checkNow();
     },
 
     async ensureChecked() {

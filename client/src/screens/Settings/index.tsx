@@ -1821,6 +1821,8 @@ function UpdatesPanel() {
   const dismissDownload = useUpdateStore((s) => s.dismissDownload);
   const autoCheckEnabled = useUpdateStore((s) => s.autoCheckEnabled);
   const setAutoCheckEnabled = useUpdateStore((s) => s.setAutoCheckEnabled);
+  const channel = useUpdateStore((s) => s.channel);
+  const setChannel = useUpdateStore((s) => s.setChannel);
   // Mobile: the store's download() opens the APK URL (or the release
   // page) in the system browser instead of saving to ~/Downloads —
   // that flow can't work in Android's sandbox. Relabel the CTA so it
@@ -1919,6 +1921,29 @@ function UpdatesPanel() {
           "update_autocheck_hint",
           undefined,
           "Looks for a new release on launch (at most once a day) and notifies you if one is available.",
+        )}
+        className="text-xs"
+      />
+      {/* Channel. Every release is published as a pre-release and promoted by
+          hand once it has been checked on real hardware, so the stable channel
+          means "someone signed this off" rather than merely "newest". Opting
+          into pre-releases is deliberate and persists across restarts. */}
+      <Checkbox
+        checked={channel === "prerelease"}
+        onChange={(checked) => setChannel(checked ? "prerelease" : "stable")}
+        label={
+          <span className="font-medium text-[var(--color-text)]">
+            {tr(
+              "update_channel_prerelease_label",
+              undefined,
+              "Get pre-release versions",
+            )}
+          </span>
+        }
+        hint={tr(
+          "update_channel_prerelease_hint",
+          undefined,
+          "Offers new releases as soon as they are published, before they have been checked on real hardware. Leave this off to be offered only releases that have been verified.",
         )}
         className="text-xs"
       />

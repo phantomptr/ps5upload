@@ -51,6 +51,35 @@ use tauri::{AppHandle, Manager};
 const DEFAULT_MANIFEST_URL: &str =
     "https://github.com/phantomptr/ps5upload/releases/latest/download/latest.json";
 
+/// Newest release INCLUDING pre-releases. The API lists newest-first and omits
+/// drafts, so the first entry is what the pre-release channel wants.
+const PRERELEASE_LIST_URL: &str =
+    "https://api.github.com/repos/phantomptr/ps5upload/releases?per_page=10";
+
+/// Which releases the updater is willing to offer.
+///
+/// Every release is published as a pre-release and promoted to a full release
+/// by hand once it has been checked on real hardware (see publish.yml), so
+/// "stable" means "a human has signed this off" rather than merely "newest".
+/// Stable is the default; opting into pre-releases is a deliberate choice made
+/// in Settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateChannel {
+    Stable,
+    Prerelease,
+}
+
+impl UpdateChannel {
+    fn from_opt(raw: Option<&str>) -> Self {
+        match raw.map(str::trim) {
+            Some("prerelease") | Some("pre") | Some("beta") => Self::Prerelease,
+            // Anything else — absent, empty, unrecognised — is stable. An
+            // unknown value must never silently opt someone into pre-releases.
+            _ => Self::Stable,
+        }
+    }
+}
+
 /// Result of a check. Flat shape so the renderer doesn't have to
 /// pattern-match a tagged union. `download_url` is non-empty only when
 /// `available == true` AND a bundle was published for the caller's
@@ -239,7 +268,9 @@ fn is_newer(current: &str, latest: &str) -> bool {
 
 #[cfg(test)]
 mod is_newer_tests {
-    use super::is_newer;
+    use super::{
+        is_newer, is_safe_update_url, UpdateChannel, DEFAULT_MANIFEST_URL, PRERELEASE_LIST_URL,
+    };
 
     #[test]
     fn higher_numeric_is_newer() {
@@ -279,6 +310,39 @@ mod is_newer_tests {
     }
 
     #[test]
+    fn unknown_channel_values_stay_on_stable() {
+        // Getting this backwards would silently move people onto pre-releases,
+        // which is the one direction that must never happen by accident.
+        assert_eq!(UpdateChannel::from_opt(None), UpdateChannel::Stable);
+        assert_eq!(UpdateChannel::from_opt(Some("")), UpdateChannel::Stable);
+        assert_eq!(
+            UpdateChannel::from_opt(Some("stable")),
+            UpdateChannel::Stable
+        );
+        assert_eq!(
+            UpdateChannel::from_opt(Some("nonsense")),
+            UpdateChannel::Stable
+        );
+        assert_eq!(
+            UpdateChannel::from_opt(Some("prerelease")),
+            UpdateChannel::Prerelease
+        );
+        assert_eq!(
+            UpdateChannel::from_opt(Some("  prerelease  ")),
+            UpdateChannel::Prerelease
+        );
+    }
+
+    #[test]
+    fn the_releases_api_host_is_pinned() {
+        // The pre-release channel resolves through api.github.com, so it has to
+        // pass the production pin or the channel is dead on arrival.
+        assert!(is_safe_update_url(PRERELEASE_LIST_URL));
+        assert!(is_safe_update_url(DEFAULT_MANIFEST_URL));
+        assert!(!is_safe_update_url("https://evil.example.com/latest.json"));
+    }
+
+    #[test]
     fn build_metadata_ignored() {
         // Per semver, +build-metadata doesn't affect ordering.
         assert!(!is_newer("2.2.0", "2.2.0+sha.abc"));
@@ -293,11 +357,62 @@ mod is_newer_tests {
 /// default-unlimited body buffer.
 const MANIFEST_MAX_BYTES: usize = 64 * 1024;
 
-async fn fetch_manifest() -> Result<Manifest, String> {
+/// Ask the releases API for the newest release of any kind and return its
+/// `latest.json` asset URL.
+///
+/// Only used by the pre-release channel. Any failure here is reported rather
+/// than silently falling back to stable: a user who opted into pre-releases
+/// and is quietly served a stable manifest has no way to tell.
+async fn prerelease_manifest_url(client: &reqwest::Client) -> Result<String, String> {
+    #[derive(serde::Deserialize)]
+    struct Asset {
+        name: String,
+        browser_download_url: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct Release {
+        draft: bool,
+        assets: Vec<Asset>,
+    }
+    let resp = client
+        .get(PRERELEASE_LIST_URL)
+        // The API rejects requests without one.
+        .header("User-Agent", "ps5upload-updater")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| format!("fetch release list: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("release list HTTP {}", resp.status()));
+    }
+    let releases: Vec<Release> = resp
+        .json()
+        .await
+        .map_err(|e| format!("parse release list: {e}"))?;
+    let url = releases
+        .into_iter()
+        .filter(|r| !r.draft)
+        .find_map(|r| {
+            r.assets
+                .into_iter()
+                .find(|a| a.name == "latest.json")
+                .map(|a| a.browser_download_url)
+        })
+        .ok_or_else(|| "no release with a latest.json asset was found".to_string())?;
+    Ok(url)
+}
+
+async fn fetch_manifest(channel: UpdateChannel) -> Result<Manifest, String> {
     let env_override = std::env::var("PS5UPLOAD_UPDATE_MANIFEST_URL").ok();
-    let url = env_override
-        .clone()
-        .unwrap_or_else(|| DEFAULT_MANIFEST_URL.to_string());
+    let resolver = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("updater client init: {e}"))?;
+    let url = match (&env_override, channel) {
+        (Some(u), _) => u.clone(),
+        (None, UpdateChannel::Prerelease) => prerelease_manifest_url(&resolver).await?,
+        (None, UpdateChannel::Stable) => DEFAULT_MANIFEST_URL.to_string(),
+    };
     // Production default URL requires HTTPS + a pinned GitHub host.
     // Env-overridden URL (dev/staging) gets a relaxed check that only
     // requires HTTPS or loopback HTTP — pinning would block a tester
@@ -316,11 +431,7 @@ async fn fetch_manifest() -> Result<Manifest, String> {
             "refusing to fetch update manifest over insecure URL: {url}"
         ));
     }
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("updater client init: {e}"))?;
-    let resp = client
+    let resp = resolver
         .get(&url)
         .send()
         .await
@@ -357,9 +468,9 @@ async fn fetch_manifest() -> Result<Manifest, String> {
 }
 
 #[tauri::command]
-pub async fn update_check(app: AppHandle) -> Result<UpdateCheck, String> {
+pub async fn update_check(app: AppHandle, channel: Option<String>) -> Result<UpdateCheck, String> {
     let current_version = app.package_info().version.to_string();
-    let manifest = fetch_manifest().await?;
+    let manifest = fetch_manifest(UpdateChannel::from_opt(channel.as_deref())).await?;
     let latest_version = manifest.version.clone();
     let available = is_newer(&current_version, &latest_version);
     // Most-specific-first: a packaged Linux install gets its own format,
@@ -614,6 +725,11 @@ async fn reveal(_app: &AppHandle, path: &std::path::Path) -> Result<(), String> 
 /// the manifest itself is hosted on github.com.
 const PINNED_PRODUCTION_HOSTS: &[&str] = &[
     "github.com",
+    // The pre-release channel resolves its manifest through the releases API:
+    // github.com/releases/latest/download/... deliberately skips pre-releases,
+    // which is exactly what makes it the right default for the stable channel
+    // and useless for the other one.
+    "api.github.com",
     "release-assets.githubusercontent.com",
     "objects.githubusercontent.com",
     "raw.githubusercontent.com",

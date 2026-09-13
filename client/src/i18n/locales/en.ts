@@ -407,6 +407,8 @@ update_notif_body:
 update_autocheck_label: "Check for updates automatically",
 update_autocheck_hint:
   "Looks for a new release on launch (at most once a day) and notifies you if one is available.",
+update_channel_prerelease_label: "Get pre-release versions",
+update_channel_prerelease_hint: "Offers new releases as soon as they are published, before they have been checked on real hardware. Leave this off to be offered only releases that have been verified.",
 update_step_quit: "Quit PS5Upload.",
 update_step_launch: "Launch the new version.",
 update_dismiss: "Dismiss",
