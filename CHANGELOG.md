@@ -4,6 +4,25 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.25.0
+
+**Fixes the console disconnects and "ps5upload isn't responding".**
+
+### Hardware
+
+- **Reading sensors no longer risks dropping your console connection.**
+  ps5upload asked the PS5 for SoC power draw using the wrong call shape, and
+  the console wrote far more data back than ps5upload had made room for. On
+  consoles that report power draw this corrupted the helper's memory — which
+  showed up as the app going unresponsive, or the connection dying moments
+  after it was established. It has been reported as a firmware problem for
+  months; it was ours.
+- **Power draw is now read correctly** — the total across the PS5's eight
+  power rails, instead of a mis-read number that had to be guessed at.
+
+If you saw disconnects, this is very likely the cause. Consoles that never
+reported power draw were never affected.
+
 ## 5.24.0
 
 **Choose whether you get early releases or only verified ones.**
