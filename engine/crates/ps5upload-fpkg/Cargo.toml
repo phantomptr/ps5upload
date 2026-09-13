@@ -1,0 +1,12 @@
+[package]
+name = "ps5upload-fpkg"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+aes = "0.9"
+hmac = "0.13"
+sha2 = "0.11"
+sha3 = "0.11"
+thiserror.workspace = true
