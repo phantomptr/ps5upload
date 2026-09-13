@@ -36,6 +36,7 @@ import {
   profileAvatarCurrent,
   profileSetUsername,
   profileRenameUser,
+  profileActivate,
   userCreate,
   userDelete,
   type ProfileInfo,
@@ -531,6 +532,7 @@ function UsernameSection({
                 addr={addr}
                 slot={s.slot}
                 name={s.name}
+                accountId={s.id}
                 activated={s.activated}
                 onChanged={onChanged}
               />
@@ -738,16 +740,40 @@ function CreateUserRow({
   );
 }
 
+/** A console account id is a 64-bit value, shown and entered as hex. Accepts
+ *  an optional 0x prefix and any case; rejects anything that is not 1-16 hex
+ *  digits, or zero (zero is "no account", which is what Clear is for). */
+export function parseAccountId(raw: string): bigint | null {
+  const t = raw.trim().replace(/^0x/i, "");
+  if (!/^[0-9a-fA-F]{1,16}$/.test(t)) return null;
+  const v = BigInt("0x" + t);
+  return v === 0n ? null : v;
+}
+
+/** Render an id for display: 0x-prefixed, lower-case, no padding. "—" when
+ *  the slot has no id, which is a real state and not an error. */
+export function formatAccountId(id: string | null | undefined): string {
+  if (!id) return "—";
+  try {
+    const v = BigInt(id);
+    return v === 0n ? "—" : "0x" + v.toString(16);
+  } catch {
+    return "—";
+  }
+}
+
 function SlotRow({
   addr,
   slot,
   name,
+  accountId,
   activated,
   onChanged,
 }: {
   addr: string;
   slot: number;
   name: string;
+  accountId: string;
   activated: boolean;
   onChanged: () => void;
 }) {
@@ -757,6 +783,9 @@ function SlotRow({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedOk, setSavedOk] = useState(false);
+  const [editingId, setEditingId] = useState(false);
+  const [idDraft, setIdDraft] = useState("");
+  const [idBusy, setIdBusy] = useState(false);
 
   // Re-sync when the server-confirmed name changes (after a refetch).
   useEffect(() => {
@@ -780,6 +809,53 @@ function SlotRow({
       setError(`${e}`);
     } finally {
       setSaving(false);
+    }
+  }
+
+  /** Write a new account id to this slot.
+   *
+   *  Gated behind an explicit confirm that names the actual consequence. The
+   *  account id is what the console matches saves against, so changing it on
+   *  a slot that already has one makes that profile's existing saves
+   *  unreadable until the old id is put back — which is why the dialog shows
+   *  the old value: it is the only copy the user will get.
+   */
+  async function saveAccountId() {
+    const parsed = parseAccountId(idDraft);
+    if (parsed === null) return;
+    const next = "0x" + parsed.toString(16);
+    const current = formatAccountId(accountId);
+    const hadId = current !== "—";
+    const ok = await confirm(
+      hadId
+        ? tr(
+            "profile.accountId.confirm_replace",
+            { slot: String(slot), old: current, next },
+            `Slot ${slot} already has account ID ${current}.\n\nChanging it to ${next} means saves made under ${current} will no longer be recognised as belonging to this profile. They are not deleted — putting ${current} back restores access.\n\nWrite it down before continuing. Change the account ID?`,
+          )
+        : tr(
+            "profile.accountId.confirm_set",
+            { slot: String(slot), next },
+            `Set slot ${slot}'s account ID to ${next}?\n\nThis activates the offline account. Saves made from now on are tied to this ID — if you change it later they will stop being recognised until you set it back.`,
+          ),
+      { title: tr("profile.accountId.confirm_title", "Change account ID?"), kind: "warning" },
+    );
+    if (!ok) return;
+    setIdBusy(true);
+    setError(null);
+    try {
+      // profileActivate writes the id and sets the slot's activated flags —
+      // the same path offact uses. Passing an explicit id skips the
+      // derive-from-name behaviour. Sent as a hex STRING: Number() would
+      // round any id above 2^53 and activate a different account.
+      await profileActivate(slot, next, addr);
+      setEditingId(false);
+      setSavedOk(true);
+      onChanged();
+    } catch (e) {
+      setError(`${e}`);
+    } finally {
+      setIdBusy(false);
     }
   }
 
@@ -815,6 +891,63 @@ function SlotRow({
         >
           {tr("profile.username.save", "Save")}
         </Button>
+      </div>
+      {/* Account id. Read-only by default: this is the value the console uses
+          to decide which saves belong to this profile, so it is shown plainly
+          and changed only deliberately. */}
+      <div className="mt-2 flex flex-wrap items-center gap-2 pl-14 text-xs">
+        <span className="text-[var(--color-muted)]">
+          {tr("profile.accountId.label", "Account ID")}
+        </span>
+        {editingId ? (
+          <>
+            <input
+              className="w-52 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 font-mono text-xs"
+              value={idDraft}
+              spellCheck={false}
+              placeholder="0x0123456789abcdef"
+              onChange={(e) => setIdDraft(e.target.value)}
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={idBusy || parseAccountId(idDraft) === null}
+              loading={idBusy}
+              onClick={() => void saveAccountId()}
+            >
+              {tr("profile.accountId.apply", "Apply")}
+            </Button>
+            <button
+              type="button"
+              className="text-[var(--color-muted)] hover:underline"
+              onClick={() => setEditingId(false)}
+            >
+              {tr("cancel", undefined, "Cancel")}
+            </button>
+            {idDraft.trim() !== "" && parseAccountId(idDraft) === null && (
+              <span className="text-[var(--color-bad)]">
+                {tr(
+                  "profile.accountId.invalid",
+                  "Enter 1-16 hex digits (not zero).",
+                )}
+              </span>
+            )}
+          </>
+        ) : (
+          <>
+            <span className="font-mono">{formatAccountId(accountId)}</span>
+            <button
+              type="button"
+              className="text-[var(--color-accent)] hover:underline"
+              onClick={() => {
+                setIdDraft(formatAccountId(accountId) === "—" ? "" : formatAccountId(accountId));
+                setEditingId(true);
+              }}
+            >
+              {tr("profile.accountId.change", "Change")}
+            </button>
+          </>
+        )}
       </div>
       {error && <p className="mt-1 text-xs text-[var(--color-bad)]">{error}</p>}
       {savedOk && (

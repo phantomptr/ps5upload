@@ -6,6 +6,11 @@ import { captureCrashReport } from "./crashReporter";
 export const DISCORD_REPORT_URL =
   "https://discord.com/channels/1464735724434624524/1465533832953462794";
 
+/** GitHub issues — the other place a report can go, and the better one for
+ *  anything that needs to be tracked to a fix rather than answered in chat. */
+export const GITHUB_ISSUES_URL =
+  "https://github.com/phantomptr/ps5upload/issues";
+
 export interface ReportResult {
   /** true = a zip was written and Discord opened. */
   ok: boolean;
@@ -58,4 +63,10 @@ export async function reportProblem(
 export async function openReportChannel(): Promise<void> {
   const { openExternalUrl } = await import("./openExternalUrl");
   await openExternalUrl(DISCORD_REPORT_URL);
+}
+
+/** Open GitHub issues in the user's browser. Best-effort, same as above. */
+export async function openGithubIssues(): Promise<void> {
+  const { openExternalUrl } = await import("./openExternalUrl");
+  await openExternalUrl(GITHUB_ISSUES_URL);
 }

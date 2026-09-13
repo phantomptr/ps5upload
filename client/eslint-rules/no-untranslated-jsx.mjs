@@ -52,6 +52,7 @@ const ALLOWED_PATTERNS = [
   /^[*./\s]*\*\.[a-z]+/i, //   *.pkg  /  eboot.bin  /  PPSA*  /  *.log globs
   /\.(ini|log|gz|elf|bin|pkg|txt)\b/i, //   filenames
   /^\/[\w./-]+$/, //   absolute paths
+  /^0x[0-9a-f]+$/i, //   hex example values (account ids, offsets)
 ];
 
 // JSX attributes whose string value is rendered to the user.

@@ -227,10 +227,15 @@ export async function profileRenameUser(
   });
 }
 
-/** Activate an offline-account slot (id derived from the name if omitted). */
+/** Activate an offline-account slot (id derived from the name if omitted).
+ *
+ *  `id` is a STRING ("0x…" or decimal), never a number: an account id is
+ *  64-bit and JavaScript cannot represent anything above 2^53 exactly, so
+ *  sending it as a JSON number would round it and activate a different id
+ *  than the caller asked for. The engine accepts either form. */
 export async function profileActivate(
   slot: number,
-  id?: number | null,
+  id?: string | null,
   addr?: string,
 ): Promise<{ ok: boolean; id: string }> {
   const resp = await invoke<{ ok: boolean; id: string; error?: string | null }>(

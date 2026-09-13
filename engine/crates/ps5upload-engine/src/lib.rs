@@ -5731,8 +5731,45 @@ struct ProfileLocalUsernameReq {
 struct ProfileActivateReq {
     addr: Option<String>,
     slot: i32,
+    /// Accepts a JSON string ("0x1a2b" or decimal) as well as a number.
+    ///
+    /// A number alone is not safe here: an account id is 64-bit, and a
+    /// JavaScript client cannot represent anything above 2^53 exactly — it
+    /// would round and silently activate a DIFFERENT id than the user typed.
+    /// The string form is what the client sends; the number form stays for
+    /// any older caller.
     #[serde(default)]
-    id: Option<u64>,
+    id: Option<AccountIdInput>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum AccountIdInput {
+    Num(u64),
+    Str(String),
+}
+
+impl AccountIdInput {
+    /// None when the text is not a usable id. Zero is rejected: it means "no
+    /// account", and clearing a slot is a separate endpoint.
+    fn to_u64(&self) -> Option<u64> {
+        let v = match self {
+            Self::Num(n) => *n,
+            Self::Str(s) => {
+                let t = s.trim();
+                let parsed = match t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+                    Some(hex) => u64::from_str_radix(hex, 16).ok()?,
+                    None => t.parse::<u64>().ok()?,
+                };
+                parsed
+            }
+        };
+        if v == 0 {
+            None
+        } else {
+            Some(v)
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -5892,7 +5929,7 @@ async fn profile_activate_handler(
 ) -> impl IntoResponse {
     let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let slot = req.slot;
-    let id = req.id;
+    let id = req.id.as_ref().and_then(AccountIdInput::to_u64);
     let r = tokio::task::spawn_blocking(move || {
         ps5upload_core::profile::profile_activate(&addr, slot, id)
     })
@@ -10095,5 +10132,53 @@ mod bug_bundle_tests {
     fn rejects_absurdly_long_paths() {
         assert!(!bundle_path_ok(&"a".repeat(201)));
         assert!(bundle_path_ok(&"a".repeat(200)));
+    }
+}
+
+#[cfg(test)]
+mod account_id_input_tests {
+    use super::AccountIdInput;
+
+    #[test]
+    fn a_full_64_bit_id_survives_as_a_string() {
+        // The reason the string form exists: this value is above 2^53, so a
+        // JavaScript client sending it as a JSON number would round it and
+        // activate a different account than the user typed.
+        let big = 0x0123_4567_89ab_cdefu64;
+        assert!(big > (1u64 << 53));
+        assert_eq!(
+            AccountIdInput::Str("0x0123456789abcdef".into()).to_u64(),
+            Some(big)
+        );
+        assert_eq!(AccountIdInput::Str(big.to_string()).to_u64(), Some(big));
+        assert_eq!(
+            AccountIdInput::Str("0xffffffffffffffff".into()).to_u64(),
+            Some(u64::MAX)
+        );
+    }
+
+    #[test]
+    fn accepts_hex_either_case_and_plain_decimal() {
+        assert_eq!(AccountIdInput::Str("0x1A2B".into()).to_u64(), Some(0x1a2b));
+        assert_eq!(AccountIdInput::Str("0X1a2b".into()).to_u64(), Some(0x1a2b));
+        assert_eq!(AccountIdInput::Str("  6789 ".into()).to_u64(), Some(6789));
+        assert_eq!(AccountIdInput::Num(6789).to_u64(), Some(6789));
+    }
+
+    #[test]
+    fn rejects_zero_and_rubbish() {
+        // Zero means "no account" — clearing a slot is its own endpoint, so
+        // writing zero through activate would be a confusing way to do it.
+        assert_eq!(AccountIdInput::Num(0).to_u64(), None);
+        assert_eq!(AccountIdInput::Str("0".into()).to_u64(), None);
+        assert_eq!(AccountIdInput::Str("0x0".into()).to_u64(), None);
+        assert_eq!(AccountIdInput::Str("".into()).to_u64(), None);
+        assert_eq!(AccountIdInput::Str("0x".into()).to_u64(), None);
+        assert_eq!(AccountIdInput::Str("nonsense".into()).to_u64(), None);
+        // Would overflow u64 — must not wrap into a valid-looking id.
+        assert_eq!(
+            AccountIdInput::Str("0x1ffffffffffffffff".into()).to_u64(),
+            None
+        );
     }
 }

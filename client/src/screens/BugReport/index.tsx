@@ -41,7 +41,7 @@ import { buildPs5Snapshot } from "../../lib/ps5Snapshot";
 import { ensurePayloadCurrent } from "../../lib/ensurePayloadCurrent";
 import { hostOf } from "../../lib/addr";
 import { flushDiskLogNow } from "../../state/logs";
-import { openReportChannel } from "../../lib/reportProblem";
+import { openReportChannel, openGithubIssues } from "../../lib/reportProblem";
 import type { SavedShot } from "../../lib/captureScreenshot";
 import type { LogLevel } from "../../state/logs";
 import { isTauriEnv } from "../../lib/tauriEnv";
@@ -752,14 +752,22 @@ export default function BugReportScreen() {
               </p>
               <p className="mt-3 text-sm">
                 {tr(
-                  "bug_report_post_hint",
+                  "bug_report_post_hint_v2",
                   undefined,
-                  "Post this .zip in the #bugs-report channel on Discord, with a short description.",
+                  "Now send it somewhere it will be seen: open an issue on GitHub and attach the .zip, or post it in the Discord bug-report channel. GitHub is better for anything that needs tracking to a fix; Discord is quicker if you just want to ask whether it is a known problem. Either way, include a short description of what you were doing.",
                 )}
               </p>
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <Button
                   variant="primary"
+                  size="sm"
+                  leftIcon={<ExternalLink size={12} />}
+                  onClick={() => void openGithubIssues()}
+                >
+                  {tr("bug_report_open_github", undefined, "Open GitHub issues")}
+                </Button>
+                <Button
+                  variant="secondary"
                   size="sm"
                   leftIcon={<ExternalLink size={12} />}
                   onClick={() => void openReportChannel()}
