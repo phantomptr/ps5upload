@@ -7,8 +7,10 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 pub mod cnt;
+pub mod cnt_write;
 pub mod crypto;
 pub mod fih;
+pub mod fih_write;
 pub mod flt;
 pub mod inner;
 pub mod keys;
@@ -18,6 +20,7 @@ pub mod outer_write;
 pub mod plan;
 pub mod rsa;
 pub mod si;
+pub mod si_write;
 pub mod source;
 pub mod verify;
 pub mod xts;

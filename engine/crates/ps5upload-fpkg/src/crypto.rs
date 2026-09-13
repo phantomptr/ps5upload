@@ -24,17 +24,25 @@ pub fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     out
 }
 
-/// The PFS image key for a debug package, from its content id and passcode.
-pub fn derive_ekpfs(content_id: &str, passcode: &str) -> [u8; 32] {
+/// A passcode-derived package key for one key index:
+/// `SHA3(SHA3(index as BE32) ‖ SHA3(content id padded to 48) ‖ passcode)`.
+///
+/// Index 1 is the PFS image key; the entry-keys slot carries indices 0..=6.
+pub fn derive_pfs_key(content_id: &str, passcode: &str, index: u32) -> [u8; 32] {
     let mut cid = [0u8; 48];
     let id = content_id.as_bytes();
     let n = id.len().min(48);
     cid[..n].copy_from_slice(&id[..n]);
     let mut buf = Vec::with_capacity(96);
-    buf.extend_from_slice(&sha3(&1u32.to_be_bytes()));
+    buf.extend_from_slice(&sha3(&index.to_be_bytes()));
     buf.extend_from_slice(&sha3(&cid));
     buf.extend_from_slice(passcode.as_bytes());
     sha3(&buf)
+}
+
+/// The PFS image key for a debug package, from its content id and passcode.
+pub fn derive_ekpfs(content_id: &str, passcode: &str) -> [u8; 32] {
+    derive_pfs_key(content_id, passcode, 1)
 }
 
 pub struct XtsKeys {
