@@ -88,7 +88,7 @@ Plan:
 | Encryption mode | **Native** (AES-XTS, passcode-derived) first; `PlaintextNoAuth` later | Native is what existing debug FPKGs use and installs with kstuff-lite alone. Plaintext also needs drakmor/ppr-patch on the A53 (profiles only 1.00–11.40). |
 | Compression | None in v1 (files stored raw) | Raw storage is a valid per-file store rule; Kraken is a large separate project. |
 | Default output folder | `~/Downloads/fpkgs` (configurable) | User request. |
-| Sony key material | **User-supplied**, validated by fingerprint, not shipped | Same rule as the backport corpus: Sony material is not ours to redistribute. Hardware tests decide which keys are actually required. |
+| Sony key material | **Built in**, like LibProsperoPKG and PSVIETHOA (decided by the maintainer 2026-09-13), isolated in one `keys.rs` module so it can move to a user-supplied file later | Every existing FPKG builder signs with the leaked publishing keys; an unsigned package's acceptance is unproven. The maintainer accepted the distribution risk. |
 
 ### Format facts
 
