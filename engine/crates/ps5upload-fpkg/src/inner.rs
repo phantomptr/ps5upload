@@ -61,13 +61,6 @@ pub fn keystone(passcode: &str) -> [u8; 96] {
     out
 }
 
-fn pad_to_block(buf: &mut Vec<u8>) {
-    let rem = buf.len() % BLOCK as usize;
-    if rem != 0 {
-        buf.resize(buf.len() + (BLOCK as usize - rem), 0);
-    }
-}
-
 /// The 0x100-byte block-info table that sits between the data and the metadata.
 ///
 /// The last entry encodes the uroot payload size: `swap24(0x27373C - 4*Σ mod 0x40000)`,
