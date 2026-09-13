@@ -7,6 +7,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 pub mod crypto;
+pub mod xts;
 
 /// Every PFS and finalized-image block is 64 KiB.
 pub const BLOCK: u64 = 0x10000;
