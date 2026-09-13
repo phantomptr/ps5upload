@@ -50,7 +50,7 @@ pub struct Cnt {
     pub entries: Vec<Entry>,
 }
 
-/// Read the container at `cnt_offset` through the end of its last entry.
+/// Read the container at `cnt_offset` through the end of its body region.
 pub fn read(file: &mut PkgFile, cnt_offset: u64) -> Result<Cnt> {
     let head = file.read_at(cnt_offset, HEADER_REGION)?;
     if be32(&head, 0) != MAGIC {
@@ -59,7 +59,9 @@ pub fn read(file: &mut PkgFile, cnt_offset: u64) -> Result<Cnt> {
     let count = be32(&head, 0x10) as usize;
     let table = be32(&head, 0x18) as usize;
     let table_bytes = file.read_at(cnt_offset + table as u64, count * ENTRY_LEN)?;
-    let mut end = table + count * ENTRY_LEN;
+    // The body region can reach past the last entry (the body digest covers it), so
+    // size the read by the header's body offset/size as well.
+    let mut end = (table + count * ENTRY_LEN).max((be64(&head, 0x20) + be64(&head, 0x28)) as usize);
     for i in 0..count {
         let o = i * ENTRY_LEN;
         let off = be32(&table_bytes, o + 16) as usize;
@@ -118,6 +120,94 @@ impl Cnt {
     /// `CNT+0xFE0 == SHA3(CNT[0..0xFE0])`.
     pub fn package_digest_ok(&self) -> bool {
         sha3(&self.bytes[..0xFE0]) == self.bytes[0xFE0..0x1000]
+    }
+
+    /// `CNT+0x100 == SHA3(CNT[off .. off+size])` with `off`/`size` from the header fields.
+    ///
+    /// Measured on the three real samples.
+    pub fn header_rollup_ok(&self) -> bool {
+        let off = be64(&self.bytes, 0x20) as usize;
+        let size = be32(&self.bytes, 0x1C) as usize;
+        let pre = self.bytes.get(off..off + size);
+        pre.is_some_and(|p| sha3(p) == self.bytes[0x100..0x120])
+    }
+
+    /// `CNT+0x160 == SHA3(body region)`, the region the header's body offset/size locate.
+    pub fn body_digest_ok(&self) -> bool {
+        let off = self.body_offset as usize;
+        let size = self.body_size as usize;
+        let pre = self.bytes.get(off..off + size);
+        pre.is_some_and(|p| sha3(p) == self.bytes[0x160..0x180])
+    }
+
+    /// `CNT+0x460 == SHA3(finalized-image header block)`.
+    pub fn fih_digest_ok(&self, fih_block: &[u8]) -> bool {
+        sha3(fih_block) == self.bytes[0x460..0x480]
+    }
+
+    /// The `0x510` descriptor pairs hold the image-key and imagedigs entries' (offset, size).
+    pub fn descriptor_ok(&self) -> bool {
+        let pair = |at: usize| (be32(&self.bytes, at), be32(&self.bytes, at + 4));
+        let key = self.entry(ids::IMAGE_KEY).map(|e| (e.offset, e.size));
+        let digests = self.entry(ids::IMAGE_DIGESTS).map(|e| (e.offset, e.size));
+        key == Some(pair(0x510)) && digests == Some(pair(0x518))
+    }
+
+    /// Recomputes the GeneralDigests slots (entry `0x0080`) that the package carries the
+    /// inputs for. Each formula was verified on `webbrowser.pkg` on 2026-09-13.
+    ///
+    /// Slots, in table order: Content, Game, Header, System, MajorParam, Param, Playgo,
+    /// Trophy, Manual, Keymap, Origin, Target, OriginGame, TargetGame.
+    pub fn general_digests(&self, game_digest: &[u8; 32]) -> Vec<(&'static str, bool)> {
+        let Some(gd) = self.entry(ids::GENERAL_DIGESTS).map(|e| self.payload(e)) else {
+            return Vec::new();
+        };
+        let slot = |i: usize| gd.get(0x20 + i * 32..0x20 + (i + 1) * 32);
+        let matches = |i: usize, digest: &[u8; 32]| slot(i).is_some_and(|s| s == digest);
+        let concat = |digests: &[[u8; 32]]| {
+            let mut pre = Vec::with_capacity(digests.len() * 32);
+            for d in digests {
+                pre.extend_from_slice(d);
+            }
+            sha3(&pre)
+        };
+        let entry_digest = |id: u32| self.entry(id).map(|e| sha3(self.payload(e)));
+
+        let mut out = Vec::new();
+        {
+            let mut pre = Vec::with_capacity(0x38 + 64);
+            pre.extend_from_slice(&self.bytes[0x40..0x78]);
+            pre.extend_from_slice(game_digest);
+            pre.extend_from_slice(&[0u8; 32]);
+            let expected = sha3(&pre);
+            out.push(("cnt general digest content", matches(0, &expected)));
+        }
+        out.push(("cnt general digest game", matches(1, game_digest)));
+        {
+            let mut pre = Vec::with_capacity(0xC0);
+            pre.extend_from_slice(&self.bytes[0..0x40]);
+            pre.extend_from_slice(&self.bytes[0x400..0x480]);
+            let expected = sha3(&pre);
+            out.push(("cnt general digest header", matches(2, &expected)));
+        }
+        if let (Some(png), Some(dds)) = (entry_digest(ids::ICON0_PNG), entry_digest(ids::ICON0_DDS))
+        {
+            let expected = concat(&[png, dds]);
+            out.push(("cnt general digest system", matches(3, &expected)));
+        }
+        if let (Some(chunk), Some(hash), Some(ficm)) = (
+            entry_digest(ids::PLAYGO_CHUNK),
+            entry_digest(ids::PLAYGO_HASH_TABLE),
+            entry_digest(ids::PLAYGO_FICM),
+        ) {
+            let expected = concat(&[chunk, hash, ficm]);
+            out.push(("cnt general digest playgo", matches(6, &expected)));
+        }
+        if let Some(param) = entry_digest(ids::PARAM_JSON) {
+            out.push(("cnt general digest param", matches(5, &param)));
+        }
+        out.push(("cnt general digest target", matches(11, game_digest)));
+        out
     }
 
     /// Whether `CNT[at..at+32]` holds `SHA3(payload of entry id)`.

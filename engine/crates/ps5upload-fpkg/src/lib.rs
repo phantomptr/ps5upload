@@ -9,6 +9,7 @@ use std::path::Path;
 pub mod cnt;
 pub mod crypto;
 pub mod fih;
+pub mod flt;
 pub mod outer;
 pub mod si;
 pub mod verify;

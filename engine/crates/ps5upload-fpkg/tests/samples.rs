@@ -10,7 +10,11 @@ fn sample_dir() -> std::path::PathBuf {
 #[test]
 fn every_check_passes_on_real_debug_samples() {
     let mut checked = 0;
-    for name in ["webbrowser.pkg", "EP7579-PPSA17599_00-EXP33DLC10000PS5.pkg"] {
+    for name in [
+        "webbrowser.pkg",
+        "EP7579-PPSA17599_00-EXP33DLC10000PS5.pkg",
+        "Crimson.Desert.DLC.Unlocker-DUPLEX.pkg",
+    ] {
         let path = sample_dir().join(name);
         if !path.exists() {
             eprintln!("skip: {} not present", path.display());

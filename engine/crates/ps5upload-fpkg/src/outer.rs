@@ -7,6 +7,12 @@ use crate::xts::{Xts, SIGNED_SECTOR_FLAG};
 use crate::{format_err, i32le, le16, le32, le64, PkgFile, Result, BLOCK};
 
 pub const DINODE_LEN: usize = 0x2C8;
+/// First direct block signature (32-byte digest + u32 block = 36-byte stride).
+const DIRECT_AT: usize = 0x64;
+/// First indirect block signature; the 36-byte stride continues past the 12 direct slots.
+/// The samples never use indirect blocks, so this offset is structural, not measured.
+const INDIRECT_AT: usize = DIRECT_AT + 12 * 36;
+const BLOCK_SIG_LEN: usize = 36;
 const SUPERBLOCK_MAGIC: u64 = 20_130_315;
 const ICV: std::ops::Range<usize> = 0x380..0x3A0;
 const SIGNED_REGION: usize = 0x5A0;
@@ -180,8 +186,12 @@ impl OuterImage {
                     size: le64(table, o + 8),
                     size_compressed: le64(table, o + 0x10),
                     blocks: le32(table, o + 0x60),
-                    direct: std::array::from_fn(|k| block_sig(table, o + 0x64 + k * 36)),
-                    indirect: std::array::from_fn(|k| block_sig(table, o + 0x1F4 + k * 36)),
+                    direct: std::array::from_fn(|k| {
+                        block_sig(table, o + DIRECT_AT + k * BLOCK_SIG_LEN)
+                    }),
+                    indirect: std::array::from_fn(|k| {
+                        block_sig(table, o + INDIRECT_AT + k * BLOCK_SIG_LEN)
+                    }),
                 }
             })
             .collect()
@@ -216,6 +226,34 @@ impl OuterImage {
 mod tests {
     use super::*;
     use crate::{cnt, crypto::DEFAULT_PASSCODE, fih};
+
+    /// The samples only use direct blocks, so the indirect offset is structural: it must
+    /// continue the 36-byte stride after the twelve direct slots.
+    #[test]
+    fn indirect_blocks_follow_the_direct_stride() {
+        let mut table = vec![0u8; crate::BLOCK as usize];
+        table[0x60..0x64].copy_from_slice(&13u32.to_le_bytes());
+        let direct0 = DIRECT_AT;
+        table[direct0 + 32..direct0 + 36].copy_from_slice(&7u32.to_le_bytes());
+        let indirect0 = DIRECT_AT + 12 * BLOCK_SIG_LEN;
+        table[indirect0 + 32..indirect0 + 36].copy_from_slice(&9u32.to_le_bytes());
+        let img = OuterImage {
+            superblock: Superblock {
+                index: 0,
+                dinode_count: 1,
+                ndblock: 1,
+                inode_table_block: 0,
+                inode_table_digest: [0; 32],
+                seed: [0; 16],
+                icv_ok: true,
+            },
+            plaintext: vec![table],
+            verdicts: vec![],
+        };
+        let nodes = img.dinodes();
+        assert_eq!(nodes[0].direct[0].block, 7);
+        assert_eq!(nodes[0].indirect[0].block, 9);
+    }
 
     #[test]
     fn dlc_sample_outer_tree() {

@@ -6,7 +6,7 @@ use std::path::Path;
 use crate::cnt::{self, EntryDigest};
 use crate::crypto::sha3;
 use crate::outer::{self, BlockKind};
-use crate::{fih, si, PkgFile, Result};
+use crate::{fih, flt, le32, si, PkgFile, Result};
 
 pub struct Check {
     pub name: String,
@@ -44,10 +44,25 @@ impl fmt::Display for Report {
     }
 }
 
+/// A dinode's file bytes, gathered from the plaintext blocks it points at.
+fn file_data(img: &outer::OuterImage, node: Option<&outer::Dinode>) -> Vec<u8> {
+    let Some(n) = node else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for d in n.direct.iter().take(n.blocks.min(12) as usize) {
+        if let Some(block) = img.plaintext.get(d.block as usize) {
+            out.extend_from_slice(block);
+        }
+    }
+    out.truncate(n.size as usize);
+    out
+}
+
 pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
     let mut file = PkgFile::open(path)?;
-    let head = file.read_at(0, fih::HEADER_LEN)?;
-    let fih = fih::parse(&head)?;
+    let fih_block = file.read_at(0, crate::BLOCK as usize)?;
+    let fih = fih::parse(&fih_block)?;
     let cnt = cnt::read(&mut file, fih.cnt_offset)?;
     let mut r = Report {
         content_id: cnt.content_id.clone(),
@@ -66,6 +81,14 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
     );
     r.push("cnt package digest", cnt.package_digest_ok(), "");
     r.push("cnt digest-table digest", cnt.digest_table_digest_ok(), "");
+    r.push("cnt header rollup digest", cnt.header_rollup_ok(), "");
+    r.push("cnt body digest", cnt.body_digest_ok(), "");
+    r.push(
+        "cnt finalized-image digest",
+        cnt.fih_digest_ok(&fih_block),
+        "",
+    );
+    r.push("cnt descriptor pairs", cnt.descriptor_ok(), "");
     r.push(
         "cnt image-key digest",
         cnt.entry_digest_at(cnt::ids::IMAGE_KEY, 0x520),
@@ -94,6 +117,9 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
             general.windows(32).any(|w| w == param),
             "",
         );
+    }
+    for (name, ok) in cnt.general_digests(&fih.game_digest) {
+        r.push(name, ok, "");
     }
 
     let img = outer::open(&mut file, &fih, &cnt, passcode)?;
@@ -142,6 +168,35 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
             && uroot.iter().any(|n| n == "naps_pkg_layout.dat"),
         uroot.join(", "),
     );
+
+    // The outer flat-path table (inode 1) hashes each uroot dirent name to its inode.
+    {
+        let flt = file_data(&img, nodes.get(1));
+        let count = flt.get(0x2C..0x30).map(|b| le32(b, 0)).unwrap_or(0) as usize;
+        let mut checked = 0usize;
+        let mut ok = count > 0;
+        for d in nodes.get(2).map(|n| img.dirents(n)).unwrap_or_default() {
+            if d.name == "." || d.name == ".." {
+                continue;
+            }
+            let want = flt::hash_path(&d.name);
+            let found = (0..count).any(|i| {
+                let e = 0x40 + i * 16;
+                flt.get(e..e + 16).is_some_and(|rec| {
+                    u64::from_le_bytes(rec[..8].try_into().unwrap()) == want
+                        && (u64::from_le_bytes(rec[8..].try_into().unwrap()) & 0xFF_FFFF)
+                            == d.ino as u64
+                })
+            });
+            checked += 1;
+            ok &= found;
+        }
+        r.push(
+            "outer flat-path table hashes the uroot names",
+            ok && checked > 0,
+            format!("{checked} name(s), {count} table entries"),
+        );
+    }
 
     match si::read(&mut file)? {
         Some(s) => {
