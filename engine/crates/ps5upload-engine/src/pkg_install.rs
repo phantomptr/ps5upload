@@ -398,13 +398,13 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
             "/api/pkg/dpi-direct-install",
             post(dpi_direct_install_handler),
         )
-        // Filename component is informational only — the session UUID
-        // is the actual lookup key. We allow ANY {filename} so the URL
-        // can carry the pkg's canonical `<ContentID>.pkg` name that
+        // The session UUID is the lookup key. We allow ANY {filename} so the
+        // URL can carry the pkg's canonical `<ContentID>.pkg` name that
         // Sony's installer cross-checks against the pkg header. Without
         // this Sony rejects with 0x80B21106 on user-renamed pkgs (file
         // header says "FOO" but URL ends in "bar.pkg" — installer treats
-        // them as inconsistent).
+        // them as inconsistent). A name ending in `.crc` is the console
+        // asking for the package's PlayGo CRC table (#319); see serve_handler.
         .route("/pkg-host/{session}/{filename}", get(serve_handler))
         .with_state(state)
 }
@@ -3462,13 +3462,13 @@ async fn dpi_direct_install_handler(
 async fn serve_handler(
     State(state): State<PkgInstallStateHandle>,
     // Two path params for the `{session}/{filename}` pattern. The
-    // `filename` is informational only — content_id canonicalisation
-    // for Sony's installer header cross-check — and never participates
-    // in authentication (session UUID is the only auth signal). It
-    // MUST be extracted here even though we discard it, or axum returns
-    // 500 ErrorMissingPathParams on every fetch and BGFT sees
-    // 0x80B22404 PlayGo HTTP 404 (caught in Round-1 v2.16.1 audit).
-    AxumPath((session, _filename)): AxumPath<(String, String)>,
+    // `filename` never participates in authentication (session UUID is the
+    // only auth signal). A name ending in `.crc` selects the package's
+    // PlayGo CRC table; any other name serves the package itself, keeping
+    // the content_id-canonical name Sony's installer cross-checks. It MUST
+    // be extracted, or axum returns 500 ErrorMissingPathParams on every
+    // fetch and BGFT sees 0x80B22404 PlayGo HTTP 404 (Round-1 v2.16.1 audit).
+    AxumPath((session, filename)): AxumPath<(String, String)>,
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
 ) -> Response<Body> {
@@ -3496,8 +3496,9 @@ async fn serve_handler(
     };
     let session_known = session_lookup.is_some();
     crate::log_info!(
-        "pkg-host fetch: session={} known={} peer={} range={:?} user-agent={:?}",
+        "pkg-host fetch: session={} name={} known={} peer={} range={:?} user-agent={:?}",
         session,
+        filename,
         session_known,
         peer.ip(),
         range,
@@ -3553,7 +3554,44 @@ async fn serve_handler(
         );
     }
 
-    let total = session.total_size;
+    // A debug FPKG makes the console ask for `<content-id>.crc` beside the
+    // package. Answering that with package bytes failed every such install
+    // with 0x80b211cd (#319); serve the real CRC table or a 404 instead.
+    let source = if crate::pkg_sidecar::is_crc_request(&filename) {
+        let lookup_session = session.clone();
+        let lookup_name = filename.clone();
+        match tokio::task::spawn_blocking(move || resolve_crc(&lookup_session, &lookup_name)).await
+        {
+            Ok(Ok(Some(src))) => src,
+            Ok(Ok(None)) => {
+                crate::log_info!(
+                    "pkg-host crc: no playgo-chunk.crc in the package or beside it: session={} name={}",
+                    session.id,
+                    filename,
+                );
+                return plain_response(
+                    StatusCode::NOT_FOUND,
+                    "no playgo-chunk.crc for this package",
+                );
+            }
+            Ok(Err(e)) => {
+                return plain_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("crc lookup failed: {e}"),
+                )
+            }
+            Err(e) => {
+                return plain_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("crc lookup task panicked/cancelled: {e}"),
+                )
+            }
+        }
+    } else {
+        ServeSource::Package
+    };
+
+    let total = source.len(session.total_size);
     let served_session_id = session.id.clone();
     let (start, end) = match parse_range_header(&headers, total) {
         Ok(r) => r,
@@ -3565,22 +3603,29 @@ async fn serve_handler(
     // consoles these synchronous disk reads would otherwise park reactor
     // worker threads, stalling every console's serving. `session` isn't used
     // past this point, so move it into the blocking task.
-    let chunk =
-        match tokio::task::spawn_blocking(move || read_split_range(&session, start, end)).await {
-            Ok(Ok(b)) => b,
-            Ok(Err(e)) => {
-                return plain_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("read failed: {e}"),
-                )
-            }
-            Err(e) => {
-                return plain_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("read task panicked/cancelled: {e}"),
-                )
-            }
-        };
+    let chunk = match tokio::task::spawn_blocking(move || match source {
+        ServeSource::Package => read_split_range(&session, start, end),
+        ServeSource::EmbeddedCrc { offset, .. } => {
+            read_split_range(&session, offset + start, offset + end)
+        }
+        ServeSource::SiblingCrc(bytes) => Ok(bytes[start as usize..=end as usize].to_vec()),
+    })
+    .await
+    {
+        Ok(Ok(b)) => b,
+        Ok(Err(e)) => {
+            return plain_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("read failed: {e}"),
+            )
+        }
+        Err(e) => {
+            return plain_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("read task panicked/cancelled: {e}"),
+            )
+        }
+    };
 
     let len = chunk.len() as u64;
     {
@@ -3753,6 +3798,63 @@ fn parse_range_header(headers: &HeaderMap, total: u64) -> Result<(u64, u64), ()>
         return Ok((start, start + PKG_HOST_RESPONSE_BYTES_CAP - 1));
     }
     Ok((start, end))
+}
+
+/// What a `/pkg-host/{session}/{filename}` request resolves to.
+enum ServeSource {
+    /// The package itself (every non-`.crc` filename, as before).
+    Package,
+    /// `playgo-chunk.crc` stored inside the package's trailing ZIP.
+    EmbeddedCrc { offset: u64, len: u64 },
+    /// A `<name>.crc` file sitting next to the package on this host.
+    SiblingCrc(Arc<Vec<u8>>),
+}
+
+impl ServeSource {
+    fn len(&self, package_size: u64) -> u64 {
+        match self {
+            ServeSource::Package => package_size,
+            ServeSource::EmbeddedCrc { len, .. } => *len,
+            ServeSource::SiblingCrc(bytes) => bytes.len() as u64,
+        }
+    }
+}
+
+/// Largest sibling `.crc` we read into memory. A 200 GB package needs 12 MiB.
+const SIBLING_CRC_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Resolve a `.crc` request: the member inside the package wins (it is the one
+/// the package was finalized with), then a sibling file, else `None` (404).
+fn resolve_crc(session: &InstallSession, filename: &str) -> std::io::Result<Option<ServeSource>> {
+    let located = crate::pkg_sidecar::locate_playgo_crc(session.total_size, |off, n| {
+        // read_split_range is inclusive and cannot express an empty range.
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        read_split_range(session, off, off + n - 1)
+    })?;
+    if let Some((offset, len)) = located {
+        return Ok(Some(ServeSource::EmbeddedCrc { offset, len }));
+    }
+    let plain_name = !filename.is_empty()
+        && filename != ".crc"
+        && !filename.contains(['/', '\\'])
+        && !filename.contains("..");
+    if !plain_name {
+        return Ok(None);
+    }
+    let Some(dir) = session.parts.first().and_then(|p| p.parent()) else {
+        return Ok(None);
+    };
+    let candidate = dir.join(filename);
+    match std::fs::metadata(&candidate) {
+        Ok(m) if m.is_file() && m.len() <= SIBLING_CRC_MAX_BYTES => Ok(Some(
+            ServeSource::SiblingCrc(Arc::new(std::fs::read(&candidate)?)),
+        )),
+        Ok(_) => Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 /// Read a byte range `[start, end]` (inclusive) from the split-pkg
@@ -4677,6 +4779,85 @@ mod tests {
             accepted_unverified: false,
             requests_served: 0,
             bytes_served: 0,
+        }
+    }
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("ps5upload-crc-{tag}-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn write_fake_fpkg(dir: &std::path::Path, crc: &[u8]) -> (PathBuf, u64) {
+        use std::io::Write;
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        zw.start_file(
+            "config/UP0000-PPSA01234_00-TESTGAME00000000/playgo-chunk.crc",
+            opts,
+        )
+        .unwrap();
+        zw.write_all(crc).unwrap();
+        let mut bytes = vec![0xCD; 0x10000];
+        bytes.extend_from_slice(&zw.finish().unwrap().into_inner());
+        let path = dir.join("game.pkg");
+        std::fs::write(&path, &bytes).unwrap();
+        (path, bytes.len() as u64)
+    }
+
+    #[test]
+    fn crc_request_served_from_embedded_zip() {
+        let dir = scratch_dir("embedded");
+        let crc: Vec<u8> = (0u8..76).collect();
+        let (path, size) = write_fake_fpkg(&dir, &crc);
+        let s = dummy_session(vec![(path, size)]);
+        match resolve_crc(&s, "UP0000-PPSA01234_00-TESTGAME00000000.crc").unwrap() {
+            Some(ServeSource::EmbeddedCrc { offset, len }) => {
+                assert_eq!(len, 76);
+                assert_eq!(read_split_range(&s, offset, offset + len - 1).unwrap(), crc);
+            }
+            _ => panic!("expected the embedded member"),
+        }
+    }
+
+    #[test]
+    fn crc_request_falls_back_to_sibling_file() {
+        let dir = scratch_dir("sibling");
+        let pkg = dir.join("game.pkg");
+        std::fs::write(&pkg, vec![0u8; 0x20000]).unwrap();
+        std::fs::write(
+            dir.join("UP0000-PPSA01234_00-TESTGAME00000000.crc"),
+            b"sidecar",
+        )
+        .unwrap();
+        let s = dummy_session(vec![(pkg, 0x20000)]);
+        match resolve_crc(&s, "UP0000-PPSA01234_00-TESTGAME00000000.crc").unwrap() {
+            Some(ServeSource::SiblingCrc(bytes)) => assert_eq!(&bytes[..], b"sidecar"),
+            _ => panic!("expected the sibling file"),
+        }
+    }
+
+    #[test]
+    fn crc_request_without_any_source_is_none() {
+        let dir = scratch_dir("none");
+        let pkg = dir.join("game.pkg");
+        std::fs::write(&pkg, vec![0u8; 0x20000]).unwrap();
+        let s = dummy_session(vec![(pkg, 0x20000)]);
+        assert!(resolve_crc(&s, "UP0000-PPSA01234_00-TESTGAME00000000.crc")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn crc_request_never_leaves_the_package_directory() {
+        let dir = scratch_dir("traversal");
+        let pkg = dir.join("game.pkg");
+        std::fs::write(&pkg, vec![0u8; 0x20000]).unwrap();
+        std::fs::write(dir.parent().unwrap().join("evil.crc"), b"x").unwrap();
+        let s = dummy_session(vec![(pkg, 0x20000)]);
+        for name in ["../evil.crc", "..\\evil.crc", "sub/evil.crc", ".crc"] {
+            assert!(resolve_crc(&s, name).unwrap().is_none(), "{name}");
         }
     }
 
