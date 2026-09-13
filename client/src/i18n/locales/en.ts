@@ -2592,7 +2592,12 @@ roster_order_hint: "This order sets the console tabs and the picker.",
 
   // FanCurve extras
   fanCurve_confirm_title: "Apply fan curve?",
-  fanCurve_preview: "Preview",
+  fanCurve_presets: "Presets",
+fanCurve_preset_quiet: "Quiet",
+fanCurve_preset_balanced: "Balanced",
+fanCurve_preset_cool: "Cool",
+fanCurve_preview_aria: "Fan duty against temperature",
+fanCurve_preview: "Preview",
   fanCurve_points: "Points",
   fanCurve_add: "Add point",
 

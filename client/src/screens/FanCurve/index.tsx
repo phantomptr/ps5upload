@@ -10,10 +10,86 @@ import {
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useTr } from "../../state/lang";
 import { useConnectionStore } from "../../state/connection";
+import { useSensors } from "../../state/sensors";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { transferAddr } from "../../lib/addr";
 import { fanCurveSet, fanCurveGet, type FanCurvePoint } from "../../api/ps5";
 import { humanizePs5Error } from "../../lib/humanizeError";
+
+/**
+ * Duty the curve prescribes at `t` degrees.
+ *
+ * Linear between the two surrounding points and flat outside the ends —
+ * matching how the payload applies the curve, so the "you are here" marker
+ * cannot disagree with what the console is actually doing. `points` must be
+ * sorted by temperature. Exported so that agreement is a test, not a claim.
+ */
+export function dutyAtTemp(
+  points: readonly FanCurvePoint[],
+  t: number,
+): number {
+  if (points.length === 0) return 0;
+  if (t <= points[0].temp_c) return points[0].duty_pct;
+  const last = points[points.length - 1];
+  if (t >= last.temp_c) return last.duty_pct;
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    if (t >= a.temp_c && t <= b.temp_c) {
+      const span = b.temp_c - a.temp_c;
+      // Two points at the same temperature: take the later one rather than
+      // dividing by zero.
+      if (span <= 0) return b.duty_pct;
+      const k = (t - a.temp_c) / span;
+      return Math.round(a.duty_pct + k * (b.duty_pct - a.duty_pct));
+    }
+  }
+  return last.duty_pct;
+}
+
+/** Named starting points. Seeds the editor only — every point stays editable.
+ *  The common ask is "quieter" or "cooler", not a specific duty at a specific
+ *  degree, which is what the four number fields alone forced you to think in. */
+const PRESETS: ReadonlyArray<{
+  id: string;
+  key: string;
+  fallback: string;
+  points: FanCurvePoint[];
+}> = [
+  {
+    id: "quiet",
+    key: "fanCurve_preset_quiet",
+    fallback: "Quiet",
+    points: [
+      { temp_c: 55, duty_pct: 20 },
+      { temp_c: 70, duty_pct: 40 },
+      { temp_c: 80, duty_pct: 70 },
+      { temp_c: 90, duty_pct: 100 },
+    ],
+  },
+  {
+    id: "balanced",
+    key: "fanCurve_preset_balanced",
+    fallback: "Balanced",
+    points: [
+      { temp_c: 50, duty_pct: 30 },
+      { temp_c: 65, duty_pct: 55 },
+      { temp_c: 75, duty_pct: 80 },
+      { temp_c: 85, duty_pct: 100 },
+    ],
+  },
+  {
+    id: "cool",
+    key: "fanCurve_preset_cool",
+    fallback: "Cool",
+    points: [
+      { temp_c: 45, duty_pct: 45 },
+      { temp_c: 60, duty_pct: 70 },
+      { temp_c: 70, duty_pct: 90 },
+      { temp_c: 80, duty_pct: 100 },
+    ],
+  },
+];
 
 const DEFAULT_POINTS: FanCurvePoint[] = [
   { temp_c: 50, duty_pct: 30 },
@@ -29,6 +105,13 @@ export default function FanCurveScreen() {
   const addr = host ? transferAddr(host) : "";
   const { confirm, dialog: confirmDialog } = useConfirm();
   const guard = useStaleHostGuard();
+  // Live CPU temperature for the "you are here" marker. The sensors store
+  // already polls while a subscriber is mounted, and pauses when the payload is
+  // down or a transfer owns the console — so this costs nothing beyond the time
+  // this screen is open. Null when unavailable: the marker is then not drawn at
+  // all rather than parked at a guessed position.
+  const { sample } = useSensors(host ?? "");
+  const liveTemp = sample?.temps?.cpu_temp ?? null;
 
   const [points, setPoints] = useState<FanCurvePoint[]>(DEFAULT_POINTS);
   const [busy, setBusy] = useState(false);
@@ -112,14 +195,28 @@ export default function FanCurveScreen() {
   }, [addr, confirm, tr, sorted, guard]);
 
   // SVG preview
-  const W = 320;
-  const H = 120;
-  const PAD = 24;
+  // Drawn in a fixed viewBox and scaled by CSS, so the graph fills whatever
+  // width it is given instead of staying a 320px thumbnail on a 27" monitor.
+  // Left/bottom padding is larger than the rest to make room for real axis
+  // labels — the old uniform 24px had nowhere to put them.
+  const W = 640;
+  const H = 260;
+  const PAD_L = 44;
+  const PAD_R = 16;
+  const PAD_T = 18;
+  const PAD_B = 34;
   const tempMin = 30;
   const tempMax = 95;
   const xFor = (t: number) =>
-    PAD + ((t - tempMin) / (tempMax - tempMin)) * (W - PAD * 2);
-  const yFor = (p: number) => PAD + (1 - p / 100) * (H - PAD * 2);
+    PAD_L + ((t - tempMin) / (tempMax - tempMin)) * (W - PAD_L - PAD_R);
+  const yFor = (p: number) => PAD_T + (1 - p / 100) * (H - PAD_T - PAD_B);
+  /** Curve plus the two baseline corners, so the area under it can be filled. */
+  const areaPath =
+    sorted.length > 1
+      ? `M ${xFor(sorted[0].temp_c)},${yFor(0)} ` +
+        sorted.map((p) => `L ${xFor(p.temp_c)},${yFor(p.duty_pct)}`).join(" ") +
+        ` L ${xFor(sorted[sorted.length - 1].temp_c)},${yFor(0)} Z`
+      : "";
   const polyPath = sorted
     .map((p) => `${xFor(p.temp_c).toFixed(1)},${yFor(p.duty_pct).toFixed(1)}`)
     .join(" ");
@@ -170,52 +267,134 @@ export default function FanCurveScreen() {
           <>
             {/* Visual preview */}
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
-              <h3 className="mb-3 flex items-center gap-2 text-sm font-medium text-[var(--color-text)]">
-                <Activity size={16} />
-                {tr("fanCurve_preview", undefined, "Curve preview")}
-              </h3>
-              <svg width={W} height={H} className="block max-w-full">
-                {[0, 50, 100].map((p) => (
-                  <line
-                    key={p}
-                    x1={PAD}
-                    y1={yFor(p)}
-                    x2={W - PAD}
-                    y2={yFor(p)}
-                    stroke="var(--color-border)"
-                    strokeDasharray="2 3"
-                  />
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <h3 className="flex items-center gap-2 text-sm font-medium text-[var(--color-text)]">
+                  <Activity size={16} />
+                  {tr("fanCurve_preview", undefined, "Curve preview")}
+                </h3>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-xs text-[var(--color-muted)]">
+                    {tr("fanCurve_presets", undefined, "Presets")}
+                  </span>
+                  {PRESETS.map((preset) => (
+                    <Button
+                      key={preset.id}
+                      variant="ghost"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => {
+                        setPoints(preset.points.map((pt) => ({ ...pt })));
+                        setApplied(false);
+                      }}
+                    >
+                      {tr(preset.key, undefined, preset.fallback)}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+              <svg
+                viewBox={`0 0 ${W} ${H}`}
+                className="block h-auto w-full"
+                role="img"
+                aria-label={tr(
+                  "fanCurve_preview_aria",
+                  undefined,
+                  "Fan duty against temperature",
+                )}
+              >
+                {/* Duty gridlines every 25%, each labelled. The old chart drew
+                    three unlabelled dashes: the shape was visible but you could
+                    not read a value off it. */}
+                {[0, 25, 50, 75, 100].map((p) => (
+                  <g key={p}>
+                    <line
+                      x1={PAD_L}
+                      y1={yFor(p)}
+                      x2={W - PAD_R}
+                      y2={yFor(p)}
+                      stroke="var(--color-border)"
+                      strokeDasharray={p === 0 ? undefined : "2 4"}
+                    />
+                    <text
+                      x={PAD_L - 8}
+                      y={yFor(p) + 3}
+                      fontSize="10"
+                      textAnchor="end"
+                      fill="var(--color-muted)"
+                    >
+                      {p}%
+                    </text>
+                  </g>
                 ))}
+                {[30, 40, 50, 60, 70, 80, 90].map((t) => (
+                  <text
+                    key={t}
+                    x={xFor(t)}
+                    y={H - PAD_B + 16}
+                    fontSize="10"
+                    textAnchor="middle"
+                    fill="var(--color-muted)"
+                  >
+                    {t}°
+                  </text>
+                ))}
+                {areaPath && (
+                  <path d={areaPath} fill="var(--color-accent)" opacity={0.12} />
+                )}
                 {sorted.length > 1 && (
                   <polyline
                     points={polyPath}
                     fill="none"
                     stroke="var(--color-accent)"
-                    strokeWidth={2}
+                    strokeWidth={2.5}
                     strokeLinejoin="round"
+                    strokeLinecap="round"
                   />
                 )}
+                {/* Where the console is RIGHT NOW — the difference between a
+                    shape and a decision, since it shows which part of the curve
+                    is actually in use. Drawn only for a real in-range reading. */}
+                {liveTemp !== null &&
+                  liveTemp >= tempMin &&
+                  liveTemp <= tempMax && (
+                    <g>
+                      <line
+                        x1={xFor(liveTemp)}
+                        y1={PAD_T}
+                        x2={xFor(liveTemp)}
+                        y2={yFor(0)}
+                        stroke="var(--color-good)"
+                        strokeWidth={1.5}
+                        strokeDasharray="3 3"
+                      />
+                      <circle
+                        cx={xFor(liveTemp)}
+                        cy={yFor(dutyAtTemp(sorted, liveTemp))}
+                        r={5}
+                        fill="var(--color-good)"
+                      />
+                      <text
+                        x={xFor(liveTemp)}
+                        y={PAD_T - 5}
+                        fontSize="10"
+                        textAnchor="middle"
+                        fill="var(--color-good)"
+                      >
+                        {liveTemp}° → {dutyAtTemp(sorted, liveTemp)}%
+                      </text>
+                    </g>
+                  )}
                 {sorted.map((p, i) => (
                   <circle
                     key={i}
                     cx={xFor(p.temp_c)}
                     cy={yFor(p.duty_pct)}
-                    r={3}
-                    fill="var(--color-accent)"
+                    r={4.5}
+                    fill="var(--color-surface-2)"
+                    stroke="var(--color-accent)"
+                    strokeWidth={2.5}
                   />
                 ))}
-                <text x={PAD} y={H - 4} fontSize="9" fill="var(--color-muted)">
-                  {tempMin}°C
-                </text>
-                <text
-                  x={W - PAD}
-                  y={H - 4}
-                  fontSize="9"
-                  fill="var(--color-muted)"
-                  textAnchor="end"
-                >
-                  {tempMax}°C
-                </text>
               </svg>
             </div>
 

@@ -92,7 +92,7 @@ import {
  *  so it forces a new row and the cards under it flow as their own band. */
 function GroupHeading({ children }: { children: React.ReactNode }) {
   return (
-    <h2 className="mt-2 border-b border-[var(--color-border)] pb-1.5 text-sm font-semibold text-[var(--color-text)] md:col-span-2 xl:col-span-3">
+    <h2 className="mt-4 border-b border-[var(--color-border)] pb-1.5 text-sm font-semibold text-[var(--color-text)] md:col-span-2 first:mt-0">
       {children}
     </h2>
   );
@@ -101,9 +101,9 @@ function GroupHeading({ children }: { children: React.ReactNode }) {
 function Section({
   title,
   children,
-  /** When true, section spans both columns of the parent grid. Used
-   *  for settings whose body is tall enough (warning card, long
-   *  description) that side-by-side layout would look cramped. */
+  /** When true, the section spans the full grid width instead of sharing a
+   *  row. For settings whose body is tall enough (a warning card, a long
+   *  description) that half-width would look cramped. */
   full = false,
 }: {
   title: string;
@@ -113,8 +113,8 @@ function Section({
   return (
     <section
       className={
-        "rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 " +
-        (full ? "md:col-span-2 xl:col-span-3" : "")
+        "flex h-full flex-col rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 " +
+        (full ? "md:col-span-2" : "")
       }
     >
       <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
@@ -579,10 +579,16 @@ export default function SettingsScreen() {
         )}
       />
 
-      {/* Responsive grid — 2 columns at md, 3 at xl. Short/simple
-          settings pack in; cards with warnings or long descriptions
-          mark themselves `full` and take all columns. */}
-      <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
+      {/* Two columns at md and above, and cards STRETCH to their row.
+          This was three columns at xl with `items-start`, which is what made
+          the page look ragged: every card shrank to its own content, so a
+          rigid grid filled with wildly different heights left holes under the
+          short ones, and eight `full` sections cutting across made it worse.
+          Two columns keeps each card wide enough that the height spread is
+          small, and stretching aligns the rows. The max-width stops the page
+          sprawling edge-to-edge on a wide monitor, where 3 narrow columns of
+          unrelated settings were hardest to scan. */}
+      <div className="mx-auto grid w-full max-w-6xl gap-4 md:grid-cols-2">
         <GroupHeading>
           {tr("settings_group_general", undefined, "General")}
         </GroupHeading>
