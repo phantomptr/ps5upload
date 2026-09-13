@@ -10,6 +10,7 @@ const HEADER_REGION: usize = 0x1000;
 
 pub mod ids {
     pub const DIGESTS: u32 = 0x0001;
+    pub const IMAGE_KEY: u32 = 0x0020;
     pub const GENERAL_DIGESTS: u32 = 0x0080;
     pub const IMAGE_DIGESTS: u32 = 0x040A;
     pub const PARAM_JSON: u32 = 0x2000;
@@ -111,12 +112,21 @@ impl Cnt {
         sha3(&self.bytes[..0xFE0]) == self.bytes[0xFE0..0x1000]
     }
 
-    /// `CNT+0x100 == SHA3(entry 0x0001 payload)`.
-    pub fn digest_table_digest_ok(&self) -> bool {
-        match self.entry(ids::DIGESTS) {
-            Some(e) => sha3(self.payload(e)) == self.bytes[0x100..0x120],
+    /// Whether `CNT[at..at+32]` holds `SHA3(payload of entry id)`.
+    ///
+    /// Measured on both debug samples: the digest table's digest sits at
+    /// `0x140`, the image key's (`0x0020`) at `0x520` and imagedigs' at
+    /// `0x540`.
+    pub fn entry_digest_at(&self, id: u32, at: usize) -> bool {
+        match self.entry(id) {
+            Some(e) => sha3(self.payload(e)) == self.bytes[at..at + 32],
             None => false,
         }
+    }
+
+    /// `CNT+0x140 == SHA3(entry 0x0001 payload)`.
+    pub fn digest_table_digest_ok(&self) -> bool {
+        self.entry_digest_at(ids::DIGESTS, 0x140)
     }
 
     /// Each entry's payload against its slot in the digest table.
@@ -198,7 +208,7 @@ mod tests {
         let d = sha3(payload);
         c[digests_off as usize + 32..digests_off as usize + 64].copy_from_slice(&d);
         let table_digest = sha3(&c[digests_off as usize..digests_off as usize + 64]);
-        c[0x100..0x120].copy_from_slice(&table_digest);
+        c[0x140..0x160].copy_from_slice(&table_digest);
         let pkg = sha3(&c[..0xFE0]);
         c[0xFE0..0x1000].copy_from_slice(&pkg);
         c

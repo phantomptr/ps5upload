@@ -11,6 +11,7 @@ pub mod crypto;
 pub mod fih;
 pub mod outer;
 pub mod si;
+pub mod verify;
 pub mod xts;
 
 /// Every PFS and finalized-image block is 64 KiB.

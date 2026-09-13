@@ -25,9 +25,9 @@
 |---|---|
 | Block size | `0x10000` |
 | FIH (little-endian) | magic `7F 46 49 48` at 0; signed byte at `0x05` (`0x00` debug); format u16 at `0x06` (= 3); PFS offset u64 `0x10`; PFS size u64 `0x18`; game digest `0x30..0x50`; CNT offset u64 `0x58` |
-| CNT (big-endian, offsets relative to CNT start) | magic `7F 43 4E 54`; entry count u32 `0x10`; entry table offset u32 `0x18`; body offset u64 `0x20`; body size u64 `0x28`; content id `0x40..0x64`; digest-table digest `0x100..0x120`; package digest `0xFE0..0x1000` = `SHA3(CNT[0..0xFE0])` |
+| CNT (big-endian, offsets relative to CNT start) | magic `7F 43 4E 54`; entry count u32 `0x10`; entry table offset u32 `0x18`; body offset u64 `0x20`; body size u64 `0x28`; content id `0x40..0x64`; digest-table digest `0x140..0x160` (image-key digest `0x520`, imagedigs digest `0x540`); package digest `0xFE0..0x1000` = `SHA3(CNT[0..0xFE0])` |
 | CNT entry (0x20 bytes) | `id, name_off, flags1, flags2, data_off, data_size` as u32 BE |
-| Entry `0x0001` | 32-byte `SHA3(payload)` per entry in table order; its own slot is zero; `CNT+0x100 = SHA3(entry 0x0001 payload)` |
+| Entry `0x0001` | 32-byte `SHA3(payload)` per entry in table order; its own slot is zero; `CNT+0x140 = SHA3(entry 0x0001 payload)` (plan originally said `0x100`; measurement during Task 6 corrected it) |
 | Entry `0x040A` (imagedigs) | one 32-byte digest per outer block = `SHA3(plaintext block)` **byte-reversed** |
 | Keys | `EKPFS = SHA3(SHA3(BE32 1) ‖ SHA3(content id padded with NUL to 48) ‖ passcode ASCII)`; default passcode `"0"×32`; `K = HMAC-SHA256(key=EKPFS, msg=seed)`; `enc = HMAC-SHA256(key=K, msg=LE32(1) ‖ seed)`; tweak key `enc[0..16]`, data key `enc[16..32]` |
 | XTS | AES-128-XTS, one 64 KiB block per data unit, tweak = sector as 16-byte LE. Data blocks: sector = block index. Signed blocks: sector = `(1<<47) | index`. The superblock block is plaintext. |
