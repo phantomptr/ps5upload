@@ -10,10 +10,18 @@ const HEADER_REGION: usize = 0x1000;
 
 pub mod ids {
     pub const DIGESTS: u32 = 0x0001;
+    pub const ENTRY_KEYS: u32 = 0x0010;
     pub const IMAGE_KEY: u32 = 0x0020;
     pub const GENERAL_DIGESTS: u32 = 0x0080;
+    pub const METAS: u32 = 0x0100;
+    pub const ENTRY_NAMES: u32 = 0x0200;
     pub const IMAGE_DIGESTS: u32 = 0x040A;
+    pub const PLAYGO_CHUNK: u32 = 0x1001;
+    pub const ICON0_PNG: u32 = 0x1200;
+    pub const ICON0_DDS: u32 = 0x1280;
     pub const PARAM_JSON: u32 = 0x2000;
+    pub const PLAYGO_HASH_TABLE: u32 = 0x2010;
+    pub const PLAYGO_FICM: u32 = 0x2011;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
