@@ -40,6 +40,7 @@ mod icon_cache;
 mod local_fs;
 mod log_dedup;
 mod pkg_install;
+mod pkg_sidecar;
 mod smb;
 #[cfg(feature = "webui")]
 mod webui;
