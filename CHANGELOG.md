@@ -4,6 +4,55 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.26.0
+
+**Your account ID, a readable fan curve, and consoles in the order you want them.**
+
+### Profile
+
+- **Your account ID is visible again.** It always reached the app; the screen
+  was throwing it away and showing a dash instead, on every console that has
+  an account.
+- **Both forms are shown, and both copy.** The same account is written one way
+  by the console and another by Remote Play pairing — pasting the wrong one
+  into the Remote Play field simply fails. The Remote Play form is now
+  labelled as such, so there is nothing to work out.
+- **You can change the account ID**, with a warning that spells out what it
+  costs: saves made under the old ID stop being recognised until you put it
+  back. It asks you to confirm, and shows you the old value first.
+- The account section is no longer called "Offline-account slots" unless you
+  actually have an offline-activated account — a normal PSN account lives
+  there too.
+
+### Console
+
+- **The fan curve editor is readable.** Bigger, responsive, with presets, and
+  it tells you the duty cycle at any temperature instead of making you read it
+  off a cramped graph.
+- **Console health explains itself when it is empty.** It used to show a wall
+  of dashes with no hint whether the reading was unsupported, still loading,
+  or genuinely broken. It also no longer trusts a boot count the console does
+  not reliably report.
+
+### Getting around
+
+- **Order your PS5s.** Drag them into the order you want in Manage PS5s, and
+  both the console dropdown and the tabs at the top follow it.
+- **About sits at the bottom of the sidebar**, below whatever you have starred,
+  instead of pushing your own screens down.
+- **Settings line up.** The panels were different sizes and aligned oddly; the
+  grid is now even at every window width.
+- **Discord is linked from About**, alongside GitHub and X, and the bug-report
+  screen points at GitHub issues and the Discord bug channel.
+- **Payload suggestions.** If you are not sure what to install, the essentials
+  are named: kstuff-lite, shadowmountplus and nanodns.
+
+### Under the hood
+
+- A 64-bit account ID can no longer be quietly rounded in transit — it used to
+  be possible to activate a *different* account than the one you typed, failing
+  in the worst way by appearing to work.
+
 ## 5.25.0
 
 **Fixes the console disconnects and "ps5upload isn't responding".**
