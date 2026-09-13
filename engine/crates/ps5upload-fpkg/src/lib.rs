@@ -12,8 +12,10 @@ pub mod fih;
 pub mod flt;
 pub mod keys;
 pub mod outer;
+pub mod plan;
 pub mod rsa;
 pub mod si;
+pub mod source;
 pub mod verify;
 pub mod xts;
 

@@ -8,5 +8,6 @@ version.workspace = true
 aes = "0.9"
 hmac = "0.13"
 sha2 = "0.11"
+serde_json.workspace = true
 sha3 = "0.11"
 thiserror.workspace = true

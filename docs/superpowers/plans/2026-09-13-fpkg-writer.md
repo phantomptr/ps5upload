@@ -249,7 +249,7 @@ Everything added here was verified against the real samples during the Plan 3 re
 - keystone is generated, not read: `(path = sce_sys/keystone, size = 96)` is appended to the file list if absent, and flagged `generated`.
 - geometry: `data_end = Σ sizes` (raw ⇒ on-disk = logical), `meta_base = round_up(data_end, 0x40000)`, `metadata_blocks = 2 + 4 + dirs + 1`, `ndblock = meta_base/0x10000 + metadata_blocks`.
 
-**Tests** (synthetic trees, no I/O): empty-dir-only tree; deep nesting orders; a tree with no `sce_sys`; name-ordinal ordering with mixed case; the web sample's numbers reproduced from a fixture list of the five file sizes + 2 dirs (`data_end = 0xA626`, `meta_base = 0x400000`, `ndblock = 74`, `FIH[0x94] = 7`, `0xF0 = 2`, `0xF8 = 2`) — this pins the geometry model to the measured sample.
+**Tests** (synthetic trees, no I/O): empty-dir-only tree; deep nesting orders; a tree with no `sce_sys`; name-ordinal ordering with mixed case; a fixture with the web sample's five inner file sizes and its order reproducing `data_end = 0xA626`, three directories, ten metadata blocks and `content_inodes = 7` — this pins the geometry model to the measured sample. (`meta_base` uses our own `RoundUp(dataEnd, 0x40000)` rule; the sample pads further, 0xA626 → 0x400000, which only changes the mount size. That is open question Q4.)
 
 - [ ] **Steps:** implement, test, `cargo fmt`, commit `feat(fpkg): source walk and pure layout planner`.
 
