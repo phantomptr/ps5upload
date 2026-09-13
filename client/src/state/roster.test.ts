@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   profileNameForAddr,
   profileNameForHost,
+  reorderProfiles,
   type PS5Profile,
 } from "./roster";
 
@@ -63,5 +64,37 @@ describe("profileNameForHost / profileNameForAddr", () => {
 
   it("returns the input host when roster is empty", () => {
     expect(profileNameForAddr("192.168.1.10:9113", [])).toBe("192.168.1.10");
+  });
+});
+
+describe("reorderProfiles", () => {
+  const abc = [
+    profile({ host: "10.0.0.1", name: "A" }),
+    profile({ host: "10.0.0.2", name: "B" }),
+    profile({ host: "10.0.0.3", name: "C" }),
+  ];
+  const names = (list: PS5Profile[] | null) => list?.map((p) => p.name) ?? null;
+
+  it("moves a console to a new position", () => {
+    expect(names(reorderProfiles(abc, 2, 0))).toEqual(["C", "A", "B"]);
+    expect(names(reorderProfiles(abc, 0, 2))).toEqual(["B", "C", "A"]);
+  });
+
+  it("returns null for a move that goes nowhere", () => {
+    // Null, not a copy: the caller skips the state write, so a drag released
+    // on the row it started from does not re-render or re-persist.
+    expect(reorderProfiles(abc, 1, 1)).toBeNull();
+  });
+
+  it("returns null for out-of-range indices", () => {
+    // A drag released outside the list must not relocate the row.
+    expect(reorderProfiles(abc, -1, 0)).toBeNull();
+    expect(reorderProfiles(abc, 0, 99)).toBeNull();
+    expect(reorderProfiles(abc, 99, 0)).toBeNull();
+  });
+
+  it("does not mutate the input", () => {
+    reorderProfiles(abc, 2, 0);
+    expect(names(abc.slice())).toEqual(["A", "B", "C"]);
   });
 });

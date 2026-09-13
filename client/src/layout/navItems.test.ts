@@ -4,6 +4,8 @@ import en from "../i18n/locales/en";
 import {
   NAV_ITEMS,
   HOME_NAV_ITEM,
+  ABOUT_NAV_ITEM,
+  PERMANENT_NAV_ITEMS,
   resolveFavorites,
   groupNavItems,
   filterNavItems,
@@ -198,5 +200,28 @@ describe("filterNavItems", () => {
     expect(filterNavItems(items, "data", tr).map((i) => i.to)).toEqual([
       "/saves",
     ]);
+  });
+});
+
+
+describe("permanent sidebar rows", () => {
+  it("pins Home and About, in that order", () => {
+    expect(PERMANENT_NAV_ITEMS.map((i) => i.to)).toEqual(["/home", "/about"]);
+  });
+
+  it("only the first permanent row opens the section", () => {
+    // groupNavItems drops anything before the first section header, so if
+    // About ever grew its own `section` it would split the group in two.
+    expect(HOME_NAV_ITEM.section).toBeDefined();
+    expect(ABOUT_NAV_ITEM.section).toBeUndefined();
+  });
+
+  it("never renders a permanent row twice when it is also starred", () => {
+    // Favorites are hand-editable on disk and survive downgrades, so a stored
+    // "/about" from an older build must not produce a duplicate row.
+    const resolved = resolveFavorites(["/about", "/home", "/settings"]);
+    expect(resolved.map((i) => i.to)).not.toContain("/about");
+    expect(resolved.map((i) => i.to)).not.toContain("/home");
+    expect(resolved.map((i) => i.to)).toContain("/settings");
   });
 });

@@ -31,7 +31,7 @@ const ALLOWED_STRINGS = new Set([
   // units / symbols
   "ms", "MB/s", "MiB/s", "MiB", "KB", "MB", "GB", "%", "·", "—", "–", "/", "@",
   // brand / proper nouns
-  "PS5Upload", "PS5", "GitHub", "PhantomPtr", "@phantomptr", "GPL-3",
+  "PS5Upload", "PS5", "GitHub", "Discord", "PhantomPtr", "@phantomptr", "GPL-3",
   // example values shown verbatim in inputs
   "192.168.1.50",
   // code identifiers / paths / snippets surfaced as literal text

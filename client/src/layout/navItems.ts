@@ -265,11 +265,11 @@ export const NAV_ITEMS: NavItem[] = [
 
 /** The one destination that is always in the sidebar.
  *
- * Home is deliberately not a favorite: it cannot be unstarred, so the
- * sidebar can never end up empty and there is always a way back to a
- * known screen. Everything else is the user's choice — see
- * `resolveFavorites`. The section label lives here so `groupNavItems`
- * has a header to open the group with.
+ * Home and About are deliberately not favorites: neither can be unstarred,
+ * so the sidebar can never end up empty and there is always a way back to a
+ * known screen AND to the links/help a newcomer needs. Everything else is
+ * the user's choice — see `resolveFavorites`. The section label lives on the
+ * first item so `groupNavItems` has a header to open the group with.
  */
 export const HOME_NAV_ITEM: NavItem = {
   to: "/home",
@@ -279,6 +279,23 @@ export const HOME_NAV_ITEM: NavItem = {
   section: { key: "nav_section_favorites", fallback: "Favorites" },
 };
 
+/** Pinned beside Home. About carries the project links (GitHub, Discord, X),
+ *  the changelog and the disclaimer — the things someone new needs to find
+ *  without first learning that More exists. No `section`: it joins the group
+ *  Home opens rather than starting another. */
+export const ABOUT_NAV_ITEM: NavItem = {
+  to: "/about",
+  key: "about",
+  fallback: "About",
+  icon: Info,
+};
+
+/** The rows that are always present, in order. */
+export const PERMANENT_NAV_ITEMS: readonly NavItem[] = [
+  HOME_NAV_ITEM,
+  ABOUT_NAV_ITEM,
+];
+
 /**
  * Resolve stored favorite route paths into real nav items.
  *
@@ -286,12 +303,12 @@ export const HOME_NAV_ITEM: NavItem = {
  * per-machine and outlive the build that wrote them, so a screen that is
  * later renamed or removed would otherwise stay pinned in someone's
  * sidebar forever, linking nowhere. Order follows the stored list (the
- * order the user starred things in), and Home is filtered out so it can
- * never appear twice.
+ * order the user starred things in), and the permanent rows are filtered out
+ * so they can never appear twice.
  */
 export function resolveFavorites(paths: readonly string[]): NavItem[] {
   const byPath = new Map(NAV_ITEMS.map((item) => [item.to, item]));
-  const seen = new Set<string>([HOME_NAV_ITEM.to]);
+  const seen = new Set<string>(PERMANENT_NAV_ITEMS.map((i) => i.to));
   const out: NavItem[] = [];
   for (const path of paths) {
     if (seen.has(path)) continue;

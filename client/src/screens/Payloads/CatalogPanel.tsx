@@ -333,6 +333,24 @@ export default function CatalogPanel() {
   return (
     <div className="mx-auto w-full max-w-5xl">
       <div className="space-y-3">
+        {/* Essentials. The catalogue is a long alphabetical list, which is no
+            help to someone who has just jailbroken a console and does not yet
+            know which of these they actually need. Naming the three that pair
+            with ps5upload is the guidance that was missing — kept as plain
+            text rather than buttons so it never implies these are installed
+            or endorsed beyond "start here". */}
+        <div className="rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] p-3">
+          <p className="text-xs font-semibold">
+            {tr("payloads_essentials_title", undefined, "Recommended alongside ps5upload")}
+          </p>
+          <p className="mt-1 text-xs text-[var(--color-muted)]">
+            {tr(
+              "payloads_essentials_body",
+              undefined,
+              "If you are setting up a console for the first time, these three cover most of what ps5upload expects to find: kstuff-lite (kernel patches most homebrew relies on), ShadowMount+ (mount game images from storage) and nanoDNS (keep the console off Sony's update path). Everything else in this list is optional.",
+            )}
+          </p>
+        </div>
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
           <div className="text-xs text-[var(--color-muted)]">
             {tr(

@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { Cable, ChevronDown, Plus, Trash2, Pencil, Check } from "lucide-react";
+import {
+  Cable,
+  ChevronDown,
+  Plus,
+  Trash2,
+  Pencil,
+  Check,
+  ChevronUp,
+  ChevronDown as ChevronDownIcon,
+} from "lucide-react";
 import {
   useRosterStore,
   useActiveProfile,
@@ -158,6 +167,7 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
   const add = useRosterStore((s) => s.add);
   const remove = useRosterStore((s) => s.remove);
   const rename = useRosterStore((s) => s.rename);
+  const reorder = useRosterStore((s) => s.reorder);
   const updateHost = useRosterStore((s) => s.updateHost);
   const setNotes = useRosterStore((s) => s.setNotes);
   const active = useActiveProfile();
@@ -213,8 +223,17 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
               )}
             </p>
           )}
+          {profiles.length > 1 && (
+            <p className="mb-2 text-[0.7rem] text-[var(--color-muted)]">
+              {tr(
+                "roster_order_hint",
+                undefined,
+                "This order sets the console tabs and the picker.",
+              )}
+            </p>
+          )}
           <ul className="space-y-2">
-            {profiles.map((p) => (
+            {profiles.map((p, index) => (
               <li
                 key={p.id}
                 className={`rounded-md border p-3 text-xs ${
@@ -303,6 +322,34 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
                       className="rounded-md p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
                     >
                       <Pencil size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={index === 0}
+                      onClick={() => reorder(index, index - 1)}
+                      aria-label={tr(
+                        "roster_move_up_aria",
+                        { name: p.name },
+                        `Move ${p.name} up`,
+                      )}
+                      title={tr("roster_move_up", undefined, "Move up")}
+                      className="rounded-md p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-30"
+                    >
+                      <ChevronUp size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={index === profiles.length - 1}
+                      onClick={() => reorder(index, index + 1)}
+                      aria-label={tr(
+                        "roster_move_down_aria",
+                        { name: p.name },
+                        `Move ${p.name} down`,
+                      )}
+                      title={tr("roster_move_down", undefined, "Move down")}
+                      className="rounded-md p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)] disabled:cursor-not-allowed disabled:opacity-30"
+                    >
+                      <ChevronDownIcon size={12} />
                     </button>
                     <button
                       type="button"

@@ -91,6 +91,14 @@ interface RosterState {
   rename: (id: string, name: string) => void;
   updateHost: (id: string, host: string) => void;
   setNotes: (id: string, notes: string) => void;
+  /** Move a console to a new position in the roster.
+   *
+   *  Roster array order IS the user's order: the console tab strip and the
+   *  roster picker both map over `profiles`, so reordering here reorders both
+   *  without either knowing about it. Out-of-range indices are ignored rather
+   *  than clamped — a drag that ends nowhere should do nothing, not silently
+   *  move the row somewhere the user did not drop it. */
+  reorder: (from: number, to: number) => void;
   /** Store the credential that lets this console be woken from standby. */
   setWakeCredential: (id: string, credential: string) => void;
   /** Store or clear the sign-in keys (both hex, or both empty to clear). */
@@ -123,6 +131,35 @@ function loadStored(): { profiles: PS5Profile[]; active_id: string | null } {
   } catch {
     return { profiles: [], active_id: null };
   }
+}
+
+/**
+ * Move a profile within the roster, or return null when the move is a no-op.
+ *
+ * Roster array order IS the user's order — the console tab strip and the
+ * roster picker both map over `profiles`, so this one function reorders both.
+ * Returns null rather than a copy for an out-of-range or same-position move so
+ * the caller can skip the state write entirely: a drag released outside the
+ * list should do nothing, not re-render and re-persist an identical array.
+ */
+export function reorderProfiles(
+  profiles: readonly PS5Profile[],
+  from: number,
+  to: number,
+): PS5Profile[] | null {
+  if (
+    from === to ||
+    from < 0 ||
+    to < 0 ||
+    from >= profiles.length ||
+    to >= profiles.length
+  ) {
+    return null;
+  }
+  const next = profiles.slice();
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
 }
 
 function persist(profiles: PS5Profile[], active_id: string | null) {
@@ -204,6 +241,12 @@ export const useRosterStore = create<RosterState>((set, get) => ({
       useConnectionStore.getState().setHost(profile.host);
     }
     return id;
+  },
+  reorder: (from, to) => {
+    const next = reorderProfiles(get().profiles, from, to);
+    if (!next) return;
+    set({ profiles: next });
+    persist(next, get().active_id);
   },
   remove: (id) => {
     const removed = get().profiles.find((p) => p.id === id);
