@@ -124,7 +124,8 @@ fn write_inode(table: &mut [u8], index: usize, rec: &InodeRecord, time: (i64, u3
     ino[0x70..0x74].copy_from_slice(&rec.db3.to_le_bytes());
 }
 
-fn dirents_bytes(dirents: &[(String, u32, i8)]) -> Vec<u8> {
+/// Serialize dirents in on-disk order (shared with the outer writer).
+pub(crate) fn dirents_bytes(dirents: &[(String, u32, i8)]) -> Vec<u8> {
     let mut out = Vec::new();
     for (name, inode, kind) in dirents {
         let size = plan::dirent_size(name) as usize;

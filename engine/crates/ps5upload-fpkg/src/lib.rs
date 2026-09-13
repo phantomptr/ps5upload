@@ -14,6 +14,7 @@ pub mod inner;
 pub mod keys;
 pub mod naps;
 pub mod outer;
+pub mod outer_write;
 pub mod plan;
 pub mod rsa;
 pub mod si;

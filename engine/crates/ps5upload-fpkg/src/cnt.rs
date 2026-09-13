@@ -345,3 +345,31 @@ mod tests {
         assert!(Cnt::from_bytes(bytes).is_err());
     }
 }
+
+/// Helpers for the writer tests: containers that carry only what they need.
+#[cfg(test)]
+pub(crate) mod test_support {
+    /// A minimal CNT whose single entry is the imagedigs table (id `0x040A`), stored the
+    /// way a real package stores it: each digest byte-reversed.
+    pub(crate) fn minimal_cnt(content_id: &str, digests: &[[u8; 32]]) -> Vec<u8> {
+        let mut c = vec![0u8; 0x3000];
+        c[0..4].copy_from_slice(&0x7F43_4E54u32.to_be_bytes());
+        c[0x10..0x14].copy_from_slice(&1u32.to_be_bytes());
+        c[0x18..0x1C].copy_from_slice(&0x2000u32.to_be_bytes());
+        let id = content_id.as_bytes();
+        let n = id.len().min(0x24);
+        c[0x40..0x40 + n].copy_from_slice(&id[..n]);
+        let payload = 0x2100u32;
+        c[0x2000..0x2004].copy_from_slice(&0x040Au32.to_be_bytes());
+        c[0x2010..0x2014].copy_from_slice(&payload.to_be_bytes());
+        c[0x2014..0x2018].copy_from_slice(&((digests.len() * 32) as u32).to_be_bytes());
+        let mut bytes = Vec::with_capacity(digests.len() * 32);
+        for d in digests {
+            let mut reversed = *d;
+            reversed.reverse();
+            bytes.extend_from_slice(&reversed);
+        }
+        c[payload as usize..payload as usize + bytes.len()].copy_from_slice(&bytes);
+        c
+    }
+}
