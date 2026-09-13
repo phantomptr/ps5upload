@@ -636,6 +636,8 @@ describe("pkgTypeForCategory (patch data-loss guard input)", () => {
   });
   it("maps DLC ('ac' — its own content_id) to PS4AC, not …DP", () => {
     expect(pkgTypeForCategory("ac")).toBe("PS4AC");
+    expect(pkgTypeForCategory("gd", "ps5")).toBe("PS5GD");
+    expect(pkgTypeForCategory("gp", "ps5")).toBe("PS5DP");
   });
   it("returns null for unknown/absent category (payload keeps its default)", () => {
     expect(pkgTypeForCategory(undefined)).toBeNull();

@@ -6,6 +6,7 @@ import {
   DEFAULT_RATE_WINDOW,
   pushRateSample,
   type RateSample,
+  remainingSeconds,
 } from "./rollingRate";
 
 describe("pushRateSample", () => {
@@ -121,5 +122,35 @@ describe("averageRate", () => {
   it("returns 0 for non-finite inputs", () => {
     expect(averageRate(Infinity, 1000)).toBe(0);
     expect(averageRate(1024, NaN)).toBe(0);
+  });
+});
+
+describe("remainingSeconds", () => {
+  it("divides the bytes left by the rate", () => {
+    // 1 GiB of a 3 GiB upload done at 100 MiB/s: 2048 MiB left = 20.48 s.
+    const MiB = 1024 * 1024;
+    expect(remainingSeconds(1024 * MiB, 3072 * MiB, 100 * MiB)).toBeCloseTo(
+      20.48,
+    );
+  });
+
+  it("has no estimate before the rate window has two samples", () => {
+    expect(remainingSeconds(0, 1000, 0)).toBeNull();
+  });
+
+  it("has no estimate without a total", () => {
+    expect(remainingSeconds(500, 0, 100)).toBeNull();
+  });
+
+  it("stops estimating once bytes reach the total (the PS5 is committing)", () => {
+    // Otherwise the row would read "ETA 0s" for the whole commit.
+    expect(remainingSeconds(1000, 1000, 100)).toBeNull();
+    expect(remainingSeconds(1200, 1000, 100)).toBeNull();
+  });
+
+  it("never returns a negative or non-finite estimate", () => {
+    expect(remainingSeconds(0, 1000, -5)).toBeNull();
+    expect(remainingSeconds(0, 1000, Number.NaN)).toBeNull();
+    expect(remainingSeconds(0, Number.NaN, 100)).toBeNull();
   });
 });

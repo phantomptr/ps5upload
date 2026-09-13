@@ -3999,7 +3999,8 @@ pub struct ExternalPkg {
     pub name: String,
     /// File size in bytes.
     pub size: u64,
-    /// ContentID from the header (empty for `\x7FFIH` / unreadable headers).
+    /// ContentID from the fast outer-header read (empty for FIH until the
+    /// embedded CNT is lazily read, or for otherwise unreadable headers).
     pub content_id: String,
     /// Title id (CUSA…/PPSA…) derived from the content id.
     pub title_id: String,
@@ -4028,10 +4029,10 @@ fn external_pkg_header(head: &[u8]) -> (String, String, String) {
     (content_id, title_id, platform)
 }
 
-/// Scan connected external/USB drives for installable `.pkg` files.
+/// Scan connected external/USB drives for installable `.pkg`/`.fpkg` files.
 ///
 /// Walks every real `/mnt/usb*` and `/mnt/ext*` mount depth-first, reading
-/// each `.pkg`'s header for content_id + platform. Bounded on depth,
+/// each package's header for content_id + platform. Bounded on depth,
 /// directories visited, and packages returned so a multi-thousand-file game
 /// drive can't wedge the scan. Errors on individual dirs/files are skipped
 /// (best-effort) rather than failing the whole scan.
@@ -4069,7 +4070,10 @@ pub fn scan_external_pkgs(addr: &str) -> anyhow::Result<Vec<ExternalPkg>> {
                     if depth + 1 < MAX_DEPTH {
                         stack.push((join(&dir, &e.name), depth + 1));
                     }
-                } else if e.name.to_ascii_lowercase().ends_with(".pkg") {
+                } else if {
+                    let lower = e.name.to_ascii_lowercase();
+                    lower.ends_with(".pkg") || lower.ends_with(".fpkg")
+                } {
                     if out.len() >= MAX_PKGS {
                         break;
                     }

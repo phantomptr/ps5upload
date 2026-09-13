@@ -13,6 +13,7 @@ import { useConnectionStore } from "./connection";
 import { hostOf } from "../lib/addr";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
+import { isInstallPackagePath } from "../lib/pkgDropDedupe";
 
 /**
  * Detected source kind. Drives which options the Upload screen shows.
@@ -267,7 +268,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     // optionally deleted) by the queue's pkg finisher — one queued unit. Parse
     // the header for ContentID/title so the row shows the title and the staged
     // file is named the way Sony's installer expects.
-    if (path.toLowerCase().endsWith(".pkg")) {
+    if (isInstallPackagePath(path)) {
       set({
         source: {
           kind: "pkg",

@@ -3633,7 +3633,7 @@ export interface ExternalPkg {
   /** Basename. */
   name: string;
   size: number;
-  /** ContentID (empty for `\x7FFIH` / unreadable headers). */
+  /** ContentID (empty only when the fast scan cannot reach/parse the header). */
   contentId: string;
   /** Title id (CUSA…/PPSA…) derived from the content id. */
   titleId: string;
@@ -3673,9 +3673,9 @@ export async function pkgScanExternal(
     }));
 }
 
-/** Authoritative metadata for one on-console pkg, parsed from its PARAM.SFO.
- *  Fields are best-effort — empty when the SFO is missing or the pkg uses the
- *  unreadable `\x7FFIH` header. */
+/** Authoritative metadata for one on-console package. Reads PARAM.SFO from a
+ *  CNT package or the embedded CNT/param.json metadata in a PS5 FIH package.
+ *  Fields remain best-effort when metadata entries are absent or encrypted. */
 export interface PkgConsoleMetadata {
   contentId: string;
   title: string;
@@ -3685,6 +3685,7 @@ export interface PkgConsoleMetadata {
   /** PARAM.SFO APP_VER, e.g. "01.04". */
   appVer: string;
   platform: string;
+  authenticity?: "fake_debug" | "retail" | "unknown";
   /** Full sampled package identity when the caller supplied the file size. */
   fingerprint: string;
 }
@@ -3707,6 +3708,7 @@ export async function pkgMetadataConsole(
       category?: string;
       app_ver?: string;
       platform?: string;
+      authenticity?: "fake_debug" | "retail" | "unknown";
       fingerprint?: string;
     }>("pkg_metadata_console", { addr, path, size: size ?? null });
     return {
@@ -3716,6 +3718,7 @@ export async function pkgMetadataConsole(
       category: m?.category ?? "",
       appVer: m?.app_ver ?? "",
       platform: m?.platform ?? "",
+      authenticity: m?.authenticity ?? "unknown",
       fingerprint: m?.fingerprint ?? "",
     };
   } catch {

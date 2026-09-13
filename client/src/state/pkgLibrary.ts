@@ -1,4 +1,5 @@
 import { trStatic } from "../lib/trStatic";
+import { isInstallPackagePath } from "../lib/pkgDropDedupe";
 import { patchInstallFailure } from "../lib/dpiUnavailable";
 import { restoreMainPayload } from "../lib/restoreMainPayload";
 import { useStore } from "zustand";
@@ -20,6 +21,11 @@ import {
 } from "../api/ps5";
 import { processList, type ExternalPkg } from "../api/ps5";
 import { formatBytes } from "../lib/format";
+import {
+  computeRate,
+  pushRateSample,
+  type RateSample,
+} from "../lib/rollingRate";
 import { hostOf, mgmtAddr, transferAddr } from "../lib/addr";
 import { removableMountRoot } from "../lib/mountPaths";
 import { humanizePs5Error } from "../lib/humanizeError";
@@ -200,12 +206,19 @@ export interface PkgEntry {
    *  on upload; inferred from the title-id prefix on refresh-from-disk.
    *  Drives the PS4/PS5 badge. */
   platform?: string;
+  /** Signing class proven by the outer package envelope. Currently available
+   * for PS5 FIH packages; PS4 CNT packages remain unknown unless cryptographically
+   * inspected rather than being guessed from their extension. */
+  authenticity?: "fake_debug" | "retail" | "unknown";
   /** Transient per-row state (never persisted; recomputed each session). */
   status: PkgStatus;
   /** Bytes transferred so far (upload) — drives the row progress bar. */
   bytes?: number;
   /** Total bytes for the active upload. */
   totalBytes?: number;
+  /** Smoothed upload rate (bytes/sec) for the active upload, from the same
+   *  trailing window the Upload queue uses. 0 until two samples exist. */
+  bytesPerSec?: number;
   /** Outcome of the last install attempt this session, for inline feedback.
    *  `warn` renders amber for either a may-not-launch success or an accepted
    *  request whose asynchronous completion could not be verified. */
@@ -294,7 +307,9 @@ export interface PkgAlternativeGroup {
 /** Return only genuinely ambiguous groups (two or more exact artifacts).
  * Same-version patch variants and same-ContentID DLC repacks are alternatives;
  * different patch versions and independent DLC remain separate installables. */
-export function pkgAlternativeGroups(entries: PkgEntry[]): PkgAlternativeGroup[] {
+export function pkgAlternativeGroups(
+  entries: PkgEntry[],
+): PkgAlternativeGroup[] {
   const grouped = new Map<string, PkgEntry[]>();
   for (const entry of entries) {
     const key = pkgAlternativeKey(entry);
@@ -303,7 +318,8 @@ export function pkgAlternativeGroups(entries: PkgEntry[]): PkgAlternativeGroup[]
   }
   return [...grouped.entries()]
     .filter(
-      ([, group]) => new Set(group.map((entry) => pkgEntryIdentity(entry))).size > 1,
+      ([, group]) =>
+        new Set(group.map((entry) => pkgEntryIdentity(entry))).size > 1,
     )
     .map(([key, group]) => ({ key, entries: group }));
 }
@@ -449,7 +465,9 @@ export function pkgRowInstalled(
 
 /** ContentID from a `<ContentID>.pkg` filename (strip the extension). */
 function contentIdFromName(name: string): string {
-  return name.toLowerCase().endsWith(".pkg") ? name.slice(0, -4) : name;
+  const lower = name.toLowerCase();
+  if (lower.endsWith(".fpkg")) return name.slice(0, -5);
+  return lower.endsWith(".pkg") ? name.slice(0, -4) : name;
 }
 
 // ── Title metadata cache ──────────────────────────────────────────────
@@ -507,6 +525,8 @@ interface PkgPathMeta {
   /** PARAM.SFO `CATEGORY` (`gd`/`gp`/`ac`) — authoritative, vs. the directory
    *  inference. Populated when we read the staged pkg off the console. */
   category?: string;
+  /** Signing class captured while the computer-side package was parsed. */
+  authenticity?: "fake_debug" | "retail" | "unknown";
 }
 
 function loadPathMetaCache(): Record<string, PkgPathMeta> {
@@ -686,6 +706,10 @@ interface SplitParseResponse {
     /** Target platform for badging: "ps4" | "ps5" | "" (unknown). Derived
      *  engine-side from the header magic + title-id prefix. */
     platform?: string;
+    /** BGFT type already resolved by the engine (PS4GD/PS4DP/PS5GD/PS5DP). */
+    package_type?: string;
+    /** Package-envelope signing class (`fake_debug`, `retail`, or `unknown`). */
+    authenticity?: "fake_debug" | "retail" | "unknown";
     warnings?: string[];
   };
 }
@@ -1511,18 +1535,22 @@ async function runDpiDirectInstall(
  *  full game (PS4GD) and defeated the guard — a hardware-confirmed data-loss
  *  bug (a Jak X patch deleted the installed base). Returns null for unknown
  *  categories so the payload keeps its own default. */
-export function pkgTypeForCategory(category?: string | null): string | null {
+export function pkgTypeForCategory(
+  category?: string | null,
+  platform?: string | null,
+): string | null {
+  const prefix = platform === "ps5" ? "PS5" : "PS4";
   switch (category) {
     case "gd":
-      return "PS4GD"; // full game
+      return `${prefix}GD`; // full game
     case "gp":
-      return "PS4DP"; // patch (shares the base content_id — guarded)
+      return `${prefix}DP`; // patch (shares the base content_id — guarded)
     case "ac":
-      return "PS4AC"; // add-on / DLC
+      return `${prefix}AC`; // add-on / DLC
     case "gde":
-      return "PS4GDE";
+      return `${prefix}GDE`;
     case "la":
-      return "PS4LA";
+      return `${prefix}LA`;
     default:
       return null;
   }
@@ -1752,10 +1780,7 @@ async function runPkgInstallCore(
         stalled: false,
         acceptedUnverified: false,
         mayNotLaunch: false,
-        errMessage: trStatic(
-          "pkg.patch_regressed",
-          PKG_PATCH_REGRESSED_HINT,
-        ),
+        errMessage: trStatic("pkg.patch_regressed", PKG_PATCH_REGRESSED_HINT),
       };
     } else if (dpi.patchVerdict === "did_not_apply") {
       // The engine watched APP_VER and it never moved: Sony accepted the
@@ -1887,7 +1912,10 @@ export async function runPkgInstall(
           recoverable: true,
         },
       });
-      showInstallFailureToast(name, result.errMessage || "Install was not confirmed.");
+      showInstallFailureToast(
+        name,
+        result.errMessage || "Install was not confirmed.",
+      );
     }
     return result;
   } catch (error) {
@@ -1980,7 +2008,7 @@ const makePkgLibraryStore = () =>
           dir: string,
         ) => {
           for (const e of listed) {
-            if (e.kind !== "file" || !e.name.toLowerCase().endsWith(".pkg")) {
+            if (e.kind !== "file" || !isInstallPackagePath(e.name)) {
               continue;
             }
             const contentId = contentIdFromName(e.name);
@@ -2001,14 +2029,14 @@ const makePkgLibraryStore = () =>
                   : undefined),
               appVer: cached?.appVer,
               fingerprint:
-                cached?.fingerprint ??
-                fingerprintFromStagingSubdir(subdir),
+                cached?.fingerprint ?? fingerprintFromStagingSubdir(subdir),
               installedHere: isPkgInstalledHere(host, path),
               titleId: titleIdFromContentId(contentId) ?? undefined,
               // Authoritative category (read off the console) when we have it,
               // else the directory inference (updates/ → gp, dlc/ → ac).
               category: cached?.category ?? categoryForSubdir(subdir),
               platform: platformFromTitleId(titleIdFromContentId(contentId)),
+              authenticity: cached?.authenticity,
               status: "idle" as PkgStatus,
             });
           }
@@ -2061,298 +2089,312 @@ const makePkgLibraryStore = () =>
       if (pkgAddsInFlight.has(addKey)) return;
       pkgAddsInFlight.add(addKey);
       try {
-      // An install swaps the main payload out (DPI), which kills the transfer
-      // port — never start an upload while one is running.
-      if (get().installing) {
-        set({ error: "Can't upload while an install is in progress." });
-        return;
-      }
-      set({ error: null });
-      // 1. Parse the local .pkg header for ContentID + title, and reject inputs
-      //    DPI can't take.
-      let meta: SplitParseResponse;
-      try {
-        meta = (await invoke("pkg_metadata_split", {
-          path: localPath,
-        })) as SplitParseResponse;
-      } catch (e) {
-        set({ error: `Couldn't read .pkg header: ${pkgError(e)}` });
-        return;
-      }
-      if ((meta.parts?.length ?? 1) > 1) {
-        set({
-          error:
-            "Split .pkg sets aren't supported by the DPI installer — pick the single lead .pkg.",
-        });
-        return;
-      }
-      const contentId = meta.head?.content_id ?? "";
-      const title = meta.head?.title;
-      const category = meta.head?.category;
-      // Prefer the engine's parsed platform; fall back to the title-id prefix
-      // (covers headerless / FIH pkgs whose ids we recovered another way).
-      const platform =
-        meta.head?.platform ||
-        platformFromTitleId(titleIdFromContentId(contentId));
-      const totalBytes = meta.total_size ?? 0;
-      if (title) cacheTitle(contentId, title);
-      // The user's original filename (e.g. `… [v01.04].pkg`) and the authoritative
-      // PARAM.SFO version — the things that distinguish a game's updates, which
-      // share a ContentID and a title. Captured here at upload (the only point we
-      // parse the pkg) and cached by staged path for later refresh-from-disk.
-      const originalName = basenameOf(localPath);
-      const appVer = meta.head?.app_ver || undefined;
-      const fingerprint = meta.head?.fingerprint || undefined;
+        // An install swaps the main payload out (DPI), which kills the transfer
+        // port — never start an upload while one is running.
+        if (get().installing) {
+          set({ error: "Can't upload while an install is in progress." });
+          return;
+        }
+        set({ error: null });
+        // 1. Parse the local .pkg header for ContentID + title, and reject inputs
+        //    DPI can't take.
+        let meta: SplitParseResponse;
+        try {
+          meta = (await invoke("pkg_metadata_split", {
+            path: localPath,
+          })) as SplitParseResponse;
+        } catch (e) {
+          set({ error: `Couldn't read .pkg header: ${pkgError(e)}` });
+          return;
+        }
+        if ((meta.parts?.length ?? 1) > 1) {
+          set({
+            error:
+              "Split .pkg sets aren't supported by the DPI installer — pick the single lead .pkg.",
+          });
+          return;
+        }
+        const contentId = meta.head?.content_id ?? "";
+        const title = meta.head?.title;
+        const category = meta.head?.category;
+        // Prefer the engine's parsed platform; fall back to the title-id prefix
+        // (covers headerless / FIH pkgs whose ids we recovered another way).
+        const platform =
+          meta.head?.platform ||
+          platformFromTitleId(titleIdFromContentId(contentId));
+        const totalBytes = meta.total_size ?? 0;
+        if (title) cacheTitle(contentId, title);
+        // The user's original filename (e.g. `… [v01.04].pkg`) and the authoritative
+        // PARAM.SFO version — the things that distinguish a game's updates, which
+        // share a ContentID and a title. Captured here at upload (the only point we
+        // parse the pkg) and cached by staged path for later refresh-from-disk.
+        const originalName = basenameOf(localPath);
+        const appVer = meta.head?.app_ver || undefined;
+        const fingerprint = meta.head?.fingerprint || undefined;
+        const authenticity = meta.head?.authenticity;
 
-      // 2. Name the on-PS5 file `<ContentID>.pkg` (Sony's installer keys on the
-      //    basename matching the ContentID — see lib/pkgStagingPath). A base
-      //    game and its update/DLC share that ContentID, so they're routed to
-      //    distinct sub-directories (basename unchanged) to keep them from
-      //    overwriting each other in the library.
-      const basename = stagingBasename(
-        contentId,
-        Math.random().toString(36).slice(2),
-        Date.now(),
-      );
-      const stagingDir = stagingDirectoryForPackage(category, fingerprint);
-      const destPath = stagingDir
-        ? `${PKG_LIBRARY_DIR}/${stagingDir}/${basename}`
-        : `${PKG_LIBRARY_DIR}/${basename}`;
-      // Remember the filename + version for this staged path so the row can show
-      // them (survives refresh-from-disk and app restarts via localStorage).
-      cachePathMeta(host, destPath, {
-        name: originalName,
-        sourcePath: localPath,
-        appVer,
-        fingerprint,
-      });
-
-      // Refuse to re-add a pkg that's already uploading to the same path:
-      // two concurrent transfers to one file would corrupt it, and the two
-      // poll loops would fight over the same row's progress. (A headerless
-      // pkg gets a unique random basename each time, so this only triggers
-      // for a real ContentID being added twice mid-upload.)
-      if (
-        get().entries.some(
-          (e) => e.path === destPath && e.status === "uploading",
-        )
-      ) {
-        // Native drag events can be observed once by AppShell during navigation
-        // and once by this screen after it mounts. Treat an exact duplicate as
-        // idempotent: the first transfer owns the row; the second event is not a
-        // user-facing error and must never start a competing writer.
-        return;
-      }
-
-      // Re-adding an exact artifact that is already staged is also idempotent.
-      // Distinct variants have distinct fingerprint directories, so this only
-      // suppresses a genuine duplicate — never an optional-fix/backport pair.
-      if (
-        get().entries.some(
-          (e) =>
-            e.path === destPath && e.status === "idle" && e.size === totalBytes,
-        )
-      ) {
-        return;
-      }
-
-      // The transfer port (:9113) is single-client: another upload (from the
-      // Upload screen or another .pkg here) must finish before this one starts,
-      // or they collide on the port. `othersBusy` is true while any such
-      // transfer holds it.
-      const othersBusy = () =>
-        transferScreenBusy(host) ||
-        get().entries.some(
-          (e) => e.path !== destPath && e.status === "uploading",
+        // 2. Name the on-PS5 file `<ContentID>.pkg` (Sony's installer keys on the
+        //    basename matching the ContentID — see lib/pkgStagingPath). A base
+        //    game and its update/DLC share that ContentID, so they're routed to
+        //    distinct sub-directories (basename unchanged) to keep them from
+        //    overwriting each other in the library.
+        const basename = stagingBasename(
+          contentId,
+          Math.random().toString(36).slice(2),
+          Date.now(),
         );
-
-      // 3. Optimistic row — "queued" if it has to wait for the port, else
-      //    straight to "uploading".
-      const optimistic: PkgEntry = {
-        name: basename,
-        path: destPath,
-        size: totalBytes,
-        contentId,
-        title,
-        originalName,
-        sourcePath: localPath,
-        appVer,
-        fingerprint,
-        titleId: titleIdFromContentId(contentId) ?? undefined,
-        category,
-        platform,
-        status: othersBusy() ? "queued" : "uploading",
-        bytes: 0,
-        totalBytes,
-      };
-      set({
-        entries: [
-          optimistic,
-          ...get().entries.filter((e) => e.path !== destPath),
-        ],
-      });
-
-      const patch = (p: Partial<PkgEntry>) =>
-        set({
-          entries: get().entries.map((e) =>
-            e.path === destPath ? { ...e, ...p } : e,
-          ),
+        const stagingDir = stagingDirectoryForPackage(category, fingerprint);
+        const destPath = stagingDir
+          ? `${PKG_LIBRARY_DIR}/${stagingDir}/${basename}`
+          : `${PKG_LIBRARY_DIR}/${basename}`;
+        // Remember the filename + version for this staged path so the row can show
+        // them (survives refresh-from-disk and app restarts via localStorage).
+        cachePathMeta(host, destPath, {
+          name: originalName,
+          sourcePath: localPath,
+          appVer,
+          fingerprint,
+          authenticity,
         });
 
-      // 4. Upload over the bulk-transfer port, polling job_status for progress.
-      try {
-        // Wait our turn on the single-client port instead of colliding. Bail if
-        // the user removed this queued row in the meantime.
-        while (othersBusy()) {
-          if (!get().entries.some((e) => e.path === destPath)) return;
-          await sleep(400);
+        // Refuse to re-add a pkg that's already uploading to the same path:
+        // two concurrent transfers to one file would corrupt it, and the two
+        // poll loops would fight over the same row's progress. (A headerless
+        // pkg gets a unique random basename each time, so this only triggers
+        // for a real ContentID being added twice mid-upload.)
+        if (
+          get().entries.some(
+            (e) => e.path === destPath && e.status === "uploading",
+          )
+        ) {
+          // Native drag events can be observed once by AppShell during navigation
+          // and once by this screen after it mounts. Treat an exact duplicate as
+          // idempotent: the first transfer owns the row; the second event is not a
+          // user-facing error and must never start a competing writer.
+          return;
         }
-        patch({ status: "uploading" });
-        // Make sure the console is on the matching (hardened) payload before we
-        // stream — same guard the upload queue uses.
-        await ensurePayloadCurrent(hostOf(host));
-        // Updates/DLC stage into a sub-dir; create it first (mkdir -p,
-        // EEXIST-tolerant) so the single-file transfer's open() doesn't fail
-        // with ENOENT on a parent that doesn't exist yet.
-        if (stagingDir) {
-          try {
-            // mkdir is one-level only. Create the category parent first, then
-            // the fingerprint child used by the new multi-variant layout.
-            const parts = stagingDir.split("/");
-            let current = PKG_LIBRARY_DIR;
-            for (const part of parts) {
-              current = `${current}/${part}`;
-              await fsMkdir(transferAddr(host), current);
-            }
-          } catch (e) {
-            patch({
-              status: "idle",
-              bytes: undefined,
-              lastResult: {
-                ok: false,
-                message: `Couldn't create the ${stagingDir} folder on the PS5: ${pkgError(e)}`,
-              },
-            });
-            return;
-          }
+
+        // Re-adding an exact artifact that is already staged is also idempotent.
+        // Distinct variants have distinct fingerprint directories, so this only
+        // suppresses a genuine duplicate — never an optional-fix/backport pair.
+        if (
+          get().entries.some(
+            (e) =>
+              e.path === destPath &&
+              e.status === "idle" &&
+              e.size === totalBytes,
+          )
+        ) {
+          return;
         }
-        const tx = (await invoke("transfer_file", {
-          req: {
-            src: localPath,
-            dest: destPath,
-            addr: transferAddr(host),
-            tx_id: null,
-          },
-        })) as { job_id?: string };
-        const jobId = tx.job_id;
-        if (!jobId) throw new Error("upload did not start");
-        let polls = 0;
-        // No-progress watchdog: bail if bytes don't advance for a while.
-        // We key on progress rather than a fixed total cap so an honest
-        // multi-GB upload isn't killed, while a job wedged in a non-terminal
-        // state (or a silently dead transfer) can't spin forever — which
-        // would leave the row "uploading" and block every future install.
-        const STALL_LIMIT = 240; // × 500ms = 120s with zero progress
-        let lastBytes = -1;
-        let stalled = 0;
-        for (;;) {
-          await sleep(500);
-          let js: {
-            status?: string;
-            bytes_sent?: number;
-            total_bytes?: number;
-            error?: string | null;
-          };
-          try {
-            js = (await invoke("job_status", { jobId })) as typeof js;
-          } catch (e) {
-            if (++polls >= 5) throw e;
-            continue;
-          }
-          polls = 0;
-          if (typeof js.bytes_sent === "number") {
-            patch({
-              bytes: js.bytes_sent,
-              totalBytes: js.total_bytes ?? totalBytes,
-            });
-            if (js.bytes_sent > lastBytes) {
-              lastBytes = js.bytes_sent;
-              stalled = 0;
-            } else if (++stalled >= STALL_LIMIT) {
-              throw new Error("upload stalled — no progress for 2 minutes");
-            }
-          } else if (++stalled >= STALL_LIMIT) {
-            throw new Error("upload stalled — no status from the PS5");
-          }
-          if (js.status === "done") break;
-          if (js.status === "failed") {
-            throw new Error(js.error || "upload failed");
-          }
-        }
-        // Settle to idle and record the completion time before refreshing, so
-        // the authoritative row immediately shows where/when it came from.
-        const uploadedAt = Date.now();
-        cachePathMeta(host, destPath, { uploadedAt });
-        patch({ status: "idle", bytes: undefined, uploadedAt });
-        await get().refresh(host);
-        // Hands-off flow: once the .pkg has landed, kick the install without a
-        // second manual click (opt-out via the Install Package screen). install()
-        // owns its own waiting/queueing, the FW-12 notice, and — when
-        // autoRemoveAfterInstall is on — the post-install cleanup, so "upload →
-        // installed → staged copy removed" becomes one action. It never throws
-        // (try/finally inside), so awaiting it here is safe; the caller already
-        // treats addAndUpload as fire-and-forget.
-        {
-          const s = useInstallSettingsStore.getState();
-          // Log the post-upload decision (install or not) with the settings that
-          // drove it, so a "it auto-installed/deleted even though I disabled that"
-          // report is answerable from the bundle alone.
-          const shouldInstall =
-            options?.installAfterUpload ?? s.autoInstallAfterUpload;
-          log.info(
-            "install",
-            `staged pkg uploaded: ${destPath} — install-after-upload=${shouldInstall}, auto-delete=${s.autoRemoveAfterInstall}`,
+
+        // The transfer port (:9113) is single-client: another upload (from the
+        // Upload screen or another .pkg here) must finish before this one starts,
+        // or they collide on the port. `othersBusy` is true while any such
+        // transfer holds it.
+        const othersBusy = () =>
+          transferScreenBusy(host) ||
+          get().entries.some(
+            (e) => e.path !== destPath && e.status === "uploading",
           );
-          if (shouldInstall) {
-            const uploaded = get().entries.find((e) => e.path === destPath);
-            if (
-              uploaded &&
-              pkgHasConflictingAlternative(uploaded, get().entries) &&
-              !options?.selectVariant
-            ) {
+
+        // 3. Optimistic row — "queued" if it has to wait for the port, else
+        //    straight to "uploading".
+        const optimistic: PkgEntry = {
+          name: basename,
+          path: destPath,
+          size: totalBytes,
+          contentId,
+          title,
+          originalName,
+          sourcePath: localPath,
+          appVer,
+          fingerprint,
+          titleId: titleIdFromContentId(contentId) ?? undefined,
+          category,
+          platform,
+          authenticity,
+          status: othersBusy() ? "queued" : "uploading",
+          bytes: 0,
+          totalBytes,
+        };
+        set({
+          entries: [
+            optimistic,
+            ...get().entries.filter((e) => e.path !== destPath),
+          ],
+        });
+
+        const patch = (p: Partial<PkgEntry>) =>
+          set({
+            entries: get().entries.map((e) =>
+              e.path === destPath ? { ...e, ...p } : e,
+            ),
+          });
+
+        // 4. Upload over the bulk-transfer port, polling job_status for progress.
+        try {
+          // Wait our turn on the single-client port instead of colliding. Bail if
+          // the user removed this queued row in the meantime.
+          while (othersBusy()) {
+            if (!get().entries.some((e) => e.path === destPath)) return;
+            await sleep(400);
+          }
+          patch({ status: "uploading" });
+          // Make sure the console is on the matching (hardened) payload before we
+          // stream — same guard the upload queue uses.
+          await ensurePayloadCurrent(hostOf(host));
+          // Updates/DLC stage into a sub-dir; create it first (mkdir -p,
+          // EEXIST-tolerant) so the single-file transfer's open() doesn't fail
+          // with ENOENT on a parent that doesn't exist yet.
+          if (stagingDir) {
+            try {
+              // mkdir is one-level only. Create the category parent first, then
+              // the fingerprint child used by the new multi-variant layout.
+              const parts = stagingDir.split("/");
+              let current = PKG_LIBRARY_DIR;
+              for (const part of parts) {
+                current = `${current}/${part}`;
+                await fsMkdir(transferAddr(host), current);
+              }
+            } catch (e) {
               patch({
+                status: "idle",
+                bytes: undefined,
                 lastResult: {
                   ok: false,
-                  warn: true,
-                  message:
-                    "Staged as an alternative variant. Choose which same-version patch/DLC matches this firmware; it was not auto-installed.",
+                  message: `Couldn't create the ${stagingDir} folder on the PS5: ${pkgError(e)}`,
                 },
               });
-              pushNotification("info", "Package variant kept staged", {
-                body: "Another same-version patch or DLC variant is already in the library. Install the intended one from its row; ps5upload will not silently make the last upload win.",
-              });
-            } else {
-              if (uploaded && options?.selectVariant) {
-                const key = pkgAlternativeKey(uploaded);
-                if (key) {
-                  recordPkgAlternativeSelection(
-                    host,
-                    key,
-                    pkgEntryIdentity(uploaded),
-                  );
-                }
-              }
-              await get().install(destPath, host);
+              return;
             }
           }
+          const tx = (await invoke("transfer_file", {
+            req: {
+              src: localPath,
+              dest: destPath,
+              addr: transferAddr(host),
+              tx_id: null,
+            },
+          })) as { job_id?: string };
+          const jobId = tx.job_id;
+          if (!jobId) throw new Error("upload did not start");
+          let polls = 0;
+          // No-progress watchdog: bail if bytes don't advance for a while.
+          // We key on progress rather than a fixed total cap so an honest
+          // multi-GB upload isn't killed, while a job wedged in a non-terminal
+          // state (or a silently dead transfer) can't spin forever — which
+          // would leave the row "uploading" and block every future install.
+          const STALL_LIMIT = 240; // × 500ms = 120s with zero progress
+          let lastBytes = -1;
+          let stalled = 0;
+          // Same 2 s trailing window as the Upload queue (500 ms polls × 4).
+          // An instantaneous "bytes since last poll" rate swings between
+          // hundreds of MiB/s and zero because the payload commits in shard
+          // bursts; the window bridges the empty ticks.
+          const rateSamples: RateSample[] = [];
+          patch({ bytesPerSec: 0 });
+          for (;;) {
+            await sleep(500);
+            let js: {
+              status?: string;
+              bytes_sent?: number;
+              total_bytes?: number;
+              error?: string | null;
+            };
+            try {
+              js = (await invoke("job_status", { jobId })) as typeof js;
+            } catch (e) {
+              if (++polls >= 5) throw e;
+              continue;
+            }
+            polls = 0;
+            if (typeof js.bytes_sent === "number") {
+              const now = Date.now();
+              pushRateSample(rateSamples, now, js.bytes_sent);
+              patch({
+                bytes: js.bytes_sent,
+                totalBytes: js.total_bytes ?? totalBytes,
+                bytesPerSec: computeRate(rateSamples, now),
+              });
+              if (js.bytes_sent > lastBytes) {
+                lastBytes = js.bytes_sent;
+                stalled = 0;
+              } else if (++stalled >= STALL_LIMIT) {
+                throw new Error("upload stalled — no progress for 2 minutes");
+              }
+            } else if (++stalled >= STALL_LIMIT) {
+              throw new Error("upload stalled — no status from the PS5");
+            }
+            if (js.status === "done") break;
+            if (js.status === "failed") {
+              throw new Error(js.error || "upload failed");
+            }
+          }
+          // Settle to idle and record the completion time before refreshing, so
+          // the authoritative row immediately shows where/when it came from.
+          const uploadedAt = Date.now();
+          cachePathMeta(host, destPath, { uploadedAt });
+          patch({ status: "idle", bytes: undefined, uploadedAt });
+          await get().refresh(host);
+          // Hands-off flow: once the .pkg has landed, kick the install without a
+          // second manual click (opt-out via the Install Package screen). install()
+          // owns its own waiting/queueing, the FW-12 notice, and — when
+          // autoRemoveAfterInstall is on — the post-install cleanup, so "upload →
+          // installed → staged copy removed" becomes one action. It never throws
+          // (try/finally inside), so awaiting it here is safe; the caller already
+          // treats addAndUpload as fire-and-forget.
+          {
+            const s = useInstallSettingsStore.getState();
+            // Log the post-upload decision (install or not) with the settings that
+            // drove it, so a "it auto-installed/deleted even though I disabled that"
+            // report is answerable from the bundle alone.
+            const shouldInstall =
+              options?.installAfterUpload ?? s.autoInstallAfterUpload;
+            log.info(
+              "install",
+              `staged pkg uploaded: ${destPath} — install-after-upload=${shouldInstall}, auto-delete=${s.autoRemoveAfterInstall}`,
+            );
+            if (shouldInstall) {
+              const uploaded = get().entries.find((e) => e.path === destPath);
+              if (
+                uploaded &&
+                pkgHasConflictingAlternative(uploaded, get().entries) &&
+                !options?.selectVariant
+              ) {
+                patch({
+                  lastResult: {
+                    ok: false,
+                    warn: true,
+                    message:
+                      "Staged as an alternative variant. Choose which same-version patch/DLC matches this firmware; it was not auto-installed.",
+                  },
+                });
+                pushNotification("info", "Package variant kept staged", {
+                  body: "Another same-version patch or DLC variant is already in the library. Install the intended one from its row; ps5upload will not silently make the last upload win.",
+                });
+              } else {
+                if (uploaded && options?.selectVariant) {
+                  const key = pkgAlternativeKey(uploaded);
+                  if (key) {
+                    recordPkgAlternativeSelection(
+                      host,
+                      key,
+                      pkgEntryIdentity(uploaded),
+                    );
+                  }
+                }
+                await get().install(destPath, host);
+              }
+            }
+          }
+        } catch (e) {
+          // Drop the optimistic row and surface the error.
+          set({
+            entries: get().entries.filter((e2) => e2.path !== destPath),
+            error: `Upload failed: ${pkgError(e)}`,
+          });
         }
-      } catch (e) {
-        // Drop the optimistic row and surface the error.
-        set({
-          entries: get().entries.filter((e2) => e2.path !== destPath),
-          error: `Upload failed: ${pkgError(e)}`,
-        });
-      }
       } finally {
         pkgAddsInFlight.delete(addKey);
       }
@@ -2467,7 +2509,7 @@ const makePkgLibraryStore = () =>
           host,
           path,
           entry?.contentId || null,
-          pkgTypeForCategory(entry?.category),
+          pkgTypeForCategory(entry?.category, entry?.platform),
           autoRemove,
           // Live install %: a large title installs over minutes — feed both the
           // inline notice and the global Activity bar so progress shows
@@ -2625,7 +2667,9 @@ const makePkgLibraryStore = () =>
           status: "idle",
           lastResult: { ok: false, message },
         });
-        const entry = get().entries.find((candidate) => candidate.path === path);
+        const entry = get().entries.find(
+          (candidate) => candidate.path === path,
+        );
         const label = entry?.title || entry?.contentId || basenameOf(path);
         pushNotification("error", `${label} install failed`, { body: message });
       } finally {
@@ -2653,7 +2697,10 @@ const makePkgLibraryStore = () =>
             installedHere: liveInstalled.has(entry.path),
           }))
         : get().entries;
-      const { targets, conflicts } = pkgInstallAllPlan(planningEntries, selections);
+      const { targets, conflicts } = pkgInstallAllPlan(
+        planningEntries,
+        selections,
+      );
 
       if (targets.length === 0) {
         pushNotification(
@@ -2680,9 +2727,7 @@ const makePkgLibraryStore = () =>
           if (
             !cur ||
             cur.status !== "idle" ||
-            (liveInstalled
-              ? liveInstalled.has(cur.path)
-              : cur.installedHere)
+            (liveInstalled ? liveInstalled.has(cur.path) : cur.installedHere)
           )
             continue;
           // install() self-serializes on `installing` and awaits the full
@@ -2851,7 +2896,9 @@ const makePkgLibraryStore = () =>
           ps5Addr: mgmtAddr(host),
           path: localPcPath,
           splitRoot: null,
-          packageTypeOverride: pkgTypeForCategory(meta.head?.category),
+          packageTypeOverride:
+            meta.head?.package_type ||
+            pkgTypeForCategory(meta.head?.category, meta.head?.platform),
           localPs5Path: null,
           contentId: contentId || null,
           expectedSize: meta.total_size ?? null,
@@ -2920,7 +2967,9 @@ const makePkgLibraryStore = () =>
           const exactInstalled = await verifyDpiInstalledArtifact(
             host,
             contentId || null,
-            pkgTypeForCategory(meta.head?.category) || "PS4GD",
+            meta.head?.package_type ||
+              pkgTypeForCategory(meta.head?.category, meta.head?.platform) ||
+              (meta.head?.platform === "ps5" ? "PS5GD" : "PS4GD"),
             {
               size: totalBytes || undefined,
               fingerprint: meta.head?.fingerprint || undefined,
@@ -3350,6 +3399,7 @@ async function enrichStagedMetadata(
       appVer: m.appVer || undefined,
       category: m.category || undefined,
       fingerprint: m.fingerprint || undefined,
+      authenticity: m.authenticity,
     });
     set((s) => ({
       entries: s.entries.map((x) =>
@@ -3360,6 +3410,7 @@ async function enrichStagedMetadata(
               category: m.category || x.category,
               title: x.title || m.title || undefined,
               fingerprint: m.fingerprint || x.fingerprint,
+              authenticity: m.authenticity,
             }
           : x,
       ),

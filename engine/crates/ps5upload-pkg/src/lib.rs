@@ -6,12 +6,10 @@
 //! encrypted body — Sony's BGFT installer on the PS5 owns decryption
 //! using device keys.
 //!
-//! Layout reference: psdevwiki PS4 "Package files" page. The header
-//! starts with magic `\x7FCNT` (`0x7F434E54`) for stock PSN packages.
-//! Community formats (FPKG variants, license-only PKGs) sometimes use
-//! different magics — those are surfaced as [`PkgKind::Unknown`] with
-//! enough metadata for the UI to show a "format not recognized — install
-//! at your own risk" prompt rather than reject outright.
+//! PS4 packages are `\x7FCNT` containers. PS5 installable packages are
+//! finalized `\x7FFIH` images which point to an embedded `\x7FCNT` metadata
+//! container. Container shape is deliberately kept separate from signing:
+//! a CNT magic alone does not prove that a package is Sony-retail signed.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -390,12 +388,11 @@ fn parse_sfo_string_keys(
     Ok(out)
 }
 
-/// Magic bytes of a stock PS4/PS5 .pkg file: `\x7FCNT`.
+/// Magic bytes of a CNT package/container: `\x7FCNT`.
 pub const PKG_MAGIC: u32 = 0x7F434E54;
 
-/// Magic bytes of a newer PS5-native fakepkg (`\x7FFIH`). Sony's installer
-/// accepts these; our parser doesn't read their metadata yet, but the magic
-/// alone tells us the target platform is PS5.
+/// Magic bytes of a PS5 finalized install image (`\x7FFIH`). Its envelope
+/// points to an embedded CNT carrying the package metadata.
 pub const PKG_MAGIC_FIH: u32 = 0x7F464948;
 
 /// Classify a package's target platform for UI badging. `\x7FFIH` is
@@ -440,6 +437,8 @@ pub fn title_id_from_filename(name: &str) -> Option<String> {
 
 /// PARAM.SFO entry id inside a PKG.
 const ENTRY_PARAM_SFO: u32 = 0x1000;
+/// PARAM.JSON entry id inside a PS5 CNT metadata container.
+const ENTRY_PARAM_JSON: u32 = 0x2000;
 /// ICON0.PNG entry id inside a PKG.
 const ENTRY_ICON0_PNG: u32 = 0x1200;
 
@@ -465,15 +464,32 @@ pub enum PkgError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum PkgKind {
-    /// Stock PS4/PS5 PKG with `\x7FCNT` magic.
-    Standard,
-    /// Magic byte sequence we don't recognise. Could be an FPKG (fake
-    /// PKG used by the homebrew/cracked-content community), a
-    /// license-only DRM unlock file, or simply the wrong file. The
-    /// install UI should warn the user but still permit an install
-    /// attempt — Sony's BGFT will reject anything it doesn't accept,
-    /// and surfacing the magic helps the user diagnose.
+    /// A `\x7FCNT` metadata container. This describes the container layout,
+    /// not whether its cryptographic material is retail or fake/debug.
+    #[serde(alias = "standard")]
+    CntContainer,
+    /// A complete PS5 finalized image (`\x7FFIH`) with an embedded CNT.
+    Ps5Finalized {
+        signed_byte: u8,
+        format_version: u16,
+    },
+    /// Magic byte sequence we don't recognise. It may be a license-only
+    /// artifact, an unsupported package variant, or simply the wrong file.
+    /// The install UI may still permit an attempt; Sony's installer remains
+    /// the final authority on formats it accepts.
     Unknown { magic_hex: String },
+}
+
+/// What the unencrypted package envelope can prove about signing. PS4 CNT
+/// packages need a deeper cryptographic probe, so they intentionally remain
+/// unknown instead of being mislabeled "retail" merely from `\x7FCNT`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PkgAuthenticity {
+    FakeDebug,
+    Retail,
+    #[default]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -485,6 +501,8 @@ pub struct PkgMetadata {
     pub size: u64,
     /// Header magic + classification.
     pub kind: PkgKind,
+    /// Signing class proven by the package envelope.
+    pub authenticity: PkgAuthenticity,
     /// 36-char content id (e.g. `EP0006-CUSA45456_00-...`). Empty for
     /// `Unknown` kind. Trailing NULs trimmed.
     pub content_id: String,
@@ -510,9 +528,7 @@ pub struct PkgMetadata {
     /// backport), without making the UI hash a multi-gigabyte pkg before an
     /// upload can start.
     pub fingerprint: String,
-    /// Mapping of `category` to BGFT's `package_type` string. None
-    /// when the category is unknown / SFO missing — caller may still
-    /// attempt install with `package_type=PS4GD` as a default.
+    /// Mapping of category/platform to BGFT's package_type string.
     pub package_type: Option<String>,
     /// Target platform for UI badging: `"ps4"`, `"ps5"`, or `""` (unknown).
     /// Derived from the header magic (`\x7FFIH` = PS5) and the title-id
@@ -570,7 +586,8 @@ pub fn parse_pkg(path: &Path) -> Result<PkgMetadata, PkgError> {
     let mut meta = PkgMetadata {
         path: path.to_path_buf(),
         size,
-        kind: PkgKind::Standard,
+        kind: PkgKind::CntContainer,
+        authenticity: PkgAuthenticity::Unknown,
         content_id: String::new(),
         title: String::new(),
         title_id: String::new(),
@@ -583,39 +600,78 @@ pub fn parse_pkg(path: &Path) -> Result<PkgMetadata, PkgError> {
         warnings: Vec::new(),
     };
 
-    if magic != PKG_MAGIC {
+    let (container_base, container_head) = if magic == PKG_MAGIC_FIH {
+        // Finalized PS5 image fields are little-endian. The embedded CNT
+        // offset lives at +0x58 and carries the normal big-endian metadata
+        // header/table. A signed byte of 0x00 is debug/fake; 0x80 is retail.
+        let signed_byte = head[0x05];
+        let format_version = u16::from_le_bytes([head[0x06], head[0x07]]);
+        let cnt_base = u64::from_le_bytes([
+            head[0x58], head[0x59], head[0x5A], head[0x5B], head[0x5C], head[0x5D], head[0x5E],
+            head[0x5F],
+        ]);
+        meta.kind = PkgKind::Ps5Finalized {
+            signed_byte,
+            format_version,
+        };
+        meta.authenticity = match signed_byte {
+            0x00 => PkgAuthenticity::FakeDebug,
+            0x80 => PkgAuthenticity::Retail,
+            _ => {
+                warnings.push(format!(
+                    "PS5 FIH signed byte 0x{signed_byte:02X} is not a recognised debug/retail value"
+                ));
+                PkgAuthenticity::Unknown
+            }
+        };
+        meta.platform = "ps5".to_string();
+        if format_version != 3 {
+            warnings.push(format!(
+                "PS5 FIH format version {format_version} is not the supported version 3"
+            ));
+        }
+        if cnt_base == 0 || cnt_base.checked_add(0xA0).is_none_or(|end| end > size) {
+            return Err(PkgError::Header("PS5 FIH embedded CNT offset out of range"));
+        }
+        f.seek(SeekFrom::Start(cnt_base))?;
+        let mut cnt = [0u8; 0xA0];
+        f.read_exact(&mut cnt)?;
+        if u32::from_be_bytes([cnt[0], cnt[1], cnt[2], cnt[3]]) != PKG_MAGIC {
+            return Err(PkgError::Header("PS5 FIH embedded CNT magic mismatch"));
+        }
+        (cnt_base, cnt)
+    } else if magic == PKG_MAGIC {
+        (0, head)
+    } else {
         meta.kind = PkgKind::Unknown {
             magic_hex: format!("{magic:08X}"),
         };
-        // We can't read this format's metadata, but the magic still tells us
-        // the platform (`\x7FFIH` → PS5) — enough for the UI badge.
         meta.platform = derive_platform(magic, "", "");
-        // Soften the warning. On a jailbroken PS5 with kernel-level
-        // Unknown header magic: most commonly 0x7F464948 (`\x7FFIH` —
-        // newer PS5-native fakepkg signing tool format) which Sony's
-        // installer accepts but our parser doesn't read yet, so the
-        // metadata (content_id, title, category) stays empty.
-        //
-        // Pre-2.2.52 we pushed a long warning explaining all of this.
-        // The user-facing reality is simpler: "we couldn't read the
-        // file's metadata, but install will still proceed and either
-        // succeed or fail with a real error." That's a step's
-        // success/fail status, not a warning to read. We now stay
-        // silent here — the queue row's metadata fields just stay
-        // empty, and the actual install attempt's success/error is
-        // surfaced through the install_start ACK path.
-        //
-        // The compile-time test below (test_parse_fih_magic) keeps
-        // the recognition of this magic working as a parse decision,
-        // we just stop emitting the verbose user-facing warning.
+        warnings.push(format!("unrecognized package magic {magic:08X}"));
+        meta.warnings = warnings;
         return Ok(meta);
-    }
+    };
 
-    // Stock PKG layout — read offsets we care about.
-    let entry_count = u32::from_be_bytes([head[0x10], head[0x11], head[0x12], head[0x13]]);
-    let table_offset = u32::from_be_bytes([head[0x18], head[0x19], head[0x1A], head[0x1B]]);
+    let entry_count = u32::from_be_bytes([
+        container_head[0x10],
+        container_head[0x11],
+        container_head[0x12],
+        container_head[0x13],
+    ]);
+    let table_offset = u32::from_be_bytes([
+        container_head[0x18],
+        container_head[0x19],
+        container_head[0x1A],
+        container_head[0x1B],
+    ]);
+    let content_flags = u32::from_be_bytes([
+        container_head[0x78],
+        container_head[0x79],
+        container_head[0x7A],
+        container_head[0x7B],
+    ]);
     // content_id is at 0x40, 36 bytes ASCII with trailing NULs.
-    let cid_raw = &head[0x40..0x40 + 36];
+    let cid_raw = &container_head[0x40..0x40 + 36];
     let cid_end = cid_raw.iter().position(|&b| b == 0).unwrap_or(36);
     meta.content_id = String::from_utf8_lossy(&cid_raw[..cid_end])
         .trim()
@@ -630,12 +686,30 @@ pub fn parse_pkg(path: &Path) -> Result<PkgMetadata, PkgError> {
     }
 
     // Walk the entry table. Each entry is 0x20 bytes.
-    if let Err(e) = walk_entries(&mut f, table_offset, entry_count, &mut meta, &mut warnings) {
+    if let Err(e) = walk_entries(
+        &mut f,
+        container_base,
+        table_offset,
+        entry_count,
+        &mut meta,
+        &mut warnings,
+    ) {
         warnings.push(format!("entry table walk failed: {e}"));
     }
 
-    meta.package_type = derive_package_type(&meta.category);
-    meta.platform = derive_platform(magic, &meta.content_id, &meta.title_id);
+    if magic == PKG_MAGIC_FIH {
+        // PS5 patch kind is encoded in CNT content flags even if param.json is
+        // absent/encrypted. Preserve the familiar gd/gp category contract for
+        // the rest of the app and never default a PS5 package to PS4GD.
+        let is_patch = (content_flags & 0x0010_0000) != 0 || (content_flags & 0x4000_0000) != 0;
+        if meta.category.is_empty() {
+            meta.category = if is_patch { "gp" } else { "gd" }.to_string();
+        }
+        meta.package_type = Some(if is_patch { "PS5DP" } else { "PS5GD" }.to_string());
+    } else {
+        meta.package_type = derive_package_type(&meta.category);
+        meta.platform = derive_platform(magic, &meta.content_id, &meta.title_id);
+    }
     meta.warnings = warnings;
     Ok(meta)
 }
@@ -739,16 +813,18 @@ pub fn parse_split_pkg(head_path: &Path) -> Result<SplitPkgMetadata, PkgError> {
 
 fn walk_entries(
     f: &mut File,
+    container_base: u64,
     table_offset: u32,
     entry_count: u32,
     meta: &mut PkgMetadata,
     warnings: &mut Vec<String>,
 ) -> std::io::Result<()> {
-    f.seek(SeekFrom::Start(table_offset as u64))?;
+    f.seek(SeekFrom::Start(container_base + table_offset as u64))?;
     let mut buf = vec![0u8; (entry_count as usize) * 0x20];
     f.read_exact(&mut buf)?;
 
     let mut sfo: Option<(u32, u32)> = None; // (offset, size)
+    let mut param_json: Option<(u32, u32)> = None;
     let mut icon: Option<(u32, u32)> = None;
 
     for i in 0..(entry_count as usize) {
@@ -758,6 +834,7 @@ fn walk_entries(
         let data_sz = u32::from_be_bytes([e[0x14], e[0x15], e[0x16], e[0x17]]);
         match id {
             ENTRY_PARAM_SFO => sfo = Some((data_off, data_sz)),
+            ENTRY_PARAM_JSON => param_json = Some((data_off, data_sz)),
             ENTRY_ICON0_PNG => icon = Some((data_off, data_sz)),
             _ => {}
         }
@@ -767,22 +844,35 @@ fn walk_entries(
         if sz == 0 || sz > MAX_SFO_BYTES {
             warnings.push(format!("PARAM.SFO size {sz} out of range, skipping"));
         } else {
-            f.seek(SeekFrom::Start(off as u64))?;
+            f.seek(SeekFrom::Start(container_base + off as u64))?;
             let mut sfo_buf = vec![0u8; sz as usize];
             f.read_exact(&mut sfo_buf)?;
             if let Err(e) = parse_sfo_into(&sfo_buf, meta) {
                 warnings.push(format!("PARAM.SFO parse: {e}"));
             }
         }
-    } else {
+    } else if param_json.is_none() {
         warnings.push("PKG has no PARAM.SFO entry".to_string());
+    }
+
+    if let Some((off, sz)) = param_json {
+        if sz == 0 || sz > MAX_SFO_BYTES {
+            warnings.push(format!("PARAM.JSON size {sz} out of range, skipping"));
+        } else {
+            f.seek(SeekFrom::Start(container_base + off as u64))?;
+            let mut json = vec![0u8; sz as usize];
+            f.read_exact(&mut json)?;
+            if let Err(e) = parse_param_json_into(&json, meta) {
+                warnings.push(format!("PARAM.JSON parse: {e}"));
+            }
+        }
     }
 
     if let Some((off, sz)) = icon {
         if sz == 0 || sz > MAX_ICON_BYTES {
             warnings.push(format!("ICON0.PNG size {sz} out of range, skipping"));
         } else {
-            f.seek(SeekFrom::Start(off as u64))?;
+            f.seek(SeekFrom::Start(container_base + off as u64))?;
             let mut png = vec![0u8; sz as usize];
             f.read_exact(&mut png)?;
             meta.icon_png_base64 = Some(b64_encode(&png));
@@ -790,6 +880,65 @@ fn walk_entries(
     }
 
     Ok(())
+}
+
+fn parse_param_json_into(buf: &[u8], meta: &mut PkgMetadata) -> Result<(), &'static str> {
+    let value = parse_param_json_value(buf)?;
+    apply_param_json(
+        &value,
+        &mut meta.content_id,
+        &mut meta.title,
+        &mut meta.title_id,
+        &mut meta.app_ver,
+    );
+    Ok(())
+}
+
+fn parse_param_json_value(buf: &[u8]) -> Result<serde_json::Value, &'static str> {
+    // Package metadata entries are commonly NUL-padded to an alignment
+    // boundary. serde_json correctly rejects that padding, so trim only the
+    // trailing zero bytes before parsing the otherwise exact entry payload.
+    let end = buf.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+    serde_json::from_slice(&buf[..end]).map_err(|_| "invalid JSON")
+}
+
+fn apply_param_json(
+    value: &serde_json::Value,
+    content_id: &mut String,
+    title: &mut String,
+    title_id: &mut String,
+    app_ver: &mut String,
+) {
+    let string = |key: &str| value.get(key).and_then(serde_json::Value::as_str);
+    if let Some(v) = string("contentId") {
+        *content_id = v.to_string();
+    }
+    if let Some(v) = string("titleId") {
+        *title_id = v.to_string();
+    }
+    if let Some(v) = string("contentVersion").or_else(|| string("masterVersion")) {
+        *app_ver = v.to_string();
+    }
+    if let Some(localized) = value
+        .get("localizedParameters")
+        .and_then(serde_json::Value::as_object)
+    {
+        let preferred = localized
+            .get("defaultLanguage")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|lang| localized.get(lang));
+        let title_name = preferred
+            .and_then(|v| v.get("titleName"))
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                localized
+                    .values()
+                    .find_map(|v| v.get("titleName").and_then(serde_json::Value::as_str))
+            });
+        if let Some(v) = title_name {
+            *title = v.to_string();
+        }
+    }
 }
 
 fn parse_sfo_into(buf: &[u8], meta: &mut PkgMetadata) -> Result<(), &'static str> {
@@ -880,7 +1029,21 @@ fn derive_package_type(category: &str) -> Option<String> {
 
 /// Public wrapper over the category → BGFT `package_type` map.
 pub fn package_type_for_category(category: &str) -> Option<String> {
-    derive_package_type(category)
+    package_type_for_category_and_platform(category, "ps4")
+}
+
+/// Map a metadata category to the platform-specific BGFT package type.
+/// Unknown platforms retain the established PS4 default for compatibility.
+pub fn package_type_for_category_and_platform(category: &str, platform: &str) -> Option<String> {
+    let prefix = if platform == "ps5" { "PS5" } else { "PS4" };
+    match category {
+        "gd" => Some(format!("{prefix}GD")),
+        "gp" => Some(format!("{prefix}DP")),
+        "ac" => Some(format!("{prefix}AC")),
+        "gde" => Some(format!("{prefix}GDE")),
+        "la" => Some(format!("{prefix}LA")),
+        _ => None,
+    }
 }
 
 /// Extract the PARAM.SFO `CATEGORY` from a `.pkg` using a ranged-read closure
@@ -889,25 +1052,56 @@ pub fn package_type_for_category(category: &str) -> Option<String> {
 /// `fs_read`) — letting the engine learn whether a STAGED pkg is a patch
 /// (`gp`) or a full game (`gd`) for the data-loss guard, without re-parsing the
 /// whole file. Only three small reads: header (0x40), the entry table, and the
-/// SFO itself. Returns `None` for a non-`\x7FCNT` pkg / unreadable / no SFO.
+/// SFO itself. For a PS5 FIH image, patch/base comes from the embedded CNT's
+/// content flags, so the destructive-patch guard also works for staged FPKGs.
 pub fn category_from_reader<F>(read_at: F) -> Option<String>
 where
     F: Fn(u64, u64) -> Option<Vec<u8>>,
 {
-    let head = read_at(0, 0x40)?;
+    let outer = read_at(0, 0x60)?;
+    if outer.len() < 0x60 {
+        return None;
+    }
+    let outer_magic = u32::from_be_bytes([outer[0], outer[1], outer[2], outer[3]]);
+    let container_base = if outer_magic == PKG_MAGIC_FIH {
+        if u16::from_le_bytes([outer[6], outer[7]]) != 3 {
+            return None;
+        }
+        u64::from_le_bytes(outer[0x58..0x60].try_into().ok()?)
+    } else if outer_magic == PKG_MAGIC {
+        0
+    } else {
+        return None;
+    };
+    let head = if container_base == 0 {
+        outer
+    } else {
+        read_at(container_base, 0xA0)?
+    };
     if head.len() < 0x1C {
         return None;
     }
     let magic = u32::from_be_bytes([head[0], head[1], head[2], head[3]]);
     if magic != PKG_MAGIC {
-        return None; // FIH / unknown magic carries no PS4 PARAM.SFO here
+        return None;
+    }
+    if outer_magic == PKG_MAGIC_FIH {
+        if head.len() < 0x7C {
+            return None;
+        }
+        let flags = u32::from_be_bytes(head[0x78..0x7C].try_into().ok()?);
+        let is_patch = (flags & 0x0010_0000) != 0 || (flags & 0x4000_0000) != 0;
+        return Some(if is_patch { "gp" } else { "gd" }.to_string());
     }
     let entry_count = u32::from_be_bytes([head[0x10], head[0x11], head[0x12], head[0x13]]);
     let table_offset = u32::from_be_bytes([head[0x18], head[0x19], head[0x1A], head[0x1B]]);
     if entry_count == 0 || entry_count > 1024 {
         return None;
     }
-    let table = read_at(table_offset as u64, entry_count as u64 * 0x20)?;
+    let table = read_at(
+        container_base + table_offset as u64,
+        entry_count as u64 * 0x20,
+    )?;
     let mut sfo: Option<(u32, u32)> = None;
     for i in 0..entry_count as usize {
         let e = table.get(i * 0x20..(i + 1) * 0x20)?;
@@ -922,7 +1116,7 @@ where
     if sz == 0 || sz > MAX_SFO_BYTES {
         return None;
     }
-    let sfo_bytes = read_at(off as u64, sz as u64)?;
+    let sfo_bytes = read_at(container_base + off as u64, sz as u64)?;
     parse_sfo_string_keys(&sfo_bytes)
         .ok()?
         .get("CATEGORY")
@@ -942,6 +1136,8 @@ pub struct ReaderMetadata {
     pub app_ver: String,
     /// `"ps4"` | `"ps5"` | `""`.
     pub platform: String,
+    /// Signing class proven by the outer envelope.
+    pub authenticity: PkgAuthenticity,
     /// Optional sampled artifact identity. `metadata_from_reader` leaves this
     /// empty because it does not know the total file size; remote callers that
     /// do know it can populate the field with
@@ -970,22 +1166,41 @@ fn title_id_from_content_id_str(content_id: &str) -> String {
 /// ranged reads. Like [`category_from_reader`] this works against a pkg that
 /// lives on the PS5 (via `fs_read`) — used to lazily enrich the External
 /// Packages listing with the authoritative title/version/category the fast,
-/// filename-based scan deliberately skips. A few small reads only: header
-/// (0xA0), the entry table, and the SFO. Returns `None` for a non-`\x7FCNT` /
-/// unreadable pkg; SFO-derived fields are best-effort (empty when absent).
+/// filename-based scan deliberately skips. Supports both top-level CNT and a
+/// PS5 FIH image's embedded CNT. SFO/param.json fields are best-effort.
 pub fn metadata_from_reader<F>(read_at: F) -> Option<ReaderMetadata>
 where
     F: Fn(u64, u64) -> Option<Vec<u8>>,
 {
-    let head = read_at(0, 0xA0)?;
+    let outer = read_at(0, 0xA0)?;
+    if outer.len() < 0x60 {
+        return None;
+    }
+    let outer_magic = u32::from_be_bytes([outer[0], outer[1], outer[2], outer[3]]);
+    let outer_signed_byte = outer[0x05];
+    let container_base = if outer_magic == PKG_MAGIC_FIH {
+        if u16::from_le_bytes([outer[6], outer[7]]) != 3 {
+            return None;
+        }
+        u64::from_le_bytes(outer[0x58..0x60].try_into().ok()?)
+    } else if outer_magic == PKG_MAGIC {
+        0
+    } else {
+        return None;
+    };
+    let head = if container_base == 0 {
+        outer
+    } else {
+        read_at(container_base, 0xA0)?
+    };
     if head.len() < 0x1C {
         return None;
     }
     let magic = u32::from_be_bytes([head[0], head[1], head[2], head[3]]);
     if magic != PKG_MAGIC {
-        return None; // FIH / unknown magic carries no PS4 PARAM.SFO here
+        return None;
     }
-    let content_id = if head.len() >= 0x40 + 36 {
+    let mut content_id = if head.len() >= 0x40 + 36 {
         let raw = &head[0x40..0x40 + 36];
         let end = raw.iter().position(|&b| b == 0).unwrap_or(36);
         String::from_utf8_lossy(&raw[..end]).trim().to_string()
@@ -998,21 +1213,28 @@ where
     let (mut title, mut title_id, mut category, mut app_ver) =
         (String::new(), String::new(), String::new(), String::new());
     if entry_count > 0 && entry_count <= 1024 {
-        if let Some(table) = read_at(table_offset as u64, entry_count as u64 * 0x20) {
+        if let Some(table) = read_at(
+            container_base + table_offset as u64,
+            entry_count as u64 * 0x20,
+        ) {
             let mut sfo: Option<(u32, u32)> = None;
+            let mut param_json: Option<(u32, u32)> = None;
             for i in 0..entry_count as usize {
                 if let Some(e) = table.get(i * 0x20..(i + 1) * 0x20) {
                     if u32::from_be_bytes([e[0], e[1], e[2], e[3]]) == ENTRY_PARAM_SFO {
                         let off = u32::from_be_bytes([e[0x10], e[0x11], e[0x12], e[0x13]]);
                         let sz = u32::from_be_bytes([e[0x14], e[0x15], e[0x16], e[0x17]]);
                         sfo = Some((off, sz));
-                        break;
+                    } else if u32::from_be_bytes([e[0], e[1], e[2], e[3]]) == ENTRY_PARAM_JSON {
+                        let off = u32::from_be_bytes([e[0x10], e[0x11], e[0x12], e[0x13]]);
+                        let sz = u32::from_be_bytes([e[0x14], e[0x15], e[0x16], e[0x17]]);
+                        param_json = Some((off, sz));
                     }
                 }
             }
             if let Some((off, sz)) = sfo {
                 if sz > 0 && sz <= MAX_SFO_BYTES {
-                    if let Some(sfo_bytes) = read_at(off as u64, sz as u64) {
+                    if let Some(sfo_bytes) = read_at(container_base + off as u64, sz as u64) {
                         if let Ok(kv) = parse_sfo_string_keys(&sfo_bytes) {
                             title = kv.get("TITLE").cloned().unwrap_or_default();
                             title_id = kv.get("TITLE_ID").cloned().unwrap_or_default();
@@ -1022,12 +1244,45 @@ where
                     }
                 }
             }
+            if let Some((off, sz)) = param_json {
+                if sz > 0 && sz <= MAX_SFO_BYTES {
+                    if let Some(bytes) = read_at(container_base + off as u64, sz as u64) {
+                        if let Ok(v) = parse_param_json_value(&bytes) {
+                            apply_param_json(
+                                &v,
+                                &mut content_id,
+                                &mut title,
+                                &mut title_id,
+                                &mut app_ver,
+                            );
+                        }
+                    }
+                }
+            }
         }
+    }
+    if outer_magic == PKG_MAGIC_FIH && category.is_empty() && head.len() >= 0x7C {
+        let flags = u32::from_be_bytes(head[0x78..0x7C].try_into().ok()?);
+        category = if (flags & 0x0010_0000) != 0 || (flags & 0x4000_0000) != 0 {
+            "gp"
+        } else {
+            "gd"
+        }
+        .to_string();
     }
     if title_id.is_empty() {
         title_id = title_id_from_content_id_str(&content_id);
     }
-    let platform = derive_platform(magic, &content_id, &title_id);
+    let platform = derive_platform(outer_magic, &content_id, &title_id);
+    let authenticity = if outer_magic == PKG_MAGIC_FIH {
+        match outer_signed_byte {
+            0x00 => PkgAuthenticity::FakeDebug,
+            0x80 => PkgAuthenticity::Retail,
+            _ => PkgAuthenticity::Unknown,
+        }
+    } else {
+        PkgAuthenticity::Unknown
+    };
     Some(ReaderMetadata {
         content_id,
         title,
@@ -1035,6 +1290,7 @@ where
         category,
         app_ver,
         platform,
+        authenticity,
         fingerprint: String::new(),
     })
 }
@@ -1239,6 +1495,48 @@ mod tests {
     }
 
     #[test]
+    fn metadata_from_reader_routes_embedded_fih_patch_as_ps5dp() {
+        let cnt_base = 0x10000usize;
+        let mut cnt = build_pkg_multi(
+            "UP0000-PPSA01234_00-TESTGAME00000000",
+            &[("TITLE", "Test Game")],
+        );
+        cnt[0x78..0x7c].copy_from_slice(&0x6000_0000u32.to_be_bytes());
+        let mut pkg = vec![0u8; cnt_base];
+        pkg[0..4].copy_from_slice(&PKG_MAGIC_FIH.to_be_bytes());
+        pkg[0x06..0x08].copy_from_slice(&3u16.to_le_bytes());
+        pkg[0x58..0x60].copy_from_slice(&(cnt_base as u64).to_le_bytes());
+        pkg.extend_from_slice(&cnt);
+
+        let read = move |off: u64, len: u64| {
+            let (o, l) = (off as usize, len as usize);
+            pkg.get(o..(o + l).min(pkg.len())).map(|s| s.to_vec())
+        };
+        let m = metadata_from_reader(read).expect("should parse embedded CNT");
+        assert_eq!(m.platform, "ps5");
+        assert_eq!(m.authenticity, PkgAuthenticity::FakeDebug);
+        assert_eq!(m.category, "gp");
+        assert_eq!(m.title_id, "PPSA01234");
+        assert_eq!(
+            package_type_for_category_and_platform(&m.category, &m.platform).as_deref(),
+            Some("PS5DP")
+        );
+    }
+
+    #[test]
+    fn package_type_mapping_is_platform_specific() {
+        assert_eq!(
+            package_type_for_category_and_platform("gd", "ps5").as_deref(),
+            Some("PS5GD")
+        );
+        assert_eq!(
+            package_type_for_category_and_platform("gp", "ps5").as_deref(),
+            Some("PS5DP")
+        );
+        assert_eq!(package_type_for_category("gp").as_deref(), Some("PS4DP"));
+    }
+
+    #[test]
     fn parse_sfo_into_reads_app_ver() {
         // A patch's APP_VER is the authoritative "which update is this" — it
         // shares the base game's content_id and TITLE, so nothing else tells
@@ -1247,7 +1545,8 @@ mod tests {
         let mut meta = PkgMetadata {
             path: PathBuf::new(),
             size: 0,
-            kind: PkgKind::Standard,
+            kind: PkgKind::CntContainer,
+            authenticity: PkgAuthenticity::Unknown,
             content_id: String::new(),
             title: String::new(),
             title_id: String::new(),
@@ -1262,6 +1561,33 @@ mod tests {
         parse_sfo_into(&sfo, &mut meta).expect("SFO should parse");
         assert_eq!(meta.app_ver, "01.04");
         assert_eq!(meta.category, "gp");
+    }
+
+    #[test]
+    fn param_json_parser_accepts_nul_padding() {
+        let mut meta = PkgMetadata {
+            path: PathBuf::new(),
+            size: 0,
+            kind: PkgKind::CntContainer,
+            authenticity: PkgAuthenticity::Unknown,
+            content_id: String::new(),
+            title: String::new(),
+            title_id: String::new(),
+            category: String::new(),
+            app_ver: String::new(),
+            fingerprint: String::new(),
+            package_type: None,
+            platform: String::new(),
+            icon_png_base64: None,
+            warnings: Vec::new(),
+        };
+        let mut json = br#"{"contentId":"UP0000-PPSA01234_00-TESTGAME00000000","titleId":"PPSA01234","contentVersion":"01.002.000","localizedParameters":{"defaultLanguage":"en-US","en-US":{"titleName":"Test Game"}}}"#.to_vec();
+        json.extend_from_slice(&[0, 0]);
+        parse_param_json_into(&json, &mut meta).expect("NUL-padded JSON should parse");
+        assert_eq!(meta.content_id, "UP0000-PPSA01234_00-TESTGAME00000000");
+        assert_eq!(meta.title, "Test Game");
+        assert_eq!(meta.title_id, "PPSA01234");
+        assert_eq!(meta.app_ver, "01.002.000");
     }
 
     #[test]
@@ -1391,29 +1717,59 @@ mod tests {
     }
 
     #[test]
-    fn unknown_magic_synthetic_file() {
+    fn ps5_fih_parses_embedded_cnt_and_uses_ps5_package_type() {
         let dir = tempdir();
-        let path = dir.join("unknown.pkg");
-        // 256-byte buffer with the user's anomalous magic.
-        let mut buf = vec![0u8; 256];
-        buf[0..4].copy_from_slice(&[0x7F, 0x46, 0x49, 0x48]);
+        let path = dir.join("PPSA01234.fpkg");
+        let cnt_base = 0x10000usize;
+        let mut cnt = build_pkg_multi(
+            "UP0000-PPSA01234_00-TESTGAME00000000",
+            &[("CATEGORY", "gd")],
+        );
+        // A PS5 CNT normally has param.json; the embedded content id and
+        // content flags are sufficient to prove platform/base routing here.
+        cnt[0x78..0x7c].copy_from_slice(&0u32.to_be_bytes());
+        let mut buf = vec![0u8; cnt_base];
+        buf[0..4].copy_from_slice(&PKG_MAGIC_FIH.to_be_bytes());
+        buf[0x05] = 0x00; // debug/fake finalized image
+        buf[0x06..0x08].copy_from_slice(&3u16.to_le_bytes());
+        buf[0x58..0x60].copy_from_slice(&(cnt_base as u64).to_le_bytes());
+        buf.extend_from_slice(&cnt);
         std::fs::write(&path, &buf).unwrap();
         let meta = parse_pkg(&path).unwrap();
         match meta.kind {
-            PkgKind::Unknown { magic_hex } => assert_eq!(magic_hex, "7F464948"),
-            _ => panic!("expected Unknown kind"),
+            PkgKind::Ps5Finalized {
+                signed_byte,
+                format_version,
+            } => {
+                assert_eq!(signed_byte, 0);
+                assert_eq!(format_version, 3);
+            }
+            _ => panic!("expected PS5 finalized kind"),
         }
-        // No user-facing warning expected: we used to emit a long
-        // "we don't recognise this magic" warning here, but the user
-        // doesn't need the explanation. The empty-metadata state is
-        // the result; the queue row's blank content_id/title fields
-        // already make the missing metadata visible, and the install
-        // attempt's eventual ACK is the success/fail signal.
-        assert!(meta.warnings.is_empty());
-        // Metadata stays empty since the parser doesn't speak this
-        // format yet — that's the row-display contract.
-        assert!(meta.content_id.is_empty());
-        assert!(meta.title.is_empty());
+        assert_eq!(meta.authenticity, PkgAuthenticity::FakeDebug);
+        assert_eq!(meta.content_id, "UP0000-PPSA01234_00-TESTGAME00000000");
+        assert_eq!(meta.platform, "ps5");
+        assert_eq!(meta.category, "gd");
+        assert_eq!(meta.package_type.as_deref(), Some("PS5GD"));
+    }
+
+    #[test]
+    fn ps5_fih_patch_flags_route_as_ps5_patch() {
+        let dir = tempdir();
+        let path = dir.join("PPSA01234-update.pkg");
+        let cnt_base = 0x10000usize;
+        let mut cnt = build_pkg_multi("UP0000-PPSA01234_00-TESTGAME00000000", &[]);
+        cnt[0x78..0x7c].copy_from_slice(&0x6000_0000u32.to_be_bytes());
+        let mut buf = vec![0u8; cnt_base];
+        buf[0..4].copy_from_slice(&PKG_MAGIC_FIH.to_be_bytes());
+        buf[0x05] = 0;
+        buf[0x06..0x08].copy_from_slice(&3u16.to_le_bytes());
+        buf[0x58..0x60].copy_from_slice(&(cnt_base as u64).to_le_bytes());
+        buf.extend_from_slice(&cnt);
+        std::fs::write(&path, &buf).unwrap();
+        let meta = parse_pkg(&path).unwrap();
+        assert_eq!(meta.category, "gp");
+        assert_eq!(meta.package_type.as_deref(), Some("PS5DP"));
     }
 
     fn tempdir() -> std::path::PathBuf {

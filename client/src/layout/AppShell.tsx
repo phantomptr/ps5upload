@@ -33,6 +33,7 @@ import {
 } from "../state/roster";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { isTauriEnv, safeUnlisten } from "../lib/tauriEnv";
+import { isInstallPackagePath } from "../lib/pkgDropDedupe";
 import { useDocumentVisible } from "../lib/visibility";
 import { useScheduleRunner } from "../state/schedules";
 import {
@@ -772,9 +773,7 @@ function usePkgAutoRoute() {
       // Find the FIRST .pkg ANYWHERE in the drop, not just paths[0] — a mixed
       // or reordered drop like [game.elf, patch.pkg] should still route the
       // pkg to Install Package instead of being missed.
-      const pkg = (e.payload.paths ?? []).find((p) =>
-        p.toLowerCase().endsWith(".pkg"),
-      );
+      const pkg = (e.payload.paths ?? []).find(isInstallPackagePath);
       if (!pkg) return;
       // Screens that own their own drag-drop opt out of the app-wide pkg
       // auto-route, so a drop meant for them doesn't also yank the user to

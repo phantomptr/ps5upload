@@ -108,8 +108,8 @@ fn serve_one(s: &mut TcpStream, data: &[u8]) -> std::io::Result<()> {
 }
 
 /// Recover a PPSA/CUSA title_id from a filename like
-/// `PS5_PPSA01650_v1.03.pkg` — the fallback when the `\x7FFIH` header
-/// doesn't expose a parseable content_id.
+/// `PS5_PPSA01650_v1.03.pkg` — a fallback for packages whose embedded metadata
+/// is absent, encrypted, or otherwise unreadable.
 fn title_id_from_filename(name: &str) -> Option<String> {
     name.split(|c: char| !c.is_ascii_alphanumeric())
         .find(|tok| {
@@ -140,10 +140,9 @@ fn live_install_and_verify() {
     let mgmt_addr = format!("{ip}:9114");
     let transfer_addr = format!("{ip}:9113");
 
-    // 1. Parse the header. The \x7FFIH PS5-native fakepkg format doesn't
-    //    expose a parseable content_id host-side (Sony's installer reads it
-    //    from the package itself), so content_id may be empty — recover the
-    //    title_id from the filename for verification.
+    // 1. Parse the header. PS5 \x7FFIH packages normally expose metadata via
+    //    their embedded CNT, but keep the filename fallback for encrypted or
+    //    unusual packages whose content_id remains unreadable.
     let meta = parse_pkg(Path::new(&pkg)).expect("parse_pkg");
     let fname = Path::new(&pkg)
         .file_name()

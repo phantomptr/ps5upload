@@ -19,6 +19,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { isAndroid } from "../../lib/platform";
 import { pickLocalPath } from "../../state/localPicker";
 import { isTauriEnv, safeUnlisten } from "../../lib/tauriEnv";
+import { isInstallPackagePath } from "../../lib/pkgDropDedupe";
 import { localFileSrc } from "../../lib/fileSrc";
 import { useShallow } from "zustand/react/shallow";
 
@@ -244,7 +245,7 @@ export default function UploadScreen() {
         // AppShell's app-wide drop listener routes it to /install-package, so
         // skip it here to avoid creating a stale plain-"file" source the user
         // never asked for (it would upload the .pkg raw and never install it).
-        if (first.toLowerCase().endsWith(".pkg")) return;
+        if (isInstallPackagePath(first)) return;
         const kind = await pathKind(first);
         if (cancelled) return;
         if (kind === "folder") await pickFolder(first);

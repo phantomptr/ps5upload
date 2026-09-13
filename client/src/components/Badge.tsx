@@ -17,6 +17,7 @@ export interface BadgeProps {
   dot?: boolean;
   icon?: LucideIcon;
   className?: string;
+  title?: string;
 }
 
 /**
@@ -44,6 +45,7 @@ export function Badge({
   dot = false,
   icon: Icon,
   className = "",
+  title,
 }: BadgeProps) {
   const sizeCls =
     size === "md"
@@ -82,6 +84,7 @@ export function Badge({
 
   return (
     <span
+      title={title}
       className={[
         "inline-flex items-center gap-1 rounded-full font-medium whitespace-nowrap",
         sizeCls,

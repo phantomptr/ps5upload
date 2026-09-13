@@ -199,6 +199,11 @@ fn sanitize_pkg_filename(name: &str) -> String {
     }
 }
 
+fn is_install_package_filename(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".pkg") || lower.ends_with(".fpkg")
+}
+
 /// POST /api/pkg/upload — receive a .pkg from the browser and stage it on the
 /// engine's own filesystem, returning the path.
 ///
@@ -236,8 +241,8 @@ async fn pkg_upload_handler(mut form: axum::extract::Multipart) -> Response<Body
             }
         };
         let filename = sanitize_pkg_filename(field.file_name().unwrap_or("package.pkg"));
-        // Only accept a .pkg — the browser could POST anything.
-        if !filename.to_ascii_lowercase().ends_with(".pkg") {
+        // The parser validates CNT/FIH magic; the suffix is only a picker hint.
+        if !is_install_package_filename(&filename) {
             continue;
         }
         let dest = dir.join(&filename);
@@ -300,7 +305,7 @@ async fn pkg_upload_handler(mut form: axum::extract::Multipart) -> Response<Body
     let _ = tokio::fs::remove_dir_all(&dir).await;
     json_response(
         StatusCode::BAD_REQUEST,
-        serde_json::json!({ "error": "no .pkg file in the upload" }),
+        serde_json::json!({ "error": "no .pkg or .fpkg file in the upload" }),
     )
 }
 
@@ -1026,9 +1031,10 @@ async fn install_start_handler(
     // game and slipped past the guard, re-registering the shared content_id
     // and WIPING the installed base (hardware-confirmed: a Jak X patch deleted
     // its 3.8 GB base). Fix: when the caller didn't declare a type, read the
-    // category straight from the STAGED pkg's PARAM.SFO (three small ranged
-    // reads) and derive the real type. This arms the guard for an ACTUAL patch
-    // (`gp` → PS4DP) while leaving a full-game re-install (`gd` → PS4GD)
+    // category straight from the STAGED package's CNT metadata (a bounded set
+    // of small ranged reads) and derive the platform-specific type. This arms
+    // the guard for an ACTUAL patch (`gp` → PS4DP/PS5DP) while leaving a
+    // full-game re-install (`gd` → PS4GD/PS5GD)
     // alone — an earlier "is it already installed?" heuristic wrongly blocked
     // legitimate base re-installs, which this avoids. Bounded + fail-soft: a
     // slow/unreadable pkg just leaves the default type, never hangs the start.
@@ -1044,11 +1050,15 @@ async fn install_start_handler(
             let parsed = tokio::time::timeout(
                 std::time::Duration::from_secs(10),
                 tokio::task::spawn_blocking(move || {
-                    ps5upload_pkg::category_from_reader(|off, len| {
+                    ps5upload_pkg::metadata_from_reader(|off, len| {
                         ps5upload_core::fs_ops::fs_read(&addr, &local_path, off, len).ok()
                     })
-                    .and_then(|cat| {
-                        ps5upload_pkg::package_type_for_category(&cat).map(|pt| (cat, pt))
+                    .and_then(|meta| {
+                        ps5upload_pkg::package_type_for_category_and_platform(
+                            &meta.category,
+                            &meta.platform,
+                        )
+                        .map(|pt| (meta.category, pt))
                     })
                 }),
             )
@@ -3654,7 +3664,8 @@ async fn resolve_parts_and_meta(
         let meta = PkgMetadata {
             path: PathBuf::from(&lp),
             size: 0,
-            kind: PkgKind::Standard,
+            kind: PkgKind::CntContainer,
+            authenticity: ps5upload_pkg::PkgAuthenticity::Unknown,
             content_id: req.content_id.clone().unwrap_or_default(),
             title: String::new(),
             title_id: String::new(),
@@ -4108,6 +4119,14 @@ mod tests {
         );
         assert_eq!(sanitize_pkg_filename("..."), "package.pkg");
         assert_eq!(sanitize_pkg_filename("bad\0name.pkg"), "badname.pkg");
+    }
+
+    #[test]
+    fn browser_upload_accepts_pkg_and_fpkg_extensions() {
+        assert!(is_install_package_filename("Game.pkg"));
+        assert!(is_install_package_filename("Game.FPKG"));
+        assert!(!is_install_package_filename("Game.ffpkg"));
+        assert!(!is_install_package_filename("Game.ffpfs"));
     }
 
     #[test]

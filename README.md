@@ -102,8 +102,9 @@
   that too. **Payload playlists** run a scripted boot sequence, and a
   playlist step can pull straight from a repo at run time so you don't
   keep a pile of `.elf` files on your PC.
-- **Install fakepkgs (package library)** — add a `.pkg` and it uploads
-  to your PS5 once and stays there. **Install Package** lists every
+- **Install packages (package library)** — add a PS4 `.pkg` or PS5 `.fpkg`
+  install package and it uploads to your PS5 once and stays there.
+  **Install Package** lists every
   uploaded package with cover art and size; **Install**, **Reinstall**,
   or **Delete** any of them in a click — no re-uploading to install
   again. **Install all** does a whole set in one tap, in base → update →
@@ -114,7 +115,7 @@
   keeps the staged package and directs users to the on-PS5 Settings → System →
   Debug Settings → Game → Package Installer instead of claiming success.
   **Stream (beta)** installs a
-  `.pkg` straight from your PC over HTTP with no staging upload — handy
+  package straight from your PC over HTTP with no staging upload — handy
   when console storage is tight.
 - **Web browser access** — run the engine (or the official Docker image)
   and manage your PS5 from any browser on the LAN, the full app served
@@ -362,10 +363,11 @@ runs on every supported firmware without per-release rebuilds.
 | **Practical jailbreak** | **~1.00 – 12.70** | Limited by the public ELF loader / exploit chain, not by our payload |
 | Hardware-tested here | **5.10** and **9.60** | Core transfer, mount, browse, install, FTP, metadata |
 
-> `.pkg` install depends on the console's jailbreak having live kernel
+> Fake/debug package install depends on the console's jailbreak having live kernel
 > patches (kstuff / fpkg-enable). On builds where those aren't active the
 > installer reports it honestly rather than claiming a false success — see
-> the FAQ on install firmware support.
+> the FAQ on install firmware support. `.ffpkg` / `.ffpfs` are UFS images for
+> the mount flow, not install-package filename variants.
 
 The process-list feature (Hardware tab's process snapshot) reads
 `kinfo_proc` via `sysctl(KERN_PROC_PROC)` with field offsets that

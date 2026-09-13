@@ -67,13 +67,11 @@ import {
   type InstalledPkgArtifact,
 } from "../../api/ps5";
 import { transferAddr, hostOf } from "../../lib/addr";
-import { formatBytes } from "../../lib/format";
-import { acceptPkgDrop } from "../../lib/pkgDropDedupe";
+import { formatBytes, formatDuration } from "../../lib/format";
+import { remainingSeconds } from "../../lib/rollingRate";
+import { acceptPkgDrop, isInstallPackagePath } from "../../lib/pkgDropDedupe";
 import { writeClipboard } from "../../lib/clipboard";
-import {
-  deleteBrowserPkgUpload,
-  stageBrowserPkg,
-} from "../../api/pkgUpload";
+import { deleteBrowserPkgUpload, stageBrowserPkg } from "../../api/pkgUpload";
 
 /* ─── Cover art ────────────────────────────────────────────────────────
  * Thin wrapper over the shared GameIcon (keyed by title id from the
@@ -156,6 +154,15 @@ function PkgRow({
     uploading && entry.totalBytes
       ? Math.min(100, Math.round(((entry.bytes ?? 0) / entry.totalBytes) * 100))
       : 0;
+  // Speed + time remaining, the same readout the Upload queue shows. Both are
+  // hidden once bytes reach the total: the PS5 is then committing the file,
+  // the last rate no longer describes anything, and an ETA would sit at "0s".
+  const uploadRate = uploading ? (entry.bytesPerSec ?? 0) : 0;
+  const uploadEtaSec = uploading
+    ? remainingSeconds(entry.bytes ?? 0, entry.totalBytes ?? 0, uploadRate)
+    : null;
+  const uploadFinalizing =
+    uploading && !!entry.totalBytes && (entry.bytes ?? 0) >= entry.totalBytes;
 
   return (
     <li className="flex flex-col gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
@@ -164,44 +171,68 @@ function PkgRow({
           <Cover host={host} titleId={entry.titleId} />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-            <span
-              className="min-w-0 basis-full truncate text-sm font-medium sm:basis-auto sm:flex-1"
-              title={rowLabel}
-            >
-              {rowLabel}
-            </span>
-            {/* PS4 / PS5 platform badge — derived from the header magic
+              <span
+                className="min-w-0 basis-full truncate text-sm font-medium sm:basis-auto sm:flex-1"
+                title={rowLabel}
+              >
+                {rowLabel}
+              </span>
+              {/* PS4 / PS5 platform badge — derived from the header magic
                 (\x7FFIH = PS5) and the title-id prefix (CUSA = PS4, PPSA =
                 PS5). Helps users tell at a glance which console a pkg targets. */}
-            <PlatformBadge platform={entry.platform} />
-            {installed && !busy && (
-              <Badge tone="good" variant="soft">
-                {tr("pkglib.badge.installed", "installed")}
-              </Badge>
-            )}
-            {/* Update / DLC badge — a base game and its update share a
-                ContentID, so without this they look identical. */}
-            {pkgCategoryLabel(entry.category) &&
-              pkgCategoryLabel(entry.category) !== "Base" && (
-                <Badge tone="accent" variant="soft">
-                  {pkgCategoryLabel(entry.category) === "Update"
-                    ? tr("pkglib.badge.update", "update")
-                    : tr("pkglib.badge.dlc", "DLC")}
+              <PlatformBadge platform={entry.platform} />
+              {entry.authenticity === "fake_debug" && (
+                <Badge
+                  tone="accent"
+                  variant="soft"
+                  title={tr(
+                    "pkglib.auth.fake.title",
+                    "Debug/fake-signed package, identified from the PS5 FIH envelope.",
+                  )}
+                >
+                  {tr("pkglib.auth.fake", "fake/debug")}
                 </Badge>
               )}
-            {/* Authoritative PARAM.SFO version — the definitive "which update
-                is this" (updates share a ContentID and a title). */}
-            {entry.appVer && (
-              <span
-                className="inline-flex shrink-0 items-center rounded-full border border-[var(--color-border)] px-1.5 py-0.5 font-mono text-xs font-medium tabular-nums text-[var(--color-muted)]"
-                title={tr(
-                  "pkglib.version.title",
-                  "Package version (PARAM.SFO APP_VER)",
+              {entry.authenticity === "retail" && (
+                <Badge
+                  tone="warn"
+                  variant="soft"
+                  title={tr(
+                    "pkglib.auth.retail.title",
+                    "Retail-signed package. Installing it does not grant a license; the console still needs a valid entitlement to launch it.",
+                  )}
+                >
+                  {tr("pkglib.auth.retail", "retail")}
+                </Badge>
+              )}
+              {installed && !busy && (
+                <Badge tone="good" variant="soft">
+                  {tr("pkglib.badge.installed", "installed")}
+                </Badge>
+              )}
+              {/* Update / DLC badge — a base game and its update share a
+                ContentID, so without this they look identical. */}
+              {pkgCategoryLabel(entry.category) &&
+                pkgCategoryLabel(entry.category) !== "Base" && (
+                  <Badge tone="accent" variant="soft">
+                    {pkgCategoryLabel(entry.category) === "Update"
+                      ? tr("pkglib.badge.update", "update")
+                      : tr("pkglib.badge.dlc", "DLC")}
+                  </Badge>
                 )}
-              >
-                v{entry.appVer}
-              </span>
-            )}
+              {/* Authoritative PARAM.SFO version — the definitive "which update
+                is this" (updates share a ContentID and a title). */}
+              {entry.appVer && (
+                <span
+                  className="inline-flex shrink-0 items-center rounded-full border border-[var(--color-border)] px-1.5 py-0.5 font-mono text-xs font-medium tabular-nums text-[var(--color-muted)]"
+                  title={tr(
+                    "pkglib.version.title",
+                    "Package version (PARAM.SFO APP_VER)",
+                  )}
+                >
+                  v{entry.appVer}
+                </span>
+              )}
             </div>
             <div className="mt-0.5 truncate font-mono text-xs text-[var(--color-muted)]">
               {entry.contentId || entry.name}
@@ -250,7 +281,10 @@ function PkgRow({
                   </span>
                 </div>
               )}
-              <div className="flex min-w-0 items-center gap-1" title={entry.path}>
+              <div
+                className="flex min-w-0 items-center gap-1"
+                title={entry.path}
+              >
                 <FolderOpen size={11} className="shrink-0 opacity-70" />
                 <span className="shrink-0 font-medium">
                   {tr("pkglib.meta.onPs5", undefined, "On PS5:")}
@@ -372,6 +406,22 @@ function PkgRow({
               {entry.totalBytes
                 ? ` / ${formatBytes(entry.totalBytes)}`
                 : ""} · {pct}%
+              {!uploadFinalizing && uploadRate > 0 && (
+                <>
+                  {" · "}
+                  {formatBytes(uploadRate)}/s
+                  {uploadEtaSec !== null && (
+                    <>
+                      {" · "}
+                      {tr(
+                        "queue_eta",
+                        { eta: formatDuration(uploadEtaSec) },
+                        "ETA {eta}",
+                      )}
+                    </>
+                  )}
+                </>
+              )}
             </span>
           </div>
         </div>
@@ -580,7 +630,8 @@ export default function InstallPackageScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.key]);
 
-  // Webview drag-drop — filter to .pkg, reject .ffpkg/.ffpfs with a clear msg.
+  // Webview drag-drop — accept install packages, but keep mountable UFS images
+  // (.ffpkg/.ffpfs) in the File System flow.
   useEffect(() => {
     if (!host) return;
     if (!isTauriEnv()) return;
@@ -595,12 +646,12 @@ export default function InstallPackageScreen() {
       } else if (e.payload.type === "drop") {
         setDropActive(false);
         const paths = e.payload.paths ?? [];
-        const pkgPaths = paths.filter((x) => /\.pkg$/i.test(x));
+        const pkgPaths = paths.filter(isInstallPackagePath);
         if (paths.length > 0 && pkgPaths.length === 0) {
           setPickError(
             tr(
               "install.error.notPkg",
-              "Only .pkg files can be installed. .ffpkg / .ffpfs are mountable images — open them from the File System tab instead.",
+              "Only .pkg or .fpkg install packages can be installed here. .ffpkg / .ffpfs are mountable images — open them from the File System tab instead.",
             ),
           );
           return;
@@ -636,11 +687,11 @@ export default function InstallPackageScreen() {
       const sel = isAndroid()
         ? await pickPath({
             mode: "file",
-            filters: [{ name: "PS5 Package", extensions: ["pkg"] }],
+            filters: [{ name: "PlayStation Package", extensions: ["pkg", "fpkg"] }],
           })
         : await openDialog({
             multiple: true,
-            filters: [{ name: "PS5 Package", extensions: ["pkg"] }],
+            filters: [{ name: "PlayStation Package", extensions: ["pkg", "fpkg"] }],
           });
       const paths = Array.isArray(sel) ? sel : sel ? [sel] : [];
       for (const pth of paths) uploadRef.current(pth as string);
@@ -671,7 +722,11 @@ export default function InstallPackageScreen() {
             "Stream install complete — the package was fetched over HTTP, nothing was staged on the PS5.",
           )
         : r.message ||
-          tr("install.stream.failed", undefined, "The install didn't complete."),
+          tr(
+            "install.stream.failed",
+            undefined,
+            "The install didn't complete.",
+          ),
     });
     if (!r.ok && r.stagedFallbackRecommended) {
       const fallback = await confirm({
@@ -686,11 +741,7 @@ export default function InstallPackageScreen() {
           undefined,
           "Upload & install",
         ),
-        cancelLabel: tr(
-          "pkglib.stream.fallback.cancel",
-          undefined,
-          "Not now",
-        ),
+        cancelLabel: tr("pkglib.stream.fallback.cancel", undefined, "Not now"),
       });
       if (fallback) {
         setPickError(null);
@@ -759,11 +810,11 @@ export default function InstallPackageScreen() {
       const sel = isAndroid()
         ? await pickPath({
             mode: "file",
-            filters: [{ name: "PS5 Package", extensions: ["pkg"] }],
+            filters: [{ name: "PlayStation Package", extensions: ["pkg", "fpkg"] }],
           })
         : await openDialog({
             multiple: false,
-            filters: [{ name: "PS5 Package", extensions: ["pkg"] }],
+            filters: [{ name: "PlayStation Package", extensions: ["pkg", "fpkg"] }],
           });
       const p = Array.isArray(sel) ? sel[0] : sel;
       if (!p) return;
@@ -922,9 +973,7 @@ export default function InstallPackageScreen() {
         pkgRowInstalled(
           entry,
           installedIds,
-          entry.titleId
-            ? installedArtifacts.get(entry.titleId)
-            : undefined,
+          entry.titleId ? installedArtifacts.get(entry.titleId) : undefined,
         ),
       );
       if (active.length === 1) {
@@ -991,9 +1040,7 @@ export default function InstallPackageScreen() {
           pkgRowInstalled(
             entry,
             installedIds,
-            entry.titleId
-              ? installedArtifacts.get(entry.titleId)
-              : undefined,
+            entry.titleId ? installedArtifacts.get(entry.titleId) : undefined,
           ),
         )
         .map((entry) => entry.path),
@@ -1028,8 +1075,7 @@ export default function InstallPackageScreen() {
       } else {
         grouped.set(key, {
           key,
-          title:
-            entry.title || entry.titleId || entry.contentId || entry.name,
+          title: entry.title || entry.titleId || entry.contentId || entry.name,
           titleId: entry.titleId,
           entries: [entry],
         });
@@ -1084,7 +1130,7 @@ export default function InstallPackageScreen() {
         loading={loading}
         description={tr(
           "install.description",
-          "Upload .pkg files to your PS5, then install them with one tap. Packages stay on the PS5 until you delete them, so you can reinstall any time.",
+          "Upload .pkg or .fpkg install packages to your PS5, then install them with one tap. Packages stay on the PS5 until you delete them, so you can reinstall any time.",
         )}
         right={
           <div className="flex items-center gap-2">
@@ -1154,14 +1200,14 @@ export default function InstallPackageScreen() {
                       : undefined
                 }
               >
-                {tr("install.add", "Add .pkg")}
+                {tr("install.add", "Add package")}
               </Button>
             )}
             {!isTauriEnv() && (
               <input
                 ref={browserPkgInputRef}
                 type="file"
-                accept=".pkg"
+                accept=".pkg,.fpkg"
                 className="hidden"
                 onChange={(event) => {
                   const file = event.currentTarget.files?.[0];
@@ -1288,7 +1334,9 @@ export default function InstallPackageScreen() {
             )}
             <div className="min-w-0">
               <div className="font-medium break-words">{streamResult.name}</div>
-              <div className="opacity-90 break-words">{streamResult.message}</div>
+              <div className="opacity-90 break-words">
+                {streamResult.message}
+              </div>
             </div>
             <button
               type="button"
@@ -1353,7 +1401,7 @@ export default function InstallPackageScreen() {
           }
           message={tr(
             "pkglib.empty.body",
-            "Add a .pkg to upload it to your PS5 — then install it from here. You can also drag .pkg files onto the window.",
+            "Add a .pkg or .fpkg install package to upload it to your PS5, then install it from here. You can also drag either format onto the window.",
           )}
         />
       ) : (
@@ -1671,7 +1719,7 @@ function ExternalPackages({ host }: { host: string }) {
       <div className="mb-2 text-xs leading-relaxed text-[var(--color-muted)]">
         {tr(
           "pkglib.external.hint",
-          "Plug a USB stick or external drive with .pkg files into the PS5 and they show up here — no upload needed. Installing copies the file onto the console first (your drive's copy is left untouched), then installs it. Use Scan after connecting a drive.",
+          "Plug a USB stick or external drive with .pkg or .fpkg install packages into the PS5 and they show up here — no upload needed. Installing copies the file onto the console first (your drive's copy is left untouched), then installs it. Use Scan after connecting a drive.",
         )}
       </div>
       <Checkbox
@@ -1696,7 +1744,7 @@ function ExternalPackages({ host }: { host: string }) {
         <div className="rounded-md border border-dashed border-[var(--color-border)] px-3 py-4 text-xs text-[var(--color-muted)]">
           {tr(
             "pkglib.external.notScanned",
-            "Auto-scan is off. Connect a USB or external drive with .pkg files, then click Scan.",
+            "Auto-scan is off. Connect a USB or external drive with .pkg or .fpkg install packages, then click Scan.",
           )}
         </div>
       ) : pkgs.length === 0 ? (
@@ -1704,7 +1752,7 @@ function ExternalPackages({ host }: { host: string }) {
         <div className="rounded-md border border-dashed border-[var(--color-border)] px-3 py-4 text-xs text-[var(--color-muted)]">
           {tr(
             "pkglib.external.empty",
-            "No .pkg files found on connected USB or external drives. Connect a drive that has .pkg files on it, then click Scan.",
+            "No .pkg or .fpkg install packages found on connected USB or external drives. Connect a drive that has packages on it, then click Scan.",
           )}
         </div>
       ) : (

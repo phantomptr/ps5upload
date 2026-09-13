@@ -1194,8 +1194,10 @@ you trigger Unmount from the Library tab or the Volumes tab.
 ## Install Package
 
 **Q: Can I install fakepkgs from the desktop?**
-Yes. **Install Package** is a package library: click **Add .pkg**,
-pick the file, and it uploads once to
+Yes. **Install Package** is a package library: click **Add package** and pick a
+PS4 `.pkg` or PS5 `.fpkg` install package. (A PS4 fake package commonly still
+uses the ordinary `.pkg` extension; the extension does not prove how it was
+signed.) It uploads once to
 `/user/data/ps5upload/pkg_library/` on the PS5 and stays there. The
 screen lists every uploaded package with cover art and size, and each
 row has **Install**, **Reinstall**, and **Delete** — so you can install
@@ -1208,13 +1210,32 @@ seconds. Hardware-validated on FW 9.60 with regular game pkgs (UP / EP /
 JP / HP / CUSA / PPSA / PCSA / etc.).
 
 **Q: Can I install a package that's already on a USB / external drive? (3.2.0+)**
-Yes. Plug the drive into the PS5, open **Install Package**, and any `.pkg`
-files on connected USB / external drives show up in an **External Packages**
-section — each with a PS4/PS5 badge and an **Install** button. No upload from
-your computer needed. Under the hood the app copies the package from the drive
-to internal storage first and installs from there, because Sony's installer
-can't read the exfat USB mount directly (it accepts the request but installs
-nothing). The copy is on-console (drive-to-drive), so it's fast.
+Yes. Plug the drive into the PS5, open **Install Package**, and any `.pkg` or
+`.fpkg` install packages on connected USB / external drives show up in an
+**External Packages** section — each with a PS4/PS5 badge and an **Install**
+button. No upload from your computer needed. Under the hood the app copies the
+package from the drive to internal storage first and installs from there,
+because Sony's installer can't read the exfat USB mount directly (it accepts
+the request but installs nothing). The copy is on-console (drive-to-drive), so
+it's fast.
+
+**Q: What is the difference between `.pkg`, `.fpkg`, and `.ffpkg` here?**
+`.pkg` and `.fpkg` are accepted by **Install Package**. The app validates their
+actual header instead of trusting the suffix: PS4-style packages use a CNT
+container, while a finalized PS5 package uses an FIH envelope with an embedded
+CNT. `.ffpkg` and `.ffpfs` are UFS filesystem images and remain in the mount /
+File System workflow; they are not sent to Sony's package installer.
+
+For a PS5 FIH package the app also reports **fake/debug** versus **retail** from
+the envelope. Installing a retail package can be useful for reinstalling owned
+content or applying an official update, but installation does not grant a
+license—the console still needs a valid entitlement to launch licensed content.
+PS4 CNT fake-versus-retail classification requires a deeper cryptographic probe,
+so the app leaves it unknown rather than guessing from `.pkg` or a filename.
+
+The A53/PPR patches are a separate mount-time PFS-key path; they do not disable
+Sony's package-registration policy. Package installation still relies on
+kstuff's ShellCore installer patches and the AppInst/BGFT/DPI paths.
 
 **Q: I have a base game and an update — does the order matter? (3.2.0+)**
 Yes — install the **base game first**, then the update. A base game and its

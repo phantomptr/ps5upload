@@ -29,6 +29,7 @@ import {
 import { pickPath, pickPaths } from "../../lib/pickPath";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { isTauriEnv } from "../../lib/tauriEnv";
+import { isInstallPackagePath } from "../../lib/pkgDropDedupe";
 import { PageHeader, Button, ConnectionGate, Spinner, ErrorCard } from "../../components";
 import EditSessionBanner from "../../components/EditSessionBanner";
 // Direct import to avoid the barrel's circular-dep warning at build.
@@ -2454,7 +2455,7 @@ export default function FileSystemScreen() {
                       <BadgeCheck size={12} />
                     </button>
                   )}
-                  {!isDir && e.name.toLowerCase().endsWith(".pkg") && (
+                  {!isDir && isInstallPackagePath(e.name) && (
                     <button
                       type="button"
                       onClick={() => void runInstallPkg(e)}

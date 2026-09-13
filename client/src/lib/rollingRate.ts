@@ -98,3 +98,23 @@ export function averageRate(bytes: number, elapsedMs: number): number {
   }
   return (bytes * 1000) / elapsedMs;
 }
+
+/**
+ * Seconds left for a transfer, or `null` when an estimate would be a lie.
+ *
+ * Null covers every case where printing a number misleads: no rate yet (the
+ * window needs two samples, so the first ~second has none), an unknown total,
+ * or bytes already at/over the total — at that point the engine is waiting
+ * on the PS5 to commit, and dividing the last rate into zero remaining bytes
+ * would read "ETA 0s" for however long the commit takes.
+ */
+export function remainingSeconds(
+  bytesSent: number,
+  totalBytes: number,
+  bytesPerSec: number,
+): number | null {
+  if (!(bytesPerSec > 0) || !(totalBytes > 0)) return null;
+  const remaining = totalBytes - bytesSent;
+  if (!(remaining > 0)) return null;
+  return remaining / bytesPerSec;
+}

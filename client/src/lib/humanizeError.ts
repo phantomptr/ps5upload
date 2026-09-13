@@ -331,20 +331,15 @@ export function humanizePs5Error(
   }
 
   // ─── 0x80B2_xxxx — Sony installer / package-format rejection ────────
-  // 0x80B2_2404 in particular has been observed on PS5-native fakepkgs
-  // submitted via PS4-emu install paths and on pkgs whose header magic
-  // isn't `\x7FCNT` (e.g. the non-canonical `\x7FFIH` produced by some
-  // PS5-native fakepkg signing tools). The rejection happens AFTER
-  // Sony fetched the bytes, so the HTTP-host plumbing is fine — the
-  // installer just can't parse what we handed it. Common causes:
+  // These errors cover several distinct Sony installer / PlayGo stages. A PS5
+  // `\x7FFIH` finalized image is a real package envelope, not malformed merely
+  // because it is not the PS4-style top-level `\x7FCNT`. Common causes include:
   //
-  //   - Pkg has a non-canonical header magic (run our /api/pkg/parse
-  //     output past `magic_hex` to verify); Sony's installer expects
-  //     `\x7FCNT` for PS4-format and rejects others.
+  //   - Unsupported/corrupt envelope or embedded CNT metadata.
   //   - DLC pkg without the base game installed first. Sony refuses
   //     to install DLC against a missing base.
   //   - PS5-native pkg (PS5GD/PS5DP) submitted with package_type
-  //     "PS4GD" — type mismatch makes the installer fail header check.
+  //     "PS4GD" — type mismatch makes the installer fail header checks.
   //
   // Without Sony docs for the 0x80B2 namespace we surface the most
   // likely actionable cause rather than a generic "unknown".

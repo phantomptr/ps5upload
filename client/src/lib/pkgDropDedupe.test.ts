@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import { acceptPkgDrop, PKG_DROP_DEDUPE_MS } from "./pkgDropDedupe";
+import {
+  acceptPkgDrop,
+  isInstallPackagePath,
+  PKG_DROP_DEDUPE_MS,
+} from "./pkgDropDedupe";
+
+describe("isInstallPackagePath", () => {
+  it("accepts .pkg and .fpkg without confusing mountable .ffpkg images", () => {
+    expect(isInstallPackagePath("Game.pkg")).toBe(true);
+    expect(isInstallPackagePath("Game.FPKG")).toBe(true);
+    expect(isInstallPackagePath("Game.ffpkg")).toBe(false);
+    expect(isInstallPackagePath("Game.ffpfs")).toBe(false);
+  });
+});
 
 describe("acceptPkgDrop", () => {
   it("accepts one physical drop only once during the route hand-off window", () => {

@@ -3,6 +3,12 @@
  * receipt window so one physical drop starts one upload. */
 export const PKG_DROP_DEDUPE_MS = 2_500;
 
+/** Extension hint only; the engine validates the package's CNT/FIH magic. */
+export function isInstallPackagePath(path: string): boolean {
+  const lower = path.toLowerCase();
+  return lower.endsWith(".pkg") || lower.endsWith(".fpkg");
+}
+
 export function acceptPkgDrop(
   recent: Map<string, number>,
   path: string,
