@@ -1,10 +1,10 @@
 //! The inner image (`pfs_image.dat`): data-first, every file stored raw.
 //!
-//! On disk the image is `[file payloads][block-info table][metadata region]` and carries no
-//! block table of its own — the geometry lives in `naps_pkg_layout.dat`. The mount the
-//! console reconstructs from those two is `[file bytes at their logical offsets][zero
-//! padding][metadata region]`, with the metadata region based at the block-aligned
-//! `meta_base` the finalized-image header records at `0x50`.
+//! v1 stores everything, so the on-disk image *is* the logical mount: files sit at their
+//! afid-order offsets, the block-info table sits in the padding block just after the data
+//! (where the sample carries it too), and the metadata region starts at the 256 KiB-aligned
+//! `meta_base` the finalized-image header records at `0x50`. A package that compressed
+//! anything would instead have to map the two spaces through `naps_pkg_layout.dat`.
 //!
 //! The metadata region itself is a small PFS: a superblock, a table of 0xA8-byte inodes
 //! that carry one logical offset each, the super-root's four entries, both flat-path
@@ -34,10 +34,8 @@ pub struct Placement {
 }
 
 pub struct InnerImage {
-    /// The `pfs_image.dat` file bytes (what the outer PFS stores).
+    /// The `pfs_image.dat` bytes, which are also the logical mount.
     pub image: Vec<u8>,
-    /// The logical mount the console reconstructs.
-    pub mount: Vec<u8>,
     pub meta_base: u64,
     pub ndblock: u64,
     pub block_info_offset: u64,
@@ -352,9 +350,9 @@ pub fn write(
         payloads.push(data);
     }
 
-    // On-disk data region, in afid order. The keystone anchors a whole block; any file
-    // that would straddle a block boundary starts a fresh one.
-    let mut image: Vec<u8> = Vec::new();
+    // One buffer: files at their logical offsets, the table in the padding block after
+    // them, the metadata at `meta_base`.
+    let mut image = vec![0u8; (plan.ndblock * BLOCK) as usize];
     let mut placements = vec![
         Placement {
             on_disk_offset: 0,
@@ -366,30 +364,30 @@ pub fn write(
     let mut afid_offsets = vec![0u64; plan.afid_order.len()];
     for (afid, &fi) in plan.afid_order.iter().enumerate() {
         let f = &plan.files[fi];
-        let data = &payloads[fi];
-        let whole_block = f.path == plan::KEYSTONE;
-        let pos = image.len() as u64;
-        if whole_block || (!pos.is_multiple_of(BLOCK) && data.len() as u64 > BLOCK - pos % BLOCK) {
-            pad_to_block(&mut image);
+        let at = f.logical_offset as usize;
+        let end = at + payloads[fi].len();
+        if end > image.len() {
+            return format_err(format!("{} runs past the mount", f.path));
         }
-        let at = image.len() as u64;
-        image.extend_from_slice(data);
-        if whole_block {
-            pad_to_block(&mut image);
-        }
+        image[at..end].copy_from_slice(&payloads[fi]);
         placements[fi] = Placement {
-            on_disk_offset: at,
-            size: data.len() as u64,
+            on_disk_offset: f.logical_offset,
+            size: payloads[fi].len() as u64,
             logical_offset: f.logical_offset,
         };
         afid_offsets[afid] = f.logical_offset;
     }
 
-    // The block-info table, then the metadata region.
-    pad_to_block(&mut image);
-    let block_info_offset = image.len() as u64;
-    image.extend_from_slice(&block_info_table(plan));
-    pad_to_block(&mut image);
+    // The block-info table, in the first padding block after the data region.
+    let block_info_offset = plan.data_end.div_ceil(BLOCK) * BLOCK;
+    let table = block_info_table(plan);
+    let at = block_info_offset as usize;
+    if at + table.len() > plan.meta_base as usize {
+        return format_err("no room for the block-info table before the metadata");
+    }
+    image[at..at + table.len()].copy_from_slice(&table);
+
+    // The metadata region.
     let blocks = metadata_blocks(plan, build_time)?;
     if blocks.len() as u64 != plan.metadata_blocks {
         return format_err(format!(
@@ -398,25 +396,16 @@ pub fn write(
             plan.metadata_blocks
         ));
     }
-    for b in &blocks {
-        image.extend_from_slice(b);
-    }
-
-    // The logical mount the console reconstructs.
-    let mut mount = vec![0u8; (plan.ndblock * BLOCK) as usize];
-    for &fi in &plan.afid_order {
-        let p = placements[fi];
-        let at = p.logical_offset as usize;
-        mount[at..at + p.size as usize].copy_from_slice(&payloads[fi]);
-    }
     let meta_at = plan.meta_base as usize;
+    if meta_at + blocks.len() * BLOCK as usize > image.len() {
+        return format_err("the metadata region runs past the mount");
+    }
     for (i, b) in blocks.iter().enumerate() {
-        mount[meta_at + i * BLOCK as usize..meta_at + (i + 1) * BLOCK as usize].copy_from_slice(b);
+        image[meta_at + i * BLOCK as usize..meta_at + (i + 1) * BLOCK as usize].copy_from_slice(b);
     }
 
     Ok(InnerImage {
         image,
-        mount,
         meta_base: plan.meta_base,
         ndblock: plan.ndblock,
         block_info_offset,
@@ -676,7 +665,7 @@ mod tests {
             (1_700_000_000, 0),
         )
         .unwrap();
-        assert_eq!(inner.mount.len(), (plan.ndblock * BLOCK) as usize);
+        assert_eq!(inner.image.len(), (plan.ndblock * BLOCK) as usize);
         assert_eq!(inner.block_info_offset % BLOCK, 0);
 
         let mounted = read_mount(&inner).unwrap();
@@ -695,7 +684,7 @@ mod tests {
         );
         for f in &mounted.files {
             let at = f.offset as usize;
-            let bytes = &inner.mount[at..at + f.size as usize];
+            let bytes = &inner.image[at..at + f.size as usize];
             if f.path == "sce_sys/keystone" {
                 assert_eq!(bytes, keystone(crate::crypto::DEFAULT_PASSCODE));
             } else {
@@ -706,6 +695,6 @@ mod tests {
     }
 
     fn read_mount(inner: &InnerImage) -> Result<InnerMount> {
-        read(&inner.mount, inner.meta_base)
+        read(&inner.image, inner.meta_base)
     }
 }

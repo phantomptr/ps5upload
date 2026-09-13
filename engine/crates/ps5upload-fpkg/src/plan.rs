@@ -15,8 +15,9 @@ pub const KEYSTONE: &str = "sce_sys/keystone";
 pub const KEYSTONE_LEN: u64 = 96;
 
 /// `metaBase` alignment: two 256 KiB ublocks, the granularity the NAPS u2c mapping
-/// addresses. The samples pad further (webbrowser's data ends at 0xA626 and its metadata
-/// base is 0x400000); only the 256 KiB alignment is load-bearing here.
+/// addresses. One further block is always left free so the block-info table has a home
+/// after the data. The samples pad further (webbrowser's data ends at 0xA626 and its
+/// metadata base is 0x400000); only the 256 KiB alignment is load-bearing here.
 const META_ALIGN: u64 = 0x40000;
 
 /// `pfs-version.dat` is a system marker, not app payload — the app-payload count the
@@ -392,7 +393,7 @@ pub fn build(input: &[SourceFile]) -> Result<Plan> {
     // Geometry: two blocks (superblock, inode table) + four content blocks (super-root
     // dirents, both tables, afid table) + one dirent block per directory + one trailing.
     let metadata_blocks = dirs.len() as u64 + 7;
-    let meta_base = data_end.div_ceil(META_ALIGN) * META_ALIGN;
+    let meta_base = (data_end + BLOCK).div_ceil(META_ALIGN) * META_ALIGN;
     let ndblock = meta_base / BLOCK + metadata_blocks;
 
     let content_inodes = files.len() as u32 + dirs.len() as u32 - 1;
