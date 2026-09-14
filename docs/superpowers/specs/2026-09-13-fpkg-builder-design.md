@@ -164,20 +164,24 @@ virtual package later.
 - **Cancellation** checked per block; **progress** as bytes done / total with
   phase names.
 
-### Engine surface and UI
+### Engine surface and UI — implemented 2026-09-13 (plan 6)
 
-- `POST /api/fpkg/inspect {source}` → readiness report, planned size, free space.
+- `POST /api/fpkg/inspect {source}` → readiness report, planned size, free space. ✅
 - `POST /api/fpkg/build {source, output_dir, options}` → job id on the existing
-  jobs infrastructure, progress events, final path plus verify summary.
+  jobs infrastructure, progress events, final path plus verify summary. ✅ (byte
+  progress every 200 ms; `/api/jobs/{id}/cancel` stops it per block; the finished
+  job carries the package path)
 - Options: passcode (default `"0"×32`), optional firmware-version override for
   `param.json`, key-material location.
 - UI: a **Convert to FPKG** screen with source picker (desktop dialog; web UI
   via `LocalPathPicker`), readiness panel, output folder, build progress, then
-  **Install** (hands the output path to `runStreamInstall`).
+  **Install** (hands the output path to `runStreamInstall`). ✅ built at
+  `/convert` — desktop and Android use `pickPath`; the browser build still takes
+  a typed path (the `LocalPathPicker` wiring is the follow-up).
 - Key material: an import step storing keys under app data, validated by
   fingerprint; the build refuses with a clear message when a required key is
-  missing.
-- Every new UI string goes through `en.ts` and the i18n coverage gate.
+  missing. — **still open**: v1 builds the keys in (see Decisions).
+- Every new UI string goes through `en.ts` and the i18n coverage gate. ✅ 30 keys.
 
 ### Sources
 
