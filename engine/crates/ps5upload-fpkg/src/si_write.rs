@@ -25,7 +25,10 @@ pub fn chunk_crc(mount_image: &[u8]) -> Vec<u8> {
 }
 
 /// The 416-byte `playgo-chunk.dat` (`plgx`, version 0x1000) for the single-image /
-/// single-chunk / single-scenario profile. `mchunk0`/`mchunk1` tile `[0, CNT offset)`.
+/// single-chunk / single-scenario profile. `mchunk0`/`mchunk1` tile `[0, CNT offset)`:
+/// `webbrowser.pkg` carries 0x40000 and 0x80000 against a 0xc0000 container offset, and its
+/// inner superblock sits at 0x40000 — so the split is the inner metadata base, not the
+/// header block.
 pub fn playgo_chunk_dat(content_id: &str, mchunk0: u64, mchunk1: u64) -> Result<Vec<u8>> {
     if content_id.len() != 36 {
         return format_err(format!(
@@ -354,7 +357,7 @@ pub fn zip(members: &[(String, Vec<u8>)], time: (i64, u32)) -> Vec<u8> {
     let mut directory = Vec::new();
     for (name, data) in members {
         let offset = out.len() as u32;
-        let crc = crate::crypto::crc32c(data);
+        let crc = crate::crypto::crc32(data);
         out.extend_from_slice(&0x0403_4B50u32.to_le_bytes());
         out.extend_from_slice(&20u16.to_le_bytes()); // version needed
         out.extend_from_slice(&0u16.to_le_bytes()); // flags
@@ -434,18 +437,28 @@ mod tests {
 
     #[test]
     fn playgo_shapes_match_the_samples() {
-        let chunk =
-            playgo_chunk_dat("IV9999-WEBB00002_00-XXXXXXXXXXXXXXXX", 0x10000, 0xB0000).unwrap();
+        // `webbrowser.pkg`'s own numbers: container offset 0xc0000 and inner metadata base
+        // 0x40000, which is what its two chunk values carry.
+        let chunk = playgo_chunk_dat(
+            "IV9999-WEBB00002_00-XXXXXXXXXXXXXXXX",
+            0x40000,
+            0xC0000 - 0x40000,
+        )
+        .unwrap();
         assert_eq!(chunk.len(), 416);
         assert_eq!(&chunk[..4], b"plgx");
         assert_eq!(&chunk[0x40..0x64], b"IV9999-WEBB00002_00-XXXXXXXXXXXXXXXX");
         assert_eq!(
             u64::from_le_bytes(chunk[0x148..0x150].try_into().unwrap()),
-            0x10000
+            0x40000
+        );
+        assert_eq!(
+            u64::from_le_bytes(chunk[0x150..0x158].try_into().unwrap()),
+            0x40000
         );
         assert_eq!(
             u64::from_le_bytes(chunk[0x158..0x160].try_into().unwrap()),
-            0xB0000
+            0x80000
         );
         let ficm = playgo_ficm(10);
         assert_eq!(ficm.len(), 26);
@@ -481,6 +494,12 @@ mod tests {
         ];
         let bytes = zip(&members, (1_700_000_000, 0));
         assert_eq!(&bytes[..4], &0x0403_4B50u32.to_le_bytes());
+        // The member checksum must be the ZIP format's CRC-32, not the Castagnoli one the
+        // PlayGo table uses — a standard unzip rejects the latter.
+        assert_eq!(
+            u32::from_le_bytes(bytes[14..18].try_into().unwrap()),
+            crate::crypto::crc32(b"hello")
+        );
         let eocd = bytes.len() - 22;
         assert_eq!(&bytes[eocd..eocd + 4], &0x0605_4B50u32.to_le_bytes());
         assert_eq!(

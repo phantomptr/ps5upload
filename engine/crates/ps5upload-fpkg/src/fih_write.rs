@@ -19,8 +19,8 @@ pub struct FihParams<'a> {
     pub naps: &'a [u8],
     /// Block-aligned inner image size (the header's `0xA0`).
     pub inner_size: u64,
-    /// The inner mount's metadata base block index (`0x50`).
-    pub meta_base_block: u64,
+    /// The inner mount's metadata base, in bytes (`0x50`).
+    pub meta_base: u64,
     /// Directories below uroot plus every file (`0x94`/`0x98`).
     pub content_inodes: u32,
     /// The content version's 2-3-3 BCD word (`0x9C`).
@@ -47,8 +47,9 @@ pub fn write(p: &FihParams) -> Vec<u8> {
     for at in [0x30usize, 0x70, 0xD0] {
         h[at..at + 32].copy_from_slice(&game_digest);
     }
-    // The loader reads the inner superblock at this block index times the block size.
-    h[0x50..0x54].copy_from_slice(&(p.meta_base_block as u32).to_le_bytes());
+    // The loader reads the inner superblock at this value times the header's block size
+    // (`0x60`), so it is the metadata base in mount blocks.
+    h[0x50..0x54].copy_from_slice(&((p.meta_base / BLOCK) as u32).to_le_bytes());
     h[0x58..0x60].copy_from_slice(&p.cnt_offset.to_le_bytes());
     h[0x60..0x68].copy_from_slice(&BLOCK.to_le_bytes());
     h[0x68..0x70].copy_from_slice(&0x0000_8000_0000_0000u64.to_le_bytes());
@@ -79,7 +80,7 @@ mod tests {
             cnt_offset: 7 * BLOCK,
             naps: &naps,
             inner_size: 4 * BLOCK,
-            meta_base_block: 3,
+            meta_base: 0x30000,
             content_inodes: 3,
             content_version: 0x0100_1000,
             app_file_count: 1,
@@ -89,7 +90,10 @@ mod tests {
         assert_eq!(&fih[0..5], &[0x7F, b'F', b'I', b'H', 0x01]);
         assert_eq!(fih[5], 0x00);
         assert_eq!(fih[6], 0x03);
-        assert_eq!(fih[0x50], 3);
+        assert_eq!(
+            u32::from_le_bytes(fih[0x50..0x54].try_into().unwrap()),
+            0x30000u32 / BLOCK as u32
+        );
         assert_eq!(&fih[0x58..0x60], &(7 * BLOCK).to_le_bytes());
         assert_eq!(&fih[0x30..0x50], &[1u8; 32]);
         assert_eq!(&fih[0xB0..0xD0], &sha3(&naps));

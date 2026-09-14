@@ -11,7 +11,7 @@ use crate::cnt::ids;
 use crate::crypto::{derive_pfs_key, sha3};
 use crate::keys;
 use crate::rsa;
-use crate::{format_err, Result};
+use crate::{format_err, Result, BLOCK};
 
 /// Where the body region starts.
 const BODY_AT: usize = 0x2000;
@@ -241,6 +241,12 @@ pub fn write(p: &CntParams) -> Result<Vec<u8>> {
     body.add(ids::PLAYGO_HASH_TABLE, p.playgo_hash_table);
     body.add(ids::PLAYGO_FICM, p.playgo_ficm);
     let body_end = body.bytes.len();
+    // Every sample's install segment starts on a 64 KiB boundary — `webbrowser.pkg` carries
+    // 42 KiB of zero padding after the container to reach one, and the container's own
+    // descriptor records that padded end rather than its content end. The PlayGo CRC table
+    // is one entry per block of everything before the segment, so the padding is what makes
+    // its length exact.
+    let padded_end = body_end.next_multiple_of(BLOCK as usize);
 
     // The entry table (`0x0100`'s payload), in entry-table order.
     let mut table = vec![0u8; digest_table_len];
@@ -283,7 +289,10 @@ pub fn write(p: &CntParams) -> Result<Vec<u8>> {
     let rollup_size = names_at - BODY_AT as u32;
     be32_into(&mut head, 0x1C, rollup_size);
     be64_into(&mut head, 0x20, BODY_AT as u64);
-    be64_into(&mut head, 0x28, (body_end - BODY_AT) as u64);
+    // The samples measure this from the *padded* region end, not the content end:
+    // `webbrowser.pkg`'s container holds 307,325 bytes of content in a 0x50000 region and
+    // the field reads 0x4E000.
+    be64_into(&mut head, 0x28, (padded_end - BODY_AT) as u64);
     be64_into(&mut head, 0x30, body.span(ids::IMAGE_DIGESTS).0 as u64);
     head[0x40..0x64].copy_from_slice(p.content_id.as_bytes());
     be32_into(&mut head, 0x70, p.drm_type);
@@ -294,10 +303,14 @@ pub fn write(p: &CntParams) -> Result<Vec<u8>> {
     be32_into(&mut descriptor, 0x00, 1);
     be32_into(&mut descriptor, 0x04, 1);
     be32_into(&mut descriptor, 0x08, 0xA000_0000);
+    descriptor[0x0E..0x10].copy_from_slice(&0x030Cu16.to_be_bytes());
     be64_into(&mut descriptor, 0x10, 0x1_0000);
     be64_into(&mut descriptor, 0x18, p.outer_size);
-    // The mount image ends where the SI segment begins.
-    be64_into(&mut descriptor, 0x28, p.cnt_offset + body_end as u64);
+    // The mount image ends where the SI segment begins — recorded at both `0x28` and `0x30`
+    // in every sample.
+    let si_offset = p.cnt_offset + padded_end as u64;
+    be64_into(&mut descriptor, 0x28, si_offset);
+    be64_into(&mut descriptor, 0x30, si_offset);
     be32_into(&mut descriptor, 0x38, 0x1_0000);
     let entry_digest = |id: u32| -> Option<[u8; 32]> {
         let i = ENTRIES.iter().position(|(eid, _, _)| *eid == id)?;
@@ -336,11 +349,18 @@ pub fn write(p: &CntParams) -> Result<Vec<u8>> {
     let image_key_digest = sha3(body.payload(ids::IMAGE_KEY));
     let imagedigs_digest = sha3(body.payload(ids::IMAGE_DIGESTS));
     let mut cnt = body.bytes;
+    // Pad before the tail digests: the body digest covers the padded region, measured on the
+    // sample (the region end matches its stored value, its content end does not).
+    cnt.resize(padded_end, 0);
     be32_into(&mut cnt, 0x7C, p.inner_size as u32);
     be32_into(&mut cnt, 0x80, 0x2024_0508);
     be32_into(&mut cnt, 0x84, 0x090F_BFC1);
     cnt[0x200..0x224].copy_from_slice(&head[0x40..0x64]);
     cnt[0x4A0..0x4B0].copy_from_slice(&p.seed);
+    // The container's own absolute offset and its region size. Every sample fills both;
+    // ours left them zeroed, which is what a reader uses to bound the container.
+    be64_into(&mut cnt, 0x4B0, p.cnt_offset);
+    be64_into(&mut cnt, 0x4B8, padded_end as u64);
     be32_into(&mut cnt, 0x510, image_key_span.0);
     be32_into(&mut cnt, 0x514, image_key_span.1);
     be32_into(&mut cnt, 0x518, imagedigs_span.0);
@@ -352,7 +372,7 @@ pub fn write(p: &CntParams) -> Result<Vec<u8>> {
     let rollup = sha3(&cnt[BODY_AT..BODY_AT + rollup_size as usize]);
     cnt[0x100..0x120].copy_from_slice(&rollup);
     cnt[0x140..0x160].copy_from_slice(&sha3(&digests));
-    let body_digest = sha3(&cnt[BODY_AT..body_end]);
+    let body_digest = sha3(&cnt[BODY_AT..padded_end]);
     cnt[0x160..0x180].copy_from_slice(&body_digest);
     let package_digest = sha3(&cnt[..PACKAGE_DIGEST_AT]);
     cnt[PACKAGE_DIGEST_AT..SIGNATURE_AT].copy_from_slice(&package_digest);

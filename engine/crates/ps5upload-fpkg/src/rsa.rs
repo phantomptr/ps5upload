@@ -106,14 +106,17 @@ fn pow_mod(base: &Limbs, exp: u64, n: &Limbs) -> Limbs {
 
 /// PKCS#1 v1.5 encryption of `message` under a big-endian modulus, exponent 65537.
 ///
-/// The block is `00 01 FF..FF 00 || message`. Deterministic on purpose: an identically
-/// built package is byte-identical.
+/// The block is `00 02 <nonzero padding> 00 || message` — the *encryption* padding (EME-PKCS1-v1_5),
+/// which is what these fields are: a console decrypts them with the private half. The signature
+/// padding (`00 01 FF..FF 00`) makes a strict decryptor reject the block outright, which is how
+/// the console answered our earlier packages. The padding bytes are fixed rather than random so
+/// that an identically built package is byte-identical.
 pub fn pkcs1_encrypt(modulus_be: &[u8], message: &[u8]) -> Vec<u8> {
     let k = modulus_be.len();
     assert!(k >= 11, "modulus too small");
     assert!(message.len() + 11 <= k, "message too long for the modulus");
     let mut block = vec![0u8; k];
-    block[1] = 0x01;
+    block[1] = 0x02;
     for b in block.iter_mut().take(k - message.len() - 1).skip(2) {
         *b = 0xFF;
     }
@@ -139,11 +142,11 @@ mod tests {
         let digest: Vec<u8> = (0..32).collect();
         assert_eq!(
             hex(&pkcs1_encrypt(&keys::METADATA_MODULUS, &digest)),
-            "6ecd4a56c4ae3589e4be5404536b72a1d68ee8b11ef3c4bfe9434bf9af6aa157f3e80835e0b5b111c0ea6ad888f4a83f29a83d32280b7b680a9fe286067bb140b358d4bbadf5510d0a6ae2411e00ce0d2c0392645c31e92ff7b23a35f9cc11b57707353c9ff6bfadbbb9880360e1cbe39b1854265f745bb2cbf12357bd21a27b19dc4dfcdf6c6cd4057d77917d26367509e2ff886a0e6b7f6226ab65e960bed88cca580720781b302548c8dc15b2566f4d64421e240aca96aa846e691f9bfb19f506f96d1629e3879d48e044b03bbf3b1e47cacac6800c89d35fc207a1153ff637bb3dfa12f448036e0365dfd9e5d5b3985623962b6d202d91123b09506862df2c712d7b3b475f23fe3c629fe131be5f7b68c59ba852f8237ebf240c39d386db30a746645dee76dbe137b0209166b27da3e9908f91f05777138b75be388d40eaa09e7e5017c6e47486e40333db385c95f82001e07bb6a9d549f8e52830815ba2c97f7e31e1479f11cef19e2521e7bc7f7756c58521ae7cbac2650d5ccb7e0e2d"
+            "43c644ee5d4d2989aa602457e2a368486f1f90c659d7505b8d14dd9a81fdd4c2ff6a84691562e067960a1f00ec05d985b4e786cf6b8045021ce2624daba3cbb51f0d16279a6a7f942c2b4a75cfbf1975c44f1c615b3f32f643f2c38ba96ce5eaeba8aa4bd383bb0f5828e930c96ea0a7117d52df69256157b393f84f48a51c6b4613d603be6faa6da93abb17776d0df8cc845db02bf0c1343c6a29b292ed086b7bc10076c1055b52df14adc52c647184db41e0117a52a330f56db832a7073a0089d64016a0d436bae711b4ef7ded932b1237238ce5fc742bf7cacccdcecc6472b6b2bd005ef20622db9b68ad56676c559afd3975f32272c24684f5b08774dcaef7a371033495f864755af0b6320d23c56fbc239c5198687beee22602b2a68c7e8ad25bced42eeeb486936dc7a8521f9e45284d96db7f04c51c498ba01095900bdbee9bb07bf5b56e7e07cae48feb38cc9c2d5cd9319d5d38e0ce4837bb6ef781857a9e152ef32b4f1cc2e2654bb26ac14731fbbcfc8a1cd2696491e3100179a2"
         );
         assert_eq!(
             hex(&pkcs1_encrypt(&keys::METADATA_MODULUS, b"0123456789abcdef")),
-            "45dd5de26de3c68561c4c20261a68dd36e45929c444830ae30ab09c9f92a40960bd19f41e965285afc4176804397239d93c25ab6c29a1d3629efce8d4a1131566599bd30bc8125e5f1f25908ca53b7c8f7671e60535681fa15198f2fe7a4728fc4e77b65fd859bb8f0be3f26bb5ec0fcc006d829e82a36b79d288ee847395d42c1897d2d51a3c5216215c1a4f40bda6870ec8c8c6ab612a3dc5e0eb7225b7f565914594009ded42d736a8e37075671188abba87abc2c343d37836d8beee32016ba79321da2ccb44a33b196593392be919d2c12138083a43a4f81d4bbbc09eccf57235988951844a136f743d5e4909e4f50fefa4ae22f33c2eae10a6d8a496e5512fb37a85abf7087ebc4169a4d0a96aef8afbd0e94c48e86d9c5b231485b10b9835293252106c798f03522cebc77ee90c238f719de02f95e9622cf08a62926409d405df3d11354e5b6cea03ff5ceeae4339c585c6a65a8ee5a50e0707a0935e7bde53971f2a0317c270382933407ee1186c4a925daec6c004cf3821b92e281e2"
+            "2b32ea134a812ae8c5e0445dff3c594c900b755c73263032df80443aee91dee4178176a69c08eece658a4c2e61bbd4f95ff58268b4b4618cff7cb5c78d2545cdfbddea66687a137e54f5fd466d89fbb91dea1aaa7683540bb7f4e7a55454ea2746dfbbcf055c07897f01838951baa432f36bb2ebb68120e6c93df86090dc74eb0597acfd4c6a45ca71f828ef4b4fd346de0c8c093350f3891cb893938733f083ad6f23e29d5761f02f9afca4d5a59a4bc202b23a64d197ad6397105bd48fb260d34f69e15e5a8c1633dd8198e5571f78d2f57918484f3370e2fd12d0cb0509f9385fe22427e11c87e5333d9c7935445e486a21aa5ce9583aa307dc37c9a34fccaa6dbf9c95da0fe62b268c4e4667c2befb090c18ef205bc4e78a074faa3ad1bce281ffe1ef21b653f73947994a9bc16658a2c12917ec74029c8b58770be29973eaf81e04a936fd7cf7a382e2ff31d28f931dfda6ed45a0cf703e22f10dedd951cbb343eee7bef70492ea5a1439236081ff33a0666fd1f09578417de86b33d9c9"
         );
     }
 

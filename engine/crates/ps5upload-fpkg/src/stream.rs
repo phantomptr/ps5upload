@@ -217,7 +217,7 @@ pub fn write_package(
         cnt_offset,
         naps: &naps,
         inner_size,
-        meta_base_block: plan.meta_base / BLOCK,
+        meta_base: plan.meta_base,
         content_inodes: plan.content_inodes,
         content_version: request.content_version,
         app_file_count: plan.app_file_count,
@@ -229,7 +229,11 @@ pub fn write_package(
 
     // ── the container ────────────────────────────────────────────────────────────────
     (progress.phase)("writing the container");
-    let playgo_chunk = si_write::playgo_chunk_dat(request.content_id, BLOCK, outer_size)?;
+    let playgo_chunk = si_write::playgo_chunk_dat(
+        request.content_id,
+        plan.meta_base,
+        cnt_offset - plan.meta_base,
+    )?;
     let ficm_files = plan.content_inodes + 3;
     let cnt = cnt_write::write(&CntParams {
         content_id: request.content_id,
