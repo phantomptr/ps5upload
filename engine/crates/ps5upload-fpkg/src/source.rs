@@ -425,7 +425,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("sce_sys")).unwrap();
         std::fs::write(dir.join("eboot.bin"), [0u8; 1024]).unwrap();
-        std::fs::write(dir.join("sce_sys/param.json"), b"{}").unwrap();
+        std::fs::write(
+            dir.join("sce_sys/param.json"),
+            br#"{"applicationDrmType":"free"}"#,
+        )
+        .unwrap();
         let mut tree = open(&dir).unwrap();
         let readiness = readiness(tree.as_mut());
         let line = readiness
@@ -436,6 +440,12 @@ mod tests {
         assert!(line.ok);
         assert!(line.detail.contains("folder"), "{}", line.detail);
         assert!(line.detail.contains("2 files"), "{}", line.detail);
+        // A non-standard DRM is reported, because the package will differ from the source.
+        assert!(
+            readiness.checks.iter().any(|c| c.name == "drm" && c.ok),
+            "{:?}",
+            readiness.checks
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
