@@ -33,6 +33,7 @@ impl Drop for TempDir {
 /// A tree that crosses block boundaries in both directions: a file smaller than a block,
 /// one that spans several, and the `sce_sys` set the container carries.
 fn write_tree(root: &Path) {
+    let title_id = &CONTENT_ID[7..16];
     let put = |path: &str, data: Vec<u8>| {
         let full = root.join(path);
         std::fs::create_dir_all(full.parent().unwrap()).unwrap();
@@ -51,7 +52,8 @@ fn write_tree(root: &Path) {
         "sce_sys/param.json",
         format!(
             "{{\"contentId\":\"{CONTENT_ID}\",\"contentVersion\":\"01.002.003\",\
-             \"titleName\":\"Scale Test\",\"requiredSystemSoftwareVersion\":\"0x1160000000000000\"}}"
+             \"titleName\":\"Scale Test\",\"titleId\":\"{title_id}\",\
+             \"requiredSystemSoftwareVersion\":\"0x1160000000000000\"}}"
         )
         .into_bytes(),
     );
@@ -378,9 +380,10 @@ fn a_non_standard_drm_reaches_the_package_as_standard() {
     let out = TempDir::new("drm-out");
     write_tree(source.path());
     let param = source.path().join("sce_sys/param.json");
+    let title_id = &CONTENT_ID[7..16];
     let original = format!(
         "{{\"contentId\":\"{CONTENT_ID}\",\"contentVersion\":\"01.002.003\",\
-         \"applicationDrmType\":\"free\",\"titleName\":\"Scale Test\"}}"
+         \"applicationDrmType\":\"free\",\"titleName\":\"Scale Test\",\"titleId\":\"{title_id}\"}}"
     );
     std::fs::write(&param, &original).unwrap();
 

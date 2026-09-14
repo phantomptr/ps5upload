@@ -231,6 +231,45 @@ pub fn drm_rewrite(param_json: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// The title id `content_id` belongs to: the part between its first `-` and its first `_`
+/// (`UP4433-PPSA17221_00-…` → `PPSA17221`).
+pub fn title_id_from_content_id(content_id: &str) -> Option<&str> {
+    let rest = content_id.split_once('-')?.1;
+    let id = rest.split_once('_')?.0;
+    (!id.is_empty()).then_some(id)
+}
+
+/// `param.json` with a `titleId` inserted, or `None` when it already carries one (or cannot be
+/// spliced). The console's `GetRawContentInfo` needs the field: a package whose copy omits it
+/// fails the install outright with `Invalid TitleId : [] strLength = 0`.
+pub fn title_id_rewrite(param_json: &[u8]) -> Option<Vec<u8>> {
+    let json = parse_param_json(param_json)?;
+    if json.get("titleId").is_some() {
+        return None;
+    }
+    let id = json.get("contentId")?.as_str()?;
+    let title_id = title_id_from_content_id(id)?;
+    let text = String::from_utf8_lossy(param_json);
+    let open = text.find('{')?;
+    // Carry the object's inner indentation, so an already-formatted file stays readable.
+    let at = open + 1;
+    let indent: String = text[at..].chars().take_while(|c| *c == '\n').collect();
+    let nl = if indent.is_empty() { "" } else { "\n" };
+    // The indentation the file already uses for its first key, so the inserted field lines up.
+    let pad: String = text[at..]
+        .chars()
+        .skip_while(|c| *c != '\n')
+        .skip(1)
+        .take_while(|c| c.is_whitespace())
+        .collect();
+    let mut out = Vec::with_capacity(param_json.len() + title_id.len() + 24);
+    out.extend_from_slice(text[..at].as_bytes());
+    let sep = if nl.is_empty() { ":" } else { ": " };
+    out.extend_from_slice(format!("{nl}{pad}\"titleId\"{sep}\"{title_id}\",").as_bytes());
+    out.extend_from_slice(text[at..].as_bytes());
+    Some(out)
+}
+
 /// The content version (`MM.mmm.ppp`) a `param.json` declares, packed as the 2-3-3 BCD
 /// word the finalized-image header echoes at `0x9C`.
 pub fn content_version_word(param_json: &[u8]) -> Option<u32> {
@@ -339,6 +378,29 @@ pub fn readiness(tree: &mut dyn SourceTree) -> Readiness {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_title_id_is_derived_from_the_content_id() {
+        // The console's GetRawContentInfo needs the packaged copy to carry `titleId`: a
+        // package without one fails the install with `Invalid TitleId : [] strLength = 0`.
+        let bare = br#"{"contentId":"UP4433-PPSA17221_00-MINECRAFTPS50000","contentVersion":"01.044.000"}"#;
+        let out = title_id_rewrite(bare).expect("a title id is injected");
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.contains(r#""titleId":"PPSA17221""#), "{text}");
+        assert!(text.contains(r#""contentId":"UP4433-PPSA17221_00-MINECRAFTPS50000""#));
+        // An indented file keeps its shape rather than being collapsed onto one line.
+        let pretty = b"{\n  \"contentId\": \"UP0000-PPSA99011_00-MINIFI8TURE00011\"\n}";
+        let out = String::from_utf8(title_id_rewrite(pretty).unwrap()).unwrap();
+        assert!(out.contains("\n  \"titleId\": \"PPSA99011\","), "{out}");
+        assert!(out.contains("\n}"), "{out}");
+        // Already present, or not a content id we understand: nothing to do.
+        assert!(title_id_rewrite(
+            br#"{"contentId":"UP0000-PPSA99011_00-X","titleId":"PPSA99011"}"#
+        )
+        .is_none());
+        assert!(title_id_rewrite(br#"{"titleName":"x"}"#).is_none());
+        assert!(title_id_rewrite(b"not json").is_none());
+    }
 
     #[test]
     fn junk_is_skipped_and_sizes_are_recorded() {

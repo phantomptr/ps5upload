@@ -127,6 +127,9 @@ fn build_mode(
     // rewritten bytes are served in its place, and the file list's size for it is adjusted
     // so the plan lays out what the package will actually carry.
     let param_json = source::drm_rewrite(&param_json).unwrap_or(param_json);
+    // The console reads `titleId` out of the packaged copy at GetRawContentInfo; a source that
+    // omits it makes the install fail before anything is transferred.
+    let param_json = source::title_id_rewrite(&param_json).unwrap_or(param_json);
     if let Some(entry) = files.iter_mut().find(|f| f.path == "sce_sys/param.json") {
         entry.size = param_json.len() as u64;
     }
