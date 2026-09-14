@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-13-fpkg-builder-design.md` — "Data flow and resource bounds" already describes this design ("one sequential pass over source bytes", "metadata written after data", "header region last"). Plans: `2026-09-13-fpkg-writer.md` (gate G2 passed), `2026-09-13-fpkg-mount-sources.md` (Plan 5 landed).
 
+**Status 2026-09-13: all five tasks implemented** (branch `feat/fpkg-builder`, commits `e5618033` … `ec64a171`). The package is written block by block with flat memory, the in-memory writers remain as the oracle (`tests/scale.rs` asserts the two files are byte-identical for a pinned seed and time), the outer dinode's slots nest past the first one, verification streams, and a build refuses a volume without room. Two defects the oracle test caught are worth naming: a per-block span array capped at four silently dropped file digests (a game's first block holds every small file), and the metric blob's per-file digests needed the same treatment. The `.ffpkg` walk now batches its inode reads: 286,000 files in 0.26 s.
+
 **Measured facts this plan builds on**
 
 | Fact | Value |
