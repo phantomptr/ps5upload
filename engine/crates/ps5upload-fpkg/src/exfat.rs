@@ -327,7 +327,8 @@ pub struct ExFatSource {
 
 impl ExFatSource {
     pub fn open(path: &Path) -> Result<Self> {
-        let mut volume = ExFat::open(path)?;
+        let mut volume = ExFat::open(path)
+            .map_err(|e| crate::Error::Format(format!("{}: {e}", path.display())))?;
         let inner = volume.walk()?;
         let files = inner
             .iter()

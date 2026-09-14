@@ -83,6 +83,14 @@ fn write_dinode(table: &mut [u8], rec: &DinodeRecord, time: (i64, u32)) {
     }
 }
 
+/// The largest inner image this writer can describe: the twelve direct slots plus five
+/// indirect ones, each holding a 36-byte `{digest, block}` record — roughly 570 MiB. A
+/// larger source needs the dinode's double-indirect slot, which is still unverified
+/// (writer plan, gate G1). Callers check this before building the image, not after.
+pub fn max_inner_blocks() -> u64 {
+    (DIRECT_SLOTS + PER_INDIRECT * INDIRECT_SLOTS) as u64
+}
+
 /// Build the encrypted outer image around a stored inner image.
 ///
 /// `afids` are the outer table's per-file afid values — the uroot files' ordinals, which
@@ -102,12 +110,12 @@ pub fn write(
         return format_err("naps_pkg_layout.dat does not fit one block");
     }
     let inner_blocks = inner.len() as u64 / BLOCK;
-    let indirect_needed = (inner_blocks as usize).saturating_sub(DIRECT_SLOTS);
-    if indirect_needed > PER_INDIRECT * INDIRECT_SLOTS {
+    if inner_blocks > max_inner_blocks() {
         return format_err(format!(
             "an inner image of {inner_blocks} blocks needs more indirect slots than a dinode has"
         ));
     }
+    let indirect_needed = (inner_blocks as usize).saturating_sub(DIRECT_SLOTS);
     let indirect_blocks = indirect_needed.div_ceil(PER_INDIRECT);
     let naps_block = inner_blocks;
     let superblock_block = inner_blocks + 1;

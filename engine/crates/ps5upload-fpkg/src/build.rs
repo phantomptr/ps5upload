@@ -96,6 +96,18 @@ pub fn build(request: &BuildRequest, progress: &mut dyn FnMut(&str)) -> Result<B
 
     progress(&format!("planning {}", tree.describe()));
     let plan = plan::build(&files)?;
+    // Refuse an over-large source here: the outer writer says the same thing, but it runs
+    // after the inner image is in memory, and a mount image is tens of gigabytes.
+    if plan.ndblock > outer_write::max_inner_blocks() {
+        return format_err(format!(
+            "{} needs an inner image of {} blocks ({:.1} GiB); this writer covers {:.1} GiB \
+             until the double-indirect outer slot is verified",
+            tree.describe(),
+            plan.ndblock,
+            (plan.ndblock * BLOCK) as f64 / (1u64 << 30) as f64,
+            (outer_write::max_inner_blocks() * BLOCK) as f64 / (1u64 << 30) as f64,
+        ));
+    }
     let sizes: std::collections::HashMap<&str, u64> =
         files.iter().map(|f| (f.path.as_str(), f.size)).collect();
     let mut read = |path: &str| -> Result<Vec<u8>> {

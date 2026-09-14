@@ -237,6 +237,18 @@ pub fn readiness(tree: &mut dyn SourceTree) -> Readiness {
     let files = tree.files().to_vec();
     let has = |path: &str| files.iter().any(|f| f.path == path);
 
+    let bytes: u64 = files.iter().map(|f| f.size).sum();
+    r.push(
+        "source",
+        true,
+        format!(
+            "{}: {} files, {:.1} GiB",
+            tree.describe(),
+            files.len(),
+            bytes as f64 / (1u64 << 30) as f64
+        ),
+    );
+
     r.push(
         "eboot.bin present",
         has("eboot.bin"),
@@ -351,6 +363,26 @@ mod tests {
         assert_eq!(tree.read("eboot.bin").unwrap(), b"0123456789");
         assert!(tree.describe().starts_with("folder "));
         assert_eq!(tree.files().len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn readiness_names_the_source_and_its_size() {
+        let dir = std::env::temp_dir().join(format!("fpkg-named-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sce_sys")).unwrap();
+        std::fs::write(dir.join("eboot.bin"), [0u8; 1024]).unwrap();
+        std::fs::write(dir.join("sce_sys/param.json"), b"{}").unwrap();
+        let mut tree = open(&dir).unwrap();
+        let readiness = readiness(tree.as_mut());
+        let line = readiness
+            .checks
+            .iter()
+            .find(|c| c.name == "source")
+            .expect("a source line");
+        assert!(line.ok);
+        assert!(line.detail.contains("folder"), "{}", line.detail);
+        assert!(line.detail.contains("2 files"), "{}", line.detail);
         std::fs::remove_dir_all(&dir).ok();
     }
 
