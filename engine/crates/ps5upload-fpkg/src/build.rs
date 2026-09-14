@@ -271,15 +271,13 @@ fn now() -> (i64, u32) {
 }
 
 fn random_seed() -> [u8; 16] {
+    use std::io::Read;
     let mut seed = [0u8; 16];
-    if std::fs::read("/dev/urandom")
-        .ok()
-        .and_then(|bytes| {
-            seed.copy_from_slice(bytes.get(..16)?);
-            Some(())
-        })
-        .is_none()
-    {
+    // `/dev/urandom` never reaches EOF, so read exactly one seed's worth.
+    let filled = std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut seed))
+        .is_ok();
+    if !filled {
         // Fall back to the clock; the seed is not a secret, it only diversifies the key.
         let (secs, nanos) = now();
         seed[..8].copy_from_slice(&secs.to_le_bytes());
@@ -350,4 +348,26 @@ pub fn summary(report: &BuildReport) -> String {
 /// The end-to-end sanity the caller can rely on: the digest of the finished file.
 pub fn package_digest(path: &Path) -> Result<[u8; 32]> {
     Ok(sha3(&std::fs::read(path)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The seed must come from exactly one read: `fs::read` on `/dev/urandom` never
+    /// reaches EOF, which used to grow the buffer until the process was killed.
+    #[test]
+    fn the_random_seed_is_sixteen_bytes_and_varies() {
+        let a = random_seed();
+        let b = random_seed();
+        assert_eq!(a.len(), 16);
+        assert_ne!(a, b, "two seeds from the system must differ");
+    }
+
+    #[test]
+    fn the_clock_fallback_is_usable() {
+        let (secs, nanos) = now();
+        assert!(secs > 1_600_000_000);
+        let _ = nanos;
+    }
 }

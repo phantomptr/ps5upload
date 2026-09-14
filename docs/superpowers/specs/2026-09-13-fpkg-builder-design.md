@@ -204,10 +204,25 @@ through gates. A gate failing stops the next one.
   indirect slot is corroborated (≈570 MiB), while its reader treats slot 1 as
   double-indirect. Minecraft's raw inner image is ~19 GB (~300k blocks).
   **Requires a debug FPKG larger than 600 MB** to confirm the indirect-block
-  scheme with the reader before the writer relies on it.
-- **G2 — writer round-trip.** Rebuild a small app from the files extracted in
-  G0; our reader re-opens it and every digest verifies. Structural diff against
-  the original, where only seed, timestamps and signature may differ.
+  scheme with the reader. Still open: the writer now emits the single-indirect
+  layout (12 direct + five 1820-record slots) from the reference's documented
+  coverage, so a large sample would confirm it rather than gate it.
+- **G2 — writer round-trip.** ✅ **Passed 2026-09-13** (`engine/crates/ps5upload-fpkg`,
+  `tests/writer.rs`): a synthetic tree (eboot.bin, a 600 KiB file, the `sce_sys`
+  set, an empty directory) builds into a package whose every check the crate's own
+  reader verifies — CNT package digest, header rollup, body digest, per-entry and
+  GeneralDigests digests, the finalized-image digest, the outer ICV and every block
+  signature, the flat-path table, `playgo-chunk.crc` — and whose inner image walks
+  back to the exact source bytes (the generated keystone included). The package's
+  `naps_pkg_layout.dat` reconstructs that image block for block. A build missing an
+  icon still verifies; a source without a content id is refused without leaving a
+  partial file behind.
+
+  Two size facts came out of it. The writer lays out an inner image past twelve data
+  blocks with the dinode's indirect tables (1820 `{SHA3, block}` records per 64 KiB
+  block, five slots), which covers 12 + 5 × 1820 blocks ≈ 570 MiB of inner image —
+  the same coverage the reference documents. Larger sources (Minecraft's 19 GB) need
+  the double-indirect slot, which stays unverified.
 - **G3 — hardware, small package** (needs your approval at the time): Stream
   install the G2 package on the Pro (FW 9.60) with kstuff-lite 1.12-fpkg loaded.
   Tile appears and the klog shows no PlayGo or mount error. Also try an unsigned
