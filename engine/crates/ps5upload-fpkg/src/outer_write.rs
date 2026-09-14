@@ -1,10 +1,15 @@
-//! The outer PFS writer: the five-inode template the samples carry, encrypted.
+//! The outer PFS writer: the five-inode template the samples carry.
 //!
 //! Layout, measured on both samples: `[pfs_image.dat blocks][naps block][superblock
-//! (plaintext)][inode table][root dirents][flat-path table][uroot dirents]`. Every block
-//! but the superblock is AES-128-XTS encrypted — data blocks with the block index as the
-//! sector, metadata blocks with bit 47 set — and each block's plaintext SHA3-256 is what
-//! `imagedigs.dat` carries (byte-reversed there).
+//! (plaintext)][inode table][root dirents][flat-path table][uroot dirents]`. Each block's
+//! plaintext SHA3-256 is what `imagedigs.dat` carries (byte-reversed there), and the block
+//! order never depends on the mode.
+//!
+//! In [`crate::ImageMode::Native`] every block but the superblock is AES-128-XTS encrypted —
+//! data blocks with the block index as the sector, metadata blocks with bit 47 set. In
+//! [`crate::ImageMode::PlaintextNoAuth`], the default, the blocks are stored as they are and the
+//! seed slot carries [`crate::PLAINTEXT_MARKER`]; that is the shape the console mounts, because
+//! its PPR read path serves a marked image without authenticating it.
 
 use crate::crypto::{derive_ekpfs, derive_xts_keys, sha3};
 use crate::flt;
@@ -87,10 +92,16 @@ fn write_dinode(table: &mut [u8], rec: &DinodeRecord, time: (i64, u32)) {
 #[derive(Debug, Clone)]
 pub struct IndirectTable {
     pub block: u64,
-    /// `None` for a data table, whose records point at data blocks starting at
-    /// `first_data`; otherwise the child tables' block indices, in record order.
+    /// `None` for a table whose records point at blocks of the thing it covers — the inner
+    /// image's data, or the layout descriptor's own blocks — starting at `first_data`;
+    /// otherwise the child tables' block indices, in record order.
     pub children: Option<Vec<u64>>,
+    /// The first block this table covers: an absolute data-block index for the inner image,
+    /// a descriptor-relative one for the layout descriptor.
     pub first_data: u64,
+    /// True for the layout descriptor's own blocks rather than the inner image's, whose
+    /// records take their digests from the descriptor.
+    pub naps: bool,
 }
 
 /// The dinode's indirect tables, level by level.
@@ -117,7 +128,8 @@ pub struct IndirectLayout {
 pub struct Layout {
     pub naps_block: u64,
     /// How many blocks `naps_pkg_layout.dat` occupies. One for a small tree; it grows with the
-    /// file count, because the descriptor carries a run per file (Minecraft's needs seven).
+    /// file count, because the descriptor carries a run per file — past twelve of them its own
+    /// indirect tables (`naps_indirect`) cover the rest.
     pub naps_blocks: u64,
     pub superblock_block: u64,
     pub table_block: u64,
@@ -125,6 +137,8 @@ pub struct Layout {
     pub flt_block: u64,
     pub uroot_block: u64,
     pub indirect: IndirectLayout,
+    /// The descriptor's dinode addressing, empty until it outgrows its direct slots.
+    pub naps_indirect: IndirectLayout,
     pub ndblock: u64,
 }
 
@@ -137,6 +151,7 @@ fn build_table(
     data: u64,
     next: &mut u64,
     out: &mut Vec<IndirectTable>,
+    naps: bool,
 ) -> u64 {
     if level == 0 {
         let block = *next;
@@ -145,6 +160,7 @@ fn build_table(
             block,
             children: None,
             first_data,
+            naps,
         });
         return block;
     }
@@ -153,7 +169,7 @@ fn build_table(
     let mut at = first_data;
     while at < first_data + data {
         let take = per_child.min(first_data + data - at);
-        children.push(build_table(level - 1, at, take, next, out));
+        children.push(build_table(level - 1, at, take, next, out, naps));
         at += take;
     }
     let block = *next;
@@ -162,27 +178,49 @@ fn build_table(
         block,
         children: Some(children),
         first_data,
+        naps,
     });
     block
 }
 
 /// The tables the dinode needs to cover `inner_blocks`, laid out from `first_table`.
 pub fn indirect_layout(inner_blocks: u64, first_table: u64) -> Result<IndirectLayout> {
+    cover(inner_blocks, first_table, false)
+}
+
+/// The tables the layout descriptor's own blocks need. Empty while its twelve direct slots
+/// are enough, so a descriptor that fitted before lays out exactly as it did.
+pub fn naps_indirect_layout(naps_blocks: u64, first_table: u64) -> Result<IndirectLayout> {
+    if naps_blocks <= DIRECT_SLOTS as u64 {
+        return Ok(IndirectLayout::default());
+    }
+    cover(naps_blocks, first_table, true)
+}
+
+/// The dinode's indirect levels over `blocks` blocks of one kind, from `first_table`.
+fn cover(blocks: u64, first_table: u64, naps: bool) -> Result<IndirectLayout> {
     let mut next = first_table;
     let mut out = Vec::new();
     let mut slots = Vec::new();
-    let mut remaining = inner_blocks.saturating_sub(DIRECT_SLOTS as u64);
+    let mut remaining = blocks.saturating_sub(DIRECT_SLOTS as u64);
     let mut first_data = DIRECT_SLOTS as u64;
     let mut level = 0u32;
     while remaining > 0 {
         if slots.len() >= INDIRECT_SLOTS {
+            let what = if naps {
+                "a layout descriptor"
+            } else {
+                "an inner image"
+            };
             return format_err(format!(
-                "an inner image of {inner_blocks} blocks needs more indirect levels than a dinode has"
+                "{what} of {blocks} blocks needs more indirect levels than a dinode has"
             ));
         }
         let span = (PER_INDIRECT as u64).saturating_pow(level + 1);
         let take = span.min(remaining);
-        slots.push(build_table(level, first_data, take, &mut next, &mut out));
+        slots.push(build_table(
+            level, first_data, take, &mut next, &mut out, naps,
+        ));
         first_data += take;
         remaining -= take;
         level += 1;
@@ -198,18 +236,20 @@ pub fn layout(inner_blocks: u64, naps_len: u64) -> Result<Layout> {
             "an inner image of {inner_blocks} blocks is past what a dinode can describe"
         ));
     }
-    // The layout descriptor runs on into as many blocks as its bytes need. Its dinode describes
-    // them with direct slots, so its size is bounded here rather than silently truncated: a
-    // descriptor longer than the slots hold would otherwise be written short and the console
-    // would reject the image at mount.
+    // The layout descriptor runs on into as many blocks as its bytes need. Past the twelve a
+    // dinode points at directly it gets its own indirect tables, the same addressing the inner
+    // image uses, so its size is described rather than capped — a descriptor written short is
+    // one the console rejects at mount.
     let naps_blocks = naps_len.div_ceil(BLOCK).max(1);
-    if naps_blocks > DIRECT_SLOTS as u64 {
+    if naps_blocks > max_inner_blocks() {
         return format_err(format!(
-            "the outer layout descriptor needs {naps_blocks} blocks, past the {DIRECT_SLOTS} a dinode describes directly"
+            "the outer layout descriptor needs {naps_blocks} blocks ({naps_len} bytes), past what a dinode addresses"
         ));
     }
     let after_naps = inner_blocks + naps_blocks;
     let indirect = indirect_layout(inner_blocks, after_naps + 5)?;
+    let naps_indirect =
+        naps_indirect_layout(naps_blocks, after_naps + 5 + indirect.tables.len() as u64)?;
     Ok(Layout {
         naps_block: inner_blocks,
         naps_blocks,
@@ -218,8 +258,9 @@ pub fn layout(inner_blocks: u64, naps_len: u64) -> Result<Layout> {
         root_block: after_naps + 2,
         flt_block: after_naps + 3,
         uroot_block: after_naps + 4,
-        ndblock: after_naps + 5 + indirect.tables.len() as u64,
+        ndblock: after_naps + 5 + indirect.tables.len() as u64 + naps_indirect.tables.len() as u64,
         indirect,
+        naps_indirect,
     })
 }
 
@@ -308,19 +349,34 @@ pub fn metadata_blocks(
     let mut records_per_table: std::collections::HashMap<u64, [u8; 32]> =
         std::collections::HashMap::new();
     let mut slots: Vec<(u64, [u8; 32])> = Vec::new();
+    let mut naps_slots: Vec<(u64, [u8; 32])> = Vec::new();
     let mut table_blocks: Vec<(u64, Vec<u8>)> = Vec::new();
-    for table in &lay.indirect.tables {
+    for table in lay.indirect.tables.iter().chain(&lay.naps_indirect.tables) {
         let mut block = vec![0u8; BLOCK as usize];
         match &table.children {
             None => {
                 for slot in 0..PER_INDIRECT {
-                    let index = table.first_data + slot as u64;
-                    if index >= inner_blocks {
+                    let at = slot * 36;
+                    // A data table covers the inner image's blocks by their absolute index;
+                    // the descriptor's own tables cover it by a descriptor-relative one, and
+                    // their records name the descriptor's blocks, which live at `naps_block`.
+                    let (index, end, block_index) = if table.naps {
+                        let k = table.first_data + slot as u64;
+                        (k, lay.naps_blocks, lay.naps_block + k)
+                    } else {
+                        let i = table.first_data + slot as u64;
+                        (i, inner_blocks, i)
+                    };
+                    if index >= end {
                         break;
                     }
-                    let at = slot * 36;
-                    block[at..at + 32].copy_from_slice(&data_digests[index as usize]);
-                    block[at + 32..at + 36].copy_from_slice(&(index as u32).to_le_bytes());
+                    let digest = if table.naps {
+                        naps_digests[index as usize].1
+                    } else {
+                        data_digests[index as usize]
+                    };
+                    block[at..at + 32].copy_from_slice(&digest);
+                    block[at + 32..at + 36].copy_from_slice(&(block_index as u32).to_le_bytes());
                 }
             }
             Some(children) => {
@@ -339,9 +395,13 @@ pub fn metadata_blocks(
         if lay.indirect.slots.contains(&table.block) {
             slots.push((table.block, digest));
         }
+        if lay.naps_indirect.slots.contains(&table.block) {
+            naps_slots.push((table.block, digest));
+        }
         table_blocks.push((table.block, block));
     }
     slots.sort_by_key(|(block, _)| *block);
+    naps_slots.sort_by_key(|(block, _)| *block);
 
     let mut flt_entries: Vec<(u64, u64)> = Vec::new();
     for (i, name) in ["pfs_image.dat", "naps_pkg_layout.dat"].iter().enumerate() {
@@ -424,8 +484,12 @@ pub fn metadata_blocks(
             flags: 0xD,
             size: naps.len() as u64,
             size_stored: naps.len() as u64,
-            direct: naps_digests,
-            indirect: Vec::new(),
+            direct: naps_digests
+                .iter()
+                .take(DIRECT_SLOTS)
+                .map(|(block, digest)| (*block, *digest))
+                .collect(),
+            indirect: naps_slots,
             blocks: Some(lay.naps_blocks as u32),
         },
     ];
@@ -458,14 +522,17 @@ pub fn metadata_blocks(
     Ok(out)
 }
 
-/// Build the encrypted outer image around a stored inner image.
+/// Build the outer image around a stored inner image.
 ///
 /// `afids` are the outer table's per-file afid values — the uroot files' ordinals, which
-/// the samples carry as 0 (`pfs_image.dat`) and 1 (`naps_pkg_layout.dat`).
+/// the samples carry as 0 (`pfs_image.dat`) and 1 (`naps_pkg_layout.dat`). `seed` is the
+/// superblock's seed slot: a random seed in `ImageMode::Native`, [`crate::PLAINTEXT_MARKER`]
+/// in the plaintext mode, whose blocks are stored as they are.
 pub fn write(
     inner: &[u8],
     naps: &[u8],
     seed: [u8; 16],
+    mode: crate::ImageMode,
     content_id: &str,
     passcode: &str,
     time: (i64, u32),
@@ -482,13 +549,22 @@ pub fn write(
         .map(|b| sha3(b))
         .collect();
 
-    let ekpfs = derive_ekpfs(content_id, passcode);
-    let xts = Xts::new(&derive_xts_keys(&ekpfs, &seed));
+    // The mode decides one thing: whether every block but the superblock is XTS-transformed.
+    // A plaintext image never is, so its keys are not even derived.
+    let xts = match mode {
+        crate::ImageMode::Native => Some(Xts::new(&derive_xts_keys(
+            &derive_ekpfs(content_id, passcode),
+            &seed,
+        ))),
+        crate::ImageMode::PlaintextNoAuth => None,
+    };
     let mut plaintext_digests = vec![[0u8; 32]; lay.ndblock as usize];
     let mut image = Vec::with_capacity(lay.ndblock as usize * BLOCK as usize);
     for (index, chunk) in inner.as_chunks::<{ BLOCK as usize }>().0.iter().enumerate() {
         let mut bytes = chunk.to_vec();
-        xts.encrypt(index as u64, &mut bytes);
+        if let Some(xts) = &xts {
+            xts.encrypt(index as u64, &mut bytes);
+        }
         plaintext_digests[index] = data_digests[index];
         image.extend_from_slice(&bytes);
     }
@@ -496,12 +572,14 @@ pub fn write(
         metadata_blocks(&lay, inner_blocks, naps, &data_digests, seed, time)?
     {
         if index != lay.superblock_block {
-            let sector = if index < lay.superblock_block {
-                index
-            } else {
-                SIGNED_SECTOR_FLAG | index
-            };
-            xts.encrypt(sector, &mut plaintext);
+            if let Some(xts) = &xts {
+                let sector = if index < lay.superblock_block {
+                    index
+                } else {
+                    SIGNED_SECTOR_FLAG | index
+                };
+                xts.encrypt(sector, &mut plaintext);
+            }
         }
         plaintext_digests[index as usize] = digest;
         image.extend_from_slice(&plaintext);
@@ -562,6 +640,34 @@ mod tests {
         assert_eq!(big.tables.len(), 1 + PER_INDIRECT + 1);
     }
 
+    /// The descriptor's own addressing appears only once it outgrows its direct slots, so a
+    /// descriptor that fitted before lays out byte for byte as it did.
+    #[test]
+    fn the_descriptor_addresses_itself_only_when_it_must() {
+        assert!(
+            naps_indirect_layout(DIRECT_SLOTS as u64, 100)
+                .unwrap()
+                .tables
+                .is_empty(),
+            "twelve blocks still fit the direct slots"
+        );
+        let over = naps_indirect_layout(DIRECT_SLOTS as u64 + 1, 100).unwrap();
+        assert_eq!(over.slots, [100], "one table covers the thirteenth block");
+        assert_eq!(over.tables.len(), 1);
+        // A whole level's worth fits one table; one block more needs a second level.
+        let two = naps_indirect_layout(DIRECT_SLOTS as u64 + PER_INDIRECT as u64 + 1, 100).unwrap();
+        assert_eq!(two.slots.len(), 2, "a second slot");
+        assert_eq!(two.tables.len(), 3, "two tables below, one root");
+
+        // And the block order holds: the descriptor's tables land after the data's.
+        let lay = layout(20, (DIRECT_SLOTS as u64 + 1) * BLOCK).unwrap();
+        assert_eq!(lay.indirect.tables.len(), 1);
+        assert_eq!(lay.naps_indirect.tables.len(), 1);
+        assert_eq!(lay.naps_indirect.tables[0].block, lay.ndblock - 1);
+        assert_eq!(lay.naps_indirect.tables[0].first_data, DIRECT_SLOTS as u64);
+        assert!(lay.naps_indirect.tables[0].naps);
+    }
+
     /// An image past the twelve direct slots exercises the indirect tables.
     #[test]
     fn a_large_image_uses_indirect_blocks() {
@@ -571,6 +677,7 @@ mod tests {
             &inner,
             &naps,
             [0x22; 16],
+            crate::ImageMode::Native,
             "UP0000-PPSA01234_00-TESTGAME00000000",
             DEFAULT_PASSCODE,
             (1_700_000_000, 0),
@@ -610,6 +717,7 @@ mod tests {
             &inner,
             &naps,
             [0x11; 16],
+            crate::ImageMode::Native,
             "UP0000-PPSA01234_00-TESTGAME00000000",
             DEFAULT_PASSCODE,
             (1_700_000_000, 0),
@@ -668,5 +776,62 @@ mod tests {
             out
         };
         assert_eq!(data, inner);
+    }
+
+    /// The default mode, and the one the console mounts: the blocks are stored as they are and
+    /// the seed slot carries the marker, which is what the reader goes by.
+    #[test]
+    fn a_plaintext_image_is_stored_as_it_is_and_marked() {
+        let inner: Vec<u8> = (0..3 * BLOCK as usize).map(|i| (i % 251) as u8).collect();
+        let naps = vec![9u8; 432];
+        let outer = write(
+            &inner,
+            &naps,
+            crate::PLAINTEXT_MARKER,
+            crate::ImageMode::PlaintextNoAuth,
+            "UP0000-PPSA01234_00-TESTGAME00000000",
+            DEFAULT_PASSCODE,
+            (1_700_000_000, 0),
+        )
+        .unwrap();
+
+        assert_eq!(
+            &outer.image[..BLOCK as usize],
+            &inner[..BLOCK as usize],
+            "a plaintext image's first block is its own bytes, not ciphertext"
+        );
+        let sb_at = outer.superblock_block as usize * BLOCK as usize;
+        assert_eq!(
+            &outer.image[sb_at + 0x370..sb_at + 0x380],
+            &crate::PLAINTEXT_MARKER,
+            "the seed slot carries the marker the console serves plaintext for"
+        );
+
+        let path = std::env::temp_dir().join(format!("outer-plain-{}.bin", std::process::id()));
+        let cnt = crate::cnt::test_support::minimal_cnt(
+            "UP0000-PPSA01234_00-TESTGAME00000000",
+            &outer.plaintext_digests,
+        );
+        std::fs::write(&path, &outer.image).unwrap();
+        let mut file = crate::PkgFile::open(&path).unwrap();
+        let fih = crate::fih::Fih {
+            signed_byte: 0,
+            format_version: 3,
+            pfs_offset: 0,
+            pfs_size: outer.image.len() as u64,
+            game_digest: outer.plaintext_digests[outer.superblock_block as usize],
+            cnt_offset: outer.image.len() as u64,
+        };
+        let parsed = crate::cnt::Cnt::from_bytes(cnt).unwrap();
+        let img = crate::outer::open(&mut file, &fih, &parsed, DEFAULT_PASSCODE).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(img.superblock.mode, crate::ImageMode::PlaintextNoAuth);
+        assert!(
+            img.verdicts.iter().all(|v| v.kind.is_some()),
+            "every stored block must still be its own imagedigs entry"
+        );
+        let nodes = img.dinodes();
+        assert_eq!(img.file_data(&nodes[3]), inner);
     }
 }

@@ -216,14 +216,23 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
         img.superblock.icv_ok,
         format!("block {}", img.superblock.index),
     );
+    // Only the wording depends on the mode: a plaintext block is not decrypted, it has to be its
+    // own digest exactly as it is stored.
+    let plaintext = img.superblock.mode == crate::ImageMode::PlaintextNoAuth;
     for v in &img.verdicts {
         r.push(
-            format!("outer block {} decrypts to its imagedigs entry", v.index),
+            format!(
+                "outer block {} {} its imagedigs entry",
+                v.index,
+                if plaintext { "matches" } else { "decrypts to" }
+            ),
             v.kind.is_some(),
             match v.kind {
                 Some(BlockKind::Data) => "data sector",
                 Some(BlockKind::Signed) => "signed sector",
                 Some(BlockKind::Superblock) => "plaintext superblock",
+                Some(BlockKind::Plaintext) => "plaintext block",
+                None if plaintext => "not its stored digest",
                 None => "no sector matched",
             },
         );
@@ -398,8 +407,15 @@ pub fn verify_streaming(
     let superblock = outer::parse_superblock(sb_index, &sb_block)?;
     r.push("outer superblock ICV", superblock.icv_ok, "");
 
-    let ekpfs = derive_ekpfs(&cnt.content_id, passcode);
-    let xts = Xts::new(&derive_xts_keys(&ekpfs, &superblock.seed));
+    // A native image derives its keys here; a plaintext one stores its blocks as they are, so
+    // there is nothing to derive and nothing to undo.
+    let plaintext_mode = superblock.mode == crate::ImageMode::PlaintextNoAuth;
+    let xts = (!plaintext_mode).then(|| {
+        Xts::new(&derive_xts_keys(
+            &derive_ekpfs(&cnt.content_id, passcode),
+            &superblock.seed,
+        ))
+    });
     // The sector rule the samples follow: data blocks carry their own index, metadata
     // blocks set bit 47, and the superblock is not encrypted at all.
     let read_block = |file: &mut PkgFile, index: u64| -> Result<Vec<u8>> {
@@ -407,6 +423,9 @@ pub fn verify_streaming(
         if index == sb_index {
             return Ok(raw);
         }
+        let Some(xts) = &xts else {
+            return Ok(raw);
+        };
         let mut pt = raw;
         let sector = if index < sb_index {
             index
@@ -438,7 +457,8 @@ pub fn verify_streaming(
         );
     }
 
-    // The sweep: every data block must decrypt to the digest `imagedigs` carries.
+    // The sweep: every data block must reach the digest `imagedigs` carries — by decryption in
+    // the native mode, as stored in the plaintext one.
     let mut bad = 0u64;
     let mut done = 0u64;
     for index in 0..count {
@@ -446,12 +466,17 @@ pub fn verify_streaming(
         if index != sb_index {
             let raw = file.read_at(fih.pfs_offset + index * BLOCK, BLOCK as usize)?;
             let mut matched = false;
-            for sector in [index, SIGNED_SECTOR_FLAG | index] {
-                let mut pt = raw.clone();
-                xts.decrypt(sector, &mut pt);
-                if sha3(&pt) == digests[index as usize] {
-                    matched = true;
-                    break;
+            match &xts {
+                None => matched = sha3(&raw) == digests[index as usize],
+                Some(xts) => {
+                    for sector in [index, SIGNED_SECTOR_FLAG | index] {
+                        let mut pt = raw.clone();
+                        xts.decrypt(sector, &mut pt);
+                        if sha3(&pt) == digests[index as usize] {
+                            matched = true;
+                            break;
+                        }
+                    }
                 }
             }
             if !matched {
@@ -465,7 +490,11 @@ pub fn verify_streaming(
     }
     progress(done * BLOCK, count * BLOCK);
     r.push(
-        "outer blocks decrypt to their imagedigs entry",
+        if plaintext_mode {
+            "outer blocks match their imagedigs entry"
+        } else {
+            "outer blocks decrypt to their imagedigs entry"
+        },
         bad == 0,
         format!("{} of {count} failed", bad),
     );

@@ -34,6 +34,31 @@ pub mod xts;
 /// Every PFS and finalized-image block is 64 KiB.
 pub const BLOCK: u64 = 0x10000;
 
+/// The 16 bytes a plaintext package carries where a native one carries its random seed:
+/// written at the outer superblock's seed slot (`0x370`) and at the container's (`0x4A0`).
+///
+/// It is a marker, not key material. The console mounts game data through `PfsMountGameData_PPR`,
+/// the A53-served read path that drakmor's `ppr-patch` patches, and only an image *marked* this way
+/// is served without authentication — a native image is verified against Sony's keys and fails for
+/// anything not signed with them. Measured on a package the console mounts: those 16 bytes appear
+/// in both slots, its outer blocks are stored in the clear, and its SHA3 digests and superblock ICV
+/// are unchanged. `outer::open` reads the marker back, so the reader tells the two apart from the
+/// package itself and needs no flag.
+pub const PLAINTEXT_MARKER: [u8; 16] = *b"PPRPLAIN-NOAUTH!";
+
+/// How the outer image's blocks are stored.
+///
+/// `PlaintextNoAuth` is the default because it is the only mode that mounts: the blocks are stored
+/// in the clear and the seed slot carries [`PLAINTEXT_MARKER`]. `Native` AES-XTS encrypts every
+/// block but the superblock with keys derived from a random seed — the shape Sony's own debug
+/// packages have — and the console's A53 authenticates it, so a package built here cannot pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ImageMode {
+    #[default]
+    PlaintextNoAuth,
+    Native,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]

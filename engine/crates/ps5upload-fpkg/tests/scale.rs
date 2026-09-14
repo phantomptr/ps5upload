@@ -191,12 +191,16 @@ fn a_source_past_the_first_indirect_slot_round_trips() {
     .unwrap();
     let nodes = img.dinodes();
     let inner_image = img.file_data(&nodes[3]);
+    // The stored image is shorter than the mount: its metadata region is a container, so
+    // the reader walks the stored bytes back to the mount before reading files out of it.
+    assert!(inner_image.len() as u64 <= plan.ndblock * ps5upload_fpkg::BLOCK);
+    let mount_image = ps5upload_fpkg::inner::logical_mount(&inner_image, plan.meta_base).unwrap();
     assert_eq!(
-        inner_image.len() as u64,
+        mount_image.len() as u64,
         plan.ndblock * ps5upload_fpkg::BLOCK,
-        "the reader must recover the whole inner image"
+        "the reader must recover the whole mount"
     );
-    let inner = ps5upload_fpkg::inner::read(&inner_image, plan.meta_base).unwrap();
+    let inner = ps5upload_fpkg::inner::read(&mount_image, plan.meta_base).unwrap();
     assert!(inner.flt_ok);
     let mut recovered: Vec<(String, u64)> = inner
         .files
@@ -321,6 +325,95 @@ fn a_tree_with_blocks_of_inodes_round_trips() {
     eprintln!(
         "{inodes} inodes in {} metadata blocks; the whole tree walked back",
         plan.metadata.blocks
+    );
+}
+
+/// The layout descriptor itself can outgrow a dinode's direct slots: enough files push
+/// `naps_pkg_layout.dat` past twelve blocks (768 KiB), and its own dinode must then use
+/// indirect tables, the same addressing the inner image uses. Minecraft is the first real
+/// tree that lands here — 35,260 files need seventeen blocks — and the alternative,
+/// dropping descriptor records until it fits, was measured on hardware to break the mount,
+/// so the descriptor has to be addressed rather than shrunk.
+///
+/// Ignored by default: it writes ~36,000 files.
+#[test]
+#[ignore = "writes ~36,000 files to the temp directory"]
+fn a_descriptor_past_the_direct_slots_round_trips() {
+    let source = TempDir::new("descriptor-source");
+    let out = TempDir::new("descriptor-out");
+    let out_memory = TempDir::new("descriptor-memory");
+    write_tree(source.path());
+    // Each tiny file costs the descriptor a face, a run record and a block record, so a
+    // flat directory of them is the cheapest way to inflate it past the direct slots.
+    let many = source.path().join("data/many");
+    std::fs::create_dir_all(&many).unwrap();
+    for i in 0..36_000u32 {
+        std::fs::write(many.join(format!("f{i:05}.bin")), [i as u8; 8]).unwrap();
+    }
+
+    let report = build::build(&request(source.path(), out.path()), &mut |_| {}).unwrap();
+    assert!(report.verify.ok(), "{}", report.verify);
+    let memory =
+        build::build_in_memory(&request(source.path(), out_memory.path()), &mut |_| {}).unwrap();
+    assert!(memory.verify.ok(), "{}", memory.verify);
+    assert_eq!(
+        std::fs::read(&report.path).unwrap(),
+        std::fs::read(&memory.path).unwrap(),
+        "the two writers disagree on a descriptor past the direct slots"
+    );
+
+    // The descriptor's size is what the header records at 0xA8.
+    let image = std::fs::read(&report.path).unwrap();
+    let naps_len = u64::from_le_bytes(image[0xA8..0xB0].try_into().unwrap());
+    let slots = ps5upload_fpkg::outer_write::DIRECT_SLOTS as u64;
+    assert!(
+        naps_len > slots * ps5upload_fpkg::BLOCK,
+        "the tree must push the descriptor past the {slots} direct slots: {naps_len} bytes"
+    );
+
+    let mut pkg = ps5upload_fpkg::PkgFile::open(&report.path).unwrap();
+    let head = pkg.read_at(0, ps5upload_fpkg::fih::HEADER_LEN).unwrap();
+    let fih = ps5upload_fpkg::fih::parse(&head).unwrap();
+    let container = ps5upload_fpkg::cnt::read(&mut pkg, fih.cnt_offset).unwrap();
+    let img = ps5upload_fpkg::outer::open(
+        &mut pkg,
+        &fih,
+        &container,
+        ps5upload_fpkg::crypto::DEFAULT_PASSCODE,
+    )
+    .unwrap();
+    let nodes = img.dinodes();
+    let descriptor = &nodes[4];
+    assert_eq!(descriptor.size, naps_len, "the dinode carries its bytes");
+    assert_eq!(
+        descriptor.blocks as u64,
+        naps_len.div_ceil(ps5upload_fpkg::BLOCK),
+        "and its block count"
+    );
+    assert!(descriptor.blocks as usize > ps5upload_fpkg::outer_write::DIRECT_SLOTS);
+    assert_ne!(
+        descriptor.indirect[0].block, 0,
+        "a descriptor past the slots must use an indirect table"
+    );
+    assert!(
+        img.indirect_ok(descriptor),
+        "the descriptor's tables must hash what their parent recorded"
+    );
+    // The point of the test: the reader walks the descriptor back out through its table.
+    let recovered = img.file_data(descriptor);
+    assert_eq!(
+        recovered.len() as u64,
+        naps_len,
+        "the reader must recover the whole descriptor through its indirect table"
+    );
+    assert!(
+        ps5upload_fpkg::naps::parse(&recovered).is_ok(),
+        "and what it recovers must still be a descriptor this crate parses"
+    );
+    eprintln!(
+        "{naps_len} byte descriptor ({} blocks) over {} indirect slot(s); walked back",
+        naps_len.div_ceil(ps5upload_fpkg::BLOCK),
+        descriptor.indirect.iter().filter(|t| t.block != 0).count()
     );
 }
 

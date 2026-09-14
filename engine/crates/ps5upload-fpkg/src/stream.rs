@@ -29,7 +29,10 @@ use crate::{format_err, Result, BLOCK};
 pub struct StreamRequest<'a> {
     pub plan: &'a Plan,
     pub passcode: &'a str,
+    /// The superblock's seed slot: random in the native mode, [`crate::PLAINTEXT_MARKER`] in the
+    /// plaintext one, whose blocks are stored as they are.
     pub seed: [u8; 16],
+    pub image_mode: crate::ImageMode,
     pub time: (i64, u32),
     pub content_id: &'a str,
     pub content_version: u32,
@@ -154,8 +157,15 @@ pub fn write_package(
     let outer_size = lay.ndblock * BLOCK;
     let cnt_offset = BLOCK + outer_size;
 
-    let ekpfs = derive_ekpfs(request.content_id, request.passcode);
-    let xts = Xts::new(&derive_xts_keys(&ekpfs, &request.seed));
+    // The mode decides one thing: whether every block but the superblock is XTS-transformed.
+    // A plaintext image never is, so its keys are not even derived.
+    let xts = match request.image_mode {
+        crate::ImageMode::Native => Some(Xts::new(&derive_xts_keys(
+            &derive_ekpfs(request.content_id, request.passcode),
+            &request.seed,
+        ))),
+        crate::ImageMode::PlaintextNoAuth => None,
+    };
     // `imagedigs` and `playgo-chunk.crc`, both indexed by file block: the header's block
     // first, then the outer image's. 32 B and 4 B per block — the only tables that scale
     // with the package, and they stay resident on purpose.
@@ -179,7 +189,9 @@ pub fn write_package(
         file_digests.block(&block, &spans);
 
         digests[index as usize] = crate::crypto::sha3(&block);
-        xts.encrypt(index, &mut block);
+        if let Some(xts) = &xts {
+            xts.encrypt(index, &mut block);
+        }
         crcs[1 + index as usize] = crc32c(&block);
         out.seek(SeekFrom::Start(BLOCK + index * BLOCK))?;
         out.write_all(&block)?;
@@ -203,12 +215,14 @@ pub fn write_package(
         request.time,
     )? {
         if index != lay.superblock_block {
-            let sector = if index < lay.superblock_block {
-                index
-            } else {
-                SIGNED_SECTOR_FLAG | index
-            };
-            xts.encrypt(sector, &mut plaintext);
+            if let Some(xts) = &xts {
+                let sector = if index < lay.superblock_block {
+                    index
+                } else {
+                    SIGNED_SECTOR_FLAG | index
+                };
+                xts.encrypt(sector, &mut plaintext);
+            }
         }
         digests[index as usize] = digest;
         if index == lay.superblock_block {

@@ -33,11 +33,15 @@ pub struct BuildRequest {
     pub passcode: String,
     /// Build timestamp; the current time when absent.
     pub time: Option<(i64, u32)>,
-    /// The outer PFS seed; random when absent.
+    /// The outer PFS seed. Only an `ImageMode::Native` build has one, and it is random when
+    /// absent; a plaintext build's seed slot carries [`crate::PLAINTEXT_MARKER`] instead.
     pub seed: Option<[u8; 16]>,
     /// How the inner image's metadata region is stored. `PS5UPLOAD_FPKG_META_CODEC` (`stored` or
     /// `zlib`) overrides it, which is how a stored control package is built without a code change.
     pub metadata_codec: inner::MetaCodec,
+    /// How the outer image's blocks are stored. `PS5UPLOAD_FPKG_IMAGE_MODE` (`native`) overrides
+    /// it, which is how a native control package is built without a code change.
+    pub image_mode: crate::ImageMode,
 }
 
 impl BuildRequest {
@@ -51,6 +55,7 @@ impl BuildRequest {
             time: None,
             seed: None,
             metadata_codec: codec_from_env(),
+            image_mode: image_mode_from_env(),
         }
     }
 }
@@ -59,6 +64,13 @@ fn codec_from_env() -> inner::MetaCodec {
     match std::env::var("PS5UPLOAD_FPKG_META_CODEC").as_deref() {
         Ok("stored") => inner::MetaCodec::Stored,
         _ => inner::MetaCodec::Zlib,
+    }
+}
+
+fn image_mode_from_env() -> crate::ImageMode {
+    match std::env::var("PS5UPLOAD_FPKG_IMAGE_MODE").as_deref() {
+        Ok("native") => crate::ImageMode::Native,
+        _ => crate::ImageMode::PlaintextNoAuth,
     }
 }
 
@@ -169,7 +181,12 @@ fn build_mode(
     let icon_png = tree.read("sce_sys/icon0.png").unwrap_or_default();
     let icon_dds = tree.read("sce_sys/icon0.dds").unwrap_or_default();
     let time = request.time.unwrap_or_else(now);
-    let seed = request.seed.unwrap_or_else(random_seed);
+    // A plaintext package carries the marker where a native one carries its random seed, so the
+    // slot and the mode can never disagree and `request.seed` only has meaning in the native mode.
+    let seed = match request.image_mode {
+        crate::ImageMode::PlaintextNoAuth => crate::PLAINTEXT_MARKER,
+        crate::ImageMode::Native => request.seed.unwrap_or_else(random_seed),
+    };
 
     progress(&format!("planning {}", tree.describe()));
     let plan = plan::build(&files)?;
@@ -245,6 +262,7 @@ fn build_mode(
                 plan: &plan,
                 passcode: &request.passcode,
                 seed,
+                image_mode: request.image_mode,
                 time,
                 content_id: &content_id,
                 content_version,
@@ -300,6 +318,7 @@ fn build_mode(
                 &inner.image,
                 &naps,
                 seed,
+                request.image_mode,
                 &content_id,
                 &request.passcode,
                 time,

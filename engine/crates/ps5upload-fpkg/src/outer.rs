@@ -23,9 +23,15 @@ const SIGNED_REGION: usize = 0x5A0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockKind {
+    /// A block of `pfs_image.dat`'s ciphertext in the native mode.
     Data,
+    /// An outer metadata block's ciphertext in the native mode, transformed with bit 47 set.
     Signed,
+    /// The superblock, which is never transformed in either mode.
     Superblock,
+    /// A block of a plaintext package, stored as it is. The mode omits the keyed authentication
+    /// tags, so there is no data/metadata distinction to report — the digest is the whole check.
+    Plaintext,
 }
 
 pub struct BlockVerdict {
@@ -40,7 +46,11 @@ pub struct Superblock {
     pub ndblock: u64,
     pub inode_table_block: u32,
     pub inode_table_digest: [u8; 32],
+    /// The seed slot's 16 bytes — a random seed in the native mode, and
+    /// [`crate::PLAINTEXT_MARKER`] in the plaintext one, which is how the two are told apart.
     pub seed: [u8; 16],
+    /// Decided by `seed`, not by a caller's flag: a package says how it is stored.
+    pub mode: crate::ImageMode,
     pub icv_ok: bool,
 }
 
@@ -90,6 +100,13 @@ pub(crate) fn parse_superblock(index: u64, sb: &[u8]) -> Result<Superblock> {
     zeroed[ICV].fill(0);
     let mut seed = [0u8; 16];
     seed.copy_from_slice(&sb[0x370..0x380]);
+    // The marker in the seed slot is what a plaintext package looks like from the inside, so the
+    // package itself decides the reader's mode; there is no flag to get out of step with it.
+    let mode = if seed == crate::PLAINTEXT_MARKER {
+        crate::ImageMode::PlaintextNoAuth
+    } else {
+        crate::ImageMode::Native
+    };
     let table = block_sig(sb, 0xB8);
     Ok(Superblock {
         index,
@@ -98,12 +115,17 @@ pub(crate) fn parse_superblock(index: u64, sb: &[u8]) -> Result<Superblock> {
         inode_table_block: table.block,
         inode_table_digest: table.digest,
         seed,
+        mode,
         icv_ok: sha3(&zeroed) == sb[ICV],
     })
 }
 
-/// Decrypt every outer block, classifying each by which XTS sector makes it
-/// hash to its `imagedigs` entry.
+/// Read every outer block, classifying it by how it is stored.
+///
+/// A native package's blocks are tried against both XTS sectors and must hash to their `imagedigs`
+/// entry; a plaintext package's are stored as they are, so the digest is checked directly. Which
+/// one this is comes from the superblock's seed slot (see `Superblock::mode`), never from the
+/// caller, so both kinds of package read with the same call.
 pub fn open(file: &mut PkgFile, fih: &Fih, cnt: &Cnt, passcode: &str) -> Result<OuterImage> {
     if !fih.pfs_size.is_multiple_of(BLOCK) {
         return format_err("outer image size is not a whole number of blocks");
@@ -123,8 +145,12 @@ pub fn open(file: &mut PkgFile, fih: &Fih, cnt: &Cnt, passcode: &str) -> Result<
         return format_err("no outer block matches the FIH game digest");
     };
     let superblock = parse_superblock(sb_index as u64, &raw[sb_index])?;
-    let ekpfs = derive_ekpfs(&cnt.content_id, passcode);
-    let xts = Xts::new(&derive_xts_keys(&ekpfs, &superblock.seed));
+    let plaintext_mode = superblock.mode == crate::ImageMode::PlaintextNoAuth;
+    // Key derivation is native-only work, so a plaintext image never pays for it.
+    let xts = (!plaintext_mode).then(|| {
+        let ekpfs = derive_ekpfs(&cnt.content_id, passcode);
+        Xts::new(&derive_xts_keys(&ekpfs, &superblock.seed))
+    });
 
     let mut plaintext = Vec::with_capacity(raw.len());
     let mut verdicts = Vec::with_capacity(raw.len());
@@ -138,13 +164,26 @@ pub fn open(file: &mut PkgFile, fih: &Fih, cnt: &Cnt, passcode: &str) -> Result<
             });
             continue;
         }
+        if plaintext_mode {
+            // Nothing to decrypt and no tag to classify by: the block must be its own digest.
+            let kind = if sha3(&block) == digests[i] {
+                Some(BlockKind::Plaintext)
+            } else {
+                None
+            };
+            plaintext.push(block);
+            verdicts.push(BlockVerdict { index, kind });
+            continue;
+        }
         let mut found = None;
         for (kind, sector) in [
             (BlockKind::Data, index),
             (BlockKind::Signed, SIGNED_SECTOR_FLAG | index),
         ] {
             let mut pt = block.clone();
-            xts.decrypt(sector, &mut pt);
+            xts.as_ref()
+                .expect("a native image derives its keys")
+                .decrypt(sector, &mut pt);
             if sha3(&pt) == digests[i] {
                 found = Some((kind, pt));
                 break;
@@ -411,6 +450,7 @@ mod tests {
                 inode_table_block: 0,
                 inode_table_digest: [0; 32],
                 seed: [0; 16],
+                mode: crate::ImageMode::Native,
                 icv_ok: true,
             },
             plaintext: vec![table],

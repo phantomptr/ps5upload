@@ -24,6 +24,15 @@ fn main() -> ps5upload_fpkg::Result<()> {
         }
     }
     let blob = blob.expect("no naps_pkg_layout.dat in uroot");
+    if std::env::var("NAPS_HEX").is_ok() {
+        // The section strides are validated by subtraction, which hides an off-by-N inside a
+        // wrong stride; small descriptors are small enough to read directly.
+        for (i, row) in blob.chunks(16).enumerate() {
+            let cells: Vec<String> = row.iter().map(|b| format!("{b:02x}")).collect();
+            println!("  {:04x}  {}", i * 16, cells.join(" "));
+        }
+        return Ok(());
+    }
     for (i, n) in nodes.iter().enumerate() {
         println!(
             "  dinode {i}: flags={:#x} size={} size_compressed={} blocks={}",
