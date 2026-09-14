@@ -524,6 +524,53 @@ mod tests {
     }
 }
 
+/// The title a `param.json` declares. Real PS5 titles keep it in
+/// `localizedParameters` (`{defaultLanguage, "en-US": {titleName}}`), while a bare
+/// `titleName` shows up in hand-made ones; the title id is the last resort.
+fn title_of(json: &serde_json::Value) -> Option<String> {
+    let from = |v: &serde_json::Value| {
+        v.get("titleName")
+            .and_then(|t| t.as_str())
+            .map(str::to_string)
+    };
+    if let Some(localized) = json.get("localizedParameters").and_then(|v| v.as_object()) {
+        let default = localized
+            .get("defaultLanguage")
+            .and_then(|v| v.as_str())
+            .unwrap_or("en-US");
+        if let Some(title) = localized.get(default).and_then(from) {
+            return Some(title);
+        }
+        for (key, value) in localized {
+            if key != "defaultLanguage" {
+                if let Some(title) = from(value) {
+                    return Some(title);
+                }
+            }
+        }
+    }
+    from(json).or_else(|| {
+        json.get("titleId")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    })
+}
+
+/// `requiredSystemSoftwareVersion` is a BCD hex word: `0x1160000000000000` is 11.60,
+/// `0x0960…` is 9.60. Anything that does not parse is passed through as it came.
+pub fn firmware_version(json: &serde_json::Value) -> Option<String> {
+    let raw = json.get("requiredSystemSoftwareVersion")?.as_str()?;
+    // A hand-made param.json may carry a plain version; only the hex word is re-encoded.
+    let Ok(value) = u64::from_str_radix(raw.trim_start_matches("0x"), 16) else {
+        return Some(raw.to_string());
+    };
+    let (major, minor) = ((value >> 56) & 0xFF, (value >> 48) & 0xFF);
+    if major == 0 && minor == 0 {
+        return Some(raw.to_string());
+    }
+    Some(format!("{major:02x}.{minor:02x}"))
+}
+
 /// What a caller learns before deciding to build: what the source is, whether it looks
 /// like a launchable title, what the package will cost, and whether there is room.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -565,12 +612,8 @@ pub fn inspect(source_path: &Path, output_dir: &Path) -> Result<Inspection> {
             .as_bytes(),
     )
     .ok();
-    let field = |name: &str| {
-        json.as_ref()
-            .and_then(|j| j.get(name))
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-    };
+    let title = json.as_ref().and_then(title_of);
+    let required_firmware = json.as_ref().and_then(firmware_version);
     let planned_size = if files.is_empty() {
         0
     } else {
@@ -581,8 +624,8 @@ pub fn inspect(source_path: &Path, output_dir: &Path) -> Result<Inspection> {
         files: files.len(),
         bytes: files.iter().map(|f| f.size).sum(),
         content_id: source::content_id(&param),
-        title: field("titleName"),
-        required_firmware: field("requiredSystemSoftwareVersion"),
+        title,
+        required_firmware,
         planned_size,
         output_free: free_bytes(output_dir),
         checks,

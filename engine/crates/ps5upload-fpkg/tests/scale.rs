@@ -49,8 +49,11 @@ fn write_tree(root: &Path) {
     put("data/two.bin", vec![0x5A; 5000]);
     put(
         "sce_sys/param.json",
-        format!("{{\"contentId\":\"{CONTENT_ID}\",\"contentVersion\":\"01.002.003\"}}")
-            .into_bytes(),
+        format!(
+            "{{\"contentId\":\"{CONTENT_ID}\",\"contentVersion\":\"01.002.003\",\
+             \"titleName\":\"Scale Test\",\"requiredSystemSoftwareVersion\":\"0x1160000000000000\"}}"
+        )
+        .into_bytes(),
     );
     put("sce_sys/icon0.png", vec![0x89; 2048]);
     put("sce_sys/icon0.dds", vec![0x44; 4096]);
@@ -242,6 +245,29 @@ fn the_size_estimate_covers_the_package() {
     );
 }
 
+/// The firmware word real titles carry is BCD hex; 0x1160… is 11.60 and 0x0960… is 9.60.
+#[test]
+fn the_firmware_word_reads_as_a_version() {
+    let json = |v: &str| serde_json::json!({ "requiredSystemSoftwareVersion": v });
+    assert_eq!(
+        ps5upload_fpkg::build::firmware_version(&json("0x1160000000000000")),
+        Some("11.60".to_string())
+    );
+    assert_eq!(
+        ps5upload_fpkg::build::firmware_version(&json("0x0960000000000000")),
+        Some("09.60".to_string())
+    );
+    // A plain version is passed through, and so is a word with no version in it.
+    assert_eq!(
+        ps5upload_fpkg::build::firmware_version(&json("03.000.000")),
+        Some("03.000.000".to_string())
+    );
+    assert_eq!(
+        ps5upload_fpkg::build::firmware_version(&json("0x0000000000000000")),
+        Some("0x0000000000000000".to_string())
+    );
+}
+
 /// Cancelling removes the partial and says so — a 100 GB build must not leave a 100 GB
 /// file behind.
 #[test]
@@ -286,6 +312,9 @@ fn inspect_reports_the_source_before_a_build() {
     // The source's own files; the keystone is generated at plan time, not found here.
     assert_eq!(inspection.files, 7);
     assert!(inspection.bytes > 600_000);
+    assert_eq!(inspection.title.as_deref(), Some("Scale Test"));
+    // Real titles carry the firmware as a BCD hex word; 0x1160… is 11.60.
+    assert_eq!(inspection.required_firmware.as_deref(), Some("11.60"));
     assert!(inspection.planned_size > inspection.bytes);
     assert!(inspection.source.starts_with("folder "));
     assert!(inspection.output_free.unwrap_or(u64::MAX) > inspection.planned_size);
