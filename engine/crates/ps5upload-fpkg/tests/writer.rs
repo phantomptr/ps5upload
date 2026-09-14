@@ -133,8 +133,9 @@ fn gate_g2_a_built_package_verifies_and_round_trips() {
     let fih_block = pkg.read_at(0, ps5upload_fpkg::BLOCK as usize).unwrap();
     assert_eq!(
         u32::from_le_bytes(fih_block[0x50..0x54].try_into().unwrap()) as u64,
-        built.meta_base / 0x1000,
-        "the header must point at the inner metadata base, in 4 KiB sectors"
+        built.meta_base / ps5upload_fpkg::BLOCK,
+        "the header must point at the inner metadata base in mount blocks, which the console \
+         multiplies by the block size the header carries at 0x60"
     );
     assert_eq!(
         u32::from_le_bytes(fih_block[0x94..0x98].try_into().unwrap()),

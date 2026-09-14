@@ -19,7 +19,7 @@ const DINODE_LEN: usize = 0x2C8;
 /// First direct block signature (32-byte digest + u32 block = 36-byte stride).
 const DIRECT_AT: usize = 0x64;
 /// Direct slots in a dinode.
-const DIRECT_SLOTS: usize = 12;
+pub const DIRECT_SLOTS: usize = 12;
 /// Indirect slots in a dinode.
 const INDIRECT_SLOTS: usize = 5;
 /// First indirect block signature; the 36-byte stride continues past the direct slots.
@@ -116,6 +116,9 @@ pub struct IndirectLayout {
 #[derive(Debug, Clone)]
 pub struct Layout {
     pub naps_block: u64,
+    /// How many blocks `naps_pkg_layout.dat` occupies. One for a small tree; it grows with the
+    /// file count, because the descriptor carries a run per file (Minecraft's needs seven).
+    pub naps_blocks: u64,
     pub superblock_block: u64,
     pub table_block: u64,
     pub root_block: u64,
@@ -189,21 +192,33 @@ pub fn indirect_layout(inner_blocks: u64, first_table: u64) -> Result<IndirectLa
 
 /// The block order: the data, then the naps layout, the superblock, the inode table, the
 /// root dirents, the flat-path table, the uroot dirents, and the indirect tables last.
-pub fn layout(inner_blocks: u64) -> Result<Layout> {
+pub fn layout(inner_blocks: u64, naps_len: u64) -> Result<Layout> {
     if inner_blocks == 0 || inner_blocks > max_inner_blocks() {
         return format_err(format!(
             "an inner image of {inner_blocks} blocks is past what a dinode can describe"
         ));
     }
-    let indirect = indirect_layout(inner_blocks, inner_blocks + 6)?;
+    // The layout descriptor runs on into as many blocks as its bytes need. Its dinode describes
+    // them with direct slots, so its size is bounded here rather than silently truncated: a
+    // descriptor longer than the slots hold would otherwise be written short and the console
+    // would reject the image at mount.
+    let naps_blocks = naps_len.div_ceil(BLOCK).max(1);
+    if naps_blocks > DIRECT_SLOTS as u64 {
+        return format_err(format!(
+            "the outer layout descriptor needs {naps_blocks} blocks, past the {DIRECT_SLOTS} a dinode describes directly"
+        ));
+    }
+    let after_naps = inner_blocks + naps_blocks;
+    let indirect = indirect_layout(inner_blocks, after_naps + 5)?;
     Ok(Layout {
         naps_block: inner_blocks,
-        superblock_block: inner_blocks + 1,
-        table_block: inner_blocks + 2,
-        root_block: inner_blocks + 3,
-        flt_block: inner_blocks + 4,
-        uroot_block: inner_blocks + 5,
-        ndblock: inner_blocks + 6 + indirect.tables.len() as u64,
+        naps_blocks,
+        superblock_block: after_naps,
+        table_block: after_naps + 1,
+        root_block: after_naps + 2,
+        flt_block: after_naps + 3,
+        uroot_block: after_naps + 4,
+        ndblock: after_naps + 5 + indirect.tables.len() as u64,
         indirect,
     })
 }
@@ -249,10 +264,13 @@ pub fn metadata_blocks(
         out.push((index, digest, block));
     }
 
-    let mut naps_block = naps.to_vec();
-    naps_block.resize(BLOCK as usize, 0);
-    let naps_digest = sha3(&naps_block);
-    push(&mut out, lay.naps_block, naps_block);
+    let mut naps_digests: Vec<(u32, [u8; 32])> = Vec::new();
+    for (i, chunk) in naps.chunks(BLOCK as usize).enumerate() {
+        let mut block = chunk.to_vec();
+        block.resize(BLOCK as usize, 0);
+        naps_digests.push(((lay.naps_block + i as u64) as u32, sha3(&block)));
+        push(&mut out, lay.naps_block + i as u64, block);
+    }
 
     // Superblock: the template the samples share, minus the values that vary. Its digest
     // is the game digest the header and the container carry, so it is filled in last.
@@ -276,7 +294,9 @@ pub fn metadata_blocks(
         sb[0x88 + t * 4..0x8C + t * 4].copy_from_slice(&time.1.to_le_bytes());
     }
     sb[0xB0..0xB8].copy_from_slice(&1i64.to_le_bytes());
-    sb[0x368] = 1;
+    // Measured on webbrowser's superblock: this flag is a 32-bit 1 at 0x36C, with 0x368
+    // left zero. We wrote a single byte at 0x368, which the mount reads as a different field.
+    sb[0x36C..0x370].copy_from_slice(&1u32.to_le_bytes());
     sb[0x370..0x380].copy_from_slice(&seed);
     let sb_slot = out.len();
     push(&mut out, lay.superblock_block, sb);
@@ -404,9 +424,9 @@ pub fn metadata_blocks(
             flags: 0xD,
             size: naps.len() as u64,
             size_stored: naps.len() as u64,
-            direct: vec![(lay.naps_block as u32, naps_digest)],
+            direct: naps_digests,
             indirect: Vec::new(),
-            blocks: None,
+            blocks: Some(lay.naps_blocks as u32),
         },
     ];
     for rec in &records {
@@ -453,11 +473,8 @@ pub fn write(
     if !inner.len().is_multiple_of(BLOCK as usize) || inner.is_empty() {
         return format_err("the inner image must be a non-empty whole number of blocks");
     }
-    if naps.len() > BLOCK as usize {
-        return format_err("naps_pkg_layout.dat does not fit one block");
-    }
     let inner_blocks = inner.len() as u64 / BLOCK;
-    let lay = layout(inner_blocks)?;
+    let lay = layout(inner_blocks, naps.len() as u64)?;
     let data_digests: Vec<[u8; 32]> = inner
         .as_chunks::<{ BLOCK as usize }>()
         .0

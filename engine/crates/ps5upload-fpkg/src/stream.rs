@@ -132,10 +132,7 @@ pub fn write_package(
 ) -> Result<StreamedPackage> {
     let plan = request.plan;
     let inner_blocks = plan.ndblock;
-    let lay = layout(inner_blocks)?;
     let inner_size = inner_blocks * BLOCK;
-    let outer_size = lay.ndblock * BLOCK;
-    let cnt_offset = BLOCK + outer_size;
     let mut source = BlockSource::new(plan, request.passcode, request.time)?;
     let naps = naps::build(
         inner_size,
@@ -144,6 +141,10 @@ pub fn write_package(
         plan.data_end,
         plan.meta_base,
     )?;
+    // The layout follows the descriptor's length, which fixes how many blocks it spans.
+    let lay = layout(inner_blocks, naps.len() as u64)?;
+    let outer_size = lay.ndblock * BLOCK;
+    let cnt_offset = BLOCK + outer_size;
 
     let ekpfs = derive_ekpfs(request.content_id, request.passcode);
     let xts = Xts::new(&derive_xts_keys(&ekpfs, &request.seed));

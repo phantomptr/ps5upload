@@ -342,7 +342,7 @@ fn build_mode(
                 &game_digest,
             )?;
             let meta_300 = si_write::naps_meta_300(inner_size);
-            let outer_layout = outer_write::layout(plan.ndblock)?;
+            let outer_layout = outer_write::layout(plan.ndblock, naps.len() as u64)?;
             let sb_at = outer.superblock_block as usize * BLOCK as usize;
             let manifest = pfsimage::build(&pfsimage::ManifestParams {
                 facts: &cnt.facts,
@@ -421,7 +421,12 @@ fn build_mode(
 /// The package's size before it is written: the header block, the outer image the layout
 /// fixes, and a couple of megabytes for the container and the install metadata.
 pub fn estimate_size(plan: &Plan) -> Result<u64> {
-    let outer = outer_write::layout(plan.ndblock)?.ndblock * BLOCK;
+    // The descriptor's length is not known until it is built, so the guard allows for the
+    // largest one a dinode can point at: an over-estimate only makes the free-space check
+    // stricter, which is the safe direction for a build that must not run out of room.
+    let outer = outer_write::layout(plan.ndblock, outer_write::DIRECT_SLOTS as u64 * BLOCK)?
+        .ndblock
+        * BLOCK;
     Ok(BLOCK + outer + 2 * 1024 * 1024)
 }
 

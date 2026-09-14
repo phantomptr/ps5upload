@@ -528,7 +528,7 @@ mod tests {
                 (0x3c31, 0x190, "playgo-chunk.dat"),
             ],
         };
-        let outer = crate::outer_write::layout(plan.ndblock).unwrap();
+        let outer = crate::outer_write::layout(plan.ndblock, 4096).unwrap();
         let params = ManifestParams {
             facts: &facts,
             content_id: "UP0000-PPSA01234_00-TESTGAME00000000",
