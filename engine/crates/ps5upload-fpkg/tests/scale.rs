@@ -268,6 +268,66 @@ fn the_firmware_word_reads_as_a_version() {
     );
 }
 
+/// A source that says `"free"` (or `"upgradable"`) must still produce a package that says
+/// `"standard"`: the console shows a lock and refuses to start a title that says otherwise.
+/// The user's own `param.json` never changes — the package carries the rewritten bytes.
+#[test]
+fn a_non_standard_drm_reaches_the_package_as_standard() {
+    let source = TempDir::new("drm-source");
+    let out = TempDir::new("drm-out");
+    write_tree(source.path());
+    let param = source.path().join("sce_sys/param.json");
+    let original = format!(
+        "{{\"contentId\":\"{CONTENT_ID}\",\"contentVersion\":\"01.002.003\",\
+         \"applicationDrmType\":\"free\",\"titleName\":\"Scale Test\"}}"
+    );
+    std::fs::write(&param, &original).unwrap();
+
+    let report = build::build(&request(source.path(), out.path()), &mut |_| {}).unwrap();
+    assert!(report.verify.ok(), "{}", report.verify);
+    assert_eq!(
+        std::fs::read_to_string(&param).unwrap(),
+        original,
+        "the source file must be left alone"
+    );
+
+    // Read the packaged copy back out of the built package's inner image.
+    let files = ps5upload_fpkg::source::scan(source.path()).unwrap();
+    let plan = ps5upload_fpkg::plan::build(&files).unwrap();
+    let mut pkg = ps5upload_fpkg::PkgFile::open(&report.path).unwrap();
+    let head = pkg.read_at(0, ps5upload_fpkg::BLOCK as usize).unwrap();
+    let fih = ps5upload_fpkg::fih::parse(&head).unwrap();
+    let cnt = ps5upload_fpkg::cnt::read(&mut pkg, fih.cnt_offset).unwrap();
+    let img = ps5upload_fpkg::outer::open(
+        &mut pkg,
+        &fih,
+        &cnt,
+        ps5upload_fpkg::crypto::DEFAULT_PASSCODE,
+    )
+    .unwrap();
+    let nodes = img.dinodes();
+    let image = img.file_data(&nodes[3]);
+    let mount = ps5upload_fpkg::inner::read(&image, plan.meta_base).unwrap();
+    let entry = mount
+        .files
+        .iter()
+        .find(|f| f.path == "sce_sys/param.json")
+        .expect("param.json is in the image");
+    let at = entry.offset as usize;
+    let packaged = &image[at..at + entry.size as usize];
+    let text = String::from_utf8_lossy(packaged);
+    assert!(
+        text.contains("\"applicationDrmType\":\"standard\""),
+        "the packaged copy says {text}"
+    );
+    assert!(!text.contains("free"), "the packaged copy says {text}");
+    assert_eq!(
+        packaged.len(),
+        original.len() + "standard".len() - "free".len(),
+        "only the value's length changed"
+    );
+}
+
 /// Cancelling removes the partial and says so — a 100 GB build must not leave a 100 GB
 /// file behind.
 #[test]

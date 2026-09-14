@@ -111,7 +111,7 @@ fn build_mode(
     mode: Mode,
 ) -> Result<BuildReport> {
     let mut tree = source::open(&request.source)?;
-    let files: Vec<SourceFile> = tree.files().to_vec();
+    let mut files: Vec<SourceFile> = tree.files().to_vec();
     if files.is_empty() {
         return format_err(format!("{} has no files", tree.describe()));
     }
@@ -121,6 +121,14 @@ fn build_mode(
         .map(|c| format!("{}: {}", c.name, c.detail))
         .collect();
     let param_json = tree.read("sce_sys/param.json").unwrap_or_default();
+    // A "free" or "upgradable" DRM value makes the console show a lock and refuse to start
+    // the title, so the package carries "standard". The user's file is untouched: the
+    // rewritten bytes are served in its place, and the file list's size for it is adjusted
+    // so the plan lays out what the package will actually carry.
+    let param_json = source::drm_rewrite(&param_json).unwrap_or(param_json);
+    if let Some(entry) = files.iter_mut().find(|f| f.path == "sce_sys/param.json") {
+        entry.size = param_json.len() as u64;
+    }
     let content_id = match &request.content_id {
         Some(id) => id.clone(),
         None => source::content_id(&param_json).ok_or_else(|| {
@@ -200,6 +208,10 @@ fn build_mode(
                 if len == 0 {
                     return Ok(Vec::new());
                 }
+                if path == "sce_sys/param.json" {
+                    let at = (offset as usize).min(param_json.len());
+                    return Ok(param_json[at..(at + len).min(param_json.len())].to_vec());
+                }
                 tree.read_range(path, offset, len)
             };
             let mut bytes = |done: u64, total: u64| {
@@ -220,7 +232,8 @@ fn build_mode(
                 time,
                 content_id: &content_id,
                 content_version,
-                param_json,
+                // The range reader keeps a borrow of it for the file's bytes.
+                param_json: param_json.clone(),
                 icon_png,
                 icon_dds,
             };
@@ -239,6 +252,7 @@ fn build_mode(
             let mut read = |path: &str| -> Result<Vec<u8>> {
                 match sizes.get(path) {
                     Some(0) => Ok(Vec::new()),
+                    Some(_) if path == "sce_sys/param.json" => Ok(param_json.clone()),
                     Some(_) => tree.read(path),
                     None => format_err(format!(
                         "the plan asked for {path}, which is not in the source"

@@ -203,6 +203,34 @@ pub fn content_id(param_json: &[u8]) -> Option<String> {
     Some(id.to_string())
 }
 
+/// The DRM value a debug package must carry. A `"free"` (or `"upgradable"`) source makes
+/// the console show a lock and refuse to start the title, so the value is rewritten in the
+/// package — the user's own file is never touched.
+pub const STANDARD_DRM: &str = "standard";
+
+/// `param.json` with `applicationDrmType` set to `standard`, or `None` when it already is
+/// (or does not say). Only the value's bytes change, so the file's formatting survives.
+pub fn drm_rewrite(param_json: &[u8]) -> Option<Vec<u8>> {
+    let text = String::from_utf8_lossy(param_json);
+    let key = "\"applicationDrmType\"";
+    let at = text.find(key)?;
+    let rest = &text[at + key.len()..];
+    let colon = rest.find(':')?;
+    let after = &rest[colon + 1..];
+    let open = after.find('\"')?;
+    let value_start = at + key.len() + colon + 1 + open + 1;
+    let close = text[value_start..].find('\"')?;
+    let value = &text[value_start..value_start + close];
+    if value.eq_ignore_ascii_case(STANDARD_DRM) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(param_json.len() + STANDARD_DRM.len());
+    out.extend_from_slice(&param_json[..value_start]);
+    out.extend_from_slice(STANDARD_DRM.as_bytes());
+    out.extend_from_slice(&param_json[value_start + close..]);
+    Some(out)
+}
+
 /// The content version (`MM.mmm.ppp`) a `param.json` declares, packed as the 2-3-3 BCD
 /// word the finalized-image header echoes at `0x9C`.
 pub fn content_version_word(param_json: &[u8]) -> Option<u32> {
@@ -272,6 +300,14 @@ pub fn readiness(tree: &mut dyn SourceTree) -> Readiness {
             format!("{id} ({} chars)", id.len()),
         ),
         None => r.push("content id", false, "no contentId in sce_sys/param.json"),
+    }
+    if drm_rewrite(&param).is_some() {
+        r.push(
+            "drm",
+            true,
+            "applicationDrmType is rewritten to \"standard\" in the package; a free or \
+             upgradable value makes the console lock the title",
+        );
     }
     r.push(
         "icon0.png and icon0.dds present",
@@ -364,6 +400,23 @@ mod tests {
         assert!(tree.describe().starts_with("folder "));
         assert_eq!(tree.files().len(), 1);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_non_standard_drm_is_rewritten_in_place() {
+        let free =
+            br#"{"contentId":"X","applicationDrmType":"free","contentVersion":"01.000.000"}"#;
+        let fixed = drm_rewrite(free).expect("free is rewritten");
+        assert!(String::from_utf8_lossy(&fixed).contains("\"applicationDrmType\":\"standard\""));
+        assert!(!String::from_utf8_lossy(&fixed).contains("free"));
+        // Everything else survives, and the length grows only by the value's difference.
+        assert_eq!(fixed.len(), free.len() + "standard".len() - "free".len());
+        assert!(String::from_utf8_lossy(&fixed).starts_with(r#"{"contentId":"X","#));
+
+        // Already standard (any case), or absent: nothing to do.
+        assert!(drm_rewrite(br#"{"applicationDrmType":"Standard"}"#).is_none());
+        assert!(drm_rewrite(br#"{"contentId":"X"}"#).is_none());
+        assert!(drm_rewrite(b"not json at all").is_none());
     }
 
     #[test]
