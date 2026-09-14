@@ -193,6 +193,46 @@ virtual package later.
 | `.ffpfs` / `.ffpfsc` | later | Needs a plain-PFS reader |
 | Folder or mounted image on the console | later | `SourceTree` over the existing FTX2 file RPCs |
 
+### What the references say, as of 2026-09-14
+
+Read again after both reference projects moved (PSVIETHOA-FPKG-Builder 2.1.1 → 2.1.6;
+LibProsperoPKG commit 748eabf). Nothing here changes our format decisions except the first
+item, which was a real bug.
+
+- **`applicationDrmType` must say `standard`.** PSVIETHOA forces it (`Services/ParamJsonDrmSwap.cs`)
+  because a package that says anything else "shows a lock on the PS5 and refuses to start"
+  (`CHANGELOG.md`). 25 of the 27 real mounts say `standard`, and two — Spider-Man: Miles
+  Morales and Death Stranding — say `upgradable`. **Fixed in our build**: the package carries
+  `standard`, the source file is untouched (see `source::drm_rewrite`).
+- **The nested indirect layout is corroborated** by three independent implementations:
+  LibProsperoPKG's *reader* reads slot 1 as a two-level table (`ProsperoPfsReader.cs:314`), its
+  inner-PFS *builder* writes `ib[0]` single then `ib[1]` as "signature for block of signatures
+  for block of signatures for data blocks" (`ProsperoPfsBuilder.cs:587-611`), and PSVIETHOA's
+  bundled engine documents the same escalation (`ProsperoOuterAddressingGeometry`). Two caveats
+  to keep for a hardware failure: their publisher puts each file's indirect maps *directly after
+  its data* while we cluster them after the uroot dirents (a dinode indexes them, so position is
+  free — but it is the first difference to try), and LibProsperoPKG's *outer* writer treats slots
+  1–4 as more flat singles and refuses past 570 MiB, calling that reading uncorroborated. A
+  ~200 MiB build is therefore the discriminating experiment: it is the range where the two
+  readings disagree.
+- **Our inner image matches their model of real packages**: LibProsperoPKG's inner reader
+  (written against Sony's own `DebugSettings.pkg`) expects a PFS superblock at the metadata base
+  with the inode table one block later (`ProsperoPs5InnerImageReader.cs:44-53,170`) — which is
+  what we lay out. Their assembler's note about an "inner sblock" two blocks earlier belongs to
+  their compressed pipeline, not to the stored image.
+- **`.ffpfsc` is a plain PFS v2** whose single file is a PFSC-compressed exFAT image
+  (`ExFat/PfsContainer.cs`), so our existing PFS reader plus a PFSC decompressor is the whole job.
+- **Kraken blueprint for Plan 8**: signed modules stored verbatim; the keystone whole-block-raw;
+  per-file Kraken in 256 KiB logical blocks, kept compressed only when the stream is ≤ 15/16 of
+  the source, level 7, with a 16-byte id=5 running-sum signature per block; compressed images go
+  in a PFSC container. Their benchmark: 21.3 GB → 8.86 GiB in 2 min 13 s, with an intermediate
+  file we would not need.
+- **Their exclude masks** (the publishing tools' defaults): names `keystone`, `disc_info.dat`,
+  `pfs-version.dat`, `ext_info.dat`; suffixes `.gp4 .gp5 .esbak .dds`. We skip only OS junk, so a
+  mount's `eboot.bin.esbak` (153 MB in one real mount) rides into the package. Excluding
+  `.esbak` alone is a tempting size win; the rest we keep, because a converted mount should
+  carry what the mount carries. **Open question for the maintainer.**
+
 ### Verification strategy
 
 Nothing here can be declared working without evidence, so the build proceeds
