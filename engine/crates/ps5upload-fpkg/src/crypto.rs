@@ -7,6 +7,31 @@ use sha3::{Digest, Sha3_256};
 /// The passcode debug FPKGs are built with when none is chosen.
 pub const DEFAULT_PASSCODE: &str = "00000000000000000000000000000000";
 
+/// An incremental SHA3-256, for hashing bytes that are never held all at once.
+pub struct Hasher(Sha3_256);
+
+impl Hasher {
+    pub fn new() -> Self {
+        Self(Sha3_256::new())
+    }
+
+    pub fn update(&mut self, data: &[u8]) {
+        self.0.update(data);
+    }
+
+    pub fn finish(self) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&self.0.finalize());
+        out
+    }
+}
+
+impl Default for Hasher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub fn sha3(data: &[u8]) -> [u8; 32] {
     let mut out = [0u8; 32];
     out.copy_from_slice(&Sha3_256::digest(data));

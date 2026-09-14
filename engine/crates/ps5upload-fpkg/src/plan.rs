@@ -65,6 +65,28 @@ pub struct PlannedFile {
     pub generated: bool,
 }
 
+impl Plan {
+    /// The inner files in afid order — the order their payloads are laid out in, and the
+    /// order the metric blob lists them.
+    pub fn inner_files(&self) -> Vec<(String, u64, u64)> {
+        self.afid_order
+            .iter()
+            .map(|&fi| {
+                let f = &self.files[fi];
+                (f.path.clone(), f.logical_offset, f.size)
+            })
+            .collect()
+    }
+
+    /// Each file's logical offset by afid.
+    pub fn afid_offsets(&self) -> Vec<u64> {
+        self.afid_order
+            .iter()
+            .map(|&fi| self.files[fi].logical_offset)
+            .collect()
+    }
+}
+
 impl PlannedFile {
     pub fn mode(&self) -> u16 {
         if self.sce_sys {
@@ -576,5 +598,50 @@ mod tests {
         assert_eq!(dirent_size("."), 24);
         assert_eq!(dirent_size(".."), 24);
         assert_eq!(dirent_size("eboot.bin"), 32);
+    }
+}
+
+#[cfg(test)]
+mod afid_tests {
+    use super::*;
+    use crate::source::SourceFile;
+
+    /// The streaming writer files its per-file digests by afid, so every file must have
+    /// exactly one, and the afid order must cover them all.
+    #[test]
+    fn every_file_gets_a_distinct_afid() {
+        let files: Vec<SourceFile> = [
+            "eboot.bin",
+            "data/one.bin",
+            "sce_sys/param.json",
+            "sce_sys/icon0.png",
+            "sce_sys/about/right.sprx",
+        ]
+        .iter()
+        .map(|p| SourceFile {
+            path: (*p).to_string(),
+            size: 10,
+        })
+        .collect();
+        let plan = build(&files).unwrap();
+        assert_eq!(
+            plan.afid_order.len(),
+            plan.files.len(),
+            "afid order covers {} of {} files",
+            plan.afid_order.len(),
+            plan.files.len()
+        );
+        for (afid, &fi) in plan.afid_order.iter().enumerate() {
+            assert_eq!(
+                plan.files[fi].afid as usize, afid,
+                "{}",
+                plan.files[fi].path
+            );
+        }
+        let mut seen: Vec<u32> = plan.files.iter().map(|f| f.afid).collect();
+        seen.sort_unstable();
+        let count = seen.len();
+        seen.dedup();
+        assert_eq!(seen.len(), count, "two files share an afid: {seen:?}");
     }
 }

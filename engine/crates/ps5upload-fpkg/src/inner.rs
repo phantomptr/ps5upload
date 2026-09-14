@@ -413,10 +413,11 @@ pub type RangeRead<'r> = &'r mut dyn FnMut(&str, u64, usize) -> Result<Vec<u8>>;
 
 /// One file's span of the inner image, in placement order.
 #[derive(Debug, Clone, Copy)]
-struct Span {
-    start: u64,
-    end: u64,
-    file: usize,
+pub struct Span {
+    pub start: u64,
+    pub end: u64,
+    /// Index into `plan.files`.
+    pub file: usize,
 }
 
 /// The inner image as blocks, read on demand.
@@ -473,6 +474,25 @@ impl<'a> BlockSource<'a> {
 
     pub fn ndblock(&self) -> u64 {
         self.plan.ndblock
+    }
+
+    /// The files that contribute bytes to block `index`, in placement order — at most two
+    /// (a block can hold the tail of one file and the head of the next).
+    pub fn block_spans(&self, index: u64) -> &[Span] {
+        let lo = index * BLOCK;
+        let hi = lo + BLOCK;
+        let from = self.spans.partition_point(|s| s.end <= lo);
+        let to = self.spans.partition_point(|s| s.start < hi);
+        &self.spans[from..to.max(from)]
+    }
+
+    /// The metadata region's bytes — bounded by the file count, not the image size.
+    pub fn metadata_region(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.meta.len() * BLOCK as usize);
+        for block in &self.meta {
+            out.extend_from_slice(block);
+        }
+        out
     }
 
     /// Block `index` of the image. The buffer is reused between calls, and `read` fetches

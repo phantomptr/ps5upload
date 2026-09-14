@@ -5,11 +5,15 @@
 //! `0xB0` slot carries `SHA3-256(naps_pkg_layout.dat)`.
 
 use crate::crypto::sha3;
-use crate::outer_write::OuterImage;
 use crate::BLOCK;
 
 pub struct FihParams<'a> {
-    pub outer: &'a OuterImage,
+    /// The encrypted outer image's length in bytes (`0x18`).
+    pub outer_size: u64,
+    /// The outer superblock's block index, whose absolute offset goes to `0x20`.
+    pub superblock_block: u64,
+    /// `SHA3-256` of the superblock's plaintext block — the image digest.
+    pub game_digest: [u8; 32],
     /// Absolute offset of the embedded container inside the finalized image.
     pub cnt_offset: u64,
     pub naps: &'a [u8],
@@ -35,11 +39,11 @@ pub fn write(p: &FihParams) -> Vec<u8> {
     h[6] = 0x03;
     h[0x08..0x0C].copy_from_slice(&1u32.to_le_bytes());
     h[0x10..0x18].copy_from_slice(&BLOCK.to_le_bytes());
-    h[0x18..0x20].copy_from_slice(&(p.outer.image.len() as u64).to_le_bytes());
-    let sb_absolute = BLOCK + p.outer.superblock_block * BLOCK;
+    h[0x18..0x20].copy_from_slice(&p.outer_size.to_le_bytes());
+    let sb_absolute = BLOCK + p.superblock_block * BLOCK;
     h[0x20..0x28].copy_from_slice(&sb_absolute.to_le_bytes());
     h[0x28..0x30].copy_from_slice(&BLOCK.to_le_bytes());
-    let game_digest = p.outer.plaintext_digests[p.outer.superblock_block as usize];
+    let game_digest = p.game_digest;
     for at in [0x30usize, 0x70, 0xD0] {
         h[at..at + 32].copy_from_slice(&game_digest);
     }
@@ -67,15 +71,11 @@ mod tests {
 
     #[test]
     fn header_carries_the_template_fields() {
-        let outer = OuterImage {
-            image: vec![0u8; 7 * BLOCK as usize],
-            plaintext_digests: vec![[1u8; 32]; 7],
-            superblock_block: 2,
-            seed: [0u8; 16],
-        };
         let naps = vec![7u8; 104];
         let fih = write(&FihParams {
-            outer: &outer,
+            outer_size: 7 * BLOCK,
+            superblock_block: 2,
+            game_digest: [1u8; 32],
             cnt_offset: 7 * BLOCK,
             naps: &naps,
             inner_size: 4 * BLOCK,

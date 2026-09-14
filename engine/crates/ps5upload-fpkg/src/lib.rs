@@ -24,6 +24,7 @@ pub mod rsa;
 pub mod si;
 pub mod si_write;
 pub mod source;
+pub mod stream;
 pub mod ufs2_source;
 pub mod verify;
 pub mod xts;

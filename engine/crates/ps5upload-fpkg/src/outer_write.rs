@@ -83,6 +83,44 @@ fn write_dinode(table: &mut [u8], rec: &DinodeRecord, time: (i64, u32)) {
     }
 }
 
+/// Where every block of the outer image lives. Both writers — the in-memory one and the
+/// streaming one — take their geometry from here, so they cannot drift apart.
+#[derive(Debug, Clone, Copy)]
+pub struct Layout {
+    pub naps_block: u64,
+    pub superblock_block: u64,
+    pub table_block: u64,
+    pub root_block: u64,
+    pub flt_block: u64,
+    pub uroot_block: u64,
+    pub first_indirect_block: u64,
+    pub indirect_blocks: u64,
+    pub ndblock: u64,
+}
+
+/// The block order: the data, then the naps layout, the superblock, the inode table, the
+/// root dirents, the flat-path table, the uroot dirents, and the indirect tables last.
+pub fn layout(inner_blocks: u64) -> Result<Layout> {
+    if inner_blocks == 0 || inner_blocks > max_inner_blocks() {
+        return format_err(format!(
+            "an inner image of {inner_blocks} blocks needs more indirect slots than a dinode has"
+        ));
+    }
+    let indirect_needed = (inner_blocks as usize).saturating_sub(DIRECT_SLOTS);
+    let indirect_blocks = indirect_needed.div_ceil(PER_INDIRECT) as u64;
+    Ok(Layout {
+        naps_block: inner_blocks,
+        superblock_block: inner_blocks + 1,
+        table_block: inner_blocks + 2,
+        root_block: inner_blocks + 3,
+        flt_block: inner_blocks + 4,
+        uroot_block: inner_blocks + 5,
+        first_indirect_block: inner_blocks + 6,
+        indirect_blocks,
+        ndblock: inner_blocks + 6 + indirect_blocks,
+    })
+}
+
 /// The largest inner image this writer can describe: the twelve direct slots plus five
 /// indirect ones, each holding a 36-byte `{digest, block}` record — roughly 570 MiB. A
 /// larger source needs the dinode's double-indirect slot, which is still unverified
@@ -91,51 +129,35 @@ pub fn max_inner_blocks() -> u64 {
     (DIRECT_SLOTS + PER_INDIRECT * INDIRECT_SLOTS) as u64
 }
 
-/// Build the encrypted outer image around a stored inner image.
-///
-/// `afids` are the outer table's per-file afid values — the uroot files' ordinals, which
-/// the samples carry as 0 (`pfs_image.dat`) and 1 (`naps_pkg_layout.dat`).
-pub fn write(
-    inner: &[u8],
+/// One metadata block: its index, its plaintext digest, and its bytes.
+pub type MetadataBlock = (u64, [u8; 32], Vec<u8>);
+
+/// The metadata that follows the data: naps, superblock, inode table, root dirents,
+/// flat-path table, uroot dirents and the indirect tables — in block order, each with its
+/// plaintext digest. Everything here derives from the data blocks' digests, so the
+/// streaming writer and the in-memory one emit the same bytes by construction.
+pub fn metadata_blocks(
+    lay: &Layout,
+    inner_blocks: u64,
     naps: &[u8],
+    data_digests: &[[u8; 32]],
     seed: [u8; 16],
-    content_id: &str,
-    passcode: &str,
     time: (i64, u32),
-) -> Result<OuterImage> {
-    if !inner.len().is_multiple_of(BLOCK as usize) || inner.is_empty() {
-        return format_err("the inner image must be a non-empty whole number of blocks");
+) -> Result<Vec<MetadataBlock>> {
+    let inner_size = inner_blocks * BLOCK;
+    let mut out: Vec<MetadataBlock> = Vec::new();
+    fn push(out: &mut Vec<MetadataBlock>, index: u64, block: Vec<u8>) {
+        let digest = sha3(&block);
+        out.push((index, digest, block));
     }
-    if naps.len() > BLOCK as usize {
-        return format_err("naps_pkg_layout.dat does not fit one block");
-    }
-    let inner_blocks = inner.len() as u64 / BLOCK;
-    if inner_blocks > max_inner_blocks() {
-        return format_err(format!(
-            "an inner image of {inner_blocks} blocks needs more indirect slots than a dinode has"
-        ));
-    }
-    let indirect_needed = (inner_blocks as usize).saturating_sub(DIRECT_SLOTS);
-    let indirect_blocks = indirect_needed.div_ceil(PER_INDIRECT);
-    let naps_block = inner_blocks;
-    let superblock_block = inner_blocks + 1;
-    let table_block = inner_blocks + 2;
-    let root_block = inner_blocks + 3;
-    let flt_block = inner_blocks + 4;
-    let uroot_block = inner_blocks + 5;
-    let first_indirect_block = inner_blocks + 6;
-    let ndblock = inner_blocks + 6 + indirect_blocks as u64;
 
-    let mut blocks: Vec<Vec<u8>> = Vec::with_capacity(ndblock as usize);
-    for i in 0..inner_blocks {
-        let at = (i * BLOCK) as usize;
-        blocks.push(inner[at..at + BLOCK as usize].to_vec());
-    }
-    let mut naps_block_bytes = naps.to_vec();
-    naps_block_bytes.resize(BLOCK as usize, 0);
-    blocks.push(naps_block_bytes);
+    let mut naps_block = naps.to_vec();
+    naps_block.resize(BLOCK as usize, 0);
+    let naps_digest = sha3(&naps_block);
+    push(&mut out, lay.naps_block, naps_block);
 
-    // Superblock: the template the samples share, minus the values that vary.
+    // Superblock: the template the samples share, minus the values that vary. Its digest
+    // is the game digest the header and the container carry, so it is filled in last.
     let mut sb = vec![0u8; BLOCK as usize];
     sb[0x00..0x08].copy_from_slice(&2i64.to_le_bytes());
     sb[0x08..0x10].copy_from_slice(&20_130_315i64.to_le_bytes());
@@ -144,7 +166,7 @@ pub fn write(
     sb[0x20..0x24].copy_from_slice(&(BLOCK as u32).to_le_bytes());
     sb[0x28..0x30].copy_from_slice(&1i64.to_le_bytes());
     sb[0x30..0x38].copy_from_slice(&(DINODES as i64).to_le_bytes());
-    sb[0x38..0x40].copy_from_slice(&(ndblock as i64).to_le_bytes());
+    sb[0x38..0x40].copy_from_slice(&(lay.ndblock as i64).to_le_bytes());
     sb[0x40..0x48].copy_from_slice(&1i64.to_le_bytes());
     sb[0x52..0x54].copy_from_slice(&1u16.to_le_bytes()); // the inode-signature record's nlink
     sb[0x58..0x60].copy_from_slice(&(BLOCK as i64).to_le_bytes());
@@ -158,35 +180,29 @@ pub fn write(
     sb[0xB0..0xB8].copy_from_slice(&1i64.to_le_bytes());
     sb[0x368] = 1;
     sb[0x370..0x380].copy_from_slice(&seed);
-    blocks.push(sb); // placeholder; the ICV is filled once the table's digest is known
-
-    // Inode table. ino 0 root dir, 1 flat-path table, 2 uroot, 3 pfs_image.dat, 4 naps.
-    let inner_digests: Vec<[u8; 32]> = blocks[..inner_blocks as usize]
-        .iter()
-        .map(|b| sha3(b))
-        .collect();
-    let naps_digest = sha3(&blocks[naps_block as usize]);
+    let sb_slot = out.len();
+    push(&mut out, lay.superblock_block, sb);
 
     // Indirect blocks: `{SHA3(plaintext), block}` records at the dinode's 36-byte stride,
     // covering the data blocks past the twelve direct slots (1820 blocks each). They are
-    // laid out after the uroot dirents, so they are built here and appended there.
+    // laid out after the uroot dirents, so they are built here and pushed last.
     let mut indirect: Vec<(u64, [u8; 32])> = Vec::new();
     let mut indirect_blocks_extra: Vec<Vec<u8>> = Vec::new();
-    for chunk in 0..indirect_blocks {
+    for chunk in 0..lay.indirect_blocks {
         let mut block = vec![0u8; BLOCK as usize];
         for slot in 0..PER_INDIRECT {
-            let index = DIRECT_SLOTS + chunk * PER_INDIRECT + slot;
+            let index = DIRECT_SLOTS + chunk as usize * PER_INDIRECT + slot;
             if index >= inner_blocks as usize {
                 break;
             }
             let at = slot * 36;
-            block[at..at + 32].copy_from_slice(&inner_digests[index]);
+            block[at..at + 32].copy_from_slice(&data_digests[index]);
             block[at + 32..at + 36].copy_from_slice(&(index as u32).to_le_bytes());
         }
-        let index = first_indirect_block + chunk as u64;
-        indirect.push((index, sha3(&block)));
+        indirect.push((lay.first_indirect_block + chunk, sha3(&block)));
         indirect_blocks_extra.push(block);
     }
+
     let mut flt_entries: Vec<(u64, u64)> = Vec::new();
     for (i, name) in ["pfs_image.dat", "naps_pkg_layout.dat"].iter().enumerate() {
         flt_entries.push((
@@ -219,7 +235,7 @@ pub fn write(
             flags: 0x2000C,
             size: BLOCK,
             size_stored: BLOCK,
-            direct: vec![(root_block as u32, sha3(&root_bytes))],
+            direct: vec![(lay.root_block as u32, sha3(&root_bytes))],
             blocks: None,
             indirect: Vec::new(),
         },
@@ -230,7 +246,7 @@ pub fn write(
             flags: 0x2000C,
             size: flt_bytes.len() as u64,
             size_stored: flt_bytes.len() as u64,
-            direct: vec![(flt_block as u32, sha3(&flt_block_bytes))],
+            direct: vec![(lay.flt_block as u32, sha3(&flt_block_bytes))],
             blocks: None,
             indirect: Vec::new(),
         },
@@ -241,7 +257,7 @@ pub fn write(
             flags: 0xC,
             size: BLOCK,
             size_stored: BLOCK,
-            direct: vec![(uroot_block as u32, sha3(&uroot_bytes))],
+            direct: vec![(lay.uroot_block as u32, sha3(&uroot_bytes))],
             blocks: None,
             indirect: Vec::new(),
         },
@@ -250,9 +266,9 @@ pub fn write(
             mode: 0o100555,
             nlink: 1,
             flags: 0xD,
-            size: inner.len() as u64,
-            size_stored: inner.len() as u64,
-            direct: inner_digests
+            size: inner_size,
+            size_stored: inner_size,
+            direct: data_digests
                 .iter()
                 .take(DIRECT_SLOTS)
                 .enumerate()
@@ -268,7 +284,7 @@ pub fn write(
             flags: 0xD,
             size: naps.len() as u64,
             size_stored: naps.len() as u64,
-            direct: vec![(naps_block as u32, naps_digest)],
+            direct: vec![(lay.naps_block as u32, naps_digest)],
             indirect: Vec::new(),
             blocks: None,
         },
@@ -277,68 +293,89 @@ pub fn write(
         write_dinode(&mut table, rec, time);
     }
     let table_digest = sha3(&table);
-    blocks.push(table);
-
-    // Root dirents (inode 0): the flat-path table and uroot, no dot entries.
-    let root_dirents = vec![
-        ("inode_flat_path_table".to_string(), 1u32, plan::DIRENT_FILE),
-        ("uroot".to_string(), 2u32, plan::DIRENT_DIR),
-    ];
-    blocks.push(padded(crate::inner::dirents_bytes(&root_dirents))?);
-
-    // The flat-path table file.
-    blocks.push(padded(flt_bytes.clone())?);
-
-    // uroot dirents (inode 2).
-    let uroot_dirents = vec![
-        (".".to_string(), 2u32, plan::DIRENT_DOT),
-        ("..".to_string(), 2u32, plan::DIRENT_DOTDOT),
-        ("pfs_image.dat".to_string(), 3u32, plan::DIRENT_FILE),
-        ("naps_pkg_layout.dat".to_string(), 4u32, plan::DIRENT_FILE),
-    ];
-    blocks.push(padded(crate::inner::dirents_bytes(&uroot_dirents))?);
-
-    for block in indirect_blocks_extra {
-        blocks.push(block);
-    }
-    if blocks.len() as u64 != ndblock {
-        return format_err("outer layout block count is inconsistent");
+    push(&mut out, lay.table_block, table);
+    push(&mut out, lay.root_block, root_bytes);
+    push(&mut out, lay.flt_block, padded(flt_bytes)?);
+    push(&mut out, lay.uroot_block, uroot_bytes);
+    for (k, block) in indirect_blocks_extra.into_iter().enumerate() {
+        push(&mut out, lay.first_indirect_block + k as u64, block);
     }
 
     // The inode-signature record inside the superblock, then its ICV.
     {
-        let sb = &mut blocks[superblock_block as usize];
+        let (_, _, sb) = &mut out[sb_slot];
         sb[0xB8..0xD8].copy_from_slice(&table_digest);
-        sb[0xD8..0xE0].copy_from_slice(&table_block.to_le_bytes());
+        sb[0xD8..0xE0].copy_from_slice(&lay.table_block.to_le_bytes());
         let mut zeroed = sb[..0x5A0].to_vec();
         zeroed[0x380..0x3A0].fill(0);
         let icv = sha3(&zeroed);
         sb[0x380..0x3A0].copy_from_slice(&icv);
     }
+    // The superblock's digest is its ICV-bearing plaintext.
+    out[sb_slot].1 = sha3(&out[sb_slot].2);
 
-    // Digests, encryption, assembly.
-    let plaintext_digests: Vec<[u8; 32]> = blocks.iter().map(|b| sha3(b)).collect();
+    if out.len() as u64 != lay.ndblock - inner_blocks {
+        return format_err("outer layout block count is inconsistent");
+    }
+    Ok(out)
+}
+
+/// Build the encrypted outer image around a stored inner image.
+///
+/// `afids` are the outer table's per-file afid values — the uroot files' ordinals, which
+/// the samples carry as 0 (`pfs_image.dat`) and 1 (`naps_pkg_layout.dat`).
+pub fn write(
+    inner: &[u8],
+    naps: &[u8],
+    seed: [u8; 16],
+    content_id: &str,
+    passcode: &str,
+    time: (i64, u32),
+) -> Result<OuterImage> {
+    if !inner.len().is_multiple_of(BLOCK as usize) || inner.is_empty() {
+        return format_err("the inner image must be a non-empty whole number of blocks");
+    }
+    if naps.len() > BLOCK as usize {
+        return format_err("naps_pkg_layout.dat does not fit one block");
+    }
+    let inner_blocks = inner.len() as u64 / BLOCK;
+    let lay = layout(inner_blocks)?;
+    let data_digests: Vec<[u8; 32]> = inner
+        .as_chunks::<{ BLOCK as usize }>()
+        .0
+        .iter()
+        .map(|b| sha3(b))
+        .collect();
+
     let ekpfs = derive_ekpfs(content_id, passcode);
     let xts = Xts::new(&derive_xts_keys(&ekpfs, &seed));
-    let mut image = Vec::with_capacity(blocks.len() * BLOCK as usize);
-    for (i, block) in blocks.into_iter().enumerate() {
-        let index = i as u64;
-        let mut bytes = block;
-        if index != superblock_block {
-            let sector = if index < superblock_block {
+    let mut plaintext_digests = vec![[0u8; 32]; lay.ndblock as usize];
+    let mut image = Vec::with_capacity(lay.ndblock as usize * BLOCK as usize);
+    for (index, chunk) in inner.as_chunks::<{ BLOCK as usize }>().0.iter().enumerate() {
+        let mut bytes = chunk.to_vec();
+        xts.encrypt(index as u64, &mut bytes);
+        plaintext_digests[index] = data_digests[index];
+        image.extend_from_slice(&bytes);
+    }
+    for (index, digest, mut plaintext) in
+        metadata_blocks(&lay, inner_blocks, naps, &data_digests, seed, time)?
+    {
+        if index != lay.superblock_block {
+            let sector = if index < lay.superblock_block {
                 index
             } else {
                 SIGNED_SECTOR_FLAG | index
             };
-            xts.encrypt(sector, &mut bytes);
+            xts.encrypt(sector, &mut plaintext);
         }
-        image.extend_from_slice(&bytes);
+        plaintext_digests[index as usize] = digest;
+        image.extend_from_slice(&plaintext);
     }
 
     Ok(OuterImage {
         image,
         plaintext_digests,
-        superblock_block,
+        superblock_block: lay.superblock_block,
         seed,
     })
 }

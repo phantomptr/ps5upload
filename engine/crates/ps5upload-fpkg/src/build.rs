@@ -12,10 +12,11 @@ use crate::crypto::sha3;
 use crate::fih_write::{self, FihParams};
 use crate::inner;
 use crate::naps;
-use crate::outer_write::{self, OuterImage};
+use crate::outer_write;
 use crate::plan::{self, Plan};
 use crate::si_write;
 use crate::source::{self, SourceFile};
+use crate::stream;
 use crate::verify::verify_package;
 use crate::{format_err, Result, BLOCK};
 
@@ -59,8 +60,56 @@ pub struct BuildReport {
     pub warnings: Vec<String>,
 }
 
+/// Optional controls an asynchronous caller supplies: byte progress and cancellation.
+#[derive(Default)]
+pub struct BuildControl<'a> {
+    /// Bytes written of the mount image, reported as the write proceeds.
+    pub bytes: Option<&'a mut dyn FnMut(u64, u64)>,
+    /// Set to abort: the partial file is removed and the error says so.
+    pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
+}
+
 /// Build the package. `progress` receives short phase lines.
 pub fn build(request: &BuildRequest, progress: &mut dyn FnMut(&str)) -> Result<BuildReport> {
+    build_controlled(request, progress, &mut BuildControl::default())
+}
+
+/// The build an asynchronous caller drives: same pipeline, with byte progress and a way
+/// to stop it.
+pub fn build_controlled(
+    request: &BuildRequest,
+    progress: &mut dyn FnMut(&str),
+    control: &mut BuildControl,
+) -> Result<BuildReport> {
+    build_mode(request, progress, control, Mode::Streaming)
+}
+
+/// The writer that holds the whole image in memory. Gate G2 verified this one, and
+/// `tests/scale.rs` still compares the streaming writer against it byte for byte.
+pub fn build_in_memory(
+    request: &BuildRequest,
+    progress: &mut dyn FnMut(&str),
+) -> Result<BuildReport> {
+    build_mode(
+        request,
+        progress,
+        &mut BuildControl::default(),
+        Mode::InMemory,
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Streaming,
+    InMemory,
+}
+
+fn build_mode(
+    request: &BuildRequest,
+    progress: &mut dyn FnMut(&str),
+    control: &mut BuildControl,
+    mode: Mode,
+) -> Result<BuildReport> {
     let mut tree = source::open(&request.source)?;
     let files: Vec<SourceFile> = tree.files().to_vec();
     if files.is_empty() {
@@ -91,13 +140,16 @@ pub fn build(request: &BuildRequest, progress: &mut dyn FnMut(&str)) -> Result<B
         return format_err("the source has no eboot.bin");
     }
     let content_version = source::content_version_word(&param_json).unwrap_or(0);
+    // The container's payloads, read once: the streaming arm hands them to the writer,
+    // and reading them here keeps the source free for the range reader below.
+    let icon_png = tree.read("sce_sys/icon0.png").unwrap_or_default();
+    let icon_dds = tree.read("sce_sys/icon0.dds").unwrap_or_default();
     let time = request.time.unwrap_or_else(now);
     let seed = request.seed.unwrap_or_else(random_seed);
 
     progress(&format!("planning {}", tree.describe()));
     let plan = plan::build(&files)?;
-    // Refuse an over-large source here: the outer writer says the same thing, but it runs
-    // after the inner image is in memory, and a mount image is tens of gigabytes.
+    // Refuse an over-large source here, before a single byte is read.
     if plan.ndblock > outer_write::max_inner_blocks() {
         return format_err(format!(
             "{} needs an inner image of {} blocks ({:.1} GiB); this writer covers {:.1} GiB \
@@ -110,118 +162,12 @@ pub fn build(request: &BuildRequest, progress: &mut dyn FnMut(&str)) -> Result<B
     }
     let sizes: std::collections::HashMap<&str, u64> =
         files.iter().map(|f| (f.path.as_str(), f.size)).collect();
-    let mut read = |path: &str| -> Result<Vec<u8>> {
-        match sizes.get(path) {
-            Some(0) => Ok(Vec::new()),
-            Some(_) => tree.read(path),
-            None => format_err(format!(
-                "the plan asked for {path}, which is not in the source"
-            )),
-        }
+    let cancelled = || {
+        control
+            .cancel
+            .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
     };
 
-    progress("writing the inner image");
-    let inner = inner::write(&plan, &request.passcode, &mut read, time)?;
-    progress("writing the layout");
-    let naps = naps::build(
-        inner.image.len() as u64,
-        plan.ndblock,
-        &inner.afid_offsets,
-        plan.data_end,
-        plan.meta_base,
-    )?;
-    progress("writing the outer image");
-    let outer = outer_write::write(
-        &inner.image,
-        &naps,
-        seed,
-        &content_id,
-        &request.passcode,
-        time,
-    )?;
-    let game_digest = outer.plaintext_digests[outer.superblock_block as usize];
-
-    // The container's offset needs only the outer image's size, so the FIH can be built
-    // before the container that embeds its digest.
-    let cnt_offset = BLOCK + outer.image.len() as u64;
-    let inner_size = plan.ndblock * BLOCK;
-    let fih = fih_write::write(&FihParams {
-        outer: &outer,
-        cnt_offset,
-        naps: &naps,
-        inner_size,
-        meta_base_block: plan.meta_base / BLOCK,
-        content_inodes: plan.content_inodes,
-        content_version,
-        app_file_count: plan.app_file_count,
-        flt_count: u32::from(!plan.flt_apr.is_empty()) + 1,
-    });
-
-    progress("writing the container");
-    let mchunk0 = BLOCK;
-    let mchunk1 = outer.image.len() as u64;
-    let playgo_chunk = si_write::playgo_chunk_dat(&content_id, mchunk0, mchunk1)?;
-    let ficm_files = plan.content_inodes + 3;
-    let playgo_ficm = si_write::playgo_ficm(ficm_files);
-    let playgo_hash = si_write::playgo_hash_table(ficm_files / 2);
-    let icon_png = tree.read("sce_sys/icon0.png").unwrap_or_default();
-    let icon_dds = tree.read("sce_sys/icon0.dds").unwrap_or_default();
-    let (content_type, drm_type, content_flags) = (0x26u32, 0u32, 0x0602_0000u32);
-    let cnt = cnt_write::write(&CntParams {
-        content_id: &content_id,
-        param_json: &param_json,
-        icon_png: &icon_png,
-        icon_dds: &icon_dds,
-        playgo_chunk: &playgo_chunk,
-        playgo_hash_table: &playgo_hash,
-        playgo_ficm: &playgo_ficm,
-        imagedigs: &outer.plaintext_digests,
-        game_digest,
-        fih_block: &fih,
-        outer_size: outer.image.len() as u64,
-        cnt_offset,
-        seed,
-        passcode: &request.passcode,
-        content_type,
-        drm_type,
-        content_flags,
-        inner_size,
-    })?;
-
-    progress("writing the install metadata");
-    let mount_image_size = cnt_offset + cnt.len() as u64;
-    let mut mount_image = Vec::with_capacity(mount_image_size as usize);
-    mount_image.extend_from_slice(&fih);
-    mount_image.extend_from_slice(&outer.image);
-    mount_image.extend_from_slice(&cnt);
-    let crc = si_write::chunk_crc(&mount_image);
-    let inner_files = inner_files(&plan);
-    let meta_18 = si_write::naps_meta_18(
-        inner_size,
-        &si_write::InnerDigests::of_image(&inner.image, &inner_files),
-        &inner.image[plan.meta_base as usize..],
-        &inner_files,
-        plan.data_end,
-        plan.meta_base,
-        &game_digest,
-    )?;
-    let meta_300 = si_write::naps_meta_300(inner_size);
-    let members = vec![
-        ("common/etc/naps_meta_18.dat".to_string(), meta_18),
-        ("common/etc/naps_meta_300.dat".to_string(), meta_300.clone()),
-        ("common/etc/naps_meta_301.dat".to_string(), meta_300.clone()),
-        ("common/etc/naps_meta_302.dat".to_string(), meta_300.clone()),
-        ("common/etc/naps_meta_308.dat".to_string(), meta_300),
-        (
-            "common/etc/pfsimage.xml".to_string(),
-            pfsimage_xml(&content_id, &plan, &outer, inner_size, cnt.len() as u64),
-        ),
-        ("common/etc/playgo-chunk.dat".to_string(), playgo_chunk),
-        (format!("config/{content_id}/playgo-chunk.crc"), crc),
-    ];
-    let si = si_write::zip(&members, time);
-
-    progress("writing the package");
     let stem = request
         .file_name
         .clone()
@@ -229,30 +175,188 @@ pub fn build(request: &BuildRequest, progress: &mut dyn FnMut(&str)) -> Result<B
     std::fs::create_dir_all(&request.output_dir)?;
     let final_path = request.output_dir.join(format!("{stem}.pkg"));
     let partial = request.output_dir.join(format!("{stem}.pkg.partial"));
-    {
-        use std::io::Write;
-        let mut out = std::fs::File::create(&partial)?;
-        out.write_all(&fih)?;
-        out.write_all(&outer.image)?;
-        out.write_all(&cnt)?;
-        out.write_all(&si)?;
-        out.sync_all()?;
-    }
+    let cleanup = |e: crate::Error| -> crate::Error {
+        std::fs::remove_file(&partial).ok();
+        e
+    };
+
+    let written = match mode {
+        Mode::Streaming => {
+            let mut file = std::fs::File::create(&partial)?;
+            let mut read_range = |path: &str, offset: u64, len: usize| -> Result<Vec<u8>> {
+                if !sizes.contains_key(path) {
+                    return format_err(format!(
+                        "the plan asked for {path}, which is not in the source"
+                    ));
+                }
+                if len == 0 {
+                    return Ok(Vec::new());
+                }
+                tree.read_range(path, offset, len)
+            };
+            let mut bytes = |done: u64, total: u64| {
+                if let Some(f) = control.bytes.as_deref_mut() {
+                    f(done, total);
+                }
+            };
+            let mut p = stream::Progress {
+                phase: progress,
+                bytes: &mut bytes,
+            };
+            let idle = std::sync::atomic::AtomicBool::new(false);
+            let cancel = control.cancel.unwrap_or(&idle);
+            let stream_request = stream::StreamRequest {
+                plan: &plan,
+                passcode: &request.passcode,
+                seed,
+                time,
+                content_id: &content_id,
+                content_version,
+                param_json,
+                icon_png,
+                icon_dds,
+            };
+            match stream::write_package(&mut file, &stream_request, &mut read_range, &mut p, cancel)
+            {
+                Ok(package) => package.size,
+                Err(e) => return Err(cleanup(e)),
+            }
+        }
+        Mode::InMemory => {
+            if cancelled() {
+                return Err(cleanup(crate::Error::Format(
+                    "the build was cancelled".to_string(),
+                )));
+            }
+            let mut read = |path: &str| -> Result<Vec<u8>> {
+                match sizes.get(path) {
+                    Some(0) => Ok(Vec::new()),
+                    Some(_) => tree.read(path),
+                    None => format_err(format!(
+                        "the plan asked for {path}, which is not in the source"
+                    )),
+                }
+            };
+            progress("writing the inner image");
+            let inner = inner::write(&plan, &request.passcode, &mut read, time)?;
+            progress("writing the layout");
+            let naps = naps::build(
+                inner.image.len() as u64,
+                plan.ndblock,
+                &inner.afid_offsets,
+                plan.data_end,
+                plan.meta_base,
+            )?;
+            progress("writing the outer image");
+            let outer = outer_write::write(
+                &inner.image,
+                &naps,
+                seed,
+                &content_id,
+                &request.passcode,
+                time,
+            )?;
+            let game_digest = outer.plaintext_digests[outer.superblock_block as usize];
+            let cnt_offset = BLOCK + outer.image.len() as u64;
+            let inner_size = plan.ndblock * BLOCK;
+            let fih = fih_write::write(&FihParams {
+                outer_size: outer.image.len() as u64,
+                superblock_block: outer.superblock_block,
+                game_digest,
+                cnt_offset,
+                naps: &naps,
+                inner_size,
+                meta_base_block: plan.meta_base / BLOCK,
+                content_inodes: plan.content_inodes,
+                content_version,
+                app_file_count: plan.app_file_count,
+                flt_count: u32::from(!plan.flt_apr.is_empty()) + 1,
+            });
+
+            progress("writing the container");
+            let outer_size = outer.image.len() as u64;
+            let playgo_chunk = si_write::playgo_chunk_dat(&content_id, BLOCK, outer_size)?;
+            let ficm_files = plan.content_inodes + 3;
+            let cnt = cnt_write::write(&CntParams {
+                content_id: &content_id,
+                param_json: &param_json,
+                icon_png: &icon_png,
+                icon_dds: &icon_dds,
+                playgo_chunk: &playgo_chunk,
+                playgo_hash_table: &si_write::playgo_hash_table(ficm_files / 2),
+                playgo_ficm: &si_write::playgo_ficm(ficm_files),
+                imagedigs: &outer.plaintext_digests,
+                game_digest,
+                fih_block: &fih,
+                outer_size,
+                cnt_offset,
+                seed,
+                passcode: &request.passcode,
+                content_type: 0x26,
+                drm_type: 0,
+                content_flags: 0x0602_0000,
+                inner_size,
+            })?;
+
+            progress("writing the install metadata");
+            let mut mount_image = Vec::with_capacity((cnt_offset + cnt.len() as u64) as usize);
+            mount_image.extend_from_slice(&fih);
+            mount_image.extend_from_slice(&outer.image);
+            mount_image.extend_from_slice(&cnt);
+            let crc = si_write::chunk_crc(&mount_image);
+            let inner_files = plan.inner_files();
+            let meta_18 = si_write::naps_meta_18(
+                inner_size,
+                &si_write::InnerDigests::of_image(&inner.image, &inner_files),
+                &inner.image[plan.meta_base as usize..],
+                &inner_files,
+                plan.data_end,
+                plan.meta_base,
+                &game_digest,
+            )?;
+            let meta_300 = si_write::naps_meta_300(inner_size);
+            let members = vec![
+                ("common/etc/naps_meta_18.dat".to_string(), meta_18),
+                ("common/etc/naps_meta_300.dat".to_string(), meta_300.clone()),
+                ("common/etc/naps_meta_301.dat".to_string(), meta_300.clone()),
+                ("common/etc/naps_meta_302.dat".to_string(), meta_300.clone()),
+                ("common/etc/naps_meta_308.dat".to_string(), meta_300),
+                (
+                    "common/etc/pfsimage.xml".to_string(),
+                    pfsimage_xml(&content_id, &plan, outer_size, inner_size, cnt.len() as u64),
+                ),
+                ("common/etc/playgo-chunk.dat".to_string(), playgo_chunk),
+                (format!("config/{content_id}/playgo-chunk.crc"), crc),
+            ];
+            let si = si_write::zip(&members, time);
+
+            progress("writing the package");
+            {
+                use std::io::Write;
+                let mut out = std::fs::File::create(&partial)?;
+                out.write_all(&fih)?;
+                out.write_all(&outer.image)?;
+                out.write_all(&cnt)?;
+                out.write_all(&si)?;
+                out.sync_all()?;
+            }
+            cnt_offset + cnt.len() as u64 + si.len() as u64
+        }
+    };
 
     progress("verifying");
     let report = match verify_package(&partial, &request.passcode) {
         Ok(report) if report.ok() => report,
         Ok(report) => {
-            std::fs::remove_file(&partial).ok();
-            return format_err(format!("the built package failed verification:\n{report}"));
+            return Err(cleanup(crate::Error::Format(format!(
+                "the built package failed verification:\n{report}"
+            ))))
         }
-        Err(e) => {
-            std::fs::remove_file(&partial).ok();
-            return Err(e);
-        }
+        Err(e) => return Err(cleanup(e)),
     };
     std::fs::rename(&partial, &final_path)?;
     let size = std::fs::metadata(&final_path)?.len();
+    debug_assert_eq!(size, written);
     progress("done");
     Ok(BuildReport {
         path: final_path,
@@ -261,17 +365,6 @@ pub fn build(request: &BuildRequest, progress: &mut dyn FnMut(&str)) -> Result<B
         verify: report,
         warnings,
     })
-}
-
-/// The inner files in afid order, as the metric blob wants them.
-fn inner_files(plan: &Plan) -> Vec<(String, u64, u64)> {
-    plan.afid_order
-        .iter()
-        .map(|&fi| {
-            let f = &plan.files[fi];
-            (f.path.clone(), f.logical_offset, f.size)
-        })
-        .collect()
 }
 
 fn now() -> (i64, u32) {
@@ -299,10 +392,10 @@ fn random_seed() -> [u8; 16] {
 
 /// The image descriptor the SI archive carries. The console does not read it; it is
 /// emitted self-consistent for tools that do.
-fn pfsimage_xml(
+pub(crate) fn pfsimage_xml(
     content_id: &str,
     plan: &Plan,
-    outer: &OuterImage,
+    outer_size: u64,
     inner_size: u64,
     cnt_size: u64,
 ) -> Vec<u8> {
@@ -318,10 +411,7 @@ fn pfsimage_xml(
     xml.push_str(&format!("    <size>0x{cnt_size:x}</size>\n"));
     xml.push_str("  </container>\n");
     xml.push_str("  <mount-image>\n");
-    xml.push_str(&format!(
-        "    <filesize>0x{:x}</filesize>\n",
-        outer.image.len()
-    ));
+    xml.push_str(&format!("    <filesize>0x{:x}</filesize>\n", outer_size));
     xml.push_str(&format!(
         "    <metadata offset=\"0x{:x}\" />\n",
         plan.meta_base
