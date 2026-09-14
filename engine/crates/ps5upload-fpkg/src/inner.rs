@@ -139,19 +139,18 @@ pub(crate) fn dirents_bytes(dirents: &[(String, u32, i8)]) -> Vec<u8> {
     out
 }
 
-fn block_of(contents: &[u8], what: &str) -> Result<Vec<u8>> {
-    if contents.len() > BLOCK as usize {
-        return format_err(format!("{what} does not fit in one block"));
-    }
-    let mut out = contents.to_vec();
-    out.resize(BLOCK as usize, 0);
-    Ok(out)
+/// Copy a structure's bytes into the region at its planned offset. The region is block-aligned
+/// as a whole; a structure may run past a block boundary, which is what big titles do.
+fn place(region: &mut [u8], span: (u64, u64), meta_base: u64, bytes: &[u8]) {
+    let at = (span.0 - meta_base) as usize;
+    region[at..at + bytes.len()].copy_from_slice(bytes);
 }
 
-/// Build the metadata-region blocks in the order the layout fixes.
-fn metadata_blocks(plan: &Plan, build_time: (i64, u32)) -> Result<Vec<Vec<u8>>> {
+/// Build the metadata region as one byte image, placing every structure at the offset the
+/// planner fixed. Structures are block-aligned at their start and may span blocks.
+fn metadata_region(plan: &Plan, build_time: (i64, u32)) -> Result<Vec<u8>> {
     let inode_count = 4 + plan.dirs.len() + plan.files.len();
-    let mut blocks: Vec<Vec<u8>> = Vec::with_capacity(plan.metadata_blocks as usize);
+    let mut region = vec![0u8; plan.metadata.blocks as usize * BLOCK as usize];
 
     // Block 0: superblock.
     let mut sb = vec![0u8; BLOCK as usize];
@@ -181,7 +180,7 @@ fn metadata_blocks(plan: &Plan, build_time: (i64, u32)) -> Result<Vec<Vec<u8>>> 
     sb[0xB0..0xB8].copy_from_slice(&1i64.to_le_bytes());
     sb[0xD8..0xE0].copy_from_slice(&0x89i64.to_le_bytes());
     sb[0x368] = 1;
-    blocks.push(sb);
+    region[..BLOCK as usize].copy_from_slice(&sb);
 
     // Block 1: the inode table. Node order: super-root, the three tables, directories
     // pre-order (uroot first), then files in inode order.
@@ -191,20 +190,18 @@ fn metadata_blocks(plan: &Plan, build_time: (i64, u32)) -> Result<Vec<Vec<u8>>> 
     for v in &plan.afid_to_ino {
         afid_bytes.extend_from_slice(&v.to_le_bytes());
     }
-    let mut table = vec![0u8; BLOCK as usize];
-    if inode_count * INODE_LEN > BLOCK as usize {
-        return format_err(format!("{inode_count} inner inodes do not fit one block"));
-    }
-    let dir_block = |index: usize| plan.meta_base + (2 + index as u64) * BLOCK;
+    let (table_at, table_bytes) = plan.metadata.inode_table;
+    let table_off = (table_at - plan.meta_base) as usize;
+    let table = &mut region[table_off..table_off + table_bytes as usize];
     write_inode(
-        &mut table,
+        table,
         plan::SUPER_ROOT_INODE as usize,
         &InodeRecord {
             mode: plan::MODE_DIR_UROOT,
             nlink: 1,
             flags: plan::FLAGS_TABLE,
-            size: BLOCK,
-            logical_offset: dir_block(0),
+            size: plan.metadata.super_root.1,
+            logical_offset: plan.metadata.super_root.0,
             db1: -1,
             db2: -1,
             db3: -1,
@@ -212,16 +209,24 @@ fn metadata_blocks(plan: &Plan, build_time: (i64, u32)) -> Result<Vec<Vec<u8>>> 
         build_time,
     );
     for (inode, size, offset) in [
-        (plan::INODE_FLT_INODE, flt_inode.len() as u64, dir_block(1)),
-        (plan::APR_FLT_INODE, flt_apr.len() as u64, dir_block(2)),
+        (
+            plan::INODE_FLT_INODE,
+            plan.metadata.flt.1,
+            plan.metadata.flt.0,
+        ),
+        (
+            plan::APR_FLT_INODE,
+            plan.metadata.flt_apr.1,
+            plan.metadata.flt_apr.0,
+        ),
         (
             plan::AFID_TABLE_INODE,
-            afid_bytes.len() as u64,
-            dir_block(3),
+            plan.metadata.afid.1,
+            plan.metadata.afid.0,
         ),
     ] {
         write_inode(
-            &mut table,
+            table,
             inode as usize,
             &InodeRecord {
                 mode: plan::MODE_FILE,
@@ -239,7 +244,7 @@ fn metadata_blocks(plan: &Plan, build_time: (i64, u32)) -> Result<Vec<Vec<u8>>> 
     for (i, d) in plan.dirs.iter().enumerate() {
         let is_root = i == 0;
         write_inode(
-            &mut table,
+            table,
             4 + i,
             &InodeRecord {
                 mode: if is_root {
@@ -253,8 +258,8 @@ fn metadata_blocks(plan: &Plan, build_time: (i64, u32)) -> Result<Vec<Vec<u8>>> 
                 } else {
                     plan::FLAGS_TABLE
                 },
-                size: BLOCK,
-                logical_offset: dir_block(4 + i),
+                size: plan.metadata.dirs[i].1,
+                logical_offset: plan.metadata.dirs[i].0,
                 db1: -1,
                 db2: d.parent_inode,
                 db3: d.dirent_offset,
@@ -264,7 +269,7 @@ fn metadata_blocks(plan: &Plan, build_time: (i64, u32)) -> Result<Vec<Vec<u8>>> 
     }
     for (i, f) in plan.files.iter().enumerate() {
         write_inode(
-            &mut table,
+            table,
             4 + plan.dirs.len() + i,
             &InodeRecord {
                 mode: f.mode(),
@@ -279,42 +284,24 @@ fn metadata_blocks(plan: &Plan, build_time: (i64, u32)) -> Result<Vec<Vec<u8>>> 
             build_time,
         );
     }
-    blocks.push(table);
-
-    // Content blocks, in the order the geometry fixes.
-    let super_root: Vec<(String, u32, i8)> = vec![
-        (
-            "inode_flat_path_table".to_string(),
-            plan::INODE_FLT_INODE,
-            plan::DIRENT_FILE,
-        ),
-        (
-            "apr_flat_path_table".to_string(),
-            plan::APR_FLT_INODE,
-            plan::DIRENT_FILE,
-        ),
-        (
-            "afid_to_ino_table".to_string(),
-            plan::AFID_TABLE_INODE,
-            plan::DIRENT_FILE,
-        ),
-        ("uroot".to_string(), plan::FIRST_DIR_INODE, plan::DIRENT_DIR),
-    ];
-    blocks.push(block_of(
-        &dirents_bytes(&super_root),
-        "the super-root dirents",
-    )?);
-    blocks.push(block_of(&flt_inode, "the inode flat-path table")?);
-    blocks.push(block_of(&flt_apr, "the apr flat-path table")?);
-    blocks.push(block_of(&afid_bytes, "the afid table")?);
-    for d in &plan.dirs {
-        blocks.push(block_of(
+    place(
+        &mut region,
+        plan.metadata.super_root,
+        plan.meta_base,
+        &dirents_bytes(&plan::super_root_dirents()),
+    );
+    place(&mut region, plan.metadata.flt, plan.meta_base, &flt_inode);
+    place(&mut region, plan.metadata.flt_apr, plan.meta_base, &flt_apr);
+    place(&mut region, plan.metadata.afid, plan.meta_base, &afid_bytes);
+    for (i, d) in plan.dirs.iter().enumerate() {
+        place(
+            &mut region,
+            plan.metadata.dirs[i],
+            plan.meta_base,
             &dirents_bytes(&d.dirents),
-            &format!("directory {}", d.path),
-        )?);
+        );
     }
-    blocks.push(vec![0u8; BLOCK as usize]);
-    Ok(blocks)
+    Ok(region)
 }
 
 /// Assemble the inner image: `[payloads][block-info table][metadata]` on disk and the
@@ -382,21 +369,19 @@ pub fn write(
     image[at..at + table.len()].copy_from_slice(&table);
 
     // The metadata region.
-    let blocks = metadata_blocks(plan, build_time)?;
-    if blocks.len() as u64 != plan.metadata_blocks {
+    let region = metadata_region(plan, build_time)?;
+    if region.len() as u64 != plan.metadata_blocks * BLOCK {
         return format_err(format!(
-            "metadata region is {} blocks but the plan fixed {}",
-            blocks.len(),
+            "metadata region is {} bytes but the plan fixed {} blocks",
+            region.len(),
             plan.metadata_blocks
         ));
     }
     let meta_at = plan.meta_base as usize;
-    if meta_at + blocks.len() * BLOCK as usize > image.len() {
+    if meta_at + region.len() > image.len() {
         return format_err("the metadata region runs past the mount");
     }
-    for (i, b) in blocks.iter().enumerate() {
-        image[meta_at + i * BLOCK as usize..meta_at + (i + 1) * BLOCK as usize].copy_from_slice(b);
-    }
+    image[meta_at..meta_at + region.len()].copy_from_slice(&region);
 
     Ok(InnerImage {
         image,
@@ -452,10 +437,10 @@ impl<'a> BlockSource<'a> {
             })
             .collect();
         spans.sort_by_key(|s| s.start);
-        let meta = metadata_blocks(plan, build_time)?;
-        if meta.len() as u64 != plan.metadata_blocks {
+        let meta = metadata_region(plan, build_time)?;
+        if meta.len() as u64 != plan.metadata_blocks * BLOCK {
             return format_err(format!(
-                "metadata region is {} blocks but the plan fixed {}",
+                "metadata region is {} bytes but the plan fixed {} blocks",
                 meta.len(),
                 plan.metadata_blocks
             ));
@@ -465,7 +450,7 @@ impl<'a> BlockSource<'a> {
             spans,
             table: block_info_table(plan),
             table_block: plan.data_end.div_ceil(BLOCK),
-            meta,
+            meta: meta.chunks(BLOCK as usize).map(<[u8]>::to_vec).collect(),
             meta_block: plan.meta_base / BLOCK,
             keystone: keystone(passcode).to_vec(),
             buf: vec![0u8; BLOCK as usize],
@@ -589,13 +574,15 @@ pub fn read(mount: &[u8], meta_base: u64) -> Result<InnerMount> {
     }
     let block_size = le32(sb, 0x20) as usize;
     let inode_count = le64(sb, 0x30) as usize;
-    if block_size != BLOCK as usize || inode_count == 0 || inode_count > 4096 {
+    if block_size != BLOCK as usize || inode_count == 0 || inode_count > 4_000_000 {
         return format_err(format!(
             "implausible inner superblock (block size {block_size:#x}, {inode_count} inodes)"
         ));
     }
+    // The table is flat from one block after the superblock and spans as many blocks as the
+    // inode count needs — a real title's does.
     let table = mount
-        .get(base + block_size..base + block_size * 2)
+        .get(base + block_size..base + block_size + inode_count * INODE_LEN)
         .ok_or_else(|| crate::Error::Format("mount has no inode table".into()))?;
 
     let inode = |i: usize| -> Option<(u16, u64, u64, i32)> {

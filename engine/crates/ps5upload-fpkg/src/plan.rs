@@ -50,6 +50,43 @@ pub const FLAGS_BLOB: u32 = 0x20;
 pub const FLAGS_SCE_SYS: u32 = 0x0002_0000;
 pub const FLAGS_TABLE: u32 = 0x0002_0010;
 
+/// Where each inner-mount metadata structure lands, in absolute mount bytes, with its byte
+/// length. Starts are block-aligned; a structure whose bytes outgrow one block runs on into the
+/// next, which is what a real title's inode table, afid table and large directories do.
+#[derive(Debug, Clone, Default)]
+pub struct MetadataLayout {
+    pub inode_table: (u64, u64),
+    pub super_root: (u64, u64),
+    pub flt: (u64, u64),
+    pub flt_apr: (u64, u64),
+    pub afid: (u64, u64),
+    pub dirs: Vec<(u64, u64)>,
+    /// Blocks the whole region occupies, the superblock block and the guard block included.
+    pub blocks: u64,
+}
+
+/// The super-root's dirents: both flat-path tables, the afid table and `uroot`.
+pub fn super_root_dirents() -> Vec<(String, u32, i8)> {
+    vec![
+        (
+            "inode_flat_path_table".to_string(),
+            INODE_FLT_INODE,
+            DIRENT_FILE,
+        ),
+        (
+            "apr_flat_path_table".to_string(),
+            APR_FLT_INODE,
+            DIRENT_FILE,
+        ),
+        (
+            "afid_to_ino_table".to_string(),
+            AFID_TABLE_INODE,
+            DIRENT_FILE,
+        ),
+        ("uroot".to_string(), FIRST_DIR_INODE, DIRENT_DIR),
+    ]
+}
+
 /// A file's placement in the inner image; `files` is in inode order after `build`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedFile {
@@ -132,6 +169,9 @@ pub struct Plan {
     /// Inner mount size in blocks.
     pub ndblock: u64,
     pub metadata_blocks: u64,
+    /// Where inside the mount each metadata structure lives. The writer places bytes by these
+    /// offsets, so the planner and the writer cannot disagree about the region's shape.
+    pub metadata: MetadataLayout,
     /// Directories below uroot plus every file: the count the header carries at `0x94`.
     pub content_inodes: u32,
     /// App-payload (non-`sce_sys`, non-marker) file count for the header's `0xF0`.
@@ -412,11 +452,50 @@ pub fn build(input: &[SourceFile]) -> Result<Plan> {
     afid_to_ino.push(-1);
     afid_to_ino.push(-1);
 
-    // Geometry: two blocks (superblock, inode table) + four content blocks (super-root
-    // dirents, both tables, afid table) + one dirent block per directory + one trailing.
-    let metadata_blocks = dirs.len() as u64 + 7;
+    // Geometry. Every metadata structure is block-aligned at its start and runs on into as many
+    // blocks as its bytes need: a real title's inode table, afid table and large directories all
+    // outgrow a single 64 KiB block (Minecraft alone has 37k inodes). The region is one
+    // superblock block, the inode table, the super-root dirents, both flat-path tables, the afid
+    // table, one dirent stream per directory, then a guard block.
     let meta_base = (data_end + BLOCK).div_ceil(META_ALIGN) * META_ALIGN;
+    let super_root = super_root_dirents();
+    let inode_table_bytes =
+        ((4 + planned_dirs.len() + files.len()) * crate::inner::INODE_LEN) as u64;
+    let flt_bytes = flt::write(&flt_inode).len() as u64;
+    let flt_apr_bytes = flt::write(&flt_apr).len() as u64;
+    let afid_bytes = (afid_to_ino.len() * 4) as u64;
+    let pad = |bytes: u64| bytes.div_ceil(BLOCK) * BLOCK;
+
+    let mut at = meta_base + BLOCK;
+    let mut layout = MetadataLayout {
+        inode_table: (at, inode_table_bytes),
+        ..Default::default()
+    };
+    at += pad(inode_table_bytes);
+    let place = |at: &mut u64, bytes: u64| {
+        let span = (*at, bytes);
+        *at += pad(bytes);
+        span
+    };
+    layout.super_root = place(
+        &mut at,
+        crate::inner::dirents_bytes(&super_root).len() as u64,
+    );
+    layout.flt = place(&mut at, flt_bytes);
+    layout.flt_apr = place(&mut at, flt_apr_bytes);
+    layout.afid = place(&mut at, afid_bytes);
+    layout.dirs = planned_dirs
+        .iter()
+        .map(|d| {
+            place(
+                &mut at,
+                crate::inner::dirents_bytes(&d.dirents).len() as u64,
+            )
+        })
+        .collect();
+    let metadata_blocks = (at - meta_base) / BLOCK + 1;
     let ndblock = meta_base / BLOCK + metadata_blocks;
+    layout.blocks = metadata_blocks;
 
     let content_inodes = files.len() as u32 + dirs.len() as u32 - 1;
     let app_file_count = files
@@ -436,6 +515,7 @@ pub fn build(input: &[SourceFile]) -> Result<Plan> {
         meta_base,
         ndblock,
         metadata_blocks,
+        metadata: layout,
         content_inodes,
         app_file_count,
     })

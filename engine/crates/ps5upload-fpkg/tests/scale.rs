@@ -219,6 +219,107 @@ fn a_source_past_the_first_indirect_slot_round_trips() {
     );
 }
 
+/// A real title's tree is far past one block: Minecraft's mount has 37,565 inodes and a
+/// single directory can hold thousands of entries. A structure that outgrows a block just
+/// runs on into the next, so the inode table and a directory's dirents are read as the byte
+/// range they claim, not as one block. Kept small enough to run with the default suite.
+#[test]
+fn a_tree_with_blocks_of_inodes_round_trips() {
+    let source = TempDir::new("deep-source");
+    let out = TempDir::new("deep-out");
+    let out_memory = TempDir::new("deep-memory");
+    write_tree(source.path());
+    // One flat directory whose dirents alone fill more than a 64 KiB block, and whose files
+    // push the inode table past one too.
+    let many = source.path().join("data/many");
+    std::fs::create_dir_all(&many).unwrap();
+    for i in 0..3000u32 {
+        std::fs::write(
+            many.join(format!("entry{i:05}.bin")),
+            (0..64u32).map(|b| (b + i) as u8).collect::<Vec<u8>>(),
+        )
+        .unwrap();
+    }
+
+    let report = build::build(&request(source.path(), out.path()), &mut |_| {}).unwrap();
+    assert!(report.verify.ok(), "{}", report.verify);
+    let memory =
+        build::build_in_memory(&request(source.path(), out_memory.path()), &mut |_| {}).unwrap();
+    assert!(memory.verify.ok(), "{}", memory.verify);
+
+    let files = ps5upload_fpkg::source::scan(source.path()).unwrap();
+    let plan = ps5upload_fpkg::plan::build(&files).unwrap();
+    // The point of the test: this tree does not fit the region's first block, and the plan
+    // says so with an explicit region rather than by failing.
+    let inodes = plan.files.len() as u64 + plan.dirs.len() as u64;
+    assert!(inodes > 3000, "the tree must carry {inodes} inodes");
+    assert!(
+        plan.metadata.blocks > 2,
+        "a {inodes}-inode tree needs a multi-block metadata region, got {}",
+        plan.metadata.blocks
+    );
+    assert!(
+        plan.metadata.inode_table.1 > ps5upload_fpkg::BLOCK,
+        "the inode table itself must outgrow a block: {} bytes",
+        plan.metadata.inode_table.1
+    );
+    let flat = plan
+        .dirs
+        .iter()
+        .find(|d| d.path == "data/many")
+        .expect("the flat directory is in the plan");
+    assert!(
+        ps5upload_fpkg::plan::dirent_size("entry00000.bin") as u64
+            * (flat.dirents.len() as u64 - 2)
+            > ps5upload_fpkg::BLOCK,
+        "the flat directory's dirents must outgrow a block"
+    );
+
+    assert_eq!(
+        std::fs::read(&report.path).unwrap(),
+        std::fs::read(&memory.path).unwrap(),
+        "the two writers disagree on a multi-block metadata region"
+    );
+
+    // The reader walks the whole tree back out through the multi-block region.
+    let mut pkg = ps5upload_fpkg::PkgFile::open(&report.path).unwrap();
+    let head = pkg.read_at(0, ps5upload_fpkg::fih::HEADER_LEN).unwrap();
+    let fih = ps5upload_fpkg::fih::parse(&head).unwrap();
+    let container = ps5upload_fpkg::cnt::read(&mut pkg, fih.cnt_offset).unwrap();
+    let img = ps5upload_fpkg::outer::open(
+        &mut pkg,
+        &fih,
+        &container,
+        ps5upload_fpkg::crypto::DEFAULT_PASSCODE,
+    )
+    .unwrap();
+    let nodes = img.dinodes();
+    let inner_image = img.file_data(&nodes[3]);
+    let inner = ps5upload_fpkg::inner::read(&inner_image, plan.meta_base).unwrap();
+    assert!(inner.flt_ok);
+    let mut recovered: Vec<(String, u64)> = inner
+        .files
+        .iter()
+        .map(|f| (f.path.clone(), f.size))
+        .collect();
+    recovered.sort();
+    let mut wanted: Vec<(String, u64)> = files
+        .iter()
+        .map(|f| (f.path.clone(), f.size))
+        .chain([(
+            "sce_sys/keystone".to_string(),
+            ps5upload_fpkg::plan::KEYSTONE_LEN,
+        )])
+        .collect();
+    wanted.sort();
+    assert_eq!(recovered.len(), wanted.len(), "every file must survive");
+    assert_eq!(recovered, wanted);
+    eprintln!(
+        "{inodes} inodes in {} metadata blocks; the whole tree walked back",
+        plan.metadata.blocks
+    );
+}
+
 /// The free-space estimate must never be smaller than the package: the guard exists to
 /// stop a build that cannot finish, and an underestimate defeats it.
 #[test]
