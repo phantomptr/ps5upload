@@ -36,6 +36,7 @@
 mod bundled_payload;
 mod engine_log;
 mod fakelibs_api;
+mod fpkg_api;
 mod icon_cache;
 mod local_fs;
 mod log_dedup;
@@ -189,7 +190,7 @@ struct PlannedFile {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
-enum JobState {
+pub(crate) enum JobState {
     Running {
         started_at_ms: u64,
         /// Bytes sent so far. Updated on a timer (200 ms) that reads the
@@ -984,7 +985,7 @@ impl Drop for JobFailOnDropGuard {
 }
 
 #[derive(Clone)]
-struct AppState {
+pub(crate) struct AppState {
     jobs: Arc<Mutex<HashMap<Uuid, JobState>>>,
     default_ps5_addr: String,
     events_tx: broadcast::Sender<String>,
@@ -1011,7 +1012,7 @@ fn cancel_registry() -> &'static Mutex<HashMap<Uuid, Weak<AtomicBool>>> {
 
 /// Register a fresh cancel flag for `job_id` and return it to thread into
 /// `TransferConfig::cancel`. Prunes flags whose transfer has finished.
-fn register_transfer_cancel(job_id: Uuid) -> Arc<AtomicBool> {
+pub(crate) fn register_transfer_cancel(job_id: Uuid) -> Arc<AtomicBool> {
     let flag = Arc::new(AtomicBool::new(false));
     let mut g = cancel_registry().lock().unwrap_or_else(|e| e.into_inner());
     g.retain(|_, v| v.strong_count() > 0);
@@ -1064,7 +1065,7 @@ fn evict_oldest_terminal(jobs: &mut HashMap<Uuid, JobState>) {
 }
 
 /// Update a job's state and broadcast the change over SSE.
-fn set_job(
+pub(crate) fn set_job(
     jobs: &Arc<Mutex<HashMap<Uuid, JobState>>>,
     events_tx: &broadcast::Sender<String>,
     job_id: Uuid,
@@ -1081,7 +1082,7 @@ fn set_job(
     let _ = events_tx.send(msg.to_string());
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
@@ -1305,7 +1306,7 @@ struct TransferDirReconcileReq {
 }
 
 #[derive(Serialize)]
-struct JobCreated {
+pub(crate) struct JobCreated {
     job_id: String,
 }
 
@@ -1353,7 +1354,7 @@ fn hex_val(b: u8) -> anyhow::Result<u8> {
     }
 }
 
-fn json_err(code: StatusCode, msg: impl Into<String>) -> impl IntoResponse {
+pub(crate) fn json_err(code: StatusCode, msg: impl Into<String>) -> impl IntoResponse {
     (code, Json(serde_json::json!({ "error": msg.into() })))
 }
 
@@ -9045,6 +9046,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/pkg/scan-external", get(ps5_pkg_scan_external))
         .route("/api/ps5/pkg/metadata", get(ps5_pkg_metadata))
         .route("/api/ps5/list-dir", get(ps5_list_dir))
+        .route("/api/fpkg/inspect", post(fpkg_api::fpkg_inspect_handler))
+        .route("/api/fpkg/build", post(fpkg_api::fpkg_build_handler))
         .route("/api/local/list-dir", get(local_list_dir_handler))
         .route("/api/local/storage-roots", get(local_storage_roots_handler))
         .route("/api/ps5/fs/delete", post(ps5_fs_delete))

@@ -526,7 +526,7 @@ mod tests {
 
 /// What a caller learns before deciding to build: what the source is, whether it looks
 /// like a launchable title, what the package will cost, and whether there is room.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Inspection {
     pub source: String,
     pub files: usize,

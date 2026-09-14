@@ -147,7 +147,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<SourceFile>) -> Result<()> {
 }
 
 /// One readiness finding: what was checked, whether it holds, and what was seen.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Check {
     pub name: String,
     pub ok: bool,
