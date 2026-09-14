@@ -12,16 +12,17 @@ pub struct SourceFile {
 }
 
 /// The game files to convert, whatever they live in. Sizes are known up front, so the
-/// plan fixes every offset before the first byte is read.
+/// plan fixes every offset before the first byte is read. Images seek, so reading takes
+/// `&mut self`.
 pub trait SourceTree {
     fn files(&self) -> &[SourceFile];
 
     /// The whole file at `path`.
-    fn read(&self, path: &str) -> Result<Vec<u8>>;
+    fn read(&mut self, path: &str) -> Result<Vec<u8>>;
 
     /// Up to `len` bytes at `offset`. Sources override this so a four-byte module magic
     /// check does not read a 100 MB `eboot.bin` into memory.
-    fn read_range(&self, path: &str, offset: u64, len: usize) -> Result<Vec<u8>> {
+    fn read_range(&mut self, path: &str, offset: u64, len: usize) -> Result<Vec<u8>> {
         let all = self.read(path)?;
         let start = usize::try_from(offset).unwrap_or(usize::MAX).min(all.len());
         let end = start.saturating_add(len).min(all.len());
@@ -52,12 +53,12 @@ impl SourceTree for FolderSource {
         &self.files
     }
 
-    fn read(&self, path: &str) -> Result<Vec<u8>> {
+    fn read(&mut self, path: &str) -> Result<Vec<u8>> {
         std::fs::read(self.root.join(path))
             .map_err(|e| Error::Io(std::io::Error::new(e.kind(), format!("{path}: {e}"))))
     }
 
-    fn read_range(&self, path: &str, offset: u64, len: usize) -> Result<Vec<u8>> {
+    fn read_range(&mut self, path: &str, offset: u64, len: usize) -> Result<Vec<u8>> {
         use std::io::{Read, Seek, SeekFrom};
         let mut file = std::fs::File::open(self.root.join(path))
             .map_err(|e| Error::Io(std::io::Error::new(e.kind(), format!("{path}: {e}"))))?;
@@ -78,14 +79,22 @@ pub fn open(path: &Path) -> Result<Box<dyn SourceTree>> {
     if path.is_dir() {
         return Ok(Box::new(FolderSource::open(path)?));
     }
-    format_err(format!(
-        "{} is neither a folder nor a supported image (.exfat, .ffpkg)",
-        path.display()
-    ))
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "exfat" => Ok(Box::new(crate::exfat::ExFatSource::open(path)?)),
+        _ => format_err(format!(
+            "{} is neither a folder nor a supported image (.exfat, .ffpkg)",
+            path.display()
+        )),
+    }
 }
 
 /// Junk no package wants, skipped by name at any depth.
-fn is_junk(name: &str) -> bool {
+pub(crate) fn is_junk(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower == ".ds_store"
         || lower == "thumbs.db"
@@ -168,11 +177,16 @@ impl Readiness {
     }
 }
 
-/// The module magics a launchable title may carry.
+/// The module magics a launchable title may carry. As the payload's own note says
+/// (`payload/include/elf_param.h`), a SELF magic means the module is *wrapped*, not that it
+/// is encrypted — which console family the wrapper is for is what the magic distinguishes.
+/// Measured: 17 of the 27 real game mounts carry the PS5 magic, 10 the PS4 one.
 pub mod magic {
     pub const RAW_ELF: [u8; 4] = [0x7F, b'E', b'L', b'F'];
-    pub const FAKE_SELF: [u8; 4] = [0x54, 0x14, 0xF5, 0xEE];
-    pub const SELF: [u8; 4] = [0x53, 0x43, 0x45, 0x00];
+    pub const SELF_PS5: [u8; 4] = [0x54, 0x14, 0xF5, 0xEE];
+    pub const SELF_PS4: [u8; 4] = [0x4F, 0x15, 0x3D, 0x1D];
+    /// A genuine (Sony-signed) SELF.
+    pub const SIGNED_SELF: [u8; 4] = [0x53, 0x43, 0x45, 0x00];
 }
 
 /// A `param.json`'s bytes, parsed (it may carry a BOM).
@@ -210,16 +224,16 @@ pub fn content_version_word(param_json: &[u8]) -> Option<u32> {
     ]))
 }
 
-fn module_magic(tree: &dyn SourceTree, rel: &str) -> Option<[u8; 4]> {
+fn module_magic(tree: &mut dyn SourceTree, rel: &str) -> Option<[u8; 4]> {
     let head = tree.read_range(rel, 0, 4).ok()?;
     head.try_into().ok()
 }
 
 /// Report readiness for a source tree. Never blocks: the caller decides which findings
 /// matter for the build it is about to run.
-pub fn readiness(tree: &dyn SourceTree) -> Readiness {
+pub fn readiness(tree: &mut dyn SourceTree) -> Readiness {
     let mut r = Readiness::default();
-    let files = tree.files();
+    let files = tree.files().to_vec();
     let has = |path: &str| files.iter().any(|f| f.path == path);
 
     r.push(
@@ -257,18 +271,16 @@ pub fn readiness(tree: &dyn SourceTree) -> Readiness {
         "the rights module a debug package ships",
     );
     if let Some(m) = module_magic(tree, "eboot.bin") {
-        let kind = if m == magic::RAW_ELF {
-            "raw ELF"
-        } else if m == magic::FAKE_SELF {
-            "fake SELF"
-        } else if m == magic::SELF {
-            "SELF"
-        } else {
-            "unknown"
+        let (kind, launchable) = match m {
+            magic::RAW_ELF => ("raw ELF", true),
+            magic::SELF_PS5 => ("PS5 SELF wrapper", true),
+            magic::SELF_PS4 => ("PS4 SELF wrapper", true),
+            magic::SIGNED_SELF => ("genuine SELF", false),
+            _ => ("unknown", false),
         };
         r.push(
             "eboot.bin module magic",
-            m == magic::RAW_ELF || m == magic::FAKE_SELF,
+            launchable,
             format!("{kind} ({m:02x?})"),
         );
     }
@@ -331,7 +343,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("eboot.bin"), b"0123456789").unwrap();
-        let tree = open(&dir).unwrap();
+        let mut tree = open(&dir).unwrap();
         assert_eq!(tree.read_range("eboot.bin", 2, 3).unwrap(), b"234");
         assert_eq!(tree.read_range("eboot.bin", 8, 99).unwrap(), b"89");
         assert_eq!(tree.read_range("eboot.bin", 99, 4).unwrap(), b"");
