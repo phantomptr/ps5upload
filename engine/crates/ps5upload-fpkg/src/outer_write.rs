@@ -222,6 +222,14 @@ pub fn max_inner_blocks() -> u64 {
 /// One metadata block: its index, its plaintext digest, and its bytes.
 pub type MetadataBlock = (u64, [u8; 32], Vec<u8>);
 
+/// The superblock's ICV: the digest over its first `0x5A0` bytes with its own ICV field
+/// zeroed. Both writers embed it, and the install manifest reports it.
+pub fn superblock_icv(superblock: &[u8]) -> [u8; 32] {
+    let mut zeroed = superblock[..0x5A0].to_vec();
+    zeroed[0x380..0x3A0].fill(0);
+    sha3(&zeroed)
+}
+
 /// The metadata that follows the data: naps, superblock, inode table, root dirents,
 /// flat-path table, uroot dirents and the indirect tables — in block order, each with its
 /// plaintext digest. Everything here derives from the data blocks' digests, so the
@@ -418,9 +426,7 @@ pub fn metadata_blocks(
         let (_, _, sb) = &mut out[sb_slot];
         sb[0xB8..0xD8].copy_from_slice(&table_digest);
         sb[0xD8..0xE0].copy_from_slice(&lay.table_block.to_le_bytes());
-        let mut zeroed = sb[..0x5A0].to_vec();
-        zeroed[0x380..0x3A0].fill(0);
-        let icv = sha3(&zeroed);
+        let icv = superblock_icv(sb);
         sb[0x380..0x3A0].copy_from_slice(&icv);
     }
     // The superblock's digest is its ICV-bearing plaintext.

@@ -197,8 +197,35 @@ fn general_digests(
     out
 }
 
+/// What the container measured, for the install manifest that describes it elsewhere. Every
+/// value here is one this writer just fixed; nothing is recomputed from the bytes later.
+pub struct Facts {
+    /// The container's padded length: where the SI segment begins.
+    pub container_size: u64,
+    /// The header region's end — the image-digests offset, as the samples record it.
+    pub mandatory_size: u64,
+    pub body_offset: u64,
+    pub body_size: u64,
+    pub body_digest: [u8; 32],
+    pub package_digest: [u8; 32],
+    /// `SHA3` of the finalized-image header block.
+    pub fih_digest: [u8; 32],
+    /// The general-digest slots the manifest repeats.
+    pub content_digest: [u8; 32],
+    pub header_digest: [u8; 32],
+    pub system_digest: [u8; 32],
+    pub param_digest: [u8; 32],
+    /// The named entries' `(offset, size, name)`, relative to the container, in offset order.
+    pub entries: Vec<(u32, u32, &'static str)>,
+}
+
+pub struct Container {
+    pub bytes: Vec<u8>,
+    pub facts: Facts,
+}
+
 /// Build the container. Its length ends where the SI segment begins.
-pub fn write(p: &CntParams) -> Result<Vec<u8>> {
+pub fn write(p: &CntParams) -> Result<Container> {
     if p.content_id.len() != 36 || !p.content_id.is_ascii() {
         return format_err("content id must be 36 ASCII characters");
     }
@@ -348,6 +375,17 @@ pub fn write(p: &CntParams) -> Result<Vec<u8>> {
     let image_key_span = body.span(ids::IMAGE_KEY);
     let image_key_digest = sha3(body.payload(ids::IMAGE_KEY));
     let imagedigs_digest = sha3(body.payload(ids::IMAGE_DIGESTS));
+    // The manifest lists the entries the name table names, in offset order — the same set
+    // the samples show.
+    let mut named: Vec<(u32, u32, &'static str)> = ENTRIES
+        .iter()
+        .filter(|(_, _, name)| !name.is_empty())
+        .map(|(id, _, name)| {
+            let (at, size) = body.span(*id);
+            (at, size, *name)
+        })
+        .collect();
+    named.sort_by_key(|(at, _, _)| *at);
     let mut cnt = body.bytes;
     // Pad before the tail digests: the body digest covers the padded region, measured on the
     // sample (the region end matches its stored value, its content end does not).
@@ -378,7 +416,23 @@ pub fn write(p: &CntParams) -> Result<Vec<u8>> {
     cnt[PACKAGE_DIGEST_AT..SIGNATURE_AT].copy_from_slice(&package_digest);
     let signature = rsa::pkcs1_encrypt(&keys::METADATA_MODULUS, &sha3(&cnt[..SIGNATURE_AT]));
     cnt[SIGNATURE_AT..SIGNATURE_AT + signature.len()].copy_from_slice(&signature);
-    Ok(cnt)
+
+    let slot = |i: usize| -> [u8; 32] { general[0x20 + i * 32..0x40 + i * 32].try_into().unwrap() };
+    let facts = Facts {
+        container_size: padded_end as u64,
+        mandatory_size: imagedigs_span.0 as u64,
+        body_offset: BODY_AT as u64,
+        body_size: (padded_end - BODY_AT) as u64,
+        body_digest,
+        package_digest,
+        fih_digest: sha3(p.fih_block),
+        content_digest: slot(0),
+        header_digest: slot(2),
+        system_digest: slot(3),
+        param_digest: slot(5),
+        entries: named,
+    };
+    Ok(Container { bytes: cnt, facts })
 }
 
 #[cfg(test)]
@@ -435,7 +489,8 @@ mod tests {
         let cnt = write(&params(
             id, param, &png, &dds, &chunk, &hash, &ficm, &digests, &fih,
         ))
-        .unwrap();
+        .unwrap()
+        .bytes;
         let parsed = crate::cnt::Cnt::from_bytes(cnt).unwrap();
         assert_eq!(parsed.content_id, id);
         assert_eq!(parsed.entries.len(), 13);
@@ -490,7 +545,8 @@ mod tests {
             &digests,
             &fih,
         ))
-        .unwrap();
+        .unwrap()
+        .bytes;
         let signature = &cnt[SIGNATURE_AT..SIGNATURE_AT + 384];
         // Applying the public exponent recovers the padded block only for a private-key
         // operation; here it must at least not be the zero block and must round-trip

@@ -19,6 +19,7 @@ use crate::fih_write::{self, FihParams};
 use crate::inner::{BlockSource, RangeRead};
 use crate::naps;
 use crate::outer_write::{self, layout};
+use crate::pfsimage;
 use crate::plan::Plan;
 use crate::si_write;
 use crate::xts::{Xts, SIGNED_SECTOR_FLAG};
@@ -183,6 +184,7 @@ pub fn write_package(
     // ── the outer metadata ───────────────────────────────────────────────────────────
     (progress.phase)("writing the layout");
     let mut game_digest = [0u8; 32];
+    let mut superblock = Vec::new();
     for (index, digest, mut plaintext) in outer_write::metadata_blocks(
         &lay,
         inner_blocks,
@@ -202,6 +204,7 @@ pub fn write_package(
         digests[index as usize] = digest;
         if index == lay.superblock_block {
             game_digest = digest;
+            superblock = plaintext.clone();
         }
         crcs[1 + index as usize] = crc32c(&plaintext);
         out.seek(SeekFrom::Start(BLOCK + index * BLOCK))?;
@@ -252,11 +255,11 @@ pub fn write_package(
         inner_size,
     })?;
     out.seek(SeekFrom::Start(cnt_offset))?;
-    out.write_all(&cnt)?;
+    out.write_all(&cnt.bytes)?;
     // The mount image is the header, the outer image and the container; its CRC is the
     // container's chunks appended to the blocks already crc'd above.
     let mut crc_table: Vec<u8> = crcs.iter().flat_map(|c| c.to_le_bytes()).collect();
-    crc_table.extend_from_slice(&si_write::chunk_crc(&cnt));
+    crc_table.extend_from_slice(&si_write::chunk_crc(&cnt.bytes));
 
     // ── the install metadata ─────────────────────────────────────────────────────────
     (progress.phase)("writing the install metadata");
@@ -273,22 +276,31 @@ pub fn write_package(
         &game_digest,
     )?;
     let meta_300 = si_write::naps_meta_300(inner_size);
+    let manifest = pfsimage::build(&pfsimage::ManifestParams {
+        facts: &cnt.facts,
+        content_id: request.content_id,
+        content_type: 0x26,
+        param_json: &request.param_json,
+        content_version: request.content_version,
+        cnt_offset,
+        si_offset: cnt_offset + cnt.facts.container_size,
+        outer_size,
+        inner_size,
+        seed: request.seed,
+        game_digest,
+        icv: outer_write::superblock_icv(&superblock),
+        playgo_chunk_len: playgo_chunk.len() as u64,
+        outer: &lay,
+        naps_len: naps.len() as u64,
+        plan,
+    });
     let members = vec![
         ("common/etc/naps_meta_18.dat".to_string(), meta_18),
         ("common/etc/naps_meta_300.dat".to_string(), meta_300.clone()),
         ("common/etc/naps_meta_301.dat".to_string(), meta_300.clone()),
         ("common/etc/naps_meta_302.dat".to_string(), meta_300.clone()),
         ("common/etc/naps_meta_308.dat".to_string(), meta_300),
-        (
-            "common/etc/pfsimage.xml".to_string(),
-            crate::build::pfsimage_xml(
-                request.content_id,
-                plan,
-                outer_size,
-                inner_size,
-                cnt.len() as u64,
-            ),
-        ),
+        ("common/etc/pfsimage.xml".to_string(), manifest),
         ("common/etc/playgo-chunk.dat".to_string(), playgo_chunk),
         (
             format!("config/{}/playgo-chunk.crc", request.content_id),
@@ -296,11 +308,11 @@ pub fn write_package(
         ),
     ];
     let si = si_write::zip(&members, request.time);
-    out.seek(SeekFrom::Start(cnt_offset + cnt.len() as u64))?;
+    out.seek(SeekFrom::Start(cnt_offset + cnt.bytes.len() as u64))?;
     out.write_all(&si)?;
     out.sync_all()?;
 
-    let size = cnt_offset + cnt.len() as u64 + si.len() as u64;
+    let size = cnt_offset + cnt.bytes.len() as u64 + si.len() as u64;
     (progress.bytes)(outer_size, outer_size);
     Ok(StreamedPackage {
         size,

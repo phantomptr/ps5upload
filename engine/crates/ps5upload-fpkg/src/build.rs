@@ -13,6 +13,7 @@ use crate::fih_write::{self, FihParams};
 use crate::inner;
 use crate::naps;
 use crate::outer_write;
+use crate::pfsimage;
 use crate::plan::{self, Plan};
 use crate::si_write;
 use crate::source::{self, SourceFile};
@@ -321,10 +322,11 @@ fn build_mode(
             })?;
 
             progress("writing the install metadata");
-            let mut mount_image = Vec::with_capacity((cnt_offset + cnt.len() as u64) as usize);
+            let mut mount_image =
+                Vec::with_capacity((cnt_offset + cnt.bytes.len() as u64) as usize);
             mount_image.extend_from_slice(&fih);
             mount_image.extend_from_slice(&outer.image);
-            mount_image.extend_from_slice(&cnt);
+            mount_image.extend_from_slice(&cnt.bytes);
             let crc = si_write::chunk_crc(&mount_image);
             let inner_files = plan.inner_files();
             let meta_18 = si_write::naps_meta_18(
@@ -337,16 +339,33 @@ fn build_mode(
                 &game_digest,
             )?;
             let meta_300 = si_write::naps_meta_300(inner_size);
+            let outer_layout = outer_write::layout(plan.ndblock)?;
+            let sb_at = outer.superblock_block as usize * BLOCK as usize;
+            let manifest = pfsimage::build(&pfsimage::ManifestParams {
+                facts: &cnt.facts,
+                content_id: &content_id,
+                content_type: 0x26,
+                param_json: &param_json,
+                content_version,
+                cnt_offset,
+                si_offset: cnt_offset + cnt.facts.container_size,
+                outer_size,
+                inner_size,
+                seed,
+                game_digest,
+                icv: outer_write::superblock_icv(&outer.image[sb_at..sb_at + BLOCK as usize]),
+                playgo_chunk_len: playgo_chunk.len() as u64,
+                outer: &outer_layout,
+                naps_len: naps.len() as u64,
+                plan: &plan,
+            });
             let members = vec![
                 ("common/etc/naps_meta_18.dat".to_string(), meta_18),
                 ("common/etc/naps_meta_300.dat".to_string(), meta_300.clone()),
                 ("common/etc/naps_meta_301.dat".to_string(), meta_300.clone()),
                 ("common/etc/naps_meta_302.dat".to_string(), meta_300.clone()),
                 ("common/etc/naps_meta_308.dat".to_string(), meta_300),
-                (
-                    "common/etc/pfsimage.xml".to_string(),
-                    pfsimage_xml(&content_id, &plan, outer_size, inner_size, cnt.len() as u64),
-                ),
+                ("common/etc/pfsimage.xml".to_string(), manifest),
                 ("common/etc/playgo-chunk.dat".to_string(), playgo_chunk),
                 (format!("config/{content_id}/playgo-chunk.crc"), crc),
             ];
@@ -358,11 +377,11 @@ fn build_mode(
                 let mut out = std::fs::File::create(&partial)?;
                 out.write_all(&fih)?;
                 out.write_all(&outer.image)?;
-                out.write_all(&cnt)?;
+                out.write_all(&cnt.bytes)?;
                 out.write_all(&si)?;
                 out.sync_all()?;
             }
-            cnt_offset + cnt.len() as u64 + si.len() as u64
+            cnt_offset + cnt.bytes.len() as u64 + si.len() as u64
         }
     };
 
@@ -453,47 +472,6 @@ fn random_seed() -> [u8; 16] {
         seed[8..].copy_from_slice(&nanos.to_le_bytes());
     }
     seed
-}
-
-/// The image descriptor the SI archive carries. The console does not read it; it is
-/// emitted self-consistent for tools that do.
-pub(crate) fn pfsimage_xml(
-    content_id: &str,
-    plan: &Plan,
-    outer_size: u64,
-    inner_size: u64,
-    cnt_size: u64,
-) -> Vec<u8> {
-    let mut xml = String::new();
-    xml.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
-    xml.push_str("<package-config version=\"1.0\">\n");
-    xml.push_str("  <config>\n");
-    xml.push_str("    <version-date>0x20240508</version-date>\n");
-    xml.push_str("    <version-hash>0x090fbfc1</version-hash>\n");
-    xml.push_str(&format!("    <content-id>{content_id}</content-id>\n"));
-    xml.push_str("  </config>\n");
-    xml.push_str("  <container>\n");
-    xml.push_str(&format!("    <size>0x{cnt_size:x}</size>\n"));
-    xml.push_str("  </container>\n");
-    xml.push_str("  <mount-image>\n");
-    xml.push_str(&format!("    <filesize>0x{:x}</filesize>\n", outer_size));
-    xml.push_str(&format!(
-        "    <metadata offset=\"0x{:x}\" />\n",
-        plan.meta_base
-    ));
-    xml.push_str(&format!("    <ndblock>0x{:x}</ndblock>\n", plan.ndblock));
-    xml.push_str(&format!("    <inner-size>0x{inner_size:x}</inner-size>\n"));
-    xml.push_str("  </mount-image>\n");
-    xml.push_str("  <entries>\n");
-    for f in &plan.files {
-        xml.push_str(&format!(
-            "    <entry path=\"{}\" size=\"0x{:x}\" />\n",
-            f.path, f.size
-        ));
-    }
-    xml.push_str("  </entries>\n");
-    xml.push_str("</package-config>\n");
-    xml.into_bytes()
 }
 
 /// A short summary line for logs.

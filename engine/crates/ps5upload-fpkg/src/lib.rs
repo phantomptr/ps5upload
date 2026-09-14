@@ -20,6 +20,7 @@ pub mod naps;
 pub mod outer;
 pub mod outer_write;
 pub mod pfsc;
+pub mod pfsimage;
 pub mod plan;
 pub mod rsa;
 pub mod si;
