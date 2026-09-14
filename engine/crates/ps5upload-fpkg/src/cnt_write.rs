@@ -390,7 +390,10 @@ pub fn write(p: &CntParams) -> Result<Container> {
     // Pad before the tail digests: the body digest covers the padded region, measured on the
     // sample (the region end matches its stored value, its content end does not).
     cnt.resize(padded_end, 0);
-    be32_into(&mut cnt, 0x7C, p.inner_size as u32);
+    // The container's own size, the quantity Sony's package records here (webbrowser: 327680,
+    // exactly its CNT region). This held the inner image's size, which is a different quantity
+    // and matches no working package; the scene packages leave the field zero.
+    be32_into(&mut cnt, 0x7C, padded_end as u32);
     be32_into(&mut cnt, 0x80, 0x2024_0508);
     be32_into(&mut cnt, 0x84, 0x090F_BFC1);
     cnt[0x200..0x224].copy_from_slice(&head[0x40..0x64]);
