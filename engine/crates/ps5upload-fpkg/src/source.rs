@@ -86,6 +86,7 @@ pub fn open(path: &Path) -> Result<Box<dyn SourceTree>> {
         .to_ascii_lowercase();
     match ext.as_str() {
         "exfat" => Ok(Box::new(crate::exfat::ExFatSource::open(path)?)),
+        "ffpkg" | "ufs2" => Ok(Box::new(crate::ufs2_source::Ufs2Source::open(path)?)),
         _ => format_err(format!(
             "{} is neither a folder nor a supported image (.exfat, .ffpkg)",
             path.display()

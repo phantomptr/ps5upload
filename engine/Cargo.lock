@@ -1222,6 +1222,8 @@ version = "5.26.0"
 dependencies = [
  "aes",
  "hmac",
+ "ps5upload-pkg",
+ "serde_json",
  "sha2",
  "sha3",
  "thiserror",

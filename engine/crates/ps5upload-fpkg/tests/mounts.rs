@@ -127,3 +127,101 @@ fn every_real_exfat_mount_walks_and_reads() {
     }
     eprintln!("read {} exfat mounts", images.len());
 }
+
+/// Every real `.ffpkg` (UFS2) mount opens, walks, and gives back the bytes of its files.
+#[test]
+fn every_real_ffpkg_mount_walks_and_reads() {
+    let Some(dir) = mount_dir() else {
+        eprintln!("skip: no mount folder (set PS5UPLOAD_SAMPLE_MOUNTS)");
+        return;
+    };
+    let images = images(&dir, "ffpkg");
+    if images.is_empty() {
+        eprintln!("skip: no .ffpkg images in {}", dir.display());
+        return;
+    }
+    for image in &images {
+        let mut tree = source::open(image).expect("the image opens as a source");
+        let files = tree.files().to_vec();
+        let name = image.file_name().unwrap().to_string_lossy().into_owned();
+
+        assert!(
+            files.len() >= 20,
+            "{name}: only {} files walked",
+            files.len()
+        );
+        for want in ["eboot.bin", "sce_sys/param.json", "sce_sys/icon0.png"] {
+            assert!(
+                files.iter().any(|f| f.path == want),
+                "{name}: {want} is missing"
+            );
+        }
+        let param = tree.read("sce_sys/param.json").expect("param.json reads");
+        let id = source::content_id(&param).expect("param.json has a content id");
+        assert_eq!(id.len(), 36, "{name}: content id {id:?}");
+        let magic = tree.read_range("eboot.bin", 0, 4).expect("eboot head");
+        assert!(
+            [
+                source::magic::RAW_ELF.as_slice(),
+                source::magic::SELF_PS5.as_slice(),
+                source::magic::SELF_PS4.as_slice(),
+                source::magic::SIGNED_SELF.as_slice()
+            ]
+            .contains(&magic.as_slice()),
+            "{name}: eboot.bin starts with {magic:02x?}"
+        );
+        let png = tree
+            .read_range("sce_sys/icon0.png", 0, 8)
+            .expect("icon head");
+        assert_eq!(png, PNG_MAGIC, "{name}: icon0.png is not a PNG");
+
+        let total: u64 = files.iter().map(|f| f.size).sum();
+        let image_size = std::fs::metadata(image).unwrap().len();
+        assert!(
+            total <= image_size,
+            "{name}: {total} bytes of files in a {image_size} byte image"
+        );
+        // Real density is ~80% (inode tables, directory blocks and the free
+        // fragments a dumped filesystem still carries); half is a floor that
+        // still catches a walk that stops early.
+        assert!(
+            total * 2 >= image_size,
+            "{name}: only {total} of {image_size} bytes are walked files"
+        );
+
+        // The ranged read walks block pointers; the whole-file read walks the
+        // block chain. On a file that uses indirect blocks they must agree at
+        // every boundary — this is what proves the pointer arithmetic.
+        let victim = files
+            .iter()
+            .filter(|f| f.path != "eboot.bin" && f.size > 2 << 20 && f.size < 96 << 20)
+            .max_by_key(|f| f.size)
+            .unwrap_or_else(|| panic!("{name}: no multi-megabyte file to range-test"));
+        let whole = tree.read(&victim.path).expect("whole file");
+        assert_eq!(
+            whole.len() as u64,
+            victim.size,
+            "{name}: {} read as {} bytes",
+            victim.path,
+            whole.len()
+        );
+        for offset in [0u64, 1, 4095, 32 * 1024, victim.size / 3, victim.size - 16] {
+            for len in [4usize, 4096] {
+                let got = tree
+                    .read_range(&victim.path, offset, len)
+                    .expect("ranged read");
+                let start = (offset as usize).min(whole.len());
+                let want = &whole[start..(start + len).min(whole.len())];
+                assert_eq!(got, want, "{name}: {} at {offset}+{len}", victim.path);
+            }
+        }
+        eprintln!(
+            "{name}: {} files, {:.1} GiB of {:.1} GiB, ranged-read proof on {} ({:.0} MiB)",
+            files.len(),
+            total as f64 / (1u64 << 30) as f64,
+            image_size as f64 / (1u64 << 30) as f64,
+            victim.path,
+            victim.size as f64 / (1u64 << 20) as f64
+        );
+    }
+}

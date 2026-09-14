@@ -15,7 +15,7 @@ use crate::naps;
 use crate::outer_write::{self, OuterImage};
 use crate::plan::{self, Plan};
 use crate::si_write;
-use crate::source;
+use crate::source::{self, SourceFile};
 use crate::verify::verify_package;
 use crate::{format_err, Result, BLOCK};
 
@@ -61,12 +61,12 @@ pub struct BuildReport {
 
 /// Build the package. `progress` receives short phase lines.
 pub fn build(request: &BuildRequest, progress: &mut dyn FnMut(&str)) -> Result<BuildReport> {
-    let tree = source::open(&request.source)?;
-    let files = tree.files();
+    let mut tree = source::open(&request.source)?;
+    let files: Vec<SourceFile> = tree.files().to_vec();
     if files.is_empty() {
         return format_err(format!("{} has no files", tree.describe()));
     }
-    let readiness = source::readiness(tree.as_ref());
+    let readiness = source::readiness(tree.as_mut());
     let warnings: Vec<String> = readiness
         .warnings()
         .map(|c| format!("{}: {}", c.name, c.detail))
@@ -95,7 +95,7 @@ pub fn build(request: &BuildRequest, progress: &mut dyn FnMut(&str)) -> Result<B
     let seed = request.seed.unwrap_or_else(random_seed);
 
     progress(&format!("planning {}", tree.describe()));
-    let plan = plan::build(files)?;
+    let plan = plan::build(&files)?;
     let sizes: std::collections::HashMap<&str, u64> =
         files.iter().map(|f| (f.path.as_str(), f.size)).collect();
     let mut read = |path: &str| -> Result<Vec<u8>> {
