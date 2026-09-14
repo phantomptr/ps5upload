@@ -5,7 +5,10 @@
 
 use std::path::{Path, PathBuf};
 
+use ps5upload_fpkg::build::{self, BuildRequest};
+use ps5upload_fpkg::crypto::DEFAULT_PASSCODE;
 use ps5upload_fpkg::source;
+use ps5upload_fpkg::{cnt, fih, inner, naps, outer, plan, PkgFile};
 
 const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
@@ -104,7 +107,8 @@ fn every_real_exfat_mount_walks_and_reads() {
         );
         assert!(
             total * 100 >= image_size * 90,
-            "{name}: only {total} of {image_size} bytes are walked files"
+            "{name}: only {total} of {image_size} bytes are walked files ({} files)",
+            files.len()
         );
 
         let dds = tree
@@ -186,7 +190,8 @@ fn every_real_ffpkg_mount_walks_and_reads() {
         // still catches a walk that stops early.
         assert!(
             total * 2 >= image_size,
-            "{name}: only {total} of {image_size} bytes are walked files"
+            "{name}: only {total} of {image_size} bytes are walked files ({} files)",
+            files.len()
         );
 
         // The ranged read walks block pointers; the whole-file read walks the
@@ -224,4 +229,105 @@ fn every_real_ffpkg_mount_walks_and_reads() {
             victim.size as f64 / (1u64 << 20) as f64
         );
     }
+}
+
+/// The fixture: a 2 MiB exFAT volume macOS itself formatted, holding a minimal app tree.
+/// `tests/fixtures/mini.exfat` also carries the `._*` AppleDouble sidecars a Mac copy
+/// leaves behind, so every walk of it proves the junk filter.
+const FIXTURE_ID: &str = "UP0000-PPSA99001_00-MINIFI8TURE00001";
+const FIXTURE_FILES: &[(&str, u64)] = &[
+    ("data/one.bin", 921_600),
+    ("eboot.bin", 16_384),
+    ("sce_sys/about/right.sprx", 2_048),
+    ("sce_sys/icon0.dds", 4_100),
+    ("sce_sys/icon0.png", 74),
+    ("sce_sys/param.json", 197),
+];
+
+fn fixture() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mini.exfat")
+}
+
+/// The inner image of a built package, read back out of its outer PFS.
+fn outer_file(pkg: &Path, name: &str) -> Vec<u8> {
+    let mut file = PkgFile::open(pkg).unwrap();
+    let head = file.read_at(0, fih::HEADER_LEN).unwrap();
+    let parsed = fih::parse(&head).unwrap();
+    let container = cnt::read(&mut file, parsed.cnt_offset).unwrap();
+    let image = outer::open(&mut file, &parsed, &container, DEFAULT_PASSCODE).unwrap();
+    let nodes = image.dinodes();
+    let uroot = nodes.get(2).unwrap();
+    let ino = image
+        .dirents(uroot)
+        .into_iter()
+        .find(|d| d.name == name)
+        .unwrap()
+        .ino as usize;
+    image.file_data(&nodes[ino])
+}
+
+/// Gate G2 for image sources: a package built from the exFAT fixture verifies, and its
+/// inner image holds exactly the fixture's tree.
+#[test]
+fn a_build_from_an_exfat_mount_verifies_and_round_trips() {
+    let fixture = fixture();
+    let out = std::env::temp_dir().join(format!("fpkg-mount-build-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+
+    // The walk sees the fixture's six real files, sidecars excluded.
+    let tree = source::open(&fixture).unwrap();
+    let walked: Vec<(String, u64)> = tree
+        .files()
+        .iter()
+        .map(|f| (f.path.clone(), f.size))
+        .collect();
+    let expected: Vec<(String, u64)> = FIXTURE_FILES
+        .iter()
+        .map(|(p, s)| (p.to_string(), *s))
+        .collect();
+    assert_eq!(walked, expected, "{}", tree.describe());
+
+    let request = BuildRequest {
+        time: Some((1_700_000_000, 0)),
+        seed: Some([0x5A; 16]),
+        ..BuildRequest::new(&fixture, &out)
+    };
+    let report = build::build(&request, &mut |_| {}).unwrap();
+    assert!(report.verify.ok(), "{}", report.verify);
+    assert_eq!(report.content_id, FIXTURE_ID);
+    assert!(report.verify.checks.iter().all(|c| c.ok));
+
+    // The inner image walks back to the fixture's files, byte for byte, plus the
+    // keystone the writer generates.
+    let built = plan::build(tree.files()).unwrap();
+    let image = outer_file(&report.path, "pfs_image.dat");
+    assert_eq!(image.len() as u64, built.ndblock * ps5upload_fpkg::BLOCK);
+    let mount = inner::read(&image, built.meta_base).unwrap();
+    assert!(mount.flt_ok);
+    let mut recovered: Vec<(String, u64)> = mount
+        .files
+        .iter()
+        .map(|f| (f.path.clone(), f.size))
+        .collect();
+    recovered.sort();
+    let mut wanted: Vec<(String, u64)> = expected.clone();
+    wanted.push(("sce_sys/keystone".to_string(), 96));
+    wanted.sort();
+    assert_eq!(recovered, wanted);
+
+    // A recovered file's bytes are the image's bytes: the PNG magic, read from the
+    // package rather than the fixture.
+    let png = mount
+        .files
+        .iter()
+        .find(|f| f.path == "sce_sys/icon0.png")
+        .unwrap();
+    let at = png.offset as usize;
+    assert_eq!(image[at..at + 8], PNG_MAGIC);
+
+    // And the layout reconstructs the image it describes.
+    let layout = naps::parse(&outer_file(&report.path, "naps_pkg_layout.dat")).unwrap();
+    assert_eq!(naps::reconstruct(&image, &layout).unwrap(), image);
+    std::fs::remove_dir_all(&out).ok();
 }
