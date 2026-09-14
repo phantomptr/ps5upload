@@ -3,7 +3,7 @@
 //! v1 stores everything, so the on-disk image *is* the logical mount: files sit at their
 //! afid-order offsets, the block-info table sits in the padding block just after the data
 //! (where the sample carries it too), and the metadata region starts at the 256 KiB-aligned
-//! `meta_base` the finalized-image header records at `0x50`. A package that compressed
+//! `meta_base` the finalized-image header records at `0x50` (in 4096-byte sectors). A package that compressed
 //! anything would instead have to map the two spaces through `naps_pkg_layout.dat`.
 //!
 //! The metadata region itself is a small PFS: a superblock, a table of 0xA8-byte inodes

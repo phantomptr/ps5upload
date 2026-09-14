@@ -7,6 +7,11 @@
 use crate::crypto::sha3;
 use crate::BLOCK;
 
+/// The header records the inner superblock's position at `0x50` as a count of these, not of
+/// 64 KiB blocks: Sony's `webbrowser.pkg` stores 64 for a superblock the inner image really
+/// does carry at `0x40000`.
+const SECTOR: u64 = 0x1000;
+
 pub struct FihParams<'a> {
     /// The encrypted outer image's length in bytes (`0x18`).
     pub outer_size: u64,
@@ -19,7 +24,8 @@ pub struct FihParams<'a> {
     pub naps: &'a [u8],
     /// Block-aligned inner image size (the header's `0xA0`).
     pub inner_size: u64,
-    /// The inner mount's metadata base, in bytes (`0x50`).
+    /// The inner mount's metadata base, in bytes; the header records it at `0x50` in
+    /// 4096-byte sectors.
     pub meta_base: u64,
     /// Directories below uroot plus every file (`0x94`/`0x98`).
     pub content_inodes: u32,
@@ -49,7 +55,7 @@ pub fn write(p: &FihParams) -> Vec<u8> {
     }
     // The loader reads the inner superblock at this value times the header's block size
     // (`0x60`), so it is the metadata base in mount blocks.
-    h[0x50..0x54].copy_from_slice(&((p.meta_base / BLOCK) as u32).to_le_bytes());
+    h[0x50..0x54].copy_from_slice(&((p.meta_base / SECTOR) as u32).to_le_bytes());
     h[0x58..0x60].copy_from_slice(&p.cnt_offset.to_le_bytes());
     h[0x60..0x68].copy_from_slice(&BLOCK.to_le_bytes());
     h[0x68..0x70].copy_from_slice(&0x0000_8000_0000_0000u64.to_le_bytes());
@@ -92,7 +98,7 @@ mod tests {
         assert_eq!(fih[6], 0x03);
         assert_eq!(
             u32::from_le_bytes(fih[0x50..0x54].try_into().unwrap()),
-            0x30000u32 / BLOCK as u32
+            0x30000u32 / SECTOR as u32
         );
         assert_eq!(&fih[0x58..0x60], &(7 * BLOCK).to_le_bytes());
         assert_eq!(&fih[0x30..0x50], &[1u8; 32]);

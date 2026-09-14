@@ -48,7 +48,12 @@ pub fn playgo_chunk_dat(content_id: &str, mchunk_size: u64) -> Result<Vec<u8>> {
     d[0x14..0x16].copy_from_slice(&0u16.to_le_bytes());
     d[0x16..0x18].copy_from_slice(&1u16.to_le_bytes());
     d[0x1E] = 0x85;
-    d[0x20] = 0x02;
+    // The mchunk count. It has to agree with the `mchunk_attrs` record's length below
+    // (one `{offset, size}` pair = 0x10 bytes): a package that declares two mchunks while
+    // carrying one leaves the console reading a phantom second pair out of the record that
+    // follows, and it refuses to transfer — measured against the three scene packages, whose
+    // one-mchunk profile says 1 here, and Sony's webbrowser, whose two-mchunk profile says 2.
+    d[0x20] = 0x01;
     d[0x24] = 0x01;
     d[0x30] = 0x11;
     d[0x38..0x40].fill(0xFF);
@@ -453,7 +458,14 @@ mod tests {
             u32::from_le_bytes(chunk[0x10..0x14].try_into().unwrap()),
             400
         );
-        // One mchunk: {offset 0, size}, and chunk #0 references mchunk #0.
+        // One mchunk: {offset 0, size}, and chunk #0 references mchunk #0. The header's
+        // mchunk count must match the single pair the attrs record carries.
+        assert_eq!(u32::from_le_bytes(chunk[0x20..0x24].try_into().unwrap()), 1);
+        assert_eq!(
+            u32::from_le_bytes(chunk[0xDC..0xE0].try_into().unwrap()),
+            0x10,
+            "one 16-byte mchunk pair"
+        );
         assert_eq!(
             u32::from_le_bytes(chunk[0x104..0x108].try_into().unwrap()),
             1
