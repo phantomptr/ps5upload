@@ -5,8 +5,11 @@ use std::path::Path;
 
 use crate::cnt::{self, EntryDigest};
 use crate::crypto::sha3;
+use crate::crypto::{derive_ekpfs, derive_xts_keys};
 use crate::outer::{self, BlockKind};
+use crate::xts::{Xts, SIGNED_SECTOR_FLAG};
 use crate::{fih, flt, le32, si, PkgFile, Result};
+use crate::{format_err, BLOCK};
 
 #[derive(Debug)]
 pub struct Check {
@@ -51,16 +54,13 @@ fn file_data(img: &outer::OuterImage, node: Option<&outer::Dinode>) -> Vec<u8> {
     node.map(|n| img.file_data(n)).unwrap_or_default()
 }
 
-pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
-    let mut file = PkgFile::open(path)?;
-    let fih_block = file.read_at(0, crate::BLOCK as usize)?;
-    let fih = fih::parse(&fih_block)?;
-    let cnt = cnt::read(&mut file, fih.cnt_offset)?;
+/// Every check that needs only the header and the container — the two things both
+/// verifiers read whole.
+fn container_report(fih_block: &[u8], fih: &fih::Fih, cnt: &cnt::Cnt) -> Report {
     let mut r = Report {
         content_id: cnt.content_id.clone(),
         checks: Vec::new(),
     };
-
     r.push(
         "fih debug image",
         fih.is_debug(),
@@ -77,7 +77,7 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
     r.push("cnt body digest", cnt.body_digest_ok(), "");
     r.push(
         "cnt finalized-image digest",
-        cnt.fih_digest_ok(&fih_block),
+        cnt.fih_digest_ok(fih_block),
         "",
     );
     r.push("cnt descriptor pairs", cnt.descriptor_ok(), "");
@@ -113,6 +113,16 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
     for (name, ok) in cnt.general_digests(&fih.game_digest) {
         r.push(name, ok, "");
     }
+
+    r
+}
+
+pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
+    let mut file = PkgFile::open(path)?;
+    let fih_block = file.read_at(0, crate::BLOCK as usize)?;
+    let fih = fih::parse(&fih_block)?;
+    let cnt = cnt::read(&mut file, fih.cnt_offset)?;
+    let mut r = container_report(&fih_block, &fih, &cnt);
 
     let img = outer::open(&mut file, &fih, &cnt, passcode)?;
     r.push(
@@ -185,6 +195,182 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
                     u64::from_le_bytes(rec[..8].try_into().unwrap()) == want
                         && (u64::from_le_bytes(rec[8..].try_into().unwrap()) & 0xFF_FFFF)
                             == d.ino as u64
+                })
+            });
+            checked += 1;
+            ok &= found;
+        }
+        r.push(
+            "outer flat-path table hashes the uroot names",
+            ok && checked > 0,
+            format!("{checked} name(s), {count} table entries"),
+        );
+    }
+
+    match si::read(&mut file)? {
+        Some(s) => {
+            let crc_name = format!("config/{}/playgo-chunk.crc", cnt.content_id);
+            match s.members.iter().find(|m| m.name == crc_name) {
+                Some(m) => {
+                    let stored = file.read_at(m.offset, m.size as usize)?;
+                    let expected = si::chunk_crc_table(&mut file, s.zip_start)?;
+                    r.push(
+                        "si playgo-chunk.crc",
+                        stored == expected,
+                        format!("{} bytes", m.size),
+                    );
+                }
+                None => r.push("si playgo-chunk.crc", false, format!("{crc_name} missing")),
+            }
+        }
+        None => r.push("si zip present", false, "no trailing STORED ZIP"),
+    }
+    Ok(r)
+}
+
+/// Verify a package without holding it: every block is read and decrypted on demand, and
+/// the data blocks are swept once against `imagedigs` instead of being kept. A 155 GB
+/// package verifies in a few hundred megabytes this way, which is what the engine needs,
+/// since the packages it builds are that size.
+pub fn verify_streaming(
+    path: &Path,
+    passcode: &str,
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<Report> {
+    let mut file = PkgFile::open(path)?;
+    let fih_block = file.read_at(0, BLOCK as usize)?;
+    let fih = fih::parse(&fih_block)?;
+    let cnt = cnt::read(&mut file, fih.cnt_offset)?;
+    let mut r = container_report(&fih_block, &fih, &cnt);
+
+    if !fih.pfs_size.is_multiple_of(BLOCK) {
+        return format_err("outer image size is not a whole number of blocks");
+    }
+    let count = fih.pfs_size / BLOCK;
+    let digests = match cnt.image_digests() {
+        Some(d) if d.len() as u64 == count => d,
+        _ => {
+            r.push(
+                "outer imagedigs table",
+                false,
+                "missing or the wrong length",
+            );
+            return Ok(r);
+        }
+    };
+
+    // The superblock is where the header says it is, and its plaintext is the game digest.
+    let sb_absolute = crate::le64(&fih_block, 0x20);
+    let sb_index = sb_absolute.saturating_sub(BLOCK) / BLOCK;
+    let sb_block = if sb_absolute >= BLOCK && sb_index < count {
+        file.read_at(fih.pfs_offset + sb_index * BLOCK, BLOCK as usize)?
+    } else {
+        return format_err("the header's superblock offset is outside the image");
+    };
+    r.push(
+        "outer superblock is where the header says",
+        sha3(&sb_block) == fih.game_digest,
+        format!("block {sb_index}"),
+    );
+    let superblock = outer::parse_superblock(sb_index, &sb_block)?;
+    r.push("outer superblock ICV", superblock.icv_ok, "");
+
+    let ekpfs = derive_ekpfs(&cnt.content_id, passcode);
+    let xts = Xts::new(&derive_xts_keys(&ekpfs, &superblock.seed));
+    // The sector rule the samples follow: data blocks carry their own index, metadata
+    // blocks set bit 47, and the superblock is not encrypted at all.
+    let read_block = |file: &mut PkgFile, index: u64| -> Result<Vec<u8>> {
+        let raw = file.read_at(fih.pfs_offset + index * BLOCK, BLOCK as usize)?;
+        if index == sb_index {
+            return Ok(raw);
+        }
+        let mut pt = raw;
+        let sector = if index < sb_index {
+            index
+        } else {
+            SIGNED_SECTOR_FLAG | index
+        };
+        xts.decrypt(sector, &mut pt);
+        Ok(pt)
+    };
+
+    let table = read_block(&mut file, superblock.inode_table_block as u64)?;
+    r.push(
+        "outer inode table digest",
+        sha3(&table) == superblock.inode_table_digest,
+        "",
+    );
+    let nodes = outer::parse_dinodes(&table, superblock.dinode_count as u64);
+    for (ino, node) in nodes.iter().enumerate() {
+        // The data blocks are checked by the sweep below; here it is the dinode's own
+        // records and every level of its indirect tables.
+        let ok = {
+            let mut read = |index: u64| read_block(&mut file, index);
+            outer::verify_dinode(node, false, &mut read)?
+        };
+        r.push(
+            format!("outer inode {ino} block signatures"),
+            ok,
+            format!("{} block(s)", node.blocks),
+        );
+    }
+
+    // The sweep: every data block must decrypt to the digest `imagedigs` carries.
+    let mut bad = 0u64;
+    let mut done = 0u64;
+    for index in 0..count {
+        // The superblock is not encrypted; it was matched against the game digest above.
+        if index != sb_index {
+            let raw = file.read_at(fih.pfs_offset + index * BLOCK, BLOCK as usize)?;
+            let mut matched = false;
+            for sector in [index, SIGNED_SECTOR_FLAG | index] {
+                let mut pt = raw.clone();
+                xts.decrypt(sector, &mut pt);
+                if sha3(&pt) == digests[index as usize] {
+                    matched = true;
+                    break;
+                }
+            }
+            if !matched {
+                bad += 1;
+            }
+        }
+        done += 1;
+        if done.is_multiple_of(256) {
+            progress(done * BLOCK, count * BLOCK);
+        }
+    }
+    progress(done * BLOCK, count * BLOCK);
+    r.push(
+        "outer blocks decrypt to their imagedigs entry",
+        bad == 0,
+        format!("{} of {count} failed", bad),
+    );
+
+    // The uroot dirents and the flat-path table, read on demand like everything else.
+    let uroot_bytes = read_block(&mut file, nodes[2].direct[0].block as u64)?;
+    let uroot = outer::OuterImage::parse_dirents(&uroot_bytes, nodes[2].size);
+    let names: Vec<String> = uroot.iter().map(|d| d.name.clone()).collect();
+    r.push(
+        "outer uroot holds pfs_image.dat and naps_pkg_layout.dat",
+        names.iter().any(|n| n == "pfs_image.dat")
+            && names.iter().any(|n| n == "naps_pkg_layout.dat"),
+        names.join(", "),
+    );
+    {
+        // The flat-path table hashes each uroot name to the inode its dirent records.
+        let flt = read_block(&mut file, nodes[1].direct[0].block as u64)?;
+        let count = crate::le32(&flt, 0x2C) as usize;
+        let mut checked = 0usize;
+        let mut ok = count > 0;
+        for entry in uroot.iter().filter(|d| !d.name.starts_with('.')) {
+            let want = flt::hash_path(&entry.name);
+            let found = (0..count).any(|i| {
+                let at = 0x40 + i * 16;
+                flt.get(at..at + 16).is_some_and(|rec| {
+                    u64::from_le_bytes(rec[..8].try_into().unwrap()) == want
+                        && (u64::from_le_bytes(rec[8..].try_into().unwrap()) & 0xFF_FFFF)
+                            == u64::from(entry.ino)
                 })
             });
             checked += 1;

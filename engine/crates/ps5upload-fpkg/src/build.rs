@@ -17,7 +17,7 @@ use crate::plan::{self, Plan};
 use crate::si_write;
 use crate::source::{self, SourceFile};
 use crate::stream;
-use crate::verify::verify_package;
+use crate::verify;
 use crate::{format_err, Result, BLOCK};
 
 /// What to build and where.
@@ -345,7 +345,14 @@ fn build_mode(
     };
 
     progress("verifying");
-    let report = match verify_package(&partial, &request.passcode) {
+    // The streaming verifier reads the package block by block, so the self-check of a
+    // 155 GB package does not need 155 GB of memory.
+    let mut verify_bytes = |done: u64, total: u64| {
+        if let Some(f) = control.bytes.as_deref_mut() {
+            f(done, total);
+        }
+    };
+    let report = match verify::verify_streaming(&partial, &request.passcode, &mut verify_bytes) {
         Ok(report) if report.ok() => report,
         Ok(report) => {
             return Err(cleanup(crate::Error::Format(format!(

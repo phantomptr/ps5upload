@@ -82,7 +82,7 @@ fn block_sig(b: &[u8], at: usize) -> DirectBlock {
     }
 }
 
-fn parse_superblock(index: u64, sb: &[u8]) -> Result<Superblock> {
+pub(crate) fn parse_superblock(index: u64, sb: &[u8]) -> Result<Superblock> {
     if le64(sb, 0) != 2 || le64(sb, 8) != SUPERBLOCK_MAGIC {
         return format_err("outer superblock version/magic mismatch");
     }
@@ -171,6 +171,67 @@ pub fn open(file: &mut PkgFile, fih: &Fih, cnt: &Cnt, passcode: &str) -> Result<
     })
 }
 
+/// A dinode's direct blocks and indirect tables, checked against the records that point
+/// at them, through a caller-supplied block reader. `data_blocks` is false when the
+/// caller verifies the data separately (a streaming sweep) and only the metadata needs
+/// checking here.
+pub fn verify_dinode<F>(node: &Dinode, data_blocks: bool, mut read: F) -> Result<bool>
+where
+    F: FnMut(u64) -> Result<Vec<u8>>,
+{
+    if data_blocks {
+        for d in node
+            .direct
+            .iter()
+            .take((node.blocks as usize).min(DIRECT_SLOTS))
+        {
+            if sha3(&read(d.block as u64)?) != d.digest {
+                return Ok(false);
+            }
+        }
+    }
+    for (level, table) in node.indirect.iter().enumerate() {
+        if table.block == 0 {
+            continue;
+        }
+        if !table_ok(&mut read, table.block as u64, level as u32, &table.digest)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn table_ok<F>(read: &mut F, block: u64, level: u32, digest: &[u8; 32]) -> Result<bool>
+where
+    F: FnMut(u64) -> Result<Vec<u8>>,
+{
+    let bytes = read(block)?;
+    if sha3(&bytes) != *digest {
+        return Ok(false);
+    }
+    if level == 0 {
+        return Ok(true);
+    }
+    for slot in 0..PER_INDIRECT {
+        let at = slot * BLOCK_SIG_LEN;
+        let child = le32(&bytes, at + 32) as u64;
+        if child == 0 {
+            continue;
+        }
+        let mut record = [0u8; 32];
+        record.copy_from_slice(&bytes[at..at + 32]);
+        if !table_ok(read, child, level - 1, &record)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// The outer inode table's records.
+pub fn parse_dinodes(table: &[u8], count: u64) -> Vec<Dinode> {
+    OuterImage::parse_dinodes(table, count)
+}
+
 impl OuterImage {
     pub fn dinodes(&self) -> Vec<Dinode> {
         let Some(table) = self
@@ -179,7 +240,12 @@ impl OuterImage {
         else {
             return Vec::new();
         };
-        (0..self.superblock.dinode_count as usize)
+        Self::parse_dinodes(table, self.superblock.dinode_count)
+    }
+
+    /// The inode table's records, without an image around them.
+    pub(crate) fn parse_dinodes(table: &[u8], count: u64) -> Vec<Dinode> {
+        (0..count as usize)
             .take_while(|j| (j + 1) * DINODE_LEN <= table.len())
             .map(|j| {
                 let o = j * DINODE_LEN;
@@ -297,7 +363,12 @@ impl OuterImage {
         let Some(block) = self.plaintext.get(dir.direct[0].block as usize) else {
             return Vec::new();
         };
-        let limit = (dir.size as usize).min(block.len());
+        Self::parse_dirents(block, dir.size)
+    }
+
+    /// A directory's entries, without an image around them.
+    pub fn parse_dirents(block: &[u8], size: u64) -> Vec<Dirent> {
+        let limit = (size as usize).min(block.len());
         let mut out = Vec::new();
         let mut o = 0usize;
         while o + 16 <= limit {

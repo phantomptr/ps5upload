@@ -113,12 +113,13 @@ fn the_streaming_writer_reports_progress() {
     .unwrap();
     assert!(report.verify.ok());
     assert!(!samples.is_empty());
-    assert!(samples.windows(2).all(|w| w[0].0 <= w[1].0), "{samples:?}");
-    assert_eq!(
-        samples.last().unwrap().1,
-        samples[0].1,
-        "one total throughout"
-    );
+    // One total throughout (the outer image), never exceeded, and the run ends complete.
+    // Each phase sweeps it — writing, then verifying — so the sequence steps back
+    // between phases, which is what the engine's per-phase progress expects.
+    let total = samples[0].1;
+    assert!(samples.iter().all(|(_, t)| *t == total), "{samples:?}");
+    assert!(samples.iter().all(|(done, t)| done <= t), "{samples:?}");
+    assert_eq!(*samples.last().unwrap(), (total, total), "{samples:?}");
 }
 
 /// An image past the first indirect slot's 1820 blocks (12 + 1820 blocks = 114 MiB) makes

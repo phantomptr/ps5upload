@@ -174,7 +174,8 @@ pub fn write_package(
         out.seek(SeekFrom::Start(BLOCK + index * BLOCK))?;
         out.write_all(&block)?;
         if index.is_multiple_of(512) {
-            (progress.bytes)((index + 1) * BLOCK, cnt_offset);
+            // Bytes of the outer image, the same measure the verifier reports.
+            (progress.bytes)(((index + 1) * BLOCK).min(outer_size), outer_size);
         }
     }
     let (file_digests, image_digest) = file_digests.finish();
@@ -300,7 +301,7 @@ pub fn write_package(
     out.sync_all()?;
 
     let size = cnt_offset + cnt.len() as u64 + si.len() as u64;
-    (progress.bytes)(cnt_offset, cnt_offset);
+    (progress.bytes)(outer_size, outer_size);
     Ok(StreamedPackage {
         size,
         outer_size,
