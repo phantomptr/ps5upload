@@ -523,3 +523,68 @@ mod tests {
         let _ = nanos;
     }
 }
+
+/// What a caller learns before deciding to build: what the source is, whether it looks
+/// like a launchable title, what the package will cost, and whether there is room.
+#[derive(Debug, Clone)]
+pub struct Inspection {
+    pub source: String,
+    pub files: usize,
+    pub bytes: u64,
+    pub content_id: Option<String>,
+    pub title: Option<String>,
+    pub required_firmware: Option<String>,
+    /// The package's estimated size (what the free-space check uses).
+    pub planned_size: u64,
+    /// Bytes free where the output would go; `None` where the platform does not say.
+    pub output_free: Option<u64>,
+    /// Every readiness finding, passes and warnings alike.
+    pub checks: Vec<source::Check>,
+}
+
+impl Inspection {
+    pub fn ok(&self) -> bool {
+        self.checks.iter().all(|c| c.ok)
+    }
+
+    pub fn warnings(&self) -> impl Iterator<Item = &source::Check> {
+        self.checks.iter().filter(|c| !c.ok)
+    }
+}
+
+/// Look at a source without building it: readiness, geometry, cost and room.
+pub fn inspect(source_path: &Path, output_dir: &Path) -> Result<Inspection> {
+    let mut tree = source::open(source_path)?;
+    let files: Vec<SourceFile> = tree.files().to_vec();
+    let checks = source::readiness(tree.as_mut()).checks;
+    let param = tree.read("sce_sys/param.json").unwrap_or_default();
+    let json: Option<serde_json::Value> = serde_json::from_slice(
+        std::str::from_utf8(&param)
+            .unwrap_or_default()
+            .trim_start_matches('\u{feff}')
+            .as_bytes(),
+    )
+    .ok();
+    let field = |name: &str| {
+        json.as_ref()
+            .and_then(|j| j.get(name))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    };
+    let planned_size = if files.is_empty() {
+        0
+    } else {
+        estimate_size(&plan::build(&files)?)?
+    };
+    Ok(Inspection {
+        source: tree.describe(),
+        files: files.len(),
+        bytes: files.iter().map(|f| f.size).sum(),
+        content_id: source::content_id(&param),
+        title: field("titleName"),
+        required_firmware: field("requiredSystemSoftwareVersion"),
+        planned_size,
+        output_free: free_bytes(output_dir),
+        checks,
+    })
+}

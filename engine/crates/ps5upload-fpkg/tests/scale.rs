@@ -38,7 +38,10 @@ fn write_tree(root: &Path) {
         std::fs::create_dir_all(full.parent().unwrap()).unwrap();
         std::fs::write(&full, &data).unwrap();
     };
-    put("eboot.bin", (0..4000u32).map(|i| (i % 241) as u8).collect());
+    // A fake SELF, as a real converted folder would carry.
+    let mut eboot: Vec<u8> = vec![0x54, 0x14, 0xF5, 0xEE];
+    eboot.extend((0..3996u32).map(|i| (i % 241) as u8));
+    put("eboot.bin", eboot);
     put(
         "data/one.bin",
         (0..600_000u32).map(|i| (i % 199) as u8).collect(),
@@ -265,4 +268,26 @@ fn a_cancelled_build_leaves_nothing_behind() {
         .path()
         .join(format!("{CONTENT_ID}.pkg.partial"))
         .exists());
+}
+
+/// What a caller sees before building: the source, its readiness, the cost and the room.
+#[test]
+fn inspect_reports_the_source_before_a_build() {
+    let source = TempDir::new("inspect-source");
+    let out = TempDir::new("inspect-out");
+    write_tree(source.path());
+    let inspection = build::inspect(source.path(), out.path()).unwrap();
+    assert!(
+        inspection.ok(),
+        "{:?}",
+        inspection.warnings().collect::<Vec<_>>()
+    );
+    assert_eq!(inspection.content_id.as_deref(), Some(CONTENT_ID));
+    // The source's own files; the keystone is generated at plan time, not found here.
+    assert_eq!(inspection.files, 7);
+    assert!(inspection.bytes > 600_000);
+    assert!(inspection.planned_size > inspection.bytes);
+    assert!(inspection.source.starts_with("folder "));
+    assert!(inspection.output_free.unwrap_or(u64::MAX) > inspection.planned_size);
+    assert!(inspection.checks.iter().any(|c| c.name == "source" && c.ok));
 }
