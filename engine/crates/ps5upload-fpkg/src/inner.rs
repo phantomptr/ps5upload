@@ -179,9 +179,11 @@ fn metadata_region(plan: &Plan, build_time: (i64, u32)) -> Result<Vec<u8>> {
     }
     sb[0xB0..0xB8].copy_from_slice(&1i64.to_le_bytes());
     sb[0xD8..0xE0].copy_from_slice(&0x89i64.to_le_bytes());
-    // Measured on webbrowser's superblock: this flag is a 32-bit 1 at 0x36C, with 0x368
-    // left zero. We wrote a single byte at 0x368, which the mount reads as a different field.
-    sb[0x36C..0x370].copy_from_slice(&1u32.to_le_bytes());
+    // The inner image has no seed, and that decides which of the superblock's two tail fields
+    // is live: a seeded superblock (the outer image's) carries a 32-bit index at 0x36C and 16
+    // seed bytes at 0x370, while an unseeded one carries a single 1 at 0x368 and leaves the
+    // seed slot zero. We had copied the outer's seeded form here.
+    sb[0x368] = 1;
     region[..BLOCK as usize].copy_from_slice(&sb);
 
     // Block 1: the inode table. Node order: super-root, the three tables, directories

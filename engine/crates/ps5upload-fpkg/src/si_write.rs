@@ -157,7 +157,8 @@ type Block = (u64, u32, u32, u32, u32, u32, Option<usize>);
 /// per content file. Both are computed while the image streams out, so the blob can be
 /// built for a package too large to hold in memory.
 pub struct InnerDigests {
-    pub image: [u8; 32],
+    /// `SHA3-256` of each stored 64 KiB block of the image, in order — the `obdg` table.
+    pub blocks: Vec<[u8; 32]>,
     pub files: Vec<[u8; 32]>,
 }
 
@@ -173,7 +174,7 @@ impl InnerDigests {
             })
             .collect();
         Self {
-            image: sha3(image),
+            blocks: image.chunks(BLOCK as usize).map(sha3).collect(),
             files,
         }
     }
@@ -332,12 +333,12 @@ pub fn naps_meta_18(
         tlv(&mut out, b"twek", &p);
     }
 
-    // obdg: the digest of the whole image, then zeros.
-    {
-        let mut body = vec![0u8; 0x80];
-        body[..32].copy_from_slice(&digests.image);
-        tlv(&mut out, b"obdg", &body);
-    }
+    // obdg: one `SHA3-256` per stored 64 KiB block of the image, in order. Measured on
+    // webbrowser.pkg, whose `obdg[0]` is exactly the digest of its stored image's first
+    // block and whose table runs to one entry per stored block — as it does in every sample
+    // (5, 3, 1 and 15736 entries). We wrote a single whole-image digest padded with zeros.
+    let obdg: Vec<u8> = digests.blocks.iter().flatten().copied().collect();
+    tlv(&mut out, b"obdg", &obdg);
 
     // The four descriptor records, then the 16-byte pad.
     let descriptor = naps_meta_300(inner_size);

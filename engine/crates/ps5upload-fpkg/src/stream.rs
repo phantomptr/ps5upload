@@ -14,7 +14,7 @@ use std::io::{Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::cnt_write::{self, CntParams};
-use crate::crypto::{crc32c, derive_ekpfs, derive_xts_keys, Hasher};
+use crate::crypto::{crc32c, derive_ekpfs, derive_xts_keys, sha3, Hasher};
 use crate::fih_write::{self, FihParams};
 use crate::inner::{BlockSource, RangeRead};
 use crate::naps;
@@ -54,13 +54,13 @@ pub struct StreamedPackage {
 }
 
 /// The digests the metric blob wants, accumulated while the image streams by: one per
-/// content file (in afid order) and one for the whole image. Files are laid out in afid
+/// stored 64 KiB block, one per content file (in afid order). Files are laid out in afid
 /// order and never interleave, so one open hasher at a time is enough — the state of a
 /// 300,000-file image stays constant.
 struct FileDigester {
     files: Vec<[u8; 32]>,
     open: Option<(usize, Hasher)>,
-    image: Hasher,
+    blocks: Vec<[u8; 32]>,
 }
 
 impl FileDigester {
@@ -68,14 +68,14 @@ impl FileDigester {
         Self {
             files: vec![[0u8; 32]; file_count],
             open: None,
-            image: Hasher::new(),
+            blocks: Vec::new(),
         }
     }
 
     /// Feed one block: `spans` are `(afid, from, to)` byte ranges within it, in image
     /// order — one per file the block touches.
     fn block(&mut self, block: &[u8], spans: &[(usize, usize, usize)]) {
-        self.image.update(block);
+        self.blocks.push(sha3(block));
         for &(afid, from, to) in spans {
             if self.open.as_ref().is_none_or(|(open, _)| *open != afid) {
                 if let Some((previous, hasher)) = self.open.take() {
@@ -89,11 +89,11 @@ impl FileDigester {
         }
     }
 
-    fn finish(mut self) -> (Vec<[u8; 32]>, [u8; 32]) {
+    fn finish(mut self) -> (Vec<[u8; 32]>, Vec<[u8; 32]>) {
         if let Some((previous, hasher)) = self.open.take() {
             self.files[previous] = hasher.finish();
         }
-        (self.files, self.image.finish())
+        (self.files, self.blocks)
     }
 }
 
@@ -180,7 +180,7 @@ pub fn write_package(
             (progress.bytes)(((index + 1) * BLOCK).min(outer_size), outer_size);
         }
     }
-    let (file_digests, image_digest) = file_digests.finish();
+    let (file_digests, block_digests) = file_digests.finish();
 
     // ── the outer metadata ───────────────────────────────────────────────────────────
     (progress.phase)("writing the layout");
@@ -267,7 +267,7 @@ pub fn write_package(
     let meta_18 = si_write::naps_meta_18(
         inner_size,
         &si_write::InnerDigests {
-            image: image_digest,
+            blocks: block_digests,
             files: file_digests,
         },
         &source.metadata_region(),
@@ -339,8 +339,8 @@ mod tests {
     use crate::plan;
     use crate::source::SourceFile;
 
-    /// The metric blob's digests must be the image's: a per-file digest in afid order and
-    /// one for the whole image, whether they come from the stream or from a built image.
+    /// The metric blob's digests must be the image's: one per stored block and one per file
+    /// in afid order, whether they come from the stream or from a built image.
     #[test]
     fn the_streamed_digests_are_the_image_digests() {
         let files: Vec<SourceFile> = [
@@ -391,8 +391,10 @@ mod tests {
                 .to_vec();
             digester.block(&block, &spans);
         }
-        let (files_streamed, image_streamed) = digester.finish();
-        assert_eq!(image_streamed, expected.image, "whole-image digest");
+        let (files_streamed, blocks_streamed) = digester.finish();
+        for (i, (a, b)) in blocks_streamed.iter().zip(&expected.blocks).enumerate() {
+            assert_eq!(a, b, "block {i} digest");
+        }
         for (i, (a, b)) in files_streamed.iter().zip(&expected.files).enumerate() {
             assert_eq!(a, b, "file {i} digest ({})", plan.inner_files()[i].0);
         }
@@ -413,7 +415,7 @@ mod tests {
         let from_stream = crate::si_write::naps_meta_18(
             plan.ndblock * BLOCK,
             &crate::si_write::InnerDigests {
-                image: image_streamed,
+                blocks: blocks_streamed,
                 files: files_streamed,
             },
             &source.metadata_region(),

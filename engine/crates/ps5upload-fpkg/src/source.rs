@@ -208,50 +208,35 @@ pub fn content_id(param_json: &[u8]) -> Option<String> {
 /// package — the user's own file is never touched.
 pub const STANDARD_DRM: &str = "standard";
 
-/// `param.json` with `applicationDrmType` set to `standard`, or `None` when it already is
-/// (or does not say). Only the value's bytes change, so the file's formatting survives.
-pub fn drm_rewrite(param_json: &[u8]) -> Option<Vec<u8>> {
-    let text = String::from_utf8_lossy(param_json);
-    let key = "\"applicationDrmType\"";
+/// The byte span of the *inside* of the string value of the first `key` a `param.json`
+/// carries, so a rewrite can replace one value and leave the file's formatting alone.
+fn string_value_span(text: &str, key: &str) -> Option<(usize, usize)> {
     let at = text.find(key)?;
     let rest = &text[at + key.len()..];
     let colon = rest.find(':')?;
     let after = &rest[colon + 1..];
     let open = after.find('\"')?;
-    let value_start = at + key.len() + colon + 1 + open + 1;
-    let close = text[value_start..].find('\"')?;
-    let value = &text[value_start..value_start + close];
-    if value.eq_ignore_ascii_case(STANDARD_DRM) {
-        return None;
-    }
-    let mut out = Vec::with_capacity(param_json.len() + STANDARD_DRM.len());
-    out.extend_from_slice(&param_json[..value_start]);
-    out.extend_from_slice(STANDARD_DRM.as_bytes());
-    out.extend_from_slice(&param_json[value_start + close..]);
+    let start = at + key.len() + colon + 1 + open + 1;
+    let close = text[start..].find('\"')?;
+    Some((start, start + close))
+}
+
+/// `param.json` with the first `key`'s string value replaced by `value`.
+fn set_string_value(param_json: &[u8], key: &str, value: &str) -> Option<Vec<u8>> {
+    let text = String::from_utf8_lossy(param_json);
+    let (start, end) = string_value_span(&text, key)?;
+    let mut out = Vec::with_capacity(param_json.len() + value.len());
+    out.extend_from_slice(&param_json[..start]);
+    out.extend_from_slice(value.as_bytes());
+    out.extend_from_slice(&param_json[end..]);
     Some(out)
 }
 
-/// The title id `content_id` belongs to: the part between its first `-` and its first `_`
-/// (`UP4433-PPSA17221_00-…` → `PPSA17221`).
-pub fn title_id_from_content_id(content_id: &str) -> Option<&str> {
-    let rest = content_id.split_once('-')?.1;
-    let id = rest.split_once('_')?.0;
-    (!id.is_empty()).then_some(id)
-}
-
-/// `param.json` with a `titleId` inserted, or `None` when it already carries one (or cannot be
-/// spliced). The console's `GetRawContentInfo` needs the field: a package whose copy omits it
-/// fails the install outright with `Invalid TitleId : [] strLength = 0`.
-pub fn title_id_rewrite(param_json: &[u8]) -> Option<Vec<u8>> {
-    let json = parse_param_json(param_json)?;
-    if json.get("titleId").is_some() {
-        return None;
-    }
-    let id = json.get("contentId")?.as_str()?;
-    let title_id = title_id_from_content_id(id)?;
+/// `param.json` with a `"name": "value"` field added after its opening brace, carrying the
+/// file's own newline and indentation so an already-formatted file stays readable.
+fn insert_field(param_json: &[u8], name: &str, value: &str) -> Option<Vec<u8>> {
     let text = String::from_utf8_lossy(param_json);
     let open = text.find('{')?;
-    // Carry the object's inner indentation, so an already-formatted file stays readable.
     let at = open + 1;
     let indent: String = text[at..].chars().take_while(|c| *c == '\n').collect();
     let nl = if indent.is_empty() { "" } else { "\n" };
@@ -262,11 +247,54 @@ pub fn title_id_rewrite(param_json: &[u8]) -> Option<Vec<u8>> {
         .skip(1)
         .take_while(|c| c.is_whitespace())
         .collect();
-    let mut out = Vec::with_capacity(param_json.len() + title_id.len() + 24);
-    out.extend_from_slice(text[..at].as_bytes());
     let sep = if nl.is_empty() { ":" } else { ": " };
-    out.extend_from_slice(format!("{nl}{pad}\"titleId\"{sep}\"{title_id}\",").as_bytes());
+    let mut out = Vec::with_capacity(param_json.len() + name.len() + value.len() + 8);
+    out.extend_from_slice(text[..at].as_bytes());
+    out.extend_from_slice(format!("{nl}{pad}\"{name}\"{sep}\"{value}\",").as_bytes());
     out.extend_from_slice(text[at..].as_bytes());
+    Some(out)
+}
+
+/// `param.json` with `applicationDrmType` set to `standard`, or `None` when it already is
+/// (or does not say). Only the value's bytes change, so the file's formatting survives.
+pub fn drm_rewrite(param_json: &[u8]) -> Option<Vec<u8>> {
+    let text = String::from_utf8_lossy(param_json);
+    let (start, end) = string_value_span(&text, "\"applicationDrmType\"")?;
+    if text[start..end].eq_ignore_ascii_case(STANDARD_DRM) {
+        return None;
+    }
+    set_string_value(param_json, "\"applicationDrmType\"", STANDARD_DRM)
+}
+
+/// The title id `content_id` belongs to: the part between its first `-` and its first `_`
+/// (`UP4433-PPSA17221_00-…` → `PPSA17221`).
+pub fn title_id_from_content_id(content_id: &str) -> Option<&str> {
+    let rest = content_id.split_once('-')?.1;
+    let id = rest.split_once('_')?.0;
+    (!id.is_empty()).then_some(id)
+}
+
+/// `param.json` as the package must carry it: `contentId` set to the id the package is being
+/// built under, and `titleId` set to match it.
+///
+/// Both fields have to agree with the transfer's own id. A package whose copy disagrees is
+/// refused before a byte of it is committed — `content_id disagree pkg:… param.sfo:…`,
+/// `CheckContentIdAgreement() ret = 80a3000f` — and a copy with no `titleId` at all fails
+/// earlier still (`Invalid TitleId : [] strLength = 0`). A source named differently from the
+/// package it is built into is the ordinary case, so the copy is rewritten rather than read.
+/// The user's own file is untouched: the rewritten bytes are what the package carries.
+pub fn content_id_rewrite(param_json: &[u8], content_id: &str) -> Option<Vec<u8>> {
+    let json = parse_param_json(param_json)?;
+    let title_id = title_id_from_content_id(content_id)?;
+    let mut out = param_json.to_vec();
+    for (name, value) in [("contentId", content_id), ("titleId", title_id)] {
+        let key = format!("\"{name}\"");
+        out = match json.get(name).and_then(|v| v.as_str()) {
+            Some(current) if current == value => continue,
+            Some(_) => set_string_value(&out, &key, value)?,
+            None => insert_field(&out, name, value)?,
+        };
+    }
     Some(out)
 }
 
@@ -380,26 +408,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_missing_title_id_is_derived_from_the_content_id() {
+    fn the_packaged_param_json_names_the_id_it_is_built_under() {
         // The console's GetRawContentInfo needs the packaged copy to carry `titleId`: a
         // package without one fails the install with `Invalid TitleId : [] strLength = 0`.
         let bare = br#"{"contentId":"UP4433-PPSA17221_00-MINECRAFTPS50000","contentVersion":"01.044.000"}"#;
-        let out = title_id_rewrite(bare).expect("a title id is injected");
+        let out = content_id_rewrite(bare, "UP4433-PPSA17221_00-MINECRAFTPS50000")
+            .expect("a title id is injected");
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains(r#""titleId":"PPSA17221""#), "{text}");
         assert!(text.contains(r#""contentId":"UP4433-PPSA17221_00-MINECRAFTPS50000""#));
+
+        // A rename rewrites both fields: leaving `contentId` behind makes the console refuse
+        // the transfer (`content_id disagree pkg:… param.sfo:…` → 0x80a3000f).
+        let renamed = content_id_rewrite(bare, "UP0000-PPSA99012_00-MINIFI8TURE00013").unwrap();
+        let text = String::from_utf8(renamed).unwrap();
+        assert!(
+            text.contains(r#""contentId":"UP0000-PPSA99012_00-MINIFI8TURE00013""#),
+            "{text}"
+        );
+        assert!(text.contains(r#""titleId":"PPSA99012""#), "{text}");
+
         // An indented file keeps its shape rather than being collapsed onto one line.
-        let pretty = b"{\n  \"contentId\": \"UP0000-PPSA99011_00-MINIFI8TURE00011\"\n}";
-        let out = String::from_utf8(title_id_rewrite(pretty).unwrap()).unwrap();
+        let pretty = b"{\n  \"contentId\": \"UP0000-PPSA99003_00-MINIFI8TURE00003\"\n}";
+        let out = String::from_utf8(
+            content_id_rewrite(pretty, "UP0000-PPSA99011_00-MINIFI8TURE00011").unwrap(),
+        )
+        .unwrap();
         assert!(out.contains("\n  \"titleId\": \"PPSA99011\","), "{out}");
         assert!(out.contains("\n}"), "{out}");
-        // Already present, or not a content id we understand: nothing to do.
-        assert!(title_id_rewrite(
-            br#"{"contentId":"UP0000-PPSA99011_00-X","titleId":"PPSA99011"}"#
-        )
-        .is_none());
-        assert!(title_id_rewrite(br#"{"titleName":"x"}"#).is_none());
-        assert!(title_id_rewrite(b"not json").is_none());
+
+        // A source that names neither field gets both: the console compares the packaged copy
+        // against the transfer's own id, so an unnamed copy is refused like a mismatched one.
+        let out = content_id_rewrite(br#"{"titleName":"x"}"#, "UP0000-PPSA99011_00-X").unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.contains(r#""contentId":"UP0000-PPSA99011_00-X""#),
+            "{text}"
+        );
+        assert!(text.contains(r#""titleId":"PPSA99011""#), "{text}");
+
+        // Nothing to change, or nothing we can read: the source bytes are handed back.
+        let same = br#"{"contentId":"UP0000-PPSA99011_00-X","titleId":"PPSA99011"}"#;
+        assert_eq!(
+            content_id_rewrite(same, "UP0000-PPSA99011_00-X").unwrap(),
+            same
+        );
+        assert!(content_id_rewrite(b"not json", "UP0000-PPSA99011_00-X").is_none());
     }
 
     #[test]

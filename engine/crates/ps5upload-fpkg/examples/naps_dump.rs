@@ -78,7 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         at += 16 + len;
-        if at > 1 << 20 {
+        if at > 1 << 30 {
             break;
         }
     }

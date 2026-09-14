@@ -16,11 +16,10 @@
 //! offset, first-sub-chunk compressed length, even/odd flags, the KDE predictor (`2` =
 //! Kraken, `4` = stored) and a shuffle index.
 //!
-//! For v1 nothing is compressed, so the builder emits one stored record per 256 KiB ublock
-//! over a linear map and no run-bases; the KDE predictor is 4 everywhere. Which record
-//! values a console needs for a stored map is the least-measured part of this format
-//! (open question in the writer plan): the round trip through [`reconstruct`] pins our own
-//! consistency, and G3 decides acceptance.
+//! Nothing is compressed in the packages this writes, but a stored image still carries a run
+//! schedule: a run opens at every file's start — the compressed cursor re-bases there — and every
+//! eleventh 256 KiB block within a file, and the metadata region opens one run on its first block.
+//! The tail closes with a terminator, without which the mount's own walk has no end.
 
 use crate::{format_err, Result, BLOCK};
 
@@ -38,8 +37,6 @@ pub const UBLOCK: u64 = 0x40000;
 const FIDX_TYPE_MOUNT_END: u8 = 0x40;
 /// The KDE predictor value that means "stored", the only one v1 emits.
 const KDE_STORED: u8 = 4;
-
-const MAX_FILE_LEN: u64 = 0x20000;
 
 /// One `cblockinfo` record, decoded.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,8 +247,71 @@ fn encode_cblock(c: &Cblock) -> [u8; CBLOCK_LEN] {
     out
 }
 
-/// Build a layout for a stored inner image: one record per ublock, no runs, no shuffle,
-/// no outer digests.
+/// One planned cblockinfo record, before the cursor walk serializes it: the per-block plan the
+/// compressor would produce, plus whether the block opens a run.
+struct Plan {
+    start_run: bool,
+    on_disk: u64,
+    logical: u64,
+    even_len: u64,
+    stream_len: u64,
+    even: u8,
+    odd: u8,
+    kde: u8,
+    shuffle: u8,
+    terminator: bool,
+}
+
+/// Walk a plan into cblockinfo records, and report `(record index, logical offset)` for every
+/// per-block record. A run-base record re-anchors the compressed-offset cursor to the block's
+/// position in the doubled offset space; each per-block record then advances it by its stream
+/// length. This is what keeps a block's recorded offset meaningful once runs are in play.
+fn walk(plans: &[Plan]) -> (Vec<Cblock>, Vec<(u32, u64)>) {
+    let mut entries: Vec<Cblock> = Vec::with_capacity(plans.len() + plans.len() / 8 + 1);
+    let mut by_std: Vec<(u32, u64)> = Vec::with_capacity(plans.len());
+    let mut cursor: u64 = 0;
+    for p in plans {
+        if p.start_run {
+            let coffset_end_mod_256k = (cursor & 0x3_FFFF) as u32;
+            cursor = 2 * (p.on_disk / UBLOCK) * UBLOCK + p.on_disk % UBLOCK;
+            entries.push(Cblock::RunBase {
+                coffset_end_mod_256k,
+                tweak: ((p.on_disk >> 15) as u32) & 0x0FFF_FFFF,
+                key_slot: 0,
+                coffset_start_256k: ((2 * (p.on_disk / UBLOCK)) as u32) & 0x7FFF,
+            });
+        }
+        let coffset_start_mod_256k = (cursor & 0x3_FFFF) as u32;
+        let (uoffset_start, clen_even_minus1, even, odd, kde, shuffle) = if p.terminator {
+            (1, 1, 0, 0, 0, 0)
+        } else {
+            (
+                (((p.logical & 0x3_FFFF) * 2) & 0x3_FFFF) as u32,
+                (p.even_len.saturating_sub(1) * 2).min(0x1_FFFE) as u32,
+                p.even,
+                p.odd,
+                p.kde,
+                p.shuffle,
+            )
+        };
+        by_std.push((entries.len() as u32, p.logical));
+        entries.push(Cblock::Block {
+            coffset_start_mod_256k,
+            uoffset_start,
+            clen_even_minus1,
+            even,
+            odd,
+            kde,
+            shuffle,
+        });
+        cursor += p.stream_len;
+    }
+    (entries, by_std)
+}
+
+/// Build a layout for a stored inner image: every file is raw, so each splits into full 256 KiB
+/// blocks and a tail, and a run opens at every file's start — the compressed cursor re-bases
+/// there — plus every eleventh block within a file, the point the offset space re-bases at.
 pub fn build(
     image_len: u64,
     ndblock: u64,
@@ -267,48 +327,136 @@ pub fn build(
     let num_outer_blocks = image_len.div_ceil(BLOCK) as u32;
     let num_files = afid_offsets.len() as u32 + 3;
 
+    // The data region: one placement per file, each split the way the mount reads it back.
+    let mut plans: Vec<Plan> = Vec::new();
+    for (i, &start) in afid_offsets.iter().enumerate() {
+        let end = afid_offsets.get(i + 1).copied().unwrap_or(data_end);
+        let size = end.saturating_sub(start);
+        let full = size / UBLOCK;
+        let tail = size - full * UBLOCK;
+        let mut runs: Vec<u64> = vec![start];
+        // A raw file's compressed cursor re-bases every eleventh 256 KiB block.
+        let mut m = 11;
+        while m < full {
+            runs.push(start + m * UBLOCK);
+            m += 11;
+        }
+        for k in 0..full {
+            let on_disk = start + k * UBLOCK;
+            plans.push(Plan {
+                start_run: runs.contains(&on_disk),
+                on_disk,
+                logical: on_disk,
+                even_len: 0x1_0000,
+                stream_len: 0x8_0000,
+                even: 1,
+                odd: 1,
+                kde: KDE_STORED,
+                shuffle: 0,
+                terminator: false,
+            });
+        }
+        if tail > 0 || full == 0 {
+            let on_disk = start + full * UBLOCK;
+            plans.push(Plan {
+                start_run: runs.contains(&on_disk),
+                on_disk,
+                logical: on_disk,
+                even_len: tail,
+                stream_len: tail,
+                even: 0,
+                odd: 1,
+                kde: 0,
+                shuffle: 0,
+                terminator: false,
+            });
+        }
+    }
+
+    // The tail: padding over the gap between the data and the metadata, then the metadata's own
+    // blocks — which open a run on the first one only — and a terminator marking the mount end.
+    let padding = data_end & !(UBLOCK - 1);
+    plans.push(Plan {
+        start_run: false,
+        on_disk: data_end,
+        logical: padding,
+        even_len: 8,
+        stream_len: 0x10,
+        even: 0,
+        odd: 1,
+        kde: KDE_STORED,
+        shuffle: 0,
+        terminator: false,
+    });
+    let meta_ublocks = mount_size.saturating_sub(meta_base).div_ceil(UBLOCK);
+    for i in 0..meta_ublocks {
+        let logical = meta_base + i * UBLOCK;
+        let len = UBLOCK.min(mount_size - logical);
+        plans.push(Plan {
+            start_run: i == 0,
+            on_disk: meta_base + i * UBLOCK,
+            logical,
+            even_len: len,
+            stream_len: len,
+            even: 0,
+            odd: 1,
+            kde: KDE_STORED,
+            shuffle: 0,
+            terminator: false,
+        });
+    }
+    let meta_end = meta_base + meta_ublocks * UBLOCK;
+    plans.push(Plan {
+        start_run: true,
+        on_disk: meta_end,
+        logical: mount_size,
+        even_len: 0,
+        stream_len: 0,
+        even: 0,
+        odd: 0,
+        kde: 0,
+        shuffle: 0,
+        terminator: true,
+    });
+
+    let (cblocks, by_std) = walk(&plans);
+    let num_cblock = cblocks.len() as u32;
+
+    // u2c: per ublock, the index of the first per-block record at or past it, as a base plus
+    // seven deltas per group of eight.
+    let mut sorted = by_std.clone();
+    sorted.sort_by_key(|(_, logical)| *logical);
+    let terminator = num_cblock - 1;
+    let mut first: Vec<u32> = Vec::with_capacity(num_ublocks as usize);
+    let mut p = 0usize;
+    for u in 0..num_ublocks {
+        let target = u64::from(u) * UBLOCK;
+        while p < sorted.len() && sorted[p].1 < target {
+            p += 1;
+        }
+        first.push(if p < sorted.len() {
+            sorted[p].0
+        } else {
+            terminator
+        });
+    }
+    let u2c: Vec<(u32, [u8; 7])> = (0..Layout::u2c_count(num_ublocks))
+        .map(|g| {
+            let base = *first.get(g * 8).unwrap_or(&terminator);
+            let mut deltas = [0u8; 7];
+            for (j, d) in deltas.iter_mut().enumerate() {
+                let v = *first.get(g * 8 + 1 + j).unwrap_or(&terminator);
+                *d = v.saturating_sub(base).min(u32::from(u8::MAX)) as u8;
+            }
+            (base, deltas)
+        })
+        .collect();
+
     // fidx: the afid offsets, then the data end, the metadata base and the mount size.
     let mut fidx: Vec<(u64, u8)> = afid_offsets.iter().map(|o| (*o, 0u8)).collect();
     fidx.push((data_end, 0));
     fidx.push((meta_base, 0));
     fidx.push((mount_size, FIDX_TYPE_MOUNT_END));
-
-    // cblockinfo: a zeroed prefix record (the sample's first record is all zeros and its
-    // u2c mapping starts at index 1), then one stored record per ublock.
-    let mut cblocks = vec![Cblock::Block {
-        coffset_start_mod_256k: 0,
-        uoffset_start: 0,
-        clen_even_minus1: 0,
-        even: 0,
-        odd: 0,
-        kde: 0,
-        shuffle: 0,
-    }];
-    for k in 0..num_ublocks as u64 {
-        let uoffset = k * UBLOCK;
-        let len = UBLOCK.min(mount_size - uoffset);
-        cblocks.push(Cblock::Block {
-            coffset_start_mod_256k: (uoffset % UBLOCK) as u32,
-            uoffset_start: (uoffset % UBLOCK) as u32,
-            clen_even_minus1: (len.min(MAX_FILE_LEN) - 1) as u32,
-            even: 0,
-            odd: 0,
-            kde: KDE_STORED,
-            shuffle: 0,
-        });
-    }
-
-    // u2c: ublock k maps to cblockinfo index 1 + k.
-    let u2c: Vec<(u32, [u8; 7])> = (0..Layout::u2c_count(num_ublocks))
-        .map(|g| {
-            let base = 1 + (g as u32) * 8;
-            let mut deltas = [0u8; 7];
-            for (i, d) in deltas.iter_mut().enumerate() {
-                *d = (i + 1) as u8;
-            }
-            (base, deltas)
-        })
-        .collect();
 
     let mut blob: Vec<u8> = Vec::with_capacity(
         16 + fidx.len() * FIDX_LEN + u2c.len() * U2C_LEN + cblocks.len() * CBLOCK_LEN,
@@ -317,8 +465,8 @@ pub fn build(
     let word0 = u64::from(num_files - 1) & 0xFF_FFFF
         | 2u64 << 24
         | (u64::from(num_ublocks) & 0xFF_FFFF) << 32;
-    let word1 = u64::from(num_outer_blocks) & 0xFF_FFFF
-        | (u64::from(cblocks.len() as u32 - 2) & 0xFF_FFFF) << 24;
+    let word1 =
+        u64::from(num_outer_blocks) & 0xFF_FFFF | (u64::from(num_cblock - 2) & 0xFF_FFFF) << 24;
     blob.extend_from_slice(&word0.to_le_bytes());
     blob.extend_from_slice(&word1.to_le_bytes());
     for _ in 0..num_outer_blocks {
@@ -377,10 +525,10 @@ pub fn reconstruct(image: &[u8], layout: &Layout) -> Result<Vec<u8>> {
                 if *kde == 2 {
                     return format_err("naps block is Kraken-compressed; v1 stores everything");
                 }
-                // v1's map is linear: a block's stored offset is its mount offset.
-                if *coffset_start_mod_256k != (uoffset % UBLOCK) as u32 {
-                    return format_err(format!("naps block {k} is not a linear stored mapping"));
-                }
+                // `coffset_start_mod_256k` is the cursor's position in the doubled offset
+                // space, which a run-base re-anchors; only the stored-image copy below is
+                // linear, because every block this writer plans is raw.
+                let _ = coffset_start_mod_256k;
                 let at = uoffset as usize;
                 let src = image.get(at..at + len as usize).ok_or_else(|| {
                     crate::Error::Format(format!("naps block {k} reads past the stored image"))
@@ -399,9 +547,18 @@ pub fn reconstruct(image: &[u8], layout: &Layout) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
 
-    /// Pull one file out of a package's outer PFS, through the reader's own decryption.
+    /// Pull one file out of a package's outer PFS, through the reader's own decryption. Each
+    /// call gets its own temp file: the removal below would otherwise pull the file out from
+    /// under a test running beside this one on the same sample.
     fn outer_file(pkg: &[u8], name: &str) -> Option<Vec<u8>> {
-        let path = std::env::temp_dir().join(format!("naps-sample-{}.pkg", std::process::id()));
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static SEQ: AtomicU32 = AtomicU32::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "naps-sample-{}-{}-{}.pkg",
+            std::process::id(),
+            name.replace(['/', '.'], "_"),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::write(&path, pkg).ok()?;
         let mut file = crate::PkgFile::open(&path).ok()?;
         let head = file.read_at(0, crate::fih::HEADER_LEN).ok()?;
@@ -452,6 +609,84 @@ mod tests {
         );
         assert_eq!(layout.fidx.last().unwrap().1, 0x40);
         assert_eq!(layout.mount_size(), 0x4a0000);
+    }
+
+    /// The run schedule is the part of a stored image this writer used to omit entirely: without
+    /// it the mount's walk has no anchors and no end.
+    #[test]
+    fn a_stored_image_carries_its_run_schedule() {
+        let ndblock = 40u64;
+        let mount_size = ndblock * BLOCK;
+        let blob = build(mount_size, ndblock, &[0, 96, 12848], 0xa626, 0x80000).unwrap();
+        let layout = parse(&blob).unwrap();
+
+        // A file opens a run, so the first record is a run-base at the data's start.
+        assert!(
+            matches!(layout.cblocks.first(), Some(Cblock::RunBase { .. })),
+            "the first file's block must open a run: {:?}",
+            layout.cblocks.first()
+        );
+
+        // The metadata opens exactly one run, on its first block.
+        let meta_run = layout
+            .cblocks
+            .iter()
+            .filter(|c| matches!(c, Cblock::RunBase { .. }))
+            .count();
+        assert!(
+            meta_run >= 2,
+            "each file and the metadata open runs, saw {meta_run}"
+        );
+
+        // The terminator closes the layout: its per-block record carries the sentinel fields.
+        match layout.cblocks.last() {
+            Some(Cblock::Block {
+                uoffset_start,
+                clen_even_minus1,
+                even,
+                odd,
+                ..
+            }) => {
+                assert_eq!(*uoffset_start, 1, "the terminator's uoffset");
+                assert_eq!(*clen_even_minus1, 1, "the terminator's clen");
+                assert_eq!((*even, *odd), (0, 0), "the terminator's flags");
+            }
+            other => panic!("the layout must end with the terminator record: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn probe_sample_u2c() {
+        let dir = std::env::var("PS5UPLOAD_SAMPLE_PKGS")
+            .unwrap_or_else(|_| "/Volumes/Storage/PS5/pkgs".into());
+        let path = std::path::Path::new(&dir).join("webbrowser.pkg");
+        let Ok(pkg) = std::fs::read(&path) else {
+            return;
+        };
+        let blob = outer_file(&pkg, "naps_pkg_layout.dat").unwrap();
+        let layout = parse(&blob).unwrap();
+        eprintln!("cblocks={} u2c={}", layout.cblocks.len(), layout.u2c.len());
+        let mut starts = Vec::new();
+        for (base, deltas) in &layout.u2c {
+            starts.push(*base);
+            for d in deltas {
+                starts.push(*base + u32::from(*d));
+            }
+        }
+        eprintln!("decoded table ({} entries): {:?}", starts.len(), starts);
+        let mono = starts.windows(2).all(|w| w[0] <= w[1]);
+        eprintln!("monotone: {mono}");
+        let cb_start = blob.len() - 32 * 9;
+        for i in 0..6 {
+            let r = &blob[cb_start + i * 9..cb_start + i * 9 + 9];
+            eprintln!(
+                "  raw {i}: {}",
+                r.iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+        }
     }
 
     #[test]

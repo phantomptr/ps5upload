@@ -127,12 +127,6 @@ fn build_mode(
     // rewritten bytes are served in its place, and the file list's size for it is adjusted
     // so the plan lays out what the package will actually carry.
     let param_json = source::drm_rewrite(&param_json).unwrap_or(param_json);
-    // The console reads `titleId` out of the packaged copy at GetRawContentInfo; a source that
-    // omits it makes the install fail before anything is transferred.
-    let param_json = source::title_id_rewrite(&param_json).unwrap_or(param_json);
-    if let Some(entry) = files.iter_mut().find(|f| f.path == "sce_sys/param.json") {
-        entry.size = param_json.len() as u64;
-    }
     let content_id = match &request.content_id {
         Some(id) => id.clone(),
         None => source::content_id(&param_json).ok_or_else(|| {
@@ -147,6 +141,13 @@ fn build_mode(
             "content id {content_id:?} is {} characters, not 36",
             content_id.len()
         ));
+    }
+    // The packaged copy has to name the id the package is built under, both in `contentId`
+    // (the console checks it against the transfer's own) and in `titleId` (which it reads at
+    // GetRawContentInfo). A source that says something else is the ordinary case for a rename.
+    let param_json = source::content_id_rewrite(&param_json, &content_id).unwrap_or(param_json);
+    if let Some(entry) = files.iter_mut().find(|f| f.path == "sce_sys/param.json") {
+        entry.size = param_json.len() as u64;
     }
     if !files.iter().any(|f| f.path == "eboot.bin") {
         return format_err("the source has no eboot.bin");
