@@ -35,6 +35,9 @@ pub struct BuildRequest {
     pub time: Option<(i64, u32)>,
     /// The outer PFS seed; random when absent.
     pub seed: Option<[u8; 16]>,
+    /// How the inner image's metadata region is stored. `PS5UPLOAD_FPKG_META_CODEC` (`stored` or
+    /// `zlib`) overrides it, which is how a stored control package is built without a code change.
+    pub metadata_codec: inner::MetaCodec,
 }
 
 impl BuildRequest {
@@ -47,7 +50,15 @@ impl BuildRequest {
             passcode: crate::crypto::DEFAULT_PASSCODE.to_string(),
             time: None,
             seed: None,
+            metadata_codec: codec_from_env(),
         }
+    }
+}
+
+fn codec_from_env() -> inner::MetaCodec {
+    match std::env::var("PS5UPLOAD_FPKG_META_CODEC").as_deref() {
+        Ok("stored") => inner::MetaCodec::Stored,
+        _ => inner::MetaCodec::Zlib,
     }
 }
 
@@ -241,6 +252,7 @@ fn build_mode(
                 param_json: param_json.clone(),
                 icon_png,
                 icon_dds,
+                metadata_codec: request.metadata_codec,
             };
             match stream::write_package(&mut file, &stream_request, &mut read_range, &mut p, cancel)
             {
@@ -265,14 +277,23 @@ fn build_mode(
                 }
             };
             progress("writing the inner image");
-            let inner = inner::write(&plan, &request.passcode, &mut read, time)?;
+            let inner = inner::write_with(
+                &plan,
+                &request.passcode,
+                &mut read,
+                time,
+                request.metadata_codec,
+            )?;
             progress("writing the layout");
-            let naps = naps::build(
+            let inner_blocks = inner.disk_blocks();
+            let naps = naps::build_with_meta(
                 inner.image.len() as u64,
                 plan.ndblock,
                 &inner.afid_offsets,
                 plan.data_end,
                 plan.meta_base,
+                &inner.metadata.blocks,
+                request.metadata_codec.compression_type(),
             )?;
             progress("writing the outer image");
             let outer = outer_write::write(
@@ -285,6 +306,8 @@ fn build_mode(
             )?;
             let game_digest = outer.plaintext_digests[outer.superblock_block as usize];
             let cnt_offset = BLOCK + outer.image.len() as u64;
+            // `0xA0` carries the mount's size; `0x90` the stored image's, which the outer PFS and
+            // the container both follow.
             let inner_size = plan.ndblock * BLOCK;
             let fih = fih_write::write(&FihParams {
                 outer_size: outer.image.len() as u64,
@@ -294,6 +317,7 @@ fn build_mode(
                 naps: &naps,
                 inner_size,
                 meta_base: plan.meta_base,
+                inner_blocks: inner_blocks as u32,
                 content_inodes: plan.content_inodes,
                 content_version,
                 app_file_count: plan.app_file_count,
@@ -336,14 +360,16 @@ fn build_mode(
             let meta_18 = si_write::naps_meta_18(
                 inner_size,
                 &si_write::InnerDigests::of_image(&inner.image, &inner_files),
-                &inner.image[plan.meta_base as usize..],
+                // The metric blob describes the metadata region's logical bytes, not the container
+                // the image stores there.
+                &inner.metadata.plain,
                 &inner_files,
                 plan.data_end,
                 plan.meta_base,
                 &game_digest,
             )?;
             let meta_300 = si_write::naps_meta_300(inner_size);
-            let outer_layout = outer_write::layout(plan.ndblock, naps.len() as u64)?;
+            let outer_layout = outer_write::layout(inner_blocks, naps.len() as u64)?;
             let sb_at = outer.superblock_block as usize * BLOCK as usize;
             let manifest = pfsimage::build(&pfsimage::ManifestParams {
                 facts: &cnt.facts,

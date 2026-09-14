@@ -22,11 +22,17 @@ pub struct FihParams<'a> {
     /// Absolute offset of the embedded container inside the finalized image.
     pub cnt_offset: u64,
     pub naps: &'a [u8],
-    /// Block-aligned inner image size (the header's `0xA0`).
+    /// The header's `0xA0`. The two samples disagree about what it holds: PSVIETHOA's Minecraft
+    /// carries 1,664,090,112 there against a 1,031,274,496-byte stored image, which is its mount
+    /// size (25,392 blocks), while `webbrowser.pkg` carries 327,680, which is its stored size and
+    /// not its 74-block mount. When they disagree, `naps_pkg_layout.dat`'s mount size wins.
     pub inner_size: u64,
     /// The inner mount's metadata base, in bytes; the header records it at `0x50` in mount
     /// blocks, which the console multiplies by `0x60` to find the superblock.
     pub meta_base: u64,
+    /// The stored inner image's length in blocks (`0x90`). This is the *on-disk* count, which a
+    /// compressed metadata region makes shorter than the mount.
+    pub inner_blocks: u32,
     /// Directories below uroot plus every file (`0x94`/`0x98`).
     pub content_inodes: u32,
     /// The content version's 2-3-3 BCD word (`0x9C`).
@@ -59,8 +65,7 @@ pub fn write(p: &FihParams) -> Vec<u8> {
     h[0x58..0x60].copy_from_slice(&p.cnt_offset.to_le_bytes());
     h[0x60..0x68].copy_from_slice(&BLOCK.to_le_bytes());
     h[0x68..0x70].copy_from_slice(&0x0000_8000_0000_0000u64.to_le_bytes());
-    let inner_blocks = (p.inner_size / BLOCK) as u32;
-    h[0x90..0x94].copy_from_slice(&inner_blocks.to_le_bytes());
+    h[0x90..0x94].copy_from_slice(&p.inner_blocks.to_le_bytes());
     h[0x94..0x98].copy_from_slice(&p.content_inodes.to_le_bytes());
     h[0x98..0x9C].copy_from_slice(&p.content_inodes.to_le_bytes());
     h[0x9C..0xA0].copy_from_slice(&p.content_version.to_le_bytes());
@@ -87,6 +92,7 @@ mod tests {
             naps: &naps,
             inner_size: 4 * BLOCK,
             meta_base: 0x30000,
+            inner_blocks: 4,
             content_inodes: 3,
             content_version: 0x0100_1000,
             app_file_count: 1,

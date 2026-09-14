@@ -37,6 +37,8 @@ pub struct StreamRequest<'a> {
     pub param_json: Vec<u8>,
     pub icon_png: Vec<u8>,
     pub icon_dds: Vec<u8>,
+    /// How the inner image's metadata region is stored.
+    pub metadata_codec: crate::inner::MetaCodec,
 }
 
 /// How a build reports itself: phase names, and bytes written of the mount image.
@@ -131,15 +133,21 @@ pub fn write_package(
     cancel: &AtomicBool,
 ) -> Result<StreamedPackage> {
     let plan = request.plan;
-    let inner_blocks = plan.ndblock;
-    let inner_size = inner_blocks * BLOCK;
-    let mut source = BlockSource::new(plan, request.passcode, request.time)?;
-    let naps = naps::build(
-        inner_size,
-        inner_blocks,
+    let mut source =
+        BlockSource::new_with(plan, request.passcode, request.time, request.metadata_codec)?;
+    // The image the outer PFS stores is the stored one, so its block count is what the outer
+    // metadata, the header's `0x90` and the descriptor's image length all follow. The mount the
+    // install metadata describes is the larger logical one.
+    let inner_blocks = source.disk_blocks();
+    let inner_size = plan.ndblock * BLOCK;
+    let naps = naps::build_with_meta(
+        inner_blocks * BLOCK,
+        plan.ndblock,
         &plan.afid_offsets(),
         plan.data_end,
         plan.meta_base,
+        &source.metadata().blocks,
+        request.metadata_codec.compression_type(),
     )?;
     // The layout follows the descriptor's length, which fixes how many blocks it spans.
     let lay = layout(inner_blocks, naps.len() as u64)?;
@@ -222,6 +230,7 @@ pub fn write_package(
         naps: &naps,
         inner_size,
         meta_base: plan.meta_base,
+        inner_blocks: inner_blocks as u32,
         content_inodes: plan.content_inodes,
         content_version: request.content_version,
         app_file_count: plan.app_file_count,
@@ -370,16 +379,19 @@ mod tests {
         let time = (1_700_000_000i64, 0);
         let mut read_all =
             |path: &str| -> Result<Vec<u8>> { Ok(payloads.get(path).cloned().unwrap_or_default()) };
-        let image =
+        let built =
             crate::inner::write(&plan, crate::crypto::DEFAULT_PASSCODE, &mut read_all, time)
-                .unwrap()
-                .image;
+                .unwrap();
+        let image = built.image.clone();
+        // One digest per *stored* block: a compressed metadata region makes that fewer than the
+        // mount's block count, and the metric blob's table follows the image.
         let expected = crate::si_write::InnerDigests::of_image(&image, &plan.inner_files());
 
         let mut source = BlockSource::new(&plan, crate::crypto::DEFAULT_PASSCODE, time).unwrap();
+        assert_eq!(source.disk_blocks(), built.disk_blocks());
         let mut digester = FileDigester::new(plan.inner_files().len());
         let mut spans = Vec::new();
-        for index in 0..plan.ndblock {
+        for index in 0..source.disk_blocks() {
             block_spans(&source, &plan, index, &mut spans);
             let block = source
                 .block(index, &mut |path, offset, len| {
@@ -405,7 +417,7 @@ mod tests {
         let from_image = crate::si_write::naps_meta_18(
             plan.ndblock * BLOCK,
             &expected,
-            &image[plan.meta_base as usize..],
+            &built.metadata.plain,
             &list,
             plan.data_end,
             plan.meta_base,

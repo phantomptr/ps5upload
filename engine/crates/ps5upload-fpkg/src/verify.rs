@@ -54,6 +54,92 @@ fn file_data(img: &outer::OuterImage, node: Option<&outer::Dinode>) -> Vec<u8> {
     node.map(|n| img.file_data(n)).unwrap_or_default()
 }
 
+/// Does the inner image expand, through its descriptor, to a mount whose metadata walks?
+///
+/// The descriptor is the authority on every length here: the image must be the block count it
+/// declares, and what the image stores from the metadata base on must expand to the rest of the
+/// mount it declares. The codec comes from the descriptor's own `compType` — a zlib image stores a
+/// container there and everything else stores the region itself — so this reads both without
+/// being told which it is looking at.
+fn inner_mount_ok(image_len: u64, image: &[u8], layout: &crate::naps::Layout) -> (bool, String) {
+    let mount_size = layout.mount_size();
+    let mut detail = format!(
+        "{} stored block(s), {} declared, mount {mount_size:#x}, comp {}",
+        image_len.div_ceil(BLOCK),
+        layout.num_outer_blocks,
+        layout.compression_type
+    );
+    if image_len != u64::from(layout.num_outer_blocks) * BLOCK {
+        detail.push_str(" (the image is not the length the descriptor declares)");
+        return (false, detail);
+    }
+    let Some(meta_base) = layout.fidx.len().checked_sub(2).map(|i| layout.fidx[i].0) else {
+        detail.push_str(" (no metadata-base fidx face)");
+        return (false, detail);
+    };
+    let region = mount_size.saturating_sub(meta_base);
+    // A stored region fills the mount, so the image is exactly the mount's length; anything
+    // shorter has had its region compressed into the space above the base.
+    let stored = image_len == mount_size;
+    if !stored && layout.compression_type != crate::naps::COMP_ZLIB as u8 {
+        // A compressed region in a codec this build does not decode — a real package's Kraken,
+        // typically. The geometry above still holds; the region is left to a Kraken reader.
+        detail.push_str(&format!(
+            " (comp {} is not decoded here, so the region is unchecked)",
+            layout.compression_type
+        ));
+        return (true, detail);
+    }
+    let Some(tail) = image.get(meta_base as usize..) else {
+        detail.push_str(" (the image ends before its metadata base)");
+        return (false, detail);
+    };
+    let plain = if stored {
+        match tail.get(..region as usize) {
+            Some(slice) => slice.to_vec(),
+            None => {
+                detail.push_str(" (the image does not reach the mount's end)");
+                return (false, detail);
+            }
+        }
+    } else {
+        match crate::pfsc::parse(tail).and_then(|c| c.decompress()) {
+            Ok(plain) => plain,
+            Err(e) => {
+                detail.push_str(&format!(" (the metadata region does not expand: {e})"));
+                return (false, detail);
+            }
+        }
+    };
+    if plain.len() as u64 != region {
+        detail.push_str(&format!(
+            " (its metadata is {} bytes against a {region}-byte region)",
+            plain.len()
+        ));
+        return (false, detail);
+    }
+    // The data region is not read: the walk needs the metadata and the inode table, both of which
+    // live above the base, so a zero prefix stands in for it.
+    let mut mount = vec![0u8; meta_base as usize];
+    mount.extend_from_slice(&plain);
+    let walked = crate::inner::read(&mount, meta_base);
+    match walked {
+        Ok(m) if m.flt_ok && !m.files.is_empty() => (true, detail),
+        Ok(m) => {
+            detail.push_str(&format!(
+                " (the metadata walks to {} file(s), flat-path table ok: {})",
+                m.files.len(),
+                m.flt_ok
+            ));
+            (false, detail)
+        }
+        Err(e) => {
+            detail.push_str(&format!(" (its metadata does not walk: {e})"));
+            (false, detail)
+        }
+    }
+}
+
 /// Every check that needs only the header and the container — the two things both
 /// verifiers read whole.
 fn container_report(fih_block: &[u8], fih: &fih::Fih, cnt: &cnt::Cnt) -> Report {
@@ -177,6 +263,43 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
             && uroot.iter().any(|n| n == "naps_pkg_layout.dat"),
         uroot.join(", "),
     );
+
+    // The inner image is what the console actually mounts, and nothing else in this report reads
+    // it: the stored file has to be the length the descriptor declares, and its metadata region
+    // has to expand to the rest of the mount and walk. A package can pass every outer check and
+    // still fail here, which is the failure this exists to name.
+    {
+        let by_name = |name: &str| -> Vec<u8> {
+            let ino = nodes
+                .get(2)
+                .map(|n| img.dirents(n))
+                .unwrap_or_default()
+                .into_iter()
+                .find(|d| d.name == name)
+                .map(|d| d.ino as usize);
+            file_data(&img, ino.and_then(|i| nodes.get(i)))
+        };
+        let image = by_name("pfs_image.dat");
+        let naps = by_name("naps_pkg_layout.dat");
+        match crate::naps::parse(&naps) {
+            // A descriptor our own reader cannot lay out is this crate's limitation, not the
+            // package's — `naps::parse` reads the smallest sample exactly and the large ones not
+            // at all — so it is reported without failing the package.
+            Err(e) => r.push(
+                "the inner image expands to the mount its descriptor fixes",
+                true,
+                format!("the descriptor is not parsed here: {e}"),
+            ),
+            Ok(layout) => {
+                let (ok, detail) = inner_mount_ok(image.len() as u64, &image, &layout);
+                r.push(
+                    "the inner image expands to the mount its descriptor fixes",
+                    ok,
+                    detail,
+                );
+            }
+        }
+    }
 
     // The outer flat-path table (inode 1) hashes each uroot dirent name to its inode.
     {

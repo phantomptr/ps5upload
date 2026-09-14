@@ -1,18 +1,21 @@
-//! The inner image (`pfs_image.dat`): data-first, every file stored raw.
+//! The inner image (`pfs_image.dat`): data-first, with the metadata region compressed.
 //!
-//! v1 stores everything, so the on-disk image *is* the logical mount: files sit at their
-//! afid-order offsets, the block-info table sits in the padding block just after the data
-//! (where the sample carries it too), and the metadata region starts at the 256 KiB-aligned
-//! `meta_base` the finalized-image header records at `0x50` (in 4096-byte sectors). A package that compressed
-//! anything would instead have to map the two spaces through `naps_pkg_layout.dat`.
+//! The file payloads are stored raw, so the data region sits at its afid-order offsets and the
+//! block-info table occupies the padding block just after it, where the sample carries it too. The
+//! metadata region starts at the 256 KiB-aligned `meta_base` the finalized-image header records at
+//! `0x50`, and it is the part that shrinks: it goes into a `PFSC` container whose blocks are
+//! deflated wherever that is shorter, so the on-disk image is *shorter than the mount* and
+//! `naps_pkg_layout.dat` is what maps one onto the other. [`logical_mount`] is that mapping in the
+//! reading direction.
 //!
-//! The metadata region itself is a small PFS: a superblock, a table of 0xA8-byte inodes
-//! that carry one logical offset each, the super-root's four entries, both flat-path
-//! tables, the afid table, then one dirent block per directory.
+//! The metadata region itself is a small PFS: a superblock, a table of 0xA8-byte inodes that carry
+//! one logical offset each, the super-root's four entries, both flat-path tables, the afid table,
+//! then one dirent block per directory.
 
 use crate::crypto::hmac_sha256;
 use crate::flt;
 use crate::keys;
+use crate::pfsc;
 use crate::plan::{self, Plan};
 use crate::{format_err, le16, le32, le64, Result, BLOCK};
 
@@ -33,16 +36,100 @@ pub struct Placement {
     pub logical_offset: u64,
 }
 
+/// How the metadata region is stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetaCodec {
+    /// The region's own bytes at `meta_base`, the way the samples that store everything do.
+    Stored,
+    /// A `PFSC` container whose blocks are deflated where that is shorter.
+    Zlib,
+}
+
+impl MetaCodec {
+    /// The compression type the layout descriptor records for this codec.
+    pub fn compression_type(self) -> u64 {
+        match self {
+            MetaCodec::Stored => crate::naps::COMP_KRAKEN,
+            MetaCodec::Zlib => crate::naps::COMP_ZLIB,
+        }
+    }
+}
+
+/// The metadata region, as the mount reads it and as the image stores it.
+///
+/// The two are not the same buffer. The mount sees `plain` at `meta_base`; the image stores
+/// `image_tail` there, which for a compressed region is a container that expands back to `plain`.
+/// `blocks` is the per-256-KiB geometry that ties them together: the layout descriptor records it
+/// so the console can find each block's payload.
+pub struct Metadata {
+    /// The region's logical bytes, from `meta_base` to the mount's end.
+    pub plain: Vec<u8>,
+    /// What the image stores at `meta_base`.
+    pub image_tail: Vec<u8>,
+    /// One entry per 256 KiB of `plain`, with `payload_at` relative to `meta_base`.
+    pub blocks: Vec<pfsc::BlockInfo>,
+}
+
+impl Metadata {
+    /// The region stored verbatim: every block is its own bytes, at its own logical offset.
+    pub fn stored(plain: Vec<u8>) -> Self {
+        let blocks = plain
+            .chunks(crate::naps::UBLOCK as usize)
+            .enumerate()
+            .map(|(i, block)| pfsc::BlockInfo {
+                payload_at: i as u64 * crate::naps::UBLOCK,
+                payload_len: block.len() as u64,
+                first_chunk_len: block.len() as u64,
+                uncompressed_len: block.len() as u64,
+                compressed: false,
+            })
+            .collect();
+        Self {
+            image_tail: plain.clone(),
+            plain,
+            blocks,
+        }
+    }
+
+    /// The region in a `PFSC` container whose blocks are deflated where that wins.
+    pub fn zlib(plain: Vec<u8>) -> Result<Self> {
+        let written = pfsc::write_zlib(&plain)?;
+        Ok(Self {
+            plain,
+            image_tail: written.container,
+            blocks: written.blocks,
+        })
+    }
+
+    pub fn for_codec(plain: Vec<u8>, codec: MetaCodec) -> Result<Self> {
+        match codec {
+            MetaCodec::Stored => Ok(Self::stored(plain)),
+            MetaCodec::Zlib => Self::zlib(plain),
+        }
+    }
+}
+
 pub struct InnerImage {
-    /// The `pfs_image.dat` bytes, which are also the logical mount.
+    /// The `pfs_image.dat` bytes as the image stores them. For a compressed metadata region this
+    /// is shorter than the mount; `metadata.plain` is what the mount reads there.
     pub image: Vec<u8>,
+    pub metadata: Metadata,
     pub meta_base: u64,
+    /// The mount's size in blocks, which is not the image's once anything is compressed.
     pub ndblock: u64,
     pub block_info_offset: u64,
     /// Indexed like `plan.files`.
     pub placements: Vec<Placement>,
     /// Logical offsets in afid order — the naps `fidx` entries.
     pub afid_offsets: Vec<u64>,
+}
+
+impl InnerImage {
+    /// The on-disk image's length in blocks — the quantity the finalized-image header records at
+    /// `0x90` and the outer image's file size follows.
+    pub fn disk_blocks(&self) -> u64 {
+        self.image.len().div_ceil(BLOCK as usize) as u64
+    }
 }
 
 /// The 96-byte `sce_sys/keystone` for a passcode.
@@ -316,6 +403,17 @@ pub fn write(
     read: &mut dyn FnMut(&str) -> Result<Vec<u8>>,
     build_time: (i64, u32),
 ) -> Result<InnerImage> {
+    write_with(plan, passcode, read, build_time, MetaCodec::Zlib)
+}
+
+/// The same, with the metadata region's codec chosen.
+pub fn write_with(
+    plan: &Plan,
+    passcode: &str,
+    read: &mut dyn FnMut(&str) -> Result<Vec<u8>>,
+    build_time: (i64, u32),
+    codec: MetaCodec,
+) -> Result<InnerImage> {
     // Payloads by inode index (only the keystone is generated).
     let mut payloads: Vec<Vec<u8>> = Vec::with_capacity(plan.files.len());
     for f in &plan.files {
@@ -372,7 +470,8 @@ pub fn write(
     }
     image[at..at + table.len()].copy_from_slice(&table);
 
-    // The metadata region.
+    // The metadata region. The mount is the full logical extent; the image keeps only what the
+    // region's codec produced, so a compressed one makes the image shorter than the mount.
     let region = metadata_region(plan, build_time)?;
     if region.len() as u64 != plan.metadata_blocks * BLOCK {
         return format_err(format!(
@@ -381,14 +480,18 @@ pub fn write(
             plan.metadata_blocks
         ));
     }
+    let metadata = Metadata::for_codec(region, codec)?;
     let meta_at = plan.meta_base as usize;
-    if meta_at + region.len() > image.len() {
+    let tail_end = meta_at + metadata.image_tail.len();
+    if tail_end > image.len() {
         return format_err("the metadata region runs past the mount");
     }
-    image[meta_at..meta_at + region.len()].copy_from_slice(&region);
+    image.truncate(tail_end.div_ceil(BLOCK as usize) * BLOCK as usize);
+    image[meta_at..tail_end].copy_from_slice(&metadata.image_tail);
 
     Ok(InnerImage {
         image,
+        metadata,
         meta_base: plan.meta_base,
         ndblock: plan.ndblock,
         block_info_offset,
@@ -420,6 +523,8 @@ pub struct BlockSource<'a> {
     spans: Vec<Span>,
     table: Vec<u8>,
     table_block: u64,
+    metadata: Metadata,
+    /// The metadata region's on-disk blocks, which is what the image stores there.
     meta: Vec<Vec<u8>>,
     meta_block: u64,
     keystone: Vec<u8>,
@@ -428,6 +533,15 @@ pub struct BlockSource<'a> {
 
 impl<'a> BlockSource<'a> {
     pub fn new(plan: &'a Plan, passcode: &str, build_time: (i64, u32)) -> Result<Self> {
+        Self::new_with(plan, passcode, build_time, MetaCodec::Zlib)
+    }
+
+    pub fn new_with(
+        plan: &'a Plan,
+        passcode: &str,
+        build_time: (i64, u32),
+        codec: MetaCodec,
+    ) -> Result<Self> {
         let mut spans: Vec<Span> = plan
             .afid_order
             .iter()
@@ -441,28 +555,51 @@ impl<'a> BlockSource<'a> {
             })
             .collect();
         spans.sort_by_key(|s| s.start);
-        let meta = metadata_region(plan, build_time)?;
-        if meta.len() as u64 != plan.metadata_blocks * BLOCK {
+        let region = metadata_region(plan, build_time)?;
+        if region.len() as u64 != plan.metadata_blocks * BLOCK {
             return format_err(format!(
                 "metadata region is {} bytes but the plan fixed {} blocks",
-                meta.len(),
+                region.len(),
                 plan.metadata_blocks
             ));
+        }
+        let metadata = Metadata::for_codec(region, codec)?;
+        // Every on-disk block is whole: a caller writes them a block at a time, so a short tail
+        // block is zero-padded, exactly as the in-memory writer pads the image.
+        let mut meta: Vec<Vec<u8>> = metadata
+            .image_tail
+            .chunks(BLOCK as usize)
+            .map(<[u8]>::to_vec)
+            .collect();
+        if let Some(last) = meta.last_mut() {
+            last.resize(BLOCK as usize, 0);
         }
         Ok(Self {
             plan,
             spans,
             table: block_info_table(plan),
             table_block: plan.data_end.div_ceil(BLOCK),
-            meta: meta.chunks(BLOCK as usize).map(<[u8]>::to_vec).collect(),
+            metadata,
+            meta,
             meta_block: plan.meta_base / BLOCK,
             keystone: keystone(passcode).to_vec(),
             buf: vec![0u8; BLOCK as usize],
         })
     }
 
+    /// The mount's size in blocks.
     pub fn ndblock(&self) -> u64 {
         self.plan.ndblock
+    }
+
+    /// The on-disk image's size in blocks, which is what the outer image stores.
+    pub fn disk_blocks(&self) -> u64 {
+        self.meta_block + self.meta.len() as u64
+    }
+
+    /// The region's logical bytes, which is what the install metadata describes.
+    pub fn metadata(&self) -> &Metadata {
+        &self.metadata
     }
 
     /// The files that contribute bytes to block `index`, in placement order — at most two
@@ -475,22 +612,21 @@ impl<'a> BlockSource<'a> {
         &self.spans[from..to.max(from)]
     }
 
-    /// The metadata region's bytes — bounded by the file count, not the image size.
+    /// The metadata region's logical bytes — bounded by the file count, not the image size.
     pub fn metadata_region(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(self.meta.len() * BLOCK as usize);
-        for block in &self.meta {
-            out.extend_from_slice(block);
-        }
-        out
+        self.metadata.plain.clone()
     }
 
-    /// Block `index` of the image. The buffer is reused between calls, and `read` fetches
+    /// Block `index` of the on-disk image. The buffer is reused between calls, and `read` fetches
     /// a byte range of a source file.
+    ///
+    /// Past the metadata base the image stores the region's codec output rather than the region
+    /// itself, so the blocks there are shorter than the mount's and the last one may be short.
     pub fn block(&mut self, index: u64, read: RangeRead<'_>) -> Result<&[u8]> {
-        if index >= self.ndblock() {
+        if index >= self.disk_blocks() {
             return format_err(format!(
                 "block {index} is past the image's {} blocks",
-                self.ndblock()
+                self.disk_blocks()
             ));
         }
         self.buf.fill(0);
@@ -550,6 +686,22 @@ impl<'a> BlockSource<'a> {
         }
         Ok(&self.buf)
     }
+}
+
+/// The logical mount an on-disk `pfs_image.dat` expands to.
+///
+/// The data region and the block-info table are stored at their own offsets, so they copy across;
+/// the rest is the metadata container at `meta_base`, expanded. This is the inverse of what
+/// [`write_with`] produces, and is how a reader turns a stored image back into the mount the
+/// console walks.
+pub fn logical_mount(disk: &[u8], meta_base: u64) -> Result<Vec<u8>> {
+    let at = meta_base as usize;
+    if disk.len() < at {
+        return format_err("the image ends before its metadata base");
+    }
+    let mut mount = disk[..at].to_vec();
+    mount.extend_from_slice(&pfsc::parse(&disk[at..])?.decompress()?);
+    Ok(mount)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -756,8 +908,8 @@ mod tests {
         let whole = write(&plan, crate::crypto::DEFAULT_PASSCODE, &mut read_all, time).unwrap();
 
         let mut source = BlockSource::new(&plan, crate::crypto::DEFAULT_PASSCODE, time).unwrap();
-        let mut image = Vec::with_capacity((plan.ndblock * BLOCK) as usize);
-        for index in 0..plan.ndblock {
+        let mut image = Vec::with_capacity((source.disk_blocks() * BLOCK) as usize);
+        for index in 0..source.disk_blocks() {
             let block = source
                 .block(index, &mut |path, offset, len| {
                     let data = payloads.get(path).cloned().unwrap_or_default();
@@ -846,10 +998,22 @@ mod tests {
             (1_700_000_000, 0),
         )
         .unwrap();
-        assert_eq!(inner.image.len(), (plan.ndblock * BLOCK) as usize);
+        // The image is shorter than the mount: the metadata region compresses.
+        assert!(inner.image.len() < (plan.ndblock * BLOCK) as usize);
+        assert!(inner.disk_blocks() <= plan.ndblock);
         assert_eq!(inner.block_info_offset % BLOCK, 0);
+        assert_eq!(
+            inner.image.len(),
+            (inner.disk_blocks() * BLOCK) as usize,
+            "the image is a whole number of blocks"
+        );
 
-        let mounted = read_mount(&inner).unwrap();
+        // The mount is the data region as stored, then the region the container expands to.
+        let meta_at = inner.meta_base as usize;
+        let mut mount = inner.image[..meta_at].to_vec();
+        mount.extend_from_slice(&inner.metadata.plain);
+        // `read` is shadowed by the closure above, so name the module's own walk explicitly.
+        let mounted = super::read(&mount, inner.meta_base).unwrap();
         assert!(mounted.flt_ok, "flat-path table must hash every path");
         let mut paths: Vec<&str> = mounted.files.iter().map(|f| f.path.as_str()).collect();
         paths.sort();
@@ -865,7 +1029,7 @@ mod tests {
         );
         for f in &mounted.files {
             let at = f.offset as usize;
-            let bytes = &inner.image[at..at + f.size as usize];
+            let bytes = &mount[at..at + f.size as usize];
             if f.path == "sce_sys/keystone" {
                 assert_eq!(bytes, keystone(crate::crypto::DEFAULT_PASSCODE));
             } else {
@@ -873,9 +1037,5 @@ mod tests {
                 assert_eq!(bytes, want.as_slice(), "{}", f.path);
             }
         }
-    }
-
-    fn read_mount(inner: &InnerImage) -> Result<InnerMount> {
-        read(&inner.image, inner.meta_base)
     }
 }

@@ -12,14 +12,20 @@
 //!
 //! `cblockinfo` records are either run-base markers (`m_isRunBase` at bit 18, carrying the
 //! AES-XTS tweak and key slot of an encrypted download run plus the base of its compressed
-//! offset) or per-block records carrying the block's compressed offset, uncompressed
-//! offset, first-sub-chunk compressed length, even/odd flags, the KDE predictor (`2` =
-//! Kraken, `4` = stored) and a shuffle index.
+//! offset) or per-block records carrying the block's compressed offset, uncompressed offset,
+//! first-sub-chunk compressed length, even/odd flags, the KDE predictor and a shuffle index.
 //!
-//! Nothing is compressed in the packages this writes, but a stored image still carries a run
-//! schedule: a run opens at every file's start — the compressed cursor re-bases there — and every
-//! eleventh 256 KiB block within a file, and the metadata region opens one run on its first block.
-//! The tail closes with a terminator, without which the mount's own walk has no end.
+//! The header's `compType` is the codec for the whole image, and it carries the same algorithm ids
+//! as the container header: 0 QuickZ, 1 Zlib, 2 Kraken. Each block record then says whether that
+//! block carries a payload at all. The values below are the ones `webbrowser.pkg` uses, which is a
+//! package that mounts: a block with a payload repeats the payload's length in `clen` with
+//! `even`/`odd` clear, and a stored block leaves all three at zero — the console takes a stored
+//! block's length from the ublock geometry and its bytes from the cursor.
+//!
+//! A stored image still carries a run schedule: a run opens at every file's start — the compressed
+//! cursor re-bases there — and every eleventh 256 KiB block within a file, and the metadata region
+//! opens one run on its first block. The tail closes with a terminator, without which the mount's
+//! own walk has no end.
 
 use crate::{format_err, Result, BLOCK};
 
@@ -35,8 +41,22 @@ const OUTER_DIGEST_LEN: usize = 8;
 pub const UBLOCK: u64 = 0x40000;
 /// The type byte the final `fidx` entry (the mount size) carries.
 const FIDX_TYPE_MOUNT_END: u8 = 0x40;
-/// The KDE predictor value that means "stored", the only one v1 emits.
+/// The KDE predictor a full stored block carries.
 const KDE_STORED: u8 = 4;
+/// The KDE predictor a partial stored block carries.
+const KDE_STORED_PARTIAL: u8 = 0;
+/// The KDE predictor a block that carries an encoded payload carries, measured on the sample's
+/// records whose `clen` is non-zero. The reference calls this value "raw partial" and reserves
+/// `2` for a compressed block; the sample disagrees, and the sample is the one that mounts.
+const KDE_PAYLOAD: u8 = 0;
+/// The `clen` field's width.
+const CLEN_MAX: u64 = 0x1_FFFF;
+/// The compression type the layout header records when a payload is a zlib stream. The field is
+/// two bits and carries the same algorithm ids as the container header: 0 QuickZ, 1 Zlib,
+/// 2 Kraken.
+pub const COMP_ZLIB: u64 = 1;
+/// The compression type a layout with no encoded payload carries.
+pub const COMP_KRAKEN: u64 = 2;
 
 /// One `cblockinfo` record, decoded.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,8 +160,16 @@ pub fn parse(blob: &[u8]) -> Result<Layout> {
             crate::Error::Format("naps layout has no room for its fidx section".into())
         })?;
     if fidx_bytes % FIDX_LEN != 0 {
+        // The section widths this parser assumes are validated by `webbrowser.pkg` exactly, but
+        // they do not all hold: PSVIETHOA's Minecraft (`naps_len` 769,240, 36,022 files, 6,348
+        // ublocks, 46,584 cblocks) leaves 216,130 bytes here, which is not a whole number of
+        // faces. Either the `u2c` count or its stride differs at that size, so treat this parser
+        // as trustworthy for small descriptors and suspect for large ones.
         return format_err(format!(
-            "naps fidx section is {fidx_bytes} bytes, not a multiple of 6"
+            "naps fidx section is {fidx_bytes} bytes, not a multiple of 6 \
+             (blob {} bytes, {num_files} files, {num_ublocks} ublocks, {num_cblock} cblocks, \
+             {num_outer_blocks} outer blocks): the u2c count or stride differs from this parser's",
+            blob.len()
         ));
     }
 
@@ -249,17 +277,38 @@ fn encode_cblock(c: &Cblock) -> [u8; CBLOCK_LEN] {
 
 /// One planned cblockinfo record, before the cursor walk serializes it: the per-block plan the
 /// compressor would produce, plus whether the block opens a run.
+///
+/// `clen` is the record's own `ClenEvenMinus1` field — the payload's byte count for a block that
+/// carries one, and zero for a stored block. A stored block's `clen`, `even` and `odd` are all
+/// zero in the sample; the console takes a stored block's length from the ublock geometry and its
+/// bytes from the cursor, so nothing else reads them.
 struct Plan {
     start_run: bool,
     on_disk: u64,
     logical: u64,
-    even_len: u64,
+    clen: u64,
     stream_len: u64,
     even: u8,
     odd: u8,
     kde: u8,
     shuffle: u8,
     terminator: bool,
+}
+
+/// A stored block's record: no payload, no sub-chunk flags, the stored predictor.
+fn stored(start_run: bool, on_disk: u64, logical: u64, stream_len: u64, full: bool) -> Plan {
+    Plan {
+        start_run,
+        on_disk,
+        logical,
+        clen: 0,
+        stream_len,
+        even: 0,
+        odd: 0,
+        kde: if full { KDE_STORED } else { KDE_STORED_PARTIAL },
+        shuffle: 0,
+        terminator: false,
+    }
 }
 
 /// Walk a plan into cblockinfo records, and report `(record index, logical offset)` for every
@@ -287,7 +336,7 @@ fn walk(plans: &[Plan]) -> (Vec<Cblock>, Vec<(u32, u64)>) {
         } else {
             (
                 (((p.logical & 0x3_FFFF) * 2) & 0x3_FFFF) as u32,
-                (p.even_len.saturating_sub(1) * 2).min(0x1_FFFE) as u32,
+                p.clen.min(CLEN_MAX) as u32,
                 p.even,
                 p.odd,
                 p.kde,
@@ -319,6 +368,33 @@ pub fn build(
     data_end: u64,
     meta_base: u64,
 ) -> Result<Vec<u8>> {
+    build_with_meta(
+        image_len,
+        ndblock,
+        afid_offsets,
+        data_end,
+        meta_base,
+        &[],
+        COMP_KRAKEN,
+    )
+}
+
+/// Build a layout for an image whose metadata region carries encoded payloads.
+///
+/// `meta_blocks` is the container's own per-block geometry, one entry per 256 KiB of the metadata
+/// region, with `payload_at` relative to the container's start — which sits at `meta_base`. A
+/// block that carries a payload records its length and the payload predictor; one that does not is
+/// a stored block like any other. `compression_type` goes to the header, where the console reads
+/// the codec every payload in the image uses.
+pub fn build_with_meta(
+    image_len: u64,
+    ndblock: u64,
+    afid_offsets: &[u64],
+    data_end: u64,
+    meta_base: u64,
+    meta_blocks: &[crate::pfsc::BlockInfo],
+    compression_type: u64,
+) -> Result<Vec<u8>> {
     if image_len == 0 || ndblock == 0 || !meta_base.is_multiple_of(UBLOCK) {
         return format_err("naps needs a non-empty image with 256 KiB-aligned metadata");
     }
@@ -326,6 +402,15 @@ pub fn build(
     let num_ublocks = mount_size.div_ceil(UBLOCK) as u32;
     let num_outer_blocks = image_len.div_ceil(BLOCK) as u32;
     let num_files = afid_offsets.len() as u32 + 3;
+    if !meta_blocks.is_empty()
+        && meta_blocks.len() as u64 != mount_size.saturating_sub(meta_base).div_ceil(UBLOCK)
+    {
+        return format_err(format!(
+            "the metadata plan has {} blocks for a region of {}",
+            meta_blocks.len(),
+            mount_size.saturating_sub(meta_base).div_ceil(UBLOCK)
+        ));
+    }
 
     // The data region: one placement per file, each split the way the mount reads it back.
     let mut plans: Vec<Plan> = Vec::new();
@@ -343,74 +428,63 @@ pub fn build(
         }
         for k in 0..full {
             let on_disk = start + k * UBLOCK;
-            plans.push(Plan {
-                start_run: runs.contains(&on_disk),
+            plans.push(stored(
+                runs.contains(&on_disk),
                 on_disk,
-                logical: on_disk,
-                even_len: 0x1_0000,
-                stream_len: 0x8_0000,
-                even: 1,
-                odd: 1,
-                kde: KDE_STORED,
-                shuffle: 0,
-                terminator: false,
-            });
+                on_disk,
+                0x8_0000,
+                true,
+            ));
         }
         if tail > 0 || full == 0 {
             let on_disk = start + full * UBLOCK;
-            plans.push(Plan {
-                start_run: runs.contains(&on_disk),
+            plans.push(stored(
+                runs.contains(&on_disk),
                 on_disk,
-                logical: on_disk,
-                even_len: tail,
-                stream_len: tail,
-                even: 0,
-                odd: 1,
-                kde: 0,
-                shuffle: 0,
-                terminator: false,
-            });
+                on_disk,
+                tail,
+                false,
+            ));
         }
     }
 
     // The tail: padding over the gap between the data and the metadata, then the metadata's own
     // blocks — which open a run on the first one only — and a terminator marking the mount end.
     let padding = data_end & !(UBLOCK - 1);
-    plans.push(Plan {
-        start_run: false,
-        on_disk: data_end,
-        logical: padding,
-        even_len: 8,
-        stream_len: 0x10,
-        even: 0,
-        odd: 1,
-        kde: KDE_STORED,
-        shuffle: 0,
-        terminator: false,
-    });
+    plans.push(stored(false, data_end, padding, 0x10, true));
     let meta_ublocks = mount_size.saturating_sub(meta_base).div_ceil(UBLOCK);
-    for i in 0..meta_ublocks {
-        let logical = meta_base + i * UBLOCK;
-        let len = UBLOCK.min(mount_size - logical);
-        plans.push(Plan {
-            start_run: i == 0,
-            on_disk: meta_base + i * UBLOCK,
-            logical,
-            even_len: len,
-            stream_len: len,
-            even: 0,
-            odd: 1,
-            kde: KDE_STORED,
-            shuffle: 0,
-            terminator: false,
-        });
+    if meta_blocks.is_empty() {
+        // Nothing encoded: the region sits on disk at its own logical offsets.
+        for i in 0..meta_ublocks {
+            let logical = meta_base + i * UBLOCK;
+            let len = UBLOCK.min(mount_size - logical);
+            plans.push(stored(i == 0, meta_base + i * UBLOCK, logical, len, true));
+        }
+    } else {
+        // Each block's payload sits where the container put it; the ones that did not compress are
+        // stored blocks with nothing for the record to describe.
+        for (i, b) in meta_blocks.iter().enumerate() {
+            let logical = meta_base + i as u64 * UBLOCK;
+            let mut p = stored(
+                i == 0,
+                meta_base + b.payload_at,
+                logical,
+                b.payload_len,
+                true,
+            );
+            if b.compressed {
+                p.clen = b.payload_len;
+                p.kde = KDE_PAYLOAD;
+            }
+            plans.push(p);
+        }
     }
     let meta_end = meta_base + meta_ublocks * UBLOCK;
     plans.push(Plan {
         start_run: true,
         on_disk: meta_end,
         logical: mount_size,
-        even_len: 0,
+        clen: 0,
         stream_len: 0,
         even: 0,
         odd: 0,
@@ -461,9 +535,9 @@ pub fn build(
     let mut blob: Vec<u8> = Vec::with_capacity(
         16 + fidx.len() * FIDX_LEN + u2c.len() * U2C_LEN + cblocks.len() * CBLOCK_LEN,
     );
-    // compType 2 (Kraken), one key, no shuffle patterns.
+    // The codec every payload in the image was encoded with, one key, no shuffle patterns.
     let word0 = u64::from(num_files - 1) & 0xFF_FFFF
-        | 2u64 << 24
+        | (compression_type & 0x3) << 24
         | (u64::from(num_ublocks) & 0xFF_FFFF) << 32;
     let word1 =
         u64::from(num_outer_blocks) & 0xFF_FFFF | (u64::from(num_cblock - 2) & 0xFF_FFFF) << 24;
@@ -487,59 +561,41 @@ pub fn build(
     Ok(blob)
 }
 
-/// Rebuild the mount from a stored inner image and its layout, the way the console's
-/// reader does: walk the u2c mapping and copy each stored block.
+/// Rebuild the mount from an inner image and its layout.
 ///
-/// Only stored blocks are supported (v1 writes nothing else); a Kraken block is an error.
+/// The data region and the block-info table sit at their own logical offsets, so they copy
+/// straight across. The metadata region does not: it is a container at `meta_base`, and it expands
+/// to the rest of the mount. A container that does not expand to exactly the region the layout
+/// describes is an error, which is what ties the image's tail to the mount's.
 pub fn reconstruct(image: &[u8], layout: &Layout) -> Result<Vec<u8>> {
     let mount_size = layout.mount_size();
     if mount_size == 0 || mount_size > 1 << 40 {
         return format_err(format!("implausible mount size {mount_size:#x}"));
     }
+    // The last three fidx faces are the data's end, the metadata base and the mount size.
+    if layout.fidx.len() < 3 {
+        return format_err("naps has no data-end / metadata-base fidx faces");
+    }
+    let base_at = layout.fidx.len() - 2;
+    let data_end = layout.fidx[base_at - 1].0;
+    let meta_base = layout.fidx[base_at].0;
+
     let mut mount = vec![0u8; mount_size as usize];
+    let copied = data_end.min(image.len() as u64).min(meta_base) as usize;
+    mount[..copied].copy_from_slice(&image[..copied]);
 
-    // ublock -> cblockinfo index, through the u2c groups.
-    let mut starts = Vec::with_capacity(layout.num_ublocks as usize);
-    for (base, deltas) in &layout.u2c {
-        starts.push(*base as usize);
-        for d in deltas {
-            starts.push(*base as usize + usize::from(*d));
-        }
+    let container = image
+        .get(meta_base as usize..)
+        .ok_or_else(|| crate::Error::Format("the image ends before its metadata base".into()))?;
+    let plain = crate::pfsc::parse(container)?.decompress()?;
+    let region = mount_size - meta_base;
+    if plain.len() as u64 != region {
+        return format_err(format!(
+            "the metadata container expands to {} bytes where the layout says {region}",
+            plain.len()
+        ));
     }
-
-    for k in 0..layout.num_ublocks as u64 {
-        let uoffset = k * UBLOCK;
-        let len = UBLOCK.min(mount_size - uoffset);
-        let index = *starts.get(k as usize).ok_or_else(|| {
-            crate::Error::Format("naps u2c mapping does not cover every ublock".into())
-        })?;
-        let record = layout.cblocks.get(index).ok_or_else(|| {
-            crate::Error::Format(format!("naps cblockinfo index {index} is out of range"))
-        })?;
-        match record {
-            Cblock::Block {
-                coffset_start_mod_256k,
-                kde,
-                ..
-            } => {
-                if *kde == 2 {
-                    return format_err("naps block is Kraken-compressed; v1 stores everything");
-                }
-                // `coffset_start_mod_256k` is the cursor's position in the doubled offset
-                // space, which a run-base re-anchors; only the stored-image copy below is
-                // linear, because every block this writer plans is raw.
-                let _ = coffset_start_mod_256k;
-                let at = uoffset as usize;
-                let src = image.get(at..at + len as usize).ok_or_else(|| {
-                    crate::Error::Format(format!("naps block {k} reads past the stored image"))
-                })?;
-                mount[at..at + len as usize].copy_from_slice(src);
-            }
-            Cblock::RunBase { .. } => {
-                return format_err("naps run bases are not part of a stored v1 layout");
-            }
-        }
-    }
+    mount[meta_base as usize..].copy_from_slice(&plain);
     Ok(mount)
 }
 
@@ -689,18 +745,158 @@ mod tests {
         }
     }
 
+    /// A metadata region that carries payloads: the descriptor's records describe the container's
+    /// blocks, and the image reconstructs to the mount.
     #[test]
-    fn builds_and_reconstructs_a_stored_image() {
+    fn builds_and_reconstructs_an_image_with_a_compressed_metadata_region() {
         let ndblock = 40u64;
+        let meta_base = 0x80000u64;
         let mount_size = ndblock * BLOCK;
-        let image: Vec<u8> = (0..mount_size).map(|i| (i % 253) as u8).collect();
-        let blob = build(mount_size, ndblock, &[0, 96, 12848], 0xa626, 0x80000).unwrap();
+        let region_len = mount_size - meta_base;
+        // A metadata region that deflates: a sparse structure with a repeating shape.
+        let plain: Vec<u8> = (0..region_len)
+            .map(|i| {
+                if i % 0xA8 < 0x20 {
+                    (i / 0xA8 % 7) as u8
+                } else {
+                    0
+                }
+            })
+            .collect();
+        // The block-info table's block, then the container at the metadata base.
+        let mut image: Vec<u8> = (0..meta_base).map(|i| (i % 253) as u8).collect();
+        let written = crate::pfsc::write_zlib(&plain).unwrap();
+        image.extend_from_slice(&written.container);
+        image.resize(image.len().div_ceil(BLOCK as usize) * BLOCK as usize, 0);
+
+        let blob = build_with_meta(
+            image.len() as u64,
+            ndblock,
+            &[0, 96, 12848],
+            0xa626,
+            meta_base,
+            &written.blocks,
+            COMP_ZLIB,
+        )
+        .unwrap();
         let layout = parse(&blob).unwrap();
         assert_eq!(layout.num_files, 6);
-        assert_eq!(layout.num_ublocks, 10);
-        assert_eq!(layout.num_outer_blocks, 40);
         assert_eq!(layout.mount_size(), mount_size);
+        assert_eq!(layout.compression_type, COMP_ZLIB as u8);
+        // The image is shorter than the mount, so the descriptor must say so.
+        assert!(image.len() < mount_size as usize);
+
+        // The metadata's records carry a payload length where the block deflated and nothing
+        // where it did not, and no record claims a sub-chunk split.
+        let meta_records: Vec<_> = written
+            .blocks
+            .iter()
+            .map(|b| {
+                if b.compressed {
+                    (b.payload_len, KDE_PAYLOAD)
+                } else {
+                    (0, KDE_STORED)
+                }
+            })
+            .collect();
+        let got: Vec<(u64, u8)> = layout
+            .cblocks
+            .iter()
+            .filter_map(|c| match c {
+                Cblock::Block {
+                    clen_even_minus1,
+                    kde,
+                    even,
+                    odd,
+                    ..
+                } if *kde == KDE_PAYLOAD || *kde == KDE_STORED => {
+                    assert_eq!(
+                        (*even, *odd),
+                        (0, 0),
+                        "no record may claim a sub-chunk split"
+                    );
+                    Some((u64::from(*clen_even_minus1), *kde))
+                }
+                _ => None,
+            })
+            .collect();
+        for want in &meta_records {
+            assert!(
+                got.contains(want),
+                "the descriptor has no record for metadata block {want:?}"
+            );
+        }
+        assert!(
+            meta_records.iter().any(|(clen, _)| *clen > 0),
+            "the fixture's metadata must actually deflate for this test to mean anything"
+        );
+
         let rebuilt = reconstruct(&image, &layout).unwrap();
-        assert_eq!(rebuilt, image);
+        assert_eq!(rebuilt.len(), mount_size as usize);
+        // The data region copies straight across; the gap between it and the metadata base is
+        // padding the image never stores, and the metadata region expands out of its container.
+        assert_eq!(&rebuilt[..0xa626], &image[..0xa626]);
+        assert!(rebuilt[0xa626..meta_base as usize].iter().all(|b| *b == 0));
+        assert_eq!(&rebuilt[meta_base as usize..], &plain[..]);
+    }
+
+    /// A stored block's record describes nothing: the sample's records carry `clen = 0` and both
+    /// sub-chunk flags clear, and the console takes a stored block's bytes from the cursor.
+    #[test]
+    fn a_stored_block_records_no_payload() {
+        let ndblock = 40u64;
+        let mount_size = ndblock * BLOCK;
+        let meta_base = 0x80000u64;
+        // A counter over a wide stride: deflate finds nothing to match in this, so every block
+        // stays stored and the records have nothing to describe.
+        let mut plain: Vec<u8> = Vec::new();
+        let mut state = 0x243F_6A88_85A3_08D3u64;
+        while (plain.len() as u64) < mount_size - meta_base {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            plain.extend_from_slice(&state.to_le_bytes());
+        }
+        let written = crate::pfsc::write_zlib(&plain).unwrap();
+        assert!(
+            written.blocks.iter().all(|b| !b.compressed),
+            "all-zero blocks must stay stored"
+        );
+        let mut image: Vec<u8> = (0..meta_base).map(|i| (i % 253) as u8).collect();
+        image.extend_from_slice(&written.container);
+        image.resize(image.len().div_ceil(BLOCK as usize) * BLOCK as usize, 0);
+
+        let blob = build_with_meta(
+            image.len() as u64,
+            ndblock,
+            &[0, 96, 12848],
+            0xa626,
+            meta_base,
+            &written.blocks,
+            COMP_KRAKEN,
+        )
+        .unwrap();
+        let layout = parse(&blob).unwrap();
+        assert_eq!(layout.compression_type, COMP_KRAKEN as u8);
+        // The terminator is a sentinel, not a stored block: its fields are deliberately non-zero.
+        let blocks = &layout.cblocks[..layout.cblocks.len() - 1];
+        for c in blocks {
+            if let Cblock::Block {
+                clen_even_minus1,
+                even,
+                odd,
+                kde,
+                ..
+            } = c
+            {
+                if *kde == KDE_STORED || *kde == KDE_STORED_PARTIAL {
+                    assert_eq!(
+                        *clen_even_minus1, 0,
+                        "a stored record must carry no payload"
+                    );
+                    assert_eq!((*even, *odd), (0, 0), "and no sub-chunk flags");
+                }
+            }
+        }
     }
 }

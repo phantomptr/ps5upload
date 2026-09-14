@@ -302,8 +302,10 @@ fn a_build_from_an_exfat_mount_verifies_and_round_trips() {
     // keystone the writer generates.
     let built = plan::build(tree.files()).unwrap();
     let image = outer_file(&report.path, "pfs_image.dat");
-    assert_eq!(image.len() as u64, built.ndblock * ps5upload_fpkg::BLOCK);
-    let mount = inner::read(&image, built.meta_base).unwrap();
+    assert!(image.len() as u64 <= built.ndblock * ps5upload_fpkg::BLOCK);
+    // The stored image is shorter than the mount: its metadata region is a container.
+    let mount_image = inner::logical_mount(&image, built.meta_base).unwrap();
+    let mount = inner::read(&mount_image, built.meta_base).unwrap();
     assert!(mount.flt_ok);
     let mut recovered: Vec<(String, u64)> = mount
         .files
@@ -324,10 +326,17 @@ fn a_build_from_an_exfat_mount_verifies_and_round_trips() {
         .find(|f| f.path == "sce_sys/icon0.png")
         .unwrap();
     let at = png.offset as usize;
-    assert_eq!(image[at..at + 8], PNG_MAGIC);
+    assert_eq!(mount_image[at..at + 8], PNG_MAGIC);
 
-    // And the layout reconstructs the image it describes.
+    // And the layout reconstructs the mount it describes — the data region where the mount reads
+    // it, and the metadata region out of the container the image stores. The gap between the two
+    // is padding the image never stores, so it is only asserted to be empty.
     let layout = naps::parse(&outer_file(&report.path, "naps_pkg_layout.dat")).unwrap();
-    assert_eq!(naps::reconstruct(&image, &layout).unwrap(), image);
+    let rebuilt = naps::reconstruct(&image, &layout).unwrap();
+    let data_end = built.data_end as usize;
+    let meta_at = built.meta_base as usize;
+    assert_eq!(&rebuilt[..data_end], &mount_image[..data_end]);
+    assert!(rebuilt[data_end..meta_at].iter().all(|b| *b == 0));
+    assert_eq!(&rebuilt[meta_at..], &mount_image[meta_at..]);
     std::fs::remove_dir_all(&out).ok();
 }

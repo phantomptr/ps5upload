@@ -297,7 +297,9 @@ fn a_tree_with_blocks_of_inodes_round_trips() {
     .unwrap();
     let nodes = img.dinodes();
     let inner_image = img.file_data(&nodes[3]);
-    let inner = ps5upload_fpkg::inner::read(&inner_image, plan.meta_base).unwrap();
+    // The stored image is shorter than the mount: its metadata region is a container.
+    let mount = ps5upload_fpkg::inner::logical_mount(&inner_image, plan.meta_base).unwrap();
+    let inner = ps5upload_fpkg::inner::read(&mount, plan.meta_base).unwrap();
     assert!(inner.flt_ok);
     let mut recovered: Vec<(String, u64)> = inner
         .files
@@ -411,14 +413,15 @@ fn a_non_standard_drm_reaches_the_package_as_standard() {
     .unwrap();
     let nodes = img.dinodes();
     let image = img.file_data(&nodes[3]);
-    let mount = ps5upload_fpkg::inner::read(&image, plan.meta_base).unwrap();
+    let mount_image = ps5upload_fpkg::inner::logical_mount(&image, plan.meta_base).unwrap();
+    let mount = ps5upload_fpkg::inner::read(&mount_image, plan.meta_base).unwrap();
     let entry = mount
         .files
         .iter()
         .find(|f| f.path == "sce_sys/param.json")
         .expect("param.json is in the image");
     let at = entry.offset as usize;
-    let packaged = &image[at..at + entry.size as usize];
+    let packaged = &mount_image[at..at + entry.size as usize];
     let text = String::from_utf8_lossy(packaged);
     assert!(
         text.contains("\"applicationDrmType\":\"standard\""),

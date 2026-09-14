@@ -146,15 +146,25 @@ fn gate_g2_a_built_package_verifies_and_round_trips() {
         built.ndblock * ps5upload_fpkg::BLOCK
     );
 
-    // The inner image walks back to the source bytes, and the layout reconstructs it.
+    // The inner image walks back to the source bytes, and the layout reconstructs the mount.
     let inner_image = outer_file(&report.path, "pfs_image.dat");
     assert_eq!(
-        inner_image.len() as u64,
-        built.ndblock * ps5upload_fpkg::BLOCK,
-        "the stored inner image spans the whole mount"
+        u32::from_le_bytes(fih_block[0x90..0x94].try_into().unwrap()) as u64,
+        inner_image.len() as u64 / ps5upload_fpkg::BLOCK,
+        "the header's 0x90 is the stored image's block count"
+    );
+    assert!(
+        (inner_image.len() as u64) < built.ndblock * ps5upload_fpkg::BLOCK,
+        "the fixture's metadata deflates, so the stored image must be shorter than the mount"
     );
     assert!(parsed.pfs_size >= inner_image.len() as u64);
-    let mount = inner::read(&inner_image, built.meta_base).unwrap();
+    // What the mount reads at the metadata base is the container expanded, not the container.
+    let mount_image = inner::logical_mount(&inner_image, built.meta_base).unwrap();
+    assert!(
+        mount_image.len() as u64 >= built.ndblock * ps5upload_fpkg::BLOCK,
+        "the mount reaches at least to the end the plan fixed"
+    );
+    let mount = inner::read(&mount_image, built.meta_base).unwrap();
     assert!(
         mount.flt_ok,
         "the inner flat-path table must hash every path"
@@ -166,7 +176,7 @@ fn gate_g2_a_built_package_verifies_and_round_trips() {
             let at = f.offset as usize;
             (
                 f.path.clone(),
-                inner_image[at..at + f.size as usize].to_vec(),
+                mount_image[at..at + f.size as usize].to_vec(),
             )
         })
         .collect();
@@ -184,6 +194,10 @@ fn gate_g2_a_built_package_verifies_and_round_trips() {
 
     let layout = naps::parse(&outer_file(&report.path, "naps_pkg_layout.dat")).unwrap();
     assert_eq!(layout.mount_size(), built.ndblock * ps5upload_fpkg::BLOCK);
+    assert_eq!(
+        layout.compression_type, 1,
+        "the layout must declare the codec its payloads use (1 = zlib)"
+    );
     assert_eq!(layout.num_files as usize, built.afid_order.len() + 3);
     let faces: Vec<u64> = layout.fidx.iter().map(|(o, _)| *o).collect();
     assert_eq!(
@@ -194,10 +208,18 @@ fn gate_g2_a_built_package_verifies_and_round_trips() {
             built.ndblock * ps5upload_fpkg::BLOCK
         ]
     );
+    // The layout's own reconstruction has to land on the same mount the container expands to.
     let rebuilt = naps::reconstruct(&inner_image, &layout).unwrap();
+    let data_end = built.data_end as usize;
     assert_eq!(
-        rebuilt, inner_image,
-        "the layout must rebuild its own image"
+        &rebuilt[..data_end],
+        &inner_image[..data_end],
+        "the data region is stored where the mount reads it"
+    );
+    assert_eq!(
+        &rebuilt[built.meta_base as usize..],
+        &mount_image[built.meta_base as usize..],
+        "the layout's metadata region is the container's expansion"
     );
 }
 
