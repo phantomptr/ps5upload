@@ -354,42 +354,83 @@ impl<R: Read + Seek> Ufs2Image<R> {
         self.reader.seek(SeekFrom::Start(off))?;
         let mut buf = [0u8; INODE_SIZE as usize];
         self.reader.read_exact(&mut buf)?;
-        // Layout per FreeBSD sys/ufs/ufs/dinode.h struct ufs2_dinode:
-        //   0-1   di_mode (u16)
-        //   2-3   di_nlink (u16)
-        //   4-7   di_uid (u32)
-        //   8-11  di_gid (u32)
-        //   12-15 di_blksize (u32)
-        //   16-23 di_size (u64)
-        //   24-31 di_blocks (u64)
-        //   32-39 di_atime (i64)
-        //   40-47 di_mtime (i64)
-        //   48-55 di_ctime (i64)
-        //   56-63 di_birthtime (i64)
-        //   ...
-        //   112-207 di_db[12] (u64 each) = direct blocks
-        //   208-231 di_ib[3] (u64 each) = indirect blocks
-        let mode = read_u16(&buf, 0);
-        let size = read_u64(&buf, 16);
-        let mtime = read_i64(&buf, 40);
-        let mut direct = [0u64; NDADDR];
-        for (i, slot) in direct.iter_mut().enumerate() {
-            *slot = read_u64(&buf, 112 + i * 8);
-        }
-        let mut indirect = [0u64; NIADDR];
-        for (i, slot) in indirect.iter_mut().enumerate() {
-            *slot = read_u64(&buf, 208 + i * 8);
-        }
-        Ok(Inode {
-            number: n,
-            mode,
-            size,
-            direct,
-            indirect,
-            mtime,
-        })
+        Ok(parse_inode(n, &buf))
     }
 
+    /// Read a run of inodes in one seek and one read.
+    ///
+    /// The inode table is contiguous inside a cylinder group, so a directory's children —
+    /// which UFS allocates together — come back in a single call. One syscall per file
+    /// made a 286,000-file image take four minutes to walk.
+    ///
+    /// The run must lie inside one cylinder group; the caller splits larger ranges.
+    pub fn read_inodes(&mut self, first: u64, count: u64) -> Result<Vec<Inode>, Ufs2Error> {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+        let per_cg = u64::from(self.superblock.inodes_per_cg);
+        let last = first + count - 1;
+        self.check_inode_number(first)?;
+        self.check_inode_number(last)?;
+        if first / per_cg != last / per_cg {
+            return Err(Ufs2Error::InodeOutOfRange {
+                inode: last,
+                max: (first / per_cg + 1) * per_cg,
+            });
+        }
+        let off = self.superblock.inode_offset(first);
+        let len = (count * INODE_SIZE) as usize;
+        self.reader.seek(SeekFrom::Start(off))?;
+        let mut buf = vec![0u8; len];
+        self.reader.read_exact(&mut buf)?;
+        Ok((0..count)
+            .map(|i| parse_inode(first + i, &buf[i as usize * INODE_SIZE as usize..]))
+            .collect())
+    }
+
+    /// Bound an inode number before it becomes an offset. Directory entries come straight
+    /// off a possibly-hostile image: an out-of-range number would otherwise map (through
+    /// saturating offset math) onto unrelated data and be read as an inode.
+    fn check_inode_number(&self, n: u64) -> Result<(), Ufs2Error> {
+        let max_inode =
+            (self.superblock.cg_count as u64).saturating_mul(self.superblock.inodes_per_cg as u64);
+        if n == 0 || n >= max_inode {
+            return Err(Ufs2Error::InodeOutOfRange {
+                inode: n,
+                max: max_inode,
+            });
+        }
+        Ok(())
+    }
+}
+
+/// One 256-byte UFS2 inode record, per FreeBSD `sys/ufs/ufs/dinode.h`:
+///   0-1 di_mode, 2-3 di_nlink, 4-7 di_uid, 8-11 di_gid, 12-15 di_blksize,
+///   16-23 di_size, 24-31 di_blocks, 32-39 di_atime, 40-47 di_mtime,
+///   48-55 di_ctime, 56-63 di_birthtime, 112-207 di_db[12], 208-231 di_ib[3].
+fn parse_inode(n: u64, buf: &[u8]) -> Inode {
+    let mode = read_u16(buf, 0);
+    let size = read_u64(buf, 16);
+    let mtime = read_i64(buf, 40);
+    let mut direct = [0u64; NDADDR];
+    for (i, slot) in direct.iter_mut().enumerate() {
+        *slot = read_u64(buf, 112 + i * 8);
+    }
+    let mut indirect = [0u64; NIADDR];
+    for (i, slot) in indirect.iter_mut().enumerate() {
+        *slot = read_u64(buf, 208 + i * 8);
+    }
+    Inode {
+        number: n,
+        mode,
+        size,
+        direct,
+        indirect,
+        mtime,
+    }
+}
+
+impl<R: Read + Seek> Ufs2Image<R> {
     /// List entries in a directory inode.
     pub fn list_dir(&mut self, dir: &Inode) -> Result<Vec<DirEntry>, Ufs2Error> {
         if !dir.is_dir() {

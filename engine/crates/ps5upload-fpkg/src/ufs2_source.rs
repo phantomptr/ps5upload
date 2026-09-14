@@ -98,15 +98,35 @@ fn walk(
     if depth > MAX_DEPTH {
         return format_err(format!("{prefix} nests deeper than {MAX_DEPTH} levels"));
     }
-    for entry in image.list_dir(dir)? {
-        if entry.name.is_empty() || is_junk(&entry.name) {
-            continue;
+    let entries: Vec<_> = image
+        .list_dir(dir)?
+        .into_iter()
+        .filter(|e| !e.name.is_empty() && !is_junk(&e.name))
+        .collect();
+    // The children's inodes, in runs the image can hand over in one read each. A game
+    // mount holds a quarter of a million files, and one syscall apiece took minutes.
+    let mut inodes_by_entry: Vec<Option<Inode>> = vec![None; entries.len()];
+    let mut order: Vec<usize> = (0..entries.len()).collect();
+    order.sort_by_key(|&i| entries[i].inode);
+    let mut run: Vec<usize> = Vec::new();
+    for &i in order.iter() {
+        let fits = run.first().is_none_or(|&first| {
+            let per_cg = u64::from(image.superblock.inodes_per_cg);
+            entries[first].inode / per_cg == entries[i].inode / per_cg
+        });
+        if !fits {
+            read_run(image, &entries, &run, &mut inodes_by_entry);
+            run.clear();
         }
-        let inode = match image.read_inode(entry.inode) {
-            Ok(inode) => inode,
-            // A directory entry pointing at an unusable inode is the image's
-            // problem, not the caller's: skip it rather than fail the walk.
-            Err(_) => continue,
+        run.push(i);
+    }
+    read_run(image, &entries, &run, &mut inodes_by_entry);
+
+    for (i, entry) in entries.iter().enumerate() {
+        // A directory entry pointing at an unusable inode is the image's problem, not the
+        // caller's: skip it rather than fail the walk.
+        let Some(inode) = inodes_by_entry[i].take() else {
+            continue;
         };
         let path = format!("{prefix}{}", entry.name);
         if inode.is_dir() {
@@ -120,4 +140,31 @@ fn walk(
         }
     }
     Ok(())
+}
+
+/// Reads one run of entries' inodes — a contiguous, same-cylinder-group stretch — in a
+/// single call, ignoring entries whose inode the image cannot produce.
+fn read_run(
+    image: &mut Ufs2Image<std::fs::File>,
+    entries: &[ps5upload_pkg::ufs2::DirEntry],
+    run: &[usize],
+    out: &mut [Option<Inode>],
+) {
+    let Some(&first) = run.first() else {
+        return;
+    };
+    let start = entries[first].inode;
+    let count = run
+        .last()
+        .map(|&i| entries[i].inode - start + 1)
+        .unwrap_or(0);
+    let Ok(batch) = image.read_inodes(start, count) else {
+        return;
+    };
+    for &i in run {
+        let at = (entries[i].inode - start) as usize;
+        if let Some(inode) = batch.get(at) {
+            out[i] = Some(inode.clone());
+        }
+    }
 }

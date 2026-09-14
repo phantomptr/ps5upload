@@ -213,6 +213,32 @@ fn a_source_past_the_first_indirect_slot_round_trips() {
     );
 }
 
+/// The free-space estimate must never be smaller than the package: the guard exists to
+/// stop a build that cannot finish, and an underestimate defeats it.
+#[test]
+fn the_size_estimate_covers_the_package() {
+    let source = TempDir::new("estimate-source");
+    let out = TempDir::new("estimate-out");
+    write_tree(source.path());
+    let report = build::build(&request(source.path(), out.path()), &mut |_| {}).unwrap();
+
+    let files = ps5upload_fpkg::source::scan(source.path()).unwrap();
+    let plan = ps5upload_fpkg::plan::build(&files).unwrap();
+    let estimate = build::estimate_size(&plan).unwrap();
+    assert!(
+        estimate >= report.size,
+        "estimated {estimate} for a {} byte package",
+        report.size
+    );
+    // And it is not wildly pessimistic either: a few megabytes of container and install
+    // metadata on top of the image, which for a small package is most of the difference.
+    assert!(
+        estimate < report.size + 4 * 1024 * 1024,
+        "estimated {estimate} for a {} byte package",
+        report.size
+    );
+}
+
 /// Cancelling removes the partial and says so — a 100 GB build must not leave a 100 GB
 /// file behind.
 #[test]

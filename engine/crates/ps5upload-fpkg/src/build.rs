@@ -168,6 +168,14 @@ fn build_mode(
             .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
     };
 
+    // Refuse before the first write rather than fill the disk and fail halfway: a game
+    // package is as large as the game.
+    let planned = estimate_size(&plan)?;
+    if let Some(free) = free_bytes(&request.output_dir) {
+        if let Some(message) = shortfall(free, planned + planned / 100) {
+            return format_err(format!("{}: {message}", request.output_dir.display()));
+        }
+    }
     let stem = request
         .file_name
         .clone()
@@ -371,6 +379,42 @@ fn build_mode(
         content_id,
         verify: report,
         warnings,
+    })
+}
+
+/// The package's size before it is written: the header block, the outer image the layout
+/// fixes, and a couple of megabytes for the container and the install metadata.
+pub fn estimate_size(plan: &Plan) -> Result<u64> {
+    let outer = outer_write::layout(plan.ndblock)?.ndblock * BLOCK;
+    Ok(BLOCK + outer + 2 * 1024 * 1024)
+}
+
+/// Bytes available to this process on the volume holding `path`. `None` where the platform
+/// does not say — the build then proceeds and the caller is told nothing about space.
+#[cfg(unix)]
+pub fn free_bytes(path: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+        return None;
+    }
+    Some(st.f_bavail as u64 * st.f_frsize as u64)
+}
+
+#[cfg(not(unix))]
+pub fn free_bytes(_path: &Path) -> Option<u64> {
+    None
+}
+
+/// The refusal message a shortfall deserves, or `None` when there is room.
+fn shortfall(free: u64, needed: u64) -> Option<String> {
+    (free < needed).then(|| {
+        format!(
+            "only {:.1} GiB free where the package is going, and it needs about {:.1} GiB",
+            free as f64 / (1u64 << 30) as f64,
+            needed as f64 / (1u64 << 30) as f64,
+        )
     })
 }
 
