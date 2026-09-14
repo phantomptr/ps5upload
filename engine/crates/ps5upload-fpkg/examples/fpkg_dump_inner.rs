@@ -15,6 +15,12 @@ fn main() -> ps5upload_fpkg::Result<()> {
     let container = cnt::read(&mut pkg, fih.cnt_offset)?;
     let img = outer::open(&mut pkg, &fih, &container, crypto::DEFAULT_PASSCODE)?;
     let nodes = img.dinodes();
+    for (i, n) in nodes.iter().enumerate() {
+        println!(
+            "  dinode {i}: flags={:#x} size={} size_compressed={} blocks={}",
+            n.flags, n.size, n.size_compressed, n.blocks
+        );
+    }
     let image = img.file_data(&nodes[3]);
     std::fs::write(&out, &image)?;
     println!(
