@@ -142,9 +142,37 @@ type Block = (u64, u32, u32, u32, u32, u32, Option<usize>);
 /// `files` are the inner files in afid order `(path, offset, size)`; `metadata_at` and
 /// `metadata_len` locate the metadata region. Digest values the console's gate does not
 /// read are still filled from the built image, so the blob is self-consistent.
+///
+/// What the metric blob needs from the inner image: a digest of the whole image and one
+/// per content file. Both are computed while the image streams out, so the blob can be
+/// built for a package too large to hold in memory.
+pub struct InnerDigests {
+    pub image: [u8; 32],
+    pub files: Vec<[u8; 32]>,
+}
+
+impl InnerDigests {
+    /// Digests of an image already in memory, in afid order as `files` lists it.
+    pub fn of_image(image: &[u8], files: &[(String, u64, u64)]) -> Self {
+        let files = files
+            .iter()
+            .map(|(_, offset, size)| {
+                let at = (*offset as usize).min(image.len());
+                let end = (at + *size as usize).min(image.len());
+                sha3(&image[at..end])
+            })
+            .collect();
+        Self {
+            image: sha3(image),
+            files,
+        }
+    }
+}
+
 pub fn naps_meta_18(
     inner_size: u64,
-    image: &[u8],
+    digests: &InnerDigests,
+    meta: &[u8],
     files: &[(String, u64, u64)],
     data_end: u64,
     meta_base: u64,
@@ -239,18 +267,25 @@ pub fn naps_meta_18(
     // ihsh: a digest per block over its plaintext span.
     {
         let mut body = Vec::with_capacity(blocks.len() * 0x30);
-        for (co, _, ps, _, _, flag, _) in &blocks {
-            let at = *co as usize;
-            let zeros = vec![0u8; *ps as usize];
-            let plain: &[u8] = if *flag == 0x4011_0000 {
-                // A hole carries zeros; its digest is over the zero-filled span.
-                &zeros
+        // A hole is a zero-filled span; a content file's digest is the one taken while
+        // the image was written; a metadata span is hashed from the resident region.
+        let zeros = vec![0u8; UBLOCK as usize];
+        for (co, _, ps, _, _, flag, owner) in &blocks {
+            let digest: [u8; 32] = if *flag == 0x4011_0000 {
+                sha3(&zeros[..*ps as usize])
+            } else if let Some(i) = owner {
+                digests.files[*i]
             } else {
-                image.get(at..at + *ps as usize).unwrap_or(&zeros)
+                let at = (*co).saturating_sub(meta_base) as usize;
+                let end = at.saturating_add(*ps as usize);
+                match meta.get(at..end) {
+                    Some(span) => sha3(span),
+                    None => sha3(&zeros[..*ps as usize]),
+                }
             };
             body.extend_from_slice(&0u32.to_le_bytes());
             body.extend_from_slice(&ps.to_le_bytes());
-            body.extend_from_slice(&sha3(plain));
+            body.extend_from_slice(&digest);
             let tail = if *flag & 0x0040_0000 != 0 {
                 0x3E9u64
             } else {
@@ -289,7 +324,7 @@ pub fn naps_meta_18(
     // obdg: the digest of the whole image, then zeros.
     {
         let mut body = vec![0u8; 0x80];
-        body[..32].copy_from_slice(&sha3(image));
+        body[..32].copy_from_slice(&digests.image);
         tlv(&mut out, b"obdg", &body);
     }
 

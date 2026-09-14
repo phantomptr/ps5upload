@@ -408,7 +408,141 @@ pub fn write(
     })
 }
 
-/// One file recovered from a mount.
+/// A ranged read of a source file, which is how a block is filled without holding one.
+pub type RangeRead<'r> = &'r mut dyn FnMut(&str, u64, usize) -> Result<Vec<u8>>;
+
+/// One file's span of the inner image, in placement order.
+#[derive(Debug, Clone, Copy)]
+struct Span {
+    start: u64,
+    end: u64,
+    file: usize,
+}
+
+/// The inner image as blocks, read on demand.
+///
+/// A block is filled from the file bytes that land in it (a block can hold the tail of one
+/// file and the head of the next), the block-info table, or the metadata region — the two
+/// latter are held whole, because both are bounded by the file count rather than the
+/// package size. Nothing here is proportional to the image, so a 100 GB game streams.
+pub struct BlockSource<'a> {
+    plan: &'a Plan,
+    spans: Vec<Span>,
+    table: Vec<u8>,
+    table_block: u64,
+    meta: Vec<Vec<u8>>,
+    meta_block: u64,
+    keystone: Vec<u8>,
+    buf: Vec<u8>,
+}
+
+impl<'a> BlockSource<'a> {
+    pub fn new(plan: &'a Plan, passcode: &str, build_time: (i64, u32)) -> Result<Self> {
+        let mut spans: Vec<Span> = plan
+            .afid_order
+            .iter()
+            .map(|&fi| {
+                let f = &plan.files[fi];
+                Span {
+                    start: f.logical_offset,
+                    end: f.logical_offset + f.size,
+                    file: fi,
+                }
+            })
+            .collect();
+        spans.sort_by_key(|s| s.start);
+        let meta = metadata_blocks(plan, build_time)?;
+        if meta.len() as u64 != plan.metadata_blocks {
+            return format_err(format!(
+                "metadata region is {} blocks but the plan fixed {}",
+                meta.len(),
+                plan.metadata_blocks
+            ));
+        }
+        Ok(Self {
+            plan,
+            spans,
+            table: block_info_table(plan),
+            table_block: plan.data_end.div_ceil(BLOCK),
+            meta,
+            meta_block: plan.meta_base / BLOCK,
+            keystone: keystone(passcode).to_vec(),
+            buf: vec![0u8; BLOCK as usize],
+        })
+    }
+
+    pub fn ndblock(&self) -> u64 {
+        self.plan.ndblock
+    }
+
+    /// Block `index` of the image. The buffer is reused between calls, and `read` fetches
+    /// a byte range of a source file.
+    pub fn block(&mut self, index: u64, read: RangeRead<'_>) -> Result<&[u8]> {
+        if index >= self.ndblock() {
+            return format_err(format!(
+                "block {index} is past the image's {} blocks",
+                self.ndblock()
+            ));
+        }
+        self.buf.fill(0);
+        if index >= self.meta_block {
+            let at = (index - self.meta_block) as usize;
+            return match self.meta.get(at) {
+                Some(block) => Ok(block),
+                None => format_err(format!("the metadata region has no block {index}")),
+            };
+        }
+        if index == self.table_block {
+            let len = self.table.len().min(BLOCK as usize);
+            self.buf[..len].copy_from_slice(&self.table[..len]);
+            return Ok(&self.buf);
+        }
+        let lo = index * BLOCK;
+        let hi = ((index + 1) * BLOCK).min(self.plan.data_end);
+        if lo >= hi {
+            return Ok(&self.buf); // padding between the data and the metadata
+        }
+        let mut at = self.spans.partition_point(|s| s.end <= lo);
+        while at < self.spans.len() {
+            let span = &self.spans[at];
+            if span.start >= hi {
+                break;
+            }
+            let from = span.start.max(lo);
+            let to = span.end.min(hi);
+            at += 1;
+            if to <= from {
+                continue;
+            }
+            let want = (to - from) as usize;
+            let offset = from - span.start;
+            let f = &self.plan.files[span.file];
+            let bytes = if f.generated && f.path == plan::KEYSTONE {
+                let start = offset as usize;
+                self.keystone
+                    .get(start..start + want)
+                    .ok_or_else(|| {
+                        crate::Error::Format(format!("{} is shorter than the plan fixed", f.path))
+                    })?
+                    .to_vec()
+            } else {
+                let bytes = read(&f.path, offset, want)?;
+                if bytes.len() != want {
+                    return format_err(format!(
+                        "{} gave {} bytes at {offset} where the plan fixed {want}",
+                        f.path,
+                        bytes.len()
+                    ));
+                }
+                bytes
+            };
+            let at_in_block = (from - lo) as usize;
+            self.buf[at_in_block..at_in_block + want].copy_from_slice(&bytes);
+        }
+        Ok(&self.buf)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InnerFile {
     pub path: String,
@@ -584,6 +718,48 @@ mod tests {
             })
             .collect();
         plan::build(&files).unwrap()
+    }
+
+    /// The block source is the streaming replacement for `write`: for the same plan it
+    /// must emit the same image, block for block.
+    #[test]
+    fn the_block_source_reproduces_the_in_memory_image() {
+        let plan = plan_for(&[
+            ("eboot.bin", 4096),
+            ("data/one.bin", 200_000),
+            ("data/two.bin", 70_000),
+            ("sce_sys/param.json", 197),
+            ("sce_sys/keystone", 96),
+        ]);
+        let time = (1_700_000_000u64 as i64, 0u32);
+        let payloads: std::collections::HashMap<&str, Vec<u8>> = plan
+            .files
+            .iter()
+            .map(|f| {
+                let data: Vec<u8> = (0..f.size).map(|i| (i % 251) as u8).collect();
+                (f.path.as_str(), data)
+            })
+            .collect();
+        let mut read_all =
+            |path: &str| -> Result<Vec<u8>> { Ok(payloads.get(path).cloned().unwrap_or_default()) };
+        let whole = write(&plan, crate::crypto::DEFAULT_PASSCODE, &mut read_all, time).unwrap();
+
+        let mut source = BlockSource::new(&plan, crate::crypto::DEFAULT_PASSCODE, time).unwrap();
+        let mut image = Vec::with_capacity((plan.ndblock * BLOCK) as usize);
+        for index in 0..plan.ndblock {
+            let block = source
+                .block(index, &mut |path, offset, len| {
+                    let data = payloads.get(path).cloned().unwrap_or_default();
+                    let at = (offset as usize).min(data.len());
+                    let end = (at + len).min(data.len());
+                    Ok(data[at..end].to_vec())
+                })
+                .unwrap()
+                .to_vec();
+            image.extend_from_slice(&block);
+        }
+        assert_eq!(image.len(), whole.image.len());
+        assert!(image == whole.image, "the block source and write disagree");
     }
 
     /// `webbrowser.pkg` stores its keystone raw at the inner image's offset 0, so those

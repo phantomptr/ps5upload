@@ -195,10 +195,12 @@ pub fn build(request: &BuildRequest, progress: &mut dyn FnMut(&str)) -> Result<B
     mount_image.extend_from_slice(&outer.image);
     mount_image.extend_from_slice(&cnt);
     let crc = si_write::chunk_crc(&mount_image);
+    let inner_files = inner_files(&plan);
     let meta_18 = si_write::naps_meta_18(
         inner_size,
-        &inner.image,
-        &inner_files(&plan),
+        &si_write::InnerDigests::of_image(&inner.image, &inner_files),
+        &inner.image[plan.meta_base as usize..],
+        &inner_files,
         plan.data_end,
         plan.meta_base,
         &game_digest,
