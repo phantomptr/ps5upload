@@ -150,7 +150,7 @@ impl ExFat {
                 if out.len() > MAX_ENTRIES {
                     return format_err("the volume holds more than a million files");
                 }
-                let bytes = self.read_dir_stream(&path, e.first_cluster, e.size)?;
+                let bytes = self.read_dir_stream(&e, &path)?;
                 self.walk_dir(&bytes, &format!("{path}/"), depth + 1, out)?;
             } else {
                 out.push(ExFatFile {
@@ -164,29 +164,45 @@ impl ExFat {
         Ok(())
     }
 
-    /// A directory's bytes: its own stream length, but at least one cluster.
-    fn read_dir_stream(&mut self, path: &str, first: u32, size: u64) -> Result<Vec<u8>> {
-        let bytes = size.max(self.geom.cluster_size);
+    /// A directory's bytes: its own stream length and its own chain flag, but at least
+    /// one cluster.
+    fn read_dir_stream(&mut self, e: &Parsed, path: &str) -> Result<Vec<u8>> {
+        let bytes = e.size.max(self.geom.cluster_size);
         if bytes > MAX_DIR_BYTES {
             return format_err(format!("directory {path} is {bytes} bytes"));
         }
-        self.read_stream(first, true, path, 0, bytes as usize)
+        self.read_stream(e.first_cluster, e.no_fat_chain, path, 0, bytes as usize)
     }
 
-    /// A stream of unknown length, followed by its FAT chain.
+    /// The root directory's stream. It has no entry, so neither its length nor its chain
+    /// flag is on disk: read clusters until the entries end (a terminator record) or the
+    /// FAT ends, continuing contiguously where the FAT was not maintained.
     fn chain_stream(&mut self, first: u32) -> Result<Vec<u8>> {
         let mut out = Vec::new();
         let mut cluster = first;
         loop {
-            out.extend_from_slice(&self.read_cluster(cluster)?);
+            let bytes = self.read_cluster(cluster)?;
+            let terminated = has_terminator(&bytes);
+            out.extend_from_slice(&bytes);
             if out.len() as u64 >= MAX_DIR_BYTES {
                 return format_err("the directory stream is over 64 MiB");
             }
-            match self.next_cluster(cluster)? {
-                Some(next) => cluster = next,
-                None => return Ok(out),
-            }
+            cluster = match self.fat_link(cluster)? {
+                FatLink::Next(next) => next,
+                // A maintained FAT ends the directory here; an unmaintained one says
+                // nothing, so the terminator decides (the next cluster is contiguous).
+                FatLink::End if terminated => return Ok(out),
+                FatLink::End => self.next_contiguous(cluster)?,
+                FatLink::Unmaintained if terminated => return Ok(out),
+                FatLink::Unmaintained => self.next_contiguous(cluster)?,
+            };
         }
+    }
+
+    fn next_contiguous(&self, cluster: u32) -> Result<u32> {
+        let next = cluster + 1;
+        self.check_cluster(next)?;
+        Ok(next)
     }
 
     /// `len` bytes at `offset` of a stream, contiguous or FAT-chained.
@@ -221,7 +237,15 @@ impl ExFat {
             out.extend_from_slice(&self.file.read_at(at, want)?);
             skip = 0;
             if out.len() < len {
-                cluster = self.next_cluster(cluster)?.ok_or_else(|| early_end(path))?;
+                // A contiguous stream advances by cluster number; only a chained one
+                // consults the FAT, which on these images is not maintained.
+                cluster = if no_fat_chain {
+                    let next = cluster + 1;
+                    self.check_cluster(next)?;
+                    next
+                } else {
+                    self.next_cluster(cluster)?.ok_or_else(|| early_end(path))?
+                };
             }
         }
         Ok(out)
@@ -247,18 +271,46 @@ impl ExFat {
         self.file.read_at(at, self.geom.cluster_size as usize)
     }
 
-    /// The next cluster of a chain, or `None` at its end. A zero or reserved entry ends
-    /// the chain too: macOS images keep the FAT for contiguous streams unmaintained.
-    fn next_cluster(&mut self, cluster: u32) -> Result<Option<u32>> {
+    /// What the FAT says about a cluster: `Next` a real successor, `End` a chain
+    /// terminator, `Unmaintained` a slot the image never filled in (zero, or a pointer
+    /// outside the heap). Only the caller's context can tell whether the last two differ.
+    fn fat_link(&mut self, cluster: u32) -> Result<FatLink> {
         let at = self.fat_offset + 4 * u64::from(cluster);
         let raw = self.file.read_at(at, 4)?;
         let next = u32::from_le_bytes(raw.try_into().unwrap());
-        if (2..self.geom.cluster_count + 2).contains(&next) && next < FAT_EOC {
-            Ok(Some(next))
-        } else {
-            Ok(None)
-        }
+        Ok(match next {
+            n if (2..self.geom.cluster_count + 2).contains(&n) && n < FAT_EOC => FatLink::Next(n),
+            0 | 1 => FatLink::Unmaintained,
+            n if n >= FAT_EOC => FatLink::End,
+            _ => FatLink::Unmaintained,
+        })
     }
+
+    /// The next cluster of a chained stream, or `None` at its end. A slot the image never
+    /// maintained also ends it — the caller's length check reports the short read.
+    fn next_cluster(&mut self, cluster: u32) -> Result<Option<u32>> {
+        Ok(match self.fat_link(cluster)? {
+            FatLink::Next(next) => Some(next),
+            FatLink::End | FatLink::Unmaintained => None,
+        })
+    }
+}
+
+/// What one FAT slot says.
+enum FatLink {
+    Next(u32),
+    End,
+    Unmaintained,
+}
+
+/// True when a directory cluster holds a record that ends the directory: `0x00` (end of
+/// entries) or `0xFF` (unused). A cluster full of entries has neither.
+fn has_terminator(cluster: &[u8]) -> bool {
+    cluster
+        .as_chunks::<32>()
+        .0
+        .iter()
+        .any(|e| e[0] == 0x00 || e[0] == 0xFF)
 }
 
 fn early_end(path: &str) -> crate::Error {
@@ -575,6 +627,107 @@ mod tests {
         let mut bytes = file_bytes("a", 5, 65536);
         bytes[1][8..16].copy_from_slice(&100u64.to_le_bytes());
         assert_eq!(parse_dir(&flat(bytes)).unwrap()[0].size, 100);
+    }
+
+    /// A 25 KiB image: 512-byte sectors, 4 KiB clusters, a root directory in cluster 4,
+    /// `big.bin` contiguous over clusters 2–3 and `chain.bin` jumping 5 → 7 through the
+    /// FAT. The blocks are filled with one byte each so a misplaced read is visible.
+    fn synthetic_image() -> Vec<u8> {
+        const SECTOR: usize = 512;
+        const CLUSTER: usize = 4096;
+        const HEAP: usize = 2 * SECTOR;
+        const CLUSTERS: u32 = 6;
+        let mut img = vec![0u8; HEAP + CLUSTERS as usize * CLUSTER];
+        img[3..11].copy_from_slice(OEM);
+        let sectors = (img.len() / SECTOR) as u64;
+        img[72..80].copy_from_slice(&sectors.to_le_bytes());
+        img[80..84].copy_from_slice(&1u32.to_le_bytes()); // FAT at sector 1
+        img[84..88].copy_from_slice(&1u32.to_le_bytes());
+        img[88..92].copy_from_slice(&((HEAP / SECTOR) as u32).to_le_bytes());
+        img[92..96].copy_from_slice(&CLUSTERS.to_le_bytes());
+        img[96..100].copy_from_slice(&4u32.to_le_bytes()); // root in cluster 4
+        img[108] = 9; // 512-byte sectors
+        img[109] = 3; // 8 sectors per cluster
+        for (cluster, value) in [
+            (0u32, 0xFFFF_FFF8u32),
+            (1, 0xFFFF_FFFF),
+            (2, 3),
+            (3, 0xFFFF_FFFF),
+            (4, 0xFFFF_FFFF),
+            (5, 7),
+            (7, 0xFFFF_FFFF),
+        ] {
+            let at = SECTOR + 4 * cluster as usize;
+            img[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        for (cluster, byte) in [(2u32, 0x11u8), (3, 0x22), (5, 0x55), (7, 0x77)] {
+            let at = HEAP + (cluster as usize - 2) * CLUSTER;
+            img[at..at + CLUSTER].fill(byte);
+        }
+        let mut root = Vec::new();
+        root.extend_from_slice(&flat(file_bytes("big.bin", 2, 2 * CLUSTER as u64)));
+        let mut chained = file_bytes("chain.bin", 5, 2 * CLUSTER as u64);
+        chained[1][1] = 0x01; // AllocationPossible only: the chain is in the FAT
+        root.extend_from_slice(&flat(chained));
+        let root_at = HEAP + (4 - 2) * CLUSTER;
+        img[root_at..root_at + root.len()].copy_from_slice(&root);
+        img
+    }
+
+    fn synthetic_at(name: &str) -> (std::path::PathBuf, ExFat) {
+        let path = std::env::temp_dir().join(format!("fpkg-exfat-{}-{name}", std::process::id()));
+        std::fs::write(&path, synthetic_image()).unwrap();
+        let volume = ExFat::open(&path).unwrap();
+        (path, volume)
+    }
+
+    #[test]
+    fn multi_cluster_streams_read_contiguously_and_through_the_fat() {
+        let (path, mut volume) = synthetic_at("multi");
+        let files = volume.walk().unwrap();
+        assert_eq!(
+            files
+                .iter()
+                .map(|f| (f.path.as_str(), f.size))
+                .collect::<Vec<_>>(),
+            [("big.bin", 8192), ("chain.bin", 8192)]
+        );
+
+        // Contiguous: no FAT entries involved, so the zeros there cannot stop it.
+        let big = files.iter().find(|f| f.path == "big.bin").unwrap().clone();
+        let data = volume.read_file(&big, 0, usize::MAX).unwrap();
+        assert_eq!(data.len(), 8192);
+        assert!(data[..4096].iter().all(|b| *b == 0x11));
+        assert!(data[4096..].iter().all(|b| *b == 0x22));
+
+        // Ranged across the cluster boundary.
+        let seam = volume.read_file(&big, 4090, 12).unwrap();
+        assert_eq!(&seam[..6], &[0x11; 6]);
+        assert_eq!(&seam[6..], &[0x22; 6]);
+
+        // Chained: cluster 5 → 7, so the data must be both halves in order.
+        let chain = files
+            .iter()
+            .find(|f| f.path == "chain.bin")
+            .unwrap()
+            .clone();
+        let data = volume.read_file(&chain, 0, usize::MAX).unwrap();
+        assert_eq!(data.len(), 8192);
+        assert!(data[..4096].iter().all(|b| *b == 0x55));
+        assert!(data[4096..].iter().all(|b| *b == 0x77));
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_stream_that_runs_off_the_volume_is_an_error() {
+        let (path, mut volume) = synthetic_at("short");
+        let files = volume.walk().unwrap();
+        let mut bogus = files[0].clone();
+        bogus.size = 64 * 4096; // claims far more than the volume holds
+        let err = volume.read_file(&bogus, 0, usize::MAX).unwrap_err();
+        assert!(err.to_string().contains("outside the volume"), "{err}");
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]
