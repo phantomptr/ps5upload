@@ -15,7 +15,7 @@ use crate::naps;
 use crate::outer_write::{self, OuterImage};
 use crate::plan::{self, Plan};
 use crate::si_write;
-use crate::source::{self, SourceFile};
+use crate::source;
 use crate::verify::verify_package;
 use crate::{format_err, Result, BLOCK};
 
@@ -61,22 +61,23 @@ pub struct BuildReport {
 
 /// Build the package. `progress` receives short phase lines.
 pub fn build(request: &BuildRequest, progress: &mut dyn FnMut(&str)) -> Result<BuildReport> {
-    let root = request.source.as_path();
-    let files = source::scan(root)?;
+    let tree = source::open(&request.source)?;
+    let files = tree.files();
     if files.is_empty() {
-        return format_err(format!("{} has no files", root.display()));
+        return format_err(format!("{} has no files", tree.describe()));
     }
-    let readiness = source::readiness(root, &files);
+    let readiness = source::readiness(tree.as_ref());
     let warnings: Vec<String> = readiness
         .warnings()
         .map(|c| format!("{}: {}", c.name, c.detail))
         .collect();
+    let param_json = tree.read("sce_sys/param.json").unwrap_or_default();
     let content_id = match &request.content_id {
         Some(id) => id.clone(),
-        None => source::content_id(root).ok_or_else(|| {
+        None => source::content_id(&param_json).ok_or_else(|| {
             crate::Error::Format(format!(
                 "{} has no content id in sce_sys/param.json; pass one explicitly",
-                root.display()
+                tree.describe()
             ))
         })?,
     };
@@ -89,21 +90,18 @@ pub fn build(request: &BuildRequest, progress: &mut dyn FnMut(&str)) -> Result<B
     if !files.iter().any(|f| f.path == "eboot.bin") {
         return format_err("the source has no eboot.bin");
     }
-    let content_version = source::content_version_word(root).unwrap_or(0);
+    let content_version = source::content_version_word(&param_json).unwrap_or(0);
     let time = request.time.unwrap_or_else(now);
     let seed = request.seed.unwrap_or_else(random_seed);
 
-    progress("planning");
-    let plan = plan::build(&files)?;
-    let by_path: std::collections::HashMap<&str, &SourceFile> =
-        files.iter().map(|f| (f.path.as_str(), f)).collect();
-    let root = root.to_path_buf();
+    progress(&format!("planning {}", tree.describe()));
+    let plan = plan::build(files)?;
+    let sizes: std::collections::HashMap<&str, u64> =
+        files.iter().map(|f| (f.path.as_str(), f.size)).collect();
     let mut read = |path: &str| -> Result<Vec<u8>> {
-        match by_path.get(path) {
-            Some(f) if f.size == 0 => Ok(Vec::new()),
-            Some(_) => std::fs::read(root.join(path)).map_err(|e| {
-                crate::Error::Io(std::io::Error::new(e.kind(), format!("{path}: {e}")))
-            }),
+        match sizes.get(path) {
+            Some(0) => Ok(Vec::new()),
+            Some(_) => tree.read(path),
             None => format_err(format!(
                 "the plan asked for {path}, which is not in the source"
             )),
@@ -154,9 +152,8 @@ pub fn build(request: &BuildRequest, progress: &mut dyn FnMut(&str)) -> Result<B
     let ficm_files = plan.content_inodes + 3;
     let playgo_ficm = si_write::playgo_ficm(ficm_files);
     let playgo_hash = si_write::playgo_hash_table(ficm_files / 2);
-    let icon_png = std::fs::read(root.join("sce_sys/icon0.png")).unwrap_or_default();
-    let icon_dds = std::fs::read(root.join("sce_sys/icon0.dds")).unwrap_or_default();
-    let param_json = std::fs::read(root.join("sce_sys/param.json")).unwrap_or_default();
+    let icon_png = tree.read("sce_sys/icon0.png").unwrap_or_default();
+    let icon_dds = tree.read("sce_sys/icon0.dds").unwrap_or_default();
     let (content_type, drm_type, content_flags) = (0x26u32, 0u32, 0x0602_0000u32);
     let cnt = cnt_write::write(&CntParams {
         content_id: &content_id,

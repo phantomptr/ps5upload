@@ -1,14 +1,87 @@
-//! Walking a source folder into the file list both images are planned from.
+//! The source of the game: a folder, or a mount image the same tree is read out of.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use crate::{Error, Result};
+use crate::{format_err, Error, Result};
 
 /// One file of the source tree: path relative to the user root, `/`-separated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceFile {
     pub path: String,
     pub size: u64,
+}
+
+/// The game files to convert, whatever they live in. Sizes are known up front, so the
+/// plan fixes every offset before the first byte is read.
+pub trait SourceTree {
+    fn files(&self) -> &[SourceFile];
+
+    /// The whole file at `path`.
+    fn read(&self, path: &str) -> Result<Vec<u8>>;
+
+    /// Up to `len` bytes at `offset`. Sources override this so a four-byte module magic
+    /// check does not read a 100 MB `eboot.bin` into memory.
+    fn read_range(&self, path: &str, offset: u64, len: usize) -> Result<Vec<u8>> {
+        let all = self.read(path)?;
+        let start = usize::try_from(offset).unwrap_or(usize::MAX).min(all.len());
+        let end = start.saturating_add(len).min(all.len());
+        Ok(all[start..end].to_vec())
+    }
+
+    /// One line for logs: what the source is and where it came from.
+    fn describe(&self) -> String;
+}
+
+/// A game folder on the filesystem.
+pub struct FolderSource {
+    root: PathBuf,
+    files: Vec<SourceFile>,
+}
+
+impl FolderSource {
+    pub fn open(root: &Path) -> Result<Self> {
+        Ok(Self {
+            root: root.to_path_buf(),
+            files: scan(root)?,
+        })
+    }
+}
+
+impl SourceTree for FolderSource {
+    fn files(&self) -> &[SourceFile] {
+        &self.files
+    }
+
+    fn read(&self, path: &str) -> Result<Vec<u8>> {
+        std::fs::read(self.root.join(path))
+            .map_err(|e| Error::Io(std::io::Error::new(e.kind(), format!("{path}: {e}"))))
+    }
+
+    fn read_range(&self, path: &str, offset: u64, len: usize) -> Result<Vec<u8>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = std::fs::File::open(self.root.join(path))
+            .map_err(|e| Error::Io(std::io::Error::new(e.kind(), format!("{path}: {e}"))))?;
+        file.seek(SeekFrom::Start(offset))?;
+        let mut buf = vec![0u8; len];
+        let read = file.read(&mut buf)?;
+        buf.truncate(read);
+        Ok(buf)
+    }
+
+    fn describe(&self) -> String {
+        format!("folder {}", self.root.display())
+    }
+}
+
+/// Open whatever `path` names as a source tree.
+pub fn open(path: &Path) -> Result<Box<dyn SourceTree>> {
+    if path.is_dir() {
+        return Ok(Box::new(FolderSource::open(path)?));
+    }
+    format_err(format!(
+        "{} is neither a folder nor a supported image (.exfat, .ffpkg)",
+        path.display()
+    ))
 }
 
 /// Junk no package wants, skipped by name at any depth.
@@ -102,21 +175,23 @@ pub mod magic {
     pub const SELF: [u8; 4] = [0x53, 0x43, 0x45, 0x00];
 }
 
+/// A `param.json`'s bytes, parsed (it may carry a BOM).
+fn parse_param_json(bytes: &[u8]) -> Option<serde_json::Value> {
+    let text = String::from_utf8_lossy(bytes);
+    serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()
+}
+
 /// The content id a `param.json` declares, if any.
-pub fn content_id(root: &Path) -> Option<String> {
-    let raw = std::fs::read(root.join("sce_sys/param.json")).ok()?;
-    let text = String::from_utf8_lossy(&raw);
-    let json: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
+pub fn content_id(param_json: &[u8]) -> Option<String> {
+    let json = parse_param_json(param_json)?;
     let id = json.get("contentId")?.as_str()?;
     Some(id.to_string())
 }
 
 /// The content version (`MM.mmm.ppp`) a `param.json` declares, packed as the 2-3-3 BCD
 /// word the finalized-image header echoes at `0x9C`.
-pub fn content_version_word(root: &Path) -> Option<u32> {
-    let raw = std::fs::read(root.join("sce_sys/param.json")).ok()?;
-    let text = String::from_utf8_lossy(&raw);
-    let json: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
+pub fn content_version_word(param_json: &[u8]) -> Option<u32> {
+    let json = parse_param_json(param_json)?;
     let version = json.get("contentVersion")?.as_str()?;
     let digits: Vec<u8> = version
         .chars()
@@ -135,17 +210,16 @@ pub fn content_version_word(root: &Path) -> Option<u32> {
     ]))
 }
 
-fn module_magic(root: &Path, rel: &str) -> Option<[u8; 4]> {
-    let mut buf = [0u8; 4];
-    let mut file = std::fs::File::open(root.join(rel)).ok()?;
-    std::io::Read::read_exact(&mut file, &mut buf).ok()?;
-    Some(buf)
+fn module_magic(tree: &dyn SourceTree, rel: &str) -> Option<[u8; 4]> {
+    let head = tree.read_range(rel, 0, 4).ok()?;
+    head.try_into().ok()
 }
 
 /// Report readiness for a source tree. Never blocks: the caller decides which findings
 /// matter for the build it is about to run.
-pub fn readiness(root: &Path, files: &[SourceFile]) -> Readiness {
+pub fn readiness(tree: &dyn SourceTree) -> Readiness {
     let mut r = Readiness::default();
+    let files = tree.files();
     let has = |path: &str| files.iter().any(|f| f.path == path);
 
     r.push(
@@ -163,7 +237,8 @@ pub fn readiness(root: &Path, files: &[SourceFile]) -> Readiness {
         !has("sce_sys/param.sfo"),
         "a param.sfo makes the launch path treat the title as PS4",
     );
-    match content_id(root) {
+    let param = tree.read("sce_sys/param.json").unwrap_or_default();
+    match content_id(&param) {
         Some(id) => r.push(
             "content id",
             id.len() == 36 && id.is_ascii(),
@@ -181,7 +256,7 @@ pub fn readiness(root: &Path, files: &[SourceFile]) -> Readiness {
         has("sce_sys/about/right.sprx"),
         "the rights module a debug package ships",
     );
-    if let Some(m) = module_magic(root, "eboot.bin") {
+    if let Some(m) = module_magic(tree, "eboot.bin") {
         let kind = if m == magic::RAW_ELF {
             "raw ELF"
         } else if m == magic::FAKE_SELF {
@@ -242,10 +317,43 @@ mod tests {
             br#"{"contentId":"UP0000-PPSA01234_00-TESTGAME00000000","contentVersion":"01.001.000"}"#,
         )
         .unwrap();
-        let word = content_version_word(&dir);
-        let id = content_id(&dir);
+        let param = std::fs::read(dir.join("sce_sys/param.json")).unwrap();
+        let word = content_version_word(&param);
+        let id = content_id(&param);
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(word, Some(0x0100_1000));
         assert_eq!(id.as_deref(), Some("UP0000-PPSA01234_00-TESTGAME00000000"));
+    }
+
+    #[test]
+    fn a_folder_source_reads_ranges_and_reports_itself() {
+        let dir = std::env::temp_dir().join(format!("fpkg-tree-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("eboot.bin"), b"0123456789").unwrap();
+        let tree = open(&dir).unwrap();
+        assert_eq!(tree.read_range("eboot.bin", 2, 3).unwrap(), b"234");
+        assert_eq!(tree.read_range("eboot.bin", 8, 99).unwrap(), b"89");
+        assert_eq!(tree.read_range("eboot.bin", 99, 4).unwrap(), b"");
+        assert_eq!(tree.read("eboot.bin").unwrap(), b"0123456789");
+        assert!(tree.describe().starts_with("folder "));
+        assert_eq!(tree.files().len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_unknown_source_kind_is_an_error() {
+        let dir = std::env::temp_dir().join(format!("fpkg-kind-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("game.iso");
+        std::fs::write(&img, [0u8; 8]).unwrap();
+        let Err(err) = open(&img) else {
+            panic!("a .iso must not open as a source");
+        };
+        let err = err.to_string();
+        assert!(err.contains(".exfat"), "{err}");
+        assert!(err.contains(".ffpkg"), "{err}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
