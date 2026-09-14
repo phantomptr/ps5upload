@@ -36,7 +36,10 @@ import urllib.request
 from pathlib import Path
 
 BLOCK = 0x10000
-MOUNT_FAIL = ("0x80020060", "verifyImage", "nmount() failed", "LNC_ISOK::0x80")
+MOUNT_FAIL = ("verifyImage(", "PfsMountGameData_PPR() ret", "nmount() failed.", "0x80020060")
+# A failed launch does not change the system power mode; a mounted one does. Kept narrow on
+# purpose — `EnsureBigAppBudget` and the eboot EXEC line both appear for a failure too.
+MOUNT_OK = ("Power Mode Change: BIG_APP",)
 
 
 def post_json(engine: str, path: str, body: dict) -> dict:
@@ -63,21 +66,26 @@ def upload(engine: str, pkg: Path) -> dict:
 
 
 def preflight(pkg: Path) -> dict:
-    """The two header fields that are silently wrong in a way the console only reports at
-    launch: the inner metadata base must land inside the inner image."""
+    """The header fields that have been silently wrong in a way the console only reports at
+    launch. `0x50 * 0x60` is the inner metadata base in the *logical* mount space, and `0xA0`
+    is the *stored* size — the two are in different spaces as soon as anything is compressed,
+    so the base can only be checked against `0xA0` for a stored image. Sony's own
+    webbrowser.pkg is the counter-example that has to stay accepted here: 0xA0 = 0x50000 while
+    its meta base is 0x400000 and its logical mount is 0x4a0000. Report, do not refuse."""
     with pkg.open("rb") as f:
         head = f.read(0x1000)
     if head[:4] != b"\x7fFIH":
         return {"fatal": f"{pkg.name} is not a debug package (\\x7FFIH); magic={head[:4].hex()}"}
     u32 = lambda o: int.from_bytes(head[o : o + 4], "little")
     u64 = lambda o: int.from_bytes(head[o : o + 8], "little")
-    meta_base, inner = u32(0x50) * u64(0x60), u64(0xA0)
+    meta_base, stored = u32(0x50) * u64(0x60), u64(0xA0)
+    blocks, stored_blocks = u32(0x90), u64(0x60)
     return {
         "meta_base": meta_base,
-        "inner_size": inner,
-        "stored_blocks": u32(0x90),
-        "logical_blocks": inner // BLOCK if BLOCK else 0,
-        "meta_base_in_range": 0 < meta_base <= inner,
+        "stored_size": stored,
+        "stored_blocks": blocks,
+        "self_consistent": blocks * stored_blocks == stored,
+        "base_within_stored_size": 0 < meta_base <= stored,
     }
 
 
@@ -114,16 +122,12 @@ def main() -> int:
         return 2
     say(f"package   {args.pkg.name}")
     say(f"content   {content_id}   (title {title_id})")
-    say(
-        f"inner     meta base {check['meta_base']:#x} of {check['inner_size']:#x} bytes"
-        f"{'' if check['meta_base_in_range'] else '   <-- OUT OF RANGE'}"
-    )
-    say(f"blocks    {check['stored_blocks']} stored / {check['logical_blocks']} logical"
-        + ("" if check['stored_blocks'] < check['logical_blocks'] else "   (stored: uncompressed)"))
-    if not check["meta_base_in_range"]:
-        print("refusing: the console reads the inner superblock at a base outside the image",
-              file=sys.stderr)
-        return 2
+    say(f"inner     meta base {check['meta_base']:#x}; stored image {check['stored_size']:#x} "
+        f"in {check['stored_blocks']} blocks"
+        + ("" if check["self_consistent"] else "   <-- 0x90 and 0xA0 disagree"))
+    if not check["base_within_stored_size"]:
+        say("          note: the base is outside the *stored* size, which is only wrong for a "
+            "stored image — a compressed one carries its logical size in the descriptor")
 
     up = upload(args.engine, args.pkg)
     if not up.get("path"):
@@ -166,28 +170,38 @@ def main() -> int:
         say("mounted   not tested (--launch does that, and a failed mount coredumps SceShellUI)")
         return 0
 
-    before = syslog(args.engine, host)
+    seen = set(syslog(args.engine, host).splitlines())
     launched = post_json(args.engine, "/api/ps5/app/launch",
                          {"addr": args.addr, "title_id": title_id})
     if not launched.get("ok"):
         print(f"launch call failed: {launched}", file=sys.stderr)
         return 2
-    deadline = time.monotonic() + 30
-    failure = None
-    while time.monotonic() < deadline:
-        time.sleep(3)
+    # Compare line *sets*, one poll apart, rather than diffing two snapshots. The log is a
+    # ~1,550-line ring that the console's chatter refills in seconds, so a single check at the
+    # end of a long window misses a failure line that has already scrolled away — that is what
+    # produced false "mount OK" verdicts. A short poll interval keeps the window small, and a
+    # set difference survives rotation (dropped lines cannot hide an added one).
+    failure = mounted = None
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline and not failure:
+        time.sleep(2)
         text = syslog(args.engine, host)
-        fresh = "\n".join(l for l in text.splitlines() if l not in before)
-        for token in MOUNT_FAIL:
-            if token in fresh:
-                failure = next(l.strip() for l in fresh.splitlines() if token in l)
+        fresh = [l.strip() for l in set(text.splitlines()) - seen]
+        seen = set(text.splitlines())
+        for line in fresh:
+            if any(token in line for token in MOUNT_FAIL):
+                failure = line
                 break
-        if failure:
-            break
+            if not mounted and any(token in line for token in MOUNT_OK):
+                mounted = line
     if failure:
         say(f"mount     FAILED  {failure}")
         return 1
-    say("mount     OK (no 0x80020060 and no verifyImage; the app's own failure, if any, is later)")
+    if not mounted:
+        say("mount     NO VERDICT — no failure and no positive signal in the window; the app may "
+            "not have reached the mount. Re-run, or read the log yourself before believing this.")
+        return 2
+    say(f"mount     OK  {mounted}")
     return 0
 
 
