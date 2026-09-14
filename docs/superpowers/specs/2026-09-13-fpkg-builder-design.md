@@ -184,9 +184,9 @@ virtual package later.
 | Source | v1 | How |
 |---|---|---|
 | Game folder | ✓ | Direct walk |
-| `.exfat` on macOS / Linux desktop | ✓ | Attach read-only through the OS (`local_image.rs`), walk the mount |
-| `.exfat` in Docker / on Windows | later | Read-only exFAT reader written from the published exFAT specification. `local_image.rs` chose not to implement exFAT **for editing**; a read-only walker for conversion is a narrower job. |
-| `.ffpkg` / `.ffpfs` | later | UFS2 (`ps5upload-pkg/src/ufs2.rs` exists) and PFS readers |
+| `.exfat`, any platform | ✓ | Own read-only exFAT reader (raw/MBR/GPT, contiguous and chained streams), no OS mount: `ps5upload-fpkg/src/exfat.rs`. Verified on 27 real mounts. |
+| `.ffpkg` | ✓ | The UFS2 reader in `ps5upload-pkg` (its superblock offsets fixed — they read the wrong slots and walked every real image to nothing) wrapped as a source tree. |
+| `.ffpfs` / `.ffpfsc` | later | Needs a plain-PFS reader |
 | Folder or mounted image on the console | later | `SourceTree` over the existing FTX2 file RPCs |
 
 ### Verification strategy
@@ -222,7 +222,13 @@ through gates. A gate failing stops the next one.
   blocks with the dinode's indirect tables (1820 `{SHA3, block}` records per 64 KiB
   block, five slots), which covers 12 + 5 × 1820 blocks ≈ 570 MiB of inner image —
   the same coverage the reference documents. Larger sources (Minecraft's 19 GB) need
-  the double-indirect slot, which stays unverified.
+  the double-indirect slot, which stays unverified. The pipeline refuses a source past that
+  ceiling *before* the inner image is built (`build.rs` checks the plan), because a mount
+  image would otherwise be read into memory first.
+
+  G2 also covers **image sources**: a package built from the committed 2 MiB exFAT fixture
+  (`tests/fixtures/mini.exfat`, formatted by macOS itself and carrying the `._*` sidecars a
+  Mac copy leaves behind) verifies and its inner image walks back to the fixture's files.
 - **G3 — hardware, small package** (needs your approval at the time): Stream
   install the G2 package on the Pro (FW 9.60) with kstuff-lite 1.12-fpkg loaded.
   Tile appears and the klog shows no PlayGo or mount error. Also try an unsigned

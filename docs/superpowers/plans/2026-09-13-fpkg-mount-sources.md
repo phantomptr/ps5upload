@@ -10,12 +10,17 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-13-fpkg-builder-design.md` — Part B, "Sources". Writer plan: `2026-09-13-fpkg-writer.md` (gate G2 passed).
 
+**Status 2026-09-13: all five tasks implemented and verified** (branch `feat/fpkg-builder`, commits `3b687aed` … `27040639`). Every real mount reads: 27 `.exfat` (33–358 files, 30–90 GB) and both `.ffpkg` (286,075 files / 116.5 GiB and 204 files / 64.2 GiB), with `tests/mounts.rs` asserting param.json, the PNG/DDS headers, the ranged-vs-whole-read agreement, and the volume accounting. A package built from the committed exFAT fixture verifies and round-trips (gate G2 for image sources). Two upstream defects surfaced and were fixed on the way: the UFS2 reader's superblock field offsets (every real `.ffpkg` walked to nothing, including the app's existing inspect) and three exFAT walker bugs (a contiguous stream advanced by the FAT, a directory's own chain flag was ignored, and the root stopped at one cluster). The writer also now refuses an over-large source *before* reading it.
+
 **Measured facts this plan encodes** (checked on the user's real mounts, 2026-09-13):
 
 | Fact | Value |
 |---|---|
 | Real mounts | `/Volumes/Storage/PS5/games/game_mounts/*.exfat` (many, 10–30 GB) and `PPSA21159.ffpkg` (75 GB); two more `.exfat` in `~/Downloads` |
-| exFAT images are raw volumes | `PPSA09519.exfat`'s boot sector is at offset 0 (`"EXFAT   "` at 0x03); sector shift 9, cluster shift 7 (64 KiB clusters), FAT at sector 2048, heap at 6144, root cluster 4. The reader still needs MBR and GPT offsets for images that are partitioned. |
+| exFAT images are raw volumes | `PPSA09519.exfat`'s boot sector is at offset 0 (`"EXFAT   "` at 0x03); sector shift 9, cluster shift 7 (64 KiB clusters), FAT at sector 2048, heap at 6144, root cluster 4. MBR and GPT offsets are implemented and unit-tested; none of the 27 samples uses them. |
+| macOS leaves the FAT unmaintained | Every entry in all 27 images carries `NoFatChain`, and the FAT is zero except its two reserved entries — so contiguity is authoritative, and a zero FAT slot must not be read as a chain end (PPSA03210 has 4 genuinely chained entries whose directories must still honor their own flag). |
+| Two module magics | `eboot.bin` starts with `0xEEF51454` (PS5 SELF wrapper) in 17 mounts and `0x1D3D154F` (PS4 SELF wrapper) in 10 — both wrapped, neither necessarily encrypted (`payload/include/elf_param.h`). |
+| UFS2 on-disk field offsets | The legacy UFS1 slots are what count: `fs_iblkno` @16, `fs_ncg` @44, `fs_bsize` @48, `fs_fsize` @52, `fs_ipg` @184, `fs_fpg` @188, `fs_size` (u64) @1080, magic @1372, inode table at `(cg·fpg + iblkno)·fsize + idx·256`, `di_db[12]` @112, `di_ib[3]` @208. |
 | `.ffpkg` is UFS2 | `PPSA21159.ffpkg` starts with zeros (UFS2's boot blocks); `ps5upload-pkg/src/ufs2.rs` already opens it (superblock at the standard offset), lists directories and reads files |
 
 **Size note (blocks real-game builds, not this plan's readers):** the writer's outer layout covers 12 direct + 5 × 1820 blocks ≈ **570 MiB** of inner image. Real mounts are 10–75 GB, so a full build from one needs the double-indirect slot (Plan 7). This plan therefore proves the readers against the real mounts and proves the *build path* with a small synthetic exFAT image; the end-to-end build of a real mount waits for Plan 7.
