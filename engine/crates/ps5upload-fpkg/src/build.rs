@@ -297,11 +297,7 @@ fn build_mode(
 
             progress("writing the container");
             let outer_size = outer.image.len() as u64;
-            let playgo_chunk = si_write::playgo_chunk_dat(
-                &content_id,
-                plan.meta_base,
-                cnt_offset - plan.meta_base,
-            )?;
+            let playgo_chunk = si_write::playgo_chunk_dat(&content_id, cnt_offset)?;
             let ficm_files = plan.content_inodes + 3;
             let cnt = cnt_write::write(&CntParams {
                 content_id: &content_id,

@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tweak: keys::NAPS_META_18_TWEAK_KEY,
         data: keys::NAPS_META_18_DATA_KEY,
     })
-    .decrypt(0, &mut blob);
+    .decrypt(keys::NAPS_META_18_TWEAK_SECTOR, &mut blob);
     println!("{path}: naps_meta_18 {} bytes (decrypted)", blob.len());
 
     let mut at = 0usize;

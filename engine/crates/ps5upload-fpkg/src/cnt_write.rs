@@ -427,7 +427,7 @@ mod tests {
         let param = br#"{"contentId":"UP0000-PPSA01234_00-TESTGAME00000000"}"#;
         let png = vec![0x89u8; 1000];
         let dds = vec![0x44u8; 2000];
-        let chunk = crate::si_write::playgo_chunk_dat(id, 0x10000, 0xB0000).unwrap();
+        let chunk = crate::si_write::playgo_chunk_dat(id, 0xB0000).unwrap();
         let ficm = crate::si_write::playgo_ficm(10);
         let hash = crate::si_write::playgo_hash_table(5);
         let digests = vec![[9u8; 32]; 11];

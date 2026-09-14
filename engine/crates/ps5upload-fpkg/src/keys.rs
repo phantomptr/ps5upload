@@ -270,6 +270,11 @@ pub const NAPS_META_18_TWEAK: [u8; 16] = [
     0x3c, 0xba, 0x10, 0x7d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
 
+/// The XTS data-unit number `naps_meta_18.dat` is encrypted at: the tweak constant's first
+/// four bytes read little-endian. Measured — a sample's blob decrypts into a TLV stream at
+/// this sector and reads as garbage at 0.
+pub const NAPS_META_18_TWEAK_SECTOR: u64 = 0x7D10_BA3C;
+
 #[cfg(test)]
 mod tests {
     use super::*;
