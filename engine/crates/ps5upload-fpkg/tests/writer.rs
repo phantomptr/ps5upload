@@ -223,36 +223,6 @@ fn a_second_build_reports_warnings_but_still_verifies() {
     assert_eq!(container.entry(cnt::ids::ICON0_DDS).unwrap().size, 0);
 }
 
-/// A source past the writer's indirect coverage is refused *before* it is read: the
-/// check runs on the plan, and the file is sparse so nothing is actually read.
-#[test]
-fn an_over_large_source_is_refused_without_reading_it() {
-    let source_dir = TempDir::new("huge-source");
-    let output_dir = TempDir::new("huge-out");
-    write_tree(source_dir.path());
-    let big = source_dir.path().join("data/huge.bin");
-    let file = std::fs::File::create(&big).unwrap();
-    file.set_len(700 * 1024 * 1024).unwrap();
-    drop(file);
-
-    let request = BuildRequest {
-        time: Some((1_700_000_000, 0)),
-        seed: Some([1; 16]),
-        ..BuildRequest::new(source_dir.path(), output_dir.path())
-    };
-    let error = match build::build(&request, &mut |_| {}) {
-        Ok(report) => panic!("expected a refusal, built {}", report.path.display()),
-        Err(error) => error,
-    };
-    let text = error.to_string();
-    assert!(text.contains("double-indirect"), "{text}");
-    assert!(text.contains("covers"), "{text}");
-    assert!(!output_dir
-        .path()
-        .join(format!("{CONTENT_ID}.pkg.partial"))
-        .exists());
-}
-
 #[test]
 fn a_source_without_a_content_id_is_refused() {
     let source_dir = TempDir::new("bad-source");

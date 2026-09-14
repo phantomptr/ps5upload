@@ -139,23 +139,22 @@ pub fn verify_package(path: &Path, passcode: &str) -> Result<Report> {
     r.push("outer inode table digest", table_ok, "");
     let nodes = img.dinodes();
     for (ino, n) in nodes.iter().enumerate() {
-        let used_indirect = (n.blocks as usize)
-            .saturating_sub(outer::DIRECT_SLOTS)
-            .div_ceil(outer::PER_INDIRECT);
-        let ok = n
+        let direct_ok = n
             .direct
             .iter()
             .take((n.blocks as usize).min(outer::DIRECT_SLOTS))
-            .chain(n.indirect.iter().take(used_indirect))
             .all(|d| {
                 img.plaintext
                     .get(d.block as usize)
                     .is_some_and(|b| sha3(b) == d.digest)
             });
+        // The indirect tables, level by level: a parent records its children's digests,
+        // so every level is checked against the one above it.
+        let used = n.indirect.iter().take_while(|t| t.block != 0).count();
         r.push(
             format!("outer inode {ino} block signatures"),
-            ok,
-            format!("{} block(s)", n.blocks),
+            direct_ok && img.indirect_ok(n),
+            format!("{} block(s), {used} indirect level(s)", n.blocks),
         );
     }
     let uroot: Vec<String> = nodes

@@ -83,9 +83,37 @@ fn write_dinode(table: &mut [u8], rec: &DinodeRecord, time: (i64, u32)) {
     }
 }
 
+/// One indirect table: where it lives and what its 1820 records point at.
+#[derive(Debug, Clone)]
+pub struct IndirectTable {
+    pub block: u64,
+    /// `None` for a data table, whose records point at data blocks starting at
+    /// `first_data`; otherwise the child tables' block indices, in record order.
+    pub children: Option<Vec<u64>>,
+    pub first_data: u64,
+}
+
+/// The dinode's indirect tables, level by level.
+///
+/// Slot 0 of a dinode is a table of data records (the samples corroborate this); slot 1 is
+/// a table whose records point at tables like slot 0's, slot 2 one level deeper again, and
+/// so on — the same nesting UFS uses, with this format's 36-byte `{digest, block}` records.
+/// Slot *k* covers `1820^(k+1)` data blocks, so two slots already cover 200 GB.
+///
+/// **Unverified**: no debug package over 570 MiB exists to check the deeper levels against
+/// (writer plan, gate G1). The reader here implements the same nesting, so a round trip
+/// proves self-consistency, not the console's agreement — gate G4 decides that.
+#[derive(Debug, Clone, Default)]
+pub struct IndirectLayout {
+    /// Tables in build order: every level's tables before their parent's.
+    pub tables: Vec<IndirectTable>,
+    /// The dinode's slots, in order: the root table of each level.
+    pub slots: Vec<u64>,
+}
+
 /// Where every block of the outer image lives. Both writers — the in-memory one and the
 /// streaming one — take their geometry from here, so they cannot drift apart.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Layout {
     pub naps_block: u64,
     pub superblock_block: u64,
@@ -93,9 +121,70 @@ pub struct Layout {
     pub root_block: u64,
     pub flt_block: u64,
     pub uroot_block: u64,
-    pub first_indirect_block: u64,
-    pub indirect_blocks: u64,
+    pub indirect: IndirectLayout,
     pub ndblock: u64,
+}
+
+/// Builds one table covering `data` data blocks at `level` (0 = data records), allocating
+/// block indices from `next`. Children are pushed before their parent, so a table's
+/// children are already hashed when it is built.
+fn build_table(
+    level: u32,
+    first_data: u64,
+    data: u64,
+    next: &mut u64,
+    out: &mut Vec<IndirectTable>,
+) -> u64 {
+    if level == 0 {
+        let block = *next;
+        *next += 1;
+        out.push(IndirectTable {
+            block,
+            children: None,
+            first_data,
+        });
+        return block;
+    }
+    let per_child = PER_INDIRECT.saturating_pow(level) as u64;
+    let mut children = Vec::new();
+    let mut at = first_data;
+    while at < first_data + data {
+        let take = per_child.min(first_data + data - at);
+        children.push(build_table(level - 1, at, take, next, out));
+        at += take;
+    }
+    let block = *next;
+    *next += 1;
+    out.push(IndirectTable {
+        block,
+        children: Some(children),
+        first_data,
+    });
+    block
+}
+
+/// The tables the dinode needs to cover `inner_blocks`, laid out from `first_table`.
+pub fn indirect_layout(inner_blocks: u64, first_table: u64) -> Result<IndirectLayout> {
+    let mut next = first_table;
+    let mut out = Vec::new();
+    let mut slots = Vec::new();
+    let mut remaining = inner_blocks.saturating_sub(DIRECT_SLOTS as u64);
+    let mut first_data = DIRECT_SLOTS as u64;
+    let mut level = 0u32;
+    while remaining > 0 {
+        if slots.len() >= INDIRECT_SLOTS {
+            return format_err(format!(
+                "an inner image of {inner_blocks} blocks needs more indirect levels than a dinode has"
+            ));
+        }
+        let span = (PER_INDIRECT as u64).saturating_pow(level + 1);
+        let take = span.min(remaining);
+        slots.push(build_table(level, first_data, take, &mut next, &mut out));
+        first_data += take;
+        remaining -= take;
+        level += 1;
+    }
+    Ok(IndirectLayout { tables: out, slots })
 }
 
 /// The block order: the data, then the naps layout, the superblock, the inode table, the
@@ -103,11 +192,10 @@ pub struct Layout {
 pub fn layout(inner_blocks: u64) -> Result<Layout> {
     if inner_blocks == 0 || inner_blocks > max_inner_blocks() {
         return format_err(format!(
-            "an inner image of {inner_blocks} blocks needs more indirect slots than a dinode has"
+            "an inner image of {inner_blocks} blocks is past what a dinode can describe"
         ));
     }
-    let indirect_needed = (inner_blocks as usize).saturating_sub(DIRECT_SLOTS);
-    let indirect_blocks = indirect_needed.div_ceil(PER_INDIRECT) as u64;
+    let indirect = indirect_layout(inner_blocks, inner_blocks + 6)?;
     Ok(Layout {
         naps_block: inner_blocks,
         superblock_block: inner_blocks + 1,
@@ -115,18 +203,20 @@ pub fn layout(inner_blocks: u64) -> Result<Layout> {
         root_block: inner_blocks + 3,
         flt_block: inner_blocks + 4,
         uroot_block: inner_blocks + 5,
-        first_indirect_block: inner_blocks + 6,
-        indirect_blocks,
-        ndblock: inner_blocks + 6 + indirect_blocks,
+        ndblock: inner_blocks + 6 + indirect.tables.len() as u64,
+        indirect,
     })
 }
 
-/// The largest inner image this writer can describe: the twelve direct slots plus five
-/// indirect ones, each holding a 36-byte `{digest, block}` record — roughly 570 MiB. A
-/// larger source needs the dinode's double-indirect slot, which is still unverified
-/// (writer plan, gate G1). Callers check this before building the image, not after.
+/// The largest inner image the dinode can describe: the twelve direct slots plus every
+/// indirect level's span. The record's block field is 32 bits, so a quarter of a terabyte
+/// of blocks is the format's own ceiling.
 pub fn max_inner_blocks() -> u64 {
-    (DIRECT_SLOTS + PER_INDIRECT * INDIRECT_SLOTS) as u64
+    let mut cover = DIRECT_SLOTS as u64;
+    for level in 0..INDIRECT_SLOTS as u32 {
+        cover = cover.saturating_add((PER_INDIRECT as u64).saturating_pow(level + 1));
+    }
+    cover.min(u32::MAX as u64)
 }
 
 /// One metadata block: its index, its plaintext digest, and its bytes.
@@ -183,25 +273,47 @@ pub fn metadata_blocks(
     let sb_slot = out.len();
     push(&mut out, lay.superblock_block, sb);
 
-    // Indirect blocks: `{SHA3(plaintext), block}` records at the dinode's 36-byte stride,
-    // covering the data blocks past the twelve direct slots (1820 blocks each). They are
-    // laid out after the uroot dirents, so they are built here and pushed last.
-    let mut indirect: Vec<(u64, [u8; 32])> = Vec::new();
-    let mut indirect_blocks_extra: Vec<Vec<u8>> = Vec::new();
-    for chunk in 0..lay.indirect_blocks {
+    // Indirect tables: `{SHA3(plaintext), block}` records at the dinode's 36-byte
+    // stride. A data table's records point at data blocks past the twelve direct slots;
+    // a parent's records point at the tables of the level below it. They are laid out
+    // after the uroot dirents, children before parents so a parent can digest them.
+    let mut records_per_table: std::collections::HashMap<u64, [u8; 32]> =
+        std::collections::HashMap::new();
+    let mut slots: Vec<(u64, [u8; 32])> = Vec::new();
+    let mut table_blocks: Vec<(u64, Vec<u8>)> = Vec::new();
+    for table in &lay.indirect.tables {
         let mut block = vec![0u8; BLOCK as usize];
-        for slot in 0..PER_INDIRECT {
-            let index = DIRECT_SLOTS + chunk as usize * PER_INDIRECT + slot;
-            if index >= inner_blocks as usize {
-                break;
+        match &table.children {
+            None => {
+                for slot in 0..PER_INDIRECT {
+                    let index = table.first_data + slot as u64;
+                    if index >= inner_blocks {
+                        break;
+                    }
+                    let at = slot * 36;
+                    block[at..at + 32].copy_from_slice(&data_digests[index as usize]);
+                    block[at + 32..at + 36].copy_from_slice(&(index as u32).to_le_bytes());
+                }
             }
-            let at = slot * 36;
-            block[at..at + 32].copy_from_slice(&data_digests[index]);
-            block[at + 32..at + 36].copy_from_slice(&(index as u32).to_le_bytes());
+            Some(children) => {
+                for (slot, child) in children.iter().enumerate() {
+                    let at = slot * 36;
+                    let digest = records_per_table.get(child).ok_or_else(|| {
+                        crate::Error::Format("an indirect table is missing its child".to_string())
+                    })?;
+                    block[at..at + 32].copy_from_slice(digest);
+                    block[at + 32..at + 36].copy_from_slice(&(*child as u32).to_le_bytes());
+                }
+            }
         }
-        indirect.push((lay.first_indirect_block + chunk, sha3(&block)));
-        indirect_blocks_extra.push(block);
+        let digest = sha3(&block);
+        records_per_table.insert(table.block, digest);
+        if lay.indirect.slots.contains(&table.block) {
+            slots.push((table.block, digest));
+        }
+        table_blocks.push((table.block, block));
     }
+    slots.sort_by_key(|(block, _)| *block);
 
     let mut flt_entries: Vec<(u64, u64)> = Vec::new();
     for (i, name) in ["pfs_image.dat", "naps_pkg_layout.dat"].iter().enumerate() {
@@ -274,7 +386,7 @@ pub fn metadata_blocks(
                 .enumerate()
                 .map(|(i, d)| (i as u32, *d))
                 .collect(),
-            indirect,
+            indirect: slots,
             blocks: Some(inner_blocks as u32),
         },
         DinodeRecord {
@@ -297,8 +409,8 @@ pub fn metadata_blocks(
     push(&mut out, lay.root_block, root_bytes);
     push(&mut out, lay.flt_block, padded(flt_bytes)?);
     push(&mut out, lay.uroot_block, uroot_bytes);
-    for (k, block) in indirect_blocks_extra.into_iter().enumerate() {
-        push(&mut out, lay.first_indirect_block + k as u64, block);
+    for (index, block) in table_blocks {
+        push(&mut out, index, block);
     }
 
     // The inode-signature record inside the superblock, then its ICV.
@@ -397,6 +509,35 @@ pub fn superblock_absolute(outer: &OuterImage) -> u64 {
 mod tests {
     use super::*;
     use crate::crypto::DEFAULT_PASSCODE;
+
+    /// The single-indirect ceiling is 12 + 1820 blocks (570 MiB); one block past it the
+    /// dinode must use its second slot, and the second level must cover the rest.
+    #[test]
+    fn the_layout_escalates_a_level_past_570_mib() {
+        let single = DIRECT_SLOTS as u64 + PER_INDIRECT as u64;
+        let small = indirect_layout(single, 100).unwrap();
+        assert_eq!(small.slots.len(), 1);
+        assert_eq!(small.tables.len(), 1);
+
+        // One block past the ceiling lands in the second slot: one data table, one child
+        // of the second level (it covers a single block), and that level's root.
+        let large = indirect_layout(single + 1, 100).unwrap();
+        assert_eq!(large.slots.len(), 2, "a second slot");
+        assert_eq!(large.tables.len(), 3, "one data table, one child, one root");
+        assert_eq!(large.slots, [100, 102]);
+
+        // Two slots are worth ~200 GB, which is past anything the format itself allows.
+        assert!(max_inner_blocks() >= (200u64 << 30) / BLOCK);
+        // Their exact capacity: the direct slots, the first level, then the second.
+        let two_levels = DIRECT_SLOTS as u64 + PER_INDIRECT as u64 + (PER_INDIRECT as u64).pow(2);
+        let big = indirect_layout(two_levels, 100).unwrap();
+        assert_eq!(
+            big.slots.len(),
+            2,
+            "the second slot's last block fits exactly"
+        );
+        assert_eq!(big.tables.len(), 1 + PER_INDIRECT + 1);
+    }
 
     /// An image past the twelve direct slots exercises the indirect tables.
     #[test]

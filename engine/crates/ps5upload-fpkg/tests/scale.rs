@@ -121,6 +121,97 @@ fn the_streaming_writer_reports_progress() {
     );
 }
 
+/// An image past the first indirect slot's 1820 blocks (12 + 1820 blocks = 114 MiB) makes
+/// the dinode use its second slot, whose table points at tables rather than at data. That
+/// nesting is the one part of the format no local sample can confirm — there is no debug
+/// package over 600 MB to check it against (writer plan, gate G1) — so this test pins the
+/// streaming writer against the in-memory one, and hardware (gate G4) decides whether the
+/// console agrees.
+///
+/// Ignored by default: it writes ~117 MiB. Run it with
+/// `cargo test -p ps5upload-fpkg --release --test scale -- --ignored`.
+#[test]
+#[ignore = "writes ~117 MiB to the temp directory"]
+fn a_source_past_the_first_indirect_slot_round_trips() {
+    let source = TempDir::new("large-source");
+    let out = TempDir::new("large-out");
+    let out_memory = TempDir::new("large-memory");
+    write_tree(source.path());
+    // A sparse file just past the slot: 12 + 1820 blocks of 64 KiB, plus one.
+    let size = (12 + 1820 + 1) * 0x10000;
+    let big = source.path().join("data/big.bin");
+    let file = std::fs::File::create(&big).unwrap();
+    file.set_len(size).unwrap();
+    drop(file);
+
+    let report = build::build(&request(source.path(), out.path()), &mut |_| {}).unwrap();
+    assert!(report.verify.ok(), "{}", report.verify);
+    assert!(report.size > size);
+    // The second-slot metadata must come out the same either way.
+    let memory =
+        build::build_in_memory(&request(source.path(), out_memory.path()), &mut |_| {}).unwrap();
+    assert!(memory.verify.ok(), "{}", memory.verify);
+    assert_eq!(
+        std::fs::read(&report.path).unwrap(),
+        std::fs::read(&memory.path).unwrap(),
+        "the two writers disagree on the second-slot layout"
+    );
+    // The container carries one digest per outer block, so its length tells the story.
+    let image = std::fs::read(&report.path).unwrap();
+    let cnt_offset = u64::from_le_bytes(image[0x58..0x60].try_into().unwrap()) as usize;
+    let container = ps5upload_fpkg::cnt::read(
+        &mut ps5upload_fpkg::PkgFile::open(&report.path).unwrap(),
+        cnt_offset as u64,
+    )
+    .unwrap();
+    let digests = container.entry(ps5upload_fpkg::cnt::ids::IMAGE_DIGESTS);
+    assert!(digests.is_some(), "the container carries the block digests");
+    // And the reader walks the inner image back out of the second slot.
+    let files = ps5upload_fpkg::source::scan(source.path()).unwrap();
+    let plan = ps5upload_fpkg::plan::build(&files).unwrap();
+    let mut pkg = ps5upload_fpkg::PkgFile::open(&report.path).unwrap();
+    let head = pkg.read_at(0, ps5upload_fpkg::fih::HEADER_LEN).unwrap();
+    let fih = ps5upload_fpkg::fih::parse(&head).unwrap();
+    let container = ps5upload_fpkg::cnt::read(&mut pkg, fih.cnt_offset).unwrap();
+    let img = ps5upload_fpkg::outer::open(
+        &mut pkg,
+        &fih,
+        &container,
+        ps5upload_fpkg::crypto::DEFAULT_PASSCODE,
+    )
+    .unwrap();
+    let nodes = img.dinodes();
+    let inner_image = img.file_data(&nodes[3]);
+    assert_eq!(
+        inner_image.len() as u64,
+        plan.ndblock * ps5upload_fpkg::BLOCK,
+        "the reader must recover the whole inner image"
+    );
+    let inner = ps5upload_fpkg::inner::read(&inner_image, plan.meta_base).unwrap();
+    assert!(inner.flt_ok);
+    let mut recovered: Vec<(String, u64)> = inner
+        .files
+        .iter()
+        .map(|f| (f.path.clone(), f.size))
+        .collect();
+    recovered.sort();
+    let mut wanted: Vec<(String, u64)> = files
+        .iter()
+        .map(|f| (f.path.clone(), f.size))
+        .chain([(
+            "sce_sys/keystone".to_string(),
+            ps5upload_fpkg::plan::KEYSTONE_LEN,
+        )])
+        .collect();
+    wanted.sort();
+    assert_eq!(recovered, wanted);
+    eprintln!(
+        "built {:.2} GiB with a {}-block image, walked back through the second indirect slot",
+        report.size as f64 / (1u64 << 30) as f64,
+        size / 0x10000
+    );
+}
+
 /// Cancelling removes the partial and says so — a 100 GB build must not leave a 100 GB
 /// file behind.
 #[test]

@@ -203,6 +203,71 @@ impl OuterImage {
 
     /// A dinode's file bytes: the direct blocks, then the indirect block tables, bounded
     /// by the inode's size.
+    /// Follows one indirect table: its records point at data blocks at level 0, or at
+    /// the tables of the level below otherwise.
+    fn walk_table(&self, block: u64, level: u32, size: u64, out: &mut Vec<u8>) {
+        let Some(table) = self.plaintext.get(block as usize) else {
+            return;
+        };
+        for slot in 0..PER_INDIRECT {
+            if out.len() as u64 >= size {
+                return;
+            }
+            let at = slot * BLOCK_SIG_LEN;
+            let child = le32(table, at + 32) as u64;
+            if child == 0 {
+                continue;
+            }
+            if level == 0 {
+                match self.plaintext.get(child as usize) {
+                    Some(data) => out.extend_from_slice(data),
+                    None => return,
+                }
+            } else {
+                self.walk_table(child, level - 1, size, out);
+            }
+        }
+    }
+
+    /// Every indirect table's plaintext must be the block its parent (or the dinode)
+    /// recorded a digest for. This is the check that makes the deeper levels trustworthy.
+    pub fn indirect_ok(&self, node: &Dinode) -> bool {
+        for (level, table) in node.indirect.iter().enumerate() {
+            if table.block == 0 {
+                continue;
+            }
+            if !self.table_ok(table.block as u64, level as u32, &table.digest) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn table_ok(&self, block: u64, level: u32, digest: &[u8; 32]) -> bool {
+        let Some(bytes) = self.plaintext.get(block as usize) else {
+            return false;
+        };
+        if sha3(bytes) != *digest {
+            return false;
+        }
+        if level == 0 {
+            return true;
+        }
+        for slot in 0..PER_INDIRECT {
+            let at = slot * BLOCK_SIG_LEN;
+            let child = le32(bytes, at + 32) as u64;
+            if child == 0 {
+                continue;
+            }
+            let mut record = [0u8; 32];
+            record.copy_from_slice(&bytes[at..at + 32]);
+            if !self.table_ok(child, level - 1, &record) {
+                return false;
+            }
+        }
+        true
+    }
+
     pub fn file_data(&self, node: &Dinode) -> Vec<u8> {
         let mut out = Vec::new();
         for d in node
@@ -215,24 +280,13 @@ impl OuterImage {
                 None => return out,
             }
         }
-        for table in &node.indirect {
-            if out.len() as u64 >= node.size {
+        // The dinode's slots are indirect levels: slot 0's records point at data blocks,
+        // slot 1's at tables like slot 0's, and so on. Unused slots are zeroed.
+        for (level, table) in node.indirect.iter().enumerate() {
+            if out.len() as u64 >= node.size || table.block == 0 {
                 break;
             }
-            let Some(block) = self.plaintext.get(table.block as usize) else {
-                break;
-            };
-            for slot in 0..PER_INDIRECT {
-                if out.len() as u64 >= node.size {
-                    break;
-                }
-                let at = slot * BLOCK_SIG_LEN;
-                let index = le32(block, at + 32) as usize;
-                match self.plaintext.get(index) {
-                    Some(data) => out.extend_from_slice(data),
-                    None => break,
-                }
-            }
+            self.walk_table(table.block as u64, level as u32, node.size, &mut out);
         }
         out.truncate(node.size as usize);
         out
