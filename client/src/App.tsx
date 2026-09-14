@@ -31,6 +31,7 @@ import HomeScreen from "./screens/Home";
 const MoreScreen = lazy(() => import("./screens/More"));
 const UploadScreen = lazy(() => import("./screens/Upload"));
 const InstallPackageScreen = lazy(() => import("./screens/InstallPackage"));
+const ConvertScreen = lazy(() => import("./screens/FpkgConvert"));
 const GamesScreen = lazy(() => import("./screens/Games"));
 const SearchScreen = lazy(() => import("./screens/Search"));
 const VolumesScreen = lazy(() => import("./screens/Volumes"));
@@ -149,6 +150,14 @@ export default function App() {
           element={
             <Suspense fallback={<ScreenLoader />}>
               <InstallPackageScreen />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/convert"
+          element={
+            <Suspense fallback={<ScreenLoader />}>
+              <ConvertScreen />
             </Suspense>
           }
         />

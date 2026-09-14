@@ -692,6 +692,21 @@ export async function browserInvoke<T>(
 
     // ── Jobs ────────────────────────────────────────────────────────────────
 
+    case "fpkg_inspect": {
+      // TS caller: { source, outputDir }
+      return postJson<T>("/api/fpkg/inspect", {
+        source: args["source"],
+        output_dir: args["outputDir"],
+      });
+    }
+    case "fpkg_build": {
+      return postJson<T>("/api/fpkg/build", {
+        source: args["source"],
+        output_dir: args["outputDir"],
+        content_id: args["contentId"],
+        name: args["name"],
+      });
+    }
     case "job_status": {
       // TS caller: { jobId } (Tauri 2 camelCases job_id → jobId)
       const jobId = args["jobId"] as string;

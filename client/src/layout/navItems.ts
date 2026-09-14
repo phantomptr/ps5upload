@@ -50,6 +50,7 @@ import {
   Network,
   Stethoscope,
   HardDrive,
+  PackagePlus,
 } from "lucide-react";
 
 export interface NavItem {
@@ -141,6 +142,12 @@ export const NAV_ITEMS: NavItem[] = [
     key: "install_package",
     fallback: "Install Package",
     icon: PackageOpen,
+  },
+  {
+    to: "/convert",
+    key: "fpkg_title",
+    fallback: "Convert to FPKG",
+    icon: PackagePlus,
   },
   { to: "/saves", key: "saves", fallback: "Save data", icon: Save },
   {

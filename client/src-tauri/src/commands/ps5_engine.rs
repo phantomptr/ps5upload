@@ -2518,6 +2518,46 @@ pub async fn transfer_dir_reconcile(req: TransferDirReconcileReq) -> Result<Json
     post_json(&url, &body).await
 }
 
+/// What a game source is, before converting it: readiness, size and cost.
+/// POST /api/fpkg/inspect.
+#[tauri::command]
+pub async fn fpkg_inspect(
+    source: String,
+    output_dir: Option<String>,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/fpkg/inspect");
+    post_json(
+        &url,
+        &serde_json::json!({ "source": source, "output_dir": output_dir }),
+    )
+    .await
+}
+
+/// Start converting a game source into an installable FPKG. Returns a job id
+/// to poll with `job_status`; the finished job carries the package's path.
+/// POST /api/fpkg/build.
+#[tauri::command]
+pub async fn fpkg_build(
+    source: String,
+    output_dir: Option<String>,
+    content_id: Option<String>,
+    name: Option<String>,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/fpkg/build");
+    post_json(
+        &url,
+        &serde_json::json!({
+            "source": source,
+            "output_dir": output_dir,
+            "content_id": content_id,
+            "name": name,
+        }),
+    )
+    .await
+}
+
 #[tauri::command]
 pub async fn job_status(job_id: String) -> Result<JsonValue, String> {
     let base = engine::url();
