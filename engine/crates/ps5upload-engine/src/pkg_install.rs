@@ -3786,9 +3786,16 @@ fn parse_range_header(headers: &HeaderMap, total: u64) -> Result<(u64, u64), ()>
         };
         (start, end)
     };
-    if start > end || end >= total {
+    if start > end || start >= total {
         return Err(());
     }
+    // RFC 9110 §14.1.2: a range that starts inside the file is satisfiable even
+    // when its end runs past it — clamp rather than reject. Sony's installer asks
+    // for whole 64 KiB blocks, so the last block of every package whose size is
+    // not a multiple of 64 KiB arrives with `end >= total`; rejecting it with a
+    // 416 aborted the install (0x80b22416) on packages Sony's own installer
+    // accepts.
+    let end = end.min(total - 1);
     // Trim ranges that exceed the per-response byte cap. The client
     // sees a smaller-than-asked PARTIAL_CONTENT and follows up with
     // another Range request for the rest — same shape as if we'd been
@@ -5190,6 +5197,18 @@ mod tests {
         let (start, end) = parse_range_header(&range_headers("bytes=500-"), 1000).unwrap();
         assert_eq!(start, 500);
         assert_eq!(end, 999);
+    }
+
+    #[test]
+    fn range_end_past_eof_is_clamped() {
+        // What the console's installer sends for the final block of a package
+        // that is not 64 KiB-aligned: whole blocks, so the end runs past EOF.
+        let (start, end) =
+            parse_range_header(&range_headers("bytes=2293760-2359295"), 2319261).unwrap();
+        assert_eq!(start, 2293760);
+        assert_eq!(end, 2319260);
+        // A start past the end is still unsatisfiable.
+        assert!(parse_range_header(&range_headers("bytes=2319261-2359295"), 2319261).is_err());
     }
 
     #[test]
