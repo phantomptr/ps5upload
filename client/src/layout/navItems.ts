@@ -67,6 +67,9 @@ export interface NavItem {
    *  nav entry is hidden entirely in a browser session rather than linking
    *  to a screen that can't do anything there. */
   hideInBrowser?: boolean;
+  /** Hidden unless the user turns beta features on in Settings. Reserved for
+   *  screens that are still being finished — see state/betaFeatures.ts. */
+  beta?: boolean;
 }
 
 export type NavGroup = {
@@ -148,6 +151,7 @@ export const NAV_ITEMS: NavItem[] = [
     key: "fpkg_title",
     fallback: "Convert to FPKG",
     icon: PackagePlus,
+    beta: true,
   },
   { to: "/saves", key: "saves", fallback: "Save data", icon: Save },
   {
@@ -316,14 +320,24 @@ export const PERMANENT_NAV_ITEMS: readonly NavItem[] = [
  * order the user starred things in), and the permanent rows are filtered out
  * so they can never appear twice.
  */
-export function resolveFavorites(paths: readonly string[]): NavItem[] {
+/** Whether an item is currently visible. Beta items stay hidden until the
+ *  user turns them on, which is what keeps a half-finished screen out of a
+ *  sidebar that the user never asked to be a test bench. */
+export function navItemVisible(item: NavItem, betaEnabled: boolean): boolean {
+  return !item.beta || betaEnabled;
+}
+
+export function resolveFavorites(
+  paths: readonly string[],
+  betaEnabled = false,
+): NavItem[] {
   const byPath = new Map(NAV_ITEMS.map((item) => [item.to, item]));
   const seen = new Set<string>(PERMANENT_NAV_ITEMS.map((i) => i.to));
   const out: NavItem[] = [];
   for (const path of paths) {
     if (seen.has(path)) continue;
     const item = byPath.get(path);
-    if (!item) continue;
+    if (!item || !navItemVisible(item, betaEnabled)) continue;
     seen.add(path);
     // Strip any section header the item carries in the More list — inside
     // Favorites it is a plain row under the Favorites header, not the start
@@ -344,8 +358,15 @@ export function resolveFavorites(paths: readonly string[]): NavItem[] {
  * favourites down. It carries no `section`, which is what keeps it inside
  * the group Home opens instead of starting a second one.
  */
-export function sidebarNavItems(favorites: readonly string[]): NavItem[] {
-  return [HOME_NAV_ITEM, ...resolveFavorites(favorites), ABOUT_NAV_ITEM];
+export function sidebarNavItems(
+  favorites: readonly string[],
+  betaEnabled = false,
+): NavItem[] {
+  return [
+    HOME_NAV_ITEM,
+    ...resolveFavorites(favorites, betaEnabled),
+    ABOUT_NAV_ITEM,
+  ];
 }
 
 /**

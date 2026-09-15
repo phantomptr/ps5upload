@@ -68,6 +68,7 @@ import {
 import { useConnectionStore } from "../../state/connection";
 import { useEngineStore, DEFAULT_ENGINE_URL } from "../../state/engine";
 import { useSaveSettingsStore, DEFAULT_SAVE_PATH } from "../../state/saveSettings";
+import { useBetaFeaturesStore } from "../../state/betaFeatures";
 import { useRestAfterUploadStore } from "../../state/restAfterUpload";
 import { userConfigPath, resetAllAppData } from "../../state/userConfig";
 import { useUpdateStore, type UpdatePhase } from "../../state/update";
@@ -552,6 +553,8 @@ export default function SettingsScreen() {
   const payloadMaxStreams = useConnectionStore((s) => s.maxTransferStreams);
   const restAfterUpload = useRestAfterUploadStore((s) => s.enabled);
   const setRestAfterUpload = useRestAfterUploadStore((s) => s.setEnabled);
+  const betaFeatures = useBetaFeaturesStore((s) => s.enabled);
+  const setBetaFeatures = useBetaFeaturesStore((s) => s.setEnabled);
   // UA-based, stable for the whole session — safe to read during render.
   const mobile = isMobile();
 
@@ -997,6 +1000,27 @@ export default function SettingsScreen() {
             stack the same word twice. */}
         <Section title={tr("bug_report", undefined, "Bug report")} full>
           <BugReportLink />
+        </Section>
+
+        <GroupHeading>
+          {tr("settings_group_beta", undefined, "Beta features")}
+        </GroupHeading>
+
+        <Section title={tr("settings_card_beta", undefined, "Beta features")} full>
+          <Toggle
+            checked={betaFeatures}
+            onChange={(on) => setBetaFeatures(on)}
+            label={tr(
+              "beta_features_label",
+              undefined,
+              "Show features that are still being finished",
+            )}
+            hint={tr(
+              "beta_features_hint",
+              undefined,
+              "Adds work-in-progress screens to the sidebar. These are usable but not yet reliable, and may change or be removed. Today this reveals the FPKG builder (Convert to FPKG).",
+            )}
+          />
         </Section>
 
         <GroupHeading>

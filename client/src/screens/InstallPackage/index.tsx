@@ -26,6 +26,7 @@ import { isTauriEnv, safeUnlisten } from "../../lib/tauriEnv";
 import {
   PageHeader,
   Button,
+  Callout,
   EmptyState,
   WarningCard,
   ConsoleChip,
@@ -1305,6 +1306,62 @@ export default function InstallPackageScreen() {
           )}
         </div>
       </div>
+
+      {/* Stated, not detected. A user installing an FPKG already knows it is
+          one, and there is no header marker that separates a fake package from
+          a retail one — every field that looked like a candidate is present on
+          genuine Sony packages too. So the note names the requirement and lets
+          the reader decide whether it applies to them. */}
+      <Callout
+        tone="warn"
+        className="mb-4"
+        title={tr(
+          "pkglib.fpkgsupport.title",
+          "Installing a fake package (FPKG)?",
+        )}
+      >
+        <div className="flex flex-col gap-1.5">
+          <div>
+            {tr(
+              "pkglib.fpkgsupport.lead",
+              "A PS5 fake package only installs when fake-package support is already loaded on the console. Load all three, in this order, before installing:",
+            )}
+          </div>
+          <ol className="ml-4 flex list-decimal flex-col gap-1">
+            <li>
+              <strong className="text-[var(--color-text)]">kstuff</strong>{" "}
+              {tr(
+                "pkglib.fpkgsupport.kstuff",
+                "— the build with PS5 fake-package support",
+              )}
+            </li>
+            <li>
+              <strong className="text-[var(--color-text)]">
+                a53_ppr_install_fast.elf
+              </strong>{" "}
+              {tr(
+                "pkglib.fpkgsupport.ppr",
+                "— applies the PPR plaintext / no-auth patch",
+              )}
+            </li>
+            <li>
+              <strong className="text-[var(--color-text)]">
+                shadowmountplus.elf
+              </strong>{" "}
+              {tr(
+                "pkglib.fpkgsupport.smp",
+                "— the mount layer that registers the installed title",
+              )}
+            </li>
+          </ol>
+          <div>
+            {tr(
+              "pkglib.fpkgsupport.tail",
+              "Without them the console refuses the install, or takes it and then fails to mount the game. Retail and debug packages need none of this — if that is what you are installing, ignore this note.",
+            )}
+          </div>
+        </div>
+      </Callout>
 
       {/* Workflow options, grouped near the top where they're set before
           adding a package (not buried under the library list). Both govern the

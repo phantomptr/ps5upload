@@ -681,6 +681,15 @@ queue_will_mount: "mount after upload",
 "pkglib.add.installingHint": "Wait for the current install to finish",
 "pkglib.note.title": "Verified game-package installs",
 "pkglib.note.body": "ps5upload tries the console's launchable game-package path first and uses the standalone DPI loader only after a clean rejection. Acceptance alone is never shown as success: the game must appear in console-side install data. High-firmware or system packages may still require the PS5's own Settings → System → Debug Settings → Game → Package Installer.",
+// Stated, not detected: no header field separates a fake package from a
+// retail one (every candidate marker is present on genuine Sony packages
+// too), so the screen names the prerequisite and lets the reader decide.
+"pkglib.fpkgsupport.title": "Installing a fake package (FPKG)?",
+"pkglib.fpkgsupport.lead": "A PS5 fake package only installs when fake-package support is already loaded on the console. Load all three, in this order, before installing:",
+"pkglib.fpkgsupport.kstuff": "— the build with PS5 fake-package support",
+"pkglib.fpkgsupport.ppr": "— applies the PPR plaintext / no-auth patch",
+"pkglib.fpkgsupport.smp": "— the mount layer that registers the installed title",
+"pkglib.fpkgsupport.tail": "Without them the console refuses the install, or takes it and then fails to mount the game. Retail and debug packages need none of this — if that is what you are installing, ignore this note.",
 "pkglib.installnote.title": "How installing works",
 "pkglib.installnote.body": "ps5upload asks Sony's game-package service to install the staged file, verifies console-side progress, and keeps the package whenever completion cannot be proven. A clean rejection can fall back to the standalone DPI loader, briefly interrupting the helper. FW 12+ and system packages may still require the PS5's own Settings → System → Debug Settings → Game → Package Installer.",
 "pkglib.options.heading": "Options",
@@ -771,6 +780,20 @@ queue_will_mount: "mount after upload",
 "fpkg.noPicker": "This build cannot browse this machine \u2014 type a path the engine can see.",
 "fpkg.pickFolder": "Choose the game folder",
 "fpkg.pickImage": "Choose an .exfat or .ffpkg image",
+// The Convert screen says plainly that it is unfinished. Kept in the screen
+// rather than only behind the Settings toggle: the toggle explains why the
+// entry appeared, not what happens to a game someone converts with it.
+"fpkg.betaTitle": "Beta — still being built",
+"fpkg.betaBody": "This screen is in development and is likely to change. A package it builds can install on the console and still refuse to mount, which means the game will not start. It is not fully working yet and will not be until it leaves beta. Use it at your own risk, on games you can afford to lose, and keep the source you converted from.",
+"fpkg.about": "Point it at a game folder, or at an .exfat or .ffpkg mount image. The converter reads the tree, checks that everything a launchable package needs is present, and writes a debug-format .pkg into the output folder.",
+"fpkg.aboutWhere": "The conversion runs on the machine hosting the engine — this computer, a Docker host or an Android device — not on the console. Nothing reaches the console until you press Install, and the install streams the package across rather than staging a copy of it first.",
+"fpkg.aboutSource": "The source has to be a game tree that is already decrypted. A retail install cannot be unwrapped here, and the check below will say so if that is what you picked.",
+"fpkg.aboutFake": "The result is a fake package, so the console needs fake-package support loaded before it will install: kstuff (the build with PS5 fake-package support), a53_ppr_install_fast.elf and shadowmountplus.elf, in that order. Install Package states the same thing next to its Install button.",
+"fpkg.aboutChecks": "What the check looks for",
+"fpkg.checkEboot": "An eboot.bin at the root of the tree — the title module. It has to be a raw ELF or a wrapped SELF; a retail-signed module cannot be repackaged.",
+"fpkg.checkParam": "sce_sys/param.json, and no sce_sys/param.sfo — a param.sfo sends the console's launch path down the PS4 route.",
+"fpkg.checkIcons": "A 36-character content id, both icons, and the rights module sce_sys/about/right.sprx.",
+"fpkg.checkDrm": "That the package's DRM value is standard. A free or upgradable value makes the console lock the title; it is rewritten in the package only, and your own file is never touched.",
 
 install_package: "Install Package",
   
@@ -1324,6 +1347,11 @@ save_path_hint:
 settings_group_updates: "Updates",
 settings_group_data: "Data & reset",
 settings_group_automation: "Automation",
+  settings_group_beta: "Beta features",
+  settings_card_beta: "Beta features",
+  beta_features_label: "Show features that are still being finished",
+  beta_features_hint:
+    "Adds work-in-progress screens to the sidebar. These are usable but not yet reliable, and may change or be removed. Today this reveals the FPKG builder (Convert to FPKG).",
 keep_ps5_awake: "Keep the PS5 awake during uploads",
 keep_ps5_awake_hint: "While an upload is running, periodically reset the PS5's auto-standby timer so it can't drop into rest mode mid-transfer (a common cause of failed uploads). On by default.",
 bandwidth_cap_label: "Upload speed limit",

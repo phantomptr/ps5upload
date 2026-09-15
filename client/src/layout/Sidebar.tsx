@@ -8,6 +8,7 @@ import { useTr } from "../state/lang";
 import { useLogsStore } from "../state/logs";
 import { useUpdateStore } from "../state/update";
 import { useNavFavoritesStore } from "../state/navFavorites";
+import { useBetaFeaturesStore } from "../state/betaFeatures";
 import NotificationInbox from "./NotificationInbox";
 import RosterPicker from "./RosterPicker";
 import { groupNavItems, sidebarNavItems } from "./navItems";
@@ -49,13 +50,16 @@ export default function Sidebar() {
   );
   const updateAvailable = useUpdateStore((s) => s.phase.kind === "available");
   const favorites = useNavFavoritesStore((s) => s.favorites);
+  // Subscribed, not read once: flipping the switch in Settings must add or
+  // remove the row without a reload.
+  const betaEnabled = useBetaFeaturesStore((s) => s.enabled);
   const hintDismissed = useNavFavoritesStore((s) => s.hintDismissed);
   const dismissHint = useNavFavoritesStore((s) => s.dismissHint);
   // Home pinned at the top, About pinned at the bottom, the user's starred
   // screens in between — see `sidebarNavItems`.
   const groups = useMemo(
-    () => groupNavItems(sidebarNavItems(favorites)),
-    [favorites],
+    () => groupNavItems(sidebarNavItems(favorites, betaEnabled)),
+    [favorites, betaEnabled],
   );
   const showFavoritesHint = favorites.length === 0 && !hintDismissed;
 

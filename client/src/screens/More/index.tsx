@@ -29,12 +29,14 @@ import { useThemeStore } from "../../state/theme";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { getAppVersion } from "../../lib/appVersion";
 import RosterPicker from "../../layout/RosterPicker";
+import { useBetaFeaturesStore } from "../../state/betaFeatures";
 import NotificationInbox from "../../layout/NotificationInbox";
 import {
   NAV_ITEMS,
   PERMANENT_NAV_ITEMS,
   groupNavItems,
   filterNavItems,
+  navItemVisible,
   resolveFavorites,
   type NavItem,
 } from "../../layout/navItems";
@@ -55,10 +57,14 @@ export default function MoreScreen() {
     (s) => s.entries.filter((e) => e.level === "error").length,
   );
   const updateAvailable = useUpdateStore((s) => s.phase.kind === "available");
+  const betaEnabled = useBetaFeaturesStore((s) => s.enabled);
 
   const visible = useMemo(
-    () => NAV_ITEMS.filter((i) => !i.hideInBrowser || isTauriEnv()),
-    [],
+    () =>
+      NAV_ITEMS.filter(
+        (i) => (!i.hideInBrowser || isTauriEnv()) && navItemVisible(i, betaEnabled),
+      ),
+    [betaEnabled],
   );
   const matches = useMemo(
     () => filterNavItems(visible, query, tr),
@@ -71,8 +77,8 @@ export default function MoreScreen() {
   // searching — a narrowed list is already the user's shortcut.
   const favoritePaths = useNavFavoritesStore((s) => s.favorites);
   const favoriteItems = useMemo(
-    () => resolveFavorites(favoritePaths),
-    [favoritePaths],
+    () => resolveFavorites(favoritePaths, betaEnabled),
+    [favoritePaths, betaEnabled],
   );
 
   return (

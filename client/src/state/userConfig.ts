@@ -10,6 +10,7 @@ import { useEngineStore, normalizeEngineUrl } from "./engine";
 import { useSaveSettingsStore, normalizeSavePath } from "./saveSettings";
 import { useAccessibilityStore } from "./accessibility";
 import { useNavFavoritesStore } from "./navFavorites";
+import { useBetaFeaturesStore } from "./betaFeatures";
 
 /**
  * Mirror all persisted user settings to `~/.ps5upload/settings.json`.
@@ -43,6 +44,9 @@ interface SettingsSnapshot {
    *  e.g. a USB stick plugged into the console. Default /mnt/usb0/savedata. */
   save_path?: string;
   keep_awake?: boolean;
+  /** Reveals features that are still being finished (today: the FPKG
+   *  builder). Off by default. */
+  beta_features?: boolean;
   upload?: {
     always_overwrite?: boolean;
     reconcile_mode?: "fast" | "safe";
@@ -77,6 +81,7 @@ function snapshotCurrent(): SettingsSnapshot {
     engine_url: useEngineStore.getState().engineUrl,
     save_path: useSaveSettingsStore.getState().savePath,
     keep_awake: useKeepAwakeStore.getState().enabled,
+    beta_features: useBetaFeaturesStore.getState().enabled,
     upload: {
       always_overwrite: useUploadSettingsStore.getState().alwaysOverwrite,
       reconcile_mode: useUploadSettingsStore.getState().reconcileMode,
@@ -152,6 +157,7 @@ export function installUserConfigMirror() {
   useSaveSettingsStore.subscribe(schedulePersist);
   useAccessibilityStore.subscribe(schedulePersist);
   useNavFavoritesStore.subscribe(schedulePersist);
+  useBetaFeaturesStore.subscribe(schedulePersist);
 }
 
 /** Tell the Rust shell which engine URL its proxies should hit. */
@@ -255,6 +261,10 @@ export async function hydrateFromUserConfig(): Promise<void> {
     data.keep_awake !== liveKeepAwake
   ) {
     await useKeepAwakeStore.getState().setEnabled(data.keep_awake);
+  }
+  const liveBeta = useBetaFeaturesStore.getState().enabled;
+  if (typeof data.beta_features === "boolean" && data.beta_features !== liveBeta) {
+    useBetaFeaturesStore.getState().setEnabled(data.beta_features);
   }
   if (data.upload) {
     const u = data.upload;
