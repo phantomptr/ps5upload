@@ -4,6 +4,45 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.27.0
+
+**Installs tell you more and lie less, and a first look at the package converter.**
+
+### Installing packages
+
+- **It tells you when the console already has the package**, before anything is
+  transferred. The check is the engine's own — the same one the completion test
+  uses — so the badge and the install result cannot disagree.
+- **Progress no longer runs past 100%.** The console re-fetches ranges, so the
+  old number was a raw byte sum: a 1.35 GB package reported 1.53 GB fetched. It
+  now reports the furthest byte reached, and never runs backwards across the
+  handover from download to install.
+- **A stalled install says it is stalled** instead of looking like a failure,
+  and the phase names come from the console.
+- **Installing a fake package (FPKG) says what it needs.** The card above the
+  button names the three things the console must have loaded first — kstuff,
+  `a53_ppr_install_fast.elf` and `shadowmountplus.elf`.
+
+### Web UI
+
+- **Install packages straight from the server's library.** The web UI could
+  only stream a package sitting on the machine you had it open on; it can now
+  install what the engine itself is holding.
+
+### Connection
+
+- **The helper redeploy loop stops before it hurts.** Every delivered payload
+  replaces the helper running at :9021, so a console that had stopped answering
+  could be held down by the very loop meant to revive it. It now stops after
+  three unanswered deliveries and says so.
+
+### Beta
+
+- **Convert to FPKG** — behind Settings → Beta features — turns a game folder
+  or an `.exfat` / `.ffpkg` mount image into an installable package. It is
+  **not finished**: it can produce a package the console installs and then will
+  not mount. Off by default, and the screen says so.
+
 ## 5.26.0
 
 **Your account ID, a readable fan curve, and consoles in the order you want them.**
