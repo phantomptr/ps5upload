@@ -104,8 +104,19 @@ pub(crate) async fn connect_probe(host: &str, port: u16) -> Result<(), String> {
 /// the explicit Check button and the 5s poll.
 ///
 /// Response shape:
-///   { ok: true,  reachable: true,  status: {...full STATUS_ACK...} }
-///   { ok: false, reachable: false, error: "<reason>" }
+///   { ok: true,  reachable: true,  engine: true,  status: {...STATUS_ACK...} }
+///   { ok: false, reachable: false, engine: <bool>, error: "<reason>" }
+///
+/// `engine` says whether the ENGINE answered at all, which is not the same
+/// question as `reachable` (whether the CONSOLE answered). The renderer needs
+/// both: a console verdict of "down" is only trustworthy when the engine
+/// rendered it. Without this bit an engine outage (engine dead, restarting, or
+/// too busy to answer in 5s) was reported as "the console is down" — a verdict
+/// nothing can ever contradict, because the engine is the only thing that
+/// probes the console. In the 2026-09-14 post-mortem that unmovable DOWN
+/// armed the renderer's auto-redeploy loop, which pushed a fresh ELF at :9021
+/// every ~32s for six minutes on both consoles, killing each helper as it came
+/// up until the consoles stopped responding.
 #[tauri::command]
 pub async fn payload_check(ip: String) -> serde_json::Value {
     let engine_url = crate::engine::url();
@@ -120,8 +131,15 @@ pub async fn payload_check(ip: String) -> serde_json::Value {
         .build()
     {
         Ok(c) => c,
+        // Our own HTTP client wouldn't build. Nothing was asked of the
+        // console, so it gets no vote.
         Err(e) => {
-            return serde_json::json!({ "ok": false, "reachable": false, "error": e.to_string() })
+            return serde_json::json!({
+                "ok": false,
+                "reachable": false,
+                "engine": false,
+                "error": e.to_string(),
+            })
         }
     };
     match client.get(&url).send().await {
@@ -129,23 +147,27 @@ pub async fn payload_check(ip: String) -> serde_json::Value {
             Ok(status) => serde_json::json!({
                 "ok": true,
                 "reachable": true,
+                "engine": true,
                 "status": status,
             }),
             Err(e) => serde_json::json!({
                 "ok": false,
                 "reachable": true,
+                "engine": true,
                 "error": format!("decode STATUS_ACK: {e}"),
             }),
         },
-        // 502 Bad Gateway from the engine means the connect/STATUS frame
-        // round-trip itself failed — surface as "not running" rather
-        // than as an engine error so the UI can render "Not reachable".
+        // 502 Bad Gateway from the engine means the engine DID answer and its
+        // connect/STATUS frame round-trip to the console failed — surface as
+        // "not running" rather than as an engine error so the UI can render
+        // "Not reachable". This is the only shape that earns a console verdict.
         Ok(r) => {
             let code = r.status();
             let body = r.text().await.unwrap_or_default();
             serde_json::json!({
                 "ok": false,
                 "reachable": false,
+                "engine": true,
                 "error": if body.is_empty() {
                     format!("engine returned HTTP {code}")
                 } else {
@@ -153,9 +175,12 @@ pub async fn payload_check(ip: String) -> serde_json::Value {
                 },
             })
         }
+        // Connection refused / timed out / reset: the engine side of the
+        // proxy failed, so the console was never consulted.
         Err(e) => serde_json::json!({
             "ok": false,
             "reachable": false,
+            "engine": false,
             "error": e.to_string(),
         }),
     }

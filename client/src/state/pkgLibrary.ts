@@ -18,6 +18,7 @@ import {
   installFreeBytes,
   consoleReadiness,
   pkgInstalledInventory,
+  pkgInstallPreflight,
 } from "../api/ps5";
 import { processList, type ExternalPkg } from "../api/ps5";
 import { formatBytes } from "../lib/format";
@@ -87,6 +88,13 @@ export const PKG_MAY_NOT_LAUNCH_MESSAGE =
  *  success: callers must keep the source package and must not mark it installed. */
 export const PKG_ACCEPTED_UNVERIFIED_HINT =
   "The PS5 accepted the install request, but ps5upload couldn’t verify that installation completed. Check the PS5 home screen and Notifications / Downloads. The staged package was kept so you can retry, or use Settings → System → Debug Settings → Game → Package Installer.";
+
+/** Shown while the app can't reach the engine that is tracking the install.
+ *  Deliberately does NOT call the install failed: the engine owns the install
+ *  state (and, for a Stream install, is the web server the console is pulling
+ *  from), so an unreachable engine means the install is UNWATCHED, not broken. */
+export const PKG_ENGINE_BLIND_HINT =
+  "Lost contact with the ps5upload engine, which is the only thing that can report this install — it may still be running. Still watching; nothing has been cancelled.";
 
 /** Whether an install response indicates the title may not launch.
  *
@@ -928,6 +936,43 @@ const PKG_VERIFY_POLL_MS = 2_500;
  *  assume success — `completed` stays false so the pkg is KEPT (never delete on
  *  uncertainty). */
 const PKG_VERIFY_MAX_POLL_ERRORS = 5;
+/** How long an install may stay UNWATCHED because the engine is unreachable
+ *  before we stop claiming to watch it. Generous on purpose: an engine restart
+ *  is seconds, and a healthy install must not be written off for one. */
+const PKG_VERIFY_ENGINE_BLIND_MS = 5 * 60 * 1000;
+
+/**
+ * Tell the two shapes of a `pkg_install_status` failure apart, because only
+ * one of them is bad news.
+ *
+ * The engine owns install state, and (for a Stream install) is also the HTTP
+ * server the console pulls the package from — so it is the only thing that can
+ * report on an install, and the only thing whose absence proves nothing about
+ * it. An unreachable ENGINE therefore means "state unknown, keep watching";
+ * an engine that answers "no install session <id>" means the state is gone for
+ * good, since sessions live in engine memory and die with the process. Both
+ * arrive here as strings, which is why this is a string match rather than a
+ * typed error — and why both shapes are listed: the desktop app's errors come
+ * from `get_json` in ps5_engine.rs ("engine request failed: …"), while the
+ * browser build's come straight from `fetch` (Chrome "Failed to fetch",
+ * Safari "Load failed", an AbortSignal timeout, a refused socket). A message
+ * that matches neither is classified as a real error and burns the retry
+ * budget, which is the safe direction: that budget only ends the watch.
+ */
+function classifyStatusPollError(
+  raw: string,
+): "engine-unreachable" | "session-gone" | "other" {
+  // Checked first: a 404 body is the engine answering, whatever else it says.
+  if (/no install session/i.test(raw)) return "session-gone";
+  if (
+    /engine request failed|failed to fetch|fetch failed|networkerror|load failed|signal timed out|timeouterror|econnrefused|connection refused/i.test(
+      raw,
+    )
+  ) {
+    return "engine-unreachable";
+  }
+  return "other";
+}
 
 // ── Console-readiness gate ───────────────────────────────────────────────────
 // A console goes unresponsive on the AppListRegistered frame while it recovers
@@ -1037,6 +1082,88 @@ export const PKG_PATCH_REGRESSED_HINT =
 export const PKG_PATCH_REJECTED_HINT =
   "This update couldn’t be applied. The PS5 itself declined it — most often because the update doesn’t match your installed version of the game, or the base game isn’t installed yet. Your base game is untouched. Check that this update is meant for the version you have installed, and that the base game is installed first.";
 
+/**
+ * One observation of an in-flight install, as the engine's status poll reports
+ * it. `phase` is the engine's own state for the session:
+ *
+ *   `queued`   — the console hasn't asked for the package yet (Stream: nothing
+ *                fetched; staged: BGFT registered but not downloading)
+ *   `download` — bytes are moving. For a Stream install this is the console
+ *                pulling from this computer, and `transferBytes` tracks it.
+ *   `install`  — everything is transferred; Sony is writing to disk
+ *   `done`     — verified complete
+ *   `error`    — terminal failure, `stalled` distinguishes a flatline
+ *
+ * Exported so the install UI can name the state rather than guess at it.
+ */
+export interface InstallSample {
+  phase: string;
+  /** Bytes observed landing on the console (free-space drop / title-dir size). */
+  installedBytes: number;
+  /** Bytes the console has fetched from us. Stream installs only; 0 when staged. */
+  transferBytes: number;
+  total: number;
+  /** `pkg-host` responses answered. 0 = the console never fetched anything. */
+  servedRequests: number;
+  stalled: boolean;
+  acceptedUnverified: boolean;
+  /** Replaces the derived line when set — used to say why the numbers above
+   *  are no longer updating (e.g. the engine went away). */
+  note?: string;
+}
+
+/** Bytes as a short human string: MB below a GB, GB above. */
+function fmtBytes(n: number): string {
+  if (n >= 1024 * 1024 * 1024)
+    return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(0)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${n} B`;
+}
+
+/**
+ * Name the state a live install is in, and where its progress bar should point.
+ *
+ * The engine reports `queued` → `download` → `install`; the client used to
+ * collapse all three into one static "Installing…" string, so a Stream install
+ * looked identical whether the console had not started, was pulling gigabytes at
+ * 90 MB/s, or was finished transferring and writing. Exported for unit testing.
+ *
+ * Progress is `max(transferBytes, installedBytes)` rather than either alone:
+ * both are lower bounds on the same package measured against the same total, so
+ * the max never runs backwards across the download→install handover.
+ */
+export function describeInstallSample(
+  s: InstallSample,
+  bytesPerSec = 0,
+): { detail: string; current: number; pct: number } {
+  const current = Math.max(s.transferBytes, s.installedBytes);
+  const pct =
+    s.total > 0 ? Math.min(100, Math.floor((100 * current) / s.total)) : 0;
+  const speed = bytesPerSec > 0 ? ` at ${fmtBytes(bytesPerSec)}/s` : "";
+  let detail: string;
+  if (s.note) {
+    // A caller-supplied explanation wins: the numbers below it are the last
+    // ones we could read, and the note says why they aren't moving.
+    return { detail: s.note, current, pct };
+  }
+  switch (s.phase) {
+    case "queued":
+      detail = "Waiting for the PS5 to start…";
+      break;
+    case "download":
+      detail = `Streaming to the PS5 — ${pct}% (${fmtBytes(current)} of ${fmtBytes(s.total)})${speed}`;
+      break;
+    case "install":
+      detail = `The PS5 is installing the package — ${pct}%${speed}`;
+      break;
+    default:
+      detail = `Installing on the PS5… ${pct}%`;
+      break;
+  }
+  return { detail, current, pct };
+}
+
 /** What the install tracker concludes. */
 interface VerifyOutcome {
   /** Confirmed complete — the title registered (or byte-settled on
@@ -1050,6 +1177,13 @@ interface VerifyOutcome {
   acceptedUnverified: boolean;
   message: string;
   launchable?: boolean | null;
+  /**
+   * Whether the engine reported a terminal state. `false` means we stopped
+   * watching while the install may still be running (safety cap, poll errors,
+   * an engine too old to answer) — the caller must then NOT tear down the
+   * serving session, because doing so aborts a live install.
+   */
+  trackedToTerminal: boolean;
 }
 
 /**
@@ -1062,25 +1196,33 @@ interface VerifyOutcome {
  * poll until terminal, so a 25 GB or 200 GB install is tracked to actual
  * completion instead of being declared done after 100s and deleted mid-write.
  *
- * `onProgress(installedBytes, total)` is called each poll so callers can render
- * a live install % for large titles.
+ * `onState(sample)` is called each poll so callers can render a live % and name
+ * the phase. A Stream install spends most of its wall clock in the transfer, so
+ * `transferBytes` (not `installedBytes`) is what moves then.
  */
 async function verifyInstallCompleted(
   session: string | undefined,
-  onProgress?: (installedBytes: number, total: number) => void,
+  onState?: (sample: InstallSample) => void,
 ): Promise<VerifyOutcome> {
-  const unverified = (): VerifyOutcome => ({
+  // `trackedToTerminal` is false for every give-up path: the engine never said
+  // the install ended, so it may still be running and reading from the session.
+  const unverified = (trackedToTerminal = false): VerifyOutcome => ({
     completed: false,
     failed: false,
     stalled: false,
     acceptedUnverified: true,
     message: PKG_ACCEPTED_UNVERIFIED_HINT,
+    trackedToTerminal,
   });
   // No session id ⇒ older engine (or a test harness) that can't report status.
   // Acceptance without a status session is not proof of completion.
   if (!session) return unverified();
   const safetyDeadline = Date.now() + PKG_VERIFY_SAFETY_CAP_MS;
   let pollErrors = 0;
+  // When the engine stopped answering, and the last state we managed to read.
+  // Both only matter while it is unreachable; see the catch below.
+  let engineBlindSince = 0;
+  let lastSample: InstallSample | null = null;
   while (Date.now() < safetyDeadline) {
     await sleep(PKG_VERIFY_POLL_MS);
     try {
@@ -1095,15 +1237,30 @@ async function verifyInstallCompleted(
         total?: number;
         stalled?: boolean;
         accepted_unverified?: boolean;
+        // Transfer counters (engine ≥ this release). Absent on older engines,
+        // so the stream UI falls back to the phase alone.
+        transfer_bytes?: number;
+        served_requests?: number;
       };
       // An engine that doesn't speak status returns no `phase` — treat as
       // accepted-but-unverified, not as a manufactured success.
       if (typeof s?.phase !== "string") return unverified();
+      // The engine answered, so whatever outage was in progress is over.
+      engineBlindSince = 0;
       if (
         typeof s.installed_bytes === "number" &&
         typeof s.total === "number"
       ) {
-        onProgress?.(s.installed_bytes, s.total);
+        lastSample = {
+          phase: s.phase,
+          installedBytes: s.installed_bytes,
+          transferBytes: s.transfer_bytes ?? 0,
+          total: s.total,
+          servedRequests: s.served_requests ?? 0,
+          stalled: !!s.stalled,
+          acceptedUnverified: !!s.accepted_unverified,
+        };
+        onState?.(lastSample);
       }
       if (s.phase === "error") {
         // Distinguish a stall (flatlined, pkg kept, retry) from a Sony-reported
@@ -1116,6 +1273,7 @@ async function verifyInstallCompleted(
             acceptedUnverified: false,
             message: PKG_STALL_HINT,
             launchable: s.launchable,
+            trackedToTerminal: true,
           };
         }
         const code = (s.err_code ?? 0) >>> 0;
@@ -1131,12 +1289,15 @@ async function verifyInstallCompleted(
             ? `${sony} — ${PKG_ASYNC_FAILED_HINT}`
             : PKG_ASYNC_FAILED_HINT,
           launchable: s.launchable,
+          trackedToTerminal: true,
         };
       }
       if (s.phase === "done") {
         if (s.accepted_unverified) {
+          // The engine reported a terminal state (it stopped tracking); this is
+          // the one unverified outcome that IS terminal.
           return {
-            ...unverified(),
+            ...unverified(true),
             launchable: s.launchable,
           };
         }
@@ -1149,13 +1310,41 @@ async function verifyInstallCompleted(
           acceptedUnverified: false,
           message: "",
           launchable: s.launchable,
+          trackedToTerminal: true,
         };
       }
       pollErrors = 0; // a clean in-progress poll resets the error streak
-    } catch {
-      // Session GC'd or a sustained blip: after a few, give up tracking — but
-      // do NOT assume success. `completed:false` keeps the pkg (never delete on
-      // uncertainty); the install may well have finished, so don't shout error.
+    } catch (e) {
+      const raw = e instanceof Error ? e.message : String(e);
+      const kind = classifyStatusPollError(raw);
+      // The ENGINE is the holder of install state — and for a Stream install
+      // it is also the web server the console is pulling from. So an engine
+      // that doesn't answer says nothing about the install: it is UNWATCHED,
+      // and it is most likely still running fine. Treating this like any
+      // other poll error used to abandon the watch after 5 polls (~12 s) —
+      // shorter than a desktop engine restart — and report "couldn't verify"
+      // for an install that then completed perfectly. Keep watching instead,
+      // and say so, but only for so long: past the blind cap, holding the
+      // install "in progress" in the UI forever is worse than admitting we
+      // lost sight of it (the session is kept either way, so nothing that may
+      // still be running gets cancelled).
+      if (kind === "engine-unreachable") {
+        if (!engineBlindSince) engineBlindSince = Date.now();
+        if (lastSample)
+          onState?.({ ...lastSample, note: PKG_ENGINE_BLIND_HINT });
+        if (Date.now() - engineBlindSince >= PKG_VERIFY_ENGINE_BLIND_MS) {
+          return { ...unverified(), message: PKG_ENGINE_BLIND_HINT };
+        }
+        continue;
+      }
+      // The engine answered and doesn't have this session. Sessions live in
+      // engine memory, so this state is gone for good — polling on cannot
+      // learn anything more, and neither can the caller cancel it.
+      if (kind === "session-gone") return unverified();
+      // Anything else: a real, repeating error. After a few, give up tracking
+      // — but do NOT assume success. `completed:false` keeps the pkg (never
+      // delete on uncertainty); the install may well have finished, so don't
+      // shout error.
       if (++pollErrors >= PKG_VERIFY_MAX_POLL_ERRORS) {
         return unverified();
       }
@@ -1574,10 +1763,10 @@ async function runPkgInstallCore(
   // the single source of truth for staging deletion now — previously the engine
   // always deleted, ignoring the setting (the reported data-loss bug).
   deleteStaging: boolean,
-  // Called each status poll with the install's live byte progress, so the UI
-  // can render a real % for large titles (Sony's BGFT progress isn't
-  // meaningful on the file:// staging path). Optional — no-op if omitted.
-  onProgress?: (installedBytes: number, total: number) => void,
+  // Called each status poll with the install's live state, so the UI can render
+  // a real % and name the phase (Sony's BGFT progress isn't meaningful on the
+  // file:// staging path). Optional — no-op if omitted.
+  onProgress?: (sample: InstallSample) => void,
   // Called with a human-readable status line while the install waits on the
   // console-readiness gate (pre-install + DPI transient retry). Lets the caller
   // surface "Waiting for the PS5 to be ready…" instead of a frozen UI.
@@ -1615,7 +1804,34 @@ async function runPkgInstallCore(
   // from the staged pkg when we didn't send one, so this is authoritative for
   // "was this treated as a patch" even on the USB/queue/File-System paths.
   let resolvedType = packageType ?? "";
+  // Local name for the messages below. NOT the bare identifier `name`, which
+  // resolves to `window.name` in this scope (and is deprecated) — there is no
+  // local one here, since the caller owns the display label.
+  const pkgLabel = basenameOf(localPs5Path) || contentId || "package";
   try {
+    // Say what the console already has, using the engine's own verdict, before
+    // the install frame is sent. The engine's guards cover some of this (a
+    // staged re-install of a full game is refused outright, a patch with no base
+    // likewise), but nothing reported the ordinary case — "this exact package is
+    // already here" — and a client-side check cannot see a PS5 debug package at
+    // all, whose console artifact is the inner image rather than the container
+    // we hold. Informational: a re-install is a legitimate repair.
+    if (contentId) {
+      const pre = await pkgInstallPreflight(host, contentId, {
+        packageType,
+        size: expected?.size,
+        fingerprint: expected?.fingerprint,
+      });
+      if (pre?.state === "installed") {
+        onStatus?.(
+          `${pkgLabel} is already installed on the PS5${pre.installedVersion ? ` (version ${pre.installedVersion})` : ""} — reinstalling over it…`,
+        );
+      } else if (pre?.state === "different_version_installed") {
+        onStatus?.(
+          `${pkgLabel}: ${pre.detail} — installing this build over it…`,
+        );
+      }
+    }
     const r = (await invoke("pkg_install_start", {
       ps5Addr: mgmtAddr(host),
       path: null,
@@ -1848,7 +2064,7 @@ export async function runPkgInstall(
   contentId: string | null,
   packageType: string | null,
   deleteStaging: boolean,
-  onProgress?: (installedBytes: number, total: number) => void,
+  onProgress?: (sample: InstallSample) => void,
   onStatus?: (msg: string) => void,
   expected?: PkgExpectedIdentity,
   /** `APP_VER` the package declares. Enables the post-install check that an
@@ -1875,12 +2091,16 @@ export async function runPkgInstall(
       contentId,
       packageType,
       deleteStaging,
-      (installedBytes, total) => {
-        latestProgress = { current: installedBytes, total, unit: "bytes" };
+      (sample) => {
+        latestProgress = {
+          current: sample.installedBytes,
+          total: sample.total,
+          unit: "bytes",
+        };
         useTaskStore
           .getState()
           .updateTask(taskId, { progress: latestProgress });
-        onProgress?.(installedBytes, total);
+        onProgress?.(sample);
       },
       (message) => {
         useTaskStore.getState().updateTask(taskId, { detail: message });
@@ -2514,7 +2734,7 @@ const makePkgLibraryStore = () =>
           // Live install %: a large title installs over minutes — feed both the
           // inline notice and the global Activity bar so progress shows
           // everywhere. Guarded so a 0 total can't divide.
-          (installedBytes, total) => {
+          ({ installedBytes, total }) => {
             useActivityHistoryStore
               .getState()
               .update(actId, { bytes: installedBytes, totalBytes: total });
@@ -2816,6 +3036,12 @@ const makePkgLibraryStore = () =>
       const clearBusy = () =>
         set({ installing: false, busyNotice: null, installPending: false });
       let servingSession: string | null = null;
+      // Whether the serving session may be torn down at the end. Defaults to
+      // yes: every early return from the hand-off (daemon never came up, Sony
+      // refused) leaves nothing that could still be reading. It is cleared only
+      // where the install MIGHT be running — the ambiguous-acknowledgement path,
+      // and a verify that stopped watching before the engine said it was done.
+      let releaseServingSession = true;
       try {
         // Wait behind any active transfer — the DPI payload swap would kill
         // the transfer port mid-upload, same as install()/installExternal().
@@ -2892,6 +3118,29 @@ const makePkgLibraryStore = () =>
           set({ busyNotice: msg });
           useTaskStore.getState().updateTask(taskId, { detail: msg });
         };
+
+        // Ask the console what it already has, before moving a byte. This is the
+        // engine's own verdict, so it is the one that agrees with the completion
+        // check at the end — and it is the only way to know for a PS5 debug
+        // package, whose console-side artifact is the inner image and therefore
+        // never matches our fingerprint. Informational only: a re-install is a
+        // legitimate repair, so a hit is reported, not refused.
+        const pre = contentId
+          ? await pkgInstallPreflight(host, contentId, {
+              packageType:
+                meta.head?.package_type ||
+                pkgTypeForCategory(meta.head?.category, meta.head?.platform),
+              size: totalBytes,
+              fingerprint: meta.head?.fingerprint,
+            })
+          : null;
+        if (pre?.state === "installed") {
+          onStatus(
+            `${label} is already installed on the PS5${pre.installedVersion ? ` (version ${pre.installedVersion})` : ""} — reinstalling over it…`,
+          );
+        } else if (pre?.state === "different_version_installed") {
+          onStatus(`${label}: ${pre.detail} — installing this build over it…`);
+        }
         const startResp = (await invoke("pkg_install_start", {
           ps5Addr: mgmtAddr(host),
           path: localPcPath,
@@ -2941,15 +3190,6 @@ const makePkgLibraryStore = () =>
         // 3. Hand the session's pkg-host URL to the DPI daemon. The daemon
         //    pulls the pkg over HTTP; no staging copy lands on the PS5.
         const dpi = await runDpiDirectInstall(host, sessionId, onStatus);
-        if (totalBytes > 0 && dpi.bytesServed > 0) {
-          useTaskStore.getState().updateTask(taskId, {
-            progress: {
-              current: Math.min(dpi.bytesServed, totalBytes),
-              total: totalBytes,
-              unit: "bytes",
-            },
-          });
-        }
         if (dpi.daemonFailed) {
           return finishStreamTask({
             ok: false,
@@ -2981,6 +3221,9 @@ const makePkgLibraryStore = () =>
             });
             return finishStreamTask({ ok: true, mayNotLaunch: false });
           }
+          // The acknowledgement was lost and the artifact isn't on disk, so the
+          // install could still be running and pulling from this session.
+          releaseServingSession = false;
           return finishStreamTask({
             ok: false,
             acceptedUnverified: true,
@@ -3008,11 +3251,46 @@ const makePkgLibraryStore = () =>
           });
         }
 
-        // 4. Verify the title actually landed (DPI's `ok` alone isn't
-        //    proof — the daemon reports InstallByPackage's rc, not the
-        //    async install result). The pkg-host session is still alive
-        //    for this, then the engine GCs it.
-        const verdict = await verifyInstallCompleted(sessionId);
+        // 4. Track the install to a real terminal state (DPI's `ok` alone
+        //    isn't proof — the daemon reports InstallByPackage's rc, not the
+        //    async install result). The session is still alive for this, then
+        //    the engine GCs it.
+        //
+        //    This is also the only place the transfer is observable: the
+        //    hand-off in step 3 returns as soon as Sony *queues* the install,
+        //    and the console then pulls the package for however long that
+        //    takes. Polling the session's own counters is what turns that
+        //    window into a live bar and a rate instead of one frozen sentence.
+        const rateSamples: RateSample[] = [{ ts: Date.now(), bytes: 0 }];
+        let lastDetail = "";
+        const verdict0 = await verifyInstallCompleted(sessionId, (sample) => {
+          const now = Date.now();
+          pushRateSample(rateSamples, now, sample.transferBytes);
+          const bytesPerSec = computeRate(rateSamples, now);
+          const { detail, current } = describeInstallSample(
+            sample,
+            bytesPerSec,
+          );
+          if (detail !== lastDetail) {
+            lastDetail = detail;
+            set({ busyNotice: detail });
+          }
+          useTaskStore.getState().updateTask(taskId, {
+            detail,
+            ...(sample.total > 0
+              ? {
+                  progress: {
+                    current,
+                    total: sample.total,
+                    unit: "bytes" as const,
+                  },
+                }
+              : {}),
+            ...(bytesPerSec > 0 ? { rate: { bytesPerSec } } : {}),
+          });
+        });
+        const verdict = verdict0;
+        releaseServingSession = verdict.trackedToTerminal;
         if (verdict.completed) {
           pushNotification("success", `Installed ${label}`, {
             body: "Stream-install complete. The pkg was fetched over HTTP — nothing was staged on the PS5.",
@@ -3032,9 +3310,22 @@ const makePkgLibraryStore = () =>
             : verdict.message || "The install didn't complete.",
         });
       } catch (e) {
+        // An unexpected failure leaves the console's state unknown — a call that
+        // threw (a client timeout mid-hand-off) can still have queued a real
+        // install. Hold the session rather than hang up on it; the engine age-GCs
+        // it either way.
+        releaseServingSession = false;
         return finishStreamTask({ ok: false, message: pkgError(e) });
       } finally {
-        if (servingSession) {
+        // Cancel the serving session ONLY when it reached a real terminal state.
+        // `pkg_install_cancel` sets the session `cancelled`, and serve_handler
+        // then answers every subsequent fetch with 410 Gone — so cancelling a
+        // session whose install is still running hangs up on the console
+        // mid-transfer and turns a live install into a failed one. That is
+        // reachable any time `verifyInstallCompleted` gives up early (its
+        // safety cap, or five consecutive poll errors), and it was the default
+        // path for every stream install before this guard.
+        if (servingSession && releaseServingSession) {
           try {
             await invoke("pkg_install_cancel", { session: servingSession });
           } catch {
@@ -3083,9 +3374,12 @@ const makePkgLibraryStore = () =>
       const label = pkg.name || contentId || "package";
       let installAttempted = false;
       // Live install %, shared by the direct-from-USB and the copy-fallback paths.
-      const onProgress = (installedBytes: number, total: number) => {
-        if (total > 0) {
-          const pct = Math.min(99, Math.floor((installedBytes / total) * 100));
+      const onProgress = (sample: InstallSample) => {
+        if (sample.total > 0) {
+          const pct = Math.min(
+            99,
+            Math.floor((sample.installedBytes / sample.total) * 100),
+          );
           set({ busyNotice: `Installing ${label} from ${pkg.drive}… ${pct}%` });
         }
       };

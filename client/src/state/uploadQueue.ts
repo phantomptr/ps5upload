@@ -747,7 +747,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
               item.deletePkgAfterInstall !== false,
               // Surface the live install % on this console's pkg screen while a
               // large queued title installs in the background.
-              (installedBytes, total) => {
+              ({ installedBytes, total }) => {
                 if (total > 0) {
                   const pct = Math.min(
                     99,

@@ -128,6 +128,22 @@ pub struct InstallSession {
     /// Total response-body bytes served across Range requests. This may exceed
     /// package size when Sony retries a range; it is diagnostic, not progress.
     pub bytes_served: u64,
+    /// Highest byte the console has fetched, as a monotonic `end + 1` over
+    /// every Range response. `bytes_served` is a raw sum and is NOT a progress
+    /// ratio — Sony re-fetches ranges, and a measured 1.35 GB package pulled
+    /// 1.53 GB, i.e. the raw sum passes 100% well before the transfer ends.
+    pub transfer_bytes: u64,
+    /// Which granules of the package the console has received. `transfer_bytes`
+    /// is its derived `bytes()`; see `TransferCoverage` for why neither a raw
+    /// sum nor a furthest-offset can stand in for it.
+    pub transfer: TransferCoverage,
+    /// The DPI daemon's answer for a Stream/serve-only session, recorded on the
+    /// session rather than only in the HTTP reply. A caller that stopped waiting
+    /// (browser, proxy, or a client timeout) still gets the verdict from the
+    /// status poll, and a slow hand-off stops being an ambiguous outcome.
+    pub dpi_ok: Option<bool>,
+    pub dpi_rc: Option<i32>,
+    pub dpi_detail: String,
 }
 
 #[derive(Default)]
@@ -377,6 +393,10 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         .route("/api/pkg/install/sessions", get(install_sessions_handler))
         .route("/api/pkg/install/cancel", post(install_cancel_handler))
         .route("/api/pkg/installed", get(installed_pkg_inventory_handler))
+        // "Do you already have this?" answered by the same artifact matching the
+        // install tracker uses, so the UI and the completion check can't
+        // disagree. Read-only; safe to poll from the package list.
+        .route("/api/pkg/install/preflight", get(install_preflight_handler))
         // Install a staged .pkg through the standalone DPI daemon (:9040).
         // The daemon runs sceAppInstUtilAppInstallPkg from a clean loader
         // process — installs without the PlayGo gate. Caller stages the
@@ -581,6 +601,40 @@ fn package_kind_for_type(package_type: &str) -> &'static str {
     }
 }
 
+/// Whether an on-console artifact is the package we just installed.
+///
+/// PS4 packages land as the same bytes we served, so a sampled fingerprint
+/// (or exact size) is authoritative. A PS5 debug FPKG is a FIH container:
+/// Sony writes the *inner* image as `app.pkg`, whose size and fingerprint
+/// differ from the file we hosted. Hardware-observed on Minecraft
+/// (outer 1_345_936_761 / fp f9545e9c… vs inner 1_333_460_992 / fp c08d913d…).
+/// For those, matching ContentID on the category-specific artifact is the
+/// proof the title landed.
+fn artifact_identity_matches(
+    artifact: &InstalledPkgArtifact,
+    wanted_kind: &str,
+    content_id: &str,
+    expected_size: u64,
+    expected_fingerprint: &str,
+    package_type: &str,
+) -> bool {
+    if !expected_fingerprint.is_empty() && artifact.fingerprint == expected_fingerprint {
+        return true;
+    }
+    if package_type.starts_with("PS5") {
+        return !content_id.is_empty() && artifact.content_id == content_id && artifact.size > 0;
+    }
+    if expected_size > 0 && artifact.size != expected_size {
+        return false;
+    }
+    // DLC ContentIDs are per-add-on and therefore useful even for legacy
+    // rows. Base/update ContentIDs are shared, so size is their fallback.
+    if wanted_kind == "dlc" && !content_id.is_empty() && !artifact.content_id.is_empty() {
+        return artifact.content_id == content_id;
+    }
+    expected_fingerprint.is_empty()
+}
+
 /// Verify the exact install target, not merely the shared base title.
 ///
 /// A patch install used to call `verify_launchable(content_id)`, which sees the
@@ -618,18 +672,14 @@ fn verify_installed_artifact(
         return InstalledArtifactCheck::Absent;
     }
     let matched = candidates.iter().any(|a| {
-        if !expected_fingerprint.is_empty() {
-            return a.fingerprint == expected_fingerprint;
-        }
-        if expected_size > 0 && a.size != expected_size {
-            return false;
-        }
-        // DLC ContentIDs are per-add-on and therefore useful even for legacy
-        // rows. Base/update ContentIDs are shared, so size is their fallback.
-        if wanted_kind == "dlc" && !content_id.is_empty() && !a.content_id.is_empty() {
-            return a.content_id == content_id;
-        }
-        true
+        artifact_identity_matches(
+            a,
+            wanted_kind,
+            content_id,
+            expected_size,
+            expected_fingerprint,
+            package_type,
+        )
     });
     if matched {
         InstalledArtifactCheck::Match
@@ -667,13 +717,176 @@ async fn installed_pkg_inventory_handler(Query(q): Query<InstalledPkgQuery>) -> 
     if !valid_title_id(&q.title_id) {
         return json_err(StatusCode::BAD_REQUEST, "invalid title_id");
     }
-    let addr = q.addr;
+    // Normalize the port like every other entry point: the inventory is read
+    // over :9114, and an address carrying a different port doesn't fail — it
+    // reports an empty console.
+    let addr = normalize_mgmt_addr(&q.addr);
     let title_id = q.title_id;
-    match tokio::task::spawn_blocking(move || installed_pkg_inventory(&addr, &title_id)).await {
-        Ok(inventory) => json_ok(&inventory),
+    match tokio::task::spawn_blocking(move || {
+        // Reachability, checked separately. An unreadable console and a
+        // console with nothing installed both produce an empty artifact list,
+        // and callers render the second as "not installed" — a wrong verdict
+        // about a title that is sitting right there. Say which one it is.
+        let reachable = ps5upload_core::volumes::list_volumes(&addr).is_ok();
+        (reachable, installed_pkg_inventory(&addr, &title_id))
+    })
+    .await
+    {
+        Ok((false, _)) => json_err(
+            StatusCode::BAD_GATEWAY,
+            "the console didn't answer, so its installed packages couldn't be read",
+        ),
+        Ok((true, inventory)) => json_ok(&inventory),
         Err(e) => json_err(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("installed pkg inventory task failed: {e}"),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PreflightQuery {
+    pub addr: String,
+    pub content_id: String,
+    #[serde(default)]
+    pub package_type: String,
+    #[serde(default)]
+    pub expected_size: u64,
+    #[serde(default)]
+    pub package_fingerprint: String,
+}
+
+/// What the console already has, for the package the user is about to install.
+///
+/// The engine's own artifact matching is the answer to "is this installed?"
+/// deliberately lives HERE rather than in the client: the client used to compare
+/// fingerprints itself and disagreed with the engine, so a PS5 FPKG could be
+/// reported as not-installed in the UI while the engine's own completion check
+/// considered it installed (Sony writes a debug package's *inner* image as
+/// `app.pkg`, so its size and hash can never equal the outer container's).
+#[derive(Debug, Serialize)]
+pub struct InstallPreflightResponse {
+    /// `installed`                 — these exact bytes are already on the console
+    /// `different_version_installed` — the title has this kind of artifact, but not this build
+    /// `base_missing`              — a patch/add-on with no base game to apply to
+    /// `not_installed`             — nothing for this title in this category
+    /// `unknown`                   — the console couldn't be read; never act on this
+    pub state: &'static str,
+    pub title_id: String,
+    /// Human-readable one-liner for the UI; empty when nothing needs saying.
+    pub detail: String,
+    /// The console's artifacts for this title, so the UI can show what IS there.
+    pub installed_artifacts: Vec<InstalledPkgArtifact>,
+    /// The version currently installed, when the console reports one.
+    pub installed_version: Option<String>,
+    /// `category` from the package being asked about (`gd`, `gp`, `ac`).
+    pub category: String,
+}
+
+fn install_preflight(
+    addr: &str,
+    content_id: &str,
+    package_type: &str,
+    expected_size: u64,
+    expected_fingerprint: &str,
+) -> InstallPreflightResponse {
+    let title_id =
+        ps5upload_core::pkg_install::title_id_from_content_id(content_id).unwrap_or_default();
+    let category = if package_type.ends_with("DP") {
+        "gp"
+    } else if package_type.ends_with("AC") {
+        "ac"
+    } else {
+        "gd"
+    };
+    let mut resp = InstallPreflightResponse {
+        state: "unknown",
+        title_id: title_id.clone(),
+        detail: String::new(),
+        installed_artifacts: Vec::new(),
+        installed_version: None,
+        category: category.to_string(),
+    };
+    if title_id.is_empty() {
+        resp.state = "unknown";
+        resp.detail = "the package's content id has no title id to look up".into();
+        return resp;
+    }
+    // Reachability, checked BEFORE the inventory is trusted. The inventory
+    // swallows every read error into an empty artifact list, so an unreachable
+    // console is indistinguishable from a console with nothing installed — and
+    // `not_installed` is the one answer that must never be wrong here, because a
+    // caller reads it as "there is nothing to replace". A volume list is the
+    // cheapest frame that answers "is this console there at all".
+    if ps5upload_core::volumes::list_volumes(addr).is_err() {
+        resp.state = "unknown";
+        resp.detail =
+            "the console didn't answer, so its installed packages couldn't be read".into();
+        return resp;
+    }
+    let inventory = installed_pkg_inventory(addr, &title_id);
+    resp.installed_artifacts = inventory.artifacts.clone();
+    resp.installed_version = read_installed_app_ver(&normalize_mgmt_addr(addr), &title_id)
+        .filter(|v| !v.trim().is_empty());
+
+    // A patch or add-on applies to a base that must already be there. Sony
+    // accepts the request without one and then writes nothing, which used to
+    // surface as a 10-minute stall — the answer is knowable now, so say it now.
+    if category != "gd" {
+        let base_present = inventory.artifacts.iter().any(|a| a.kind == "base");
+        if !base_present {
+            resp.state = "base_missing";
+            resp.detail =
+                "the base game isn't installed, so this can't be applied (Sony accepts the request and then writes nothing)".into();
+            return resp;
+        }
+    }
+
+    resp.state = match verify_installed_artifact(
+        addr,
+        content_id,
+        package_type,
+        expected_size,
+        expected_fingerprint,
+    ) {
+        InstalledArtifactCheck::Match => "installed",
+        InstalledArtifactCheck::Different => "different_version_installed",
+        InstalledArtifactCheck::Absent => "not_installed",
+        InstalledArtifactCheck::Unsupported => "unknown",
+    };
+    resp.detail = match resp.state {
+        "installed" => "this exact package is already installed".into(),
+        "different_version_installed" => match resp.installed_version.as_deref() {
+            Some(v) => format!("a different version is installed (version {v} on the console)"),
+            None => "a different version of this content is installed".into(),
+        },
+        "unknown" => "the console's installed packages couldn't be read".into(),
+        _ => String::new(),
+    };
+    resp
+}
+
+async fn install_preflight_handler(Query(q): Query<PreflightQuery>) -> Response<Body> {
+    let addr = q.addr;
+    let content_id = q.content_id;
+    let package_type = q.package_type;
+    let res = tokio::task::spawn_blocking(move || {
+        // Two blocking FS probes plus an app.db read: keep them off the reactor,
+        // this endpoint is polled from the UI.
+        install_preflight(
+            &addr,
+            &content_id,
+            &package_type,
+            q.expected_size,
+            &q.package_fingerprint,
+        )
+    })
+    .await;
+    match res {
+        Ok(resp) => json_ok(&resp),
+        Err(e) => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("preflight task failed: {e}"),
         ),
     }
 }
@@ -1247,7 +1460,18 @@ async fn install_start_handler(
         },
         package_type: package_type.clone(),
         package_fingerprint,
-        ps5_mgmt_addr: req.ps5_addr.clone(),
+        // Normalize to the MANAGEMENT port, always. Every observation this
+        // session makes — the on-disk artifact check, the free-space and
+        // title-dir signals that decide `installed_bytes`, the Sony-log
+        // verdict — goes to :9114. A caller that sends a bare IP (a script,
+        // the web UI, a future client) used to get a session whose every
+        // filesystem frame failed instantly: 0 ms status polls, `Absent`
+        // forever, `installed_bytes: 0`, and a phase stuck on `install` until
+        // the 600 s startup-stall deadline fired. Measured 2026-09-14 with a
+        // portless addr while the exact package was already installed on the
+        // console — the tracker could not see it. `req.ps5_addr` may also
+        // arrive on the transfer port (:9113), which `mgmt_addr_for` swaps.
+        ps5_mgmt_addr: normalize_mgmt_addr(&req.ps5_addr),
         task_id: None,
         err_code: 0,
         detail: String::new(),
@@ -1267,6 +1491,11 @@ async fn install_start_handler(
         accepted_unverified: false,
         requests_served: 0,
         bytes_served: 0,
+        transfer_bytes: 0,
+        transfer: TransferCoverage::new(expected_size),
+        dpi_ok: None,
+        dpi_rc: None,
+        dpi_detail: String::new(),
     };
 
     // Insert *before* sending the install frame so the HTTP listener
@@ -1595,6 +1824,25 @@ pub struct StatusResponse {
     ///                   payloads/clients see this and behave as before.
     #[serde(default)]
     pub launchable: Option<bool>,
+    /// Bytes the console has fetched from `/pkg-host/`, as the furthest byte it
+    /// asked for (monotonic, clamped to `total`). Only a Stream/serve-only
+    /// session moves this — a staged install reads from PS5-local disk and
+    /// leaves it 0. Drives the client's transfer bar and its speed readout for
+    /// the window where the install has not started writing yet.
+    #[serde(default)]
+    pub transfer_bytes: u64,
+    /// `pkg-host` responses answered for this session. 0 means the console
+    /// never asked for a byte — which separates "Sony refused the request
+    /// before fetching" from a failure after the transfer began.
+    #[serde(default)]
+    pub served_requests: u64,
+    /// The DPI daemon's answer for a Stream session, replayed here so a caller
+    /// that stopped waiting (client timeout, proxy, browser navigation) still
+    /// learns the verdict. `None` until the daemon replies.
+    #[serde(default)]
+    pub dpi_ok: Option<bool>,
+    #[serde(default)]
+    pub dpi_rc: Option<i32>,
 }
 
 /// Default maximum age (seconds) of an install session before the
@@ -1791,9 +2039,288 @@ enum InstallVerdict {
     Stalled,
 }
 
+/// Phase to report while an install is still in flight — i.e. the tracker has
+/// ruled out done, error and stall, and the install is simply not finished.
+///
+/// A staged install reports `install` throughout, because BGFT's own phase
+/// already says `download` while it pulls and there is nothing to add.
+///
+/// A Stream (serve-only) session has no BGFT task to ask, so the transfer's own
+/// counters are the only evidence of where it is:
+///
+///   * no `pkg-host` request yet → `queued`. Sony has not started; a stall here
+///     is "the console never asked", which is a different problem from a slow
+///     transfer and must not look like one.
+///   * bytes still arriving     → `download`. This is the window a Stream
+///     install spends most of its wall clock in, and the one the UI needs to
+///     label "streaming" and drive a progress bar from.
+///   * everything fetched       → `install`. Sony is writing.
+///
+/// The transition is driven by `transfer_bytes`, not `bytes_served`: the summed
+/// byte count overshoots the package when Sony re-fetches a range (measured
+/// 1.53 GB over a 1.35 GB package), so it can read as complete well before it is.
+fn in_flight_phase(
+    is_serve_only: bool,
+    requests_served: u64,
+    transfer_bytes: u64,
+    total: u64,
+) -> InstallPhase {
+    if !is_serve_only {
+        return InstallPhase::Install;
+    }
+    if requests_served == 0 {
+        InstallPhase::Queued
+    } else if total > 0 && transfer_bytes < total {
+        InstallPhase::Download
+    } else {
+        InstallPhase::Install
+    }
+}
+
+/// How many granules a package is divided into for transfer progress. Fixed, so
+/// the bitmap stays 8 KiB per session whatever the package size — accuracy far
+/// beyond what a progress bar needs (1/65536 of the package).
+const COVERAGE_GRANULES: u64 = 1 << 16;
+
+/// How much of a package the console has actually received.
+///
+/// Neither obvious metric works, and both were measured on hardware:
+///
+///   * **The sum of response bodies** overshoots, because Sony re-fetches
+///     ranges. A 1.35 GB package served 1.53 GB, so the sum passes 100% while
+///     the transfer is still going.
+///   * **The furthest byte asked for** jumps to the *end of the file* on the
+///     first requests: a debug FPKG is a container with a trailing index, so
+///     Sony reads the tail (and the header) before the bulk. That made progress
+///     read 100% at 7% transferred, which is how this was caught.
+///
+/// A bitmap of granules answers the question that is actually being asked —
+/// "how much of this file has arrived" — and is immune to both out-of-order
+/// ranges and duplicate fetches.
+#[derive(Debug, Clone)]
+pub struct TransferCoverage {
+    /// Bytes per granule: `total / COVERAGE_GRANULES`, rounded up (min 1).
+    granule: u64,
+    words: Vec<u64>,
+    covered: u64,
+    total: u64,
+}
+
+impl TransferCoverage {
+    pub fn new(total: u64) -> Self {
+        let granule = total.div_ceil(COVERAGE_GRANULES).max(1);
+        let granules = total.div_ceil(granule);
+        Self {
+            granule,
+            words: vec![0u64; granules.div_ceil(64) as usize],
+            covered: 0,
+            total,
+        }
+    }
+
+    /// Record that `[start, end]` (inclusive) has been received. Re-marking
+    /// already-covered granules is free, which is what makes a re-fetch
+    /// harmless.
+    pub fn mark(&mut self, start: u64, end: u64) {
+        if self.total == 0 {
+            return;
+        }
+        let last = end.min(self.total - 1);
+        if start > last {
+            return;
+        }
+        // At most COVERAGE_GRANULES iterations: a response body is capped at
+        // 16 MiB, and the granule size is chosen so the whole package spans
+        // exactly that many granules.
+        for idx in (start / self.granule)..=(last / self.granule) {
+            let Some(word) = self.words.get_mut((idx / 64) as usize) else {
+                break;
+            };
+            let bit = 1u64 << (idx % 64);
+            if *word & bit == 0 {
+                *word |= bit;
+                self.covered = self.covered.saturating_add(self.granule);
+            }
+        }
+    }
+
+    /// Bytes covered, never more than the package size.
+    pub fn bytes(&self) -> u64 {
+        self.covered.min(self.total)
+    }
+}
+
+/// `SCE_APP_INSTALLER_ERROR_ALREADY_RUNNING`-class "another install is in
+/// flight, ask again" rejection. The client retries these (it waits for the
+/// console to go ready, up to `DPI_MAX_ATTEMPTS`); the engine must not turn one
+/// into a terminal failure when it replays the DPI verdict from the session.
+const DPI_TRANSIENT_BUSY_RC: i32 = 0x8002_0002u32 as i32;
+
+/// What Sony's PlayGo/BGFT log says about one content id. Stream (serve-only)
+/// installs have no BGFT task_id we can poll, so this is the only way to see a
+/// post-transfer refusal such as 0x80A3000D instead of spinning until stall.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SonyLogVerdict {
+    Installed,
+    Refused { err_code: u32, detail: String },
+}
+
+/// Latest terminal PlayGo/BGFT line for `content_id` in a syslog snapshot.
+///
+/// The verdict lines name a *request number*, not the content id. Only the
+/// `[RequestInstall] begin` line carries the id, so that attempt is found
+/// first and its own lines are read after. Every line is re-scanned: the
+/// console's log rotates, and a marker kept by position can fall off between
+/// polls. Mirrors `scripts/ps5-install-watch.py`.
+fn sony_log_verdict(text: &str, content_id: &str) -> Option<SonyLogVerdict> {
+    if content_id.is_empty() {
+        return None;
+    }
+    let title_id =
+        ps5upload_core::pkg_install::title_id_from_content_id(content_id).unwrap_or_default();
+    let mut request: Option<String> = None;
+    for line in text.lines() {
+        let Some(rest) = line.split("[RequestInstall] begin (#").nth(1) else {
+            continue;
+        };
+        let Some((num, rest)) = rest.split_once(", ") else {
+            continue;
+        };
+        let cid = rest
+            .trim()
+            .trim_end_matches(')')
+            .trim_end_matches(',')
+            .trim();
+        if cid == content_id {
+            request = Some(num.trim().to_string());
+        }
+    }
+    let mut latest: Option<SonyLogVerdict> = None;
+    if let Some(req) = request.as_deref() {
+        let mine = format!("[Request #{req}]");
+        for line in text.lines() {
+            if !line.contains(&mine) {
+                continue;
+            }
+            if let Some(v) = parse_request_ended_line(line) {
+                latest = Some(v);
+            } else if let Some(v) = parse_transfer_ended_line(line) {
+                latest = Some(v);
+            }
+        }
+    }
+    for line in text.lines() {
+        if !line.contains(content_id) && (title_id.is_empty() || !line.contains(&title_id)) {
+            continue;
+        }
+        if let Some(v) = parse_bgft_task_ended_line(line) {
+            latest = Some(v);
+        }
+        if let Some(v) = parse_playgo_progress_error_line(line) {
+            latest = Some(v);
+        }
+    }
+    latest
+}
+
+fn parse_hex_err(s: &str) -> Option<u32> {
+    u32::from_str_radix(
+        s.trim().trim_start_matches("0x").trim_start_matches("0X"),
+        16,
+    )
+    .ok()
+}
+
+/// `[PlayGoCore][Request #2] request ended (state = 9, error = 0x80a3000d, …)`
+fn parse_request_ended_line(line: &str) -> Option<SonyLogVerdict> {
+    let rest = line.split("request ended (").nth(1)?;
+    let state = rest.split("state = ").nth(1)?.split(',').next()?.trim();
+    let err_hex = rest
+        .split("error = ")
+        .nth(1)?
+        .split([',', ')'])
+        .next()?
+        .trim();
+    let err_code = parse_hex_err(err_hex)?;
+    if state == "7" && err_code == 0 {
+        Some(SonyLogVerdict::Installed)
+    } else {
+        Some(SonyLogVerdict::Refused {
+            err_code,
+            detail: format!("request ended state={state} error=0x{err_code:08x}"),
+        })
+    }
+}
+
+/// `[PlayGoCore][Request #2] transfer ended (0x80b22416)` — ignore 0x0.
+fn parse_transfer_ended_line(line: &str) -> Option<SonyLogVerdict> {
+    let rest = line.split("transfer ended (").nth(1)?;
+    let hex = rest.split(')').next()?.trim();
+    let err_code = parse_hex_err(hex)?;
+    if err_code == 0 {
+        None
+    } else {
+        Some(SonyLogVerdict::Refused {
+            err_code,
+            detail: format!("transfer ended 0x{err_code:08x}"),
+        })
+    }
+}
+
+/// `Task 2000002f : …ended (state=0,runstate=2,error=0x80a3000d)`
+fn parse_bgft_task_ended_line(line: &str) -> Option<SonyLogVerdict> {
+    let rest = line.split("ended (state=").nth(1)?;
+    let state = rest.split(',').next()?.trim();
+    let run = rest.split("runstate=").nth(1)?.split(',').next()?.trim();
+    let err_hex = rest.split("error=").nth(1)?.split(')').next()?.trim();
+    let err_code = parse_hex_err(err_hex)?;
+    if state == "3" || (err_code == 0 && run == "4") {
+        Some(SonyLogVerdict::Installed)
+    } else {
+        Some(SonyLogVerdict::Refused {
+            err_code,
+            detail: format!("task ended state={state} runstate={run} error=0x{err_code:08x}"),
+        })
+    }
+}
+
+/// `Task 2000002f : playgo.progress.state=9, progress.error_code=0x80a3000d`
+fn parse_playgo_progress_error_line(line: &str) -> Option<SonyLogVerdict> {
+    let rest = line.split("progress.error_code=").nth(1)?;
+    let err_code = parse_hex_err(rest.split(',').next()?)?;
+    if err_code == 0 {
+        None
+    } else {
+        Some(SonyLogVerdict::Refused {
+            err_code,
+            detail: format!("playgo progress error=0x{err_code:08x}"),
+        })
+    }
+}
+
 /// Pure completion/stall decision — no I/O, fully unit-testable. This is the
 /// brain of the tracker; the handler only feeds it observations and acts on
 /// the verdict.
+/// The phase each verdict reports. Kept as one exhaustive mapping so a verdict
+/// cannot leave the phase stale: the arms of the tracker used to set the phase
+/// individually, and the one that forgot (Complete) silently reported a
+/// finished install as still installing for as long as it was polled.
+fn verdict_phase(
+    verdict: InstallVerdict,
+    is_serve_only: bool,
+    requests_served: u64,
+    transfer_bytes: u64,
+    total: u64,
+) -> InstallPhase {
+    match verdict {
+        InstallVerdict::Complete | InstallVerdict::AcceptedUnverified => InstallPhase::Done,
+        InstallVerdict::Stalled => InstallPhase::Error,
+        InstallVerdict::Installing => {
+            in_flight_phase(is_serve_only, requests_served, transfer_bytes, total)
+        }
+    }
+}
+
 fn install_verdict(obs: &TrackerObs) -> InstallVerdict {
     // Authoritative: the title's app.pkg landed on disk. Always wins, instantly
     // — independent of the byte math, which can only ever be an estimate.
@@ -1985,6 +2512,11 @@ async fn install_status_handler(
         cached_accepted_unverified,
         register_err_code,
         is_serve_only,
+        requests_served,
+        transfer_bytes,
+        dpi_ok,
+        dpi_rc,
+        dpi_detail,
     ) = {
         let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         match sessions.get(&q.session) {
@@ -2009,6 +2541,11 @@ async fn install_status_handler(
                 s.accepted_unverified,
                 s.err_code,
                 s.serve_only,
+                s.requests_served,
+                s.transfer_bytes,
+                s.dpi_ok,
+                s.dpi_rc,
+                s.dpi_detail.clone(),
             ),
         }
     };
@@ -2033,6 +2570,12 @@ async fn install_status_handler(
             cached_consumed,
             cached_stalled,
             cached_accepted_unverified,
+            TransferView {
+                bytes: transfer_bytes,
+                requests: requests_served,
+                dpi_ok,
+                dpi_rc,
+            },
         ));
     }
     // Off the reactor: this handler is polled ~1/s per active install, and the
@@ -2069,7 +2612,9 @@ async fn install_status_handler(
             }
         }
         None => PkgInstallStatus {
-            phase: InstallPhase::Done,
+            // The tracker below owns the terminal answer; this is only the
+            // phase to report while nothing is finished yet.
+            phase: in_flight_phase(is_serve_only, requests_served, transfer_bytes, total),
             downloaded: 0,
             total,
             // Carry the REGISTER rejection code instead of hardcoding 0.
@@ -2123,6 +2668,88 @@ async fn install_status_handler(
         }
     }
 
+    // Stream (serve-only) has no BGFT task_id. Sony still writes the real
+    // outcome to the console log after the HTTP transfer — including
+    // post-transfer refusals such as 0x80A3000D (firmware too old) that used
+    // to leave this handler spinning for the 600s stall. Require at least one
+    // pkg-host fetch so a retry cannot inherit the previous attempt's line.
+    if is_serve_only
+        && requests_served > 0
+        && !matches!(status.phase, InstallPhase::Error)
+        && !cancelled
+    {
+        let addr = ps5_addr.clone();
+        let cid = content_id.clone();
+        let log_verdict =
+            tokio::task::spawn_blocking(move || match ps5upload_core::hw::syslog_tail(&addr) {
+                Ok(text) => sony_log_verdict(&text, &cid),
+                Err(_) => None,
+            })
+            .await
+            .ok()
+            .flatten();
+        if let Some(SonyLogVerdict::Refused { err_code, detail }) = log_verdict {
+            crate::log_warn!(
+                "stream install refused by console: session={} content_id={} {}",
+                q.session,
+                content_id,
+                detail
+            );
+            status.phase = InstallPhase::Error;
+            status.err_code = err_code;
+            status.detail = ps5upload_core::pkg_install::err_code_message(err_code)
+                .map(|s| format!("{s} ({detail})"))
+                .unwrap_or(detail);
+            // A refused stream often still writes an app.db row with no
+            // app.pkg (a hollow tile). That blocks a later staged retry via
+            // the destructive-reinstall guard. Remove it when nothing landed.
+            if let Some(tid) = ps5upload_core::pkg_install::title_id_from_content_id(&content_id) {
+                let addr = ps5_addr.clone();
+                tokio::task::spawn_blocking(move || {
+                    let inv = installed_pkg_inventory(&addr, &tid);
+                    if inv.artifacts.is_empty() {
+                        match ps5upload_core::fs_ops::app_unregister(&addr, &tid) {
+                            Ok(_) => {
+                                crate::log_info!("cleared hollow tile after refused stream: {tid}")
+                            }
+                            Err(e) => crate::log_warn!("could not clear hollow tile {tid}: {e}"),
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    // The DPI daemon's answer, replayed from the session. A Stream caller that
+    // stopped waiting — an HTTP client timeout, a reverse proxy's 60 s default,
+    // a browser navigation — never saw the reply to `/api/pkg/dpi-direct-install`,
+    // and used to leave the session reporting "installing" for the full 600 s
+    // startup stall even though the daemon had already refused. Re-reading it
+    // here makes the hand-off's outcome independent of who is still listening.
+    if is_serve_only && !cancelled && !matches!(status.phase, InstallPhase::Error) {
+        if let Some(rc) = dpi_rc {
+            if dpi_ok == Some(false) && rc != DPI_TRANSIENT_BUSY_RC {
+                crate::log_warn!(
+                    "stream install refused by DPI daemon: session={} rc=0x{:08x} detail={}",
+                    q.session,
+                    rc as u32,
+                    dpi_detail
+                );
+                status.phase = InstallPhase::Error;
+                status.err_code = rc as u32;
+                status.detail = if dpi_detail.is_empty() {
+                    err_code_message(rc as u32)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| {
+                            format!("the PS5 installer refused (0x{:08X})", rc as u32)
+                        })
+                } else {
+                    dpi_detail
+                };
+            }
+        }
+    }
+
     // (`total` from the session is the fallback for build_status_response,
     // which prefers the BGFT-reported size when non-zero — BGFT reports 0
     // before the download starts.)
@@ -2145,7 +2772,14 @@ async fn install_status_handler(
     let mut terminal_complete = false;
     let mut stalled = false;
     let mut accepted_unverified = false;
-    if matches!(status.phase, InstallPhase::Done) {
+    // A serve-only session has no BGFT task to report a phase, so this tracker
+    // is the only thing that can say "done" for it — run it whenever the
+    // session is still live, not just on a synthesized Done. A staged session
+    // reaches here only when its payload reported Done (or, for a register
+    // reject with no task, when it has already failed and is excluded above).
+    let track = matches!(status.phase, InstallPhase::Done)
+        || (is_serve_only && !matches!(status.phase, InstallPhase::Error) && !cancelled);
+    if track {
         // A finished install changes which artwork exists on the console.
         // Drop the cached images for it so the new title's cover appears
         // immediately instead of waiting out the cache's TTL.
@@ -2236,9 +2870,20 @@ async fn install_status_handler(
                 }
             },
         };
-        match install_verdict(&obs) {
+        let verdict = install_verdict(&obs);
+        // One mapping decides the phase for every verdict, so no arm can
+        // leave it stale. See `verdict_phase`.
+        status.phase = verdict_phase(
+            verdict,
+            is_serve_only,
+            requests_served,
+            transfer_bytes,
+            total,
+        );
+        match verdict {
             InstallVerdict::Complete => {
-                // Confirmed done. `Some(true)` when the title registered;
+                // Confirmed done — the phase is already `Done`; see
+                // verdict_phase, the single place a verdict becomes a phase. `Some(true)` when the title registered;
                 // `None` on unverifiable FW that settled by byte-accounting
                 // (fall back to the may_not_launch heuristic, as before).
                 let via = if registered == Some(true) {
@@ -2270,7 +2915,6 @@ async fn install_status_handler(
                 // Synthetic DONE proves only that Sony accepted the request.
                 // End the spinner but keep the source package and avoid a
                 // green success until registration or byte-settle proves it.
-                status.phase = InstallPhase::Done;
                 accepted_unverified = true;
                 launchable = None;
                 status.detail =
@@ -2286,16 +2930,17 @@ async fn install_status_handler(
                 );
             }
             InstallVerdict::Installing => {
-                // Downgrade to Install: keeps the UI in "installing", surfaces
-                // the live % (installed_bytes/total), and skips the terminal/
-                // cleanup blocks so the next poll re-observes. The staging pkg
-                // is left in place — Sony's installer is still reading it.
-                status.phase = InstallPhase::Install;
+                // Not terminal. Its phase — `queued` before the console fetches
+                // anything, `download` while it pulls, `install` once the
+                // transfer is done — comes from verdict_phase, so the UI can
+                // name the state instead of showing one static "Installing…"
+                // through a minutes-long transfer. Skips the terminal/cleanup
+                // blocks, so the next poll re-observes and any staging pkg is
+                // left in place (Sony's installer may still be reading it).
             }
             InstallVerdict::Stalled => {
                 // No disk progress past the adaptive deadline. Terminal, but
                 // NOT complete: report an error AND KEEP the pkg (retry path).
-                status.phase = InstallPhase::Error;
                 stalled = true;
                 launchable = Some(false);
                 if status.detail.is_empty() {
@@ -2427,6 +3072,28 @@ async fn install_status_handler(
             .unwrap_or(cached_consumed)
     };
 
+    // Re-read the transfer counters under the lock: they move on every Range
+    // response, and the values captured at the top of the handler are already
+    // stale by the time the tracker has run. The DPI verdict is kept from the
+    // entry read — the fail-fast block above already acted on it.
+    let transfer = {
+        let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        sessions
+            .get(&q.session)
+            .map(|s| TransferView {
+                bytes: s.transfer_bytes,
+                requests: s.requests_served,
+                dpi_ok,
+                dpi_rc,
+            })
+            .unwrap_or(TransferView {
+                bytes: transfer_bytes,
+                requests: requests_served,
+                dpi_ok,
+                dpi_rc,
+            })
+    };
+
     json_ok(&build_status_response(
         q.session,
         status,
@@ -2439,7 +3106,18 @@ async fn install_status_handler(
         installed_bytes,
         stalled,
         accepted_unverified,
+        transfer,
     ))
+}
+
+/// The transfer-side view of a session. Needed by both the live status path and
+/// the cached-terminal replay so a replayed poll renders identically.
+#[derive(Debug, Clone, Copy, Default)]
+struct TransferView {
+    bytes: u64,
+    requests: u64,
+    dpi_ok: Option<bool>,
+    dpi_rc: Option<i32>,
 }
 
 /// Build the wire `StatusResponse` from a payload `PkgInstallStatus`.
@@ -2457,6 +3135,7 @@ fn build_status_response(
     installed_bytes: u64,
     stalled: bool,
     accepted_unverified: bool,
+    transfer: TransferView,
 ) -> StatusResponse {
     let total = if status.total > 0 {
         status.total
@@ -2483,6 +3162,10 @@ fn build_status_response(
         installed_bytes,
         stalled,
         accepted_unverified,
+        transfer_bytes: transfer.bytes,
+        served_requests: transfer.requests,
+        dpi_ok: transfer.dpi_ok,
+        dpi_rc: transfer.dpi_rc,
     }
 }
 
@@ -2948,19 +3631,34 @@ fn dpi_send(ps5_ip: &str, line: &str) -> std::io::Result<DpiReply> {
     Ok(parse_dpi_reply(&buf))
 }
 
-/// Normalize whatever address the caller gave into a management address.
-/// Callers pass `ip:9114` today, but a bare IP must not silently produce a
-/// broken connect.
-fn mgmt_addr_for_dpi(addr: &str) -> String {
+/// Normalize whatever address the caller gave into the payload's MANAGEMENT
+/// address (`ip:9114`), whatever port it arrived on.
+///
+/// Callers today pass `ip:9114`, but the engine's public surfaces accept a
+/// bare IP, and the transfer port (`:9113`) turns up in the same slots — both
+/// of which must end up on `:9114`. A wrong port here does not fail loudly:
+/// every frame (FS_LIST_DIR, the artifact hash, the Sony log read) fails
+/// instantly and every caller degrades to "nothing is there". That is how a
+/// session with a portless address sat at `phase=install` for the full 600 s
+/// stall while the exact package was already installed on the console
+/// (measured 2026-09-14).
+fn normalize_mgmt_addr(addr: &str) -> String {
     let host = strip_host_port(addr);
     if host.is_empty() {
         return addr.to_string();
     }
-    match addr.rsplit_once(':') {
-        Some((_, port)) if port.parse::<u16>().is_ok() => addr.to_string(),
-        _ => format!("{host}:9114"),
+    // A bare IPv6 literal has to go back in brackets, or `::1:9114` is a
+    // different (invalid) address than `[::1]:9114`.
+    if host.contains(':') {
+        format!("[{host}]:{PS5_MGMT_PORT}")
+    } else {
+        format!("{host}:{PS5_MGMT_PORT}")
     }
 }
+
+/// The payload's management port. Mirrors the crate-root constant of the same
+/// name (`mgmt_addr_for`) and `ps5upload_core::transfer`'s.
+const PS5_MGMT_PORT: u16 = 9114;
 
 /// Read a title's installed `APP_VER`, or `None` when it cannot be read (title
 /// absent, payload too old, console busy). `None` deliberately means "unknown"
@@ -3064,7 +3762,7 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
     // Snapshot the installed version BEFORE the install so an accepted-but-
     // inert overwrite can be told from a real one afterwards. Sony returns
     // 0x00000000 either way.
-    let mgmt = mgmt_addr_for_dpi(&req.ps5_addr);
+    let mgmt = normalize_mgmt_addr(&req.ps5_addr);
     let verify_id = req.title_id.clone().filter(|t| !t.trim().is_empty());
     let verify_pkg_ver = req.package_app_ver.clone().filter(|v| !v.trim().is_empty());
     let app_ver_before = match (&verify_id, &verify_pkg_ver) {
@@ -3330,6 +4028,17 @@ async fn dpi_direct_install_handler(
         req.session_id,
         url
     );
+    // Clear any previous attempt's verdict first: the client retries this call
+    // on a transient busy, and a stale rejection left on the session would
+    // outlive the retry that superseded it.
+    {
+        let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(s) = sessions.get_mut(&req.session_id) {
+            s.dpi_ok = None;
+            s.dpi_rc = None;
+            s.dpi_detail.clear();
+        }
+    }
     let res = tokio::task::spawn_blocking(move || dpi_send(&ps5_ip, &url)).await;
     let (requests_served, bytes_served) = {
         let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
@@ -3422,6 +4131,22 @@ async fn dpi_direct_install_handler(
             };
             if ok {
                 crate::log_info!("dpi-direct-install ok");
+            }
+            // Record the daemon's answer ON THE SESSION before replying. The
+            // reply is not guaranteed to reach anyone — this call blocks for as
+            // long as the console takes to accept the hand-off, and a client
+            // timeout, a reverse proxy's own timeout, or a browser navigation
+            // all abandon it. Without this the session had no record of what the
+            // daemon said, so the status poll reported "installing" until the
+            // 600 s startup stall regardless of the daemon having already
+            // refused. See the replay in install_status_handler.
+            {
+                let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(s) = sessions.get_mut(&req.session_id) {
+                    s.dpi_ok = Some(ok);
+                    s.dpi_rc = Some(rc);
+                    s.dpi_detail = err_message.clone().unwrap_or_default();
+                }
             }
             json_ok(&DpiInstallResponse {
                 ok,
@@ -3557,6 +4282,10 @@ async fn serve_handler(
     // A debug FPKG makes the console ask for `<content-id>.crc` beside the
     // package. Answering that with package bytes failed every such install
     // with 0x80b211cd (#319); serve the real CRC table or a 404 instead.
+    //
+    // A `.crc` fetch is a different file whose offsets mean nothing against the
+    // package, so it must not be counted as transfer progress.
+    let counts_as_progress = !crate::pkg_sidecar::is_crc_request(&filename);
     let source = if crate::pkg_sidecar::is_crc_request(&filename) {
         let lookup_session = session.clone();
         let lookup_name = filename.clone();
@@ -3633,6 +4362,10 @@ async fn serve_handler(
         if let Some(active) = sessions.get_mut(&served_session_id) {
             active.requests_served = active.requests_served.saturating_add(1);
             active.bytes_served = active.bytes_served.saturating_add(len);
+            if counts_as_progress {
+                active.transfer.mark(start, end);
+                active.transfer_bytes = active.transfer.bytes();
+            }
         }
     }
     let mut builder = Response::builder()
@@ -4219,6 +4952,33 @@ mod tests {
     // one leaks into another; serialize them on this lock.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    /// A session's address is used for EVERY observation it will ever make
+    /// (artifact check, free-space, title-dir, Sony log), and every one of
+    /// those failures degrades quietly to "absent" rather than to an error.
+    /// So a bare IP must be normalized at creation, not left to each caller:
+    /// measured on 2026-09-14, a portless addr produced 0 ms status polls,
+    /// `installed_bytes: 0`, an `Absent` artifact check and a phase stuck on
+    /// `install` for the full 600 s stall — while the exact package was
+    /// already installed on the console.
+    #[test]
+    fn a_session_address_is_always_normalized_to_the_mgmt_port() {
+        assert_eq!(normalize_mgmt_addr("192.168.86.100"), "192.168.86.100:9114");
+        assert_eq!(
+            normalize_mgmt_addr("192.168.86.100:9114"),
+            "192.168.86.100:9114"
+        );
+        // A caller may hand us the transfer port; the mgmt port is what every
+        // frame this session sends must target.
+        assert_eq!(
+            normalize_mgmt_addr("192.168.86.100:9113"),
+            "192.168.86.100:9114"
+        );
+        // Hostnames and IPv6 literals follow the same rule.
+        assert_eq!(normalize_mgmt_addr("ps5.lan"), "ps5.lan:9114");
+        assert_eq!(normalize_mgmt_addr("[::1]"), "[::1]:9114");
+        assert_eq!(normalize_mgmt_addr("[::1]:9113"), "[::1]:9114");
+    }
+
     #[test]
     fn browser_upload_filename_is_a_safe_basename() {
         assert_eq!(sanitize_pkg_filename("../../Game.pkg"), "Game.pkg");
@@ -4786,6 +5546,11 @@ mod tests {
             accepted_unverified: false,
             requests_served: 0,
             bytes_served: 0,
+            transfer_bytes: 0,
+            transfer: TransferCoverage::new(total),
+            dpi_ok: None,
+            dpi_rc: None,
+            dpi_detail: String::new(),
         }
     }
 
@@ -5243,5 +6008,226 @@ mod tests {
     fn range_start_after_end_rejected() {
         let result = parse_range_header(&range_headers("bytes=200-100"), 1000);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn sony_log_verdict_reads_playgo_firmware_refusal() {
+        // Captured 2026-09-14 streaming Minecraft (debug FPKG) to a FW 9.60 Pro.
+        // Transfer finished 0x0; the request then died with 0x80a3000d.
+        let log = "\
+[PlayGoCore][RequestInstall] begin (#2, UP4433-PPSA17221_00-MINECRAFTPS50000)
+[PlayGoCore][Request #2] transfer started (196608/1333460992)
+[PlayGoCore][Request #2] transfer ended (0x00000000)
+[PlayGoCore][Request #2] request ended (state = 9, error = 0x80a3000d, 15642 [msec])
+Task 2000002f : playgo.progress.state=9, progress.error_code=0x80a3000d
+[BGFT] [329] changed error code (0x80a3000d -> 0x809900c1)
+";
+        match sony_log_verdict(log, "UP4433-PPSA17221_00-MINECRAFTPS50000") {
+            Some(SonyLogVerdict::Refused { err_code, .. }) => {
+                assert_eq!(err_code, 0x80A3_000D);
+            }
+            other => panic!("expected firmware refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sony_log_verdict_reads_clean_request_end() {
+        let log = "\
+[PlayGoCore][RequestInstall] begin (#7, UP9000-CUSA07842_00-SCUS974290000001)
+[PlayGoCore][Request #7] request ended (state = 7, error = 0x0)
+";
+        assert_eq!(
+            sony_log_verdict(log, "UP9000-CUSA07842_00-SCUS974290000001"),
+            Some(SonyLogVerdict::Installed)
+        );
+    }
+
+    fn sample_artifact(kind: &str, size: u64, fp: &str, cid: &str) -> InstalledPkgArtifact {
+        InstalledPkgArtifact {
+            kind: kind.to_string(),
+            path: "/mnt/ext1/user/app/PPSA17221/app.pkg".into(),
+            size,
+            fingerprint: fp.into(),
+            content_id: cid.into(),
+        }
+    }
+
+    #[test]
+    fn ps4_artifact_matches_on_fingerprint() {
+        let a = sample_artifact(
+            "base",
+            3827433472,
+            "49983d5f",
+            "UP9000-CUSA07842_00-SCUS974290000001",
+        );
+        assert!(artifact_identity_matches(
+            &a,
+            "base",
+            "UP9000-CUSA07842_00-SCUS974290000001",
+            3827433472,
+            "49983d5f",
+            "PS4GD",
+        ));
+        assert!(!artifact_identity_matches(
+            &a,
+            "base",
+            "UP9000-CUSA07842_00-SCUS974290000001",
+            3827433472,
+            "deadbeef",
+            "PS4GD",
+        ));
+    }
+
+    #[test]
+    fn ps5_fpkg_matches_inner_app_pkg_by_content_id() {
+        // Outer FIH we streamed vs inner image Sony wrote.
+        let inner = sample_artifact(
+            "base",
+            1_333_460_992,
+            "c08d913daab17da3764b0627f70ffa72122f366f959e8e296c3d69adf07ed1cc",
+            "UP4433-PPSA17221_00-MINECRAFTPS50000",
+        );
+        assert!(artifact_identity_matches(
+            &inner,
+            "base",
+            "UP4433-PPSA17221_00-MINECRAFTPS50000",
+            1_345_936_761,
+            "f9545e9cba776ca44864243b950466e7c55017644e400e1ebfe25e2ec8b3987f",
+            "PS5GD",
+        ));
+        assert!(!artifact_identity_matches(
+            &inner,
+            "base",
+            "UP0000-PPSA00000_00-SOMEOTHERGAME000",
+            1_345_936_761,
+            "f9545e9cba776ca44864243b950466e7c55017644e400e1ebfe25e2ec8b3987f",
+            "PS5GD",
+        ));
+    }
+
+    /// Every verdict must produce its own phase — the bug this mapping exists to
+    /// prevent was Complete leaving the phase untouched, which reported a
+    /// finished install as still installing for as long as anything polled it.
+    #[test]
+    fn every_verdict_names_its_own_phase() {
+        let total = 1_345_936_761;
+        let phase = |v| verdict_phase(v, true, 158, total, total);
+        assert_eq!(phase(InstallVerdict::Complete), InstallPhase::Done);
+        assert_eq!(
+            phase(InstallVerdict::AcceptedUnverified),
+            InstallPhase::Done
+        );
+        assert_eq!(phase(InstallVerdict::Stalled), InstallPhase::Error);
+        // Only the live verdict is allowed to look like a live phase.
+        assert_eq!(phase(InstallVerdict::Installing), InstallPhase::Install);
+        assert_ne!(
+            phase(InstallVerdict::Complete),
+            phase(InstallVerdict::Installing)
+        );
+    }
+
+    /// Coverage is what makes the stream progress bar honest. Both of the
+    /// obvious alternatives were wrong on hardware, in opposite directions.
+    #[test]
+    fn coverage_counts_distinct_bytes_only() {
+        let total = 1_345_936_761u64; // the Minecraft pkg that exposed this
+        let mut c = TransferCoverage::new(total);
+
+        // Sony reads the container's trailing index first. A furthest-offset
+        // metric read 100% here; coverage says almost nothing has arrived.
+        c.mark(total - 4096, total - 1);
+        assert!(c.bytes() < total / 100, "tail fetch must not read as done");
+
+        // The bulk, in order.
+        c.mark(0, 100_000_000);
+        assert!(c.bytes() >= 100_000_000);
+        assert!(c.bytes() < total);
+    }
+
+    #[test]
+    fn coverage_ignores_a_refetch() {
+        // Measured: 1.53 GB served for a 1.35 GB package, because Sony
+        // re-requests ranges. A summed byte count passes 100% during the
+        // transfer; coverage cannot.
+        let total = 1_345_936_761u64;
+        let mut c = TransferCoverage::new(total);
+        c.mark(0, total - 1);
+        assert_eq!(c.bytes(), total);
+        c.mark(0, total - 1);
+        c.mark(500, 900);
+        assert_eq!(c.bytes(), total);
+    }
+
+    #[test]
+    fn coverage_is_never_short_of_the_package() {
+        let mut c = TransferCoverage::new(1000);
+        c.mark(0, 999);
+        assert_eq!(c.bytes(), 1000);
+        // A request past the end (a stale Range, or the .crc sidecar's offset
+        // space) must not inflate the total.
+        c.mark(1000, 5000);
+        assert_eq!(c.bytes(), 1000);
+        // Degenerate package.
+        let empty = TransferCoverage::new(0);
+        assert_eq!(empty.bytes(), 0);
+    }
+
+    #[test]
+    fn coverage_is_bounded_whatever_the_package_size() {
+        // The bitmap is what keeps this per-session state small: 8 KiB whether
+        // the package is 100 MB or 200 GB.
+        for total in [1u64 << 20, 1 << 30, 200 << 30] {
+            let c = TransferCoverage::new(total);
+            assert!(
+                c.words.len() <= 1024,
+                "{} bytes → {} words",
+                total,
+                c.words.len()
+            );
+        }
+    }
+
+    /// The Stream state model, pinned. Measured 2026-09-14 streaming a 1.35 GB
+    /// debug FPKG: 152 requests, 1.53 GB served (the sum overshoots), and the
+    /// engine reported `install` for the whole 19 s transfer.
+    #[test]
+    fn stream_phase_tracks_the_transfer() {
+        let total = 1_345_936_761;
+        // Nothing fetched yet: the console hasn't started, and this must not be
+        // dressed up as a transfer in progress.
+        assert_eq!(in_flight_phase(true, 0, 0, total), InstallPhase::Queued);
+        // Mid-transfer.
+        assert_eq!(
+            in_flight_phase(true, 30, 177_233_273, total),
+            InstallPhase::Download
+        );
+        // Transfer finished; Sony is writing.
+        assert_eq!(
+            in_flight_phase(true, 152, total, total),
+            InstallPhase::Install
+        );
+        // A re-fetch can push the *sum* past the total while the furthest byte
+        // is still short — the phase must follow `transfer_bytes`.
+        assert_eq!(
+            in_flight_phase(true, 152, total - 1, total),
+            InstallPhase::Download
+        );
+        // Unknown total (a split set that never reported one) must not sit in
+        // `download` forever.
+        assert_eq!(in_flight_phase(true, 4, 4096, 0), InstallPhase::Install);
+        // A staged install reads from PS5 disk: no transfer to report.
+        assert_eq!(in_flight_phase(false, 0, 0, total), InstallPhase::Install);
+    }
+
+    #[test]
+    fn sony_log_verdict_ignores_other_titles() {
+        let log = "\
+[PlayGoCore][RequestInstall] begin (#2, UP4433-PPSA17221_00-MINECRAFTPS50000)
+[PlayGoCore][Request #2] request ended (state = 9, error = 0x80a3000d, 15642 [msec])
+";
+        assert_eq!(
+            sony_log_verdict(log, "UP9000-CUSA07842_00-SCUS974290000001"),
+            None
+        );
     }
 }

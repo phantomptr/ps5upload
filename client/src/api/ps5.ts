@@ -3608,6 +3608,88 @@ export async function pkgInstalledInventory(
     }));
 }
 
+/** What the console already has for the package about to be installed.
+ *
+ * Answered by the ENGINE, deliberately: it applies the same artifact matching
+ * its own completion check uses, so the badge and the install result can't
+ * disagree. That matters most for a PS5 debug package, whose console artifact is
+ * the package's INNER image — its size and hash can never equal the outer
+ * container's, so a client-side fingerprint comparison reads "not installed"
+ * for a title the console has. `unknown` means the console couldn't be read and
+ * must never be treated as "not installed". */
+export interface PkgInstallPreflight {
+  state:
+    | "installed"
+    | "different_version_installed"
+    | "base_missing"
+    | "not_installed"
+    | "unknown";
+  titleId: string;
+  detail: string;
+  category: string;
+  installedVersion: string | null;
+  installedArtifacts: InstalledPkgArtifact[];
+}
+
+export async function pkgInstallPreflight(
+  transferAddr: string,
+  contentId: string,
+  opts?: {
+    packageType?: string | null;
+    size?: number;
+    fingerprint?: string;
+  },
+): Promise<PkgInstallPreflight | null> {
+  try {
+    const res = await invoke<{
+      state?: string;
+      title_id?: string;
+      detail?: string;
+      category?: string;
+      installed_version?: string | null;
+      installed_artifacts?: Array<{
+        kind?: string;
+        path?: string;
+        size?: number;
+        fingerprint?: string;
+        content_id?: string;
+      }>;
+    }>("pkg_install_preflight", {
+      addr: toMgmtAddr(transferAddr),
+      contentId,
+      packageType: opts?.packageType ?? null,
+      expectedSize: opts?.size ?? null,
+      packageFingerprint: opts?.fingerprint ?? null,
+    });
+    if (typeof res?.state !== "string") return null;
+    return {
+      state: res.state as PkgInstallPreflight["state"],
+      titleId: res.title_id ?? "",
+      detail: res.detail ?? "",
+      category: res.category ?? "",
+      installedVersion: res.installed_version ?? null,
+      installedArtifacts: (res.installed_artifacts ?? [])
+        .filter(
+          (a) =>
+            (a.kind === "base" || a.kind === "patch" || a.kind === "dlc") &&
+            typeof a.path === "string" &&
+            a.path.length > 0,
+        )
+        .map((a) => ({
+          kind: a.kind as InstalledPkgArtifact["kind"],
+          path: a.path as string,
+          size: a.size ?? 0,
+          fingerprint: a.fingerprint ?? "",
+          contentId: a.content_id ?? "",
+        })),
+    };
+  } catch {
+    // A failed preflight is "unknown", never "not installed" — the caller must
+    // not block or mislabel an install because a probe failed.
+    return null;
+  }
+}
+
 /** Whether the console is settled enough to take a .pkg install — the engine
  *  round-trips the AppListRegistered frame, which goes unanswered while the
  *  console is recovering from a prior install (the post-install SceShellUI
@@ -4377,6 +4459,15 @@ export async function payloadCheck(ip: string): Promise<{
    *  stream). The Upload path resolves the actual count as
    *  min(user setting, this). See docs/multistream-upload.md. */
   maxTransferStreams: number | null;
+  /** Whether the ENGINE answered at all — a different question from
+   *  `reachable`, which is about the console. Every console verdict comes
+   *  from the engine, so when this is false the console's state is simply
+   *  UNKNOWN: the caller must not record it as "down". Treating an engine
+   *  outage as a console outage is what armed the auto-redeploy loop that
+   *  hammered both consoles until they stopped answering (2026-09-14).
+   *  Defaults to true when absent so an older engine degrades to the old
+   *  interpretation rather than claiming a console outage it can't see. */
+  engineReachable: boolean;
   /** Raw error string from the engine when reachable=false. Lets the
    *  Connection screen's wait-for-boot banner surface what actually
    *  went wrong (TCP connect refused, STATUS_ACK timeout, etc.)
@@ -4386,6 +4477,7 @@ export async function payloadCheck(ip: string): Promise<{
   const resp = await invoke<{
     reachable?: boolean;
     loaded?: boolean;
+    engine?: boolean;
     error?: string;
     status?: {
       version?: string;
@@ -4397,6 +4489,7 @@ export async function payloadCheck(ip: string): Promise<{
   return {
     reachable: !!resp?.reachable,
     loaded: !!resp?.loaded,
+    engineReachable: resp?.engine !== false,
     payloadVersion: resp?.status?.version ?? null,
     ps5Kernel: resp?.status?.ps5_kernel ?? null,
     ucredElevated:

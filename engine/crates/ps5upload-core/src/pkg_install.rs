@@ -669,6 +669,10 @@ pub fn err_code_message(code: u32) -> Option<&'static str> {
         0x80A3_0019 => Some("The patch package is invalid or corrupt — re-download it"),
         0x80A3_0017 => Some("This DLC needs its base content installed first"),
         0x80A3_000D => Some("The console firmware is too old for this package"),
+        // BGFT remaps SCE_APP_INSTALLER_ERROR_SYSTEM_VERSION (0x80A3000D) to
+        // this after a completed PlayGo transfer. Hardware-observed on FW 9.60
+        // streaming a debug FPKG that declared a newer system software.
+        0x8099_00C1 => Some("The console firmware is too old for this package"),
         0x80A3_000C => Some("Close the game on the PS5 before installing this patch"),
         0x80A3_0008 | 0x80A3_0009 => Some("The package is broken or the wrong content type"),
         // Remaining actionable AppInstaller codes from OnionHEN's full enum.
@@ -773,6 +777,11 @@ mod tests {
     fn known_err_codes_have_messages() {
         assert!(err_code_message(0x80990088).is_some());
         assert!(err_code_message(0x80990085).is_some());
+        assert_eq!(
+            err_code_message(0x80A3000D),
+            Some("The console firmware is too old for this package")
+        );
+        assert_eq!(err_code_message(0x809900C1), err_code_message(0x80A3000D));
         assert!(err_code_message(0).is_none());
         assert!(err_code_message(0xDEADBEEF).is_none());
     }

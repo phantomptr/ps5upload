@@ -27,6 +27,9 @@ vi.mock("../api/ps5", () => ({
   // the pre-install gate immediately. Readiness-specific tests override it.
   consoleReadiness: vi.fn(async () => true),
   pkgInstalledInventory: vi.fn(async () => []),
+  // Pre-install "do you already have this?" probe. `null` = unknown, which
+  // must never block or relabel an install.
+  pkgInstallPreflight: vi.fn(async () => null),
 }));
 // No active transfer in tests → installs proceed immediately.
 vi.mock("../lib/ps5Transfers", () => ({ transferScreenBusy: () => false }));
@@ -39,6 +42,7 @@ import {
   pkgMetadataConsole,
   consoleReadiness,
   pkgInstalledInventory,
+  pkgInstallPreflight,
 } from "../api/ps5";
 import {
   titleIdFromContentId,
@@ -56,6 +60,7 @@ import {
   pkgRowInstalled,
   installSpaceWarning,
   installedLastResult,
+  describeInstallSample,
   runPkgInstall,
   waitForConsoleReady,
   recordPkgInstalled,
@@ -66,6 +71,7 @@ import {
   PKG_ALTERNATIVE_SKIP,
   PKG_MAY_NOT_LAUNCH_MESSAGE,
   PKG_ACCEPTED_UNVERIFIED_HINT,
+  PKG_ENGINE_BLIND_HINT,
   PKG_PATCH_REJECTED_HINT,
   type PkgEntry,
 } from "./pkgLibrary";
@@ -388,6 +394,7 @@ describe("installStream — DPI lifecycle and HTTP fallback", () => {
   const localPath = "/tmp/game.pkg";
   const mockedInvoke = vi.mocked(invoke);
   const mockedInventory = vi.mocked(pkgInstalledInventory);
+  const mockedPreflight = vi.mocked(pkgInstallPreflight);
   const metadata = {
     parts: [localPath],
     total_size: 8_192_000,
@@ -402,6 +409,8 @@ describe("installStream — DPI lifecycle and HTTP fallback", () => {
   afterEach(() => {
     vi.useRealTimers();
     mockedInvoke.mockReset();
+    mockedPreflight.mockReset();
+    mockedPreflight.mockResolvedValue(null);
     evictPkgLibraryStore(host);
   });
 
@@ -560,6 +569,297 @@ describe("installStream — DPI lifecycle and HTTP fallback", () => {
       "CUSA33334",
     );
     expect(useTaskStore.getState().tasks[0]?.status).toBe("done");
+  });
+
+  it("tells the user the package is already installed before transferring", async () => {
+    vi.useFakeTimers();
+    mockedPreflight.mockResolvedValue({
+      state: "installed",
+      titleId: "CUSA33334",
+      detail: "this exact package is already installed",
+      category: "gd",
+      installedVersion: "01.04",
+      installedArtifacts: [],
+    });
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_metadata_split") return metadata;
+      if (cmd === "pkg_install_start")
+        return { err_code: 0, session_id: "stream-pre" };
+      if (cmd === "dpi_ensure") return { ok: true, sent: true };
+      if (cmd === "pkg_dpi_direct_install")
+        return { ok: true, rc: 0, requests_served: 2, bytes_served: 8192 };
+      if (cmd === "payload_bundled_path")
+        return { ok: true, path: "/tmp/ps5upload.elf" };
+      if (cmd === "pkg_install_status")
+        return {
+          phase: "done",
+          installed_bytes: metadata.total_size,
+          total: metadata.total_size,
+        };
+      return {};
+    });
+
+    // The notice is the user-visible surface; it is cleared when the run ends,
+    // so collect it as it changes.
+    const notices: string[] = [];
+    const unsubscribe = pkgLibraryStore(host).subscribe((s) => {
+      if (s.busyNotice) notices.push(s.busyNotice);
+    });
+    const pending = pkgLibraryStore(host)
+      .getState()
+      .installStream(localPath, host);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await pending;
+    unsubscribe();
+
+    // Reported, not refused: re-installing is a legitimate repair, so the
+    // install still runs and still ends green.
+    expect(mockedPreflight).toHaveBeenCalled();
+    expect(notices.join("\n")).toMatch(/already installed on the PS5/);
+    expect(notices.join("\n")).toMatch(/version 01\.04/);
+    const task = useTaskStore
+      .getState()
+      .tasks.find((candidate) => candidate.kind === "pkg-dpi-install");
+    expect(task?.status).toBe("done");
+  });
+
+  it("keeps serving when verification gives up before a terminal state", async () => {
+    // Five consecutive poll failures make verifyInstallCompleted stop watching.
+    // The engine never said the install ended, so the console may still be
+    // pulling — cancelling the session here answers its next fetch with 410
+    // Gone and kills a live install. That was the unconditional behaviour.
+    vi.useFakeTimers();
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_metadata_split") return metadata;
+      if (cmd === "pkg_install_start")
+        return { err_code: 0, session_id: "stream-gaveup" };
+      if (cmd === "dpi_ensure") return { ok: true, sent: true };
+      if (cmd === "pkg_dpi_direct_install")
+        return { ok: true, rc: 0, requests_served: 3, bytes_served: 4096 };
+      if (cmd === "payload_bundled_path")
+        return { ok: true, path: "/tmp/ps5upload.elf" };
+      if (cmd === "pkg_install_status") throw new Error("engine HTTP 502");
+      return {};
+    });
+
+    const pending = pkgLibraryStore(host)
+      .getState()
+      .installStream(localPath, host);
+    await vi.advanceTimersByTimeAsync(30_000);
+    const result = await pending;
+
+    expect(result.ok).toBe(false);
+    expect(result.acceptedUnverified).toBe(true);
+    expect(mockedInvoke).not.toHaveBeenCalledWith("pkg_install_cancel", {
+      session: "stream-gaveup",
+    });
+    // The payload still comes back — the daemon is not left running.
+    expect(mockedInvoke).toHaveBeenCalledWith("payload_send", expect.anything());
+  });
+});
+
+// ── install tracking vs engine availability ─────────────────────────────────
+//
+// The engine owns install state, and for a Stream install it is also the HTTP
+// server the console pulls the package from. So "the engine didn't answer" and
+// "the install is failing" are different facts, and only the second is news
+// about the install. Collapsing them meant ~12 s of engine downtime — shorter
+// than a desktop engine restart — ended the watch on a healthy install and told
+// the user it couldn't be verified.
+describe("install tracking when the engine is unreachable", () => {
+  const mockedInvoke = vi.mocked(invoke);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockedInvoke.mockReset();
+    useTaskStore.setState({ tasks: [] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const ENGINE_DOWN = () =>
+    new Error("engine request failed: error sending request");
+
+  it("keeps watching through an engine outage longer than the error budget", async () => {
+    // Well past PKG_VERIFY_MAX_POLL_ERRORS (5) consecutive failures, which is
+    // what used to end the watch — the outage is the engine's problem, not the
+    // install's, so tracking must survive it and still report the real result.
+    let n = 0;
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_install_start")
+        return { err_code: 0, register_path: "shellui-rpc", session_id: "s1" };
+      if (cmd === "pkg_install_status") {
+        n += 1;
+        if (n <= 8) throw ENGINE_DOWN();
+        return { phase: "done", launchable: true, installed_bytes: 9, total: 9 };
+      }
+      return {};
+    });
+    const promise = runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", null, true);
+    await vi.advanceTimersByTimeAsync(2600 * 12);
+    const r = await promise;
+    expect(n).toBeGreaterThan(5);
+    expect(r.installed).toBe(true);
+  });
+
+  it("tells the user why the numbers stopped moving, without calling it a failure", async () => {
+    let n = 0;
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_install_start")
+        return { err_code: 0, register_path: "shellui-rpc", session_id: "s1" };
+      if (cmd === "pkg_install_status") {
+        n += 1;
+        // One good poll to establish a live state, then the engine goes away.
+        if (n === 1) return { phase: "install", installed_bytes: 10, total: 100 };
+        if (n <= 4) throw ENGINE_DOWN();
+        return { phase: "done", launchable: true };
+      }
+      return {};
+    });
+    const notes: Array<string | undefined> = [];
+    const promise = runPkgInstall(
+      "192.168.1.50",
+      "/user/data/x.pkg",
+      "CID",
+      null,
+      true,
+      (s) => notes.push(s.note),
+    );
+    await vi.advanceTimersByTimeAsync(2600 * 6);
+    const r = await promise;
+    expect(notes).toContain(PKG_ENGINE_BLIND_HINT);
+    expect(r.installed).toBe(true);
+  });
+
+  it("stops polling at once when the engine says the session is gone", async () => {
+    // Sessions live in engine memory, so this state never comes back. Waiting
+    // out the error budget would only delay the same answer.
+    let statusCalls = 0;
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_install_start")
+        return { err_code: 0, register_path: "shellui-rpc", session_id: "s1" };
+      if (cmd === "pkg_install_status") {
+        statusCalls += 1;
+        throw new Error("engine HTTP 404 Not Found: no install session s1");
+      }
+      return {};
+    });
+    const promise = runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", null, true);
+    await vi.advanceTimersByTimeAsync(2600 * 8);
+    const r = await promise;
+    expect(statusCalls).toBe(1);
+    expect(r.installed).toBe(false);
+    expect(r.acceptedUnverified).toBe(true);
+    expect(r.errMessage).toBe(PKG_ACCEPTED_UNVERIFIED_HINT);
+  });
+
+  it("gives up watching after the blind cap — and keeps the path for a live install", async () => {
+    // An engine that never comes back must not leave the UI claiming to watch
+    // an install forever. Giving up is honest, keeps the pkg, and must not
+    // cancel anything that may still be running.
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_install_start")
+        return { err_code: 0, register_path: "shellui-rpc", session_id: "s1" };
+      if (cmd === "pkg_install_status") throw ENGINE_DOWN();
+      return {};
+    });
+    const promise = runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", null, true);
+    await vi.advanceTimersByTimeAsync(6 * 60 * 1000);
+    const r = await promise;
+    expect(r.installed).toBe(false);
+    expect(r.acceptedUnverified).toBe(true);
+    expect(r.errMessage).toBe(PKG_ENGINE_BLIND_HINT);
+    expect(mockedInvoke).not.toHaveBeenCalledWith("pkg_install_cancel", {
+      session: "s1",
+    });
+  });
+});
+
+describe("describeInstallSample (stream state naming)", () => {
+  const base = {
+    installedBytes: 0,
+    transferBytes: 0,
+    total: 1000,
+    servedRequests: 0,
+    stalled: false,
+    acceptedUnverified: false,
+  };
+
+  it("names each phase the engine can report", () => {
+    expect(describeInstallSample({ ...base, phase: "queued" }).detail).toMatch(
+      /Waiting for the PS5/,
+    );
+    expect(
+      describeInstallSample({
+        ...base,
+        phase: "download",
+        transferBytes: 500,
+        servedRequests: 3,
+      }).detail,
+    ).toMatch(/Streaming to the PS5 — 50%/);
+    expect(
+      describeInstallSample({
+        ...base,
+        phase: "install",
+        installedBytes: 1000,
+      }).detail,
+    ).toMatch(/The PS5 is installing/);
+  });
+
+  it("says why the numbers stopped moving when the engine is gone", () => {
+    // The bytes below the line are the last ones we could read. Without the
+    // note the UI showed a frozen bar with no explanation, which reads as
+    // "stuck" — but the install may be running fine and simply unwatched.
+    const s = describeInstallSample({
+      ...base,
+      phase: "install",
+      installedBytes: 1000,
+      note: PKG_ENGINE_BLIND_HINT,
+    });
+    expect(s.detail).toBe(PKG_ENGINE_BLIND_HINT);
+    // The bar still points at the last real progress rather than resetting.
+    expect(s.current).toBe(1000);
+    expect(s.pct).toBe(100);
+  });
+
+  it("reports the transfer, not the (still zero) install bytes, while streaming", () => {
+    // Measured on hardware: `installed_bytes` stays 0 for the whole 19 s of a
+    // 1.35 GB transfer, so a bar driven by it would sit at 0% and then jump.
+    const s = describeInstallSample({
+      ...base,
+      phase: "download",
+      transferBytes: 250,
+      servedRequests: 2,
+    });
+    expect(s.current).toBe(250);
+    expect(s.pct).toBe(25);
+  });
+
+  it("never runs backwards across the download → install handover", () => {
+    // The install phase reports bytes it wrote (for a PS5 FPKG, the *inner*
+    // image, which is smaller than the container we served), so taking either
+    // figure alone would drop the bar when the phase flips.
+    const streaming = describeInstallSample({
+      ...base,
+      phase: "download",
+      transferBytes: 900,
+    });
+    const writing = describeInstallSample({
+      ...base,
+      phase: "install",
+      transferBytes: 1000,
+      installedBytes: 40,
+    });
+    expect(writing.current).toBeGreaterThanOrEqual(streaming.current);
+  });
+
+  it("appends the rate only when it is known", () => {
+    const s = { ...base, phase: "download", transferBytes: 100 };
+    expect(describeInstallSample(s, 0).detail).not.toMatch(/\/s/);
+    expect(describeInstallSample(s, 90 * 1024 * 1024).detail).toMatch(
+      /at 90 MB\/s/,
+    );
   });
 });
 
@@ -1394,7 +1694,7 @@ describe("runPkgInstall — tracks the install to genuine completion", () => {
       "CID",
       null,
       true,
-      (b, t) => progress.push([b, t]),
+      (s) => progress.push([s.installedBytes, s.total]),
     );
     await vi.advanceTimersByTimeAsync(2600 * 4);
     const r = await promise;

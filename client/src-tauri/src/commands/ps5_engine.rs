@@ -2521,10 +2521,7 @@ pub async fn transfer_dir_reconcile(req: TransferDirReconcileReq) -> Result<Json
 /// What a game source is, before converting it: readiness, size and cost.
 /// POST /api/fpkg/inspect.
 #[tauri::command]
-pub async fn fpkg_inspect(
-    source: String,
-    output_dir: Option<String>,
-) -> Result<JsonValue, String> {
+pub async fn fpkg_inspect(source: String, output_dir: Option<String>) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/fpkg/inspect");
     post_json(
@@ -2672,6 +2669,32 @@ pub async fn pkg_installed_inventory(addr: String, title_id: String) -> Result<J
     url.query_pairs_mut()
         .append_pair("addr", &addr)
         .append_pair("title_id", &title_id);
+    get_json(url.as_str()).await
+}
+
+/// Ask the engine what the console already has for this package, using the
+/// same artifact matching its completion check uses. Answers "already
+/// installed" for a PS5 debug package, whose console artifact is the inner
+/// image — a comparison the client cannot make from fingerprints alone.
+#[tauri::command]
+pub async fn pkg_install_preflight(
+    addr: String,
+    content_id: String,
+    package_type: Option<String>,
+    expected_size: Option<u64>,
+    package_fingerprint: Option<String>,
+) -> Result<JsonValue, String> {
+    let mut url = reqwest::Url::parse(&format!("{}/api/pkg/install/preflight", engine::url()))
+        .map_err(|e| format!("build preflight URL: {e}"))?;
+    url.query_pairs_mut()
+        .append_pair("addr", &addr)
+        .append_pair("content_id", &content_id)
+        .append_pair("package_type", package_type.as_deref().unwrap_or(""))
+        .append_pair("expected_size", &expected_size.unwrap_or(0).to_string())
+        .append_pair(
+            "package_fingerprint",
+            package_fingerprint.as_deref().unwrap_or(""),
+        );
     get_json(url.as_str()).await
 }
 

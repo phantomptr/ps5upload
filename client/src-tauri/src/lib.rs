@@ -308,6 +308,7 @@ pub fn run() {
             commands::ffpkg_inspect,
             commands::ffpkg_extract,
             commands::pkg_installed_inventory,
+            commands::pkg_install_preflight,
             commands::pkg_install_start,
             commands::pkg_dpi_install,
             commands::pkg_dpi_direct_install,

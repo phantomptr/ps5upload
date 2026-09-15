@@ -763,6 +763,17 @@ export async function browserInvoke<T>(
       );
     }
 
+    // "Do you already have this?" — answered by the engine, so the browser
+    // build gets the same verdict as the desktop one.
+    case "pkg_install_preflight":
+      return getJson<T>(
+        `/api/pkg/install/preflight?addr=${uenc(args["addr"] as string)}` +
+          `&content_id=${uenc(args["contentId"] as string)}` +
+          `&package_type=${uenc((args["packageType"] as string) ?? "")}` +
+          `&expected_size=${(args["expectedSize"] as number) ?? 0}` +
+          `&package_fingerprint=${uenc((args["packageFingerprint"] as string) ?? "")}`,
+      );
+
     case "pkg_install_status":
       return getJson<T>(
         `/api/pkg/install/status?session=${uenc(args["session"] as string)}`,
@@ -834,7 +845,10 @@ export async function browserInvoke<T>(
 
     case "payload_check": {
       // Rust probes.rs: GET /api/ps5/status?addr={ip}:9114, wraps the
-      // response as { ok, reachable, status } or { ok:false, reachable:false, error }.
+      // response as { ok, reachable, engine, status } or
+      // { ok:false, reachable:false, engine, error }. Keep `engine` in step
+      // with the Rust side: an engine that never answered is not evidence
+      // about the console (see the 2026-09-14 post-mortem in probes.rs).
       const ip = args["ip"] as string;
       const addr = uenc(`${ip}:9114`);
       const url = `${getEngineUrl()}/api/ps5/status?addr=${addr}`;
@@ -842,18 +856,20 @@ export async function browserInvoke<T>(
         const r = await fetch(url, { signal: AbortSignal.timeout(5_000) });
         if (r.ok) {
           const status = (await r.json()) as unknown;
-          return { ok: true, reachable: true, status } as unknown as T;
+          return { ok: true, reachable: true, engine: true, status } as unknown as T;
         }
         const body = await r.text().catch(() => "");
         return {
           ok: false,
           reachable: false,
+          engine: true,
           error: body.trim() || `engine HTTP ${r.status}`,
         } as unknown as T;
       } catch (e) {
         return {
           ok: false,
           reachable: false,
+          engine: false,
           error: e instanceof Error ? e.message : String(e),
         } as unknown as T;
       }
