@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { transferScreenBusy } from "../lib/ps5Transfers";
+import {
+  autoRedeployDecision,
+  MAX_REDEPLOYS_WITHOUT_RECOVERY,
+} from "../lib/autoRedeploy";
 import { useTransferStore } from "../state/transfer";
 import { useUploadQueueStore } from "../state/uploadQueue";
 
@@ -69,5 +73,63 @@ describe("auto-redeploy must not fire over a live transfer", () => {
       phasesByHost: { [HOST]: { kind: "failed", error: "boom" } },
     });
     expect(transferScreenBusy(HOST)).toBe(false);
+  });
+});
+
+/**
+ * Regression guard for the 2026-09-14 console kill.
+ *
+ * An engine outage during a dev restart made every probe fail. The poller
+ * read each failure as a console miss, flipped both consoles to "down", and
+ * — because the engine is the only thing that can probe them — nothing could
+ * ever flip them back. The redeploy loop then pushed a fresh ELF at :9021
+ * every ~32 s for six minutes: 10 helpers into each console, each one killing
+ * the helper the previous one had just started. Both consoles stopped
+ * answering and had to be rebooted.
+ *
+ * Two fixes, both pinned here: a console whose state we could not learn is
+ * never "down" (the poller now leaves it untouched), and a console that takes
+ * helpers without recovering gets three then silence.
+ */
+describe("auto-redeploy must not run away on a healthy console", () => {
+  const delivered = (n: number) => ({ status: "down" as const, busy: false, delivered: n });
+
+  it("never fires on a console whose state we could not learn", () => {
+    // The engine didn't answer, so the poller has no verdict — an engine
+    // outage must never be spent as an ELF at the console.
+    expect(
+      autoRedeployDecision({ status: undefined, busy: false, delivered: 0 }),
+    ).toBe("hold");
+    expect(
+      autoRedeployDecision({ status: "unknown", busy: false, delivered: 0 }),
+    ).toBe("hold");
+  });
+
+  it("fires exactly once for a console that really is down", () => {
+    expect(autoRedeployDecision(delivered(0))).toBe("redeploy");
+    expect(autoRedeployDecision(delivered(1))).toBe("redeploy");
+  });
+
+  it("stops after MAX_REDEPLOYS_WITHOUT_RECOVERY delivered helpers", () => {
+    expect(autoRedeployDecision(delivered(MAX_REDEPLOYS_WITHOUT_RECOVERY - 1))).toBe(
+      "redeploy",
+    );
+    expect(autoRedeployDecision(delivered(MAX_REDEPLOYS_WITHOUT_RECOVERY))).toBe(
+      "hold",
+    );
+    // Well past the brake (the 09-14 loop reached 10) it must still hold.
+    expect(autoRedeployDecision(delivered(10))).toBe("hold");
+  });
+
+  it("re-arms on any up verdict, so the next standby still recovers", () => {
+    expect(
+      autoRedeployDecision({ status: "up", busy: false, delivered: 10 }),
+    ).toBe("rearm");
+  });
+
+  it("still refuses to redeploy over a live transfer, even when down", () => {
+    expect(autoRedeployDecision({ status: "down", busy: true, delivered: 0 })).toBe(
+      "hold",
+    );
   });
 });

@@ -44,6 +44,10 @@ import {
 import { ensureOsNotificationPermission } from "../lib/osNotify";
 import { powerTick } from "../api/ps5";
 import { transferScreenBusy } from "../lib/ps5Transfers";
+import {
+  autoRedeployDecision,
+  MAX_REDEPLOYS_WITHOUT_RECOVERY,
+} from "../lib/autoRedeploy";
 import { CommandPalette } from "../components/CommandPalette";
 import { ShortcutsOverlay } from "../components/ShortcutsOverlay";
 import { LocalPathPicker } from "../components/LocalPathPicker";
@@ -144,6 +148,11 @@ function useStatusPolling() {
   // scan, momentary network jitter) shouldn't flash "Helper isn't running"
   // when the helper is actually alive. Require N misses in a row first.
   const missCountRef = useRef<Record<string, number>>({});
+  /** Per host: the last probe yielded no console verdict because OUR side
+   *  failed — the engine didn't answer, or the IPC plumbing itself threw.
+   *  Distinct from "the console is down". Kept so the transition is logged
+   *  once instead of every 10s. */
+  const blindProbeRef = useRef<Record<string, boolean>>({});
   /** Last `bytesSent` seen for each console's in-flight upload.
    *  Lets the poller use transfer progress as a liveness signal instead
    *  of competing with the very upload it is trying to monitor. */
@@ -261,8 +270,7 @@ function useStatusPolling() {
       // genuinely be stuck, and we fall through to a real probe.
       if (transferScreenBusy(probedHost)) {
         const phase = useTransferStore.getState().phasesByHost[key];
-        const sent =
-          phase && phase.kind === "running" ? phase.bytesSent : null;
+        const sent = phase && phase.kind === "running" ? phase.bytesSent : null;
         const prevSent = transferProgressRef.current[key];
         // Any CHANGE counts as proof of life, not just an increase: a
         // resumed attempt restarts the byte count lower, and that still
@@ -286,6 +294,39 @@ function useStatusPolling() {
         // Transient miss: keep this host's last-known version/kernel/ucred
         // rather than blanking the UI on a single dropped poll.
         const carryOver = !s.reachable;
+        // ── An engine outage is not a console outage ────────────────────
+        //
+        // Every console verdict comes from the engine: it is the only thing
+        // that speaks STATUS to the console. So when the engine never
+        // answered (dead, restarting, or too busy to reply in 5s), the
+        // console's state is simply UNKNOWN — and a DOWN recorded here is
+        // doubly dangerous. It is unretractable, because the next probe
+        // needs the same engine that is missing, so nothing can ever flip
+        // the host back to "up"; and it arms the auto-redeploy loop below,
+        // which pushes a fresh ELF at :9021 every 30s. Each push kills the
+        // running helper, so the console reads as down again — forever.
+        //
+        // That is exactly how both consoles were taken out on 2026-09-14: a
+        // ~6 minute engine outage (self-inflicted, during a dev restart) put
+        // 10 redeploys into each console (Phat :9021 1789424190→…478, Pro
+        // 1789424255→…545 per /data/ps5upload/stderr.log) until they stopped
+        // answering and had to be rebooted. Leave the last known status
+        // alone and log the real culprit instead.
+        if (carryOver && !s.engineReachable) {
+          if (blindProbeRef.current[key] !== true) {
+            blindProbeRef.current[key] = true;
+            log.warn(
+              "connection",
+              `engine unreachable — ${probedHost}'s state is unknown, not down`,
+            );
+          }
+          if (isActive(key)) setStatus({ payloadProbing: false });
+          return;
+        }
+        if (blindProbeRef.current[key]) {
+          blindProbeRef.current[key] = false;
+          log.info("connection", `probes working again (${probedHost})`);
+        }
         // Debounce up→down: a reachable probe clears the miss counter; an
         // unreachable one only flips to "down" after MISS_THRESHOLD misses in
         // a row, so one busy/jittery poll holds the last-known "up".
@@ -356,7 +397,8 @@ function useStatusPolling() {
             // transfer is live, matching the redeploy guard. The store no-ops
             // unless the `autoResume` setting is on.
             const resumedAt = uploadResumeFiredAtRef.current[key] ?? 0;
-            const resumeCooling = Date.now() - resumedAt < AUTO_LOADER_COOLDOWN_MS;
+            const resumeCooling =
+              Date.now() - resumedAt < AUTO_LOADER_COOLDOWN_MS;
             if (!resumeCooling && !transferScreenBusy(probedHost)) {
               uploadResumeFiredAtRef.current[key] = Date.now();
               void useUploadQueueStore
@@ -508,29 +550,21 @@ function useStatusPolling() {
         const prev =
           useConnectionStore.getState().runtimeByHost[key] ??
           EMPTY_HOST_RUNTIME;
-        // A probe exception is also a miss — apply the same debounce so a
-        // single transient error doesn't flip a live helper to "down".
-        const misses = (missCountRef.current[key] ?? 0) + 1;
-        missCountRef.current[key] = misses;
-        const threshold = transferScreenBusy(probedHost)
-          ? PROBE_MISS_THRESHOLD_DURING_TRANSFER
-          : PROBE_MISS_THRESHOLD;
-        const newStatus =
-          prev.payloadStatus === "up" && misses < threshold ? "up" : "down";
-        if (prev.payloadStatus === "up" && newStatus === "down") {
+        // The probe didn't complete — `payloadCheck` answers with a verdict
+        // object in both the Tauri and the browser build, so an exception
+        // here means the plumbing broke (IPC/serialization), not that the
+        // console refused us. There is no evidence about the console, so
+        // record none. This used to count as a miss and flip the host to
+        // "down" after the threshold, which is how a broken engine turned
+        // into an unrecoverable DOWN and a redeploy loop (2026-09-14).
+        if (blindProbeRef.current[key] !== true) {
+          blindProbeRef.current[key] = true;
           log.warn(
             "connection",
-            `helper went DOWN on ${probedHost} (probe error: ${e instanceof Error ? e.message : String(e)})`,
+            `probe of ${probedHost} failed (${e instanceof Error ? e.message : String(e)}) — console state unchanged (${prev.payloadStatus}), not marking it down`,
           );
         }
-        setHostStatus(probedHost, { payloadStatus: newStatus });
         if (isActive(key)) setStatus({ payloadProbing: false });
-        // mgmt probe threw — transfer port state is unknown. Clear so a
-        // subsequent successful poll re-establishes the baseline.
-        if (transferAliveRef.current[key] !== undefined) {
-          delete transferAliveRef.current[key];
-        }
-        setHostStatus(probedHost, { transferAlive: null });
       }
     };
     const tick = () => {
@@ -563,11 +597,23 @@ function useStatusPolling() {
  *  the next poll sees it UP — at which point this loop skips it. No user
  *  action needed.
  *
+ *  Brakes on the loop, because it pushes ELFs at a console that may be
+ *  perfectly healthy. Every delivered ELF kills the running helper, so a
+ *  deploy that fires when it shouldn't is not a no-op — it is the thing that
+ *  breaks the console. Three of them in a row with no recovery is enough:
+ *  the loop stops and reports. (2026-09-14: without that brake, a ~6 minute
+ *  engine outage — which the poller misread as both consoles being down —
+ *  sent 10 helpers to each console and left them unresponsive.)
+ *
  *  - Native-only: a browser session has no bundled ELF to push.
  *  - Honors the `autoRedeployOnWake` setting (default ON).
  *  - One in-flight redeploy per host (no pile-up if a 9021 connect hangs).
+ *  - Re-probes before sending: a console that answers is left alone, and an
+ *    engine that can't be reached has no verdict to justify a send.
  *  - Gated to AUTO_REDEPLOY_INTERVAL_MS per host so a sleeping PS5 isn't
  *    bombarded with connect attempts.
+ *  - Stops after MAX_REDEPLOYS_WITHOUT_RECOVERY delivered helpers with no
+ *    "up" verdict in between; re-arms on any "up".
  *  - Pauses when the window is hidden (matches the poller). */
 function useAutoRedeployDownHelpers() {
   const visible = useDocumentVisible();
@@ -576,6 +622,12 @@ function useAutoRedeployDownHelpers() {
   // fresh values without re-arming the effect.
   const lastAttemptRef = useRef<Record<string, number>>({});
   const inFlightRef = useRef<Record<string, boolean>>({});
+  // Consecutive ELFs actually DELIVERED to :9021 without the helper ever
+  // reporting back up. A failed send (console asleep, loader refused) does not
+  // count — that's the rest-mode case this loop exists for, and it must keep
+  // trying through an all-night standby. A delivered send that doesn't produce
+  // an up verdict means we are the problem, not the console.
+  const deliveredRef = useRef<Record<string, number>>({});
   useEffect(() => {
     if (!visible) return;
     if (!isTauriEnv()) return;
@@ -590,11 +642,62 @@ function useAutoRedeployDownHelpers() {
       lastAttemptRef.current[key] = now;
       inFlightRef.current[key] = true;
       try {
+        // ── Price of admission: a fresh verdict that the console is gone ──
+        //
+        // The "down" that woke this loop was read up to 15s ago and can be
+        // stale by now (a helper that finished booting, a console that just
+        // woke). Pushing on a stale verdict is not harmless — the send kills
+        // the running helper — so ask the console right now, and only send if
+        // the ENGINE answered and said the console did not. An engine that
+        // can't be reached holds the send: it has no verdict to give, and its
+        // absence is not evidence about the console.
+        let fresh: { reachable: boolean; engineReachable: boolean };
+        try {
+          fresh = await payloadCheck(host);
+        } catch {
+          // No verdict at all. Hold; the poller will try again.
+          return;
+        }
+        if (cancelled) return;
+        if (fresh.reachable) {
+          log.info(
+            "connection",
+            `auto-redeploy: ${host} answered a fresh probe — nothing to restore (the down verdict was stale)`,
+          );
+          return;
+        }
+        if (!fresh.engineReachable) {
+          log.warn(
+            "connection",
+            `auto-redeploy: holding off on ${host} — the engine is unreachable, so it cannot say whether the console needs a helper`,
+          );
+          return;
+        }
         // ensurePayloadCurrent(force=true) probes, then sends + polls up to
         // ~30s. While the PS5 is in rest mode the probe/send fails fast; once
         // awake it lands and boots. Either way it never throws.
-        log.info("connection", `auto-redeploy: attempting helper restore on ${host}`);
-        await ensurePayloadCurrent(host, () => cancelled, true);
+        log.info(
+          "connection",
+          `auto-redeploy: attempting helper restore on ${host}`,
+        );
+        const result = await ensurePayloadCurrent(host, () => cancelled, true);
+        // "pushed"/"stale-ok" both mean an ELF reached the loader. If a
+        // console takes MAX_REDEPLOYS_WITHOUT_RECOVERY of them and still
+        // reads down, pushing more cannot help — it only keeps killing
+        // whatever helper manages to start. Stop and say so, loudly enough
+        // to find in a bug report. Resets the moment the console reports up.
+        if (result === "pushed" || result === "stale-ok") {
+          const n = (deliveredRef.current[key] ?? 0) + 1;
+          deliveredRef.current[key] = n;
+          if (n >= MAX_REDEPLOYS_WITHOUT_RECOVERY) {
+            log.error(
+              "connection",
+              `auto-redeploy: gave up on ${host} after ${n} delivered helpers with no recovery — ` +
+                `the console is not coming back on its own. Check it (power, rest mode, network), ` +
+                `then use Connection → Send. Not sending more.`,
+            );
+          }
+        }
       } finally {
         inFlightRef.current[key] = false;
       }
@@ -609,27 +712,25 @@ function useAutoRedeployDownHelpers() {
         const h = (p.host ?? "").trim();
         if (!h) continue;
         const key = hostOf(h) || h;
-        const rt = runtimeByHost[key];
-        // Only redeploy when we've LOST the helper (status down). Once it's
-        // back up, the normal poller tracks it and the boot-time fan restore
-        // handles the threshold. "unknown" (never seen) is left to the manual
-        // Connect flow / bringUp so we don't push to a console the user just
-        // typed in but hasn't deliberately connected to yet.
-        // NEVER redeploy over a live transfer. Pushing a fresh ELF makes
-        // the new instance take over and the old one shut down, which kills
-        // the upload mid-flight. A user bundle showed this as an unbreakable
-        // loop: a saturating upload made the mgmt poll time out, the helper
-        // was declared "down", the redeploy landed and killed the transfer,
-        // the transfer restarted from scratch — 33 redeploys, 23 helper
-        // shutdowns, and 132 GB re-sent for a 20 GB archive that never
-        // finished. The transfer-port liveness probe was already gated on
-        // this (issue #164); the redeploy never was.
-        //
-        // If the helper really has died, the transfer is already lost and
-        // the redeploy can wait for it to settle — nothing is gained by
-        // racing it, and a healthy upload must not be destroyed on the
-        // strength of a missed poll.
-        if (rt?.payloadStatus === "down" && !transferScreenBusy(h)) {
+        // All four guards live in the predicate so they can be pinned by a
+        // test (see lib/autoRedeploy.ts): never while a transfer is live,
+        // never on a console whose state we never learned, never past the
+        // brake, and re-arm on any "up". The transfer guard in particular is
+        // load-bearing — a saturating upload once made the mgmt poll time
+        // out, the helper was declared "down", the redeploy landed and killed
+        // the transfer mid-flight, and the whole thing repeated: 33 redeploys,
+        // 23 helper shutdowns, 132 GB re-sent for a 20 GB archive.
+        const decision = autoRedeployDecision({
+          status: runtimeByHost[key]?.payloadStatus,
+          busy: transferScreenBusy(h),
+          delivered: deliveredRef.current[key] ?? 0,
+        });
+        if (decision === "rearm") {
+          if ((deliveredRef.current[key] ?? 0) > 0) {
+            deliveredRef.current[key] = 0;
+            log.info("connection", `auto-redeploy: ${h} is back up — re-armed`);
+          }
+        } else if (decision === "redeploy") {
           void tryRedeploy(h);
         }
       }
@@ -911,7 +1012,10 @@ function HelperVersionBanner() {
     <div className="border-b border-[var(--color-border)] bg-[var(--color-warn-soft)] px-3 py-2 text-[var(--color-text)]">
       <div className="mx-auto flex max-w-6xl flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
         <div className="flex min-w-0 flex-1 items-start gap-3">
-          <RefreshCw size={18} className="mt-0.5 shrink-0 text-[var(--color-warn)]" />
+          <RefreshCw
+            size={18}
+            className="mt-0.5 shrink-0 text-[var(--color-warn)]"
+          />
           <div className="min-w-0">
             <p className="text-sm font-medium">
               {tr(
@@ -930,7 +1034,11 @@ function HelperVersionBanner() {
           </div>
         </div>
         <div className="flex shrink-0 gap-2">
-          <Button size="sm" variant="primary" onClick={() => navigate("/connection")}>
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={() => navigate("/connection")}
+          >
             {tr("helper_mismatch_go", undefined, "Reload helper")}
           </Button>
           <Button
@@ -979,10 +1087,7 @@ function AndroidStorageAccessBanner() {
   useEffect(() => {
     if (!isAndroid()) return;
     try {
-      if (
-        safeGetItem(ANDROID_STORAGE_PROMPT_DISMISSED_KEY) ===
-        "1"
-      ) {
+      if (safeGetItem(ANDROID_STORAGE_PROMPT_DISMISSED_KEY) === "1") {
         return;
       }
     } catch {
