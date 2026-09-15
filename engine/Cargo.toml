@@ -14,7 +14,7 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "GPL-3.0-or-later"
-version = "5.27.1"
+version = "5.28.0"
 
 [workspace.dependencies]
 anyhow = "1.0"
