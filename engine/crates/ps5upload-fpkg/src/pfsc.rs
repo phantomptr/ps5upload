@@ -108,6 +108,10 @@ fn align(value: usize, to: usize) -> usize {
 
 fn put_dir_entry(out: &mut [u8], index: usize, id: u16, offset: usize, size: usize) {
     let p = 0x48 + index * DIR_ENTRY;
+    // The field on disk is 48 bits wide whatever the host is, so widen first:
+    // `usize` is 32 bits on a 32-bit target (the Android armv7 build), where
+    // `offset >> 32` is both a compile error and the wrong number.
+    let (offset, size) = (offset as u64, size as u64);
     out[p..p + 2].copy_from_slice(&id.to_le_bytes());
     out[p + 2..p + 6].copy_from_slice(&(offset as u32).to_le_bytes());
     out[p + 6..p + 8].copy_from_slice(&((offset >> 32) as u16).to_le_bytes());
