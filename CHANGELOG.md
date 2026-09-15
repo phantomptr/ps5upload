@@ -4,6 +4,21 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.27.1
+
+**The Android build compiles again. Nothing else changed.**
+
+The 5.27.0 release went out without its Android app: the build failed while
+that release was already being assembled. The cause was an arithmetic error in
+the package converter that only exists on 32-bit ARM — the Android build
+targets armv7, where a memory offset is 32 bits wide, and one was shifted by
+32. Desktop and Docker were never affected, and the bytes written by the
+converter are unchanged.
+
+If you installed 5.27.0 on desktop, you already have everything in 5.27.1. The
+Android app is the only thing this adds. For what actually changed in the
+feature set, read the 5.27.0 entry below.
+
 ## 5.27.0
 
 **Installs tell you more and lie less, and a first look at the package converter.**
