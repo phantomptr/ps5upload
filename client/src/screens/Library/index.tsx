@@ -135,6 +135,8 @@ import {
   SkeletonRows,
   Spinner,
   type OverflowMenuItem,
+  Toggle,
+  ConnectionGate,
 } from "../../components";
 import { useTr } from "../../state/lang";
 
@@ -513,210 +515,199 @@ export default function LibraryScreen({
       {/* Running apps with suspend/resume/kill controls. Auto-hides
           when nothing is running. Wires Phase 18 (app lifecycle RPCs)
           + Phase 33 (app.db query) so each row shows a friendly name. */}
-      {host?.trim() && payloadStatus === "up" && (
+      <ConnectionGate require="payload">
         <RunningAppsPanel mgmtAddr={mgmtAddr(host.trim())} />
-      )}
 
-      {entries === null && !loading && !error && (
-        <EmptyState
-          fill
-          message={tr(
-            "library_waiting",
-            undefined,
-            "Waiting for the PS5 payload to become reachable…",
-          )}
-        />
-      )}
+        {/* First scan in flight: hold the list's shape with shimmering row
+            placeholders instead of dead space — a 200k-file console can take
+            seconds, and a blank page reads as "broken". Refreshes of an
+            already-loaded list keep showing the stale list (no flicker). */}
+        {entries === null && loading && (
+          <SkeletonRows rows={8} rowClassName="h-14" />
+        )}
 
-      {/* First scan in flight: hold the list's shape with shimmering row
-          placeholders instead of dead space — a 200k-file console can take
-          seconds, and a blank page reads as "broken". Refreshes of an
-          already-loaded list keep showing the stale list (no flicker). */}
-      {entries === null && loading && (
-        <SkeletonRows rows={8} rowClassName="h-14" />
-      )}
+        {entries && entries.length === 0 && (
+          <EmptyState
+            icon={LibraryBig}
+            size="hero"
+            title={tr(
+              "library_empty_title",
+              undefined,
+              "Nothing in the scan folders yet",
+            )}
+            message={tr(
+              "library_empty_message",
+              undefined,
+              "Upload a game folder or disk image, or register titles with a PS5-side installer — they'll show up here.",
+            )}
+          />
+        )}
 
-      {entries && entries.length === 0 && (
-        <EmptyState
-          icon={LibraryBig}
-          size="hero"
-          title={tr(
-            "library_empty_title",
-            undefined,
-            "Nothing in the scan folders yet",
-          )}
-          message={tr(
-            "library_empty_message",
-            undefined,
-            "Upload a game folder or disk image, or register titles with a PS5-side installer — they'll show up here.",
-          )}
-        />
-      )}
-
-      {entries && entries.length > 0 && (
-        <>
-          {/* Search bar. Matches name / titleId / path / scope /
-              volume so a query like "dead", "PPSA03845", or "ext1"
-              all narrow the list. Empty query renders the full list
-              unchanged (filterLibraryEntries returns the same
-              reference, so memoization downstream stays warm). */}
-          <div className="mb-4 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2">
-            <Search size={14} className="shrink-0 text-[var(--color-muted)]" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                // Standard search-input convention: Escape clears
-                // the query. Match what the X button does so the
-                // keyboard path mirrors the mouse path.
-                if (e.key === "Escape" && query !== "") {
-                  setQuery("");
-                  e.stopPropagation();
-                }
-              }}
-              placeholder={tr(
-                "library_search_placeholder",
-                undefined,
-                "Search by name, title ID, or path…",
-              )}
-              className="flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--color-muted)]"
-              aria-label={tr(
-                "library_search_aria",
-                undefined,
-                "Filter library entries",
-              )}
-            />
-            {querying && (
-              <button
-                type="button"
-                onClick={() => setQuery("")}
-                className="rounded p-0.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
-                aria-label={tr(
-                  "library_search_clear",
+        {entries && entries.length > 0 && (
+          <>
+            {/* Search bar. Matches name / titleId / path / scope /
+                volume so a query like "dead", "PPSA03845", or "ext1"
+                all narrow the list. Empty query renders the full list
+                unchanged (filterLibraryEntries returns the same
+                reference, so memoization downstream stays warm). */}
+            <div className="mb-4 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2">
+              <Search size={14} className="shrink-0 text-[var(--color-muted)]" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  // Standard search-input convention: Escape clears
+                  // the query. Match what the X button does so the
+                  // keyboard path mirrors the mouse path.
+                  if (e.key === "Escape" && query !== "") {
+                    setQuery("");
+                    e.stopPropagation();
+                  }
+                }}
+                placeholder={tr(
+                  "library_search_placeholder",
                   undefined,
-                  "Clear search",
+                  "Search by name, title ID, or path…",
+                )}
+                className="flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--color-muted)]"
+                aria-label={tr(
+                  "library_search_aria",
+                  undefined,
+                  "Filter library entries",
+                )}
+              />
+              {querying && (
+                <button
+                  type="button"
+                  onClick={() => setQuery("")}
+                  className="rounded p-0.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
+                  aria-label={tr(
+                    "library_search_clear",
+                    undefined,
+                    "Clear search",
+                  )}
+                >
+                  <X size={12} />
+                </button>
+              )}
+              {querying && (
+                <span className="shrink-0 text-xs text-[var(--color-muted)]">
+                  {split.total} / {totalUnfiltered}
+                </span>
+              )}
+              <select
+                value={sortKey}
+                onChange={(e) => setSortKey(e.target.value as SortKey)}
+                className="shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-xs text-[var(--color-text)] outline-none hover:bg-[var(--color-surface-3)]"
+                aria-label={tr(
+                  "library_sort_aria",
+                  undefined,
+                  "Sort library entries",
+                )}
+                title={tr(
+                  "library_sort_tooltip",
+                  undefined,
+                  "Choose how the list is ordered. 'Most recent' uses each entry's last-modified time on the PS5.",
                 )}
               >
-                <X size={12} />
-              </button>
-            )}
-            {querying && (
-              <span className="shrink-0 text-xs text-[var(--color-muted)]">
-                {split.total} / {totalUnfiltered}
-              </span>
-            )}
-            <select
-              value={sortKey}
-              onChange={(e) => setSortKey(e.target.value as SortKey)}
-              className="shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-xs text-[var(--color-text)] outline-none hover:bg-[var(--color-surface-3)]"
-              aria-label={tr(
-                "library_sort_aria",
-                undefined,
-                "Sort library entries",
-              )}
-              title={tr(
-                "library_sort_tooltip",
-                undefined,
-                "Choose how the list is ordered. 'Most recent' uses each entry's last-modified time on the PS5.",
-              )}
-            >
-              <option value="recent">
-                {tr("library_sort_recent", undefined, "Most recent")}
-              </option>
-              <option value="oldest">
-                {tr("library_sort_oldest", undefined, "Oldest first")}
-              </option>
-              <option value="name-asc">
-                {tr("library_sort_name_asc", undefined, "Name (A→Z)")}
-              </option>
-              <option value="name-desc">
-                {tr("library_sort_name_desc", undefined, "Name (Z→A)")}
-              </option>
-            </select>
-          </div>
-
-          {querying && split.total === 0 && (
-            <EmptyState
-              icon={Search}
-              title={tr(
-                "library_search_no_matches_title",
-                undefined,
-                "No matches",
-              )}
-              message={tr(
-                "library_search_no_matches_message",
-                { query },
-                `Nothing in your library matches "${query}". Try a shorter phrase, the title ID (e.g. PPSA01342), or a fragment of the path.`,
-              )}
-            />
-          )}
-
-          {split.total > 0 && (
-            <div className="flex flex-col gap-6">
-              {split.games.length > 0 && (
-                <section>
-                  <SectionHeader
-                    icon={<Gamepad2 size={13} />}
-                    title={tr("library_games", undefined, "Games")}
-                    count={split.games.length}
-                  />
-                  <CappedRows
-                    entries={split.games}
-                    expanded={gamesExpanded}
-                    onExpand={() => setGamesExpanded(true)}
-                    host={host}
-                    mountMap={mountMap}
-                    pendingMounts={pendingMounts}
-                    volumes={volumes}
-                    registeredBySource={registeredBySource}
-                    smpRunning={smpRunning}
-                    onChanged={refresh}
-                  />
-                </section>
-              )}
-              {split.images.length > 0 && (
-                <section>
-                  <SectionHeader
-                    icon={<FileArchive size={13} />}
-                    title={tr(
-                      "library_disk_images",
-                      undefined,
-                      "Disk images (.exfat / .ffpkg / .ffpfs)",
-                    )}
-                    count={split.images.length}
-                  />
-                  {/* What you can actually DO with a disk image. Both verbs
-                      are on every row below, but until you press one nothing
-                      says that editing an image is how you add DLC or apply a
-                      backport — that knowledge lived only in the FAQ, and
-                      users were finding it by accident. One quiet line, not a
-                      card: it's orientation, not a warning. */}
-                  <p className="mb-2 text-xs text-[var(--color-muted)]">
-                    {tr(
-                      "library_images_capabilities",
-                      undefined,
-                      "Mount to play a game, or Edit files to change what's inside it — adding DLC, swapping assets, or applying a backport patch. Edits are written straight into the image.",
-                    )}
-                  </p>
-                  <FpkgKstuffTip />
-                  <CappedRows
-                    entries={split.images}
-                    expanded={imagesExpanded}
-                    onExpand={() => setImagesExpanded(true)}
-                    host={host}
-                    mountMap={mountMap}
-                    pendingMounts={pendingMounts}
-                    volumes={volumes}
-                    registeredBySource={registeredBySource}
-                    smpRunning={smpRunning}
-                    onChanged={refresh}
-                  />
-                </section>
-              )}
+                <option value="recent">
+                  {tr("library_sort_recent", undefined, "Most recent")}
+                </option>
+                <option value="oldest">
+                  {tr("library_sort_oldest", undefined, "Oldest first")}
+                </option>
+                <option value="name-asc">
+                  {tr("library_sort_name_asc", undefined, "Name (A→Z)")}
+                </option>
+                <option value="name-desc">
+                  {tr("library_sort_name_desc", undefined, "Name (Z→A)")}
+                </option>
+              </select>
             </div>
-          )}
-        </>
-      )}
+
+            {querying && split.total === 0 && (
+              <EmptyState
+                icon={Search}
+                title={tr(
+                  "library_search_no_matches_title",
+                  undefined,
+                  "No matches",
+                )}
+                message={tr(
+                  "library_search_no_matches_message",
+                  { query },
+                  `Nothing in your library matches "${query}". Try a shorter phrase, the title ID (e.g. PPSA01342), or a fragment of the path.`,
+                )}
+              />
+            )}
+
+            {split.total > 0 && (
+              <div className="flex flex-col gap-6">
+                {split.games.length > 0 && (
+                  <section>
+                    <SectionHeader
+                      icon={<Gamepad2 size={13} />}
+                      title={tr("library_games", undefined, "Games")}
+                      count={split.games.length}
+                    />
+                    <CappedRows
+                      entries={split.games}
+                      expanded={gamesExpanded}
+                      onExpand={() => setGamesExpanded(true)}
+                      host={host}
+                      mountMap={mountMap}
+                      pendingMounts={pendingMounts}
+                      volumes={volumes}
+                      registeredBySource={registeredBySource}
+                      smpRunning={smpRunning}
+                      onChanged={refresh}
+                    />
+                  </section>
+                )}
+                {split.images.length > 0 && (
+                  <section>
+                    <SectionHeader
+                      icon={<FileArchive size={13} />}
+                      title={tr(
+                        "library_disk_images",
+                        undefined,
+                        "Disk images (.exfat / .ffpkg / .ffpfs)",
+                      )}
+                      count={split.images.length}
+                    />
+                    {/* What you can actually DO with a disk image. Both verbs
+                        are on every row below, but until you press one nothing
+                        says that editing an image is how you add DLC or apply a
+                        backport — that knowledge lived only in the FAQ, and
+                        users were finding it by accident. One quiet line, not a
+                        card: it's orientation, not a warning. */}
+                    <p className="mb-2 text-xs text-[var(--color-muted)]">
+                      {tr(
+                        "library_images_capabilities",
+                        undefined,
+                        "Mount to play a game, or Edit files to change what's inside it — adding DLC, swapping assets, or applying a backport patch. Edits are written straight into the image.",
+                      )}
+                    </p>
+                    <FpkgKstuffTip />
+                    <CappedRows
+                      entries={split.images}
+                      expanded={imagesExpanded}
+                      onExpand={() => setImagesExpanded(true)}
+                      host={host}
+                      mountMap={mountMap}
+                      pendingMounts={pendingMounts}
+                      volumes={volumes}
+                      registeredBySource={registeredBySource}
+                      smpRunning={smpRunning}
+                      onChanged={refresh}
+                    />
+                  </section>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </ConnectionGate>
     </div>
   );
 }
@@ -3915,30 +3906,21 @@ function MountModal({
             definition, so offering "Mount read-only" here would contradict
             the button the user just pressed. */}
         {supportsReadOnly && intent !== "edit" && (
-          <label className="mb-3 flex cursor-pointer items-start gap-2 text-xs">
-            <input
-              type="checkbox"
-              className="mt-[3px]"
-              checked={readOnly}
-              onChange={(e) => setReadOnly(e.target.checked)}
-            />
-            <span>
+          <Toggle
+            className="mb-3 items-start"
+            checked={readOnly}
+            onChange={setReadOnly}
+            label={
               <span className="font-medium">
-                {tr(
-                  "library_mount_modal_read_only",
-                  undefined,
-                  "Mount read-only",
-                )}
+                {tr("library_mount_modal_read_only", undefined, "Mount read-only")}
               </span>
-              <span className="ml-1 text-[var(--color-muted)]">
-                {tr(
-                  "library_mount_modal_read_only_hint",
-                  undefined,
-                  "— prevents writes through the mount. Useful for shared dumps and save-data PFS images. Requires payload 2.2.26+.",
-                )}
-              </span>
-            </span>
-          </label>
+            }
+            hint={tr(
+              "library_mount_modal_read_only_hint",
+              undefined,
+              "Prevents writes through the mount. Useful for shared dumps and save-data PFS images. Requires payload 2.2.26+.",
+            )}
+          />
         )}
 
         {/* Read-write is the whole point for anyone patching a game, but it

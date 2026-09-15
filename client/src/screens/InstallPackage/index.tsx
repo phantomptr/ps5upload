@@ -29,14 +29,15 @@ import {
   Callout,
   EmptyState,
   WarningCard,
+  ConnectionGate,
   ConsoleChip,
   GameIcon,
   OverflowMenu,
   PlatformBadge,
   Spinner,
   Badge,
-  Checkbox,
   type OverflowMenuItem,
+  Toggle,
 } from "../../components";
 import { openInFileSystem } from "../../state/fsNavigation";
 import { useConfirm } from "../../components/ConfirmDialog";
@@ -465,6 +466,7 @@ const installedIdsCache = new Map<string, Set<string>>();
 export default function InstallPackageScreen() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
+  const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   // Per-console store: every selector is scoped to THIS console's host, so the
   // Install Package view is fully isolated per PS5 (parallel installs).
   const entries = usePkgLibrary(host, (s) => s.entries);
@@ -542,8 +544,15 @@ export default function InstallPackageScreen() {
   const uploadRef = useRef<(p: string) => void>(() => {});
   const recentPkgDrops = useRef(new Map<string, number>());
   useEffect(() => {
+    // The window-level drop listener is registered outside JSX, so the
+    // ConnectionGate cannot disarm it — an offline drop has to be refused here
+    // or it starts a staging run against a console that isn't answering.
     uploadRef.current = (p: string) => {
-      if (hostReady && acceptPkgDrop(recentPkgDrops.current, p)) {
+      if (
+        hostReady &&
+        payloadStatus === "up" &&
+        acceptPkgDrop(recentPkgDrops.current, p)
+      ) {
         void addAndUpload(p, host);
       }
     };
@@ -1293,389 +1302,380 @@ export default function InstallPackageScreen() {
         }
       />
 
-      <div className="mb-4 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-[12px] text-[var(--color-muted)]">
-        <Info size={13} className="mt-0.5 shrink-0" />
-        <div>
-          <span className="font-medium text-[var(--color-text)]">
-            {tr("pkglib.installnote.title", "How installing works")}
-          </span>
-          {" — "}
-          {tr(
-            "pkglib.installnote.body",
-            "ps5upload installs the package on the PS5 for you. It briefly takes over the payload to run the install (falling back to the DPI loader if needed) and restores it when done, so the connection may blip for a few seconds. On FW 12+ the screen can go black for a moment — that's normal. Game pkgs work best; some system (NPXS) pkgs may still need the PS5's own Settings → Package Installer.",
-          )}
-        </div>
-      </div>
-
-      {/* Stated, not detected. A user installing an FPKG already knows it is
-          one, and there is no header marker that separates a fake package from
-          a retail one — every field that looked like a candidate is present on
-          genuine Sony packages too. So the note names the requirement and lets
-          the reader decide whether it applies to them. */}
-      <Callout
-        tone="warn"
-        className="mb-4"
-        title={tr(
-          "pkglib.fpkgsupport.title",
-          "Installing a fake package (FPKG)?",
-        )}
-      >
-        <div className="flex flex-col gap-1.5">
+      <ConnectionGate require="payload">
+        <div className="mb-4 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-[12px] text-[var(--color-muted)]">
+          <Info size={13} className="mt-0.5 shrink-0" />
           <div>
+            <span className="font-medium text-[var(--color-text)]">
+              {tr("pkglib.installnote.title", "How installing works")}
+            </span>
+            {" — "}
             {tr(
-              "pkglib.fpkgsupport.lead",
-              "A PS5 fake package only installs when fake-package support is already loaded on the console. Load all three, in this order, before installing:",
-            )}
-          </div>
-          <ol className="ml-4 flex list-decimal flex-col gap-1">
-            <li>
-              <strong className="text-[var(--color-text)]">kstuff</strong>{" "}
-              {tr(
-                "pkglib.fpkgsupport.kstuff",
-                "— the build with PS5 fake-package support",
-              )}
-            </li>
-            <li>
-              <strong className="text-[var(--color-text)]">
-                a53_ppr_install_fast.elf
-              </strong>{" "}
-              {tr(
-                "pkglib.fpkgsupport.ppr",
-                "— applies the PPR plaintext / no-auth patch",
-              )}
-            </li>
-            <li>
-              <strong className="text-[var(--color-text)]">
-                shadowmountplus.elf
-              </strong>{" "}
-              {tr(
-                "pkglib.fpkgsupport.smp",
-                "— the mount layer that registers the installed title",
-              )}
-            </li>
-          </ol>
-          <div>
-            {tr(
-              "pkglib.fpkgsupport.tail",
-              "Without them the console refuses the install, or takes it and then fails to mount the game. Retail and debug packages need none of this — if that is what you are installing, ignore this note.",
+              "pkglib.installnote.body",
+              "ps5upload installs the package on the PS5 for you. It briefly takes over the payload to run the install (falling back to the DPI loader if needed) and restores it when done, so the connection may blip for a few seconds. On FW 12+ the screen can go black for a moment — that's normal. Game pkgs work best; some system (NPXS) pkgs may still need the PS5's own Settings → Package Installer.",
             )}
           </div>
         </div>
-      </Callout>
 
-      {/* Workflow options, grouped near the top where they're set before
-          adding a package (not buried under the library list). Both govern the
-          hands-off "add → installed → cleaned up" flow, so they read together. */}
-      <div className="mb-4 flex flex-col gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
-        <span className="text-xs font-medium uppercase tracking-wide text-[var(--color-muted)]">
-          {tr("pkglib.options.heading", "Options")}
-        </span>
-        <Checkbox
-          checked={autoInstall}
-          onChange={setAutoInstall}
-          label={tr(
-            "pkglib.autoInstall",
-            undefined,
-            "Install automatically once the upload finishes",
+        {/* Stated, not detected. A user installing an FPKG already knows it is
+            one, and there is no header marker that separates a fake package from
+            a retail one — every field that looked like a candidate is present on
+            genuine Sony packages too. So the note names the requirement and lets
+            the reader decide whether it applies to them. */}
+        <Callout
+          tone="warn"
+          className="mb-4"
+          title={tr(
+            "pkglib.fpkgsupport.title",
+            "Installing a fake package (FPKG)?",
           )}
-        />
-        <Checkbox
-          checked={autoRemove}
-          onChange={setAutoRemove}
-          label={tr(
-            "pkglib.autoRemove",
-            undefined,
-            "Auto-delete each package from the PS5 after it installs",
-          )}
-        />
-      </div>
-
-      {alternativeGroups.length > 0 && (
-        <div className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-3 text-sm leading-relaxed text-[var(--color-muted)]">
-          <strong className="text-[var(--color-text)]">
-            {tr("pkglib.installAll.what", undefined, "What is Install all?")}
-          </strong>{" "}
-          {tr(
-            "pkglib.installAll.whatBody",
-            undefined,
-            "Install all runs every ready package in order: base game → updates → DLC. When you have two updates of the same version (or two DLC packs that conflict), use the checkbox on each row to choose which one this console should install — only one per group. Uncheck to leave that group out. The Install button on a single row always installs just that package.",
-          )}
-        </div>
-      )}
-
-      {!hostReady && (
-        <div className="mb-4">
-          <WarningCard
-            title={tr(
-              "install.noTarget",
-              "No PS5 host set — open the Connection tab to set one.",
-            )}
-          />
-        </div>
-      )}
-
-      {streamResult && (
-        <div className="mb-4">
-          <div
-            className={`flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm ${
-              streamResult.ok
-                ? "border-[var(--color-good)] text-[var(--color-good)]"
-                : streamResult.warn
-                  ? "border-[var(--color-warn)] text-[var(--color-warn)]"
-                  : "border-[var(--color-bad)] text-[var(--color-bad)]"
-            }`}
-            role="status"
-          >
-            {streamResult.ok ? (
-              <CheckCircle2 size={15} className="mt-px shrink-0" />
-            ) : streamResult.warn ? (
-              <AlertTriangle size={15} className="mt-px shrink-0" />
-            ) : (
-              <XCircle size={15} className="mt-px shrink-0" />
-            )}
-            <div className="min-w-0">
-              <div className="font-medium break-words">{streamResult.name}</div>
-              <div className="opacity-90 break-words">
-                {streamResult.message}
-              </div>
+        >
+          <div className="flex flex-col gap-1.5">
+            <div>
+              {tr(
+                "pkglib.fpkgsupport.lead",
+                "A PS5 fake package only installs when fake-package support is already loaded on the console. Load all three, in this order, before installing:",
+              )}
             </div>
-            <button
-              type="button"
-              className="ml-auto shrink-0 opacity-70 hover:opacity-100"
-              onClick={() => setStreamResult(null)}
-              aria-label={tr("common.dismiss", undefined, "Dismiss")}
-            >
-              ×
-            </button>
+            <ol className="ml-4 flex list-decimal flex-col gap-1">
+              <li>
+                <strong className="text-[var(--color-text)]">kstuff</strong>{" "}
+                {tr(
+                  "pkglib.fpkgsupport.kstuff",
+                  "— the build with PS5 fake-package support",
+                )}
+              </li>
+              <li>
+                <strong className="text-[var(--color-text)]">
+                  a53_ppr_install_fast.elf
+                </strong>{" "}
+                {tr(
+                  "pkglib.fpkgsupport.ppr",
+                  "— applies the PPR plaintext / no-auth patch",
+                )}
+              </li>
+              <li>
+                <strong className="text-[var(--color-text)]">
+                  shadowmountplus.elf
+                </strong>{" "}
+                {tr(
+                  "pkglib.fpkgsupport.smp",
+                  "— the mount layer that registers the installed title",
+                )}
+              </li>
+            </ol>
+            <div>
+              {tr(
+                "pkglib.fpkgsupport.tail",
+                "Without them the console refuses the install, or takes it and then fails to mount the game. Retail and debug packages need none of this — if that is what you are installing, ignore this note.",
+              )}
+            </div>
           </div>
-        </div>
-      )}
-      {pickError && (
-        <div className="mb-4">
-          <WarningCard
-            title={tr("install.pickError", "Could not add file")}
-            detail={pickError}
+        </Callout>
+
+        {/* Workflow options, grouped near the top where they're set before
+            adding a package (not buried under the library list). Both govern the
+            hands-off "add → installed → cleaned up" flow, so they read together. */}
+        <div className="mb-4 flex flex-col gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
+          <span className="text-xs font-medium uppercase tracking-wide text-[var(--color-muted)]">
+            {tr("pkglib.options.heading", "Options")}
+          </span>
+          <Toggle
+            checked={autoInstall}
+            onChange={setAutoInstall}
+            label={tr(
+              "pkglib.autoInstall",
+              undefined,
+              "Install automatically once the upload finishes",
+            )}
+          />
+          <Toggle
+            checked={autoRemove}
+            onChange={setAutoRemove}
+            label={tr(
+              "pkglib.autoRemove",
+              undefined,
+              "Auto-delete each package from the PS5 after it installs",
+            )}
           />
         </div>
-      )}
-      {error && (
-        <div className="mb-4">
-          <WarningCard
-            title={tr("pkglib.error", "Something went wrong")}
-            detail={error}
-          />
-        </div>
-      )}
 
-      {busyNotice && (
-        <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-[var(--color-accent)] bg-[var(--color-accent-soft)] px-4 py-3 text-sm">
-          <div className="flex items-start gap-2">
-            <Spinner size={14} tone="accent" className="mt-0.5 shrink-0" />
-            <span>{busyNotice}</span>
+        {alternativeGroups.length > 0 && (
+          <div className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-3 text-sm leading-relaxed text-[var(--color-muted)]">
+            <strong className="text-[var(--color-text)]">
+              {tr("pkglib.installAll.what", undefined, "What is Install all?")}
+            </strong>{" "}
+            {tr(
+              "pkglib.installAll.whatBody",
+              undefined,
+              "Install all runs every ready package in order: base game → updates → DLC. When you have two updates of the same version (or two DLC packs that conflict), use the checkbox on each row to choose which one this console should install — only one per group. Uncheck to leave that group out. The Install button on a single row always installs just that package.",
+            )}
           </div>
-          {/* Only offer Cancel while the install is still WAITING its turn.
-              During the real install (FW 12.x keeps busyNotice set for the
-              "screen may go black" notice) cancelling would tear the payload
-              out mid-swap, so the button is hidden then. */}
-          {installPending && (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={cancelPendingInstall}
+        )}
+
+        {streamResult && (
+          <div className="mb-4">
+            <div
+              className={`flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm ${
+                streamResult.ok
+                  ? "border-[var(--color-good)] text-[var(--color-good)]"
+                  : streamResult.warn
+                    ? "border-[var(--color-warn)] text-[var(--color-warn)]"
+                    : "border-[var(--color-bad)] text-[var(--color-bad)]"
+              }`}
+              role="status"
             >
-              {tr("cancel", undefined, "Cancel")}
-            </Button>
-          )}
-        </div>
-      )}
+              {streamResult.ok ? (
+                <CheckCircle2 size={15} className="mt-px shrink-0" />
+              ) : streamResult.warn ? (
+                <AlertTriangle size={15} className="mt-px shrink-0" />
+              ) : (
+                <XCircle size={15} className="mt-px shrink-0" />
+              )}
+              <div className="min-w-0">
+                <div className="font-medium break-words">{streamResult.name}</div>
+                <div className="opacity-90 break-words">
+                  {streamResult.message}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="ml-auto shrink-0 opacity-70 hover:opacity-100"
+                onClick={() => setStreamResult(null)}
+                aria-label={tr("common.dismiss", undefined, "Dismiss")}
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        )}
+        {pickError && (
+          <div className="mb-4">
+            <WarningCard
+              title={tr("install.pickError", "Could not add file")}
+              detail={pickError}
+            />
+          </div>
+        )}
+        {error && (
+          <div className="mb-4">
+            <WarningCard
+              title={tr("pkglib.error", "Something went wrong")}
+              detail={error}
+            />
+          </div>
+        )}
 
-      {hostReady && <ExternalPackages host={host} />}
+        {busyNotice && (
+          <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-[var(--color-accent)] bg-[var(--color-accent-soft)] px-4 py-3 text-sm">
+            <div className="flex items-start gap-2">
+              <Spinner size={14} tone="accent" className="mt-0.5 shrink-0" />
+              <span>{busyNotice}</span>
+            </div>
+            {/* Only offer Cancel while the install is still WAITING its turn.
+                During the real install (FW 12.x keeps busyNotice set for the
+                "screen may go black" notice) cancelling would tear the payload
+                out mid-swap, so the button is hidden then. */}
+            {installPending && (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={cancelPendingInstall}
+              >
+                {tr("cancel", undefined, "Cancel")}
+              </Button>
+            )}
+          </div>
+        )}
 
-      {hostReady && entries.length === 0 && !loading ? (
-        <EmptyState
-          icon={dropActive ? HardDrive : PackageOpen}
-          size="hero"
-          title={
-            dropActive
-              ? tr("pkglib.empty.drop", "Drop to upload")
-              : tr("pkglib.empty.title", "No packages uploaded yet")
-          }
-          message={tr(
-            "pkglib.empty.body",
-            "Add a .pkg or .fpkg install package to upload it to your PS5, then install it from here. You can also drag either format onto the window.",
-          )}
-        />
-      ) : (
-        <>
-          <div className="grid gap-4">
-            {titleGroups.map((group) => {
-              const sections = [
-                {
-                  key: "base",
-                  label: tr("pkglib.section.base", undefined, "Base game"),
-                  rows: group.entries.filter(
-                    (entry) =>
-                      entry.category !== "gp" && entry.category !== "ac",
-                  ),
-                },
-                {
-                  key: "updates",
-                  label: tr("pkglib.section.updates", undefined, "Updates"),
-                  rows: group.entries.filter(
-                    (entry) => entry.category === "gp",
-                  ),
-                },
-                {
-                  key: "dlc",
-                  label: tr("pkglib.section.dlc", undefined, "DLC"),
-                  rows: group.entries.filter(
-                    (entry) => entry.category === "ac",
-                  ),
-                },
-              ].filter((section) => section.rows.length > 0);
-              const groupPaths = new Set(
-                group.entries.map((entry) => entry.path),
-              );
-              const alternatives = alternativeGroups.filter((alternative) =>
-                alternative.entries.some((entry) => groupPaths.has(entry.path)),
-              );
-              const unresolved = alternatives.filter(
-                (alternative) =>
-                  !effectiveAlternativeSelections[alternative.key],
-              ).length;
+        {hostReady && <ExternalPackages host={host} />}
 
-              return (
-                <section
-                  key={group.key}
-                  className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3"
-                >
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border)] pb-3">
-                    <div className="min-w-0">
-                      <h2 className="truncate text-sm font-semibold">
-                        {group.title}
-                      </h2>
-                      <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-[var(--color-muted)]">
-                        {group.titleId && (
-                          <span className="font-mono">{group.titleId}</span>
-                        )}
+        {hostReady && entries.length === 0 && !loading ? (
+          <EmptyState
+            icon={dropActive ? HardDrive : PackageOpen}
+            size="hero"
+            title={
+              dropActive
+                ? tr("pkglib.empty.drop", "Drop to upload")
+                : tr("pkglib.empty.title", "No packages uploaded yet")
+            }
+            message={tr(
+              "pkglib.empty.body",
+              "Add a .pkg or .fpkg install package to upload it to your PS5, then install it from here. You can also drag either format onto the window.",
+            )}
+          />
+        ) : (
+          <>
+            <div className="grid gap-4">
+              {titleGroups.map((group) => {
+                const sections = [
+                  {
+                    key: "base",
+                    label: tr("pkglib.section.base", undefined, "Base game"),
+                    rows: group.entries.filter(
+                      (entry) =>
+                        entry.category !== "gp" && entry.category !== "ac",
+                    ),
+                  },
+                  {
+                    key: "updates",
+                    label: tr("pkglib.section.updates", undefined, "Updates"),
+                    rows: group.entries.filter(
+                      (entry) => entry.category === "gp",
+                    ),
+                  },
+                  {
+                    key: "dlc",
+                    label: tr("pkglib.section.dlc", undefined, "DLC"),
+                    rows: group.entries.filter(
+                      (entry) => entry.category === "ac",
+                    ),
+                  },
+                ].filter((section) => section.rows.length > 0);
+                const groupPaths = new Set(
+                  group.entries.map((entry) => entry.path),
+                );
+                const alternatives = alternativeGroups.filter((alternative) =>
+                  alternative.entries.some((entry) => groupPaths.has(entry.path)),
+                );
+                const unresolved = alternatives.filter(
+                  (alternative) =>
+                    !effectiveAlternativeSelections[alternative.key],
+                ).length;
+
+                return (
+                  <section
+                    key={group.key}
+                    className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3"
+                  >
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border)] pb-3">
+                      <div className="min-w-0">
+                        <h2 className="truncate text-sm font-semibold">
+                          {group.title}
+                        </h2>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-[var(--color-muted)]">
+                          {group.titleId && (
+                            <span className="font-mono">{group.titleId}</span>
+                          )}
+                          <span>
+                            {tr(
+                              "pkglib.group.count",
+                              { n: group.entries.length },
+                              `${group.entries.length} package${group.entries.length === 1 ? "" : "s"}`,
+                            )}
+                          </span>
+                        </div>
+                      </div>
+                      {alternatives.length > 0 && (
+                        <Badge
+                          tone={unresolved > 0 ? "warn" : "accent"}
+                          variant="soft"
+                        >
+                          {unresolved > 0
+                            ? `${unresolved} choice${unresolved === 1 ? "" : "s"} needed`
+                            : `${alternatives.length} variant choice${alternatives.length === 1 ? "" : "s"} set`}
+                        </Badge>
+                      )}
+                    </div>
+
+                    {alternatives.length > 0 && (
+                      <div className="mb-3 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2.5 text-xs text-[var(--color-muted)]">
+                        <Info size={13} className="mt-0.5 shrink-0" />
                         <span>
                           {tr(
-                            "pkglib.group.count",
-                            { n: group.entries.length },
-                            `${group.entries.length} package${group.entries.length === 1 ? "" : "s"}`,
+                            "pkglib.variant.help",
+                            undefined,
+                            "Every update/DLC variant is preserved below. Choose one same-version alternative for this PS5; Install all uses the selected row and leaves its siblings staged.",
                           )}
                         </span>
                       </div>
-                    </div>
-                    {alternatives.length > 0 && (
-                      <Badge
-                        tone={unresolved > 0 ? "warn" : "accent"}
-                        variant="soft"
-                      >
-                        {unresolved > 0
-                          ? `${unresolved} choice${unresolved === 1 ? "" : "s"} needed`
-                          : `${alternatives.length} variant choice${alternatives.length === 1 ? "" : "s"} set`}
-                      </Badge>
                     )}
-                  </div>
 
-                  {alternatives.length > 0 && (
-                    <div className="mb-3 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2.5 text-xs text-[var(--color-muted)]">
-                      <Info size={13} className="mt-0.5 shrink-0" />
-                      <span>
-                        {tr(
-                          "pkglib.variant.help",
-                          undefined,
-                          "Every update/DLC variant is preserved below. Choose one same-version alternative for this PS5; Install all uses the selected row and leaves its siblings staged.",
-                        )}
-                      </span>
-                    </div>
-                  )}
-
-                  <div className="grid gap-4">
-                    {sections.map((section) => (
-                      <div key={section.key}>
-                        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-                          <span>{section.label}</span>
-                          <span className="rounded-full bg-[var(--color-surface-3)] px-1.5 py-0.5 font-mono text-[10px] tabular-nums">
-                            {section.rows.length}
-                          </span>
+                    <div className="grid gap-4">
+                      {sections.map((section) => (
+                        <div key={section.key}>
+                          <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+                            <span>{section.label}</span>
+                            <span className="rounded-full bg-[var(--color-surface-3)] px-1.5 py-0.5 font-mono text-[10px] tabular-nums">
+                              {section.rows.length}
+                            </span>
+                          </div>
+                          <ul className="grid gap-2">
+                            {section.rows.map(renderPkgRow)}
+                          </ul>
                         </div>
-                        <ul className="grid gap-2">
-                          {section.rows.map(renderPkgRow)}
-                        </ul>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              );
-            })}
-          </div>
-          {entries.length > 0 && (
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--color-border)] pt-3 text-xs text-[var(--color-muted)]">
-              <span>
-                {tr(
-                  "pkglib.footer.count",
-                  { n: entries.length },
-                  `${entries.length} package${entries.length === 1 ? "" : "s"}`,
-                )}
-              </span>
-              <div className="flex items-center gap-2">
-                {finishedCount > 0 && (
+                      ))}
+                    </div>
+                  </section>
+                );
+              })}
+            </div>
+            {entries.length > 0 && (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--color-border)] pt-3 text-xs text-[var(--color-muted)]">
+                <span>
+                  {tr(
+                    "pkglib.footer.count",
+                    { n: entries.length },
+                    `${entries.length} package${entries.length === 1 ? "" : "s"}`,
+                  )}
+                </span>
+                <div className="flex items-center gap-2">
+                  {finishedCount > 0 && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      disabled={installing}
+                      onClick={() => void clearFinished(host)}
+                    >
+                      {tr(
+                        "pkglib.clearFinished",
+                        { n: finishedCount },
+                        `Clear finished (${finishedCount})`,
+                      )}
+                    </Button>
+                  )}
                   <Button
                     variant="secondary"
                     size="sm"
                     disabled={installing}
-                    onClick={() => void clearFinished(host)}
+                    onClick={async () => {
+                      const ok = await confirm({
+                        title: tr(
+                          "pkglib.clearAll.confirmTitle",
+                          undefined,
+                          "Delete all staged packages?",
+                        ),
+                        message: tr(
+                          "pkglib.clearAll.confirmBody",
+                          { n: entries.length },
+                          `This permanently deletes all ${entries.length} staged .pkg file(s) from the PS5. Installed games are not affected.`,
+                        ),
+                        confirmLabel: tr(
+                          "pkglib.clearAll",
+                          undefined,
+                          "Clear all",
+                        ),
+                        destructive: true,
+                      });
+                      if (ok) void clearAll(host);
+                    }}
                   >
-                    {tr(
-                      "pkglib.clearFinished",
-                      { n: finishedCount },
-                      `Clear finished (${finishedCount})`,
-                    )}
+                    {tr("pkglib.clearAll", undefined, "Clear all")}
                   </Button>
-                )}
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  disabled={installing}
-                  onClick={async () => {
-                    const ok = await confirm({
-                      title: tr(
-                        "pkglib.clearAll.confirmTitle",
-                        undefined,
-                        "Delete all staged packages?",
-                      ),
-                      message: tr(
-                        "pkglib.clearAll.confirmBody",
-                        { n: entries.length },
-                        `This permanently deletes all ${entries.length} staged .pkg file(s) from the PS5. Installed games are not affected.`,
-                      ),
-                      confirmLabel: tr(
-                        "pkglib.clearAll",
-                        undefined,
-                        "Clear all",
-                      ),
-                      destructive: true,
-                    });
-                    if (ok) void clearAll(host);
-                  }}
-                >
-                  {tr("pkglib.clearAll", undefined, "Clear all")}
-                </Button>
-                <span className="tabular-nums">
-                  {tr(
-                    "pkglib.footer.size",
-                    { size: formatBytes(totalSize) },
-                    `${formatBytes(totalSize)} on PS5`,
-                  )}
-                </span>
+                  <span className="tabular-nums">
+                    {tr(
+                      "pkglib.footer.size",
+                      { size: formatBytes(totalSize) },
+                      `${formatBytes(totalSize)} on PS5`,
+                    )}
+                  </span>
+                </div>
               </div>
-            </div>
-          )}
-        </>
-      )}
-      {dialog}
+            )}
+          </>
+        )}
+        {dialog}
+      </ConnectionGate>
     </div>
   );
 }
@@ -1823,7 +1823,7 @@ function ExternalPackages({ host }: { host: string }) {
           "Plug a USB stick or external drive with .pkg or .fpkg install packages into the PS5 and they show up here — no upload needed. Installing copies the file onto the console first (your drive's copy is left untouched), then installs it. Use Scan after connecting a drive.",
         )}
       </div>
-      <Checkbox
+      <Toggle
         className="mb-2"
         checked={autoScan}
         onChange={setAutoScan}

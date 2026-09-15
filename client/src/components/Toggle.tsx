@@ -5,7 +5,8 @@ export interface ToggleProps {
   checked: boolean;
   onChange: (checked: boolean) => void;
   label: React.ReactNode;
-  hint?: string;
+  /** Inline content only — rendered inside a `<p>` under the label. */
+  hint?: React.ReactNode;
   disabled?: boolean;
   className?: string;
 }

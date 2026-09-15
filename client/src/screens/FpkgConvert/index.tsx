@@ -13,6 +13,7 @@ import {
   Button,
   Callout,
   Card,
+  ConnectionGate,
   Input,
   PageHeader,
   ProgressBar,
@@ -144,7 +145,7 @@ export default function FpkgConvertScreen() {
   }, [source, outputDir]);
 
   const install = useCallback(async () => {
-    if (!job?.dest) return;
+    if (!job?.dest || !host?.trim()) return;
     setInstalling(true);
     setError(null);
     try {
@@ -410,22 +411,39 @@ export default function FpkgConvertScreen() {
       )}
 
       {job?.status === "done" && (
-        <Card>
-          <div className="flex flex-col gap-2 text-sm">
-            <div className="text-[var(--color-good)]">
-              {tr("fpkg.done", undefined, "Package written")}
+        <>
+          <Card>
+            <div className="flex flex-col gap-2 text-sm">
+              <div className="text-[var(--color-good)]">
+                {tr("fpkg.done", undefined, "Package written")}
+              </div>
+              <div className="break-all text-[var(--color-text)]">{job.dest}</div>
             </div>
-            <div className="break-all text-[var(--color-text)]">{job.dest}</div>
-            <div className="flex gap-2">
-              <Button onClick={() => void install()} disabled={installing || !job.dest}>
-                {installing
-                  ? tr("fpkg.installing", undefined, "Installing…")
-                  : tr("fpkg.install", undefined, "Install on the console")}
-              </Button>
-            </div>
-            {installResult && <div className="text-[var(--color-text)]">{installResult}</div>}
-          </div>
-        </Card>
+          </Card>
+
+          {/* Only this step needs the console — the conversion above ran on
+              the machine hosting the engine, so it stays available with no
+              PS5 connected. */}
+          <ConnectionGate require="payload">
+            <Card>
+              <div className="flex flex-col gap-2 text-sm">
+                <div className="flex gap-2">
+                  <Button
+                    onClick={() => void install()}
+                    disabled={installing || !job.dest || !host?.trim()}
+                  >
+                    {installing
+                      ? tr("fpkg.installing", undefined, "Installing…")
+                      : tr("fpkg.install", undefined, "Install on the console")}
+                  </Button>
+                </div>
+                {installResult && (
+                  <div className="text-[var(--color-text)]">{installResult}</div>
+                )}
+              </div>
+            </Card>
+          </ConnectionGate>
+        </>
       )}
 
       <div>

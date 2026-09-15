@@ -14,7 +14,7 @@ import {
   ExternalLink,
   Package,
 } from "lucide-react";
-import { Button, ErrorCard, Card, Spinner } from "../../components";
+import { Button, ErrorCard, Card, Spinner, Toggle } from "../../components";
 import { useTr } from "../../state/lang";
 import {
   cheatsReposList,
@@ -352,14 +352,11 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
                   <option key={v} value={v}>{v}</option>
                 ))}
               </select>
-              <label className="flex items-center gap-1.5">
-                <input
-                  type="checkbox"
-                  checked={filters.installedOnly}
-                  onChange={(ev) => setFilters((f) => ({ ...f, installedOnly: ev.target.checked }))}
-                />
-                {tr("cheats_filter_installed_only", undefined, "Only my games")}
-              </label>
+              <Toggle
+                checked={filters.installedOnly}
+                onChange={(on) => setFilters((f) => ({ ...f, installedOnly: on }))}
+                label={tr("cheats_filter_installed_only", undefined, "Only my games")}
+              />
               <span className="text-[var(--color-muted)]">
                 {tr("cheats_filter_count", { shown: visible.length, total: entries.length },
                   `${visible.length} of ${entries.length}`)}

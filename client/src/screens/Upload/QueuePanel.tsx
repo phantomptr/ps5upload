@@ -15,7 +15,7 @@ import {
   Ban,
 } from "lucide-react";
 
-import { Button, ErrorCard, Spinner } from "../../components";
+import { Button, ErrorCard, Spinner, Toggle } from "../../components";
 import { GameIcon } from "../../components/GameIcon";
 import { PlatformBadge } from "../../components/PlatformBadge";
 import { humanizeJobErrorReason } from "../../api/ps5";
@@ -172,15 +172,11 @@ export function QueuePanel() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
-            <input
-              type="checkbox"
-              checked={continueOnFailure}
-              onChange={(e) => setContinueOnFailure(e.target.checked)}
-              className="h-3.5 w-3.5"
-            />
-            {tr("queue_continue_on_failure", undefined, "Continue on failure")}
-          </label>
+          <Toggle
+            checked={continueOnFailure}
+            onChange={setContinueOnFailure}
+            label={tr("queue_continue_on_failure", undefined, "Continue on failure")}
+          />
 
           {failedCount > 0 && (
             <Button

@@ -6,6 +6,7 @@ import { fsReadPreview, fsWriteText } from "../../api/ps5";
 import {
   PageHeader,
   EmptyState,
+  ConnectionGate,
   ErrorCard,
   WarningCard,
   Button,
@@ -221,202 +222,193 @@ export default function NanoDnsScreen({ embedded = false }: { embedded?: boolean
         </div>
       )}
 
-      {!host?.trim() ? (
-        <EmptyState
-          icon={Globe}
-          size="hero"
-          title={tr("nanodns_no_host_title", undefined, "Not connected")}
-          message={tr(
-            "nanodns_no_host_body",
-            undefined,
-            "Connect to a PS5 on the Connection tab to edit nanoDNS.",
-          )}
-        />
-      ) : notFound ? (
-        <EmptyState
-          icon={Globe}
-          size="hero"
-          title={tr(
-            "nanodns_not_loaded_title",
-            undefined,
-            "nanoDNS isn't set up yet",
-          )}
-          message={tr(
-            "nanodns_not_loaded_body",
-            undefined,
-            "No /data/nanodns/nanodns.ini on the console — load nanoDNS once from the Payloads tab (it writes a default config on first run), then come back to edit it.",
-          )}
-        />
-      ) : (
-        <div className="flex flex-col gap-4">
-          {/* How to point the PS5 at nanoDNS. */}
-          <WarningCard
+      <ConnectionGate require="payload">
+        {notFound ? (
+          <EmptyState
+            icon={Globe}
+            size="hero"
             title={tr(
-              "nanodns_dns_howto_title",
+              "nanodns_not_loaded_title",
               undefined,
-              "Point your PS5's DNS at nanoDNS",
+              "nanoDNS isn't set up yet",
             )}
-            detail={tr(
-              "nanodns_dns_howto_body",
+            message={tr(
+              "nanodns_not_loaded_body",
               undefined,
-              "On the PS5: Settings → Network → Set Up Internet → (your connection) → Custom → DNS Settings → Manual. Set Primary DNS to the address from the bind setting in the [general] section of /data/nanodns/nanodns.ini below — for example, with bind=127.0.0.1, set Primary DNS to 127.0.0.1.",
+              "No /data/nanodns/nanodns.ini on the console — load nanoDNS once from the Payloads tab (it writes a default config on first run), then come back to edit it.",
             )}
           />
-
-          {error ? (
-            <ErrorCard
-              title={tr("nanodns_save_error", undefined, "Couldn't save")}
-              detail={error}
-            />
-          ) : null}
-
-          <div className="flex flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge
-                tone={
-                  version.generation === "modern"
-                    ? "good"
-                    : version.generation === "legacy"
-                      ? "neutral"
-                      : "warn"
-                }
-                size="md"
-                dot
-              >
-                {versionLabel}
-              </Badge>
-              <span className="text-xs text-[var(--color-muted)]">
-                {version.source === "runtime-log"
-                  ? "nanodns.log"
-                  : version.source === "config"
-                    ? "nanodns.ini"
-                    : "—"}
-              </span>
-            </div>
-            <p className="text-xs text-[var(--color-muted)]">{versionDetail}</p>
-          </div>
-
-          {version.generation === "modern" &&
-          modernMigration &&
-          modernMigration.changes.length > 0 ? (
+        ) : (
+          <div className="flex flex-col gap-4">
+            {/* How to point the PS5 at nanoDNS. */}
             <WarningCard
-              title={versionLabel}
-              detail={tr(
-                "nanodns_migrate_body",
+              title={tr(
+                "nanodns_dns_howto_title",
                 undefined,
-                "Keep every custom resolver, override, exception, comment, and path; add only missing nanoDNS 0.4 settings and correct the obsolete Yandex.DNS address. Review the editor, then Save.",
+                "Point your PS5's DNS at nanoDNS",
               )}
-              action={
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => setText(modernMigration.text)}
-                >
-                  0.3 → 0.4
-                </Button>
-              }
-            />
-          ) : null}
-
-          {version.generation !== "modern" && oldYandexDns && text !== null ? (
-            <WarningCard
-              title={YANDEX_DNS_NAME}
               detail={tr(
-                "nanodns_yandex_body",
+                "nanodns_dns_howto_body",
                 undefined,
-                "nanoDNS 0.3 shipped 77.77.88.88 by mistake. Correcting it to 77.88.8.8 is safe for both 0.3 and 0.4 and leaves the rest of the file unchanged.",
+                "On the PS5: Settings → Network → Set Up Internet → (your connection) → Custom → DNS Settings → Manual. Set Primary DNS to the address from the bind setting in the [general] section of /data/nanodns/nanodns.ini below — for example, with bind=127.0.0.1, set Primary DNS to 127.0.0.1.",
               )}
-              action={
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => setText(fixNanoDnsYandexDns(text).text)}
-                >
-                  77.77.88.88 → 77.88.8.8
-                </Button>
-              }
             />
-          ) : null}
 
-          {version.generation === "modern" && text !== null ? (
-            <div className="grid gap-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 md:grid-cols-2">
-              <Toggle
-                checked={quietEnabled}
-                disabled={saving}
-                onChange={(checked) =>
-                  setText(setNanoDnsGeneralValue(text, "quiet", checked ? "1" : "0"))
-                }
-                label={tr("nanodns_quiet_label", undefined, "Quiet mode")}
-                hint={tr(
-                  "nanodns_quiet_hint",
-                  undefined,
-                  "Stops nanoDNS startup popups; logging continues normally.",
-                )}
+            {error ? (
+              <ErrorCard
+                title={tr("nanodns_save_error", undefined, "Couldn't save")}
+                detail={error}
               />
-              <Input
-                label={tr(
-                  "nanodns_bind6_label",
-                  undefined,
-                  "IPv6 bind address",
-                )}
-                value={bind6Value}
-                disabled={saving}
-                spellCheck={false}
-                onChange={(event) =>
-                  setText(setNanoDnsGeneralValue(text, "bind6", event.currentTarget.value))
-                }
-                hint={tr(
-                  "nanodns_bind6_hint",
-                  undefined,
-                  "Use ::1 for this console, :: for all IPv6 interfaces, or off to disable IPv6.",
-                )}
-              />
-            </div>
-          ) : null}
+            ) : null}
 
-          <div className="flex flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
-            <div className="flex items-center justify-between">
-              <code className="text-xs text-[var(--color-muted)]">
-                {NANODNS_INI_PATH}
-              </code>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={!dirty || saving}
-                  onClick={() => setText(original)}
+            <div className="flex flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge
+                  tone={
+                    version.generation === "modern"
+                      ? "good"
+                      : version.generation === "legacy"
+                        ? "neutral"
+                        : "warn"
+                  }
+                  size="md"
+                  dot
                 >
-                  <RotateCcw size={14} />
-                  {tr("nanodns_revert", undefined, "Revert")}
-                </Button>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  loading={saving}
-                  disabled={!dirty || saving}
-                  onClick={() => void save()}
-                >
-                  <Save size={14} />
-                  {tr("nanodns_save", undefined, "Save")}
-                </Button>
+                  {versionLabel}
+                </Badge>
+                <span className="text-xs text-[var(--color-muted)]">
+                  {version.source === "runtime-log"
+                    ? "nanodns.log"
+                    : version.source === "config"
+                      ? "nanodns.ini"
+                      : "—"}
+                </span>
               </div>
+              <p className="text-xs text-[var(--color-muted)]">{versionDetail}</p>
             </div>
-            <textarea
-              value={text ?? ""}
-              onChange={(e) => setText(e.target.value)}
-              spellCheck={false}
-              className="h-[28rem] w-full resize-y rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3 font-mono text-xs leading-relaxed outline-none focus:border-[var(--color-accent)]"
-            />
-            <p className="text-xs text-[var(--color-muted)]">
-              {tr(
-                "nanodns_apply_hint",
-                undefined,
-                "Sections: [general] (log/debug/bind) · [upstream] (server×N, timeout_ms) · [overrides] (mask=IPv4, 0.0.0.0 = block) · [exceptions] (one mask per line). Saving writes the file; re-load nanoDNS from Payloads to apply.",
-              )}
-            </p>
+
+            {version.generation === "modern" &&
+            modernMigration &&
+            modernMigration.changes.length > 0 ? (
+              <WarningCard
+                title={versionLabel}
+                detail={tr(
+                  "nanodns_migrate_body",
+                  undefined,
+                  "Keep every custom resolver, override, exception, comment, and path; add only missing nanoDNS 0.4 settings and correct the obsolete Yandex.DNS address. Review the editor, then Save.",
+                )}
+                action={
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setText(modernMigration.text)}
+                  >
+                    0.3 → 0.4
+                  </Button>
+                }
+              />
+            ) : null}
+
+            {version.generation !== "modern" && oldYandexDns && text !== null ? (
+              <WarningCard
+                title={YANDEX_DNS_NAME}
+                detail={tr(
+                  "nanodns_yandex_body",
+                  undefined,
+                  "nanoDNS 0.3 shipped 77.77.88.88 by mistake. Correcting it to 77.88.8.8 is safe for both 0.3 and 0.4 and leaves the rest of the file unchanged.",
+                )}
+                action={
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setText(fixNanoDnsYandexDns(text).text)}
+                  >
+                    77.77.88.88 → 77.88.8.8
+                  </Button>
+                }
+              />
+            ) : null}
+
+            {version.generation === "modern" && text !== null ? (
+              <div className="grid gap-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 md:grid-cols-2">
+                <Toggle
+                  checked={quietEnabled}
+                  disabled={saving}
+                  onChange={(checked) =>
+                    setText(setNanoDnsGeneralValue(text, "quiet", checked ? "1" : "0"))
+                  }
+                  label={tr("nanodns_quiet_label", undefined, "Quiet mode")}
+                  hint={tr(
+                    "nanodns_quiet_hint",
+                    undefined,
+                    "Stops nanoDNS startup popups; logging continues normally.",
+                  )}
+                />
+                <Input
+                  label={tr(
+                    "nanodns_bind6_label",
+                    undefined,
+                    "IPv6 bind address",
+                  )}
+                  value={bind6Value}
+                  disabled={saving}
+                  spellCheck={false}
+                  onChange={(event) =>
+                    setText(setNanoDnsGeneralValue(text, "bind6", event.currentTarget.value))
+                  }
+                  hint={tr(
+                    "nanodns_bind6_hint",
+                    undefined,
+                    "Use ::1 for this console, :: for all IPv6 interfaces, or off to disable IPv6.",
+                  )}
+                />
+              </div>
+            ) : null}
+
+            <div className="flex flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+              <div className="flex items-center justify-between">
+                <code className="text-xs text-[var(--color-muted)]">
+                  {NANODNS_INI_PATH}
+                </code>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={!dirty || saving}
+                    onClick={() => setText(original)}
+                  >
+                    <RotateCcw size={14} />
+                    {tr("nanodns_revert", undefined, "Revert")}
+                  </Button>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    loading={saving}
+                    disabled={!dirty || saving}
+                    onClick={() => void save()}
+                  >
+                    <Save size={14} />
+                    {tr("nanodns_save", undefined, "Save")}
+                  </Button>
+                </div>
+              </div>
+              <textarea
+                value={text ?? ""}
+                onChange={(e) => setText(e.target.value)}
+                spellCheck={false}
+                className="h-[28rem] w-full resize-y rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3 font-mono text-xs leading-relaxed outline-none focus:border-[var(--color-accent)]"
+              />
+              <p className="text-xs text-[var(--color-muted)]">
+                {tr(
+                  "nanodns_apply_hint",
+                  undefined,
+                  "Sections: [general] (log/debug/bind) · [upstream] (server×N, timeout_ms) · [overrides] (mask=IPv4, 0.0.0.0 = block) · [exceptions] (one mask per line). Saving writes the file; re-load nanoDNS from Payloads to apply.",
+                )}
+              </p>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </ConnectionGate>
     </div>
   );
 }

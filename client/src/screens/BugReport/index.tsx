@@ -21,7 +21,7 @@ import {
   Spinner,
   Select,
   Textarea,
-  Checkbox,
+  Toggle,
 } from "../../components";
 import { useTr } from "../../state/lang";
 import { useDiagSettingsStore, LOG_LEVELS } from "../../state/diagSettings";
@@ -667,7 +667,7 @@ export default function BugReportScreen() {
 
           {/* Privacy */}
           <div className="mt-4">
-            <Checkbox
+            <Toggle
               checked={redact}
               onChange={setRedact}
               label={
@@ -807,24 +807,19 @@ function IncludeRow({
   onChange: () => void;
 }) {
   return (
-    <label
-      className={`flex items-center justify-between gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 max-md:min-h-11 ${
-        disabled ? "opacity-50" : "cursor-pointer"
+    <div
+      className={`rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 ${
+        disabled ? "opacity-50" : ""
       }`}
     >
-      <span className="min-w-0">
-        <span className="block text-sm">{label}</span>
-        {detail && (
-          <span className="block text-xs text-[var(--color-muted)]">{detail}</span>
-        )}
-      </span>
-      <input
-        type="checkbox"
+      <Toggle
+        className="w-full"
         checked={checked && !disabled}
         disabled={disabled}
         onChange={onChange}
-        className="shrink-0"
+        label={label}
+        hint={detail}
       />
-    </label>
+    </div>
   );
 }

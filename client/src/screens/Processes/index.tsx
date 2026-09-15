@@ -18,6 +18,8 @@ import {
   Modal,
   Badge,
   Select,
+  Toggle,
+  ConnectionGate,
 } from "../../components";
 import { GameIcon } from "../../components/GameIcon";
 import { PlatformBadge } from "../../components/PlatformBadge";
@@ -235,31 +237,6 @@ export default function ProcessesScreen() {
 
   const systemCount = procs.filter((p) => p.kind === "system").length;
 
-  if (!online) {
-    return (
-      <div className="mx-auto max-w-5xl p-6">
-        <PageHeader
-          icon={Cpu}
-          title={tr("processes_title", undefined, "Processes")}
-        />
-        <EmptyState
-          icon={Cpu}
-          size="hero"
-          title={tr(
-            "processes_offline_title",
-            undefined,
-            "PS5 helper not running",
-          )}
-          message={tr(
-            "processes_offline_desc",
-            undefined,
-            "Connect to a PS5 and load the helper payload to manage processes.",
-          )}
-        />
-      </div>
-    );
-  }
-
   return (
     <div className="mx-auto max-w-5xl p-6">
       <PageHeader
@@ -273,158 +250,156 @@ export default function ProcessesScreen() {
         )}
       />
 
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <label className="flex items-center gap-1.5 text-xs">
-          <input
-            type="checkbox"
+      <ConnectionGate require="payload">
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <Toggle
             checked={showSystem}
-            onChange={(e) => setShowSystem(e.target.checked)}
-            className="h-3.5 w-3.5"
-          />
-          {tr("processes_show_system", undefined, "Show system processes")}
-          {systemCount > 0 && (
-            <span className="text-[var(--color-muted)]">({systemCount})</span>
-          )}
-        </label>
-        <label className="flex items-center gap-1.5 text-xs">
-          <input
-            type="checkbox"
-            checked={autoRefresh}
-            onChange={(e) => setAutoRefresh(e.target.checked)}
-            className="h-3.5 w-3.5"
-          />
-          {tr("processes_auto_refresh", undefined, "Auto-refresh")}
-        </label>
-        <div className="ml-auto flex items-center gap-2">
-          <Select
-            value={sortKey}
-            onChange={(e) => setSortKey(e.target.value as SortKey)}
-            block={false}
-            className="text-xs"
-            options={[
-              { value: "memory", label: tr("processes_sort_memory", undefined, "Sort: Memory") },
-              { value: "threads", label: tr("processes_sort_threads", undefined, "Sort: Threads") },
-              { value: "pid", label: tr("processes_sort_pid", undefined, "Sort: PID") },
-              { value: "name", label: tr("processes_sort_name", undefined, "Sort: Name") },
-            ]}
-          />
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={<RefreshCw size={12} />}
-            onClick={() => void refresh()}
-          >
-            {tr("refresh", undefined, "Refresh")}
-          </Button>
-        </div>
-      </div>
-
-      {error && (
-        <ErrorCard
-          title={tr("processes_error", undefined, "Process action failed")}
-          detail={error}
-          onDismiss={() => setError(null)}
-        />
-      )}
-
-      {truncated && (
-        <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]">
-          <TriangleAlert size={14} />
-          {tr(
-            "processes_truncated",
-            undefined,
-            "The process list was cut short — too many processes to show all.",
-          )}
-        </div>
-      )}
-
-      {loadedOnce && visible.length === 0 && !error ? (
-        <EmptyState
-          icon={Cpu}
-          title={tr("processes_empty_title", undefined, "No processes")}
-          message={
-            showSystem
-              ? tr("processes_empty_all", undefined, "Nothing is running.")
-              : tr(
-                  "processes_empty_user",
-                  undefined,
-                  "No games or payloads are running. Toggle “Show system processes” to see everything.",
-                )
-          }
-        />
-      ) : (
-        <ul className="grid gap-1.5">
-          {visible.map((p) => (
-            <ProcessRow
-              key={p.pid}
-              proc={p}
-              host={host}
-              busy={busyPid === p.pid}
-              onKill={requestKill}
-              onRestart={doRestart}
-            />
-          ))}
-        </ul>
-      )}
-
-      {confirmKill && (
-        <Modal
-          open
-          onClose={() => setConfirmKill(null)}
-          role="alertdialog"
-          size="md"
-          title={
-            confirmKill.kind === "app"
-              ? tr(
-                  "processes_kill_app_title",
-                  { name: confirmKill.comm || confirmKill.name },
-                  'Close "{name}"?',
-                )
-              : tr(
-                  "processes_kill_system_title",
-                  { name: confirmKill.comm || confirmKill.name },
-                  'Kill system process "{name}"?',
-                )
-          }
-          footer={
-            <>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setConfirmKill(null)}
-              >
-                {tr("cancel", undefined, "Cancel")}
-              </Button>
-              <Button
-                variant="danger"
-                size="sm"
-                leftIcon={<Skull size={12} />}
-                onClick={() => {
-                  const p = confirmKill;
-                  setConfirmKill(null);
-                  void doKill(p);
-                }}
-              >
-                {tr("processes_kill", undefined, "Kill")}
-              </Button>
-            </>
-          }
-        >
-          <p className="p-5 text-xs text-[var(--color-muted)]">
-            {confirmKill.kind === "app"
-              ? tr(
-                  "processes_kill_app_body",
-                  { name: confirmKill.comm || confirmKill.name },
-                  'This force-closes the running game "{name}". Any unsaved progress will be lost. Use Restart instead to relaunch it.',
-                )
-              : tr(
-                  "processes_kill_system_body",
-                  { name: confirmKill.comm || confirmKill.name },
-                  'This is a PS5 system process. Killing "{name}" may freeze or crash the console, forcing a reboot. Only continue if you know what you are doing.',
+            onChange={setShowSystem}
+            label={
+              <>
+                {tr("processes_show_system", undefined, "Show system processes")}
+                {systemCount > 0 && (
+                  <span className="text-[var(--color-muted)]"> ({systemCount})</span>
                 )}
-          </p>
-        </Modal>
-      )}
+              </>
+            }
+          />
+          <Toggle
+            checked={autoRefresh}
+            onChange={setAutoRefresh}
+            label={tr("processes_auto_refresh", undefined, "Auto-refresh")}
+          />
+          <div className="ml-auto flex items-center gap-2">
+            <Select
+              value={sortKey}
+              onChange={(e) => setSortKey(e.target.value as SortKey)}
+              block={false}
+              className="text-xs"
+              options={[
+                { value: "memory", label: tr("processes_sort_memory", undefined, "Sort: Memory") },
+                { value: "threads", label: tr("processes_sort_threads", undefined, "Sort: Threads") },
+                { value: "pid", label: tr("processes_sort_pid", undefined, "Sort: PID") },
+                { value: "name", label: tr("processes_sort_name", undefined, "Sort: Name") },
+              ]}
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={<RefreshCw size={12} />}
+              onClick={() => void refresh()}
+            >
+              {tr("refresh", undefined, "Refresh")}
+            </Button>
+          </div>
+        </div>
+
+        {error && (
+          <ErrorCard
+            title={tr("processes_error", undefined, "Process action failed")}
+            detail={error}
+            onDismiss={() => setError(null)}
+          />
+        )}
+
+        {truncated && (
+          <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]">
+            <TriangleAlert size={14} />
+            {tr(
+              "processes_truncated",
+              undefined,
+              "The process list was cut short — too many processes to show all.",
+            )}
+          </div>
+        )}
+
+        {loadedOnce && visible.length === 0 && !error ? (
+          <EmptyState
+            icon={Cpu}
+            title={tr("processes_empty_title", undefined, "No processes")}
+            message={
+              showSystem
+                ? tr("processes_empty_all", undefined, "Nothing is running.")
+                : tr(
+                    "processes_empty_user",
+                    undefined,
+                    "No games or payloads are running. Toggle “Show system processes” to see everything.",
+                  )
+            }
+          />
+        ) : (
+          <ul className="grid gap-1.5">
+            {visible.map((p) => (
+              <ProcessRow
+                key={p.pid}
+                proc={p}
+                host={host}
+                busy={busyPid === p.pid}
+                onKill={requestKill}
+                onRestart={doRestart}
+              />
+            ))}
+          </ul>
+        )}
+
+        {confirmKill && (
+          <Modal
+            open
+            onClose={() => setConfirmKill(null)}
+            role="alertdialog"
+            size="md"
+            title={
+              confirmKill.kind === "app"
+                ? tr(
+                    "processes_kill_app_title",
+                    { name: confirmKill.comm || confirmKill.name },
+                    'Close "{name}"?',
+                  )
+                : tr(
+                    "processes_kill_system_title",
+                    { name: confirmKill.comm || confirmKill.name },
+                    'Kill system process "{name}"?',
+                  )
+            }
+            footer={
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setConfirmKill(null)}
+                >
+                  {tr("cancel", undefined, "Cancel")}
+                </Button>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  leftIcon={<Skull size={12} />}
+                  onClick={() => {
+                    const p = confirmKill;
+                    setConfirmKill(null);
+                    void doKill(p);
+                  }}
+                >
+                  {tr("processes_kill", undefined, "Kill")}
+                </Button>
+              </>
+            }
+          >
+            <p className="p-5 text-xs text-[var(--color-muted)]">
+              {confirmKill.kind === "app"
+                ? tr(
+                    "processes_kill_app_body",
+                    { name: confirmKill.comm || confirmKill.name },
+                    'This force-closes the running game "{name}". Any unsaved progress will be lost. Use Restart instead to relaunch it.',
+                  )
+                : tr(
+                    "processes_kill_system_body",
+                    { name: confirmKill.comm || confirmKill.name },
+                    'This is a PS5 system process. Killing "{name}" may freeze or crash the console, forcing a reboot. Only continue if you know what you are doing.',
+                  )}
+            </p>
+          </Modal>
+        )}
+      </ConnectionGate>
     </div>
   );
 }

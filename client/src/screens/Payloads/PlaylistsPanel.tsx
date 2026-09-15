@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 
-import { Button, ErrorCard, Modal, Spinner, Badge, Input, Checkbox, Select } from "../../components";
+import { Button, ErrorCard, Modal, Spinner, Badge, Input, Select, Toggle } from "../../components";
 import { ConsoleChip } from "../../components/ConsoleChip";
 import { useTr } from "../../state/lang";
 import {
@@ -425,7 +425,7 @@ function AutoLoaderCard() {
               </option>
             ))}
           </Select>
-          <Checkbox
+          <Toggle
             checked={autoLoader.enabled}
             onChange={(checked) => setAutoLoader({ enabled: checked })}
             label={tr("autoloader_enable", undefined, "Enable")}
@@ -784,7 +784,7 @@ function PlaylistCard({
           </span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Checkbox
+          <Toggle
             checked={playlist.continueOnFailure}
             onChange={(checked) =>
               setContinueOnFailure(playlist.id, checked)

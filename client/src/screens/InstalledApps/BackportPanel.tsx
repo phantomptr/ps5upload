@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Layers, Play, RotateCcw } from "lucide-react";
-import { Button, Callout, Modal, Spinner } from "../../components";
+import { Button, Callout, Modal, Spinner, Toggle } from "../../components";
 import {
   fsCopy,
   fsDelete,
@@ -608,10 +608,12 @@ export function BackportPanel({
             <ul className="max-h-40 overflow-auto rounded bg-[var(--color-surface-3)] p-3 font-mono text-xs">
               {plan.copies.map((copy) => <li key={copy.name}>{tr("backport_library_size", { name: copy.name, size: copy.size.toLocaleString() }, `${copy.name} (${copy.size.toLocaleString()} bytes)`)}</li>)}
             </ul>
-            <label className="flex items-start gap-2">
-              <input type="checkbox" checked={patchLibc} onChange={(e) => setPatchLibc(e.target.checked)} />
-              <span><strong>{tr("sdk_patch_libc", undefined, "Also patch libc.prx")}</strong><br /><span className="text-[var(--color-muted)]">{tr("sdk_patch_libc_hint", undefined, "Helps some titles and stops others from launching. Leave off unless needed.")}</span></span>
-            </label>
+            <Toggle
+              checked={patchLibc}
+              onChange={setPatchLibc}
+              label={<strong>{tr("sdk_patch_libc", undefined, "Also patch libc.prx")}</strong>}
+              hint={tr("sdk_patch_libc_hint", undefined, "Helps some titles and stops others from launching. Leave off unless needed.")}
+            />
             {imageBacked ? <p className="text-xs text-[var(--color-muted)]">{tr("backport_image_cycle", undefined, "This disk image will be stopped if needed, remounted read-write for the edit, then returned to read-only automatically.")}</p> : null}
             <div className="flex flex-wrap gap-2">
               <Button variant="primary" onClick={() => void apply()} disabled={busy || autoRunning || !overlayReady} loading={busy}>{tr("backport_action", undefined, "Backport")}</Button>

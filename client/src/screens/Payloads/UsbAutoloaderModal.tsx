@@ -12,7 +12,7 @@ import {
   type PayloadLocalEntry,
   type AutoloaderInstallResult,
 } from "../../api/ps5";
-import { Button, ErrorCard, Modal, Spinner, Checkbox } from "../../components";
+import { Button, ErrorCard, Modal, Spinner, Toggle } from "../../components";
 import { useTr } from "../../state/lang";
 import { formatBytes } from "../../lib/format";
 import { isMobile } from "../../lib/platform";
@@ -273,7 +273,7 @@ export default function UsbAutoloaderModal({
                     );
                   })}
                 </ul>
-                <Checkbox
+                <Toggle
                   checked={includeUs}
                   onChange={(checked) => setIncludeUs(checked)}
                   label={tr(

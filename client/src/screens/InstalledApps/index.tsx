@@ -67,6 +67,7 @@ import {
   Skeleton,
   PlatformBadge,
   Spinner,
+  Toggle,
 } from "../../components";
 // Direct import to avoid the barrel's circular-dep warning at build.
 import { useConfirm } from "../../components/ConfirmDialog";
@@ -1416,24 +1417,16 @@ export default function InstalledAppsScreen({
                   // seen titles float to the top) and optionally hide everything
                   // you HAVE played, so removal candidates are all that's left.
                   <div className="flex flex-wrap items-center gap-3 text-xs">
-                    <label className="flex cursor-pointer items-center gap-1.5 text-[var(--color-muted)]">
-                      <input
-                        type="checkbox"
-                        className="h-3.5 w-3.5"
-                        checked={sortByPlaytime}
-                        onChange={(e) => setSortByPlaytime(e.target.checked)}
-                      />
-                      {tr("installed_sort_playtime", undefined, "Sort by play time")}
-                    </label>
-                    <label className="flex cursor-pointer items-center gap-1.5 text-[var(--color-muted)]">
-                      <input
-                        type="checkbox"
-                        className="h-3.5 w-3.5"
-                        checked={onlyUnplayed}
-                        onChange={(e) => setOnlyUnplayed(e.target.checked)}
-                      />
-                      {tr("installed_only_unplayed", undefined, "Only not-seen-playing")}
-                    </label>
+                    <Toggle
+                      checked={sortByPlaytime}
+                      onChange={setSortByPlaytime}
+                      label={tr("installed_sort_playtime", undefined, "Sort by play time")}
+                    />
+                    <Toggle
+                      checked={onlyUnplayed}
+                      onChange={setOnlyUnplayed}
+                      label={tr("installed_only_unplayed", undefined, "Only not-seen-playing")}
+                    />
                   </div>
                 }
               >

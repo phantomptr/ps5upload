@@ -21,7 +21,7 @@ import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import { mgmtAddr } from "../../lib/addr";
 import { useScrollLock } from "../../lib/useScrollLock";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
-import { PageHeader, Button, EmptyState, ErrorCard, Spinner } from "../../components";
+import { PageHeader, Button, EmptyState, ErrorCard, Spinner, ConnectionGate } from "../../components";
 import { useTr } from "../../state/lang";
 import { pickPath } from "../../lib/pickPath";
 import { formatBytes } from "../../lib/format";
@@ -312,152 +312,146 @@ export default function VideosScreen() {
         }
       />
 
-      {payloadStatus !== "up" && (
-        <EmptyState
-          fill
-          icon={VideoIcon}
-          message={tr("videos_no_payload", undefined, "Connect to your PS5 first.")}
-        />
-      )}
-
-      {error && (
-        <div className="mb-4">
-          <ErrorCard
-            title={tr("videos_error", undefined, "Couldn't list video clips")}
-            detail={error}
-          />
-        </div>
-      )}
-
-      {items && items.length === 0 && payloadStatus === "up" && (
-        <EmptyState
-          icon={VideoIcon}
-          message={tr(
-            "videos_empty",
-            undefined,
-            "No clips found — record a gameplay video on the PS5 first.",
-          )}
-        />
-      )}
-
-      <div className="mx-auto max-w-4xl">
-        {items && items.length > 0 && (
-          <button
-            type="button"
-            onClick={toggleAll}
-            className="mb-2 inline-flex items-center gap-1.5 text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]"
-          >
-            {allSelected ? <CheckSquare size={11} /> : <Square size={11} />}
-            {allSelected
-              ? tr("videos_deselect_all", undefined, "Deselect all")
-              : tr("videos_select_all", undefined, "Select all")}
-          </button>
+      <ConnectionGate require="payload">
+        {error && (
+          <div className="mb-4">
+            <ErrorCard
+              title={tr("videos_error", undefined, "Couldn't list video clips")}
+              detail={error}
+            />
+          </div>
         )}
-        <ul className="space-y-1">
-          {items?.map((item) => {
-            const isSelected = selected.has(item.path);
-            const rowBusy = busyPaths.has(item.path);
-            return (
-              <li
-                key={item.path}
-                className={`flex items-center gap-3 rounded-md border p-2 text-xs ${
-                  isSelected
-                    ? "border-[var(--color-accent)] bg-[var(--color-surface-2)]"
-                    : "border-[var(--color-border)] bg-[var(--color-surface-2)]"
-                }`}
-              >
-                <button
-                  type="button"
-                  onClick={() => toggleOne(item.path)}
-                  className="text-[var(--color-muted)] hover:text-[var(--color-text)]"
-                  aria-label={tr("videos_select", undefined, "Toggle select")}
-                >
-                  {isSelected ? <CheckSquare size={12} /> : <Square size={12} />}
-                </button>
-                <VideoIcon
-                  size={16}
-                  className="shrink-0 text-[var(--color-muted)]"
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate font-medium text-[var(--color-text)]">
-                    {basename(item.path)}
-                  </div>
-                  <div className="truncate text-[var(--color-muted)]">
-                    {formatBytes(item.size)}
-                  </div>
-                </div>
-                {canPreview && (
-                  <button
-                    type="button"
-                    onClick={() => openPreview(item)}
-                    className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-text)]"
-                    aria-label={tr("videos_preview", undefined, "Preview")}
-                  >
-                    <Eye size={13} />
-                  </button>
-                )}
-                {isTauriEnv() && (
-                  <button
-                    type="button"
-                    onClick={() => void downloadOne(item)}
-                    disabled={rowBusy}
-                    className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
-                    aria-label={tr("videos_download", undefined, "Download")}
-                  >
-                    {rowBusy ? (
-                      <Spinner size={14} tone="inherit" />
-                    ) : (
-                      <Download size={13} />
-                    )}
-                  </button>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      </div>
 
-      {preview && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6"
-          onClick={closePreview}
-        >
-          <div
-            className="relative max-h-full max-w-3xl overflow-hidden rounded-lg bg-[var(--color-surface)]"
-            onClick={(e) => e.stopPropagation()}
-          >
+        {items && items.length === 0 && (
+          <EmptyState
+            icon={VideoIcon}
+            message={tr(
+              "videos_empty",
+              undefined,
+              "No clips found — record a gameplay video on the PS5 first.",
+            )}
+          />
+        )}
+
+        <div className="mx-auto max-w-4xl">
+          {items && items.length > 0 && (
             <button
               type="button"
-              onClick={closePreview}
-              className="absolute right-2 top-2 z-10 rounded-full bg-black/50 p-1.5 text-white hover:bg-black/70"
-              aria-label={tr("close", undefined, "Close")}
+              onClick={toggleAll}
+              className="mb-2 inline-flex items-center gap-1.5 text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]"
             >
-              <X size={16} />
+              {allSelected ? <CheckSquare size={11} /> : <Square size={11} />}
+              {allSelected
+                ? tr("videos_deselect_all", undefined, "Deselect all")
+                : tr("videos_select_all", undefined, "Select all")}
             </button>
-            <div className="flex min-h-[240px] min-w-[320px] items-center justify-center p-2">
-              {preview.loading && (
-                <div className="flex items-center gap-2 text-sm text-[var(--color-muted)]">
-                  <Spinner size={16} />
-                  {tr("videos_preview_loading", undefined, "Downloading clip…")}
-                </div>
-              )}
-              {preview.error && (
-                <div className="max-w-sm text-center text-sm text-[var(--color-danger)]">
-                  {preview.error}
-                </div>
-              )}
-              {preview.url && !preview.loading && (
-                <video
-                  src={preview.url}
-                  controls
-                  autoPlay
-                  className="max-h-[70vh] max-w-full rounded"
-                />
-              )}
+          )}
+          <ul className="space-y-1">
+            {items?.map((item) => {
+              const isSelected = selected.has(item.path);
+              const rowBusy = busyPaths.has(item.path);
+              return (
+                <li
+                  key={item.path}
+                  className={`flex items-center gap-3 rounded-md border p-2 text-xs ${
+                    isSelected
+                      ? "border-[var(--color-accent)] bg-[var(--color-surface-2)]"
+                      : "border-[var(--color-border)] bg-[var(--color-surface-2)]"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => toggleOne(item.path)}
+                    className="text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                    aria-label={tr("videos_select", undefined, "Toggle select")}
+                  >
+                    {isSelected ? <CheckSquare size={12} /> : <Square size={12} />}
+                  </button>
+                  <VideoIcon
+                    size={16}
+                    className="shrink-0 text-[var(--color-muted)]"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-medium text-[var(--color-text)]">
+                      {basename(item.path)}
+                    </div>
+                    <div className="truncate text-[var(--color-muted)]">
+                      {formatBytes(item.size)}
+                    </div>
+                  </div>
+                  {canPreview && (
+                    <button
+                      type="button"
+                      onClick={() => openPreview(item)}
+                      className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                      aria-label={tr("videos_preview", undefined, "Preview")}
+                    >
+                      <Eye size={13} />
+                    </button>
+                  )}
+                  {isTauriEnv() && (
+                    <button
+                      type="button"
+                      onClick={() => void downloadOne(item)}
+                      disabled={rowBusy}
+                      className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
+                      aria-label={tr("videos_download", undefined, "Download")}
+                    >
+                      {rowBusy ? (
+                        <Spinner size={14} tone="inherit" />
+                      ) : (
+                        <Download size={13} />
+                      )}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+
+        {preview && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6"
+            onClick={closePreview}
+          >
+            <div
+              className="relative max-h-full max-w-3xl overflow-hidden rounded-lg bg-[var(--color-surface)]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                onClick={closePreview}
+                className="absolute right-2 top-2 z-10 rounded-full bg-black/50 p-1.5 text-white hover:bg-black/70"
+                aria-label={tr("close", undefined, "Close")}
+              >
+                <X size={16} />
+              </button>
+              <div className="flex min-h-[240px] min-w-[320px] items-center justify-center p-2">
+                {preview.loading && (
+                  <div className="flex items-center gap-2 text-sm text-[var(--color-muted)]">
+                    <Spinner size={16} />
+                    {tr("videos_preview_loading", undefined, "Downloading clip…")}
+                  </div>
+                )}
+                {preview.error && (
+                  <div className="max-w-sm text-center text-sm text-[var(--color-danger)]">
+                    {preview.error}
+                  </div>
+                )}
+                {preview.url && !preview.loading && (
+                  <video
+                    src={preview.url}
+                    controls
+                    autoPlay
+                    className="max-h-[70vh] max-w-full rounded"
+                  />
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </ConnectionGate>
     </div>
   );
 }

@@ -4,6 +4,44 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.28.0
+
+**Screens wait for a console instead of pretending, and every on/off setting
+is the same switch.**
+
+### Screens that need a console now say so
+
+- **Install Package no longer draws its whole staging UI with nothing
+  connected.** It used to show a small "No PS5 host set" warning and then the
+  full screen anyway. It now hands the screen to the same connection gate the
+  rest of the app uses, which names the actual problem — the engine is down, no
+  console is set up, or the helper isn't running — and offers the one click
+  that fixes it. The header stays, so the console chip still tells you what you
+  are pointed at.
+- **The same fix for Screenshots, Videos, Library, nanoDNS, and Processes,**
+  each of which was drawing its own version of "connect first" underneath a
+  full set of controls.
+- **Convert to FPKG keeps working with no console.** The conversion runs on the
+  machine hosting the engine, so only the install step at the end is gated.
+
+### One switch for every setting
+
+- **The checkboxes that turn something on or off are now the switch** used by
+  the beta-feature setting. That covers all of Settings, Continue on failure,
+  Auto-refresh, Mount read-only, Also patch libc.prx, the bug-report sections,
+  and the view filters on Processes, Installed apps and Cheats.
+- **Picking things is still a checkbox.** Table rows, file-system entries, the
+  payload multi-pick, and the tri-state "select all" keep their checkboxes — a
+  switch means "on/off", not "these ones".
+
+### Fixed
+
+- **Stream install refused to run with no console set** instead of failing
+  somewhere further in.
+- **Dropping a `.pkg` on the window with no console connected no longer starts
+  a staging upload.** The drop handler is registered on the window, outside the
+  screen, so it needed its own guard.
+
 ## 5.27.1
 
 **The Android build compiles again. Nothing else changed.**

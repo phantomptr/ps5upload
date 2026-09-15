@@ -63,7 +63,7 @@ import {
   Spinner,
   Input,
   Select,
-  Checkbox,
+  Toggle,
 } from "../../components";
 import {
   parseArchivePart,
@@ -1259,7 +1259,7 @@ function Step2Options(props: {
 
       {source.kind === "game-folder" && (
         <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
-          <Checkbox
+          <Toggle
             checked={registerAfterUpload}
             onChange={(c) => onSetRegisterAfterUpload(c)}
             label={
@@ -2637,7 +2637,7 @@ function PkgFinisherCard({ pkgInfo }: { pkgInfo: PkgSourceInfo | null }) {
           "Uploads into the PS5 package library, then installs — one queued step. The staged copy lives in the library until removed.",
         )}
       </p>
-      <Checkbox
+      <Toggle
         checked={autoInstall}
         onChange={(c) => setAutoInstall(c)}
         className="text-xs text-[var(--color-text)]"
@@ -2647,7 +2647,7 @@ function PkgFinisherCard({ pkgInfo }: { pkgInfo: PkgSourceInfo | null }) {
           "Install automatically once the upload finishes",
         )}
       />
-      <Checkbox
+      <Toggle
         checked={autoRemove}
         onChange={(c) => setAutoRemove(c)}
         className="mt-2 text-xs text-[var(--color-text)]"
@@ -2974,7 +2974,7 @@ function MountAfterUploadCard({
   const tr = useTr();
   return (
     <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
-      <Checkbox
+      <Toggle
         checked={checked}
         onChange={(c) => onChange(c)}
         label={
@@ -2996,7 +2996,7 @@ function MountAfterUploadCard({
           is off) so users can see the option exists. Default on — keeps the
           PS5 from silently writing save-data back into the image and
           corrupting it on next mount. */}
-      <Checkbox
+      <Toggle
         className={`mt-3 ml-6 ${checked ? "" : "opacity-50"}`}
         checked={readOnly}
         disabled={!checked}
@@ -3233,15 +3233,16 @@ function ExcludesCard({
                 key={rule.pattern}
                 className="flex items-center gap-2 text-sm"
               >
-                <input
-                  type="checkbox"
+                <Toggle
+                  className="min-w-0 flex-1"
                   checked={rule.enabled}
                   onChange={() => onToggle(rule.pattern)}
-                  className="accent-[var(--color-accent)]"
+                  label={
+                    <code className="block rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-xs">
+                      {rule.pattern}
+                    </code>
+                  }
                 />
-                <code className="flex-1 rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-xs">
-                  {rule.pattern}
-                </code>
                 <button
                   type="button"
                   onClick={() => onRemove(rule.pattern)}

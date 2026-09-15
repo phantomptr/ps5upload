@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Server, RefreshCw, Play, Square, CheckCircle2, AlertTriangle, Lock } from "lucide-react";
-import { PageHeader, Button, ErrorCard, ConnectionGate, Card, Spinner, Input } from "../../components";
+import { PageHeader, Button, ErrorCard, ConnectionGate, Card, Spinner, Input, Toggle } from "../../components";
 import { useTr } from "../../state/lang";
 import { useConnectionStore } from "../../state/connection";
 import { transferAddr } from "../../lib/addr";
@@ -163,16 +163,16 @@ export default function FtpServerScreen() {
               />
             </div>
 
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={readonly}
-                onChange={(e) => setReadonly(e.target.checked)}
-                className="checkbox"
-              />
-              <Lock size={14} />
-              {tr("ftp_readonly", undefined, "Read-only (recommended — prevents writes/deletes)")}
-            </label>
+            <Toggle
+              checked={readonly}
+              onChange={setReadonly}
+              label={
+                <span className="inline-flex items-center gap-1.5">
+                  <Lock size={14} />
+                  {tr("ftp_readonly", undefined, "Read-only (recommended — prevents writes/deletes)")}
+                </span>
+              }
+            />
 
             <Button variant="primary" size="md" onClick={() => void handleStart()} disabled={actionLoading}>
               {actionLoading ? <Spinner size={16} tone="inherit" /> : <Play size={16} />}

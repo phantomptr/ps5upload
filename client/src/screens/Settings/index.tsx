@@ -39,7 +39,6 @@ import {
   Spinner,
   Input,
   Select,
-  Checkbox,
   Toggle,
   Callout,
 } from "../../components";
@@ -634,7 +633,7 @@ export default function SettingsScreen() {
           }
         >
           <div>
-            <Checkbox
+            <Toggle
               checked={enabled}
               disabled={!supported}
               onChange={(checked) => setEnabled(checked)}
@@ -710,7 +709,7 @@ export default function SettingsScreen() {
           title={tr("settings_card_upload_behavior", undefined, "Behavior")}
         >
           <div className="grid gap-3">
-            <Checkbox
+            <Toggle
               checked={alwaysOverwrite}
               onChange={(checked) => setAlwaysOverwrite(checked)}
               label={
@@ -730,7 +729,7 @@ export default function SettingsScreen() {
               )}
             />
 
-            <Checkbox
+            <Toggle
               checked={showTransferFiles}
               onChange={(checked) => setShowTransferFiles(checked)}
               label={tr(
@@ -745,7 +744,7 @@ export default function SettingsScreen() {
               )}
             />
 
-            <Checkbox
+            <Toggle
               checked={autoResume}
               onChange={(checked) => setAutoResume(checked)}
               label={tr(
@@ -760,7 +759,7 @@ export default function SettingsScreen() {
               )}
             />
 
-            <Checkbox
+            <Toggle
               checked={autoRedeployOnWake}
               onChange={(checked) => setAutoRedeployOnWake(checked)}
               label={tr(
@@ -775,7 +774,7 @@ export default function SettingsScreen() {
               )}
             />
 
-            <Checkbox
+            <Toggle
               checked={systemFileRead}
               onChange={(checked) => setSystemFileRead(checked)}
               label={tr(
@@ -828,7 +827,7 @@ export default function SettingsScreen() {
               </div>
             </div>
 
-            <Checkbox
+            <Toggle
               checked={restAfterUpload}
               onChange={(checked) => setRestAfterUpload(checked)}
               label={tr(
@@ -908,7 +907,7 @@ export default function SettingsScreen() {
         </GroupHeading>
 
         <Section title={tr("notifications", undefined, "Notifications")}>
-          <Checkbox
+          <Toggle
             checked={osNotifyEnabled}
             onChange={(checked) => setOsNotifyEnabled(checked)}
             label={
@@ -1103,41 +1102,45 @@ function SchedulesPanel() {
               key={s.id}
               className="flex items-center gap-2 rounded-md border border-[var(--color-border)] p-2 text-xs"
             >
-              <input
-                type="checkbox"
+              <Toggle
+                className="flex-1"
                 checked={s.enabled}
-                onChange={(e) => toggle(s.id, e.target.checked)}
+                onChange={(on) => toggle(s.id, on)}
+                label={
+                  <>
+                    <span className="font-medium">{s.label}</span>{" "}
+                    <span className="text-[var(--color-muted)]">
+                      {s.kind === "daily" &&
+                        tr(
+                          "schedule_daily_at",
+                          { time: s.hhmm ?? "" },
+                          `daily at ${s.hhmm ?? ""}`,
+                        )}
+                      {s.kind === "weekly" &&
+                        tr(
+                          "schedule_weekly_at",
+                          { time: s.hhmm ?? "" },
+                          `weekly at ${s.hhmm ?? ""}`,
+                        )}
+                      {s.kind === "once" &&
+                        s.oneShotMs &&
+                        tr(
+                          "schedule_once_at",
+                          { time: new Date(s.oneShotMs).toLocaleString() },
+                          `once at ${new Date(s.oneShotMs).toLocaleString()}`,
+                        )}
+                      {" · "}
+                      {/* Friendly action name — reuse the same labels as the
+                          add-dropdown below, instead of the raw store id
+                          (notif / power_tick) that meant nothing to the user. */}
+                      {s.action === "power_tick"
+                        ? tr("settings_ps5_power_tick", "PS5 power tick")
+                        : tr("settings_notify_only", "Notify only")}
+                      {s.action === "power_tick" && s.host && ` → ${s.host}`}
+                    </span>
+                  </>
+                }
               />
-              <span className="font-medium">{s.label}</span>
-              <span className="text-[var(--color-muted)]">
-                {s.kind === "daily" &&
-                  tr(
-                    "schedule_daily_at",
-                    { time: s.hhmm ?? "" },
-                    `daily at ${s.hhmm ?? ""}`,
-                  )}
-                {s.kind === "weekly" &&
-                  tr(
-                    "schedule_weekly_at",
-                    { time: s.hhmm ?? "" },
-                    `weekly at ${s.hhmm ?? ""}`,
-                  )}
-                {s.kind === "once" &&
-                  s.oneShotMs &&
-                  tr(
-                    "schedule_once_at",
-                    { time: new Date(s.oneShotMs).toLocaleString() },
-                    `once at ${new Date(s.oneShotMs).toLocaleString()}`,
-                  )}
-                {" · "}
-                {/* Friendly action name — reuse the same labels as the
-                    add-dropdown below, instead of the raw store id
-                    (notif / power_tick) that meant nothing to the user. */}
-                {s.action === "power_tick"
-                  ? tr("settings_ps5_power_tick", "PS5 power tick")
-                  : tr("settings_notify_only", "Notify only")}
-                {s.action === "power_tick" && s.host && ` → ${s.host}`}
-              </span>
               <button
                 type="button"
                 onClick={() => remove(s.id)}
@@ -1935,7 +1938,7 @@ function UpdatesPanel() {
       )}
       {/* Auto-check preference (default on). When off, the launch check is
           skipped entirely — the user drives updates from the button below. */}
-      <Checkbox
+      <Toggle
         checked={autoCheckEnabled}
         onChange={(checked) => setAutoCheckEnabled(checked)}
         label={
@@ -1958,7 +1961,7 @@ function UpdatesPanel() {
           hand once it has been checked on real hardware, so the stable channel
           means "someone signed this off" rather than merely "newest". Opting
           into pre-releases is deliberate and persists across restarts. */}
-      <Checkbox
+      <Toggle
         checked={channel === "prerelease"}
         onChange={(checked) => setChannel(checked ? "prerelease" : "stable")}
         label={

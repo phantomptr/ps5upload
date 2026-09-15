@@ -23,7 +23,7 @@ import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import { mgmtAddr } from "../../lib/addr";
 import { useScrollLock } from "../../lib/useScrollLock";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
-import { PageHeader, Button, EmptyState, ErrorCard, Spinner } from "../../components";
+import { PageHeader, Button, EmptyState, ErrorCard, Spinner, ConnectionGate } from "../../components";
 import { useTr } from "../../state/lang";
 import { pickPath } from "../../lib/pickPath";
 import { formatBytes } from "../../lib/format";
@@ -554,233 +554,223 @@ export default function ScreenshotsScreen() {
         }
       />
 
-      {payloadStatus !== "up" && (
-        <EmptyState
-          fill
-          icon={ImageIcon}
-          message={tr(
-            "screenshots_no_payload",
-            undefined,
-            "Connect to your PS5 first.",
-          )}
-        />
-      )}
-
-      {error && (
-        <div className="mb-4">
-          <ErrorCard
-            title={tr("screenshots_error", undefined, "Couldn't list screenshots")}
-            detail={error}
-          />
-        </div>
-      )}
-
-      {items && items.length === 0 && payloadStatus === "up" && (
-        <EmptyState
-          icon={ImageIcon}
-          message={tr(
-            "screenshots_empty",
-            undefined,
-            "No photos found — take a screenshot on the PS5 first.",
-          )}
-        />
-      )}
-
-      <div className="mx-auto max-w-4xl">
-        {items && items.length > 0 && (
-          <button
-            type="button"
-            onClick={toggleAll}
-            className="mb-2 inline-flex items-center gap-1.5 text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]"
-          >
-            {allSelected ? (
-              <CheckSquare size={11} />
-            ) : (
-              <Square size={11} />
-            )}
-            {allSelected
-              ? tr("screenshots_deselect_all", undefined, "Deselect all")
-              : tr("screenshots_select_all", undefined, "Select all")}
-          </button>
+      <ConnectionGate require="payload">
+        {error && (
+          <div className="mb-4">
+            <ErrorCard
+              title={tr("screenshots_error", undefined, "Couldn't list screenshots")}
+              detail={error}
+            />
+          </div>
         )}
-        <ul className="space-y-1">
-          {items?.map((item) => {
-            const isSelected = selected.has(item.path);
-            return (
-              <li
-                key={item.path}
-                className={`flex items-center gap-3 rounded-md border p-2 text-xs ${
-                  isSelected
-                    ? "border-[var(--color-accent)] bg-[var(--color-surface-2)]"
-                    : "border-[var(--color-border)] bg-[var(--color-surface-2)]"
-                }`}
-              >
-                <button
-                  type="button"
-                  onClick={() => toggleOne(item.path)}
-                  className="text-[var(--color-muted)] hover:text-[var(--color-text)]"
-                  aria-label={tr("screenshots_select", undefined, "Toggle select")}
+
+        {items && items.length === 0 && (
+          <EmptyState
+            icon={ImageIcon}
+            message={tr(
+              "screenshots_empty",
+              undefined,
+              "No photos found — take a screenshot on the PS5 first.",
+            )}
+          />
+        )}
+
+        <div className="mx-auto max-w-4xl">
+          {items && items.length > 0 && (
+            <button
+              type="button"
+              onClick={toggleAll}
+              className="mb-2 inline-flex items-center gap-1.5 text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]"
+            >
+              {allSelected ? (
+                <CheckSquare size={11} />
+              ) : (
+                <Square size={11} />
+              )}
+              {allSelected
+                ? tr("screenshots_deselect_all", undefined, "Deselect all")
+                : tr("screenshots_select_all", undefined, "Select all")}
+            </button>
+          )}
+          <ul className="space-y-1">
+            {items?.map((item) => {
+              const isSelected = selected.has(item.path);
+              return (
+                <li
+                  key={item.path}
+                  className={`flex items-center gap-3 rounded-md border p-2 text-xs ${
+                    isSelected
+                      ? "border-[var(--color-accent)] bg-[var(--color-surface-2)]"
+                      : "border-[var(--color-border)] bg-[var(--color-surface-2)]"
+                  }`}
                 >
-                  {isSelected ? <CheckSquare size={12} /> : <Square size={12} />}
-                </button>
-                <ScreenshotThumb
-                  item={item}
-                  host={host ?? ""}
-                  enabled={canConvert}
-                  cache={thumbCache}
-                />
-                <div className="min-w-0 flex-1">
-                  <code className="block truncate text-xs">
-                    {item.path.split("/").pop()}
-                  </code>
-                  <div className="text-xs text-[var(--color-muted)]">
-                    {formatBytes(item.size)} ·{" "}
-                    {new Date(item.mtime * 1000).toLocaleString()}
+                  <button
+                    type="button"
+                    onClick={() => toggleOne(item.path)}
+                    className="text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                    aria-label={tr("screenshots_select", undefined, "Toggle select")}
+                  >
+                    {isSelected ? <CheckSquare size={12} /> : <Square size={12} />}
+                  </button>
+                  <ScreenshotThumb
+                    item={item}
+                    host={host ?? ""}
+                    enabled={canConvert}
+                    cache={thumbCache}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <code className="block truncate text-xs">
+                      {item.path.split("/").pop()}
+                    </code>
+                    <div className="text-xs text-[var(--color-muted)]">
+                      {formatBytes(item.size)} ·{" "}
+                      {new Date(item.mtime * 1000).toLocaleString()}
+                    </div>
                   </div>
-                </div>
-                {canConvert && (
+                  {canConvert && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      leftIcon={<Eye size={11} />}
+                      onClick={() => void openPreview(item)}
+                      disabled={
+                        convertingPaths.has(item.path) || busyPaths.has(item.path)
+                      }
+                      title={tr(
+                        "screenshots_preview_hint",
+                        undefined,
+                        "Preview this screenshot",
+                      )}
+                    >
+                      {tr("screenshots_preview", undefined, "Preview")}
+                    </Button>
+                  )}
+                  {canConvert && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      leftIcon={
+                        convertingPaths.has(item.path) ? (
+                          <Spinner size={12} tone="inherit" />
+                        ) : (
+                          <FileImage size={11} />
+                        )
+                      }
+                      onClick={() => convertOne(item)}
+                      disabled={
+                        convertingPaths.has(item.path) || busyPaths.has(item.path)
+                      }
+                      title={tr(
+                        "screenshots_convert_hint",
+                        undefined,
+                        "Download and convert this HDR screenshot to a viewable PNG",
+                      )}
+                    >
+                      {tr("screenshots_convert", undefined, "Convert to PNG")}
+                    </Button>
+                  )}
+                  {isTauriEnv() && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      leftIcon={
+                        busyPaths.has(item.path) ? (
+                          <Spinner size={12} tone="inherit" />
+                        ) : (
+                          <Download size={11} />
+                        )
+                      }
+                      onClick={() => downloadOne(item)}
+                      disabled={
+                        busyPaths.has(item.path) || convertingPaths.has(item.path)
+                      }
+                    >
+                      {tr("screenshots_download", undefined, "Download")}
+                    </Button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+
+        {loading && items === null && (
+          <div className="mt-4 text-center text-xs text-[var(--color-muted)]">
+            <Spinner size={12} className="mr-2 inline" />
+            {tr("screenshots_loading", undefined, "Reading screenshots…")}
+          </div>
+        )}
+
+        {/* Preview lightbox — click the backdrop or press Esc to close. */}
+        {preview && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-6"
+            onClick={closePreview}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div
+              className="relative flex max-h-full max-w-full flex-col items-center gap-3"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex w-full items-center justify-between gap-3 text-sm text-white">
+                <span className="min-w-0 truncate font-mono text-xs">
+                  {preview.item.path.split("/").pop()}
+                </span>
+                <div className="flex shrink-0 items-center gap-2">
+                  {isTauriEnv() && (
                   <Button
-                    variant="ghost"
-                    size="sm"
-                    leftIcon={<Eye size={11} />}
-                    onClick={() => void openPreview(item)}
-                    disabled={
-                      convertingPaths.has(item.path) || busyPaths.has(item.path)
-                    }
-                    title={tr(
-                      "screenshots_preview_hint",
-                      undefined,
-                      "Preview this screenshot",
-                    )}
-                  >
-                    {tr("screenshots_preview", undefined, "Preview")}
-                  </Button>
-                )}
-                {canConvert && (
-                  <Button
-                    variant="ghost"
+                    variant="secondary"
                     size="sm"
                     leftIcon={
-                      convertingPaths.has(item.path) ? (
+                      busyPaths.has(preview.item.path) ? (
                         <Spinner size={12} tone="inherit" />
                       ) : (
-                        <FileImage size={11} />
+                        <Download size={12} />
                       )
                     }
-                    onClick={() => convertOne(item)}
-                    disabled={
-                      convertingPaths.has(item.path) || busyPaths.has(item.path)
-                    }
-                    title={tr(
-                      "screenshots_convert_hint",
-                      undefined,
-                      "Download and convert this HDR screenshot to a viewable PNG",
-                    )}
-                  >
-                    {tr("screenshots_convert", undefined, "Convert to PNG")}
-                  </Button>
-                )}
-                {isTauriEnv() && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    leftIcon={
-                      busyPaths.has(item.path) ? (
-                        <Spinner size={12} tone="inherit" />
-                      ) : (
-                        <Download size={11} />
-                      )
-                    }
-                    onClick={() => downloadOne(item)}
-                    disabled={
-                      busyPaths.has(item.path) || convertingPaths.has(item.path)
-                    }
+                    disabled={busyPaths.has(preview.item.path)}
+                    onClick={() => void downloadOne(preview.item)}
                   >
                     {tr("screenshots_download", undefined, "Download")}
                   </Button>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      </div>
-
-      {loading && items === null && (
-        <div className="mt-4 text-center text-xs text-[var(--color-muted)]">
-          <Spinner size={12} className="mr-2 inline" />
-          {tr("screenshots_loading", undefined, "Reading screenshots…")}
-        </div>
-      )}
-
-      {/* Preview lightbox — click the backdrop or press Esc to close. */}
-      {preview && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-6"
-          onClick={closePreview}
-          role="dialog"
-          aria-modal="true"
-        >
-          <div
-            className="relative flex max-h-full max-w-full flex-col items-center gap-3"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex w-full items-center justify-between gap-3 text-sm text-white">
-              <span className="min-w-0 truncate font-mono text-xs">
-                {preview.item.path.split("/").pop()}
-              </span>
-              <div className="flex shrink-0 items-center gap-2">
-                {isTauriEnv() && (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  leftIcon={
-                    busyPaths.has(preview.item.path) ? (
-                      <Spinner size={12} tone="inherit" />
-                    ) : (
-                      <Download size={12} />
-                    )
-                  }
-                  disabled={busyPaths.has(preview.item.path)}
-                  onClick={() => void downloadOne(preview.item)}
-                >
-                  {tr("screenshots_download", undefined, "Download")}
-                </Button>
-                )}
-                <button
-                  type="button"
-                  onClick={closePreview}
-                  aria-label={tr("screenshots_preview_close", undefined, "Close")}
-                  className="rounded p-1 text-white/80 hover:text-white"
-                >
-                  <X size={18} />
-                </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={closePreview}
+                    aria-label={tr("screenshots_preview_close", undefined, "Close")}
+                    className="rounded p-1 text-white/80 hover:text-white"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+              </div>
+              <div className="flex min-h-[40vh] min-w-[40vw] items-center justify-center overflow-hidden rounded-md bg-[var(--color-surface-2)]">
+                {preview.loading ? (
+                  <div className="flex flex-col items-center gap-2 p-10 text-xs text-[var(--color-muted)]">
+                    <Spinner size={20} />
+                    {tr(
+                      "screenshots_preview_loading",
+                      undefined,
+                      "Downloading + converting (HDR screenshots take a few seconds)…",
+                    )}
+                  </div>
+                ) : preview.error ? (
+                  <div className="max-w-md p-8 text-center text-xs text-[var(--color-bad)]">
+                    {preview.error}
+                  </div>
+                ) : preview.url ? (
+                  <img
+                    src={preview.url}
+                    alt=""
+                    className="max-h-[80vh] max-w-[88vw] object-contain"
+                  />
+                ) : null}
               </div>
             </div>
-            <div className="flex min-h-[40vh] min-w-[40vw] items-center justify-center overflow-hidden rounded-md bg-[var(--color-surface-2)]">
-              {preview.loading ? (
-                <div className="flex flex-col items-center gap-2 p-10 text-xs text-[var(--color-muted)]">
-                  <Spinner size={20} />
-                  {tr(
-                    "screenshots_preview_loading",
-                    undefined,
-                    "Downloading + converting (HDR screenshots take a few seconds)…",
-                  )}
-                </div>
-              ) : preview.error ? (
-                <div className="max-w-md p-8 text-center text-xs text-[var(--color-bad)]">
-                  {preview.error}
-                </div>
-              ) : preview.url ? (
-                <img
-                  src={preview.url}
-                  alt=""
-                  className="max-h-[80vh] max-w-[88vw] object-contain"
-                />
-              ) : null}
-            </div>
           </div>
-        </div>
-      )}
+        )}
+      </ConnectionGate>
     </div>
   );
 }
