@@ -8,7 +8,7 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let (Some(source), Some(output_dir)) = (args.next(), args.next()) else {
         eprintln!(
-            "usage: fpkg_build <source> <output-dir> [--content-id ID] [--name STEM]\n\
+            "usage: fpkg_build <source> <output-dir> [--content-id ID] [--name STEM] [--fw WORD]\n\
              \n\
              <source> is a game folder, or an .exfat or .ffpkg mount image."
         );
@@ -19,6 +19,7 @@ fn main() {
         match flag.as_str() {
             "--content-id" => request.content_id = args.next(),
             "--name" => request.file_name = args.next(),
+            "--fw" => request.firmware = args.next(),
             other => {
                 eprintln!("unknown argument {other}");
                 std::process::exit(2);

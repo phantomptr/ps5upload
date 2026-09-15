@@ -66,6 +66,9 @@ fn request(source: &Path, out: &Path) -> BuildRequest {
     BuildRequest {
         time: Some(TIME),
         seed: Some(SEED),
+        // These tests read the stored image back through the container. The default is `Stored`,
+        // whose round trip `mounts.rs` covers.
+        metadata_codec: ps5upload_fpkg::inner::MetaCodec::Zlib,
         ..BuildRequest::new(source, out)
     }
 }
@@ -194,7 +197,13 @@ fn a_source_past_the_first_indirect_slot_round_trips() {
     // The stored image is shorter than the mount: its metadata region is a container, so
     // the reader walks the stored bytes back to the mount before reading files out of it.
     assert!(inner_image.len() as u64 <= plan.ndblock * ps5upload_fpkg::BLOCK);
-    let mount_image = ps5upload_fpkg::inner::logical_mount(&inner_image, plan.meta_base).unwrap();
+    let mount_image = ps5upload_fpkg::inner::logical_mount(
+        &inner_image,
+        plan.meta_base,
+        ps5upload_fpkg::inner::MetaCodec::Zlib,
+        &plan.placements(),
+    )
+    .unwrap();
     assert_eq!(
         mount_image.len() as u64,
         plan.ndblock * ps5upload_fpkg::BLOCK,
@@ -302,7 +311,13 @@ fn a_tree_with_blocks_of_inodes_round_trips() {
     let nodes = img.dinodes();
     let inner_image = img.file_data(&nodes[3]);
     // The stored image is shorter than the mount: its metadata region is a container.
-    let mount = ps5upload_fpkg::inner::logical_mount(&inner_image, plan.meta_base).unwrap();
+    let mount = ps5upload_fpkg::inner::logical_mount(
+        &inner_image,
+        plan.meta_base,
+        ps5upload_fpkg::inner::MetaCodec::Zlib,
+        &plan.placements(),
+    )
+    .unwrap();
     let inner = ps5upload_fpkg::inner::read(&mount, plan.meta_base).unwrap();
     assert!(inner.flt_ok);
     let mut recovered: Vec<(String, u64)> = inner
@@ -506,7 +521,13 @@ fn a_non_standard_drm_reaches_the_package_as_standard() {
     .unwrap();
     let nodes = img.dinodes();
     let image = img.file_data(&nodes[3]);
-    let mount_image = ps5upload_fpkg::inner::logical_mount(&image, plan.meta_base).unwrap();
+    let mount_image = ps5upload_fpkg::inner::logical_mount(
+        &image,
+        plan.meta_base,
+        ps5upload_fpkg::inner::MetaCodec::Zlib,
+        &plan.placements(),
+    )
+    .unwrap();
     let mount = ps5upload_fpkg::inner::read(&mount_image, plan.meta_base).unwrap();
     let entry = mount
         .files

@@ -255,6 +255,18 @@ fn insert_field(param_json: &[u8], name: &str, value: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// `param.json` with `requiredSystemSoftwareVersion` replaced by `version` (a BCD hex word
+/// such as `0x0510000000000000` for 5.10), or `None` when the source does not declare one.
+///
+/// The console refuses a package whose declared minimum is above its own firmware —
+/// measured on the Phat at 5.10 with a title declaring 12.60: `state=9 error=0x80a3000d`.
+/// The value goes into the install metadata, so a title whose minimum is above the console
+/// can be made installable; whether it then *runs* is a separate question that the
+/// executable's own SDK version decides.
+pub fn firmware_rewrite(param_json: &[u8], version: &str) -> Option<Vec<u8>> {
+    set_string_value(param_json, "\"requiredSystemSoftwareVersion\"", version)
+}
+
 /// `param.json` with `applicationDrmType` set to `standard`, or `None` when it already is
 /// (or does not say). Only the value's bytes change, so the file's formatting survives.
 pub fn drm_rewrite(param_json: &[u8]) -> Option<Vec<u8>> {
@@ -454,6 +466,25 @@ mod tests {
             same
         );
         assert!(content_id_rewrite(b"not json", "UP0000-PPSA99011_00-X").is_none());
+    }
+
+    #[test]
+    fn the_firmware_requirement_can_be_lowered_for_an_older_console() {
+        // The console compares this value against its own firmware and refuses the package
+        // when it is newer: measured on a 5.10 console against a title declaring 12.60,
+        // `state=9 error=0x80a3000d`. Only the value's bytes change.
+        let json = br#"{"contentId":"UP1004-PPSA30528_00-REDEMPTION000001","requiredSystemSoftwareVersion":"0x1260000000000000"}"#;
+        let out = firmware_rewrite(json, "0x0510000000000000").unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(
+            text.contains(r#""requiredSystemSoftwareVersion":"0x0510000000000000""#),
+            "{text}"
+        );
+        assert!(text.contains(r#""contentId":"UP1004-PPSA30528_00-REDEMPTION000001""#));
+
+        // A source that declares none is left alone rather than gaining a field: the console
+        // treats an absent minimum as no minimum.
+        assert!(firmware_rewrite(br#"{"titleName":"x"}"#, "0x0510000000000000").is_none());
     }
 
     #[test]

@@ -7,12 +7,15 @@ step here is followed by the console's own words rather than by an HTTP reply:
     rc: 0 from /api/pkg/dpi-direct-install   the daemon accepted the hand-off
     state = 7, error = 0x0                   the console finished installing
     origin = pkg in the app database         it registered
-    no launch error                          the nested mount worked
+    the title's process is live              the nested mount worked
 
-Only the last one is the mount, and it is the one that was missing for weeks. A title whose
-mount fails is torn down with `0x80020060`, which surfaces at launch as
+Only the last one is the mount, and it is the one that was missing for weeks. There is no
+log line that proves one: `[SceSystemStateMgr] Power Mode Change: BIG_APP` is logged before
+`[SceLncService] BeginAppMount()` and is printed even when the mount then fails, so it is a
+marker to be ignored, not a pass condition. The two failure shapes seen so far are
 
-    [SceLncService] lnc_manager.cpp(568) launchApp: LNC_ISOK::0x80020060
+    [SceLncService] lnc_manager.cpp(568) launchApp: LNC_ISOK::0x80020060   (torn down)
+    [0]mountppfs() line=3719 error=45 0x2d                                (ppfs gave up)
 
 **Launching such a title coredumps SceShellUI** (it restarts itself; the console and the
 payload survive). That is why --launch is opt-in: run the install steps as often as you like,
@@ -28,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -36,10 +40,18 @@ import urllib.request
 from pathlib import Path
 
 BLOCK = 0x10000
-MOUNT_FAIL = ("verifyImage(", "PfsMountGameData_PPR() ret", "nmount() failed.", "0x80020060")
-# A failed launch does not change the system power mode; a mounted one does. Kept narrow on
-# purpose — `EnsureBigAppBudget` and the eboot EXEC line both appear for a failure too.
-MOUNT_OK = ("Power Mode Change: BIG_APP",)
+# What the console prints when a mount does not complete. The ppfs family reports its own
+# failures as `name() line=NNNN error=<code>`, and only a non-zero code is a failure —
+# `verify_ppr_sblock_100() line=1126 error(0)` is a *pass* and must not match.
+MOUNT_FAIL = ("verifyImage(", "PfsMountGameData_PPR() ret", "nmount() failed.", "0x80020060",
+              "LaunchFlowError.")
+MOUNT_FAIL_CODE = re.compile(r"\(\) line=\d+ error=(-?\d+)")
+# There is no log line that proves a mount: `[SceSystemStateMgr] Power Mode Change: BIG_APP`
+# is logged *before* `[SceLncService] BeginAppMount()`, so a title that mounts onto nothing
+# still prints it. Measured 2026-09-14 — an RDR package printed BIG_APP and then failed at
+# `mountppfs() line=3719 error=45 0x2d`, and every verdict this script had reported up to
+# then was a false OK. The positive signal is the title's own process, which cannot exist
+# unless the mount finished.
 
 
 def post_json(engine: str, path: str, body: dict) -> dict:
@@ -87,6 +99,34 @@ def preflight(pkg: Path) -> dict:
         "self_consistent": blocks * stored_blocks == stored,
         "base_within_stored_size": 0 < meta_base <= stored,
     }
+
+
+def mount_failure(line: str) -> bool:
+    if any(token in line for token in MOUNT_FAIL):
+        return True
+    code = MOUNT_FAIL_CODE.search(line)
+    return bool(code) and int(code.group(1)) != 0
+
+
+def registered_title(engine: str, addr: str, title_id: str) -> bool:
+    try:
+        url = f"{engine}/api/ps5/apps/installed?addr={addr}"
+        with urllib.request.urlopen(url, timeout=30) as r:
+            titles = json.loads(r.read()).get("titles", [])
+    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError):
+        return False
+    return any(t.get("title_id") == title_id and t.get("origin") == "pkg" for t in titles)
+
+
+def running_title(engine: str, addr: str, title_id: str) -> bool:
+    """True when the console has a live process for this title."""
+    try:
+        url = f"{engine}/api/ps5/process/list?addr={addr}"
+        with urllib.request.urlopen(url, timeout=30) as r:
+            procs = json.loads(r.read()).get("processes", [])
+    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError):
+        return False
+    return any(p.get("title_id") == title_id for p in procs)
 
 
 def syslog(engine: str, host: str, lines: int = 8000) -> str:
@@ -170,6 +210,13 @@ def main() -> int:
         say("mounted   not tested (--launch does that, and a failed mount coredumps SceShellUI)")
         return 0
 
+    # The app database lags the install verdict, and a launch of a title it has not caught up
+    # with gives no mount answer at all — the payload just sits on the frame. Wait for it.
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline and not registered_title(args.engine, args.addr, title_id):
+        time.sleep(3)
+    say(f"launch    {title_id} registered={registered_title(args.engine, args.addr, title_id)}")
+
     seen = set(syslog(args.engine, host).splitlines())
     launched = post_json(args.engine, "/api/ps5/app/launch",
                          {"addr": args.addr, "title_id": title_id})
@@ -183,23 +230,25 @@ def main() -> int:
     # set difference survives rotation (dropped lines cannot hide an added one).
     failure = mounted = None
     deadline = time.monotonic() + 45
-    while time.monotonic() < deadline and not failure:
+    while time.monotonic() < deadline and not (failure or mounted):
         time.sleep(2)
         text = syslog(args.engine, host)
         fresh = [l.strip() for l in set(text.splitlines()) - seen]
         seen = set(text.splitlines())
         for line in fresh:
-            if any(token in line for token in MOUNT_FAIL):
+            if mount_failure(line):
                 failure = line
                 break
-            if not mounted and any(token in line for token in MOUNT_OK):
-                mounted = line
+        # Checked after the log so a failure printed in the same window wins: the two can
+        # only be a poll apart, and a false OK is the costlier mistake.
+        if not failure and running_title(args.engine, args.addr, title_id):
+            mounted = f"a live {title_id} process"
     if failure:
         say(f"mount     FAILED  {failure}")
         return 1
     if not mounted:
-        say("mount     NO VERDICT — no failure and no positive signal in the window; the app may "
-            "not have reached the mount. Re-run, or read the log yourself before believing this.")
+        say(f"mount     NO VERDICT — {title_id} never appeared in the process list and the log "
+            "carried no failure line. Re-run, or read the log yourself before believing this.")
         return 2
     say(f"mount     OK  {mounted}")
     return 0

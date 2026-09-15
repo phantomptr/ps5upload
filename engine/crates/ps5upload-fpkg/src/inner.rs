@@ -1,12 +1,13 @@
-//! The inner image (`pfs_image.dat`): data-first, with the metadata region compressed.
+//! The inner image (`pfs_image.dat`): data-first, with the metadata region stored per [`MetaCodec`].
 //!
 //! The file payloads are stored raw, so the data region sits at its afid-order offsets and the
 //! block-info table occupies the padding block just after it, where the sample carries it too. The
 //! metadata region starts at the 256 KiB-aligned `meta_base` the finalized-image header records at
-//! `0x50`, and it is the part that shrinks: it goes into a `PFSC` container whose blocks are
-//! deflated wherever that is shorter, so the on-disk image is *shorter than the mount* and
-//! `naps_pkg_layout.dat` is what maps one onto the other. [`logical_mount`] is that mapping in the
-//! reading direction.
+//! `0x50`, and it is the part that can shrink: under `Zlib` it goes into a `PFSC` container whose
+//! blocks are deflated wherever that is shorter, so the on-disk image is *shorter than the mount*;
+//! under `Stored` the region's own bytes sit there and the two are the same length.
+//! `naps_pkg_layout.dat` is what maps one onto the other, and [`logical_mount`] is that mapping in
+//! the reading direction.
 //!
 //! The metadata region itself is a small PFS: a superblock, a table of 0xA8-byte inodes that carry
 //! one logical offset each, the super-root's four entries, both flat-path tables, the afid table,
@@ -51,6 +52,19 @@ impl MetaCodec {
         match self {
             MetaCodec::Stored => crate::naps::COMP_KRAKEN,
             MetaCodec::Zlib => crate::naps::COMP_ZLIB,
+        }
+    }
+
+    /// The codec a layout descriptor's `compType` names — the inverse of
+    /// [`MetaCodec::compression_type`], for a reader that has the descriptor rather than the
+    /// request that produced it.
+    pub fn from_compression_type(comp_type: u8) -> Result<Self> {
+        match u64::from(comp_type) {
+            crate::naps::COMP_KRAKEN => Ok(MetaCodec::Stored),
+            crate::naps::COMP_ZLIB => Ok(MetaCodec::Zlib),
+            other => format_err(format!(
+                "the layout declares compType {other}, which no writer here emits"
+            )),
         }
     }
 }
@@ -120,8 +134,8 @@ pub struct InnerImage {
     pub block_info_offset: u64,
     /// Indexed like `plan.files`.
     pub placements: Vec<Placement>,
-    /// Logical offsets in afid order — the naps `fidx` entries.
-    pub afid_offsets: Vec<u64>,
+    /// `(logical, on_disk, size)` in afid order — what the descriptor is built from.
+    pub afid_files: Vec<(u64, u64, u64)>,
 }
 
 impl InnerImage {
@@ -444,21 +458,23 @@ pub fn write_with(
         };
         plan.files.len()
     ];
-    let mut afid_offsets = vec![0u64; plan.afid_order.len()];
+    let mut afid_files = vec![(0u64, 0u64, 0u64); plan.afid_order.len()];
     for (afid, &fi) in plan.afid_order.iter().enumerate() {
         let f = &plan.files[fi];
-        let at = f.logical_offset as usize;
+        // The image holds the bytes where the mount will not find them directly: the descriptor
+        // is what carries a block's logical offset, so the file goes at its physical one.
+        let at = f.on_disk_offset as usize;
         let end = at + payloads[fi].len();
         if end > image.len() {
             return format_err(format!("{} runs past the mount", f.path));
         }
         image[at..end].copy_from_slice(&payloads[fi]);
         placements[fi] = Placement {
-            on_disk_offset: f.logical_offset,
+            on_disk_offset: f.on_disk_offset,
             size: payloads[fi].len() as u64,
             logical_offset: f.logical_offset,
         };
-        afid_offsets[afid] = f.logical_offset;
+        afid_files[afid] = (f.logical_offset, f.on_disk_offset, f.size);
     }
 
     // The block-info table, in the first padding block after the data region.
@@ -496,7 +512,7 @@ pub fn write_with(
         ndblock: plan.ndblock,
         block_info_offset,
         placements,
-        afid_offsets,
+        afid_files,
     })
 }
 
@@ -547,9 +563,11 @@ impl<'a> BlockSource<'a> {
             .iter()
             .map(|&fi| {
                 let f = &plan.files[fi];
+                // The image holds the payloads, so a span is where the bytes are, not where the
+                // mount wants them; the gaps left between files read back as zero.
                 Span {
-                    start: f.logical_offset,
-                    end: f.logical_offset + f.size,
+                    start: f.on_disk_offset,
+                    end: f.on_disk_offset + f.size,
                     file: fi,
                 }
             })
@@ -690,17 +708,40 @@ impl<'a> BlockSource<'a> {
 
 /// The logical mount an on-disk `pfs_image.dat` expands to.
 ///
-/// The data region and the block-info table are stored at their own offsets, so they copy across;
-/// the rest is the metadata container at `meta_base`, expanded. This is the inverse of what
-/// [`write_with`] produces, and is how a reader turns a stored image back into the mount the
-/// console walks.
-pub fn logical_mount(disk: &[u8], meta_base: u64) -> Result<Vec<u8>> {
+/// The image and the mount do not agree about the data region: the image starts every file at a
+/// boundary of its own, while the mount packs them, so each file has to be carried across from
+/// `on_disk` to `logical`. `files` is `(logical, on_disk, size)` per file, which is what
+/// [`Plan::placements`] and [`InnerImage::afid_files`] hold.
+///
+/// Only the files the descriptor names reach the mount's data region — its padding and the
+/// block-info table are image-side scaffolding, and read back as zero. Past `meta_base` the
+/// region is the drawn container, expanded. This is the inverse of what [`write_with`] produces,
+/// and is how a reader turns a stored image back into the mount the console walks.
+pub fn logical_mount(
+    disk: &[u8],
+    meta_base: u64,
+    codec: MetaCodec,
+    files: &[(u64, u64, u64)],
+) -> Result<Vec<u8>> {
     let at = meta_base as usize;
     if disk.len() < at {
         return format_err("the image ends before its metadata base");
     }
-    let mut mount = disk[..at].to_vec();
-    mount.extend_from_slice(&pfsc::parse(&disk[at..])?.decompress()?);
+    let mut mount = vec![0u8; at];
+    for &(logical, on_disk, size) in files {
+        let (from, to, len) = (on_disk as usize, logical as usize, size as usize);
+        let src = disk
+            .get(from..from + len)
+            .ok_or_else(|| crate::Error::Format("a file runs past the image".into()))?;
+        let dst = mount
+            .get_mut(to..to + len)
+            .ok_or_else(|| crate::Error::Format("a file runs past the metadata base".into()))?;
+        dst.copy_from_slice(src);
+    }
+    match codec {
+        MetaCodec::Stored => mount.extend_from_slice(&disk[at..]),
+        MetaCodec::Zlib => mount.extend_from_slice(&pfsc::parse(&disk[at..])?.decompress()?),
+    }
     Ok(mount)
 }
 
@@ -1008,10 +1049,14 @@ mod tests {
             "the image is a whole number of blocks"
         );
 
-        // The mount is the data region as stored, then the region the container expands to.
-        let meta_at = inner.meta_base as usize;
-        let mut mount = inner.image[..meta_at].to_vec();
-        mount.extend_from_slice(&inner.metadata.plain);
+        // The mount holds each file at its logical offset, which is not where the image put it.
+        let mount = logical_mount(
+            &inner.image,
+            inner.meta_base,
+            MetaCodec::Zlib,
+            &inner.afid_files,
+        )
+        .unwrap();
         // `read` is shadowed by the closure above, so name the module's own walk explicitly.
         let mounted = super::read(&mount, inner.meta_base).unwrap();
         assert!(mounted.flt_ok, "flat-path table must hash every path");

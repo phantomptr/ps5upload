@@ -3392,6 +3392,7 @@ name = "ps5upload-fpkg"
 version = "5.26.0"
 dependencies = [
  "aes",
+ "flate2",
  "hmac",
  "libc",
  "ps5upload-pkg",

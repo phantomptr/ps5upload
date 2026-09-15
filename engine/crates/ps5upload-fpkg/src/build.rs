@@ -42,6 +42,10 @@ pub struct BuildRequest {
     /// How the outer image's blocks are stored. `PS5UPLOAD_FPKG_IMAGE_MODE` (`native`) overrides
     /// it, which is how a native control package is built without a code change.
     pub image_mode: crate::ImageMode,
+    /// Rewrites `requiredSystemSoftwareVersion` in the packaged `param.json`, which is what the
+    /// console compares against its own firmware at install time. `PS5UPLOAD_FPKG_FW` (a BCD hex
+    /// word) overrides the source's value; absent, the source's own value is carried through.
+    pub firmware: Option<String>,
 }
 
 impl BuildRequest {
@@ -56,14 +60,27 @@ impl BuildRequest {
             seed: None,
             metadata_codec: codec_from_env(),
             image_mode: image_mode_from_env(),
+            firmware: firmware_from_env(),
         }
     }
 }
 
+fn firmware_from_env() -> Option<String> {
+    match std::env::var("PS5UPLOAD_FPKG_FW") {
+        Ok(v) if !v.trim().is_empty() => Some(v.trim().to_string()),
+        _ => None,
+    }
+}
+
+/// `stored` is the default: it declares `compType = 2` (Kraken), the value carried by both
+/// packages whose descriptors we can read — including the only one seen to mount — while the
+/// `zlib` shape's `compType = 1` is the code the console rejects at `ppfs_create_cmpc_for_naps()`
+/// with `EOPNOTSUPP` before a mount can finish. `zlib` stays reachable for the A/B that
+/// established this.
 fn codec_from_env() -> inner::MetaCodec {
     match std::env::var("PS5UPLOAD_FPKG_META_CODEC").as_deref() {
-        Ok("stored") => inner::MetaCodec::Stored,
-        _ => inner::MetaCodec::Zlib,
+        Ok("zlib") => inner::MetaCodec::Zlib,
+        _ => inner::MetaCodec::Stored,
     }
 }
 
@@ -169,6 +186,12 @@ fn build_mode(
     // (the console checks it against the transfer's own) and in `titleId` (which it reads at
     // GetRawContentInfo). A source that says something else is the ordinary case for a rename.
     let param_json = source::content_id_rewrite(&param_json, &content_id).unwrap_or(param_json);
+    // Written into the install metadata, where the console compares it against its own
+    // firmware and refuses the package when the console is older (0x80a3000d).
+    let param_json = match request.firmware.as_deref() {
+        Some(version) => source::firmware_rewrite(&param_json, version).unwrap_or(param_json),
+        None => param_json,
+    };
     if let Some(entry) = files.iter_mut().find(|f| f.path == "sce_sys/param.json") {
         entry.size = param_json.len() as u64;
     }
@@ -307,7 +330,7 @@ fn build_mode(
             let naps = naps::build_with_meta(
                 inner.image.len() as u64,
                 plan.ndblock,
-                &inner.afid_offsets,
+                &inner.afid_files,
                 plan.data_end,
                 plan.meta_base,
                 &inner.metadata.blocks,
@@ -378,7 +401,7 @@ fn build_mode(
             let inner_files = plan.inner_files();
             let meta_18 = si_write::naps_meta_18(
                 inner_size,
-                &si_write::InnerDigests::of_image(&inner.image, &inner_files),
+                &si_write::InnerDigests::of_image(&inner.image, &inner.afid_files),
                 // The metric blob describes the metadata region's logical bytes, not the container
                 // the image stores there.
                 &inner.metadata.plain,

@@ -163,12 +163,14 @@ pub struct InnerDigests {
 }
 
 impl InnerDigests {
-    /// Digests of an image already in memory, in afid order as `files` lists it.
-    pub fn of_image(image: &[u8], files: &[(String, u64, u64)]) -> Self {
+    /// Digests of an image already in memory, in afid order as `files` lists it. A file's digest
+    /// is over the bytes the image holds for it, which sit at its physical offset — the logical
+    /// one names a position in the mount, not in the image.
+    pub fn of_image(image: &[u8], files: &[(u64, u64, u64)]) -> Self {
         let files = files
             .iter()
-            .map(|(_, offset, size)| {
-                let at = (*offset as usize).min(image.len());
+            .map(|(_, on_disk, size)| {
+                let at = (*on_disk as usize).min(image.len());
                 let end = (at + *size as usize).min(image.len());
                 sha3(&image[at..end])
             })

@@ -146,7 +146,7 @@ pub fn write_package(
     let naps = naps::build_with_meta(
         inner_blocks * BLOCK,
         plan.ndblock,
-        &plan.afid_offsets(),
+        &plan.placements(),
         plan.data_end,
         plan.meta_base,
         &source.metadata().blocks,
@@ -399,7 +399,7 @@ mod tests {
         let image = built.image.clone();
         // One digest per *stored* block: a compressed metadata region makes that fewer than the
         // mount's block count, and the metric blob's table follows the image.
-        let expected = crate::si_write::InnerDigests::of_image(&image, &plan.inner_files());
+        let expected = crate::si_write::InnerDigests::of_image(&image, &plan.placements());
 
         let mut source = BlockSource::new(&plan, crate::crypto::DEFAULT_PASSCODE, time).unwrap();
         assert_eq!(source.disk_blocks(), built.disk_blocks());

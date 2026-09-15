@@ -135,6 +135,7 @@ fn main() -> ps5upload_fpkg::Result<()> {
         match layout.cblocks.get(index as usize) {
             Some(naps::Cblock::Block {
                 coffset_start_mod_256k,
+                reserved19: _,
                 uoffset_start,
                 clen_even_minus1,
                 even,
@@ -166,6 +167,7 @@ fn main() -> ps5upload_fpkg::Result<()> {
                 ),
                 naps::Cblock::Block {
                     coffset_start_mod_256k,
+                    reserved19: _,
                     uoffset_start,
                     clen_even_minus1,
                     even,

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use ps5upload_fpkg::build::{self, BuildRequest};
 use ps5upload_fpkg::crypto::DEFAULT_PASSCODE;
+use ps5upload_fpkg::inner::MetaCodec;
 use ps5upload_fpkg::{cnt, fih, inner, naps, outer, plan, source, verify, PkgFile};
 
 const CONTENT_ID: &str = "UP0000-PPSA01234_00-TESTGAME00000000";
@@ -90,6 +91,10 @@ fn gate_g2_a_built_package_verifies_and_round_trips() {
     let request = BuildRequest {
         time: Some((1_700_000_000, 0)),
         seed: Some([0x42; 16]),
+        // This gate asserts the container shape (a stored image shorter than the mount), so it
+        // pins the codec the container belongs to. The default is `Stored`, whose round trip
+        // `mounts.rs` covers.
+        metadata_codec: MetaCodec::Zlib,
         ..BuildRequest::new(source_dir.path(), output_dir.path())
     };
     let mut phases = Vec::new();
@@ -159,7 +164,13 @@ fn gate_g2_a_built_package_verifies_and_round_trips() {
     );
     assert!(parsed.pfs_size >= inner_image.len() as u64);
     // What the mount reads at the metadata base is the container expanded, not the container.
-    let mount_image = inner::logical_mount(&inner_image, built.meta_base).unwrap();
+    let mount_image = inner::logical_mount(
+        &inner_image,
+        built.meta_base,
+        MetaCodec::Zlib,
+        &built.placements(),
+    )
+    .unwrap();
     assert!(
         mount_image.len() as u64 >= built.ndblock * ps5upload_fpkg::BLOCK,
         "the mount reaches at least to the end the plan fixed"
@@ -209,11 +220,11 @@ fn gate_g2_a_built_package_verifies_and_round_trips() {
         ]
     );
     // The layout's own reconstruction has to land on the same mount the container expands to.
-    let rebuilt = naps::reconstruct(&inner_image, &layout).unwrap();
+    let rebuilt = naps::reconstruct(&inner_image, &layout, &built.placements()).unwrap();
     let data_end = built.data_end as usize;
     assert_eq!(
         &rebuilt[..data_end],
-        &inner_image[..data_end],
+        &mount_image[..data_end],
         "the data region is stored where the mount reads it"
     );
     assert_eq!(

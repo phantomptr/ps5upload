@@ -13,6 +13,8 @@ use crate::{format_err, Result, BLOCK};
 /// Generated into the tree when the source lacks it.
 pub const KEYSTONE: &str = "sce_sys/keystone";
 pub const KEYSTONE_LEN: u64 = 96;
+/// The image gives every file a boundary of its own at this granularity.
+pub const FILE_ALIGN: u64 = 0x1_0000;
 
 /// `metaBase` alignment: two 256 KiB ublocks, the granularity the NAPS u2c mapping
 /// addresses. One further block is always left free so the block-info table has a home
@@ -95,6 +97,10 @@ pub struct PlannedFile {
     pub inode: u32,
     pub afid: u32,
     pub logical_offset: u64,
+    /// Where the file sits in the image. Files are packed in the mount but each one starts at
+    /// its own 64 KiB boundary on disk, so the two orderings differ once a file is not a whole
+    /// number of those units — which is the usual case.
+    pub on_disk_offset: u64,
     pub parent_inode: u32,
     pub dirent_offset: i32,
     pub sce_sys: bool,
@@ -120,6 +126,18 @@ impl Plan {
         self.afid_order
             .iter()
             .map(|&fi| self.files[fi].logical_offset)
+            .collect()
+    }
+
+    /// `(logical, on_disk, size)` per file in afid order — everything the descriptor needs,
+    /// since a file's two offsets no longer imply its length.
+    pub fn placements(&self) -> Vec<(u64, u64, u64)> {
+        self.afid_order
+            .iter()
+            .map(|&fi| {
+                let f = &self.files[fi];
+                (f.logical_offset, f.on_disk_offset, f.size)
+            })
             .collect()
     }
 }
@@ -238,6 +256,7 @@ pub fn build(input: &[SourceFile]) -> Result<Plan> {
             inode: 0,
             afid: 0,
             logical_offset: 0,
+            on_disk_offset: 0,
             parent_inode: 0,
             dirent_offset: -1,
             sce_sys: f.path.starts_with("sce_sys/"),
@@ -251,6 +270,7 @@ pub fn build(input: &[SourceFile]) -> Result<Plan> {
             inode: 0,
             afid: 0,
             logical_offset: 0,
+            on_disk_offset: 0,
             parent_inode: 0,
             dirent_offset: -1,
             sce_sys: true,
@@ -336,18 +356,28 @@ pub fn build(input: &[SourceFile]) -> Result<Plan> {
         }
         afid_order.extend(dirs[d].files.iter().copied());
     }
+    // The keystone opens the layout whatever the tree order says. Sony's own packages carry it
+    // at logical offset 0, and the reference engine's do too.
+    if let Some(pos) = afid_order.iter().position(|&fi| files[fi].path == KEYSTONE) {
+        let keystone = afid_order.remove(pos);
+        afid_order.insert(0, keystone);
+    }
     for (afid, &fi) in afid_order.iter().enumerate() {
         files[fi].afid = afid as u32;
     }
 
-    // Logical offsets, packed in afid order.
+    // The mount packs the files in afid order; the image gives each one a 64 KiB boundary of
+    // its own, so the two cursors diverge as soon as a file is not a whole number of units.
     let mut cursor = 0u64;
+    let mut on_disk = 0u64;
     for &fi in &afid_order {
         files[fi].logical_offset = cursor;
+        files[fi].on_disk_offset = on_disk;
         files[fi].parent_inode = dirs[parent_of(&dirs, &files[fi].path)?].inode;
         cursor += files[fi].size;
+        on_disk = (on_disk + files[fi].size).next_multiple_of(FILE_ALIGN);
     }
-    let data_end = cursor;
+    let data_end = on_disk;
 
     // Directory entries with their byte offsets.
     let mut planned_dirs = Vec::with_capacity(dirs_pre.len());
@@ -591,7 +621,9 @@ mod tests {
             ("z.dat", 14734),
         ]))
         .unwrap();
-        assert_eq!(plan.data_end, 0xa626);
+        // The data region ends where the last file lands on disk, not where the mount packs it:
+        // every file opens on a 64 KiB boundary of its own.
+        assert_eq!(plan.data_end, 0x50000);
         assert_eq!(plan.dirs.len(), 3);
         assert_eq!(plan.metadata_blocks, 10);
         assert_eq!(plan.content_inodes, 7);
@@ -603,6 +635,13 @@ mod tests {
             .map(|&fi| plan.files[fi].logical_offset)
             .collect();
         assert_eq!(offsets, vec![0, 96, 12848, 12858, 27800]);
+        // The same files on disk, each at its own boundary.
+        let on_disk: Vec<u64> = plan
+            .afid_order
+            .iter()
+            .map(|&fi| plan.files[fi].on_disk_offset)
+            .collect();
+        assert_eq!(on_disk, vec![0, 0x10000, 0x20000, 0x30000, 0x40000]);
     }
 
     /// `pfs-version.dat` is a marker, not app payload: the sample's three uroot files

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use ps5upload_fpkg::build::{self, BuildRequest};
 use ps5upload_fpkg::crypto::DEFAULT_PASSCODE;
+use ps5upload_fpkg::inner::MetaCodec;
 use ps5upload_fpkg::source;
 use ps5upload_fpkg::{cnt, fih, inner, naps, outer, plan, PkgFile};
 
@@ -303,8 +304,15 @@ fn a_build_from_an_exfat_mount_verifies_and_round_trips() {
     let built = plan::build(tree.files()).unwrap();
     let image = outer_file(&report.path, "pfs_image.dat");
     assert!(image.len() as u64 <= built.ndblock * ps5upload_fpkg::BLOCK);
-    // The stored image is shorter than the mount: its metadata region is a container.
-    let mount_image = inner::logical_mount(&image, built.meta_base).unwrap();
+    // The image is read back through the codec the build used — the default, whose metadata
+    // region is stored verbatim rather than wrapped in a container.
+    let mount_image = inner::logical_mount(
+        &image,
+        built.meta_base,
+        MetaCodec::Stored,
+        &built.placements(),
+    )
+    .unwrap();
     let mount = inner::read(&mount_image, built.meta_base).unwrap();
     assert!(mount.flt_ok);
     let mut recovered: Vec<(String, u64)> = mount
@@ -332,7 +340,7 @@ fn a_build_from_an_exfat_mount_verifies_and_round_trips() {
     // it, and the metadata region out of the container the image stores. The gap between the two
     // is padding the image never stores, so it is only asserted to be empty.
     let layout = naps::parse(&outer_file(&report.path, "naps_pkg_layout.dat")).unwrap();
-    let rebuilt = naps::reconstruct(&image, &layout).unwrap();
+    let rebuilt = naps::reconstruct(&image, &layout, &built.placements()).unwrap();
     let data_end = built.data_end as usize;
     let meta_at = built.meta_base as usize;
     assert_eq!(&rebuilt[..data_end], &mount_image[..data_end]);

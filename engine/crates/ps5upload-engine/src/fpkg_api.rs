@@ -43,6 +43,10 @@ pub(crate) struct BuildReq {
     name: Option<String>,
     #[serde(default)]
     passcode: Option<String>,
+    /// Rewrites `requiredSystemSoftwareVersion` (a BCD hex word, e.g. `0x0510000000000000` for
+    /// 5.10). A console older than the declared minimum refuses the install with `0x80a3000d`.
+    #[serde(default)]
+    firmware: Option<String>,
 }
 
 /// Where packages go when the caller does not say: the user's Downloads folder, which is
@@ -173,6 +177,7 @@ pub(crate) async fn fpkg_build_handler(
         if let Some(passcode) = req.passcode.filter(|p| !p.is_empty()) {
             request.passcode = passcode;
         }
+        request.firmware = req.firmware.filter(|v| !v.trim().is_empty());
         let mut control = BuildControl {
             bytes: Some(&mut |done, total_now| {
                 bytes.store(done, Ordering::Relaxed);
