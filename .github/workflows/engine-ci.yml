@@ -369,7 +369,13 @@ jobs:
   coverage:
     name: coverage reports
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # `continue-on-error` below does NOT cover the timeout: a job that hits
+    # `timeout-minutes` is reported as *cancelled*, which cancels the whole
+    # run and leaves main red over a job that is explicitly not a gate. It
+    # reached 20m17s on 2026-09-16 against a 16m02s green run the day
+    # before, so the headroom here is deliberate — keep it well clear of
+    # the real runtime as the test suite grows.
+    timeout-minutes: 40
     # Reporting job — not a gate. cargo-llvm-cov occasionally trails
     # rustc's profraw format version (we hit "raw profile version
     # mismatch: ... expected version = 9" when rustc bumped to v10),
