@@ -141,7 +141,13 @@ static int jb_escalate_pid(pid_t pid) {
 
     /* cr_sceAttr high-attr flag. Mirrors elf-arsenal's backup-helper
      * exactly (attrs = 0x80 in byte 0). SDK v0.41 changed the prototype
-     * to a 32-byte array — construct it with byte 0 = 0x80. */
+     * to a 32-byte array — construct it with byte 0 = 0x80.
+     *
+     * NOTE: byte 0 here disagrees with main.c, which sets byte 3 (the
+     * SDK's documented ptrace bit, crt/patch.c `attrs[3] |= 0x80`).
+     * DPI does not ptrace, and this value installs successfully on
+     * FW 5.10/9.60 as-is, so it is left unchanged rather than unified
+     * on an untested assumption. */
     uint8_t attrs[32];
     memset(attrs, 0, sizeof(attrs));
     attrs[0] = 0x80;

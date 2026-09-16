@@ -5,7 +5,7 @@
 // only involved at the install step. The engine's work runs as a job, so this
 // screen starts one and polls it like the transfer screens do.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 
 import { PackagePlus } from "lucide-react";
 
@@ -19,14 +19,14 @@ import {
   ProgressBar,
 } from "../../components";
 import { fpkg, type FpkgInspection } from "../../api/fpkg";
-import { jobCancel, jobStatus, type JobSnapshot } from "../../api/ps5";
 import { pickPath } from "../../lib/pickPath";
-import { isAndroid, isIOS } from "../../lib/platform";
+import { pickLocalPath } from "../../state/localPicker";
+import { isIOS } from "../../lib/platform";
+import { isTauriEnv } from "../../lib/tauriEnv";
 import { useConnectionStore } from "../../state/connection";
+import { useFpkgConversion } from "../../state/fpkgConversion";
 import { usePkgLibrary } from "../../state/pkgLibrary";
 import { useTr } from "../../state/lang";
-
-const POLL_MS = 500;
 
 function prettyBytes(n: number): string {
   if (n >= 1 << 30) return `${(n / (1 << 30)).toFixed(2)} GiB`;
@@ -44,11 +44,14 @@ export default function FpkgConvertScreen() {
   const [inspection, setInspection] = useState<FpkgInspection | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [job, setJob] = useState<JobSnapshot | null>(null);
+  const jobId = useFpkgConversion((s) => s.jobId);
+  const job = useFpkgConversion((s) => s.job);
+  const jobError = useFpkgConversion((s) => s.error);
+  const starting = useFpkgConversion((s) => s.starting);
+  const startConversion = useFpkgConversion((s) => s.start);
+  const cancelConversion = useFpkgConversion((s) => s.cancel);
   const [installing, setInstalling] = useState(false);
   const [installResult, setInstallResult] = useState<string | null>(null);
-  const pollRef = useRef<number | null>(null);
 
   const check = useCallback(
     async (path: string, out: string) => {
@@ -70,7 +73,7 @@ export default function FpkgConvertScreen() {
   const browse = useCallback(
     async (mode: "file" | "folder") => {
       try {
-        const picked = await pickPath({
+        const opts = {
           mode,
           title:
             mode === "folder"
@@ -80,7 +83,10 @@ export default function FpkgConvertScreen() {
             mode === "file"
               ? [{ name: "Game image", extensions: ["exfat", "ffpkg"] }]
               : undefined,
-        });
+        } as const;
+        const picked = !isTauriEnv()
+          ? await pickLocalPath({ mode, title: opts.title })
+          : await pickPath(opts);
         if (picked) {
           setSource(picked);
           void check(picked, outputDir);
@@ -100,49 +106,12 @@ export default function FpkgConvertScreen() {
     [check, outputDir, tr],
   );
 
-  // Poll the job until it stops running.
-  useEffect(() => {
-    if (!jobId) return;
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const snapshot = await jobStatus(jobId);
-        if (cancelled) return;
-        setJob(snapshot);
-        if (snapshot.status === "running") {
-          pollRef.current = window.setTimeout(tick, POLL_MS);
-        } else {
-          setJobId(null);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : String(e));
-          setJobId(null);
-        }
-      }
-    };
-    pollRef.current = window.setTimeout(tick, POLL_MS);
-    return () => {
-      cancelled = true;
-      if (pollRef.current !== null) window.clearTimeout(pollRef.current);
-    };
-  }, [jobId]);
-
   const convert = useCallback(async () => {
     if (!source.trim()) return;
     setError(null);
     setInstallResult(null);
-    setJob(null);
-    try {
-      const { job_id } = await fpkg.build({
-        source: source.trim(),
-        outputDir: outputDir.trim() || undefined,
-      });
-      setJobId(job_id);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, [source, outputDir]);
+    await startConversion({ source: source.trim(), outputDir: outputDir.trim() || undefined });
+  }, [source, outputDir, startConversion]);
 
   const install = useCallback(async () => {
     if (!job?.dest || !host?.trim()) return;
@@ -162,13 +131,24 @@ export default function FpkgConvertScreen() {
     }
   }, [job, host, installStream, tr]);
 
-  const running = job?.status === "running" || jobId !== null;
+  const running = job?.status === "running" || jobId !== null || starting;
   const warnings = inspection?.checks.filter((c) => !c.ok) ?? [];
   const passed = inspection?.checks.filter((c) => c.ok) ?? [];
   // Desktop and Android can open a real-path picker; the browser build reads
   // the engine's disk instead, where a typed path (or the server picker) is
   // the only route.
-  const canBrowse = !isIOS() && (isAndroid() || "__TAURI_INTERNALS__" in window);
+  const canBrowse = !isIOS() || !isTauriEnv();
+
+  const browseOutput = useCallback(async () => {
+    try {
+      const picked = !isTauriEnv()
+        ? await pickLocalPath({ mode: "folder", title: "Choose an output folder on the engine host" })
+        : await pickPath({ mode: "folder", title: "Choose an output folder" });
+      if (picked) setOutputDir(picked);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-4 p-4">
@@ -192,7 +172,7 @@ export default function FpkgConvertScreen() {
         {tr(
           "fpkg.betaBody",
           undefined,
-          "This screen is in development and is likely to change. A package it builds can install on the console and still refuse to mount, which means the game will not start. It is not fully working yet and will not be until it leaves beta. Use it at your own risk, on games you can afford to lose, and keep the source you converted from.",
+          "Work in progress: conversion or installation may fail, and a package may install but not launch. Keep your original source and backups. Do not use this on irreplaceable data; we cannot guarantee against data loss or damage.",
         )}
       </Callout>
 
@@ -305,13 +285,25 @@ export default function FpkgConvertScreen() {
               value={outputDir}
               onChange={(e) => setOutputDir(e.target.value)}
             />
+            {canBrowse && (
+              <Button onClick={() => void browseOutput()}>
+                {tr("fpkg.browseOutput", undefined, "Browse output folder…")}
+              </Button>
+            )}
+            <div className="mt-1 text-xs text-[var(--color-muted)]">
+              {tr(
+                "fpkg.outputPathHint",
+                undefined,
+                "Relative paths resolve on the engine host and ~/ expands to its home folder. A missing output folder is created when conversion starts.",
+              )}
+            </div>
           </div>
         </div>
       </Card>
 
-      {error && (
+      {(error || jobError) && (
         <Callout tone="error" title={tr("fpkg.error", undefined, "Conversion error")}>
-          {error}
+          {error || jobError}
         </Callout>
       )}
 
@@ -394,7 +386,7 @@ export default function FpkgConvertScreen() {
               <Button
                 variant="danger"
                 onClick={() => {
-                  if (jobId) void jobCancel(jobId);
+                  void cancelConversion();
                 }}
               >
                 {tr("fpkg.cancel", undefined, "Cancel")}

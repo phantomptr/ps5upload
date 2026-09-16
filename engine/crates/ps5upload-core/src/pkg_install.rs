@@ -722,9 +722,9 @@ pub fn err_code_message(code: u32) -> Option<&'static str> {
         0x8002_0005 => Some(
             "PS5 install daemon couldn't reach our process (ESRCH) — re-send the payload and retry",
         ),
-        // SCE_PLAYGO_ERROR_CORE_INVALID_SLOT. The AppInst/PlayGo path is not
-        // compatible with this firmware/package context. Confirmed on FW 12.40
-        // in issue #277 and independently reported by singleDPI on FW 11.60.
+        // SCE_PLAYGO_ERROR_CORE_INVALID_SLOT. The code identifies the PlayGo
+        // failure but does not distinguish package state from process context.
+        // Reported on FW 12.40 in issue #277 and by singleDPI on FW 11.60.
         // Seen on FW 5.10 for a STAGED (PS5-local) install of a package that
         // stream-installs fine on the same console minutes later — i.e. the
         // installer refusing this route, not the package. Same family as
@@ -733,7 +733,7 @@ pub fn err_code_message(code: u32) -> Option<&'static str> {
             "PS5 AppInst rejected the staged (PS5-local) install (0x80B2150F) — the package was kept. Enable Settings → System → Debug Settings → Game → Package Installer, or install with Stream instead, which uses a different path.",
         ),
         0x80B2_116F => Some(
-            "PS5 AppInst/PlayGo rejected this firmware/package combination (0x80B2116F) — the staged pkg was kept; use Settings → System → Debug Settings → Game → Package Installer",
+            "Sony PlayGo rejected the install (0x80B2116F, INVALID_SLOT). The cause is not established; the staged pkg was kept. You can try Settings → System → Debug Settings → Game → Package Installer on the PS5.",
         ),
         // ShellUI-RPC tier reject — the install path that routes through
         // SceShellUI's process attributes returned 0x80B21401. Most
@@ -743,7 +743,7 @@ pub fn err_code_message(code: u32) -> Option<&'static str> {
             "PS5 ShellUI install path rejected the request — likely a firmware-point or pkg-format incompatibility",
         ),
         0xE000_0008 => Some(
-            "Staged DLC is being handed to the safer standalone DPI installer",
+            "Staged DLC or patch is being handed to the safer standalone DPI installer",
         ),
         _ => None,
     }

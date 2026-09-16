@@ -1592,6 +1592,7 @@ async function runDpiDirectInstall(
   ambiguous: boolean;
   errMessage: string;
   daemonFailed: boolean;
+  daemonReason?: string;
   rc: number;
   requestsServed: number;
   bytesServed: number;
@@ -1616,6 +1617,7 @@ async function runDpiDirectInstall(
       ok: false,
       ambiguous: false,
       daemonFailed: true,
+      daemonReason: undefined,
       rc: 0,
       requestsServed: 0,
       bytesServed: 0,
@@ -1634,6 +1636,7 @@ async function runDpiDirectInstall(
       ok: false,
       ambiguous: false,
       daemonFailed: true,
+      daemonReason: ens.reason,
       rc: 0,
       requestsServed: 0,
       bytesServed: 0,
@@ -1687,6 +1690,7 @@ async function runDpiDirectInstall(
     ok,
     ambiguous: !!resp.ambiguous,
     daemonFailed: false,
+    daemonReason: undefined,
     rc,
     requestsServed: resp.requests_served ?? 0,
     bytesServed: resp.bytes_served ?? 0,
@@ -2673,7 +2677,7 @@ const makePkgLibraryStore = () =>
           if (major >= 12) {
             set({
               busyNotice:
-                "Installing on FW 12.x… ps5upload will only report success after console-side verification. If AppInst rejects this firmware/package combination, the package stays staged for the PS5's Debug Settings Package Installer.",
+                "Installing on FW 12.x… ps5upload will only report success after console-side verification. If PlayGo rejects the install, the package stays staged for the PS5's Debug Settings Package Installer.",
             });
           }
         }
@@ -3191,10 +3195,18 @@ const makePkgLibraryStore = () =>
         //    pulls the pkg over HTTP; no staging copy lands on the PS5.
         const dpi = await runDpiDirectInstall(host, sessionId, onStatus);
         if (dpi.daemonFailed) {
+          const loaderUnavailable =
+            dpi.daemonReason === "loader_unreachable" ||
+            dpi.daemonReason === "loader_send_failed";
           return finishStreamTask({
             ok: false,
-            message: `${dpi.errMessage}. Upload & install can still use the PS5-local staged path instead.`,
-            stagedFallbackRecommended: true,
+            message: loaderUnavailable
+              ? `${dpi.errMessage}. Reload the payload loader on the PS5, then retry Stream install. Uploading the package to staging cannot repair a closed loader and may only repeat the same failure.`
+              : `${dpi.errMessage}. Upload & install can still try the PS5-local staged path instead.`,
+            // A closed :9021 is a prerequisite failure, not an HTTP-path
+            // failure. Offering staging here caused a reporter to upload a
+            // multi-GB package only to hit the same DPI hand-off again.
+            stagedFallbackRecommended: !loaderUnavailable,
             rc: dpi.rc,
             requestsServed: dpi.requestsServed,
           });

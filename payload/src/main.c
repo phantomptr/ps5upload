@@ -263,7 +263,11 @@ void runtime_apply_ucred_jailbreak(void) {
     };
     rc |= kernel_set_ucred_caps(-1, k_full_caps);
     /* sceAttr: byte 3 = 0x80 of the 8-byte attrs field (now a 32-byte
-     * array in SDK v0.41+; zero the rest). */
+     * array in SDK v0.41+; zero the rest). Byte 3, not byte 0 — the
+     * SDK's own jailbreak sets it that way and names the bit:
+     * ps5-payload-dev/sdk crt/patch.c does `attrs[3] |= 0x80; // ptrace`.
+     * kernel_set_ucred_attrs is a straight 32-byte copy to cr_sceAttr,
+     * so the array index IS the byte offset in the kernel field. */
     static const uint8_t k_attrs[32] = { 0x00, 0x00, 0x00, 0x80 };
     rc |= kernel_set_ucred_attrs(-1, k_attrs);
     /* sceAuthID — last so if earlier writes fail we at least

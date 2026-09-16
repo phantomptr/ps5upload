@@ -247,6 +247,13 @@ fn build_mode(
     std::fs::create_dir_all(&request.output_dir)?;
     let final_path = request.output_dir.join(format!("{stem}.pkg"));
     let partial = request.output_dir.join(format!("{stem}.pkg.partial"));
+    if final_path.exists() || partial.exists() {
+        return format_err(format!(
+            "output already exists: {} or {}; choose another output folder or name",
+            final_path.display(),
+            partial.display()
+        ));
+    }
     let cleanup = |e: crate::Error| -> crate::Error {
         std::fs::remove_file(&partial).ok();
         e
@@ -254,7 +261,10 @@ fn build_mode(
 
     let written = match mode {
         Mode::Streaming => {
-            let mut file = std::fs::File::create(&partial)?;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&partial)?;
             let mut read_range = |path: &str, offset: u64, len: usize| -> Result<Vec<u8>> {
                 if !sizes.contains_key(path) {
                     return format_err(format!(
@@ -446,7 +456,10 @@ fn build_mode(
             progress("writing the package");
             {
                 use std::io::Write;
-                let mut out = std::fs::File::create(&partial)?;
+                let mut out = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&partial)?;
                 out.write_all(&fih)?;
                 out.write_all(&outer.image)?;
                 out.write_all(&cnt.bytes)?;
@@ -474,6 +487,12 @@ fn build_mode(
         }
         Err(e) => return Err(cleanup(e)),
     };
+    if final_path.exists() {
+        return Err(cleanup(crate::Error::Format(format!(
+            "output appeared during conversion: {}",
+            final_path.display()
+        ))));
+    }
     std::fs::rename(&partial, &final_path)?;
     let size = std::fs::metadata(&final_path)?.len();
     debug_assert_eq!(size, written);
@@ -504,7 +523,10 @@ pub fn estimate_size(plan: &Plan) -> Result<u64> {
 #[cfg(unix)]
 pub fn free_bytes(path: &Path) -> Option<u64> {
     use std::os::unix::ffi::OsStrExt;
-    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    // A user may name an output folder that will be created by the build.
+    // Check the nearest existing parent so the preflight still catches a full disk.
+    let existing = path.ancestors().find(|ancestor| ancestor.exists())?;
+    let c = std::ffi::CString::new(existing.as_os_str().as_bytes()).ok()?;
     let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
         return None;

@@ -452,6 +452,35 @@ describe("installStream — DPI lifecycle and HTTP fallback", () => {
     });
   });
 
+  it("does not recommend a staging upload when the loader itself is unreachable", async () => {
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_metadata_split") return metadata;
+      if (cmd === "pkg_install_start")
+        return { err_code: 0, session_id: "stream-loader-down" };
+      if (cmd === "dpi_ensure")
+        return {
+          ok: false,
+          sent: false,
+          listening: false,
+          reason: "loader_unreachable",
+          error: "send dpi.elf: connection refused",
+        };
+      return {};
+    });
+
+    const result = await pkgLibraryStore(host)
+      .getState()
+      .installStream(localPath, host);
+
+    expect(result.ok).toBe(false);
+    expect(result.stagedFallbackRecommended).toBe(false);
+    expect(result.message).toMatch(/reload the payload loader/i);
+    expect(result.message).toMatch(/staging cannot repair/i);
+    expect(mockedInvoke).toHaveBeenCalledWith("pkg_install_cancel", {
+      session: "stream-loader-down",
+    });
+  });
+
   it("explains a pre-fetch Sony proxy reject and still restores/cleans up", async () => {
     mockedInvoke.mockImplementation(async (cmd: unknown) => {
       if (cmd === "pkg_metadata_split") return metadata;
@@ -1479,7 +1508,7 @@ describe("runPkgInstall — forwards deleteStaging to the engine", () => {
         return {
           err_code: 0xe0000008,
           err_message:
-            "Staged DLC is being handed to the safer standalone DPI installer",
+            "Staged DLC or patch is being handed to the safer standalone DPI installer",
           register_path: "dpi-required",
           package_type: "PS4AC",
         };

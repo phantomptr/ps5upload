@@ -49,6 +49,10 @@ pub struct BugReportArgs {
     pub dest_filename: Option<String>,
     /// Pretty-printed manifest JSON the renderer already built.
     pub report_json: String,
+    /// Apply privacy redaction to every textual archive entry, including the
+    /// raw app/engine/payload logs (not just structured report fields).
+    #[serde(default)]
+    pub redact: bool,
     /// How many minutes of app log to include (filters `app.jsonl`).
     pub window_minutes: u64,
     /// Raw PS5 kernel logs, if a console was connected (written as .txt).
@@ -81,6 +85,77 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Redact complete IPv4 addresses embedded in arbitrary diagnostic text,
+/// preserving punctuation and ports around the address.
+fn redact_diagnostic_text(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0usize;
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        if !bytes[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+            i += 1;
+        }
+        let candidate = &text[start..i];
+        let parts: Vec<&str> = candidate.split('.').collect();
+        let is_ipv4 = parts.len() == 4
+            && parts
+                .iter()
+                .all(|p| !p.is_empty() && p.len() <= 3 && p.bytes().all(|b| b.is_ascii_digit()));
+        if is_ipv4 {
+            out.push_str(&text[cursor..start]);
+            out.push_str("<IPv4>");
+            cursor = i;
+        }
+    }
+    out.push_str(&text[cursor..]);
+
+    // Socket errors conventionally bracket IPv6 hosts. Preserve the brackets
+    // and following port while hiding the address itself.
+    let ipv4_redacted = out;
+    let bytes = ipv4_redacted.as_bytes();
+    let mut ipv6_redacted = String::with_capacity(ipv4_redacted.len());
+    let mut cursor = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] != b'[' {
+            i += 1;
+            continue;
+        }
+        let Some(close_rel) = bytes[i + 1..].iter().position(|b| *b == b']') else {
+            break;
+        };
+        let close = i + 1 + close_rel;
+        let inner = &bytes[i + 1..close];
+        let is_ipv6 = inner.contains(&b':')
+            && inner
+                .iter()
+                .all(|b| b.is_ascii_hexdigit() || *b == b':' || *b == b'.');
+        if is_ipv6 {
+            ipv6_redacted.push_str(&ipv4_redacted[cursor..i]);
+            ipv6_redacted.push_str("[<IPv6>]");
+            cursor = close + 1;
+        }
+        i = close + 1;
+    }
+    ipv6_redacted.push_str(&ipv4_redacted[cursor..]);
+    ipv6_redacted
+}
+
+fn maybe_redact_text(text: &str, redact: bool) -> String {
+    if redact {
+        redact_diagnostic_text(text)
+    } else {
+        text.to_string()
+    }
 }
 
 /// Sanitize an arbitrary filename to a safe zip entry leaf (no path
@@ -165,7 +240,8 @@ fn assemble_zip(
         };
 
     // 1. Manifest — always.
-    write_entry(&mut zw, "report.json", args.report_json.as_bytes())?;
+    let report_json = maybe_redact_text(&args.report_json, args.redact);
+    write_entry(&mut zw, "report.json", report_json.as_bytes())?;
     entries += 1;
 
     // 2. README so a non-developer opening the zip knows what's inside.
@@ -179,6 +255,7 @@ fn assemble_zip(
         log_lines = lines.len();
         let mut body = lines.join("\n");
         body.push('\n');
+        let body = maybe_redact_text(&body, args.redact);
         write_entry(&mut zw, "logs/app.jsonl", body.as_bytes())?;
         entries += 1;
     }
@@ -191,7 +268,12 @@ fn assemble_zip(
             (dirs.engine.join("engine.log.old"), "logs/engine.log.old"),
         ] {
             if let Ok(data) = std::fs::read(&src) {
-                write_entry(&mut zw, name, &data)?;
+                if args.redact {
+                    let text = redact_diagnostic_text(&String::from_utf8_lossy(&data));
+                    write_entry(&mut zw, name, text.as_bytes())?;
+                } else {
+                    write_entry(&mut zw, name, &data)?;
+                }
                 entries += 1;
             }
         }
@@ -205,8 +287,14 @@ fn assemble_zip(
                 .and_then(|s| s.to_str())
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| format!("report-{crash_reports}.json"));
+            let leaf = maybe_redact_text(&leaf, args.redact);
             if let Ok(data) = std::fs::read(&p) {
-                write_entry(&mut zw, &format!("crash-reports/{leaf}"), &data)?;
+                if args.redact {
+                    let text = redact_diagnostic_text(&String::from_utf8_lossy(&data));
+                    write_entry(&mut zw, &format!("crash-reports/{leaf}"), text.as_bytes())?;
+                } else {
+                    write_entry(&mut zw, &format!("crash-reports/{leaf}"), &data)?;
+                }
                 entries += 1;
                 crash_reports += 1;
             }
@@ -217,13 +305,15 @@ fn assemble_zip(
     if args.include.ps5_logs {
         if let Some(t) = &args.klog_text {
             if !t.is_empty() {
-                write_entry(&mut zw, "ps5/klog.txt", t.as_bytes())?;
+                let text = maybe_redact_text(t, args.redact);
+                write_entry(&mut zw, "ps5/klog.txt", text.as_bytes())?;
                 entries += 1;
             }
         }
         if let Some(t) = &args.syslog_text {
             if !t.is_empty() {
-                write_entry(&mut zw, "ps5/syslog.txt", t.as_bytes())?;
+                let text = maybe_redact_text(t, args.redact);
+                write_entry(&mut zw, "ps5/syslog.txt", text.as_bytes())?;
                 entries += 1;
             }
         }
@@ -233,11 +323,12 @@ fn assemble_zip(
             if pl.text.is_empty() {
                 continue;
             }
-            let leaf = safe_leaf(&pl.name, "log");
+            let leaf = maybe_redact_text(&safe_leaf(&pl.name, "log"), args.redact);
+            let text = maybe_redact_text(&pl.text, args.redact);
             write_entry(
                 &mut zw,
                 &format!("ps5/payload-logs/{:02}_{leaf}", i + 1),
-                pl.text.as_bytes(),
+                text.as_bytes(),
             )?;
             entries += 1;
         }
@@ -246,7 +337,7 @@ fn assemble_zip(
     // 7. User-attached screenshots — index-prefixed to avoid collisions.
     if args.include.images {
         for (i, p) in args.image_paths.iter().enumerate() {
-            let leaf = safe_leaf(p, "image");
+            let leaf = maybe_redact_text(&safe_leaf(p, "image"), args.redact);
             if let Ok(data) = std::fs::read(p) {
                 write_entry(&mut zw, &format!("images/{:02}_{leaf}", i + 1), &data)?;
                 entries += 1;
@@ -296,8 +387,8 @@ diagnostics to help debug an issue — no games or app data.\n\
                        log, tx state, crash marker) — best for helper crashes.\n\
   images/              Screenshots you attached.\n\
 \n\
-IP addresses and the console serial are redacted by default. Post this zip in\n\
-the #bugs-report channel on Discord.\n";
+Textual IPv4 and bracketed IPv6 addresses and the console serial are redacted\n\
+by default. Review screenshots and personal details before sharing.\n";
 
 #[cfg(test)]
 mod tests {
@@ -352,7 +443,11 @@ mod tests {
             ),
         )
         .unwrap();
-        std::fs::write(engine.join("engine.log"), b"[engine:info] ts=1 boot\n").unwrap();
+        std::fs::write(
+            engine.join("engine.log"),
+            b"[engine:warn] connect 192.168.86.99:9021 refused\n",
+        )
+        .unwrap();
         std::fs::write(
             reports.join("ps5upload-report-123-7.json"),
             br#"{"schema":2,"trigger":"test"}"#,
@@ -365,7 +460,9 @@ mod tests {
         let args = BugReportArgs {
             dest: dest.to_string_lossy().into_owned(),
             dest_filename: None,
-            report_json: r#"{"kind":"ps5upload-bug-report"}"#.to_string(),
+            report_json: r#"{"kind":"ps5upload-bug-report","error":"connect 192.168.86.99:9021"}"#
+                .to_string(),
+            redact: true,
             window_minutes: 30,
             // Real kernel logs contain non-UTF8 / control bytes after lossy
             // decode; make sure they survive into the zip unmangled.
@@ -430,6 +527,19 @@ mod tests {
             .read_to_string(&mut klog)
             .unwrap();
         assert!(klog.contains("0x80f40030") && klog.contains('⚠'));
+        let mut engine_log = String::new();
+        zip.by_name("logs/engine.log")
+            .unwrap()
+            .read_to_string(&mut engine_log)
+            .unwrap();
+        assert!(engine_log.contains("<IPv4>:9021"));
+        assert!(!engine_log.contains("192.168.86.99"));
+        let mut report = String::new();
+        zip.by_name("report.json")
+            .unwrap()
+            .read_to_string(&mut report)
+            .unwrap();
+        assert!(!report.contains("192.168.86.99"));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -445,6 +555,7 @@ mod tests {
             dest: dest.to_string_lossy().into_owned(),
             dest_filename: None,
             report_json: "{}".to_string(),
+            redact: false,
             window_minutes: 30,
             klog_text: Some("x".to_string()),
             syslog_text: None,
@@ -469,5 +580,27 @@ mod tests {
             "only report.json + README when all unticked"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn redaction_covers_addresses_inside_free_form_logs() {
+        assert_eq!(
+            redact_diagnostic_text("connect 192.168.86.99:9021 refused"),
+            "connect <IPv4>:9021 refused"
+        );
+        assert_eq!(
+            redact_diagnostic_text("peer=10.0.0.5 local=172.16.4.20"),
+            "peer=<IPv4> local=<IPv4>"
+        );
+        // Dotted timestamps are not addresses; IP-shaped values are redacted
+        // even when an octet is invalid, matching the renderer's policy.
+        assert_eq!(
+            redact_diagnostic_text("ts=1780601834.879 bad=999.1.2.3"),
+            "ts=1780601834.879 bad=<IPv4>"
+        );
+        assert_eq!(
+            redact_diagnostic_text("connect [fe80::1234]:9114 refused"),
+            "connect [<IPv6>]:9114 refused"
+        );
     }
 }

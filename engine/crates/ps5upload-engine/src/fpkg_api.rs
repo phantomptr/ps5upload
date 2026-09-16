@@ -58,10 +58,55 @@ pub(crate) fn default_output_dir() -> PathBuf {
     home.join("Downloads").join("fpkgs")
 }
 
+fn resolve_engine_path(raw: &str) -> PathBuf {
+    let raw = raw.trim();
+    let expanded = if raw == "~" || raw.starts_with("~/") {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        if raw == "~" {
+            home
+        } else {
+            home.join(&raw[2..])
+        }
+    } else {
+        PathBuf::from(raw)
+    };
+    if expanded.is_absolute() {
+        expanded
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(expanded)
+    }
+}
+
 fn output_dir(requested: Option<&str>) -> PathBuf {
     match requested {
-        Some(dir) if !dir.trim().is_empty() => PathBuf::from(dir.trim()),
+        Some(dir) if !dir.trim().is_empty() => resolve_engine_path(dir),
         _ => default_output_dir(),
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn expands_home_and_resolves_relative_output_paths() {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        assert_eq!(
+            output_dir(Some("~/Downloads/fpkg")),
+            home.join("Downloads/fpkg")
+        );
+        assert_eq!(
+            output_dir(Some("generated/fpkg")),
+            std::env::current_dir().unwrap().join("generated/fpkg")
+        );
+        let absolute = std::env::current_dir().unwrap().join("fpkg");
+        assert_eq!(output_dir(Some(absolute.to_str().unwrap())), absolute);
     }
 }
 
@@ -72,7 +117,9 @@ pub(crate) async fn fpkg_inspect_handler(
     Json(req): Json<InspectReq>,
 ) -> impl IntoResponse {
     let out = output_dir(req.output_dir.as_deref());
-    let source = req.source.trim().to_string();
+    let source = resolve_engine_path(&req.source)
+        .to_string_lossy()
+        .into_owned();
     let result =
         tokio::task::spawn_blocking(move || build::inspect(Path::new(&source), &out)).await;
     match result {
@@ -92,7 +139,9 @@ pub(crate) async fn fpkg_build_handler(
     Json(req): Json<BuildReq>,
 ) -> impl IntoResponse {
     let out = output_dir(req.output_dir.as_deref());
-    let source = req.source.trim().to_string();
+    let source = resolve_engine_path(&req.source)
+        .to_string_lossy()
+        .into_owned();
     let source_path = PathBuf::from(&source);
 
     // Look first: a source that cannot convert should fail now, with the reason, rather

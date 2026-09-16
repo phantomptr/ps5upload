@@ -1057,12 +1057,26 @@ fn default_true() -> bool {
 /// for a completed install.
 const DLC_DPI_REQUIRED_ERR: u32 = 0xE000_0008;
 
-/// Staged DLC must never enter the main payload's AppInstUtil cascade. On FW
-/// 9.60 that call can remove an already-installed add-on before returning a
-/// rejection. Stream mode already invokes DPI directly and non-local installs
-/// have no staged path to hand to the local-path DPI route.
-fn staged_dlc_requires_dpi(is_local: bool, serve_only: bool, package_type: &str) -> bool {
-    is_local && !serve_only && package_type.ends_with("AC")
+/// Whether a staged install should skip the main payload and go straight to
+/// the standalone DPI daemon. Stream mode already invokes DPI directly, and a
+/// non-local install has no staged path to hand to the local-path DPI route.
+///
+/// DLC (`…AC`) always: on FW 9.60 the in-process call can remove an
+/// already-installed add-on before returning a rejection, so the payload's
+/// whole cascade is unsafe for it.
+///
+/// Patch (`…DP`) only when DPI is `dpi_up`: the in-process attempt is measured
+/// to fail on both of our consoles (0x80B2150F on FW 5.10, 0x80B2116F on FW
+/// 9.60), so with DPI already listening the attempt is a guaranteed rejection
+/// worth skipping. Without DPI it is NOT safe to skip — the in-process path
+/// does apply patches on some firmware points, and refusing up front would
+/// turn a working install into a failure on a console whose loader is simply
+/// not running.
+fn staged_requires_dpi(is_local: bool, serve_only: bool, package_type: &str, dpi_up: bool) -> bool {
+    if !is_local || serve_only {
+        return false;
+    }
+    package_type.ends_with("AC") || (package_type.ends_with("DP") && dpi_up)
 }
 
 /// Decide the session's `staging_path` — the file the terminal-phase handler
@@ -1594,9 +1608,31 @@ async fn install_start_handler(
     // desktop remains safe when the console still has an older payload loaded.
     // Return a typed start rejection; runPkgInstallCore then starts standalone
     // DPI and verifies the exact add-on fingerprint before showing success.
-    if staged_dlc_requires_dpi(is_local, req.serve_only, &package_type) {
+    //
+    // A staged patch is routed the same way, but only when the DPI daemon is
+    // already listening — see `staged_requires_dpi`. Probing :9040 is safe
+    // (it is our own accept loop, and `dpi_ensure` probes it the same way);
+    // probing :9021 is NOT, because a loader that gets a connect-and-close
+    // with no bytes can execute an empty image.
+    let dpi_up = if package_type.ends_with("DP") && is_local && !req.serve_only {
+        let dpi_addr = ps5upload_core::payload_lifecycle::join_host_port(
+            &strip_host_port(&req.ps5_addr),
+            ps5upload_core::payload_lifecycle::DPI_DAEMON_PORT,
+        );
+        // spawn_blocking: `port_is_open` is a synchronous connect with a
+        // 1.5 s timeout, and this handler runs on the tokio runtime.
+        tokio::task::spawn_blocking(move || {
+            ps5upload_core::payload_lifecycle::port_is_open(&dpi_addr, DPI_PROBE_TIMEOUT)
+        })
+        .await
+        .unwrap_or(false)
+    } else {
+        false
+    };
+    if staged_requires_dpi(is_local, req.serve_only, &package_type, dpi_up) {
         crate::log_info!(
-            "pkg_install: staged DLC session={} routed directly to standalone DPI; main payload skipped",
+            "pkg_install: staged {} session={} routed directly to standalone DPI; main payload skipped",
+            if package_type.ends_with("AC") { "DLC" } else { "patch" },
             session_id,
         );
         return json_ok(&InstallStartResponse {
@@ -2623,8 +2659,8 @@ async fn install_status_handler(
             // legitimately have no BGFT task_id — but a register-REJECT has no
             // task_id either, so it landed here too and had its rejection
             // silently rewritten to "err_code: 0, phase: Done". A staged
-            // install Sony refused (0x80B2116F — the firmware/package combo
-            // rejection, see err_code_message) therefore surfaced to the
+            // install Sony refused (0x80B2116F — PlayGo INVALID_SLOT,
+            // cause not established) therefore surfaced to the
             // client as a clean success with no hint that anything had been
             // declined, and no pointer to the Debug Settings workaround that
             // message carries. The progress tracker below still
@@ -5262,22 +5298,41 @@ mod tests {
         assert!(!is_synthetic_done_tier(None));
     }
 
-    // ── staged DLC routing (the FW 9.60 destructive-reject fix) ──
+    // ── staged DLC/patch routing (the FW 9.60 destructive-reject fix) ──
 
     #[test]
     fn staged_dlc_is_routed_to_dpi_before_main_payload() {
-        assert!(staged_dlc_requires_dpi(true, false, "PS4AC"));
-        assert!(staged_dlc_requires_dpi(true, false, "PS5AC"));
+        // DLC routes whether or not DPI is already listening: the in-process
+        // cascade can delete an installed add-on before it returns.
+        assert!(staged_requires_dpi(true, false, "PS4AC", false));
+        assert!(staged_requires_dpi(true, false, "PS5AC", false));
+        assert!(staged_requires_dpi(true, false, "PS4AC", true));
     }
 
     #[test]
-    fn staged_dlc_route_does_not_capture_stream_or_other_types() {
+    fn staged_patch_skips_the_main_payload_only_when_dpi_is_up() {
+        // The in-process attempt is a measured rejection on both consoles
+        // (0x80B2150F on FW 5.10, 0x80B2116F on FW 9.60), so skip it — but
+        // only while the route that does apply patches is actually up.
+        assert!(staged_requires_dpi(true, false, "PS4DP", true));
+        assert!(staged_requires_dpi(true, false, "PS5DP", true));
+        // No DPI listening: keep the in-process cascade, which does apply
+        // patches on some firmware points. Refusing here would turn a
+        // working install into a failure on a console whose loader is
+        // simply not running.
+        assert!(!staged_requires_dpi(true, false, "PS4DP", false));
+        assert!(!staged_requires_dpi(true, false, "PS5DP", false));
+    }
+
+    #[test]
+    fn staged_dpi_route_does_not_capture_stream_or_other_types() {
         // Stream already invokes DPI directly, so its serve-only setup must
         // still create an HTTP session instead of returning the staged handoff.
-        assert!(!staged_dlc_requires_dpi(true, true, "PS4AC"));
-        assert!(!staged_dlc_requires_dpi(false, false, "PS4AC"));
-        assert!(!staged_dlc_requires_dpi(true, false, "PS4DP"));
-        assert!(!staged_dlc_requires_dpi(true, false, "PS4GD"));
+        assert!(!staged_requires_dpi(true, true, "PS4AC", true));
+        assert!(!staged_requires_dpi(false, false, "PS4AC", true));
+        assert!(!staged_requires_dpi(true, true, "PS4DP", true));
+        assert!(!staged_requires_dpi(false, false, "PS4DP", true));
+        assert!(!staged_requires_dpi(true, false, "PS4GD", true));
     }
 
     // ── delete_staging / staging cleanup (the Auto-Delete data-loss fix) ──

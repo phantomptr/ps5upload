@@ -26,7 +26,10 @@ import {
 import { useTr } from "../../state/lang";
 import { useDiagSettingsStore, LOG_LEVELS } from "../../state/diagSettings";
 import { useConnectionStore } from "../../state/connection";
-import { buildDiagnosticBundle } from "../../lib/diagnosticBundle";
+import {
+  buildDiagnosticBundle,
+  redactDiagnosticText,
+} from "../../lib/diagnosticBundle";
 import { collectEngineDiagnostics } from "../../lib/engineDiagnostics";
 import {
   BROWSER_README,
@@ -317,7 +320,22 @@ export default function BugReportScreen() {
             });
           }
         }
-        await downloadBugBundle(entries, destFilename);
+        // `report.json` has structured redaction, but connection failures in
+        // every free-form log can contain the full host. Apply the privacy
+        // option once to every textual entry immediately before export so a
+        // newly-added diagnostic file cannot accidentally bypass it.
+        const exportEntries = redact
+          ? entries.map((entry) =>
+              entry.text === undefined
+                ? { ...entry, path: redactDiagnosticText(entry.path, true) }
+                : {
+                    ...entry,
+                    path: redactDiagnosticText(entry.path, true),
+                    text: redactDiagnosticText(entry.text, true),
+                  },
+            )
+          : entries;
+        await downloadBugBundle(exportEntries, destFilename);
         setResult({
           entries: entries.length,
           bytes: 0,
@@ -348,6 +366,7 @@ export default function BugReportScreen() {
           // real path it wrote (shown in the success summary).
           dest_filename: destFilename,
           report_json: JSON.stringify(manifest, null, 2),
+          redact,
           window_minutes: windowMinutes,
           klog_text: include.ps5_logs ? klog : null,
           syslog_text: include.ps5_logs ? syslog : null,
@@ -678,7 +697,7 @@ export default function BugReportScreen() {
               hint={tr(
                 "bug_report_redact_hint",
                 undefined,
-                "Strip your PS5's IP address and serial number so the zip is safe to post publicly.",
+                "Replace IP addresses in report text and logs and hide the console serial. Review the zip before sharing: attached screenshots and other personal details may still be visible.",
               )}
             />
           </div>

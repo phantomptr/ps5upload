@@ -780,6 +780,8 @@ queue_will_mount: "mount after upload",
 "fpkg.noPicker": "This build cannot browse this machine \u2014 type a path the engine can see.",
 "fpkg.pickFolder": "Choose the game folder",
 "fpkg.pickImage": "Choose an .exfat or .ffpkg image",
+"fpkg.browseOutput": "Browse output folder…",
+"fpkg.outputPathHint": "Relative paths resolve on the engine host and ~/ expands to its home folder. A missing output folder is created when conversion starts.",
 // The Convert screen says plainly that it is unfinished. Kept in the screen
 // rather than only behind the Settings toggle: the toggle explains why the
 // entry appeared, not what happens to a game someone converts with it.
@@ -2151,7 +2153,7 @@ err_install_http_fetch:
 err_install_116f_npxs:
   "PS5 installer rejected this system pkg (0x80B2116F). Sony's installer can't complete system patches (Store updates, Settings) — use Settings → Debug Settings → Game → Package Installer on the PS5 itself for these.",
 err_install_116f_game:
-  "PS5 AppInst/PlayGo rejected this firmware/package combination (0x80B2116F). This is a known high-firmware compatibility failure, not proof that the pkg is corrupt. The staged pkg was kept; install it on the PS5 from Settings → System → Debug Settings → Game → Package Installer.",
+  "Sony's PlayGo rejected this install (0x80B2116F, INVALID_SLOT). The code alone does not establish whether the cause is the package, existing install state, or the installer context. The staged pkg was kept; you can try the PS5's Settings → System → Debug Settings → Game → Package Installer.",
 err_install_1401:
   "PS5's ShellUI install path rejected the request (0x80B21401). Usually paired with another tier failure on FW 9.60 when the firmware point lacks the BGFT registers we depend on. Try the latest payload from Connection → Send payload, or install via the PS5's own Debug Settings panel.",
 err_install_2101:

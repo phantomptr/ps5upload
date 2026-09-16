@@ -163,6 +163,7 @@ extern int sceAppInstUtilCancelInstall(const char *content_id);
 static pthread_once_t g_appinst_init_once = PTHREAD_ONCE_INIT;
 static void appinst_init_locked(void) {
     int rc = sceAppInstUtilInitialize();
+    fprintf(stderr, "[bgft] sceAppInstUtilInitialize rc=0x%08X\n", (unsigned)rc);
     if (rc != 0) {
         fprintf(stderr,
                 "[bgft] sceAppInstUtilInitialize returned 0x%08X "
@@ -398,40 +399,45 @@ typedef struct {
     int valid;
 } ucred_snapshot_t;
 
-static void ucred_snapshot(pid_t pid, ucred_snapshot_t *s) {
+static int ucred_snapshot(pid_t pid, ucred_snapshot_t *s) {
     memset(s, 0, sizeof(*s));
     s->uid     = kernel_get_ucred_uid(pid);
     s->ruid    = kernel_get_ucred_ruid(pid);
     s->svuid   = kernel_get_ucred_svuid(pid);
     s->rgid    = kernel_get_ucred_rgid(pid);
     s->svgid   = kernel_get_ucred_svgid(pid);
-    kernel_get_ucred_caps(pid, s->caps);
-    kernel_get_ucred_attrs(pid, s->attrs);
+    if (kernel_get_ucred_caps(pid, s->caps) != 0) return -1;
+    if (kernel_get_ucred_attrs(pid, s->attrs) != 0) return -1;
     s->rootdir = kernel_get_proc_rootdir(pid);
     s->jaildir = kernel_get_proc_jaildir(pid);
+    if (!s->rootdir || !s->jaildir) return -1;
     s->valid   = 1;
+    return 0;
 }
 
 /* Escalate to root + sandbox-escaped + all-caps, exactly as the DPI daemon's
  * jb_escalate_pid does (authid is left to the existing swap). */
-static void ucred_escalate_full(pid_t pid) {
-    kernel_set_ucred_uid(pid, 0);
-    kernel_set_ucred_ruid(pid, 0);
-    kernel_set_ucred_svuid(pid, 0);
-    kernel_set_ucred_rgid(pid, 0);
-    kernel_set_ucred_svgid(pid, 0);
+static int ucred_escalate_full(pid_t pid) {
+    int rc = 0;
+    if (kernel_set_ucred_uid(pid, 0) != 0) rc = -1;
+    if (kernel_set_ucred_ruid(pid, 0) != 0) rc = -1;
+    if (kernel_set_ucred_svuid(pid, 0) != 0) rc = -1;
+    if (kernel_set_ucred_rgid(pid, 0) != 0) rc = -1;
+    if (kernel_set_ucred_svgid(pid, 0) != 0) rc = -1;
     intptr_t root = kernel_get_root_vnode();
-    if (root) {
-        kernel_set_proc_rootdir(pid, root);
-        kernel_set_proc_jaildir(pid, root);
+    if (!root) rc = -1;
+    else {
+        if (kernel_set_proc_rootdir(pid, root) != 0) rc = -1;
+        if (kernel_set_proc_jaildir(pid, root) != 0) rc = -1;
     }
     uint8_t caps[16];
     memset(caps, 0xff, sizeof(caps));
-    kernel_set_ucred_caps(pid, caps);
+    if (kernel_set_ucred_caps(pid, caps) != 0) rc = -1;
     uint8_t attrs[32];
     memset(attrs, 0, sizeof(attrs));
     attrs[0] = 0x80;
-    kernel_set_ucred_attrs(pid, attrs);
+    if (kernel_set_ucred_attrs(pid, attrs) != 0) rc = -1;
+    return rc;
 }
 
 static void ucred_restore(pid_t pid, const ucred_snapshot_t *s) {
@@ -552,11 +558,60 @@ static int appinst_install_start(const char *url,
             fw_major, (unsigned long long)install_authid,
             install_authid == PS5_SYSTEM_INSTALL_AUTHID ? "SYSTEM" : "ShellCore");
 
-    /* Init Sony's installer subsystem under the chosen authid. The
-     * pthread_once guard makes this idempotent across installs; the
-     * FIRST install's pthread_once-controlled invocation sets up
-     * Sony's IPC handles correctly (under SYSTEM on FW 10+, exactly as
-     * elf-arsenal inits from its escalated process). */
+    /* Record only capability SHAPE, not raw credential bytes or pointers.
+     * This distinguishes a SYSTEM-authid-only call from DPI's full-root
+     * process context in a redacted bug report without leaking kernel data. */
+    {
+        pid_t self = getpid();
+        uint8_t caps[16] = {0};
+        uint8_t attrs[32] = {0};
+        int caps_ok = kernel_get_ucred_caps(self, caps) == 0;
+        int attrs_ok = kernel_get_ucred_attrs(self, attrs) == 0;
+        intptr_t root = kernel_get_root_vnode();
+        int all_caps = caps_ok;
+        if (caps_ok) {
+            for (size_t i = 0; i < sizeof(caps); i++) {
+                if (caps[i] != 0xff) { all_caps = 0; break; }
+            }
+        }
+        fprintf(stderr,
+                "[bgft] AppInst pre-escalation caller: uid=%u root_jail=%d "
+                "all_caps=%d high_attr=%d "
+                "full_escalate_opt_in=%d\n",
+                (unsigned)kernel_get_ucred_uid(self),
+                root && kernel_get_proc_rootdir(self) == root &&
+                    kernel_get_proc_jaildir(self) == root,
+                all_caps, attrs_ok && attrs[0] == 0x80,
+                bgft_full_escalate_enabled(fw_major, getenv("PS5UPLOAD_FULL_ESCALATE")));
+    }
+
+    /* Experimental full escalation (default OFF; see helpers above). DPI
+     * escalates BEFORE AppInst initialization; doing it only around the
+     * InstallByPackage call fails to reproduce DPI's IPC peer context. */
+    int escalated = bgft_full_escalate_enabled(fw_major, getenv("PS5UPLOAD_FULL_ESCALATE"));
+    ucred_snapshot_t cred_snap = {0};
+    if (escalated) {
+        pid_t self = getpid();
+        if (ucred_snapshot(self, &cred_snap) != 0 ||
+            ucred_escalate_full(self) != 0) {
+            ucred_restore(self, &cred_snap);
+            authid_release_shellcore(saved_authid, "InstallByPackage");
+            pthread_mutex_unlock(&kernel_rw_lock);
+            pthread_mutex_unlock(&sony_api_lock);
+            if (pre_tid >= 0 && pre_tid_fresh) appinst_task_release(pre_tid);
+            *out_err_code = BGFT_ERR_DPI_REQUIRED;
+            fprintf(stderr, "[bgft] PS5UPLOAD_FULL_ESCALATE: failed; "
+                            "credentials restored, AppInst not called\n");
+            return -1;
+        }
+        fprintf(stderr, "[bgft] PS5UPLOAD_FULL_ESCALATE: escalated ucred "
+                        "before AppInst init (fw_major=%d)\n", fw_major);
+    }
+
+    /* The first Init now sees the chosen authid and, when opted in, full
+     * ucred. pthread_once means an earlier install may already have
+     * initialized AppInst under a different context; only a freshly loaded
+     * payload can isolate that variable in a hardware A/B test. */
     pthread_once(&g_appinst_init_once, appinst_init_locked);
 
     /* Direct testing showed adding sceAppInstUtilCancelInstall HERE
@@ -567,19 +622,6 @@ static int appinst_install_start(const char *url,
      * needs for the immediately-following InstallByPackage on the
      * same authid. Keep cancel ONLY in the shellui-rpc tier where
      * it's been proven non-destructive. */
-
-    /* Experimental full escalation (default OFF; see helpers above). Snapshot,
-     * escalate, install, restore — all inside the existing lock window so no
-     * other thread sees the escalated ucred. */
-    int escalated = bgft_full_escalate_enabled(fw_major, getenv("PS5UPLOAD_FULL_ESCALATE"));
-    ucred_snapshot_t cred_snap = {0};
-    if (escalated) {
-        pid_t self = getpid();
-        ucred_snapshot(self, &cred_snap);
-        ucred_escalate_full(self);
-        fprintf(stderr, "[bgft] PS5UPLOAD_FULL_ESCALATE: escalated ucred for "
-                        "InstallByPackage (fw_major=%d)\n", fw_major);
-    }
 
     int rc = sceAppInstUtilInstallByPackage(&meta, &pkg_info, &playgo);
 

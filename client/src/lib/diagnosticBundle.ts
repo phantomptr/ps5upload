@@ -20,7 +20,7 @@ import { useEditSessionStore } from "../state/editSession";
  *   - Schema-evolves cleanly — adding a field doesn't break old reports
  *
  * Privacy:
- *   - Host IPs are redacted to /16 by default (`192.168.X.X`).
+ *   - Host IPs are fully redacted by default (`<IPv4>`).
  *     The user can untick "redact" before exporting, but the default
  *     errs on the side of not publishing LAN topology to GitHub.
  *   - Per-PS5 notes are kept (the user wrote them; they own them and
@@ -150,18 +150,41 @@ export interface DiagnosticBundle {
 }
 
 /**
- * Exported for testing. Redacts the last two octets of an IPv4
- * address; preserves IPv6/hostnames as a length-only placeholder.
+ * Exported for testing. Hides the complete IPv4 address;
+ * preserves IPv6/hostnames as a length-only placeholder.
  */
 export function redactHost(host: string | null | undefined, redact: boolean): string {
   if (!host) return "";
   if (!redact) return host;
-  // IPv4: keep first two octets, redact last two.
+  // Do not retain the LAN prefix: a /16 still identifies a local network.
   const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (m) return `${m[1]}.${m[2]}.X.X`;
+  if (m) return "<IPv4>";
   // IPv6 / hostname: hash by length only — preserves shape without
   // revealing the actual address.
   return `<host:${host.length}-char>`;
+}
+
+/**
+ * Redact addresses embedded in free-form diagnostic text.
+ *
+ * Structured host fields go through `redactHost`, but bug-report logs also
+ * contain addresses inside error strings (`connect 192.168.1.50:9021`, for
+ * example). Those files used to be copied verbatim, so checking "Redact IPs"
+ * only protected report fields and not the logs beside them.
+ */
+export function redactDiagnosticText(text: string, redact: boolean): string {
+  if (!redact || !text) return text;
+
+  // Avoid lookbehind so this remains compatible with older Android WebViews.
+  // Redact the entire address, including its network prefix.
+  const ipv4 = text.replace(
+    /(^|[^0-9.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?=$|[^0-9.])/g,
+    (_whole, prefix: string) => `${prefix}<IPv4>`,
+  );
+
+  // Socket errors render IPv6 hosts in brackets. Redact the host while
+  // retaining a following port, e.g. [fe80::1]:9021 -> [<IPv6>]:9021.
+  return ipv4.replace(/\[[0-9a-f:.]*:[0-9a-f:.]+\]/gi, "[<IPv6>]");
 }
 
 export function buildDiagnosticBundle(opts: {

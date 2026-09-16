@@ -258,6 +258,19 @@ fn a_second_build_reports_warnings_but_still_verifies() {
 }
 
 #[test]
+fn a_build_never_overwrites_an_existing_package() {
+    let source_dir = TempDir::new("preserve-source");
+    let output_dir = TempDir::new("preserve-out");
+    write_tree(source_dir.path());
+    let request = BuildRequest::new(source_dir.path(), output_dir.path());
+    let first = build::build(&request, &mut |_| {}).unwrap();
+    let original = std::fs::read(&first.path).unwrap();
+    let error = build::build(&request, &mut |_| {}).err().unwrap();
+    assert!(error.to_string().contains("output already exists"));
+    assert_eq!(std::fs::read(&first.path).unwrap(), original);
+}
+
+#[test]
 fn a_source_without_a_content_id_is_refused() {
     let source_dir = TempDir::new("bad-source");
     let output_dir = TempDir::new("bad-out");
