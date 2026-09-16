@@ -4,6 +4,70 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.29.0
+
+**Bug reports stop leaking your network, and a conversion survives leaving the
+page.**
+
+### Bug reports redact the logs, not just the summary
+
+- **"Redact IP addresses" now covers every text file in the zip.** It used to
+  apply only to the structured fields in `report.json`, so the engine log,
+  the payload logs, crash reports, klog and syslog went in verbatim — a
+  connection error reading `connect 192.168.1.50:9021 refused` published the
+  full address anyway. Every textual entry is now redacted as the archive is
+  written, on desktop and in the self-hosted browser build alike.
+- **Addresses are hidden completely** (`<IPv4>`, `[<IPv6>]`) instead of being
+  shortened to `192.168.X.X`, which still identified the network. Ports and
+  surrounding punctuation are preserved so the logs stay readable.
+- **Screenshots are still not scrubbed, and cannot be automatically.** The
+  page now says so next to the option rather than implying the zip is clean.
+
+### Convert to FPKG
+
+- **A conversion no longer dies when you navigate away.** The job always ran
+  to completion in the engine; what stopped was the page polling for it, so
+  the result vanished with the screen. Tracking now lives outside the page,
+  and finishing or failing raises a notification that links back to Convert.
+- **You can pick the output folder**, including browsing the engine host's
+  disk in the browser build.
+- **Relative paths and `~` work.** They resolve on the machine running the
+  engine, and a missing output folder is created when the conversion starts.
+- **An existing package is never overwritten.** A conversion that would land
+  on an existing output name now stops with an error instead of replacing the
+  file. Re-running a conversion previously destroyed the package it had
+  produced the first time.
+- **The work-in-progress warning says what it means**: a package can install
+  and still refuse to launch, so keep the source you converted from.
+
+### Install failures say what actually happened
+
+- **Stream install no longer sends you off to upload a multi-GB package when
+  the real problem is the loader.** If the installer helper could not be
+  delivered because port 9021 was closed, the app offered "Upload & install"
+  as a recovery — which cannot reopen the loader and only repeated the same
+  failure after a full upload. It now tells you to reload the payload loader
+  and retry Stream.
+- **`0x80B2116F` is described honestly.** The old text called it a known
+  firmware/package incompatibility. The code turns up across several packages
+  and several firmwares, and the cause is not established, so the message now
+  says that while still pointing at the PS5's own Debug Settings → Package
+  Installer route.
+- **An update skips a step we already know is rejected.** A staged patch used
+  to be sent to the helper first, which tried an in-process install measured as
+  failing on both tested consoles (`0x80B2150F` on 5.10, `0x80B2116F` on
+  9.60), and only then fell back to the standalone installer. It now goes
+  straight to that installer — but *only* when it is already running, so a
+  console whose loader is not loaded keeps the previous path rather than
+  failing early on hardware where the in-process route does work.
+
+### Payload
+
+- The opt-in installer experiment (`PS5UPLOAD_FULL_ESCALATE`) now escalates
+  before AppInst initializes, matching the standalone DPI daemon's order, and
+  restores the original credentials and aborts if any step fails. It remains
+  off by default.
+
 ## 5.28.0
 
 **Screens wait for a console instead of pretending, and every on/off setting
