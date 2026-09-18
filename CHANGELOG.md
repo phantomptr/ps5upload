@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 5.30.0
 
 **Install a game straight from a link, at your line speed — and a fix for
 installs that died halfway.**
