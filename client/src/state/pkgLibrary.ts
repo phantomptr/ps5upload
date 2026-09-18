@@ -218,6 +218,10 @@ export interface PkgEntry {
    * for PS5 FIH packages; PS4 CNT packages remain unknown unless cryptographically
    * inspected rather than being guessed from their extension. */
   authenticity?: "fake_debug" | "retail" | "unknown";
+  /** Problems the parser found in the package itself — e.g. a param.json DRM
+   *  type the console will refuse to run. Advisory: shown on the row so the
+   *  user learns before a long upload and install, never a reason to block. */
+  warnings?: string[];
   /** Transient per-row state (never persisted; recomputed each session). */
   status: PkgStatus;
   /** Bytes transferred so far (upload) — drives the row progress bar. */
@@ -535,6 +539,9 @@ interface PkgPathMeta {
   category?: string;
   /** Signing class captured while the computer-side package was parsed. */
   authenticity?: "fake_debug" | "retail" | "unknown";
+  /** Parser warnings captured at the same time, so the row keeps showing them
+   *  after a refresh-from-disk (the console-side pkg is never re-parsed). */
+  warnings?: string[];
 }
 
 function loadPathMetaCache(): Record<string, PkgPathMeta> {
@@ -735,6 +742,13 @@ function pkgError(e: unknown): string {
   return humanizePs5Error(e instanceof Error ? e.message : String(e));
 }
 
+/** Where a stream install gets its bytes. A local `.pkg` is read off this
+ *  computer's disk; a link is fetched from its origin by the engine (several
+ *  connections at once) and re-served to the console. Everything downstream —
+ *  the DPI hand-off, the transfer tracking, the completion check — is the same
+ *  for both, which is why they share one code path. */
+export type StreamInstallSource = string | { remoteUrl: string };
+
 interface PkgLibraryState {
   /** Library contents, derived from the on-PS5 dir + transient row state. */
   entries: PkgEntry[];
@@ -776,7 +790,7 @@ interface PkgLibraryState {
    *  Shares the `installing` lock with `install()`.
    *  Returns `{ ok, message?, mayNotLaunch? }`. */
   installStream: (
-    localPcPath: string,
+    source: StreamInstallSource,
     host: string,
   ) => Promise<{
     ok: boolean;
@@ -791,6 +805,16 @@ interface PkgLibraryState {
     /** Number of HTTP requests that reached ps5upload's pkg-host listener. */
     requestsServed?: number;
   }>;
+  /** Install a package straight from an HTTP(S) link. The engine fetches it
+   * from the origin over several connections at once and re-serves it to the
+   * console on the LAN, so the download runs at the PC's line speed instead
+   * of Sony's single-stream rate, and nothing is staged on either machine.
+   * Delegates to `installStream`, so it shares the `installing` lock and the
+   * same hand-off + verification. */
+  installUrl: (
+    url: string,
+    host: string,
+  ) => ReturnType<PkgLibraryState["installStream"]>;
   /** Install every staged, not-yet-installed, idle row sequentially, in
    *  base → update → DLC order (`pkgEntryInstallOrder`). Each item runs the
    *  full readiness-gated `install()` cascade; one failure doesn't abort the
@@ -1030,7 +1054,14 @@ const PKG_VERIFY_SAFETY_CAP_MS = 3 * 60 * 60 * 1000;
 /** DPI's synchronous rc=0 is only acceptance. Once the main payload is
  * restored, allow enough time for its live installed-artifact inventory to
  * observe the exact patch/DLC/base that landed. */
-const DPI_EXACT_VERIFY_SAFETY_CAP_MS = 3 * 60 * 1000;
+/** How long the post-install check waits with NO sign of the install writing
+ *  before giving up. The window restarts on any growth, so this bounds a
+ *  *stalled* install, never a slow one. */
+const DPI_VERIFY_IDLE_MS = 3 * 60 * 1000;
+/** Absolute ceiling for the post-install check, so a console that writes
+ *  forever cannot pin the UI open indefinitely. Sized for a ~200-300 GB title
+ *  on a slow internal copy. */
+const DPI_VERIFY_MAX_MS = 4 * 60 * 60 * 1000;
 
 /** Re-install guidance appended when Sony fails the async install — mirrors the
  *  may-not-launch copy so the user has a concrete next step. */
@@ -1217,7 +1248,15 @@ async function verifyInstallCompleted(
   // No session id ⇒ older engine (or a test harness) that can't report status.
   // Acceptance without a status session is not proof of completion.
   if (!session) return unverified();
-  const safetyDeadline = Date.now() + PKG_VERIFY_SAFETY_CAP_MS;
+  // Backstop only — the ENGINE decides when an install has genuinely stalled
+  // (it watches real disk progress and reports `stalled`). This deadline exists
+  // so a forgotten session can't be watched forever, so it must be measured
+  // from the last sign of progress rather than from the start: a 200-300 GB
+  // title on a modest link legitimately runs past any fixed clock, and a fixed
+  // one would stop watching a perfectly healthy install and report it
+  // unverified.
+  let safetyDeadline = Date.now() + PKG_VERIFY_SAFETY_CAP_MS;
+  let bestProgress = 0;
   let pollErrors = 0;
   // When the engine stopped answering, and the last state we managed to read.
   // Both only matter while it is unreachable; see the catch below.
@@ -1261,6 +1300,16 @@ async function verifyInstallCompleted(
           acceptedUnverified: !!s.accepted_unverified,
         };
         onState?.(lastSample);
+        // Any forward movement — bytes landing on the console, or ranges
+        // being pulled from us — restarts the watch window.
+        const progressed = Math.max(
+          lastSample.installedBytes,
+          lastSample.transferBytes,
+        );
+        if (progressed > bestProgress) {
+          bestProgress = progressed;
+          safetyDeadline = Date.now() + PKG_VERIFY_SAFETY_CAP_MS;
+        }
       }
       if (s.phase === "error") {
         // Distinguish a stall (flatlined, pkg kept, retry) from a Sony-reported
@@ -1358,7 +1407,8 @@ async function verifyInstallCompleted(
  * artifact to the exact source identity. This closes the old gap where DPI
  * could apply a patch successfully but the UI still said "couldn't verify" —
  * or, worse, a pre-existing base/different patch could be mistaken for it. */
-async function verifyDpiInstalledArtifact(
+/** Exported for tests: the progress-aware post-install check. */
+export async function verifyDpiInstalledArtifact(
   host: string,
   contentId: string | null,
   packageType: string,
@@ -1372,9 +1422,24 @@ async function verifyDpiInstalledArtifact(
     : packageType.endsWith("AC")
       ? "ac"
       : "gd";
-  const deadline = Date.now() + DPI_EXACT_VERIFY_SAFETY_CAP_MS;
+  // Wait on PROGRESS, not on a fixed clock. A flat 3-minute cap made this
+  // size-dependent in exactly the way users reported: a small package finished
+  // inside the window, while a large one was still being written when we gave
+  // up, so ps5upload showed an error for an install the PS5 went on to
+  // complete — and, because an unverified install must keep its staged copy,
+  // left a package the user then had to delete by hand.
+  //
+  // Sony writes the title's files as it installs, so a growing artifact is
+  // proof the install is alive. While it grows we keep waiting; we only stop
+  // after the install has been completely still for `DPI_VERIFY_IDLE_MS`, or
+  // at an absolute ceiling that a genuinely huge install should never reach.
+  const startedAt = Date.now();
+  const hardDeadline = startedAt + DPI_VERIFY_MAX_MS;
+  let idleDeadline = startedAt + DPI_VERIFY_IDLE_MS;
+  let bestSeenBytes = 0;
+  let announcedProgress = false;
   onStatus?.("Verifying the exact installed package on the PS5…");
-  while (Date.now() < deadline) {
+  while (Date.now() < idleDeadline && Date.now() < hardDeadline) {
     try {
       const artifacts = await pkgInstalledInventory(
         transferAddr(host),
@@ -1395,11 +1460,41 @@ async function verifyDpiInstalledArtifact(
       ) {
         return true;
       }
+      // Not the finished article yet — but is it being written? Any growth in
+      // this title's files resets the idle window, so a slow install is waited
+      // out instead of being called a failure.
+      const seenBytes = artifacts.reduce((sum, a) => sum + (a.size || 0), 0);
+      if (seenBytes > bestSeenBytes) {
+        bestSeenBytes = seenBytes;
+        idleDeadline = Date.now() + DPI_VERIFY_IDLE_MS;
+        if (expected?.size && expected.size > 0) {
+          const pct = Math.min(
+            99,
+            Math.floor((seenBytes / expected.size) * 100),
+          );
+          onStatus?.(
+            `The PS5 is still writing ${titleId} (${pct}%) — waiting for it to finish…`,
+          );
+        } else {
+          onStatus?.(`The PS5 is still writing ${titleId} — waiting…`);
+        }
+        announcedProgress = true;
+      }
     } catch {
       // The main payload is still restarting after DPI replaced it. Retry until
       // it is reachable; a transient restore gap is expected, not a failure.
+      // It also must not burn the idle window — we cannot see progress while
+      // the payload is down, so treat the blind period as neutral.
+      idleDeadline = Math.max(idleDeadline, Date.now() + DPI_VERIFY_IDLE_MS);
     }
     await sleep(PKG_VERIFY_POLL_MS);
+  }
+  if (announcedProgress) {
+    log.info(
+      "install",
+      `verify gave up after ${Math.round((Date.now() - startedAt) / 1000)}s ` +
+        `with ${bestSeenBytes} bytes written for ${titleId}`,
+    );
   }
   return false;
 }
@@ -1570,8 +1665,13 @@ async function runDpiInstall(
  * `/pkg-host/` URL for an existing session instead of a staged PS5 path.
  * The daemon pulls the pkg over HTTP — no staging copy is uploaded to
  * the PS5 first. Mirrors `runDpiInstall`'s daemon-bring-up + restore
- * dance (the DPI ELF still replaces the main payload on the loader), but
- * sends a session_id rather than a local path.
+ * dance, but sends a session_id rather than a local path.
+ *
+ * The engine prefers an etaHEN / elf-arsenal "DPI v2" bridge if one is already
+ * listening on the console (:12800). When it is, nothing is sent to the payload
+ * loader at all and the user's running payloads are left alone; our own DPI ELF
+ * — which does replace the main payload for the duration — is only used when no
+ * bridge is there. `bridge` says which one ran.
  *
  * The caller MUST have already registered the session with the engine
  * (via `pkg_install_start` with `localPs5Path: null` and a PC-side file
@@ -1596,6 +1696,9 @@ async function runDpiDirectInstall(
   rc: number;
   requestsServed: number;
   bytesServed: number;
+  /** "dpiv2" = an existing etaHEN/Arsenal bridge did it, no payload swap.
+   *  "ps5upload" = our own DPI daemon. Undefined on failures before hand-off. */
+  bridge?: string;
 }> {
   const ip = hostOf(host);
   log.info(
@@ -1650,6 +1753,7 @@ async function runDpiDirectInstall(
     ambiguous?: boolean;
     requests_served?: number;
     bytes_served?: number;
+    bridge?: string;
   } = {};
   try {
     for (let attempt = 1; attempt <= DPI_MAX_ATTEMPTS; attempt++) {
@@ -1682,7 +1786,18 @@ async function runDpiDirectInstall(
       });
     }
   } finally {
-    await restoreMainPayload(ip);
+    // Only restore what we actually displaced. When an etaHEN / elf-arsenal
+    // bridge was already listening, `dpi_ensure` sent nothing, so the main
+    // payload is still running — re-sending it here would cause the very
+    // disruption using the bridge is meant to avoid.
+    if (ens.sent) {
+      await restoreMainPayload(ip);
+    } else {
+      log.info(
+        "install",
+        "DPI: nothing was sent to the loader, leaving the running payloads alone",
+      );
+    }
   }
   const ok = !!resp.ok;
   const rc = (resp.rc ?? 0) >>> 0;
@@ -1692,6 +1807,7 @@ async function runDpiDirectInstall(
     daemonFailed: false,
     daemonReason: undefined,
     rc,
+    bridge: resp.bridge,
     requestsServed: resp.requests_served ?? 0,
     bytesServed: resp.bytes_served ?? 0,
     errMessage: ok
@@ -2261,6 +2377,7 @@ const makePkgLibraryStore = () =>
               category: cached?.category ?? categoryForSubdir(subdir),
               platform: platformFromTitleId(titleIdFromContentId(contentId)),
               authenticity: cached?.authenticity,
+              warnings: cached?.warnings,
               status: "idle" as PkgStatus,
             });
           }
@@ -2356,6 +2473,9 @@ const makePkgLibraryStore = () =>
         const appVer = meta.head?.app_ver || undefined;
         const fingerprint = meta.head?.fingerprint || undefined;
         const authenticity = meta.head?.authenticity;
+        const parseWarnings = meta.head?.warnings?.length
+          ? meta.head.warnings
+          : undefined;
 
         // 2. Name the on-PS5 file `<ContentID>.pkg` (Sony's installer keys on the
         //    basename matching the ContentID — see lib/pkgStagingPath). A base
@@ -2379,6 +2499,7 @@ const makePkgLibraryStore = () =>
           appVer,
           fingerprint,
           authenticity,
+          warnings: parseWarnings,
         });
 
         // Refuse to re-add a pkg that's already uploading to the same path:
@@ -2987,21 +3108,62 @@ const makePkgLibraryStore = () =>
       );
     },
 
-    async installStream(localPcPath, host) {
+    async installUrl(url, host) {
+      const trimmed = url.trim();
+      let parsed: URL;
+      try {
+        parsed = new URL(trimmed);
+      } catch {
+        return {
+          ok: false,
+          message: "Enter a valid HTTP or HTTPS package URL.",
+        };
+      }
+      // The engine re-validates (it is also a plain HTTP API), but rejecting
+      // here keeps the user's mistake a local message instead of a round trip.
+      const hasControlChars = [...trimmed].some((ch) => {
+        const code = ch.charCodeAt(0);
+        return code < 32 || code === 127;
+      });
+      if (
+        !["http:", "https:"].includes(parsed.protocol) ||
+        !parsed.hostname ||
+        parsed.hash ||
+        hasControlChars ||
+        new TextEncoder().encode(trimmed).length > 4093
+      ) {
+        return {
+          ok: false,
+          message:
+            "Enter an HTTP(S) package URL with no fragment or control characters (max 4093 bytes).",
+        };
+      }
+      return get().installStream({ remoteUrl: trimmed }, host);
+    },
+    async installStream(source, host) {
       if (!host?.trim()) {
         return { ok: false, message: "No PS5 host selected." };
       }
       if (get().installing) {
         return { ok: false, message: "Another install is in progress." };
       }
+      // A link and a local file differ only in where the bytes come from and
+      // what we call them; the install itself is one path.
+      const remoteUrl = typeof source === "string" ? null : source.remoteUrl;
+      const localPcPath = typeof source === "string" ? source : null;
+      const sourceName = remoteUrl
+        ? basenameOf(new URL(remoteUrl).pathname) || "package"
+        : basenameOf(localPcPath ?? "") || "package";
       const tasks = useTaskStore.getState();
       const taskId = tasks.registerTask({
         kind: "pkg-dpi-install",
-        origin: "pkg.stream-install",
-        label: `Stream-installing ${basenameOf(localPcPath) || "package"}`,
+        origin: remoteUrl ? "pkg.url-install" : "pkg.stream-install",
+        label: `Stream-installing ${sourceName}`,
         detail: "Waiting to prepare the package…",
         consoleId: host,
-        payload: { localPcPath },
+        // Never record the URL: an install link can carry a signed token and
+        // task payloads reach the diagnostic bundle.
+        payload: remoteUrl ? { remote: true } : { localPcPath },
         status: "queued",
       });
       let taskFinished = false;
@@ -3080,27 +3242,66 @@ const makePkgLibraryStore = () =>
         // 1. Parse the PC-side pkg header for content_id + category. The
         //    engine needs the content_id to canonicalise the pkg-host URL
         //    filename (Sony's installer cross-checks it against the header).
-        let meta: SplitParseResponse;
-        try {
-          meta = (await invoke("pkg_metadata_split", {
-            path: localPcPath,
-          })) as SplitParseResponse;
-        } catch (e) {
-          return finishStreamTask({
-            ok: false,
-            message: `Couldn't read .pkg header: ${pkgError(e)}`,
-          });
+        // For a link the engine identifies the package by reading a handful
+        // of byte ranges from the origin — the same proxy the install will
+        // then stream through — so a 100 GB URL is named in one round trip
+        // and an HTML share page is rejected before anything is committed.
+        let head: {
+          content_id?: string;
+          title?: string;
+          category?: string;
+          platform?: string;
+          package_type?: string;
+          fingerprint?: string;
+        };
+        let totalBytes: number;
+        if (remoteUrl) {
+          try {
+            const probe = (await invoke("pkg_remote_probe", {
+              url: remoteUrl,
+            })) as {
+              total_size?: number;
+              content_id?: string;
+              title?: string;
+              category?: string;
+              platform?: string;
+              package_type?: string;
+              fingerprint?: string;
+            };
+            head = probe;
+            totalBytes = probe.total_size ?? 0;
+          } catch (e) {
+            return finishStreamTask({
+              ok: false,
+              message: `Couldn't read a package from that link: ${pkgError(e)}`,
+            });
+          }
+        } else {
+          let meta: SplitParseResponse;
+          try {
+            meta = (await invoke("pkg_metadata_split", {
+              path: localPcPath,
+            })) as SplitParseResponse;
+          } catch (e) {
+            return finishStreamTask({
+              ok: false,
+              message: `Couldn't read .pkg header: ${pkgError(e)}`,
+            });
+          }
+          if ((meta.parts?.length ?? 1) > 1) {
+            return finishStreamTask({
+              ok: false,
+              message:
+                "Split .pkg sets aren't supported by the streaming installer — pick the single lead .pkg.",
+            });
+          }
+          head = meta.head ?? {};
+          totalBytes = meta.total_size ?? 0;
         }
-        if ((meta.parts?.length ?? 1) > 1) {
-          return finishStreamTask({
-            ok: false,
-            message:
-              "Split .pkg sets aren't supported by the streaming installer — pick the single lead .pkg.",
-          });
-        }
-        const contentId = meta.head?.content_id ?? "";
-        const label = meta.head?.title || contentId || basenameOf(localPcPath);
-        const totalBytes = meta.total_size ?? 0;
+        const contentId = head.content_id ?? "";
+        const label = head.title || contentId || sourceName;
+        const resolvedPackageType =
+          head.package_type || pkgTypeForCategory(head.category, head.platform);
         useTaskStore.getState().updateTask(taskId, {
           label: `Stream-installing ${label}`,
           detail: "Preparing the PS5 installer…",
@@ -3111,7 +3312,9 @@ const makePkgLibraryStore = () =>
         });
 
         set({
-          busyNotice: `Stream-installing ${label} (beta) — the PS5 pulls the pkg directly over HTTP, no staging upload…`,
+          busyNotice: remoteUrl
+            ? `Installing ${label} from the link (beta) — this computer downloads it over several connections at once and feeds the PS5, nothing is staged…`
+            : `Stream-installing ${label} (beta) — the PS5 pulls the pkg directly over HTTP, no staging upload…`,
         });
 
         // 2. Register the session with the engine. Passing `localPs5Path:
@@ -3131,11 +3334,9 @@ const makePkgLibraryStore = () =>
         // legitimate repair, so a hit is reported, not refused.
         const pre = contentId
           ? await pkgInstallPreflight(host, contentId, {
-              packageType:
-                meta.head?.package_type ||
-                pkgTypeForCategory(meta.head?.category, meta.head?.platform),
+              packageType: resolvedPackageType,
               size: totalBytes,
-              fingerprint: meta.head?.fingerprint,
+              fingerprint: head.fingerprint,
             })
           : null;
         if (pre?.state === "installed") {
@@ -3149,13 +3350,15 @@ const makePkgLibraryStore = () =>
           ps5Addr: mgmtAddr(host),
           path: localPcPath,
           splitRoot: null,
-          packageTypeOverride:
-            meta.head?.package_type ||
-            pkgTypeForCategory(meta.head?.category, meta.head?.platform),
+          // Exactly one of these is set. With remoteUrl the engine fetches the
+          // package from the origin in parallel and serves it from the same
+          // pkg-host session a local file would use.
+          remoteUrl,
+          packageTypeOverride: resolvedPackageType,
           localPs5Path: null,
           contentId: contentId || null,
-          expectedSize: meta.total_size ?? null,
-          packageFingerprint: meta.head?.fingerprint ?? null,
+          expectedSize: totalBytes || null,
+          packageFingerprint: head.fingerprint ?? null,
           // No staging file is created, so deleteStaging is moot — pass
           // false so the engine doesn't record a staging_path to clean up.
           deleteStaging: false,
@@ -3201,7 +3404,7 @@ const makePkgLibraryStore = () =>
           return finishStreamTask({
             ok: false,
             message: loaderUnavailable
-              ? `${dpi.errMessage}. Reload the payload loader on the PS5, then retry Stream install. Uploading the package to staging cannot repair a closed loader and may only repeat the same failure.`
+              ? `${dpi.errMessage}. Reload the payload loader on the PS5, then retry Stream install — or run etaHEN or elf-arsenal, whose installer bridge ps5upload will use instead, leaving your loaded payloads untouched. Uploading the package to staging cannot repair a closed loader and may only repeat the same failure.`
               : `${dpi.errMessage}. Upload & install can still try the PS5-local staged path instead.`,
             // A closed :9021 is a prerequisite failure, not an HTTP-path
             // failure. Offering staging here caused a reporter to upload a
@@ -3219,12 +3422,11 @@ const makePkgLibraryStore = () =>
           const exactInstalled = await verifyDpiInstalledArtifact(
             host,
             contentId || null,
-            meta.head?.package_type ||
-              pkgTypeForCategory(meta.head?.category, meta.head?.platform) ||
-              (meta.head?.platform === "ps5" ? "PS5GD" : "PS4GD"),
+            resolvedPackageType ||
+              (head.platform === "ps5" ? "PS5GD" : "PS4GD"),
             {
               size: totalBytes || undefined,
-              fingerprint: meta.head?.fingerprint || undefined,
+              fingerprint: head.fingerprint || undefined,
             },
           );
           if (exactInstalled) {
@@ -3304,8 +3506,16 @@ const makePkgLibraryStore = () =>
         const verdict = verdict0;
         releaseServingSession = verdict.trackedToTerminal;
         if (verdict.completed) {
+          const viaBridge =
+            dpi.bridge === "dpiv2"
+              ? " Installed through the console's existing DPI bridge, so your loaded payloads were left running."
+              : "";
           pushNotification("success", `Installed ${label}`, {
-            body: "Stream-install complete. The pkg was fetched over HTTP — nothing was staged on the PS5.",
+            body:
+              (remoteUrl
+                ? "Link install complete. The package was downloaded from the link and fed straight to the console — nothing was staged on this computer or the PS5."
+                : "Stream-install complete. The pkg was fetched over HTTP — nothing was staged on the PS5.") +
+              viaBridge,
           });
           return finishStreamTask({ ok: true, mayNotLaunch: false });
         }

@@ -6,6 +6,11 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+# Cross-platform OS randomness for the Remote Play registration nonce. The old
+# code opened /dev/urandom directly, which does not exist on Windows — the
+# reported "opening /dev/urandom: os error 3" on Wake & sign in. Already in the
+# tree via the dependency graph, so this pulls in no new code.
+getrandom = "0.4"
 base64 = "0.23"
 blake3.workspace = true
 # BPS patch checksums (bps.rs). Already in the tree via zip's dependency

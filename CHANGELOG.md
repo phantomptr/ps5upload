@@ -4,6 +4,126 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+**Install a game straight from a link, at your line speed — and a fix for
+installs that died halfway.**
+
+### Install from an HTTP(S) link
+
+- **Paste a direct package URL and install it, with nothing staged anywhere.**
+  Install Package has a new link field. No copy lands on your PC and none on
+  the console, so a 100 GB game no longer needs twice its size free — only the
+  space the installed game itself takes.
+- **The download is parallel, so it runs at your line speed.** ps5upload
+  fetches the link over several connections at once (eight by default) and
+  feeds the bytes to the PS5 over your network. Handing the URL to the console
+  instead — what other tools do — leaves Sony's single-stream downloader in
+  charge, which is why those top out around 5-10 MB/s on a gigabit line.
+- **The link is identified before anything starts.** ps5upload reads a few
+  byte ranges to name the title, its content id and its exact size, so a share
+  page or a non-package file is rejected up front instead of after an hour.
+- **Dropped connections are resumed, not restarted.** A connection that dies
+  partway through re-requests only the missing tail, and any forward progress
+  refreshes the retry budget — a lossy mirror still finishes.
+- **Your PC has to stay awake and connected** for the whole install, since it
+  is the one doing the downloading. The URL is never written to logs, task
+  records or diagnostic bundles, so a signed download token stays private.
+- Tuning, if you need it: `PS5UPLOAD_URL_THREADS` (default 8),
+  `PS5UPLOAD_URL_WINDOW_MB` (32) and `PS5UPLOAD_URL_CACHE_WINDOWS` (4). Memory
+  use is roughly window × windows, so about 128 MB at the defaults.
+- Not available in the Android build, which deliberately ships without an HTTP
+  client.
+
+### Large installs (the "it fails halfway" / "lost connection" reports)
+
+- **A big package is no longer truncated mid-request.** The package host capped
+  every response at 16 MiB and expected the console to ask for the rest. Sony
+  doesn't: it reads a package's trailing metadata in a *single* request whose
+  size grows with the package, and it never re-requests the part it didn't get.
+  One user's 121 GB install asked for **249.6 MiB in one range** and was refused
+  with `0x80b211cd` immediately after our 16 MiB answer; another report shows
+  **718** truncated requests. Small packages stay under the cap — which is
+  exactly why installs "worked with small files and failed with big ones".
+  Responses are now streamed in bounded chunks, so any range is served whole
+  without the engine holding it in memory.
+- **A long install no longer has its session pulled out from under it.** The
+  package host expired sessions 2 hours after they were *created*, regardless of
+  whether the console was still downloading. A 200-300 GB game on a modest
+  connection runs well past that, so the console's next request got
+  "no such install session" — the dropped/lost connection people reported.
+  Expiry is now measured from the last sign of life, so an install that is still
+  moving is never reaped, while genuinely abandoned sessions still are.
+- Verified on hardware: a 250 MiB single range now returns complete and
+  byte-identical to the source, and full installs still complete and register.
+
+### The FPKG builder warns about an AMPR title before you build it
+
+- **Convert to FPKG now flags a game that needs `ampr_emu`.** A title whose
+  `eboot.bin` imports `libSceAmpr` packages and installs perfectly well, and then
+  will not start unless `ampr_emu` is loaded on the console — which looks like a
+  broken package rather than a missing dependency. The readiness report names it
+  before the build, alongside the checks already there. It is a warning, not a
+  block: you can still build it, you just know what it will need.
+
+### A warning before you install a package the console won't run
+
+- **Packages are now checked for a DRM type the PS5 refuses to start.** A title
+  dumped from a disc or store install keeps the DRM type it shipped with, and a
+  package built from that dump as-is installs and then won't launch. The parser
+  now flags a `param.json` whose `applicationDrmType` isn't `standard`, and the
+  package's row shows a "check package" badge explaining the fix — so you learn
+  before spending an hour uploading and installing, rather than meeting a bare
+  Sony error code afterwards. It stays a warning: you can still install it.
+
+### "It says error, but my PS5 installed it fine"
+
+- **The post-install check no longer gives up after 3 minutes.** After the PS5
+  accepted a staged install, ps5upload looked for the finished package for a
+  flat three minutes and then reported the install unverified. A large title
+  cannot finish writing in that time, so the app showed an error for an install
+  the console went on to complete — and, because an unverified install keeps
+  its staged copy, left a package behind to delete by hand. The check now
+  watches the title's files grow and waits as long as the PS5 is still writing,
+  giving up only after three minutes of no movement at all. A stalled install is
+  still caught just as quickly as before.
+- **Watching a running install is no longer capped by the clock.** The same fix
+  applies to Stream installs: the three-hour watch window now restarts on every
+  bit of progress, so a 200-300 GB title on a modest connection is followed to
+  the end instead of being abandoned as unverified while it is still going.
+- With verification now succeeding, "Auto Delete after installation" cleans up
+  the staged package as it always should have.
+
+### Installs stop disturbing your loaded payloads
+
+- **If your console already runs etaHEN or elf-arsenal, ps5upload now uses its
+  installer bridge** (the "DPI v2" listener on port 12800) instead of sending
+  its own DPI payload. That send is the fragile part of a Stream install: it
+  needs the payload loader alive on :9021 and it **replaces the running
+  ps5upload payload** for the duration. When a bridge is there, nothing is
+  sent, nothing is displaced, and a carefully built stack of payloads keeps
+  running through the install.
+- **We no longer "restore" a payload we never replaced.** The restore ran
+  unconditionally at the end of every stream install, so even a run that sent
+  nothing re-pushed the payload to the loader — exactly the disruption the
+  bridge avoids. It now runs only when something was actually swapped.
+- The install result says which bridge handled it, and a completed install
+  tells you when your payloads were left alone.
+- If the loader is closed and no bridge is running, the error now says that
+  running etaHEN or elf-arsenal is a way out, instead of only offering a
+  loader reload.
+
+### Stream installs that failed halfway
+
+- **The package host now sends a `Last-Modified` validator.** Sony's downloader
+  only advances to the next chunk against a response it considers cacheable, so
+  without it a transfer could simply stop partway through with no error that
+  pointed anywhere. This is the most likely cause of the "always fails halfway"
+  reports on 5.29.0 and affects every Stream install, not just link installs.
+- **A rejected byte range now answers with `Content-Range: bytes */<size>`**, as
+  the HTTP spec requires, so the console can re-derive the real size and retry
+  instead of dead-ending.
+
 ## 5.29.0
 
 **Bug reports stop leaking your network, and a conversion survives leaving the

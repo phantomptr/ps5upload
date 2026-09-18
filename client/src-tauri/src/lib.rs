@@ -310,6 +310,7 @@ pub fn run() {
             commands::pkg_installed_inventory,
             commands::pkg_install_preflight,
             commands::pkg_install_start,
+            commands::pkg_remote_probe,
             commands::pkg_dpi_install,
             commands::pkg_dpi_direct_install,
             commands::dpi_ensure,

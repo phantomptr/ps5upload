@@ -47,6 +47,28 @@ use uuid::Uuid;
 /// endpoints (e.g. listing active sessions in the engine logs) even
 /// though no current handler reads them — `#[allow(dead_code)]` documents
 /// this intentional surplus rather than churn the struct each release.
+/// A package being proxied from an HTTP(S) origin for an install-from-a-link
+/// session (see `remote_pkg`).
+///
+/// Installing from a link needs an HTTP client, which the Android build
+/// deliberately does not carry so its cross-compile stays pure Rust. There the
+/// type is uninhabited: `Option<Arc<RemotePkg>>` can only ever be `None`, so
+/// the remote paths are statically unreachable rather than conditionally
+/// compiled out of every call site.
+#[cfg(not(target_os = "android"))]
+pub type RemotePkg = crate::remote_pkg::RemoteSource;
+
+#[cfg(target_os = "android")]
+#[derive(Debug)]
+pub enum RemotePkg {}
+
+#[cfg(target_os = "android")]
+impl RemotePkg {
+    pub fn read_range(&self, _start: u64, _end: u64) -> std::io::Result<Vec<u8>> {
+        match *self {}
+    }
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct InstallSession {
@@ -144,6 +166,17 @@ pub struct InstallSession {
     pub dpi_ok: Option<bool>,
     pub dpi_rc: Option<i32>,
     pub dpi_detail: String,
+    /// Unix time of the last sign of life for this session — a pkg-host range
+    /// served, or a status poll. Session expiry is measured from THIS, not from
+    /// creation: a 200-300 GB install on a modest link runs for many hours, and
+    /// ageing it out by creation time reaped the session while the console was
+    /// still fetching. The console's next range then got `404 no such install
+    /// session`, which is what users saw as the transfer "losing connection".
+    pub last_activity_unix: u64,
+    /// Set for an install-from-a-link session: the package lives on an HTTP
+    /// origin and `parts` is empty, so range reads are proxied through this
+    /// instead of the local filesystem. `None` for every local/staged install.
+    pub remote: Option<Arc<RemotePkg>>,
 }
 
 #[derive(Default)]
@@ -388,6 +421,7 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         // dir. Useful for grabbing a single asset without uploading
         // the whole image to the PS5 first.
         .route("/api/ffpkg/extract", post(extract_handler))
+        .route("/api/pkg/remote/probe", post(remote_probe_handler))
         .route("/api/pkg/install/start", post(install_start_handler))
         .route("/api/pkg/install/status", get(install_status_handler))
         .route("/api/pkg/install/sessions", get(install_sessions_handler))
@@ -990,6 +1024,13 @@ pub struct InstallStartRequest {
     /// detection — we look for `<root>.0`, `<root>.1`, ... siblings.
     pub path: Option<String>,
     pub split_root: Option<String>,
+    /// Install straight from an HTTP(S) link: the engine fetches the package
+    /// from this URL over many connections at once and re-serves it to the
+    /// console from the pkg-host, so nothing is staged on PC disk or on the
+    /// console. Mutually exclusive with `path` / `split_root` /
+    /// `local_ps5_path`. The origin must honour byte ranges.
+    #[serde(default)]
+    pub remote_url: Option<String>,
     /// Optional override for the package_type passed to BGFT. When
     /// unset we use whatever `derive_package_type(category)` returns
     /// or fall back to "PS4GD". Useful for unknown-magic PKGs where
@@ -1237,10 +1278,11 @@ async fn install_start_handler(
     State(state): State<PkgInstallStateHandle>,
     Json(req): Json<InstallStartRequest>,
 ) -> Response<Body> {
-    let (parts, part_sizes, total_size, head_meta) = match resolve_parts_and_meta(&req).await {
-        Ok(t) => t,
-        Err(e) => return json_err(StatusCode::BAD_REQUEST, &e),
-    };
+    let (parts, part_sizes, total_size, head_meta, remote) =
+        match resolve_parts_and_meta(&req).await {
+            Ok(t) => t,
+            Err(e) => return json_err(StatusCode::BAD_REQUEST, &e),
+        };
 
     let mut package_type = req
         .package_type_override
@@ -1491,6 +1533,7 @@ async fn install_start_handler(
         detail: String::new(),
         cancelled: false,
         created_at_unix: now_unix(),
+        last_activity_unix: now_unix(),
         // staging_path drives the terminal-phase cleanup. None ⇒ pkg KEPT,
         // honouring "Auto Delete after installation" = off. See staging_path_for.
         staging_path: staging_path_for(&req.local_ps5_path, req.delete_staging),
@@ -1510,6 +1553,7 @@ async fn install_start_handler(
         dpi_ok: None,
         dpi_rc: None,
         dpi_detail: String::new(),
+        remote,
     };
 
     // Insert *before* sending the install frame so the HTTP listener
@@ -1563,10 +1607,13 @@ async fn install_start_handler(
         // which a register-reject never calls). The full-age sweep here is the
         // only thing that reaps them, bounding the sessions map.
         sessions.retain(|_, s| {
-            if s.created_at_unix <= full_cutoff {
+            // Measured from the last sign of life, so an install that is still
+            // pulling bytes is never reaped no matter how long it runs.
+            let idle_since = s.last_activity_unix.max(s.created_at_unix);
+            if idle_since <= full_cutoff {
                 return false;
             }
-            s.created_at_unix > aggressive_cutoff || s.terminal_status.is_none()
+            idle_since > aggressive_cutoff || s.terminal_status.is_none()
         });
         sessions.insert(session_id.clone(), session.clone());
     }
@@ -2524,7 +2571,7 @@ fn gc_old_sessions(state: &PkgInstallStateHandle) {
         // orphaned (queue UI's worker loop terminates at done/error/
         // cancelled or after pollErrors >= 5, so it shouldn't be
         // legitimately polling a 2h-old session anyway).
-        now.saturating_sub(s.created_at_unix) < max_age
+        now.saturating_sub(s.last_activity_unix.max(s.created_at_unix)) < max_age
     });
 }
 
@@ -2532,6 +2579,14 @@ async fn install_status_handler(
     State(state): State<PkgInstallStateHandle>,
     Query(q): Query<StatusQuery>,
 ) -> Response<Body> {
+    // A client that is still watching counts as activity too, so a session
+    // whose console has gone quiet mid-install is kept while anyone is looking.
+    {
+        let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(s) = sessions.get_mut(&q.session) {
+            s.last_activity_unix = now_unix();
+        }
+    }
     gc_old_sessions(&state);
     let (
         ps5_addr,
@@ -3425,6 +3480,25 @@ fn dpi_ensure_blocking(ps5_ip: &str) -> DpiEnsureResponse {
         };
     }
 
+    // An etaHEN / elf-arsenal DPI v2 bridge can do the install for us, which
+    // means we do NOT have to send our own daemon to the loader — and so we do
+    // not replace the user's running main payload at all. Checked after our own
+    // daemon only because if that is already up, it costs nothing to use.
+    let v2_addr = pl::join_host_port(ps5_ip, DPI_V2_PORT);
+    if pl::port_is_open(&v2_addr, DPI_PROBE_TIMEOUT) {
+        crate::log_info!(
+            "dpi-ensure: DPI v2 bridge listening on {} — no payload swap needed",
+            v2_addr
+        );
+        return DpiEnsureResponse {
+            ok: true,
+            listening: true,
+            sent: false,
+            error: None,
+            reason: None,
+        };
+    }
+
     let bytes = match crate::bundled_payload::image_bytes(crate::bundled_payload::Image::Dpi) {
         Ok(b) => b,
         Err(e) => {
@@ -3536,7 +3610,8 @@ pub struct DpiInstallRequest {
     /// Any PS5 address we hold (`ip:9114` etc.) or a bare IP — we use
     /// only the host part and talk to the DPI daemon on `:9040`.
     pub ps5_addr: String,
-    /// Absolute PS5-side path to the staged `.pkg` (under /user/data).
+    /// Absolute PS5-side staged `.pkg` path, or an HTTP(S) URL that the PS5
+    /// can fetch directly. The latter has no ps5upload staging copy.
     pub local_ps5_path: String,
     /// Title the package belongs to. Supplied by the client, which parsed the
     /// pkg locally; the engine cannot parse a file that lives on the console.
@@ -3572,6 +3647,12 @@ pub struct DpiInstallResponse {
     /// pkg-host evidence for Stream installs. Always zero for staged paths.
     pub requests_served: u64,
     pub bytes_served: u64,
+    /// Which installer bridge handled this: `"dpiv2"` for an etaHEN /
+    /// elf-arsenal bridge that was already listening (no payload swap
+    /// happened), or `"ps5upload"` for our own daemon. Absent for staged
+    /// installs, which never route through a bridge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bridge: Option<String>,
     /// Post-install version check: "applied", "did_not_apply", "inconclusive",
     /// or absent when the caller supplied no identity to check against.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3647,6 +3728,159 @@ fn parse_dpi_reply(s: &str) -> DpiReply {
 /// The daemon runs `sceAppInstUtilInstallByPackage(uri)` from its own
 /// clean loader process, with a timed sceAppInstUtilInitialize + retry
 /// so a cold install can never wedge IPMI (issue #152 root cause).
+/// The de-facto "DPI v2" port. etaHEN exposes an install bridge here, and
+/// elf-arsenal ships a compatible one (`payloads-src/dpiv2/main.c`), so on a
+/// console running either, a package URL can be installed over plain HTTP.
+const DPI_V2_PORT: u16 = 12800;
+
+/// Hand a package URL to an already-running DPI v2 bridge.
+///
+/// Why this is tried first: our own DPI daemon has to be sent to the payload
+/// loader, and doing that **replaces the main ps5upload payload** for the
+/// duration of the install. That swap is the most fragile step in a stream
+/// install — it needs the third-party loader alive on :9021, and users who had
+/// a working stack of payloads reasonably resent having it disturbed. A
+/// console already running etaHEN or elf-arsenal has an installer bridge
+/// listening, so we can simply give it the pkg-host URL and leave every
+/// running payload untouched.
+///
+/// Protocol (etaHEN-compatible): `POST /api/install` with `{"url":"…"}`,
+/// answered `{"res":"0"}` on acceptance. As with our own daemon, acceptance is
+/// NOT proof of a completed install — the caller still verifies through the
+/// session tracker.
+fn dpi_v2_send(ps5_ip: &str, url: &str) -> std::io::Result<DpiReply> {
+    use std::io::{Read, Write};
+    use std::net::ToSocketAddrs;
+
+    // The URL goes into a JSON string; a quote or backslash would let a
+    // crafted pkg-host path break out of it. Our URLs never contain either,
+    // so rejecting is right rather than escaping.
+    if url.contains('"') || url.contains('\\') || url.contains('\n') || url.contains('\r') {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "url is not safe to embed in a JSON request",
+        ));
+    }
+    let body = format!("{{\"url\":\"{url}\"}}");
+    let req = format!(
+        "POST /api/install HTTP/1.0\r\n\
+         Host: {ps5_ip}:{DPI_V2_PORT}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n{body}",
+        body.len()
+    );
+
+    let sa = format!("{ps5_ip}:{DPI_V2_PORT}")
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("resolve :{DPI_V2_PORT} failed"),
+            )
+        })?;
+    let mut s = std::net::TcpStream::connect_timeout(&sa, std::time::Duration::from_secs(5))?;
+    s.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
+    // The bridge installs synchronously before replying (elf-arsenal's forwards
+    // with `?sync=1` and waits up to 10 minutes), so this needs the same
+    // generous deadline as our own daemon.
+    s.set_read_timeout(Some(std::time::Duration::from_secs(900)))?;
+    s.write_all(req.as_bytes())?;
+    let mut buf = String::new();
+    s.read_to_string(&mut buf)?;
+    Ok(parse_dpi_v2_reply(&buf))
+}
+
+/// Map a DPI v2 HTTP reply onto the same `DpiReply` the native daemon yields,
+/// so the hand-off, the session verdict and the UI stay identical either way.
+fn parse_dpi_v2_reply(resp: &str) -> DpiReply {
+    let body = resp
+        .split_once("\r\n\r\n")
+        .or_else(|| resp.split_once("\n\n"))
+        .map(|(_, b)| b)
+        .unwrap_or(resp);
+    // `"res":"0"` is the etaHEN success token; elf-arsenal also answers
+    // `"ok":true` through the same bridge when it installed synchronously.
+    let accepted = body.contains("\"res\":\"0\"")
+        || body.contains("\"res\": \"0\"")
+        || body.contains("\"ok\":true");
+    if accepted {
+        return DpiReply::Ok;
+    }
+    if body.trim().is_empty() {
+        return DpiReply::RecvError;
+    }
+    // A bridge that answers but refuses is a real rejection, not a transport
+    // problem. It carries no Sony error code, so use the daemon's ambiguous
+    // sentinel and let artifact verification decide.
+    DpiReply::InstallReject(-1)
+}
+
+/// Install `url` through whichever bridge the console actually has.
+///
+/// Prefers an already-listening DPI v2 bridge (etaHEN / elf-arsenal) because
+/// using it disturbs nothing on the console. Falls back to our own daemon on
+/// :9040 when that bridge did not get the install started.
+///
+/// **A listening bridge is not a working bridge**, which hardware proved on the
+/// first real test: elf-arsenal's `dpiv2.elf` forwards to Arsenal's own API on
+/// loopback, so when it is loaded standalone it accepts the request, answers
+/// `{"res":"-1"}`, and the console never fetches a byte. Preferring it blindly
+/// turned an install that our daemon would have completed into a dead end.
+///
+/// `served` reports how many pkg-host requests the console has made. It is the
+/// discriminator that makes a retry safe:
+/// - **zero** — Sony's installer never engaged, so nothing was started and
+///   nothing can be corrupted by trying again through our own daemon.
+/// - **non-zero** — the console really did begin fetching the package. The
+///   bridge's refusal is then a genuine installer verdict, and re-running the
+///   same install through a second path could act on a half-applied one. We
+///   report it and let artifact verification decide.
+fn dpi_send_via_best_bridge(
+    ps5_ip: &str,
+    url: &str,
+    served: impl Fn() -> u64,
+) -> (std::io::Result<DpiReply>, &'static str) {
+    use ps5upload_core::payload_lifecycle as pl;
+
+    let v2_addr = pl::join_host_port(ps5_ip, DPI_V2_PORT);
+    if pl::port_is_open(&v2_addr, DPI_PROBE_TIMEOUT) {
+        crate::log_info!(
+            "dpi: using the DPI v2 bridge already listening on {}",
+            v2_addr
+        );
+        let res = dpi_v2_send(ps5_ip, url);
+        let accepted = matches!(res, Ok(DpiReply::Ok));
+        let fetched = served();
+        if accepted || fetched > 0 {
+            if !accepted {
+                crate::log_warn!(
+                    "dpi: v2 bridge on {} refused after the console fetched {} request(s) —                      reporting its verdict rather than retrying elsewhere",
+                    v2_addr,
+                    fetched
+                );
+            }
+            return (res, "dpiv2");
+        }
+        match &res {
+            Err(e) => crate::log_warn!(
+                "dpi: v2 bridge on {} did not answer ({}); falling back to the ps5upload daemon",
+                v2_addr,
+                e
+            ),
+            Ok(_) => crate::log_warn!(
+                "dpi: v2 bridge on {} answered but the console fetched nothing — the bridge is \
+                 listening without a working installer behind it; falling back to the ps5upload \
+                 daemon",
+                v2_addr
+            ),
+        }
+    }
+    (dpi_send(ps5_ip, url), "ps5upload")
+}
+
 fn dpi_send(ps5_ip: &str, line: &str) -> std::io::Result<DpiReply> {
     use std::io::{Read, Write};
     use std::net::ToSocketAddrs;
@@ -3781,11 +4015,33 @@ fn verify_patch_after_install(
     }
 }
 
+/// The DPI wire protocol is one newline-terminated URI in a 4096-byte buffer.
+/// Keep URL validation here rather than trusting the UI (the engine is also an
+/// HTTP API), and leave room for the newline and terminating NUL.
+fn valid_dpi_install_source(source: &str) -> bool {
+    if source.is_empty() || source.len() > 4093 || source.bytes().any(|b| b < 0x20 || b == 0x7f) {
+        return false;
+    }
+    if source.starts_with('/') {
+        return true;
+    }
+    if source.contains('#') {
+        return false;
+    }
+    match source.parse::<axum::http::Uri>() {
+        Ok(uri) => {
+            matches!(uri.scheme_str(), Some("http" | "https"))
+                && uri.host().is_some_and(|host| !host.is_empty())
+        }
+        Err(_) => false,
+    }
+}
+
 async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Body> {
-    if !req.local_ps5_path.starts_with('/') {
+    if !valid_dpi_install_source(&req.local_ps5_path) {
         return json_err(
             StatusCode::BAD_REQUEST,
-            "local_ps5_path must be an absolute PS5 path (stage the pkg first)",
+            "install source must be an absolute PS5 path or an HTTP(S) package URL",
         );
     }
     let ps5_ip = strip_host_port(&req.ps5_addr);
@@ -3793,7 +4049,16 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
         return json_err(StatusCode::BAD_REQUEST, "ps5_addr is required");
     }
     let path = req.local_ps5_path.clone();
-    crate::log_info!("dpi-install: ps5={} path={}", ps5_ip, path);
+    // Signed download URLs may contain credentials; never put them in logs.
+    crate::log_info!(
+        "dpi-install: ps5={} source={}",
+        ps5_ip,
+        if path.starts_with('/') {
+            "local"
+        } else {
+            "remote-url"
+        }
+    );
 
     // Snapshot the installed version BEFORE the install so an accepted-but-
     // inert overwrite can be told from a real one afterwards. Sony returns
@@ -3968,6 +4233,7 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
                     _ => (None, None, ok, err_message),
                 };
             json_ok(&DpiInstallResponse {
+                bridge: None,
                 ok,
                 rc,
                 init_failed,
@@ -3983,6 +4249,7 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
         Ok(Err(e)) => {
             crate::log_warn!("dpi-install connection ended ambiguously: {e}");
             json_ok(&DpiInstallResponse {
+                bridge: None,
                 ok: false,
                 rc: -1,
                 init_failed: false,
@@ -4075,7 +4342,24 @@ async fn dpi_direct_install_handler(
             s.dpi_detail.clear();
         }
     }
-    let res = tokio::task::spawn_blocking(move || dpi_send(&ps5_ip, &url)).await;
+    // Live view of the session's request counter, so the bridge choice can tell
+    // "the console never started" from "the console started and Sony refused".
+    let served_state = state.clone();
+    let served_session = req.session_id.clone();
+    let served = move || {
+        served_state
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&served_session)
+            .map(|s| s.requests_served)
+            .unwrap_or(0)
+    };
+    let res = tokio::task::spawn_blocking(move || {
+        let (reply, bridge) = dpi_send_via_best_bridge(&ps5_ip, &url, served);
+        reply.map(|r| (r, bridge))
+    })
+    .await;
     let (requests_served, bytes_served) = {
         let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         sessions
@@ -4084,7 +4368,8 @@ async fn dpi_direct_install_handler(
             .unwrap_or((0, 0))
     };
     match res {
-        Ok(Ok(reply)) => {
+        Ok(Ok((reply, bridge))) => {
+            crate::log_info!("dpi-direct-install: handled by the {} bridge", bridge);
             let (ok, rc, init_failed, ambiguous, err_message) = match reply {
                 DpiReply::Ok => (true, 0, false, false, None),
                 DpiReply::InstallReject(rc) => {
@@ -4192,6 +4477,7 @@ async fn dpi_direct_install_handler(
                 err_message,
                 requests_served,
                 bytes_served,
+                bridge: Some(bridge.to_string()),
                 // Stream installs go through the session/status flow, which
                 // does its own verification; nothing to report from here.
                 patch_verdict: None,
@@ -4202,6 +4488,7 @@ async fn dpi_direct_install_handler(
         Ok(Err(e)) => {
             crate::log_warn!("dpi-direct-install connection ended ambiguously: {e}");
             json_ok(&DpiInstallResponse {
+                bridge: None,
                 ok: false,
                 rc: -1,
                 init_failed: false,
@@ -4360,42 +4647,34 @@ async fn serve_handler(
     let served_session_id = session.id.clone();
     let (start, end) = match parse_range_header(&headers, total) {
         Ok(r) => r,
-        Err(_) => return plain_response(StatusCode::RANGE_NOT_SATISFIABLE, "invalid Range"),
-    };
-
-    // Read the ≤16 MiB split off the async reactor. Sony's BGFT issues
-    // parallel range fetches, and across up to 12 concurrently-installing
-    // consoles these synchronous disk reads would otherwise park reactor
-    // worker threads, stalling every console's serving. `session` isn't used
-    // past this point, so move it into the blocking task.
-    let chunk = match tokio::task::spawn_blocking(move || match source {
-        ServeSource::Package => read_split_range(&session, start, end),
-        ServeSource::EmbeddedCrc { offset, .. } => {
-            read_split_range(&session, offset + start, offset + end)
-        }
-        ServeSource::SiblingCrc(bytes) => Ok(bytes[start as usize..=end as usize].to_vec()),
-    })
-    .await
-    {
-        Ok(Ok(b)) => b,
-        Ok(Err(e)) => {
-            return plain_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("read failed: {e}"),
-            )
-        }
-        Err(e) => {
-            return plain_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("read task panicked/cancelled: {e}"),
-            )
+        // RFC 9110 §15.5.17 requires `Content-Range: bytes */<total>` on a 416
+        // so the client can re-derive the real size and retry; a bare 416 just
+        // dead-ends Sony's fetch loop.
+        Err(_) => {
+            return Response::builder()
+                .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                .header(header::CONTENT_RANGE, format!("bytes */{total}"))
+                .header(header::ACCEPT_RANGES, "bytes")
+                .header(header::CONTENT_LENGTH, "0")
+                .body(Body::empty())
+                .unwrap_or_else(builder_failed_response)
         }
     };
 
-    let len = chunk.len() as u64;
+    // The body is produced in bounded chunks on a blocking thread, never
+    // materialised whole. Sony asks for the trailing metadata of a large
+    // package in a single quarter-gigabyte range, so buffering the response
+    // would mean allocating that per request (and, across concurrently
+    // installing consoles, several times over). Reads stay off the async
+    // reactor for the same reason as before: they are synchronous disk (or
+    // proxied network) I/O and would otherwise park reactor workers.
+    let len = end - start + 1;
     {
         let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(active) = sessions.get_mut(&served_session_id) {
+            // Every served range is a sign of life; without this the session
+            // would age out from under a long transfer.
+            active.last_activity_unix = now_unix();
             active.requests_served = active.requests_served.saturating_add(1);
             active.bytes_served = active.bytes_served.saturating_add(len);
             if counts_as_progress {
@@ -4407,7 +4686,16 @@ async fn serve_handler(
     let mut builder = Response::builder()
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::CONTENT_LENGTH, len.to_string());
+        .header(header::CONTENT_LENGTH, len.to_string())
+        // Validator. ShellCore's downloader only advances to the next chunk
+        // against a *cacheable* response: hyper already supplies `Date`, but
+        // without `Last-Modified` the fetch loop can stall mid-package (the
+        // "install fails halfway" class). The value is deliberately a fixed
+        // constant rather than the pkg's mtime so it stays stable across
+        // requests, engine restarts and split-part layouts — a validator that
+        // changes between two range fetches of the same install looks to the
+        // client like the file was replaced underneath it.
+        .header(header::LAST_MODIFIED, PKG_HOST_LAST_MODIFIED);
 
     // Respond 206 + Content-Range whenever the body is a *subset* of the
     // file — i.e. there was a Range header, OR a bare GET whose body the
@@ -4429,15 +4717,234 @@ async fn serve_handler(
     }
 
     builder
-        .body(Body::from(chunk))
+        .body(range_body(session, source, start, end))
         .unwrap_or_else(builder_failed_response)
+}
+
+/// Bytes read per chunk while streaming a range response. Small enough that a
+/// quarter-gigabyte range costs kilobytes of buffer, large enough that the
+/// per-chunk overhead stays negligible against disk and LAN throughput.
+const PKG_HOST_STREAM_CHUNK: u64 = 1024 * 1024;
+
+/// Stream `[start, end]` of `source` as a response body.
+///
+/// The producer runs on a blocking thread and hands chunks to the reactor
+/// through a short channel, so a slow console applies backpressure instead of
+/// letting the engine read ahead without bound. A read error ends the body
+/// early: the headers are already sent by then, so the client sees a truncated
+/// response and retries, which is the only signalling HTTP allows at that
+/// point.
+fn range_body(session: InstallSession, source: ServeSource, start: u64, end: u64) -> Body {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(4);
+    tokio::task::spawn_blocking(move || {
+        let mut cursor = start;
+        while cursor <= end {
+            let stop = end.min(cursor + PKG_HOST_STREAM_CHUNK - 1);
+            let read = match &source {
+                ServeSource::Package => read_split_range(&session, cursor, stop),
+                ServeSource::EmbeddedCrc { offset, .. } => {
+                    read_split_range(&session, offset + cursor, offset + stop)
+                }
+                ServeSource::SiblingCrc(bytes) => {
+                    Ok(bytes[cursor as usize..=stop as usize].to_vec())
+                }
+            };
+            match read {
+                Ok(b) => {
+                    // A send error means the console hung up; stop reading.
+                    if tx.blocking_send(Ok(axum::body::Bytes::from(b))).is_err() {
+                        return;
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.blocking_send(Err(e));
+                    return;
+                }
+            }
+            cursor = stop + 1;
+        }
+    });
+    Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────
 
-async fn resolve_parts_and_meta(
+/// Probe an install-from-a-link URL and read its metadata over byte ranges.
+///
+/// The package is never downloaded to parse it: `metadata_from_reader` needs
+/// only a few ranged reads (envelope, entry table, PARAM.SFO/param.json), all
+/// of which the proxy satisfies from its first window. So a 100 GB link is
+/// identified in about as long as one HTTP round trip.
+#[cfg(not(target_os = "android"))]
+async fn resolve_remote_source(
+    url: &str,
     req: &InstallStartRequest,
-) -> Result<(Vec<PathBuf>, Vec<u64>, u64, PkgMetadata), String> {
+) -> Result<ResolvedSource, String> {
+    if req.path.is_some() || req.split_root.is_some() {
+        return Err("remote_url cannot be combined with path or split_root".into());
+    }
+    if req.local_ps5_path.as_deref().is_some_and(|p| !p.is_empty()) {
+        return Err("remote_url cannot be combined with local_ps5_path".into());
+    }
+    let owned = url.to_string();
+    // Probe and header-parse are blocking HTTP; keep them off the reactor so
+    // concurrent installs for other consoles keep being served.
+    let (remote, meta) = tokio::task::spawn_blocking(move || {
+        let probe = crate::remote_pkg::RemoteSource::probe(&owned)?;
+        let remote = Arc::new(crate::remote_pkg::RemoteSource::new(
+            owned,
+            probe.total_size,
+        ));
+        let read_at = |offset: u64, len: u64| -> Option<Vec<u8>> {
+            if len == 0 {
+                return Some(Vec::new());
+            }
+            remote.read_range(offset, offset + len - 1).ok()
+        };
+        let head = ps5upload_pkg::metadata_from_reader(read_at).ok_or_else(|| {
+            "the link does not look like a PS4/PS5 package (no readable PKG header)".to_string()
+        })?;
+        let fingerprint =
+            ps5upload_pkg::package_fingerprint_from_reader(probe.total_size, &read_at)
+                .unwrap_or_default();
+        Ok::<_, String>((remote, (head, fingerprint, probe)))
+    })
+    .await
+    .map_err(|e| format!("remote package probe task panicked/cancelled: {e}"))??;
+
+    let (head, fingerprint, probe) = meta;
+    let total_size = probe.total_size;
+    let display_name = if probe.filename.is_empty() {
+        head.content_id.clone()
+    } else {
+        probe.filename.clone()
+    };
+    let metadata = PkgMetadata {
+        // No local file exists; the name is for display and logging only.
+        path: PathBuf::from(&display_name),
+        size: total_size,
+        kind: ps5upload_pkg::PkgKind::CntContainer,
+        authenticity: head.authenticity,
+        content_id: head.content_id,
+        title: head.title,
+        title_id: head.title_id,
+        category: head.category,
+        app_ver: head.app_ver,
+        fingerprint,
+        package_type: req.package_type_override.clone(),
+        platform: head.platform,
+        icon_png_base64: None,
+        warnings: vec![],
+    };
+    // `parts` stays empty: every range read is proxied, never read off disk.
+    Ok((vec![], vec![], total_size, metadata, Some(remote)))
+}
+
+#[cfg(target_os = "android")]
+async fn resolve_remote_source(
+    _url: &str,
+    _req: &InstallStartRequest,
+) -> Result<ResolvedSource, String> {
+    Err("installing from a link is not available in the Android build".into())
+}
+
+// ─── /api/pkg/remote/probe ───────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct RemoteProbeRequest {
+    pub url: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RemoteProbeResponse {
+    pub total_size: u64,
+    pub filename: String,
+    pub content_id: String,
+    pub title: String,
+    pub title_id: String,
+    pub category: String,
+    pub app_ver: String,
+    pub platform: String,
+    pub package_type: String,
+    pub fingerprint: String,
+}
+
+/// Identify a package behind an HTTP(S) link without downloading it.
+///
+/// Lets the UI show what the link actually is — and reject a share page or a
+/// non-package file — before the user commits a multi-hour install. Reads only
+/// a few byte ranges (see `resolve_remote_source`).
+async fn remote_probe_handler(Json(req): Json<RemoteProbeRequest>) -> Response<Body> {
+    let url = req.url.trim().to_string();
+    if url.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "url is required");
+    }
+    if !valid_dpi_install_source(&url) || url.starts_with('/') {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "url must be an http(s) package link with no fragment or control characters",
+        );
+    }
+    let probe_req = InstallStartRequest {
+        ps5_addr: String::new(),
+        allow_destructive_reinstall: false,
+        path: None,
+        split_root: None,
+        remote_url: Some(url.clone()),
+        package_type_override: None,
+        local_ps5_path: None,
+        content_id: None,
+        expected_size: None,
+        package_fingerprint: None,
+        delete_staging: false,
+        serve_only: true,
+    };
+    match resolve_remote_source(&url, &probe_req).await {
+        Ok((_, _, total_size, meta, _)) => {
+            let package_type = meta
+                .package_type
+                .clone()
+                .or_else(|| {
+                    ps5upload_pkg::package_type_for_category_and_platform(
+                        &meta.category,
+                        &meta.platform,
+                    )
+                })
+                .unwrap_or_default();
+            json_ok(&RemoteProbeResponse {
+                total_size,
+                filename: meta
+                    .path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string(),
+                content_id: meta.content_id,
+                title: meta.title,
+                title_id: meta.title_id,
+                category: meta.category,
+                app_ver: meta.app_ver,
+                platform: meta.platform,
+                package_type,
+                fingerprint: meta.fingerprint,
+            })
+        }
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, &e),
+    }
+}
+
+type ResolvedSource = (
+    Vec<PathBuf>,
+    Vec<u64>,
+    u64,
+    PkgMetadata,
+    Option<Arc<RemotePkg>>,
+);
+
+async fn resolve_parts_and_meta(req: &InstallStartRequest) -> Result<ResolvedSource, String> {
+    if let Some(url) = req.remote_url.as_deref().filter(|u| !u.is_empty()) {
+        return resolve_remote_source(url, req).await;
+    }
     // The two `parse_*` calls open and read .pkg / split-part headers (and stat
     // each split part) from disk. On a cold or network-hosted pkg that's
     // blocking I/O; run it OFF the async reactor so concurrent install-starts
@@ -4449,7 +4956,7 @@ async fn resolve_parts_and_meta(
                 .await
                 .map_err(|e| format!("split pkg parse task panicked/cancelled: {e}"))?
                 .map_err(|e| format!("{e}"))?;
-        Ok((m.parts, m.part_sizes, m.total_size, m.head))
+        Ok((m.parts, m.part_sizes, m.total_size, m.head, None))
     } else if let Some(p) = &req.path {
         let p = p.clone();
         let meta = tokio::task::spawn_blocking(move || parse_pkg(std::path::Path::new(&p)))
@@ -4457,7 +4964,7 @@ async fn resolve_parts_and_meta(
             .map_err(|e| format!("pkg parse task panicked/cancelled: {e}"))?
             .map_err(|e| format!("{e}"))?;
         let size = meta.size;
-        Ok((vec![meta.path.clone()], vec![size], size, meta))
+        Ok((vec![meta.path.clone()], vec![size], size, meta, None))
     } else if req
         .local_ps5_path
         .as_deref()
@@ -4495,7 +5002,7 @@ async fn resolve_parts_and_meta(
             icon_png_base64: None,
             warnings: vec![],
         };
-        Ok((vec![PathBuf::from(lp)], vec![0], 0, meta))
+        Ok((vec![PathBuf::from(lp)], vec![0], 0, meta, None))
     } else {
         Err("either `path`, `split_root`, or `local_ps5_path` is required".into())
     }
@@ -4509,7 +5016,9 @@ async fn resolve_parts_and_meta(
 /// and return that prefix; HTTP Range semantics let the client follow
 /// up with a `bytes=(end+1)-...` request, which is what BGFT already
 /// does for legitimate chunked fetches.
-const PKG_HOST_RESPONSE_BYTES_CAP: u64 = 16 * 1024 * 1024;
+/// Fixed `Last-Modified` validator for every pkg-host response. Constant on
+/// purpose: see the header comment in `serve_handler`.
+const PKG_HOST_LAST_MODIFIED: &str = "Wed, 01 Jan 2025 00:00:00 GMT";
 
 /// Decide whether a pkg-host response must be `206 Partial Content` (with a
 /// `Content-Range`) rather than a bare `200 OK`. True when the client sent a
@@ -4531,11 +5040,9 @@ fn parse_range_header(headers: &HeaderMap, total: u64) -> Result<(u64, u64), ()>
     let h = match headers.get(header::RANGE).and_then(|v| v.to_str().ok()) {
         Some(s) => s,
         None => {
-            // No Range header — serve the prefix up to the cap.
-            let cap_end = PKG_HOST_RESPONSE_BYTES_CAP
-                .saturating_sub(1)
-                .min(total.saturating_sub(1));
-            return Ok((0, cap_end));
+            // No Range header — serve the whole file. The body is streamed in
+            // bounded chunks, so size is not a memory concern.
+            return Ok((0, total.saturating_sub(1)));
         }
     };
     let after = h.strip_prefix("bytes=").ok_or(())?;
@@ -4565,14 +5072,16 @@ fn parse_range_header(headers: &HeaderMap, total: u64) -> Result<(u64, u64), ()>
     // 416 aborted the install (0x80b22416) on packages Sony's own installer
     // accepts.
     let end = end.min(total - 1);
-    // Trim ranges that exceed the per-response byte cap. The client
-    // sees a smaller-than-asked PARTIAL_CONTENT and follows up with
-    // another Range request for the rest — same shape as if we'd been
-    // serving from a stream with a small read buffer.
-    let len = end - start + 1;
-    if len > PKG_HOST_RESPONSE_BYTES_CAP {
-        return Ok((start, start + PKG_HOST_RESPONSE_BYTES_CAP - 1));
-    }
+    // NOTE: ranges are NEVER truncated. We used to trim anything over 16 MiB
+    // and let the client ask for the rest, which is legal HTTP but broke every
+    // large install: Sony reads a package's trailing metadata in ONE request
+    // whose size scales with the package, and it does not re-request the tail
+    // it did not get. Measured in user bug reports — a 121 GB FF16 asked for a
+    // single 249.6 MiB range and was refused with 0x80b211cd right after we
+    // answered with 16 MiB; another report truncated 718 requests (largest
+    // 39 MiB). Small packages never hit the cap, which is exactly why installs
+    // "worked with small files and failed with big ones". The body is streamed
+    // now, so a large range costs bounded memory rather than its full size.
     Ok((start, end))
 }
 
@@ -4636,6 +5145,13 @@ fn resolve_crc(session: &InstallSession, filename: &str) -> std::io::Result<Opti
 /// Read a byte range `[start, end]` (inclusive) from the split-pkg
 /// part list, crossing part boundaries as needed.
 fn read_split_range(s: &InstallSession, start: u64, end: u64) -> std::io::Result<Vec<u8>> {
+    // Install-from-a-link: there is no local file, so the range is satisfied
+    // from the origin (many connections at once, short in-memory window
+    // cache). Everything downstream — 206/Content-Range, the transfer
+    // coverage map, cancel — is identical to a local stream install.
+    if let Some(remote) = &s.remote {
+        return remote.read_range(start, end);
+    }
     let want_len = usize::try_from(end - start + 1).map_err(|_| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -4666,7 +5182,7 @@ fn read_split_range(s: &InstallSession, start: u64, end: u64) -> std::io::Result
             f.seek(SeekFrom::Start(local_start))?;
             // Read directly into `out`'s tail to avoid a double allocation
             // (previously allocated `chunk` + `out.extend_from_slice`, using
-            // up to 2× PKG_HOST_RESPONSE_BYTES_CAP = 32 MiB per request).
+            // twice the chunk size per read).
             let old_len = out.len();
             out.resize(old_len + take_usize, 0);
             f.read_exact(&mut out[old_len..])?;
@@ -4981,6 +5497,24 @@ mod loader_route_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dpi_install_source_accepts_http_links_but_not_other_schemes_or_lines() {
+        assert!(super::valid_dpi_install_source("/user/data/game.pkg"));
+        assert!(super::valid_dpi_install_source(
+            "https://example.org/game.pkg?token=abc"
+        ));
+        assert!(super::valid_dpi_install_source(
+            "http://192.168.1.10/game.pkg"
+        ));
+        assert!(!super::valid_dpi_install_source("file:///etc/passwd"));
+        assert!(!super::valid_dpi_install_source(
+            "https://example.org/a.pkg\n/evil"
+        ));
+        assert!(!super::valid_dpi_install_source(
+            "https://example.org/a.pkg#fragment"
+        ));
+        assert!(!super::valid_dpi_install_source("relative.pkg"));
+    }
     use super::*;
 
     // pkg_host_url_for reads process-global env vars (PS5UPLOAD_ENGINE_PORT,
@@ -5589,6 +6123,7 @@ mod tests {
             detail: String::new(),
             cancelled: false,
             created_at_unix: 0,
+            last_activity_unix: now_unix(),
             staging_path: None,
             terminal_status: None,
             launchable: None,
@@ -5606,6 +6141,167 @@ mod tests {
             dpi_ok: None,
             dpi_rc: None,
             dpi_detail: String::new(),
+            remote: None,
+        }
+    }
+
+    /// A bridge can be listening without a working installer behind it —
+    /// elf-arsenal's `dpiv2.elf` forwards to Arsenal's own API on loopback, so
+    /// loaded standalone it accepts the request, answers `{"res":"-1"}` and the
+    /// console never fetches a byte. Measured on hardware (Phat, FW 5.10):
+    /// `requests_served: 0`, and an install our own daemon had just completed
+    /// twice became a dead end. Zero fetches therefore MUST fall back; a
+    /// refusal after real fetches must not, because that is Sony's verdict on
+    /// an install that actually started.
+    #[test]
+    fn a_bridge_that_refuses_without_the_console_fetching_falls_back() {
+        // No bridge is listening on this port in the test environment, so the
+        // selection function can only reach the fallback — which is itself the
+        // guarantee we want when nothing answers.
+        let (_res, bridge) =
+            dpi_send_via_best_bridge("127.0.0.1", "http://127.0.0.1:1/x.pkg", || 0);
+        assert_eq!(
+            bridge, "ps5upload",
+            "with no reachable v2 bridge the native daemon must be used"
+        );
+    }
+
+    /// The decision rule itself, isolated from any socket: what the handler
+    /// must do for each (bridge answer, bytes fetched) pair.
+    #[test]
+    fn bridge_fallback_rule_matches_what_hardware_showed() {
+        // (accepted by bridge, requests the console made) -> keep the bridge's answer?
+        let keep = |accepted: bool, fetched: u64| accepted || fetched > 0;
+
+        // Accepted: always the bridge's result, fetches or not.
+        assert!(keep(true, 0));
+        assert!(keep(true, 57));
+        // Refused having fetched nothing: the elf-arsenal-standalone case.
+        // Must NOT be kept — fall back to our daemon.
+        assert!(!keep(false, 0));
+        // Refused after the console really started: Sony's verdict, keep it
+        // rather than re-running the install down a second path.
+        assert!(keep(false, 1));
+        assert!(keep(false, 57));
+    }
+
+    /// etaHEN and elf-arsenal answer the DPI v2 bridge differently on
+    /// success, and a bridge that answers-but-refuses must not be confused
+    /// with one that never answered: the first is Sony's real verdict, the
+    /// second is the only case worth retrying through our own daemon.
+    #[test]
+    fn dpi_v2_replies_map_onto_the_native_daemon_verdicts() {
+        let ok_etahen = "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n{\"res\":\"0\"}";
+        assert!(matches!(parse_dpi_v2_reply(ok_etahen), DpiReply::Ok));
+
+        // elf-arsenal's bridge forwards Arsenal's own synchronous verdict.
+        let ok_arsenal = "HTTP/1.0 200 OK\r\n\r\n{\"ok\":true,\"via\":\"dpi\"}";
+        assert!(matches!(parse_dpi_v2_reply(ok_arsenal), DpiReply::Ok));
+
+        // Whitespace after the colon is still success.
+        let ok_spaced = "HTTP/1.0 200 OK\r\n\r\n{\"res\": \"0\"}";
+        assert!(matches!(parse_dpi_v2_reply(ok_spaced), DpiReply::Ok));
+
+        // A refusal is a real rejection, reported with the ambiguous sentinel
+        // so artifact verification decides rather than a bogus Sony code.
+        let refused = "HTTP/1.0 500 Error\r\n\r\n{\"res\":\"-1\",\"error\":\"install failed\"}";
+        assert!(matches!(
+            parse_dpi_v2_reply(refused),
+            DpiReply::InstallReject(-1)
+        ));
+
+        // Nothing came back at all — transport failure, worth a fallback.
+        assert!(matches!(parse_dpi_v2_reply(""), DpiReply::RecvError));
+        assert!(matches!(
+            parse_dpi_v2_reply("HTTP/1.0 200 OK\r\n\r\n"),
+            DpiReply::RecvError
+        ));
+    }
+
+    /// The URL is interpolated into a JSON string, so anything that could
+    /// close that string has to be refused rather than escaped — our pkg-host
+    /// URLs never contain these, so refusing costs nothing and rules out the
+    /// injection entirely.
+    #[test]
+    fn dpi_v2_refuses_a_url_that_could_break_out_of_the_json_body() {
+        for bad in [
+            "http://host/a\".pkg",
+            "http://host/a\\pkg",
+            "http://host/a\npkg",
+            "http://host/a\rpkg",
+        ] {
+            let Err(err) = dpi_v2_send("127.0.0.1", bad) else {
+                panic!("must refuse {bad:?}");
+            };
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "for {bad:?}");
+        }
+    }
+
+    /// A long install must not be reaped while the console is still pulling.
+    /// Expiry is measured from the last served range, not from creation: a
+    /// 200-300 GB package on a modest link runs well past the 2 h ceiling, and
+    /// ageing it out by creation time 404'd the console's next range — what
+    /// users reported as the transfer losing connection.
+    #[test]
+    fn a_session_still_being_fetched_is_never_aged_out() {
+        let max_age = pkg_session_max_age_sec();
+        let now = now_unix();
+
+        // Created 5 hours ago — far past the ceiling — but fetched a second
+        // ago, i.e. an install that has been running all night and is fine.
+        let mut busy = dummy_session(vec![]);
+        busy.created_at_unix = now - (5 * 60 * 60);
+        busy.last_activity_unix = now - 1;
+
+        // Same age, but nothing has touched it since it was made.
+        let mut abandoned = dummy_session(vec![]);
+        abandoned.created_at_unix = now - (5 * 60 * 60);
+        abandoned.last_activity_unix = abandoned.created_at_unix;
+
+        let idle =
+            |s: &InstallSession| now.saturating_sub(s.last_activity_unix.max(s.created_at_unix));
+        assert!(
+            idle(&busy) < max_age,
+            "an actively fetched session must be kept"
+        );
+        assert!(
+            idle(&abandoned) >= max_age,
+            "a genuinely abandoned session must still be reaped"
+        );
+    }
+
+    /// A remote-backed session must satisfy ranges from the HTTP origin
+    /// instead of the (empty) `parts` list. This is the seam between the
+    /// range proxy and the pkg-host serve path: if `read_split_range` ever
+    /// stopped delegating, an install-from-a-link would serve zero bytes or
+    /// hit "No such file", and only a test that goes through a session catches
+    /// it.
+    #[test]
+    fn a_remote_backed_session_serves_ranges_from_the_origin() {
+        use crate::remote_pkg::origin_tests::{body, spawn_origin};
+
+        let total = 3 * 1024 * 1024usize;
+        let data = body(total);
+        let origin = spawn_origin(data.clone(), 0, false);
+        let remote = Arc::new(crate::remote_pkg::RemoteSource::new(
+            format!("http://{}/game.pkg", origin.addr),
+            total as u64,
+        ));
+
+        // A link install has no local parts at all — every byte is proxied.
+        let mut session = dummy_session(vec![]);
+        session.total_size = total as u64;
+        session.remote = Some(remote);
+
+        for (start, len) in [(0u64, 4096u64), (1_000_000, 200_000), (total as u64 - 8, 8)] {
+            let end = start + len - 1;
+            let got = read_split_range(&session, start, end)
+                .unwrap_or_else(|e| panic!("remote session read {start}..={end} failed: {e}"));
+            assert_eq!(
+                got,
+                &data[start as usize..=end as usize],
+                "wrong bytes served for {start}..={end}"
+            );
         }
     }
 
@@ -5716,39 +6412,57 @@ mod tests {
     }
 
     #[test]
-    fn over_cap_range_is_trimmed() {
-        // A request larger than PKG_HOST_RESPONSE_BYTES_CAP must come
-        // back trimmed to the cap, NOT errored. HTTP Range semantics
-        // let the client follow up for the rest. Without this, a
-        // malicious LAN client requesting `bytes=0-{total-1}` on a
-        // big pkg would force a multi-GB Vec allocation and OOM the
-        // engine.
+    fn a_large_range_is_served_whole_never_trimmed() {
+        // Sony reads a package's trailing metadata in ONE request whose size
+        // scales with the package, and does not re-request a tail it did not
+        // get. We used to trim anything over 16 MiB, which is legal HTTP but
+        // failed every large install: a 121 GB FF16 asked for 249.6 MiB in one
+        // range and was refused with 0x80b211cd immediately after our 16 MiB
+        // answer. The body is streamed, so serving it whole is bounded work.
         let mut h = HeaderMap::new();
-        // 50 GB total, request the full thing.
+        let total: u64 = 121 * 1024 * 1024 * 1024;
+        let start_at: u64 = 120 * 1024 * 1024 * 1024;
+        let want: u64 = 262 * 1024 * 1024; // ~the measured footer read
+        h.insert(
+            header::RANGE,
+            format!("bytes={start_at}-{}", start_at + want - 1)
+                .parse()
+                .unwrap(),
+        );
+        let (start, end) = parse_range_header(&h, total).unwrap();
+        assert_eq!(start, start_at);
+        assert_eq!(
+            end - start + 1,
+            want,
+            "the full requested range must be served"
+        );
+    }
+
+    #[test]
+    fn a_whole_file_range_is_served_whole() {
+        // The extreme case: `bytes=0-{total-1}` on a 50 GB package. Streaming
+        // means this no longer implies a 50 GB allocation.
+        let mut h = HeaderMap::new();
         let total: u64 = 50 * 1024 * 1024 * 1024;
         h.insert(
             header::RANGE,
             format!("bytes=0-{}", total - 1).parse().unwrap(),
         );
         let (start, end) = parse_range_header(&h, total).unwrap();
-        assert_eq!(start, 0);
-        assert_eq!(end, PKG_HOST_RESPONSE_BYTES_CAP - 1);
-        // `end - start < CAP` is the post-trim invariant. Avoiding
-        // `+ 1 <= CAP` keeps clippy::int_plus_one quiet without
-        // changing the assertion's semantics.
-        assert!(end - start < PKG_HOST_RESPONSE_BYTES_CAP);
+        assert_eq!((start, end), (0, total - 1));
     }
 
     #[test]
-    fn no_range_header_is_capped() {
-        // GET with no Range header on a giant pkg used to return the
-        // whole thing (and OOM). Now serves only the first cap-sized
-        // window; client must follow up with explicit ranges.
+    fn no_range_header_serves_the_whole_file() {
+        // A bare GET now yields the entire package rather than a capped
+        // prefix. Returning a truncated body with a 206 was how a non-Range
+        // consumer could mistake an incomplete package for a complete one.
         let h = HeaderMap::new();
         let total: u64 = 50 * 1024 * 1024 * 1024;
         let (start, end) = parse_range_header(&h, total).unwrap();
-        assert_eq!(start, 0);
-        assert_eq!(end, PKG_HOST_RESPONSE_BYTES_CAP - 1);
+        assert_eq!((start, end), (0, total - 1));
+        // And with the whole file covered, it is a plain 200, not a 206.
+        assert!(!serve_is_partial(false, end, total));
     }
 
     #[test]
@@ -5764,13 +6478,16 @@ mod tests {
     #[test]
     fn serve_partial_status_matches_body_coverage() {
         let total: u64 = 50 * 1024 * 1024 * 1024;
-        // Bare GET trimmed by the cap → must be 206 (body < total).
+        // A bare GET now covers the whole file, so it is a plain 200 — there is
+        // no longer a truncated body that would need a 206 to be honest about.
         let (s, e) = parse_range_header(&HeaderMap::new(), total).unwrap();
-        assert_eq!(s, 0);
+        assert_eq!((s, e), (0, total - 1));
         assert!(
-            serve_is_partial(false, e, total),
-            "trimmed bare GET must be 206"
+            !serve_is_partial(false, e, total),
+            "a whole-file bare GET must be 200"
         );
+        // The 206 rule still holds for any body that really is a subset.
+        assert!(serve_is_partial(false, total - 2, total));
         // Bare GET on a small pkg that fits → bare 200.
         let (_s2, e2) = parse_range_header(&HeaderMap::new(), 100).unwrap();
         assert!(
@@ -5782,8 +6499,8 @@ mod tests {
     }
 
     #[test]
-    fn under_cap_range_passes_through_unchanged() {
-        // A reasonable BGFT fetch (a few MB) is unaffected by the cap.
+    fn an_ordinary_small_range_passes_through_unchanged() {
+        // A reasonable BGFT fetch (a few MB) is returned exactly as asked.
         let mut h = HeaderMap::new();
         h.insert(header::RANGE, "bytes=1000-2000".parse().unwrap());
         let (start, end) = parse_range_header(&h, 10_000_000).unwrap();

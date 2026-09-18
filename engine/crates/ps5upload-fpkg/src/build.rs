@@ -557,15 +557,16 @@ fn now() -> (i64, u32) {
     (nanos.as_secs() as i64, nanos.subsec_nanos())
 }
 
+/// The outer PFS seed, from the operating system's randomness.
+///
+/// This used to read `/dev/urandom`, which does not exist on Windows, so every build there
+/// silently took the clock fallback below — two builds started in the same nanosecond window
+/// would share a seed. The OS call works on every platform we ship, so the fallback is now
+/// genuinely unreachable in practice and remains only so that a build never fails for want of
+/// entropy: the seed diversifies the key, it is not itself a secret.
 fn random_seed() -> [u8; 16] {
-    use std::io::Read;
     let mut seed = [0u8; 16];
-    // `/dev/urandom` never reaches EOF, so read exactly one seed's worth.
-    let filled = std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut seed))
-        .is_ok();
-    if !filled {
-        // Fall back to the clock; the seed is not a secret, it only diversifies the key.
+    if getrandom::fill(&mut seed).is_err() {
         let (secs, nanos) = now();
         seed[..8].copy_from_slice(&secs.to_le_bytes());
         seed[8..].copy_from_slice(&nanos.to_le_bytes());
@@ -595,6 +596,25 @@ pub fn package_digest(path: &Path) -> Result<[u8; 32]> {
 
 #[cfg(test)]
 mod tests {
+    /// The seed must come from the OS, not the clock. Reading `/dev/urandom` meant Windows
+    /// always took the clock fallback, so two builds in the same nanosecond window shared a
+    /// seed. Clock-derived seeds are recognisable: the first eight bytes are a small
+    /// little-endian second count, so the high bytes are zero.
+    #[test]
+    fn the_seed_comes_from_the_os_not_the_clock() {
+        let a = super::random_seed();
+        let b = super::random_seed();
+        assert_ne!(a, [0u8; 16], "an all-zero seed means nothing was written");
+        assert_ne!(a, b, "two seeds must differ");
+        // A seconds-since-epoch value leaves bytes 5..8 zero for the next few thousand
+        // years; real randomness effectively never does across two draws.
+        let clocklike = |s: &[u8; 16]| s[5] == 0 && s[6] == 0 && s[7] == 0;
+        assert!(
+            !(clocklike(&a) && clocklike(&b)),
+            "both seeds look clock-derived: {a:02x?} {b:02x?}"
+        );
+    }
+
     use super::*;
 
     /// The seed must come from exactly one read: `fs::read` on `/dev/urandom` never

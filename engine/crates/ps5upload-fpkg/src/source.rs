@@ -337,6 +337,51 @@ fn module_magic(tree: &mut dyn SourceTree, rel: &str) -> Option<[u8; 4]> {
     head.try_into().ok()
 }
 
+/// Bytes read per window while looking for an import name. Bounded so a 100 MB `eboot.bin`
+/// costs a megabyte of buffer, not its whole size.
+const AMPR_SCAN_WINDOW: usize = 1024 * 1024;
+/// How far into a module the scan looks. Import names live in the dynamic section near the
+/// front; reading further would cost time on every build for no added detection.
+const AMPR_SCAN_LIMIT: u64 = 16 * 1024 * 1024;
+/// The import whose presence means the title needs `ampr_emu` on the console.
+const AMPR_LIB: &[u8] = b"libSceAmpr";
+
+/// Does `rel` import `libSceAmpr`?
+///
+/// A title built against AMPR installs normally and then fails to start unless `ampr_emu` is
+/// loaded, which presents as a black screen with nothing in the package to explain it. The
+/// name is looked for as a literal in the module's own bytes: fake-SELF and raw-ELF modules —
+/// the two kinds that can launch here — keep their import names in clear text.
+///
+/// Windows overlap by the name's length so a match lying across a boundary is still found;
+/// without that, detection would depend on where in the file the string happened to land.
+fn imports_ampr(tree: &mut dyn SourceTree, rel: &str) -> bool {
+    let mut offset = 0u64;
+    let mut carry: Vec<u8> = Vec::new();
+    while offset < AMPR_SCAN_LIMIT {
+        let Ok(chunk) = tree.read_range(rel, offset, AMPR_SCAN_WINDOW) else {
+            return false;
+        };
+        if chunk.is_empty() {
+            return false;
+        }
+        let read = chunk.len() as u64;
+        // Prepend the tail of the previous window so a straddling name is contiguous here.
+        let mut window = carry;
+        window.extend_from_slice(&chunk);
+        if window.windows(AMPR_LIB.len()).any(|w| w == AMPR_LIB) {
+            return true;
+        }
+        let keep = window.len().saturating_sub(AMPR_LIB.len() - 1);
+        carry = window.split_off(keep);
+        offset += read;
+        if read < AMPR_SCAN_WINDOW as u64 {
+            return false; // short read: end of file
+        }
+    }
+    false
+}
+
 /// Report readiness for a source tree. Never blocks: the caller decides which findings
 /// matter for the build it is about to run.
 pub fn readiness(tree: &mut dyn SourceTree) -> Readiness {
@@ -398,6 +443,17 @@ pub fn readiness(tree: &mut dyn SourceTree) -> Readiness {
         has("sce_sys/about/right.sprx"),
         "the rights module a debug package ships",
     );
+    // AMPR titles install fine and then will not start without ampr_emu loaded, which looks
+    // like a broken package rather than a missing dependency. Say so before the build.
+    if imports_ampr(tree, "eboot.bin") {
+        r.push(
+            "libSceAmpr import",
+            false,
+            "eboot.bin imports libSceAmpr: the title installs but will not start unless \
+             ampr_emu is loaded on the console",
+        );
+    }
+
     if let Some(m) = module_magic(tree, "eboot.bin") {
         let (kind, launchable) = match m {
             magic::RAW_ELF => ("raw ELF", true),
@@ -418,6 +474,63 @@ pub fn readiness(tree: &mut dyn SourceTree) -> Readiness {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tree held in memory, so a readiness check can be exercised without touching disk.
+    struct MemTree(Vec<(String, Vec<u8>)>);
+
+    impl SourceTree for MemTree {
+        fn files(&self) -> &[SourceFile] {
+            // Readiness only asks `files()` for names and sizes; the checks under test read
+            // bytes instead, so an empty slice keeps this helper to the point.
+            &[]
+        }
+        fn read(&mut self, path: &str) -> Result<Vec<u8>> {
+            self.0
+                .iter()
+                .find(|(p, _)| p == path)
+                .map(|(_, b)| b.clone())
+                .ok_or_else(|| crate::Error::Format(format!("no {path}")))
+        }
+        fn describe(&self) -> String {
+            "mem".to_string()
+        }
+    }
+
+    /// A title that imports libSceAmpr will install and then fail to start unless ampr_emu is
+    /// loaded on the console. Detecting it at build time is the difference between a known
+    /// requirement and an unexplained black screen.
+    #[test]
+    fn an_ampr_import_is_detected_in_the_module() {
+        let mut eboot = vec![0u8; 4096];
+        eboot[0..4].copy_from_slice(&magic::RAW_ELF);
+        eboot[2048..2048 + b"libSceAmpr.prx".len()].copy_from_slice(b"libSceAmpr.prx");
+        let mut tree = MemTree(vec![("eboot.bin".to_string(), eboot)]);
+        assert!(imports_ampr(&mut tree, "eboot.bin"));
+    }
+
+    #[test]
+    fn a_module_without_the_import_is_not_flagged() {
+        let mut eboot = vec![0u8; 4096];
+        eboot[0..4].copy_from_slice(&magic::RAW_ELF);
+        eboot[2048..2048 + b"libSceGnmDriver".len()].copy_from_slice(b"libSceGnmDriver");
+        let mut tree = MemTree(vec![("eboot.bin".to_string(), eboot)]);
+        assert!(!imports_ampr(&mut tree, "eboot.bin"));
+        // A module that is not there at all is not a reason to claim an AMPR dependency.
+        assert!(!imports_ampr(&mut tree, "nope.bin"));
+    }
+
+    /// The scan reads in windows, so a name lying across a window boundary must still be
+    /// found — otherwise detection would depend on where in the file the string happens to sit.
+    #[test]
+    fn an_import_spanning_a_scan_window_is_still_found() {
+        let name = b"libSceAmpr";
+        let mut eboot = vec![0u8; AMPR_SCAN_WINDOW * 2];
+        eboot[0..4].copy_from_slice(&magic::RAW_ELF);
+        let at = AMPR_SCAN_WINDOW - (name.len() / 2);
+        eboot[at..at + name.len()].copy_from_slice(name);
+        let mut tree = MemTree(vec![("eboot.bin".to_string(), eboot)]);
+        assert!(imports_ampr(&mut tree, "eboot.bin"));
+    }
 
     #[test]
     fn the_packaged_param_json_names_the_id_it_is_built_under() {
@@ -564,6 +677,45 @@ mod tests {
         assert!(drm_rewrite(br#"{"applicationDrmType":"Standard"}"#).is_none());
         assert!(drm_rewrite(br#"{"contentId":"X"}"#).is_none());
         assert!(drm_rewrite(b"not json at all").is_none());
+    }
+
+    /// The finding has to reach the report a user actually sees — a detector that works but
+    /// is never called would be invisible, which is the failure this guards.
+    #[test]
+    fn readiness_reports_an_ampr_dependency() {
+        let dir = std::env::temp_dir().join(format!(
+            "fpkg-ready-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sce_sys")).unwrap();
+        let mut eboot = vec![0u8; 8192];
+        eboot[0..4].copy_from_slice(&magic::RAW_ELF);
+        eboot[4096..4096 + b"libSceAmpr.prx".len()].copy_from_slice(b"libSceAmpr.prx");
+        std::fs::write(dir.join("eboot.bin"), &eboot).unwrap();
+        std::fs::write(
+            dir.join("sce_sys/param.json"),
+            br#"{"contentId":"UP0000-PPSA99011_00-X","requiredSystemSoftwareVersion":"0x1160000000000000"}"#,
+        )
+        .unwrap();
+
+        let mut tree = open(&dir).unwrap();
+        let readiness = readiness(tree.as_mut());
+
+        // The AMPR finding is a WARNING, so it surfaces through `warnings()` — the same
+        // iterator the build turns into the user-visible list.
+        let ampr = readiness
+            .warnings()
+            .find(|c| c.name == "libSceAmpr import")
+            .expect("an ampr warning");
+        assert!(ampr.detail.contains("ampr_emu"), "{}", ampr.detail);
+        assert!(
+            !readiness.ok(),
+            "an AMPR dependency must not read as all-clear"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

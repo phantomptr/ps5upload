@@ -424,7 +424,9 @@ int main(void) {
              * can see the staged pkg. URLs pass through unchanged. */
             rewrite_path_for_install(buffer, fixed, sizeof(fixed));
 
-            notify("ezRemote DPI received:\n%s", fixed);
+            /* A remote URL may contain a signed query token. Never show it
+             * on screen or in a diagnostic bundle. */
+            notify("ezRemote DPI received %s package", fixed[0] == '/' ? "local" : "remote");
 
             memset(&playgo_info, 0, sizeof(playgo_info));
             memset(&pkg_info, 0, sizeof(pkg_info));

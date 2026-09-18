@@ -884,6 +884,9 @@ fn walk_entries(
 
 fn parse_param_json_into(buf: &[u8], meta: &mut PkgMetadata) -> Result<(), &'static str> {
     let value = parse_param_json_value(buf)?;
+    if let Some(w) = drm_type_warning(&value) {
+        meta.warnings.push(w);
+    }
     apply_param_json(
         &value,
         &mut meta.content_id,
@@ -892,6 +895,38 @@ fn parse_param_json_into(buf: &[u8], meta: &mut PkgMetadata) -> Result<(), &'sta
         &mut meta.app_ver,
     );
     Ok(())
+}
+
+/// The value `applicationDrmType` must carry for a package the console will
+/// actually run.
+const DRM_TYPE_STANDARD: &str = "standard";
+
+/// Flag a package whose `param.json` declares a DRM type the console will not
+/// run.
+///
+/// A title dumped from a disc or store install keeps the DRM type it shipped
+/// with, and a package built from that dump as-is installs but then refuses to
+/// start. Package-building tools force the field to `"standard"` on every build
+/// for exactly this reason (rdmrocha/fpkg-cli does it by default and documents
+/// it as one of two fix-ups without which "a dump used as-is builds a package
+/// the console refuses to run").
+///
+/// Catching it when the package is *parsed* means the user is told before they
+/// spend an hour uploading and installing, instead of meeting a bare Sony error
+/// code afterwards. It is only ever a warning: the field is advisory, we may be
+/// reading a package type whose rules differ, and refusing to install would be
+/// worse than letting an informed user try.
+fn drm_type_warning(value: &serde_json::Value) -> Option<String> {
+    let drm = value.get("applicationDrmType")?.as_str()?.trim();
+    if drm.is_empty() || drm.eq_ignore_ascii_case(DRM_TYPE_STANDARD) {
+        return None;
+    }
+    Some(format!(
+        "param.json declares applicationDrmType \"{drm}\" instead of \"standard\" — \
+         the PS5 can install this package and then refuse to start the game. \
+         It usually means the package was built from a dump without resetting \
+         the DRM type; rebuilding it with a tool that sets \"standard\" fixes it."
+    ))
 }
 
 fn parse_param_json_value(buf: &[u8]) -> Result<serde_json::Value, &'static str> {
@@ -1328,6 +1363,49 @@ fn b64_encode(input: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A package built from a dump keeps its original DRM type and then refuses
+    /// to start once installed. Warn at parse time, before an hour of uploading.
+    #[test]
+    fn a_non_standard_drm_type_is_warned_about() {
+        let v: serde_json::Value = serde_json::from_str(r#"{"applicationDrmType":"psn"}"#).unwrap();
+        let w = super::drm_type_warning(&v).expect("must warn");
+        assert!(w.contains("psn"), "warning should name the value: {w}");
+        assert!(w.contains("standard"), "warning should name the fix: {w}");
+    }
+
+    #[test]
+    fn a_standard_drm_type_is_silent() {
+        for good in [
+            r#"{"applicationDrmType":"standard"}"#,
+            r#"{"applicationDrmType":"STANDARD"}"#,
+        ] {
+            let v: serde_json::Value = serde_json::from_str(good).unwrap();
+            assert!(
+                super::drm_type_warning(&v).is_none(),
+                "should not warn for {good}"
+            );
+        }
+    }
+
+    /// Absent, empty or non-string means "nothing to say" — never a warning,
+    /// because a false alarm on a good package trains people to ignore them.
+    #[test]
+    fn a_missing_or_unusable_drm_type_is_silent() {
+        for quiet in [
+            r#"{}"#,
+            r#"{"applicationDrmType":""}"#,
+            r#"{"applicationDrmType":"  "}"#,
+            r#"{"applicationDrmType":3}"#,
+            r#"{"applicationDrmType":null}"#,
+        ] {
+            let v: serde_json::Value = serde_json::from_str(quiet).unwrap();
+            assert!(
+                super::drm_type_warning(&v).is_none(),
+                "should not warn for {quiet}"
+            );
+        }
+    }
+
     use super::*;
 
     #[test]

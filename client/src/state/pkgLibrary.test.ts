@@ -73,9 +73,29 @@ import {
   PKG_ACCEPTED_UNVERIFIED_HINT,
   PKG_ENGINE_BLIND_HINT,
   PKG_PATCH_REJECTED_HINT,
+  verifyDpiInstalledArtifact,
   type PkgEntry,
 } from "./pkgLibrary";
 import { useTaskStore } from "./tasks";
+
+describe("link install input", () => {
+  it("rejects unsafe URLs before contacting the console", async () => {
+    vi.mocked(invoke).mockClear();
+    const host = "192.168.86.99";
+    const store = pkgLibraryStore(host);
+    for (const source of [
+      "file:///tmp/game.pkg",
+      "https://example.org/game.pkg#part",
+      "https://example.org/game.pkg\n/next",
+      "not a URL",
+    ]) {
+      const result = await store.getState().installUrl(source, host);
+      expect(result.ok).toBe(false);
+    }
+    expect(invoke).not.toHaveBeenCalled();
+    evictPkgLibraryStore(host);
+  });
+});
 
 describe("platformFromTitleId", () => {
   it("maps CUSA → ps4 and PPSA → ps5", () => {
@@ -419,6 +439,113 @@ describe("installStream — DPI lifecycle and HTTP fallback", () => {
     mockedInventory.mockReset().mockResolvedValue([]);
   });
 
+  it("leaves the running payloads alone when an existing DPI bridge did the install", async () => {
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_metadata_split") return metadata;
+      if (cmd === "pkg_install_start")
+        return { err_code: 0, session_id: "bridge-session" };
+      // dpi_ensure reports a bridge already listening: ok, but nothing sent.
+      if (cmd === "dpi_ensure")
+        return { ok: true, listening: true, sent: false };
+      if (cmd === "pkg_dpi_direct_install")
+        return { ok: true, rc: 0, requests_served: 12, bridge: "dpiv2" };
+      if (cmd === "pkg_install_status")
+        return { phase: "done", completed: true, transfer_bytes: 8_192_000 };
+      if (cmd === "payload_bundled_path")
+        return { ok: true, path: "/tmp/ps5upload.elf" };
+      return {};
+    });
+
+    await pkgLibraryStore(host).getState().installStream(localPath, host);
+
+    // The whole point: nothing was sent to the loader, so nothing may be
+    // re-sent to "restore" it either — that would disturb the very payloads
+    // using the bridge is meant to preserve.
+    expect(mockedInvoke).not.toHaveBeenCalledWith(
+      "payload_send",
+      expect.anything(),
+    );
+  });
+
+  it("still restores the main payload when our own DPI daemon was sent", async () => {
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_metadata_split") return metadata;
+      if (cmd === "pkg_install_start")
+        return { err_code: 0, session_id: "swap-session" };
+      // No bridge: our ELF was sent to the loader.
+      if (cmd === "dpi_ensure")
+        return { ok: true, listening: true, sent: true };
+      if (cmd === "pkg_dpi_direct_install")
+        return { ok: true, rc: 0, requests_served: 12, bridge: "ps5upload" };
+      if (cmd === "pkg_install_status")
+        return { phase: "done", completed: true, transfer_bytes: 8_192_000 };
+      if (cmd === "payload_bundled_path")
+        return { ok: true, path: "/tmp/ps5upload.elf" };
+      return {};
+    });
+
+    await pkgLibraryStore(host).getState().installStream(localPath, host);
+
+    expect(mockedInvoke).toHaveBeenCalledWith("payload_send", {
+      ip: host,
+      path: "/tmp/ps5upload.elf",
+      port: null,
+    });
+  });
+
+  it("routes a link through the engine's range proxy instead of parsing a local file", async () => {
+    const url = "https://files.example/game.pkg?token=secret";
+    let startArgs: Record<string, unknown> | undefined;
+    mockedInvoke.mockImplementation(async (cmd: unknown, args?: unknown) => {
+      // A link has no PC-side file, so the local header parse must not run.
+      if (cmd === "pkg_metadata_split") {
+        throw new Error("a link install must not parse a local .pkg");
+      }
+      if (cmd === "pkg_remote_probe") {
+        expect((args as { url: string }).url).toBe(url);
+        return {
+          total_size: 8_192_000,
+          content_id: "UP0000-CUSA33334_00-TEST000000000000",
+          title: "Test Game",
+          category: "gd",
+          platform: "ps4",
+          package_type: "PS4GD",
+          fingerprint: "a".repeat(64),
+        };
+      }
+      if (cmd === "pkg_install_start") {
+        startArgs = args as Record<string, unknown>;
+        return { err_code: 0, session_id: "link-session" };
+      }
+      // Stop after the hand-off; the DPI lifecycle is covered by the tests
+      // below and is identical for both sources.
+      if (cmd === "dpi_ensure")
+        return { ok: false, sent: false, listening: false, error: "stop here" };
+      if (cmd === "payload_bundled_path")
+        return { ok: true, path: "/tmp/ps5upload.elf" };
+      return {};
+    });
+
+    await pkgLibraryStore(host).getState().installUrl(url, host);
+
+    expect(startArgs).toBeDefined();
+    // The engine is told to fetch the URL; no local or staged path is used.
+    expect(startArgs?.["remoteUrl"]).toBe(url);
+    expect(startArgs?.["path"]).toBeNull();
+    expect(startArgs?.["localPs5Path"]).toBeNull();
+    // Serve-only: the DPI daemon performs the install, as for a local stream.
+    expect(startArgs?.["serveOnly"]).toBe(true);
+    // Metadata the probe resolved is what gets registered.
+    expect(startArgs?.["expectedSize"]).toBe(8_192_000);
+    expect(startArgs?.["packageTypeOverride"]).toBe("PS4GD");
+
+    // The URL can carry a signed token, so it must not reach the task record
+    // that feeds the diagnostic bundle.
+    const recorded = JSON.stringify(useTaskStore.getState().tasks);
+    expect(recorded).not.toContain("secret");
+    expect(recorded).not.toContain("files.example");
+  });
+
   it("restores the main payload and closes the host session when DPI was sent but never became ready", async () => {
     mockedInvoke.mockImplementation(async (cmd: unknown) => {
       if (cmd === "pkg_metadata_split") return metadata;
@@ -507,7 +634,10 @@ describe("installStream — DPI lifecycle and HTTP fallback", () => {
     expect(result.stagedFallbackRecommended).toBe(true);
     expect(result.message).toMatch(/SCE_HTTP_ERROR_PROXY/);
     expect(result.message).toMatch(/Do Not Use/);
-    expect(mockedInvoke).toHaveBeenCalledWith("payload_send", expect.anything());
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      "payload_send",
+      expect.anything(),
+    );
     expect(mockedInvoke).toHaveBeenCalledWith("pkg_install_cancel", {
       session: "stream-proxy",
     });
@@ -593,10 +723,7 @@ describe("installStream — DPI lifecycle and HTTP fallback", () => {
       .installStream(localPath, host);
 
     expect(result.ok).toBe(true);
-    expect(mockedInventory).toHaveBeenCalledWith(
-      `${host}:9113`,
-      "CUSA33334",
-    );
+    expect(mockedInventory).toHaveBeenCalledWith(`${host}:9113`, "CUSA33334");
     expect(useTaskStore.getState().tasks[0]?.status).toBe("done");
   });
 
@@ -683,7 +810,10 @@ describe("installStream — DPI lifecycle and HTTP fallback", () => {
       session: "stream-gaveup",
     });
     // The payload still comes back — the daemon is not left running.
-    expect(mockedInvoke).toHaveBeenCalledWith("payload_send", expect.anything());
+    expect(mockedInvoke).toHaveBeenCalledWith(
+      "payload_send",
+      expect.anything(),
+    );
   });
 });
 
@@ -721,11 +851,22 @@ describe("install tracking when the engine is unreachable", () => {
       if (cmd === "pkg_install_status") {
         n += 1;
         if (n <= 8) throw ENGINE_DOWN();
-        return { phase: "done", launchable: true, installed_bytes: 9, total: 9 };
+        return {
+          phase: "done",
+          launchable: true,
+          installed_bytes: 9,
+          total: 9,
+        };
       }
       return {};
     });
-    const promise = runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", null, true);
+    const promise = runPkgInstall(
+      "192.168.1.50",
+      "/user/data/x.pkg",
+      "CID",
+      null,
+      true,
+    );
     await vi.advanceTimersByTimeAsync(2600 * 12);
     const r = await promise;
     expect(n).toBeGreaterThan(5);
@@ -740,7 +881,8 @@ describe("install tracking when the engine is unreachable", () => {
       if (cmd === "pkg_install_status") {
         n += 1;
         // One good poll to establish a live state, then the engine goes away.
-        if (n === 1) return { phase: "install", installed_bytes: 10, total: 100 };
+        if (n === 1)
+          return { phase: "install", installed_bytes: 10, total: 100 };
         if (n <= 4) throw ENGINE_DOWN();
         return { phase: "done", launchable: true };
       }
@@ -774,7 +916,13 @@ describe("install tracking when the engine is unreachable", () => {
       }
       return {};
     });
-    const promise = runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", null, true);
+    const promise = runPkgInstall(
+      "192.168.1.50",
+      "/user/data/x.pkg",
+      "CID",
+      null,
+      true,
+    );
     await vi.advanceTimersByTimeAsync(2600 * 8);
     const r = await promise;
     expect(statusCalls).toBe(1);
@@ -793,7 +941,13 @@ describe("install tracking when the engine is unreachable", () => {
       if (cmd === "pkg_install_status") throw ENGINE_DOWN();
       return {};
     });
-    const promise = runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", null, true);
+    const promise = runPkgInstall(
+      "192.168.1.50",
+      "/user/data/x.pkg",
+      "CID",
+      null,
+      true,
+    );
     await vi.advanceTimersByTimeAsync(6 * 60 * 1000);
     const r = await promise;
     expect(r.installed).toBe(false);
@@ -1329,6 +1483,89 @@ describe("pkgInstallMayNotLaunch", () => {
 
 // ── delete_staging threading (the Auto-Delete data-loss fix) ────────────────
 //
+describe("post-install verification waits on progress, not a fixed clock", () => {
+  const mockedInvoke = vi.mocked(invoke);
+  const mockedInventory = vi.mocked(pkgInstalledInventory);
+  const host = "192.168.55.77";
+  const contentId = "EP0082-PPSA10665_00-FF16000000000000";
+  const titleId = "PPSA10665";
+  const total = 121 * 1024 * 1024 * 1024; // a 121 GB title, as reported
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useTaskStore.setState({ tasks: [] });
+    mockedInvoke.mockReset();
+    mockedInventory.mockReset();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    evictPkgLibraryStore(host);
+  });
+
+  /** Drive the fake clock until `p` settles, so the poll loop can advance. */
+  async function runOut<T>(p: Promise<T>): Promise<T> {
+    let done = false;
+    const wrapped = p.finally(() => {
+      done = true;
+    });
+    while (!done) {
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+    return wrapped;
+  }
+
+  it("keeps waiting while the PS5 is still writing a huge title, then confirms it", async () => {
+    // The install writes in stages and only reaches full size well past the
+    // old 3-minute cap — the exact shape that made ps5upload report an error
+    // for an install the console went on to finish.
+    let polls = 0;
+    mockedInventory.mockImplementation(async () => {
+      polls += 1;
+      // ~50 polls in, the artifact finally lands complete.
+      const size =
+        polls < 50 ? Math.min(total - 1, polls * 2_000_000_000) : total;
+      return [
+        {
+          kind: "base" as const,
+          path: `/user/app/${titleId}/app.pkg`,
+          size,
+          fingerprint: size === total ? "f".repeat(64) : "",
+          contentId,
+        },
+      ];
+    });
+
+    const verified = await runOut(
+      verifyDpiInstalledArtifact(host, contentId, "PS5GD", {
+        size: total,
+        fingerprint: "f".repeat(64),
+      }),
+    );
+
+    expect(verified).toBe(true);
+    // It must have polled far past the old 3-minute / ~90-poll ceiling.
+    expect(polls).toBeGreaterThan(40);
+  });
+
+  it("still gives up when the install is genuinely not writing anything", async () => {
+    // Artifact never appears and nothing grows: the idle window must expire
+    // rather than waiting out the multi-hour ceiling.
+    mockedInventory.mockResolvedValue([]);
+
+    const started = Date.now();
+    const verified = await runOut(
+      verifyDpiInstalledArtifact(host, contentId, "PS5GD", {
+        size: total,
+        fingerprint: "f".repeat(64),
+      }),
+    );
+
+    expect(verified).toBe(false);
+    // Bounded by the idle window, nowhere near the absolute ceiling.
+    expect(Date.now() - started).toBeLessThan(30 * 60 * 1000);
+  });
+});
+
 // runPkgInstall MUST forward the caller's delete-staging intent to the engine
 // (pkg_install_start). Before the fix the engine always deleted the uploaded
 // pkg regardless; the regression we're guarding is "Auto Delete off but the pkg

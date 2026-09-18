@@ -42,6 +42,8 @@ mod local_fs;
 mod log_dedup;
 mod pkg_install;
 mod pkg_sidecar;
+#[cfg(not(target_os = "android"))]
+mod remote_pkg;
 mod smb;
 #[cfg(feature = "webui")]
 mod webui;

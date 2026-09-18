@@ -1181,6 +1181,7 @@ dependencies = [
  "cfb-mode",
  "crc32fast",
  "ftx2-proto",
+ "getrandom 0.4.3",
  "hmac",
  "image",
  "libc",
@@ -1213,6 +1214,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tower-http",
+ "ureq",
  "uuid",
  "zip",
 ]
@@ -1223,6 +1225,7 @@ version = "5.29.0"
 dependencies = [
  "aes",
  "flate2",
+ "getrandom 0.4.3",
  "hmac",
  "libc",
  "ps5upload-pkg",

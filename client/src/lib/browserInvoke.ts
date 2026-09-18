@@ -746,6 +746,7 @@ export async function browserInvoke<T>(
         ps5_addr: args["ps5Addr"],
         path: args["path"],
         split_root: args["splitRoot"],
+        remote_url: args["remoteUrl"],
         package_type_override: args["packageTypeOverride"],
         local_ps5_path: args["localPs5Path"],
         content_id: args["contentId"],
@@ -754,6 +755,10 @@ export async function browserInvoke<T>(
         delete_staging: args["deleteStaging"] ?? true,
         serve_only: args["serveOnly"] ?? false,
       });
+
+    // Identify a package behind a link before committing to the install.
+    case "pkg_remote_probe":
+      return postJson<T>("/api/pkg/remote/probe", { url: args["url"] });
 
     case "pkg_installed_inventory": {
       const addr = args["addr"] as string;

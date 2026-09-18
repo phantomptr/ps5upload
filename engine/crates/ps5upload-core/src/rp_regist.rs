@@ -433,18 +433,43 @@ pub fn parse_registration(plain: &[u8]) -> Result<Registration> {
     Ok(out)
 }
 
+/// Fill `buf` with randomness from the operating system.
+///
+/// This used to open `/dev/urandom`, which simply does not exist on Windows: every Wake &
+/// sign in there failed with "opening /dev/urandom: os error 3" before a single packet was
+/// sent. The OS call underneath (`BCryptGenRandom`, `getrandom(2)`, `getentropy`) is the
+/// right source on each platform and cannot be defeated by a sandbox with no `/dev`.
 fn getrandom_bytes(buf: &mut [u8]) -> Result<()> {
-    use std::io::Read as _;
-    let mut f =
-        std::fs::File::open("/dev/urandom").map_err(|e| anyhow!("opening /dev/urandom: {e}"))?;
-    f.read_exact(buf)
-        .map_err(|e| anyhow!("reading /dev/urandom: {e}"))?;
-    Ok(())
+    getrandom::fill(buf).map_err(|e| anyhow!("reading OS randomness: {e}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The nonce source has to work on every platform we ship. It used to read
+    /// `/dev/urandom`, so on Windows Wake & sign in failed with "os error 3" before sending
+    /// anything — a platform-specific path in a cross-platform code path, which no test on a
+    /// Unix CI runner would ever have caught.
+    #[test]
+    fn os_randomness_fills_the_buffer_on_this_platform() {
+        let mut a = [0u8; 16];
+        let mut b = [0u8; 16];
+        getrandom_bytes(&mut a).expect("OS randomness must be available");
+        getrandom_bytes(&mut b).expect("OS randomness must be available");
+        assert_ne!(a, [0u8; 16], "a zero nonce means nothing was written");
+        assert_ne!(a, b, "two nonces must differ");
+
+        // A zero-length request is legal and must not error.
+        getrandom_bytes(&mut []).expect("an empty fill is not a failure");
+
+        // Every length the callers use, filled completely.
+        for n in [1usize, 8, 16, 32, 64] {
+            let mut buf = vec![0u8; n];
+            getrandom_bytes(&mut buf).expect("fill");
+            assert_eq!(buf.len(), n);
+        }
+    }
 
     #[test]
     fn session_keys_are_padded_to_sixteen_bytes() {

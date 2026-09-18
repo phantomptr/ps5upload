@@ -208,6 +208,18 @@ function PkgRow({
                   {tr("pkglib.auth.retail", "retail")}
                 </Badge>
               )}
+              {/* Problems found while parsing the package itself. Shown here
+                  so the user sees them BEFORE spending an upload and an
+                  install on a package the console will refuse to run. */}
+              {(entry.warnings?.length ?? 0) > 0 && (
+                <Badge
+                  tone="warn"
+                  variant="soft"
+                  title={entry.warnings?.join("\n")}
+                >
+                  {tr("pkglib.badge.pkgWarning", "check package")}
+                </Badge>
+              )}
               {installed && !busy && (
                 <Badge tone="good" variant="soft">
                   {tr("pkglib.badge.installed", "installed")}
@@ -481,6 +493,7 @@ export default function InstallPackageScreen() {
   const install = usePkgLibrary(host, (s) => s.install);
   const installAll = usePkgLibrary(host, (s) => s.installAll);
   const installStream = usePkgLibrary(host, (s) => s.installStream);
+  const installUrl = usePkgLibrary(host, (s) => s.installUrl);
   const cancelPendingInstall = usePkgLibrary(
     host,
     (s) => s.cancelPendingInstall,
@@ -520,6 +533,7 @@ export default function InstallPackageScreen() {
   } | null>(null);
   const [picking, setPicking] = useState(false);
   const [streaming, setStreaming] = useState(false);
+  const [remoteUrl, setRemoteUrl] = useState("");
   const [dropActive, setDropActive] = useState(false);
   const browserPkgInputRef = useRef<HTMLInputElement>(null);
   const [alternativeSelections, setAlternativeSelections] =
@@ -862,6 +876,36 @@ export default function InstallPackageScreen() {
       await runStreamInstall(sourcePath, streamName);
     } catch (e) {
       setPickError(`${e}`);
+    } finally {
+      setStreaming(false);
+    }
+  }
+
+  async function handleUrlInstall() {
+    setPickError(null);
+    setStreamResult(null);
+    const approved = await confirm({
+      title: tr("pkglib.url.confirmTitle", "Start experimental link install?"),
+      message: tr("pkglib.url.confirmBody", "This computer downloads the package from the link and feeds it to the PS5, so it must stay awake and connected until the install finishes. Reinstalling over an existing title may remove it if Sony's installer fails. Use only a trusted package URL you are authorized to install."),
+      confirmLabel: tr("pkglib.url.confirm", "Start install"),
+      cancelLabel: tr("pkglib.stream.fallback.cancel", "Not now"),
+    });
+    if (!approved) return;
+    setStreaming(true);
+    try {
+      const result = await installUrl(remoteUrl.trim(), host);
+      const message =
+        result.message ??
+        (result.ok
+          ? tr("pkglib.url.done", "Installed from the link.")
+          : tr("pkglib.url.failed", "The link install didn't complete."));
+      setStreamResult({
+        ok: result.ok,
+        warn: false,
+        name: "Link install",
+        message,
+      });
+      if (!result.ok) setPickError(message);
     } finally {
       setStreaming(false);
     }
@@ -1303,6 +1347,30 @@ export default function InstallPackageScreen() {
       />
 
       <ConnectionGate require="payload">
+        <div className="mb-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
+          <label htmlFor="pkg-remote-url" className="block text-sm font-medium text-[var(--color-text)]">
+            {tr("pkglib.url.title", "Install from HTTP(S) link")}
+          </label>
+          <p className="my-1 text-xs text-[var(--color-muted)]">
+            {tr("pkglib.url.help", "This computer downloads the package over several connections at once and feeds it to the PS5 on your network, so the transfer runs at your line speed rather than the console's slower single stream. Nothing is staged on either machine, so a 100 GB game needs no spare space. The link must be a direct download that supports byte ranges. Keep this computer awake until the install finishes.")}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <input
+              id="pkg-remote-url"
+              type="url"
+              value={remoteUrl}
+              onChange={(event) => setRemoteUrl(event.currentTarget.value)}
+              placeholder="https://example.com/game.pkg"
+              aria-label={tr("pkglib.url.label", "Direct package URL")}
+              className="min-w-52 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-1.5 text-sm text-[var(--color-text)]"
+            />
+            <Button variant="secondary" size="sm" onClick={handleUrlInstall}
+              disabled={!hostReady || !remoteUrl.trim() || installing || installingAll || streaming}
+              loading={streaming}>
+              {tr("pkglib.url.install", "Install link")}
+            </Button>
+          </div>
+        </div>
         <div className="mb-4 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-[12px] text-[var(--color-muted)]">
           <Info size={13} className="mt-0.5 shrink-0" />
           <div>
@@ -1417,18 +1485,18 @@ export default function InstallPackageScreen() {
           <div className="mb-4">
             <div
               className={`flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm ${
-                streamResult.ok
-                  ? "border-[var(--color-good)] text-[var(--color-good)]"
-                  : streamResult.warn
+                streamResult.warn
                     ? "border-[var(--color-warn)] text-[var(--color-warn)]"
+                  : streamResult.ok
+                    ? "border-[var(--color-good)] text-[var(--color-good)]"
                     : "border-[var(--color-bad)] text-[var(--color-bad)]"
               }`}
               role="status"
             >
-              {streamResult.ok ? (
+              {streamResult.warn ? (
+                <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+              ) : streamResult.ok ? (
                 <CheckCircle2 size={15} className="mt-px shrink-0" />
-              ) : streamResult.warn ? (
-                <AlertTriangle size={15} className="mt-px shrink-0" />
               ) : (
                 <XCircle size={15} className="mt-px shrink-0" />
               )}

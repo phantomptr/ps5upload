@@ -2710,6 +2710,10 @@ pub async fn pkg_install_start(
     ps5_addr: String,
     path: Option<String>,
     split_root: Option<String>,
+    // Install-from-a-link: the engine fetches the package from this HTTP(S)
+    // URL over many connections at once and re-serves it to the console from
+    // the pkg-host. Mutually exclusive with path/split_root/local_ps5_path.
+    remote_url: Option<String>,
     package_type_override: Option<String>,
     local_ps5_path: Option<String>,
     content_id: Option<String>,
@@ -2729,6 +2733,7 @@ pub async fn pkg_install_start(
         "ps5_addr": ps5_addr,
         "path": path,
         "split_root": split_root,
+        "remote_url": remote_url,
         "package_type_override": package_type_override,
         "local_ps5_path": local_ps5_path,
         "content_id": content_id,
@@ -2738,6 +2743,15 @@ pub async fn pkg_install_start(
         "serve_only": serve_only.unwrap_or(false),
     });
     post_json(&url, &body).await
+}
+
+/// Identify the package behind an HTTP(S) link without downloading it, so the
+/// UI can show what it is (and reject a share page) before the user commits to
+/// a multi-hour install. Reads only a few byte ranges from the origin.
+#[tauri::command]
+pub async fn pkg_remote_probe(url: String) -> Result<JsonValue, String> {
+    let endpoint = format!("{}/api/pkg/remote/probe", engine::url());
+    post_json(&endpoint, &serde_json::json!({ "url": url })).await
 }
 
 /// Install a staged .pkg through the DPI daemon on :9040 (the engine
