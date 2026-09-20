@@ -1517,6 +1517,62 @@ export async function verifyDpiInstalledArtifact(
   return false;
 }
 
+/** Delay before re-verify attempt `attempt` (0-based).
+ *
+ *  Pure so the schedule is testable without timers. Quick at first because a
+ *  small package often registers within a minute, then backing off to a
+ *  five-minute floor so a multi-hour install costs only a handful of probes.
+ */
+export function installReverifyDelaysMs(attempt: number): number {
+  const schedule = [30_000, 60_000, 120_000, 300_000];
+  return schedule[Math.min(attempt, schedule.length - 1)];
+}
+
+/** Keep asking whether an accepted-but-unverified install has registered.
+ *
+ *  Reuses verifyDpiInstalledArtifact, which already waits on the artifact
+ *  GROWING rather than on a clock — its own comment records why a flat
+ *  three-minute cap was wrong: it made success size-dependent, so a large
+ *  package showed an error for an install the PS5 went on to complete.
+ *
+ *  Fire-and-forget. Never throws: a failure to verify leaves the row exactly
+ *  as it was, which is the honest outcome.
+ */
+export function scheduleInstallReverify(args: {
+  taskId: string;
+  host: string;
+  name: string;
+  contentId: string | null;
+  packageType: string;
+  expected: PkgExpectedIdentity | undefined;
+}): void {
+  let attempt = 0;
+  const tick = async () => {
+    // Stop if the user resolved the row by hand, or the app moved on.
+    const task = useTaskStore.getState().tasks.find((t) => t.id === args.taskId);
+    if (!task || task.status !== "awaiting") return;
+    let ok: boolean;
+    try {
+      ok = await verifyDpiInstalledArtifact(
+        args.host,
+        args.contentId,
+        args.packageType,
+        args.expected,
+      );
+    } catch {
+      ok = false;
+    }
+    if (ok) {
+      useTaskStore.getState().finishTask(args.taskId, "done");
+      return;
+    }
+    const delay = installReverifyDelaysMs(attempt);
+    attempt += 1;
+    setTimeout(() => void tick(), delay);
+  };
+  setTimeout(() => void tick(), installReverifyDelaysMs(0));
+}
+
 /** Is a payload loader visible in the console's process list?
  *
  *  Distinguishes "you never loaded one" from "it is running but not listening
@@ -2267,6 +2323,14 @@ export async function runPkgInstall(
         lastError: undefined,
       });
       showInstallUnverifiedToast(name);
+      scheduleInstallReverify({
+        taskId,
+        host,
+        name,
+        contentId,
+        packageType: packageType ?? "",
+        expected,
+      });
     } else {
       useTaskStore.getState().finishTask(taskId, "failed", {
         progress: latestProgress,
