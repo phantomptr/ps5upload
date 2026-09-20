@@ -66,6 +66,11 @@ impl RemotePkg {
     pub fn read_range(&self, _start: u64, _end: u64) -> std::io::Result<Vec<u8>> {
         match *self {}
     }
+
+    /// Readahead stub for the uninhabited Android type. No value of `RemotePkg`
+    /// can exist here, so this is never called; it exists so the serve path's
+    /// call site needs no `cfg`, matching `read_range` above.
+    pub fn prefetch_after(_this: &std::sync::Arc<Self>, _offset: u64) {}
 }
 
 #[derive(Debug, Clone)]
@@ -5169,7 +5174,7 @@ fn read_split_range(s: &InstallSession, start: u64, end: u64) -> std::io::Result
         // one reads a small fixed range once to identify the package, and a
         // readahead after it would pull a whole window the install may never ask
         // for.
-        crate::remote_pkg::RemoteSource::prefetch_after(remote, end);
+        RemotePkg::prefetch_after(remote, end);
         return Ok(bytes);
     }
     let want_len = usize::try_from(end - start + 1).map_err(|_| {

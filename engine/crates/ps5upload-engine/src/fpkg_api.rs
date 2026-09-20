@@ -88,28 +88,6 @@ fn output_dir(requested: Option<&str>) -> PathBuf {
     }
 }
 
-#[cfg(test)]
-mod path_tests {
-    use super::*;
-
-    #[test]
-    fn expands_home_and_resolves_relative_output_paths() {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
-        assert_eq!(
-            output_dir(Some("~/Downloads/fpkg")),
-            home.join("Downloads/fpkg")
-        );
-        assert_eq!(
-            output_dir(Some("generated/fpkg")),
-            std::env::current_dir().unwrap().join("generated/fpkg")
-        );
-        let absolute = std::env::current_dir().unwrap().join("fpkg");
-        assert_eq!(output_dir(Some(absolute.to_str().unwrap())), absolute);
-    }
-}
-
 /// POST /api/fpkg/inspect — what the source is, whether it looks convertible, and what it
 /// will cost. Synchronous: a walk is fast even for a 286,000-file mount.
 pub(crate) async fn fpkg_inspect_handler(
@@ -298,4 +276,26 @@ pub(crate) async fn fpkg_build_handler(
         }),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn expands_home_and_resolves_relative_output_paths() {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        assert_eq!(
+            output_dir(Some("~/Downloads/fpkg")),
+            home.join("Downloads/fpkg")
+        );
+        assert_eq!(
+            output_dir(Some("generated/fpkg")),
+            std::env::current_dir().unwrap().join("generated/fpkg")
+        );
+        let absolute = std::env::current_dir().unwrap().join("fpkg");
+        assert_eq!(output_dir(Some(absolute.to_str().unwrap())), absolute);
+    }
 }

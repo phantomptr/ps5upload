@@ -4,6 +4,18 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.31.1
+
+**Fixes the Android build, which 5.31.0 broke.**
+
+- **The Android app failed to build in 5.31.0.** The link-install readahead
+  added in 5.31.0 called into a module the Android build deliberately leaves
+  out, so the APK never got made — 5.31.0 shipped desktop builds only. Fixed,
+  and verified against the Android target this time.
+- No behaviour changes on desktop; 5.31.0's fixes are all still here.
+
+---
+
 ## 5.31.0
 
 **The helper no longer dies during installs, a slow install is no longer
