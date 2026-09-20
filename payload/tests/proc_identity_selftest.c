@@ -35,6 +35,12 @@ int main(void) {
     check(!proc_name_is_ours(""), "empty string is not ours");
     check(!proc_name_is_ours("ps5uploa"), "truncated prefix is not ours");
 
+    /* Prefix match alone is not enough — the byte after it must be a
+     * delimiter our real names actually use ('\0', '.', or '-'). */
+    check(!proc_name_is_ours("ps5uploader.elf"), "ps5uploader.elf is not ours");
+    check(!proc_name_is_ours("ps5upload2-tool.elf"), "ps5upload2-tool.elf is not ours");
+    check(!proc_name_is_ours("ps5uploadX"), "ps5uploadX is not ours");
+
     printf("\nproc_identity_selftest: %s\n",
            failures == 0 ? "ALL PASS" : "FAILED");
     return failures == 0 ? 0 : 1;

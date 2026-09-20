@@ -188,6 +188,14 @@ static void handle_fatal(int sig) {
      * reboot or a fresh send of a newer payload. */
     if (g_state) {
         runtime_cleanup_listener(g_state);
+        /* Unlink the ownership record directly (not via
+         * runtime_clear_ownership, whose failure path calls fprintf — not
+         * async-signal-safe). unlink() itself is async-signal-safe. Without
+         * this, a SIGSEGV/SIGABRT/etc. leaves the record behind and the
+         * next instance's classifier reads "record present, from this boot,
+         * pid dead" — the exact signature of killed_externally — and blames
+         * an external kill for what was actually our own crash. */
+        unlink(g_state->ownership_path);
     }
     /* Re-raise so the default handler runs (core dump, proper exit code). */
     signal(sig, SIG_DFL);
@@ -686,7 +694,7 @@ int main(void) {
     activity_flush();
     fakelib_overlay_stop();
 
-    runtime_arm_shutdown_watchdog(rc == 0 ? 0 : 1);
+    runtime_arm_shutdown_watchdog(&state, rc == 0 ? 0 : 1);
 
     /* Ask the mgmt thread to exit by closing its listener. accept()
      * returns with EBADF, mgmt loop sees shutdown_requested and

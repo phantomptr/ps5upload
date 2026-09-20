@@ -187,7 +187,14 @@ int runtime_clear_ownership(const runtime_state_t *state);
 void runtime_reap_prior_instance(runtime_state_t *state);
 /* Classify how the previous instance ended and store it on `state`.
  * MUST be called after runtime_init (which fills ownership_path) and
- * BEFORE runtime_write_ownership overwrites the prior record. */
+ * BEFORE runtime_write_ownership overwrites the prior record. MUST also be
+ * called before any worker thread starts (mgmt thread, shutdown watchdog,
+ * etc.): it writes state->prior_verdict WITHOUT holding state_mtx, while
+ * handle_status_frame reads it under that mutex. That is only safe because
+ * today's one call site runs on the main thread long before any other
+ * thread that could read prior_verdict exists — a later call, or a second
+ * call from a worker thread, would race. This is a threading contract, not
+ * locking: no lock has been added here on purpose. */
 void runtime_classify_prior_instance(runtime_state_t *state);
 /* LAST RESORT. SIGKILL every process whose name carries our own
  * "ps5upload" prefix, except this one. Returns how many were killed.
@@ -200,12 +207,26 @@ void runtime_classify_prior_instance(runtime_state_t *state);
  *
  * Unlike the pid-based reap this does NOT need an ownership record, which
  * is the case it exists for: a predecessor whose record was lost or
- * overwritten is otherwise unreachable and the new payload just exits. */
+ * overwritten is otherwise unreachable and the new payload just exits.
+ *
+ * Deliberately has NO boot-session guard, unlike runtime_reap_prior_instance.
+ * That guard exists there because a pid comes from a persisted file that
+ * survives reboots. Here every pid comes from a live KERN_PROC_PROC sysctl
+ * snapshot taken at call time — the live snapshot IS the boot-session proof,
+ * so there is nothing for a started_at/boottime check to add. See the
+ * comment at the top of the implementation for the full reasoning. */
 int runtime_sweep_our_instances(void);
 /* Arm a detached watchdog that force-`_exit()`s the process if the graceful
  * shutdown wedges, so a stuck shutdown can't leave an orphan. Call once when
- * shutdown begins (after runtime_server_loop returns). */
-void runtime_arm_shutdown_watchdog(int exit_code);
+ * shutdown begins (after runtime_server_loop returns).
+ *
+ * `state` is used ONLY to clear the ownership record before the forced
+ * `_exit()` — a shutdown that wedges past this watchdog is a deliberate exit
+ * we caused, not an external kill, and the ownership record must not
+ * outlive it (see instance_verdict.h: a leftover record + dead pid is
+ * indistinguishable from `killed_externally` to the next instance). May be
+ * NULL to skip that step. */
+void runtime_arm_shutdown_watchdog(const runtime_state_t *state, int exit_code);
 int runtime_ensure_directories(void);
 /* Post-startup cleanup: unmount `/mnt/ps5upload/` mounts whose backing
  * dev node is gone (orphans from a previous session). Called once at

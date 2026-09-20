@@ -1622,14 +1622,14 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
               {tr(
                 "connection_prior_killed",
                 undefined,
-                "The previous helper was killed by something else on your PS5",
+                "The previous helper did not shut down cleanly",
               )}
             </div>
             <p className="mt-0.5 text-[var(--color-muted)]">
               {tr(
                 "connection_prior_killed_detail",
                 undefined,
-                "It did not exit on its own. Another payload on the console — or the system running low on memory — ended it. If you load ps5upload through an autoloader, try sending it from here instead.",
+                "This can mean another payload on the console ended it, the system ran low on memory, or it crashed. stderr.log in a bug report says which. If you load ps5upload through an autoloader, try sending it from here instead.",
               )}
             </p>
           </div>

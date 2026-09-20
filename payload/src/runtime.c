@@ -2120,11 +2120,30 @@ void runtime_reap_prior_instance(runtime_state_t *state) {
             prior);
 }
 
+/* NOTE on the missing boot-session guard: runtime_reap_prior_instance
+ * needs one because it reads a pid out of the ownership file, which lives
+ * on persistent /data and SURVIVES reboots — after a reboot the kernel's
+ * pid counter resets, so an old record's pid may now belong to unrelated
+ * homebrew, and the started_at/boottime comparison is what rules that out.
+ *
+ * This function has no such gap to guard against. It never reads a
+ * persisted pid at all — every pid it considers comes from a live
+ * KERN_PROC_PROC sysctl snapshot taken right here, right now. A pid that
+ * exists in that snapshot is, by construction, a pid running in the CURRENT
+ * boot session; there is no stale-record case to defend against. Adding a
+ * started_at/boottime check here would have nothing meaningful to compare
+ * against (a live process has no persisted start time to read) and would
+ * be pure dead weight. The live snapshot IS the boot-session proof. */
 int runtime_sweep_our_instances(void) {
     int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC, 0};
     size_t buf_size = 0;
     int me = (int)getpid();
     int killed = 0;
+    /* pids we sent SIGKILL to, so the confirmation poll below can check each
+     * one individually instead of just sleeping and hoping. A fixed cap is
+     * fine — this is "our own stray instances", never an unbounded set. */
+    pid_t killed_pids[64];
+    int killed_pid_count = 0;
 
     if (sysctl(mib, 4, NULL, &buf_size, NULL, 0) != 0 || buf_size == 0) return 0;
     size_t alloc = buf_size + (buf_size / 4) + 1024;
@@ -2162,15 +2181,42 @@ int runtime_sweep_our_instances(void) {
                 "[payload2] sweep: SIGKILL pid=%d name=%s (ports still held after "
                 "handshake and reap both failed)\n",
                 (int)pid, name);
-        if (kill(pid, SIGKILL) == 0) killed++;
+        if (kill(pid, SIGKILL) == 0) {
+            killed++;
+            if (killed_pid_count < (int)(sizeof(killed_pids) / sizeof(killed_pids[0]))) {
+                killed_pids[killed_pid_count++] = pid;
+            }
+        }
     }
     free(kbuf);
 
-    if (killed > 0) {
-        /* Same confirmation window the pid-based reap uses: give the kernel
-         * ~1 s to actually tear the processes down before we retry the bind.
-         * A survivor is kernel-wedged and only a reboot clears it. */
-        usleep(1000000);
+    /* Same confirmation poll runtime_reap_prior_instance uses: kill()
+     * returning 0 only means the signal was DELIVERED, not that the process
+     * died — a kernel-wedged process (uninterruptible sleep) ignores SIGKILL
+     * entirely. Poll each killed pid for up to ~1 s and drop it out of the
+     * "still alive" set as soon as it's gone, instead of a flat sleep that
+     * neither confirms nor names a survivor. This is the whole point of the
+     * branch: the next bug bundle should say whether the kill actually
+     * worked, not just that we asked for it. */
+    for (int i = 0; i < 20 && killed_pid_count > 0; i++) {
+        int remaining = 0;
+        for (int j = 0; j < killed_pid_count; j++) {
+            if (killed_pids[j] == 0) continue; /* already confirmed dead */
+            if (kill(killed_pids[j], 0) != 0) {
+                killed_pids[j] = 0; /* confirmed dead */
+                continue;
+            }
+            remaining++;
+        }
+        if (remaining == 0) break;
+        usleep(50000);
+    }
+    for (int j = 0; j < killed_pid_count; j++) {
+        if (killed_pids[j] == 0) continue;
+        fprintf(stderr,
+                "[payload2] sweep: pid=%d survived SIGKILL (kernel-wedged) — "
+                "a PS5 reboot is required to clear it\n",
+                (int)killed_pids[j]);
     }
     fprintf(stderr, "[payload2] sweep: killed %d instance(s)\n", killed);
     return killed;
@@ -2179,6 +2225,10 @@ int runtime_sweep_our_instances(void) {
 /* ── Shutdown watchdog ────────────────────────────────────────────────────── */
 
 static int g_watchdog_exit_code = 0;
+/* Set once by runtime_arm_shutdown_watchdog, before the watchdog thread is
+ * created — never mutated after, so the watchdog thread reads it race-free
+ * without a lock. May be NULL. */
+static const runtime_state_t *g_watchdog_state = NULL;
 
 static void *runtime_shutdown_watchdog(void *arg) {
     (void)arg;
@@ -2188,13 +2238,22 @@ static void *runtime_shutdown_watchdog(void *arg) {
      * stuck in an uninterruptible Sony API never returns), force the process
      * out so it can't linger as an orphan the next resend would duplicate. */
     sleep(8);
+    /* We are exiting deliberately — clear the ownership record BEFORE
+     * _exit() so the next instance doesn't read a leftover record + dead
+     * pid as `killed_externally`. runtime_clear_ownership is just unlink()
+     * + fprintf on failure: no locks, no allocation, can't block, so this
+     * can't itself wedge the forced exit it exists to guarantee. */
+    if (g_watchdog_state) {
+        (void)runtime_clear_ownership(g_watchdog_state);
+    }
     fprintf(stderr, "[payload2] shutdown watchdog fired — forcing _exit(%d)\n",
             g_watchdog_exit_code);
     _exit(g_watchdog_exit_code);
     return NULL;
 }
 
-void runtime_arm_shutdown_watchdog(int exit_code) {
+void runtime_arm_shutdown_watchdog(const runtime_state_t *state, int exit_code) {
+    g_watchdog_state = state;
     g_watchdog_exit_code = exit_code;
     pthread_t t;
     if (pthread_create(&t, NULL, runtime_shutdown_watchdog, NULL) == 0) {
