@@ -159,7 +159,7 @@ export default function PowerControl({ host }: { host: string }) {
               ? ack.err
               : tr(
                   "power_ack_dispatched",
-                  { kind },
+                  { kind, host },
                   `${kind} dispatched to ${host}.`,
                 ),
           },
