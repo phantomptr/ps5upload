@@ -151,7 +151,7 @@ static void handle_fatal(int sig) {
      * and hand-rolled formatting: snprintf and stderr stdio are not
      * async-signal-safe, and a handler that deadlocks on the stdio lock
      * loses the one line that matters. stderr is the persisted
-     * /data/ps5upload/stderr.log (redirect_stderr_to_file), unbuffered, so
+     * /data/ps5upload/stderr.log (redirect_stdio_to_file), unbuffered, so
      * this survives the process and lands in the next bug report. */
     write_fatal_breadcrumb(sig, g_inflight_frame_type);
 
@@ -343,33 +343,50 @@ static void startup_trace(const char *stage) {
     fclose(fp);
 }
 
-/* Redirect the payload's stderr to a file under the runtime root so the
- * extensive fprintf(stderr) diagnostics scattered through runtime.c (BeginTx
- * rejections, shard-write failures, commit/apply errors, rename errno, …) are
- * PERSISTED and fetchable via FS_READ after the fact, instead of being thrown
- * away (the loader points the payload's stderr at nowhere useful). This is the
- * single biggest win for debugging a helper that misbehaves or dies: the bug
- * report's ps5/payload-logs/ now includes the helper's own error stream.
+/* Detach the payload's stdio from whoever launched it.
  *
- * Uses dup2 (async-safe, robust): if the open fails, stderr is left untouched.
- * Unbuffered so a crash can't lose the tail. One .old generation is kept so it
- * can't grow without bound across restarts. */
-static void redirect_stderr_to_file(void) {
+ * elfldr dup2s the SENDER's TCP socket onto stdin, stdout AND stderr
+ * (elfldr.c:471-483) and keeps it there for the payload's whole life.
+ * ps5-payload-manager closes its end the instant the ELF is streamed
+ * (ps5_launcher.c:78), so from then on our stdio points at a socket whose
+ * peer is gone. We must not depend on it.
+ *
+ * stderr already went to a file; stdout did not, and stdin was left as the
+ * socket. Now all three are ours: stdout and stderr to the log, stdin to
+ * /dev/null. The startup printf() output that used to vanish into the
+ * launcher's socket now lands in stderr.log, which the bug bundle collects.
+ *
+ * Uses dup2 (async-safe, robust): if an open fails the corresponding
+ * descriptor is left untouched. Unbuffered so a crash can't lose the tail.
+ * One .old generation is kept so it can't grow without bound. */
+static void redirect_stdio_to_file(void) {
     const char *path = PS5UPLOAD2_RUNTIME_ROOT "/stderr.log";
     struct stat st;
     if (stat(path, &st) == 0 && st.st_size > 512 * 1024) {
         rename(path, PS5UPLOAD2_RUNTIME_ROOT "/stderr.log.old");
     }
+
+    /* stdin first: a closed socket on fd 0 is a descriptor we do not
+     * control, and /dev/null is always safe to read EOF from. */
+    int devnull = open("/dev/null", O_RDONLY);
+    if (devnull >= 0) {
+        dup2(devnull, STDIN_FILENO);
+        if (devnull != STDIN_FILENO) close(devnull);
+    }
+
     int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd < 0) return;
+    dup2(fd, STDOUT_FILENO);
     dup2(fd, STDERR_FILENO);
-    if (fd != STDERR_FILENO) close(fd);
+    if (fd != STDOUT_FILENO && fd != STDERR_FILENO) close(fd);
+    setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
+
     struct timespec ts;
     if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
         ts.tv_sec = time(NULL);
     }
-    fprintf(stderr, "=== ps5upload payload v%s stderr — session start %lld ===\n",
+    fprintf(stderr, "=== ps5upload payload v%s stdio — session start %lld ===\n",
             PS5UPLOAD2_VERSION, (long long)ts.tv_sec);
 }
 
@@ -446,10 +463,11 @@ int main(void) {
     }
     startup_trace("ENSURE_DIRECTORIES_DONE");
 
-    /* Now that the runtime root exists, capture stderr to a fetchable file so
-     * the helper's own error diagnostics survive for bug reports. */
-    redirect_stderr_to_file();
-    startup_trace("STDERR_REDIRECTED");
+    /* Now that the runtime root exists, capture stdout+stderr to a fetchable
+     * file and detach stdin so the helper's own error diagnostics survive for
+     * bug reports. */
+    redirect_stdio_to_file();
+    startup_trace("STDIO_REDIRECTED");
 
     /* Sweep orphan Tier-1 staging files. Crash-recovery only;
      * the desktop-side post-install delete handles steady-state. */
