@@ -43,7 +43,7 @@
 /* The detailed (process-manager) path reads memory + thread count via the
  * SDK's `struct kinfo_proc` directly (cleaner than hand-offsetting every
  * field). This assert ties that struct to the SAME proven layout the raw
- * offsets above rely on: if a future SDK shuffles kinfo_proc, ki_pid moves
+ * offsets in proc_list.h rely on: if a future SDK shuffles kinfo_proc, ki_pid moves
  * off 72 and the build fails LOUDLY instead of silently reporting garbage
  * memory. (pid@72 is independently confirmed by shellui_rpc.c.) */
 _Static_assert(offsetof(struct kinfo_proc, ki_pid) == KINFO_PID_OFFSET,

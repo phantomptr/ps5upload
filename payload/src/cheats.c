@@ -68,8 +68,6 @@
 
 #define RG_CACHE_TTL_MS     2000
 
-#define KINFO_PID_OFFSET    72
-#define KINFO_TDNAME_OFFSET 447
 #define KINFO_STRUCT_MINSIZE 448
 
 #define PROT_READ  0x01
