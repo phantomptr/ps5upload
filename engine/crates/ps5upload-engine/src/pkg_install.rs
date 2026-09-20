@@ -29,8 +29,7 @@ use axum::{
 use ps5upload_core::app_lifecycle::{toast_send, ToastRequest};
 use ps5upload_core::pkg_install::{
     err_code_message, pkg_install, pkg_install_status, InstallPhase, PkgInstallRequest,
-    PkgInstallResponse, PkgInstallStatus, APPINST_VIA_LOCAL_FLAG, APPINST_VIA_SHELLUI_FLAG,
-    APPINST_VIA_TIER0_FLAG,
+    PkgInstallResponse, PkgInstallStatus, APPINST_TASK_ID_FLAG,
 };
 use ps5upload_pkg::{
     extract_from_ffpkg, inspect_ffpkg, metadata_from_reader, package_fingerprint_from_reader,
@@ -2029,16 +2028,26 @@ fn install_synthetic_done_grace_sec() -> u64 {
     )
 }
 
-/// Whether this task_id indicates a synthetic-DONE tier — one where
-/// the payload reports Done immediately (shellui-rpc, appinst-local)
-/// rather than real-polling Sony's install status.
+/// Whether this task_id indicates a synthetic-DONE tier.
+///
+/// That is now simply "is this an AppInstUtil task id at all". Every
+/// AppInstUtil tier — shellui-rpc, appinst-local, tier0-worker AND plain
+/// in-proc `InstallByPackage` — reports Done the instant Sony accepts the
+/// task, because the payload no longer calls `sceAppInstUtilGetInstallStatus`
+/// on any of them (it kills the process that calls it; measured on FW 9.60
+/// and 5.10). So every AppInstUtil id carries `APPINST_TASK_ID_FLAG` and
+/// every one of them needs the grace window.
+///
+/// Testing the VIA_* flags alone was the bug: a plain `APPINST_TASK_ID_FLAG`
+/// id (`via_tier()` = "in-proc-appinst") got no grace, so a SUCCESSFUL
+/// install fell through to `Stalled` → `InstallPhase::Error` — issue #230's
+/// symptom, on the one tier this change actually altered. The VIA_* flags
+/// remain only to name the backend in logs and bug reports.
+///
+/// Only BGFT ids (no `APPINST_TASK_ID_FLAG`) are real-polled.
 fn is_synthetic_done_tier(task_id: Option<i32>) -> bool {
     match task_id {
-        Some(tid) if tid >= 0 => {
-            (tid & APPINST_VIA_SHELLUI_FLAG) != 0
-                || (tid & APPINST_VIA_LOCAL_FLAG) != 0
-                || (tid & APPINST_VIA_TIER0_FLAG) != 0
-        }
+        Some(tid) if tid >= 0 => (tid & APPINST_TASK_ID_FLAG) != 0,
         _ => false,
     }
 }
@@ -5808,23 +5817,27 @@ mod tests {
 
     #[test]
     fn is_synthetic_done_tier_classification() {
-        // Direct BGFT (no synthetic flags): not synthetic-done.
+        use ps5upload_core::pkg_install::{
+            APPINST_VIA_LOCAL_FLAG, APPINST_VIA_SHELLUI_FLAG, APPINST_VIA_TIER0_FLAG,
+        };
+        // Direct BGFT (no AppInstUtil flag): real-polled, not synthetic-done.
         assert!(!is_synthetic_done_tier(Some(0x0000_1234)));
-        // shellui-rpc flag set: synthetic-done.
+        // Plain in-proc appinst — APPINST_TASK_ID_FLAG only, `via_tier()` =
+        // "in-proc-appinst": synthetic-done too. The payload stopped polling
+        // Sony on this tier, so without the grace a SUCCESSFUL install is
+        // reported as Stalled (issue #230's symptom).
+        assert!(is_synthetic_done_tier(Some(APPINST_TASK_ID_FLAG | 0x1234)));
+        // The VIA_* tiers, as the payload actually mints them: the backend
+        // flag is OR-ed onto an id that appinst_task_register already stamped
+        // with APPINST_TASK_ID_FLAG.
         assert!(is_synthetic_done_tier(Some(
-            APPINST_VIA_SHELLUI_FLAG | 0x1234
+            APPINST_TASK_ID_FLAG | APPINST_VIA_SHELLUI_FLAG | 0x1234
         )));
-        // appinst-local flag set: synthetic-done.
         assert!(is_synthetic_done_tier(Some(
-            APPINST_VIA_LOCAL_FLAG | 0x1234
+            APPINST_TASK_ID_FLAG | APPINST_VIA_LOCAL_FLAG | 0x1234
         )));
-        // tier0-worker flag set: synthetic-done (issue #230 — was missing).
         assert!(is_synthetic_done_tier(Some(
-            APPINST_VIA_TIER0_FLAG | 0x1234
-        )));
-        // Both the base task-id flag + local: still synthetic-done.
-        assert!(is_synthetic_done_tier(Some(
-            ps5upload_core::pkg_install::APPINST_TASK_ID_FLAG | APPINST_VIA_LOCAL_FLAG | 0x1234
+            APPINST_TASK_ID_FLAG | APPINST_VIA_TIER0_FLAG | 0x1234
         )));
         // Failure sentinel (-1): not synthetic-done (it's "no tier reached").
         assert!(!is_synthetic_done_tier(Some(-1)));
