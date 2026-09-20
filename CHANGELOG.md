@@ -4,6 +4,33 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.31.2
+
+**Honest status for installs we can't confirm, and the payload finally gets
+its own name on the console.**
+
+- **Your payload really does have its own name now.** 5.31.0 said this was
+  done. It wasn't — checked on a real console, ps5upload was still listed as
+  the generic `payload.elf`. Only one of its ~16 threads had been renamed, and
+  the console shows whichever thread it feels like. All of them are named now,
+  and it reads `ps5upload.elf`. This also repairs the cleanup that reuses that
+  name: ps5upload can once again spot and clear a stuck copy of itself on
+  reconnect, while leaving other homebrew on the console alone.
+- **An install we can't confirm no longer says "Cancelled".** Nothing was
+  cancelled — the PS5 took the package and is very likely still installing it.
+  Those rows now say **Unverified**, in every language.
+- **The Recheck button now appears when you need it.** If a console was busy
+  transferring something else, the automatic re-check politely waited its turn
+  — forever — and the row never offered you the manual Recheck. It now hands
+  the row over on time.
+- **No more "ps5upload keeps checking" when it can't.** For a package with
+  nothing to identify it by, that message appeared next to a row that had just
+  closed. It now says what's actually true.
+- Verified on real hardware: a 101 GB PS5 game and an 80 GB PS4 game with its
+  patch, both installed end to end at around 100 MB/s.
+
+---
+
 ## 5.31.1
 
 **Fixes the Android build, which 5.31.0 broke.**
