@@ -737,6 +737,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/wake_watchdog_selftest.c
 	@/tmp/ps5upload-wake-watchdog-selftest
 	@echo "✓ clock adjustments and unknown firmware state cannot trigger kernel writes"
+	@echo "Running process-identity self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-proc-identity-selftest \
+		$(PAYLOAD_DIR)/tests/proc_identity_selftest.c
+	@/tmp/ps5upload-proc-identity-selftest
+	@echo "✓ only our own threads are ever in SIGKILL range"
 	@echo "Running ptrace timeout-recovery self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-ptrace-recovery-selftest \
 		$(PAYLOAD_DIR)/tests/ptrace_recovery_selftest.c
