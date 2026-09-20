@@ -104,4 +104,18 @@ unsigned int proc_app_id_by_title_id(const char *title_id);
 int proc_list_app_states_json(char *buf, size_t cap, size_t *written_out,
                               const char **err_out);
 
+/* Log every homebrew-looking process on the console to stderr (and so to
+ * stderr.log and the bug bundle).
+ *
+ * "Homebrew-looking" = a thread name ending in ".elf", which is what every
+ * payload loaded through elfldr gets, plus our own "ps5upload*" threads.
+ * System processes are named without the extension (SceShellUI,
+ * SceRedisServer, ...) and are skipped.
+ *
+ * This is the data that was missing from every "the helper just dies"
+ * report: what ELSE was running, and was anything else wearing the generic
+ * "payload.elf" name that the scene's kill-my-predecessor sweeps target.
+ * One sysctl, once, at startup. Best-effort — never fails the boot. */
+void proc_log_homebrew_neighbours(void);
+
 #endif /* PS5UPLOAD2_PROC_LIST_H */

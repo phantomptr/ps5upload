@@ -16,6 +16,7 @@
 #include "shellui_rpc.h"
 #include "hw_guard.h"
 #include "kernel_rw_lock.h"
+#include "proc_list.h"
 #include "hw_info.h"
 #include "wake_watchdog.h"
 #include "fakelib_overlay.h"
@@ -487,6 +488,9 @@ int main(void) {
      * how the last instance ended. */
     runtime_classify_prior_instance(&state);
     startup_trace("PRIOR_VERDICT_DONE");
+
+    proc_log_homebrew_neighbours();
+    startup_trace("NEIGHBOUR_CENSUS_DONE");
 
     /* No eager Sony-service init at startup. Both `register_module_init`
      * (dlopen + dlsym for libSceAppInstUtil/Lnc/UserService) and
