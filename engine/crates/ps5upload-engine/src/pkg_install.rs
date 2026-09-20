@@ -1619,6 +1619,42 @@ async fn install_start_handler(
             }
             idle_since > aggressive_cutoff || s.terminal_status.is_none()
         });
+        // ── Rival-session guard ──────────────────────────────────────────
+        //
+        // Sony keys an install by content_id, and a base, its patch and its
+        // DLC all SHARE one content_id. Before this guard, starting a second
+        // install for the same package left the first session in the table
+        // alongside it, still holding the URL the console was actively
+        // fetching. Observed live on FW 5.10: three concurrent sessions for
+        // one content_id (one cancelled with 60 GiB already served), the
+        // console pulling a stale one, the pkg-host answering `410 Gone`, and
+        // PlayGo responding to that by DELETING the 64.8 GiB it had
+        // downloaded — `[PlayGoCore][Uninstall] begin`.
+        //
+        // Identity here is deliberately NOT content_id. `package_fingerprint`
+        // is per-PACKAGE, so a base and its patch are distinct even though
+        // Sony cannot tell them apart, and a genuine retry of the SAME package
+        // is recognised as the rival it is.
+        let rival = sessions.values().find(|s| {
+            s.id != session_id
+                && !s.cancelled
+                && s.terminal_status.is_none()
+                && s.package_fingerprint == session.package_fingerprint
+                && !s.package_fingerprint.is_empty()
+        });
+        if let Some(r) = rival {
+            crate::log_warn!(
+                "install start: a live session for this exact package is already \
+                 serving (session={} served={} of {} bytes, {} requests) — the new \
+                 session={} will run alongside it. Both URLs stay valid; the console \
+                 keeps whichever it was given.",
+                r.id,
+                r.bytes_served,
+                r.total_size,
+                r.requests_served,
+                session_id,
+            );
+        }
         sessions.insert(session_id.clone(), session.clone());
     }
 
