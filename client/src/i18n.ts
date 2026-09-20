@@ -1,6 +1,6 @@
 // i18n translations for PS5 Upload webapp
 //
-// The 19 locale dictionaries each live in `src/i18n/locales/<code>.ts`
+// The 20 locale dictionaries each live in `src/i18n/locales/<code>.ts`
 // and are imported here via per-locale dynamic `import()` so Vite ships
 // each as its own chunk. English is loaded eagerly because it's the
 // universal fallback and every screen's inline `tr(key, "English…")`
@@ -39,10 +39,11 @@ export type LanguageCode =
   | "zh-TW"
   | "fr"
   | "es"
-  | "ar";
+  | "ar"
+  | "hu";
 
 /** Cache of loaded locale dictionaries. English is pre-populated; the
- *  other 18 land here once their dynamic import resolves. */
+ *  other 19 land here once their dynamic import resolves. */
 const loaded: Partial<Record<LanguageCode, Translations>> = {
   en: enTranslations,
 };
@@ -96,6 +97,8 @@ function importLocale(code: LanguageCode): Promise<{ default: Translations }> {
       return import("./i18n/locales/de");
     case "it":
       return import("./i18n/locales/it");
+    case "hu":
+      return import("./i18n/locales/hu");
     case "zh-CN":
       return import("./i18n/locales/zh-CN");
     case "zh-TW":
