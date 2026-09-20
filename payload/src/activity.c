@@ -41,6 +41,7 @@
  * title_id at offset 64, so play-time tracking never saw a game. */
 #include "app_info.h"
 
+#include "proc_identity.h"
 typedef struct {
     char     title_id[TITLE_ID_LEN];
     uint64_t launches;
@@ -356,6 +357,10 @@ static void detect_and_track(void) {
 }
 
 static void *watcher_thread(void *arg) {
+    /* Name this thread: the process listing shows a representative
+     * thread that is not reliably main, so an unnamed worker makes the
+     * whole process read as "payload.elf". See proc_identity.h. */
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
     (void)arg;
     for (;;) {
         sleep(POLL_INTERVAL_SEC);

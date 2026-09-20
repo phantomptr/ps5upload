@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <stdatomic.h>
 
+#include "proc_identity.h"
 /* Max concurrent control sessions. Every accepted client must be tracked so
  * Stop can reliably tear it down; excess clients receive 421 instead of
  * becoming an orphan that survives a restart. */
@@ -1036,6 +1037,10 @@ static void process_command(struct ftp_session *s, char *line) {
 }
 
 static void *ftp_client_thread(void *arg) {
+    /* Name this thread: the process listing shows a representative
+     * thread that is not reliably main, so an unnamed worker makes the
+     * whole process read as "payload.elf". See proc_identity.h. */
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
     struct ftp_session *s = (struct ftp_session *)arg;
     if (!ftp_session_register(s)) {
         send_resp(s->ctrl_fd, 421, "Too many FTP connections");
@@ -1098,6 +1103,10 @@ struct ftp_listener_ctx {
 };
 
 static void *ftp_listen_thread(void *arg) {
+    /* Name this thread: the process listing shows a representative
+     * thread that is not reliably main, so an unnamed worker makes the
+     * whole process read as "payload.elf". See proc_identity.h. */
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
     struct ftp_listener_ctx *ctx = (struct ftp_listener_ctx *)arg;
     int listen_fd = ctx->listen_fd;
     unsigned int generation = ctx->generation;

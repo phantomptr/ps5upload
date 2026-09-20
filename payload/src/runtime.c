@@ -2231,6 +2231,10 @@ static int g_watchdog_exit_code = 0;
 static const runtime_state_t *g_watchdog_state = NULL;
 
 static void *runtime_shutdown_watchdog(void *arg) {
+    /* Name this thread: the process listing shows a representative
+     * thread that is not reliably main, so an unnamed worker makes the
+     * whole process read as "payload.elf". See proc_identity.h. */
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
     (void)arg;
     /* Grace period for the normal close+join below. If shutdown is healthy the
      * process exits via main()'s return long before this fires and this thread
@@ -2528,6 +2532,10 @@ static int  direct_writer_finish(runtime_tx_entry_t *entry);
 static void direct_writer_discard(runtime_tx_entry_t *entry);
 
 static void *piped_writer_thread(void *arg) {
+    /* Name this thread: the process listing shows a representative
+     * thread that is not reliably main, so an unnamed worker makes the
+     * whole process read as "payload.elf". See proc_identity.h. */
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
     piped_writer_t *pw = (piped_writer_t *)arg;
     int i = 0;
     /* Bytes written since the last periodic fsync. Bounds the kernel
@@ -2807,6 +2815,10 @@ static void pack_retry_backoff(int retry_idx) {
 }
 
 static void *pack_worker_thread(void *arg) {
+    /* Name this thread: the process listing shows a representative
+     * thread that is not reliably main, so an unnamed worker makes the
+     * whole process read as "payload.elf". See proc_identity.h. */
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
     pack_worker_pool_t *pool = (pack_worker_pool_t *)arg;
     for (;;) {
         pack_work_item_t item;
@@ -7024,6 +7036,10 @@ typedef struct {
 } async_copy_t;
 
 static void *async_copy_writer_thread(void *arg) {
+    /* Name this thread: the process listing shows a representative
+     * thread that is not reliably main, so an unnamed worker makes the
+     * whole process read as "payload.elf". See proc_identity.h. */
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
     async_copy_t *w = (async_copy_t *)arg;
     int slot = 0;
     /* Bytes written since the last periodic fsync. A cross-volume move
@@ -11852,6 +11868,10 @@ typedef struct {
 } index_thread_args_t;
 
 static void *index_thread_fn(void *arg) {
+    /* Name this thread: the process listing shows a representative
+     * thread that is not reliably main, so an unnamed worker makes the
+     * whole process read as "payload.elf". See proc_identity.h. */
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
     index_thread_args_t *args = (index_thread_args_t *)arg;
     for (int i = 0; i < args->root_count; i++) {
         index_walk(args->roots[i], 0);
@@ -16877,6 +16897,10 @@ static void transfer_handle_connection(runtime_state_t *state, int client_fd) {
 }
 
 static void *transfer_client_thread(void *arg) {
+    /* Name this thread: the process listing shows a representative
+     * thread that is not reliably main, so an unnamed worker makes the
+     * whole process read as "payload.elf". See proc_identity.h. */
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
     transfer_client_ctx_t *ctx = (transfer_client_ctx_t *)arg;
     runtime_state_t *state = ctx->state;
     int client_fd = ctx->client_fd;
@@ -17037,6 +17061,10 @@ static int mgmt_thread_can_spawn(void) {
 }
 
 static void *mgmt_client_thread(void *arg) {
+    /* Name this thread: the process listing shows a representative
+     * thread that is not reliably main, so an unnamed worker makes the
+     * whole process read as "payload.elf". See proc_identity.h. */
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
     mgmt_client_ctx_t *ctx = (mgmt_client_ctx_t *)arg;
     runtime_state_t *state = ctx->state;
     int client_fd = ctx->client_fd;
@@ -17052,6 +17080,10 @@ static void *mgmt_client_thread(void *arg) {
 }
 
 void *runtime_mgmt_server_loop(void *state_ptr) {
+    /* Name this thread: the process listing shows a representative
+     * thread that is not reliably main, so an unnamed worker makes the
+     * whole process read as "payload.elf". See proc_identity.h. */
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
     runtime_state_t *state = (runtime_state_t *)state_ptr;
     if (!state) return NULL;
 

@@ -18,6 +18,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "proc_identity.h"
 #define OVERLAY_PATH_MAX 1024
 #define IOVEC_ENTRY(x) { (void *)(x), (x) ? strlen(x) + 1 : 0 }
 #define IOVEC_SIZE(x) (sizeof(x) / sizeof((x)[0]))
@@ -200,6 +201,10 @@ static void handle_exec(int kq, pid_t pid) {
 }
 
 static void *overlay_main(void *unused) {
+    /* Name this thread: the process listing shows a representative
+     * thread that is not reliably main, so an unnamed worker makes the
+     * whole process read as "payload.elf". See proc_identity.h. */
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
     (void)unused;
     int syscore = proc_find_pid_by_name("SceSysCore.elf");
     if (syscore <= 0) { set_state("error", NULL, "syscore_not_found"); return NULL; }

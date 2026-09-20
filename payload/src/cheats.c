@@ -81,6 +81,7 @@
 /* Canonical layout + title-id helpers. */
 #include "app_info.h"
 
+#include "proc_identity.h"
 /* ── Engine state ────────────────────────────────────────────────── */
 
 static atomic_int g_engine_enabled = 0;
@@ -1286,6 +1287,10 @@ static int reapply_enabled_for_game(pid_t pid, intptr_t base,
 }
 
 static void *watcher_thread(void *arg) {
+    /* Name this thread: the process listing shows a representative
+     * thread that is not reliably main, so an unnamed worker makes the
+     * whole process read as "payload.elf". See proc_identity.h. */
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
     (void)arg;
     pid_t last_pid = 0;
 

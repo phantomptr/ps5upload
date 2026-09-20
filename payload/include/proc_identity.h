@@ -2,12 +2,23 @@
 #define PS5UPLOAD2_PROC_IDENTITY_H
 
 #include <string.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 /*
  * Is this process name one of OURS?
  *
  * Every thread the payload creates shares the "ps5upload" prefix:
- * "ps5upload.elf" (main), "ps5upload-wake", "ps5upload-fan", "ps5upload-smp".
+ * "ps5upload.elf" (generic workers and main), plus the named helpers
+ * "ps5upload-wake", "ps5upload-fan" and "ps5upload-smp".
+ *
+ * That is only true because every thread entry point calls
+ * proc_name_set_self() as its first statement. It is NOT inherited: naming
+ * main alone was measured on a Phat 5.10 running v5.31.1 to leave the
+ * process listed as "payload.elf", because SYS_thr_set_name names only the
+ * CALLING thread and the kernel's representative thread is usually one of
+ * the ~15 unnamed workers. Any new pthread_create MUST name its thread too,
+ * or it reopens the reap gap described below.
  *
  * A prefix test rather than an exact compare is REQUIRED. The kinfo_proc
  * record returned by sysctl(KERN_PROC_*) carries the name of whichever
@@ -35,6 +46,29 @@
  */
 #define PS5UPLOAD2_PROC_PREFIX     "ps5upload"
 #define PS5UPLOAD2_PROC_PREFIX_LEN 9
+
+/* The name every generic payload thread takes. Helpers with a dedicated
+ * role pass their own ("ps5upload-fan" and friends) — anything sharing the
+ * prefix satisfies proc_name_is_ours(). */
+#define PS5UPLOAD2_PROC_NAME "ps5upload.elf"
+
+/* Name the CALLING thread. Must be the first statement of every thread entry
+ * point: `-1` means "this thread", so it cannot be done on the creator's
+ * behalf from a pthread_create wrapper. Best-effort — a failure here costs
+ * identification, never correctness, so the return is deliberately ignored. */
+#ifdef SYS_thr_set_name
+static inline void proc_name_set_self(const char *name) {
+    (void)syscall(SYS_thr_set_name, -1, name);
+}
+#else
+/* Host builds (the proc_identity selftest compiles this header on macOS and
+ * Linux) have no SYS_thr_set_name. Naming is a PS5-only concern, so the
+ * fallback is a no-op rather than a #error — it keeps the pure-logic
+ * proc_name_is_ours() tests buildable off-target. */
+static inline void proc_name_set_self(const char *name) {
+    (void)name;
+}
+#endif
 
 static inline int proc_name_is_ours(const char *name) {
     if (!name) return 0;

@@ -21,6 +21,7 @@
 #include "wake_watchdog.h"
 #include "fakelib_overlay.h"
 
+#include "proc_identity.h"
 /* Sony "debugger" / system-process authid. Setting our process's
  * ucred authid to this value grants the credentials Sony's kernel
  * stubs check before allowing sensor reads / launches / installs
@@ -413,7 +414,7 @@ int main(void) {
      * It also breaks our OWN reap: runtime_reap_prior_instance compares our
      * name against the predecessor's, and ours is read before any worker
      * thread starts while the predecessor's is read after — see #289. */
-    (void)syscall(SYS_thr_set_name, -1, "ps5upload.elf");
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
 
     int rc = 0;
     runtime_state_t state = {0};
