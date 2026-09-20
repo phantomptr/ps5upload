@@ -1584,7 +1584,7 @@ async fn install_start_handler(
     // failures (no status polls fire because the UI sees the
     // immediate error) would bloat the map unbounded — gc_old_sessions
     // alone wouldn't help because nothing calls status.
-    {
+    let rival = {
         let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         let now = now_unix();
         let max_age = pkg_session_max_age_sec();
@@ -1635,27 +1635,51 @@ async fn install_start_handler(
         // is per-PACKAGE, so a base and its patch are distinct even though
         // Sony cannot tell them apart, and a genuine retry of the SAME package
         // is recognised as the rival it is.
-        let rival = sessions.values().find(|s| {
-            s.id != session_id
-                && !s.cancelled
-                && s.terminal_status.is_none()
-                && s.package_fingerprint == session.package_fingerprint
-                && !s.package_fingerprint.is_empty()
-        });
-        if let Some(r) = rival {
-            crate::log_warn!(
-                "install start: a live session for this exact package is already \
-                 serving (session={} served={} of {} bytes, {} requests) — the new \
-                 session={} will run alongside it. Both URLs stay valid; the console \
-                 keeps whichever it was given.",
-                r.id,
-                r.bytes_served,
-                r.total_size,
-                r.requests_served,
-                session_id,
-            );
+        let rival_info = sessions
+            .values()
+            .find(|s| {
+                s.id != session_id
+                    && !s.cancelled
+                    && s.terminal_status.is_none()
+                    && !s.package_fingerprint.is_empty()
+                    && s.package_fingerprint == session.package_fingerprint
+            })
+            .map(|r| {
+                (
+                    r.id.clone(),
+                    r.bytes_served,
+                    r.total_size,
+                    r.requests_served,
+                )
+            });
+        // Insert ONLY when no rival exists. Nothing has been registered with
+        // Sony yet — that happens further down — so refusing here costs
+        // nothing and leaves the running install completely untouched.
+        if rival_info.is_none() {
+            sessions.insert(session_id.clone(), session.clone());
         }
-        sessions.insert(session_id.clone(), session.clone());
+        rival_info
+    };
+    if let Some((rid, served, total, reqs)) = rival {
+        crate::log_warn!(
+            "install start refused: a live session for this exact package is \
+             already serving (session={} served={}/{} bytes over {} requests). \
+             A second session leaves the console able to fetch a URL we may \
+             later invalidate, and a pkg-host 410 makes PlayGo discard the \
+             whole partial download.",
+            rid,
+            served,
+            total,
+            reqs,
+        );
+        return json_err(
+            StatusCode::CONFLICT,
+            &format!(
+                "an install of this exact package is already running (session \
+                 {rid}, {served} of {total} bytes transferred). Wait for it, or \
+                 cancel it first."
+            ),
+        );
     }
 
     // Serve-only (Stream beta): the session + its /pkg-host/ listener are now
