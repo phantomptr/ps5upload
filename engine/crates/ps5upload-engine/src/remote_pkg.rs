@@ -157,9 +157,22 @@ impl PieceStat {
     }
 }
 
-fn build_agent() -> ureq::Agent {
+/// `parallelism` is the number of connections a single window fetch opens at
+/// once, and the pool must be sized to keep all of them.
+///
+/// ureq defaults to `max_idle_connections_per_host: 3`. We open 8. So five of
+/// every eight connections were dropped after each window and rebuilt for the
+/// next one: a fresh TCP and TLS handshake, then TCP slow-start from zero, to
+/// move only 4 MiB before being thrown away again. On a long path that is
+/// most of the transfer spent ramping up and none of it at speed, which is
+/// the shape of the 1.9 MB/s reports — a browser or download manager holds
+/// its connections open and never pays this.
+fn build_agent(parallelism: usize) -> ureq::Agent {
+    let keep = parallelism.max(1);
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(PIECE_TIMEOUT))
+        .max_idle_connections_per_host(keep)
+        .max_idle_connections(keep.saturating_mul(2).max(10))
         .build();
     ureq::Agent::new_with_config(config)
 }
@@ -204,7 +217,8 @@ impl RemoteSource {
     /// landing page, or a 405, and a one-byte GET proves the exact thing we
     /// depend on — that ranged reads work and report a total.
     pub fn probe(url: &str) -> Result<RemoteProbe, String> {
-        let agent = build_agent();
+        // A single one-byte GET; one pooled connection is all it can use.
+        let agent = build_agent(1);
         let resp = agent
             .get(url)
             .header("User-Agent", "ps5upload")
@@ -251,7 +265,7 @@ impl RemoteSource {
         Self {
             url,
             total_size,
-            agent: build_agent(),
+            agent: build_agent(parallelism),
             window_bytes,
             parallelism,
             readahead,
@@ -646,6 +660,15 @@ impl RemoteSource {
                 }
             }
         }
+        // Read once more to observe EOF. ureq only returns a connection to
+        // the pool when its body reader reaches the end; stopping the instant
+        // `dst` is full leaves the response looking half-read, so every piece
+        // got a brand-new TCP+TLS connection and a fresh TCP slow-start. With
+        // a Content-Length response this returns 0 immediately.
+        if filled == dst.len() {
+            let mut scratch = [0u8; 1];
+            let _ = reader.read(&mut scratch);
+        }
         Ok((filled as u64, ttfb))
     }
 }
@@ -867,6 +890,183 @@ pub(crate) mod origin_tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         cond()
+    }
+
+    /// Are the pieces of one window ACTUALLY fetched concurrently?
+    ///
+    /// This is not a style question. A user's link install sat at 1.9 MB/s
+    /// while the same URL pulled 40-50 MB/s in a multi-connection downloader
+    /// on the same machine and line. Every piece shares one `ureq::Agent`, and
+    /// if that Agent serialises them then "8 parallel pieces" is one
+    /// connection wearing a disguise — which looks exactly like a slow origin
+    /// from the outside and is the difference between 1.9 MB/s and 15.
+    ///
+    /// The origin here holds every response open for a beat and records the
+    /// high-water mark of simultaneously open requests. With N pieces truly in
+    /// flight that mark is N; if the Agent serialises, it is 1.
+    #[test]
+    fn window_pieces_are_fetched_concurrently_not_serialised() {
+        let threads = 8usize;
+        let window_mb = 8u64;
+        let total = window_mb * 1024 * 1024;
+        let hold = Duration::from_millis(120);
+
+        let live = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let data = Arc::new(body(total as usize));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        {
+            let (live, peak, data) = (live.clone(), peak.clone(), data.clone());
+            std::thread::spawn(move || {
+                for conn in listener.incoming() {
+                    let Ok(stream) = conn else { break };
+                    let (live, peak, data) = (live.clone(), peak.clone(), data.clone());
+                    std::thread::spawn(move || {
+                        let n = live.fetch_add(1, Ordering::SeqCst) + 1;
+                        peak.fetch_max(n, Ordering::SeqCst);
+                        // Hold the request open so genuine overlap is visible.
+                        std::thread::sleep(hold);
+                        let _ = serve_one(stream, &data, &Arc::new(AtomicUsize::new(0)), 0, false);
+                        live.fetch_sub(1, Ordering::SeqCst);
+                    });
+                }
+            });
+        }
+
+        let mut src = RemoteSource::new(format!("http://{addr}/game.pkg"), total);
+        src.window_bytes = window_mb * 1024 * 1024;
+        src.parallelism = threads;
+
+        let started = std::time::Instant::now();
+        let got = src.read_range(0, total - 1).expect("window fetch");
+        let elapsed = started.elapsed();
+        assert_eq!(got.len(), total as usize, "short window");
+
+        let seen = peak.load(Ordering::SeqCst);
+        assert_eq!(
+            seen, threads,
+            "expected {threads} concurrent origin requests, saw {seen} — the \
+             shared ureq::Agent is serialising the pieces, so the window's \
+             throughput is one connection's, not {threads}"
+        );
+        // Serialised would be threads * hold; concurrent is ~one hold.
+        assert!(
+            elapsed < hold * (threads as u32) / 2,
+            "window took {elapsed:?}; concurrent pieces should finish in about \
+             one {hold:?} hold, serialised ones in {threads} of them"
+        );
+    }
+
+    /// A keep-alive origin: serves any number of sequential ranged GETs on
+    /// one socket, exactly as a real HTTP/1.1 server does. The shared
+    /// `serve_one` helper answers a single request and hangs up, which would
+    /// make a connection-reuse test measure the stub instead of ureq.
+    fn spawn_keepalive_origin(data: Vec<u8>, accepted: Arc<AtomicUsize>) -> std::net::SocketAddr {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let data = Arc::new(data);
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut stream) = conn else { break };
+                accepted.fetch_add(1, Ordering::SeqCst);
+                let data = data.clone();
+                std::thread::spawn(move || {
+                    let Ok(peer) = stream.try_clone() else { return };
+                    let mut reader = BufReader::new(peer);
+                    // One iteration per request on this socket.
+                    loop {
+                        let mut range: Option<(usize, usize)> = None;
+                        let mut saw_request = false;
+                        loop {
+                            let mut line = String::new();
+                            match reader.read_line(&mut line) {
+                                Ok(0) => return,
+                                Ok(_) => {}
+                                Err(_) => return,
+                            }
+                            if line == "\r\n" || line == "\n" {
+                                break;
+                            }
+                            saw_request = true;
+                            if let Some(v) = line.to_ascii_lowercase().strip_prefix("range: bytes=")
+                            {
+                                if let Some((a, b)) = v.trim().split_once('-') {
+                                    let st: usize = a.trim().parse().unwrap_or(0);
+                                    let en: usize =
+                                        b.trim().parse().unwrap_or(data.len().saturating_sub(1));
+                                    range = Some((st, en.min(data.len() - 1)));
+                                }
+                            }
+                        }
+                        if !saw_request {
+                            return;
+                        }
+                        let (st, en) = range.unwrap_or((0, data.len() - 1));
+                        let body = &data[st..=en];
+                        let head = format!(
+                            "HTTP/1.1 206 Partial Content\r\n\
+                             Content-Range: bytes {}-{}/{}\r\n\
+                             Content-Length: {}\r\n\
+                             Connection: keep-alive\r\n\r\n",
+                            st,
+                            en,
+                            data.len(),
+                            body.len(),
+                        );
+                        if stream.write_all(head.as_bytes()).is_err()
+                            || stream.write_all(body).is_err()
+                            || stream.flush().is_err()
+                        {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    /// Connections must survive from one window to the next.
+    ///
+    /// ureq pools only 3 idle connections per host by default while a window
+    /// fetch opens `parallelism` of them, so five of every eight were being
+    /// closed and rebuilt each window — a TCP and TLS handshake plus a fresh
+    /// TCP slow-start to move 4 MiB, over and over. This counts the distinct
+    /// sockets the origin accepts across several sequential windows: with the
+    /// pool sized to the parallelism it stays at `parallelism`, and without
+    /// it climbs with every window.
+    #[test]
+    fn connections_are_reused_across_windows() {
+        let threads = 4usize;
+        // 4 MiB window with a 1 MiB minimum piece = 4 pieces, so each window
+        // really does open `threads` connections at once.
+        let window_mb = 4u64;
+        let windows = 4u64;
+        let total = window_mb * 1024 * 1024 * windows;
+
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let addr = spawn_keepalive_origin(body(total as usize), accepted.clone());
+
+        let mut src = RemoteSource::new(format!("http://{addr}/game.pkg"), total);
+        src.window_bytes = window_mb * 1024 * 1024;
+        src.parallelism = threads;
+        // Defeat the window cache so every window is a real origin fetch.
+        src.max_windows = 1;
+
+        for w in 0..windows {
+            let start = w * src.window_bytes;
+            let end = start + src.window_bytes - 1;
+            src.read_range(start, end).expect("window fetch");
+        }
+
+        let sockets = accepted.load(Ordering::SeqCst);
+        assert!(
+            sockets <= threads,
+            "origin accepted {sockets} sockets for {windows} windows of \
+             {threads} pieces; with the pool sized to the parallelism the \
+             same {threads} connections should have served them all"
+        );
     }
 
     #[test]
