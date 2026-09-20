@@ -5159,7 +5159,18 @@ fn read_split_range(s: &InstallSession, start: u64, end: u64) -> std::io::Result
     // cache). Everything downstream — 206/Content-Range, the transfer
     // coverage map, cancel — is identical to a local stream install.
     if let Some(remote) = &s.remote {
-        return remote.read_range(start, end);
+        let bytes = remote.read_range(start, end)?;
+        // Overlap the NEXT window's origin fetch with serving this one. Without
+        // it the proxy only ever pulls as fast as the console consumes, because
+        // every window is faulted in on demand and the console blocks while it
+        // is fetched. See RemoteSource::prefetch_after.
+        //
+        // Deliberately only here, not on the header-probe read_range above: that
+        // one reads a small fixed range once to identify the package, and a
+        // readahead after it would pull a whole window the install may never ask
+        // for.
+        crate::remote_pkg::RemoteSource::prefetch_after(remote, end);
+        return Ok(bytes);
     }
     let want_len = usize::try_from(end - start + 1).map_err(|_| {
         std::io::Error::new(
