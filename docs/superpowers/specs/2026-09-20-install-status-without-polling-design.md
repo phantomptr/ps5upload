@@ -144,9 +144,13 @@ console", and a low-frequency background re-check keeps asking whether the
 title registered.
 
 * The re-check reuses the existing registration probe — no new payload RPC.
-* Cadence: every 30 s, for up to 30 minutes, then stop and leave the row in the
-  unverified state with a manual **Recheck** action. A 100 GiB install on a slow
-  internal drive is the case this must not give up on.
+* Cadence: a 30/60/120/300 s backoff, for up to 30 minutes, then stop and leave
+  the row in the unverified state with a manual **Recheck** action. A 100 GiB
+  install on a slow internal drive is the case this must not give up on.
+  (This section originally specified a flat 30 s. The backoff is the better
+  behaviour: the probe runs against the console's single-client transfer port,
+  so a flat cadence over 30 minutes competes with the very transfer it is
+  waiting on. The implementation is correct; this text was reconciled to it.)
 * On registration the row flips to done exactly as a normal completion would,
   and the staged package becomes eligible for the usual cleanup.
 * The 180 s grace is unchanged in meaning — it still marks when we stop
