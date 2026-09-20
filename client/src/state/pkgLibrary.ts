@@ -121,6 +121,24 @@ export function pkgInstallMayNotLaunch(r: {
   return r.may_not_launch ?? r.register_path === "appinst-local";
 }
 
+/** Which of the four install outcomes a result represents.
+ *
+ *  Pure so the mapping is testable without a console. The distinction that
+ *  matters is `unverified` vs `failed`: the PS5 accepted the install and is
+ *  very likely still working on it, so it must not be rendered as an error.
+ *  See docs/superpowers/specs/2026-09-20-install-status-without-polling-design.md
+ */
+export function installOutcomeKind(r: {
+  installed: boolean;
+  acceptedUnverified?: boolean;
+  stalled?: boolean;
+}): "done" | "unverified" | "stalled" | "failed" {
+  if (r.installed) return "done";
+  if (r.acceptedUnverified) return "unverified";
+  if (r.stalled) return "stalled";
+  return "failed";
+}
+
 /** The lastResult for a SUCCESSFUL primary install — amber warn when the title
  *  may not launch, plain green success otherwise. */
 export function installedLastResult(mayNotLaunch: boolean): {
@@ -2230,24 +2248,31 @@ export async function runPkgInstall(
       packageAppVer,
     );
 
-    if (result.installed) {
+    const kind = installOutcomeKind(result);
+    if (kind === "done") {
       useTaskStore.getState().finishTask(taskId, "done", {
         progress: latestProgress
           ? { ...latestProgress, current: latestProgress.total }
           : undefined,
         detail: localPs5Path,
       });
+    } else if (kind === "unverified") {
+      // NOT terminal and NOT failed: the PS5 took the install and is probably
+      // still writing it. `awaiting` keeps the row live so the background
+      // re-verify (see scheduleInstallReverify) can flip it to done.
+      useTaskStore.getState().updateTask(taskId, {
+        status: "awaiting",
+        progress: latestProgress,
+        detail: localPs5Path,
+        lastError: undefined,
+      });
+      showInstallUnverifiedToast(name);
     } else {
-      const code = result.acceptedUnverified
-        ? "INSTALL_UNVERIFIED"
-        : result.stalled
-          ? "INSTALL_STALLED"
-          : "INSTALL_FAILED";
       useTaskStore.getState().finishTask(taskId, "failed", {
         progress: latestProgress,
         detail: localPs5Path,
         lastError: {
-          code,
+          code: kind === "stalled" ? "INSTALL_STALLED" : "INSTALL_FAILED",
           message: result.errMessage || "Install was not confirmed.",
           recoverable: true,
         },
@@ -2282,6 +2307,28 @@ function showInstallFailureToast(name: string, detail: string): void {
   useToastStore.getState().push({
     tone: "critical",
     message: `${name} was not verified as installed. ${compact}`,
+    action: {
+      label: "Open Tasks",
+      onClick: () => {
+        window.history.pushState({}, "", "/tasks");
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      },
+    },
+  });
+}
+
+/** The PS5 accepted the install but we could not confirm completion yet.
+ *  Informational, never critical — a large install routinely outlives the
+ *  engine's grace window while the console is still copying files.
+ *
+ *  Plain English, no `tr()`: this module has no i18n import and its sibling
+ *  `showInstallFailureToast` is untranslated too. Adding a translator here
+ *  would introduce a new i18n mechanism into a file that has none, which is
+ *  out of scope. */
+function showInstallUnverifiedToast(name: string): void {
+  useToastStore.getState().push({
+    tone: "info",
+    message: `${name} is still finishing on the PS5. Large games keep installing for a while after the transfer ends — ps5upload keeps checking, and the staged package is kept until it is confirmed.`,
     action: {
       label: "Open Tasks",
       onClick: () => {

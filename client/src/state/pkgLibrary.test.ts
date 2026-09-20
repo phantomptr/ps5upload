@@ -2049,7 +2049,7 @@ describe("runPkgInstall — tracks the install to genuine completion", () => {
     expect(r.installed).toBe(true);
   });
 
-  it("treats the engine's accepted_unverified terminal state as a warning", async () => {
+  it("treats the engine's accepted_unverified terminal state as awaiting, not failed", async () => {
     mockedInvoke.mockImplementation(async (cmd: unknown) => {
       if (cmd === "pkg_install_start") return START_OK;
       if (cmd === "pkg_install_status") {
@@ -2076,8 +2076,8 @@ describe("runPkgInstall — tracks the install to genuine completion", () => {
     expect(r.errMessage).toBe(PKG_ACCEPTED_UNVERIFIED_HINT);
     expect(useTaskStore.getState().tasks[0]).toMatchObject({
       kind: "pkg-install",
-      status: "failed",
-      lastError: { code: "INSTALL_UNVERIFIED", recoverable: true },
+      status: "awaiting",
+      lastError: undefined,
     });
   });
 });
