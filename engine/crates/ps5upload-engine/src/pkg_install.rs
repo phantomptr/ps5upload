@@ -71,7 +71,17 @@ impl RemotePkg {
     /// can exist here, so this is never called; it exists so the serve path's
     /// call site needs no `cfg`, matching `read_range` above.
     pub fn prefetch_after(_this: &std::sync::Arc<Self>, _offset: u64) {}
+
+    /// Origin-rate stub for the uninhabited Android type, for the same reason
+    /// as `prefetch_after`: the status builder's call site needs no `cfg`.
+    /// Omitting a stub here is what broke the 5.31.0 Android build.
+    pub fn origin_rate_bps(&self) -> Option<u64> {
+        match *self {}
+    }
 }
+
+/// How often the pkg-host serve-rate line may be emitted, in seconds.
+const SERVE_RATE_LOG_SECS: u64 = 15;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -151,6 +161,12 @@ pub struct InstallSession {
     /// diagnostics use zero to distinguish a Sony HTTP/proxy preflight reject
     /// from a failure after package transfer began.
     pub requests_served: u64,
+    /// Unix time the last `pkg-host serve rate` line was emitted. The rate
+    /// log is paced by TIME, not by a request count: a link install using
+    /// 32 MiB windows serves only ~100 requests for a whole 3 GiB, so the
+    /// previous "every 512 requests" trigger never fired once on exactly the
+    /// slow installs it existed to explain.
+    pub last_rate_log_unix: u64,
     /// Total response-body bytes served across Range requests. This may exceed
     /// package size when Sony retries a range; it is diagnostic, not progress.
     pub bytes_served: u64,
@@ -1551,6 +1567,7 @@ async fn install_start_handler(
         stalled: false,
         accepted_unverified: false,
         requests_served: 0,
+        last_rate_log_unix: 0,
         bytes_served: 0,
         transfer_bytes: 0,
         transfer: TransferCoverage::new(expected_size),
@@ -1996,6 +2013,12 @@ pub struct StatusResponse {
     /// before fetching" from a failure after the transfer began.
     #[serde(default)]
     pub served_requests: u64,
+    /// Average bytes/sec on the DOWNLOAD leg of a link install (origin -> this
+    /// computer). Reported separately from the console leg because the two
+    /// have completely different causes when slow, and one blended number
+    /// cannot tell a user which of them to go and fix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_rate_bps: Option<u64>,
     /// The DPI daemon's answer for a Stream session, replayed here so a caller
     /// that stopped waiting (client timeout, proxy, browser navigation) still
     /// learns the verdict. `None` until the daemon replies.
@@ -2806,6 +2829,7 @@ async fn install_status_handler(
             TransferView {
                 bytes: transfer_bytes,
                 requests: requests_served,
+                origin_rate_bps: None,
                 dpi_ok,
                 dpi_rc,
             },
@@ -3347,12 +3371,14 @@ async fn install_status_handler(
             .map(|s| TransferView {
                 bytes: s.transfer_bytes,
                 requests: s.requests_served,
+                origin_rate_bps: s.remote.as_ref().and_then(|r| r.origin_rate_bps()),
                 dpi_ok,
                 dpi_rc,
             })
             .unwrap_or(TransferView {
                 bytes: transfer_bytes,
                 requests: requests_served,
+                origin_rate_bps: None,
                 dpi_ok,
                 dpi_rc,
             })
@@ -3380,6 +3406,9 @@ async fn install_status_handler(
 struct TransferView {
     bytes: u64,
     requests: u64,
+    /// Average bytes/sec pulled from the ORIGIN, for a link install. `None`
+    /// for a staged install (no origin) or before the first window lands.
+    origin_rate_bps: Option<u64>,
     dpi_ok: Option<bool>,
     dpi_rc: Option<i32>,
 }
@@ -3428,6 +3457,7 @@ fn build_status_response(
         accepted_unverified,
         transfer_bytes: transfer.bytes,
         served_requests: transfer.requests,
+        origin_rate_bps: transfer.origin_rate_bps,
         dpi_ok: transfer.dpi_ok,
         dpi_rc: transfer.dpi_rc,
     }
@@ -4855,15 +4885,21 @@ async fn serve_handler(
                 active.transfer_bytes = active.transfer.bytes();
             }
             // Periodic serve-rate line, so the CONSOLE leg is measurable the
-            // same way the origin leg now is. A "my install is slow" report
-            // needs both numbers to be answerable: a slow origin and a slow
-            // console link look identical from the outside and want opposite
-            // fixes. Every 512 ranges keeps this to roughly one line per
-            // several hundred MB rather than per request.
-            if active.requests_served % 512 == 0 {
-                let secs = now_unix().saturating_sub(active.created_at_unix).max(1);
+            // same way the origin leg is. A "my install is slow" report needs
+            // both numbers: a slow origin and a slow console link look
+            // identical from the outside and want opposite fixes.
+            //
+            // Paced by TIME, not by a request count. The previous trigger
+            // fired every 512 ranges, but a link install uses 32 MiB windows
+            // and serves only ~100 requests for a whole 3 GiB — so on a real
+            // 30-minute 1.9 MB/s report it never emitted a single line, which
+            // is exactly the case it existed to explain.
+            let now_s = now_unix();
+            if now_s.saturating_sub(active.last_rate_log_unix) >= SERVE_RATE_LOG_SECS {
+                active.last_rate_log_unix = now_s;
+                let secs = now_s.saturating_sub(active.created_at_unix).max(1);
                 crate::log_info!(
-                    "pkg-host serve rate: session={} served={} of {} bytes over {}                      requests in {}s = {:.1} MB/s average",
+                    "pkg-host serve rate: session={} served={} of {} bytes over {} requests in {}s = {:.1} MB/s average",
                     active.id,
                     active.bytes_served,
                     active.total_size,
@@ -6405,6 +6441,7 @@ mod tests {
             stalled: false,
             accepted_unverified: false,
             requests_served: 0,
+            last_rate_log_unix: 0,
             bytes_served: 0,
             transfer_bytes: 0,
             transfer: TransferCoverage::new(total),

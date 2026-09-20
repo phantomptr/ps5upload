@@ -990,6 +990,45 @@ describe("describeInstallSample (stream state naming)", () => {
     ).toMatch(/The PS5 is installing/);
   });
 
+  /* A link install has two legs that fail differently: a slow origin and a
+   * slow console link look identical in one blended number, which is why a
+   * real 1.9 MB/s report could not be diagnosed from the UI at all. */
+  it("names both legs when the origin rate is known", () => {
+    const { detail } = describeInstallSample(
+      {
+        phase: "download",
+        installedBytes: 0,
+        transferBytes: 500,
+        total: 1000,
+        servedRequests: 3,
+        stalled: false,
+        acceptedUnverified: false,
+        originRateBps: 1_900_000,
+      },
+      1_800_000,
+    );
+    expect(detail).toContain("downloading");
+    expect(detail).toContain("sending");
+  });
+
+  /* A staged install has no origin, so there is no second leg to name. */
+  it("keeps the single-speed wording when there is no origin leg", () => {
+    const { detail } = describeInstallSample(
+      {
+        phase: "download",
+        installedBytes: 0,
+        transferBytes: 500,
+        total: 1000,
+        servedRequests: 3,
+        stalled: false,
+        acceptedUnverified: false,
+      },
+      1_800_000,
+    );
+    expect(detail).not.toContain("downloading");
+    expect(detail).toMatch(/ at /);
+  });
+
   it("says why the numbers stopped moving when the engine is gone", () => {
     // The bytes below the line are the last ones we could read. Without the
     // note the UI showed a frozen bar with no explanation, which reads as

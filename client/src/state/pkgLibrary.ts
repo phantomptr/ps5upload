@@ -1178,6 +1178,11 @@ export interface InstallSample {
   total: number;
   /** `pkg-host` responses answered. 0 = the console never fetched anything. */
   servedRequests: number;
+  /** Average bytes/sec on the DOWNLOAD leg of a link install (origin → this
+   *  computer). Undefined for a staged install, which has no origin. Shown
+   *  next to the console leg so a slow install says WHICH side is slow: the
+   *  two look identical otherwise and need opposite fixes. */
+  originRateBps?: number;
   stalled: boolean;
   acceptedUnverified: boolean;
   /** Replaces the derived line when set — used to say why the numbers above
@@ -1224,9 +1229,18 @@ export function describeInstallSample(
     case "queued":
       detail = "Waiting for the PS5 to start…";
       break;
-    case "download":
-      detail = `Streaming to the PS5 — ${pct}% (${fmtBytes(current)} of ${fmtBytes(s.total)})${speed}`;
+    case "download": {
+      // For a link install, name both legs. The console leg alone cannot
+      // explain a slow install: the download from the origin feeds it, and
+      // when that is the constraint the PS5 figure just mirrors it.
+      const legs =
+        s.originRateBps && s.originRateBps > 0
+          ? ` — downloading ${fmtBytes(s.originRateBps)}/s` +
+            (bytesPerSec > 0 ? `, sending ${fmtBytes(bytesPerSec)}/s` : "")
+          : speed;
+      detail = `Streaming to the PS5 — ${pct}% (${fmtBytes(current)} of ${fmtBytes(s.total)})${legs}`;
       break;
+    }
     case "install":
       detail = `The PS5 is installing the package — ${pct}%${speed}`;
       break;
@@ -1322,6 +1336,7 @@ async function verifyInstallCompleted(
         // so the stream UI falls back to the phase alone.
         transfer_bytes?: number;
         served_requests?: number;
+        origin_rate_bps?: number;
       };
       // An engine that doesn't speak status returns no `phase` — treat as
       // accepted-but-unverified, not as a manufactured success.
@@ -1338,6 +1353,8 @@ async function verifyInstallCompleted(
           transferBytes: s.transfer_bytes ?? 0,
           total: s.total,
           servedRequests: s.served_requests ?? 0,
+          originRateBps:
+            typeof s.origin_rate_bps === "number" ? s.origin_rate_bps : undefined,
           stalled: !!s.stalled,
           acceptedUnverified: !!s.accepted_unverified,
         };

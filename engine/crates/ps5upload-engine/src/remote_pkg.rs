@@ -34,6 +34,7 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::io::Read;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -115,6 +116,45 @@ pub struct RemoteSource {
     /// console requests that land inside one window from each spawning their
     /// own thread for the same next window.
     prefetching: Mutex<HashSet<u64>>,
+    /// Cumulative origin bytes fetched and nanoseconds spent fetching them.
+    /// Kept so the install status can report the DOWNLOAD leg's speed next to
+    /// the console leg's, instead of one blended number that hides which of
+    /// the two is actually slow.
+    origin_bytes: AtomicU64,
+    origin_nanos: AtomicU64,
+}
+
+/// Per-piece evidence for one ranged GET, gathered so a slow link install can
+/// be diagnosed from a bug report instead of guessed at.
+///
+/// The field that matters most is not here but derived from these across a
+/// window: `sum(took) / window_elapsed`. With N pieces fetched concurrently
+/// that ratio approaches N; if it sits near 1 the pieces are effectively
+/// SERIALISED, which looks identical from the outside but wants the opposite
+/// fix (more connections, not more bandwidth).
+#[derive(Debug, Default, Clone, Copy)]
+struct PieceStat {
+    bytes: u64,
+    took: Duration,
+    /// Time to first byte of the FIRST attempt — the origin's answer latency,
+    /// as distinct from how fast it then sends.
+    first_ttfb: Option<Duration>,
+    /// Total GETs issued, including resumes after a short read.
+    attempts: u32,
+    /// Worst consecutive run of zero-progress attempts.
+    stalls: u32,
+    /// Times the origin closed before sending the whole range.
+    short_reads: u32,
+    /// Milliseconds spent asleep in retry backoff, previously invisible.
+    backoff_ms: u64,
+}
+
+impl PieceStat {
+    fn record_ttfb(&mut self, ttfb: Duration) {
+        if self.first_ttfb.is_none() {
+            self.first_ttfb = Some(ttfb);
+        }
+    }
 }
 
 fn build_agent() -> ureq::Agent {
@@ -219,6 +259,8 @@ impl RemoteSource {
             cache: Mutex::new(VecDeque::new()),
             fetch_lock: Mutex::new(()),
             prefetching: Mutex::new(HashSet::new()),
+            origin_bytes: AtomicU64::new(0),
+            origin_nanos: AtomicU64::new(0),
         }
     }
 
@@ -373,6 +415,7 @@ impl RemoteSource {
             rest = tail;
         }
 
+        let mut stats: Vec<PieceStat> = Vec::with_capacity(pieces.len());
         let errors: Vec<String> = std::thread::scope(|scope| {
             let handles: Vec<_> = pieces
                 .iter()
@@ -385,7 +428,10 @@ impl RemoteSource {
             handles
                 .into_iter()
                 .filter_map(|h| match h.join() {
-                    Ok(Ok(())) => None,
+                    Ok(Ok(stat)) => {
+                        stats.push(stat);
+                        None
+                    }
                     Ok(Err(e)) => Some(e),
                     Err(_) => Some("a download worker panicked".to_string()),
                 })
@@ -399,20 +445,84 @@ impl RemoteSource {
         }
 
         let took = fetch_started.elapsed();
+        self.origin_bytes.fetch_add(w_len, Ordering::Relaxed);
+        self.origin_nanos
+            .fetch_add(took.as_nanos() as u64, Ordering::Relaxed);
         let mbps = if took.as_secs_f64() > 0.0 {
             (w_len as f64) / took.as_secs_f64() / 1_000_000.0
         } else {
             0.0
         };
+        // Concurrency evidence. Each piece runs on its own thread, so if they
+        // truly overlap the sum of their durations is ~N x the window's own
+        // elapsed time. A ratio near 1 means they are serialising — the same
+        // slow window, but caused by too few connections rather than too
+        // little bandwidth, and fixed differently.
+        let piece_ms_total: u64 = stats.iter().map(|p| p.took.as_millis() as u64).sum();
+        let overlap = if took.as_millis() > 0 {
+            piece_ms_total as f64 / took.as_millis() as f64
+        } else {
+            0.0
+        };
+        let slowest = stats.iter().map(|p| p.took.as_millis()).max().unwrap_or(0);
+        let fastest = stats.iter().map(|p| p.took.as_millis()).min().unwrap_or(0);
+        let ttfb_max = stats
+            .iter()
+            .filter_map(|p| p.first_ttfb)
+            .map(|d| d.as_millis())
+            .max()
+            .unwrap_or(0);
+        // Throughput of a SINGLE connection. If every piece lands near the
+        // same figure while the window total stays low, the origin is capping
+        // per connection and the answer is more connections; if this is
+        // already high, the cap is the line itself and more connections will
+        // not help. This is the figure that tells those two apart.
+        let per_conn: Vec<u64> = stats
+            .iter()
+            .map(|p| {
+                let ms = p.took.as_millis() as u64;
+                p.bytes.checked_div(ms).unwrap_or(0)
+            })
+            .collect();
+        let per_conn_min = per_conn.iter().copied().min().unwrap_or(0);
+        let per_conn_max = per_conn.iter().copied().max().unwrap_or(0);
+        let attempts: u32 = stats.iter().map(|p| p.attempts).sum();
+        let stalls: u32 = stats.iter().map(|p| p.stalls).sum();
+        let short_reads: u32 = stats.iter().map(|p| p.short_reads).sum();
+        let backoff_ms: u64 = stats.iter().map(|p| p.backoff_ms).sum();
         crate::log_info!(
-            "url-install origin fetch: window={} bytes={} pieces={} took_ms={} rate={:.1} MB/s",
+            "url-install origin fetch: window={} bytes={} pieces={} took_ms={} rate={:.1} MB/s overlap={:.1}x piece_ms={}..{} per_conn_kBps={}..{} ttfb_max_ms={} attempts={} stalls={} short_reads={} backoff_ms={}",
             idx,
             w_len,
             pieces.len(),
             took.as_millis(),
             mbps,
+            overlap,
+            fastest,
+            slowest,
+            per_conn_min,
+            per_conn_max,
+            ttfb_max,
+            attempts,
+            stalls,
+            short_reads,
+            backoff_ms,
         );
         Ok(buf)
+    }
+
+    /// Average origin throughput in bytes/sec across every window fetched so
+    /// far, or `None` before the first fetch completes. This is the DOWNLOAD
+    /// leg only — the console leg is measured separately by the pkg-host — so
+    /// the UI can name which side is slow rather than showing one blended
+    /// figure that explains nothing.
+    pub fn origin_rate_bps(&self) -> Option<u64> {
+        let bytes = self.origin_bytes.load(Ordering::Relaxed);
+        let nanos = self.origin_nanos.load(Ordering::Relaxed);
+        if bytes == 0 || nanos == 0 {
+            return None;
+        }
+        Some(((bytes as u128 * 1_000_000_000u128) / nanos as u128) as u64)
     }
 
     /// Split `[start, start+len)` into contiguous `(start, len)` pieces, at
@@ -437,7 +547,12 @@ impl RemoteSource {
     /// failures. Resumes mid-piece: a connection that dies after 3 of 4 MiB
     /// re-requests only the missing tail, and any forward progress refreshes
     /// the stall budget so a slow, lossy origin still finishes.
-    fn fetch_piece(&self, start: u64, len: u64, dst: &mut [u8]) -> Result<(), String> {
+    fn fetch_piece(&self, start: u64, len: u64, dst: &mut [u8]) -> Result<PieceStat, String> {
+        let piece_started = std::time::Instant::now();
+        let mut stat = PieceStat {
+            bytes: len,
+            ..PieceStat::default()
+        };
         let mut filled = 0u64;
         let mut stalls = 0u32;
         let mut attempts = 0u32;
@@ -456,20 +571,27 @@ impl RemoteSource {
                 ));
             }
             if stalls > 0 {
-                std::thread::sleep(Duration::from_millis(250 * u64::from(stalls)));
+                let backoff = Duration::from_millis(250 * u64::from(stalls));
+                stat.backoff_ms += backoff.as_millis() as u64;
+                std::thread::sleep(backoff);
             }
             attempts += 1;
             let from = start + filled;
             let to = start + len - 1;
             match self.read_into(from, to, &mut dst[filled as usize..]) {
-                Ok(0) => {
+                Ok((0, ttfb)) => {
+                    stat.record_ttfb(ttfb);
                     stalls += 1;
                     last_err = format!("origin sent no bytes at offset {from}");
                 }
-                Ok(n) => {
+                Ok((n, ttfb)) => {
+                    stat.record_ttfb(ttfb);
                     filled += n;
                     // Progress: the connection died early but the cursor
                     // moved, so this does not count as a stall.
+                    if n < len - (filled - n) {
+                        stat.short_reads += 1;
+                    }
                     stalls = 0;
                     last_err = format!("origin closed after {filled} of {len} bytes");
                 }
@@ -478,13 +600,20 @@ impl RemoteSource {
                     last_err = e;
                 }
             }
+            stat.stalls = stat.stalls.max(stalls);
         }
-        Ok(())
+        stat.attempts = attempts;
+        stat.took = piece_started.elapsed();
+        Ok(stat)
     }
 
-    /// One ranged GET. Returns how many bytes actually landed in `dst`, which
-    /// may be short if the origin closed early — the caller resumes.
-    fn read_into(&self, start: u64, end: u64, dst: &mut [u8]) -> Result<u64, String> {
+    /// One ranged GET. Returns how many bytes actually landed in `dst` (which
+    /// may be short if the origin closed early — the caller resumes) and the
+    /// time to first byte. TTFB is split out because it separates an origin
+    /// that is slow to ANSWER from one that is slow to SEND: the first points
+    /// at per-request throttling or cold storage, the second at bandwidth.
+    fn read_into(&self, start: u64, end: u64, dst: &mut [u8]) -> Result<(u64, Duration), String> {
+        let started = std::time::Instant::now();
         let resp = self
             .agent
             .get(&self.url)
@@ -492,6 +621,7 @@ impl RemoteSource {
             .header("Range", &format!("bytes={start}-{end}"))
             .call()
             .map_err(|e| format!("{e}"))?;
+        let ttfb = started.elapsed();
         let status = resp.status().as_u16();
         if status != 206 {
             // A 200 here means the origin ignored the Range and is about to
@@ -516,7 +646,7 @@ impl RemoteSource {
                 }
             }
         }
-        Ok(filled as u64)
+        Ok((filled as u64, ttfb))
     }
 }
 
