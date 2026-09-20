@@ -98,6 +98,8 @@ connection_scene_none: "None detected. Companion tools will appear here once the
 connection_payload_outdated_title: "PS5 has an older helper than this app",
 connection_payload_outdated_body: "Running v{running}, this app ships v{bundled}. The bundled helper includes fixes the older one is missing — replace it for the best results.",
 connection_payload_outdated_action: "Replace helper",
+connection_prior_killed: "The previous helper did not shut down cleanly",
+connection_prior_killed_detail: "This can mean another payload on the console ended it, the system ran low on memory, or it crashed. stderr.log in a bug report says which. If you load ps5upload through an autoloader, try sending it from here instead.",
 connection_block_rechecking: "rechecking…",
 connection_block_probing: "Probing…",
 status_fw: "FW {ver}",

@@ -91,6 +91,7 @@ export interface HostRuntime {
   payloadVersion: string | null;
   ps5Kernel: string | null;
   ucredElevated: boolean | null;
+  priorInstance: string | null;
   maxTransferStreams: number | null;
   /** Whether the FTX2 transfer listener (:9113) accepts TCP. Probed
    *  alongside the mgmt STATUS frame so the UI can flag the wedge
@@ -106,6 +107,7 @@ export const EMPTY_HOST_RUNTIME: HostRuntime = {
   payloadVersion: null,
   ps5Kernel: null,
   ucredElevated: null,
+  priorInstance: null,
   maxTransferStreams: null,
   transferAlive: null,
 };
@@ -144,6 +146,10 @@ export interface ConnectionState {
    *          probe hasn't returned yet. Renders as "—" in the UI.
    *  Set by Connection's payload probe + AppShell's polling tick. */
   ucredElevated: boolean | null;
+  /** How the PREVIOUS payload instance ended, straight from STATUS_ACK:
+   *  "clean" | "killed_externally" | "wedged" | "stale". null on payloads
+   *  older than this field, which is indistinguishable from "unknown". */
+  priorInstance: string | null;
   /** Max parallel upload streams the payload advertises (STATUS_ACK
    *  `max_transfer_streams`). null = pre-multi-stream payload (or no probe
    *  yet); the Upload path treats null as 1. The effective stream count is
@@ -183,6 +189,7 @@ export interface ConnectionState {
         | "payloadVersion"
         | "ps5Kernel"
         | "ucredElevated"
+        | "priorInstance"
         | "maxTransferStreams"
         | "payloadProbing"
         | "transferAlive"
@@ -205,6 +212,7 @@ function mirrorRuntime(host: string, rt: HostRuntime) {
     payloadVersion: rt.payloadVersion,
     ps5Kernel: rt.ps5Kernel,
     ucredElevated: rt.ucredElevated,
+    priorInstance: rt.priorInstance,
     maxTransferStreams: rt.maxTransferStreams,
     transferAlive: rt.transferAlive,
   };
@@ -220,6 +228,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   payloadVersion: null,
   ps5Kernel: null,
   ucredElevated: null,
+  priorInstance: null,
   maxTransferStreams: null,
   transferAlive: null,
   payloadProbing: false,

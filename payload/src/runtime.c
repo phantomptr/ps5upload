@@ -33,6 +33,7 @@
 #include "commit_apply.h"
 #include "runtime.h"
 #include "sandbox_unmount.h"
+#include "instance_verdict.h"
 
 #include "content_db.h"
 #include "register.h"
@@ -54,6 +55,7 @@
 #include "sony_api_lock.h"
 #include "focus_probe.h"
 #include "proc_list.h"
+#include "proc_identity.h"
 #include "smp_meta.h"
 #include "blake3.h"
 
@@ -1982,6 +1984,35 @@ static uint64_t runtime_system_boottime_unix(void) {
     return (uint64_t)bt.tv_sec;
 }
 
+void runtime_classify_prior_instance(runtime_state_t *state) {
+    if (!state) return;
+
+    struct stat st;
+    int record_present = (stat(state->ownership_path, &st) == 0) ? 1 : 0;
+    uint64_t prior_started = 0;
+    int prior_alive = 0;
+
+    if (record_present) {
+        prior_started = runtime_read_prior_started_at(state->ownership_path);
+        int prior_pid = runtime_read_prior_pid(state->ownership_path);
+        if (prior_pid > 0 && prior_pid != (int)getpid()) {
+            prior_alive = (kill((pid_t)prior_pid, 0) == 0) ? 1 : 0;
+        }
+    }
+
+    ps5upload2_prior_verdict_t v =
+        instance_verdict_classify(record_present, prior_started,
+                                  runtime_system_boottime_unix(), prior_alive);
+    state->prior_verdict = (int)v;
+
+    fprintf(stderr, "[payload2] prior instance: %s\n", instance_verdict_name(v));
+    if (v == PS5UPLOAD2_PRIOR_KILLED_EXTERNALLY) {
+        fprintf(stderr,
+                "[payload2] the previous instance was killed by something else on this "
+                "console (SIGKILL or OOM) — it did not exit on its own\n");
+    }
+}
+
 /*
  * Best-effort reap of a previous payload instance that crashed and lingered.
  *
@@ -2049,20 +2080,25 @@ void runtime_reap_prior_instance(runtime_state_t *state) {
 
     if (kill((pid_t)prior, 0) != 0) return; /* already gone */
 
-    char my_name[64] = {0};
     char their_name[64] = {0};
-    if (proc_name_by_pid(me, my_name, sizeof(my_name)) != 0) {
-        /* Can't establish our own name → can't safely compare → don't kill. */
-        fprintf(stderr, "[payload2] reap: cannot read own process name — skipping\n");
-        return;
-    }
     if (proc_name_by_pid(prior, their_name, sizeof(their_name)) != 0) {
         return; /* prior pid vanished between the checks — nothing to do */
     }
-    if (strcmp(my_name, their_name) != 0) {
+    /* Second line of defence against pid recycling. NOT an exact compare
+     * against our own name: ours is read here, before any worker thread has
+     * started, so it is still "ps5upload.elf", while a predecessor that has
+     * been up for a while reports whichever worker the kernel picked as its
+     * representative thread — "ps5upload-wake" in issue #289's kernel log.
+     * The exact compare made this branch always take the skip path, so a
+     * wedged predecessor was never reaped and the new payload exited.
+     *
+     * The PRIMARY safety gate remains the boot-session check above; this
+     * only has to rule out a recycled pid now owned by unrelated homebrew,
+     * and no other homebrew carries the "ps5upload" prefix. */
+    if (!proc_name_is_ours(their_name)) {
         fprintf(stderr,
-                "[payload2] reap: pid %d is '%s', not our '%s' — recycled pid, skipping\n",
-                prior, their_name, my_name);
+                "[payload2] reap: pid %d is '%s', not one of ours — recycled pid, skipping\n",
+                prior, their_name);
         return;
     }
 
@@ -2084,9 +2120,115 @@ void runtime_reap_prior_instance(runtime_state_t *state) {
             prior);
 }
 
+/* NOTE on the missing boot-session guard: runtime_reap_prior_instance
+ * needs one because it reads a pid out of the ownership file, which lives
+ * on persistent /data and SURVIVES reboots — after a reboot the kernel's
+ * pid counter resets, so an old record's pid may now belong to unrelated
+ * homebrew, and the started_at/boottime comparison is what rules that out.
+ *
+ * This function has no such gap to guard against. It never reads a
+ * persisted pid at all — every pid it considers comes from a live
+ * KERN_PROC_PROC sysctl snapshot taken right here, right now. A pid that
+ * exists in that snapshot is, by construction, a pid running in the CURRENT
+ * boot session; there is no stale-record case to defend against. Adding a
+ * started_at/boottime check here would have nothing meaningful to compare
+ * against (a live process has no persisted start time to read) and would
+ * be pure dead weight. The live snapshot IS the boot-session proof. */
+int runtime_sweep_our_instances(void) {
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC, 0};
+    size_t buf_size = 0;
+    int me = (int)getpid();
+    int killed = 0;
+    /* pids we sent SIGKILL to, so the confirmation poll below can check each
+     * one individually instead of just sleeping and hoping. A fixed cap is
+     * fine — this is "our own stray instances", never an unbounded set. */
+    pid_t killed_pids[64];
+    int killed_pid_count = 0;
+
+    if (sysctl(mib, 4, NULL, &buf_size, NULL, 0) != 0 || buf_size == 0) return 0;
+    size_t alloc = buf_size + (buf_size / 4) + 1024;
+    uint8_t *kbuf = (uint8_t *)malloc(alloc);
+    if (!kbuf) return 0;
+    size_t got = alloc;
+    if (sysctl(mib, 4, kbuf, &got, NULL, 0) != 0) {
+        free(kbuf);
+        return 0;
+    }
+
+    const size_t MIN_KINFO_BYTES = KINFO_TDNAME_OFFSET + 1;
+    for (uint8_t *p = kbuf; (size_t)(p - kbuf) + sizeof(int) <= got;) {
+        int ki_structsize = *(int *)p;
+        if (ki_structsize <= 0 ||
+            (size_t)ki_structsize < MIN_KINFO_BYTES ||
+            (size_t)(p - kbuf) + (size_t)ki_structsize > got) {
+            break;
+        }
+        pid_t pid = *(pid_t *)&p[KINFO_PID_OFFSET];
+        const char *tdname = (const char *)&p[KINFO_TDNAME_OFFSET];
+        size_t name_max = (size_t)ki_structsize - KINFO_TDNAME_OFFSET;
+        char name[64] = {0};
+        size_t i = 0;
+        for (; i < name_max && i + 1 < sizeof(name) && tdname[i]; ++i) {
+            name[i] = tdname[i];
+        }
+        name[i] = '\0';
+        p += (size_t)ki_structsize;
+
+        if ((int)pid <= 1 || (int)pid == me) continue;
+        if (!proc_name_is_ours(name)) continue;
+
+        fprintf(stderr,
+                "[payload2] sweep: SIGKILL pid=%d name=%s (ports still held after "
+                "handshake and reap both failed)\n",
+                (int)pid, name);
+        if (kill(pid, SIGKILL) == 0) {
+            killed++;
+            if (killed_pid_count < (int)(sizeof(killed_pids) / sizeof(killed_pids[0]))) {
+                killed_pids[killed_pid_count++] = pid;
+            }
+        }
+    }
+    free(kbuf);
+
+    /* Same confirmation poll runtime_reap_prior_instance uses: kill()
+     * returning 0 only means the signal was DELIVERED, not that the process
+     * died — a kernel-wedged process (uninterruptible sleep) ignores SIGKILL
+     * entirely. Poll each killed pid for up to ~1 s and drop it out of the
+     * "still alive" set as soon as it's gone, instead of a flat sleep that
+     * neither confirms nor names a survivor. This is the whole point of the
+     * branch: the next bug bundle should say whether the kill actually
+     * worked, not just that we asked for it. */
+    for (int i = 0; i < 20 && killed_pid_count > 0; i++) {
+        int remaining = 0;
+        for (int j = 0; j < killed_pid_count; j++) {
+            if (killed_pids[j] == 0) continue; /* already confirmed dead */
+            if (kill(killed_pids[j], 0) != 0) {
+                killed_pids[j] = 0; /* confirmed dead */
+                continue;
+            }
+            remaining++;
+        }
+        if (remaining == 0) break;
+        usleep(50000);
+    }
+    for (int j = 0; j < killed_pid_count; j++) {
+        if (killed_pids[j] == 0) continue;
+        fprintf(stderr,
+                "[payload2] sweep: pid=%d survived SIGKILL (kernel-wedged) — "
+                "a PS5 reboot is required to clear it\n",
+                (int)killed_pids[j]);
+    }
+    fprintf(stderr, "[payload2] sweep: killed %d instance(s)\n", killed);
+    return killed;
+}
+
 /* ── Shutdown watchdog ────────────────────────────────────────────────────── */
 
 static int g_watchdog_exit_code = 0;
+/* Set once by runtime_arm_shutdown_watchdog, before the watchdog thread is
+ * created — never mutated after, so the watchdog thread reads it race-free
+ * without a lock. May be NULL. */
+static const runtime_state_t *g_watchdog_state = NULL;
 
 static void *runtime_shutdown_watchdog(void *arg) {
     (void)arg;
@@ -2096,13 +2238,22 @@ static void *runtime_shutdown_watchdog(void *arg) {
      * stuck in an uninterruptible Sony API never returns), force the process
      * out so it can't linger as an orphan the next resend would duplicate. */
     sleep(8);
+    /* We are exiting deliberately — clear the ownership record BEFORE
+     * _exit() so the next instance doesn't read a leftover record + dead
+     * pid as `killed_externally`. runtime_clear_ownership is just unlink()
+     * + fprintf on failure: no locks, no allocation, can't block, so this
+     * can't itself wedge the forced exit it exists to guarantee. */
+    if (g_watchdog_state) {
+        (void)runtime_clear_ownership(g_watchdog_state);
+    }
     fprintf(stderr, "[payload2] shutdown watchdog fired — forcing _exit(%d)\n",
             g_watchdog_exit_code);
     _exit(g_watchdog_exit_code);
     return NULL;
 }
 
-void runtime_arm_shutdown_watchdog(int exit_code) {
+void runtime_arm_shutdown_watchdog(const runtime_state_t *state, int exit_code) {
+    g_watchdog_state = state;
     g_watchdog_exit_code = exit_code;
     pthread_t t;
     if (pthread_create(&t, NULL, runtime_shutdown_watchdog, NULL) == 0) {
@@ -15124,6 +15275,7 @@ static int handle_status_frame(runtime_state_t *state, int client_fd,
     uint64_t snap_instance_id, snap_started_at, snap_command_count;
     uint64_t snap_active_tx, snap_last_seq, snap_recovered;
     int snap_shutdown, snap_startup_reason, snap_takeover_req, snap_port;
+    int snap_prior_verdict;
     int len;
     char kernel_version_raw[256];
     char kernel_version_esc[512];
@@ -15134,6 +15286,7 @@ static int handle_status_frame(runtime_state_t *state, int client_fd,
     snap_port           = state->runtime_port;
     snap_shutdown       = state->shutdown_requested;
     snap_startup_reason = state->startup_reason;
+    snap_prior_verdict  = state->prior_verdict;
     snap_takeover_req   = state->takeover_requested;
     snap_started_at     = state->started_at_unix;
     snap_command_count  = state->command_count;
@@ -15159,6 +15312,10 @@ static int handle_status_frame(runtime_state_t *state, int client_fd,
                    "\"instance_id\":%llu,\"runtime_port\":%d,"
                    "\"shutdown\":%d,\"startup_reason\":%d,"
                    "\"takeover_requested\":%d,\"started_at_unix\":%llu,"
+                   /* How the PREVIOUS instance ended: "clean",
+                    * "killed_externally", "wedged" or "stale". Absent on
+                    * older payloads — the client treats that as unknown. */
+                   "\"prior_instance\":\"%s\","
                    "\"command_count\":%llu,\"active_transactions\":%llu,"
                    "\"last_tx_seq\":%llu,\"recovered_transactions\":%llu,"
                    "\"ucred_elevated\":%s,"
@@ -15179,6 +15336,8 @@ static int handle_status_frame(runtime_state_t *state, int client_fd,
                    snap_startup_reason,
                    snap_takeover_req,
                    (unsigned long long)snap_started_at,
+                   instance_verdict_name(
+                       (ps5upload2_prior_verdict_t)snap_prior_verdict),
                    (unsigned long long)snap_command_count,
                    (unsigned long long)snap_active_tx,
                    (unsigned long long)snap_last_seq,
