@@ -3381,6 +3381,13 @@ backport_stop_external: "Állítsd le a külső BackPork payloadot, majd küldd 
 "pkglib.auth.fake": "fake/debug",
 "pkglib.auth.retail.title": "Retail aláírású csomag. A telepítése nem ad licencet; a konzolnak indításhoz még mindig érvényes jogosultságra van szüksége.",
 "pkglib.auth.retail": "retail",
+connection_prior_killed: "Az előző segédprogram nem állt le rendesen",
+connection_prior_killed_detail: "Ez jelentheti azt, hogy egy másik payload a konzolon leállította, hogy a rendszernek kevés lett a memóriája, vagy hogy összeomlott. A hibajelentésben lévő stderr.log megmondja, melyik. Ha a ps5uploadot autoloaderen keresztül töltöd be, próbáld inkább innen elküldeni.",
+"pkg.install_unverified_toast": "még befejeződik a PS5-ön. A nagy játékok az átvitel vége után még egy ideig telepítenek — a ps5upload tovább ellenőrzi, és az előkészített csomag megmarad, amíg meg nem erősíti.",
+"pkg.open_tasks": "Feladatok megnyitása",
+"pkg.reverify_gave_up": "30 perc után sem erősítve. Egy nagyon nagy cím ennél tovább is tarthat — nézd meg a PS5 Értesítéseit, vagy használd az Újraellenőrzést.",
+"pkg.reverify_impossible": "A PS5 elfogadta ezt a telepítést, de a ps5uploadnak nincs mivel azonosítania a telepített csomagot, így nem tudja megerősíteni. Nézd meg az eredményt a PS5 Értesítéseiben. Az előkészített csomag megmaradt.",
+task_recheck: "Újraellenőrzés",
 };
 
 export default hu;
