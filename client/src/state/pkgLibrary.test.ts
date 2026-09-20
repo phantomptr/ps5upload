@@ -1029,6 +1029,46 @@ describe("describeInstallSample (stream state naming)", () => {
     expect(detail).toMatch(/ at /);
   });
 
+  /* The install phase is the longest part of a large install and used to be
+   * a bare percentage: no bytes, no rate, no estimate. Worse, the rate was
+   * sampled from transferBytes, which stops moving exactly when this phase
+   * begins, so "at X/s" read 0 for the whole of it. */
+  it("reports bytes, rate and an estimate while the PS5 installs", () => {
+    const { detail } = describeInstallSample(
+      {
+        phase: "install",
+        installedBytes: 45_100_000_000,
+        transferBytes: 0,
+        total: 108_000_000_000,
+        servedRequests: 9,
+        stalled: false,
+        acceptedUnverified: false,
+      },
+      96_000_000,
+    );
+    expect(detail).toContain("of");
+    expect(detail).toContain("/s");
+    expect(detail).toContain("left");
+  });
+
+  /* No rate yet means no honest estimate, so we show neither. */
+  it("omits the estimate when there is no rate to base it on", () => {
+    const { detail } = describeInstallSample(
+      {
+        phase: "install",
+        installedBytes: 45_100_000_000,
+        transferBytes: 0,
+        total: 108_000_000_000,
+        servedRequests: 9,
+        stalled: false,
+        acceptedUnverified: false,
+      },
+      0,
+    );
+    expect(detail).not.toContain("left");
+    expect(detail).not.toContain("/s");
+  });
+
   it("says why the numbers stopped moving when the engine is gone", () => {
     // The bytes below the line are the last ones we could read. Without the
     // note the UI showed a frozen bar with no explanation, which reads as

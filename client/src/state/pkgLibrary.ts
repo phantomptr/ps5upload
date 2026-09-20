@@ -1190,6 +1190,19 @@ export interface InstallSample {
   note?: string;
 }
 
+/** Seconds remaining as a short human string. Returns "" when there is no
+ *  usable estimate, so callers can append it unconditionally. */
+export function fmtEta(remainingBytes: number, bytesPerSec: number): string {
+  if (!(bytesPerSec > 0) || !(remainingBytes > 0)) return "";
+  const secs = remainingBytes / bytesPerSec;
+  if (!Number.isFinite(secs)) return "";
+  if (secs < 90) return `${Math.max(1, Math.round(secs))}s left`;
+  if (secs < 5400) return `${Math.round(secs / 60)}m left`;
+  const h = Math.floor(secs / 3600);
+  const m = Math.round((secs % 3600) / 60);
+  return m > 0 ? `${h}h ${m}m left` : `${h}h left`;
+}
+
 /** Bytes as a short human string: MB below a GB, GB above. */
 function fmtBytes(n: number): string {
   if (n >= 1024 * 1024 * 1024)
@@ -1219,6 +1232,8 @@ export function describeInstallSample(
   const pct =
     s.total > 0 ? Math.min(100, Math.floor((100 * current) / s.total)) : 0;
   const speed = bytesPerSec > 0 ? ` at ${fmtBytes(bytesPerSec)}/s` : "";
+  const etaText = fmtEta(Math.max(0, s.total - current), bytesPerSec);
+  const eta = etaText ? ` · ${etaText}` : "";
   let detail: string;
   if (s.note) {
     // A caller-supplied explanation wins: the numbers below it are the last
@@ -1235,14 +1250,22 @@ export function describeInstallSample(
       // when that is the constraint the PS5 figure just mirrors it.
       const legs =
         s.originRateBps && s.originRateBps > 0
-          ? ` — downloading ${fmtBytes(s.originRateBps)}/s` +
+          ? ` · downloading ${fmtBytes(s.originRateBps)}/s` +
             (bytesPerSec > 0 ? `, sending ${fmtBytes(bytesPerSec)}/s` : "")
           : speed;
-      detail = `Streaming to the PS5 — ${pct}% (${fmtBytes(current)} of ${fmtBytes(s.total)})${legs}`;
+      detail =
+        `Streaming to the PS5 — ${pct}% (${fmtBytes(current)} of ${fmtBytes(s.total)})${legs}` +
+        eta;
       break;
     }
     case "install":
-      detail = `The PS5 is installing the package — ${pct}%${speed}`;
+      // Show the same bytes/rate/ETA the transfer phase does. This phase is
+      // the longest part of a big install and used to be a bare percentage.
+      detail =
+        `The PS5 is installing the package — ${pct}%` +
+        (s.total > 0 ? ` (${fmtBytes(current)} of ${fmtBytes(s.total)})` : "") +
+        speed +
+        eta;
       break;
     default:
       detail = `Installing on the PS5… ${pct}%`;
@@ -3870,7 +3893,16 @@ const makePkgLibraryStore = () =>
         let lastDetail = "";
         const verdict0 = await verifyInstallCompleted(sessionId, (sample) => {
           const now = Date.now();
-          pushRateSample(rateSamples, now, sample.transferBytes);
+          // Feed the SAME counter the progress line reads. Sampling
+          // transferBytes alone made the rate go dead the moment the transfer
+          // finished and the console started writing: installedBytes is what
+          // moves during the install phase, so "at X/s" sat at 0 for the
+          // longest part of a big install.
+          pushRateSample(
+            rateSamples,
+            now,
+            Math.max(sample.transferBytes, sample.installedBytes),
+          );
           const bytesPerSec = computeRate(rateSamples, now);
           const { detail, current } = describeInstallSample(
             sample,
