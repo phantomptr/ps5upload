@@ -1742,7 +1742,10 @@ export function scheduleInstallReverify(args: {
       `re-verify not possible for ${args.name} (no title id / no size or fingerprint) — ` +
         `leaving the outcome to the PS5's notifications`,
     );
-    tasks().finishTask(args.taskId, "cancelled", {
+    // `unverified`, not `cancelled`: nothing was stopped. The console took
+    // the install and is very likely completing it — we just have no way to
+    // confirm that from here.
+    tasks().finishTask(args.taskId, "unverified", {
       detail: trStatic(
         "pkg.reverify_impossible",
         PKG_REVERIFY_IMPOSSIBLE_HINT,
@@ -1752,10 +1755,26 @@ export function scheduleInstallReverify(args: {
   }
   const giveUpAt = Date.now() + INSTALL_REVERIFY_MAX_MS;
   let attempt = 0;
+  // Out of automatic attempts. Leave the row `awaiting` (the install may
+  // still be running) but hand the user the Recheck control so the row is
+  // theirs to resolve instead of re-arming forever.
+  const giveUp = () => {
+    tasks().updateTask(args.taskId, {
+      detail: trStatic("pkg.reverify_gave_up", PKG_REVERIFY_GAVE_UP_HINT),
+      control: { owner: "pkg-install", taskId: args.taskId },
+    });
+  };
   const tick = async () => {
     // Stop if the user resolved the row by hand, or the app moved on.
     const task = tasks().tasks.find((t) => t.id === args.taskId);
     if (!task || task.status !== "awaiting") return;
+    // Expiry is checked before the busy gate, not after it. A console with a
+    // transfer that never ends would otherwise postpone every tick forever
+    // and the row would never gain its Recheck control.
+    if (Date.now() >= giveUpAt) {
+      giveUp();
+      return;
+    }
     // Never compete with a transfer for the console's single-client transfer
     // port: postpone (don't consume) this tick.
     if (transferScreenBusy(args.host)) {
@@ -1793,13 +1812,7 @@ export function scheduleInstallReverify(args: {
       return;
     }
     if (Date.now() >= giveUpAt) {
-      // Out of automatic attempts. Leave the row `awaiting` (the install may
-      // still be running) but hand the user the Recheck control so the row is
-      // theirs to resolve instead of re-arming forever.
-      tasks().updateTask(args.taskId, {
-        detail: trStatic("pkg.reverify_gave_up", PKG_REVERIFY_GAVE_UP_HINT),
-        control: { owner: "pkg-install", taskId: args.taskId },
-      });
+      giveUp();
       return;
     }
     const delay = installReverifyDelaysMs(attempt);
@@ -2624,7 +2637,16 @@ export async function runPkgInstall(
           mayNotLaunch: result.mayNotLaunch,
         },
       });
-      showInstallUnverifiedToast(name);
+      // Only promise "ps5upload keeps checking" when the background re-verify
+      // can actually run. When there is nothing to identify the package by,
+      // scheduleInstallReverify closes the row on its first act, and that
+      // toast would be sitting next to an already-closed row telling the user
+      // to wait for a check that will never happen.
+      if (installReverifyProbeViable(contentId, expected)) {
+        showInstallUnverifiedToast(name);
+      } else {
+        showInstallUnconfirmableToast(name);
+      }
       scheduleInstallReverify({
         taskId,
         host,
@@ -2694,6 +2716,23 @@ function showInstallUnverifiedToast(name: string): void {
   useToastStore.getState().push({
     tone: "info",
     message: `${name} ${trStatic("pkg.install_unverified_toast", PKG_INSTALL_UNVERIFIED_TOAST)}`,
+    action: {
+      label: trStatic("pkg.open_tasks", "Open Tasks"),
+      onClick: () => {
+        window.history.pushState({}, "", "/tasks");
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      },
+    },
+  });
+}
+
+/** The PS5 accepted the install but nothing identifies the package, so no
+ *  background check is possible. Says so, rather than promising a re-verify
+ *  that `scheduleInstallReverify` is about to decline. */
+function showInstallUnconfirmableToast(name: string): void {
+  useToastStore.getState().push({
+    tone: "info",
+    message: `${name}: ${trStatic("pkg.reverify_impossible", PKG_REVERIFY_IMPOSSIBLE_HINT)}`,
     action: {
       label: trStatic("pkg.open_tasks", "Open Tasks"),
       onClick: () => {

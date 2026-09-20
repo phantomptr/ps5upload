@@ -3063,6 +3063,7 @@ fanCurve_preview: "Preview",
   task_status_done: "Done",
   task_status_failed: "Failed",
   task_status_cancelled: "Cancelled",
+  task_status_unverified: "Unverified",
   task_status_interrupted: "Interrupted",
   // ─ v5 game hub ─
   game_hub_overview: "Overview",

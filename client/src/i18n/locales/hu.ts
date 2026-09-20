@@ -3063,6 +3063,7 @@ fanCurve_preview: "Előnézet",
   task_status_done: "Kész",
   task_status_failed: "Sikertelen",
   task_status_cancelled: "Megszakítva",
+  task_status_unverified: "Nem megerősített",
   task_status_interrupted: "Megszakadt",
   // ─ v5 játékközpont ─
   game_hub_overview: "Áttekintés",

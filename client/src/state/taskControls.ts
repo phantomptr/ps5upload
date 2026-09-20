@@ -1,4 +1,5 @@
 import { useFsBulkOpStore } from "./fsBulkOp";
+import { retryInstallReverify } from "./pkgLibrary";
 import { useTransferStore } from "./transfer";
 import { useUploadQueueStore } from "./uploadQueue";
 import type { Task } from "./tasks";
@@ -71,9 +72,6 @@ export async function commandTask(task: Task, command: TaskCommand): Promise<boo
   }
 
   if (control.owner === "pkg-install") {
-    // Imported lazily: pkgLibrary pulls in the install cascade (and the upload
-    // queue through it), and a static import here would close that cycle.
-    const { retryInstallReverify } = await import("./pkgLibrary");
     return retryInstallReverify(task);
   }
   if (control.owner !== "upload-queue") return false;

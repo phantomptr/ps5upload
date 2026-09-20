@@ -98,6 +98,8 @@ function StatusIcon({ status }: { status: TaskStatus }) {
       return <XCircle size={13} className="text-[var(--color-bad)]" />;
     case "cancelled":
       return <XCircle size={13} className="text-[var(--color-muted)]" />;
+    case "unverified":
+      return <AlertCircle size={13} className="text-[var(--color-muted)]" />;
     case "interrupted":
       return <AlertCircle size={13} className="text-[var(--color-warn)]" />;
     default:
@@ -109,7 +111,8 @@ function StatusIcon({ status }: { status: TaskStatus }) {
 function progressTone(status: TaskStatus): "accent" | "good" | "warn" | "bad" {
   if (status === "done") return "good";
   if (status === "failed") return "bad";
-  if (status === "paused" || status === "interrupted") return "warn";
+  if (status === "paused" || status === "interrupted" || status === "unverified")
+    return "warn";
   return "accent";
 }
 
@@ -147,6 +150,8 @@ function statusLabel(
       return tr("task_status_failed", undefined, "Failed");
     case "cancelled":
       return tr("task_status_cancelled", undefined, "Cancelled");
+    case "unverified":
+      return tr("task_status_unverified", undefined, "Unverified");
     case "interrupted":
       return tr("task_status_interrupted", undefined, "Interrupted");
     default:

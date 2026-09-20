@@ -68,6 +68,11 @@ export type TaskStatus =
   | "done"
   | "failed"
   | "cancelled"
+  // terminal, but NOT a statement that the operation failed or was stopped:
+  // the console accepted the work and we simply cannot confirm the outcome.
+  // Distinct from "cancelled" so the row never claims we stopped something
+  // that is very likely still running (a large install, say).
+  | "unverified"
   // synthetic terminal state assigned on reload to tasks that were
   // `running`/`queued`/`paused`/`awaiting` when the app closed — the
   // underlying engine op didn't survive the restart.
@@ -205,6 +210,7 @@ export function isTerminal(status: TaskStatus): boolean {
     status === "done" ||
     status === "failed" ||
     status === "cancelled" ||
+    status === "unverified" ||
     status === "interrupted"
   );
 }
@@ -261,7 +267,7 @@ interface TaskState {
    *  already-finished task is a no-op (the first terminal state wins). */
   finishTask: (
     id: string,
-    status: Extract<TaskStatus, "done" | "failed" | "cancelled">,
+    status: Extract<TaskStatus, "done" | "failed" | "cancelled" | "unverified">,
     extras?: Partial<Pick<Task, "lastError" | "progress" | "detail">>,
   ) => void;
 
