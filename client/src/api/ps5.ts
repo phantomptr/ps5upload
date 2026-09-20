@@ -4453,6 +4453,10 @@ export async function payloadCheck(ip: string): Promise<{
    *  even with the right symbols resolved. Surfaced on the
    *  Connection screen so the user sees the prerequisite state. */
   ucredElevated: boolean | null;
+  /** How the PREVIOUS payload instance ended, straight from STATUS_ACK:
+   *  "clean" | "killed_externally" | "wedged" | "stale". null on payloads
+   *  older than this field, which is indistinguishable from "unknown". */
+  priorInstance: string | null;
   /** Max parallel upload streams this payload will service concurrently
    *  (from STATUS_ACK `max_transfer_streams`). Absent on payloads that
    *  predate multi-stream → null, which the caller treats as 1 (single
@@ -4483,6 +4487,7 @@ export async function payloadCheck(ip: string): Promise<{
       version?: string;
       ps5_kernel?: string;
       ucred_elevated?: boolean;
+      prior_instance?: string;
       max_transfer_streams?: number;
     };
   }>("payload_check", { ip });
@@ -4495,6 +4500,10 @@ export async function payloadCheck(ip: string): Promise<{
     ucredElevated:
       typeof resp?.status?.ucred_elevated === "boolean"
         ? resp.status.ucred_elevated
+        : null,
+    priorInstance:
+      typeof resp?.status?.prior_instance === "string"
+        ? resp.status.prior_instance
         : null,
     maxTransferStreams:
       typeof resp?.status?.max_transfer_streams === "number" &&

@@ -16,5 +16,5 @@ ps5upload-pkg = { path = "../ps5upload-pkg" }
 serde_json.workspace = true
 libc = "0.2"
 serde = { workspace = true }
-sha3 = "0.11"
+sha3 = "0.12"
 thiserror.workspace = true

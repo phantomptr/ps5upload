@@ -1368,7 +1368,7 @@ dependencies = [
 
 [[package]]
 name = "ftx2-proto"
-version = "5.30.0"
+version = "5.31.0"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -2962,9 +2962,9 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "open"
-version = "5.4.3"
+version = "5.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c603ab8300cf18bc3b14146b19fe3dfcc4843ae5a400cd0e7a30b95aa366634"
+checksum = "aa576c76302b7b808eecc68061e67336c47833ef9d22caa74dda10fa9675eebc"
 dependencies = [
  "dunce",
  "is-wsl",
@@ -3311,7 +3311,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-core"
-version = "5.30.0"
+version = "5.31.0"
 dependencies = [
  "aes",
  "anyhow",
@@ -3335,7 +3335,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-desktop"
-version = "5.30.0"
+version = "5.31.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -3368,7 +3368,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-engine"
-version = "5.30.0"
+version = "5.31.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3391,7 +3391,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-fpkg"
-version = "5.30.0"
+version = "5.31.0"
 dependencies = [
  "aes",
  "flate2",
@@ -3408,7 +3408,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-pkg"
-version = "5.30.0"
+version = "5.31.0"
 dependencies = [
  "blake3",
  "serde",
@@ -4175,12 +4175,13 @@ dependencies = [
 
 [[package]]
 name = "sha3"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be176f1a57ce4e3d31c1a166222d9768de5954f811601fb7ca06fc8203905ce1"
+checksum = "bc9bad02c26382724b2d2692c6f179285e4b54eeecd7968f52a50059c3c11759"
 dependencies = [
  "digest 0.11.3",
  "keccak",
+ "sponge-cursor",
 ]
 
 [[package]]
@@ -4365,6 +4366,12 @@ checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
 dependencies = [
  "lock_api",
 ]
+
+[[package]]
+name = "sponge-cursor"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a0219bd7d979d58245a4f41f695e1ac9f8befdffadd7f61f1bae9e39abc6620"
 
 [[package]]
 name = "stable_deref_trait"
@@ -5515,9 +5522,9 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 
 [[package]]
 name = "uuid"
-version = "1.26.0"
+version = "1.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5772d71c9be8a8a6ac2117d949c5b224c1b72241bb611d9a3012edcf8af7812"
+checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",

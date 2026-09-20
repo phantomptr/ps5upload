@@ -4,6 +4,51 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.31.0
+
+**The helper no longer dies during installs, a slow install is no longer
+reported as a failure, and link installs got faster.**
+
+### The helper crashing during a PKG install
+
+- **Fixed.** ps5upload asked the PS5 how an install was going, roughly once a
+  second. That question kills the process that asks it — measured on two
+  consoles against an otherwise identical build. If your helper went down every
+  time you installed a package, this was why. It no longer asks.
+- **Your payload now has its own name on the console.** It used to run as
+  `payload.elf`, the same generic name every payload gets — and several PS5
+  tools shut down "their" previous copy by that name. It is now `ps5upload`, so
+  nothing else mistakes it for its own.
+- **A helper that was killed or crashed now says so on the next start**, instead
+  of leaving you to guess.
+
+### "Was not verified as installed"
+
+- **A big install is no longer called a failure while the PS5 is still working
+  on it.** A 40 GB game routinely keeps installing after the transfer ends;
+  ps5upload was giving up after three minutes and showing a red error for
+  installs that went on to succeed.
+- **It now keeps checking in the background** and marks the install done when
+  the game actually registers — with a **Recheck** button if you want to look
+  again yourself. The package is kept until it is confirmed, as before.
+
+### Installing from a link
+
+- **Faster.** The download now runs ahead of the console instead of waiting for
+  it, so your connection stays busy rather than stopping at every chunk.
+  Expect a few times quicker; the ceiling after that is the PS5's own
+  installer, not your line.
+
+### Also
+
+- **Hungarian.** Thanks to the request in #326 — machine-translated for now and
+  not yet checked by a native speaker, so corrections are very welcome.
+- **Fixed a message that read "reboot dispatched to reboot"** instead of naming
+  your console. It was wrong in English and in all 19 translations.
+- Dependency updates.
+
+---
+
 ## 5.30.0
 
 **Install a game straight from a link, at your line speed — and a fix for

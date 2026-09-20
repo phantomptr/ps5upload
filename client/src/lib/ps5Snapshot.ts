@@ -57,6 +57,7 @@ export interface Ps5Snapshot {
   payload_version: string | null;
   ps5_kernel: string | null;
   ucred_elevated: boolean | null;
+  prior_instance: string | null;
   hw_info: HwInfo | null;
   hw_temps: HwTemps | null;
   hw_power: HwPower | null;
@@ -258,6 +259,7 @@ export async function buildPs5Snapshot(opts: {
     payload_version: conn.payloadVersion ?? null,
     ps5_kernel: conn.ps5Kernel ?? null,
     ucred_elevated: conn.ucredElevated ?? null,
+    prior_instance: conn.priorInstance ?? null,
     hw_info: null,
     hw_temps: null,
     hw_power: null,

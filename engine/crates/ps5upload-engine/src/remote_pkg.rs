@@ -23,7 +23,7 @@
 //! BGFT reads a package broadly front-to-back, the following requests hit the
 //! same cached window and cost no origin traffic at all.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -85,6 +85,10 @@ pub struct RemoteSource {
     /// memory. Window fetches are internally parallel, so serialising misses
     /// costs no throughput on the sequential access pattern BGFT actually has.
     fetch_lock: Mutex<()>,
+    /// Window indices a readahead thread is currently fetching. Stops several
+    /// console requests that land inside one window from each spawning their
+    /// own thread for the same next window.
+    prefetching: Mutex<HashSet<u64>>,
 }
 
 fn build_agent() -> ureq::Agent {
@@ -186,6 +190,7 @@ impl RemoteSource {
             max_windows,
             cache: Mutex::new(VecDeque::new()),
             fetch_lock: Mutex::new(()),
+            prefetching: Mutex::new(HashSet::new()),
         }
     }
 
@@ -256,6 +261,54 @@ impl RemoteSource {
             }
         }
         Ok(bytes)
+    }
+
+    /// Start fetching the window after `offset` in the background, unless it is
+    /// already cached or already in flight.
+    ///
+    /// Why this exists: `window()` is demand-driven, so without readahead the
+    /// console blocks at every window boundary while a whole window is fetched,
+    /// then drains it from RAM in a fraction of that time. The origin therefore
+    /// never runs faster than the console consumes — reported from the field as
+    /// a 1-3 MB/s install on a line that pulls 20-50 MB/s to disk, unchanged by
+    /// any amount of rearranging WiFi and LAN, because none of that touches the
+    /// stall. The existing parallelism only hides latency *within* a window; it
+    /// never overlaps fetching with serving. One window of readahead does.
+    ///
+    /// Deliberately direction-agnostic. BGFT is not strictly sequential, but a
+    /// window wasted after a backward seek is absorbed by the LRU ring, and
+    /// tracking direction would cost more complexity than the occasional waste.
+    ///
+    /// An associated function rather than a method because it must clone the
+    /// `Arc` for the thread, and `&Arc<Self>` is not a stable receiver type.
+    pub fn prefetch_after(this: &Arc<Self>, offset: u64) {
+        if this.total_size == 0 || this.window_bytes == 0 {
+            return;
+        }
+        let next = offset / this.window_bytes + 1;
+        let last = (this.total_size - 1) / this.window_bytes;
+        if next > last {
+            return;
+        }
+        if this.cache_get(next).is_some() {
+            return;
+        }
+        {
+            let mut inflight = this.prefetching.lock().unwrap_or_else(|e| e.into_inner());
+            // `insert` is false when this window is already queued.
+            if !inflight.insert(next) {
+                return;
+            }
+        }
+        let me = Arc::clone(this);
+        std::thread::spawn(move || {
+            // Errors are deliberately dropped: a failed readahead costs nothing
+            // because the demand path refetches the window and surfaces any real
+            // error to the caller then.
+            let _ = me.window(next);
+            let mut inflight = me.prefetching.lock().unwrap_or_else(|e| e.into_inner());
+            inflight.remove(&next);
+        });
     }
 
     /// Fetch one aligned window as `parallelism` contiguous pieces at once.
@@ -617,6 +670,96 @@ pub(crate) mod origin_tests {
         s.window_bytes = window_mb * 1024 * 1024;
         s.parallelism = threads;
         s
+    }
+
+    /// Poll for a condition rather than sleeping a fixed amount: the readahead
+    /// runs on its own thread, and a fixed sleep is the classic flaky-CI bug.
+    fn wait_until(deadline: std::time::Duration, mut cond: impl FnMut() -> bool) -> bool {
+        let start = std::time::Instant::now();
+        while start.elapsed() < deadline {
+            if cond() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        cond()
+    }
+
+    #[test]
+    fn a_read_faults_in_the_next_window_in_the_background() {
+        // Three windows of 1 MiB. Reading inside window 0 must pull window 1
+        // without anyone asking for it — that overlap is the whole point: it is
+        // what stops the origin running only as fast as the console consumes.
+        let total = 3 * 1024 * 1024usize;
+        let data = body(total);
+        let origin = spawn_origin(data, 0, false);
+        let s = Arc::new(source_for(&origin, total as u64, 1, 2));
+
+        let first = s.read_range(0, 1023).expect("first read");
+        assert_eq!(first, &s.read_range(0, 1023).expect("cached reread")[..]);
+        assert!(s.cache_get(1).is_none(), "window 1 must not be cached yet");
+
+        RemoteSource::prefetch_after(&s, 1023);
+        assert!(
+            wait_until(std::time::Duration::from_secs(10), || s
+                .cache_get(1)
+                .is_some()),
+            "readahead never cached window 1"
+        );
+
+        // And it cached the RIGHT bytes, not merely something.
+        let w1 = s
+            .read_range(1024 * 1024, 1024 * 1024 + 511)
+            .expect("window 1");
+        assert_eq!(w1, &body(total)[1024 * 1024..1024 * 1024 + 512]);
+    }
+
+    #[test]
+    fn readahead_past_the_last_window_is_a_no_op() {
+        let total = 2048usize;
+        let origin = spawn_origin(body(total), 0, false);
+        let s = Arc::new(source_for(&origin, total as u64, 1, 2));
+        // One 1 MiB window covers the whole package, so there is no next window.
+        RemoteSource::prefetch_after(&s, total as u64 - 1);
+        assert!(
+            !wait_until(std::time::Duration::from_millis(300), || s
+                .cache_get(1)
+                .is_some()),
+            "nothing may be fetched past the end of the package"
+        );
+    }
+
+    #[test]
+    fn overlapping_readaheads_fetch_the_window_once() {
+        // Several console requests landing inside one window must not each
+        // spawn a fetch for the same next window.
+        let total = 4 * 1024 * 1024usize;
+        let origin = spawn_origin(body(total), 0, false);
+        let s = Arc::new(source_for(&origin, total as u64, 1, 1));
+
+        s.read_range(0, 1023).expect("first read");
+        let before = origin.requests.load(Ordering::SeqCst);
+
+        for off in [0u64, 100, 4096, 65_536] {
+            RemoteSource::prefetch_after(&s, off);
+        }
+        assert!(
+            wait_until(std::time::Duration::from_secs(10), || s
+                .cache_get(1)
+                .is_some()),
+            "readahead never cached window 1"
+        );
+        // Give any late-starting duplicate a chance to appear before counting,
+        // so the assertion below fails loudly rather than racing past one.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        let after = origin.requests.load(Ordering::SeqCst);
+        // parallelism is 1, so one window costs exactly one origin request.
+        assert_eq!(
+            after - before,
+            1,
+            "four overlapping readaheads fetched window 1 more than once"
+        );
     }
 
     #[test]

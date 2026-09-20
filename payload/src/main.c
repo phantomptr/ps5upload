@@ -3,6 +3,7 @@
 #include <signal.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/syscall.h>
 #include <sys/stat.h>   /* umask(), stat() */
 #include <fcntl.h>      /* open() for stderr capture */
 #include <pthread.h>
@@ -15,6 +16,7 @@
 #include "shellui_rpc.h"
 #include "hw_guard.h"
 #include "kernel_rw_lock.h"
+#include "proc_list.h"
 #include "hw_info.h"
 #include "wake_watchdog.h"
 #include "fakelib_overlay.h"
@@ -150,7 +152,7 @@ static void handle_fatal(int sig) {
      * and hand-rolled formatting: snprintf and stderr stdio are not
      * async-signal-safe, and a handler that deadlocks on the stdio lock
      * loses the one line that matters. stderr is the persisted
-     * /data/ps5upload/stderr.log (redirect_stderr_to_file), unbuffered, so
+     * /data/ps5upload/stderr.log (redirect_stdio_to_file), unbuffered, so
      * this survives the process and lands in the next bug report. */
     write_fatal_breadcrumb(sig, g_inflight_frame_type);
 
@@ -186,6 +188,14 @@ static void handle_fatal(int sig) {
      * reboot or a fresh send of a newer payload. */
     if (g_state) {
         runtime_cleanup_listener(g_state);
+        /* Unlink the ownership record directly (not via
+         * runtime_clear_ownership, whose failure path calls fprintf — not
+         * async-signal-safe). unlink() itself is async-signal-safe. Without
+         * this, a SIGSEGV/SIGABRT/etc. leaves the record behind and the
+         * next instance's classifier reads "record present, from this boot,
+         * pid dead" — the exact signature of killed_externally — and blames
+         * an external kill for what was actually our own crash. */
+        unlink(g_state->ownership_path);
     }
     /* Re-raise so the default handler runs (core dump, proper exit code). */
     signal(sig, SIG_DFL);
@@ -284,7 +294,8 @@ void runtime_apply_ucred_jailbreak(void) {
      * Payloads injected directly into SceShellCore's process can keep
      * permanent ShellCore authid (because authid AND pid both match
      * Sony's expectations). We're a separate :9021-loaded ELF; per-call
-     * swap (in bgft.c::appinst_install_start and ::appinst_install_status)
+     * swap (in bgft.c::appinst_install_start; the status side no longer
+     * swaps at all — it never calls Sony's status API)
      * is the safe pattern. Default back to debugger authid for kernel
      * R/W and ptrace; swap to ShellCore only for the install/status
      * window then restore. */
@@ -342,37 +353,68 @@ static void startup_trace(const char *stage) {
     fclose(fp);
 }
 
-/* Redirect the payload's stderr to a file under the runtime root so the
- * extensive fprintf(stderr) diagnostics scattered through runtime.c (BeginTx
- * rejections, shard-write failures, commit/apply errors, rename errno, …) are
- * PERSISTED and fetchable via FS_READ after the fact, instead of being thrown
- * away (the loader points the payload's stderr at nowhere useful). This is the
- * single biggest win for debugging a helper that misbehaves or dies: the bug
- * report's ps5/payload-logs/ now includes the helper's own error stream.
+/* Detach the payload's stdio from whoever launched it.
  *
- * Uses dup2 (async-safe, robust): if the open fails, stderr is left untouched.
- * Unbuffered so a crash can't lose the tail. One .old generation is kept so it
- * can't grow without bound across restarts. */
-static void redirect_stderr_to_file(void) {
+ * elfldr dup2s the SENDER's TCP socket onto stdin, stdout AND stderr
+ * (elfldr.c:471-483) and keeps it there for the payload's whole life.
+ * ps5-payload-manager closes its end the instant the ELF is streamed
+ * (ps5_launcher.c:78), so from then on our stdio points at a socket whose
+ * peer is gone. We must not depend on it.
+ *
+ * stderr already went to a file; stdout did not, and stdin was left as the
+ * socket. Now all three are ours: stdout and stderr to the log, stdin to
+ * /dev/null. The startup printf() output that used to vanish into the
+ * launcher's socket now lands in stderr.log, which the bug bundle collects.
+ *
+ * Uses dup2 (async-safe, robust): if an open fails the corresponding
+ * descriptor is left untouched. Unbuffered so a crash can't lose the tail.
+ * One .old generation is kept so it can't grow without bound. */
+static void redirect_stdio_to_file(void) {
     const char *path = PS5UPLOAD2_RUNTIME_ROOT "/stderr.log";
     struct stat st;
     if (stat(path, &st) == 0 && st.st_size > 512 * 1024) {
         rename(path, PS5UPLOAD2_RUNTIME_ROOT "/stderr.log.old");
     }
+
+    /* stdin first: a closed socket on fd 0 is a descriptor we do not
+     * control, and /dev/null is always safe to read EOF from. */
+    int devnull = open("/dev/null", O_RDONLY);
+    if (devnull >= 0) {
+        dup2(devnull, STDIN_FILENO);
+        if (devnull != STDIN_FILENO) close(devnull);
+    }
+
     int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd < 0) return;
+    dup2(fd, STDOUT_FILENO);
     dup2(fd, STDERR_FILENO);
-    if (fd != STDERR_FILENO) close(fd);
+    if (fd != STDOUT_FILENO && fd != STDERR_FILENO) close(fd);
+    setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
+
     struct timespec ts;
     if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
         ts.tv_sec = time(NULL);
     }
-    fprintf(stderr, "=== ps5upload payload v%s stderr — session start %lld ===\n",
+    fprintf(stderr, "=== ps5upload payload v%s stdio — session start %lld ===\n",
             PS5UPLOAD2_VERSION, (long long)ts.tv_sec);
 }
 
 int main(void) {
+    /* Name ourselves BEFORE anything else can observe us.
+     *
+     * elfldr names every raw-streamed payload "payload.elf" (elfldr.c:704 ->
+     * uri_get_filename falls back to the literal when the ELF arrives as raw
+     * bytes rather than a URI). That is the same generic name pldmgr, pkgmgr
+     * and elfldr itself sweep for with the scene's standard
+     * "kill my predecessor by name" idiom, so wearing it puts us in the blast
+     * radius of any payload that runs that idiom.
+     *
+     * It also breaks our OWN reap: runtime_reap_prior_instance compares our
+     * name against the predecessor's, and ours is read before any worker
+     * thread starts while the predecessor's is read after — see #289. */
+    (void)syscall(SYS_thr_set_name, -1, "ps5upload.elf");
+
     int rc = 0;
     runtime_state_t state = {0};
     g_state = &state;
@@ -431,10 +473,11 @@ int main(void) {
     }
     startup_trace("ENSURE_DIRECTORIES_DONE");
 
-    /* Now that the runtime root exists, capture stderr to a fetchable file so
-     * the helper's own error diagnostics survive for bug reports. */
-    redirect_stderr_to_file();
-    startup_trace("STDERR_REDIRECTED");
+    /* Now that the runtime root exists, capture stdout+stderr to a fetchable
+     * file and detach stdin so the helper's own error diagnostics survive for
+     * bug reports. */
+    redirect_stdio_to_file();
+    startup_trace("STDIO_REDIRECTED");
 
     /* Sweep orphan Tier-1 staging files. Crash-recovery only;
      * the desktop-side post-install delete handles steady-state. */
@@ -448,6 +491,15 @@ int main(void) {
         return 1;
     }
     startup_trace("RUNTIME_INIT_DONE");
+
+    /* Before the takeover and reap touch the ownership record, and long
+     * before runtime_write_ownership overwrites it, read it as evidence of
+     * how the last instance ended. */
+    runtime_classify_prior_instance(&state);
+    startup_trace("PRIOR_VERDICT_DONE");
+
+    proc_log_homebrew_neighbours();
+    startup_trace("NEIGHBOUR_CENSUS_DONE");
 
     /* No eager Sony-service init at startup. Both `register_module_init`
      * (dlopen + dlsym for libSceAppInstUtil/Lnc/UserService) and
@@ -482,14 +534,29 @@ int main(void) {
                 "takeover failed — escalating to SIGKILL of the prior instance\n");
         runtime_reap_prior_instance(&state);
         if (runtime_try_takeover(&state) != 0) {
-            /* Ports STILL held after a SIGKILL means the old process is
-             * kernel-wedged (un-killable) — only a reboot clears that. */
-            startup_trace("TAKEOVER_FAILED");
+            /* The handshake AND the pid-based reap have both failed. Before
+             * telling the user to restart the console — which is what they
+             * had to do until now — sweep for anything wearing our own
+             * process-name prefix and SIGKILL it. This catches a predecessor
+             * whose ownership record was lost or overwritten, which the
+             * pid-based reap cannot see. Only our own prefix is ever matched,
+             * never the generic payload.elf. */
+            startup_trace("TAKEOVER_FAILED_SWEEPING");
             fprintf(stderr,
-                    "takeover failed even after reaping the prior instance — ports still held\n");
-            pop_notification(
-                "PS5Upload: a previous instance is stuck and can't be cleared — please restart the PS5");
-            return 1;
+                    "takeover and reap both failed — sweeping our own instances\n");
+            if (runtime_sweep_our_instances() > 0 &&
+                runtime_try_takeover(&state) == 0) {
+                startup_trace("TAKEOVER_DONE_AFTER_SWEEP");
+            } else {
+                /* Ports STILL held after a SIGKILL means the old process is
+                 * kernel-wedged (un-killable) — only a reboot clears that. */
+                startup_trace("TAKEOVER_FAILED");
+                fprintf(stderr,
+                        "takeover failed even after sweeping — ports still held\n");
+                pop_notification(
+                    "PS5Upload: a previous instance is stuck and can't be cleared — please restart the PS5");
+                return 1;
+            }
         }
         startup_trace("TAKEOVER_DONE_AFTER_REAP");
     } else {
@@ -628,7 +695,7 @@ int main(void) {
     activity_flush();
     fakelib_overlay_stop();
 
-    runtime_arm_shutdown_watchdog(rc == 0 ? 0 : 1);
+    runtime_arm_shutdown_watchdog(&state, rc == 0 ? 0 : 1);
 
     /* Ask the mgmt thread to exit by closing its listener. accept()
      * returns with EBADF, mgmt loop sees shutdown_requested and

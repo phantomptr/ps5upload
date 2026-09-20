@@ -24,6 +24,7 @@
  */
 
 #include "proc_list.h"
+#include "proc_identity.h"
 
 #include <errno.h>
 #include <stddef.h>
@@ -39,15 +40,10 @@
 #include <sys/types.h>
 #include <sys/user.h>
 
-/* Layout offsets inside FreeBSD's kinfo_proc as exposed via
- * sysctl(KERN_PROC_PROC). Same offsets shellui_rpc.c uses. */
-#define KINFO_PID_OFFSET     72
-#define KINFO_TDNAME_OFFSET  447
-
 /* The detailed (process-manager) path reads memory + thread count via the
  * SDK's `struct kinfo_proc` directly (cleaner than hand-offsetting every
  * field). This assert ties that struct to the SAME proven layout the raw
- * offsets above rely on: if a future SDK shuffles kinfo_proc, ki_pid moves
+ * offsets in proc_list.h rely on: if a future SDK shuffles kinfo_proc, ki_pid moves
  * off 72 and the build fails LOUDLY instead of silently reporting garbage
  * memory. (pid@72 is independently confirmed by shellui_rpc.c.) */
 _Static_assert(offsetof(struct kinfo_proc, ki_pid) == KINFO_PID_OFFSET,
@@ -359,6 +355,77 @@ int proc_name_by_pid(int pid, char *out, size_t cap) {
     for (; i < name_max && i + 1 < cap && tdname[i]; ++i) out[i] = tdname[i];
     out[i] = '\0';
     return 0;
+}
+
+void proc_log_homebrew_neighbours(void) {
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC, 0};
+    size_t buf_size = 0;
+    if (sysctl(mib, 4, NULL, &buf_size, NULL, 0) != 0 || buf_size == 0) {
+        fprintf(stderr, "[payload2] neighbours: sysctl unavailable\n");
+        return;
+    }
+
+    /* 25% headroom + 1 KiB padding — same growth strategy the rest of this
+     * file uses, because the proc list can grow between the sizing call and
+     * the fetch. */
+    size_t alloc = buf_size + (buf_size / 4) + 1024;
+    uint8_t *kbuf = (uint8_t *)malloc(alloc);
+    if (!kbuf) return;
+
+    size_t got = alloc;
+    if (sysctl(mib, 4, kbuf, &got, NULL, 0) != 0) {
+        free(kbuf);
+        fprintf(stderr, "[payload2] neighbours: sysctl fetch failed\n");
+        return;
+    }
+
+    const size_t MIN_KINFO_BYTES = KINFO_TDNAME_OFFSET + 1;
+    int count = 0;
+    int generic = 0;
+
+    fprintf(stderr, "[payload2] neighbours: homebrew processes on this console\n");
+    for (uint8_t *p = kbuf; (size_t)(p - kbuf) + sizeof(int) <= got;) {
+        int ki_structsize = *(int *)p;
+        if (ki_structsize <= 0 ||
+            (size_t)ki_structsize < MIN_KINFO_BYTES ||
+            (size_t)(p - kbuf) + (size_t)ki_structsize > got) {
+            break;
+        }
+        pid_t pid = *(pid_t *)&p[KINFO_PID_OFFSET];
+        const char *tdname = (const char *)&p[KINFO_TDNAME_OFFSET];
+        size_t name_max = (size_t)ki_structsize - KINFO_TDNAME_OFFSET;
+
+        /* Bounded copy: tdname is not guaranteed NUL-terminated within the
+         * record. */
+        char name[64] = {0};
+        size_t i = 0;
+        for (; i < name_max && i + 1 < sizeof(name) && tdname[i]; ++i) {
+            name[i] = tdname[i];
+        }
+        name[i] = '\0';
+
+        p += (size_t)ki_structsize;
+
+        size_t len = strlen(name);
+        int is_elf = (len > 4 && strcmp(name + len - 4, ".elf") == 0);
+        if (!is_elf && !proc_name_is_ours(name)) continue;
+
+        int mine = proc_name_is_ours(name);
+        if (strcmp(name, "payload.elf") == 0) generic++;
+        fprintf(stderr, "[payload2]   pid=%d name=%s%s\n",
+                (int)pid, name, mine ? " (ours)" : "");
+        count++;
+    }
+    free(kbuf);
+
+    fprintf(stderr, "[payload2] neighbours: %d homebrew process(es)\n", count);
+    if (generic > 0) {
+        fprintf(stderr,
+                "[payload2] neighbours: %d process(es) named 'payload.elf' — any payload "
+                "running the scene's kill-my-predecessor-by-name sweep will SIGKILL "
+                "them all\n",
+                generic);
+    }
 }
 
 /* Find the first process whose thread-name matches `name`, via

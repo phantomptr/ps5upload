@@ -760,6 +760,17 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
               },
               // Readiness-gate status (pre-install wait / DPI transient retry).
               (msg) => pkgStore.setState({ busyNotice: msg }),
+              // Identity for the post-install check AND for the background
+              // re-verify of an accepted-but-unverified install. Without a
+              // size the re-verify has nothing to match the installed artifact
+              // against and returns false at its first line, forever — this is
+              // the queue's mainline path, so it must carry one. The uploaded
+              // byte count IS the staged pkg's size.
+              (snap.total_bytes ?? 0) > 0
+                ? { size: snap.total_bytes }
+                : (snap.bytes_sent ?? 0) > 0
+                  ? { size: snap.bytes_sent }
+                  : undefined,
             );
             if (r.installed) {
               installPhase = r.mayNotLaunch ? "warn" : "done";
