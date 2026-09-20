@@ -1825,19 +1825,35 @@ export function retryInstallReverify(task: {
     typeof payload.contentId === "string" ? payload.contentId : null;
   const packageType =
     typeof payload.packageType === "string" ? payload.packageType : "";
+  // The engine-resolved type from the original schedule, when it was
+  // persisted (see runPkgInstall's `awaiting` transition). Preferred over the
+  // caller's `packageType`, which is null on the upload-queue mainline and
+  // would otherwise probe with the wrong artifact type — see the module doc
+  // comment on `resolvedPackageType` and pkgLibrary.reverify.test.ts.
+  const resolvedPackageType =
+    typeof payload.resolvedPackageType === "string"
+      ? payload.resolvedPackageType
+      : undefined;
+  const mayNotLaunch = payload.mayNotLaunch === true;
   const expected = payload.expected as PkgExpectedIdentity | undefined;
   if (!installReverifyProbeViable(contentId, expected)) return false;
-  // Clear the give-up detail so the row reads as live again.
-  useTaskStore.getState().updateTask(task.id, { detail: path ?? task.label });
+  // Clear the give-up detail and control so the row reads as live again, and
+  // so a second Recheck click can't start a concurrent chain on this task
+  // while this one is still running its own 30-minute window.
+  useTaskStore.getState().updateTask(task.id, {
+    detail: path ?? task.label,
+    control: undefined,
+  });
   scheduleInstallReverify({
     taskId: task.id,
     host: task.consoleId,
     name: basenameOf(path || "") || task.label,
     contentId,
-    packageType,
+    packageType: resolvedPackageType ?? packageType ?? "",
     expected,
     path,
     autoRemove: payload.deleteStaging === true,
+    mayNotLaunch,
   });
   return true;
 }
@@ -2589,11 +2605,24 @@ export async function runPkgInstall(
       // NOT terminal and NOT failed: the PS5 took the install and is probably
       // still writing it. `awaiting` keeps the row live so the background
       // re-verify (see scheduleInstallReverify) can flip it to done.
+      //
+      // Persist the engine-resolved package type and mayNotLaunch into the
+      // payload alongside the caller's original args: `retryInstallReverify`
+      // (the Recheck action) rebuilds its args from this payload alone, and
+      // without these two fields it falls back to the caller's (often null)
+      // packageType — silently re-probing with the wrong artifact type and
+      // losing the launch caution. See pkgLibrary.reverify.test.ts.
+      const awaitingTask = useTaskStore.getState().getTask(taskId);
       useTaskStore.getState().updateTask(taskId, {
         status: "awaiting",
         progress: latestProgress,
         detail: localPs5Path,
         lastError: undefined,
+        payload: {
+          ...(awaitingTask?.payload ?? {}),
+          resolvedPackageType: result.resolvedPackageType ?? packageType ?? "",
+          mayNotLaunch: result.mayNotLaunch,
+        },
       });
       showInstallUnverifiedToast(name);
       scheduleInstallReverify({

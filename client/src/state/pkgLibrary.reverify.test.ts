@@ -29,7 +29,11 @@ vi.mock("../lib/ps5Transfers", () => ({ transferScreenBusy: () => false }));
 
 import { invoke } from "@tauri-apps/api/core";
 import { pkgInstalledInventory } from "../api/ps5";
-import { installReverifyDelaysMs, runPkgInstall } from "./pkgLibrary";
+import {
+  installReverifyDelaysMs,
+  retryInstallReverify,
+  runPkgInstall,
+} from "./pkgLibrary";
 import { useTaskStore } from "./tasks";
 
 /* The re-verify must be cheap and must not give up early. A 100 GiB install on
@@ -135,5 +139,82 @@ describe("runPkgInstall — hands the ENGINE's resolved package_type to the back
     await vi.advanceTimersByTimeAsync(30_000);
 
     expect(useTaskStore.getState().getTask(taskId!)?.status).toBe("done");
+  });
+});
+
+// Regression: the Recheck action (retryInstallReverify) rebuilds its args
+// from task.payload alone. registerTask's payload is only
+// { localPs5Path, contentId, packageType, deleteStaging, expected } — it
+// never carried the engine's resolved package_type, so a Recheck on a task
+// whose ORIGINAL schedule had packageType === null (the uploadQueue.ts
+// mainline) would re-probe with "" instead of the engine's real type. A test
+// that only drove the first schedule (above) would not catch this: it never
+// exercises payload round-tripping through the store. This one does.
+describe("retryInstallReverify — Recheck probes with the engine's resolved package_type", () => {
+  const mockedInvoke = vi.mocked(invoke);
+  const mockedInventory = vi.mocked(pkgInstalledInventory);
+  const host = "192.168.1.50";
+  const contentId = "IV0000-CUSA07842_00-0000000000000001";
+  const localPath = "/user/data/dlc.pkg";
+  const fingerprint = "f".repeat(64);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useTaskStore.setState({ tasks: [] });
+    mockedInventory.mockReset();
+    mockedInvoke.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("uses resolvedPackageType from payload, not the original null packageType", async () => {
+    // Only a "dlc"-kind artifact is present. If the Recheck fell back to the
+    // caller's null (⇒ "" ⇒ category "gd" ⇒ kind "base"), this would never
+    // match and the row would stay stuck in "awaiting" forever.
+    mockedInventory.mockResolvedValue([
+      {
+        kind: "dlc",
+        path: `/user/addcont/CUSA07842/CUSA07842-AC0001/ac.pkg`,
+        size: 12_345,
+        fingerprint,
+        contentId,
+      },
+    ]);
+
+    // Mirrors what runPkgInstall's registerTask + the `awaiting` transition
+    // now persist: the caller's original (null) packageType alongside the
+    // engine-resolved type from PkgInstallOutcome.
+    const taskId = useTaskStore.getState().registerTask({
+      kind: "pkg-install",
+      origin: "pkg.install",
+      label: "Installing dlc.pkg",
+      detail: localPath,
+      consoleId: host,
+      status: "awaiting",
+      payload: {
+        localPs5Path: localPath,
+        contentId,
+        packageType: null,
+        deleteStaging: true,
+        expected: { fingerprint },
+        resolvedPackageType: "AC",
+        mayNotLaunch: false,
+      },
+    });
+    const task = useTaskStore.getState().getTask(taskId)!;
+
+    const started = retryInstallReverify({
+      id: task.id,
+      label: task.label,
+      consoleId: task.consoleId,
+      payload: task.payload,
+    });
+    expect(started).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(useTaskStore.getState().getTask(taskId)?.status).toBe("done");
   });
 });

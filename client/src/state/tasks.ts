@@ -253,7 +253,7 @@ interface TaskState {
   updateTask: (
     id: string,
     patch: Partial<
-      Pick<Task, "label" | "progress" | "rate" | "eta" | "status" | "detail" | "engineJobId" | "lastError" | "control">
+      Pick<Task, "label" | "progress" | "rate" | "eta" | "status" | "detail" | "engineJobId" | "lastError" | "control" | "payload">
     >,
   ) => void;
 
