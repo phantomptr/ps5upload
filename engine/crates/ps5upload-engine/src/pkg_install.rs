@@ -2454,6 +2454,27 @@ fn verdict_phase(
     }
 }
 
+/// Seconds since this session last showed ANY sign of life.
+///
+/// Two independent signals, and the LATER one wins:
+///   * `last_progress_unix` — the console-side install measure advanced
+///     (free-space drop / title-dir growth).
+///   * `last_activity_unix` — the pkg-host served the console a range.
+///
+/// Taking only the first was a real bug. Measured on FW 5.10 installing a
+/// 79 GB PS4 title: the install measure stayed at 0 for the whole transfer
+/// because the title's `app.pkg` only appears once Sony finishes, so idle grew
+/// from t=0, crossed the 180 s synthetic-DONE grace, and the tracker reported
+/// AcceptedUnverified at 24.5% — while that same session was being served at
+/// ~105 MB/s. The install then completed and registered perfectly.
+///
+/// A console still pulling ranges is not idle. "Idle" has to mean neither
+/// transferring nor installing, which is what every deadline that consumes
+/// this value was always meant to measure.
+fn session_idle_sec(now: u64, last_progress_unix: u64, last_activity_unix: u64) -> u64 {
+    now.saturating_sub(last_progress_unix.max(last_activity_unix))
+}
+
 fn install_verdict(obs: &TrackerObs) -> InstallVerdict {
     // Authoritative: the title's app.pkg landed on disk. Always wins, instantly
     // — independent of the byte math, which can only ever be an estimate.
@@ -2983,7 +3004,29 @@ async fn install_status_handler(
                         s.last_progress_unix = Some(now);
                     }
                     let started = *s.last_progress_unix.get_or_insert(now);
-                    (s.progress_consumed_bytes, now.saturating_sub(started))
+                    // Serving bytes to the console is ALSO a sign of life.
+                    //
+                    // `progress_consumed_bytes` is the console-side install
+                    // measure (free-space drop / title-dir growth). Measured on
+                    // FW 5.10 installing a 79 GB PS4 title, it stayed at 0 for
+                    // the ENTIRE install: the title's app.pkg only appears once
+                    // Sony finishes, so there was nothing to observe until the
+                    // end. `idle_sec` therefore grew from t=0, crossed the 180 s
+                    // synthetic-DONE grace, and the tracker reported
+                    // AcceptedUnverified at 24.5% — while the pkg-host was
+                    // actively serving that same session at ~105 MB/s. The
+                    // install went on to complete and register perfectly.
+                    //
+                    // A console that is still pulling ranges is not idle,
+                    // whatever the install-side measure says. `last_activity_unix`
+                    // is stamped by the serve handler on every range request, so
+                    // taking the later of the two makes "idle" mean "neither
+                    // transferring nor installing" — which is what every deadline
+                    // downstream of it was always meant to measure.
+                    (
+                        s.progress_consumed_bytes,
+                        session_idle_sec(now, started, s.last_activity_unix),
+                    )
                 }
                 None => (consumed_now, 0),
             }
@@ -5846,6 +5889,37 @@ mod tests {
         let mut o = obs(Some(false), 0, 25_000_000_000, 100);
         o.synthetic_done_grace_sec = Some(180);
         assert_eq!(install_verdict(&o), InstallVerdict::Installing);
+    }
+
+    #[test]
+    fn session_idle_counts_serving_as_liveness() {
+        // The regression this exists for: a 79 GB install whose console-side
+        // measure never moved, while the pkg-host served it continuously.
+        // Install-side last moved 600 s ago; we served a range 2 s ago.
+        // Before the fix this read 600 and tripped the 180 s grace.
+        assert_eq!(session_idle_sec(1_000, 400, 998), 2);
+    }
+
+    #[test]
+    fn session_idle_counts_install_progress_when_transfer_is_quiet() {
+        // The mirror case: the transfer finished (nothing served for 600 s)
+        // but Sony is still writing, so the install measure is advancing.
+        assert_eq!(session_idle_sec(1_000, 995, 400), 5);
+    }
+
+    #[test]
+    fn session_idle_is_only_large_when_both_signals_are_stale() {
+        // A genuine stall — neither transferring nor installing. This must
+        // still reach the deadlines, or the fix would make stalls immortal.
+        assert_eq!(session_idle_sec(1_000, 400, 400), 600);
+    }
+
+    #[test]
+    fn session_idle_never_underflows_on_a_future_timestamp() {
+        // Clock adjustments happen; a timestamp ahead of `now` must read 0
+        // rather than wrapping to a colossal idle age.
+        assert_eq!(session_idle_sec(1_000, 5_000, 0), 0);
+        assert_eq!(session_idle_sec(1_000, 0, 5_000), 0);
     }
 
     #[test]
