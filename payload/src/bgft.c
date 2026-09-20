@@ -96,6 +96,10 @@ typedef struct {
     long  unknown[810];
 } AppInstPlayGoInfo;
 
+/* Intentionally unused: these two types document Sony's
+ * sceAppInstUtilGetInstallStatus ABI. We no longer call it (see the
+ * synthetic-DONE bypass in bgft_install_status) but keep the layout on
+ * record rather than deleting it. */
 typedef struct {
     int32_t error_code;
     int32_t version;
@@ -141,8 +145,6 @@ extern int sceAppInstUtilInstallByPackage(AppInstMetaInfo *meta,
  * that gracefully degrades to NULL is the correct discipline. */
 typedef int (*sce_app_inst_util_app_install_pkg_fn)(const char *path,
                                                     AppInstPkgInfo *pkg_info);
-extern int sceAppInstUtilGetInstallStatus(const char *content_id,
-                                          AppInstStatus *out);
 /* 2.2.54-fix-round-7: pre-install cancel for stuck tasks. Sony
  * retains queued install tasks across our payload restarts; once a
  * task for content_id X is queued, subsequent same-content_id
@@ -222,11 +224,12 @@ static void appinst_init_locked(void) {
  * status API simply can't be polled from our process for this task class
  * on 9.60. This is the same failure mode the shellui-rpc tier documents.
  *
- * Distinct from the regular in-process InstallByPackage path (plain
- * APPINST_TASK_ID_FLAG): on firmwares where InstallByPackage succeeds,
- * GetInstallStatus is known-safe and gives real download/install
- * progress, so we must NOT blanket-bypass it — only the local-disk
- * variant gets the bypass. */
+ * NOTE (2026-09-20): the claim that once stood here — that GetInstallStatus is
+ * "known-safe" on firmwares where InstallByPackage succeeds — was never
+ * measured, and the A/B in payload/dpi/ezremote_dpi.c disproves it. Every tier
+ * now bypasses. These VIA_* flags no longer select between polling and not
+ * polling; they are retained because they still identify which backend issued
+ * a task id in logs and bug reports. */
 #define APPINST_VIA_LOCAL_FLAG     0x08000000
 #define APPINST_TASK_TABLE    16
 
@@ -286,8 +289,8 @@ static int32_t appinst_task_register(const char *content_id,
 
 /** Free a slot when the install task reaches a terminal state
  *  (DONE/ERROR per Sony). Releases the slot for future registers
- *  with different content_ids. Called from appinst_install_status
- *  on phase transitions. Safe to call on already-free slots
+ *  with different content_ids. Called from the synthetic-DONE bypass
+ *  in bgft_install_status. Safe to call on already-free slots
  *  (idempotent). */
 static void appinst_task_release(int32_t task_id) {
     if ((task_id & APPINST_TASK_ID_FLAG) == 0) return;
@@ -300,30 +303,11 @@ static void appinst_task_release(int32_t task_id) {
     pthread_mutex_unlock(&g_appinst_mtx);
 }
 
-/** Look up the content_id for an appinst-tagged task_id. Returns
- *  0 + populates `out_content_id` on hit; -1 on miss / wrong tag.
- *
- *  2.2.54-fix-round-15: also strip APPINST_VIA_SHELLUI_FLAG when
- *  computing idx. The flag is OR'd into the synthetic task_id at
- *  shellui-rpc register time; without stripping it here, idx
- *  becomes 0x20000000 (huge) and the slot lookup fails — surfaces
- *  as `phase=queued, err=0xE0000004 BGFT_ERR_REGISTER_FAILED` on
- *  every status poll for shellui-rpc-backed tasks. */
-static int appinst_task_lookup(int32_t task_id, char *out, size_t out_cap) {
-    if ((task_id & APPINST_TASK_ID_FLAG) == 0) return -1;
-    int idx = task_id & ~(APPINST_TASK_ID_FLAG | APPINST_VIA_SHELLUI_FLAG
-                            | APPINST_VIA_TIER0_FLAG | APPINST_VIA_LOCAL_FLAG);
-    if (idx < 0 || idx >= APPINST_TASK_TABLE) return -1;
-    pthread_mutex_lock(&g_appinst_mtx);
-    if (!g_appinst_tasks[idx].in_use) {
-        pthread_mutex_unlock(&g_appinst_mtx);
-        return -1;
-    }
-    strncpy(out, g_appinst_tasks[idx].content_id, out_cap - 1);
-    out[out_cap - 1] = '\0';
-    pthread_mutex_unlock(&g_appinst_mtx);
-    return 0;
-}
+/* appinst_task_lookup (content_id lookup by synthetic task_id) was deleted
+ * here: it existed solely to feed appinst_install_status's now-removed call
+ * to sceAppInstUtilGetInstallStatus, and had no other caller. -Werror's
+ * unused-function check caught it as the expected leftover once the poller
+ * was gone. */
 
 /* Authid constants (PS5_SHELLCORE_AUTHID, PS5_SYSTEM_INSTALL_AUTHID),
  * kernel ucred extern declarations, swap helpers (ps5_authid_acquire,
@@ -337,8 +321,9 @@ static int appinst_task_lookup(int32_t task_id, char *out, size_t out_cap) {
 /** Try the AppInstUtil install path. Returns 0 + sets *out_task_id
  *  on success; -1 + sets *out_err_code on failure (caller may then
  *  fall back to the BGFT path). The "success" return only means
- *  Sony accepted the install request — actual download completion
- *  is observed via appinst_install_status polling. */
+ *  Sony accepted the install request — actual download completion is
+ *  never polled from this process; see the synthetic-DONE bypass in
+ *  bgft_install_status. */
 /* ── Experimental: full in-process credential escalation (default OFF) ────────
  *
  * The user-facing problem this targets: a PS4 PATCH install rejected in-process
@@ -808,119 +793,6 @@ static int appinst_install_start_local(const char *path,
     return 0;
 }
 
-/** Poll an in-flight AppInstUtil install. Maps Sony's status string
- *  ("downloading"/"installing"/"playable") to our phase enum. */
-static int appinst_install_status(int32_t task_id,
-                                   bgft_phase_t *out_phase,
-                                   uint64_t *out_downloaded,
-                                   uint64_t *out_total,
-                                   uint32_t *out_err_code) {
-    char content_id[APPINST_CONTENTID_SIZE];
-    if (appinst_task_lookup(task_id, content_id, sizeof(content_id)) != 0) {
-        *out_err_code = BGFT_ERR_REGISTER_FAILED;
-        return -1;
-    }
-    /* 2.20.2-fix: never hand an empty content_id to Sony's status API.
-     * sceAppInstUtilGetInstallStatus("") dereferences installer state
-     * keyed by content_id; an empty key segfaulted the payload on FW
-     * 9.60. If we somehow tracked a task with no id, report INSTALL
-     * (keep-polling) rather than crash — the install itself already
-     * started when AppInstallPkg/InstallByPackage returned 0. */
-    if (content_id[0] == '\0') {
-        fprintf(stderr,
-                "[bgft] appinst status: empty content_id for task 0x%08X "
-                "— skipping GetInstallStatus, reporting INSTALL\n",
-                (unsigned)task_id);
-        *out_phase      = BGFT_PHASE_INSTALL;
-        *out_downloaded = 0;
-        *out_total      = 0;
-        *out_err_code   = 0;
-        return 0;
-    }
-    AppInstStatus st;
-    memset(&st, 0, sizeof(st));
-
-    /* GetInstallStatus also requires ShellCore authid (same gate as
-     * InstallByPackage). Calling it from our default debugger authid
-     * was the crash source observed pre-2.2.53-fix-round-3 — the call
-     * dereferences cross-process state the kernel won't let a non-
-     * ShellCore caller see, and the segfault propagates back to us.
-     * Same swap+restore pattern as appinst_install_start, centralised
-     * via the authid_{acquire,release}_shellcore helpers — verifying
-     * the restore keeps the window during which our authid is wrong
-     * as small as possible so concurrent sensor reads on another mgmt
-     * thread don't see a transient bad-authid state.
-     *
-     * Shared `sony_api_lock` taken around the whole window: status
-     * polls fire every ~1 s during an active install, so a concurrent
-     * register/launch/uninstall on another mgmt thread is the
-     * realistic deadlock trigger. Pre-2.2.61 the status path raced
-     * those calls against Sony's installer kernel stubs. */
-    pthread_mutex_lock(&sony_api_lock);
-    /* kernel_rw_lock across the authid swap window — see appinst_install_start.
-     * Status polls fire ~1/s during an install, so this window is the most
-     * frequent concurrent partner for a sensor read's ptrace authid swap. */
-    pthread_mutex_lock(&kernel_rw_lock);
-    uint64_t saved_authid = authid_acquire_shellcore("GetInstallStatus");
-
-    int rc = sceAppInstUtilGetInstallStatus(content_id, &st);
-
-    authid_release_shellcore(saved_authid, "GetInstallStatus");
-    pthread_mutex_unlock(&kernel_rw_lock);
-    usleep(SONY_API_POST_SLEEP_US);
-    pthread_mutex_unlock(&sony_api_lock);
-
-    if (rc != 0) {
-        /* Hard error from GetInstallStatus — the task is dead.
-         * Release the slot here too; the terminal-state release
-         * block below is unreachable on this path because we
-         * early-return. Without this the 16-slot table leaks one
-         * entry per status-call failure (e.g. content_id Sony
-         * already forgot about), and the next install with a
-         * different content_id eventually hits TASK_TABLE_FULL. */
-        *out_err_code = (uint32_t)rc;
-        *out_phase = BGFT_PHASE_ERROR;
-        appinst_task_release(task_id);
-        return 0;
-    }
-    *out_downloaded = st.downloaded_size;
-    *out_total      = st.total_size;
-    *out_err_code   = (uint32_t)st.error_info.error_code;
-    if (st.error_info.error_code != 0) {
-        *out_phase = BGFT_PHASE_ERROR;
-    } else if (strncmp(st.status, "playable", 8) == 0
-            || strncmp(st.status, "completed", 9) == 0) {
-        *out_phase = BGFT_PHASE_DONE;
-    } else if (strncmp(st.status, "installing", 10) == 0
-            || strncmp(st.status, "promoting", 9) == 0) {
-        /* Sony's actual install state strings (observed):
-         * transferring → promoting → playable (or error/none).
-         * "installing" was our pre-2.2.53 best-guess; keep it as
-         * an alias since some firmwares may still emit it. */
-        *out_phase = BGFT_PHASE_INSTALL;
-    } else if (strncmp(st.status, "downloading", 11) == 0
-            || strncmp(st.status, "transferring", 12) == 0) {
-        *out_phase = BGFT_PHASE_DOWNLOAD;
-    } else {
-        /* "queued", "checking", "none", anything else — treat as
-         * queued so the UI keeps polling vs erroring out on a state
-         * we just don't have a name for. */
-        *out_phase = BGFT_PHASE_QUEUED;
-    }
-    /* 2.2.54-fix-round-11: free the slot on terminal transitions so
-     * a future install with a different content_id can reuse it.
-     * Without this, the 16-slot table fills up after a single
-     * session of repeated installs (or errored installs that leave
-     * the slot allocated). The host's polling loop calls status
-     * one more time after seeing DONE/ERROR; that final poll
-     * lookup will fail (slot freed), surface as
-     * BGFT_ERR_REGISTER_FAILED, but the host already transitioned
-     * the row to terminal state — no UX impact. */
-    if (*out_phase == BGFT_PHASE_DONE || *out_phase == BGFT_PHASE_ERROR) {
-        appinst_task_release(task_id);
-    }
-    return 0;
-}
 
 /* ─── Sony API: BGFT struct + bindings ───────────────────────────── */
 
@@ -1824,9 +1696,30 @@ int bgft_install_status(int32_t task_id,
         *out_err_code = 0;
         return 0;
     }
+    /* Every AppInstUtil tier now takes the synthetic-DONE bypass, including
+     * plain InstallByPackage. Sony's sceAppInstUtilGetInstallStatus kills the
+     * process that calls it — measured 2026-09-12 on Pro FW 9.60 and Phat FW
+     * 5.10, A/B against an otherwise identical build, 2/2 dead with the poll
+     * and 1/1 alive without it. See the block comment in
+     * payload/dpi/ezremote_dpi.c, which also retracts the older theory that
+     * only a CROSS-process poller is affected: it dies in-process too.
+     *
+     * The install itself is unaffected — InstallByPackage already returned 0,
+     * and Sony finishes it in the background. Proving completion is the
+     * HOST's job: the engine re-verifies the installed artifact (category,
+     * size, fingerprint) and watches APP_VER move for patches. Neither can
+     * crash the console. */
     if ((task_id & APPINST_TASK_ID_FLAG) != 0) {
-        return appinst_install_status(task_id, out_phase, out_downloaded,
-                                       out_total, out_err_code);
+        /* Free the slot now — this response is terminal for the engine, so
+         * holding the slot only leaks one of the 16 and eventually yields
+         * TASK_TABLE_FULL. Release is idempotent (it strips the flags to find
+         * the index). Same reasoning as the two bypasses above. */
+        appinst_task_release(task_id);
+        *out_phase = BGFT_PHASE_DONE;
+        *out_downloaded = 0;
+        *out_total = 0;
+        *out_err_code = 0;
+        return 0;
     }
 
     pthread_once(&g_init_once, bgft_init_once);
