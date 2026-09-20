@@ -656,7 +656,8 @@ static int appinst_install_start(const char *url,
      * GetInstallStatus — which segfaults the payload on the first poll for a
      * locally-registered task (hardware-confirmed on FW 5.10; the comment on
      * APPINST_VIA_LOCAL_FLAG documents the same crash on 9.60 for the
-     * AppInstallPkg variant). HTTP-source installs keep real status polling. */
+     * AppInstallPkg variant). HTTP-source installs take the same bypass now —
+     * every AppInstUtil tier does; see bgft_install_status. */
     if (url && url[0] == '/') {
         tid |= APPINST_VIA_LOCAL_FLAG;
     }
@@ -674,10 +675,12 @@ static int appinst_install_start(const char *url,
  *  rejection a bare path hits in InstallByPackage.
  *
  *  `path` must be a local absolute path. On success the synthetic task_id
- *  carries APPINST_TASK_ID_FLAG (set by appinst_task_register), so status
- *  polling routes through the same GetInstallStatus path as the
- *  InstallByPackage tier — the install record lives in OUR process here
- *  (no ptrace), so GetInstallStatus is safe to call. */
+ *  carries APPINST_TASK_ID_FLAG (set by appinst_task_register), so a status
+ *  poll routes through the same synthetic-DONE bypass as the InstallByPackage
+ *  tier. It is NOT safe to call sceAppInstUtilGetInstallStatus here: the old
+ *  claim that an in-process install record (no ptrace) made the call safe was
+ *  never measured, and the 2026-09-12 A/B killed the process in-process too.
+ *  Nothing on this path may ever call it again. */
 static int appinst_install_start_local(const char *path,
                                         const char *content_id,
                                         int32_t *out_task_id,
@@ -1708,7 +1711,17 @@ int bgft_install_status(int32_t task_id,
      * and Sony finishes it in the background. Proving completion is the
      * HOST's job: the engine re-verifies the installed artifact (category,
      * size, fingerprint) and watches APP_VER move for patches. Neither can
-     * crash the console. */
+     * crash the console.
+     *
+     * COST OF THIS TRADE (record it, don't re-derive it): with the poll gone,
+     * a genuine Sony REJECTION on this tier no longer surfaces
+     * error_info.error_code. Every outcome now reads DONE, err=0, so a real
+     * failure is visible only as a long silence that the host eventually
+     * reports as "install stalled" / "couldn't confirm" — never as 0x80B2xxxx.
+     * That is deliberate: a crashed console is worse than a vague error. If
+     * you are here because a user asks why they get "stalled" instead of a
+     * Sony error code, this is why; get the precise code from the PS5's own
+     * Notifications, or from the standalone DPI path, not from a poll. */
     if ((task_id & APPINST_TASK_ID_FLAG) != 0) {
         /* Free the slot now — this response is terminal for the engine, so
          * holding the slot only leaks one of the 16 and eventually yields

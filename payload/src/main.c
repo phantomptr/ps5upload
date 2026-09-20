@@ -284,7 +284,8 @@ void runtime_apply_ucred_jailbreak(void) {
      * Payloads injected directly into SceShellCore's process can keep
      * permanent ShellCore authid (because authid AND pid both match
      * Sony's expectations). We're a separate :9021-loaded ELF; per-call
-     * swap (in bgft.c::appinst_install_start and ::appinst_install_status)
+     * swap (in bgft.c::appinst_install_start; the status side no longer
+     * swaps at all — it never calls Sony's status API)
      * is the safe pattern. Default back to debugger authid for kernel
      * R/W and ptrace; swap to ShellCore only for the install/status
      * window then restore. */
