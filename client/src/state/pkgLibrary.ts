@@ -960,6 +960,14 @@ export interface PkgInstallOutcome {
   /** Sony accepted the request, but completion could not be proven. This is a
    *  terminal warning, never success, and the staged package must be kept. */
   acceptedUnverified?: boolean;
+  /** The package_type the engine actually resolved the install to, from the
+   *  staged pkg's own PARAM.SFO when the caller sent none. Authoritative over
+   *  the caller's own `packageType` argument, which is frequently null (e.g.
+   *  the upload-queue path never carries a category) — any later re-verify
+   *  against the wrong (default "gd"/base) category would filter out the
+   *  real DLC/patch artifact and either strand the row forever or, worse,
+   *  match an unrelated already-installed base of the same size. */
+  resolvedPackageType?: string;
 }
 
 /**
@@ -2154,6 +2162,7 @@ async function runPkgInstallCore(
             translate: (key, fallback) => trStatic(key, fallback),
           }),
           stalled,
+          resolvedPackageType: resolvedType,
         };
       }
       throw new Error(
@@ -2191,6 +2200,7 @@ async function runPkgInstallCore(
         acceptedUnverified: false,
         mayNotLaunch: false,
         errMessage: trStatic("pkg.patch_regressed", PKG_PATCH_REGRESSED_HINT),
+        resolvedPackageType: resolvedType,
       };
     } else if (dpi.patchVerdict === "did_not_apply") {
       // The engine watched APP_VER and it never moved: Sony accepted the
@@ -2214,6 +2224,7 @@ async function runPkgInstallCore(
           "pkg.patch_did_not_apply",
           PKG_PATCH_DID_NOT_APPLY_HINT,
         ),
+        resolvedPackageType: resolvedType,
       };
     } else if (dpi.ok) {
       // DPI's rc=0 proves only that Sony accepted InstallByPackage. Confirm the
@@ -2244,6 +2255,7 @@ async function runPkgInstallCore(
     errMessage: mainErr,
     stalled,
     acceptedUnverified,
+    resolvedPackageType: resolvedType,
   };
 }
 
@@ -2328,7 +2340,7 @@ export async function runPkgInstall(
         host,
         name,
         contentId,
-        packageType: packageType ?? "",
+        packageType: result.resolvedPackageType ?? packageType ?? "",
         expected,
       });
     } else {
