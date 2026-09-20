@@ -325,7 +325,7 @@ connection_step1_hint: "Ezt a PS5 hálózati beállításai között, vagy a rou
 connection_step2_hint: "A PS5Upload segédprogram egy kis program, amit a PS5-öd memóriában futtat a feltöltések fogadásához. A(z) {port} porton keresztül küldve; a PS5-nek pár másodpercbe telik, mire válaszol, miután a bájtok megérkeztek.",
 connection_step2_busy_hint: "A PS5 jellemzően 3-5 másodperc alatt elindítja a segédprogramot. Akár 20 másodpercig is folyamatosan lekérdezzük, mielőtt feladnánk — ha időtúllépés lesz, küldd el újra.",
 connection_step3_ready: "A PS5 készen áll",
-connection_step3_hint: "Menj a Feltöltés fülre, és ejts rá egy játékmappát, egy .exfat képet, vagy egy .ffpkg képet. Lemezképekhez nyomd meg a Csatolást a Könyvtár fülön. A PS5 kezdőképernyőjén installált appok regisztrálásához használj PS5-oldali telepítőt (küldd el a Payloadok → Fájl küldése fülről).",
+connection_step3_hint: "Menj a Feltöltés fülre, és ejts rá egy játékmappát, egy .exfat képet, vagy egy .ffpkg képet. Lemezképekhez nyomd meg a Csatolást a Könyvtár fülön. A PS5 kezdőképernyőjén telepített appok regisztrálásához használj PS5-oldali telepítőt (küldd el a Payloadok → Fájl küldése fülről).",
 connection_go_upload: "Ugrás a Feltöltéshez",
 
 // Hardver képernyő — szenzorsorok címkéi és tippek
@@ -846,7 +846,7 @@ connection_first_run_nudge_action: "Beállítási varázsló megnyitása",
 connection_first_run_nudge_body: "A beállítási varázsló egy kattintással telepíti a kstuffot + ShadowMount+-t + ps5uploadot. Vagy csak lépkedj végig a lenti kézi folyamaton.",
 connection_first_run_nudge_title: "Most állítod be először?",
 connection_kernel_rw: "Kernel R/W",
-connection_kernel_rw_no: "nem elérhető — töltsd be a :9021-en keresztül (jailbreak loader). A csomagtelepítés e nélkül sikertelen lesz.",
+connection_kernel_rw_no: "nem elérhető — töltsd be a :9021-en keresztül (jailbreak loader). A PKG-telepítés e nélkül sikertelen lesz.",
 connection_kernel_rw_yes: "elérhető — privilegizált telepítés engedélyezve",
 dashboard_description: "Élő áttekintés a PS5-ödről — kapcsolat, hőmérsékletek, futó appok, legutóbbi tevékenység és értesítések. 5 másodpercenként automatikusan frissül.",
 dashboard_no_payload: "Csatlakozz először a PS5-ödhöz.",
