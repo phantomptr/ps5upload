@@ -158,6 +158,7 @@ function statusLabel(
 function TaskRow({ task }: { task: Task }) {
   const tr = useTr();
   const removeTask = useTaskStore((s) => s.removeTask);
+  const finishTask = useTaskStore((s) => s.finishTask);
   const profiles = useRosterStore((s) => s.profiles);
   const [now, setNow] = useState(() => Date.now());
 
@@ -203,7 +204,12 @@ function TaskRow({ task }: { task: Task }) {
   }
   if (capabilities.canRetry) {
     menuItems.push({
-      label: tr("task_retry", undefined, "Retry"),
+      // For an accepted-but-unverified install "retry" means look again, not
+      // install again — say so, or the action reads as a destructive re-run.
+      label:
+        task.control?.owner === "pkg-install"
+          ? tr("task_recheck", undefined, "Recheck")
+          : tr("task_retry", undefined, "Retry"),
       icon: <RotateCcw size={12} />,
       onSelect: () => void commandTask(task, "retry"),
     });
@@ -213,6 +219,15 @@ function TaskRow({ task }: { task: Task }) {
       label: tr("task_dismiss", undefined, "Dismiss"),
       icon: <X size={12} />,
       onSelect: () => removeTask(task.id),
+    });
+  } else if (task.status === "awaiting") {
+    // An `awaiting` row is waiting on the CONSOLE, not on us, so it has no
+    // cancel — but it must not be permanent either. Dismissing closes it as
+    // cancelled, which is terminal and therefore removable like any other.
+    menuItems.push({
+      label: tr("task_dismiss", undefined, "Dismiss"),
+      icon: <X size={12} />,
+      onSelect: () => finishTask(task.id, "cancelled"),
     });
   }
 

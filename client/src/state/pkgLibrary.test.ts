@@ -76,7 +76,7 @@ import {
   verifyDpiInstalledArtifact,
   type PkgEntry,
 } from "./pkgLibrary";
-import { useTaskStore } from "./tasks";
+import { isTerminal, useTaskStore } from "./tasks";
 
 describe("link install input", () => {
   it("rejects unsafe URLs before contacting the console", async () => {
@@ -2062,12 +2062,18 @@ describe("runPkgInstall — tracks the install to genuine completion", () => {
       }
       return {};
     });
+    // A real identity (title id + fingerprint) — otherwise the background
+    // re-verify has nothing to probe with and closes the row immediately
+    // instead of leaving it awaiting (see the next test).
     const promise = runPkgInstall(
       "192.168.1.50",
       "/user/data/x.pkg",
-      "CID",
+      "UP0000-CUSA07842_00-0000000000000001",
       null,
       true,
+      undefined,
+      undefined,
+      { fingerprint: "a".repeat(64) },
     );
     await vi.advanceTimersByTimeAsync(2600);
     const r = await promise;
@@ -2079,6 +2085,39 @@ describe("runPkgInstall — tracks the install to genuine completion", () => {
       status: "awaiting",
       lastError: undefined,
     });
+  });
+
+  it("closes the row instead of scheduling a re-verify that cannot succeed", async () => {
+    // No title id and no fingerprint/size: verifyDpiInstalledArtifact returns
+    // false at its first line, forever. Parking the row in `awaiting` against
+    // that probe left a permanently inert row telling the user ps5upload
+    // "keeps checking". It must reach a terminal, dismissible state.
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_install_start") return START_OK;
+      if (cmd === "pkg_install_status") {
+        return {
+          phase: "done",
+          accepted_unverified: true,
+          installed_bytes: 1_000_000,
+          total: 25_000_000_000,
+        };
+      }
+      return {};
+    });
+    const promise = runPkgInstall(
+      "192.168.1.50",
+      "/user/data/x.pkg",
+      "CID",
+      null,
+      true,
+    );
+    await vi.advanceTimersByTimeAsync(2600);
+    const r = await promise;
+    expect(r.acceptedUnverified).toBe(true);
+    const task = useTaskStore.getState().tasks[0];
+    expect(task.kind).toBe("pkg-install");
+    expect(isTerminal(task.status)).toBe(true);
+    expect(task.detail).toContain("Notifications");
   });
 });
 

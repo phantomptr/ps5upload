@@ -86,6 +86,22 @@ export const PKG_MAY_NOT_LAUNCH_MESSAGE =
 /** Sony accepted the request, but none of the signals we trust proved that the
  *  asynchronous install finished. This is deliberately a warning rather than
  *  success: callers must keep the source package and must not mark it installed. */
+/** Toast copy for an accepted-but-unverified install (prefixed with the
+ *  package name at the call site). */
+export const PKG_INSTALL_UNVERIFIED_TOAST =
+  "is still finishing on the PS5. Large games keep installing for a while after the transfer ends — ps5upload keeps checking, and the staged package is kept until it is confirmed.";
+
+/** Shown when the background re-verify can never succeed for this package —
+ *  no title id, and neither a fingerprint nor a size to match an installed
+ *  artifact against. Saying "we keep checking" there would be a lie. */
+export const PKG_REVERIFY_IMPOSSIBLE_HINT =
+  "The PS5 accepted this install, but ps5upload has nothing to identify the installed package by, so it cannot confirm it. Check the PS5's Notifications for the result. The staged package was kept.";
+
+/** Shown when the 30-minute automatic re-verify window closes without the
+ *  package registering. The row stays open with a Recheck action. */
+export const PKG_REVERIFY_GAVE_UP_HINT =
+  "Still not confirmed after 30 minutes. A very large title can take longer — check the PS5's Notifications, or use Recheck to look again.";
+
 export const PKG_ACCEPTED_UNVERIFIED_HINT =
   "The PS5 accepted the install request, but ps5upload couldn’t verify that installation completed. Check the PS5 home screen and Notifications / Downloads. The staged package was kept so you can retry, or use Settings → System → Debug Settings → Game → Package Installer.";
 
@@ -1440,9 +1456,18 @@ export async function verifyDpiInstalledArtifact(
   packageType: string,
   expected: PkgExpectedIdentity | undefined,
   onStatus?: (msg: string) => void,
+  /** Deadline overrides. The defaults implement the growth-watching wait used
+   *  right after an install (idle 3 min, ceiling 4 h). A caller that only
+   *  wants a CHEAP PROBE — "is it registered right now?" — passes seconds
+   *  here: the background re-verify does, because a probe that can occupy
+   *  four hours at ~24 requests/min against the console's transfer port makes
+   *  its own backoff schedule decorative and starves transfers. */
+  opts?: { idleMs?: number; maxMs?: number },
 ): Promise<boolean> {
   const titleId = titleIdFromContentId(contentId || "");
-  if (!titleId || (!expected?.fingerprint && !expected?.size)) return false;
+  // Same predicate the re-verify scheduler checks up front, so the two can
+  // never disagree about whether a probe is even possible.
+  if (!titleId || !installReverifyProbeViable(contentId, expected)) return false;
   const category = packageType.endsWith("DP")
     ? "gp"
     : packageType.endsWith("AC")
@@ -1460,8 +1485,9 @@ export async function verifyDpiInstalledArtifact(
   // after the install has been completely still for `DPI_VERIFY_IDLE_MS`, or
   // at an absolute ceiling that a genuinely huge install should never reach.
   const startedAt = Date.now();
-  const hardDeadline = startedAt + DPI_VERIFY_MAX_MS;
-  let idleDeadline = startedAt + DPI_VERIFY_IDLE_MS;
+  const idleMs = opts?.idleMs ?? DPI_VERIFY_IDLE_MS;
+  const hardDeadline = startedAt + (opts?.maxMs ?? DPI_VERIFY_MAX_MS);
+  let idleDeadline = startedAt + idleMs;
   let bestSeenBytes = 0;
   let announcedProgress = false;
   onStatus?.("Verifying the exact installed package on the PS5…");
@@ -1492,7 +1518,7 @@ export async function verifyDpiInstalledArtifact(
       const seenBytes = artifacts.reduce((sum, a) => sum + (a.size || 0), 0);
       if (seenBytes > bestSeenBytes) {
         bestSeenBytes = seenBytes;
-        idleDeadline = Date.now() + DPI_VERIFY_IDLE_MS;
+        idleDeadline = Date.now() + idleMs;
         if (expected?.size && expected.size > 0) {
           const pct = Math.min(
             99,
@@ -1511,7 +1537,7 @@ export async function verifyDpiInstalledArtifact(
       // it is reachable; a transient restore gap is expected, not a failure.
       // It also must not burn the idle window — we cannot see progress while
       // the payload is down, so treat the blind period as neutral.
-      idleDeadline = Math.max(idleDeadline, Date.now() + DPI_VERIFY_IDLE_MS);
+      idleDeadline = Math.max(idleDeadline, Date.now() + idleMs);
     }
     await sleep(PKG_VERIFY_POLL_MS);
   }
@@ -1525,6 +1551,114 @@ export async function verifyDpiInstalledArtifact(
   return false;
 }
 
+/** Everything that must happen when an install is CONFIRMED, wherever the
+ *  confirmation arrives from.
+ *
+ *  Two paths reach it: the Library's install action, and the background
+ *  re-verify when a slow install finally registers. The re-verify used to call
+ *  only `finishTask(done)`, so a late success produced a green Tasks row while
+ *  the Library still showed the amber "couldn't confirm" state, still offered
+ *  Install instead of Reinstall, and the staged pkg stayed on the console
+ *  forever. Shared here so the two can't drift.
+ *
+ *  Best-effort by construction: nothing in here may throw into the caller —
+ *  the install already succeeded.
+ */
+export async function finalizePkgInstallSuccess(args: {
+  host: string;
+  /** The staged pkg path on the console — the library row's key. */
+  path: string;
+  label: string;
+  mayNotLaunch: boolean;
+  /** The user's "Auto Delete after installation" preference for this install. */
+  autoRemove: boolean;
+}): Promise<void> {
+  const { host, path, label, mayNotLaunch, autoRemove } = args;
+  const store = pkgLibraryStore(host);
+  const entries = () => store.getState().entries;
+  const patch = (p: Partial<PkgEntry>) =>
+    store.setState({
+      entries: entries().map((e) => (e.path === path ? { ...e, ...p } : e)),
+    });
+  const entry = entries().find((e) => e.path === path);
+
+  // Record THIS package as installed ON THIS CONSOLE (persisted) and
+  // reflect it on the row, so an update/DLC that's been installed shows
+  // "Reinstall" — not "Install" — even though app_list can't confirm an
+  // add-on. Scoped to `host` so a sibling console with the same staged
+  // file isn't wrongly marked installed.
+  const installedAlternativeKey = entry ? pkgAlternativeKey(entry) : null;
+  const replacedAlternativePaths = installedAlternativeKey
+    ? entries()
+        .filter(
+          (candidate) =>
+            candidate.path !== path &&
+            pkgAlternativeKey(candidate) === installedAlternativeKey,
+        )
+        .map((candidate) => candidate.path)
+    : [];
+  recordPkgInstalled(host, path, replacedAlternativePaths);
+  if (replacedAlternativePaths.length > 0) {
+    const replaced = new Set(replacedAlternativePaths);
+    store.setState({
+      entries: entries().map((candidate) =>
+        replaced.has(candidate.path)
+          ? { ...candidate, installedHere: false }
+          : candidate,
+      ),
+    });
+  }
+  patch({
+    status: "idle",
+    installedHere: true,
+    lastResult: installedLastResult(mayNotLaunch),
+  });
+  // Notify on confirmed completion (the engine only reports installed
+  // once the title actually registered on disk — i.e. it's ready to
+  // play). Surfaces in the bell even if the user navigated away while a
+  // large title finished, which is exactly when a heads-up is wanted.
+  pushNotification(mayNotLaunch ? "warning" : "success", `${label} installed`, {
+    body: mayNotLaunch
+      ? PKG_MAY_NOT_LAUNCH_MESSAGE
+      : "Installed on the PS5 and ready to play.",
+  });
+  // Flash a toast on the PS5 itself (sceNotificationSend) so the
+  // confirmation shows on the console screen too — handy when the desktop
+  // app isn't focused. Fire-and-forget; never let it affect the install.
+  void toastPush(mgmtAddr(host), `${label} installed`, {
+    subtitle: mayNotLaunch
+      ? "Installed — may need the PS5’s Package Installer to launch"
+      : "Ready to play",
+  }).catch(() => {});
+  // Optional: auto-delete the spent staged .pkg so the library doesn't
+  // accumulate installed packages. The ENGINE usually already removed the
+  // staged file (delete_staging=autoRemove), so this mainly drops the
+  // library ROW. Make it a QUIET best-effort: a brief settle lets Sony's
+  // installer release the file (it can still hold it for a beat after the
+  // title registers — the cause of the reported "Delete failed:
+  // fs_delete_failed" toast), then a retrying delete; if it STILL fails,
+  // we log and drop the row anyway rather than alarm the user mid-success
+  // (the leftover is harmless staging that "Clear finished" sweeps).
+  if (autoRemove) {
+    log.info("install", `auto-deleting staged pkg after install: ${path}`);
+    await sleep(800);
+    try {
+      await fsDeleteWithRetry(mgmtAddr(host), path);
+    } catch (e) {
+      log.info(
+        "install",
+        `post-install staged-pkg cleanup deferred (${pkgError(e)}): ${path}`,
+      );
+    }
+    store.setState({ entries: entries().filter((e) => e.path !== path) });
+  } else {
+    log.info(
+      "install",
+      `keeping staged pkg after install (auto-delete off): ${path}`,
+    );
+  }
+}
+
 /** Delay before re-verify attempt `attempt` (0-based).
  *
  *  Pure so the schedule is testable without timers. Quick at first because a
@@ -1536,12 +1670,52 @@ export function installReverifyDelaysMs(attempt: number): number {
   return schedule[Math.min(attempt, schedule.length - 1)];
 }
 
+/** Total wall time the background re-verify keeps trying before it gives up
+ *  and hands the row back to the user (spec §2: "for up to 30 minutes, then
+ *  stop and leave the row in the unverified state with a manual Recheck
+ *  action"). Without a cap the chain re-armed forever. */
+export const INSTALL_REVERIFY_MAX_MS = 30 * 60 * 1000;
+
+/** One re-verify probe is a cheap question — "is it registered NOW?" — not the
+ *  growth-watching wait the post-install check performs. Seconds, not hours:
+ *  this poller runs against the console's transfer port, and an ungated
+ *  long-running poller is what once dropped exfat writes from 120 MB/s to
+ *  10 MB/s. */
+const INSTALL_REVERIFY_PROBE_MS = 15_000;
+
+/** How long to wait before re-trying when a transfer to the same console is in
+ *  flight. The tick is POSTPONED, not spent: an install that finishes during a
+ *  25 GB upload must still be picked up afterwards. */
+const INSTALL_REVERIFY_BUSY_RETRY_MS = 30_000;
+
+/** Can the artifact probe ever succeed for this package?
+ *
+ *  `verifyDpiInstalledArtifact` compares the installed artifact against an
+ *  exact identity, so with no derivable title id, and no fingerprint or size
+ *  to match, it returns false at its first line — forever. Scheduling a
+ *  re-verify against that is a row that can never resolve itself, so callers
+ *  check this FIRST and finish the task instead.
+ */
+export function installReverifyProbeViable(
+  contentId: string | null,
+  expected: PkgExpectedIdentity | undefined,
+): boolean {
+  if (!titleIdFromContentId(contentId || "")) return false;
+  return !!expected?.fingerprint || !!(expected?.size && expected.size > 0);
+}
+
 /** Keep asking whether an accepted-but-unverified install has registered.
  *
- *  Reuses verifyDpiInstalledArtifact, which already waits on the artifact
- *  GROWING rather than on a clock — its own comment records why a flat
- *  three-minute cap was wrong: it made success size-dependent, so a large
- *  package showed an error for an install the PS5 went on to complete.
+ *  Bounded on three axes, each of which was previously unbounded:
+ *   - VIABILITY: if the probe provably cannot succeed (no title id, or neither
+ *     fingerprint nor size), don't schedule at all — finish the task with a
+ *     terminal state and tell the user where to look. A row parked against an
+ *     impossible probe is inert until an app reload rewrites it.
+ *   - TIME: at most `INSTALL_REVERIFY_MAX_MS` of wall clock, after which the
+ *     row stays `awaiting` but carries a Recheck control the user can drive.
+ *   - COST: each tick is a seconds-long probe, and it is postponed entirely
+ *     while a transfer to the same console is running (`transferScreenBusy`,
+ *     the same gate the mgmt-port pollers use).
  *
  *  Fire-and-forget. Never throws: a failure to verify leaves the row exactly
  *  as it was, which is the honest outcome.
@@ -1553,12 +1727,41 @@ export function scheduleInstallReverify(args: {
   contentId: string | null;
   packageType: string;
   expected: PkgExpectedIdentity | undefined;
+  /** Staged pkg path + flags, so a LATE success can run the same post-install
+   *  work a normal completion does (library row, notification, cleanup). */
+  path?: string;
+  autoRemove?: boolean;
+  mayNotLaunch?: boolean;
 }): void {
+  const tasks = () => useTaskStore.getState();
+  if (!installReverifyProbeViable(args.contentId, args.expected)) {
+    // Nothing to probe against. Don't pretend to keep checking: close the row
+    // with an honest message so it is dismissible rather than permanent.
+    log.info(
+      "install",
+      `re-verify not possible for ${args.name} (no title id / no size or fingerprint) — ` +
+        `leaving the outcome to the PS5's notifications`,
+    );
+    tasks().finishTask(args.taskId, "cancelled", {
+      detail: trStatic(
+        "pkg.reverify_impossible",
+        PKG_REVERIFY_IMPOSSIBLE_HINT,
+      ),
+    });
+    return;
+  }
+  const giveUpAt = Date.now() + INSTALL_REVERIFY_MAX_MS;
   let attempt = 0;
   const tick = async () => {
     // Stop if the user resolved the row by hand, or the app moved on.
-    const task = useTaskStore.getState().tasks.find((t) => t.id === args.taskId);
+    const task = tasks().tasks.find((t) => t.id === args.taskId);
     if (!task || task.status !== "awaiting") return;
+    // Never compete with a transfer for the console's single-client transfer
+    // port: postpone (don't consume) this tick.
+    if (transferScreenBusy(args.host)) {
+      setTimeout(() => void tick(), INSTALL_REVERIFY_BUSY_RETRY_MS);
+      return;
+    }
     let ok: boolean;
     try {
       ok = await verifyDpiInstalledArtifact(
@@ -1566,12 +1769,37 @@ export function scheduleInstallReverify(args: {
         args.contentId,
         args.packageType,
         args.expected,
+        undefined,
+        { idleMs: INSTALL_REVERIFY_PROBE_MS, maxMs: INSTALL_REVERIFY_PROBE_MS },
       );
     } catch {
       ok = false;
     }
     if (ok) {
-      useTaskStore.getState().finishTask(args.taskId, "done");
+      // Flip the row first — the confirmation is already in hand — then run
+      // the same post-install work a normal completion does. Without it the
+      // Tasks row said done while the Library still showed "couldn't confirm"
+      // + Install, and the staged pkg was never cleaned up.
+      tasks().finishTask(args.taskId, "done");
+      if (args.path) {
+        void finalizePkgInstallSuccess({
+          host: args.host,
+          path: args.path,
+          label: args.name,
+          mayNotLaunch: args.mayNotLaunch === true,
+          autoRemove: args.autoRemove === true,
+        }).catch(() => {});
+      }
+      return;
+    }
+    if (Date.now() >= giveUpAt) {
+      // Out of automatic attempts. Leave the row `awaiting` (the install may
+      // still be running) but hand the user the Recheck control so the row is
+      // theirs to resolve instead of re-arming forever.
+      tasks().updateTask(args.taskId, {
+        detail: trStatic("pkg.reverify_gave_up", PKG_REVERIFY_GAVE_UP_HINT),
+        control: { owner: "pkg-install", taskId: args.taskId },
+      });
       return;
     }
     const delay = installReverifyDelaysMs(attempt);
@@ -1579,6 +1807,39 @@ export function scheduleInstallReverify(args: {
     setTimeout(() => void tick(), delay);
   };
   setTimeout(() => void tick(), installReverifyDelaysMs(0));
+}
+
+/** Re-run the background re-verify for an `awaiting` pkg-install row — the
+ *  Recheck action on the Tasks screen. Reads everything it needs from the
+ *  task's own payload, so it works after a navigation. */
+export function retryInstallReverify(task: {
+  id: string;
+  label: string;
+  consoleId: string;
+  payload: Record<string, unknown>;
+}): boolean {
+  const payload = task.payload || {};
+  const path =
+    typeof payload.localPs5Path === "string" ? payload.localPs5Path : undefined;
+  const contentId =
+    typeof payload.contentId === "string" ? payload.contentId : null;
+  const packageType =
+    typeof payload.packageType === "string" ? payload.packageType : "";
+  const expected = payload.expected as PkgExpectedIdentity | undefined;
+  if (!installReverifyProbeViable(contentId, expected)) return false;
+  // Clear the give-up detail so the row reads as live again.
+  useTaskStore.getState().updateTask(task.id, { detail: path ?? task.label });
+  scheduleInstallReverify({
+    taskId: task.id,
+    host: task.consoleId,
+    name: basenameOf(path || "") || task.label,
+    contentId,
+    packageType,
+    expected,
+    path,
+    autoRemove: payload.deleteStaging === true,
+  });
+  return true;
 }
 
 /** Is a payload loader visible in the console's process list?
@@ -2342,6 +2603,10 @@ export async function runPkgInstall(
         contentId,
         packageType: result.resolvedPackageType ?? packageType ?? "",
         expected,
+        // A late success must do everything a normal completion does.
+        path: localPs5Path,
+        autoRemove: deleteStaging,
+        mayNotLaunch: result.mayNotLaunch,
       });
     } else {
       useTaskStore.getState().finishTask(taskId, "failed", {
@@ -2395,18 +2660,13 @@ function showInstallFailureToast(name: string, detail: string): void {
 
 /** The PS5 accepted the install but we could not confirm completion yet.
  *  Informational, never critical — a large install routinely outlives the
- *  engine's grace window while the console is still copying files.
- *
- *  Plain English, no `tr()`: this module has no i18n import and its sibling
- *  `showInstallFailureToast` is untranslated too. Adding a translator here
- *  would introduce a new i18n mechanism into a file that has none, which is
- *  out of scope. */
+ *  engine's grace window while the console is still copying files. */
 function showInstallUnverifiedToast(name: string): void {
   useToastStore.getState().push({
     tone: "info",
-    message: `${name} is still finishing on the PS5. Large games keep installing for a while after the transfer ends — ps5upload keeps checking, and the staged package is kept until it is confirmed.`,
+    message: `${name} ${trStatic("pkg.install_unverified_toast", PKG_INSTALL_UNVERIFIED_TOAST)}`,
     action: {
-      label: "Open Tasks",
+      label: trStatic("pkg.open_tasks", "Open Tasks"),
       onClick: () => {
         window.history.pushState({}, "", "/tasks");
         window.dispatchEvent(new PopStateEvent("popstate"));
@@ -3013,90 +3273,13 @@ const makePkgLibraryStore = () =>
           );
 
         if (installed) {
-          // Record THIS package as installed ON THIS CONSOLE (persisted) and
-          // reflect it on the row, so an update/DLC that's been installed shows
-          // "Reinstall" — not "Install" — even though app_list can't confirm an
-          // add-on. Scoped to `host` so a sibling console with the same staged
-          // file isn't wrongly marked installed.
-          const installedAlternativeKey = entry
-            ? pkgAlternativeKey(entry)
-            : null;
-          const replacedAlternativePaths = installedAlternativeKey
-            ? get()
-                .entries.filter(
-                  (candidate) =>
-                    candidate.path !== path &&
-                    pkgAlternativeKey(candidate) === installedAlternativeKey,
-                )
-                .map((candidate) => candidate.path)
-            : [];
-          recordPkgInstalled(host, path, replacedAlternativePaths);
-          if (replacedAlternativePaths.length > 0) {
-            const replaced = new Set(replacedAlternativePaths);
-            set({
-              entries: get().entries.map((candidate) =>
-                replaced.has(candidate.path)
-                  ? { ...candidate, installedHere: false }
-                  : candidate,
-              ),
-            });
-          }
-          patch({
-            status: "idle",
-            installedHere: true,
-            lastResult: installedLastResult(mayNotLaunch),
+          await finalizePkgInstallSuccess({
+            host,
+            path,
+            label,
+            mayNotLaunch,
+            autoRemove,
           });
-          // Notify on confirmed completion (the engine only reports installed
-          // once the title actually registered on disk — i.e. it's ready to
-          // play). Surfaces in the bell even if the user navigated away while a
-          // large title finished, which is exactly when a heads-up is wanted.
-          pushNotification(
-            mayNotLaunch ? "warning" : "success",
-            `${label} installed`,
-            {
-              body: mayNotLaunch
-                ? PKG_MAY_NOT_LAUNCH_MESSAGE
-                : "Installed on the PS5 and ready to play.",
-            },
-          );
-          // Flash a toast on the PS5 itself (sceNotificationSend) so the
-          // confirmation shows on the console screen too — handy when the desktop
-          // app isn't focused. Fire-and-forget; never let it affect the install.
-          void toastPush(mgmtAddr(host), `${label} installed`, {
-            subtitle: mayNotLaunch
-              ? "Installed — may need the PS5’s Package Installer to launch"
-              : "Ready to play",
-          }).catch(() => {});
-          // Optional: auto-delete the spent staged .pkg so the library doesn't
-          // accumulate installed packages. The ENGINE usually already removed the
-          // staged file (delete_staging=autoRemove), so this mainly drops the
-          // library ROW. Make it a QUIET best-effort: a brief settle lets Sony's
-          // installer release the file (it can still hold it for a beat after the
-          // title registers — the cause of the reported "Delete failed:
-          // fs_delete_failed" toast), then a retrying delete; if it STILL fails,
-          // we log and drop the row anyway rather than alarm the user mid-success
-          // (the leftover is harmless staging that "Clear finished" sweeps).
-          if (autoRemove) {
-            log.info(
-              "install",
-              `auto-deleting staged pkg after install: ${path}`,
-            );
-            await sleep(800);
-            try {
-              await fsDeleteWithRetry(mgmtAddr(host), path);
-            } catch (e) {
-              log.info(
-                "install",
-                `post-install staged-pkg cleanup deferred (${pkgError(e)}): ${path}`,
-              );
-            }
-            set({ entries: get().entries.filter((e) => e.path !== path) });
-          } else {
-            log.info(
-              "install",
-              `keeping staged pkg after install (auto-delete off): ${path}`,
-            );
-          }
         } else {
           // Not completed → the pkg was KEPT on the PS5 (never deleted on a
           // non-confirmed install). A stall gets the retry-oriented copy; a hard
@@ -3812,6 +3995,11 @@ const makePkgLibraryStore = () =>
           null,
           true, // the internal copy is transient — always clean it
           onProgress,
+          undefined,
+          // The USB scan knows the pkg's size; without it the background
+          // re-verify has nothing to match an installed artifact against and
+          // could never confirm this install.
+          pkg.size > 0 ? { size: pkg.size } : undefined,
         );
         // Only a CONFIRMED completion authorizes deletion. A request that Sony
         // merely accepted can still be installing (or can fail asynchronously),

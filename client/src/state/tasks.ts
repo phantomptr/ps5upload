@@ -98,6 +98,10 @@ export interface TaskError {
 export type TaskControlRef =
   | { owner: "transfer"; host: string }
   | { owner: "upload-queue"; host: string; itemId: string }
+  // An accepted-but-unverified pkg install. Its only command is "retry",
+  // which re-runs the background verification (the Recheck action) — the
+  // install itself is Sony's and cannot be cancelled from here.
+  | { owner: "pkg-install"; taskId: string }
   | { owner: "fs-bulk"; host: string };
 
 /** Per-kind specifics. Kept loose (record of string→unknown) so each

@@ -31,6 +31,12 @@ export function taskCapabilities(task: Task): TaskCapabilities {
     const op = useFsBulkOpStore.getState().byHost[control.host];
     return { ...none, canCancel: op?.op != null && !op.cancelRequested };
   }
+  if (control.owner === "pkg-install") {
+    // An install Sony accepted but we could not confirm. Nothing to cancel —
+    // the install is the console's — but the user can ask us to look again
+    // (the Recheck action), which is what "retry" means for this owner.
+    return { ...none, canRetry: task.status === "awaiting" };
+  }
 
   const item = useUploadQueueStore.getState().items.find(
     (candidate) => candidate.id === control.itemId,
@@ -59,10 +65,17 @@ export async function commandTask(task: Task, command: TaskCommand): Promise<boo
       useFsBulkOpStore.getState().requestCancel(control.host);
       return true;
     }
+    if (control.owner === "pkg-install") return false;
     useUploadQueueStore.getState().cancelItem(control.itemId);
     return true;
   }
 
+  if (control.owner === "pkg-install") {
+    // Imported lazily: pkgLibrary pulls in the install cascade (and the upload
+    // queue through it), and a static import here would close that cycle.
+    const { retryInstallReverify } = await import("./pkgLibrary");
+    return retryInstallReverify(task);
+  }
   if (control.owner !== "upload-queue") return false;
   const retried = useUploadQueueStore.getState().retryItem(control.itemId);
   if (retried) await useUploadQueueStore.getState().startHost(control.host);
