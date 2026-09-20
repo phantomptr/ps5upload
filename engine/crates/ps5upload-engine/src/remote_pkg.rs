@@ -1,12 +1,21 @@
 //! Parallel HTTP range proxy for installing a package straight from a link.
 //!
-//! Sony's installer pulls a package over a single connection and tops out
-//! around 5-10 MB/s no matter how fast the line is, so pointing the console
-//! straight at an internet URL wastes most of a gigabit link. Instead the
-//! engine fetches the URL itself over many connections at once and re-serves
-//! those bytes to the console from the pkg-host on the LAN — the same
-//! transport the Stream install path already uses, so the console side of the
-//! install is unchanged and already hardware-verified.
+//! Sony's installer pulls from a given URL over a single connection, so
+//! pointing the console straight at an internet host leaves one TCP stream
+//! against a distant, possibly rate-limited origin. Instead the engine fetches
+//! the URL itself over many connections at once and re-serves those bytes to
+//! the console from the pkg-host on the LAN — the same transport the Stream
+//! install path already uses, so the console side is unchanged and already
+//! hardware-verified.
+//!
+//! CORRECTION (2026-09-20): this comment used to claim the console "tops out
+//! around 5-10 MB/s no matter how fast the line is". That is wrong and it
+//! misled real work — a 79 GB install measured **105.7 MB/s sustained** to a
+//! wired console on FW 5.10, and a link install's serve leg logged 73.3 MB/s.
+//! The console is not the ceiling on a LAN. When a link install is slow, the
+//! constraint is the origin fetch or the PC-to-console path, and the
+//! `url-install origin fetch` / `pkg-host serve rate` log lines say which —
+//! do not assume a console-side limit that does not exist.
 //!
 //! Nothing is staged on disk. The proxy keeps a short ring of recently
 //! fetched windows in memory, so a 100 GB package needs neither PC disk space

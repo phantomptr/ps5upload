@@ -665,6 +665,22 @@ test-engine: setup-engine
 	@echo "Running Rust engine tests..."
 	@cd $(ENGINE_DIR) && $(CARGO) test --workspace
 	@echo "✓ Engine tests passed"
+	@# Android cross-compile check. The engine cfg's some modules out on
+	@# Android (remote_pkg, which needs an HTTP client), so a call site added
+	@# without the matching cfg builds fine on every desktop target and fails
+	@# ONLY here. That is exactly how v5.31.0 shipped with no APK: every local
+	@# gate was green on macOS while the Android build was broken, and it was
+	@# not caught until the release workflow. `cargo check` is enough — this
+	@# needs to catch a compile error, not produce an artifact.
+	@if rustup target list --installed 2>/dev/null | grep -q aarch64-linux-android; then \
+		echo "Checking engine against the Android target..."; \
+		cd $(ENGINE_DIR) && $(CARGO) check -p ps5upload-engine --target aarch64-linux-android; \
+		echo "✓ Engine compiles for Android"; \
+	else \
+		echo "⚠ aarch64-linux-android target not installed — SKIPPING the Android check."; \
+		echo "  CI still runs it, so a cfg mistake will surface there instead of here."; \
+		echo "  Install with: rustup target add aarch64-linux-android"; \
+	fi
 
 test-engine-coverage:
 	@$(MAKE) coverage-engine
