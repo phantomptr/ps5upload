@@ -3,6 +3,7 @@
 #include <signal.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/syscall.h>
 #include <sys/stat.h>   /* umask(), stat() */
 #include <fcntl.h>      /* open() for stderr capture */
 #include <pthread.h>
@@ -373,6 +374,20 @@ static void redirect_stderr_to_file(void) {
 }
 
 int main(void) {
+    /* Name ourselves BEFORE anything else can observe us.
+     *
+     * elfldr names every raw-streamed payload "payload.elf" (elfldr.c:704 ->
+     * uri_get_filename falls back to the literal when the ELF arrives as raw
+     * bytes rather than a URI). That is the same generic name pldmgr, pkgmgr
+     * and elfldr itself sweep for with the scene's standard
+     * "kill my predecessor by name" idiom, so wearing it puts us in the blast
+     * radius of any payload that runs that idiom.
+     *
+     * It also breaks our OWN reap: runtime_reap_prior_instance compares our
+     * name against the predecessor's, and ours is read before any worker
+     * thread starts while the predecessor's is read after — see #289. */
+    (void)syscall(SYS_thr_set_name, -1, "ps5upload.elf");
+
     int rc = 0;
     runtime_state_t state = {0};
     g_state = &state;

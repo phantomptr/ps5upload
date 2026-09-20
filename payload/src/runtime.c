@@ -54,6 +54,7 @@
 #include "sony_api_lock.h"
 #include "focus_probe.h"
 #include "proc_list.h"
+#include "proc_identity.h"
 #include "smp_meta.h"
 #include "blake3.h"
 
@@ -2049,20 +2050,25 @@ void runtime_reap_prior_instance(runtime_state_t *state) {
 
     if (kill((pid_t)prior, 0) != 0) return; /* already gone */
 
-    char my_name[64] = {0};
     char their_name[64] = {0};
-    if (proc_name_by_pid(me, my_name, sizeof(my_name)) != 0) {
-        /* Can't establish our own name → can't safely compare → don't kill. */
-        fprintf(stderr, "[payload2] reap: cannot read own process name — skipping\n");
-        return;
-    }
     if (proc_name_by_pid(prior, their_name, sizeof(their_name)) != 0) {
         return; /* prior pid vanished between the checks — nothing to do */
     }
-    if (strcmp(my_name, their_name) != 0) {
+    /* Second line of defence against pid recycling. NOT an exact compare
+     * against our own name: ours is read here, before any worker thread has
+     * started, so it is still "ps5upload.elf", while a predecessor that has
+     * been up for a while reports whichever worker the kernel picked as its
+     * representative thread — "ps5upload-wake" in issue #289's kernel log.
+     * The exact compare made this branch always take the skip path, so a
+     * wedged predecessor was never reaped and the new payload exited.
+     *
+     * The PRIMARY safety gate remains the boot-session check above; this
+     * only has to rule out a recycled pid now owned by unrelated homebrew,
+     * and no other homebrew carries the "ps5upload" prefix. */
+    if (!proc_name_is_ours(their_name)) {
         fprintf(stderr,
-                "[payload2] reap: pid %d is '%s', not our '%s' — recycled pid, skipping\n",
-                prior, their_name, my_name);
+                "[payload2] reap: pid %d is '%s', not one of ours — recycled pid, skipping\n",
+                prior, their_name);
         return;
     }
 
