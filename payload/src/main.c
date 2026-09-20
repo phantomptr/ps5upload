@@ -482,6 +482,12 @@ int main(void) {
     }
     startup_trace("RUNTIME_INIT_DONE");
 
+    /* Before the takeover and reap touch the ownership record, and long
+     * before runtime_write_ownership overwrites it, read it as evidence of
+     * how the last instance ended. */
+    runtime_classify_prior_instance(&state);
+    startup_trace("PRIOR_VERDICT_DONE");
+
     /* No eager Sony-service init at startup. Both `register_module_init`
      * (dlopen + dlsym for libSceAppInstUtil/Lnc/UserService) and
      * `register_services_init` (sceUserServiceInitialize +

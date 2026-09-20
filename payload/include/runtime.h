@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <pthread.h>
 
+#include "instance_verdict.h"
+
 #define PS5UPLOAD2_MAX_TX 32
 
 /* Hard upper bounds on the manifest we will accept at BEGIN_TX.
@@ -150,6 +152,12 @@ typedef struct {
     pthread_mutex_t state_mtx;
     int shutdown_requested;
     int startup_reason;
+    /* How the PREVIOUS instance ended, classified once at startup before
+     * runtime_write_ownership overwrites the record. Holds a
+     * ps5upload2_prior_verdict_t. Reported on STATUS_ACK so the client and
+     * the bug bundle can show it — an externally SIGKILLed predecessor is
+     * otherwise completely invisible. */
+    int prior_verdict;
     int takeover_requested;
     uint64_t started_at_unix;
     uint64_t command_count;
@@ -177,6 +185,10 @@ int runtime_clear_ownership(const runtime_state_t *state);
  * cooperative takeover only handles a healthy old instance). Call AFTER
  * runtime_try_takeover and BEFORE runtime_write_ownership. See runtime.c. */
 void runtime_reap_prior_instance(runtime_state_t *state);
+/* Classify how the previous instance ended and store it on `state`.
+ * MUST be called after runtime_init (which fills ownership_path) and
+ * BEFORE runtime_write_ownership overwrites the prior record. */
+void runtime_classify_prior_instance(runtime_state_t *state);
 /* Arm a detached watchdog that force-`_exit()`s the process if the graceful
  * shutdown wedges, so a stuck shutdown can't leave an orphan. Call once when
  * shutdown begins (after runtime_server_loop returns). */

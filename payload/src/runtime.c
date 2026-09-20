@@ -33,6 +33,7 @@
 #include "commit_apply.h"
 #include "runtime.h"
 #include "sandbox_unmount.h"
+#include "instance_verdict.h"
 
 #include "content_db.h"
 #include "register.h"
@@ -1981,6 +1982,35 @@ static uint64_t runtime_system_boottime_unix(void) {
     if (sysctl(mib, 2, &bt, &len, NULL, 0) != 0 || len < sizeof(bt)) return 0;
     if (bt.tv_sec <= 0) return 0;
     return (uint64_t)bt.tv_sec;
+}
+
+void runtime_classify_prior_instance(runtime_state_t *state) {
+    if (!state) return;
+
+    struct stat st;
+    int record_present = (stat(state->ownership_path, &st) == 0) ? 1 : 0;
+    uint64_t prior_started = 0;
+    int prior_alive = 0;
+
+    if (record_present) {
+        prior_started = runtime_read_prior_started_at(state->ownership_path);
+        int prior_pid = runtime_read_prior_pid(state->ownership_path);
+        if (prior_pid > 0 && prior_pid != (int)getpid()) {
+            prior_alive = (kill((pid_t)prior_pid, 0) == 0) ? 1 : 0;
+        }
+    }
+
+    ps5upload2_prior_verdict_t v =
+        instance_verdict_classify(record_present, prior_started,
+                                  runtime_system_boottime_unix(), prior_alive);
+    state->prior_verdict = (int)v;
+
+    fprintf(stderr, "[payload2] prior instance: %s\n", instance_verdict_name(v));
+    if (v == PS5UPLOAD2_PRIOR_KILLED_EXTERNALLY) {
+        fprintf(stderr,
+                "[payload2] the previous instance was killed by something else on this "
+                "console (SIGKILL or OOM) — it did not exit on its own\n");
+    }
 }
 
 /*
@@ -15130,6 +15160,7 @@ static int handle_status_frame(runtime_state_t *state, int client_fd,
     uint64_t snap_instance_id, snap_started_at, snap_command_count;
     uint64_t snap_active_tx, snap_last_seq, snap_recovered;
     int snap_shutdown, snap_startup_reason, snap_takeover_req, snap_port;
+    int snap_prior_verdict;
     int len;
     char kernel_version_raw[256];
     char kernel_version_esc[512];
@@ -15140,6 +15171,7 @@ static int handle_status_frame(runtime_state_t *state, int client_fd,
     snap_port           = state->runtime_port;
     snap_shutdown       = state->shutdown_requested;
     snap_startup_reason = state->startup_reason;
+    snap_prior_verdict  = state->prior_verdict;
     snap_takeover_req   = state->takeover_requested;
     snap_started_at     = state->started_at_unix;
     snap_command_count  = state->command_count;
@@ -15165,6 +15197,10 @@ static int handle_status_frame(runtime_state_t *state, int client_fd,
                    "\"instance_id\":%llu,\"runtime_port\":%d,"
                    "\"shutdown\":%d,\"startup_reason\":%d,"
                    "\"takeover_requested\":%d,\"started_at_unix\":%llu,"
+                   /* How the PREVIOUS instance ended: "clean",
+                    * "killed_externally", "wedged" or "stale". Absent on
+                    * older payloads — the client treats that as unknown. */
+                   "\"prior_instance\":\"%s\","
                    "\"command_count\":%llu,\"active_transactions\":%llu,"
                    "\"last_tx_seq\":%llu,\"recovered_transactions\":%llu,"
                    "\"ucred_elevated\":%s,"
@@ -15185,6 +15221,8 @@ static int handle_status_frame(runtime_state_t *state, int client_fd,
                    snap_startup_reason,
                    snap_takeover_req,
                    (unsigned long long)snap_started_at,
+                   instance_verdict_name(
+                       (ps5upload2_prior_verdict_t)snap_prior_verdict),
                    (unsigned long long)snap_command_count,
                    (unsigned long long)snap_active_tx,
                    (unsigned long long)snap_last_seq,
