@@ -35,6 +35,21 @@ const DEFAULT_WINDOW_MB: u64 = 32;
 /// Windows retained in memory. Peak proxy memory is roughly
 /// `DEFAULT_WINDOW_MB * DEFAULT_CACHE_WINDOWS` (128 MiB at the defaults).
 const DEFAULT_CACHE_WINDOWS: usize = 4;
+
+/// How many windows ahead of the console to fetch in the background.
+///
+/// One is right when the origin is at least as fast as the console: the next
+/// window lands while the current one is being served and the pipeline never
+/// stalls. It is NOT enough when the origin is the slow leg — with a
+/// high-latency or rate-limited host, one window of lead is consumed before
+/// the next arrives and throughput collapses back to the origin's
+/// per-connection rate.
+///
+/// Left at 1 by default because raising it costs real memory (each window is
+/// `PS5UPLOAD_URL_WINDOW_MB`) and wastes origin traffic on a backward seek.
+/// Raise it only with evidence — the `url-install origin fetch` and
+/// `pkg-host serve rate` log lines say which leg is actually the constraint.
+const DEFAULT_READAHEAD_WINDOWS: u64 = 1;
 /// Never cut a window into pieces smaller than this — below it, per-request
 /// latency dominates and more connections make the transfer slower.
 const MIN_PIECE_BYTES: u64 = 1024 * 1024;
@@ -80,6 +95,8 @@ pub struct RemoteSource {
     max_windows: usize,
     /// LRU ring of `(window index, bytes)`, most recently used at the back.
     cache: Mutex<VecDeque<(u64, Arc<Vec<u8>>)>>,
+    /// Windows to fetch ahead of demand; see DEFAULT_READAHEAD_WINDOWS.
+    readahead: u64,
     /// Serialises cache misses. Without it two concurrent BGFT requests that
     /// miss the same window each fetch it, doubling origin traffic and peak
     /// memory. Window fetches are internally parallel, so serialising misses
@@ -175,6 +192,7 @@ impl RemoteSource {
             env_u64("PS5UPLOAD_URL_WINDOW_MB", DEFAULT_WINDOW_MB, 1, 512) * 1024 * 1024;
         let parallelism =
             env_u64("PS5UPLOAD_URL_THREADS", DEFAULT_PARALLELISM as u64, 1, 32) as usize;
+        let readahead = env_u64("PS5UPLOAD_URL_READAHEAD", DEFAULT_READAHEAD_WINDOWS, 1, 8);
         let max_windows = env_u64(
             "PS5UPLOAD_URL_CACHE_WINDOWS",
             DEFAULT_CACHE_WINDOWS as u64,
@@ -187,6 +205,7 @@ impl RemoteSource {
             agent: build_agent(),
             window_bytes,
             parallelism,
+            readahead,
             max_windows,
             cache: Mutex::new(VecDeque::new()),
             fetch_lock: Mutex::new(()),
@@ -285,30 +304,33 @@ impl RemoteSource {
         if this.total_size == 0 || this.window_bytes == 0 {
             return;
         }
-        let next = offset / this.window_bytes + 1;
+        let here = offset / this.window_bytes;
         let last = (this.total_size - 1) / this.window_bytes;
-        if next > last {
-            return;
-        }
-        if this.cache_get(next).is_some() {
-            return;
-        }
-        {
-            let mut inflight = this.prefetching.lock().unwrap_or_else(|e| e.into_inner());
-            // `insert` is false when this window is already queued.
-            if !inflight.insert(next) {
+        for step in 1..=this.readahead {
+            let next = here + step;
+            if next > last {
                 return;
             }
+            if this.cache_get(next).is_some() {
+                continue;
+            }
+            {
+                let mut inflight = this.prefetching.lock().unwrap_or_else(|e| e.into_inner());
+                // `insert` is false when this window is already queued.
+                if !inflight.insert(next) {
+                    continue;
+                }
+            }
+            let me = Arc::clone(this);
+            std::thread::spawn(move || {
+                // Errors are deliberately dropped: a failed readahead costs
+                // nothing because the demand path refetches the window and
+                // surfaces any real error to the caller then.
+                let _ = me.window(next);
+                let mut inflight = me.prefetching.lock().unwrap_or_else(|e| e.into_inner());
+                inflight.remove(&next);
+            });
         }
-        let me = Arc::clone(this);
-        std::thread::spawn(move || {
-            // Errors are deliberately dropped: a failed readahead costs nothing
-            // because the demand path refetches the window and surfaces any real
-            // error to the caller then.
-            let _ = me.window(next);
-            let mut inflight = me.prefetching.lock().unwrap_or_else(|e| e.into_inner());
-            inflight.remove(&next);
-        });
     }
 
     /// Fetch one aligned window as `parallelism` contiguous pieces at once.
@@ -322,6 +344,14 @@ impl RemoteSource {
         }
         let w_len = self.window_bytes.min(self.total_size - w_start);
         let pieces = self.piece_ranges(w_start, w_len);
+        // Time the origin leg. Without this there is NO way — from logs,
+        // status or anything else — to tell whether a slow link install is
+        // slow because the origin is slow or because the console is pulling
+        // slowly, and the two want opposite fixes. A user reporting "my
+        // browser downloads this at 30 MB/s but the install runs at 1 MB/s"
+        // could not be answered without guessing; now the log says which leg
+        // is the constraint.
+        let fetch_started = std::time::Instant::now();
 
         let mut buf = vec![0u8; w_len as usize];
         // Hand each worker a disjoint &mut slice of the output so the pieces
@@ -358,6 +388,21 @@ impl RemoteSource {
                 "remote fetch failed at offset {w_start}: {first}"
             )));
         }
+
+        let took = fetch_started.elapsed();
+        let mbps = if took.as_secs_f64() > 0.0 {
+            (w_len as f64) / took.as_secs_f64() / 1_000_000.0
+        } else {
+            0.0
+        };
+        crate::log_info!(
+            "url-install origin fetch: window={} bytes={} pieces={} took_ms={} rate={:.1} MB/s",
+            idx,
+            w_len,
+            pieces.len(),
+            took.as_millis(),
+            mbps,
+        );
         Ok(buf)
     }
 

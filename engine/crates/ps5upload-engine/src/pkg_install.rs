@@ -1643,6 +1643,19 @@ async fn install_start_handler(
                     && s.terminal_status.is_none()
                     && !s.package_fingerprint.is_empty()
                     && s.package_fingerprint == session.package_fingerprint
+                    // ...and the console is ACTUALLY still pulling it.
+                    //
+                    // `terminal_status` is only set by the status handler, so a
+                    // session nobody polls never reaches a terminal state and
+                    // would block its own package forever. Hit immediately when
+                    // dogfooding this guard: a session that had transferred
+                    // 20,625,752,064 of 20,624,703,488 bytes — past 100% — still
+                    // refused the next install. Recent serving activity is the
+                    // signal that matters; a session no console has fetched from
+                    // in RIVAL_ACTIVE_WINDOW_SEC is not a rival, whatever its
+                    // bookkeeping says.
+                    && now_unix().saturating_sub(s.last_activity_unix)
+                        < RIVAL_ACTIVE_WINDOW_SEC
             })
             .map(|r| {
                 (
@@ -1991,6 +2004,15 @@ pub struct StatusResponse {
     #[serde(default)]
     pub dpi_rc: Option<i32>,
 }
+
+/// How recently a session must have served the console to count as a rival
+/// that blocks a new install of the same package.
+///
+/// Sized well above the gap between BGFT's range requests (sub-second at LAN
+/// speed, and it retries for minutes before giving up) and well below the
+/// session GC age, so a genuinely active transfer is always protected while a
+/// finished-but-unpolled one never blocks its own retry.
+const RIVAL_ACTIVE_WINDOW_SEC: u64 = 90;
 
 /// Default maximum age (seconds) of an install session before the
 /// engine GCs it. 2 hours covers the practical worst case: a large
@@ -4797,6 +4819,24 @@ async fn serve_handler(
             if counts_as_progress {
                 active.transfer.mark(start, end);
                 active.transfer_bytes = active.transfer.bytes();
+            }
+            // Periodic serve-rate line, so the CONSOLE leg is measurable the
+            // same way the origin leg now is. A "my install is slow" report
+            // needs both numbers to be answerable: a slow origin and a slow
+            // console link look identical from the outside and want opposite
+            // fixes. Every 512 ranges keeps this to roughly one line per
+            // several hundred MB rather than per request.
+            if active.requests_served % 512 == 0 {
+                let secs = now_unix().saturating_sub(active.created_at_unix).max(1);
+                crate::log_info!(
+                    "pkg-host serve rate: session={} served={} of {} bytes over {}                      requests in {}s = {:.1} MB/s average",
+                    active.id,
+                    active.bytes_served,
+                    active.total_size,
+                    active.requests_served,
+                    secs,
+                    (active.bytes_served as f64) / (secs as f64) / 1_000_000.0,
+                );
             }
         }
     }
