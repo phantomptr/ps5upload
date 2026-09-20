@@ -4,6 +4,31 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.31.3
+
+**Installing from a link was many times slower than it should have been.
+Fixed, and installs now tell you what they are actually doing.**
+
+- **Install from http/https was crawling.** Every chunk we requested opened a
+  brand-new connection to the server instead of reusing the one already open.
+  A 3 GB install made around 800 of them, and each one had to start from
+  scratch and get up to speed before being thrown away — so it never reached
+  full speed at all. One user measured 1.9 MB/s in ps5upload while a download
+  manager pulled the same file at 40-50 MB/s on the same connection. Fixed.
+  How much faster depends on your distance to the server, but it should be a
+  large difference.
+- **Installs now show download speed and send speed separately.** A link
+  install has two halves — fetching the package to your PC, and feeding it to
+  the PS5 — and one combined number could never tell you which was slow.
+- **The "PS5 is installing" stage now shows real progress.** It was a bare
+  percentage, and the speed it did show sat at 0 for that whole stage because
+  it was measuring the wrong thing. It now shows GB done, actual speed, and
+  time remaining, the same as the transfer stage.
+- Time remaining is shown for both stages, and left out entirely when there
+  is no reliable speed to estimate from rather than showing a made-up figure.
+
+---
+
 ## 5.31.2
 
 **Honest status for installs we can't confirm, and the payload finally gets
