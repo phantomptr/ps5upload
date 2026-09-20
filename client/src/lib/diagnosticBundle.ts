@@ -54,6 +54,7 @@ export interface DiagnosticBundle {
     payload_version: string | null;
     ps5_kernel: string | null;
     ucred_elevated: boolean | null;
+    prior_instance: string | null;
   };
   /** App vs. on-console helper versions, and whether they disagree.
    *
@@ -237,6 +238,7 @@ export function buildDiagnosticBundle(opts: {
       payload_version: conn.payloadVersion,
       ps5_kernel: conn.ps5Kernel,
       ucred_elevated: conn.ucredElevated,
+      prior_instance: conn.priorInstance,
     },
     versions: {
       app: opts.appVersion,

@@ -227,6 +227,7 @@ function useStatusPolling() {
         payloadVersion: null,
         ps5Kernel: null,
         ucredElevated: null,
+        priorInstance: null,
         maxTransferStreams: null,
       });
       return;
@@ -429,6 +430,7 @@ function useStatusPolling() {
           payloadVersion: carryOver ? prev.payloadVersion : s.payloadVersion,
           ps5Kernel: carryOver ? prev.ps5Kernel : s.ps5Kernel,
           ucredElevated: carryOver ? prev.ucredElevated : s.ucredElevated,
+          priorInstance: carryOver ? prev.priorInstance : s.priorInstance,
           maxTransferStreams: carryOver
             ? prev.maxTransferStreams
             : s.maxTransferStreams,

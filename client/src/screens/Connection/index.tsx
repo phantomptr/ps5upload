@@ -528,6 +528,7 @@ export default function ConnectionScreen() {
                 payloadVersion: status.payloadVersion,
                 ps5Kernel: status.ps5Kernel,
                 ucredElevated: status.ucredElevated,
+                priorInstance: status.priorInstance,
                 maxTransferStreams: status.maxTransferStreams,
                 payloadProbing: false,
               });
@@ -1391,6 +1392,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
   const payloadVersion = useConnectionStore((s) => s.payloadVersion);
   const ps5Kernel = useConnectionStore((s) => s.ps5Kernel);
   const ucredElevated = useConnectionStore((s) => s.ucredElevated);
+  const priorInstance = useConnectionStore((s) => s.priorInstance);
   const payloadProbing = useConnectionStore((s) => s.payloadProbing);
   const ps5Firmware = parsePS5Firmware(ps5Kernel);
 
@@ -1606,6 +1608,31 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
               )}
             </Button>
           )}
+        </div>
+      )}
+
+      {priorInstance === "killed_externally" && (
+        <div className="mt-3 flex flex-wrap items-start gap-2 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface-2)] p-2 text-xs">
+          <AlertTriangle
+            size={12}
+            className="mt-0.5 shrink-0 text-[var(--color-warn)]"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="font-medium text-[var(--color-warn)]">
+              {tr(
+                "connection_prior_killed",
+                undefined,
+                "The previous helper was killed by something else on your PS5",
+              )}
+            </div>
+            <p className="mt-0.5 text-[var(--color-muted)]">
+              {tr(
+                "connection_prior_killed_detail",
+                undefined,
+                "It did not exit on its own. Another payload on the console — or the system running low on memory — ended it. If you load ps5upload through an autoloader, try sending it from here instead.",
+              )}
+            </p>
+          </div>
         </div>
       )}
     </div>
