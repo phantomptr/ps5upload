@@ -2190,6 +2190,20 @@ struct TrackerObs {
     expected: u64,
     /// Seconds since `consumed` last increased (the stall clock).
     idle_sec: u64,
+    /// For a session where WE serve the bytes (stream / install-from-link),
+    /// the fraction of the package the console has actually fetched from us.
+    /// `None` for a staged install, where the console reads from its own disk
+    /// and we serve nothing.
+    ///
+    /// This is the one completion signal the filesystem cannot fake, and it is
+    /// needed because on the PS5 path the others are faked. Measured on FW 5.10
+    /// installing a 101 GB PS5 fake package: Sony PRE-ALLOCATES the full-size
+    /// /user/app/<title>/app.pkg up front, so at 2% transferred the title dir
+    /// already read 108,398,837,760 bytes and the launchability probe said
+    /// Registered. Both `consumed` and `registered` reported a finished install
+    /// while 98% of the package had not left this machine — a false SUCCESS,
+    /// which with auto-delete on bins the source and leaves an unplayable title.
+    served_fraction: Option<f64>,
     /// Tuning, pulled from env once by the caller so the function stays pure.
     startup_sec: u64,
     mid_sec: u64,
@@ -2522,6 +2536,17 @@ fn session_idle_sec(now: u64, last_progress_unix: u64, last_activity_unix: u64) 
 }
 
 fn install_verdict(obs: &TrackerObs) -> InstallVerdict {
+    // We cannot be finished before we have sent the bytes. Checked FIRST,
+    // ahead of every filesystem-derived signal, because on the PS5 path those
+    // signals actively lie: Sony pre-allocates the full-size app.pkg, so the
+    // title directory reads complete and the probe says Registered while the
+    // transfer has barely started. Applies only to sessions we serve — a
+    // staged install legitimately serves nothing.
+    if let Some(f) = obs.served_fraction {
+        if f < INSTALL_SETTLE_FRACTION {
+            return InstallVerdict::Installing;
+        }
+    }
     // Authoritative: the title's app.pkg landed on disk. Always wins, instantly
     // — independent of the byte math, which can only ever be an estimate.
     if obs.registered == Some(true) {
@@ -3036,7 +3061,7 @@ async fn install_status_handler(
         let now = now_unix();
         // Update the session's monotonic progress + stall clock, and read back
         // the values the verdict needs.
-        let (consumed, idle_sec) = {
+        let (consumed, idle_sec, served_fraction) = {
             let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
             match sessions.get_mut(&q.session) {
                 Some(s) => {
@@ -3072,9 +3097,17 @@ async fn install_status_handler(
                     (
                         s.progress_consumed_bytes,
                         session_idle_sec(now, started, s.last_activity_unix),
+                        // Only a session we actually serve can report a served
+                        // fraction; a staged install serves nothing and must
+                        // keep relying on the other signals.
+                        if s.requests_served > 0 && s.total_size > 0 {
+                            Some(s.transfer_bytes as f64 / s.total_size as f64)
+                        } else {
+                            None
+                        },
                     )
                 }
-                None => (consumed_now, 0),
+                None => (consumed_now, 0, None),
             }
         };
 
@@ -3084,6 +3117,7 @@ async fn install_status_handler(
             consumed,
             expected: total,
             idle_sec,
+            served_fraction,
             startup_sec: install_stall_startup_sec(),
             mid_sec: install_stall_mid_sec(),
             neardone_sec: install_stall_neardone_sec(),
@@ -5762,6 +5796,9 @@ mod tests {
             consumed,
             expected,
             idle_sec,
+            // Default: not a serve session. Tests that exercise the served-
+            // fraction gate set it explicitly.
+            served_fraction: None,
             startup_sec: 120,
             mid_sec: 240,
             neardone_sec: 600,
@@ -5953,6 +5990,36 @@ mod tests {
         let mut o = obs(Some(false), 0, 25_000_000_000, 100);
         o.synthetic_done_grace_sec = Some(180);
         assert_eq!(install_verdict(&o), InstallVerdict::Installing);
+    }
+
+    #[test]
+    fn preallocated_full_size_file_cannot_fake_completion() {
+        // The PS5 regression, measured on FW 5.10 with a 101 GB fake package:
+        // Sony pre-allocates the whole app.pkg, so at 2% transferred the title
+        // directory already reads full size AND the launchability probe says
+        // Registered. Both completion signals lie at once; only the bytes we
+        // have actually served tell the truth.
+        let mut o = obs(Some(true), 108_398_837_760, 108_583_376_266, 0);
+        o.served_fraction = Some(0.021);
+        assert_eq!(install_verdict(&o), InstallVerdict::Installing);
+    }
+
+    #[test]
+    fn served_fraction_gate_releases_once_the_bytes_are_out() {
+        // Same observation, but the transfer has finished. Registered must now
+        // be believed — otherwise the gate would make installs immortal.
+        let mut o = obs(Some(true), 108_398_837_760, 108_583_376_266, 0);
+        o.served_fraction = Some(1.0);
+        assert_eq!(install_verdict(&o), InstallVerdict::Complete);
+    }
+
+    #[test]
+    fn served_fraction_gate_does_not_apply_to_a_staged_install() {
+        // A staged install reads from the console's own disk; we serve nothing,
+        // so there is no fraction and the other signals must still work.
+        let mut o = obs(Some(true), 0, 25_000_000_000, 0);
+        o.served_fraction = None;
+        assert_eq!(install_verdict(&o), InstallVerdict::Complete);
     }
 
     #[test]
