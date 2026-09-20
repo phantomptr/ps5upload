@@ -525,14 +525,29 @@ int main(void) {
                 "takeover failed — escalating to SIGKILL of the prior instance\n");
         runtime_reap_prior_instance(&state);
         if (runtime_try_takeover(&state) != 0) {
-            /* Ports STILL held after a SIGKILL means the old process is
-             * kernel-wedged (un-killable) — only a reboot clears that. */
-            startup_trace("TAKEOVER_FAILED");
+            /* The handshake AND the pid-based reap have both failed. Before
+             * telling the user to restart the console — which is what they
+             * had to do until now — sweep for anything wearing our own
+             * process-name prefix and SIGKILL it. This catches a predecessor
+             * whose ownership record was lost or overwritten, which the
+             * pid-based reap cannot see. Only our own prefix is ever matched,
+             * never the generic payload.elf. */
+            startup_trace("TAKEOVER_FAILED_SWEEPING");
             fprintf(stderr,
-                    "takeover failed even after reaping the prior instance — ports still held\n");
-            pop_notification(
-                "PS5Upload: a previous instance is stuck and can't be cleared — please restart the PS5");
-            return 1;
+                    "takeover and reap both failed — sweeping our own instances\n");
+            if (runtime_sweep_our_instances() > 0 &&
+                runtime_try_takeover(&state) == 0) {
+                startup_trace("TAKEOVER_DONE_AFTER_SWEEP");
+            } else {
+                /* Ports STILL held after a SIGKILL means the old process is
+                 * kernel-wedged (un-killable) — only a reboot clears that. */
+                startup_trace("TAKEOVER_FAILED");
+                fprintf(stderr,
+                        "takeover failed even after sweeping — ports still held\n");
+                pop_notification(
+                    "PS5Upload: a previous instance is stuck and can't be cleared — please restart the PS5");
+                return 1;
+            }
         }
         startup_trace("TAKEOVER_DONE_AFTER_REAP");
     } else {

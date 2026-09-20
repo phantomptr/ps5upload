@@ -3,6 +3,11 @@
 
 #include <stddef.h>
 
+/* Layout offsets inside FreeBSD's kinfo_proc as exposed via
+ * sysctl(KERN_PROC_PROC). Same offsets shellui_rpc.c uses. */
+#define KINFO_PID_OFFSET     72
+#define KINFO_TDNAME_OFFSET  447
+
 /*
  * Walk the kernel's allproc linked list and emit a JSON blob describing
  * every process on the system. Response shape:

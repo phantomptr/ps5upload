@@ -189,6 +189,19 @@ void runtime_reap_prior_instance(runtime_state_t *state);
  * MUST be called after runtime_init (which fills ownership_path) and
  * BEFORE runtime_write_ownership overwrites the prior record. */
 void runtime_classify_prior_instance(runtime_state_t *state);
+/* LAST RESORT. SIGKILL every process whose name carries our own
+ * "ps5upload" prefix, except this one. Returns how many were killed.
+ *
+ * Only ever called after BOTH the cooperative TAKEOVER_REQUEST handshake
+ * AND the pid-based reap have failed. The graceful path stays primary
+ * because it calls runtime_mark_active_transactions(..., "interrupted")
+ * first, which tears the journal down cleanly so upload resume survives;
+ * a SIGKILL skips all of that.
+ *
+ * Unlike the pid-based reap this does NOT need an ownership record, which
+ * is the case it exists for: a predecessor whose record was lost or
+ * overwritten is otherwise unreachable and the new payload just exits. */
+int runtime_sweep_our_instances(void);
 /* Arm a detached watchdog that force-`_exit()`s the process if the graceful
  * shutdown wedges, so a stuck shutdown can't leave an orphan. Call once when
  * shutdown begins (after runtime_server_loop returns). */

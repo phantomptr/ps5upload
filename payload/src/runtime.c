@@ -2120,6 +2120,62 @@ void runtime_reap_prior_instance(runtime_state_t *state) {
             prior);
 }
 
+int runtime_sweep_our_instances(void) {
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC, 0};
+    size_t buf_size = 0;
+    int me = (int)getpid();
+    int killed = 0;
+
+    if (sysctl(mib, 4, NULL, &buf_size, NULL, 0) != 0 || buf_size == 0) return 0;
+    size_t alloc = buf_size + (buf_size / 4) + 1024;
+    uint8_t *kbuf = (uint8_t *)malloc(alloc);
+    if (!kbuf) return 0;
+    size_t got = alloc;
+    if (sysctl(mib, 4, kbuf, &got, NULL, 0) != 0) {
+        free(kbuf);
+        return 0;
+    }
+
+    const size_t MIN_KINFO_BYTES = KINFO_TDNAME_OFFSET + 1;
+    for (uint8_t *p = kbuf; (size_t)(p - kbuf) + sizeof(int) <= got;) {
+        int ki_structsize = *(int *)p;
+        if (ki_structsize <= 0 ||
+            (size_t)ki_structsize < MIN_KINFO_BYTES ||
+            (size_t)(p - kbuf) + (size_t)ki_structsize > got) {
+            break;
+        }
+        pid_t pid = *(pid_t *)&p[KINFO_PID_OFFSET];
+        const char *tdname = (const char *)&p[KINFO_TDNAME_OFFSET];
+        size_t name_max = (size_t)ki_structsize - KINFO_TDNAME_OFFSET;
+        char name[64] = {0};
+        size_t i = 0;
+        for (; i < name_max && i + 1 < sizeof(name) && tdname[i]; ++i) {
+            name[i] = tdname[i];
+        }
+        name[i] = '\0';
+        p += (size_t)ki_structsize;
+
+        if ((int)pid <= 1 || (int)pid == me) continue;
+        if (!proc_name_is_ours(name)) continue;
+
+        fprintf(stderr,
+                "[payload2] sweep: SIGKILL pid=%d name=%s (ports still held after "
+                "handshake and reap both failed)\n",
+                (int)pid, name);
+        if (kill(pid, SIGKILL) == 0) killed++;
+    }
+    free(kbuf);
+
+    if (killed > 0) {
+        /* Same confirmation window the pid-based reap uses: give the kernel
+         * ~1 s to actually tear the processes down before we retry the bind.
+         * A survivor is kernel-wedged and only a reboot clears it. */
+        usleep(1000000);
+    }
+    fprintf(stderr, "[payload2] sweep: killed %d instance(s)\n", killed);
+    return killed;
+}
+
 /* ── Shutdown watchdog ────────────────────────────────────────────────────── */
 
 static int g_watchdog_exit_code = 0;

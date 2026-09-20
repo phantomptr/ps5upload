@@ -40,11 +40,6 @@
 #include <sys/types.h>
 #include <sys/user.h>
 
-/* Layout offsets inside FreeBSD's kinfo_proc as exposed via
- * sysctl(KERN_PROC_PROC). Same offsets shellui_rpc.c uses. */
-#define KINFO_PID_OFFSET     72
-#define KINFO_TDNAME_OFFSET  447
-
 /* The detailed (process-manager) path reads memory + thread count via the
  * SDK's `struct kinfo_proc` directly (cleaner than hand-offsetting every
  * field). This assert ties that struct to the SAME proven layout the raw
