@@ -4,6 +4,46 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.31.4
+
+**Faster installs from a link when the file host is throttling, honest
+progress for "Upload and install", and a data-loss guard that was not
+arming on the link path.**
+
+- **Installing from a link no longer runs at the speed of its slowest
+  connection.** We fetch a package in eight parallel connections. Some file
+  hosts serve one of them quickly and throttle the rest, and we used to give
+  each connection a fixed share and wait for all of them — so a connection
+  that finished in a second then sat idle for twenty while a throttled one
+  crawled. Connections now pull work from a shared queue, so a fast one keeps
+  going instead of waiting. On the measured pattern that is about 4x.
+- **A connection the host has throttled is now dropped and reopened**, which
+  is what a download manager does and a normal HTTP client does not. Some
+  hosts slow a connection permanently once it has carried enough data.
+- **A host asking us to slow down no longer fails the install.** A "too many
+  requests" reply was treated as a dead connection, retried four times in a
+  second and then given up on. It now waits as long as the host asks.
+- **"Upload and install" shows real progress.** It reported 0 bytes and 0%
+  for the entire install — for hours on a large game — while the PS5 was
+  installing perfectly. It had no way to identify the package it was
+  watching. It now shows GB, speed and time remaining like every other
+  install.
+- **Installs show the download and the send speed separately**, so when one
+  is slow you can see which. The "PS5 is installing" stage shows GB done,
+  speed and time remaining too, instead of a bare percentage.
+- **Fixed a way to lose an installed game.** A PS5 patch installed from a
+  link was labelled as a PS4 full game, which stopped the safety check that
+  keeps a patch from overwriting its base game. A patch shares its base's
+  identity, so that check is the only thing standing between a failed patch
+  and a deleted game.
+
+Verified on a real console: a 101 GB PS5 game installed from an http link at
+about 103 MB/s — the speed of the network link itself — and launched. If your
+own link installs are still slow, the limit is the file host, not ps5upload:
+the same package over a fast link saturates the connection.
+
+---
+
 ## 5.31.3
 
 **Installing from a link was many times slower than it should have been.
