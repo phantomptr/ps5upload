@@ -60,6 +60,16 @@ const DEFAULT_CACHE_WINDOWS: usize = 4;
 /// Raise it only with evidence — the `url-install origin fetch` and
 /// `pkg-host serve rate` log lines say which leg is actually the constraint.
 const DEFAULT_READAHEAD_WINDOWS: u64 = 1;
+/// Rotate a worker's connection when a chunk lands below this rate. A
+/// throttled connection was measured at ~200 kB/s against a healthy one's
+/// 6.5 MB/s on the same origin, so this sits between the two.
+const DEFAULT_ROTATE_BELOW_KBPS: u64 = 600;
+
+/// Cap on connection rotations per worker per window. Without it, a link
+/// where every connection is slow would spend the whole window in TLS
+/// handshakes instead of transferring.
+const MAX_ROTATIONS_PER_WINDOW: u32 = 3;
+
 /// Default work-queue chunk size. See `chunk_ranges` for why this value, and
 /// `PS5UPLOAD_URL_CHUNK_MB` to change it without a release: the right size
 /// depends on the origin's latency, which we cannot know in advance.
@@ -106,7 +116,6 @@ pub struct RemoteProbe {
 pub struct RemoteSource {
     url: String,
     total_size: u64,
-    agent: ureq::Agent,
     window_bytes: u64,
     parallelism: usize,
     max_windows: usize,
@@ -116,6 +125,18 @@ pub struct RemoteSource {
     readahead: u64,
     /// Work-queue chunk size; see `chunk_ranges`.
     chunk_bytes: u64,
+    /// Drop and reopen a worker's connection when a chunk comes in below this
+    /// many kB/s. 0 disables rotation.
+    rotate_below_kbps: u64,
+    /// One agent per worker slot, kept ACROSS windows.
+    ///
+    /// These two requirements pull against each other and both matter:
+    /// connections must survive from one window to the next (otherwise every
+    /// chunk pays a fresh handshake and TCP slow-start), but a worker must
+    /// also be able to discard a connection an origin has throttled. A shared
+    /// pool cannot do the second, and a per-window agent cannot do the first.
+    /// A per-worker agent that outlives the window does both.
+    worker_agents: Vec<Mutex<ureq::Agent>>,
     /// Serialises cache misses. Without it two concurrent BGFT requests that
     /// miss the same window each fetch it, doubling origin traffic and peak
     /// memory. Window fetches are internally parallel, so serialising misses
@@ -205,6 +226,10 @@ struct PieceStat {
     short_reads: u32,
     /// Milliseconds spent asleep in retry backoff, previously invisible.
     backoff_ms: u64,
+    /// Connections this worker discarded and reopened because the origin was
+    /// throttling them. Worth seeing in a bug report: it says whether the
+    /// rotation is firing and whether it is helping.
+    rotations: u32,
     /// Times the origin answered 429/503. Distinct from `stalls`: it means
     /// the host is healthy and deliberately pacing us, which is worth seeing
     /// in a bug report because it changes the advice (fewer connections, not
@@ -226,6 +251,7 @@ impl PieceStat {
         self.short_reads += other.short_reads;
         self.backoff_ms += other.backoff_ms;
         self.rate_limited += other.rate_limited;
+        self.rotations += other.rotations;
     }
 
     fn record_ttfb(&mut self, ttfb: Duration) {
@@ -340,6 +366,15 @@ impl RemoteSource {
             env_u64("PS5UPLOAD_URL_THREADS", DEFAULT_PARALLELISM as u64, 1, 32) as usize;
         let readahead = env_u64("PS5UPLOAD_URL_READAHEAD", DEFAULT_READAHEAD_WINDOWS, 1, 8);
         let chunk_bytes = env_u64("PS5UPLOAD_URL_CHUNK_MB", DEFAULT_CHUNK_MB, 1, 64) * 1024 * 1024;
+        // 0 disables. The default sits well under any healthy connection, so
+        // a normal origin never rotates, and comfortably above the ~200 kB/s
+        // a throttled one was measured at.
+        let rotate_below_kbps = env_u64(
+            "PS5UPLOAD_URL_ROTATE_BELOW_KBPS",
+            DEFAULT_ROTATE_BELOW_KBPS,
+            0,
+            100_000,
+        );
         let max_windows = env_u64(
             "PS5UPLOAD_URL_CACHE_WINDOWS",
             DEFAULT_CACHE_WINDOWS as u64,
@@ -349,11 +384,14 @@ impl RemoteSource {
         Self {
             url,
             total_size,
-            agent: build_agent(parallelism),
             window_bytes,
             parallelism,
             readahead,
             chunk_bytes,
+            rotate_below_kbps,
+            worker_agents: (0..parallelism.max(1))
+                .map(|_| Mutex::new(build_agent(1)))
+                .collect(),
             max_windows,
             cache: Mutex::new(VecDeque::new()),
             fetch_lock: Mutex::new(()),
@@ -536,13 +574,22 @@ impl RemoteSource {
         let errors: Vec<String> = std::thread::scope(|scope| {
             let queue = &queue;
             let handles: Vec<_> = (0..workers)
-                .map(|_| {
+                .map(|slot| {
                     scope.spawn(move || {
                         // One worker = one connection, taking chunks until the
                         // queue is empty. A throttled connection simply
                         // completes fewer of them.
                         let mut agg = PieceStat::default();
                         let started = std::time::Instant::now();
+                        // This worker's own long-lived connection. Held for
+                        // the window, then handed back so the next window
+                        // reuses it rather than reconnecting.
+                        let slot_lock = &self.worker_agents[slot % self.worker_agents.len()];
+                        let mut agent = {
+                            let g = slot_lock.lock().unwrap_or_else(|e| e.into_inner());
+                            g.clone()
+                        };
+                        let mut rotations = 0u32;
                         loop {
                             let next = {
                                 let mut q = queue.lock().unwrap_or_else(|e| e.into_inner());
@@ -551,9 +598,27 @@ impl RemoteSource {
                             let Some((c_start, c_len, dst)) = next else {
                                 break;
                             };
-                            let stat = self.fetch_piece(c_start, c_len, dst)?;
+                            let stat = self.fetch_piece(&agent, c_start, c_len, dst)?;
+                            let ms = stat.took.as_millis().max(1) as u64;
+                            let kbps = stat.bytes / ms; // bytes/ms == kB/s
                             agg.merge(&stat);
+                            // Bounded: where every connection is slow,
+                            // rotating each chunk would only add handshakes.
+                            if self.rotate_below_kbps > 0
+                                && kbps < self.rotate_below_kbps
+                                && rotations < MAX_ROTATIONS_PER_WINDOW
+                            {
+                                rotations += 1;
+                                agent = build_agent(1);
+                            }
                         }
+                        if rotations > 0 {
+                            // Publish the replacement so later windows use the
+                            // fresh connection rather than the throttled one.
+                            let mut g = slot_lock.lock().unwrap_or_else(|e| e.into_inner());
+                            *g = agent.clone();
+                        }
+                        agg.rotations = rotations;
                         agg.took = started.elapsed();
                         Ok(agg)
                     })
@@ -625,8 +690,9 @@ impl RemoteSource {
         let short_reads: u32 = stats.iter().map(|p| p.short_reads).sum();
         let backoff_ms: u64 = stats.iter().map(|p| p.backoff_ms).sum();
         let rate_limited: u32 = stats.iter().map(|p| p.rate_limited).sum();
+        let rotations: u32 = stats.iter().map(|p| p.rotations).sum();
         crate::log_info!(
-            "url-install origin fetch: window={} bytes={} conns={} chunks={} took_ms={} rate={:.1} MB/s overlap={:.1}x conn_ms={}..{} per_conn_kBps={}..{} ttfb_max_ms={} attempts={} stalls={} short_reads={} backoff_ms={} rate_limited={}",
+            "url-install origin fetch: window={} bytes={} conns={} chunks={} took_ms={} rate={:.1} MB/s overlap={:.1}x conn_ms={}..{} per_conn_kBps={}..{} ttfb_max_ms={} attempts={} stalls={} short_reads={} backoff_ms={} rate_limited={} rotations={}",
             idx,
             w_len,
             workers,
@@ -644,6 +710,7 @@ impl RemoteSource {
             short_reads,
             backoff_ms,
             rate_limited,
+            rotations,
         );
         Ok(buf)
     }
@@ -698,7 +765,13 @@ impl RemoteSource {
     /// failures. Resumes mid-piece: a connection that dies after 3 of 4 MiB
     /// re-requests only the missing tail, and any forward progress refreshes
     /// the stall budget so a slow, lossy origin still finishes.
-    fn fetch_piece(&self, start: u64, len: u64, dst: &mut [u8]) -> Result<PieceStat, String> {
+    fn fetch_piece(
+        &self,
+        agent: &ureq::Agent,
+        start: u64,
+        len: u64,
+        dst: &mut [u8],
+    ) -> Result<PieceStat, String> {
         let piece_started = std::time::Instant::now();
         let mut stat = PieceStat {
             bytes: len,
@@ -729,7 +802,7 @@ impl RemoteSource {
             attempts += 1;
             let from = start + filled;
             let to = start + len - 1;
-            match self.read_into(from, to, &mut dst[filled as usize..]) {
+            match self.read_into(agent, from, to, &mut dst[filled as usize..]) {
                 Ok((0, ttfb)) => {
                     stat.record_ttfb(ttfb);
                     stalls += 1;
@@ -785,10 +858,15 @@ impl RemoteSource {
     /// time to first byte. TTFB is split out because it separates an origin
     /// that is slow to ANSWER from one that is slow to SEND: the first points
     /// at per-request throttling or cold storage, the second at bandwidth.
-    fn read_into(&self, start: u64, end: u64, dst: &mut [u8]) -> Result<(u64, Duration), FetchErr> {
+    fn read_into(
+        &self,
+        agent: &ureq::Agent,
+        start: u64,
+        end: u64,
+        dst: &mut [u8],
+    ) -> Result<(u64, Duration), FetchErr> {
         let started = std::time::Instant::now();
-        let resp = self
-            .agent
+        let resp = agent
             .get(&self.url)
             .header("User-Agent", "ps5upload")
             .header("Range", &format!("bytes={start}-{end}"))
@@ -1331,6 +1409,111 @@ pub(crate) mod origin_tests {
             .expect("a 429 must not fail the fetch");
         assert_eq!(got.len(), total as usize);
         assert_eq!(&got[..], &body(total as usize)[..], "wrong bytes");
+    }
+
+    /// A connection the origin has throttled must be discarded, not kept.
+    ///
+    /// This is what separates a download manager from a pooled HTTP client.
+    /// Some hosts serve a connection at full speed until it has carried a
+    /// quota, then throttle THAT socket for good; keeping it — which pooling
+    /// does, and which our own connection-reuse fix made us do — locks in the
+    /// penalty for the rest of the install. This origin gives each socket one
+    /// fast chunk and crawls thereafter, so the only way to stay fast is to
+    /// reconnect.
+    #[test]
+    fn a_throttled_connection_is_dropped_and_reopened() {
+        let total = 8 * 1024 * 1024u64;
+        let data = Arc::new(body(total as usize));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let sockets = Arc::new(AtomicUsize::new(0));
+        {
+            let (data, sockets) = (data.clone(), sockets.clone());
+            std::thread::spawn(move || {
+                for conn in listener.incoming() {
+                    let Ok(mut stream) = conn else { break };
+                    sockets.fetch_add(1, Ordering::SeqCst);
+                    let data = data.clone();
+                    std::thread::spawn(move || {
+                        let Ok(peer) = stream.try_clone() else { return };
+                        let mut reader = BufReader::new(peer);
+                        let mut served = 0u32;
+                        loop {
+                            let mut range = None;
+                            let mut saw = false;
+                            loop {
+                                let mut line = String::new();
+                                match reader.read_line(&mut line) {
+                                    Ok(0) | Err(_) => return,
+                                    Ok(_) => {}
+                                }
+                                if line == "\r\n" || line == "\n" {
+                                    break;
+                                }
+                                saw = true;
+                                if let Some(v) =
+                                    line.to_ascii_lowercase().strip_prefix("range: bytes=")
+                                {
+                                    if let Some((a, b)) = v.trim().split_once('-') {
+                                        let st: usize = a.trim().parse().unwrap_or(0);
+                                        let en: usize = b.trim().parse().unwrap_or(data.len() - 1);
+                                        range = Some((st, en.min(data.len() - 1)));
+                                    }
+                                }
+                            }
+                            if !saw {
+                                return;
+                            }
+                            // Per-SOCKET quota: fast once, throttled after.
+                            if served > 0 {
+                                std::thread::sleep(Duration::from_millis(400));
+                            }
+                            served += 1;
+                            let (st, en) = range.unwrap_or((0, data.len() - 1));
+                            let body_ = &data[st..=en];
+                            let head = format!(
+                                "HTTP/1.1 206 Partial Content\r\n\
+                                 Content-Range: bytes {}-{}/{}\r\n\
+                                 Content-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+                                st,
+                                en,
+                                data.len(),
+                                body_.len()
+                            );
+                            if stream.write_all(head.as_bytes()).is_err()
+                                || stream.write_all(body_).is_err()
+                                || stream.flush().is_err()
+                            {
+                                return;
+                            }
+                        }
+                    });
+                }
+            });
+        }
+
+        let mut src = RemoteSource::new(format!("http://{addr}/game.pkg"), total);
+        src.window_bytes = total;
+        src.parallelism = 2;
+        src.worker_agents = (0..2).map(|_| Mutex::new(build_agent(1))).collect();
+        // The simulated throttle is 400 ms per 1 MiB chunk (~2.6 MB/s), which
+        // is far quicker than a real throttled connection. Scale the trigger
+        // to sit above it so the test exercises rotation rather than the
+        // production constant, which is tuned for ~200 kB/s.
+        src.rotate_below_kbps = 8_000;
+        let got = src.read_range(0, total - 1).expect("window");
+        assert_eq!(got.len(), total as usize);
+        assert_eq!(&got[..], &body(total as usize)[..], "wrong bytes");
+
+        // 8 chunks over 2 workers. Keeping one socket each would mean the
+        // origin sees exactly 2; rotating away from a throttled socket means
+        // it sees more.
+        let n = sockets.load(Ordering::SeqCst);
+        assert!(
+            n > 2,
+            "origin saw only {n} sockets for 2 workers: a throttled \
+             connection was kept instead of being reopened"
+        );
     }
 
     /// A throttled connection must not set the pace for the whole window.
