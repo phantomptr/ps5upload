@@ -70,6 +70,12 @@ const MIN_PIECE_BYTES: u64 = 1024 * 1024;
 /// "install fails halfway" class we must survive on a multi-hour 100 GB
 /// download.
 const PIECE_STALL_ATTEMPTS: u32 = 4;
+
+/// How long to wait on a 429/503 that carries no `Retry-After`.
+const RATE_LIMIT_DEFAULT_WAIT: Duration = Duration::from_secs(2);
+/// Cap on an honoured `Retry-After`, so a hostile or absurd value cannot
+/// park an install for hours. The piece is retried after this regardless.
+const RATE_LIMIT_MAX_WAIT: Duration = Duration::from_secs(30);
 /// Absolute cap on attempts per piece, so an origin that answers every
 /// request with a single byte cannot spin forever.
 const PIECE_MAX_ATTEMPTS: u32 = 512;
@@ -124,6 +130,55 @@ pub struct RemoteSource {
     origin_nanos: AtomicU64,
 }
 
+/// Why one ranged GET did not deliver.
+///
+/// `RateLimited` is separate because it needs the opposite response to every
+/// other failure: waiting longer, not retrying sooner, and not counting
+/// against the no-progress budget. Hosts that serve large files commonly
+/// answer a burst of parallel range requests with 429 or 503, and treating
+/// that as a dead connection turns a short pause into a failed install.
+#[derive(Debug)]
+enum FetchErr {
+    /// Host asked us to slow down; carries its `Retry-After` when given.
+    RateLimited {
+        status: u16,
+        retry_after: Option<Duration>,
+    },
+    Other(String),
+}
+
+impl std::fmt::Display for FetchErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FetchErr::RateLimited {
+                status,
+                retry_after,
+            } => write!(
+                f,
+                "origin rate-limited us ({status}{})",
+                match retry_after {
+                    Some(d) => format!(", Retry-After {}s", d.as_secs()),
+                    None => String::new(),
+                }
+            ),
+            FetchErr::Other(m) => write!(f, "{m}"),
+        }
+    }
+}
+
+/// `Retry-After` is either seconds or an HTTP date; we honour the seconds
+/// form and ignore the date form rather than pull in a date parser for it.
+fn retry_after_of(resp: &ureq::http::Response<ureq::Body>) -> Option<Duration> {
+    resp.headers()
+        .get("retry-after")?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .map(Duration::from_secs)
+}
+
 /// Per-piece evidence for one ranged GET, gathered so a slow link install can
 /// be diagnosed from a bug report instead of guessed at.
 ///
@@ -147,6 +202,11 @@ struct PieceStat {
     short_reads: u32,
     /// Milliseconds spent asleep in retry backoff, previously invisible.
     backoff_ms: u64,
+    /// Times the origin answered 429/503. Distinct from `stalls`: it means
+    /// the host is healthy and deliberately pacing us, which is worth seeing
+    /// in a bug report because it changes the advice (fewer connections, not
+    /// more).
+    rate_limited: u32,
 }
 
 impl PieceStat {
@@ -170,6 +230,11 @@ impl PieceStat {
 fn build_agent(parallelism: usize) -> ureq::Agent {
     let keep = parallelism.max(1);
     let config = ureq::Agent::config_builder()
+        // Read the status ourselves. With ureq's default, a 429 arrives as an
+        // opaque error string and is indistinguishable from a dead socket —
+        // so it was retried four times in a second and then failed the whole
+        // install, instead of waiting the moment the host asked for.
+        .http_status_as_error(false)
         .timeout_global(Some(PIECE_TIMEOUT))
         .max_idle_connections_per_host(keep)
         .max_idle_connections(keep.saturating_mul(2).max(10))
@@ -504,8 +569,9 @@ impl RemoteSource {
         let stalls: u32 = stats.iter().map(|p| p.stalls).sum();
         let short_reads: u32 = stats.iter().map(|p| p.short_reads).sum();
         let backoff_ms: u64 = stats.iter().map(|p| p.backoff_ms).sum();
+        let rate_limited: u32 = stats.iter().map(|p| p.rate_limited).sum();
         crate::log_info!(
-            "url-install origin fetch: window={} bytes={} pieces={} took_ms={} rate={:.1} MB/s overlap={:.1}x piece_ms={}..{} per_conn_kBps={}..{} ttfb_max_ms={} attempts={} stalls={} short_reads={} backoff_ms={}",
+            "url-install origin fetch: window={} bytes={} pieces={} took_ms={} rate={:.1} MB/s overlap={:.1}x piece_ms={}..{} per_conn_kBps={}..{} ttfb_max_ms={} attempts={} stalls={} short_reads={} backoff_ms={} rate_limited={}",
             idx,
             w_len,
             pieces.len(),
@@ -521,6 +587,7 @@ impl RemoteSource {
             stalls,
             short_reads,
             backoff_ms,
+            rate_limited,
         );
         Ok(buf)
     }
@@ -609,9 +676,31 @@ impl RemoteSource {
                     stalls = 0;
                     last_err = format!("origin closed after {filled} of {len} bytes");
                 }
+                Err(FetchErr::RateLimited {
+                    status,
+                    retry_after,
+                }) => {
+                    // Being asked to slow down is not a stall. Retrying it in
+                    // 250 ms four times and then failing the install is the
+                    // worst possible response: it guarantees we never come
+                    // back after the limit clears. Wait what the host asked
+                    // for (bounded), count it separately, and keep the piece
+                    // alive.
+                    let wait = retry_after
+                        .unwrap_or(RATE_LIMIT_DEFAULT_WAIT)
+                        .min(RATE_LIMIT_MAX_WAIT);
+                    stat.rate_limited += 1;
+                    stat.backoff_ms += wait.as_millis() as u64;
+                    last_err = FetchErr::RateLimited {
+                        status,
+                        retry_after,
+                    }
+                    .to_string();
+                    std::thread::sleep(wait);
+                }
                 Err(e) => {
                     stalls += 1;
-                    last_err = e;
+                    last_err = e.to_string();
                 }
             }
             stat.stalls = stat.stalls.max(stalls);
@@ -626,7 +715,7 @@ impl RemoteSource {
     /// time to first byte. TTFB is split out because it separates an origin
     /// that is slow to ANSWER from one that is slow to SEND: the first points
     /// at per-request throttling or cold storage, the second at bandwidth.
-    fn read_into(&self, start: u64, end: u64, dst: &mut [u8]) -> Result<(u64, Duration), String> {
+    fn read_into(&self, start: u64, end: u64, dst: &mut [u8]) -> Result<(u64, Duration), FetchErr> {
         let started = std::time::Instant::now();
         let resp = self
             .agent
@@ -634,14 +723,22 @@ impl RemoteSource {
             .header("User-Agent", "ps5upload")
             .header("Range", &format!("bytes={start}-{end}"))
             .call()
-            .map_err(|e| format!("{e}"))?;
+            .map_err(|e| FetchErr::Other(format!("{e}")))?;
         let ttfb = started.elapsed();
         let status = resp.status().as_u16();
+        if status == 429 || status == 503 {
+            return Err(FetchErr::RateLimited {
+                status,
+                retry_after: retry_after_of(&resp),
+            });
+        }
         if status != 206 {
             // A 200 here means the origin ignored the Range and is about to
             // send the whole package down one connection. Treat it as fatal
             // rather than silently writing the wrong bytes at this offset.
-            return Err(format!("expected 206 for a range request, got {status}"));
+            return Err(FetchErr::Other(format!(
+                "expected 206 for a range request, got {status}"
+            )));
         }
         let mut reader = resp.into_body().into_reader();
         let mut filled = 0usize;
@@ -652,7 +749,7 @@ impl RemoteSource {
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(e) => {
                     if filled == 0 {
-                        return Err(format!("{e}"));
+                        return Err(FetchErr::Other(format!("{e}")));
                     }
                     // Partial progress is still progress; let the retry loop
                     // ask for the tail instead of discarding what arrived.
@@ -1025,6 +1122,128 @@ pub(crate) mod origin_tests {
             }
         });
         addr
+    }
+
+    /// Live throughput check against a REAL origin, for comparing our client
+    /// with a download manager on the same link. Ignored by default (needs
+    /// network). Point it anywhere with:
+    ///
+    ///   PS5UPLOAD_TEST_URL=https://host/file cargo test -p ps5upload-engine \
+    ///     --lib live_origin_throughput -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn live_origin_throughput() {
+        let Ok(url) = std::env::var("PS5UPLOAD_TEST_URL") else {
+            eprintln!("set PS5UPLOAD_TEST_URL");
+            return;
+        };
+        let probe = RemoteSource::probe(&url).expect("probe");
+        let threads: usize = std::env::var("PS5UPLOAD_URL_THREADS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8);
+        let mut src = RemoteSource::new(url, probe.total_size);
+        src.parallelism = threads;
+        let win = src.window_bytes.min(probe.total_size);
+        let started = std::time::Instant::now();
+        let got = src.read_range(0, win - 1).expect("window");
+        let secs = started.elapsed().as_secs_f64();
+        eprintln!(
+            "RESULT threads={threads} bytes={} in {secs:.2}s = {:.1} MB/s",
+            got.len(),
+            got.len() as f64 / secs / 1e6
+        );
+    }
+
+    /// A 429 must be waited out, not retried to death.
+    ///
+    /// Hosts that serve large files commonly answer a burst of parallel range
+    /// requests with 429. Before this, that arrived as an opaque ureq error,
+    /// was counted as a no-progress stall, retried four times inside a second
+    /// and then failed the whole install — verified live against a public
+    /// host that rate-limited an 8-way ranged burst. The origin here refuses
+    /// the first two requests per connection with `Retry-After: 1`, then
+    /// serves normally.
+    #[test]
+    fn a_rate_limited_origin_is_waited_out_not_failed() {
+        let total = 2 * 1024 * 1024u64;
+        let refusals = Arc::new(AtomicUsize::new(2));
+        let data = Arc::new(body(total as usize));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        {
+            let (refusals, data) = (refusals.clone(), data.clone());
+            std::thread::spawn(move || {
+                for conn in listener.incoming() {
+                    let Ok(mut stream) = conn else { break };
+                    let (refusals, data) = (refusals.clone(), data.clone());
+                    std::thread::spawn(move || {
+                        let Ok(peer) = stream.try_clone() else { return };
+                        let mut reader = BufReader::new(peer);
+                        loop {
+                            let mut saw = false;
+                            loop {
+                                let mut line = String::new();
+                                match reader.read_line(&mut line) {
+                                    Ok(0) | Err(_) => return,
+                                    Ok(_) => {}
+                                }
+                                if line == "\r\n" || line == "\n" {
+                                    break;
+                                }
+                                saw = true;
+                            }
+                            if !saw {
+                                return;
+                            }
+                            let refuse = refusals
+                                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                                    if n > 0 {
+                                        Some(n - 1)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .is_ok();
+                            let resp = if refuse {
+                                "HTTP/1.1 429 Too Many Requests\r\n\
+                                 Retry-After: 1\r\nContent-Length: 0\r\n\
+                                 Connection: keep-alive\r\n\r\n"
+                                    .to_string()
+                            } else {
+                                format!(
+                                    "HTTP/1.1 206 Partial Content\r\n\
+                                     Content-Range: bytes 0-{}/{}\r\n\
+                                     Content-Length: {}\r\n\
+                                     Connection: keep-alive\r\n\r\n",
+                                    data.len() - 1,
+                                    data.len(),
+                                    data.len()
+                                )
+                            };
+                            if stream.write_all(resp.as_bytes()).is_err() {
+                                return;
+                            }
+                            if !refuse && stream.write_all(&data).is_err() {
+                                return;
+                            }
+                            if stream.flush().is_err() {
+                                return;
+                            }
+                        }
+                    });
+                }
+            });
+        }
+
+        let mut src = RemoteSource::new(format!("http://{addr}/game.pkg"), total);
+        src.window_bytes = total;
+        src.parallelism = 1;
+        let got = src
+            .read_range(0, total - 1)
+            .expect("a 429 must not fail the fetch");
+        assert_eq!(got.len(), total as usize);
+        assert_eq!(&got[..], &body(total as usize)[..], "wrong bytes");
     }
 
     /// Connections must survive from one window to the next.
