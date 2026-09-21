@@ -1333,7 +1333,19 @@ async fn install_start_handler(
         .map(|p| !p.is_empty())
         .unwrap_or(false);
     let type_declared = req.package_type_override.is_some() || head_meta.package_type.is_some();
-    if is_local && !type_declared {
+    // Read the staged package's own metadata once. This used to run only when
+    // the caller declared no package_type, and to keep nothing but the
+    // category — so a staged install had an EMPTY content_id and a total of 0.
+    // That is not cosmetic: `title_id_from_content_id("")` is empty, so
+    // `title_dir_size` measured nothing, the free-space baseline is captured
+    // after Sony pre-allocates, and `total` is the percentage's denominator.
+    // A staged install therefore reported "0 bytes, 0%" for its entire run
+    // with no ETA — measured on FW 5.10 installing a 101 GB PS5 title that
+    // was in fact installing perfectly (PlayGo chunks advancing the whole
+    // time). That display is almost certainly why staged installs are
+    // believed not to work at all.
+    let mut staged_meta: Option<ps5upload_pkg::ReaderMetadata> = None;
+    if is_local {
         if let Some(local_path) = req.local_ps5_path.clone() {
             let addr = req.ps5_addr.clone();
             let parsed = tokio::time::timeout(
@@ -1342,17 +1354,24 @@ async fn install_start_handler(
                     ps5upload_pkg::metadata_from_reader(|off, len| {
                         ps5upload_core::fs_ops::fs_read(&addr, &local_path, off, len).ok()
                     })
-                    .and_then(|meta| {
-                        ps5upload_pkg::package_type_for_category_and_platform(
-                            &meta.category,
-                            &meta.platform,
-                        )
-                        .map(|pt| (meta.category, pt))
-                    })
                 }),
             )
             .await;
-            if let Ok(Ok(Some((cat, pt)))) = parsed {
+            if let Ok(Ok(Some(meta))) = parsed {
+                staged_meta = Some(meta);
+            }
+        }
+    }
+    if is_local && !type_declared {
+        {
+            let parsed = staged_meta.as_ref().and_then(|meta| {
+                ps5upload_pkg::package_type_for_category_and_platform(
+                    &meta.category,
+                    &meta.platform,
+                )
+                .map(|pt| (meta.category.clone(), pt))
+            });
+            if let Some((cat, pt)) = parsed {
                 if pt != package_type {
                     crate::log_info!(
                         "install guard: staged pkg category '{}' → package_type {} \
@@ -1367,6 +1386,41 @@ async fn install_start_handler(
                         }
                     );
                     package_type = pt;
+                }
+            }
+        }
+    }
+
+    // Fill the identity and size a staged install otherwise has no source
+    // for. `head_meta` is populated from the PC-side file or the HTTP HEAD;
+    // neither exists when the package is already sitting on the console, so
+    // without this the progress tracker has no title to measure and no total
+    // to divide by. Never overrides a value the caller already supplied.
+    let mut head_meta = head_meta;
+    let mut total_size = total_size;
+    if let Some(meta) = staged_meta.as_ref() {
+        if head_meta.content_id.is_empty() && !meta.content_id.is_empty() {
+            crate::log_info!(
+                "staged install: resolved content_id {} from the package on the console                  (progress tracking needs it)",
+                meta.content_id
+            );
+            head_meta.content_id = meta.content_id.clone();
+        }
+        if head_meta.title.is_empty() && !meta.title.is_empty() {
+            head_meta.title = meta.title.clone();
+        }
+    }
+    if total_size == 0 && is_local {
+        if let Some(local_path) = req.local_ps5_path.clone() {
+            let addr = req.ps5_addr.clone();
+            if let Ok(Ok(sz)) = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                tokio::task::spawn_blocking(move || staged_file_size(&addr, &local_path)),
+            )
+            .await
+            {
+                if sz > 0 {
+                    total_size = sz;
                 }
             }
         }
@@ -2640,6 +2694,26 @@ fn install_verdict(obs: &TrackerObs) -> InstallVerdict {
 /// volume since the baseline) and (sum of the title dir's file sizes). Both
 /// are best-effort: an unreadable signal contributes 0, not an error — the
 /// tracker degrades to whichever signal is available.
+/// Size of one staged package already on the console, by listing its parent
+/// directory. A staged install has no PC-side file to stat and no HTTP HEAD to
+/// read a Content-Length from, so without this its `total` stays 0 and the
+/// client can render neither a percentage nor an estimate. 0 if unreadable.
+fn staged_file_size(addr: &str, path: &str) -> u64 {
+    let (dir, name) = match path.rsplit_once('/') {
+        Some((d, n)) if !n.is_empty() => (if d.is_empty() { "/" } else { d }, n),
+        _ => return 0,
+    };
+    ps5upload_core::fs_ops::list_dir(addr, dir, ps5upload_core::fs_ops::ListDirOptions::default())
+        .ok()
+        .and_then(|l| {
+            l.entries
+                .into_iter()
+                .find(|e| e.kind == "file" && e.name == name)
+                .map(|e| e.size)
+        })
+        .unwrap_or(0)
+}
+
 fn observe_consumed(addr: &str, title_id: &str, baseline_free: Option<u64>) -> u64 {
     // Signal A — global free-space drop on the volume hosting /user/app. Noisy
     // (other writes move it) but available from the first poll, before Sony
