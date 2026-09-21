@@ -60,9 +60,10 @@ const DEFAULT_CACHE_WINDOWS: usize = 4;
 /// Raise it only with evidence — the `url-install origin fetch` and
 /// `pkg-host serve rate` log lines say which leg is actually the constraint.
 const DEFAULT_READAHEAD_WINDOWS: u64 = 1;
-/// Never cut a window into pieces smaller than this — below it, per-request
-/// latency dominates and more connections make the transfer slower.
-const MIN_PIECE_BYTES: u64 = 1024 * 1024;
+/// Default work-queue chunk size. See `chunk_ranges` for why this value, and
+/// `PS5UPLOAD_URL_CHUNK_MB` to change it without a release: the right size
+/// depends on the origin's latency, which we cannot know in advance.
+const DEFAULT_CHUNK_MB: u64 = 1;
 /// Consecutive *no-progress* attempts tolerated per piece. Only attempts that
 /// deliver nothing count against this budget — an attempt that moved the
 /// cursor forward resets it. A flaky origin that dribbles a piece out over
@@ -113,6 +114,8 @@ pub struct RemoteSource {
     cache: Mutex<VecDeque<(u64, Arc<Vec<u8>>)>>,
     /// Windows to fetch ahead of demand; see DEFAULT_READAHEAD_WINDOWS.
     readahead: u64,
+    /// Work-queue chunk size; see `chunk_ranges`.
+    chunk_bytes: u64,
     /// Serialises cache misses. Without it two concurrent BGFT requests that
     /// miss the same window each fetch it, doubling origin traffic and peak
     /// memory. Window fetches are internally parallel, so serialising misses
@@ -210,6 +213,21 @@ struct PieceStat {
 }
 
 impl PieceStat {
+    /// Fold one chunk's result into this worker's running total. `took` is
+    /// set by the worker from its own wall clock, not summed, so
+    /// `per_conn_kBps` stays "what this single connection achieved".
+    fn merge(&mut self, other: &PieceStat) {
+        self.bytes += other.bytes;
+        if let Some(t) = other.first_ttfb {
+            self.record_ttfb(t);
+        }
+        self.attempts += other.attempts;
+        self.stalls = self.stalls.max(other.stalls);
+        self.short_reads += other.short_reads;
+        self.backoff_ms += other.backoff_ms;
+        self.rate_limited += other.rate_limited;
+    }
+
     fn record_ttfb(&mut self, ttfb: Duration) {
         if self.first_ttfb.is_none() {
             self.first_ttfb = Some(ttfb);
@@ -321,6 +339,7 @@ impl RemoteSource {
         let parallelism =
             env_u64("PS5UPLOAD_URL_THREADS", DEFAULT_PARALLELISM as u64, 1, 32) as usize;
         let readahead = env_u64("PS5UPLOAD_URL_READAHEAD", DEFAULT_READAHEAD_WINDOWS, 1, 8);
+        let chunk_bytes = env_u64("PS5UPLOAD_URL_CHUNK_MB", DEFAULT_CHUNK_MB, 1, 64) * 1024 * 1024;
         let max_windows = env_u64(
             "PS5UPLOAD_URL_CACHE_WINDOWS",
             DEFAULT_CACHE_WINDOWS as u64,
@@ -334,6 +353,7 @@ impl RemoteSource {
             window_bytes,
             parallelism,
             readahead,
+            chunk_bytes,
             max_windows,
             cache: Mutex::new(VecDeque::new()),
             fetch_lock: Mutex::new(()),
@@ -473,7 +493,19 @@ impl RemoteSource {
             ));
         }
         let w_len = self.window_bytes.min(self.total_size - w_start);
-        let pieces = self.piece_ranges(w_start, w_len);
+        // Cut the window into many small chunks and let `parallelism` workers
+        // PULL from a shared queue, rather than giving each worker one fixed
+        // piece and waiting for all of them.
+        //
+        // Measured on a user's 157 GB link install: the origin serves some
+        // connections at ~6.5 MB/s and throttles others to ~200 kB/s, and the
+        // window's duration equalled the slowest piece's duration to within
+        // 0.1% across 71 windows. The fast connection finished its 4 MiB in
+        // about a second and then sat idle for twenty while the throttled one
+        // ground on — so the install ran at 8x the slowest connection instead
+        // of the sum of all of them. With a queue, a fast connection simply
+        // takes more chunks.
+        let chunks = self.chunk_ranges(w_start, w_len);
         // Time the origin leg. Without this there is NO way — from logs,
         // status or anything else — to tell whether a slow link install is
         // slow because the origin is slow or because the console is pulling
@@ -484,24 +516,47 @@ impl RemoteSource {
         let fetch_started = std::time::Instant::now();
 
         let mut buf = vec![0u8; w_len as usize];
-        // Hand each worker a disjoint &mut slice of the output so the pieces
-        // land in order with no reassembly step and no per-piece allocation.
-        let mut slices: Vec<&mut [u8]> = Vec::with_capacity(pieces.len());
-        let mut rest = buf.as_mut_slice();
-        for (_, len) in &pieces {
-            let (head, tail) = rest.split_at_mut(*len as usize);
-            slices.push(head);
-            rest = tail;
+        // Disjoint &mut slice per chunk, so chunks land in place with no
+        // reassembly and no per-chunk allocation. Queued back-to-front and
+        // popped from the back, so they are still issued in file order.
+        let mut queue: Vec<(u64, u64, &mut [u8])> = Vec::with_capacity(chunks.len());
+        {
+            let mut rest = buf.as_mut_slice();
+            for (c_start, c_len) in &chunks {
+                let (head, tail) = rest.split_at_mut(*c_len as usize);
+                queue.push((*c_start, *c_len, head));
+                rest = tail;
+            }
         }
+        queue.reverse();
+        let queue = Mutex::new(queue);
 
-        let mut stats: Vec<PieceStat> = Vec::with_capacity(pieces.len());
+        let workers = self.parallelism.max(1).min(chunks.len().max(1));
+        let mut stats: Vec<PieceStat> = Vec::with_capacity(workers);
         let errors: Vec<String> = std::thread::scope(|scope| {
-            let handles: Vec<_> = pieces
-                .iter()
-                .zip(slices)
-                .map(|((p_start, p_len), dst)| {
-                    let (p_start, p_len) = (*p_start, *p_len);
-                    scope.spawn(move || self.fetch_piece(p_start, p_len, dst))
+            let queue = &queue;
+            let handles: Vec<_> = (0..workers)
+                .map(|_| {
+                    scope.spawn(move || {
+                        // One worker = one connection, taking chunks until the
+                        // queue is empty. A throttled connection simply
+                        // completes fewer of them.
+                        let mut agg = PieceStat::default();
+                        let started = std::time::Instant::now();
+                        loop {
+                            let next = {
+                                let mut q = queue.lock().unwrap_or_else(|e| e.into_inner());
+                                q.pop()
+                            };
+                            let Some((c_start, c_len, dst)) = next else {
+                                break;
+                            };
+                            let stat = self.fetch_piece(c_start, c_len, dst)?;
+                            agg.merge(&stat);
+                        }
+                        agg.took = started.elapsed();
+                        Ok(agg)
+                    })
                 })
                 .collect();
             handles
@@ -571,10 +626,11 @@ impl RemoteSource {
         let backoff_ms: u64 = stats.iter().map(|p| p.backoff_ms).sum();
         let rate_limited: u32 = stats.iter().map(|p| p.rate_limited).sum();
         crate::log_info!(
-            "url-install origin fetch: window={} bytes={} pieces={} took_ms={} rate={:.1} MB/s overlap={:.1}x piece_ms={}..{} per_conn_kBps={}..{} ttfb_max_ms={} attempts={} stalls={} short_reads={} backoff_ms={} rate_limited={}",
+            "url-install origin fetch: window={} bytes={} conns={} chunks={} took_ms={} rate={:.1} MB/s overlap={:.1}x conn_ms={}..{} per_conn_kBps={}..{} ttfb_max_ms={} attempts={} stalls={} short_reads={} backoff_ms={} rate_limited={}",
             idx,
             w_len,
-            pieces.len(),
+            workers,
+            chunks.len(),
             took.as_millis(),
             mbps,
             overlap,
@@ -606,20 +662,34 @@ impl RemoteSource {
         Some(((bytes as u128 * 1_000_000_000u128) / nanos as u128) as u64)
     }
 
-    /// Split `[start, start+len)` into contiguous `(start, len)` pieces, at
-    /// most `parallelism` of them and none smaller than `MIN_PIECE_BYTES`.
-    fn piece_ranges(&self, start: u64, len: u64) -> Vec<(u64, u64)> {
-        let by_min = (len / MIN_PIECE_BYTES).max(1);
-        let n = (self.parallelism as u64).min(by_min).max(1);
-        let base = len / n;
-        let mut out = Vec::with_capacity(n as usize);
+    /// Split a window into the work-queue's chunks: contiguous
+    /// `(start, len)` spans of `chunk_bytes`, with the remainder folded into
+    /// the last one so no chunk is pathologically small.
+    ///
+    /// Chunk size trades two costs against each other. Too large and a
+    /// throttled connection holding the final chunk still sets the window's
+    /// duration — the very problem the queue exists to fix. Too small and
+    /// every chunk pays another time-to-first-byte, which was measured at a
+    /// median of 650 ms against a real origin. 1 MiB keeps the worst-case
+    /// tail near 5 s on a 200 kB/s connection instead of the 21 s a fixed
+    /// 4 MiB piece cost, without multiplying request latency.
+    fn chunk_ranges(&self, start: u64, len: u64) -> Vec<(u64, u64)> {
+        if len == 0 {
+            return Vec::new();
+        }
+        let chunk = self.chunk_bytes.max(1);
+        let mut out = Vec::new();
         let mut off = 0u64;
-        for i in 0..n {
-            // The last piece absorbs the remainder, so the pieces always sum
-            // to exactly `len`.
-            let this = if i == n - 1 { len - off } else { base };
-            out.push((start + off, this));
-            off += this;
+        while off < len {
+            let remaining = len - off;
+            // Fold a short final chunk into its predecessor.
+            let take = if remaining <= chunk + chunk / 2 {
+                remaining
+            } else {
+                chunk
+            };
+            out.push((start + off, take));
+            off += take;
         }
         out
     }
@@ -801,40 +871,57 @@ mod tests {
     }
 
     #[test]
-    fn piece_ranges_are_contiguous_and_cover_the_window_exactly() {
+    fn chunk_ranges_are_contiguous_and_cover_the_window_exactly() {
         let s = source(1024 * 1024 * 1024);
         for len in [
             1u64,
-            MIN_PIECE_BYTES - 1,
-            MIN_PIECE_BYTES,
-            MIN_PIECE_BYTES * 3 + 7,
+            s.chunk_bytes - 1,
+            s.chunk_bytes,
+            s.chunk_bytes * 3 + 7,
             32 * 1024 * 1024,
         ] {
-            let pieces = s.piece_ranges(4096, len);
-            assert!(!pieces.is_empty(), "len {len} produced no pieces");
-            assert!(pieces.len() <= s.parallelism);
-            assert_eq!(pieces[0].0, 4096, "len {len} must start at the window");
-            let summed: u64 = pieces.iter().map(|(_, l)| *l).sum();
-            assert_eq!(summed, len, "pieces must sum to the window length");
-            for w in pieces.windows(2) {
+            let chunks = s.chunk_ranges(4096, len);
+            assert!(!chunks.is_empty(), "len {len} produced no chunks");
+            assert_eq!(chunks[0].0, 4096, "len {len} must start at the window");
+            let summed: u64 = chunks.iter().map(|(_, l)| *l).sum();
+            assert_eq!(summed, len, "chunks must sum to the window length");
+            for w in chunks.windows(2) {
                 assert_eq!(
                     w[0].0 + w[0].1,
                     w[1].0,
-                    "pieces must be contiguous for len {len}"
+                    "chunks must be contiguous for len {len}"
                 );
             }
             assert!(
-                pieces.iter().all(|(_, l)| *l > 0),
-                "no empty piece for len {len}"
+                chunks.iter().all(|(_, l)| *l > 0),
+                "no empty chunk for len {len}"
             );
         }
     }
 
+    /// The queue only helps if there are more chunks than connections — with
+    /// one chunk per worker we are back to a fixed piece each and the
+    /// slowest connection sets the window's duration again.
     #[test]
-    fn small_windows_are_not_split_into_latency_bound_pieces() {
-        let s = source(64 * 1024 * 1024);
-        assert_eq!(s.piece_ranges(0, 256 * 1024).len(), 1);
-        assert_eq!(s.piece_ranges(0, MIN_PIECE_BYTES * 2).len(), 2);
+    fn a_window_yields_many_more_chunks_than_connections() {
+        let s = source(1024 * 1024 * 1024);
+        let chunks = s.chunk_ranges(0, 32 * 1024 * 1024);
+        assert!(
+            chunks.len() >= s.parallelism * 4,
+            "{} chunks for {} connections leaves little to steal",
+            chunks.len(),
+            s.parallelism
+        );
+    }
+
+    /// A short final chunk is folded into its predecessor rather than
+    /// costing another round trip for a few KiB.
+    #[test]
+    fn a_short_tail_does_not_become_its_own_chunk() {
+        let s = source(1024 * 1024 * 1024);
+        let chunks = s.chunk_ranges(0, s.chunk_bytes * 2 + 4096);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[1].1, s.chunk_bytes + 4096);
     }
 
     #[test]
@@ -1244,6 +1331,117 @@ pub(crate) mod origin_tests {
             .expect("a 429 must not fail the fetch");
         assert_eq!(got.len(), total as usize);
         assert_eq!(&got[..], &body(total as usize)[..], "wrong bytes");
+    }
+
+    /// A throttled connection must not set the pace for the whole window.
+    ///
+    /// This reproduces what a user's origin actually did: it serves the first
+    /// connection at full speed and every other one at a crawl. With a fixed
+    /// piece per connection the window took as long as the slowest piece —
+    /// measured at 0.1% median error across 71 real windows, with the fast
+    /// connection idle for twenty seconds of each. With a shared queue the
+    /// fast connection keeps taking chunks, so the window finishes in roughly
+    /// the time that one fast connection needs for the whole thing.
+    #[test]
+    fn a_throttled_connection_does_not_set_the_window_pace() {
+        // 32 MiB = 32 chunks for 8 connections, so there is real work to
+        // steal. With one chunk per connection the queue cannot help and the
+        // test would prove nothing.
+        let total = 32 * 1024 * 1024u64;
+        // Per-connection BANDWIDTH: the first socket is fast, the rest crawl.
+        // Throttling per byte, not per request, is what a real origin does —
+        // a per-request delay would penalise the queue's smaller chunks and
+        // flatter the old fixed-piece split.
+        let seen = Arc::new(AtomicUsize::new(0));
+        let data = Arc::new(body(total as usize));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        {
+            let (seen, data) = (seen.clone(), data.clone());
+            std::thread::spawn(move || {
+                for conn in listener.incoming() {
+                    let Ok(mut stream) = conn else { break };
+                    let n = seen.fetch_add(1, Ordering::SeqCst);
+                    let slow = n > 0;
+                    let data = data.clone();
+                    std::thread::spawn(move || {
+                        let Ok(peer) = stream.try_clone() else { return };
+                        let mut reader = BufReader::new(peer);
+                        loop {
+                            let mut range = None;
+                            let mut saw = false;
+                            loop {
+                                let mut line = String::new();
+                                match reader.read_line(&mut line) {
+                                    Ok(0) | Err(_) => return,
+                                    Ok(_) => {}
+                                }
+                                if line == "\r\n" || line == "\n" {
+                                    break;
+                                }
+                                saw = true;
+                                if let Some(v) =
+                                    line.to_ascii_lowercase().strip_prefix("range: bytes=")
+                                {
+                                    if let Some((a, b)) = v.trim().split_once('-') {
+                                        let st: usize = a.trim().parse().unwrap_or(0);
+                                        let en: usize = b.trim().parse().unwrap_or(data.len() - 1);
+                                        range = Some((st, en.min(data.len() - 1)));
+                                    }
+                                }
+                            }
+                            if !saw {
+                                return;
+                            }
+                            // The throttle: a slow connection takes 300 ms per
+                            // chunk, a fast one is immediate.
+                            let (st, en) = range.unwrap_or((0, data.len() - 1));
+                            if slow {
+                                let mib = ((en - st + 1) as u64).div_ceil(1024 * 1024);
+                                std::thread::sleep(Duration::from_millis(300 * mib));
+                            }
+                            let body_ = &data[st..=en];
+                            let head = format!(
+                                "HTTP/1.1 206 Partial Content\r\n\
+                                 Content-Range: bytes {}-{}/{}\r\n\
+                                 Content-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+                                st,
+                                en,
+                                data.len(),
+                                body_.len()
+                            );
+                            if stream.write_all(head.as_bytes()).is_err()
+                                || stream.write_all(body_).is_err()
+                                || stream.flush().is_err()
+                            {
+                                return;
+                            }
+                        }
+                    });
+                }
+            });
+        }
+
+        let mut src = RemoteSource::new(format!("http://{addr}/game.pkg"), total);
+        src.window_bytes = total;
+        src.parallelism = 8;
+        let started = std::time::Instant::now();
+        let got = src.read_range(0, total - 1).expect("window");
+        let elapsed = started.elapsed();
+        assert_eq!(got.len(), total as usize);
+        assert_eq!(&got[..], &body(total as usize)[..], "wrong bytes");
+
+        // The old fixed split gave each of the 8 connections a 4 MiB piece,
+        // so a throttled one took 4 x 300 ms = 1200 ms and set the window's
+        // duration. The queue lets the fast connection absorb the chunks the
+        // slow ones never get to, so the window must come in well under that.
+        let fixed_piece_bound = Duration::from_millis(1200);
+        assert!(
+            elapsed < fixed_piece_bound,
+            "window took {elapsed:?}, no better than the fixed-piece split \
+             ({fixed_piece_bound:?}): the fast connection is still idling \
+             while a throttled one finishes"
+        );
     }
 
     /// Connections must survive from one window to the next.
