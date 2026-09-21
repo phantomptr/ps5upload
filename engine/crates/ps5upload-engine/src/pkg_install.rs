@@ -5129,16 +5129,56 @@ async fn resolve_remote_source(
         content_id: head.content_id,
         title: head.title,
         title_id: head.title_id,
+        fingerprint,
+        // Derive the BGFT type from the package's own category and platform,
+        // exactly as the staged path does. Leaving this as the caller's
+        // override alone meant a link install fell back to the "PS4GD"
+        // default, so a PS5 patch pulled from a URL was typed as a PS4 full
+        // game — and the payload recognises a patch only by a type ending in
+        // "DP". The data-loss guard therefore never armed on the link path,
+        // and a patch shares its base game's content_id: a destructive
+        // fallback tier would re-register that id and WIPE the installed
+        // base. That is the exact failure the guard was added for, already
+        // hardware-confirmed once on the staged path.
+        package_type: req.package_type_override.clone().or_else(|| {
+            ps5upload_pkg::package_type_for_category_and_platform(&head.category, &head.platform)
+        }),
         category: head.category,
         app_ver: head.app_ver,
-        fingerprint,
-        package_type: req.package_type_override.clone(),
         platform: head.platform,
         icon_png_base64: None,
         warnings: vec![],
     };
     // `parts` stays empty: every range read is proxied, never read off disk.
     Ok((vec![], vec![], total_size, metadata, Some(remote)))
+}
+
+#[cfg(test)]
+mod remote_type_tests {
+    /// A link install must derive its BGFT package type from the package,
+    /// not fall back to the PS4-full-game default.
+    ///
+    /// The payload recognises a patch only by a type ending in "DP", and a
+    /// patch shares its base game's content_id — so a mistyped patch lets a
+    /// destructive fallback tier re-register that id and wipe the installed
+    /// base. The staged path derives the type; the link path did not, and
+    /// typed every PS5 patch pulled from a URL as "PS4GD".
+    #[test]
+    fn category_and_platform_decide_the_type_for_every_platform() {
+        for (cat, plat, want) in [
+            ("gd", "ps5", "PS5GD"),
+            ("gp", "ps5", "PS5DP"),
+            ("ac", "ps5", "PS5AC"),
+            ("gd", "ps4", "PS4GD"),
+            ("gp", "ps4", "PS4DP"),
+        ] {
+            assert_eq!(
+                ps5upload_pkg::package_type_for_category_and_platform(cat, plat).as_deref(),
+                Some(want),
+                "{cat}/{plat}"
+            );
+        }
+    }
 }
 
 #[cfg(target_os = "android")]
