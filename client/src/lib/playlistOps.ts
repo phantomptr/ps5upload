@@ -334,3 +334,38 @@ export function sanitiseSleepMs(raw: number | string): number {
   if (!Number.isFinite(n) || n < 0) return 0;
   return Math.floor(n);
 }
+
+/**
+ * Does this playlist step send ps5upload's OWN helper payload?
+ *
+ * Matters for the auto-loader, which fires on a cold -> ready edge — the
+ * moment the helper reports UP. A step that re-sends our helper at that point
+ * makes the new instance take over from the running one, which shuts the old
+ * one down (`mgmt loop exiting shutdown=1`) and drops the connection. That
+ * drop produces another cold -> ready edge, which fires the auto-loader again.
+ *
+ * Matched by filename prefix, the same way the payload identifies its own
+ * processes: our names are "ps5upload.elf", "ps5upload-wake" and friends,
+ * while the generic "payload.elf" that elfldr gives every raw-streamed payload
+ * belongs to everyone and must NOT match — treating that as ours would skip
+ * unrelated homebrew from a user's playlist.
+ */
+export function stepSendsOurHelper(step: PlaylistStep): boolean {
+  const name = (step.path || "").split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  const id = (step.payloadId || "").toLowerCase();
+  const isOurs = (v: string) => {
+    if (!v.startsWith("ps5upload")) return false;
+    const after = v.charAt("ps5upload".length);
+    // Only a real delimiter: "ps5uploader.elf" is somebody else's.
+    return after === "" || after === "." || after === "-" || after === "_";
+  };
+  return isOurs(name) || isOurs(id);
+}
+
+/** The first step in this playlist that would re-send our own helper, or
+ *  null when none does. */
+export function playlistResendsOurHelper(
+  steps: PlaylistStep[],
+): PlaylistStep | null {
+  return steps.find(stepSendsOurHelper) ?? null;
+}

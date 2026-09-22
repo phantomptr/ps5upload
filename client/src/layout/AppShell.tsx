@@ -20,6 +20,7 @@ import {
 } from "../lib/prearmDpi";
 import { usePayloadPlaylistsStore } from "../state/payloadPlaylists";
 import { log } from "../state/logs";
+import { playlistResendsOurHelper } from "../lib/playlistOps";
 import { useUpdateStore } from "../state/update";
 import { engineApi } from "../api/engine";
 import { payloadCheck, portCheck } from "../api/ps5";
@@ -366,13 +367,30 @@ function useStatusPolling() {
               : undefined;
             const firedAt = autoLoaderFiredAtRef.current[key] ?? 0;
             const onCooldown = Date.now() - firedAt < AUTO_LOADER_COOLDOWN_MS;
-            if (cfg.enabled && auto && auto.steps.length > 0 && !onCooldown) {
+            // A playlist that re-sends OUR OWN helper cannot run here. This
+            // edge fires the moment the helper reports UP, so sending it again
+            // makes the new instance take over from the running one, shutting
+            // that one down and dropping the connection — which produces
+            // another edge, which fires this again. Refuse and say so, rather
+            // than leaving someone chasing a connection that drops every time
+            // they touch the app.
+            const selfSend = auto
+              ? playlistResendsOurHelper(auto.steps)
+              : null;
+            if (cfg.enabled && auto && auto.steps.length > 0 && !onCooldown && !selfSend) {
               autoLoaderFiredAtRef.current[key] = Date.now();
               log.info(
                 "connection",
                 `auto-loader: running "${auto.name}" on ${probedHost}`,
               );
               void pl.run(auto.id, probedHost, PS5_LOADER_PORT);
+            } else if (cfg.enabled && selfSend) {
+              log.warn(
+                "connection",
+                `auto-loader: not running "${auto?.name}" — step "${selfSend.path || selfSend.payloadId}" ` +
+                  `sends ps5upload's own helper, which would take over the running one and drop this connection. ` +
+                  `Remove that step; the helper is already up whenever this runs.`,
+              );
             } else if (cfg.enabled) {
               // Enabled but didn't fire — record WHY, so "the auto-loader
               // didn't run" reports have a trace instead of silence.

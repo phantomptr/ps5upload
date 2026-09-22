@@ -14,6 +14,8 @@ import {
   resolveRepoStepPath,
   sanitiseSleepMs,
   type Playlist,
+  stepSendsOurHelper,
+  playlistResendsOurHelper,
   type PlaylistStep,
   type RepoResolveDeps,
 } from "./playlistOps";
@@ -276,5 +278,37 @@ describe("resolveRepoStepPath", () => {
       },
     });
     await expect(resolveRepoStepPath("k", deps, true)).rejects.toThrow(/offline/);
+  });
+});
+
+describe("auto-loader self-send guard", () => {
+  const step = (path: string, payloadId?: string): PlaylistStep =>
+    ({ path, payloadId }) as PlaylistStep;
+
+  /* Re-sending our own helper on a ready edge takes over the running
+   * instance, drops the connection, and produces another ready edge. */
+  it("recognises our own helper by name", () => {
+    expect(stepSendsOurHelper(step("C:/tools/ps5upload.elf"))).toBe(true);
+    expect(stepSendsOurHelper(step("/home/u/ps5upload-wake.elf"))).toBe(true);
+    expect(stepSendsOurHelper(step("", "ps5upload"))).toBe(true);
+  });
+
+  /* "payload.elf" is what elfldr calls EVERY raw-streamed payload. Treating
+   * it as ours would silently skip unrelated homebrew from a user's
+   * playlist — the same trap the payload's own reaper avoids. */
+  it("does not claim payloads that merely look similar", () => {
+    expect(stepSendsOurHelper(step("/x/payload.elf"))).toBe(false);
+    expect(stepSendsOurHelper(step("/x/kstuff.elf"))).toBe(false);
+    expect(stepSendsOurHelper(step("/x/ps5uploader.elf"))).toBe(false);
+    expect(stepSendsOurHelper(step("/x/shadowmountplus.elf"))).toBe(false);
+  });
+
+  /* The caller needs the offending step so the log can name it. */
+  it("finds the offending step, or reports none", () => {
+    expect(
+      playlistResendsOurHelper([step("/x/kstuff.elf"), step("/x/ps5upload.elf")])
+        ?.path,
+    ).toBe("/x/ps5upload.elf");
+    expect(playlistResendsOurHelper([step("/x/kstuff.elf")])).toBeNull();
   });
 });
