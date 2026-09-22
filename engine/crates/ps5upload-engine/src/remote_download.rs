@@ -21,9 +21,21 @@
 //! The download reuses [`crate::remote_pkg::RemoteSource`], so it gets the
 //! same parallel ranged fetch, adaptive connection count and stall handling
 //! as streaming — the difference is only where the bytes land.
+//!
+//! Android compiles `remote_pkg` out entirely, so the copy loop goes with it
+//! and the handler answers "not available in the Android build". The request
+//! and response types, the path helpers and the registry still compile there
+//! — one client speaks to every engine, so the route must keep its shape and
+//! answer properly rather than 404. Hence the dead-code allowance below,
+//! matching how `InstallStartRequest::insecure_tls` is handled.
+#![cfg_attr(target_os = "android", allow(dead_code))]
 
+// Only the copy loop uses these, and that is compiled out on Android.
+#[cfg(not(target_os = "android"))]
 use std::io::{Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+#[cfg(not(target_os = "android"))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -36,6 +48,11 @@ use serde::{Deserialize, Serialize};
 
 /// Bytes pulled from the origin per write. Matches the fetcher's window so a
 /// download is one window fetch followed by one sequential write.
+///
+/// Android compiles the whole remote-fetch path out (see `mod remote_pkg` in
+/// lib.rs), so everything that touches it is gated the same way — the handler
+/// there answers "not available in the Android build" instead.
+#[cfg(not(target_os = "android"))]
 const COPY_WINDOW: u64 = 32 * 1024 * 1024;
 
 /// Where a link-download goes when the caller does not say. Downloads is
@@ -280,6 +297,7 @@ async fn start_handler(
 /// Sequential writes on purpose: the fetcher is already parallel *inside* a
 /// window, so this needs no concurrency of its own, and one append-only
 /// stream is what a spinning disk and a network share both handle best.
+#[cfg(not(target_os = "android"))]
 fn copy_to_file(
     src: &crate::remote_pkg::RemoteSource,
     dl: &Arc<Download>,
