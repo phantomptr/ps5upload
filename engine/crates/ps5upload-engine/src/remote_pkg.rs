@@ -426,11 +426,23 @@ impl RemoteSource {
     /// landing page, or a 405, and a one-byte GET proves the exact thing we
     /// depend on — that ranged reads work and report a total.
     pub fn probe(url: &str) -> Result<RemoteProbe, String> {
+        Self::probe_with_options(url, false)
+    }
+
+    /// As [`probe`](Self::probe), but able to skip certificate verification.
+    ///
+    /// The probe used to verify unconditionally, on the reasoning that a
+    /// caller opts out "for the download". That made the user-facing option
+    /// dead on arrival: the probe runs FIRST, so a self-signed origin failed
+    /// here and the download it was meant to govern was never reached.
+    /// Hardware-checked against a self-signed origin — with the box ticked,
+    /// the install still ended at `invalid peer certificate`.
+    ///
+    /// The choice belongs to the same install either way, so both legs honour
+    /// it. Verification stays on unless the caller explicitly asks.
+    pub fn probe_with_options(url: &str, insecure_tls: bool) -> Result<RemoteProbe, String> {
         // A single one-byte GET; one pooled connection is all it can use.
-        // Probe verifies certificates: a caller that wants them skipped is
-        // opting in for the DOWNLOAD, and a probe failure is a clearer signal
-        // than silently trusting anything at this stage.
-        let agent = build_agent(1, false);
+        let agent = build_agent(1, insecure_tls);
         let probe_started = std::time::Instant::now();
         let resp = agent
             .get(url)

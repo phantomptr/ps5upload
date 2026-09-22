@@ -5130,7 +5130,7 @@ async fn resolve_remote_source(
     // Probe and header-parse are blocking HTTP; keep them off the reactor so
     // concurrent installs for other consoles keep being served.
     let (remote, meta) = tokio::task::spawn_blocking(move || {
-        let probe = crate::remote_pkg::RemoteSource::probe(&owned)?;
+        let probe = crate::remote_pkg::RemoteSource::probe_with_options(&owned, insecure_tls)?;
         let remote = Arc::new(crate::remote_pkg::RemoteSource::new_with_options(
             owned,
             probe.total_size,

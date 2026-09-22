@@ -42,6 +42,7 @@ mod local_fs;
 mod log_dedup;
 mod pkg_install;
 mod pkg_sidecar;
+mod remote_download;
 #[cfg(not(target_os = "android"))]
 mod remote_pkg;
 mod smb;
@@ -9303,6 +9304,12 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         // so the pkg routes share the same listener + CORS + body limit.
         .merge(pkg_install::router(std::sync::Arc::new(
             pkg_install::PkgInstallState::default(),
+        )))
+        // Downloading a link to disk before installing it. Separate state for
+        // the same reason as the install sessions: its progress is polled
+        // independently of everything else the engine is doing.
+        .merge(remote_download::router(std::sync::Arc::new(
+            remote_download::DownloadRegistry::default(),
         )))
         // Tauri's renderer performs a few direct fetches to the sidecar for
         // liveness, job polling and streamed resources. Emit CORS headers only
