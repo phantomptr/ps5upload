@@ -141,6 +141,8 @@ pub struct RemoteSource {
     /// Rotate a connection when it is this many times slower than the best
     /// connection seen on this origin. 0 disables rotation.
     rotate_disparity: u64,
+    /// Whether TLS certificate verification is skipped for this source.
+    pub(crate) insecure_tls: bool,
     /// Best single-connection throughput observed so far, in kB/s. Rotation
     /// is judged against this rather than a fixed number, so it fires when an
     /// origin plays favourites and stays quiet when it throttles everyone.
@@ -288,9 +290,20 @@ impl PieceStat {
 /// most of the transfer spent ramping up and none of it at speed, which is
 /// the shape of the 1.9 MB/s reports — a browser or download manager holds
 /// its connections open and never pays this.
-fn build_agent(parallelism: usize) -> ureq::Agent {
+fn build_agent(parallelism: usize, insecure_tls: bool) -> ureq::Agent {
     let keep = parallelism.max(1);
     let config = ureq::Agent::config_builder()
+        // Certificate verification stays ON unless the caller asked for it to
+        // be skipped, per install. With it off, a machine between us and the
+        // origin can substitute the package, so this is never a global
+        // setting and never a default. Same switch as `curl -k`, and it
+        // exists for the same reasons: self-hosted origins, self-signed
+        // certificates, and hosts whose certificate has expired.
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .disable_verification(insecure_tls)
+                .build(),
+        )
         // Read the status ourselves. With ureq's default, a 429 arrives as an
         // opaque error string and is indistinguishable from a dead socket —
         // so it was retried four times in a second and then failed the whole
@@ -344,7 +357,10 @@ impl RemoteSource {
     /// depend on — that ranged reads work and report a total.
     pub fn probe(url: &str) -> Result<RemoteProbe, String> {
         // A single one-byte GET; one pooled connection is all it can use.
-        let agent = build_agent(1);
+        // Probe verifies certificates: a caller that wants them skipped is
+        // opting in for the DOWNLOAD, and a probe failure is a clearer signal
+        // than silently trusting anything at this stage.
+        let agent = build_agent(1, false);
         let resp = agent
             .get(url)
             .header("User-Agent", "ps5upload")
@@ -376,7 +392,18 @@ impl RemoteSource {
         })
     }
 
+    /// Verifying constructor. Only the tests use it — the install path always
+    /// goes through `new_with_options`, because it always has an explicit
+    /// answer for whether the user asked to skip certificate checks.
+    #[cfg(test)]
     pub fn new(url: String, total_size: u64) -> Self {
+        Self::new_with_options(url, total_size, false)
+    }
+
+    /// As `new`, but `insecure_tls` skips certificate verification for every
+    /// request this source makes. Off is the only safe default; see
+    /// `build_agent`.
+    pub fn new_with_options(url: String, total_size: u64, insecure_tls: bool) -> Self {
         let window_bytes =
             env_u64("PS5UPLOAD_URL_WINDOW_MB", DEFAULT_WINDOW_MB, 1, 512) * 1024 * 1024;
         let parallelism =
@@ -402,8 +429,9 @@ impl RemoteSource {
             rotate_disparity,
             best_conn_kbps: AtomicU64::new(0),
             worker_agents: (0..parallelism.max(1))
-                .map(|_| Mutex::new(build_agent(1)))
+                .map(|_| Mutex::new(build_agent(1, insecure_tls)))
                 .collect(),
+            insecure_tls,
             max_windows,
             cache: Mutex::new(VecDeque::new()),
             fetch_lock: Mutex::new(()),
@@ -630,7 +658,7 @@ impl RemoteSource {
                                 && rotations < MAX_ROTATIONS_PER_WINDOW
                             {
                                 rotations += 1;
-                                agent = build_agent(1);
+                                agent = build_agent(1, self.insecure_tls);
                             }
                         }
                         if rotations > 0 {
@@ -942,6 +970,19 @@ impl RemoteSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Certificate verification is only skipped when a caller explicitly asks.
+    ///
+    /// Asserted on the plumbing rather than a live handshake: standing up a
+    /// bad-certificate server here would test rustls, not us. What matters is
+    /// that the default constructor can never produce an unverified source.
+    #[test]
+    fn insecure_tls_is_off_unless_asked_for() {
+        let a = RemoteSource::new("https://h.example/g.pkg".to_string(), 1);
+        assert!(!a.insecure_tls, "default must verify certificates");
+        let b = RemoteSource::new_with_options("https://h.example/g.pkg".to_string(), 1, true);
+        assert!(b.insecure_tls, "explicit opt-in must be honoured");
+    }
 
     #[test]
     fn total_from_content_range_reads_the_total_and_rejects_unknown_lengths() {
@@ -1512,7 +1553,7 @@ pub(crate) mod origin_tests {
         let mut src = RemoteSource::new(format!("http://{addr}/game.pkg"), total);
         src.window_bytes = total;
         src.parallelism = 4;
-        src.worker_agents = (0..4).map(|_| Mutex::new(build_agent(1))).collect();
+        src.worker_agents = (0..4).map(|_| Mutex::new(build_agent(1, false))).collect();
         let got = src.read_range(0, total - 1).expect("window");
         assert_eq!(got.len(), total as usize);
 
@@ -1611,7 +1652,7 @@ pub(crate) mod origin_tests {
         let mut src = RemoteSource::new(format!("http://{addr}/game.pkg"), total);
         src.window_bytes = total;
         src.parallelism = 2;
-        src.worker_agents = (0..2).map(|_| Mutex::new(build_agent(1))).collect();
+        src.worker_agents = (0..2).map(|_| Mutex::new(build_agent(1, false))).collect();
         // The disparity rule needs a fast connection to compare against, which
         // this origin provides: the first socket is immediate and the rest are
         // throttled, so `best_conn_kbps` climbs high and the slow ones fall

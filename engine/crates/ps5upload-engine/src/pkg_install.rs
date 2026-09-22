@@ -1039,6 +1039,18 @@ pub struct InstallStartRequest {
     /// the user may set it.
     #[serde(default)]
     pub allow_destructive_reinstall: bool,
+    /// Skip TLS certificate verification when THIS COMPUTER downloads the
+    /// package from `remote_url`. Per install, never global, default off.
+    ///
+    /// Has no effect on a direct install, where the console performs its own
+    /// handshake and we have no say in what it accepts — the client disables
+    /// the option in that mode rather than letting it silently do nothing.
+    #[serde(default)]
+    // Read only on platforms that can install from a link; the Android build
+    // compiles the remote path out entirely but must still accept the field
+    // so one client speaks to every engine.
+    #[cfg_attr(target_os = "android", allow(dead_code))]
+    pub insecure_tls: bool,
     /// Either `path` (single .pkg) or `split_root` (lead `.pkg` of a
     /// split set) must be set. `split_root` triggers split-pkg
     /// detection — we look for `<root>.0`, `<root>.1`, ... siblings.
@@ -5088,13 +5100,15 @@ async fn resolve_remote_source(
         return Err("remote_url cannot be combined with local_ps5_path".into());
     }
     let owned = url.to_string();
+    let insecure_tls = req.insecure_tls;
     // Probe and header-parse are blocking HTTP; keep them off the reactor so
     // concurrent installs for other consoles keep being served.
     let (remote, meta) = tokio::task::spawn_blocking(move || {
         let probe = crate::remote_pkg::RemoteSource::probe(&owned)?;
-        let remote = Arc::new(crate::remote_pkg::RemoteSource::new(
+        let remote = Arc::new(crate::remote_pkg::RemoteSource::new_with_options(
             owned,
             probe.total_size,
+            insecure_tls,
         ));
         let read_at = |offset: u64, len: u64| -> Option<Vec<u8>> {
             if len == 0 {
@@ -5229,6 +5243,9 @@ async fn remote_probe_handler(Json(req): Json<RemoteProbeRequest>) -> Response<B
     let probe_req = InstallStartRequest {
         ps5_addr: String::new(),
         allow_destructive_reinstall: false,
+        // A probe only reads a byte range to identify the package; it always
+        // verifies certificates regardless of the install's own choice.
+        insecure_tls: false,
         path: None,
         split_root: None,
         remote_url: Some(url.clone()),
