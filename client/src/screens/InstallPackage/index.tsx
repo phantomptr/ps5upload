@@ -58,6 +58,7 @@ import {
   type PkgEntry,
   type PkgAlternativeSelections,
 } from "../../state/pkgLibrary";
+import { useLinkInstallPrefs } from "../../state/linkInstallPrefs";
 import { useInstallSettingsStore } from "../../state/installSettings";
 import { pkgCategoryLabel, isAddonCategory } from "../../lib/pkgStagingPath";
 import {
@@ -493,6 +494,12 @@ export default function InstallPackageScreen() {
   const install = usePkgLibrary(host, (s) => s.install);
   const installAll = usePkgLibrary(host, (s) => s.installAll);
   const installStream = usePkgLibrary(host, (s) => s.installStream);
+  // How this console should fetch a link, remembered per host — the right
+  // answer follows the link, and two consoles can sit behind different ones.
+  const linkMode = useLinkInstallPrefs((s) => s.modeFor(host));
+  const linkInsecure = useLinkInstallPrefs((s) => s.insecureFor(host));
+  const setLinkMode = useLinkInstallPrefs((s) => s.setMode);
+  const setLinkInsecure = useLinkInstallPrefs((s) => s.setInsecure);
   const installUrl = usePkgLibrary(host, (s) => s.installUrl);
   const cancelPendingInstall = usePkgLibrary(
     host,
@@ -893,7 +900,9 @@ export default function InstallPackageScreen() {
     if (!approved) return;
     setStreaming(true);
     try {
-      const result = await installUrl(remoteUrl.trim(), host);
+      const result = await installUrl(remoteUrl.trim(), host, {
+        mode: linkMode,
+      });
       const message =
         result.message ??
         (result.ok
@@ -1354,6 +1363,51 @@ export default function InstallPackageScreen() {
           <p className="my-1 text-xs text-[var(--color-muted)]">
             {tr("pkglib.url.help", "This computer downloads the package over several connections at once and feeds it to the PS5 on your network, so the transfer runs at your line speed rather than the console's slower single stream. Nothing is staged on either machine, so a 100 GB game needs no spare space. The link must be a direct download that supports byte ranges. Keep this computer awake until the install finishes.")}
           </p>
+          <fieldset className="my-2 space-y-1.5">
+            <legend className="sr-only">
+              {tr("pkglib.url.title", "Install from HTTP(S) link")}
+            </legend>
+            {(["direct", "accelerated"] as const).map((m) => (
+              <label key={m} className="flex items-start gap-2 text-xs">
+                <input
+                  type="radio"
+                  name="link-install-mode"
+                  className="mt-0.5"
+                  checked={linkMode === m}
+                  onChange={() => setLinkMode(host, m)}
+                />
+                <span>
+                  <span className="text-[var(--color-text)]">
+                    {tr(`pkglib.url.mode.${m}`)}
+                  </span>
+                  <span className="block text-[var(--color-muted)]">
+                    {tr(`pkglib.url.mode.${m}_hint`)}
+                  </span>
+                </span>
+              </label>
+            ))}
+            <label className="flex items-start gap-2 text-xs">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                // Only meaningful when THIS computer does the downloading: in
+                // direct mode the console runs its own TLS handshake and we
+                // have no say in what it accepts. Disabled rather than hidden
+                // so the reason can be read.
+                checked={linkInsecure && linkMode === "accelerated"}
+                disabled={linkMode === "direct"}
+                onChange={(e) => setLinkInsecure(host, e.currentTarget.checked)}
+              />
+              <span className={linkMode === "direct" ? "opacity-60" : undefined}>
+                <span className="text-[var(--color-text)]">
+                  {tr("pkglib.url.insecure")}
+                </span>
+                <span className="block text-[var(--color-muted)]">
+                  {tr("pkglib.url.insecure_hint")}
+                </span>
+              </span>
+            </label>
+          </fieldset>
           <div className="flex flex-wrap gap-2">
             <input
               id="pkg-remote-url"

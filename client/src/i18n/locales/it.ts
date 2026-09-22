@@ -1311,6 +1311,12 @@ os_notify_hint: "Esegui il mirroring delle notifiche in-app (trasferimento effet
 
 // Libreria pacchetti (schermata Installa pacchetto ridisegnata — solo DPI)
 "pkglib.install": "Installa",
+"pkglib.url.mode.direct": "Lascia scaricare alla PS5",
+"pkglib.url.mode.direct_hint": "Il più veloce se il link è rapido o vicino, e puoi chiudere l'app una volta avviato. La PS5 deve poter raggiungere il link.",
+"pkglib.url.mode.accelerated": "Scarica tramite questo computer",
+"pkglib.url.mode.accelerated_hint": "Meglio con link lenti o lontani, e funziona anche se solo questo computer raggiunge il link. Tienilo acceso fino alla fine.",
+"pkglib.url.insecure": "Salta il controllo del certificato",
+"pkglib.url.insecure_hint": "Per un server tuo o un sito con certificato scaduto. Vale solo se scarica questo computer.",
 "pkglib.reinstall": "Reinstalla",
 "pkglib.delete": "Elimina",
 "pkglib.installing": "Installazione…",

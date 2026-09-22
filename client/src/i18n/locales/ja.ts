@@ -1312,6 +1312,12 @@ os_notify_hint: "アプリ内通知（転送完了、エラーなど）をオペ
 
 // パッケージライブラリ（再設計された「パッケージをインストール」画面 — DPI 専用）
 "pkglib.install": "インストール",
+"pkglib.url.mode.direct": "PS5 にダウンロードさせる",
+"pkglib.url.mode.direct_hint": "リンクが高速または近い場合に最速で、開始後はアプリを閉じられます。PS5 自身がリンクに到達できる必要があります。",
+"pkglib.url.mode.accelerated": "このパソコン経由でダウンロード",
+"pkglib.url.mode.accelerated_hint": "低速または遠いリンクで有利で、このパソコンだけがリンクに到達できる場合でも動作します。完了までスリープさせないでください。",
+"pkglib.url.insecure": "証明書の確認をスキップ",
+"pkglib.url.insecure_hint": "自分のサーバーや証明書が期限切れのサイト向け。このパソコンがダウンロードする場合のみ有効です。",
 "pkglib.reinstall": "再インストール",
 "pkglib.delete": "削除",
 "pkglib.installing": "インストール中…",

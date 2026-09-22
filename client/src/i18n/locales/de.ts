@@ -1312,6 +1312,12 @@ os_notify_hint: "Spiegeln Sie In-App-Benachrichtigungen (Übertragung abgeschlos
 
 // Paketbibliothek (neu gestalteter Bildschirm „Paket installieren" — nur DPI)
 "pkglib.install": "Installieren",
+"pkglib.url.mode.direct": "Die PS5 herunterladen lassen",
+"pkglib.url.mode.direct_hint": "Am schnellsten bei schnellen oder nahen Links; du kannst die App nach dem Start schließen. Die PS5 muss den Link selbst erreichen können.",
+"pkglib.url.mode.accelerated": "Über diesen Computer herunterladen",
+"pkglib.url.mode.accelerated_hint": "Besser bei langsamen oder weit entfernten Links und funktioniert auch, wenn nur dieser Computer den Link erreicht. Lass den Computer bis zum Ende wach.",
+"pkglib.url.insecure": "Zertifikatsprüfung überspringen",
+"pkglib.url.insecure_hint": "Für den eigenen Server oder eine Seite mit veraltetem Zertifikat. Gilt nur, wenn dieser Computer herunterlädt.",
 "pkglib.reinstall": "Neu installieren",
 "pkglib.delete": "Löschen",
 "pkglib.installing": "Wird installiert…",

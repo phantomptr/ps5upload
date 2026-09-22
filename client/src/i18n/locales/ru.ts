@@ -1311,6 +1311,12 @@ os_notify_hint: "Зеркало уведомлений в приложении (
 
 // === Package Library (pkglib.*) — appended ru translations ===
 "pkglib.install": "Установить",
+"pkglib.url.mode.direct": "Пусть PS5 скачает сама",
+"pkglib.url.mode.direct_hint": "Быстрее всего при быстрой или близкой ссылке; после запуска приложение можно закрыть. PS5 должна сама открывать ссылку.",
+"pkglib.url.mode.accelerated": "Скачивать через этот компьютер",
+"pkglib.url.mode.accelerated_hint": "Лучше на медленных или далёких ссылках и работает, даже если ссылка доступна только этому компьютеру. Не давайте ему уснуть.",
+"pkglib.url.insecure": "Пропустить проверку сертификата",
+"pkglib.url.insecure_hint": "Для своего сервера или сайта с просроченным сертификатом. Действует только при загрузке этим компьютером.",
 "pkglib.reinstall": "Переустановить",
 "pkglib.delete": "Удалить",
 "pkglib.installing": "Установка…",

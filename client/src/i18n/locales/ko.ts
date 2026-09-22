@@ -1312,6 +1312,12 @@ os_notify_hint: "앱 내 알림 (전송 완료, 오류 등) 을 운영 체제의
 
 // 패키지 라이브러리 (Install Package 화면 — DPI 전용)
 "pkglib.install": "설치",
+"pkglib.url.mode.direct": "PS5가 직접 내려받기",
+"pkglib.url.mode.direct_hint": "링크가 빠르거나 가까울 때 가장 빠르며, 시작 후 앱을 닫아도 됩니다. PS5가 직접 링크에 접근할 수 있어야 합니다.",
+"pkglib.url.mode.accelerated": "이 컴퓨터로 내려받기",
+"pkglib.url.mode.accelerated_hint": "느리거나 먼 링크에 유리하고, 이 컴퓨터만 링크에 접근 가능해도 동작합니다. 끝날 때까지 컴퓨터를 켜 두세요.",
+"pkglib.url.insecure": "인증서 확인 건너뛰기",
+"pkglib.url.insecure_hint": "자체 서버나 만료된 인증서를 쓰는 사이트용. 이 컴퓨터가 내려받을 때만 적용됩니다.",
 "pkglib.reinstall": "재설치",
 "pkglib.delete": "삭제",
 "pkglib.installing": "설치 중…",

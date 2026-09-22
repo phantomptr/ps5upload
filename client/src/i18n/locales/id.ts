@@ -1311,6 +1311,12 @@ os_notify_hint: "Cerminkan pemberitahuan dalam aplikasi (transfer selesai, kesal
 
 // Package Library (layar Install Package yang didesain ulang — khusus DPI)
 "pkglib.install": "Pasang",
+"pkglib.url.mode.direct": "Biarkan PS5 mengunduhnya",
+"pkglib.url.mode.direct_hint": "Tercepat bila tautan cepat atau dekat, dan Anda bisa menutup aplikasi setelah mulai. PS5 harus bisa menjangkau tautannya sendiri.",
+"pkglib.url.mode.accelerated": "Unduh melalui komputer ini",
+"pkglib.url.mode.accelerated_hint": "Lebih baik pada tautan lambat atau jauh, dan tetap bekerja bila hanya komputer ini yang bisa menjangkaunya. Biarkan komputer menyala sampai selesai.",
+"pkglib.url.insecure": "Lewati pemeriksaan sertifikat",
+"pkglib.url.insecure_hint": "Untuk server sendiri atau situs dengan sertifikat kedaluwarsa. Hanya berlaku bila komputer ini yang mengunduh.",
 "pkglib.reinstall": "Pasang ulang",
 "pkglib.delete": "Hapus",
 "pkglib.installing": "Memasang…",

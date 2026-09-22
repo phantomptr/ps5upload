@@ -1311,6 +1311,12 @@ os_notify_hint: "Espelhe as notificações no aplicativo (transferência conclu�
 
 // Package Library (tela Install Package redesenhada — somente DPI)
 "pkglib.install": "Instalar",
+"pkglib.url.mode.direct": "Deixar o PS5 baixar",
+"pkglib.url.mode.direct_hint": "Mais rápido quando o link é veloz ou próximo, e você pode fechar o app depois de iniciar. O PS5 precisa alcançar o link sozinho.",
+"pkglib.url.mode.accelerated": "Baixar por este computador",
+"pkglib.url.mode.accelerated_hint": "Melhor em links lentos ou distantes, e funciona mesmo se só este computador alcançar o link. Mantenha-o ligado até terminar.",
+"pkglib.url.insecure": "Ignorar a verificação do certificado",
+"pkglib.url.insecure_hint": "Para seu próprio servidor ou um site com certificado vencido. Só vale quando este computador baixa.",
 "pkglib.reinstall": "Reinstalar",
 "pkglib.delete": "Excluir",
 "pkglib.installing": "Instalando…",

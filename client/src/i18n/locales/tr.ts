@@ -1311,6 +1311,12 @@ os_notify_hint: "Uygulama içi bildirimleri (aktarım yapıldı, hatalar vb.) i�
 
 // Package Library (yeniden tasarlanan Paket Yükle ekranı — yalnızca DPI)
 "pkglib.install": "Yükle",
+"pkglib.url.mode.direct": "İndirmeyi PS5 yapsın",
+"pkglib.url.mode.direct_hint": "Bağlantı hızlı veya yakınsa en hızlısıdır ve başladıktan sonra uygulamayı kapatabilirsiniz. PS5'in bağlantıya kendisi erişebilmesi gerekir.",
+"pkglib.url.mode.accelerated": "Bu bilgisayar üzerinden indir",
+"pkglib.url.mode.accelerated_hint": "Yavaş veya uzak bağlantılarda daha iyidir ve bağlantıya yalnızca bu bilgisayar erişse bile çalışır. Bitene kadar uyutmayın.",
+"pkglib.url.insecure": "Sertifika kontrolünü atla",
+"pkglib.url.insecure_hint": "Kendi sunucunuz veya süresi geçmiş sertifikalı site için. Yalnızca bu bilgisayar indirirken geçerlidir.",
 "pkglib.reinstall": "Yeniden yükle",
 "pkglib.delete": "Sil",
 "pkglib.installing": "Yükleniyor…",

@@ -1318,6 +1318,12 @@ os_notify_hint: "将应用内通知（传输完成、错误等）镜像到操作
 
 // Package Library
 "pkglib.install": "安装",
+"pkglib.url.mode.direct": "让 PS5 自己下载",
+"pkglib.url.mode.direct_hint": "链接快或距离近时最快，开始后即可关闭本应用。PS5 必须自己能访问该链接。",
+"pkglib.url.mode.accelerated": "通过这台电脑下载",
+"pkglib.url.mode.accelerated_hint": "链接慢或距离远时更好，且仅这台电脑能访问链接时也可用。完成前请勿让电脑休眠。",
+"pkglib.url.insecure": "跳过证书检查",
+"pkglib.url.insecure_hint": "用于自建服务器或证书过期的站点。仅在这台电脑下载时生效。",
 "pkglib.reinstall": "重新安装",
 "pkglib.delete": "删除",
 "pkglib.installing": "正在安装…",
