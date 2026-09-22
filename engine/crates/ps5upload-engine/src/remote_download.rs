@@ -77,7 +77,6 @@ pub struct Download {
     pub done: AtomicBool,
     pub cancelled: AtomicBool,
     pub error: Mutex<Option<String>>,
-    pub started_unix: u64,
 }
 
 #[derive(Default)]
@@ -129,13 +128,6 @@ pub struct DownloadCancelRequest {
 
 fn json_err(code: StatusCode, msg: &str) -> Response {
     (code, Json(serde_json::json!({ "error": msg }))).into_response()
-}
-
-fn now_unix() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 pub fn router(state: DownloadStateHandle) -> Router {
@@ -225,7 +217,6 @@ async fn start_handler(
         done: AtomicBool::new(false),
         cancelled: AtomicBool::new(false),
         error: Mutex::new(None),
-        started_unix: now_unix(),
     });
     state
         .items

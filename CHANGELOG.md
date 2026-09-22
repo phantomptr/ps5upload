@@ -4,6 +4,41 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.33.0
+
+**Installing from a link is much faster, there is now a third way to do it,
+and "skip the certificate check" actually works.**
+
+- **Links install about 65% faster.** Measured installing a 101 GB game: 108
+  MB/s, against 65 MB/s before, and it no longer slows to a crawl part way
+  through. ps5upload was getting in its own way — dropping and reopening
+  connections that were already fast, fetching the same piece of the file over
+  and over, and piling on more connections when the site was already
+  struggling. It now downloads about as many bytes as the game actually is,
+  instead of roughly six times that.
+- **New: download the package first, then install it.** The third choice
+  alongside letting the PS5 fetch the link and streaming it through this
+  computer. It is the one to pick when a link keeps dying part way through:
+  the download finishes on its own and can be retried by itself, and the
+  install afterwards never touches the internet. It needs room on your disk
+  for the package; the other two do not.
+- **"Skip the certificate check" was doing nothing.** Ticking it made no
+  difference — the setting never reached the downloader. Fixed, and checked
+  against a server with a self-signed certificate: off it refuses, on it
+  downloads. It still applies only when this computer is downloading, since
+  the PS5 checks certificates itself.
+- **A clearer message when the PS5 refuses a link.** The console's installer
+  will not accept a link longer than 127 characters, and many library links
+  are longer than that. It used to say something about re-adding the package
+  to your library, which made no sense for a pasted link. It now explains the
+  length limit and points you at the two options that do not have it.
+- Cancelling a link download now deletes the half-finished file instead of
+  leaving something that looks like a real package.
+- For developers: the app can be built and smoke-tested on a headless Android
+  emulator, so Android changes no longer need a phone plugged in.
+
+---
+
 ## 5.32.0
 
 **You now choose how an install from a link downloads: let the PS5 fetch it

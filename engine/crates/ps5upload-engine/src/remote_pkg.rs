@@ -425,11 +425,8 @@ impl RemoteSource {
     /// and CDNs answer `HEAD` with a wrong length, a redirect to an HTML
     /// landing page, or a 405, and a one-byte GET proves the exact thing we
     /// depend on — that ranged reads work and report a total.
-    pub fn probe(url: &str) -> Result<RemoteProbe, String> {
-        Self::probe_with_options(url, false)
-    }
-
-    /// As [`probe`](Self::probe), but able to skip certificate verification.
+    /// Able to skip certificate verification, because the caller's choice
+    /// has to reach BOTH legs of one install.
     ///
     /// The probe used to verify unconditionally, on the reasoning that a
     /// caller opts out "for the download". That made the user-facing option
@@ -1706,7 +1703,7 @@ pub(crate) mod origin_tests {
         let addr = spawn_keepalive_origin(body(total), sockets);
         // A path and query of the shape a real signed link has.
         let url = format!("http://{addr}/pkg/game.pkg?token=SECRET123&exp=999");
-        let probe = RemoteSource::probe(&url).expect("probe");
+        let probe = RemoteSource::probe_with_options(&url, false).expect("probe");
         assert_eq!(probe.total_size, total as u64);
 
         // Derive the host the same way the log does, and check the secret is
@@ -1734,7 +1731,7 @@ pub(crate) mod origin_tests {
             eprintln!("set PS5UPLOAD_TEST_URL");
             return;
         };
-        let probe = RemoteSource::probe(&url).expect("probe");
+        let probe = RemoteSource::probe_with_options(&url, false).expect("probe");
         let threads: usize = std::env::var("PS5UPLOAD_URL_THREADS")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -2404,7 +2401,8 @@ pub(crate) mod origin_tests {
         let data = body(5000);
         let origin = spawn_origin(data, 0, false);
         let probe =
-            RemoteSource::probe(&format!("http://{}/game.pkg", origin.addr)).expect("probe ok");
+            RemoteSource::probe_with_options(&format!("http://{}/game.pkg", origin.addr), false)
+                .expect("probe ok");
         assert_eq!(probe.total_size, 5000);
         assert_eq!(probe.filename, "game.pkg");
     }
@@ -2412,8 +2410,9 @@ pub(crate) mod origin_tests {
     #[test]
     fn probe_rejects_an_origin_that_ignores_ranges() {
         let origin = spawn_origin(body(5000), 0, true);
-        let err = RemoteSource::probe(&format!("http://{}/game.pkg", origin.addr))
-            .expect_err("a 200 origin must be rejected");
+        let err =
+            RemoteSource::probe_with_options(&format!("http://{}/game.pkg", origin.addr), false)
+                .expect_err("a 200 origin must be rejected");
         assert!(err.contains("206"), "unhelpful message: {err}");
     }
 
