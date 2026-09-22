@@ -7,30 +7,34 @@ What's new in ps5upload, written for humans.
 ## 5.32.0
 
 **You now choose how an install from a link downloads: let the PS5 fetch it
-itself, or have this computer fetch it faster over many connections.**
+itself, or have this computer fetch it over many connections.**
 
 - **New: let the PS5 download the link itself.** ps5upload hands the console
-  the link and steps out of the way — this computer sends nothing after that,
-  so you can close the app. On a quick or nearby link this is the fastest
-  option: measured at 114 MB/s installing a 101 GB game from a local server.
-  The PS5 has to be able to reach the link itself, and it only opens a couple
-  of connections, so it is not the best choice for a slow or distant one.
-- **Downloading through this computer is still the default**, and got faster.
-  It now opens more connections when opening more connections actually helps,
-  and fewer when the site pushes back — instead of always using eight. It also
-  keeps fetching further ahead rather than pausing every time the PS5 does,
-  which alone was costing about a sixth of the time on a measured install.
+  the link and steps aside — this computer sends nothing after that, so you
+  can close the app. On a quick or nearby link this is the fastest option:
+  measured at 114 MB/s installing a 101 GB game from a local server. The PS5
+  has to be able to reach the link itself, and it only opens a couple of
+  connections, so it is not the best choice for a slow or distant one.
+- **Downloading through this computer is still the default, and got faster.**
+  It now opens more connections when that actually helps and fewer when the
+  site pushes back, instead of always using eight — and keeps fetching ahead
+  instead of pausing every time the PS5 does.
 - **New: skip the certificate check**, for your own server or a site whose
   certificate has expired. Off unless you turn it on, per install, and only
-  when this computer is doing the downloading — the PS5 checks certificates
-  itself and we cannot change that.
-- Both choices are remembered per console, and explained in your own language
-  rather than ours.
+  when this computer is downloading — the PS5 checks certificates itself.
+- Both choices are remembered per console, and explained in your own language.
+- **A dropped connection no longer restarts itself.** If your auto-loader was
+  set to send ps5upload's own helper, it could knock out the copy already
+  running and then do it again. That is now refused, with an explanation.
+- **Problem reports are far more useful.** An unreachable console used to fill
+  the log with the same line dozens of times, and the PS5's own log could come
+  back with two messages shredded together. Both fixed, and reports now record
+  which server a link came from and how far away it is.
 
 If your link installs are still slow, the limit is the site you are
 downloading from. We measured one that gives every connection the same small
-share no matter what, and no amount of cleverness on our side changes what a
-server is willing to send.
+share no matter what, and nothing on our side changes what a server is willing
+to send.
 
 ---
 
