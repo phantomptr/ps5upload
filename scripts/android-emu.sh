@@ -2,7 +2,14 @@
 #
 # Android emulator lifecycle for testing the app without a physical device.
 #
-# Subcommands: create | start | stop | status | test
+# Subcommands: create | start | ensure | stop | status | test
+#
+#   ensure  boots an emulator ONLY if no device is attached, and prints
+#           "booted" or "preexisting" so a caller knows whether it owns the
+#           emulator and should shut it down (see run-android in the Makefile).
+#
+# `test` leaves the emulator running so re-runs skip the ~25s cold boot; set
+# PS5UPLOAD_EMU_TEARDOWN=1 (CI) to shut down one that this run booted.
 #
 # ARTIFACTS LIVE OUTSIDE THE REPO, at ~/.ps5upload/android-test/<stamp>/.
 # That is deliberate and not a style choice: this repo has already leaked
@@ -54,6 +61,13 @@ emu_serial() {
   "$ADB" devices 2>/dev/null | awk 'NR>1 && $1 ~ /^emulator-/ && $2=="device"{print $1; exit}'
 }
 
+# ANY attached device, emulator or physical. `ensure` uses this rather than
+# emu_serial so that a phone plugged in by hand still wins and we never boot a
+# second target behind the developer's back.
+any_device() {
+  "$ADB" devices 2>/dev/null | awk 'NR>1 && $2=="device"{print $1; exit}'
+}
+
 cmd_create() {
   need_tools
   if "$EMULATOR" -list-avds 2>/dev/null | grep -qx "$AVD_NAME"; then
@@ -85,10 +99,23 @@ cmd_start() {
   # state, which turns one bad run into every later run failing the same way.
   # -wipe-data would reset each run; we deliberately keep data so an install
   # survives, matching how a real device behaves between builds.
+  # `set -m` puts the emulator in its OWN process group. Without it a Ctrl-C
+  # aimed at whatever launched us (make, a dev server) is delivered to the
+  # whole group and kills the emulator mid-write -- it dies, but uncleanly,
+  # and the teardown trap never gets to run. Shutdown must go through
+  # `adb emu kill`, which is what cmd_stop does.
+  set -m
   nohup "$EMULATOR" -avd "$AVD_NAME" \
     -no-window -no-audio -no-boot-anim -no-snapshot-save \
     -gpu swiftshader_indirect \
     >"$HOME/.ps5upload/android-emu.log" 2>&1 &
+  set +m
+  local emu_pid=$!
+
+  # A Ctrl-C during the ~25s boot would otherwise orphan a half-booted
+  # emulator: it is in its own process group now, so the signal never reaches
+  # it, and the caller's teardown trap does not exist yet.
+  trap 'say "Interrupted during boot - stopping the emulator..."; kill '"$emu_pid"' 2>/dev/null; exit 130' INT TERM
 
   local waited=0 serial=""
   while [ "$waited" -lt "$BOOT_TIMEOUT_SEC" ]; do
@@ -97,13 +124,32 @@ cmd_start() {
       local booted
       booted="$("$ADB" -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r\n')"
       if [ "$booted" = "1" ]; then
+        trap - INT TERM
         say "✓ Emulator booted ($serial) after ${waited}s"
         return 0
       fi
     fi
     sleep 5; waited=$((waited + 5))
   done
+  trap - INT TERM
+  kill "$emu_pid" 2>/dev/null
   die "emulator did not finish booting within ${BOOT_TIMEOUT_SEC}s — see ~/.ps5upload/android-emu.log"
+}
+
+# Boot an emulator ONLY if nothing is attached, and report on stdout which
+# happened: "booted" (we own it, the caller should shut it down) or
+# "preexisting" (someone else's device or emulator -- leave it alone).
+#
+# All human-readable progress goes to stderr, because the caller reads stdout.
+cmd_ensure() {
+  need_tools
+  if [ -n "$(any_device)" ]; then
+    say "✓ Using the already-attached device ($(any_device))" >&2
+    printf 'preexisting\n'
+    return 0
+  fi
+  cmd_start >&2 || die "could not boot an emulator"
+  printf 'booted\n'
 }
 
 cmd_stop() {
@@ -133,9 +179,17 @@ cmd_test() {
   local apk="client/src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk"
   [ -f "$apk" ] || die "no APK at $apk — run 'make android-build' first"
 
+  # Remember whether an emulator was already up: we only tear down one that
+  # THIS run booted, and only when asked to. Leaving it running is the default
+  # because a cold boot is ~25s and re-runs are the common case; CI wants the
+  # opposite, hence PS5UPLOAD_EMU_TEARDOWN=1.
+  local preexisting; preexisting="$(emu_serial)"
   cmd_start
   local serial; serial="$(emu_serial)"
   [ -n "$serial" ] || die "emulator is not reporting a serial"
+  if [ -z "$preexisting" ] && [ "${PS5UPLOAD_EMU_TEARDOWN:-0}" = "1" ]; then
+    trap 'cmd_stop' EXIT INT TERM
+  fi
 
   local stamp; stamp="$(date +%Y%m%d-%H%M%S)"
   local out="$ART_ROOT/$stamp"
@@ -211,8 +265,9 @@ cmd_test() {
 case "${1:-}" in
   create) cmd_create ;;
   start)  cmd_start ;;
+  ensure) cmd_ensure ;;
   stop)   cmd_stop ;;
   status) cmd_status ;;
   test)   cmd_test ;;
-  *) die "usage: $0 {create|start|stop|status|test}" ;;
+  *) die "usage: $0 {create|start|ensure|stop|status|test}" ;;
 esac

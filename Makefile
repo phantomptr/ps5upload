@@ -179,6 +179,8 @@ help:
 	@echo "  make emu-test         - Build + run the app on a headless emulator, with a screenshot"
 	@echo "  make emu-start        - Boot the test emulator (headless); emu-stop to shut it down"
 	@echo "  make emu-status       - Show AVDs, whether one is running, and where artifacts go"
+	@echo "  make run-android      - Live dev build; boots the emulator if nothing is attached"
+	@echo "      emu-test leaves the emulator up for fast re-runs; PS5UPLOAD_EMU_TEARDOWN=1 stops it"
 	@echo ""
 	@echo "Auto-launch (engine starts at OS login):"
 	@echo "  make install-engine    - Register systemd/launchd/Task Scheduler job"
@@ -598,11 +600,20 @@ android-build: android-deps payload setup-client
 	@apk=$$(find "$(ANDROID_GEN_DIR)/app/build/outputs/apk" -name 'app-*-debug.apk' -print -quit 2>/dev/null); \
 		echo "✓ APK built: $${apk:-under $(ANDROID_GEN_DIR)/app/build/outputs/apk}"
 
+# Boots the headless test emulator when nothing is attached, and shuts down
+# ONLY an emulator this invocation booted -- a phone you plugged in, or an
+# emulator you already had running, is left alone. The trap covers Ctrl-C,
+# which is how `tauri android dev` normally ends.
 run-android: android-deps payload setup-client
 	@test -d $(ANDROID_GEN_DIR) || $(MAKE) android-init
-	@echo "Launching on a connected Android device/emulator (tauri android dev)..."
-	@echo "  Attach one first — check with: adb devices"
-	@cd $(CLIENT_DIR) && $(ANDROID_ENV) npx tauri android dev
+	@state=$$(bash $(CURDIR)/scripts/android-emu.sh ensure) || exit 1; \
+	if [ "$$state" = "booted" ]; then \
+		trap 'trap - EXIT INT TERM; echo ""; echo "Shutting down the emulator this run booted..."; bash $(CURDIR)/scripts/android-emu.sh stop' EXIT INT TERM; \
+	else \
+		echo "  (leaving the existing device/emulator running)"; \
+	fi; \
+	echo "Launching on the attached Android device/emulator (tauri android dev)..."; \
+	cd $(CLIENT_DIR) && $(ANDROID_ENV) npx tauri android dev
 
 #──────────────────────────────────────────────────────────────────────────────
 # Docker — self-hosted engine image. Mirrors what .github/workflows/
