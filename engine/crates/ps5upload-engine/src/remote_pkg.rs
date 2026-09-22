@@ -64,7 +64,13 @@ const DEFAULT_CACHE_WINDOWS: usize = 4;
 /// `PS5UPLOAD_URL_WINDOW_MB`) and wastes origin traffic on a backward seek.
 /// Raise it only with evidence — the `url-install origin fetch` and
 /// `pkg-host serve rate` log lines say which leg is actually the constraint.
-const DEFAULT_READAHEAD_WINDOWS: u64 = 1;
+/// Windows kept in flight ahead of console demand.
+///
+/// Was 1, which left the fetcher idle 16% of a measured install: it finished a
+/// window and then waited for the console to ask before starting the next.
+/// Safe to deepen now that `in_flight` caps total connections regardless of
+/// how many windows are being fetched at once.
+const DEFAULT_READAHEAD_WINDOWS: u64 = 3;
 /// Rotate a worker's connection only when another connection to the SAME
 /// origin has proven this much faster. Reconnecting is only worth a
 /// handshake if a faster slot demonstrably exists.
@@ -161,6 +167,16 @@ pub struct RemoteSource {
     max_parallelism: usize,
     /// Aggregate MB/s of the previous window, for the improve/regress test.
     last_window_mbps: Mutex<f64>,
+    /// Connections in flight across EVERY window being fetched at once.
+    ///
+    /// Readahead fetches a window on its own thread, so without a global
+    /// bound a horizon of 4 windows at 8 connections each would open 32
+    /// sockets — and with the ramp on top, more. This permit pool keeps the
+    /// total at `active` however many windows are in flight, which is what
+    /// makes a deeper horizon safe: it removes the idle time between windows
+    /// without changing how hard we lean on the origin.
+    in_flight: Mutex<usize>,
+    in_flight_freed: std::sync::Condvar,
     /// Whether TLS certificate verification is skipped for this source.
     pub(crate) insecure_tls: bool,
     /// Best single-connection throughput observed so far, in kB/s. Rotation
@@ -191,6 +207,20 @@ pub struct RemoteSource {
     /// the two is actually slow.
     origin_bytes: AtomicU64,
     origin_nanos: AtomicU64,
+}
+
+/// Holds one slot in `RemoteSource::in_flight` until dropped.
+struct ConnectionPermit<'a> {
+    src: &'a RemoteSource,
+}
+
+impl Drop for ConnectionPermit<'_> {
+    fn drop(&mut self) {
+        let mut n = self.src.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+        *n = n.saturating_sub(1);
+        // One waiter is enough: each release frees exactly one slot.
+        self.src.in_flight_freed.notify_one();
+    }
 }
 
 /// Why one ranged GET did not deliver.
@@ -452,6 +482,8 @@ impl RemoteSource {
             active: AtomicUsize::new(parallelism.max(1)),
             max_parallelism,
             last_window_mbps: Mutex::new(0.0),
+            in_flight: Mutex::new(0),
+            in_flight_freed: std::sync::Condvar::new(),
             readahead,
             chunk_bytes,
             rotate_disparity,
@@ -672,7 +704,9 @@ impl RemoteSource {
                             let Some((c_start, c_len, dst)) = next else {
                                 break;
                             };
+                            let _permit = self.acquire_connection();
                             let stat = self.fetch_piece(&agent, c_start, c_len, dst)?;
+                            drop(_permit);
                             let ms = stat.took.as_millis().max(1) as u64;
                             let kbps = stat.bytes / ms; // bytes/ms == kB/s
                             agg.merge(&stat);
@@ -797,6 +831,26 @@ impl RemoteSource {
         );
         self.adapt_parallelism(mbps, rate_limited);
         Ok(buf)
+    }
+
+    /// Block until a connection permit is free, then hold it until dropped.
+    ///
+    /// The cap is read fresh each time rather than captured, so a ramp that
+    /// grows mid-install takes effect on the next chunk instead of the next
+    /// install.
+    fn acquire_connection(&self) -> ConnectionPermit<'_> {
+        let mut n = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            let cap = self.active.load(Ordering::Relaxed).max(1);
+            if *n < cap {
+                *n += 1;
+                return ConnectionPermit { src: self };
+            }
+            n = self
+                .in_flight_freed
+                .wait(n)
+                .unwrap_or_else(|e| e.into_inner());
+        }
     }
 
     /// Move the connection count toward whatever this origin rewards.
@@ -1917,6 +1971,46 @@ pub(crate) mod origin_tests {
         );
     }
 
+    /// Deeper readahead must not multiply connections.
+    ///
+    /// Readahead fetches each window on its own thread. Without a global cap
+    /// a horizon of several windows at N connections each opens N x windows
+    /// sockets, and the ramp would compound it. The permit pool holds the
+    /// total at `active` however many windows are in flight — which is the
+    /// whole reason a deeper horizon is safe.
+    #[test]
+    fn readahead_does_not_multiply_connections() {
+        let total = 16 * 1024 * 1024u64;
+        let sockets = Arc::new(AtomicUsize::new(0));
+        let addr = spawn_keepalive_origin(body(total as usize), sockets.clone());
+        let mut src = RemoteSource::new(format!("http://{addr}/game.pkg"), total);
+        src.window_bytes = 4 * 1024 * 1024;
+        src.parallelism = 3;
+        // Pin, so this measures the permit pool and not the ramp.
+        src.max_parallelism = 3;
+        src.active = AtomicUsize::new(3);
+        src.readahead = 3;
+        src.max_windows = 1;
+        src.worker_agents = (0..3).map(|_| Mutex::new(build_agent(1, false))).collect();
+
+        for w in 0..4u64 {
+            let start = w * src.window_bytes;
+            src.read_range(start, start + src.window_bytes - 1)
+                .expect("window");
+        }
+        // Give any readahead threads a moment to have done their worst.
+        assert!(wait_until(Duration::from_secs(2), || sockets
+            .load(Ordering::SeqCst)
+            > 0));
+
+        let n = sockets.load(Ordering::SeqCst);
+        assert!(
+            n <= 3,
+            "origin saw {n} sockets with a cap of 3: readahead is opening \
+             connections outside the permit pool"
+        );
+    }
+
     /// Connections must survive from one window to the next.
     ///
     /// ureq pools only 3 idle connections per host by default while a window
@@ -2012,7 +2106,13 @@ pub(crate) mod origin_tests {
         // spawn a fetch for the same next window.
         let total = 4 * 1024 * 1024usize;
         let origin = spawn_origin(body(total), 0, false);
-        let s = Arc::new(source_for(&origin, total as u64, 1, 1));
+        let mut src = source_for(&origin, total as u64, 1, 1);
+        // One window of horizon: this test is about DE-DUPLICATION of the same
+        // window, and a deeper horizon legitimately fetches several different
+        // ones, which would be counted here as duplicates. The horizon itself
+        // is covered by `readahead_does_not_multiply_connections`.
+        src.readahead = 1;
+        let s = Arc::new(src);
 
         s.read_range(0, 1023).expect("first read");
         let before = origin.requests.load(Ordering::SeqCst);
