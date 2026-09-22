@@ -2727,6 +2727,11 @@ pub async fn pkg_install_start(
     // the in-process install — the caller finishes via dpi-direct-install. See
     // InstallStartRequest::serve_only. Optional; defaults false (normal install).
     serve_only: Option<bool>,
+    // Skip TLS verification while THIS COMPUTER downloads from remote_url.
+    // Per install, never global, and it has no bearing on a direct install,
+    // where the console performs its own handshake. Optional so an older
+    // caller keeps verification on.
+    insecure_tls: Option<bool>,
 ) -> Result<JsonValue, String> {
     let url = format!("{}/api/pkg/install/start", engine::url());
     let body = serde_json::json!({
@@ -2741,8 +2746,46 @@ pub async fn pkg_install_start(
         "package_fingerprint": package_fingerprint,
         "delete_staging": delete_staging.unwrap_or(true),
         "serve_only": serve_only.unwrap_or(false),
+        "insecure_tls": insecure_tls.unwrap_or(false),
     });
     post_json(&url, &body).await
+}
+
+/// Download a package from a link to this computer's disk, to be installed
+/// from the local file afterwards. Returns immediately with an id to poll;
+/// the transfer runs in the engine.
+#[tauri::command]
+pub async fn pkg_remote_download_start(
+    url: String,
+    insecure_tls: Option<bool>,
+    dest_dir: Option<String>,
+) -> Result<JsonValue, String> {
+    let endpoint = format!("{}/api/pkg/remote/download/start", engine::url());
+    let body = serde_json::json!({
+        "url": url,
+        "insecure_tls": insecure_tls.unwrap_or(false),
+        "dest_dir": dest_dir,
+    });
+    post_json(&endpoint, &body).await
+}
+
+/// Progress of a link download: bytes written, whether it finished, and the
+/// error if it did not.
+#[tauri::command]
+pub async fn pkg_remote_download_status(id: String) -> Result<JsonValue, String> {
+    let endpoint = format!(
+        "{}/api/pkg/remote/download/status?id={}",
+        engine::url(),
+        urlencoding(&id)
+    );
+    get_json(&endpoint).await
+}
+
+/// Stop a link download and delete the partial file.
+#[tauri::command]
+pub async fn pkg_remote_download_cancel(id: String) -> Result<JsonValue, String> {
+    let endpoint = format!("{}/api/pkg/remote/download/cancel", engine::url());
+    post_json(&endpoint, &serde_json::json!({ "id": id })).await
 }
 
 /// Identify the package behind an HTTP(S) link without downloading it, so the

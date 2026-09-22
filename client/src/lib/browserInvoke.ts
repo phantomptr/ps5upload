@@ -754,11 +754,32 @@ export async function browserInvoke<T>(
         package_fingerprint: args["packageFingerprint"],
         delete_staging: args["deleteStaging"] ?? true,
         serve_only: args["serveOnly"] ?? false,
+        insecure_tls: args["insecureTls"] ?? false,
       });
 
     // Identify a package behind a link before committing to the install.
     case "pkg_remote_probe":
       return postJson<T>("/api/pkg/remote/probe", { url: args["url"] });
+
+    // Download-then-install: the engine pulls the package to ITS disk, which
+    // for the browser build is the machine running the engine, not the one
+    // running the browser. Same routes, so the mode works from the web UI.
+    case "pkg_remote_download_start":
+      return postJson<T>("/api/pkg/remote/download/start", {
+        url: args["url"],
+        insecure_tls: args["insecureTls"] ?? false,
+        dest_dir: args["destDir"],
+      });
+
+    case "pkg_remote_download_status":
+      return getJson<T>(
+        `/api/pkg/remote/download/status?id=${uenc(args["id"] as string)}`,
+      );
+
+    case "pkg_remote_download_cancel":
+      return postJson<T>("/api/pkg/remote/download/cancel", {
+        id: args["id"],
+      });
 
     case "pkg_installed_inventory": {
       const addr = args["addr"] as string;

@@ -1367,7 +1367,7 @@ export default function InstallPackageScreen() {
             <legend className="sr-only">
               {tr("pkglib.url.title", "Install from HTTP(S) link")}
             </legend>
-            {(["direct", "accelerated"] as const).map((m) => (
+            {(["direct", "stream", "download"] as const).map((m) => (
               <label key={m} className="flex items-start gap-2 text-xs">
                 <input
                   type="radio"
@@ -1394,7 +1394,7 @@ export default function InstallPackageScreen() {
                 // direct mode the console runs its own TLS handshake and we
                 // have no say in what it accepts. Disabled rather than hidden
                 // so the reason can be read.
-                checked={linkInsecure && linkMode === "accelerated"}
+                checked={linkInsecure && linkMode !== "direct"}
                 disabled={linkMode === "direct"}
                 onChange={(e) => setLinkInsecure(host, e.currentTarget.checked)}
               />

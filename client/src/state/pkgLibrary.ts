@@ -854,6 +854,18 @@ interface PkgLibraryState {
     host: string,
     opts?: { mode?: LinkInstallMode },
   ) => ReturnType<PkgLibraryState["installStream"]>;
+  /** Download a link to this computer's disk, then install the local file.
+   *
+   * The slow leg finishes before the console is involved, so an expiring
+   * link, a dropped connection or a sleeping machine costs a retry of the
+   * download rather than the whole install. Needs room for the package.
+   * Delegates to `installStream` for the install itself, so it shares the
+   * `installing` lock and the same hand-off and verification. */
+  installDownloadedLink: (
+    url: string,
+    host: string,
+    insecureTls: boolean,
+  ) => ReturnType<PkgLibraryState["installStream"]>;
   /** Install every staged, not-yet-installed, idle row sequentially, in
    *  base → update → DLC order (`pkgEntryInstallOrder`). Each item runs the
    *  full readiness-gated `install()` cascade; one failure doesn't abort the
@@ -3527,6 +3539,67 @@ const makePkgLibraryStore = () =>
       );
     },
 
+    async installDownloadedLink(url, host, insecureTls) {
+      // Two legs, reported separately: people need to know which one is slow.
+      // The download is the fragile one; once it finishes, the install is an
+      // ordinary local-file install at LAN speed.
+      let started: { download_id?: string; path?: string; total?: number };
+      try {
+        started = (await invoke("pkg_remote_download_start", {
+          url,
+          insecureTls,
+          destDir: null,
+        })) as { download_id?: string; path?: string; total?: number };
+      } catch (e) {
+        return { ok: false, message: pkgError(e) };
+      }
+      const id = started.download_id;
+      const path = started.path;
+      if (!id || !path) {
+        return {
+          ok: false,
+          message: "The engine did not start a download for that link.",
+        };
+      }
+
+      const total = started.total ?? 0;
+      log.info(
+        "install",
+        `downloading the link to this computer first (${fmtBytes(total)})`,
+      );
+
+      // Poll until it finishes. Deliberately no timeout on the transfer as a
+      // whole: a 100 GB package over a slow link legitimately takes hours,
+      // and the engine reports an error the moment one actually occurs.
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1000));
+        let st: {
+          written?: number;
+          done?: boolean;
+          cancelled?: boolean;
+          error?: string | null;
+        };
+        try {
+          st = (await invoke("pkg_remote_download_status", { id })) as typeof st;
+        } catch (e) {
+          return { ok: false, message: pkgError(e) };
+        }
+        if (st.error) {
+          return {
+            ok: false,
+            message: `The download failed: ${st.error}`,
+          };
+        }
+        if (st.cancelled) {
+          return { ok: false, message: "The download was cancelled." };
+        }
+        if (st.done) break;
+      }
+
+      log.info("install", "download finished; installing from the local file");
+      // From here it is a local file, so the link can expire freely.
+      return get().installStream(path, host);
+    },
     async installUrl(url, host, opts) {
       const trimmed = url.trim();
       let parsed: URL;
@@ -3557,14 +3630,23 @@ const makePkgLibraryStore = () =>
             "Enter an HTTP(S) package URL with no fragment or control characters (max 4093 bytes).",
         };
       }
-      // Direct: hand the URL to the console's own installer via the DPI
-      // daemon and get out of the way — this computer serves nothing and may
-      // then sleep or close. Measured at 114 MB/s from a LAN origin on FW
-      // 5.10. The console opens only two connections, so on a slow or distant
-      // source the accelerated path (many connections) wins instead; that is
-      // why this is the user's choice and not ours.
       const mode =
         opts?.mode ?? useLinkInstallPrefs.getState().modeFor(host);
+      const insecureTls = useLinkInstallPrefs.getState().insecureFor(host);
+
+      // Download first, then install the local file. The only mode that
+      // survives a link dying mid-install: the transfer finishes on its own
+      // and the install afterwards never touches the network.
+      if (mode === "download") {
+        return get().installDownloadedLink(trimmed, host, insecureTls);
+      }
+
+      // Direct: hand the URL to the console's own installer via the DPI
+      // daemon and get out of the way — this computer serves nothing and may
+      // then sleep or close. Measured at ~90 MB/s from a LAN origin on FW
+      // 5.10, against 108 for streaming, because the console opens only two
+      // connections; on a slow or distant source that gap widens. Its
+      // installer also refuses a link longer than 127 bytes.
       if (mode === "direct") {
         try {
           await invoke("pkg_dpi_install", {
@@ -3585,10 +3667,10 @@ const makePkgLibraryStore = () =>
               "watch progress on the console. You can close ps5upload.",
           };
         } catch (e) {
-          // Name the reason and carry on. The accelerated path needs neither
-          // the DPI daemon nor a console-reachable URL, so a refusal here is
-          // not the end of the install — but silently switching would leave
-          // someone wondering why their computer is suddenly busy.
+          // Name the reason and carry on. Streaming needs neither the DPI
+          // daemon nor a console-reachable URL, so a refusal here is not the
+          // end of the install — but silently switching would leave someone
+          // wondering why their computer is suddenly busy.
           const why = pkgError(e);
           log.info(
             "install",
@@ -3820,6 +3902,12 @@ const makePkgLibraryStore = () =>
           // No staging file is created, so deleteStaging is moot — pass
           // false so the engine doesn't record a staging_path to clean up.
           deleteStaging: false,
+          // Per-host "skip the certificate check". This governs only what
+          // THIS COMPUTER accepts while fetching from the origin; the
+          // console's own handshake in direct mode is not ours to relax.
+          insecureTls: useLinkInstallPrefs
+            .getState()
+            .insecureFor(host),
           // Serve-only: create the /pkg-host/ session but DON'T run the
           // in-process InstallByPackage. The standalone DPI process owns Sony's
           // HTTP installer state and returns its real proxy/network error without

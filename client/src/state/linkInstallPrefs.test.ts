@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useLinkInstallPrefs } from "./linkInstallPrefs";
 
 // vitest's default node env has no `window`; the store reads
@@ -26,9 +26,9 @@ describe("link install preferences", () => {
   /* The default must not change behaviour under existing users, and direct
    * cannot yet be verified end to end — the console accepting a URL is not
    * the same as the console reaching it. */
-  it("defaults to accelerated for an unknown host", () => {
+  it("defaults to stream for an unknown host", () => {
     expect(useLinkInstallPrefs.getState().modeFor("10.0.0.5")).toBe(
-      "accelerated",
+      "stream",
     );
   });
 
@@ -38,8 +38,45 @@ describe("link install preferences", () => {
     useLinkInstallPrefs.getState().setMode("10.0.0.5", "direct");
     expect(useLinkInstallPrefs.getState().modeFor("10.0.0.5")).toBe("direct");
     expect(useLinkInstallPrefs.getState().modeFor("10.0.0.6")).toBe(
-      "accelerated",
+      "stream",
     );
+  });
+
+  /* A preference saved before the download-to-disk mode existed must keep
+   * meaning what the person chose. "accelerated" was this mode's old name;
+   * dropping it as unrecognised would silently revert them to the default.
+   *
+   * The migration runs in `loadMap` at module load, so this has to re-import
+   * the module with storage already seeded — setting state by hand would
+   * skip the very code under test. */
+  it("keeps a preference saved under the mode's old name", async () => {
+    installWindowStub({
+      "ps5upload.link_install_mode": JSON.stringify({
+        "10.0.0.7": "accelerated",
+        "10.0.0.9": "direct",
+      }),
+    });
+    vi.resetModules();
+    const fresh = await import("./linkInstallPrefs");
+    // Assert on the stored map, not on modeFor: an unmigrated value is
+    // dropped as unrecognised and modeFor then returns the DEFAULT, which is
+    // currently also "stream" — so reading it through modeFor would pass
+    // whether or not the migration exists.
+    expect(fresh.useLinkInstallPrefs.getState().modes["10.0.0.7"]).toBe(
+      "stream",
+    );
+    // An unrelated saved choice must come through untouched.
+    expect(fresh.useLinkInstallPrefs.getState().modeFor("10.0.0.9")).toBe(
+      "direct",
+    );
+  });
+
+  /* Three modes, and each must survive a round trip: the download mode is
+   * the one people pick when a link keeps dying, so losing it silently would
+   * send them back to the mode that just failed. */
+  it("remembers the download mode", () => {
+    useLinkInstallPrefs.getState().setMode("10.0.0.8", "download");
+    expect(useLinkInstallPrefs.getState().modeFor("10.0.0.8")).toBe("download");
   });
 
   /* Turning off certificate verification is a security decision. It must be
@@ -59,7 +96,7 @@ describe("link install preferences", () => {
       "ps5upload.link_install_insecure": '{"h":"yes"}',
     });
     useLinkInstallPrefs.setState({ modes: {}, insecure: {} });
-    expect(useLinkInstallPrefs.getState().modeFor("h")).toBe("accelerated");
+    expect(useLinkInstallPrefs.getState().modeFor("h")).toBe("stream");
     expect(useLinkInstallPrefs.getState().insecureFor("h")).toBe(false);
   });
 });

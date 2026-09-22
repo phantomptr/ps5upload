@@ -6,38 +6,50 @@ import { safeGetItem, safeSetItem } from "../lib/safeStorage";
  *
  * Unlike the settings in `installSettings.ts`, this one is PER HOST: two
  * consoles can sit behind different links, and the right answer follows the
- * link, not the user. A PS5 next to a fast local mirror wants `direct`; one
- * pulling from a slow distant host wants `accelerated`.
+ * link, not the user.
  *
- *  - `direct`      the PS5 downloads the URL itself, through the DPI daemon.
- *                  Measured at 114 MB/s from a LAN origin on FW 5.10, with
- *                  this computer serving nothing. The console opens only two
- *                  connections, so it loses on a slow or distant source.
- *  - `accelerated` this computer downloads over many connections and re-serves
- *                  to the console. Wins wherever connection count is the only
- *                  lever, at the cost of keeping the computer awake.
+ *  - `direct`   the PS5 downloads the URL itself, through the DPI daemon.
+ *               Measured at ~90 MB/s from a LAN origin on FW 5.10, with this
+ *               computer serving nothing, so it can be closed once the
+ *               install starts. Two limits: the console must be able to reach
+ *               the link itself, and its installer refuses a link longer than
+ *               127 bytes (hardware-measured: 127 accepted, 128 refused with
+ *               0x80A30003).
+ *  - `stream`   this computer downloads over many connections and re-serves
+ *               to the console as it asks, keeping nothing on disk. Measured
+ *               at 108 MB/s median on the same package and hardware, so it is
+ *               the fastest of the three here. It holds the link open for the
+ *               whole install, so an expiring link or a sleeping computer
+ *               takes the install with it.
+ *  - `download` this computer downloads the whole package to disk first, then
+ *               installs it as a local file. The slowest wall-clock of the
+ *               three (two legs, one after the other) and it needs room for
+ *               the package, but it is the only one that survives a link that
+ *               dies mid-install: the download can be retried on its own, and
+ *               the install afterwards never touches the network.
  */
-export type LinkInstallMode = "direct" | "accelerated";
+export type LinkInstallMode = "direct" | "stream" | "download";
 
 const KEY_MODE = "ps5upload.link_install_mode";
 const KEY_INSECURE = "ps5upload.link_install_insecure";
 
 /** Default for a console we have never installed a link on.
  *
- * `accelerated`, despite `direct` being faster on a healthy source, for two
- * reasons that outweigh speed:
+ * `stream`, despite `direct` being simpler, for two reasons that outweigh
+ * simplicity:
  *
  *  - It is what every existing install already does. Flipping the default
  *    would change behaviour under people who never asked for it.
- *  - Direct cannot yet be verified. `pkg_dpi_install` returns as soon as the
+ *  - Direct cannot be verified. `pkg_dpi_install` returns as soon as the
  *    console ACCEPTS the URL, so if the console cannot actually reach it we
- *    would report "downloading" and nothing would happen. Accelerated is
- *    tracked byte by byte, and works even when the URL is reachable only
- *    from this computer.
+ *    would report "downloading" and nothing would happen. Stream is tracked
+ *    byte by byte, and works even when the URL is reachable only from this
+ *    computer.
  *
- * Direct is offered, explained, and remembered once chosen — it is just not
- * imposed. */
-const DEFAULT_MODE: LinkInstallMode = "accelerated";
+ * It is also the fastest measured of the three (108 MB/s against direct's 90
+ * on a LAN origin). The other two are offered, explained, and remembered once
+ * chosen — they are just not imposed. */
+const DEFAULT_MODE: LinkInstallMode = "stream";
 
 /** Host → value maps, persisted as JSON.
  *
@@ -53,7 +65,11 @@ function loadMap<T>(key: string, valid: (v: unknown) => v is T): Record<string, 
     if (!parsed || typeof parsed !== "object") return {};
     const out: Record<string, T> = {};
     for (const [host, v] of Object.entries(parsed as Record<string, unknown>)) {
-      if (valid(v)) out[host] = v;
+      // "accelerated" was this mode's name before the download-to-disk
+      // option existed; a stored preference must keep meaning what the
+      // person chose rather than silently reverting to the default.
+      const migrated = v === "accelerated" ? "stream" : v;
+      if (valid(migrated)) out[host] = migrated;
     }
     return out;
   } catch {
@@ -72,7 +88,7 @@ function saveMap(key: string, value: Record<string, unknown>): void {
 }
 
 const isMode = (v: unknown): v is LinkInstallMode =>
-  v === "direct" || v === "accelerated";
+  v === "direct" || v === "stream" || v === "download";
 const isBool = (v: unknown): v is boolean => typeof v === "boolean";
 
 interface LinkInstallPrefsState {

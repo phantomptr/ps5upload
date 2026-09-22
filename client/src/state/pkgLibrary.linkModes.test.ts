@@ -55,7 +55,7 @@ describe("link install modes", () => {
     expect(r.ok).toBe(true);
   });
 
-  /* A refusal must not dead-end the user: the accelerated path needs neither
+  /* A refusal must not dead-end the user: the streaming path needs neither
    * the DPI daemon nor a console-reachable URL. */
   it("falls back to this computer when the PS5 cannot fetch it", async () => {
     mockedInvoke.mockImplementation(async (cmd: string) => {
@@ -75,13 +75,13 @@ describe("link install modes", () => {
   });
 
   /* Accelerated must never reach for the console's installer. */
-  it("accelerated mode does not call the DPI daemon", async () => {
+  it("stream mode does not call the DPI daemon", async () => {
     mockedInvoke.mockImplementation(async () => {
       throw new Error("probe not stubbed");
     });
     await pkgLibraryStore(HOST)
       .getState()
-      .installUrl(URL_OK, HOST, { mode: "accelerated" });
+      .installUrl(URL_OK, HOST, { mode: "stream" });
     expect(
       mockedInvoke.mock.calls.some((c) => c[0] === "pkg_dpi_install"),
     ).toBe(false);
@@ -89,7 +89,7 @@ describe("link install modes", () => {
 
   /* With no explicit mode the stored per-host choice decides. */
   it("uses the remembered choice when no mode is passed", async () => {
-    useLinkInstallPrefs.getState().setMode(HOST, "accelerated");
+    useLinkInstallPrefs.getState().setMode(HOST, "stream");
     mockedInvoke.mockImplementation(async () => {
       throw new Error("probe not stubbed");
     });
