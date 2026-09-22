@@ -60,10 +60,23 @@ const DEFAULT_CACHE_WINDOWS: usize = 4;
 /// Raise it only with evidence — the `url-install origin fetch` and
 /// `pkg-host serve rate` log lines say which leg is actually the constraint.
 const DEFAULT_READAHEAD_WINDOWS: u64 = 1;
-/// Rotate a worker's connection when a chunk lands below this rate. A
-/// throttled connection was measured at ~200 kB/s against a healthy one's
-/// 6.5 MB/s on the same origin, so this sits between the two.
-const DEFAULT_ROTATE_BELOW_KBPS: u64 = 600;
+/// Rotate a worker's connection only when another connection to the SAME
+/// origin has proven this much faster. Reconnecting is only worth a
+/// handshake if a faster slot demonstrably exists.
+///
+/// An absolute threshold does not work, and made things worse in the field.
+/// Set at 600 kB/s it was right for an origin serving one connection at
+/// 6.5 MB/s and throttling the rest to 200 — but on an origin that throttles
+/// every connection UNIFORMLY to 460-621 kB/s it fired constantly: 20
+/// rotations per 32 MiB window against a cap of 24, on 29 of 48 windows,
+/// which pushed time-to-first-byte from 652 ms to 1602 ms and bought nothing,
+/// because there was no faster slot to find.
+const ROTATE_DISPARITY: u64 = 4;
+
+/// Never rotate below this observed best, whatever the ratio. Prevents a
+/// pathologically slow origin (best seen 40 kB/s, this chunk 8) from
+/// thrashing connections when the whole host is simply slow.
+const ROTATE_MIN_BEST_KBPS: u64 = 1_000;
 
 /// Cap on connection rotations per worker per window. Without it, a link
 /// where every connection is slow would spend the whole window in TLS
@@ -125,9 +138,13 @@ pub struct RemoteSource {
     readahead: u64,
     /// Work-queue chunk size; see `chunk_ranges`.
     chunk_bytes: u64,
-    /// Drop and reopen a worker's connection when a chunk comes in below this
-    /// many kB/s. 0 disables rotation.
-    rotate_below_kbps: u64,
+    /// Rotate a connection when it is this many times slower than the best
+    /// connection seen on this origin. 0 disables rotation.
+    rotate_disparity: u64,
+    /// Best single-connection throughput observed so far, in kB/s. Rotation
+    /// is judged against this rather than a fixed number, so it fires when an
+    /// origin plays favourites and stays quiet when it throttles everyone.
+    best_conn_kbps: AtomicU64,
     /// One agent per worker slot, kept ACROSS windows.
     ///
     /// These two requirements pull against each other and both matter:
@@ -366,15 +383,9 @@ impl RemoteSource {
             env_u64("PS5UPLOAD_URL_THREADS", DEFAULT_PARALLELISM as u64, 1, 32) as usize;
         let readahead = env_u64("PS5UPLOAD_URL_READAHEAD", DEFAULT_READAHEAD_WINDOWS, 1, 8);
         let chunk_bytes = env_u64("PS5UPLOAD_URL_CHUNK_MB", DEFAULT_CHUNK_MB, 1, 64) * 1024 * 1024;
-        // 0 disables. The default sits well under any healthy connection, so
-        // a normal origin never rotates, and comfortably above the ~200 kB/s
-        // a throttled one was measured at.
-        let rotate_below_kbps = env_u64(
-            "PS5UPLOAD_URL_ROTATE_BELOW_KBPS",
-            DEFAULT_ROTATE_BELOW_KBPS,
-            0,
-            100_000,
-        );
+        // 0 disables rotation entirely.
+        let rotate_disparity =
+            env_u64("PS5UPLOAD_URL_ROTATE_DISPARITY", ROTATE_DISPARITY, 0, 1_000);
         let max_windows = env_u64(
             "PS5UPLOAD_URL_CACHE_WINDOWS",
             DEFAULT_CACHE_WINDOWS as u64,
@@ -388,7 +399,8 @@ impl RemoteSource {
             parallelism,
             readahead,
             chunk_bytes,
-            rotate_below_kbps,
+            rotate_disparity,
+            best_conn_kbps: AtomicU64::new(0),
             worker_agents: (0..parallelism.max(1))
                 .map(|_| Mutex::new(build_agent(1)))
                 .collect(),
@@ -602,10 +614,19 @@ impl RemoteSource {
                             let ms = stat.took.as_millis().max(1) as u64;
                             let kbps = stat.bytes / ms; // bytes/ms == kB/s
                             agg.merge(&stat);
-                            // Bounded: where every connection is slow,
-                            // rotating each chunk would only add handshakes.
-                            if self.rotate_below_kbps > 0
-                                && kbps < self.rotate_below_kbps
+                            let best = self
+                                .best_conn_kbps
+                                .fetch_max(kbps, Ordering::Relaxed)
+                                .max(kbps);
+                            // Only abandon a connection when a faster slot is
+                            // KNOWN to exist on this origin: some hosts serve
+                            // one connection quickly and throttle the rest, and
+                            // reconnecting escapes the penalty. When a host
+                            // throttles every connection alike there is nothing
+                            // to escape to, and rotating just buys handshakes.
+                            if self.rotate_disparity > 0
+                                && best >= ROTATE_MIN_BEST_KBPS
+                                && kbps.saturating_mul(self.rotate_disparity) < best
                                 && rotations < MAX_ROTATIONS_PER_WINDOW
                             {
                                 rotations += 1;
@@ -1411,6 +1432,101 @@ pub(crate) mod origin_tests {
         assert_eq!(&got[..], &body(total as usize)[..], "wrong bytes");
     }
 
+    /// An origin that throttles EVERY connection alike must not be fought
+    /// with reconnections.
+    ///
+    /// Measured in the field on 5.31.4: a host serving all eight connections
+    /// at 460-621 kB/s tripped the old absolute 600 kB/s trigger on nearly
+    /// every chunk — 20 rotations per window against a cap of 24, on 29 of 48
+    /// windows — and pushed time-to-first-byte from 652 ms to 1602 ms while
+    /// finding no faster slot, because none existed. Rotation must key off a
+    /// faster connection having actually been SEEN, not off a fixed number.
+    #[test]
+    fn a_uniformly_slow_origin_is_not_fought_with_reconnections() {
+        let total = 8 * 1024 * 1024u64;
+        let data = Arc::new(body(total as usize));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let sockets = Arc::new(AtomicUsize::new(0));
+        {
+            let (data, sockets) = (data.clone(), sockets.clone());
+            std::thread::spawn(move || {
+                for conn in listener.incoming() {
+                    let Ok(mut stream) = conn else { break };
+                    sockets.fetch_add(1, Ordering::SeqCst);
+                    let data = data.clone();
+                    std::thread::spawn(move || {
+                        let Ok(peer) = stream.try_clone() else { return };
+                        let mut reader = BufReader::new(peer);
+                        loop {
+                            let mut range = None;
+                            let mut saw = false;
+                            loop {
+                                let mut line = String::new();
+                                match reader.read_line(&mut line) {
+                                    Ok(0) | Err(_) => return,
+                                    Ok(_) => {}
+                                }
+                                if line == "\r\n" || line == "\n" {
+                                    break;
+                                }
+                                saw = true;
+                                if let Some(v) =
+                                    line.to_ascii_lowercase().strip_prefix("range: bytes=")
+                                {
+                                    if let Some((a, b)) = v.trim().split_once('-') {
+                                        let st: usize = a.trim().parse().unwrap_or(0);
+                                        let en: usize = b.trim().parse().unwrap_or(data.len() - 1);
+                                        range = Some((st, en.min(data.len() - 1)));
+                                    }
+                                }
+                            }
+                            if !saw {
+                                return;
+                            }
+                            // EVERY connection equally slow — no favourites.
+                            std::thread::sleep(Duration::from_millis(120));
+                            let (st, en) = range.unwrap_or((0, data.len() - 1));
+                            let body_ = &data[st..=en];
+                            let head = format!(
+                                "HTTP/1.1 206 Partial Content\r\n\
+                                 Content-Range: bytes {}-{}/{}\r\n\
+                                 Content-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+                                st,
+                                en,
+                                data.len(),
+                                body_.len()
+                            );
+                            if stream.write_all(head.as_bytes()).is_err()
+                                || stream.write_all(body_).is_err()
+                                || stream.flush().is_err()
+                            {
+                                return;
+                            }
+                        }
+                    });
+                }
+            });
+        }
+
+        let mut src = RemoteSource::new(format!("http://{addr}/game.pkg"), total);
+        src.window_bytes = total;
+        src.parallelism = 4;
+        src.worker_agents = (0..4).map(|_| Mutex::new(build_agent(1))).collect();
+        let got = src.read_range(0, total - 1).expect("window");
+        assert_eq!(got.len(), total as usize);
+
+        // With no disparity to chase, the four workers must keep their four
+        // connections rather than burning handshakes on identical ones.
+        let n = sockets.load(Ordering::SeqCst);
+        assert_eq!(
+            n, 4,
+            "origin saw {n} sockets for 4 workers: rotation fired against an \
+             origin that throttles every connection alike, which only costs \
+             handshakes"
+        );
+    }
+
     /// A connection the origin has throttled must be discarded, not kept.
     ///
     /// This is what separates a download manager from a pooled HTTP client.
@@ -1496,11 +1612,11 @@ pub(crate) mod origin_tests {
         src.window_bytes = total;
         src.parallelism = 2;
         src.worker_agents = (0..2).map(|_| Mutex::new(build_agent(1))).collect();
-        // The simulated throttle is 400 ms per 1 MiB chunk (~2.6 MB/s), which
-        // is far quicker than a real throttled connection. Scale the trigger
-        // to sit above it so the test exercises rotation rather than the
-        // production constant, which is tuned for ~200 kB/s.
-        src.rotate_below_kbps = 8_000;
+        // The disparity rule needs a fast connection to compare against, which
+        // this origin provides: the first socket is immediate and the rest are
+        // throttled, so `best_conn_kbps` climbs high and the slow ones fall
+        // below best/disparity.
+        src.rotate_disparity = ROTATE_DISPARITY;
         let got = src.read_range(0, total - 1).expect("window");
         assert_eq!(got.len(), total as usize);
         assert_eq!(&got[..], &body(total as usize)[..], "wrong bytes");
