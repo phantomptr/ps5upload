@@ -108,6 +108,7 @@ ADB ?= $(ANDROID_HOME)/platform-tools/adb
 .PHONY: install-engine uninstall-engine
 .PHONY: dist dist-win dist-win-arm dist-mac dist-mac-x64 dist-linux dist-linux-arm
 .PHONY: android-deps android-init android-build android-deploy _android-install-if-device run-android
+.PHONY: emu-create emu-start emu-stop emu-status emu-test
 .PHONY: send-payload gen-fixtures sweep validate validate-xl
 .PHONY: sync-version sync-version-check
 .PHONY: docker-engine docker-engine-run
@@ -175,6 +176,9 @@ help:
 	@echo "  make android-build    - Build a debug APK (no device needed)"
 	@echo "  make android-init     - One-time: scaffold src-tauri/gen/android"
 	@echo "  make android-deps     - Check the Android toolchain is ready"
+	@echo "  make emu-test         - Build + run the app on a headless emulator, with a screenshot"
+	@echo "  make emu-start        - Boot the test emulator (headless); emu-stop to shut it down"
+	@echo "  make emu-status       - Show AVDs, whether one is running, and where artifacts go"
 	@echo ""
 	@echo "Auto-launch (engine starts at OS login):"
 	@echo "  make install-engine    - Register systemd/launchd/Task Scheduler job"
@@ -556,6 +560,28 @@ android-deps:
 	@test -n "$(ANDROID_JAVA_HOME)" || { echo "ERROR: JDK 17 not found — set JAVA_HOME or install Temurin 17"; exit 1; }
 	@rustup target list --installed 2>/dev/null | grep -qx '$(ANDROID_RUST_TARGET)' || rustup target add $(ANDROID_RUST_TARGET)
 	@echo "Android toolchain OK — JDK=$(ANDROID_JAVA_HOME) NDK=$(ANDROID_NDK_HOME) target=$(ANDROID_RUST_TARGET)"
+
+# ─── Headless emulator for testing without a physical device ─────────────
+# Lifecycle lives in scripts/android-emu.sh. Artifacts (screenshots, logcat,
+# install logs) are written OUTSIDE the repo, to ~/.ps5upload/android-test/ —
+# this repo has already leaked debug screenshots into a public repo, and a
+# file that is not in the working tree cannot be committed by accident.
+emu-create:
+	@bash scripts/android-emu.sh create
+
+emu-start:
+	@bash scripts/android-emu.sh start
+
+emu-stop:
+	@bash scripts/android-emu.sh stop
+
+emu-status:
+	@bash scripts/android-emu.sh status
+
+# Build the APK, then install + launch it on the emulator and capture proof.
+# Depends on android-build so `make emu-test` is the single command.
+emu-test: android-build
+	@bash scripts/android-emu.sh test
 
 android-init: android-deps setup-client
 	@echo "Scaffolding Android project (tauri android init)..."
