@@ -167,14 +167,19 @@ pub struct RemoteSource {
     max_parallelism: usize,
     /// Aggregate MB/s of the previous window, for the improve/regress test.
     last_window_mbps: Mutex<f64>,
-    /// Connections in flight across EVERY window being fetched at once.
+    /// Requests in flight across EVERY window being fetched at once.
     ///
     /// Readahead fetches a window on its own thread, so without a global
-    /// bound a horizon of 4 windows at 8 connections each would open 32
-    /// sockets — and with the ramp on top, more. This permit pool keeps the
-    /// total at `active` however many windows are in flight, which is what
-    /// makes a deeper horizon safe: it removes the idle time between windows
-    /// without changing how hard we lean on the origin.
+    /// bound a horizon of 4 windows at 8 connections each would put 32
+    /// requests on the origin at once — and with the ramp on top, more. This
+    /// permit pool keeps concurrent requests at `active` however many windows
+    /// are in flight, which is what makes a deeper horizon safe: it removes
+    /// the idle time between windows without leaning harder on the origin.
+    ///
+    /// It bounds CONCURRENCY, not sockets opened over time: each worker holds
+    /// its own agent, so a socket may be closed and reopened underneath. An
+    /// early version of the test asserted on cumulative sockets and was
+    /// flaky — it passed alone and failed in a full run.
     in_flight: Mutex<usize>,
     in_flight_freed: std::sync::Condvar,
     /// Whether TLS certificate verification is skipped for this source.
@@ -1971,43 +1976,115 @@ pub(crate) mod origin_tests {
         );
     }
 
-    /// Deeper readahead must not multiply connections.
+    /// Deeper readahead must not multiply CONCURRENT requests.
     ///
-    /// Readahead fetches each window on its own thread. Without a global cap
-    /// a horizon of several windows at N connections each opens N x windows
-    /// sockets, and the ramp would compound it. The permit pool holds the
-    /// total at `active` however many windows are in flight — which is the
-    /// whole reason a deeper horizon is safe.
+    /// Readahead fetches each window on its own thread. Without a global cap a
+    /// horizon of several windows at N connections each would hammer the
+    /// origin with N x windows requests at once, and the ramp would compound
+    /// it. The permit pool holds requests in flight at `active` however many
+    /// windows are being fetched — which is what makes a deeper horizon safe.
+    ///
+    /// Asserts on PEAK CONCURRENCY, not on sockets opened. Each worker clones
+    /// an agent, so cumulative socket count is not what the pool bounds, and
+    /// asserting on it produced a test that passed alone and failed in a full
+    /// run.
     #[test]
-    fn readahead_does_not_multiply_connections() {
+    fn readahead_does_not_multiply_concurrent_requests() {
         let total = 16 * 1024 * 1024u64;
-        let sockets = Arc::new(AtomicUsize::new(0));
-        let addr = spawn_keepalive_origin(body(total as usize), sockets.clone());
+        let cap = 3usize;
+        let live = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let data = Arc::new(body(total as usize));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        {
+            let (live, peak, data) = (live.clone(), peak.clone(), data.clone());
+            std::thread::spawn(move || {
+                for conn in listener.incoming() {
+                    let Ok(mut stream) = conn else { break };
+                    let (live, peak, data) = (live.clone(), peak.clone(), data.clone());
+                    std::thread::spawn(move || {
+                        let Ok(peer) = stream.try_clone() else { return };
+                        let mut reader = BufReader::new(peer);
+                        loop {
+                            let mut range = None;
+                            let mut saw = false;
+                            loop {
+                                let mut line = String::new();
+                                match reader.read_line(&mut line) {
+                                    Ok(0) | Err(_) => return,
+                                    Ok(_) => {}
+                                }
+                                if line == "\r\n" || line == "\n" {
+                                    break;
+                                }
+                                saw = true;
+                                if let Some(v) =
+                                    line.to_ascii_lowercase().strip_prefix("range: bytes=")
+                                {
+                                    if let Some((a, b)) = v.trim().split_once('-') {
+                                        let st: usize = a.trim().parse().unwrap_or(0);
+                                        let en: usize = b.trim().parse().unwrap_or(data.len() - 1);
+                                        range = Some((st, en.min(data.len() - 1)));
+                                    }
+                                }
+                            }
+                            if !saw {
+                                return;
+                            }
+                            let n = live.fetch_add(1, Ordering::SeqCst) + 1;
+                            peak.fetch_max(n, Ordering::SeqCst);
+                            // Hold it open long enough for genuine overlap to
+                            // register before replying.
+                            std::thread::sleep(Duration::from_millis(60));
+                            let (st, en) = range.unwrap_or((0, data.len() - 1));
+                            let body_ = &data[st..=en];
+                            let head = format!(
+                                "HTTP/1.1 206 Partial Content\r\n\
+                                 Content-Range: bytes {}-{}/{}\r\n\
+                                 Content-Length: {}\r\nConnection: keep-alive\r\n\r\n",
+                                st,
+                                en,
+                                data.len(),
+                                body_.len()
+                            );
+                            let ok = stream.write_all(head.as_bytes()).is_ok()
+                                && stream.write_all(body_).is_ok()
+                                && stream.flush().is_ok();
+                            live.fetch_sub(1, Ordering::SeqCst);
+                            if !ok {
+                                return;
+                            }
+                        }
+                    });
+                }
+            });
+        }
+
         let mut src = RemoteSource::new(format!("http://{addr}/game.pkg"), total);
         src.window_bytes = 4 * 1024 * 1024;
-        src.parallelism = 3;
+        src.parallelism = cap;
         // Pin, so this measures the permit pool and not the ramp.
-        src.max_parallelism = 3;
-        src.active = AtomicUsize::new(3);
+        src.max_parallelism = cap;
+        src.active = AtomicUsize::new(cap);
         src.readahead = 3;
         src.max_windows = 1;
-        src.worker_agents = (0..3).map(|_| Mutex::new(build_agent(1, false))).collect();
+        src.worker_agents = (0..cap)
+            .map(|_| Mutex::new(build_agent(1, false)))
+            .collect();
 
         for w in 0..4u64 {
             let start = w * src.window_bytes;
             src.read_range(start, start + src.window_bytes - 1)
                 .expect("window");
         }
-        // Give any readahead threads a moment to have done their worst.
-        assert!(wait_until(Duration::from_secs(2), || sockets
-            .load(Ordering::SeqCst)
-            > 0));
 
-        let n = sockets.load(Ordering::SeqCst);
+        let seen = peak.load(Ordering::SeqCst);
+        assert!(seen > 0, "origin was never asked for anything");
         assert!(
-            n <= 3,
-            "origin saw {n} sockets with a cap of 3: readahead is opening \
-             connections outside the permit pool"
+            seen <= cap,
+            "origin saw {seen} concurrent requests against a cap of {cap}: \
+             readahead is fetching outside the permit pool"
         );
     }
 
