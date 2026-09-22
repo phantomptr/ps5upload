@@ -23,20 +23,23 @@ describe("link install preferences", () => {
     useLinkInstallPrefs.setState({ modes: {}, insecure: {} });
   });
 
-  /* A first-time user gets the mode that needs no explanation and no awake
-   * computer, and which is faster on a healthy source. */
-  it("defaults to direct for an unknown host", () => {
-    expect(useLinkInstallPrefs.getState().modeFor("10.0.0.5")).toBe("direct");
+  /* The default must not change behaviour under existing users, and direct
+   * cannot yet be verified end to end — the console accepting a URL is not
+   * the same as the console reaching it. */
+  it("defaults to accelerated for an unknown host", () => {
+    expect(useLinkInstallPrefs.getState().modeFor("10.0.0.5")).toBe(
+      "accelerated",
+    );
   });
 
   /* The right mode follows the LINK, and two consoles can sit behind
    * different ones — so the choice cannot be global. */
   it("remembers a choice per host", () => {
-    useLinkInstallPrefs.getState().setMode("10.0.0.5", "accelerated");
-    expect(useLinkInstallPrefs.getState().modeFor("10.0.0.5")).toBe(
+    useLinkInstallPrefs.getState().setMode("10.0.0.5", "direct");
+    expect(useLinkInstallPrefs.getState().modeFor("10.0.0.5")).toBe("direct");
+    expect(useLinkInstallPrefs.getState().modeFor("10.0.0.6")).toBe(
       "accelerated",
     );
-    expect(useLinkInstallPrefs.getState().modeFor("10.0.0.6")).toBe("direct");
   });
 
   /* Turning off certificate verification is a security decision. It must be
@@ -56,7 +59,7 @@ describe("link install preferences", () => {
       "ps5upload.link_install_insecure": '{"h":"yes"}',
     });
     useLinkInstallPrefs.setState({ modes: {}, insecure: {} });
-    expect(() => useLinkInstallPrefs.getState().modeFor("h")).not.toThrow();
+    expect(useLinkInstallPrefs.getState().modeFor("h")).toBe("accelerated");
     expect(useLinkInstallPrefs.getState().insecureFor("h")).toBe(false);
   });
 });

@@ -24,11 +24,20 @@ const KEY_INSECURE = "ps5upload.link_install_insecure";
 
 /** Default for a console we have never installed a link on.
  *
- * `direct` needs no explanation and no awake computer, and on a healthy
- * source it is the faster of the two. Someone on a slow link discovers the
- * other option when they go looking for speed; someone on a fast link never
- * has to. */
-const DEFAULT_MODE: LinkInstallMode = "direct";
+ * `accelerated`, despite `direct` being faster on a healthy source, for two
+ * reasons that outweigh speed:
+ *
+ *  - It is what every existing install already does. Flipping the default
+ *    would change behaviour under people who never asked for it.
+ *  - Direct cannot yet be verified. `pkg_dpi_install` returns as soon as the
+ *    console ACCEPTS the URL, so if the console cannot actually reach it we
+ *    would report "downloading" and nothing would happen. Accelerated is
+ *    tracked byte by byte, and works even when the URL is reachable only
+ *    from this computer.
+ *
+ * Direct is offered, explained, and remembered once chosen — it is just not
+ * imposed. */
+const DEFAULT_MODE: LinkInstallMode = "accelerated";
 
 /** Host → value maps, persisted as JSON.
  *

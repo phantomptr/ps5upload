@@ -44,6 +44,10 @@ import { useConnectionStore } from "./connection";
 import { log } from "./logs";
 import { pushNotification } from "./notifications";
 import { useActivityHistoryStore } from "./activityHistory";
+import {
+  useLinkInstallPrefs,
+  type LinkInstallMode,
+} from "./linkInstallPrefs";
 import { useTaskStore } from "./tasks";
 import { useToastStore } from "./toasts";
 import { parsePS5Firmware } from "../lib/ps5Firmware";
@@ -848,6 +852,7 @@ interface PkgLibraryState {
   installUrl: (
     url: string,
     host: string,
+    opts?: { mode?: LinkInstallMode },
   ) => ReturnType<PkgLibraryState["installStream"]>;
   /** Install every staged, not-yet-installed, idle row sequentially, in
    *  base → update → DLC order (`pkgEntryInstallOrder`). Each item runs the
@@ -3522,7 +3527,7 @@ const makePkgLibraryStore = () =>
       );
     },
 
-    async installUrl(url, host) {
+    async installUrl(url, host, opts) {
       const trimmed = url.trim();
       let parsed: URL;
       try {
@@ -3551,6 +3556,45 @@ const makePkgLibraryStore = () =>
           message:
             "Enter an HTTP(S) package URL with no fragment or control characters (max 4093 bytes).",
         };
+      }
+      // Direct: hand the URL to the console's own installer via the DPI
+      // daemon and get out of the way — this computer serves nothing and may
+      // then sleep or close. Measured at 114 MB/s from a LAN origin on FW
+      // 5.10. The console opens only two connections, so on a slow or distant
+      // source the accelerated path (many connections) wins instead; that is
+      // why this is the user's choice and not ours.
+      const mode =
+        opts?.mode ?? useLinkInstallPrefs.getState().modeFor(host);
+      if (mode === "direct") {
+        try {
+          await invoke("pkg_dpi_install", {
+            ps5Addr: host,
+            localPs5Path: trimmed,
+            titleId: null,
+            packageAppVer: null,
+          });
+          // Deliberately hedged. The daemon answers as soon as the console
+          // ACCEPTS the URL, which is not the same as the console reaching
+          // it, and from here we serve nothing and see nothing — so there is
+          // no byte count to promise against. Point at the PS5, which does
+          // show real progress.
+          return {
+            ok: true,
+            message:
+              "Sent to the PS5. It downloads and installs on its own from here — " +
+              "watch progress on the console. You can close ps5upload.",
+          };
+        } catch (e) {
+          // Name the reason and carry on. The accelerated path needs neither
+          // the DPI daemon nor a console-reachable URL, so a refusal here is
+          // not the end of the install — but silently switching would leave
+          // someone wondering why their computer is suddenly busy.
+          const why = pkgError(e);
+          log.info(
+            "install",
+            `the PS5 could not fetch that link itself (${why}); downloading through this computer instead`,
+          );
+        }
       }
       return get().installStream({ remoteUrl: trimmed }, host);
     },
