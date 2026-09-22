@@ -34,12 +34,17 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::io::Read;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Origin connections opened per window fetch.
 const DEFAULT_PARALLELISM: usize = 8;
+
+/// Ceiling the ramp may reach when the count is not pinned. Each connection
+/// costs a socket and a slot in the agent pool, and beyond this a host is
+/// more likely to answer 429 than to serve faster.
+const MAX_PARALLELISM: usize = 32;
 /// Bytes faulted in per cache miss.
 const DEFAULT_WINDOW_MB: u64 = 32;
 /// Windows retained in memory. Peak proxy memory is roughly
@@ -141,6 +146,21 @@ pub struct RemoteSource {
     /// Rotate a connection when it is this many times slower than the best
     /// connection seen on this origin. 0 disables rotation.
     rotate_disparity: u64,
+    /// Live connection count, adjusted after each window by
+    /// `adapt_parallelism`. Starts at `parallelism` and moves within
+    /// `1..=max_parallelism`.
+    ///
+    /// A fixed count cannot be right for both ends of the range we see: a
+    /// local origin saturates at a handful, while a distant one measured
+    /// 525 kB/s PER CONNECTION, where throughput simply scales with how many
+    /// we open. Rather than guess, measure — and the ramp also answers a
+    /// question the logs could not, namely whether a slow origin is limiting
+    /// each connection or the client as a whole.
+    active: AtomicUsize,
+    /// Ceiling for the ramp.
+    max_parallelism: usize,
+    /// Aggregate MB/s of the previous window, for the improve/regress test.
+    last_window_mbps: Mutex<f64>,
     /// Whether TLS certificate verification is skipped for this source.
     pub(crate) insecure_tls: bool,
     /// Best single-connection throughput observed so far, in kB/s. Rotation
@@ -406,8 +426,13 @@ impl RemoteSource {
     pub fn new_with_options(url: String, total_size: u64, insecure_tls: bool) -> Self {
         let window_bytes =
             env_u64("PS5UPLOAD_URL_WINDOW_MB", DEFAULT_WINDOW_MB, 1, 512) * 1024 * 1024;
+        // PS5UPLOAD_URL_THREADS pins the count: if a user sets it, the ramp
+        // is disabled and the number is honoured exactly. Unset, we start at
+        // the old default and adapt up to MAX_PARALLELISM.
+        let pinned = std::env::var("PS5UPLOAD_URL_THREADS").is_ok();
         let parallelism =
             env_u64("PS5UPLOAD_URL_THREADS", DEFAULT_PARALLELISM as u64, 1, 32) as usize;
+        let max_parallelism = if pinned { parallelism } else { MAX_PARALLELISM };
         let readahead = env_u64("PS5UPLOAD_URL_READAHEAD", DEFAULT_READAHEAD_WINDOWS, 1, 8);
         let chunk_bytes = env_u64("PS5UPLOAD_URL_CHUNK_MB", DEFAULT_CHUNK_MB, 1, 64) * 1024 * 1024;
         // 0 disables rotation entirely.
@@ -424,11 +449,16 @@ impl RemoteSource {
             total_size,
             window_bytes,
             parallelism,
+            active: AtomicUsize::new(parallelism.max(1)),
+            max_parallelism,
+            last_window_mbps: Mutex::new(0.0),
             readahead,
             chunk_bytes,
             rotate_disparity,
             best_conn_kbps: AtomicU64::new(0),
-            worker_agents: (0..parallelism.max(1))
+            // Sized to the CEILING, not the starting count: the ramp indexes
+            // this by worker slot and must never run off the end.
+            worker_agents: (0..max_parallelism.max(parallelism).max(1))
                 .map(|_| Mutex::new(build_agent(1, insecure_tls)))
                 .collect(),
             insecure_tls,
@@ -609,7 +639,11 @@ impl RemoteSource {
         queue.reverse();
         let queue = Mutex::new(queue);
 
-        let workers = self.parallelism.max(1).min(chunks.len().max(1));
+        let workers = self
+            .active
+            .load(Ordering::Relaxed)
+            .max(1)
+            .min(chunks.len().max(1));
         let mut stats: Vec<PieceStat> = Vec::with_capacity(workers);
         let errors: Vec<String> = std::thread::scope(|scope| {
             let queue = &queue;
@@ -761,7 +795,51 @@ impl RemoteSource {
             rate_limited,
             rotations,
         );
+        self.adapt_parallelism(mbps, rate_limited);
         Ok(buf)
+    }
+
+    /// Move the connection count toward whatever this origin rewards.
+    ///
+    /// Grow while throughput is still improving; shrink when it falls or the
+    /// host pushes back with 429/503. The dead band in the middle matters:
+    /// without it the count oscillates on ordinary jitter, and every change
+    /// costs connections their warmed-up state.
+    ///
+    /// Deliberately slow to react — two connections per window. A window is
+    /// seconds long, so this settles within a handful of windows on a long
+    /// install while never lurching somewhere it has no evidence for.
+    fn adapt_parallelism(&self, mbps: f64, rate_limited: u32) {
+        if self.max_parallelism <= 1 {
+            return; // pinned by PS5UPLOAD_URL_THREADS
+        }
+        let mut prev = self
+            .last_window_mbps
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let cur = self.active.load(Ordering::Relaxed);
+        let next = if rate_limited > 0 {
+            // The host asked us to slow down. Fewer connections is the only
+            // answer it will accept.
+            cur.saturating_sub(2).max(1)
+        } else if *prev > 0.0 && mbps < *prev * 0.9 {
+            cur.saturating_sub(2).max(1)
+        } else if *prev == 0.0 || mbps > *prev * 1.1 {
+            (cur + 2).min(self.max_parallelism)
+        } else {
+            cur
+        };
+        *prev = mbps;
+        if next != cur {
+            self.active.store(next, Ordering::Relaxed);
+            crate::log_info!(
+                "url-install connections: {} -> {} ({:.1} MB/s this window, rate_limited={})",
+                cur,
+                next,
+                mbps,
+                rate_limited
+            );
+        }
     }
 
     /// Average origin throughput in bytes/sec across every window fetched so
@@ -976,6 +1054,56 @@ mod tests {
     /// Asserted on the plumbing rather than a live handshake: standing up a
     /// bad-certificate server here would test rustls, not us. What matters is
     /// that the default constructor can never produce an unverified source.
+    /// The count must climb while climbing pays, and stop at the ceiling.
+    #[test]
+    fn the_connection_count_ramps_while_throughput_improves() {
+        let s = RemoteSource::new("https://h.example/g.pkg".to_string(), 1);
+        let start = s.active.load(Ordering::Relaxed);
+        for i in 1..20 {
+            // Each window faster than the last.
+            s.adapt_parallelism(i as f64, 0);
+        }
+        let now = s.active.load(Ordering::Relaxed);
+        assert!(now > start, "count stayed at {start} while throughput rose");
+        assert!(
+            now <= MAX_PARALLELISM,
+            "count {now} ran past the ceiling {MAX_PARALLELISM}"
+        );
+    }
+
+    /// Being asked to slow down must reduce connections, whatever the rate
+    /// looked like — a 429 is the one signal that is not about speed.
+    #[test]
+    fn rate_limiting_shrinks_the_connection_count() {
+        let s = RemoteSource::new("https://h.example/g.pkg".to_string(), 1);
+        for i in 1..6 {
+            s.adapt_parallelism(i as f64, 0);
+        }
+        let grown = s.active.load(Ordering::Relaxed);
+        s.adapt_parallelism(100.0, 3);
+        assert!(
+            s.active.load(Ordering::Relaxed) < grown,
+            "a rate-limited window must back off even when it looked fast"
+        );
+    }
+
+    /// Ordinary jitter must not move the count: every change costs
+    /// connections their warmed-up state.
+    #[test]
+    fn steady_throughput_leaves_the_connection_count_alone() {
+        let s = RemoteSource::new("https://h.example/g.pkg".to_string(), 1);
+        s.adapt_parallelism(10.0, 0);
+        let settled = s.active.load(Ordering::Relaxed);
+        for _ in 0..5 {
+            s.adapt_parallelism(10.4, 0); // +4%, inside the dead band
+        }
+        assert_eq!(
+            s.active.load(Ordering::Relaxed),
+            settled,
+            "the count drifted on noise"
+        );
+    }
+
     #[test]
     fn insecure_tls_is_off_unless_asked_for() {
         let a = RemoteSource::new("https://h.example/g.pkg".to_string(), 1);
@@ -1553,6 +1681,11 @@ pub(crate) mod origin_tests {
         let mut src = RemoteSource::new(format!("http://{addr}/game.pkg"), total);
         src.window_bytes = total;
         src.parallelism = 4;
+        // Pin the count: this test counts SOCKETS to prove rotation stays
+        // quiet, and a ramping connection count would open sockets of its own
+        // and confound that.
+        src.max_parallelism = 4;
+        src.active = AtomicUsize::new(4);
         src.worker_agents = (0..4).map(|_| Mutex::new(build_agent(1, false))).collect();
         let got = src.read_range(0, total - 1).expect("window");
         assert_eq!(got.len(), total as usize);
@@ -1808,6 +1941,9 @@ pub(crate) mod origin_tests {
         let mut src = RemoteSource::new(format!("http://{addr}/game.pkg"), total);
         src.window_bytes = window_mb * 1024 * 1024;
         src.parallelism = threads;
+        // Pin the count for the same reason: this asserts on socket count.
+        src.max_parallelism = threads;
+        src.active = AtomicUsize::new(threads);
         // Defeat the window cache so every window is a real origin fetch.
         src.max_windows = 1;
 
