@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## 5.33.0
+## 5.33.1
 
 **Installing from a link is much faster, there is now a third way to do it,
 and "skip the certificate check" actually works.**
