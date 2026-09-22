@@ -4326,6 +4326,25 @@ fn valid_dpi_install_source(source: &str) -> bool {
     }
 }
 
+/// Error copy for a DPI install, aware of whether the source was a link.
+///
+/// `SCE_APP_INSTALLER_ERROR_PARAM` is the only code whose cause differs by
+/// source: for a staged file it is a path-length problem, and for a link the
+/// console's installer rejected the URL. Everything else reads the same
+/// either way, so it falls through to the shared table.
+fn dpi_err_message(code: u32, source_is_url: bool) -> Option<String> {
+    if source_is_url && code == 0x80A3_0003 {
+        return Some(
+            "The PS5's installer refused this link. An over-long link is the usual \
+             cause: a 139-character link was refused where the same package installed \
+             from a 68-character one. Use 'Download through this computer' or \
+             'Stream through this computer' instead - neither has that limit."
+                .to_string(),
+        );
+    }
+    err_code_message(code).map(|s| s.to_string())
+}
+
 async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Body> {
     if !valid_dpi_install_source(&req.local_ps5_path) {
         return json_err(
@@ -4338,6 +4357,13 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
         return json_err(StatusCode::BAD_REQUEST, "ps5_addr is required");
     }
     let path = req.local_ps5_path.clone();
+    // Which kind of source this is decides how to READ an error afterwards:
+    // 0x80A30003 from a local path means "path too long", but from a link it
+    // means the console's installer refused the URL itself, and the local
+    // advice ("re-add it to the Package Library") is useless to someone who
+    // pasted a link. Hardware-measured: a 139-char URL was refused where the
+    // same bytes installed fine from a 68-char one.
+    let source_is_url = !path.starts_with('/');
     // Signed download URLs may contain credentials; never put them in logs.
     crate::log_info!(
         "dpi-install: ps5={} source={}",
@@ -4389,7 +4415,7 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
                         if ambiguous {
                             Some("installer acknowledgement was inconclusive".to_string())
                         } else {
-                            err_code_message(rc as u32).map(|s| s.to_string())
+                            dpi_err_message(rc as u32, source_is_url)
                         },
                     )
                 }

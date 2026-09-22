@@ -48,7 +48,9 @@ const MAX_PARALLELISM: usize = 32;
 /// Bytes faulted in per cache miss.
 const DEFAULT_WINDOW_MB: u64 = 32;
 /// Windows retained in memory. Peak proxy memory is roughly
-/// `DEFAULT_WINDOW_MB * DEFAULT_CACHE_WINDOWS` (128 MiB at the defaults).
+/// `DEFAULT_WINDOW_MB * DEFAULT_CACHE_WINDOWS`. The effective floor is
+/// `readahead + 3` (see `new_with_options`), so at the defaults that is 6
+/// windows / 192 MiB rather than this number.
 const DEFAULT_CACHE_WINDOWS: usize = 4;
 
 /// How many windows ahead of the console to fetch in the background.
@@ -88,6 +90,19 @@ const ROTATE_DISPARITY: u64 = 4;
 /// pathologically slow origin (best seen 40 kB/s, this chunk 8) from
 /// thrashing connections when the whole host is simply slow.
 const ROTATE_MIN_BEST_KBPS: u64 = 1_000;
+
+/// A connection already moving this fast is never rotated, whatever the
+/// disparity says. Rotation exists to escape a SLOW slot; when the slot is
+/// fast there is nothing to escape, and the reconnect costs a handshake.
+///
+/// Measured against a LAN origin: chunks served from the page cache clocked
+/// 1.28 GB/s while chunks served from the disk clocked 1.4-20 MB/s, so the
+/// disparity test was true for nearly every disk-served chunk. The fetcher
+/// rotated 22-32 times per 32-chunk window, and those windows carried up to
+/// 8 stalls and 2250 ms of backoff -- 43 MB/s against 90 MB/s for windows
+/// that did not thrash. The reconnects caused the stalls they then blamed on
+/// the origin.
+const ROTATE_GOOD_KBPS: u64 = 8_000;
 
 /// Cap on connection rotations per worker per window. Without it, a link
 /// where every connection is slow would spend the whole window in TLS
@@ -508,12 +523,32 @@ impl RemoteSource {
         // 0 disables rotation entirely.
         let rotate_disparity =
             env_u64("PS5UPLOAD_URL_ROTATE_DISPARITY", ROTATE_DISPARITY, 0, 1_000);
-        let max_windows = env_u64(
+        let cache_pinned = std::env::var("PS5UPLOAD_URL_CACHE_WINDOWS").is_ok();
+        let mut max_windows = env_u64(
             "PS5UPLOAD_URL_CACHE_WINDOWS",
             DEFAULT_CACHE_WINDOWS as u64,
             1,
             64,
         ) as usize;
+        // The cache must be able to hold everything in flight at once, or a
+        // window is evicted before the reader that asked for it gets to use
+        // it -- and the next reader faults it in AGAIN. At the defaults
+        // (readahead 3, cache 4) there was no slack at all: the readahead
+        // windows plus the one being served exactly filled the cache, so the
+        // console's second BGFT connection evicted live entries.
+        //
+        // Measured on a 101 GiB install: 2530 window fetches delivered only
+        // 400 distinct windows, a 6.3x origin amplification, with single
+        // windows re-fetched 12 times in 1.5 s. That is invisible on a local
+        // origin (the re-reads come from the page cache) and ruinous on the
+        // slow or metered origin this mode exists to serve.
+        //
+        // +3 covers the window being served, the one being read, and slack
+        // for a second console connection. An explicit env override still
+        // wins, so the memory ceiling stays in the operator's hands.
+        if !cache_pinned {
+            max_windows = max_windows.max(readahead as usize + 3);
+        }
         Self {
             url,
             total_size,
@@ -716,6 +751,13 @@ impl RemoteSource {
             .load(Ordering::Relaxed)
             .max(1)
             .min(chunks.len().max(1));
+        // "Best" means best seen in THIS window, not ever. As a session-wide
+        // high-water mark it never decayed, so one chunk served from the
+        // origin's page cache (1.28 GB/s measured) left every later chunk
+        // looking >4x slower than "best" for the rest of a multi-hour
+        // download -- the disparity test was permanently true and the
+        // fetcher rotated on nearly every chunk.
+        self.best_conn_kbps.store(0, Ordering::Relaxed);
         let mut stats: Vec<PieceStat> = Vec::with_capacity(workers);
         let errors: Vec<String> = std::thread::scope(|scope| {
             let queue = &queue;
@@ -761,6 +803,7 @@ impl RemoteSource {
                             // throttles every connection alike there is nothing
                             // to escape to, and rotating just buys handshakes.
                             if self.rotate_disparity > 0
+                                && kbps < ROTATE_GOOD_KBPS
                                 && best >= ROTATE_MIN_BEST_KBPS
                                 && kbps.saturating_mul(self.rotate_disparity) < best
                                 && rotations < MAX_ROTATIONS_PER_WINDOW
@@ -869,7 +912,7 @@ impl RemoteSource {
             rate_limited,
             rotations,
         );
-        self.adapt_parallelism(mbps, rate_limited);
+        self.adapt_parallelism(mbps, rate_limited, stalls, chunks.len());
         Ok(buf)
     }
 
@@ -903,7 +946,19 @@ impl RemoteSource {
     /// Deliberately slow to react — two connections per window. A window is
     /// seconds long, so this settles within a handful of windows on a long
     /// install while never lurching somewhere it has no evidence for.
-    fn adapt_parallelism(&self, mbps: f64, rate_limited: u32) {
+    /// `stalls` / `chunks` are the window's no-progress attempts and its piece
+    /// count. Throughput alone is not enough to steer the ramp: windows
+    /// alternate fast and slow while an origin is overloaded, so comparing
+    /// each window with the previous one sees "improvement" after every slow
+    /// window and grows again, oscillating instead of settling.
+    ///
+    /// Stalls say directly that the origin will not serve this many sockets.
+    /// Measured on a disk-backed origin: the ramp reached 28 connections, at
+    /// which point a 32-piece window logged 34 stalls and 14 SECONDS of
+    /// backoff, and throughput collapsed from 110 MB/s to 17. A host that
+    /// answers 429 is polite about it; one that simply stops responding, or a
+    /// disk that is seeking itself to death, shows up only here.
+    fn adapt_parallelism(&self, mbps: f64, rate_limited: u32, stalls: u32, chunks: usize) {
         if self.max_parallelism <= 1 {
             return; // pinned by PS5UPLOAD_URL_THREADS
         }
@@ -912,10 +967,25 @@ impl RemoteSource {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let cur = self.active.load(Ordering::Relaxed);
+        let stall_ratio = if chunks == 0 {
+            0.0
+        } else {
+            f64::from(stalls) / chunks as f64
+        };
         let next = if rate_limited > 0 {
             // The host asked us to slow down. Fewer connections is the only
             // answer it will accept.
             cur.saturating_sub(2).max(1)
+        } else if stall_ratio >= 0.25 {
+            // A quarter of the pieces made no progress: back off hard rather
+            // than shaving two sockets off a window that is already timing
+            // out, which takes many windows to escape while each one costs
+            // seconds of backoff.
+            (cur / 2).max(1)
+        } else if stalls > 0 {
+            // Some stalling: stop growing and give back one socket. Never
+            // grow into an origin that is already failing to answer.
+            cur.saturating_sub(1).max(1)
         } else if *prev > 0.0 && mbps < *prev * 0.9 {
             cur.saturating_sub(2).max(1)
         } else if *prev == 0.0 || mbps > *prev * 1.1 {
@@ -1155,7 +1225,7 @@ mod tests {
         let start = s.active.load(Ordering::Relaxed);
         for i in 1..20 {
             // Each window faster than the last.
-            s.adapt_parallelism(i as f64, 0);
+            s.adapt_parallelism(i as f64, 0, 0, 32);
         }
         let now = s.active.load(Ordering::Relaxed);
         assert!(now > start, "count stayed at {start} while throughput rose");
@@ -1165,16 +1235,55 @@ mod tests {
         );
     }
 
+    /// A window where many pieces made no progress must cut the connection
+    /// count hard, even though the origin never said 429. Measured on a
+    /// disk-backed origin: the ramp reached 28 connections, a 32-piece window
+    /// then logged 34 stalls and 14 s of backoff, and throughput fell from
+    /// 110 MB/s to 17 — while the old rule, which saw only the rate, grew
+    /// straight back because the NEXT window looked like an improvement.
+    #[test]
+    fn heavy_stalling_halves_the_connection_count() {
+        let s = RemoteSource::new("https://h.example/g.pkg".to_string(), 1);
+        for i in 1..8 {
+            s.adapt_parallelism(i as f64, 0, 0, 32);
+        }
+        let grown = s.active.load(Ordering::Relaxed);
+        assert!(grown >= 4, "ramp should have grown, got {grown}");
+        // A quarter of the pieces stalled, and the window still looked fast.
+        s.adapt_parallelism(1_000.0, 0, 8, 32);
+        let after = s.active.load(Ordering::Relaxed);
+        assert!(
+            after <= grown / 2,
+            "heavy stalling must halve the count: {grown} -> {after}"
+        );
+    }
+
+    /// A little stalling must not GROW the count, whatever the rate says.
+    #[test]
+    fn any_stalling_stops_the_ramp_growing() {
+        let s = RemoteSource::new("https://h.example/g.pkg".to_string(), 1);
+        for i in 1..5 {
+            s.adapt_parallelism(i as f64, 0, 0, 32);
+        }
+        let before = s.active.load(Ordering::Relaxed);
+        // Looks like a big improvement, but one piece made no progress.
+        s.adapt_parallelism(1_000.0, 0, 1, 32);
+        assert!(
+            s.active.load(Ordering::Relaxed) < before,
+            "one stall must stop growth, not accelerate it"
+        );
+    }
+
     /// Being asked to slow down must reduce connections, whatever the rate
     /// looked like — a 429 is the one signal that is not about speed.
     #[test]
     fn rate_limiting_shrinks_the_connection_count() {
         let s = RemoteSource::new("https://h.example/g.pkg".to_string(), 1);
         for i in 1..6 {
-            s.adapt_parallelism(i as f64, 0);
+            s.adapt_parallelism(i as f64, 0, 0, 32);
         }
         let grown = s.active.load(Ordering::Relaxed);
-        s.adapt_parallelism(100.0, 3);
+        s.adapt_parallelism(100.0, 3, 0, 32);
         assert!(
             s.active.load(Ordering::Relaxed) < grown,
             "a rate-limited window must back off even when it looked fast"
@@ -1186,10 +1295,10 @@ mod tests {
     #[test]
     fn steady_throughput_leaves_the_connection_count_alone() {
         let s = RemoteSource::new("https://h.example/g.pkg".to_string(), 1);
-        s.adapt_parallelism(10.0, 0);
+        s.adapt_parallelism(10.0, 0, 0, 32);
         let settled = s.active.load(Ordering::Relaxed);
         for _ in 0..5 {
-            s.adapt_parallelism(10.4, 0); // +4%, inside the dead band
+            s.adapt_parallelism(10.4, 0, 0, 32); // +4%, inside the dead band
         }
         assert_eq!(
             s.active.load(Ordering::Relaxed),
