@@ -7,6 +7,7 @@ import {
 import { log } from "../state/logs";
 import { isTauriEnv } from "./tauriEnv";
 import { browserInvoke } from "./browserInvoke";
+import { observeInvokeOutcome } from "./invokeLogDedup";
 
 /**
  * Drop-in replacement for Tauri's `invoke` that leaves a log breadcrumb for
@@ -58,10 +59,30 @@ export async function invoke<T>(
     // Cheap, name-only at trace — the value/args could be large (manifests,
     // file lists), and the point of the breadcrumb is the sequence of calls.
     log.trace("cmd", cmd);
+    const recovered = observeInvokeOutcome(cmd, undefined, Date.now());
+    if (recovered.kind === "recovered") {
+      log.warn(
+        "cmd",
+        `${cmd} recovered after ${recovered.suppressed} more failure(s)`,
+      );
+    }
     return result;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    log.warn("cmd", `${cmd} failed: ${msg}`);
+    // Collapse a run of identical failures. An unreachable console fails the
+    // same poll every few seconds forever; one report carried 63 identical
+    // process_list_get lines out of 100 warnings, burying the outage they
+    // were all describing. First one speaks, repeats stay quiet, a reminder
+    // proves it is ongoing, and the success path announces recovery.
+    const action = observeInvokeOutcome(cmd, msg, Date.now());
+    if (action.kind === "warn") {
+      log.warn(
+        "cmd",
+        action.suppressed > 0
+          ? `${cmd} failed: ${msg} — still failing, ${action.suppressed} identical repeat(s) not logged`
+          : `${cmd} failed: ${msg}`,
+      );
+    }
     throw e;
   }
 }
