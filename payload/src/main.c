@@ -390,8 +390,29 @@ static void redirect_stdio_to_file(void) {
     dup2(fd, STDOUT_FILENO);
     dup2(fd, STDERR_FILENO);
     if (fd != STDOUT_FILENO && fd != STDERR_FILENO) close(fd);
-    setvbuf(stdout, NULL, _IONBF, 0);
-    setvbuf(stderr, NULL, _IONBF, 0);
+    /* LINE buffered, not unbuffered.
+     *
+     * Unbuffered means each fprintf issues several small writes, so two
+     * threads logging at once interleave CHARACTER BY CHARACTER. Real bug
+     * reports contain lines like
+     *
+     *   [[ppaayyllooaadd22]] ttarkaenosvfeerr: ...
+     *
+     * which is two messages shredded together — in the very file we ask users
+     * to send us. Line buffering flushes once per newline, so a whole line
+     * lands in a single write and stays intact.
+     *
+     * Crash evidence does not depend on this: write_fatal_breadcrumb() and
+     * the signal path use raw write(2) on STDERR_FILENO, bypassing stdio
+     * entirely. The most a crash can now lose is one incomplete line.
+     *
+     * The buffers are static because setvbuf keeps using the storage for the
+     * life of the stream; a stack buffer here would be a dangling pointer the
+     * moment this function returns. */
+    static char out_buf[4096];
+    static char err_buf[4096];
+    setvbuf(stdout, out_buf, _IOLBF, sizeof(out_buf));
+    setvbuf(stderr, err_buf, _IOLBF, sizeof(err_buf));
 
     struct timespec ts;
     if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
