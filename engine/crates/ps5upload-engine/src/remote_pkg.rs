@@ -416,12 +416,47 @@ impl RemoteSource {
         // opting in for the DOWNLOAD, and a probe failure is a clearer signal
         // than silently trusting anything at this stage.
         let agent = build_agent(1, false);
+        let probe_started = std::time::Instant::now();
         let resp = agent
             .get(url)
             .header("User-Agent", "ps5upload")
             .header("Range", "bytes=0-0")
             .call()
             .map_err(|e| format!("could not reach the package URL: {e}"))?;
+        let round_trip = probe_started.elapsed();
+
+        // Who is on the other end, and how far away.
+        //
+        // Three bug reports could each say the download was slow and none
+        // could say WHY, because nothing recorded the origin or the distance
+        // to it. A per-connection rate is meaningless without them: 525 kB/s
+        // is a throttle if the host is next door and simple arithmetic if the
+        // round trip is 125 ms, and those want opposite fixes.
+        //
+        // The HOST only — never the path or query, which carry signed tokens
+        // on most download links. `Server`/`Via`/`CF-Ray` say whether a CDN is
+        // in front, which is what decides who is doing the limiting.
+        let host = url
+            .split("://")
+            .nth(1)
+            .and_then(|rest| rest.split('/').next())
+            .unwrap_or("(unparsed)");
+        let hdr = |name: &str| {
+            resp.headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("-")
+                .to_string()
+        };
+        crate::log_info!(
+            "url-install origin: host={} round_trip_ms={} server={} via={} cf_ray={} accept_ranges={}",
+            host,
+            round_trip.as_millis(),
+            hdr("server"),
+            hdr("via"),
+            hdr("cf-ray"),
+            hdr("accept-ranges"),
+        );
 
         let status = resp.status().as_u16();
         if status != 206 {
@@ -1536,6 +1571,33 @@ pub(crate) mod origin_tests {
             }
         });
         addr
+    }
+
+    /// The origin line must name the HOST and nothing else from the URL.
+    ///
+    /// Install links carry signed tokens in their path and query; logging the
+    /// full URL would put them in every bug report. The host is what tells us
+    /// who is limiting us, and is safe to keep.
+    #[test]
+    fn the_origin_log_keeps_the_host_and_drops_the_secret_part() {
+        let total = 1024usize;
+        let sockets = Arc::new(AtomicUsize::new(0));
+        let addr = spawn_keepalive_origin(body(total), sockets);
+        // A path and query of the shape a real signed link has.
+        let url = format!("http://{addr}/pkg/game.pkg?token=SECRET123&exp=999");
+        let probe = RemoteSource::probe(&url).expect("probe");
+        assert_eq!(probe.total_size, total as u64);
+
+        // Derive the host the same way the log does, and check the secret is
+        // not part of it.
+        let host = url
+            .split("://")
+            .nth(1)
+            .and_then(|rest| rest.split('/').next())
+            .unwrap_or("(unparsed)");
+        assert_eq!(host, addr.to_string());
+        assert!(!host.contains("SECRET123"), "token leaked into the host");
+        assert!(!host.contains("game.pkg"), "path leaked into the host");
     }
 
     /// Live throughput check against a REAL origin, for comparing our client
