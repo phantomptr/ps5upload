@@ -21,6 +21,8 @@ import {
 import { usePayloadPlaylistsStore } from "../state/payloadPlaylists";
 import { log } from "../state/logs";
 import { playlistResendsOurHelper } from "../lib/playlistOps";
+import { capturePayloadBlackBox } from "../lib/ps5Snapshot";
+import { shouldCaptureBlackBox } from "../lib/payloadBlackBox";
 import { useUpdateStore } from "../state/update";
 import { engineApi } from "../api/engine";
 import { payloadCheck, portCheck } from "../api/ps5";
@@ -344,6 +346,20 @@ function useStatusPolling() {
             : PROBE_MISS_THRESHOLD;
           newStatus =
             prev.payloadStatus === "up" && misses < threshold ? "up" : "down";
+        }
+        // Keep a copy of the helper's own logs every time it arrives at "up" —
+        // including the first sighting after the app starts, which the
+        // transition log below deliberately skips. A helper that dies within
+        // seconds of starting (measured: 7.6 s on a FW 12.70 console) is gone
+        // again before anyone can file a report, and the report can only read
+        // logs through the helper. The new instance can still read the files
+        // its predecessor left, so read them now while something answers.
+        if (
+          newStatus === "up" &&
+          prev.payloadStatus !== "up" &&
+          shouldCaptureBlackBox(probedHost, Date.now())
+        ) {
+          void capturePayloadBlackBox(probedHost);
         }
         // Log only on an up<->down TRANSITION (not every poll).
         if (

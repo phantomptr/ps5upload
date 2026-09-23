@@ -66,7 +66,10 @@ app data.
   logs/engine.log      The engine's recent log ring (see note below).
   ps5/klog.txt         PS5 /dev/klog tail (kernel log).
   ps5/syslog.txt       PS5 kern.msgbuf tail.
-  ps5/payload-logs/    The helper's own on-PS5 logs.
+  ps5/payload-logs/    The helper's own on-PS5 logs. If the helper was down
+                       when this report was made, these are the copy taken
+                       when it last came up (report.json: ps5.payload_logs_source,
+                       ps5.payload_logs_captured_at, ps5.helper_lost_during).
   images/              Screenshots you attached.
 
 Differences from a desktop bundle, so an absent file is not read as a clue:

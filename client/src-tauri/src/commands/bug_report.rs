@@ -385,6 +385,11 @@ diagnostics to help debug an issue — no games or app data.\n\
   ps5/syslog.txt       PS5 kern.msgbuf tail.\n\
   ps5/payload-logs/    The helper's own on-PS5 logs (startup trace, tx event\n\
                        log, tx state, crash marker) — best for helper crashes.\n\
+                       If the helper was down when this report was made, these\n\
+                       are the copy taken when it last came up: see\n\
+                       ps5.payload_logs_source and payload_logs_captured_at in\n\
+                       report.json, and ps5.helper_lost_during for the request\n\
+                       it stopped answering on.\n\
   images/              Screenshots you attached.\n\
 \n\
 Textual IPv4 and bracketed IPv6 addresses and the console serial are redacted\n\
