@@ -40,8 +40,8 @@ pub struct ManifestParams<'a> {
     pub game_digest: [u8; 32],
     /// The outer superblock's ICV.
     pub icv: [u8; 32],
-    /// The `playgo-chunk.dat` member's length.
-    pub playgo_chunk_len: u64,
+    /// The PlayGo map, whose chunks and mchunks the manifest repeats.
+    pub playgo: &'a crate::playgo::PlayGo,
     /// The outer image's block map, which supplies every `index`.
     pub outer: &'a Layout,
     /// `naps_pkg_layout.dat`'s length.
@@ -330,14 +330,22 @@ pub fn build(p: &ManifestParams) -> Vec<u8> {
     }
     xml.push_str("  </entries>\n");
 
-    // The chunk map the container's own `playgo-chunk.dat` declares: one scenario, one
-    // chunk and one mchunk spanning `[0, cnt_offset)`.
-    let mchunk = p.cnt_offset;
+    // The chunk map the container's own `playgo-chunk.dat` declares: one scenario holding
+    // every chunk, the first of them initial, and each mchunk as an outer span. A single chunk
+    // is one mchunk spanning `[0, cnt_offset)`, the shape the installing packages carry.
+    let pg = p.playgo;
     let scenario_type = p.content_type;
+    let n = pg.chunks.len();
+    let total: u64 = pg.mchunks.iter().map(|m| m.1).sum();
+    let initial = pg.chunk_size(0);
+    let ids = |list: &mut dyn Iterator<Item = u64>| -> String {
+        list.map(|v| v.to_string()).collect::<Vec<_>>().join(" ")
+    };
+    let all_chunks = ids(&mut (0..n as u64));
     let _ = writeln!(
         xml,
         "  <chunkinfo size=\"{}\" nested=\"true\" sdk=\"0x00850000\" disps=\"0x0011\">",
-        p.playgo_chunk_len
+        pg.chunk_dat.len()
     );
     let _ = writeln!(xml, "    <contentid>{}</contentid>", escape(p.content_id));
     xml.push_str("    <languages default=\"1\">0xffffffffffffffff</languages>\n");
@@ -346,27 +354,44 @@ pub fn build(p: &ManifestParams) -> Vec<u8> {
         xml,
         "      <scenario id=\"0\" type=\"{scenario_type}\" name=\"\">"
     );
-    let _ = writeln!(
-        xml,
-        "        <overall initials=\"1\" num=\"1\" init-size=\"{mchunk}\" total=\"{mchunk}\">0</overall>"
-    );
-    let _ = writeln!(
-        xml,
-        "        <default initials=\"1\" num=\"1\" init-size=\"{mchunk}\" total=\"{mchunk}\">0</default>"
-    );
+    for tag in ["overall", "default"] {
+        let _ = writeln!(
+            xml,
+            "        <{tag} initials=\"1\" num=\"{n}\" init-size=\"{initial}\" total=\"{total}\">{all_chunks}</{tag}>"
+        );
+    }
     xml.push_str("      </scenario>\n");
     xml.push_str("    </scenarios>\n");
-    xml.push_str("    <chunks num=\"1\" default=\"0xffffffffffffffff\">\n");
     let _ = writeln!(
         xml,
-        "      <chunk id=\"0\" flag=\"0x80\" locus=\"0x03\" language=\"0xffffffffffffffff\" disps=\"0x0011\" num=\"1\" size=\"{mchunk}\" name=\"\">0</chunk>"
+        "    <chunks num=\"{n}\" default=\"0xffffffffffffffff\">"
     );
+    for (k, owned) in pg.chunks.iter().enumerate() {
+        let name = if n == 1 {
+            String::new()
+        } else {
+            format!("Chunk #{k}")
+        };
+        let _ = writeln!(
+            xml,
+            "      <chunk id=\"{k}\" flag=\"0x80\" locus=\"0x03\" language=\"0xffffffffffffffff\" disps=\"0x0011\" num=\"{}\" size=\"{}\" name=\"{name}\">{}</chunk>",
+            owned.len(),
+            pg.chunk_size(k),
+            ids(&mut owned.iter().map(|&m| u64::from(m)))
+        );
+    }
     xml.push_str("    </chunks>\n");
-    xml.push_str("    <outers num=\"1\" overlapped=\"0\" language-overlapped=\"0\">\n");
     let _ = writeln!(
         xml,
-        "      <outer id=\"0\" image=\"0\" offset=\"0x0000000000000000\" size=\"0x{mchunk:016x}\" chunks=\"1\"/>"
+        "    <outers num=\"{}\" overlapped=\"0\" language-overlapped=\"0\">",
+        pg.mchunks.len()
     );
+    for (m, (offset, size)) in pg.mchunks.iter().enumerate() {
+        let _ = writeln!(
+            xml,
+            "      <outer id=\"{m}\" image=\"0\" offset=\"0x{offset:016x}\" size=\"0x{size:016x}\" chunks=\"1\"/>"
+        );
+    }
     xml.push_str("    </outers>\n");
     xml.push_str("  </chunkinfo>\n");
 
@@ -529,6 +554,13 @@ mod tests {
             ],
         };
         let outer = crate::outer_write::layout(plan.ndblock, 4096).unwrap();
+        let pg = crate::playgo::build(
+            "UP0000-PPSA01234_00-TESTGAME00000000",
+            &plan.mount_files(),
+            0x16_0000,
+            1,
+        )
+        .unwrap();
         let params = ManifestParams {
             facts: &facts,
             content_id: "UP0000-PPSA01234_00-TESTGAME00000000",
@@ -542,7 +574,7 @@ mod tests {
             seed: [0x11; 16],
             game_digest: [0x22; 32],
             icv: [0x33; 32],
-            playgo_chunk_len: 400,
+            playgo: &pg,
             outer: &outer,
             naps_len: 247,
             plan: &plan,

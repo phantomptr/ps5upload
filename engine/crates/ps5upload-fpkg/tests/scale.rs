@@ -179,7 +179,7 @@ fn a_source_past_the_first_indirect_slot_round_trips() {
     let digests = container.entry(ps5upload_fpkg::cnt::ids::IMAGE_DIGESTS);
     assert!(digests.is_some(), "the container carries the block digests");
     // And the reader walks the inner image back out of the second slot.
-    let files = ps5upload_fpkg::source::scan(source.path()).unwrap();
+    let files = in_image(ps5upload_fpkg::source::scan(source.path()).unwrap());
     let plan = ps5upload_fpkg::plan::build(&files).unwrap();
     let mut pkg = ps5upload_fpkg::PkgFile::open(&report.path).unwrap();
     let head = pkg.read_at(0, ps5upload_fpkg::fih::HEADER_LEN).unwrap();
@@ -262,7 +262,7 @@ fn a_tree_with_blocks_of_inodes_round_trips() {
         build::build_in_memory(&request(source.path(), out_memory.path()), &mut |_| {}).unwrap();
     assert!(memory.verify.ok(), "{}", memory.verify);
 
-    let files = ps5upload_fpkg::source::scan(source.path()).unwrap();
+    let files = in_image(ps5upload_fpkg::source::scan(source.path()).unwrap());
     let plan = ps5upload_fpkg::plan::build(&files).unwrap();
     // The point of the test: this tree does not fit the region's first block, and the plan
     // says so with an explicit region rather than by failing.
@@ -441,7 +441,7 @@ fn the_size_estimate_covers_the_package() {
     write_tree(source.path());
     let report = build::build(&request(source.path(), out.path()), &mut |_| {}).unwrap();
 
-    let files = ps5upload_fpkg::source::scan(source.path()).unwrap();
+    let files = in_image(ps5upload_fpkg::source::scan(source.path()).unwrap());
     let plan = ps5upload_fpkg::plan::build(&files).unwrap();
     let estimate = build::estimate_size(&plan).unwrap();
     assert!(
@@ -506,7 +506,7 @@ fn a_non_standard_drm_reaches_the_package_as_standard() {
     );
 
     // Read the packaged copy back out of the built package's inner image.
-    let files = ps5upload_fpkg::source::scan(source.path()).unwrap();
+    let files = in_image(ps5upload_fpkg::source::scan(source.path()).unwrap());
     let plan = ps5upload_fpkg::plan::build(&files).unwrap();
     let mut pkg = ps5upload_fpkg::PkgFile::open(&report.path).unwrap();
     let head = pkg.read_at(0, ps5upload_fpkg::BLOCK as usize).unwrap();
@@ -600,4 +600,14 @@ fn inspect_reports_the_source_before_a_build() {
     assert!(inspection.source.starts_with("folder "));
     assert!(inspection.output_free.unwrap_or(u64::MAX) > inspection.planned_size);
     assert!(inspection.checks.iter().any(|c| c.name == "source" && c.ok));
+}
+
+/// The files a build puts in the image: the icons and artwork the container carries are not.
+fn in_image(
+    mut files: Vec<ps5upload_fpkg::source::SourceFile>,
+) -> Vec<ps5upload_fpkg::source::SourceFile> {
+    files.retain(|f| {
+        !(f.size > 0 && ps5upload_fpkg::cnt_write::CONTAINER_ONLY.contains(&f.path.as_str()))
+    });
+    files
 }

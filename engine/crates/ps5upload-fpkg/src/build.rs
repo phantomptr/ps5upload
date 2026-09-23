@@ -48,6 +48,8 @@ pub struct BuildRequest {
     /// console compares against its own firmware at install time. `PS5UPLOAD_FPKG_FW` (a BCD hex
     /// word) overrides the source's value; absent, the source's own value is carried through.
     pub firmware: Option<String>,
+    /// PlayGo chunks (1 through 255). `PS5UPLOAD_FPKG_CHUNKS` overrides the default.
+    pub playgo_chunks: u16,
 }
 
 impl BuildRequest {
@@ -63,8 +65,16 @@ impl BuildRequest {
             metadata_codec: codec_from_env(),
             image_mode: image_mode_from_env(),
             firmware: firmware_from_env(),
+            playgo_chunks: chunks_from_env(),
         }
     }
+}
+
+fn chunks_from_env() -> u16 {
+    std::env::var("PS5UPLOAD_FPKG_CHUNKS")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(crate::playgo::DEFAULT_CHUNKS)
 }
 
 fn firmware_from_env() -> Option<String> {
@@ -255,6 +265,21 @@ fn build_mode(
     let extras = cnt_write::presentation_extras(&mut |path| {
         sizes_of(&files, path).and_then(|_| tree.read(path).ok())
     });
+    // What the container now carries, the image leaves out (see `CONTAINER_ONLY`).
+    let mut carried: std::collections::HashSet<&str> = cnt_write::PRESENTATION
+        .iter()
+        .filter(|(id, _, _)| extras.iter().any(|e| e.id == *id))
+        .map(|(_, path, _)| *path)
+        .collect();
+    if !icon_png.is_empty() {
+        carried.insert("sce_sys/icon0.png");
+    }
+    if !icon_dds.is_empty() {
+        carried.insert("sce_sys/icon0.dds");
+    }
+    files.retain(|f| {
+        !(cnt_write::CONTAINER_ONLY.contains(&f.path.as_str()) && carried.contains(f.path.as_str()))
+    });
     let time = request.time.unwrap_or_else(now);
     // A plaintext package carries the marker where a native one carries its random seed, so the
     // slot and the mode can never disagree and `request.seed` only has meaning in the native mode.
@@ -360,6 +385,7 @@ fn build_mode(
                 icon_png,
                 icon_dds,
                 extras,
+                playgo_chunks: request.playgo_chunks,
                 metadata_codec: request.metadata_codec,
             };
             match stream::write_package(&mut file, &stream_request, &mut read_range, &mut p, cancel)
@@ -441,17 +467,21 @@ fn build_mode(
 
             progress("writing the container");
             let outer_size = outer.image.len() as u64;
-            let playgo_chunk = si_write::playgo_chunk_dat(&content_id, cnt_offset)?;
-            let ficm_files = plan.content_inodes + 3;
+            let playgo = crate::playgo::build(
+                &content_id,
+                &plan.mount_files(),
+                cnt_offset,
+                request.playgo_chunks,
+            )?;
             let cnt = cnt_write::write(&CntParams {
                 content_id: &content_id,
                 param_json: &param_json,
                 icon_png: &icon_png,
                 icon_dds: &icon_dds,
                 extras: &extras,
-                playgo_chunk: &playgo_chunk,
-                playgo_hash_table: &si_write::playgo_hash_table(ficm_files / 2),
-                playgo_ficm: &si_write::playgo_ficm(ficm_files),
+                playgo_chunk: &playgo.chunk_dat,
+                playgo_hash_table: &playgo.hash_table,
+                playgo_ficm: &playgo.ficm,
                 imagedigs: &outer.plaintext_digests,
                 game_digest,
                 fih_block: &fih,
@@ -500,7 +530,7 @@ fn build_mode(
                 seed,
                 game_digest,
                 icv: outer_write::superblock_icv(&outer.image[sb_at..sb_at + BLOCK as usize]),
-                playgo_chunk_len: playgo_chunk.len() as u64,
+                playgo: &playgo,
                 outer: &outer_layout,
                 naps_len: naps.len() as u64,
                 plan: &plan,
@@ -512,7 +542,10 @@ fn build_mode(
                 ("common/etc/naps_meta_302.dat".to_string(), meta_300.clone()),
                 ("common/etc/naps_meta_308.dat".to_string(), meta_300),
                 ("common/etc/pfsimage.xml".to_string(), manifest),
-                ("common/etc/playgo-chunk.dat".to_string(), playgo_chunk),
+                (
+                    "common/etc/playgo-chunk.dat".to_string(),
+                    playgo.chunk_dat.clone(),
+                ),
                 (format!("config/{content_id}/playgo-chunk.crc"), crc),
             ];
             let si = si_write::zip(&members, time);

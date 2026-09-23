@@ -42,6 +42,8 @@ pub struct StreamRequest<'a> {
     pub icon_dds: Vec<u8>,
     /// The presentation entries beyond the icons.
     pub extras: Vec<cnt_write::ExtraEntry>,
+    /// PlayGo chunks; see [`crate::playgo`].
+    pub playgo_chunks: u16,
     /// How the inner image's metadata region is stored.
     pub metadata_codec: crate::inner::MetaCodec,
 }
@@ -258,17 +260,21 @@ pub fn write_package(
 
     // ── the container ────────────────────────────────────────────────────────────────
     (progress.phase)("writing the container");
-    let playgo_chunk = si_write::playgo_chunk_dat(request.content_id, cnt_offset)?;
-    let ficm_files = plan.content_inodes + 3;
+    let playgo = crate::playgo::build(
+        request.content_id,
+        &plan.mount_files(),
+        cnt_offset,
+        request.playgo_chunks,
+    )?;
     let cnt = cnt_write::write(&CntParams {
         content_id: request.content_id,
         param_json: &request.param_json,
         icon_png: &request.icon_png,
         icon_dds: &request.icon_dds,
         extras: &request.extras,
-        playgo_chunk: &playgo_chunk,
-        playgo_hash_table: &si_write::playgo_hash_table(ficm_files / 2),
-        playgo_ficm: &si_write::playgo_ficm(ficm_files),
+        playgo_chunk: &playgo.chunk_dat,
+        playgo_hash_table: &playgo.hash_table,
+        playgo_ficm: &playgo.ficm,
         imagedigs: &digests,
         game_digest,
         fih_block: &fih,
@@ -316,7 +322,7 @@ pub fn write_package(
         seed: request.seed,
         game_digest,
         icv: outer_write::superblock_icv(&superblock),
-        playgo_chunk_len: playgo_chunk.len() as u64,
+        playgo: &playgo,
         outer: &lay,
         naps_len: naps.len() as u64,
         plan,
@@ -328,7 +334,10 @@ pub fn write_package(
         ("common/etc/naps_meta_302.dat".to_string(), meta_300.clone()),
         ("common/etc/naps_meta_308.dat".to_string(), meta_300),
         ("common/etc/pfsimage.xml".to_string(), manifest),
-        ("common/etc/playgo-chunk.dat".to_string(), playgo_chunk),
+        (
+            "common/etc/playgo-chunk.dat".to_string(),
+            playgo.chunk_dat.clone(),
+        ),
         (
             format!("config/{}/playgo-chunk.crc", request.content_id),
             crc_table,

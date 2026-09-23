@@ -59,6 +59,22 @@ pub const PRESENTATION: [(u32, &str, &str); 8] = [
     (ids::PIC2_DDS, "sce_sys/pic2.dds", "pic2.dds"),
 ];
 
+/// Artwork and sound the image need not carry once the container does: the installer
+/// extracts the container's copies to `/user/appmeta/<title>/`, which is where the system
+/// reads them, and a Publishing Tools image leaves them out. `param.json`, the trophy and
+/// UDS data and the NP files stay in the image — our own backport tooling and third-party
+/// trophy tools read them from the game's folder.
+pub const CONTAINER_ONLY: [&str; 8] = [
+    "sce_sys/icon0.png",
+    "sce_sys/icon0.dds",
+    "sce_sys/pic0.png",
+    "sce_sys/pic0.dds",
+    "sce_sys/pic1.dds",
+    "sce_sys/pic2.dds",
+    "sce_sys/snd0.at9",
+    "sce_sys/save_data.png",
+];
+
 /// A container entry beyond the fixed set: stored in the clear, digested like the rest.
 #[derive(Debug, Clone)]
 pub struct ExtraEntry {
@@ -589,9 +605,9 @@ mod tests {
         let param = br#"{"contentId":"UP0000-PPSA01234_00-TESTGAME00000000"}"#;
         let png = vec![0x89u8; 1000];
         let dds = vec![0x44u8; 2000];
-        let chunk = crate::si_write::playgo_chunk_dat(id, 0xB0000).unwrap();
-        let ficm = crate::si_write::playgo_ficm(10);
-        let hash = crate::si_write::playgo_hash_table(5);
+        let pg =
+            crate::playgo::build(id, &[("eboot.bin".into(), crate::BLOCK, 5)], 0xB0000, 1).unwrap();
+        let (chunk, ficm, hash) = (pg.chunk_dat, pg.ficm, pg.hash_table);
         let digests = vec![[9u8; 32]; 11];
         let fih = vec![1u8; crate::BLOCK as usize];
         let cnt = write(&params(
@@ -643,9 +659,9 @@ mod tests {
     #[test]
     fn extras_take_the_publishing_tools_layout() {
         let id = "UP0000-PPSA01234_00-TESTGAME00000000";
-        let chunk = crate::si_write::playgo_chunk_dat(id, 0xB0000).unwrap();
-        let ficm = crate::si_write::playgo_ficm(10);
-        let hash = crate::si_write::playgo_hash_table(5);
+        let pg =
+            crate::playgo::build(id, &[("eboot.bin".into(), crate::BLOCK, 5)], 0xB0000, 1).unwrap();
+        let (chunk, ficm, hash) = (pg.chunk_dat, pg.ficm, pg.hash_table);
         let digests = vec![[9u8; 32]; 3];
         let fih = vec![1u8; crate::BLOCK as usize];
         let extras: Vec<ExtraEntry> = PRESENTATION

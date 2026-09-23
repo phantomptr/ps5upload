@@ -121,6 +121,15 @@ impl Plan {
             .collect()
     }
 
+    /// Every file the image holds as `(path, offset in the mount image, size)`: the inner image
+    /// starts one block into the mount, after the finalized-image header.
+    pub fn mount_files(&self) -> Vec<(String, u64, u64)> {
+        self.files
+            .iter()
+            .map(|f| (f.path.clone(), crate::BLOCK + f.on_disk_offset, f.size))
+            .collect()
+    }
+
     /// Each file's logical offset by afid.
     pub fn afid_offsets(&self) -> Vec<u64> {
         self.afid_order

@@ -1,9 +1,7 @@
-//! The install-metadata (SI) segment: the PlayGo helpers, the NAPS metric records and the
-//! trailing STORED ZIP.
+//! The install-metadata (SI) segment: the chunk CRCs, the NAPS metric records and the
+//! trailing STORED ZIP. The PlayGo tables are [`crate::playgo`]'s.
 //!
-//! The header fields and the member order are the samples'; the PlayGo files are generated
-//! to the shapes the reference documents (their sizes match the samples: a 416-byte chunk
-//! file, a 16 + n ficm, a `0x38 + 8n` hash table). `naps_meta_18` is the AES-128-XTS TLV
+//! The header fields and the member order are the samples'. `naps_meta_18` is the AES-128-XTS TLV
 //! metric blob whose key material is fixed across packages.
 
 use crate::crypto::{sha3, XtsKeys};
@@ -22,104 +20,6 @@ pub fn chunk_crc(mount_image: &[u8]) -> Vec<u8> {
         out.extend_from_slice(&crate::crypto::crc32c(&mount_image[at..end]).to_le_bytes());
     }
     out
-}
-
-/// The 400-byte `playgo-chunk.dat` (`plgx`, version 0x1000) for the single-image /
-/// single-chunk / single-scenario profile: one chunk, one mchunk covering `[0, CNT offset)`,
-/// no labels. Transcribed from the three third-party packages, which are the samples whose
-/// install actually transfers. Sony's own `webbrowser.pkg` uses a 416-byte variant that
-/// splits the region at the inner metadata base into two mchunks; that split is unverified
-/// through a transfer, so this profile follows the proven one.
-pub fn playgo_chunk_dat(content_id: &str, mchunk_size: u64) -> Result<Vec<u8>> {
-    if content_id.len() != 36 {
-        return format_err(format!(
-            "content id must be 36 characters, got {}",
-            content_id.len()
-        ));
-    }
-    let mut d = vec![0u8; 0x190];
-    d[0x00..0x04].copy_from_slice(b"plgx");
-    d[0x04..0x06].copy_from_slice(&0x1000u16.to_le_bytes());
-    d[0x08..0x0A].copy_from_slice(&1u16.to_le_bytes());
-    d[0x0A..0x0C].copy_from_slice(&1u16.to_le_bytes());
-    d[0x0C..0x0E].copy_from_slice(&0u16.to_le_bytes());
-    d[0x0E..0x10].copy_from_slice(&1u16.to_le_bytes());
-    d[0x10..0x14].copy_from_slice(&(0x190u32).to_le_bytes());
-    d[0x14..0x16].copy_from_slice(&0u16.to_le_bytes());
-    d[0x16..0x18].copy_from_slice(&1u16.to_le_bytes());
-    d[0x1E] = 0x85;
-    // The mchunk count. It has to agree with the `mchunk_attrs` record's length below
-    // (one `{offset, size}` pair = 0x10 bytes): a package that declares two mchunks while
-    // carrying one leaves the console reading a phantom second pair out of the record that
-    // follows, and it refuses to transfer — measured against the three scene packages, whose
-    // one-mchunk profile says 1 here, and Sony's webbrowser, whose two-mchunk profile says 2.
-    d[0x20] = 0x01;
-    d[0x24] = 0x01;
-    d[0x30] = 0x11;
-    d[0x38..0x40].fill(0xFF);
-    d[0x40..0x64].copy_from_slice(content_id.as_bytes());
-    for (at, offset, size) in [
-        (0xC0usize, 0x100u32, 0x20u32),
-        (0xC8, 0x120, 0x04),
-        (0xD0, 0x130, 0x01),
-        (0xD8, 0x140, 0x10),
-        (0xE0, 0x150, 0x20),
-        (0xE8, 0x170, 0x02),
-        (0xF0, 0x180, 0x01),
-    ] {
-        d[at..at + 4].copy_from_slice(&offset.to_le_bytes());
-        d[at + 4..at + 8].copy_from_slice(&size.to_le_bytes());
-    }
-    d[0x100] = 0x80;
-    d[0x102] = 0x03;
-    d[0x104..0x108].copy_from_slice(&1u32.to_le_bytes());
-    d[0x108] = 0x11;
-    d[0x110..0x118].copy_from_slice(&u64::MAX.to_le_bytes());
-    // chunk_mchunks: chunk #0 is mchunk #0.
-    d[0x120..0x124].copy_from_slice(&0u32.to_le_bytes());
-    // mchunk_attrs: one {offset 0, size} entry spanning the whole mount image.
-    d[0x148..0x150].copy_from_slice(&mchunk_size.to_le_bytes());
-    // inner mchunk attrs, then the constant {1, 1} marker.
-    d[0x150..0x158].copy_from_slice(&0x21u64.to_le_bytes());
-    d[0x164..0x166].copy_from_slice(&1u16.to_le_bytes());
-    d[0x166..0x168].copy_from_slice(&1u16.to_le_bytes());
-    Ok(d)
-}
-
-/// `playgo-ficm.dat`: a 16-byte header plus a zero byte per file.
-pub fn playgo_ficm(file_count: u32) -> Vec<u8> {
-    let mut d = vec![0u8; 0x10 + file_count as usize];
-    d[0x00..0x04].copy_from_slice(&1u32.to_le_bytes());
-    d[0x08..0x0C].copy_from_slice(&0x10u32.to_le_bytes());
-    d[0x0C..0x10].copy_from_slice(&file_count.to_le_bytes());
-    d
-}
-
-/// The per-chunk constants `playgo-hash-table.dat` carries (content-independent).
-const HASH_TABLE_ENTRIES: [[u8; 8]; 5] = [
-    [0x8E, 0x54, 0xCB, 0x4D, 0x4A, 0xF6, 0x30, 0x0E],
-    [0xF2, 0xBF, 0xF6, 0x27, 0xB9, 0x8F, 0x88, 0x53],
-    [0xCB, 0xDC, 0xC6, 0x3E, 0xEC, 0xB3, 0xC4, 0xAE],
-    [0x0B, 0xF4, 0xE9, 0xC5, 0xDA, 0xF8, 0xC9, 0xAE],
-    [0x4C, 0xF7, 0x0C, 0x08, 0x17, 0x4D, 0xCB, 0xD3],
-];
-
-/// `playgo-hash-table.dat`: a `0x28` header, a 16-byte constant prefix and an 8-byte
-/// constant per chunk, so `0x38 + 8n` bytes.
-pub fn playgo_hash_table(chunk_count: u32) -> Vec<u8> {
-    let mut d = vec![0u8; 0x38 + chunk_count as usize * 8];
-    d[0x00..0x04].copy_from_slice(&1u32.to_le_bytes());
-    d[0x04..0x08].copy_from_slice(&0x0800_0000u32.to_le_bytes());
-    d[0x08..0x0C].copy_from_slice(&0x38u32.to_le_bytes());
-    d[0x0C..0x10].copy_from_slice(&(chunk_count * 8).to_le_bytes());
-    d[0x18..0x1C].copy_from_slice(&[0x7F, b'F', b'L', b'T']);
-    d[0x24..0x28].copy_from_slice(&chunk_count.to_le_bytes());
-    d[0x28..0x38].copy_from_slice(&crate::flt::HEADER_SEED);
-    for i in 0..chunk_count as usize {
-        let entry = HASH_TABLE_ENTRIES[i.min(HASH_TABLE_ENTRIES.len() - 1)];
-        d[0x38 + i * 8..0x40 + i * 8].copy_from_slice(&entry);
-    }
-    d
 }
 
 /// One 48-byte `naps_meta_300/301/302/308` record: `R` at `0x10` and `0x20`, kind id `0x3E9`
@@ -447,50 +347,6 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn playgo_shapes_match_the_samples() {
-        // The third-party profile: one chunk, one mchunk spanning the whole mount image,
-        // and the container's own offset as its size (crimson: 0x80000 against a 0x80000
-        // container).
-        let chunk = playgo_chunk_dat("IV9999-WEBB00002_00-XXXXXXXXXXXXXXXX", 0xC0000).unwrap();
-        assert_eq!(chunk.len(), 400);
-        assert_eq!(&chunk[..4], b"plgx");
-        assert_eq!(&chunk[0x40..0x64], b"IV9999-WEBB00002_00-XXXXXXXXXXXXXXXX");
-        assert_eq!(
-            u32::from_le_bytes(chunk[0x10..0x14].try_into().unwrap()),
-            400
-        );
-        // One mchunk: {offset 0, size}, and chunk #0 references mchunk #0. The header's
-        // mchunk count must match the single pair the attrs record carries.
-        assert_eq!(u32::from_le_bytes(chunk[0x20..0x24].try_into().unwrap()), 1);
-        assert_eq!(
-            u32::from_le_bytes(chunk[0xDC..0xE0].try_into().unwrap()),
-            0x10,
-            "one 16-byte mchunk pair"
-        );
-        assert_eq!(
-            u32::from_le_bytes(chunk[0x104..0x108].try_into().unwrap()),
-            1
-        );
-        assert_eq!(
-            u64::from_le_bytes(chunk[0x140..0x148].try_into().unwrap()),
-            0
-        );
-        assert_eq!(
-            u64::from_le_bytes(chunk[0x148..0x150].try_into().unwrap()),
-            0xC0000
-        );
-        assert_eq!(
-            u32::from_le_bytes(chunk[0x120..0x124].try_into().unwrap()),
-            0
-        );
-        let ficm = playgo_ficm(10);
-        assert_eq!(ficm.len(), 26);
-        let table = playgo_hash_table(5);
-        assert_eq!(table.len(), 0x60);
-        assert_eq!(u32::from_le_bytes(table[0x24..0x28].try_into().unwrap()), 5);
-    }
 
     #[test]
     fn meta_300_carries_the_inner_geometry() {

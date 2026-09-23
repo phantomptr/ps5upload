@@ -9,7 +9,7 @@ use ps5upload_fpkg::build::{self, BuildRequest};
 use ps5upload_fpkg::crypto::DEFAULT_PASSCODE;
 use ps5upload_fpkg::inner::MetaCodec;
 use ps5upload_fpkg::source;
-use ps5upload_fpkg::{cnt, fih, inner, naps, outer, plan, PkgFile};
+use ps5upload_fpkg::{cnt, cnt_write, fih, inner, naps, outer, plan, PkgFile};
 
 const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
@@ -300,8 +300,14 @@ fn a_build_from_an_exfat_mount_verifies_and_round_trips() {
     assert!(report.verify.checks.iter().all(|c| c.ok));
 
     // The inner image walks back to the fixture's files, byte for byte, plus the
-    // keystone the writer generates.
-    let built = plan::build(tree.files()).unwrap();
+    // keystone the writer generates — less the icons, which the container carries instead.
+    let in_image: Vec<source::SourceFile> = tree
+        .files()
+        .iter()
+        .filter(|f| !cnt_write::CONTAINER_ONLY.contains(&f.path.as_str()))
+        .cloned()
+        .collect();
+    let built = plan::build(&in_image).unwrap();
     let image = outer_file(&report.path, "pfs_image.dat");
     assert!(image.len() as u64 <= built.ndblock * ps5upload_fpkg::BLOCK);
     // The image is read back through the codec the build used — the default, whose metadata
@@ -321,20 +327,22 @@ fn a_build_from_an_exfat_mount_verifies_and_round_trips() {
         .map(|f| (f.path.clone(), f.size))
         .collect();
     recovered.sort();
-    let mut wanted: Vec<(String, u64)> = expected.clone();
+    let mut wanted: Vec<(String, u64)> = expected
+        .iter()
+        .filter(|(p, _)| !cnt_write::CONTAINER_ONLY.contains(&p.as_str()))
+        .cloned()
+        .collect();
     wanted.push(("sce_sys/keystone".to_string(), 96));
     wanted.sort();
     assert_eq!(recovered, wanted);
 
-    // A recovered file's bytes are the image's bytes: the PNG magic, read from the
-    // package rather than the fixture.
-    let png = mount
-        .files
-        .iter()
-        .find(|f| f.path == "sce_sys/icon0.png")
-        .unwrap();
-    let at = png.offset as usize;
-    assert_eq!(mount_image[at..at + 8], PNG_MAGIC);
+    // The icon's bytes come back out of the package's container: the PNG magic, read from
+    // the package rather than the fixture.
+    let mut file = PkgFile::open(&report.path).unwrap();
+    let head = file.read_at(0, fih::HEADER_LEN).unwrap();
+    let container = cnt::read(&mut file, fih::parse(&head).unwrap().cnt_offset).unwrap();
+    let icon = container.entry(cnt::ids::ICON0_PNG).unwrap();
+    assert_eq!(container.payload(icon)[..8], PNG_MAGIC);
 
     // And the layout reconstructs the mount it describes — the data region where the mount reads
     // it, and the metadata region out of the container the image stores. The gap between the two
