@@ -480,6 +480,11 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         // them as inconsistent). A name ending in `.crc` is the console
         // asking for the package's PlayGo CRC table (#319); see serve_handler.
         .route("/pkg-host/{session}/{filename}", get(serve_handler))
+        // Short alias for a link too long for the PS5's installer; answers
+        // with a redirect to the real link. Under /pkg-host/ because that is
+        // the one prefix the console is allowed to reach. See
+        // `shorten_for_installer`.
+        .route("/pkg-host/link/{file}", get(link_redirect_handler))
         .with_state(state)
 }
 
@@ -3951,6 +3956,12 @@ pub struct DpiInstallResponse {
     pub app_ver_before: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_ver_after: Option<String>,
+    /// True when the link was too long for the PS5's installer and it was
+    /// handed a short alias on this computer instead. The console re-resolves
+    /// the alias on every request, so this computer must stay reachable until
+    /// the install finishes. See `shorten_for_installer`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub shortened: bool,
 }
 
 /// One parsed reply from the DPI daemon. The daemon replies in the
@@ -4356,7 +4367,32 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
     if ps5_ip.is_empty() {
         return json_err(StatusCode::BAD_REQUEST, "ps5_addr is required");
     }
-    let path = req.local_ps5_path.clone();
+    let mut path = req.local_ps5_path.clone();
+    // A link longer than the installer accepts is swapped for a short alias
+    // on this computer that redirects to it. Done here, not in the client, so
+    // every caller — desktop, web UI, scripts — gets it.
+    let mut shortened = false;
+    if !path.starts_with('/') && path.len() > MAX_INSTALL_SOURCE_LEN {
+        match shorten_for_installer(&req.ps5_addr, &path) {
+            Ok(Some(short)) => {
+                // Lengths only: a signed download link carries credentials.
+                crate::log_info!(
+                    "dpi-install: link is {} chars (installer limit {}), handing the PS5 a {}-char alias",
+                    path.len(),
+                    MAX_INSTALL_SOURCE_LEN,
+                    short.len()
+                );
+                path = short;
+                shortened = true;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                // Send the original; the installer's refusal is explained by
+                // dpi_err_message, which is still better than inventing one.
+                crate::log_warn!("dpi-install: could not shorten an over-long link: {e}");
+            }
+        }
+    }
     // Which kind of source this is decides how to READ an error afterwards:
     // 0x80A30003 from a local path means "path too long", but from a link it
     // means the console's installer refused the URL itself, and the local
@@ -4559,6 +4595,7 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
                 patch_verdict,
                 app_ver_before,
                 app_ver_after,
+                shortened,
             })
         }
         Ok(Err(e)) => {
@@ -4577,6 +4614,7 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
                 patch_verdict: None,
                 app_ver_before,
                 app_ver_after: None,
+                shortened,
             })
         }
         Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("task: {e}")),
@@ -4798,6 +4836,7 @@ async fn dpi_direct_install_handler(
                 patch_verdict: None,
                 app_ver_before: None,
                 app_ver_after: None,
+                shortened: false,
             })
         }
         Ok(Err(e)) => {
@@ -4816,6 +4855,7 @@ async fn dpi_direct_install_handler(
                 patch_verdict: None,
                 app_ver_before: None,
                 app_ver_after: None,
+                shortened: false,
             })
         }
         Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("task: {e}")),
@@ -5627,6 +5667,14 @@ pub fn lan_ip_for_ps5(ps5_host: &str) -> std::io::Result<IpAddr> {
 /// the BGFT register request) and the direct/streaming install flow
 /// (which hands the URL to the DPI daemon instead of a local path).
 fn pkg_host_url_for(ps5_addr: &str, session_id: &str, content_id: &str) -> std::io::Result<String> {
+    let origin = engine_origin_for_ps5(ps5_addr)?;
+    let url_filename = pkg_url_filename(content_id);
+    Ok(format!("{origin}/pkg-host/{session_id}/{url_filename}"))
+}
+
+/// `http://<ip>:<port>` of this engine as the PS5 reaches it. See
+/// `pkg_host_url_for` for how the IP is chosen and when it must be pinned.
+fn engine_origin_for_ps5(ps5_addr: &str) -> std::io::Result<String> {
     let ps5_host_only = strip_host_port(ps5_addr);
     // PS5UPLOAD_PKG_HOST_IP lets a deployment pin the IP the console fetches
     // from, overriding the routing-table guess. Required whenever the engine
@@ -5648,10 +5696,105 @@ fn pkg_host_url_for(ps5_addr: &str, session_id: &str, content_id: &str) -> std::
         .ok()
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(19113);
-    let url_filename = pkg_url_filename(content_id);
-    Ok(format!(
-        "http://{local_ip}:{host_port}/pkg-host/{session_id}/{url_filename}"
-    ))
+    Ok(format!("http://{local_ip}:{host_port}"))
+}
+
+// ─── Short aliases for over-long install links ───────────────────────
+
+/// Longest install source the PS5's installer accepts, in bytes.
+///
+/// Hardware-measured on FW 5.10 by binary search: 127 accepted, 128 refused
+/// with 0x80A30003 (SCE_APP_INSTALLER_ERROR_PARAM) — a 128-byte buffer. An
+/// ordinary library link is longer than that (a 139-character one was
+/// refused), which is why "let the PS5 download it" failed for them.
+pub const MAX_INSTALL_SOURCE_LEN: usize = 127;
+
+/// How long an alias lives after its last use. An install re-resolves the
+/// alias on every range request, so an active one never expires.
+const LINK_ALIAS_TTL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+struct LinkAlias {
+    url: String,
+    last_used: std::time::Instant,
+}
+
+fn link_aliases() -> &'static Mutex<HashMap<String, LinkAlias>> {
+    static ALIASES: std::sync::OnceLock<Mutex<HashMap<String, LinkAlias>>> =
+        std::sync::OnceLock::new();
+    ALIASES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The alias id for `url`, reusing an existing one for the same link.
+fn link_alias_id_for(url: &str) -> String {
+    let mut map = link_aliases().lock().unwrap_or_else(|e| e.into_inner());
+    let now = std::time::Instant::now();
+    map.retain(|_, a| now.duration_since(a.last_used) < LINK_ALIAS_TTL);
+    if let Some((id, a)) = map.iter_mut().find(|(_, a)| a.url == url) {
+        a.last_used = now;
+        return id.clone();
+    }
+    // 96 random bits: an alias is reachable off-loopback, so it must not be
+    // guessable — though even a guessed one only redirects to a link this
+    // user registered through the loopback-only API.
+    let id = uuid::Uuid::new_v4().simple().to_string()[..24].to_string();
+    map.insert(
+        id.clone(),
+        LinkAlias {
+            url: url.to_string(),
+            last_used: now,
+        },
+    );
+    id
+}
+
+fn link_alias_target(id: &str) -> Option<String> {
+    let mut map = link_aliases().lock().unwrap_or_else(|e| e.into_inner());
+    let a = map.get_mut(id)?;
+    a.last_used = std::time::Instant::now();
+    Some(a.url.clone())
+}
+
+/// A short URL the PS5 can be given in place of `url`, or `None` when `url`
+/// already fits.
+///
+/// The console's installer follows HTTP redirects — hardware-verified: handed
+/// a 33-character URL that redirected to a 182-character one, it installed a
+/// package in about 3 s. So the alias keeps "let the PS5 download it" direct:
+/// the package bytes still flow from the link to the console. The cost is
+/// that the console re-resolves the alias on every range request (measured:
+/// one redirect per request), so this computer has to stay reachable until
+/// the install finishes, answering tiny redirects.
+fn shorten_for_installer(ps5_addr: &str, url: &str) -> std::io::Result<Option<String>> {
+    if url.starts_with('/') || url.len() <= MAX_INSTALL_SOURCE_LEN {
+        return Ok(None);
+    }
+    let origin = engine_origin_for_ps5(ps5_addr)?;
+    let id = link_alias_id_for(url);
+    let short = format!("{origin}/pkg-host/link/{id}.pkg");
+    if short.len() > MAX_INSTALL_SOURCE_LEN {
+        return Err(std::io::Error::other(format!(
+            "even the shortened link is {} characters (limit {MAX_INSTALL_SOURCE_LEN})",
+            short.len()
+        )));
+    }
+    Ok(Some(short))
+}
+
+/// GET/HEAD /pkg-host/link/{id}.pkg — redirect to the link the alias stands for.
+async fn link_redirect_handler(AxumPath(file): AxumPath<String>) -> Response<Body> {
+    let id = file.strip_suffix(".pkg").unwrap_or(&file);
+    match link_alias_target(id) {
+        Some(url) => Response::builder()
+            .status(StatusCode::FOUND)
+            .header(header::LOCATION, url)
+            .header(header::CONTENT_LENGTH, "0")
+            .body(Body::empty())
+            .unwrap_or_else(builder_failed_response),
+        None => Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::empty())
+            .unwrap_or_else(builder_failed_response),
+    }
 }
 
 /// Last-ditch fallback when a `Response::builder()` chain fails. The
@@ -5892,6 +6035,114 @@ mod loader_route_tests {
 
 #[cfg(test)]
 mod tests {
+    // ── short aliases for over-long install links ──
+
+    const LONG: &str = "http://192.168.86.199:20080/3A5CA02AFD084A3B8445AC51D3EAE212/\
+Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
+
+    /// The link from the field that "let the PS5 download it" could not take.
+    #[test]
+    fn the_reported_link_is_over_the_installer_limit() {
+        assert_eq!(LONG.len(), 139);
+        assert!(LONG.len() > super::MAX_INSTALL_SOURCE_LEN);
+    }
+
+    /// A link that already fits is handed over untouched: no alias, no
+    /// dependency on this computer staying up.
+    #[test]
+    fn a_link_that_fits_is_not_shortened() {
+        let short = "http://192.168.86.199:20081/UP9000-PPSA03016_00-MARVELSPIDERMAN2.pkg";
+        assert_eq!(
+            super::shorten_for_installer("127.0.0.1:9114", short).unwrap(),
+            None
+        );
+        assert_eq!(
+            super::shorten_for_installer("127.0.0.1:9114", "/data/pkg/a.pkg").unwrap(),
+            None
+        );
+    }
+
+    /// An over-long link becomes an alias the installer accepts, and the
+    /// alias leads back to the exact link.
+    #[test]
+    fn an_over_long_link_becomes_an_alias_that_fits() {
+        let short = super::shorten_for_installer("127.0.0.1:9114", LONG)
+            .unwrap()
+            .expect("shortened");
+        assert!(
+            short.len() <= super::MAX_INSTALL_SOURCE_LEN,
+            "{} chars",
+            short.len()
+        );
+        assert!(short.contains("/pkg-host/link/"), "{short}");
+        let id = short
+            .rsplit('/')
+            .next()
+            .unwrap()
+            .trim_end_matches(".pkg")
+            .to_string();
+        assert_eq!(super::link_alias_target(&id).as_deref(), Some(LONG));
+    }
+
+    /// Installing the same link twice reuses its alias rather than growing
+    /// the table without bound.
+    #[test]
+    fn the_same_link_reuses_its_alias() {
+        let a = super::link_alias_id_for(LONG);
+        let b = super::link_alias_id_for(LONG);
+        assert_eq!(a, b);
+        assert_ne!(a, super::link_alias_id_for(&format!("{LONG}?other=1")));
+    }
+
+    /// Through the real router: the alias answers 302 to the link, and an
+    /// unknown id answers 404. This also proves the alias route does not
+    /// collide with /pkg-host/{session}/{filename}.
+    #[tokio::test]
+    async fn the_alias_route_redirects_and_unknown_ids_404() {
+        use std::io::{Read, Write};
+        let id = super::link_alias_id_for(LONG);
+        let app = super::router(std::sync::Arc::new(super::PkgInstallState::default()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let fetch = move |path: String| {
+            std::thread::spawn(move || {
+                let mut c = std::net::TcpStream::connect(addr).unwrap();
+                write!(
+                    c,
+                    "GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+                let mut out = String::new();
+                c.read_to_string(&mut out).unwrap();
+                out
+            })
+            .join()
+            .unwrap()
+        };
+
+        let hit = tokio::task::spawn_blocking(move || {
+            (
+                fetch(format!("/pkg-host/link/{id}.pkg")),
+                fetch("/pkg-host/link/nope.pkg".into()),
+            )
+        })
+        .await
+        .unwrap();
+        assert!(hit.0.starts_with("HTTP/1.1 302"), "{}", hit.0);
+        assert!(
+            hit.0
+                .to_ascii_lowercase()
+                .contains(&format!("location: {}", LONG.to_ascii_lowercase())),
+            "{}",
+            hit.0
+        );
+        assert!(hit.1.starts_with("HTTP/1.1 404"), "{}", hit.1);
+    }
+
     #[test]
     fn dpi_install_source_accepts_http_links_but_not_other_schemes_or_lines() {
         assert!(super::valid_dpi_install_source("/user/data/game.pkg"));

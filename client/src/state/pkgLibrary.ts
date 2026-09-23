@@ -1966,6 +1966,10 @@ async function runDpiInstall(
   patchVerdict?: string;
   appVerBefore?: string;
   appVerAfter?: string;
+  /** The link was too long for the PS5's installer, so the engine handed it
+   *  a short alias on this computer that redirects to the link. The console
+   *  re-resolves it during the install, so this computer must stay up. */
+  shortened?: boolean;
 }> {
   const ip = hostOf(host);
   // dpi_ensure sends the DPI ELF to the loader port (:9021). Whether that
@@ -2034,6 +2038,7 @@ async function runDpiInstall(
     patch_verdict?: string;
     app_ver_before?: string;
     app_ver_after?: string;
+    shortened?: boolean;
   } = {};
   try {
     for (let attempt = 1; attempt <= DPI_MAX_ATTEMPTS; attempt++) {
@@ -2086,6 +2091,7 @@ async function runDpiInstall(
     patchVerdict: resp.patch_verdict,
     appVerBefore: resp.app_ver_before,
     appVerAfter: resp.app_ver_after,
+    shortened: !!resp.shortened,
   };
 }
 
@@ -3648,35 +3654,36 @@ const makePkgLibraryStore = () =>
       // connections; on a slow or distant source that gap widens. Its
       // installer also refuses a link longer than 127 bytes.
       if (mode === "direct") {
-        try {
-          await invoke("pkg_dpi_install", {
-            ps5Addr: host,
-            localPs5Path: trimmed,
-            titleId: null,
-            packageAppVer: null,
-          });
-          // Deliberately hedged. The daemon answers as soon as the console
-          // ACCEPTS the URL, which is not the same as the console reaching
-          // it, and from here we serve nothing and see nothing — so there is
-          // no byte count to promise against. Point at the PS5, which does
-          // show real progress.
+        // Through runDpiInstall, not a bare pkg_dpi_install. The bare call
+        // had three faults, each enough on its own to break this mode:
+        //  - it never started the DPI daemon, so it failed whenever :9040
+        //    was not already up from an earlier install;
+        //  - it ignored the result — a refusal arrives as HTTP 200 with
+        //    ok:false — so the user was told "Sent to the PS5, you can close
+        //    ps5upload" while nothing was installing;
+        //  - a link over the installer's 127-byte limit was always refused.
+        //    The engine now swaps such a link for a short alias (see
+        //    shorten_for_installer), which is why `shortened` matters below.
+        const res = await runDpiInstall(host, trimmed);
+        if (res.ok) {
           return {
             ok: true,
-            message:
-              "Sent to the PS5. It downloads and installs on its own from here — " +
-              "watch progress on the console. You can close ps5upload.",
+            message: res.shortened
+              ? "Sent to the PS5 — it downloads the package from the link itself. " +
+                "The link is longer than the PS5 accepts, so it goes through a short " +
+                "address on this computer: keep ps5upload running until the PS5 finishes."
+              : "Sent to the PS5. It downloads and installs on its own from here — " +
+                "watch progress on the console. You can close ps5upload.",
           };
-        } catch (e) {
-          // Name the reason and carry on. Streaming needs neither the DPI
-          // daemon nor a console-reachable URL, so a refusal here is not the
-          // end of the install — but silently switching would leave someone
-          // wondering why their computer is suddenly busy.
-          const why = pkgError(e);
-          log.info(
-            "install",
-            `the PS5 could not fetch that link itself (${why}); downloading through this computer instead`,
-          );
         }
+        // Name the reason and carry on. Streaming needs neither the DPI
+        // daemon nor a console-reachable link, so a refusal here is not the
+        // end of the install — but silently switching would leave someone
+        // wondering why their computer is suddenly busy.
+        log.info(
+          "install",
+          `the PS5 could not fetch that link itself (${res.errMessage}); downloading through this computer instead`,
+        );
       }
       return get().installStream({ remoteUrl: trimmed }, host);
     },

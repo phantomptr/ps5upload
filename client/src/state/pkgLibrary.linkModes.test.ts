@@ -59,6 +59,7 @@ describe("link install modes", () => {
    * the DPI daemon nor a console-reachable URL. */
   it("falls back to this computer when the PS5 cannot fetch it", async () => {
     mockedInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "dpi_ensure") return { ok: true, listening: true, sent: false };
       if (cmd === "pkg_dpi_install") throw new Error("dpi daemon unreachable");
       throw new Error("probe not stubbed");
     });
@@ -72,6 +73,55 @@ describe("link install modes", () => {
     expect(
       mockedInvoke.mock.calls.some((c) => c[0] === "pkg_remote_probe"),
     ).toBe(true);
+  });
+
+  /* The daemon that does a direct install is not always running — it was
+   * down on the test console until something started it. Direct mode used to
+   * skip starting it and fail whenever :9040 was closed. */
+  it("starts the DPI daemon before asking the PS5 to fetch the link", async () => {
+    mockedInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "dpi_ensure") return { ok: true, listening: true, sent: true };
+      if (cmd === "pkg_dpi_install") return { ok: true, rc: 0 };
+      return {};
+    });
+    await pkgLibraryStore(HOST).getState().installUrl(URL_OK, HOST, { mode: "direct" });
+    const order = mockedInvoke.mock.calls.map((c) => c[0]);
+    expect(order.indexOf("dpi_ensure")).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf("dpi_ensure")).toBeLessThan(order.indexOf("pkg_dpi_install"));
+  });
+
+  /* A refusal arrives as HTTP 200 with ok:false. It used to be read as
+   * success — "Sent to the PS5, you can close ps5upload" — while nothing was
+   * installing. It must be treated as a failure and fall back instead. */
+  it("never reports a refused link as sent", async () => {
+    mockedInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "dpi_ensure") return { ok: true, listening: true, sent: false };
+      if (cmd === "pkg_dpi_install")
+        return { ok: false, rc: 0x80a30003 | 0, err_message: "refused" };
+      throw new Error("probe not stubbed");
+    });
+    const r = await pkgLibraryStore(HOST)
+      .getState()
+      .installUrl(URL_OK, HOST, { mode: "direct" });
+    expect(r.message ?? "").not.toMatch(/Sent to the PS5/);
+    expect(mockedInvoke.mock.calls.some((c) => c[0] === "pkg_remote_probe")).toBe(true);
+  });
+
+  /* A link too long for the installer goes through a short alias on this
+   * computer, which the console keeps re-resolving — so this is the one
+   * direct install where closing the app would break it. Say so. */
+  it("tells the user to keep the app running when the link was shortened", async () => {
+    mockedInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "dpi_ensure") return { ok: true, listening: true, sent: false };
+      if (cmd === "pkg_dpi_install") return { ok: true, rc: 0, shortened: true };
+      return {};
+    });
+    const r = await pkgLibraryStore(HOST)
+      .getState()
+      .installUrl(URL_OK, HOST, { mode: "direct" });
+    expect(r.ok).toBe(true);
+    expect(r.message).toMatch(/keep ps5upload running/);
+    expect(r.message).not.toMatch(/You can close ps5upload/);
   });
 
   /* Accelerated must never reach for the console's installer. */
