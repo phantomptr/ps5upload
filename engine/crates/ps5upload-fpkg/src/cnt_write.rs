@@ -19,6 +19,11 @@ const BODY_AT: usize = 0x2000;
 const PACKAGE_DIGEST_AT: usize = 0xFE0;
 /// Offset of the header signature.
 const SIGNATURE_AT: usize = 0x1000;
+/// The leading system entries (0x0001, 0x0010, 0x0020, 0x0080, 0x0100, 0x0200) the header
+/// counts at 0x14, and the rows of the entry table the second rollup at 0x120 covers.
+const SC_ENTRY_COUNT: u16 = 6;
+/// One entry-table row.
+const ENTRY_ROW: u32 = 32;
 /// The `set_digests` bits a debug package sets.
 const GENERAL_DIGEST_SET: u32 = 0x10DE;
 /// The general-digests payload's length.
@@ -143,12 +148,31 @@ pub struct CntParams<'a> {
     /// The outer superblock seed (`CNT+0x4A0`).
     pub seed: [u8; 16],
     pub passcode: &'a str,
-    /// `0x26` for an app, `0x21` for additional content; DLC also sets `drm_type` `0x10`.
+    /// `0x20` for a game, `0x26` for an app, `0x21` for additional content; DLC also sets
+    /// `drm_type` `0x10`. See [`content_class`].
     pub content_type: u32,
     pub drm_type: u32,
     pub content_flags: u32,
     /// The block-aligned inner image size (the promote size).
     pub inner_size: u64,
+}
+
+/// The container's `(content_type, content_flags)` for an application package, from its
+/// `param.json`'s `applicationCategoryType`.
+///
+/// Measured on Publishing Tools packages: a game (category 0, Spider-Man 2) is `0x20` /
+/// `0x0202_0000`, an app (category 65536: the Web Browser, YouTube) `0x26` / `0x0602_0000`.
+/// Every package here used the app pair, copied from the Web Browser, so games went out
+/// labelled as apps. A param.json that names no category is a game: 0 is the default.
+pub fn content_class(param_json: &[u8]) -> (u32, u32) {
+    let category = crate::source::parse_param_json(param_json)
+        .and_then(|j| j.get("applicationCategoryType").and_then(|v| v.as_u64()))
+        .unwrap_or(0);
+    if category == 0 {
+        (0x20, 0x0202_0000)
+    } else {
+        (0x26, 0x0602_0000)
+    }
 }
 
 fn be32_into(buf: &mut [u8], at: usize, value: u32) {
@@ -428,7 +452,7 @@ pub fn write(p: &CntParams) -> Result<Container> {
     be32_into(&mut head, 0x08, 0x8000_0000);
     be32_into(&mut head, 0x0C, 0xC);
     be32_into(&mut head, 0x10, count as u32);
-    head[0x14..0x16].copy_from_slice(&6u16.to_be_bytes());
+    head[0x14..0x16].copy_from_slice(&SC_ENTRY_COUNT.to_be_bytes());
     head[0x16..0x18].copy_from_slice(&(count as u16).to_be_bytes());
     let metas_span = body.span(ids::METAS);
     let names_at = body.span(ids::ENTRY_NAMES).0;
@@ -506,6 +530,16 @@ pub fn write(p: &CntParams) -> Result<Container> {
         })
         .collect();
     named.sort_by_key(|(at, _, _)| *at);
+    // The second system-entry rollup covers the key, image-key and general-digest entries and
+    // the first SC_ENTRY_COUNT rows of the entry table.
+    let sc_spans: Vec<(u32, u32)> = [ids::ENTRY_KEYS, ids::IMAGE_KEY, ids::GENERAL_DIGESTS]
+        .iter()
+        .map(|id| body.span(*id))
+        .chain(std::iter::once((
+            body.span(ids::METAS).0,
+            u32::from(SC_ENTRY_COUNT) * ENTRY_ROW,
+        )))
+        .collect();
     let mut cnt = body.bytes;
     // Pad before the tail digests: the body digest covers the padded region, measured on the
     // sample (the region end matches its stored value, its content end does not).
@@ -532,6 +566,13 @@ pub fn write(p: &CntParams) -> Result<Container> {
     // The digests over container regions.
     let rollup = sha3(&cnt[BODY_AT..BODY_AT + rollup_size as usize]);
     cnt[0x100..0x120].copy_from_slice(&rollup);
+    // Every Sony package fills 0x120 (verified on ten: a game, an app, a patch, seven DLC);
+    // ours left it zero.
+    let mut sc2 = Vec::new();
+    for (at, size) in &sc_spans {
+        sc2.extend_from_slice(&cnt[*at as usize..(*at + *size) as usize]);
+    }
+    cnt[0x120..0x140].copy_from_slice(&sha3(&sc2));
     cnt[0x140..0x160].copy_from_slice(&sha3(&digests));
     let body_digest = sha3(&cnt[BODY_AT..padded_end]);
     cnt[0x160..0x180].copy_from_slice(&body_digest);
@@ -621,6 +662,7 @@ mod tests {
         assert!(parsed.package_digest_ok());
         assert!(parsed.digest_table_digest_ok());
         assert!(parsed.header_rollup_ok());
+        assert!(parsed.sc_entries2_ok());
         assert!(parsed.body_digest_ok());
         assert!(parsed.descriptor_ok());
         assert!(parsed.fih_digest_ok(&fih));

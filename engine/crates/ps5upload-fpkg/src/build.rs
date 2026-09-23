@@ -436,7 +436,7 @@ fn build_mode(
                 &plan,
                 &request.passcode,
                 &mut read,
-                time,
+                crate::stream::image_time(request.image_mode, time),
                 request.metadata_codec,
             )?;
             progress("writing the layout");
@@ -458,7 +458,7 @@ fn build_mode(
                 request.image_mode,
                 &content_id,
                 &request.passcode,
-                time,
+                crate::stream::image_time(request.image_mode, time),
             )?;
             let game_digest = outer.plaintext_digests[outer.superblock_block as usize];
             let cnt_offset = BLOCK + outer.image.len() as u64;
@@ -504,9 +504,9 @@ fn build_mode(
                 cnt_offset,
                 seed,
                 passcode: &request.passcode,
-                content_type: 0x26,
+                content_type: cnt_write::content_class(&param_json).0,
                 drm_type: 0,
-                content_flags: 0x0602_0000,
+                content_flags: cnt_write::content_class(&param_json).1,
                 inner_size,
             })?;
 
@@ -535,7 +535,7 @@ fn build_mode(
             let manifest = pfsimage::build(&pfsimage::ManifestParams {
                 facts: &cnt.facts,
                 content_id: &content_id,
-                content_type: 0x26,
+                content_type: cnt_write::content_class(&param_json).0,
                 param_json: &param_json,
                 content_version,
                 cnt_offset,

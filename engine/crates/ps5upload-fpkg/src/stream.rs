@@ -143,8 +143,12 @@ pub fn write_package(
     cancel: &AtomicBool,
 ) -> Result<StreamedPackage> {
     let plan = request.plan;
-    let mut source =
-        BlockSource::new_with(plan, request.passcode, request.time, request.metadata_codec)?;
+    let mut source = BlockSource::new_with(
+        plan,
+        request.passcode,
+        image_time(request.image_mode, request.time),
+        request.metadata_codec,
+    )?;
     // The image the outer PFS stores is the stored one, so its block count is what the outer
     // metadata, the header's `0x90` and the descriptor's image length all follow. The mount the
     // install metadata describes is the larger logical one.
@@ -269,7 +273,7 @@ pub fn write_package(
         &naps,
         &digests[..inner_blocks as usize],
         request.seed,
-        request.time,
+        image_time(request.image_mode, request.time),
         kraken.as_ref().map(|_| inner_size),
     )? {
         if index != lay.superblock_block {
@@ -368,9 +372,9 @@ pub fn write_package(
         cnt_offset,
         seed: request.seed,
         passcode: request.passcode,
-        content_type: 0x26,
+        content_type: cnt_write::content_class(&request.param_json).0,
         drm_type: 0,
-        content_flags: 0x0602_0000,
+        content_flags: cnt_write::content_class(&request.param_json).1,
         inner_size,
     })?;
     out.seek(SeekFrom::Start(cnt_offset))?;
@@ -411,7 +415,7 @@ pub fn write_package(
     let manifest = pfsimage::build(&pfsimage::ManifestParams {
         facts: &cnt.facts,
         content_id: request.content_id,
-        content_type: 0x26,
+        content_type: cnt_write::content_class(&request.param_json).0,
         param_json: &request.param_json,
         content_version: request.content_version,
         cnt_offset,
@@ -465,6 +469,17 @@ pub fn check_cancelled(cancel: &AtomicBool) -> Result<()> {
         return format_err("the build was cancelled");
     }
     Ok(())
+}
+
+/// The timestamps a build writes into both images. Publishing Tools' plaintext packages (the
+/// sdk-fpkg279 kit's output, Spider-Man 2) leave every one zero — outer and inner superblocks,
+/// dinodes and inodes — while its encrypted ones carry the build time. A plaintext build does
+/// the same.
+pub(crate) fn image_time(mode: crate::ImageMode, time: (i64, u32)) -> (i64, u32) {
+    match mode {
+        crate::ImageMode::PlaintextNoAuth => (0, 0),
+        crate::ImageMode::Native => time,
+    }
 }
 
 #[cfg(test)]

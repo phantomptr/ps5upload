@@ -160,6 +160,7 @@ fn container_report(fih_block: &[u8], fih: &fih::Fih, cnt: &cnt::Cnt) -> Report 
     r.push("cnt package digest", cnt.package_digest_ok(), "");
     r.push("cnt digest-table digest", cnt.digest_table_digest_ok(), "");
     r.push("cnt header rollup digest", cnt.header_rollup_ok(), "");
+    r.push("cnt second rollup digest", cnt.sc_entries2_ok(), "");
     r.push("cnt body digest", cnt.body_digest_ok(), "");
     r.push(
         "cnt finalized-image digest",

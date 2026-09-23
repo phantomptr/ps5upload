@@ -512,6 +512,10 @@ pub struct DescribedBlock {
     pub stored_len: u64,
     pub even_lz: bool,
     pub odd_lz: bool,
+    /// The record's mode bits 32..=36, as stored: 32 and 35 are NOT the even and odd halves'
+    /// literal modes, 33 and 36 mark LZ halves, 34 Sony's bare entropy-array forms. Lets a
+    /// reader with a full Kraken decoder read Sony's own blocks, which ours does not.
+    pub mode_bits: u8,
 }
 
 /// Walk a descriptor the way the console does: records in order, anchors moving the stored
@@ -582,6 +586,7 @@ pub fn describe(blob: &[u8]) -> Result<Vec<DescribedBlock>> {
             stored_len: end - cursor,
             even_lz: f(33, 1) == 1,
             odd_lz: f(36, 1) == 1,
+            mode_bits: f(32, 5) as u8,
         });
         cursor = end;
         logical += len;

@@ -155,6 +155,30 @@ impl Cnt {
         pre.is_some_and(|p| sha3(p) == self.bytes[0x100..0x120])
     }
 
+    /// `CNT+0x120 == SHA3(entry 0x0010 ‖ 0x0020 ‖ 0x0080 ‖ the first sc_entry_count rows of the
+    /// entry table)`, `sc_entry_count` being the header's `0x14`.
+    ///
+    /// Verified on ten Publishing Tools packages (a game, an app, a patch and seven DLC).
+    pub fn sc_entries2_ok(&self) -> bool {
+        let sc = u16::from_be_bytes([self.bytes[0x14], self.bytes[0x15]]) as u32;
+        let mut pre = Vec::new();
+        for id in [ids::ENTRY_KEYS, ids::IMAGE_KEY, ids::GENERAL_DIGESTS] {
+            match self.entry(id) {
+                Some(e) => pre.extend_from_slice(self.payload(e)),
+                None => return false,
+            }
+        }
+        let Some(metas) = self.entry(ids::METAS) else {
+            return false;
+        };
+        let rows = self
+            .bytes
+            .get(metas.offset as usize..(metas.offset + sc * ENTRY_LEN as u32) as usize);
+        let Some(rows) = rows else { return false };
+        pre.extend_from_slice(rows);
+        sha3(&pre) == self.bytes[0x120..0x140]
+    }
+
     /// `CNT+0x160 == SHA3(body region)`, the region the header's body offset/size locate.
     pub fn body_digest_ok(&self) -> bool {
         let off = self.body_offset as usize;

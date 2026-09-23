@@ -177,6 +177,14 @@ pub struct PlannedDir {
     pub dirents: Vec<(String, u32, i8)>,
 }
 
+impl PlannedDir {
+    /// `sce_sys` or a directory under it: the system directories, whose inodes carry the
+    /// system mode and flags. Everything else, uroot included, is an ordinary directory.
+    pub fn sce_sys(&self) -> bool {
+        self.path == "sce_sys" || self.path.starts_with("sce_sys/")
+    }
+}
+
 /// The whole layout. Pure: no file is read to build it.
 #[derive(Debug)]
 pub struct Plan {

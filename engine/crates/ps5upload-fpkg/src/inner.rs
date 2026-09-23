@@ -190,6 +190,12 @@ pub fn block_info_table(plan: &Plan) -> Vec<u8> {
     table
 }
 
+/// A directory's inode size: its entries' bytes rounded up to whole blocks. Both Sony references
+/// record every directory, the super-root included, as 0x10000 however few entries it holds.
+fn dir_size(entry_bytes: u64) -> u64 {
+    entry_bytes.next_multiple_of(BLOCK).max(BLOCK)
+}
+
 /// The fields one 0xA8-byte inner inode carries.
 struct InodeRecord {
     mode: u16,
@@ -279,7 +285,10 @@ fn metadata_region(plan: &Plan, build_time: (i64, u32)) -> Result<Vec<u8>> {
         sb[0x88 + t * 4..0x8C + t * 4].copy_from_slice(&build_time.1.to_le_bytes());
     }
     sb[0xB0..0xB8].copy_from_slice(&1i64.to_le_bytes());
-    sb[0xD8..0xE0].copy_from_slice(&0x89i64.to_le_bytes());
+    // The inode table's absolute block. Both Sony references hold exactly this (the Web
+    // Browser 0x41, Spider-Man 2 0x3f6911); the constant 0x89 that stood here was one
+    // package's value and pointed every other package's mount at the wrong block.
+    sb[0xD8..0xE0].copy_from_slice(&((plan.metadata.inode_table.0 / BLOCK) as i64).to_le_bytes());
     // The inner image has no seed, and that decides which of the superblock's two tail fields
     // is live: a seeded superblock (the outer image's) carries a 32-bit index at 0x36C and 16
     // seed bytes at 0x370, while an unseeded one carries a single 1 at 0x368 and leaves the
@@ -305,7 +314,7 @@ fn metadata_region(plan: &Plan, build_time: (i64, u32)) -> Result<Vec<u8>> {
             mode: plan::MODE_DIR_UROOT,
             nlink: 1,
             flags: plan::FLAGS_TABLE,
-            size: plan.metadata.super_root.1,
+            size: dir_size(plan.metadata.super_root.1),
             logical_offset: plan.metadata.super_root.0,
             db1: -1,
             db2: -1,
@@ -352,18 +361,21 @@ fn metadata_region(plan: &Plan, build_time: (i64, u32)) -> Result<Vec<u8>> {
             table,
             4 + i,
             &InodeRecord {
-                mode: if is_root {
+                // Only sce_sys and what is under it are system directories. Measured on
+                // Spider-Man 2: d/, fakelib/ and sce_module/ are 0x416d with flags 0x10, like
+                // uroot; every directory was written the sce_sys way.
+                mode: if is_root || !d.sce_sys() {
                     plan::MODE_DIR_UROOT
                 } else {
                     plan::MODE_DIR
                 },
                 nlink: d.nlink,
-                flags: if is_root {
+                flags: if is_root || !d.sce_sys() {
                     plan::FLAGS_DATA
                 } else {
                     plan::FLAGS_TABLE
                 },
-                size: plan.metadata.dirs[i].1,
+                size: dir_size(plan.metadata.dirs[i].1),
                 logical_offset: plan.metadata.dirs[i].0,
                 db1: -1,
                 db2: d.parent_inode,
