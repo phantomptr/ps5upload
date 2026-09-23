@@ -192,4 +192,65 @@ print("patched MainActivity.kt with onWebViewCreate textZoom=100")
 PY
 fi
 
+# --- (4) hand the page the navigation-bar inset ----------------------
+# The app draws edge-to-edge (enableEdgeToEdge, targetSdk 36), and the CSS pads
+# the bottom nav with env(safe-area-inset-bottom). Android WebView does not
+# report the navigation bar there: measured in the app on the emulator
+# (Chrome 134), safe-area-inset-top was 49px but safe-area-inset-bottom was
+# 0px, so the bottom tab bar sat under the gesture bar and its labels were
+# covered. Expose the real inset through a JS interface the page reads.
+#
+# Never install an insets listener on the WebView: it replaces the WebView's
+# own, and that is what computes the (correct) top inset. Idempotent via the
+# interface name.
+if [ -n "$mainactivity" ]; then
+  python3 - "$mainactivity" <<'PY'
+import sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+if "PS5UploadInsets" in src:
+    print("MainActivity.kt already exposes PS5UploadInsets — skipping")
+    sys.exit(0)
+anchor = "    super.onWebViewCreate(webView)\n"
+if anchor not in src:
+    sys.exit("::error::onWebViewCreate not found in MainActivity.kt (step 3 must run first)")
+hook = anchor + '''    // WebView reports env(safe-area-inset-bottom) as 0 for the navigation
+    // bar (measured: top 49px, bottom 0px), so give the page the real value.
+    webView.addJavascriptInterface(object {
+      @android.webkit.JavascriptInterface
+      fun navBottomPx(): Int = navInsetBottomPx
+    }, "PS5UploadInsets")
+    // Read the insets from the window root on each layout rather than
+    // installing an insets listener on the WebView. A listener REPLACES the
+    // WebView's own, which is what computes its safe-area-inset-top: the first
+    // version of this did that and the header slid under the status bar
+    // (measured top inset 49px -> 0px), even with the default handling
+    // re-invoked. A layout observer changes nothing about inset dispatch.
+    val root = window.decorView
+    root.viewTreeObserver.addOnGlobalLayoutListener {
+      val insets = androidx.core.view.ViewCompat.getRootWindowInsets(root)
+        ?: return@addOnGlobalLayoutListener
+      val bottom = insets
+        .getInsets(androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+        .bottom
+      if (bottom != navInsetBottomPx) {
+        navInsetBottomPx = bottom
+        webView.evaluateJavascript(
+          "window.dispatchEvent(new Event('ps5upload-insets'))", null)
+      }
+    }
+'''
+src = src.replace(anchor, hook, 1)
+field = '''
+  // Navigation-bar height in physical pixels, read by the page through
+  // PS5UploadInsets. Written on the UI thread, read on WebView's binder thread.
+  @Volatile private var navInsetBottomPx: Int = 0
+'''
+brace = src.index("{", src.index("class MainActivity"))
+src = src[:brace + 1] + field + src[brace + 1:]
+open(path, "w", encoding="utf-8").write(src)
+print("patched MainActivity.kt to expose the navigation-bar inset")
+PY
+fi
+
 echo "android post-init patches applied"

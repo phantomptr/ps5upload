@@ -595,6 +595,10 @@ android-init: android-deps setup-client
 
 android-build: android-deps payload setup-client
 	@test -d $(ANDROID_GEN_DIR) || $(MAKE) android-init
+	@# Re-apply the (idempotent) post-init patches on every build. They used to
+	@# run only at init, so an existing gen/ never picked up a new patch step and
+	@# a local APK silently differed from the CI one, which inits fresh.
+	@bash scripts/release/android-postinit-patch.sh
 	@echo "Building Android APK (debug, $(ANDROID_TARGET))..."
 	@cd $(CLIENT_DIR) && $(ANDROID_ENV) npx tauri android build --debug --apk --target $(ANDROID_TARGET)
 	@apk=$$(find "$(ANDROID_GEN_DIR)/app/build/outputs/apk" -name 'app-*-debug.apk' -print -quit 2>/dev/null); \

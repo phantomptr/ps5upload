@@ -9,6 +9,7 @@ import { RootErrorBoundary } from "./components";
 import "./state/theme";
 import "./state/uiScale";
 import "./state/accessibility";
+import "./lib/androidInsets";
 import "./state/lang";
 import "./index.css";
 import {

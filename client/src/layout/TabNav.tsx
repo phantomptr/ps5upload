@@ -277,7 +277,7 @@ export function TabBottomNav() {
     <>
       <nav
         aria-label={tr("v5_tab_primary_nav", undefined, "Primary")}
-        className="h-bottom-nav md:hidden fixed inset-x-0 bottom-0 z-40 flex items-stretch justify-around border-t border-[var(--color-border)] bg-[var(--color-surface-2)] pb-[env(safe-area-inset-bottom)]"
+        className="h-bottom-nav md:hidden fixed inset-x-0 bottom-0 z-40 flex items-stretch justify-around border-t border-[var(--color-border)] bg-[var(--color-surface-2)] pb-[var(--safe-bottom)]"
       >
         {TABS.map((tab) => {
           const Icon = tab.icon;

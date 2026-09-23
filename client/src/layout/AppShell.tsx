@@ -1360,7 +1360,7 @@ export default function AppShell() {
           <div
             key={location.pathname}
             data-scroll-root
-            className="anim-screen flex-1 overflow-y-auto overflow-x-hidden pb-[calc(56px+env(safe-area-inset-bottom))] md:pb-0 [overscroll-behavior:contain]"
+            className="anim-screen flex-1 overflow-y-auto overflow-x-hidden pb-[calc(56px+var(--safe-bottom))] md:pb-0 [overscroll-behavior:contain]"
           >
             <Outlet />
           </div>

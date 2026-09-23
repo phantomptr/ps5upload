@@ -100,7 +100,7 @@ export default function StatusBar() {
     .join("\n");
 
   return (
-    <div className="hidden min-h-8 flex-wrap items-center gap-x-3 gap-y-1 whitespace-nowrap border-t border-[var(--color-border)] bg-[var(--color-surface-raised)] px-3 pb-[calc(env(safe-area-inset-bottom)_+_0.3rem)] pt-1.5 pl-[calc(env(safe-area-inset-left)_+_0.75rem)] pr-[calc(env(safe-area-inset-right)_+_0.75rem)] text-[0.6875rem] text-[var(--color-muted)] shadow-[0_-1px_8px_rgba(0,0,0,0.06)] md:flex">
+    <div className="hidden min-h-8 flex-wrap items-center gap-x-3 gap-y-1 whitespace-nowrap border-t border-[var(--color-border)] bg-[var(--color-surface-raised)] px-3 pb-[calc(var(--safe-bottom)_+_0.3rem)] pt-1.5 pl-[calc(env(safe-area-inset-left)_+_0.75rem)] pr-[calc(env(safe-area-inset-right)_+_0.75rem)] text-[0.6875rem] text-[var(--color-muted)] shadow-[0_-1px_8px_rgba(0,0,0,0.06)] md:flex">
       {/* Group 1 — the Engine (our local backend). */}
       <div
         className="flex items-center gap-2"

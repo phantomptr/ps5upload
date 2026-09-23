@@ -782,18 +782,24 @@ button {
  * that touches the viewport bezel: top bars, bottom navs, drawer sides,
  * modal sheets, full-bleed lists. */
 .safe-top { padding-top: env(safe-area-inset-top); }
-.safe-bottom { padding-bottom: max(env(safe-area-inset-bottom), 0px); }
+/* The bottom safe area. env() where the browser reports it; otherwise the
+   value the Android shell hands the page (lib/androidInsets.ts). Android
+   WebView reports safe-area-inset-bottom as 0 for the navigation bar even when
+   the app draws edge-to-edge — measured: top 49px, bottom 0px — which put the
+   bottom tab bar under the gesture bar. */
+:root { --safe-bottom: max(env(safe-area-inset-bottom), var(--nav-inset-bottom, 0px)); }
+.safe-bottom { padding-bottom: var(--safe-bottom); }
 .safe-left { padding-left: env(safe-area-inset-left); }
 .safe-right { padding-right: env(safe-area-inset-right); }
 .safe-pad {
   padding-top: env(safe-area-inset-top);
-  padding-bottom: max(env(safe-area-inset-bottom), 0px);
+  padding-bottom: var(--safe-bottom);
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
 }
 /* Fixed-height chrome that needs to account for the inset in its height
  * (bottom nav = 56px + inset, top bar = 44px + inset). */
-.h-bottom-nav { height: calc(56px + env(safe-area-inset-bottom)); }
+.h-bottom-nav { height: calc(56px + var(--safe-bottom)); }
 .h-top-bar { height: calc(44px + env(safe-area-inset-top)); }
 
 /* ── Responsive width safety net ──────────────────────────────────────────

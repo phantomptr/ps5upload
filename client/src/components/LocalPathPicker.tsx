@@ -120,7 +120,7 @@ export function LocalPathPicker() {
       className="anim-scrim fixed inset-0 z-50 flex items-end justify-center bg-[var(--overlay-scrim)] sm:items-center"
       style={{
         paddingTop: "env(safe-area-inset-top)",
-        paddingBottom: "env(safe-area-inset-bottom)",
+        paddingBottom: "var(--safe-bottom)",
       }}
       onClick={() => settle(null)}
     >
