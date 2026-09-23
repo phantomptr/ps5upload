@@ -363,7 +363,7 @@ fn encode_block(raw: &[u8], level: u32, min_gain: u8) -> Vec<u8> {
 /// the order it was produced. Reading, the workers and writing all overlap, and the queues are
 /// bounded, so a 100 GB image streams through in constant memory. The first error from any
 /// stage stops the rest.
-fn pipeline<T: Send, U: Send>(
+pub(crate) fn pipeline<T: Send, U: Send>(
     threads: usize,
     mut produce: impl FnMut() -> Result<Option<T>> + Send,
     work: impl Fn(T) -> Result<U> + Sync,

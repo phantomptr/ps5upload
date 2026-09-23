@@ -89,14 +89,16 @@ Records are 72-bit little-endian integers.
 | 36 | odd half is an LZ chunk |
 | 37–47 | 0 |
 | 48–65 | the block's stored **end** offset, mod 256 KiB |
-| 66 | the next record is an anchor (end of a run) |
+| 66 | **the next record is an anchor.** This is the only thing that tells a reader an anchor from a block (it separates all 1.14 M Spider-Man records; no bit inside an anchor does), so two anchors never follow each other |
 | 67–68 | hint, meaning unknown (Sony writes 0, 2 or 4; 0 appears on compressed metadata blocks) |
 | 69–71 | hint, constant within a file (0–5); 0 appears on compressed metadata blocks |
 
 A raw half is one whose stored length equals its logical length; its flags are 0.
 
-**Anchor record** (bit 31 = 0): bits 26–47 = the 256 KiB window of the next stored position,
-bits 48–65 = its offset within that window. Anchors appear (a) wherever the next block's
+**Anchor record** — recognised only by the previous record's bit 66 (index 0 is always one):
+bits 0–25 = the next stored position in 1 MiB units, bits 26–47 = the same in 256 KiB windows,
+bits 48–65 = its offset within that window. (Bit 31 is just window bit 5: set on anchors past
+8 MiB, so it cannot identify blocks.) Anchors appear (a) wherever the next block's
 stored data does not follow the previous block's (each file group starts on a 64 KiB
 boundary), and (b) at every 16th record index. The **terminator** is an anchor at the end of
 the stored data with bits 67–68 = 1 (value 2 in bits 66–68). The **end sentinel** is the last
@@ -108,6 +110,11 @@ length is `min(256 KiB, next file boundary − start)`; blocks never cross a fid
 **All-zero data** (for example the gap between the data and the metadata base) is stored as
 16 bytes per 256 KiB block: each half is `27 ff fc 00 03 00 40 00`, a one-symbol Huffman
 array decoding to 128 KiB of zeros, flags `0x04`.
+
+Sony's encoder also uses forms ours never emits: blocks with flag `0x4` and no stored bytes
+(all-zero or deduplicated), anchors that jump **backwards** to reuse stored data, entropy-only
+halves. `kraken_image::describe` walks all of them: all 1,039,050 of Spider-Man's blocks tile its
+272 GB mount.
 
 ### Why our uncompressed layouts looked right
 
