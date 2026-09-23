@@ -4454,7 +4454,7 @@ export async function payloadCheck(ip: string): Promise<{
    *  Connection screen so the user sees the prerequisite state. */
   ucredElevated: boolean | null;
   /** How the PREVIOUS payload instance ended, straight from STATUS_ACK:
-   *  "clean" | "killed_externally" | "wedged" | "stale". null on payloads
+   *  "clean" | "killed_externally" | "wedged" | "stale" | "replaced". null on payloads
    *  older than this field, which is indistinguishable from "unknown". */
   priorInstance: string | null;
   /** Max parallel upload streams this payload will service concurrently

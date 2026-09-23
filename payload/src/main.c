@@ -10,6 +10,7 @@
 #include <dlfcn.h>
 #include <ps5/kernel.h>
 #include "activity.h"
+#include "instance_verdict.h"
 #include "config.h"
 #include "runtime.h"
 #include "register.h"
@@ -390,31 +391,22 @@ static void redirect_stdio_to_file(void) {
     dup2(fd, STDOUT_FILENO);
     dup2(fd, STDERR_FILENO);
     if (fd != STDOUT_FILENO && fd != STDERR_FILENO) close(fd);
-    /* UNBUFFERED. Do not change this to line or full buffering.
+    /* Unbuffered, as every build up to 5.31.4 shipped.
      *
-     * stdio here is the CONSOLE's libc (fprintf/fwrite/setvbuf resolve from
-     * libc_stub_weak.so at runtime, not from the SDK's static libc.a), and
-     * FreeBSD-derived stdio only locks a FILE when `__isthreaded` is set:
-     * FLOCKFILE(fp) is a no-op otherwise. Whether it is set depends on the
-     * host process the loader put us in, which we do not control.
+     * 5.32.0 made these line buffered to stop concurrent log lines shredding,
+     * and was reverted when users reported "connects for a few seconds, then
+     * disconnects" on every build after 5.31.4. Hardware testing then showed
+     * the drops were NOT caused by buffering: the accept loops gave up on an
+     * unrecognised errno (163) and stopped serving — see
+     * recover_from_accept_error in runtime.c. A line-buffered build survived
+     * the same load that later killed an unbuffered one.
      *
-     * Unbuffered, an unlocked stdio has no shared state to corrupt — two
-     * threads logging at once merely interleave characters, which is ugly:
-     *
-     *   [[ppaayyllooaadd22]] ttarkaenosvfeerr: ...
-     *
-     * That shredding IS the evidence that the locks are absent.
-     *
-     * Buffered, every thread shares one buffer and its pointer and count with
-     * nothing serialising them: a data race that corrupts memory. 5.32.0 made
-     * exactly this change to fix the shredding, and every build from 5.32.0
-     * killed the helper within seconds on consoles where the locks are off —
-     * reported independently by two users (one on FW 12.70 with kstuff-lite
-     * only), both of whom found 5.31.4 to be the last build that worked. It
-     * was the only behavioural payload change between the two builds.
-     *
-     * If the shredding ever needs fixing, format each line into a local buffer
-     * and hand it to a single write(2) — never a shared stdio buffer. */
+     * Kept unbuffered anyway because it is the long-proven configuration and
+     * whether the console's stdio locks between threads depends on the host
+     * process (FreeBSD stdio only locks when __isthreaded is set). The cost is
+     * that two writers can interleave characters — seen both between two
+     * instances during a takeover and between two threads of one instance.
+     * To fix that, format each line locally and hand it to one write(2). */
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
 
@@ -587,6 +579,17 @@ int main(void) {
         startup_trace("TAKEOVER_DONE_AFTER_REAP");
     } else {
         startup_trace("TAKEOVER_DONE");
+        /* The predecessor handed over when asked, so it was not wedged — it
+         * was simply running. See instance_verdict_after_takeover. */
+        {
+            ps5upload2_prior_verdict_t refined = instance_verdict_after_takeover(
+                (ps5upload2_prior_verdict_t)state.prior_verdict, 1);
+            if ((int)refined != state.prior_verdict) {
+                state.prior_verdict = (int)refined;
+                fprintf(stderr, "[payload2] prior instance: %s (handed over cleanly)\n",
+                        instance_verdict_name(refined));
+            }
+        }
         /* Healthy cooperative takeover. Still reap in case a SEPARATE crashed
          * instance lingered with a stale pid record (the "duplicate
          * payload.elf" case) — harmless no-op when the pid is already gone. */

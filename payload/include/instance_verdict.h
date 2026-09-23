@@ -20,6 +20,9 @@ typedef enum {
     PS5UPLOAD2_PRIOR_KILLED_EXTERNALLY = 1,
     PS5UPLOAD2_PRIOR_WEDGED = 2,
     PS5UPLOAD2_PRIOR_STALE = 3,
+    /* Alive when this instance started, then handed over cooperatively. The
+     * normal relaunch-over-a-running-helper case. */
+    PS5UPLOAD2_PRIOR_REPLACED = 4,
 } ps5upload2_prior_verdict_t;
 
 /*
@@ -46,6 +49,26 @@ instance_verdict_classify(int record_present,
     return PS5UPLOAD2_PRIOR_KILLED_EXTERNALLY;
 }
 
+/*
+ * Refine the startup verdict once the takeover's outcome is known.
+ *
+ * The classifier has to run BEFORE the takeover (afterwards the ownership
+ * record belongs to this instance), and at that point a perfectly healthy
+ * predecessor is alive — so every ordinary relaunch over a running helper was
+ * reported as "wedged". Measured: five relaunches in a row on a FW 5.10
+ * console, every one "wedged", every predecessor handing over cleanly. That
+ * label then sent a crash investigation after a stuck process that did not
+ * exist. "Wedged" now means what it says: alive, and it would NOT hand over.
+ */
+static inline ps5upload2_prior_verdict_t
+instance_verdict_after_takeover(ps5upload2_prior_verdict_t at_startup,
+                                int cooperative_takeover_ok) {
+    if (at_startup == PS5UPLOAD2_PRIOR_WEDGED && cooperative_takeover_ok) {
+        return PS5UPLOAD2_PRIOR_REPLACED;
+    }
+    return at_startup;
+}
+
 /* Wire name. snake_case: this value crosses the STATUS_ACK JSON boundary
  * into serde on the engine side. */
 static inline const char *
@@ -55,6 +78,7 @@ instance_verdict_name(ps5upload2_prior_verdict_t v) {
         case PS5UPLOAD2_PRIOR_KILLED_EXTERNALLY:  return "killed_externally";
         case PS5UPLOAD2_PRIOR_WEDGED:             return "wedged";
         case PS5UPLOAD2_PRIOR_STALE:              return "stale";
+        case PS5UPLOAD2_PRIOR_REPLACED:           return "replaced";
     }
     return "unknown";
 }

@@ -61,6 +61,29 @@ int main(void) {
           "wedged name");
     check(!strcmp(instance_verdict_name(PS5UPLOAD2_PRIOR_STALE), "stale"),
           "stale name");
+    check(!strcmp(instance_verdict_name(PS5UPLOAD2_PRIOR_REPLACED), "replaced"),
+          "replaced name");
+
+    /* A live predecessor that hands over cleanly was running, not wedged.
+     * Every ordinary relaunch used to read "wedged". */
+    check(instance_verdict_after_takeover(PS5UPLOAD2_PRIOR_WEDGED, 1) ==
+              PS5UPLOAD2_PRIOR_REPLACED,
+          "clean handover of a live predecessor reads as replaced");
+    /* One that had to be SIGKILLed really was wedged. */
+    check(instance_verdict_after_takeover(PS5UPLOAD2_PRIOR_WEDGED, 0) ==
+              PS5UPLOAD2_PRIOR_WEDGED,
+          "a predecessor that would not hand over stays wedged");
+    /* The refinement only ever touches the live-predecessor case. */
+    check(instance_verdict_after_takeover(PS5UPLOAD2_PRIOR_CLEAN, 1) ==
+              PS5UPLOAD2_PRIOR_CLEAN,
+          "clean is untouched");
+    check(instance_verdict_after_takeover(PS5UPLOAD2_PRIOR_KILLED_EXTERNALLY, 1) ==
+              PS5UPLOAD2_PRIOR_KILLED_EXTERNALLY,
+          "killed_externally is untouched");
+    check(instance_verdict_after_takeover(PS5UPLOAD2_PRIOR_STALE, 0) ==
+              PS5UPLOAD2_PRIOR_STALE,
+          "stale is untouched");
+
     check(!strcmp(instance_verdict_name((ps5upload2_prior_verdict_t)99),
                   "unknown"),
           "out-of-range verdict has a name");

@@ -34,6 +34,7 @@
 #include "runtime.h"
 #include "sandbox_unmount.h"
 #include "instance_verdict.h"
+#include "accept_recovery.h"
 
 #include "content_db.h"
 #include "register.h"
@@ -16914,6 +16915,78 @@ static void *transfer_client_thread(void *arg) {
     return NULL;
 }
 
+
+/*
+ * accept() failed on a listener. Decide how to carry on — never by giving up.
+ *
+ * Both accept loops used to `break` on any errno outside a short allow-list,
+ * which ends the loop, closes the listener and leaves the helper up but
+ * serving nothing: the host sees :9114 "connection refused" and reports the
+ * helper as gone. Reproduced on a FW 5.10 Phat under a sustained burst of
+ * the requests a bug report sends: after ~2 min both loops logged
+ *
+ *   [payload2] mgmt accept: error_code=0x000000a3
+ *   [payload2] accept: error_code=0x000000a3
+ *   [payload2] transfer loop exiting shutdown=0 takeover=0
+ *
+ * — errno 163, a Sony addition beyond FreeBSD's ELAST (96), which no
+ * allow-list will ever anticipate. Nothing crashed and nobody asked it to
+ * stop; the helper simply quit. That is the "connects for a few seconds, then
+ * disconnects" users reported.
+ *
+ * So: an EINTR/ECONNABORTED is retried at once, anything else backs off and
+ * retries, and a listener that keeps failing is closed and rebuilt on the
+ * same port. The only way out of an accept loop is shutdown_requested.
+ *
+ * Returns 0 to keep looping, -1 when shutdown was requested.
+ */
+static int recover_from_accept_error(runtime_state_t *state, int *listener_fd,
+                                     int port, int *consecutive,
+                                     const char *which) {
+    int err = errno;
+    accept_action_t action;
+    if (state->shutdown_requested) return -1; /* listener closed from outside */
+    if (accept_error_action(err, 1) == ACCEPT_RETRY_NOW) return 0;
+
+    (*consecutive)++;
+    action = accept_error_action(err, *consecutive);
+    /* Log the first failure and each rebuild, not every 100 ms retry: a
+     * persistent error would otherwise fill stderr.log at 10 lines/s. */
+    if (*consecutive == 1) {
+        fprintf(stderr, "[payload2] %s accept failed, retrying: %s (errno %d)\n",
+                which, strerror(err), err);
+    }
+    usleep(100000); /* 100 ms back-off so a hard failure cannot busy-spin */
+
+    if (action != ACCEPT_REBUILD) return 0;
+
+    /* Still failing: assume the listening socket is dead and rebuild it. */
+    fprintf(stderr, "[payload2] %s accept failed %d times in a row (errno %d) — "
+                    "rebuilding the listener on port %d\n",
+            which, *consecutive, err, port);
+    if (*listener_fd >= 0) close(*listener_fd);
+    *listener_fd = -1;
+    for (;;) {
+        int fd;
+        if (state->shutdown_requested) return -1;
+        fd = create_listener(port, /*probe_max_rcvbuf=*/0, NULL, NULL, NULL, NULL);
+        if (fd >= 0) {
+            /* main() closes mgmt_listener_fd to stop the mgmt loop. If that
+             * raced this rebuild, honour the shutdown instead of accepting on
+             * a socket nobody will ever close. */
+            if (state->shutdown_requested) {
+                close(fd);
+                return -1;
+            }
+            *listener_fd = fd;
+            *consecutive = 0;
+            fprintf(stderr, "[payload2] %s listener rebuilt on port %d\n", which, port);
+            return 0;
+        }
+        sleep(1); /* bind/listen failed (port held, stack busy) — try again */
+    }
+}
+
 int runtime_server_loop(runtime_state_t *state) {
     if (!state) return -1;
 
@@ -16927,25 +17000,19 @@ int runtime_server_loop(runtime_state_t *state) {
 
     printf("[payload2] transfer listener ready on port %d\n", state->runtime_port);
 
+    int accept_failures = 0;
     while (!state->shutdown_requested) {
         int client_fd = accept(state->listener_fd, NULL, NULL);
         if (client_fd < 0) {
-            if (state->shutdown_requested) break; /* listener closed from outside */
-            /* Transient per-connection errors must NOT tear down the whole
-             * helper. Previously ANY non-EINTR error broke the loop and killed
-             * the payload — a single ECONNABORTED or an fd-pressure spike under
-             * a heavy Library scan dropped the helper, surfacing as "helper
-             * keeps dying randomly". Retry instead. */
-            if (errno == EINTR || errno == ECONNABORTED) continue;
-            if (errno == EMFILE || errno == ENFILE || errno == ENOBUFS ||
-                errno == ENOMEM) {
-                fprintf(stderr, "[payload2] accept (transient resource pressure): %s\n", strerror(errno));
-                usleep(100000); /* 100 ms back-off so we don't busy-spin */
-                continue;
+            /* Never give up on the listener; see recover_from_accept_error. */
+            if (recover_from_accept_error(state, &state->listener_fd,
+                                          state->runtime_port,
+                                          &accept_failures, "transfer") != 0) {
+                break;
             }
-            fprintf(stderr, "[payload2] accept: %s\n", strerror(errno));
-            break;
+            continue;
         }
+        accept_failures = 0;
         /* Tune on the accept thread (writes state->last_client_rcvbuf, which no
          * other thread touches) BEFORE handing off, so the worker threads never
          * race on it. */
@@ -17098,25 +17165,23 @@ void *runtime_mgmt_server_loop(void *state_ptr) {
 
     printf("[payload2] mgmt listener ready on port %d\n", state->mgmt_port);
 
+    int accept_failures = 0;
     while (!state->shutdown_requested) {
         int client_fd = accept(state->mgmt_listener_fd, NULL, NULL);
         if (client_fd < 0) {
             /* When main() signals shutdown it closes mgmt_listener_fd from
-             * the outside; accept() returns with EBADF and we exit cleanly. */
-            if (state->shutdown_requested) break;
-            /* Keep the MGMT listener alive across transient errors — it's the
-             * port the host's liveness probe hits, so breaking here makes the
-             * app declare "Helper isn't running" even though the helper is up. */
-            if (errno == EINTR || errno == ECONNABORTED) continue;
-            if (errno == EMFILE || errno == ENFILE || errno == ENOBUFS ||
-                errno == ENOMEM) {
-                fprintf(stderr, "[payload2] mgmt accept (transient resource pressure): %s\n", strerror(errno));
-                usleep(100000); /* 100 ms back-off */
-                continue;
+             * the outside; accept() returns and the helper sees the flag.
+             * Anything else is retried — this is the port the host's
+             * liveness probe hits, so giving up here makes the app declare
+             * the helper gone while it is still running. */
+            if (recover_from_accept_error(state, &state->mgmt_listener_fd,
+                                          state->mgmt_port,
+                                          &accept_failures, "mgmt") != 0) {
+                break;
             }
-            fprintf(stderr, "[payload2] mgmt accept: %s\n", strerror(errno));
-            break;
+            continue;
         }
+        accept_failures = 0;
         tune_accepted_client(client_fd, NULL);
 
         /* Hand the client off to its own thread so a stuck fs syscall

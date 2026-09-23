@@ -751,6 +751,11 @@ test-payload: payload
 	done
 	@echo "✓ Main payload and DPI installer are PS5 ELFs with gzip resources"
 	@echo "Running play-time launch/resume self-test (host build)..."
+	@echo "Running accept-recovery self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-accept-recovery-selftest \
+		$(PAYLOAD_DIR)/tests/accept_recovery_selftest.c
+	@/tmp/ps5upload-accept-recovery-selftest
+	@echo "✓ an accept() failure never stops the helper serving"
 	@echo "Running direct-commit apply self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-commit-apply-selftest \
 		$(PAYLOAD_DIR)/tests/commit_apply_selftest.c

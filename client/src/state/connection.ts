@@ -147,7 +147,7 @@ export interface ConnectionState {
    *  Set by Connection's payload probe + AppShell's polling tick. */
   ucredElevated: boolean | null;
   /** How the PREVIOUS payload instance ended, straight from STATUS_ACK:
-   *  "clean" | "killed_externally" | "wedged" | "stale". null on payloads
+   *  "clean" | "killed_externally" | "wedged" | "stale" | "replaced". null on payloads
    *  older than this field, which is indistinguishable from "unknown". */
   priorInstance: string | null;
   /** Max parallel upload streams the payload advertises (STATUS_ACK
