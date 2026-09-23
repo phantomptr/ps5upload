@@ -785,7 +785,22 @@ function pkgError(e: unknown): string {
  *  connections at once) and re-served to the console. Everything downstream —
  *  the DPI hand-off, the transfer tracking, the completion check — is the same
  *  for both, which is why they share one code path. */
-export type StreamInstallSource = string | { remoteUrl: string };
+/** A package file on an SMB share, streamed straight into the installer. */
+export interface SmbStreamSource {
+  server: string;
+  share: string;
+  user: string;
+  password: string;
+  /** Path of the .pkg within the share. */
+  path: string;
+  /** Size from the share listing, for progress before the engine reports it. */
+  size?: number;
+}
+
+export type StreamInstallSource =
+  | string
+  | { remoteUrl: string }
+  | { smb: SmbStreamSource };
 
 interface PkgLibraryState {
   /** Library contents, derived from the on-PS5 dir + transient row state. */
@@ -3696,11 +3711,15 @@ const makePkgLibraryStore = () =>
       }
       // A link and a local file differ only in where the bytes come from and
       // what we call them; the install itself is one path.
-      const remoteUrl = typeof source === "string" ? null : source.remoteUrl;
+      const remoteUrl =
+        typeof source === "object" && "remoteUrl" in source ? source.remoteUrl : null;
+      const smb = typeof source === "object" && "smb" in source ? source.smb : null;
       const localPcPath = typeof source === "string" ? source : null;
       const sourceName = remoteUrl
         ? basenameOf(new URL(remoteUrl).pathname) || "package"
-        : basenameOf(localPcPath ?? "") || "package";
+        : smb
+          ? basenameOf(smb.path.replace(/\\/g, "/")) || "package"
+          : basenameOf(localPcPath ?? "") || "package";
       const tasks = useTaskStore.getState();
       const taskId = tasks.registerTask({
         kind: "pkg-dpi-install",
@@ -3710,7 +3729,12 @@ const makePkgLibraryStore = () =>
         consoleId: host,
         // Never record the URL: an install link can carry a signed token and
         // task payloads reach the diagnostic bundle.
-        payload: remoteUrl ? { remote: true } : { localPcPath },
+        // Never the SMB password: task payloads are shown and persisted.
+        payload: remoteUrl
+          ? { remote: true }
+          : smb
+            ? { smb: { server: smb.server, share: smb.share, path: smb.path } }
+            : { localPcPath },
         status: "queued",
       });
       let taskFinished = false;
@@ -3802,7 +3826,13 @@ const makePkgLibraryStore = () =>
           fingerprint?: string;
         };
         let totalBytes: number;
-        if (remoteUrl) {
+        if (smb) {
+          // The engine reads the header off the share itself when the install
+          // starts (the same ranges it then serves), so there is nothing to
+          // probe here — a second read of the share would only add latency.
+          head = {};
+          totalBytes = smb.size ?? 0;
+        } else if (remoteUrl) {
           try {
             const probe = (await invoke("pkg_remote_probe", {
               url: remoteUrl,
@@ -3899,12 +3929,24 @@ const makePkgLibraryStore = () =>
           splitRoot: null,
           // Exactly one of these is set. With remoteUrl the engine fetches the
           // package from the origin in parallel and serves it from the same
-          // pkg-host session a local file would use.
+          // pkg-host session a local file would use; with smb it reads the
+          // share the same way. Nothing is copied or staged for either.
           remoteUrl,
+          smb: smb
+            ? {
+                server: smb.server,
+                share: smb.share,
+                user: smb.user,
+                password: smb.password,
+                path: smb.path,
+              }
+            : null,
           packageTypeOverride: resolvedPackageType,
           localPs5Path: null,
           contentId: contentId || null,
-          expectedSize: totalBytes || null,
+          // For SMB the size is the listing's, not a parsed header's: leave
+          // it to the engine, which opened the file and knows it exactly.
+          expectedSize: smb ? null : totalBytes || null,
           packageFingerprint: head.fingerprint ?? null,
           // No staging file is created, so deleteStaging is moot — pass
           // false so the engine doesn't record a staging_path to clean up.

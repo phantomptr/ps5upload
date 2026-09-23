@@ -9,6 +9,7 @@ import {
   Download,
   Home,
   Upload,
+  PackagePlus,
 } from "lucide-react";
 import {
   PageHeader,
@@ -22,6 +23,7 @@ import {
 } from "../../components";
 import { useTr } from "../../state/lang";
 import { useConnectionStore } from "../../state/connection";
+import { usePkgLibrary } from "../../state/pkgLibrary";
 import { transferAddr } from "../../lib/addr";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { isTauriEnv } from "../../lib/tauriEnv";
@@ -47,6 +49,8 @@ export default function SmbBrowserScreen() {
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const addr = host ? transferAddr(host) : "";
+  const installStream = usePkgLibrary(host ?? "", (s) => s.installStream);
+  const [installing, setInstalling] = useState<string | null>(null);
 
   // Empty rather than a sample address: the old default pointed at a
   // subnet almost nobody is on, so "Connect" looked broken until you
@@ -246,6 +250,53 @@ export default function SmbBrowserScreen() {
   });
 
   const canUploadPs5 = payloadStatus === "up" && !!addr;
+
+  /** Install a package straight from the share: the engine reads it in
+   *  ranges and serves the console's installer, so nothing is copied to this
+   *  computer or staged on the PS5 first — the same way itsPLK's PKG Manager
+   *  installs from SMB. "Upload to PS5" (below) is still there for keeping a
+   *  copy on the console. */
+  const handleInstall = useCallback(
+    async (name: string, size: number) => {
+      if (!currentShare || !host) return;
+      if (payloadStatus !== "up") {
+        setError(
+          tr("smb_need_payload", undefined, "Connect a PS5 with the payload loaded first"),
+        );
+        return;
+      }
+      setInstalling(name);
+      setError(null);
+      setStatus(tr("smb_installing", { name }, `Installing ${name} from the share…`));
+      try {
+        const r = await installStream(
+          {
+            smb: {
+              server,
+              share: currentShare,
+              user,
+              password,
+              path: [...pathStack, name].join("/"),
+              size,
+            },
+          },
+          host,
+        );
+        if (r.ok) {
+          setStatus(r.message || tr("smb_install_done", { name }, `Installed ${name}`));
+        } else {
+          setError(r.message || tr("smb_install_failed", undefined, "The install didn't complete."));
+          setStatus(null);
+        }
+      } catch (e) {
+        setError(humanizePs5Error(String(e)));
+        setStatus(null);
+      } finally {
+        setInstalling(null);
+      }
+    },
+    [currentShare, host, payloadStatus, installStream, server, user, password, pathStack, tr],
+  );
 
   return (
     <div className="p-6">
@@ -488,6 +539,32 @@ export default function SmbBrowserScreen() {
                           )}
                         </button>
                       )}
+                      {/* Only real packages: macOS drops "._name" resource-fork
+                          files beside every file it copies to a share, and those
+                          end in .pkg too. */}
+                      {!e.is_dir &&
+                        /\.pkg$/i.test(e.name) &&
+                        !e.name.startsWith("._") && (
+                          <button
+                            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] disabled:opacity-40"
+                            onClick={(ev) => {
+                              ev.stopPropagation();
+                              void handleInstall(e.name, e.size);
+                            }}
+                            disabled={!canUploadPs5 || !!installing || !!uploading || !!downloading}
+                            title={tr(
+                              "smb_install_ps5",
+                              undefined,
+                              "Install on PS5 (streams from the share — nothing is copied first)",
+                            )}
+                          >
+                            {installing === e.name ? (
+                              <Spinner size={14} tone="inherit" />
+                            ) : (
+                              <PackagePlus size={14} />
+                            )}
+                          </button>
+                        )}
                       <button
                         className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] disabled:opacity-40"
                         onClick={(ev) => {

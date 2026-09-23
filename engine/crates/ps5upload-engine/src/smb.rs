@@ -38,7 +38,7 @@ pub const SMB_STAGE_MAX_DIRS: u64 = 200_000;
 /// suggested) was passed through verbatim and failed DNS resolution on
 /// the literal string `smb://host`. Users typing the most natural thing
 /// got "failed to lookup address information" and no hint as to why.
-fn normalize_smb_server(input: &str) -> anyhow::Result<String> {
+pub(crate) fn normalize_smb_server(input: &str) -> anyhow::Result<String> {
     let mut s = input.trim();
     if s.is_empty() {
         anyhow::bail!("server is required");

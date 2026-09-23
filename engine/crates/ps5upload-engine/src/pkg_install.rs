@@ -55,7 +55,39 @@ use uuid::Uuid;
 /// the remote paths are statically unreachable rather than conditionally
 /// compiled out of every call site.
 #[cfg(not(target_os = "android"))]
-pub type RemotePkg = crate::remote_pkg::RemoteSource;
+#[derive(Debug)]
+pub enum RemotePkg {
+    /// An HTTP(S) link, fetched over many connections.
+    Http(Arc<crate::remote_pkg::RemoteSource>),
+    /// A file on an SMB share, read in positioned pieces.
+    Smb(crate::smb_range::SmbRangeSource),
+}
+
+#[cfg(not(target_os = "android"))]
+impl RemotePkg {
+    pub fn read_range(&self, start: u64, end: u64) -> std::io::Result<Vec<u8>> {
+        match self {
+            RemotePkg::Http(r) => r.read_range(start, end),
+            RemotePkg::Smb(r) => r.read_range(start, end),
+        }
+    }
+
+    /// Fetch ahead of the console. Only the HTTP source needs it: its window
+    /// cache is what lets the origin run ahead of the console. An SMB read on
+    /// a LAN share answers well inside the console's own pacing.
+    pub fn prefetch_after(this: &Arc<Self>, offset: u64) {
+        if let RemotePkg::Http(r) = &**this {
+            crate::remote_pkg::RemoteSource::prefetch_after(r, offset);
+        }
+    }
+
+    pub fn origin_rate_bps(&self) -> Option<u64> {
+        match self {
+            RemotePkg::Http(r) => r.origin_rate_bps(),
+            RemotePkg::Smb(r) => r.origin_rate_bps(),
+        }
+    }
+}
 
 #[cfg(target_os = "android")]
 #[derive(Debug)]
@@ -1033,6 +1065,24 @@ async fn parse_split_handler(Json(req): Json<ParseRequest>) -> Response<Body> {
 
 // ─── /api/pkg/install/start ──────────────────────────────────────────
 
+/// Where an SMB install reads from. Credentials arrive in the request body
+/// (loopback-only API) and are held only by the open connection.
+#[derive(Debug, Clone, Deserialize)]
+// Read only where installing from SMB is compiled in; Android keeps the type
+// so one client speaks to every engine, and answers "not available".
+#[cfg_attr(target_os = "android", allow(dead_code))]
+pub struct SmbInstallSource {
+    /// Host or host:port of the SMB server.
+    pub server: String,
+    pub share: String,
+    #[serde(default)]
+    pub user: String,
+    #[serde(default)]
+    pub password: String,
+    /// Path of the .pkg within the share.
+    pub path: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct InstallStartRequest {
     /// PS5 mgmt-port address, e.g. "192.168.1.42:9114".
@@ -1068,6 +1118,13 @@ pub struct InstallStartRequest {
     /// `local_ps5_path`. The origin must honour byte ranges.
     #[serde(default)]
     pub remote_url: Option<String>,
+    /// Install a package straight from a file on an SMB share: the engine
+    /// reads it in ranges and re-serves it to the console from the pkg-host,
+    /// exactly as it does for `remote_url`. Nothing is copied to this computer
+    /// or staged on the console. Mutually exclusive with the other sources.
+    #[serde(default)]
+    #[cfg_attr(target_os = "android", allow(dead_code))]
+    pub smb: Option<SmbInstallSource>,
     /// Optional override for the package_type passed to BGFT. When
     /// unset we use whatever `derive_package_type(category)` returns
     /// or fall back to "PS4GD". Useful for unknown-magic PKGs where
@@ -5200,9 +5257,31 @@ async fn resolve_remote_source(
     } else {
         probe.filename.clone()
     };
-    let metadata = PkgMetadata {
+    let metadata = streamed_metadata(req, head, fingerprint, total_size, &display_name);
+    // `parts` stays empty: every range read is proxied, never read off disk.
+    Ok((
+        vec![],
+        vec![],
+        total_size,
+        metadata,
+        Some(Arc::new(RemotePkg::Http(remote))),
+    ))
+}
+
+/// Metadata for a package that is streamed rather than read off local disk —
+/// a link or an SMB file. One copy, because it carries the patch data-loss
+/// guard below and two copies would drift.
+#[cfg(not(target_os = "android"))]
+fn streamed_metadata(
+    req: &InstallStartRequest,
+    head: ps5upload_pkg::ReaderMetadata,
+    fingerprint: String,
+    total_size: u64,
+    display_name: &str,
+) -> PkgMetadata {
+    PkgMetadata {
         // No local file exists; the name is for display and logging only.
-        path: PathBuf::from(&display_name),
+        path: PathBuf::from(display_name),
         size: total_size,
         kind: ps5upload_pkg::PkgKind::CntContainer,
         authenticity: head.authenticity,
@@ -5228,9 +5307,7 @@ async fn resolve_remote_source(
         platform: head.platform,
         icon_png_base64: None,
         warnings: vec![],
-    };
-    // `parts` stays empty: every range read is proxied, never read off disk.
-    Ok((vec![], vec![], total_size, metadata, Some(remote)))
+    }
 }
 
 #[cfg(test)]
@@ -5267,6 +5344,69 @@ async fn resolve_remote_source(
     _req: &InstallStartRequest,
 ) -> Result<ResolvedSource, String> {
     Err("installing from a link is not available in the Android build".into())
+}
+
+/// Resolve an install that streams from a file on an SMB share.
+#[cfg(not(target_os = "android"))]
+async fn resolve_smb_source(
+    smb: &SmbInstallSource,
+    req: &InstallStartRequest,
+) -> Result<ResolvedSource, String> {
+    if req.path.is_some() || req.split_root.is_some() || req.remote_url.is_some() {
+        return Err("smb cannot be combined with path, split_root or remote_url".into());
+    }
+    if req.local_ps5_path.as_deref().is_some_and(|p| !p.is_empty()) {
+        return Err("smb cannot be combined with local_ps5_path".into());
+    }
+    let source = crate::smb_range::SmbRangeSource::open(
+        &smb.server,
+        &smb.share,
+        &smb.user,
+        &smb.password,
+        &smb.path,
+    )
+    .await
+    .map_err(|e| format!("could not open the package on the share: {e}"))?;
+    let total_size = source.total_size();
+    // Share host only; the path can name a user's folders and the password
+    // never leaves the connection.
+    crate::log_info!("smb install: host={} bytes={}", source.host(), total_size);
+    let remote = Arc::new(RemotePkg::Smb(source));
+    // Header parsing issues blocking range reads, which block on the runtime:
+    // keep them off the reactor.
+    let probe_remote = Arc::clone(&remote);
+    let (head, fingerprint) = tokio::task::spawn_blocking(move || {
+        let read_at = |offset: u64, len: u64| -> Option<Vec<u8>> {
+            if len == 0 {
+                return Some(Vec::new());
+            }
+            probe_remote.read_range(offset, offset + len - 1).ok()
+        };
+        let head = ps5upload_pkg::metadata_from_reader(read_at).ok_or_else(|| {
+            "that file does not look like a PS4/PS5 package (no readable PKG header)".to_string()
+        })?;
+        let fingerprint = ps5upload_pkg::package_fingerprint_from_reader(total_size, &read_at)
+            .unwrap_or_default();
+        Ok::<_, String>((head, fingerprint))
+    })
+    .await
+    .map_err(|e| format!("smb package probe task panicked/cancelled: {e}"))??;
+    let name = smb
+        .path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(&smb.path)
+        .to_string();
+    let metadata = streamed_metadata(req, head, fingerprint, total_size, &name);
+    Ok((vec![], vec![], total_size, metadata, Some(remote)))
+}
+
+#[cfg(target_os = "android")]
+async fn resolve_smb_source(
+    _smb: &SmbInstallSource,
+    _req: &InstallStartRequest,
+) -> Result<ResolvedSource, String> {
+    Err("installing from an SMB share is not available in the Android build".into())
 }
 
 // ─── /api/pkg/remote/probe ───────────────────────────────────────────
@@ -5315,6 +5455,7 @@ async fn remote_probe_handler(Json(req): Json<RemoteProbeRequest>) -> Response<B
         path: None,
         split_root: None,
         remote_url: Some(url.clone()),
+        smb: None,
         package_type_override: None,
         local_ps5_path: None,
         content_id: None,
@@ -5368,6 +5509,9 @@ type ResolvedSource = (
 async fn resolve_parts_and_meta(req: &InstallStartRequest) -> Result<ResolvedSource, String> {
     if let Some(url) = req.remote_url.as_deref().filter(|u| !u.is_empty()) {
         return resolve_remote_source(url, req).await;
+    }
+    if let Some(smb) = &req.smb {
+        return resolve_smb_source(smb, req).await;
     }
     // The two `parse_*` calls open and read .pkg / split-part headers (and stat
     // each split part) from disk. On a cold or network-hosted pkg that's
@@ -7006,7 +7150,7 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         // A link install has no local parts at all — every byte is proxied.
         let mut session = dummy_session(vec![]);
         session.total_size = total as u64;
-        session.remote = Some(remote);
+        session.remote = Some(std::sync::Arc::new(RemotePkg::Http(remote)));
 
         for (start, len) in [(0u64, 4096u64), (1_000_000, 200_000), (total as u64 - 8, 8)] {
             let end = start + len - 1;

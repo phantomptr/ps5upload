@@ -22,6 +22,7 @@ vi.mock("../lib/ps5Transfers", () => ({ transferScreenBusy: () => false }));
 import { invoke } from "@tauri-apps/api/core";
 import { pkgLibraryStore } from "./pkgLibrary";
 import { useLinkInstallPrefs } from "./linkInstallPrefs";
+import { useTaskStore } from "./tasks";
 
 const HOST = "10.0.0.5:9114";
 const URL_OK = "https://h.example/game.pkg";
@@ -122,6 +123,62 @@ describe("link install modes", () => {
     expect(r.ok).toBe(true);
     expect(r.message).toMatch(/keep ps5upload running/);
     expect(r.message).not.toMatch(/You can close ps5upload/);
+  });
+
+  /* Installing from an SMB share streams the file: the share details go to
+   * the engine in the install request, and nothing is probed or copied on
+   * this side first. */
+  it("sends an SMB install to the engine as a streamed source", async () => {
+    mockedInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "pkg_install_start") return { session_id: "s1", err_code: 0 };
+      throw new Error("stop here");
+    });
+    await pkgLibraryStore(HOST)
+      .getState()
+      .installStream(
+        {
+          smb: {
+            server: "nas",
+            share: "GAMES",
+            user: "me",
+            password: "s3cret",
+            path: "PS5/Game.pkg",
+            size: 123,
+          },
+        },
+        HOST,
+      );
+    const call = mockedInvoke.mock.calls.find((c) => c[0] === "pkg_install_start");
+    expect(call, "expected pkg_install_start").toBeTruthy();
+    const args = call?.[1] as Record<string, unknown>;
+    expect(args.smb).toEqual({
+      server: "nas",
+      share: "GAMES",
+      user: "me",
+      password: "s3cret",
+      path: "PS5/Game.pkg",
+    });
+    expect(args.remoteUrl).toBeNull();
+    expect(args.path).toBeNull();
+    expect(args.serveOnly).toBe(true);
+    // Nothing read off a PC-side file or a link for an SMB source.
+    expect(mockedInvoke.mock.calls.some((c) => c[0] === "pkg_metadata_split")).toBe(false);
+    expect(mockedInvoke.mock.calls.some((c) => c[0] === "pkg_remote_probe")).toBe(false);
+  });
+
+  /* Task records are shown in the UI and persisted to disk. The SMB password
+   * must never be in one. */
+  it("never records the SMB password in the task", async () => {
+    mockedInvoke.mockImplementation(async () => {
+      throw new Error("stop here");
+    });
+    await pkgLibraryStore(HOST)
+      .getState()
+      .installStream(
+        { smb: { server: "nas", share: "S", user: "u", password: "s3cret", path: "a.pkg" } },
+        HOST,
+      );
+    expect(JSON.stringify(useTaskStore.getState().tasks)).not.toContain("s3cret");
   });
 
   /* Accelerated must never reach for the console's installer. */

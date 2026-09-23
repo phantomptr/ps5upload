@@ -46,6 +46,8 @@ mod remote_download;
 #[cfg(not(target_os = "android"))]
 mod remote_pkg;
 mod smb;
+#[cfg(not(target_os = "android"))]
+mod smb_range;
 #[cfg(feature = "webui")]
 mod webui;
 

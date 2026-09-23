@@ -755,6 +755,7 @@ export async function browserInvoke<T>(
         delete_staging: args["deleteStaging"] ?? true,
         serve_only: args["serveOnly"] ?? false,
         insecure_tls: args["insecureTls"] ?? false,
+        smb: args["smb"] ?? null,
       });
 
     // Identify a package behind a link before committing to the install.

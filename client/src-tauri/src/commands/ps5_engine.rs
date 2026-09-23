@@ -2732,6 +2732,9 @@ pub async fn pkg_install_start(
     // where the console performs its own handshake. Optional so an older
     // caller keeps verification on.
     insecure_tls: Option<bool>,
+    // Install straight from a file on an SMB share: {server, share, user,
+    // password, path}. The engine streams it; nothing is copied or staged.
+    smb: Option<JsonValue>,
 ) -> Result<JsonValue, String> {
     let url = format!("{}/api/pkg/install/start", engine::url());
     let body = serde_json::json!({
@@ -2747,6 +2750,7 @@ pub async fn pkg_install_start(
         "delete_staging": delete_staging.unwrap_or(true),
         "serve_only": serve_only.unwrap_or(false),
         "insecure_tls": insecure_tls.unwrap_or(false),
+        "smb": smb,
     });
     post_json(&url, &body).await
 }
