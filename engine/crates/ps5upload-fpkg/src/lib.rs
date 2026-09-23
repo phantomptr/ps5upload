@@ -17,6 +17,7 @@ pub mod fih_write;
 pub mod flt;
 pub mod inner;
 pub mod keys;
+pub mod kraken;
 pub mod naps;
 pub mod outer;
 pub mod outer_write;
