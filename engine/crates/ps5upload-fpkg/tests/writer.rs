@@ -294,3 +294,57 @@ fn a_source_without_a_content_id_is_refused() {
     assert!(!output_dir.path().join("out.pkg.partial").exists());
     assert!(verify::verify_package(&output_dir.path().join("x.pkg"), DEFAULT_PASSCODE).is_err());
 }
+
+/// A Kraken package decodes back to its source: every block through the descriptor, the way
+/// the console reads it, then the inner file system walked and each file compared.
+#[test]
+fn a_kraken_package_decodes_back_to_its_source() {
+    use ps5upload_fpkg::kraken_image;
+    let source_dir = TempDir::new("kraken-src");
+    let out = TempDir::new("kraken-out");
+    let expected = write_tree(source_dir.path());
+    let mut request = BuildRequest::new(source_dir.path(), out.path());
+    request.kraken = true;
+    request.time = Some((1_700_000_000, 0));
+    let report = build::build(&request, &mut |_| {}).unwrap();
+    assert!(report.verify.ok(), "{}", report.verify);
+
+    let naps = outer_file(&report.path, "naps_pkg_layout.dat");
+    let image = outer_file(&report.path, "pfs_image.dat");
+    let blocks = kraken_image::describe(&naps).unwrap();
+    let mount_size = blocks.last().map(|b| b.logical + b.len).unwrap();
+    assert!((image.len() as u64) < mount_size, "the image is compressed");
+    let mut mount = vec![0u8; mount_size as usize];
+    for b in &blocks {
+        let bytes = kraken_image::decode_described(&image, b).unwrap();
+        mount[b.logical as usize..(b.logical + b.len) as usize].copy_from_slice(&bytes);
+    }
+    let files = source::scan(source_dir.path()).unwrap();
+    let meta_base = plan::build(
+        &files
+            .into_iter()
+            .filter(|f| !ps5upload_fpkg::cnt_write::CONTAINER_ONLY.contains(&f.path.as_str()))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap()
+    .meta_base;
+    let walked = inner::read(&mount, meta_base).unwrap();
+    assert!(walked.flt_ok);
+    for (path, data) in &expected {
+        if ps5upload_fpkg::cnt_write::CONTAINER_ONLY.contains(&path.as_str())
+            || path == "sce_sys/param.json"
+        {
+            continue;
+        }
+        let f = walked
+            .files
+            .iter()
+            .find(|f| &f.path == path)
+            .unwrap_or_else(|| panic!("{path} missing from the mount"));
+        assert_eq!(
+            &mount[f.offset as usize..(f.offset + f.size) as usize],
+            &data[..],
+            "{path}"
+        );
+    }
+}

@@ -297,6 +297,7 @@ pub fn metadata_blocks(
     data_digests: &[[u8; 32]],
     seed: [u8; 16],
     time: (i64, u32),
+    mount_size: Option<u64>,
 ) -> Result<Vec<MetadataBlock>> {
     let inner_size = inner_blocks * BLOCK;
     let mut out: Vec<MetadataBlock> = Vec::new();
@@ -467,7 +468,9 @@ pub fn metadata_blocks(
             nlink: 1,
             flags: 0xD,
             size: inner_size,
-            size_stored: inner_size,
+            // A compressed image records the mount it expands to here, as Sony's packages do
+            // (Spider-Man 2: 108 GB stored, 272 GB here); a stored image is its own mount.
+            size_stored: mount_size.unwrap_or(inner_size),
             direct: data_digests
                 .iter()
                 .take(DIRECT_SLOTS)
@@ -569,7 +572,7 @@ pub fn write(
         image.extend_from_slice(&bytes);
     }
     for (index, digest, mut plaintext) in
-        metadata_blocks(&lay, inner_blocks, naps, &data_digests, seed, time)?
+        metadata_blocks(&lay, inner_blocks, naps, &data_digests, seed, time, None)?
     {
         if index != lay.superblock_block {
             if let Some(xts) = &xts {

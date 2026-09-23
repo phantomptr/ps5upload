@@ -44,6 +44,9 @@ pub struct StreamRequest<'a> {
     pub extras: Vec<cnt_write::ExtraEntry>,
     /// PlayGo chunks; see [`crate::playgo`].
     pub playgo_chunks: u16,
+    /// Compress the inner image with Kraken, spooling it here first (see
+    /// [`crate::kraken_image`]). `None` stores it uncompressed.
+    pub kraken_spool: Option<std::path::PathBuf>,
     /// How the inner image's metadata region is stored.
     pub metadata_codec: crate::inner::MetaCodec,
 }
@@ -145,17 +148,58 @@ pub fn write_package(
     // The image the outer PFS stores is the stored one, so its block count is what the outer
     // metadata, the header's `0x90` and the descriptor's image length all follow. The mount the
     // install metadata describes is the larger logical one.
-    let inner_blocks = source.disk_blocks();
     let inner_size = plan.ndblock * BLOCK;
-    let naps = naps::build_with_meta(
-        inner_blocks * BLOCK,
-        plan.ndblock,
-        &plan.placements(),
-        plan.data_end,
-        plan.meta_base,
-        &source.metadata().blocks,
-        request.metadata_codec.compression_type(),
-    )?;
+    // A compressed image is built first, into its spool: the outer image's geometry follows
+    // its length, which is only known once every block is compressed.
+    let kraken = match &request.kraken_spool {
+        Some(spool) => {
+            (progress.phase)("compressing the image");
+            let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+            let keystone = crate::inner::keystone(request.passcode);
+            let metadata = source.metadata_region();
+            let image = crate::kraken_image::compress(
+                plan,
+                &metadata,
+                &keystone,
+                read,
+                spool,
+                threads,
+                cancel,
+                &mut |done, total| (progress.bytes)(done, total),
+            )?;
+            Some(image)
+        }
+        None => None,
+    };
+    let (inner_blocks, naps) = match &kraken {
+        Some(image) => {
+            let starts: Vec<u64> = plan
+                .afid_order
+                .iter()
+                .map(|&fi| plan.files[fi].logical_offset)
+                .collect();
+            (
+                image.image_len / BLOCK,
+                crate::kraken_image::layout(image, &starts)?,
+            )
+        }
+        None => (
+            source.disk_blocks(),
+            naps::build_with_meta(
+                source.disk_blocks() * BLOCK,
+                plan.ndblock,
+                &plan.placements(),
+                plan.data_end,
+                plan.meta_base,
+                &source.metadata().blocks,
+                request.metadata_codec.compression_type(),
+            )?,
+        ),
+    };
+    let mut spool = match &request.kraken_spool {
+        Some(path) if kraken.is_some() => Some(File::open(path)?),
+        _ => None,
+    };
     // The layout follows the descriptor's length, which fixes how many blocks it spans.
     let lay = layout(inner_blocks, naps.len() as u64)?;
     let outer_size = lay.ndblock * BLOCK;
@@ -186,11 +230,16 @@ pub fn write_package(
         if cancel.load(Ordering::Relaxed) {
             return Err(cancelled());
         }
-        block_spans(&source, plan, index, &mut spans);
-        let plaintext = source.block(index, read)?;
-        block.copy_from_slice(plaintext);
-
-        file_digests.block(&block, &spans);
+        if let Some(spool) = spool.as_mut() {
+            // The compressed image: its files' digests were taken as it was compressed.
+            crate::kraken_image::spool_block(spool, index, &mut block)?;
+            file_digests.block(&block, &[]);
+        } else {
+            block_spans(&source, plan, index, &mut spans);
+            let plaintext = source.block(index, read)?;
+            block.copy_from_slice(plaintext);
+            file_digests.block(&block, &spans);
+        }
 
         digests[index as usize] = crate::crypto::sha3(&block);
         if let Some(xts) = &xts {
@@ -205,6 +254,10 @@ pub fn write_package(
         }
     }
     let (file_digests, block_digests) = file_digests.finish();
+    let file_digests = match &kraken {
+        Some(image) => image.file_digests.clone(),
+        None => file_digests,
+    };
 
     // ── the outer metadata ───────────────────────────────────────────────────────────
     (progress.phase)("writing the layout");
@@ -217,6 +270,7 @@ pub fn write_package(
         &digests[..inner_blocks as usize],
         request.seed,
         request.time,
+        kraken.as_ref().map(|_| inner_size),
     )? {
         if index != lay.superblock_block {
             if let Some(xts) = &xts {
@@ -260,9 +314,41 @@ pub fn write_package(
 
     // ── the container ────────────────────────────────────────────────────────────────
     (progress.phase)("writing the container");
+    // PlayGo maps files to chunks by where their bytes sit in the mount image — for a compressed
+    // image, where their compressed blocks are.
+    let mount_files = match &kraken {
+        Some(image) => {
+            let mut extent = vec![(u64::MAX, 0u64); plan.afid_order.len()];
+            for b in &image.blocks {
+                if let crate::kraken_image::Owner::File(afid) = b.owner {
+                    let e = &mut extent[afid];
+                    e.0 = e.0.min(b.stored_at);
+                    e.1 = e.1.max(b.stored_at + b.stored_len());
+                }
+            }
+            plan.afid_order
+                .iter()
+                .enumerate()
+                .map(|(afid, &fi)| {
+                    let (lo, hi) = extent[afid];
+                    let lo = if lo == u64::MAX {
+                        image.file_stored_at[afid]
+                    } else {
+                        lo
+                    };
+                    (
+                        plan.files[fi].path.clone(),
+                        BLOCK + lo,
+                        hi.saturating_sub(lo),
+                    )
+                })
+                .collect()
+        }
+        None => plan.mount_files(),
+    };
     let playgo = crate::playgo::build(
         request.content_id,
-        &plan.mount_files(),
+        &mount_files,
         cnt_offset,
         request.playgo_chunks,
     )?;
@@ -296,18 +382,31 @@ pub fn write_package(
 
     // ── the install metadata ─────────────────────────────────────────────────────────
     (progress.phase)("writing the install metadata");
-    let meta_18 = si_write::naps_meta_18(
-        inner_size,
-        &si_write::InnerDigests {
-            blocks: block_digests,
-            files: file_digests,
-        },
-        &source.metadata_region(),
-        &files,
-        plan.data_end,
-        plan.meta_base,
-        &game_digest,
-    )?;
+    let digests_18 = si_write::InnerDigests {
+        blocks: block_digests,
+        files: file_digests,
+    };
+    let meta_18 = match &kraken {
+        Some(image) => si_write::naps_meta_18_blocks(
+            image.image_len,
+            inner_size,
+            &digests_18,
+            &source.metadata_region(),
+            &files,
+            &si_write::kraken_blocks(image),
+            plan.meta_base,
+            &game_digest,
+        )?,
+        None => si_write::naps_meta_18(
+            inner_size,
+            &digests_18,
+            &source.metadata_region(),
+            &files,
+            plan.data_end,
+            plan.meta_base,
+            &game_digest,
+        )?,
+    };
     let meta_300 = si_write::naps_meta_300(inner_size);
     let manifest = pfsimage::build(&pfsimage::ManifestParams {
         facts: &cnt.facts,

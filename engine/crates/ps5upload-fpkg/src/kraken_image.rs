@@ -126,6 +126,77 @@ fn plan_blocks(plan: &Plan) -> (Vec<Todo>, u64) {
     (todo, end)
 }
 
+/// A source-file range reader.
+pub type SourceRead<'r> = &'r mut dyn FnMut(&str, u64, usize) -> Result<Vec<u8>>;
+
+/// Like [`crate::ffpfsc::pipeline`], but the calling thread both produces the work and consumes
+/// the results, so neither needs to be `Send` — a source tree and a progress callback usually are
+/// not. Only `work` runs on the pool. Results reach `sink` in production order.
+fn pipeline_local<T: Send, U: Send>(
+    threads: usize,
+    mut produce: impl FnMut() -> Result<Option<T>>,
+    work: impl Fn(T) -> Result<U> + Sync,
+    mut sink: impl FnMut(U) -> Result<()>,
+) -> Result<()> {
+    use std::sync::mpsc::sync_channel;
+    use std::sync::{Arc, Mutex};
+    let depth = threads * 8;
+    std::thread::scope(|s| {
+        let (tx_in, rx_in) = sync_channel::<(u64, T)>(depth);
+        let (tx_out, rx_out) = sync_channel::<(u64, Result<U>)>(depth);
+        let rx_in = Arc::new(Mutex::new(rx_in));
+        let work = &work;
+        for _ in 0..threads {
+            let rx_in = Arc::clone(&rx_in);
+            let tx_out = tx_out.clone();
+            s.spawn(move || loop {
+                let next = rx_in.lock().map(|rx| rx.recv());
+                match next {
+                    Ok(Ok((i, item))) => {
+                        if tx_out.send((i, work(item))).is_err() {
+                            return;
+                        }
+                    }
+                    _ => return,
+                }
+            });
+        }
+        drop(rx_in);
+        drop(tx_out);
+        let (mut sent, mut next, mut finished) = (0u64, 0u64, false);
+        let mut pending = std::collections::BTreeMap::new();
+        let result = (|| -> Result<()> {
+            loop {
+                // Keep the pool fed without letting more than `depth` items be in flight.
+                while !finished && sent - next < depth as u64 {
+                    match produce()? {
+                        Some(item) => {
+                            tx_in
+                                .send((sent, item))
+                                .map_err(|_| crate::Error::Format("the pool stopped".into()))?;
+                            sent += 1;
+                        }
+                        None => finished = true,
+                    }
+                }
+                if next == sent {
+                    return Ok(());
+                }
+                let (i, r) = rx_out
+                    .recv()
+                    .map_err(|_| crate::Error::Format("the pool stopped".into()))?;
+                pending.insert(i, r);
+                while let Some(r) = pending.remove(&next) {
+                    sink(r?)?;
+                    next += 1;
+                }
+            }
+        })();
+        drop(tx_in);
+        result
+    })
+}
+
 /// Compress the image described by `plan` into `spool`. `read` fetches a byte range of a source
 /// file, `metadata` is the metadata region's logical bytes and `keystone` the generated one.
 #[allow(clippy::too_many_arguments)]
@@ -133,7 +204,7 @@ pub fn compress(
     plan: &Plan,
     metadata: &[u8],
     keystone: &[u8],
-    read: &mut (dyn FnMut(&str, u64, usize) -> Result<Vec<u8>> + Send),
+    read: SourceRead<'_>,
     spool: &Path,
     threads: usize,
     cancel: &AtomicBool,
@@ -154,7 +225,7 @@ pub fn compress(
     let mut file_stored_at = vec![0u64; files];
     let mut open: Option<(usize, Hasher)> = None;
     let mut done = 0u64;
-    crate::ffpfsc::pipeline(
+    pipeline_local(
         threads.max(1),
         || {
             let Some(t) = next.next() else {
@@ -387,6 +458,25 @@ pub fn layout(image: &KrakenImage, file_starts: &[u64]) -> Result<Vec<u8>> {
         blob.extend_from_slice(&r.to_le_bytes()[..9]);
     }
     blob.resize(blob.len().next_multiple_of(8), 0);
+
+    // Read it back the way the console will, and require exactly the blocks we stored.
+    let walked = describe(&blob)?;
+    if walked.len() != image.blocks.len() {
+        return format_err("the descriptor does not walk back to its blocks");
+    }
+    for (w, b) in walked.iter().zip(&image.blocks) {
+        if w.logical != b.logical
+            || w.len != u64::from(b.len)
+            || w.stored_at != b.stored_at
+            || w.stored_len != b.stored_len()
+            || w.even_len != u64::from(b.halves[0].0)
+        {
+            return format_err(format!(
+                "the descriptor misdescribes the block at {:#x}",
+                b.logical
+            ));
+        }
+    }
     Ok(blob)
 }
 
@@ -450,8 +540,16 @@ pub fn describe(blob: &[u8]) -> Result<Vec<DescribedBlock>> {
         if (logical % WINDOW) >> 4 != f(0, 14) {
             return format_err(format!("record {i}: logical offset disagrees"));
         }
+        // A block ends where its record says, within the window. The one case that cannot say
+        // so is a block stored whole and raw — exactly 256 KiB, ending where it began modulo the
+        // window — so a raw even half with nothing else to mark it takes the full window. (Sony's
+        // zero-byte blocks, which also end where they begin, carry bit 34.)
         let mut end = (cursor & !(WINDOW - 1)) | f(48, 18);
         if end < cursor {
+            end += WINDOW;
+        }
+        let even_raw = f(33, 1) == 0 && f(14, 17) + 1 == len.min(kraken::HALF as u64);
+        if end == cursor && even_raw && f(34, 1) == 0 && len > kraken::HALF as u64 {
             end += WINDOW;
         }
         out.push(DescribedBlock {
@@ -540,11 +638,10 @@ mod tests {
             b(0x3230, 0xa, 0x20000, &[(0xa, false)], Owner::File(2)),
             b(0x323a, 0x3a5e, 0x2000a, &[(0x6cc, true)], Owner::File(3)),
         ];
-        let img = image_of(blocks, 0x80000, 0x6c98, 0x40000);
+        // The Web Browser's first four files, as a mount of their own.
+        let img = image_of(blocks, 0x6c98, 0x6c98, 0x6c98);
         let blob = layout(&img, &[0, 0x60, 0x3230, 0x323a]).unwrap();
-        let described = describe(&blob);
-        // The blocks above stop short of the mount, so the walk reports the gap it finds.
-        assert!(described.is_err());
+        assert_eq!(describe(&blob).unwrap().len(), 4);
         // Records: start anchor, keystone, run end → anchor 0x10000, ...
         let files = 7;
         let rec_at = (16usize + 3 * 8 + files * 6 + 10).next_multiple_of(8) + 3;

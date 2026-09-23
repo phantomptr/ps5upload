@@ -50,6 +50,10 @@ pub struct BuildRequest {
     pub firmware: Option<String>,
     /// PlayGo chunks (1 through 255). `PS5UPLOAD_FPKG_CHUNKS` overrides the default.
     pub playgo_chunks: u16,
+    /// Compress the inner image with Kraken, as Sony's packages are (see
+    /// [`crate::kraken_image`]). Off until a compressed package is confirmed on a console;
+    /// `PS5UPLOAD_FPKG_KRAKEN=1` turns it on.
+    pub kraken: bool,
 }
 
 impl BuildRequest {
@@ -66,6 +70,10 @@ impl BuildRequest {
             image_mode: image_mode_from_env(),
             firmware: firmware_from_env(),
             playgo_chunks: chunks_from_env(),
+            kraken: matches!(
+                std::env::var("PS5UPLOAD_FPKG_KRAKEN").as_deref(),
+                Ok("1") | Ok("true")
+            ),
         }
     }
 }
@@ -386,10 +394,17 @@ fn build_mode(
                 icon_dds,
                 extras,
                 playgo_chunks: request.playgo_chunks,
+                kraken_spool: request
+                    .kraken
+                    .then(|| PathBuf::from(format!("{}.kraken", partial.display()))),
                 metadata_codec: request.metadata_codec,
             };
-            match stream::write_package(&mut file, &stream_request, &mut read_range, &mut p, cancel)
-            {
+            let written =
+                stream::write_package(&mut file, &stream_request, &mut read_range, &mut p, cancel);
+            if let Some(spool) = &stream_request.kraken_spool {
+                std::fs::remove_file(spool).ok();
+            }
+            match written {
                 Ok(package) => package.size,
                 Err(e) => return Err(cleanup(e)),
             }

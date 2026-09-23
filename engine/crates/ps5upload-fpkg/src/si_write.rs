@@ -42,9 +42,44 @@ fn tlv(out: &mut Vec<u8>, tag: &[u8; 4], payload: &[u8]) {
     out.extend_from_slice(payload);
 }
 
-/// One `naps_meta_18` block-map entry: `co, cs, ps, c0, c1, flag` and the owning file's
-/// afid index (for app payload blocks).
-type Block = (u64, u32, u32, u32, u32, u32, Option<usize>);
+/// One `naps_meta_18` block-map entry: `co, cs, ps, c0, c1, flag`, the owning file's afid index
+/// (for app payload blocks) and the block's logical offset in the mount.
+pub type Block = (u64, u32, u32, u32, u32, u32, Option<usize>, u64);
+
+/// A compressed image's block map: each block where its compressed bytes are, with the even
+/// and odd halves' stored lengths. The flags are the ones a Kraken package's own map carries:
+/// `0x4005_0000` for a block that holds Kraken data, `0x4009_0000` for a file block stored raw,
+/// `0x4011_0000` for the zeros before the metadata base.
+pub fn kraken_blocks(image: &crate::kraken_image::KrakenImage) -> Vec<Block> {
+    use crate::kraken_image::Owner;
+    image
+        .blocks
+        .iter()
+        .map(|b| {
+            let lz = b.halves.iter().any(|h| h.1);
+            let flag = match b.owner {
+                _ if lz => 0x4005_0000,
+                Owner::Gap => 0x4011_0000,
+                Owner::Meta => 0x4005_0000,
+                Owner::File(_) => 0x4009_0000,
+            };
+            let owner = match b.owner {
+                Owner::File(afid) => Some(afid),
+                _ => None,
+            };
+            (
+                b.stored_at,
+                b.stored_len() as u32,
+                b.len,
+                b.halves[0].0,
+                b.halves.get(1).map_or(0, |h| h.0),
+                flag,
+                owner,
+                b.logical,
+            )
+        })
+        .collect()
+}
 
 /// The `naps_meta_18.dat` metric blob: a TLV stream over the inner block map, encrypted
 /// with the fixed AES-128-XTS key set as a single data unit.
@@ -91,7 +126,53 @@ pub fn naps_meta_18(
     meta_base: u64,
     game_digest: &[u8; 32],
 ) -> Result<Vec<u8>> {
-    let inner_blocks = (inner_size / BLOCK) as u32;
+    // The block map: one entry per file, then the data-region holes, then the metadata.
+    // co, cs, ps, c0, c1, flag, owner (afid index for file blocks, `None` otherwise).
+    let mut blocks: Vec<Block> = Vec::new();
+    for (i, (_, offset, size)) in files.iter().enumerate() {
+        let cs = (*size).min(u32::MAX as u64) as u32;
+        blocks.push((*offset, cs, cs, cs, 0, 0x4009_0000, Some(i), *offset));
+    }
+    let hole_start = data_end.div_ceil(UBLOCK) * UBLOCK;
+    let mut at = hole_start;
+    while at < meta_base {
+        let ps = UBLOCK.min(meta_base - at) as u32;
+        blocks.push((at, ps, ps, ps, 0, 0x4011_0000, None, at));
+        at += UBLOCK;
+    }
+    let mut at = meta_base;
+    while at < inner_size {
+        let ps = UBLOCK.min(inner_size - at) as u32;
+        blocks.push((at, ps, ps, ps, 0, 0x4005_0000, None, at));
+        at += UBLOCK;
+    }
+    naps_meta_18_blocks(
+        inner_size,
+        inner_size,
+        digests,
+        meta,
+        files,
+        &blocks,
+        meta_base,
+        game_digest,
+    )
+}
+
+/// [`naps_meta_18`] over an explicit block map. `stored_size` is the image as stored (the
+/// header's block count follows it) and `mount_size` the mount it expands to.
+#[allow(clippy::too_many_arguments)]
+pub fn naps_meta_18_blocks(
+    stored_size: u64,
+    mount_size: u64,
+    digests: &InnerDigests,
+    meta: &[u8],
+    files: &[(String, u64, u64)],
+    blocks: &[Block],
+    meta_base: u64,
+    game_digest: &[u8; 32],
+) -> Result<Vec<u8>> {
+    let inner_size = mount_size;
+    let inner_blocks = stored_size.div_ceil(BLOCK) as u32;
     let mut out: Vec<u8> = Vec::with_capacity(4096);
 
     // phdr: {1, 0x30, innerBlocks, UBLOCK, 1, 0x10000}. The fourth word is the U-block
@@ -104,27 +185,7 @@ pub fn naps_meta_18(
         tlv(&mut out, b"phdr", &p);
     }
 
-    // The block map: one entry per file, then the data-region holes, then the metadata.
-    // co, cs, ps, c0, c1, flag, owner (afid index for file blocks, `None` otherwise).
-    let mut blocks: Vec<Block> = Vec::new();
-    for (i, (_, offset, size)) in files.iter().enumerate() {
-        let cs = (*size).min(u32::MAX as u64) as u32;
-        blocks.push((*offset, cs, cs, cs, 0, 0x4009_0000, Some(i)));
-    }
-    let hole_start = data_end.div_ceil(UBLOCK) * UBLOCK;
-    let mut at = hole_start;
-    while at < meta_base {
-        let ps = UBLOCK.min(meta_base - at) as u32;
-        blocks.push((at, ps, ps, ps, 0, 0x4011_0000, None));
-        at += UBLOCK;
-    }
     let meta_len = inner_size.saturating_sub(meta_base);
-    let mut at = meta_base;
-    while at < inner_size {
-        let ps = UBLOCK.min(inner_size - at) as u32;
-        blocks.push((at, ps, ps, ps, 0, 0x4005_0000, None));
-        at += UBLOCK;
-    }
 
     // file: one 0x18 entry per content file plus the metadata pseudo-file.
     {
@@ -161,7 +222,7 @@ pub fn naps_meta_18(
     {
         let mut i2ob = Vec::with_capacity(blocks.len() * 0x28);
         let mut i2op = Vec::with_capacity(blocks.len() * 0x10);
-        for (co, cs, ps, c0, c1, flag, _) in &blocks {
+        for (co, cs, ps, c0, c1, flag, _, _) in blocks {
             i2ob.extend_from_slice(&co.to_le_bytes());
             i2ob.extend_from_slice(&cs.to_le_bytes());
             i2ob.extend_from_slice(&ps.to_le_bytes());
@@ -184,13 +245,13 @@ pub fn naps_meta_18(
         // A hole is a zero-filled span; a content file's digest is the one taken while
         // the image was written; a metadata span is hashed from the resident region.
         let zeros = vec![0u8; UBLOCK as usize];
-        for (co, _, ps, _, _, flag, owner) in &blocks {
+        for (_, _, ps, _, _, flag, owner, logical) in blocks {
             let digest: [u8; 32] = if *flag == 0x4011_0000 {
                 sha3(&zeros[..*ps as usize])
             } else if let Some(i) = owner {
                 digests.files[*i]
             } else {
-                let at = (*co).saturating_sub(meta_base) as usize;
+                let at = (*logical).saturating_sub(meta_base) as usize;
                 let end = at.saturating_add(*ps as usize);
                 match meta.get(at..end) {
                     Some(span) => sha3(span),
