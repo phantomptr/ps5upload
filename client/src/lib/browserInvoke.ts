@@ -707,6 +707,13 @@ export async function browserInvoke<T>(
         name: args["name"],
       });
     }
+    case "ffpfsc_compress": {
+      return postJson<T>("/api/ffpfsc/compress", {
+        source: args["source"],
+        output_dir: args["outputDir"],
+        level: args["level"],
+      });
+    }
     case "job_status": {
       // TS caller: { jobId } (Tauri 2 camelCases job_id → jobId)
       const jobId = args["jobId"] as string;

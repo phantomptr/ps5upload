@@ -2555,6 +2555,26 @@ pub async fn fpkg_build(
     .await
 }
 
+/// Compress a game image into a `.ffpfsc` for ShadowMountPlus; runs as an engine job.
+#[tauri::command]
+pub async fn ffpfsc_compress(
+    source: String,
+    output_dir: Option<String>,
+    level: Option<u32>,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ffpfsc/compress");
+    post_json(
+        &url,
+        &serde_json::json!({
+            "source": source,
+            "output_dir": output_dir,
+            "level": level,
+        }),
+    )
+    .await
+}
+
 #[tauri::command]
 pub async fn job_status(job_id: String) -> Result<JsonValue, String> {
     let base = engine::url();

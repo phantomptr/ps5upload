@@ -10,6 +10,7 @@ version.workspace = true
 getrandom = "0.4"
 aes = "0.9"
 flate2 = "1"
+crc32fast = "1"
 hmac = "0.13"
 sha2 = "0.11"
 ps5upload-pkg = { path = "../ps5upload-pkg" }

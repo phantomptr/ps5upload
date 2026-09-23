@@ -48,4 +48,8 @@ export const fpkg = {
       contentId: req.contentId,
       name: req.name,
     }),
+  /** Compress an .exfat / .ffpkg game image into a .ffpfsc for ShadowMountPlus.
+   *  Starts a job; the output lands next to the source unless outputDir says otherwise. */
+  compress: (source: string, outputDir?: string) =>
+    invoke<{ job_id: string }>("ffpfsc_compress", { source, outputDir }),
 };

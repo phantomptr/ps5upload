@@ -299,3 +299,187 @@ mod path_tests {
         assert_eq!(output_dir(Some(absolute.to_str().unwrap())), absolute);
     }
 }
+
+#[derive(Deserialize)]
+pub(crate) struct CompressReq {
+    /// A game image: `.exfat` (most compatible) or `.ffpkg`.
+    source: String,
+    /// Where the `.ffpfsc` goes; the source's own folder by default.
+    #[serde(default)]
+    output_dir: Option<String>,
+    /// zlib level 1–9; the library default when absent.
+    #[serde(default)]
+    level: Option<u32>,
+}
+
+/// POST /api/ffpfsc/compress — compress a game image into a `.ffpfsc` for ShadowMountPlus.
+/// Runs as a job like a package build: the ticker publishes bytes read, and the job's cancel
+/// stops it between blocks. The output is written as `.partial`, read back and matched
+/// against the source, and only then renamed.
+pub(crate) async fn ffpfsc_compress_handler(
+    State(state): State<AppState>,
+    Json(req): Json<CompressReq>,
+) -> impl IntoResponse {
+    use ps5upload_fpkg::ffpfsc;
+    let source = resolve_engine_path(&req.source);
+    let size = match std::fs::metadata(&source) {
+        Ok(m) if m.is_file() && m.len() > 0 => m.len(),
+        Ok(_) => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                format!("{} is not a game image file", source.display()),
+            )
+            .into_response()
+        }
+        Err(e) => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                format!("{}: {e}", source.display()),
+            )
+            .into_response()
+        }
+    };
+    let out_dir = match req.output_dir.as_deref() {
+        Some(dir) if !dir.trim().is_empty() => resolve_engine_path(dir),
+        _ => source
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(default_output_dir),
+    };
+    let stem = source
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "image".to_string());
+    let output = out_dir.join(format!("{stem}.ffpfsc"));
+    if output.exists() {
+        return json_err(
+            StatusCode::CONFLICT,
+            format!("{} already exists", output.display()),
+        )
+        .into_response();
+    }
+    if let Err(e) = std::fs::create_dir_all(&out_dir) {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            format!("{}: {e}", out_dir.display()),
+        )
+        .into_response();
+    }
+
+    let job_id = Uuid::new_v4();
+    let cancel = register_transfer_cancel(job_id);
+    let bytes = Arc::new(AtomicU64::new(0));
+    let started_at_ms = now_ms();
+    set_job(
+        &state.jobs,
+        &state.events_tx,
+        job_id,
+        JobState::Running {
+            started_at_ms,
+            bytes_sent: 0,
+            total_bytes: size,
+            files: Vec::new(),
+            skipped_files: 0,
+            skipped_bytes: 0,
+            files_processing: 0,
+            files_finalized: 0,
+            files_finalizing_total: 0,
+            bytes_finalized: 0,
+        },
+    );
+    let jobs = state.jobs.clone();
+    let events_tx = state.events_tx.clone();
+    let tick_bytes = bytes.clone();
+    let ticker = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let mut g = jobs.lock().unwrap_or_else(|e| e.into_inner());
+            match g.get_mut(&job_id) {
+                Some(JobState::Running { bytes_sent, .. }) => {
+                    *bytes_sent = tick_bytes.load(Ordering::Relaxed);
+                    let state = g.get(&job_id).cloned();
+                    drop(g);
+                    if let Some(state) = state {
+                        let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": state });
+                        let _ = events_tx.send(msg.to_string());
+                    }
+                }
+                _ => break,
+            }
+        }
+    });
+
+    let state_for_job = state.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut options = ffpfsc::WrapOptions::default();
+        if let Some(level) = req.level {
+            options.level = level;
+        }
+        let mut progress = |done: u64, _total: u64| bytes.store(done, Ordering::Relaxed);
+        let mut control = ffpfsc::Control {
+            progress: Some(&mut progress),
+            cancel: Some(&cancel),
+        };
+        let outcome = ffpfsc::wrap(&source, &output, &options, &mut control);
+        let completed_at_ms = now_ms();
+        ticker.abort();
+        match outcome {
+            Ok(report) => {
+                crate::engine_log::record(
+                    "info",
+                    format!(
+                        "ffpfsc: {} -> {} ({} -> {} bytes, {}/{} blocks compressed, verified)",
+                        source.display(),
+                        report.output.display(),
+                        report.raw_size,
+                        report.image_size,
+                        report.compressed_blocks,
+                        report.blocks
+                    ),
+                );
+                set_job(
+                    &state_for_job.jobs,
+                    &state_for_job.events_tx,
+                    job_id,
+                    JobState::Done {
+                        started_at_ms,
+                        completed_at_ms,
+                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                        tx_id_hex: report.inner_name.clone(),
+                        shards_sent: 0,
+                        bytes_sent: report.image_size,
+                        dest: report.output.display().to_string(),
+                        files_sent: 1,
+                        skipped_files: 0,
+                        skipped_bytes: 0,
+                        commit_ack: None,
+                    },
+                );
+            }
+            Err(error) => {
+                crate::engine_log::record("warn", format!("ffpfsc: compression failed: {error}"));
+                set_job(
+                    &state_for_job.jobs,
+                    &state_for_job.events_tx,
+                    job_id,
+                    JobState::Failed {
+                        started_at_ms,
+                        completed_at_ms,
+                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                        error: error.to_string(),
+                        error_reason: None,
+                        error_detail: None,
+                    },
+                );
+            }
+        }
+    });
+
+    (
+        StatusCode::ACCEPTED,
+        Json(JobCreated {
+            job_id: job_id.to_string(),
+        }),
+    )
+        .into_response()
+}

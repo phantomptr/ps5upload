@@ -9053,6 +9053,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/list-dir", get(ps5_list_dir))
         .route("/api/fpkg/inspect", post(fpkg_api::fpkg_inspect_handler))
         .route("/api/fpkg/build", post(fpkg_api::fpkg_build_handler))
+        .route(
+            "/api/ffpfsc/compress",
+            post(fpkg_api::ffpfsc_compress_handler),
+        )
         .route("/api/local/list-dir", get(local_list_dir_handler))
         .route("/api/local/storage-roots", get(local_storage_roots_handler))
         .route("/api/ps5/fs/delete", post(ps5_fs_delete))

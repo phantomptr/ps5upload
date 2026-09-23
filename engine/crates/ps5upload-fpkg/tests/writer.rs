@@ -129,8 +129,11 @@ fn gate_g2_a_built_package_verifies_and_round_trips() {
         );
     }
 
-    // The plan's geometry is what the package carries.
-    let files = source::scan(source_dir.path()).unwrap();
+    // The plan's geometry is what the package carries — less the icons, which the container
+    // carries instead of the image.
+    let only_in_container = |path: &str| ps5upload_fpkg::cnt_write::CONTAINER_ONLY.contains(&path);
+    let mut files = source::scan(source_dir.path()).unwrap();
+    files.retain(|f| !only_in_container(&f.path));
     let built = plan::build(&files).unwrap();
     let mut pkg = PkgFile::open(&report.path).unwrap();
     let head = pkg.read_at(0, fih::HEADER_LEN).unwrap();
@@ -194,6 +197,7 @@ fn gate_g2_a_built_package_verifies_and_round_trips() {
     recovered.sort();
     let mut wanted: Vec<(String, Vec<u8>)> = expected
         .iter()
+        .filter(|(p, _)| !only_in_container(p))
         .map(|(p, d)| (p.clone(), d.clone()))
         .chain([(
             "sce_sys/keystone".to_string(),

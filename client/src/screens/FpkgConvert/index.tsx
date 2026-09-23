@@ -49,6 +49,8 @@ export default function FpkgConvertScreen() {
   const jobError = useFpkgConversion((s) => s.error);
   const starting = useFpkgConversion((s) => s.starting);
   const startConversion = useFpkgConversion((s) => s.start);
+  const startCompression = useFpkgConversion((s) => s.compress);
+  const kind = useFpkgConversion((s) => s.kind);
   const cancelConversion = useFpkgConversion((s) => s.cancel);
   const [installing, setInstalling] = useState(false);
   const [installResult, setInstallResult] = useState<string | null>(null);
@@ -113,6 +115,13 @@ export default function FpkgConvertScreen() {
     await startConversion({ source: source.trim(), outputDir: outputDir.trim() || undefined });
   }, [source, outputDir, startConversion]);
 
+  const compress = useCallback(async () => {
+    if (!source.trim()) return;
+    setError(null);
+    setInstallResult(null);
+    await startCompression(source.trim(), outputDir.trim() || undefined);
+  }, [source, outputDir, startCompression]);
+
   const install = useCallback(async () => {
     if (!job?.dest || !host?.trim()) return;
     setInstalling(true);
@@ -132,6 +141,8 @@ export default function FpkgConvertScreen() {
   }, [job, host, installStream, tr]);
 
   const running = job?.status === "running" || jobId !== null || starting;
+  // Compression takes one image file; a game folder has nothing to wrap.
+  const isImage = /\.(exfat|ffpkg)$/i.test(source.trim());
   const warnings = inspection?.checks.filter((c) => !c.ok) ?? [];
   const passed = inspection?.checks.filter((c) => c.ok) ?? [];
   // Desktop and Android can open a real-path picker; the browser build reads
@@ -377,7 +388,11 @@ export default function FpkgConvertScreen() {
             <ProgressBar
               value={job && job.total_bytes ? (job.bytes_sent ?? 0) / job.total_bytes : 0}
               tone="accent"
-              label={tr("fpkg.converting", undefined, "Converting…")}
+              label={
+                kind === "ffpfsc"
+                  ? tr("fpkg.compressing", undefined, "Compressing…")
+                  : tr("fpkg.converting", undefined, "Converting…")
+              }
             />
             <div className="text-sm text-[var(--color-muted)]">
               {prettyBytes(job?.bytes_sent ?? 0)} / {prettyBytes(job?.total_bytes ?? 0)}
@@ -397,12 +412,37 @@ export default function FpkgConvertScreen() {
       )}
 
       {job?.status === "failed" && (
-        <Callout tone="error" title={tr("fpkg.failed", undefined, "The conversion failed")}>
+        <Callout
+          tone="error"
+          title={
+            kind === "ffpfsc"
+              ? tr("fpkg.compressFailed", undefined, "The compression failed")
+              : tr("fpkg.failed", undefined, "The conversion failed")
+          }
+        >
           {job.error}
         </Callout>
       )}
 
-      {job?.status === "done" && (
+      {job?.status === "done" && kind === "ffpfsc" && (
+        <Card>
+          <div className="flex flex-col gap-2 text-sm">
+            <div className="text-[var(--color-good)]">
+              {tr("fpkg.compressed", undefined, "Compressed image written and verified")}
+            </div>
+            <div className="break-all text-[var(--color-text)]">{job.dest}</div>
+            <div className="text-[var(--color-muted)]">
+              {tr(
+                "fpkg.compressedNext",
+                undefined,
+                "Upload it to the console like any other game image and mount it with ShadowMountPlus.",
+              )}
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {job?.status === "done" && kind === "fpkg" && (
         <>
           <Card>
             <div className="flex flex-col gap-2 text-sm">
@@ -438,14 +478,28 @@ export default function FpkgConvertScreen() {
         </>
       )}
 
-      <div>
+      <div className="flex flex-wrap gap-2">
         <Button
           onClick={() => void convert()}
           disabled={running || !source.trim() || (inspection !== null && inspection.files === 0)}
         >
           {tr("fpkg.convert", undefined, "Convert to FPKG")}
         </Button>
+        {isImage && (
+          <Button variant="secondary" onClick={() => void compress()} disabled={running}>
+            {tr("fpkg.compress", undefined, "Compress to .ffpfsc")}
+          </Button>
+        )}
       </div>
+      {isImage && (
+        <div className="text-xs text-[var(--color-muted)]">
+          {tr(
+            "fpkg.compressAbout",
+            undefined,
+            "Compress to .ffpfsc keeps the game as a mountable image, 40–60% smaller: the console decompresses it as the game reads. It goes next to the source unless you choose an output folder, and it is read back and checked against the source before it is kept.",
+          )}
+        </div>
+      )}
     </div>
   );
 }

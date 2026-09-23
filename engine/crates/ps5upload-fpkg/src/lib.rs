@@ -11,6 +11,7 @@ pub mod cnt;
 pub mod cnt_write;
 pub mod crypto;
 pub mod exfat;
+pub mod ffpfsc;
 pub mod fih;
 pub mod fih_write;
 pub mod flt;

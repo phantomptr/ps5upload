@@ -4,12 +4,18 @@ import { fpkg, type FpkgBuildRequest } from "../api/fpkg";
 import { jobCancel, jobStatus, type JobSnapshot } from "../api/ps5";
 import { pushNotification } from "./notifications";
 
+/** What the running (or last) job makes: a package, or a compressed image. */
+export type ConversionKind = "fpkg" | "ffpfsc";
+
 interface ConversionState {
+  kind: ConversionKind;
   jobId: string | null;
   job: JobSnapshot | null;
   error: string | null;
   starting: boolean;
   start: (request: FpkgBuildRequest) => Promise<void>;
+  /** Compress an .exfat / .ffpkg image into a .ffpfsc. */
+  compress: (source: string, outputDir?: string) => Promise<void>;
   cancel: () => Promise<void>;
 }
 
@@ -23,13 +29,15 @@ function schedulePoll(jobId: string, failures = 0) {
         schedulePoll(jobId);
       } else {
         useFpkgConversion.setState({ jobId: null });
+        const what =
+          useFpkgConversion.getState().kind === "ffpfsc" ? "Compression" : "FPKG conversion";
         if (snapshot.status === "done") {
-          pushNotification("success", "FPKG conversion complete", {
+          pushNotification("success", `${what} complete`, {
             body: snapshot.dest,
             link: "/convert",
           });
         } else if (snapshot.status === "failed") {
-          pushNotification("error", "FPKG conversion failed", {
+          pushNotification("error", `${what} failed`, {
             body: snapshot.error,
             link: "/convert",
           });
@@ -52,13 +60,14 @@ function schedulePoll(jobId: string, failures = 0) {
 }
 
 export const useFpkgConversion = create<ConversionState>((set, get) => ({
+  kind: "fpkg",
   jobId: null,
   job: null,
   error: null,
   starting: false,
   start: async (request) => {
     if (get().starting || get().jobId) return;
-    set({ starting: true, error: null, job: null });
+    set({ starting: true, error: null, job: null, kind: "fpkg" });
     try {
       const { job_id } = await fpkg.build(request);
       set({ jobId: job_id });
@@ -67,6 +76,21 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
       const message = error instanceof Error ? error.message : String(error);
       set({ error: message });
       pushNotification("error", "FPKG conversion failed", { body: message, link: "/convert" });
+    } finally {
+      set({ starting: false });
+    }
+  },
+  compress: async (source, outputDir) => {
+    if (get().starting || get().jobId) return;
+    set({ starting: true, error: null, job: null, kind: "ffpfsc" });
+    try {
+      const { job_id } = await fpkg.compress(source, outputDir);
+      set({ jobId: job_id });
+      schedulePoll(job_id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      set({ error: message });
+      pushNotification("error", "Compression failed", { body: message, link: "/convert" });
     } finally {
       set({ starting: false });
     }
