@@ -22,6 +22,29 @@ pub mod ids {
     pub const PARAM_JSON: u32 = 0x2000;
     pub const PLAYGO_HASH_TABLE: u32 = 0x2010;
     pub const PLAYGO_FICM: u32 = 0x2011;
+    pub const SAVE_DATA_PNG: u32 = 0x100D;
+    pub const PIC0_PNG: u32 = 0x1220;
+    pub const SND0_AT9: u32 = 0x1240;
+    pub const PIC0_DDS: u32 = 0x12A0;
+    pub const PIC1_DDS: u32 = 0x12C0;
+    pub const TROPHY: u32 = 0x1480;
+    pub const UDS: u32 = 0x14A0;
+    pub const PIC2_DDS: u32 = 0x2060;
+
+    /// The presentation entries the "system" general digest covers, in the id order it
+    /// hashes them. Derived from a Publishing Tools package with all eight: the slot is the
+    /// `SHA3` of their digests concatenated. Trophy and UDS data are not in it, and a
+    /// package with only the two icons reduces to the icon-only formula the samples show.
+    pub const SYSTEM_DIGEST_IDS: [u32; 8] = [
+        SAVE_DATA_PNG,
+        ICON0_PNG,
+        PIC0_PNG,
+        SND0_AT9,
+        ICON0_DDS,
+        PIC0_DDS,
+        PIC1_DDS,
+        PIC2_DDS,
+    ];
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,10 +213,12 @@ impl Cnt {
             let expected = sha3(&pre);
             out.push(("cnt general digest header", matches(2, &expected)));
         }
-        if let (Some(png), Some(dds)) = (entry_digest(ids::ICON0_PNG), entry_digest(ids::ICON0_DDS))
-        {
-            let expected = concat(&[png, dds]);
-            out.push(("cnt general digest system", matches(3, &expected)));
+        let system: Vec<[u8; 32]> = ids::SYSTEM_DIGEST_IDS
+            .iter()
+            .filter_map(|id| entry_digest(*id))
+            .collect();
+        if !system.is_empty() {
+            out.push(("cnt general digest system", matches(3, &concat(&system))));
         }
         if let (Some(chunk), Some(hash), Some(ficm)) = (
             entry_digest(ids::PLAYGO_CHUNK),

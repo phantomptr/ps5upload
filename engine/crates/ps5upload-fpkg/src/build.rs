@@ -15,6 +15,8 @@ use crate::naps;
 use crate::outer_write;
 use crate::pfsimage;
 use crate::plan::{self, Plan};
+use crate::sdk_rules;
+use crate::self_repair;
 use crate::si_write;
 use crate::source::{self, SourceFile};
 use crate::stream;
@@ -156,6 +158,21 @@ fn build_mode(
     if files.is_empty() {
         return format_err(format!("{} has no files", tree.describe()));
     }
+    // Leftovers of an earlier build stay out of this one (see `sdk_rules`).
+    let before = files.len();
+    files.retain(|f| match sdk_rules::excluded(&f.path) {
+        Some(why) => {
+            progress(&format!("leaving out {} ({why})", f.path));
+            false
+        }
+        None => true,
+    });
+    if files.len() != before {
+        progress(&format!(
+            "left out {} generated or stale file(s)",
+            before - files.len()
+        ));
+    }
     let readiness = source::readiness(tree.as_mut());
     let warnings: Vec<String> = readiness
         .warnings()
@@ -192,6 +209,37 @@ fn build_mode(
         Some(version) => source::firmware_rewrite(&param_json, version).unwrap_or(param_json),
         None => param_json,
     };
+    // Executables some dumpers leave malformed are served repaired (see `self_repair`).
+    let mut repairs: std::collections::HashMap<String, (self_repair::SelfRepair, u64)> =
+        std::collections::HashMap::new();
+    for f in files.iter_mut() {
+        if f.size < 0x20 {
+            continue;
+        }
+        let header = tree.read_range(&f.path, 0, 0x20)?;
+        let path = f.path.clone();
+        let mut read = |offset: u64, len: usize| tree.read_range(&path, offset, len);
+        if let Some(repair) = self_repair::plan(&header, f.size, &mut read) {
+            progress(&format!("repairing {}: {}", f.path, repair.describe()));
+            repairs.insert(f.path.clone(), (repair, f.size));
+            f.size = repair.new_size(f.size);
+        }
+    }
+    // The declared size class, from everything but `param.json` itself.
+    let unpacked: u64 = files
+        .iter()
+        .filter(|f| f.path != "sce_sys/param.json")
+        .map(|f| f.size)
+        .sum();
+    let param_json = match sdk_rules::size_class_rewrite(&param_json, unpacked, files.len() as u64)
+    {
+        Ok(Some((rewritten, what))) => {
+            progress(&format!("size class: {what}"));
+            rewritten
+        }
+        Ok(None) => param_json,
+        Err(e) => return format_err(e),
+    };
     if let Some(entry) = files.iter_mut().find(|f| f.path == "sce_sys/param.json") {
         entry.size = param_json.len() as u64;
     }
@@ -203,6 +251,10 @@ fn build_mode(
     // and reading them here keeps the source free for the range reader below.
     let icon_png = tree.read("sce_sys/icon0.png").unwrap_or_default();
     let icon_dds = tree.read("sce_sys/icon0.dds").unwrap_or_default();
+    // Only files still in the package: an excluded one must not reappear in the container.
+    let extras = cnt_write::presentation_extras(&mut |path| {
+        sizes_of(&files, path).and_then(|_| tree.read(path).ok())
+    });
     let time = request.time.unwrap_or_else(now);
     // A plaintext package carries the marker where a native one carries its random seed, so the
     // slot and the mode can never disagree and `request.seed` only has meaning in the native mode.
@@ -278,6 +330,10 @@ fn build_mode(
                     let at = (offset as usize).min(param_json.len());
                     return Ok(param_json[at..(at + len).min(param_json.len())].to_vec());
                 }
+                if let Some((repair, original)) = repairs.get(path) {
+                    let mut read = |o: u64, l: usize| tree.read_range(path, o, l);
+                    return repair.read(*original, offset, len, &mut read);
+                }
                 tree.read_range(path, offset, len)
             };
             let mut bytes = |done: u64, total: u64| {
@@ -303,6 +359,7 @@ fn build_mode(
                 param_json: param_json.clone(),
                 icon_png,
                 icon_dds,
+                extras,
                 metadata_codec: request.metadata_codec,
             };
             match stream::write_package(&mut file, &stream_request, &mut read_range, &mut p, cancel)
@@ -321,7 +378,13 @@ fn build_mode(
                 match sizes.get(path) {
                     Some(0) => Ok(Vec::new()),
                     Some(_) if path == "sce_sys/param.json" => Ok(param_json.clone()),
-                    Some(_) => tree.read(path),
+                    Some(&size) => match repairs.get(path) {
+                        Some((repair, original)) => {
+                            let mut read = |o: u64, l: usize| tree.read_range(path, o, l);
+                            repair.read(*original, 0, size as usize, &mut read)
+                        }
+                        None => tree.read(path),
+                    },
                     None => format_err(format!(
                         "the plan asked for {path}, which is not in the source"
                     )),
@@ -385,6 +448,7 @@ fn build_mode(
                 param_json: &param_json,
                 icon_png: &icon_png,
                 icon_dds: &icon_dds,
+                extras: &extras,
                 playgo_chunk: &playgo_chunk,
                 playgo_hash_table: &si_write::playgo_hash_table(ficm_files / 2),
                 playgo_ficm: &si_write::playgo_ficm(ficm_files),
@@ -548,6 +612,10 @@ fn shortfall(free: u64, needed: u64) -> Option<String> {
             needed as f64 / (1u64 << 30) as f64,
         )
     })
+}
+
+fn sizes_of(files: &[SourceFile], path: &str) -> Option<u64> {
+    files.iter().find(|f| f.path == path).map(|f| f.size)
 }
 
 fn now() -> (i64, u32) {

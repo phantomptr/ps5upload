@@ -23,6 +23,8 @@ pub mod pfsc;
 pub mod pfsimage;
 pub mod plan;
 pub mod rsa;
+pub mod sdk_rules;
+pub mod self_repair;
 pub mod si;
 pub mod si_write;
 pub mod source;

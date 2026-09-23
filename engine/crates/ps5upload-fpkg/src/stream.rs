@@ -40,6 +40,8 @@ pub struct StreamRequest<'a> {
     pub param_json: Vec<u8>,
     pub icon_png: Vec<u8>,
     pub icon_dds: Vec<u8>,
+    /// The presentation entries beyond the icons.
+    pub extras: Vec<cnt_write::ExtraEntry>,
     /// How the inner image's metadata region is stored.
     pub metadata_codec: crate::inner::MetaCodec,
 }
@@ -263,6 +265,7 @@ pub fn write_package(
         param_json: &request.param_json,
         icon_png: &request.icon_png,
         icon_dds: &request.icon_dds,
+        extras: &request.extras,
         playgo_chunk: &playgo_chunk,
         playgo_hash_table: &si_write::playgo_hash_table(ficm_files / 2),
         playgo_ficm: &si_write::playgo_ficm(ficm_files),

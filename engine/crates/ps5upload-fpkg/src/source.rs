@@ -191,7 +191,7 @@ pub mod magic {
 }
 
 /// A `param.json`'s bytes, parsed (it may carry a BOM).
-fn parse_param_json(bytes: &[u8]) -> Option<serde_json::Value> {
+pub(crate) fn parse_param_json(bytes: &[u8]) -> Option<serde_json::Value> {
     let text = String::from_utf8_lossy(bytes);
     serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()
 }
@@ -235,11 +235,22 @@ fn set_string_value(param_json: &[u8], key: &str, value: &str) -> Option<Vec<u8>
 /// `param.json` with a `"name": "value"` field added after its opening brace, carrying the
 /// file's own newline and indentation so an already-formatted file stays readable.
 fn insert_field(param_json: &[u8], name: &str, value: &str) -> Option<Vec<u8>> {
+    insert_raw_field(param_json, name, &format!("\"{value}\""))
+}
+
+/// [`insert_field`] for a value already written as JSON (a number, say).
+pub(crate) fn insert_raw_field(param_json: &[u8], name: &str, raw: &str) -> Option<Vec<u8>> {
     let text = String::from_utf8_lossy(param_json);
     let open = text.find('{')?;
     let at = open + 1;
-    let indent: String = text[at..].chars().take_while(|c| *c == '\n').collect();
-    let nl = if indent.is_empty() { "" } else { "\n" };
+    // The file's own line ending: Sony's tools write CRLF, most others LF.
+    let nl = if text[at..].starts_with("\r\n") {
+        "\r\n"
+    } else if text[at..].starts_with('\n') {
+        "\n"
+    } else {
+        ""
+    };
     // The indentation the file already uses for its first key, so the inserted field lines up.
     let pad: String = text[at..]
         .chars()
@@ -248,9 +259,9 @@ fn insert_field(param_json: &[u8], name: &str, value: &str) -> Option<Vec<u8>> {
         .take_while(|c| c.is_whitespace())
         .collect();
     let sep = if nl.is_empty() { ":" } else { ": " };
-    let mut out = Vec::with_capacity(param_json.len() + name.len() + value.len() + 8);
+    let mut out = Vec::with_capacity(param_json.len() + name.len() + raw.len() + 8);
     out.extend_from_slice(text[..at].as_bytes());
-    out.extend_from_slice(format!("{nl}{pad}\"{name}\"{sep}\"{value}\",").as_bytes());
+    out.extend_from_slice(format!("{nl}{pad}\"{name}\"{sep}{raw},").as_bytes());
     out.extend_from_slice(text[at..].as_bytes());
     Some(out)
 }

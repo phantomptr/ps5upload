@@ -41,11 +41,78 @@ const ENTRIES: [(u32, u32, &str); 13] = [
     (ids::PLAYGO_FICM, 0x0800_0000, "playgo-ficm.dat"),
 ];
 
+/// Presentation files the container carries beside the icons, when the source has them:
+/// `(entry id, source path, entry name)`. The ids and names are the ones a Publishing Tools
+/// package uses for the same files. Each is also left in the image, as that package does.
+pub const PRESENTATION: [(u32, &str, &str); 8] = [
+    (ids::SAVE_DATA_PNG, "sce_sys/save_data.png", "save_data.png"),
+    (ids::PIC0_PNG, "sce_sys/pic0.png", "pic0.png"),
+    (ids::SND0_AT9, "sce_sys/snd0.at9", "snd0.at9"),
+    (ids::PIC0_DDS, "sce_sys/pic0.dds", "pic0.dds"),
+    (ids::PIC1_DDS, "sce_sys/pic1.dds", "pic1.dds"),
+    (
+        ids::TROPHY,
+        "sce_sys/trophy2/trophy00.ucp",
+        "trophy2/trophy00.ucp",
+    ),
+    (ids::UDS, "sce_sys/uds/uds00.ucp", "uds/uds00.ucp"),
+    (ids::PIC2_DDS, "sce_sys/pic2.dds", "pic2.dds"),
+];
+
+/// A container entry beyond the fixed set: stored in the clear, digested like the rest.
+#[derive(Debug, Clone)]
+pub struct ExtraEntry {
+    pub id: u32,
+    pub name: &'static str,
+    pub data: Vec<u8>,
+}
+
+/// The [`PRESENTATION`] entries `read` finds (a missing or empty file is skipped).
+pub fn presentation_extras(read: &mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Vec<ExtraEntry> {
+    PRESENTATION
+        .iter()
+        .filter_map(|(id, path, name)| {
+            let data = read(path).filter(|d| !d.is_empty())?;
+            Some(ExtraEntry {
+                id: *id,
+                name,
+                data,
+            })
+        })
+        .collect()
+}
+
+/// Where an entry's payload sits: every body starts with the key and table entries, then
+/// `param.json`, then the entries in the `0x2000` range ahead of the image digests; the
+/// PlayGo chunk table and the `0x1000`-range presentation entries follow them, and the two
+/// PlayGo tables close it. Measured on a Publishing Tools package with 26 entries.
+fn body_rank(id: u32) -> (u8, u32) {
+    match id {
+        ids::ENTRY_KEYS => (0, 0),
+        ids::IMAGE_KEY => (1, 0),
+        ids::GENERAL_DIGESTS => (2, 0),
+        ids::METAS => (3, 0),
+        ids::DIGESTS => (4, 0),
+        ids::ENTRY_NAMES => (5, 0),
+        ids::PARAM_JSON => (6, 0),
+        ids::IMAGE_DIGESTS => (8, 0),
+        ids::PLAYGO_CHUNK => (9, 0),
+        ids::PLAYGO_HASH_TABLE | ids::PLAYGO_FICM => (11, id),
+        0x1000..=0x1FFF => (10, id),
+        _ => (7, id),
+    }
+}
+
+/// Every payload starts on this boundary, as in every sample.
+const ENTRY_ALIGN: usize = 16;
+
 pub struct CntParams<'a> {
     pub content_id: &'a str,
     pub param_json: &'a [u8],
     pub icon_png: &'a [u8],
     pub icon_dds: &'a [u8],
+    /// Presentation entries beyond the icons; see [`presentation_extras`].
+    pub extras: &'a [ExtraEntry],
     pub playgo_chunk: &'a [u8],
     pub playgo_hash_table: &'a [u8],
     pub playgo_ficm: &'a [u8],
@@ -91,6 +158,8 @@ impl Body {
     }
 
     fn add(&mut self, id: u32, data: &[u8]) {
+        let aligned = self.bytes.len().next_multiple_of(ENTRY_ALIGN);
+        self.bytes.resize(aligned, 0);
         let at = self.bytes.len() as u32;
         self.bytes.extend_from_slice(data);
         self.spans.insert(id, (at, data.len() as u32));
@@ -173,11 +242,14 @@ fn general_digests(
     pre.extend_from_slice(&header_prefix[0..0x40]);
     pre.extend_from_slice(mount_descriptor);
     slot(2, &sha3(&pre));
-    if let (Some(png), Some(dds)) = (entry_digest(ids::ICON0_PNG), entry_digest(ids::ICON0_DDS)) {
-        let mut pre = Vec::with_capacity(64);
-        pre.extend_from_slice(&png);
-        pre.extend_from_slice(&dds);
-        slot(3, &sha3(&pre));
+    let mut system = Vec::with_capacity(ids::SYSTEM_DIGEST_IDS.len() * 32);
+    for id in ids::SYSTEM_DIGEST_IDS {
+        if let Some(digest) = entry_digest(id) {
+            system.extend_from_slice(&digest);
+        }
+    }
+    if !system.is_empty() {
+        slot(3, &sha3(&system));
     }
     if let Some(param) = entry_digest(ids::PARAM_JSON) {
         slot(5, &param);
@@ -219,6 +291,19 @@ pub struct Facts {
     pub entries: Vec<(u32, u32, &'static str)>,
 }
 
+/// The entry table: the fixed set plus the extras, in id order.
+fn entry_list(extras: &[ExtraEntry]) -> Result<Vec<(u32, u32, &'static str)>> {
+    let mut entries: Vec<(u32, u32, &'static str)> = ENTRIES.to_vec();
+    for extra in extras {
+        if entries.iter().any(|(id, _, _)| *id == extra.id) {
+            return format_err(format!("container entry {:#06x} given twice", extra.id));
+        }
+        entries.push((extra.id, 0x0800_0000, extra.name));
+    }
+    entries.sort_by_key(|(id, _, _)| *id);
+    Ok(entries)
+}
+
 pub struct Container {
     pub bytes: Vec<u8>,
     pub facts: Facts,
@@ -229,14 +314,15 @@ pub fn write(p: &CntParams) -> Result<Container> {
     if p.content_id.len() != 36 || !p.content_id.is_ascii() {
         return format_err("content id must be 36 ASCII characters");
     }
-    let count = ENTRIES.len();
+    let entries = entry_list(p.extras)?;
+    let count = entries.len();
     let digest_table_len = count * 32;
     let ekpfs = derive_pfs_key(p.content_id, p.passcode, 1);
 
     // Names table: the empty name, then each named entry's name in entry order.
     let mut names = vec![0u8];
     let mut name_offsets = vec![0u32; count];
-    for (i, (_, _, name)) in ENTRIES.iter().enumerate() {
+    for (i, (_, _, name)) in entries.iter().enumerate() {
         if name.is_empty() {
             continue;
         }
@@ -253,20 +339,38 @@ pub fn write(p: &CntParams) -> Result<Container> {
         reversed.reverse();
         imagedigs.extend_from_slice(&reversed);
     }
+    let keys = keys_entry(p.content_id, p.passcode);
+    let image_key = image_key_entry(&ekpfs);
+    let general_placeholder = vec![0u8; GENERAL_LEN];
+    let table_placeholder = vec![0u8; digest_table_len];
+    let payload_of = |id: u32| -> &[u8] {
+        match id {
+            ids::ENTRY_KEYS => &keys,
+            ids::IMAGE_KEY => &image_key,
+            ids::GENERAL_DIGESTS => &general_placeholder,
+            ids::METAS | ids::DIGESTS => &table_placeholder,
+            ids::ENTRY_NAMES => &names,
+            ids::PARAM_JSON => p.param_json,
+            ids::IMAGE_DIGESTS => &imagedigs,
+            ids::PLAYGO_CHUNK => p.playgo_chunk,
+            ids::ICON0_PNG => p.icon_png,
+            ids::ICON0_DDS => p.icon_dds,
+            ids::PLAYGO_HASH_TABLE => p.playgo_hash_table,
+            ids::PLAYGO_FICM => p.playgo_ficm,
+            other => p
+                .extras
+                .iter()
+                .find(|e| e.id == other)
+                .map(|e| e.data.as_slice())
+                .unwrap_or(&[]),
+        }
+    };
+    let mut order: Vec<u32> = entries.iter().map(|(id, _, _)| *id).collect();
+    order.sort_by_key(|id| body_rank(*id));
     let mut body = Body::new();
-    body.add(ids::ENTRY_KEYS, &keys_entry(p.content_id, p.passcode));
-    body.add(ids::IMAGE_KEY, &image_key_entry(&ekpfs));
-    body.add(ids::GENERAL_DIGESTS, &vec![0u8; GENERAL_LEN]);
-    body.add(ids::METAS, &vec![0u8; digest_table_len]);
-    body.add(ids::DIGESTS, &vec![0u8; digest_table_len]);
-    body.add(ids::ENTRY_NAMES, &names);
-    body.add(ids::PARAM_JSON, p.param_json);
-    body.add(ids::IMAGE_DIGESTS, &imagedigs);
-    body.add(ids::PLAYGO_CHUNK, p.playgo_chunk);
-    body.add(ids::ICON0_PNG, p.icon_png);
-    body.add(ids::ICON0_DDS, p.icon_dds);
-    body.add(ids::PLAYGO_HASH_TABLE, p.playgo_hash_table);
-    body.add(ids::PLAYGO_FICM, p.playgo_ficm);
+    for id in order {
+        body.add(id, payload_of(id));
+    }
     let body_end = body.bytes.len();
     // Every sample's install segment starts on a 64 KiB boundary — `webbrowser.pkg` carries
     // 42 KiB of zero padding after the container to reach one, and the container's own
@@ -277,7 +381,7 @@ pub fn write(p: &CntParams) -> Result<Container> {
 
     // The entry table (`0x0100`'s payload), in entry-table order.
     let mut table = vec![0u8; digest_table_len];
-    for (i, (id, flags1, _)) in ENTRIES.iter().enumerate() {
+    for (i, (id, flags1, _)) in entries.iter().enumerate() {
         let (at, size) = body.span(*id);
         let entry = &mut table[i * 32..(i + 1) * 32];
         be32_into(entry, 0x00, *id);
@@ -293,7 +397,7 @@ pub fn write(p: &CntParams) -> Result<Container> {
     // Per-entry digests (the table's own slot stays zero; the general digests are only
     // final once their payload exists).
     let mut digests = vec![0u8; digest_table_len];
-    for (i, (id, _, _)) in ENTRIES.iter().enumerate() {
+    for (i, (id, _, _)) in entries.iter().enumerate() {
         if *id == ids::DIGESTS || *id == ids::GENERAL_DIGESTS {
             continue;
         }
@@ -340,7 +444,7 @@ pub fn write(p: &CntParams) -> Result<Container> {
     be64_into(&mut descriptor, 0x30, si_offset);
     be32_into(&mut descriptor, 0x38, 0x1_0000);
     let entry_digest = |id: u32| -> Option<[u8; 32]> {
-        let i = ENTRIES.iter().position(|(eid, _, _)| *eid == id)?;
+        let i = entries.iter().position(|(eid, _, _)| *eid == id)?;
         Some(digests[i * 32..(i + 1) * 32].try_into().unwrap())
     };
     // The general digests hash the container's own header bytes, so write the header and
@@ -361,7 +465,7 @@ pub fn write(p: &CntParams) -> Result<Container> {
     let general_at = body.span(ids::GENERAL_DIGESTS).0;
     body.write_at(general_at, &general);
     {
-        let i = ENTRIES
+        let i = entries
             .iter()
             .position(|(id, _, _)| *id == ids::GENERAL_DIGESTS)
             .unwrap();
@@ -377,7 +481,7 @@ pub fn write(p: &CntParams) -> Result<Container> {
     let imagedigs_digest = sha3(body.payload(ids::IMAGE_DIGESTS));
     // The manifest lists the entries the name table names, in offset order — the same set
     // the samples show.
-    let mut named: Vec<(u32, u32, &'static str)> = ENTRIES
+    let mut named: Vec<(u32, u32, &'static str)> = entries
         .iter()
         .filter(|(_, _, name)| !name.is_empty())
         .map(|(id, _, name)| {
@@ -461,6 +565,7 @@ mod tests {
             param_json: param,
             icon_png: png,
             icon_dds: dds,
+            extras: &[],
             playgo_chunk: chunk,
             playgo_hash_table: hash,
             playgo_ficm: ficm,
@@ -530,6 +635,75 @@ mod tests {
             let end = table[at..].iter().position(|b| *b == 0).unwrap() + at;
             assert_eq!(&table[at..end], name.as_bytes(), "entry {i}");
         }
+    }
+
+    /// The layout of a Publishing Tools package with every presentation entry: table in id
+    /// order, payloads in its body order and on 16-byte boundaries, the system digest over
+    /// all eight presentation entries.
+    #[test]
+    fn extras_take_the_publishing_tools_layout() {
+        let id = "UP0000-PPSA01234_00-TESTGAME00000000";
+        let chunk = crate::si_write::playgo_chunk_dat(id, 0xB0000).unwrap();
+        let ficm = crate::si_write::playgo_ficm(10);
+        let hash = crate::si_write::playgo_hash_table(5);
+        let digests = vec![[9u8; 32]; 3];
+        let fih = vec![1u8; crate::BLOCK as usize];
+        let extras: Vec<ExtraEntry> = PRESENTATION
+            .iter()
+            .enumerate()
+            .map(|(i, (eid, _, name))| ExtraEntry {
+                id: *eid,
+                name,
+                data: vec![i as u8 + 1; 1001 + i],
+            })
+            .collect();
+        let mut p = params(
+            id,
+            b"{\"a\":1}",
+            &[7; 333],
+            &[8; 555],
+            &chunk,
+            &hash,
+            &ficm,
+            &digests,
+            &fih,
+        );
+        p.extras = &extras;
+        let parsed = crate::cnt::Cnt::from_bytes(write(&p).unwrap().bytes).unwrap();
+        let table: Vec<u32> = parsed.entries.iter().map(|e| e.id).collect();
+        let mut sorted = table.clone();
+        sorted.sort();
+        assert_eq!(table, sorted, "the entry table is in id order");
+        assert_eq!(table.len(), 21);
+        let mut by_offset = parsed.entries.clone();
+        by_offset.sort_by_key(|e| e.offset);
+        let body: Vec<u32> = by_offset.iter().map(|e| e.id).collect();
+        assert_eq!(
+            body,
+            [
+                0x0010, 0x0020, 0x0080, 0x0100, 0x0001, 0x0200, 0x2000, 0x2060, 0x040A, 0x1001,
+                0x100D, 0x1200, 0x1220, 0x1240, 0x1280, 0x12A0, 0x12C0, 0x1480, 0x14A0, 0x2010,
+                0x2011,
+            ]
+        );
+        assert!(parsed.entries.iter().all(|e| e.offset % 16 == 0));
+        let checks = parsed.general_digests(&[3u8; 32]);
+        assert!(checks.iter().all(|(_, ok)| *ok), "{checks:?}");
+        assert!(checks
+            .iter()
+            .any(|(n, _)| *n == "cnt general digest system"));
+        assert!(parsed.body_digest_ok() && parsed.package_digest_ok());
+        // Trophy and UDS data are digested but are not part of the system digest.
+        let gd = parsed.payload(parsed.entry(ids::GENERAL_DIGESTS).unwrap());
+        let mut pre = Vec::new();
+        for eid in ids::SYSTEM_DIGEST_IDS {
+            pre.extend_from_slice(&sha3(parsed.payload(parsed.entry(eid).unwrap())));
+        }
+        assert_eq!(&gd[0x20 + 3 * 32..0x40 + 3 * 32], &sha3(&pre));
+        // A duplicate id is refused rather than written twice.
+        let twice = [extras[0].clone(), extras[0].clone()];
+        p.extras = &twice;
+        assert!(write(&p).is_err());
     }
 
     #[test]
