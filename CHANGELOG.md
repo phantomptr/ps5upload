@@ -4,6 +4,32 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.33.2
+
+**The helper no longer drops the connection a few seconds after you start it,
+installing straight from a link works, and you can now install directly from a
+network share.**
+
+- **Fixed: "connects, then disconnects as soon as I click anything."** When
+  the PS5 returned an unusual network error, the helper quietly stopped
+  accepting connections while still running — so the app showed it as gone
+  until you started it again. It now recovers on its own and keeps going. This
+  affected every recent version, not just the newest ones.
+- **"Let the PS5 download it" now works.** It wasn't starting the PS5's
+  installer service first, it said "sent" even when the PS5 had refused the
+  link, and the PS5 can't take links longer than 127 characters — which most
+  library links are. All three are fixed: a long link now goes through a short
+  address on this computer (keep ps5upload open until the PS5 finishes).
+- **New: install straight from an SMB / network share.** Pick a package in the
+  SMB browser and choose Install on PS5 — it streams from the share into the
+  PS5, with nothing copied to your computer or the console first.
+- **Better bug reports when the helper keeps dying.** They now include the
+  helper's own logs even if it crashed just before the report was made, and
+  say which step it stopped responding on.
+- **Android:** the bottom tabs are no longer hidden behind the gesture bar.
+
+---
+
 ## 5.33.1
 
 **Installing from a link is much faster, there is now a third way to do it,
