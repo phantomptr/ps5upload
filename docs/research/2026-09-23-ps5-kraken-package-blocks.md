@@ -1,6 +1,6 @@
 # PS5 package compression: how Kraken blocks and their records are stored
 
-Status: **partly decoded, not yet implemented.** Our FPKG builder writes every block
+Status: **layout fully decoded (records, sections, anchors); writer not yet implemented.** Our FPKG builder writes every block
 stored (uncompressed), which installs. This note records what is known about the
 compressed form, so the work can resume without redoing it.
 
@@ -51,45 +51,75 @@ below added.
 - The decoder copies matches 8 bytes at a time, so an encoder must never emit a
   distance under 8.
 
-## `naps_pkg_layout.dat`
+## `naps_pkg_layout.dat` — complete structure
 
-Section order: 16-byte header; outer-block digests (8 B each); shuffle patterns; `fidx`
-(`files + 3` entries of 6 B: 40-bit **logical** file offset + 1-byte type); `u2c`
-(`ublocks/8 + 1` entries of 10 B; the leading 24 bits are **not** a plain LE index,
-their top byte climbs ~8.8 per entry); `cblockinfo` (9 B each), which exactly fills the
-rest.
+Verified by walking four packages (Spider-Man 2, EA FC 26 unlocker, a DLC unlocker, the Web
+Browser homebrew): every block tiles the logical mount contiguously, every compressed block
+decodes, and the rebuilt mount has the inner PFS superblock exactly at the metadata base.
 
-### `cblockinfo` block record (72 bits, little-endian), verified on 72/72 blocks
+In order:
+
+1. **Header**, 16 bytes: `word0 = (files−1) | comp<<24 | (keys−1)<<26 | shuffles<<28 |
+   ublocks<<32`, `word1 = outer_blocks | (records−2)<<24`. `comp` is 2 (Kraken).
+2. **Outer digests**, 8 bytes per outer 64 KiB block — all zero in every sample.
+3. **fidx**, exactly `files` entries of 6 bytes (40-bit logical offset, 1-byte type): each
+   file's logical start, then the data end, the metadata base, and the mount size with type
+   `0x40`.
+4. **u2c**, `floor(ublocks/8) + 1` groups of 10 bytes (24-bit base + 7 one-byte deltas),
+   covering ublocks `0 ..= ublocks`. The value for ublock *n* is the record index of the first
+   block record whose logical start is `>= n × 256 KiB` (anchors are counted in the indices but
+   never pointed at); the entry past the mount end points at the end sentinel.
+5. **Padding to 8 bytes, then `00 00 04`** (24-bit 0x40000, the ublock size).
+6. **Records**, 9 bytes each, `records` of them. Index 0 is an all-zero start anchor.
+7. Zero padding (to 8 or 16 bytes; readers use the counts).
+
+Records are 72-bit little-endian integers.
+
+**Block record** (bit 31 = 1):
 
 | Bits | Field |
 |---|---|
-| 0–13 | constant within the file (`0xA5D` for `d/actor`, `0xA47` for the file before). Unknown. |
-| 14–30 | even half's compressed length − 1 |
-| 31 | 1 on every compressed block seen |
-| 32 | NOT even half's literal mode (1 = mode 0) |
-| 33 | 1 on all seen (probably "even half is LZ") |
-| 34 | 0 on all seen |
+| 0–13 | logical start within its 256 KiB window, / 16 (floor) |
+| 14–30 | even half's stored length − 1 (a raw 256 KiB block: `0x1FFFF`) |
+| 31 | 1 |
+| 32 | NOT even half's literal mode (1 = mode 0, delta literals) |
+| 33 | even half is an LZ chunk |
+| 34 | set on halves stored as bare entropy arrays (the all-zero blocks) |
 | 35 | NOT odd half's literal mode |
-| 36 | 1 on all seen (probably "odd half is LZ") |
-| 37–47 | 0 on all seen |
-| 48–65 | the block's compressed **end** offset, modulo 256 KiB |
-| 66–71 | 4 on most blocks; 5, 17, 29, 45 on a few. Unknown. |
+| 36 | odd half is an LZ chunk |
+| 37–47 | 0 |
+| 48–65 | the block's stored **end** offset, mod 256 KiB |
+| 66 | the next record is an anchor (end of a run) |
+| 67–68 | hint, meaning unknown (Sony writes 0, 2 or 4; 0 appears on compressed metadata blocks) |
+| 69–71 | hint, constant within a file (0–5); 0 appears on compressed metadata blocks |
 
-A block's start is the previous record's end, so the odd length is
-`end − start − even_length`.
+A raw half is one whose stored length equals its logical length; its flags are 0.
 
-### Interleaved records
+**Anchor record** (bit 31 = 0): bits 26–47 = the 256 KiB window of the next stored position,
+bits 48–65 = its offset within that window. Anchors appear (a) wherever the next block's
+stored data does not follow the previous block's (each file group starts on a 64 KiB
+boundary), and (b) at every 16th record index. The **terminator** is an anchor at the end of
+the stored data with bits 67–68 = 1 (value 2 in bits 66–68). The **end sentinel** is the last
+record: bits 0–13 = the mount size mod 256 KiB / 16, all else 0.
 
-One every 16 slots, for example `00 00 00 04 00 00 c5 77 10`,
-`00 00 00 08 …`, `01 00 00 10 …`. They repeat the previous record's end offset in
-bits 48–65, and bits 24+ climb by 4 per 16 blocks: the absolute compressed position in
-64 KiB units (a window anchor). Exact layout still to fit.
+A block's stored start is the previous record's end (or the anchor's position). Its logical
+length is `min(256 KiB, next file boundary − start)`; blocks never cross a fidx boundary.
+
+**All-zero data** (for example the gap between the data and the metadata base) is stored as
+16 bytes per 256 KiB block: each half is `27 ff fc 00 03 00 40 00`, a one-symbol Huffman
+array decoding to 128 KiB of zeros, flags `0x04`.
+
+### Why our uncompressed layouts looked right
+
+Our writer placed records 4 bytes off this framing and packed fields 32 bits off, which
+reproduced Sony's bytes for the uncompressed samples without describing them. A small
+test package built that way installed and mounted (2026-09-14). A compressed image cannot
+work that way: the writer has to follow this model.
 
 ## Still to do before an encoder is useful
 
-1. Decode bits 0–13, 66–71, the interleaved record, the `u2c` entries and the header's
-   remaining fields. Blocks with other shapes (stored halves, entropy-only halves, a
-   file's short last block, the metadata region) will show what the constant bits mean.
+1. The `naps_meta_18.dat` block map in the install segment must describe compressed blocks
+   too; decode it from Spider-Man's (the XTS key is already in `si_write`).
 2. A Kraken encoder that emits the excess framing, with a decoder in tests to prove
    every block round-trips. A raw-array (type 0) encoder is enough to start;
    Huffman arrays improve the ratio.
