@@ -4,6 +4,21 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.33.3
+
+**Fewer disconnects.**
+
+- **Fixed: the connection dropping and not coming back.** When the PS5 cut off
+  the helper's network, the helper stayed half-running and the app could not
+  reach it. It now shuts down cleanly so a fresh one can start.
+- **Fixed: the helper being started twice.** The app could send it two at once,
+  and the two knocked each other out. It now sends one at a time.
+- **Fixed: the app restarting a helper that was still running.**
+- **"Check" on the Connection screen** no longer reports an error when the
+  helper is already connected (some loaders, like pldmgr, close port 9021).
+
+---
+
 ## 5.33.2
 
 **The helper no longer drops the connection a few seconds after you start it,

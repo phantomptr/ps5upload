@@ -428,6 +428,21 @@ export default function ConnectionScreen() {
           `Port ${PS5_LOADER_PORT} is open on ${target}`,
         ));
     } else {
+      // A closed loader port is not a problem when our helper is already
+      // running: some loaders (pldmgr, for one) don't keep :9021 open after
+      // boot, and "Port 9021 is not open" read as "not connected" to a user
+      // whose app was connected the whole time.
+      const helper = await payloadCheck(target).catch(() => null);
+      if (helper?.reachable) {
+        const running = tr(
+          "connection_payload_running",
+          { host: target },
+          `Helper is running on ${target}`,
+        );
+        settleStep1("ok", running);
+        settleStep2("ok", running);
+        return;
+      }
       // Append the probe's own reason. Without it a name that simply didn't
       // resolve reads identically to a console that isn't jailbroken yet,
       // and the user has no way to tell the two apart (#272).

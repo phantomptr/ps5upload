@@ -22,7 +22,10 @@ import { usePayloadPlaylistsStore } from "../state/payloadPlaylists";
 import { log } from "../state/logs";
 import { playlistResendsOurHelper } from "../lib/playlistOps";
 import { capturePayloadBlackBox } from "../lib/ps5Snapshot";
-import { shouldCaptureBlackBox } from "../lib/payloadBlackBox";
+import {
+  BLACK_BOX_SETTLE_MS,
+  shouldCaptureBlackBox,
+} from "../lib/payloadBlackBox";
 import { useUpdateStore } from "../state/update";
 import { engineApi } from "../api/engine";
 import { payloadCheck, portCheck } from "../api/ps5";
@@ -49,6 +52,7 @@ import { powerTick } from "../api/ps5";
 import { transferScreenBusy } from "../lib/ps5Transfers";
 import {
   autoRedeployDecision,
+  liveHelperDecision,
   MAX_REDEPLOYS_WITHOUT_RECOVERY,
 } from "../lib/autoRedeploy";
 import { CommandPalette } from "../components/CommandPalette";
@@ -61,7 +65,12 @@ import { TabBottomNav } from "./TabNav";
 import Sidebar from "./Sidebar";
 import NavigationControls from "./NavigationControls";
 import { useWindowStatePersistence } from "../lib/windowState";
-import { mgmtAddr, hostOf } from "../lib/addr";
+import {
+  mgmtAddr,
+  hostOf,
+  PS5_MGMT_PORT,
+  PS5_TRANSFER_PORT,
+} from "../lib/addr";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { useUploadQueueStore } from "../state/uploadQueue";
 import { useTransferStore } from "../state/transfer";
@@ -349,17 +358,28 @@ function useStatusPolling() {
         }
         // Keep a copy of the helper's own logs every time it arrives at "up" —
         // including the first sighting after the app starts, which the
-        // transition log below deliberately skips. A helper that dies within
-        // seconds of starting (measured: 7.6 s on a FW 12.70 console) is gone
-        // again before anyone can file a report, and the report can only read
-        // logs through the helper. The new instance can still read the files
-        // its predecessor left, so read them now while something answers.
+        // transition log below deliberately skips. A helper that dies soon
+        // after starting is gone again before anyone can file a report, and
+        // the report can only read logs through the helper; the new instance
+        // can still read the files its predecessor left.
+        //
+        // Not at the instant it comes up, though. Reading then was followed,
+        // every time, by the helper dropping mid-reply (FW 12.70 report,
+        // 2026-09-23: up, first read reset 114 ms later, :9114 refused 27 ms
+        // after that). Let it settle, and read only if it is still up.
         if (
           newStatus === "up" &&
           prev.payloadStatus !== "up" &&
           shouldCaptureBlackBox(probedHost, Date.now())
         ) {
-          void capturePayloadBlackBox(probedHost);
+          const captureHost = probedHost;
+          window.setTimeout(() => {
+            const now =
+              useConnectionStore.getState().runtimeByHost[key];
+            if (now?.payloadStatus !== "up") return;
+            if (transferScreenBusy(captureHost)) return;
+            void capturePayloadBlackBox(captureHost);
+          }, BLACK_BOX_SETTLE_MS);
         }
         // Log only on an up<->down TRANSITION (not every poll).
         if (
@@ -664,6 +684,9 @@ function useAutoRedeployDownHelpers() {
   // trying through an all-night standby. A delivered send that doesn't produce
   // an up verdict means we are the problem, not the console.
   const deliveredRef = useRef<Record<string, number>>({});
+  // Consecutive ticks a console was left alone because its helper still
+  // accepted connections (see liveHelperDecision).
+  const liveHoldsRef = useRef<Record<string, number>>({});
   useEffect(() => {
     if (!visible) return;
     if (!isTauriEnv()) return;
@@ -709,6 +732,34 @@ function useAutoRedeployDownHelpers() {
           );
           return;
         }
+        // ── A helper that still owns our ports is alive ─────────────────
+        //
+        // STATUS can fail while the helper runs (one listener down, a busy
+        // accept loop). A push then starts a new instance that takes over
+        // from the live one and drops the connection again. Plain TCP
+        // connects only, never an RPC.
+        const portsOpen = (
+          await Promise.all(
+            [PS5_TRANSFER_PORT, PS5_MGMT_PORT].map((port) =>
+              portCheck(hostOf(host) || host, port).catch(() => false),
+            ),
+          )
+        ).some(Boolean);
+        if (cancelled) return;
+        const held = liveHoldsRef.current[key] ?? 0;
+        if (liveHelperDecision({ portsOpen, held }) === "hold") {
+          liveHoldsRef.current[key] = held + 1;
+          if (held === 0) {
+            log.warn(
+              "connection",
+              `auto-redeploy: holding off on ${host} — the helper is not answering STATUS, ` +
+                `but its ports still accept connections, so it is running. Sending another ` +
+                `would replace it and drop the connection.`,
+            );
+          }
+          return;
+        }
+        liveHoldsRef.current[key] = 0;
         // ensurePayloadCurrent(force=true) probes, then sends + polls up to
         // ~30s. While the PS5 is in rest mode the probe/send fails fast; once
         // awake it lands and boots. Either way it never throws.
@@ -762,6 +813,7 @@ function useAutoRedeployDownHelpers() {
           delivered: deliveredRef.current[key] ?? 0,
         });
         if (decision === "rearm") {
+          liveHoldsRef.current[key] = 0;
           if ((deliveredRef.current[key] ?? 0) > 0) {
             deliveredRef.current[key] = 0;
             log.info("connection", `auto-redeploy: ${h} is back up — re-armed`);

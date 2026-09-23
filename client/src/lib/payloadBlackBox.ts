@@ -58,6 +58,13 @@ export function clearBlackBoxes(): void {
  *  with a new predecessor to explain, so this stays short. */
 export const BLACK_BOX_COOLDOWN_MS = 20_000;
 
+/** How long a helper must have stayed up before the capture reads from it.
+ *  A helper is at its most fragile right after it starts (it is still taking
+ *  over from its predecessor and arming its listeners), and a capture fired
+ *  at that instant preceded the helper dropping on every recovery in one
+ *  FW 12.70 report. */
+export const BLACK_BOX_SETTLE_MS = 10_000;
+
 const lastAttempt = new Map<string, number>();
 
 /** True when a capture for `host` should start now, and marks the attempt. */

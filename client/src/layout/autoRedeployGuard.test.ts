@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { transferScreenBusy } from "../lib/ps5Transfers";
 import {
   autoRedeployDecision,
+  liveHelperDecision,
+  MAX_LIVE_HELPER_HOLDS,
   MAX_REDEPLOYS_WITHOUT_RECOVERY,
 } from "../lib/autoRedeploy";
 import { useTransferStore } from "../state/transfer";
@@ -131,5 +133,30 @@ describe("auto-redeploy must not run away on a healthy console", () => {
     expect(autoRedeployDecision({ status: "down", busy: true, delivered: 0 })).toBe(
       "hold",
     );
+  });
+});
+
+/**
+ * A FW 12.70 report: STATUS failed while :9113 still accepted connections,
+ * and each helper that came up reported "prior_instance": "replaced". A
+ * redeploy over a helper that still owns our ports replaces a live process
+ * and drops the connection it was meant to restore.
+ */
+describe("a helper whose ports still accept connections", () => {
+  it("is left alone", () => {
+    expect(liveHelperDecision({ portsOpen: true, held: 0 })).toBe("hold");
+    expect(
+      liveHelperDecision({ portsOpen: true, held: MAX_LIVE_HELPER_HOLDS - 1 }),
+    ).toBe("hold");
+  });
+
+  it("is replaced once it has stayed unresponsive long enough to be wedged", () => {
+    expect(
+      liveHelperDecision({ portsOpen: true, held: MAX_LIVE_HELPER_HOLDS }),
+    ).toBe("send");
+  });
+
+  it("does not delay a send when nothing of ours is listening", () => {
+    expect(liveHelperDecision({ portsOpen: false, held: 0 })).toBe("send");
   });
 });

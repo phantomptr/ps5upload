@@ -6,8 +6,9 @@
 /*
  * What an accept loop does after accept() fails.
  *
- * There is deliberately no "give up" action. Both accept loops used to break
- * on any errno outside a short allow-list, which left the helper running but
+ * There is no "give up" action for an accept failure itself (the one exit is
+ * accept_should_exit, below, once rebuilt listeners keep failing). Both accept
+ * loops used to break on any errno outside a short allow-list, which left the helper running but
  * serving nothing. On hardware they hit errno 163 — a Sony addition beyond
  * FreeBSD's ELAST, which no allow-list anticipates — and the user saw the
  * connection drop a few seconds after launching the helper. The only way out
@@ -30,6 +31,26 @@ static inline accept_action_t accept_error_action(int err, int consecutive) {
     if (err == EINTR || err == ECONNABORTED) return ACCEPT_RETRY_NOW;
     if (consecutive >= ACCEPT_REBUILD_AFTER) return ACCEPT_REBUILD;
     return ACCEPT_BACKOFF;
+}
+
+/*
+ * Rebuilds in a row, with no successful accept between them, after which the
+ * helper stops serving and exits so a fresh one can start.
+ *
+ * The exception to "never give up", and a measured one. On a FW 5.10 Phat the
+ * mgmt listener hit errno 163, was rebuilt, and the brand-new listener failed
+ * with 163 on its first accept(). Sony's neighbouring network errnos are
+ * interface or resume events (160 ADHOC, 161 DISABLEDIF, 162 RESUME): 163
+ * disables the PROCESS's sockets, which no rebuild inside it can fix, while
+ * the next helper process accepts normally. Retrying forever left a helper
+ * half alive (mgmt refused, transfer still answering) that the host neither
+ * reached nor replaced. Three rebuilds is about 7 s of proof.
+ */
+#define ACCEPT_EXIT_AFTER_REBUILDS 3
+
+/* `rebuilds` counts listener rebuilds since the last successful accept(). */
+static inline int accept_should_exit(int rebuilds) {
+    return rebuilds >= ACCEPT_EXIT_AFTER_REBUILDS;
 }
 
 #endif

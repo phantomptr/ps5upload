@@ -16917,6 +16917,27 @@ static void *transfer_client_thread(void *arg) {
 
 
 /*
+ * Nudge the OTHER accept loop so it notices shutdown_requested. The transfer
+ * loop runs on the main thread, blocked in accept(); nothing wakes it but a
+ * connection. The host's own status polls would do it within seconds, and so
+ * does main closing the mgmt listener, but a loopback connect makes the exit
+ * prompt. Best effort: a process that has lost its network may not manage it.
+ */
+static void wake_other_listener(runtime_state_t *state, int failing_port) {
+    int other = (failing_port == state->mgmt_port) ? state->runtime_port
+                                                    : state->mgmt_port;
+    struct sockaddr_in sa;
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return;
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons((uint16_t)other);
+    sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    (void)connect(fd, (struct sockaddr *)&sa, sizeof(sa));
+    close(fd);
+}
+
+/*
  * accept() failed on a listener. Decide how to carry on — never by giving up.
  *
  * Both accept loops used to `break` on any errno outside a short allow-list,
@@ -16938,10 +16959,12 @@ static void *transfer_client_thread(void *arg) {
  * retries, and a listener that keeps failing is closed and rebuilt on the
  * same port. The only way out of an accept loop is shutdown_requested.
  *
- * Returns 0 to keep looping, -1 when shutdown was requested.
+ * Returns 0 to keep looping, -1 when the loop should end: shutdown was
+ * requested, or the listener kept failing after ACCEPT_EXIT_AFTER_REBUILDS
+ * rebuilds (the process has lost its network; the helper shuts down).
  */
 static int recover_from_accept_error(runtime_state_t *state, int *listener_fd,
-                                     int port, int *consecutive,
+                                     int port, int *consecutive, int *rebuilds,
                                      const char *which) {
     int err = errno;
     accept_action_t action;
@@ -16960,10 +16983,27 @@ static int recover_from_accept_error(runtime_state_t *state, int *listener_fd,
 
     if (action != ACCEPT_REBUILD) return 0;
 
+    /* Rebuilt listeners that fail straight away again mean the process has
+     * lost its network (errno 163 on a FW 5.10 Phat), and no rebuild inside
+     * it will help. Stop serving so the helper exits and a fresh one can take
+     * its place, instead of lingering half alive. See accept_should_exit. */
+    if (accept_should_exit(*rebuilds)) {
+        fprintf(stderr, "[payload2] %s accept still failing after %d listener rebuilds "
+                        "(errno %d) — this process has lost its network; shutting the "
+                        "helper down so a fresh one can start\n",
+                which, *rebuilds, err);
+        runtime_mark_active_transactions(state, "interrupted");
+        (void)runtime_append_tx_event(state, "network_lost");
+        state->shutdown_requested = 1;
+        wake_other_listener(state, port);
+        return -1;
+    }
+
     /* Still failing: assume the listening socket is dead and rebuild it. */
+    (*rebuilds)++;
     fprintf(stderr, "[payload2] %s accept failed %d times in a row (errno %d) — "
-                    "rebuilding the listener on port %d\n",
-            which, *consecutive, err, port);
+                    "rebuilding the listener on port %d (rebuild %d of %d)\n",
+            which, *consecutive, err, port, *rebuilds, ACCEPT_EXIT_AFTER_REBUILDS);
     if (*listener_fd >= 0) close(*listener_fd);
     *listener_fd = -1;
     for (;;) {
@@ -17001,18 +17041,21 @@ int runtime_server_loop(runtime_state_t *state) {
     printf("[payload2] transfer listener ready on port %d\n", state->runtime_port);
 
     int accept_failures = 0;
+    int accept_rebuilds = 0;
     while (!state->shutdown_requested) {
         int client_fd = accept(state->listener_fd, NULL, NULL);
         if (client_fd < 0) {
-            /* Never give up on the listener; see recover_from_accept_error. */
+            /* See recover_from_accept_error. */
             if (recover_from_accept_error(state, &state->listener_fd,
                                           state->runtime_port,
-                                          &accept_failures, "transfer") != 0) {
+                                          &accept_failures, &accept_rebuilds,
+                                          "transfer") != 0) {
                 break;
             }
             continue;
         }
         accept_failures = 0;
+        accept_rebuilds = 0;
         /* Tune on the accept thread (writes state->last_client_rcvbuf, which no
          * other thread touches) BEFORE handing off, so the worker threads never
          * race on it. */
@@ -17166,6 +17209,7 @@ void *runtime_mgmt_server_loop(void *state_ptr) {
     printf("[payload2] mgmt listener ready on port %d\n", state->mgmt_port);
 
     int accept_failures = 0;
+    int accept_rebuilds = 0;
     while (!state->shutdown_requested) {
         int client_fd = accept(state->mgmt_listener_fd, NULL, NULL);
         if (client_fd < 0) {
@@ -17176,12 +17220,14 @@ void *runtime_mgmt_server_loop(void *state_ptr) {
              * the helper gone while it is still running. */
             if (recover_from_accept_error(state, &state->mgmt_listener_fd,
                                           state->mgmt_port,
-                                          &accept_failures, "mgmt") != 0) {
+                                          &accept_failures, &accept_rebuilds,
+                                          "mgmt") != 0) {
                 break;
             }
             continue;
         }
         accept_failures = 0;
+        accept_rebuilds = 0;
         tune_accepted_client(client_fd, NULL);
 
         /* Hand the client off to its own thread so a stuck fs syscall

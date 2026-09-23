@@ -54,3 +54,31 @@ export function autoRedeployDecision(input: {
   if (input.delivered >= MAX_REDEPLOYS_WITHOUT_RECOVERY) return "hold";
   return "redeploy";
 }
+
+/** How many redeploy ticks (15 s each) a helper that still accepts
+ *  connections is left alone before the loop may replace it anyway.
+ *
+ *  A failed STATUS is not a dead helper. A FW 12.70 report caught :9113
+ *  accepting connections while STATUS failed, and its helper reported
+ *  "prior_instance": "replaced" — started over a predecessor that was still
+ *  running. A process that still owns our ports is alive, and a push replaces
+ *  it, which drops the connection again. A minute still lets a genuinely
+ *  wedged helper be replaced. */
+export const MAX_LIVE_HELPER_HOLDS = 4;
+
+/**
+ * Whether to push a helper at a console that failed its status probe, given
+ * whether our own ports still accept connections there.
+ *
+ * - `send` — nothing of ours is listening: the helper is gone.
+ * - `hold` — a helper process is still there; leave it (and count the hold).
+ */
+export function liveHelperDecision(input: {
+  /** :9113 or :9114 accepted a TCP connection just now. */
+  portsOpen: boolean;
+  /** Consecutive holds for this console so far. */
+  held: number;
+}): "send" | "hold" {
+  if (!input.portsOpen) return "send";
+  return input.held < MAX_LIVE_HELPER_HOLDS ? "hold" : "send";
+}

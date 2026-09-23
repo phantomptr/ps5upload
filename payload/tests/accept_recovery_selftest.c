@@ -38,6 +38,15 @@ int main(void) {
      * couple of seconds, not a helper. */
     assert(ACCEPT_REBUILD_AFTER > 1 && ACCEPT_REBUILD_AFTER <= 50);
 
-    printf("accept recovery: every accept() failure keeps the helper serving\n");
+    /* A listener that fails again after being rebuilt, repeatedly, means the
+     * process lost its network (the FW 5.10 errno 163 case): exit so a fresh
+     * helper can start, but never on the first or second rebuild. */
+    assert(!accept_should_exit(0));
+    assert(!accept_should_exit(1));
+    assert(!accept_should_exit(ACCEPT_EXIT_AFTER_REBUILDS - 1));
+    assert(accept_should_exit(ACCEPT_EXIT_AFTER_REBUILDS));
+    assert(ACCEPT_EXIT_AFTER_REBUILDS >= 2 && ACCEPT_EXIT_AFTER_REBUILDS <= 5);
+
+    printf("accept recovery: failures keep the helper serving until the process has lost its network\n");
     return 0;
 }

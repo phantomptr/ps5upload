@@ -759,7 +759,7 @@ test-payload: payload
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-accept-recovery-selftest \
 		$(PAYLOAD_DIR)/tests/accept_recovery_selftest.c
 	@/tmp/ps5upload-accept-recovery-selftest
-	@echo "✓ an accept() failure never stops the helper serving"
+	@echo "✓ accept() failures keep the helper serving until its network is gone"
 	@echo "Running direct-commit apply self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-commit-apply-selftest \
 		$(PAYLOAD_DIR)/tests/commit_apply_selftest.c

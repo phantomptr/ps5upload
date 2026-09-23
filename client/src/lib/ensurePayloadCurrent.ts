@@ -46,10 +46,49 @@ function sleep(ms: number): Promise<void> {
  * "I had to re-send the ELF manually" symptom). On a connection-class
  * failure the payload is already suspect, so force a clean redeploy.
  */
-export async function ensurePayloadCurrent(
+export function ensurePayloadCurrent(
   host: string,
   shouldCancel?: () => boolean,
   force = false,
+): Promise<EnsurePayloadResult> {
+  // One at a time per console. The redeploy loop, both queues and their
+  // recovery paths each call this on their own schedule, and two sends that
+  // land together start two helpers: the Phat's startup log has pairs of
+  // ENTER_MAIN 82 ms and 180 ms apart, each followed by two mgmt threads and a
+  // takeover fight. A caller that arrives while a check is running shares its
+  // result instead of sending again.
+  const key = host.trim().toLowerCase();
+  const running = inFlight.get(key);
+  if (running) return running;
+  const p = ensurePayloadCurrentOnce(host, shouldCancel, force).finally(() => {
+    inFlight.delete(key);
+  });
+  inFlight.set(key, p);
+  return p;
+}
+
+const inFlight = new Map<string, Promise<EnsurePayloadResult>>();
+
+/** When each console was last sent a helper by this module (ms). */
+const lastSentAt = new Map<string, number>();
+
+/** A helper just sent is still starting — taking over, arming listeners — for
+ *  several seconds, and answers nothing meanwhile. A second send inside this
+ *  window is what starts a duplicate instance, so it waits for the first
+ *  instead. Longer than the ~30 s boot poll below, so a slow boot that the
+ *  poll gave up on is not immediately doubled either. */
+export const RESEND_COOLDOWN_MS = 45_000;
+
+/** Test seam. */
+export function resetEnsurePayloadState(): void {
+  inFlight.clear();
+  lastSentAt.clear();
+}
+
+async function ensurePayloadCurrentOnce(
+  host: string,
+  shouldCancel: (() => boolean) | undefined,
+  force: boolean,
 ): Promise<EnsurePayloadResult> {
   if (shouldCancel?.()) return "no-push";
   let appVersion: string;
@@ -85,7 +124,18 @@ export async function ensurePayloadCurrent(
     void prearmDpiDaemon(host);
     return "current";
   }
-  // Need to push. Locate the bundled ELF + send it.
+  // Need to push — unless we already did, moments ago, and that helper is
+  // still starting.
+  const key = host.trim().toLowerCase();
+  const sentAgo = Date.now() - (lastSentAt.get(key) ?? 0);
+  if (sentAgo < RESEND_COOLDOWN_MS) {
+    log.info(
+      "payload",
+      `not re-sending the helper to ${host}: one was sent ${Math.round(sentAgo / 1000)}s ago and may still be starting`,
+    );
+    return "no-push";
+  }
+  // Locate the bundled ELF + send it.
   log.info(
     "payload",
     `(re)deploying helper to ${host} (running=${running ?? "none"}, want=${appVersion})`,
@@ -96,6 +146,7 @@ export async function ensurePayloadCurrent(
     // desktop-only commands and throw here — which is why the web UI could
     // never redeploy a helper it had just found stale or dead.
     await restoreMainPayload(host);
+    lastSentAt.set(key, Date.now());
   } else {
     let elfPath: string;
     try {
@@ -106,6 +157,7 @@ export async function ensurePayloadCurrent(
     }
     try {
       await sendPayload(host, elfPath);
+      lastSentAt.set(key, Date.now());
     } catch (e) {
       log.warn("payload", `payload send to ${host} failed: ${e instanceof Error ? e.message : String(e)}`);
       return "no-push";
