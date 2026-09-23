@@ -390,29 +390,33 @@ static void redirect_stdio_to_file(void) {
     dup2(fd, STDOUT_FILENO);
     dup2(fd, STDERR_FILENO);
     if (fd != STDOUT_FILENO && fd != STDERR_FILENO) close(fd);
-    /* LINE buffered, not unbuffered.
+    /* UNBUFFERED. Do not change this to line or full buffering.
      *
-     * Unbuffered means each fprintf issues several small writes, so two
-     * threads logging at once interleave CHARACTER BY CHARACTER. Real bug
-     * reports contain lines like
+     * stdio here is the CONSOLE's libc (fprintf/fwrite/setvbuf resolve from
+     * libc_stub_weak.so at runtime, not from the SDK's static libc.a), and
+     * FreeBSD-derived stdio only locks a FILE when `__isthreaded` is set:
+     * FLOCKFILE(fp) is a no-op otherwise. Whether it is set depends on the
+     * host process the loader put us in, which we do not control.
+     *
+     * Unbuffered, an unlocked stdio has no shared state to corrupt — two
+     * threads logging at once merely interleave characters, which is ugly:
      *
      *   [[ppaayyllooaadd22]] ttarkaenosvfeerr: ...
      *
-     * which is two messages shredded together — in the very file we ask users
-     * to send us. Line buffering flushes once per newline, so a whole line
-     * lands in a single write and stays intact.
+     * That shredding IS the evidence that the locks are absent.
      *
-     * Crash evidence does not depend on this: write_fatal_breadcrumb() and
-     * the signal path use raw write(2) on STDERR_FILENO, bypassing stdio
-     * entirely. The most a crash can now lose is one incomplete line.
+     * Buffered, every thread shares one buffer and its pointer and count with
+     * nothing serialising them: a data race that corrupts memory. 5.32.0 made
+     * exactly this change to fix the shredding, and every build from 5.32.0
+     * killed the helper within seconds on consoles where the locks are off —
+     * reported independently by two users (one on FW 12.70 with kstuff-lite
+     * only), both of whom found 5.31.4 to be the last build that worked. It
+     * was the only behavioural payload change between the two builds.
      *
-     * The buffers are static because setvbuf keeps using the storage for the
-     * life of the stream; a stack buffer here would be a dangling pointer the
-     * moment this function returns. */
-    static char out_buf[4096];
-    static char err_buf[4096];
-    setvbuf(stdout, out_buf, _IOLBF, sizeof(out_buf));
-    setvbuf(stderr, err_buf, _IOLBF, sizeof(err_buf));
+     * If the shredding ever needs fixing, format each line into a local buffer
+     * and hand it to a single write(2) — never a shared stdio buffer. */
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
 
     struct timespec ts;
     if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
