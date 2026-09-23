@@ -1,8 +1,8 @@
 # PS5 package compression: how Kraken blocks and their records are stored
 
-Status: **layout fully decoded (records, sections, anchors); writer not yet implemented.** Our FPKG builder writes every block
-stored (uncompressed), which installs. This note records what is known about the
-compressed form, so the work can resume without redoing it.
+Status: **layout fully decoded; writer implemented (`kraken.rs`, `kraken_image.rs`), opt-in with
+`PS5UPLOAD_FPKG_KRAKEN=1` until a compressed package mounts on a console.** Without it the builder
+writes every block stored (uncompressed), which installs. This note records the compressed form.
 
 ## Why this matters
 
@@ -69,6 +69,13 @@ In order:
    covering ublocks `0 ..= ublocks`. The value for ublock *n* is the record index of the first
    block record whose logical start is `>= n × 256 KiB` (anchors are counted in the indices but
    never pointed at); the entry past the mount end points at the end sentinel.
+   Each delta is one byte, so the records opening any seven consecutive ublocks of a group must
+   number under 256. Sony's packages never come close (at most 16, measured on all four), but
+   every file opens at least one record, so thousands of tiny files overflow it (Minecraft: 2043
+   in one group, 141 groups over). Our planner, for a compressed image, starts at most 16
+   non-empty files per ublock and moves the next file to a fresh ublock; the zeros in between
+   are tiled into the previous file's blocks and never read, since an inode addresses its file
+   by logical offset and size. The writer refuses a delta over 255 instead of clamping.
 5. **Padding to 8 bytes, then `00 00 04`** (24-bit 0x40000, the ublock size).
 6. **Records**, 9 bytes each, `records` of them. Index 0 is an all-zero start anchor.
 7. Zero padding (to 8 or 16 bytes; readers use the counts).

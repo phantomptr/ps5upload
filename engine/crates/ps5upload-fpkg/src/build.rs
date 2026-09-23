@@ -297,7 +297,7 @@ fn build_mode(
     };
 
     progress(&format!("planning {}", tree.describe()));
-    let plan = plan::build(&files)?;
+    let plan = plan::build_with(&files, request.kraken)?;
     // Refuse an over-large source here, before a single byte is read.
     if plan.ndblock > outer_write::max_inner_blocks() {
         return format_err(format!(

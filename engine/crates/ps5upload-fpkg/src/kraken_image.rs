@@ -73,6 +73,8 @@ pub struct KrakenImage {
 struct Todo {
     logical: u64,
     len: usize,
+    /// How much of `len` is the file's own; the rest is gap.
+    real: usize,
     owner: Owner,
     /// For a file block: the path and the offset within the file.
     source: Option<(String, u64)>,
@@ -84,12 +86,19 @@ fn plan_blocks(plan: &Plan) -> (Vec<Todo>, u64) {
     let mut end = 0u64;
     for (afid, &fi) in plan.afid_order.iter().enumerate() {
         let f = &plan.files[fi];
+        // Blocks tile a file up to the next file's start: the descriptor gives no other length.
+        // That is the file itself, plus the zeros of a gap the planner spread it by.
+        let span = match plan.afid_order.get(afid + 1) {
+            Some(&next) => plan.files[next].logical_offset - f.logical_offset,
+            None => f.size,
+        };
         let mut off = 0u64;
-        while off < f.size {
-            let len = (f.size - off).min(UBLOCK);
+        while off < span {
+            let len = (span - off).min(UBLOCK);
             todo.push(Todo {
                 logical: f.logical_offset + off,
                 len: len as usize,
+                real: f.size.saturating_sub(off).min(len) as usize,
                 owner: Owner::File(afid),
                 source: Some((f.path.clone(), off)),
                 generated_keystone: f.generated && f.path == plan::KEYSTONE,
@@ -104,6 +113,7 @@ fn plan_blocks(plan: &Plan) -> (Vec<Todo>, u64) {
         todo.push(Todo {
             logical: at,
             len: len as usize,
+            real: 0,
             owner: Owner::Gap,
             source: None,
             generated_keystone: false,
@@ -117,6 +127,7 @@ fn plan_blocks(plan: &Plan) -> (Vec<Todo>, u64) {
         todo.push(Todo {
             logical: at,
             len: len as usize,
+            real: 0,
             owner: Owner::Meta,
             source: None,
             generated_keystone: false,
@@ -236,22 +247,26 @@ pub fn compress(
             }
             let bytes = match (&t.owner, &t.source) {
                 (Owner::File(_), Some((path, off))) => {
-                    if t.generated_keystone {
+                    let mut b = if t.real == 0 {
+                        Vec::new()
+                    } else if t.generated_keystone {
                         keystone
-                            .get(*off as usize..*off as usize + t.len)
+                            .get(*off as usize..*off as usize + t.real)
                             .ok_or_else(|| crate::Error::Format("keystone is short".into()))?
                             .to_vec()
                     } else {
-                        let b = read(path, *off, t.len)?;
-                        if b.len() != t.len {
+                        let b = read(path, *off, t.real)?;
+                        if b.len() != t.real {
                             return format_err(format!(
                                 "{path} gave {} bytes at {off} where the plan fixed {}",
                                 b.len(),
-                                t.len
+                                t.real
                             ));
                         }
                         b
-                    }
+                    };
+                    b.resize(t.len, 0);
+                    b
                 }
                 (Owner::Meta, _) => {
                     let at = (t.logical - plan.meta_base) as usize;
@@ -281,7 +296,7 @@ pub fn compress(
                     file_stored_at[afid] = cursor;
                 }
                 if let Some((_, h)) = open.as_mut() {
-                    h.update(&bytes);
+                    h.update(&bytes[..t.real]);
                 }
             }
             let stored_at = cursor;
@@ -447,9 +462,16 @@ pub fn layout(image: &KrakenImage, file_starts: &[u64]) -> Result<Vec<u8>> {
         let base = at(g * 8);
         blob.extend_from_slice(&(base as u32).to_le_bytes()[..3]);
         for j in 1..8 {
-            // A group dense with small files can outgrow a byte; pointing earlier is safe, a
-            // reader walks forward from the index.
-            blob.push(at(g * 8 + j).saturating_sub(base).min(255) as u8);
+            // A clamped delta would send the console to the wrong record, so a group this dense
+            // is refused; `plan::build_with` spreads small files to keep them under a byte.
+            let Ok(delta) = u8::try_from(at(g * 8 + j) - base) else {
+                return format_err(format!(
+                    "ublocks {}..{} hold too many blocks for the layout descriptor",
+                    g * 8,
+                    g * 8 + 8
+                ));
+            };
+            blob.push(delta);
         }
     }
     blob.resize(blob.len().next_multiple_of(8), 0);

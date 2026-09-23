@@ -440,8 +440,11 @@ fn encode_half(
     out.append(&mut f);
     out.append(&mut b);
     out.extend(excess);
-    // The decoder wants at least 13 bytes of chunk; a half that small is stored raw instead.
-    if out.len() >= end - start || out.len() < 13 {
+    // Compressed only when it saves at least 2%: below that the console would decode a half
+    // to gain almost nothing, where a raw half is a plain copy. (The decoder also wants at
+    // least 13 bytes of chunk.)
+    let raw = end - start;
+    if out.len() + raw / 50 >= raw || out.len() < 13 {
         return None;
     }
     Some(out)

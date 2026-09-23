@@ -255,8 +255,27 @@ fn post_order(dirs: &[DirNode], from: usize, out: &mut Vec<usize>) {
     out.push(from);
 }
 
+/// How many non-empty files a compressed image lets start in one 256 KiB ublock.
+///
+/// The layout descriptor finds a ublock's first block record from its group's base plus a
+/// one-byte delta, so the records opening seven ublocks must number under 256. Every file opens
+/// at least one record, and Sony's packages never come near the limit (at most 16 per group,
+/// measured on Spider-Man 2, an EA title and the Web Browser), but a tree of thousands of tiny
+/// files would pass it (Minecraft: 2043 records in one group). Sixteen starts per ublock keeps
+/// a group at about 130.
+pub const MAX_STARTS_PER_UBLOCK: u32 = 16;
+const UBLOCK: u64 = 0x4_0000;
+
 /// Plan the inner image and everything derived from it.
 pub fn build(input: &[SourceFile]) -> Result<Plan> {
+    build_with(input, false)
+}
+
+/// Like [`build`]; `spread` is for a compressed image. It moves the next file to a fresh
+/// ublock once [`MAX_STARTS_PER_UBLOCK`] files have started in the current one. The gap
+/// belongs to the file before it and is never read: an inode addresses its file by logical
+/// offset and size.
+pub fn build_with(input: &[SourceFile], spread: bool) -> Result<Plan> {
     let mut files: Vec<PlannedFile> = input
         .iter()
         .map(|f| PlannedFile {
@@ -379,12 +398,31 @@ pub fn build(input: &[SourceFile]) -> Result<Plan> {
     // its own, so the two cursors diverge as soon as a file is not a whole number of units.
     let mut cursor = 0u64;
     let mut on_disk = 0u64;
+    let mut starts = (0u64, 0u32); // (ublock, non-empty files started in it)
     for &fi in &afid_order {
+        if starts.0 != cursor / UBLOCK {
+            starts = (cursor / UBLOCK, 0);
+        }
+        if files[fi].size > 0 {
+            starts.1 += 1;
+        }
         files[fi].logical_offset = cursor;
         files[fi].on_disk_offset = on_disk;
         files[fi].parent_inode = dirs[parent_of(&dirs, &files[fi].path)?].inode;
         cursor += files[fi].size;
         on_disk = (on_disk + files[fi].size).next_multiple_of(FILE_ALIGN);
+        if spread
+            && files[fi].size > 0
+            && starts.1 >= MAX_STARTS_PER_UBLOCK
+            && cursor / UBLOCK == starts.0
+        {
+            // The gap follows a file with bytes, so an empty file never owns one, and the
+            // logical space stays inside the image's own extent, which sets the metadata base.
+            let next = cursor.next_multiple_of(UBLOCK);
+            if next <= on_disk {
+                cursor = next;
+            }
+        }
     }
     let data_end = on_disk;
 
@@ -651,6 +689,54 @@ mod tests {
             .map(|&fi| plan.files[fi].on_disk_offset)
             .collect();
         assert_eq!(on_disk, vec![0, 0x10000, 0x20000, 0x30000, 0x40000]);
+    }
+
+    /// A compressed image spreads a run of tiny files so no ublock opens more than the layout
+    /// descriptor's one-byte deltas can index; an empty file never owns the gap, and the packed
+    /// plan is untouched.
+    #[test]
+    fn spreading_caps_file_starts_per_ublock() {
+        let mut paths: Vec<(String, u64)> = (0..200).map(|i| (format!("d/{i:03}"), 4000)).collect();
+        // An empty file after every 16th, where each gap opens in name order.
+        for i in (15..200).step_by(16) {
+            paths.push((format!("d/{i:03}e"), 0));
+        }
+        let owned: Vec<(&str, u64)> = paths.iter().map(|(p, s)| (p.as_str(), *s)).collect();
+        let input = src(&owned);
+        let spread = build_with(&input, true).unwrap();
+        let mut per_ublock: BTreeMap<u64, u32> = BTreeMap::new();
+        let order: Vec<&PlannedFile> = spread
+            .afid_order
+            .iter()
+            .map(|&fi| &spread.files[fi])
+            .collect();
+        for (i, f) in order.iter().enumerate() {
+            assert!(f.logical_offset <= f.on_disk_offset);
+            if let Some(next) = order.get(i + 1) {
+                assert!(
+                    next.logical_offset >= f.logical_offset + f.size,
+                    "{} overlaps",
+                    f.path
+                );
+                if f.size == 0 {
+                    assert_eq!(
+                        next.logical_offset, f.logical_offset,
+                        "an empty file owns a gap"
+                    );
+                }
+            }
+            if f.size > 0 {
+                *per_ublock.entry(f.logical_offset / UBLOCK).or_default() += 1;
+            }
+        }
+        assert!(per_ublock.values().all(|&n| n <= MAX_STARTS_PER_UBLOCK));
+        assert!(per_ublock.len() > 1);
+        let packed = build(&input).unwrap();
+        let mut at = 0;
+        for &fi in &packed.afid_order {
+            assert_eq!(packed.files[fi].logical_offset, at);
+            at += packed.files[fi].size;
+        }
     }
 
     /// `pfs-version.dat` is a marker, not app payload: the sample's three uroot files
