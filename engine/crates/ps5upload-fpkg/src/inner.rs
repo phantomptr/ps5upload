@@ -22,6 +22,25 @@ use crate::{format_err, le16, le32, le64, Result, BLOCK};
 
 /// Bytes of one inner inode.
 pub const INODE_LEN: usize = 0xA8;
+
+/// Inodes per 64 KiB block of the inode table: 390 × 0xA8 = 65,520 bytes, the rest of the block
+/// left zero, so no inode straddles two blocks. We had packed them back to back, which put
+/// every inode past the 390th 16 bytes further off per block; the console then read garbage
+/// for Minecraft's `eboot.bin` (inode 37,552) and refused to start it
+/// (`sceSblACMgrGetFsSandboxType ... 0x80020016`). LibProsperoPkg's inner metadata writer,
+/// whose packages launch, lays the table out this way, and the kernel's own block count for
+/// the table (`blkcnt=97` for 37,552 inodes) is exactly ⌈n / 390⌉.
+pub const INODES_PER_BLOCK: usize = 390;
+
+/// The byte offset of inode `index` within the inode table.
+pub fn inode_offset(index: usize) -> usize {
+    (index / INODES_PER_BLOCK) * BLOCK as usize + (index % INODES_PER_BLOCK) * INODE_LEN
+}
+
+/// The inode table's length in bytes for `count` inodes: whole blocks.
+pub fn inode_table_len(count: usize) -> u64 {
+    (count.div_ceil(INODES_PER_BLOCK).max(1) as u64) * BLOCK
+}
 /// The block-info table's entry count, as measured on the sample (31 template entries and
 /// one derived value).
 pub const BLOCK_INFO_ENTRIES: usize = 32;
@@ -212,7 +231,7 @@ struct InodeRecord {
 }
 
 fn write_inode(table: &mut [u8], index: usize, rec: &InodeRecord, time: (i64, u32)) {
-    let o = index * INODE_LEN;
+    let o = inode_offset(index);
     let ino = &mut table[o..o + INODE_LEN];
     ino[0..2].copy_from_slice(&rec.mode.to_le_bytes());
     ino[2..4].copy_from_slice(&rec.nlink.to_le_bytes());
@@ -269,26 +288,24 @@ fn metadata_region(plan: &Plan, build_time: (i64, u32)) -> Result<Vec<u8>> {
     sb[0x28..0x30].copy_from_slice(&1i64.to_le_bytes());
     sb[0x30..0x38].copy_from_slice(&(inode_count as i64).to_le_bytes());
     sb[0x38..0x40].copy_from_slice(&(plan.ndblock as i64).to_le_bytes());
-    sb[0x40..0x48].copy_from_slice(&1i64.to_le_bytes());
-    for (at, value) in [
-        (0x50usize, BLOCK as u32),
-        (0x54, 0x10),
-        (0x58, BLOCK as u32),
-        (0x60, BLOCK as u32),
-    ] {
-        sb[at..at + 4].copy_from_slice(&value.to_le_bytes());
-    }
+    // 0x40 onward describe the inode table itself (an embedded inode at 0x50): its block count
+    // here, then mode 0 / nlink 1 / flags 0x10, its size and compressed size (whole blocks), and
+    // again its block count at 0xB0. All were one block's values, as in every small sample.
+    let table_blocks = plan.metadata.inode_table.1.div_ceil(BLOCK).max(1);
+    sb[0x40..0x48].copy_from_slice(&(table_blocks as i64).to_le_bytes());
+    sb[0x50..0x52].copy_from_slice(&0u16.to_le_bytes());
+    sb[0x52..0x54].copy_from_slice(&1u16.to_le_bytes());
+    sb[0x54..0x58].copy_from_slice(&0x10u32.to_le_bytes());
+    sb[0x58..0x60].copy_from_slice(&((table_blocks * BLOCK) as i64).to_le_bytes());
+    sb[0x60..0x68].copy_from_slice(&((table_blocks * BLOCK) as i64).to_le_bytes());
     for t in 0..4 {
         sb[0x68 + t * 8..0x70 + t * 8].copy_from_slice(&build_time.0.to_le_bytes());
     }
     for t in 0..4 {
         sb[0x88 + t * 4..0x8C + t * 4].copy_from_slice(&build_time.1.to_le_bytes());
     }
-    // The inode table's length in blocks (its "super inode"'s di_blocks). Every sample's table
-    // fits one block, so this was a constant 1; Minecraft's 37,000 inodes fill 97, and the
-    // console then failed every lookup past the first block (`ppr_get_blkno_sino() no blocks
-    // ... dino->di_blocks=1 blkcnt=97`, then EINVAL from path_lookup on eboot.bin).
-    let table_blocks = plan.metadata.inode_table.1.div_ceil(BLOCK).max(1);
+    // The table's di_blocks. A constant 1 made the console fail every lookup past the first
+    // block (`ppr_get_blkno_sino() no blocks ... dino->di_blocks=1 blkcnt=97`).
     sb[0xB0..0xB8].copy_from_slice(&(table_blocks as i64).to_le_bytes());
     // The inode table's absolute block. Both Sony references hold exactly this (the Web
     // Browser 0x41, Spider-Man 2 0x3f6911); the constant 0x89 that stood here was one
@@ -793,14 +810,13 @@ pub fn read(mount: &[u8], meta_base: u64) -> Result<InnerMount> {
             "implausible inner superblock (block size {block_size:#x}, {inode_count} inodes)"
         ));
     }
-    // The table is flat from one block after the superblock and spans as many blocks as the
-    // inode count needs — a real title's does.
+    // The table starts one block after the superblock, 390 inodes to a block.
     let table = mount
-        .get(base + block_size..base + block_size + inode_count * INODE_LEN)
+        .get(base + block_size..base + block_size + inode_table_len(inode_count) as usize)
         .ok_or_else(|| crate::Error::Format("mount has no inode table".into()))?;
 
     let inode = |i: usize| -> Option<(u16, u64, u64, i32)> {
-        let o = i * INODE_LEN;
+        let o = inode_offset(i);
         let raw = table.get(o..o + INODE_LEN)?;
         Some((
             le16(raw, 0),
@@ -927,6 +943,19 @@ fn walk(
 
 #[cfg(test)]
 mod tests {
+    /// 390 inodes to a 64 KiB block, the tail of each block left empty; Minecraft's 37,552
+    /// inodes take the 97 blocks the console computed.
+    #[test]
+    fn inode_table_is_390_to_a_block() {
+        assert_eq!(inode_offset(0), 0);
+        assert_eq!(inode_offset(389), 389 * INODE_LEN);
+        assert_eq!(inode_offset(390), BLOCK as usize);
+        assert_eq!(inode_offset(781), 2 * BLOCK as usize + INODE_LEN);
+        assert!(389 * INODE_LEN + INODE_LEN <= BLOCK as usize);
+        assert_eq!(inode_table_len(37_552), 97 * BLOCK);
+        assert_eq!(inode_table_len(1), BLOCK);
+    }
+
     use super::*;
     use crate::source::SourceFile;
 

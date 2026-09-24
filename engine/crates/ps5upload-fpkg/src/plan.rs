@@ -616,8 +616,7 @@ pub fn build_with(input: &[SourceFile], spread: bool) -> Result<Plan> {
         (data_end + BLOCK).div_ceil(META_ALIGN) * META_ALIGN
     };
     let super_root = super_root_dirents();
-    let inode_table_bytes =
-        ((4 + planned_dirs.len() + files.len()) * crate::inner::INODE_LEN) as u64;
+    let inode_table_bytes = crate::inner::inode_table_len(4 + planned_dirs.len() + files.len());
     let flt_bytes = flt::write(&flt_inode).len() as u64;
     let flt_apr_bytes = flt::write(&flt_apr).len() as u64;
     let afid_bytes = (afid_to_ino.len() * 4) as u64;
