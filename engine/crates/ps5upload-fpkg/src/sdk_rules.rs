@@ -9,7 +9,8 @@
 //!   Packaging them again carries stale copies next to the fresh ones, so they are left
 //!   out. The kit also drops what Sony's tool regenerates from other inputs (`.dds`
 //!   renders, `about/right.sprx`, `keystone`, `pfs-version.dat`, `ext_info.dat`); this
-//!   builder regenerates none of those, so it keeps the source's copies. The same goes for
+//!   builder regenerates none of those, so it keeps the source's copies — except
+//!   `ext_info.dat`, a stale sidecar of the original package that working builds leave out. The same goes for
 //!   `ampr_emu.index` and `fakelib/libSceAmpr.sprx` / `libScePlayGo.sprx`, which the kit
 //!   strips: in a backported game they are APR Emu's file index and emulation library, and
 //!   the title needs them to run on older firmware.
@@ -22,6 +23,9 @@ use crate::source;
 /// `sce_sys/<name>` files the packaging step generates.
 const GENERATED_SCE_SYS_FILES: &[&str] = &[
     "disc_info.dat",
+    // The original package's install sidecar, which Sony's tool regenerates; PSVIETHOA's
+    // working package leaves it out and so do we now.
+    "ext_info.dat",
     "imagedigs.dat",
     "license.info",
     "license.dat",

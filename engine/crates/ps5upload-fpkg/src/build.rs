@@ -202,6 +202,7 @@ fn build_mode(
     // rewritten bytes are served in its place, and the file list's size for it is adjusted
     // so the plan lays out what the package will actually carry.
     let param_json = source::drm_rewrite(&param_json).unwrap_or(param_json);
+    let param_json = source::launch_rewrite(&param_json).unwrap_or(param_json);
     let content_id = match &request.content_id {
         Some(id) => id.clone(),
         None => source::content_id(&param_json).ok_or_else(|| {

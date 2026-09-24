@@ -289,6 +289,99 @@ pub fn drm_rewrite(param_json: &[u8]) -> Option<Vec<u8>> {
     set_string_value(param_json, "\"applicationDrmType\"", STANDARD_DRM)
 }
 
+/// `param.json` made safe to launch from a debug package, as PSVIETHOA's builder does in a
+/// package that runs where ours showed a black screen (same Minecraft folder, FW 5.10):
+///
+/// - `versionFileUri` cleared: the game otherwise checks Sony's update server at start;
+/// - `originContentVersion` / `targetContentVersion` removed: they mark a patch applied over a
+///   base, which a standalone package is not;
+/// - each `addcont.serviceIdForSharing` id blanked to spaces of the same length.
+///
+/// Only those bytes change. `None` when there is nothing to do.
+pub fn launch_rewrite(param_json: &[u8]) -> Option<Vec<u8>> {
+    let mut out = param_json.to_vec();
+    let mut changed = false;
+    let text = String::from_utf8_lossy(&out).into_owned();
+    if let Some((start, end)) = string_value_span(&text, "\"versionFileUri\"") {
+        if start < end {
+            out = set_string_value(&out, "\"versionFileUri\"", "")?;
+            changed = true;
+        }
+    }
+    for key in ["\"originContentVersion\"", "\"targetContentVersion\""] {
+        if let Some(next) = remove_string_field(&out, key) {
+            out = next;
+            changed = true;
+        }
+    }
+    if let Some(next) = blank_string_array(&out, "\"serviceIdForSharing\"") {
+        out = next;
+        changed = true;
+    }
+    changed.then_some(out)
+}
+
+/// `param.json` without the first `key` and its string value, plus the comma that separated
+/// it from its neighbour; `None` when the key is absent.
+fn remove_string_field(param_json: &[u8], key: &str) -> Option<Vec<u8>> {
+    let text = String::from_utf8_lossy(param_json);
+    let key_at = text.find(key)?;
+    let (_, value_end) = string_value_span(&text, key)?;
+    let mut end = value_end + 1; // past the closing quote
+                                 // Take the following comma, or if this was the last field, the preceding one.
+    let after = &text[end..];
+    let start;
+    if let Some(comma) = after.find(',').filter(|&c| after[..c].trim().is_empty()) {
+        end += comma + 1;
+        // Also the line break and indentation up to the next key, so no blank line is left.
+        let rest = &text[end..];
+        let ws = rest.len() - rest.trim_start().len();
+        end += ws;
+        let before = &text[..key_at];
+        let lead = before.len() - before.trim_end_matches([' ', '\t']).len();
+        start = key_at - lead;
+        // Keep the indentation of the removed line for the next key.
+        let indent = &text[start..key_at];
+        let mut out = param_json[..start].to_vec();
+        out.extend_from_slice(indent.as_bytes());
+        out.extend_from_slice(&param_json[end..]);
+        return Some(out);
+    }
+    let before = &text[..key_at];
+    let comma = before.rfind(',')?;
+    if !before[comma + 1..].trim().is_empty() {
+        return None;
+    }
+    start = comma;
+    let mut out = param_json[..start].to_vec();
+    out.extend_from_slice(&param_json[end..]);
+    Some(out)
+}
+
+/// `param.json` with every string inside the first `key`'s array replaced by spaces of the same
+/// length; `None` when the key is absent or already blank.
+fn blank_string_array(param_json: &[u8], key: &str) -> Option<Vec<u8>> {
+    let text = String::from_utf8_lossy(param_json);
+    let at = text.find(key)? + key.len();
+    let open = at + text[at..].find('[')?;
+    let close = open + text[open..].find(']')?;
+    let mut out = param_json.to_vec();
+    let mut changed = false;
+    let mut in_str = false;
+    for i in open + 1..close {
+        match out[i] {
+            b'"' => in_str = !in_str,
+            b' ' => {}
+            _ if in_str => {
+                out[i] = b' ';
+                changed = true;
+            }
+            _ => {}
+        }
+    }
+    changed.then_some(out)
+}
+
 /// The title id `content_id` belongs to: the part between its first `-` and its first `_`
 /// (`UP4433-PPSA17221_00-…` → `PPSA17221`).
 pub fn title_id_from_content_id(content_id: &str) -> Option<&str> {
@@ -484,6 +577,25 @@ pub fn readiness(tree: &mut dyn SourceTree) -> Readiness {
 
 #[cfg(test)]
 mod tests {
+    /// The launch rewrite leaves valid JSON with only the three launch fields changed.
+    #[test]
+    fn launch_rewrite_clears_update_and_patch_fields() {
+        let src = b"{\r\n  \"addcont\": {\r\n    \"serviceIdForSharing\": [\"UP4433-CUSA00744_00\", \"UP4433-PPSA19634_00\"]\r\n  },\r\n  \"contentId\": \"UP4433-PPSA17221_00-MINECRAFTPS50000\",\r\n  \"originContentVersion\": \"01.000.000\",\r\n  \"targetContentVersion\": \"01.043.000\",\r\n  \"versionFileUri\": \"https://example/version.xml\"\r\n}\r\n";
+        let out = launch_rewrite(src).unwrap();
+        let v = parse_param_json(&out).expect("still valid JSON");
+        assert_eq!(v["versionFileUri"], "");
+        assert!(v.get("originContentVersion").is_none());
+        assert!(v.get("targetContentVersion").is_none());
+        assert_eq!(v["contentId"], "UP4433-PPSA17221_00-MINECRAFTPS50000");
+        let ids = v["addcont"]["serviceIdForSharing"].as_array().unwrap();
+        assert!(ids.iter().all(|s| s.as_str().unwrap().trim().is_empty()));
+        assert_eq!(ids[0].as_str().unwrap().len(), 19);
+        assert!(
+            launch_rewrite(&out).is_none(),
+            "a second pass has nothing to do"
+        );
+    }
+
     use super::*;
 
     /// A tree held in memory, so a readiness check can be exercised without touching disk.
