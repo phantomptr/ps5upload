@@ -229,7 +229,10 @@ fn cover(blocks: u64, first_table: u64, naps: bool) -> Result<IndirectLayout> {
 }
 
 /// The block order: the data, then the naps layout, the superblock, the inode table, the
-/// root dirents, the flat-path table, the uroot dirents, and the indirect tables last.
+/// root dirents, the flat-path table, the indirect tables, and the uroot dirents last — the
+/// order LibProsperoPkg writes. Its reader fills a 64 KiB window from the exact offset it is
+/// asked for, so a map table in the image's final block reads past the end there; a
+/// directory block, read from its start, does not.
 pub fn layout(inner_blocks: u64, naps_len: u64) -> Result<Layout> {
     if inner_blocks == 0 || inner_blocks > max_inner_blocks() {
         return format_err(format!(
@@ -247,9 +250,11 @@ pub fn layout(inner_blocks: u64, naps_len: u64) -> Result<Layout> {
         ));
     }
     let after_naps = inner_blocks + naps_blocks;
-    let indirect = indirect_layout(inner_blocks, after_naps + 5)?;
+    let indirect = indirect_layout(inner_blocks, after_naps + 4)?;
     let naps_indirect =
-        naps_indirect_layout(naps_blocks, after_naps + 5 + indirect.tables.len() as u64)?;
+        naps_indirect_layout(naps_blocks, after_naps + 4 + indirect.tables.len() as u64)?;
+    let uroot_block =
+        after_naps + 4 + indirect.tables.len() as u64 + naps_indirect.tables.len() as u64;
     Ok(Layout {
         naps_block: inner_blocks,
         naps_blocks,
@@ -257,8 +262,8 @@ pub fn layout(inner_blocks: u64, naps_len: u64) -> Result<Layout> {
         table_block: after_naps + 1,
         root_block: after_naps + 2,
         flt_block: after_naps + 3,
-        uroot_block: after_naps + 4,
-        ndblock: after_naps + 5 + indirect.tables.len() as u64 + naps_indirect.tables.len() as u64,
+        uroot_block,
+        ndblock: uroot_block + 1,
         indirect,
         naps_indirect,
     })
@@ -503,9 +508,13 @@ pub fn metadata_blocks(
     push(&mut out, lay.table_block, table);
     push(&mut out, lay.root_block, root_bytes);
     push(&mut out, lay.flt_block, padded(flt_bytes)?);
-    push(&mut out, lay.uroot_block, uroot_bytes);
     for (index, block) in table_blocks {
         push(&mut out, index, block);
+    }
+    push(&mut out, lay.uroot_block, uroot_bytes);
+    // Callers append these in order, so the order must be the block order.
+    if out.windows(2).any(|w| w[1].0 != w[0].0 + 1) {
+        return format_err("outer metadata blocks are out of order");
     }
 
     // The inode-signature record inside the superblock, then its ICV.
@@ -666,7 +675,12 @@ mod tests {
         let lay = layout(20, (DIRECT_SLOTS as u64 + 1) * BLOCK).unwrap();
         assert_eq!(lay.indirect.tables.len(), 1);
         assert_eq!(lay.naps_indirect.tables.len(), 1);
-        assert_eq!(lay.naps_indirect.tables[0].block, lay.ndblock - 1);
+        assert_eq!(lay.naps_indirect.tables[0].block, lay.ndblock - 2);
+        assert_eq!(
+            lay.uroot_block,
+            lay.ndblock - 1,
+            "uroot's dirents close the image"
+        );
         assert_eq!(lay.naps_indirect.tables[0].first_data, DIRECT_SLOTS as u64);
         assert!(lay.naps_indirect.tables[0].naps);
     }
@@ -709,7 +723,8 @@ mod tests {
         let data = img.file_data(&nodes[3]);
         assert_eq!(data, inner, "the indirect tables must recover every block");
         assert_eq!(nodes[3].blocks, 20);
-        assert_eq!(nodes[3].indirect[0].block, 26);
+        // 20 data + 1 naps, then superblock, inode table, root, flat-path table: 25.
+        assert_eq!(nodes[3].indirect[0].block, 25);
     }
 
     #[test]

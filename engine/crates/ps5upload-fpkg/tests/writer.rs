@@ -132,9 +132,9 @@ fn gate_g2_a_built_package_verifies_and_round_trips() {
     // The plan's geometry is what the package carries — less the icons, which the container
     // carries instead of the image.
     let only_in_container = |path: &str| ps5upload_fpkg::cnt_write::CONTAINER_ONLY.contains(&path);
-    let mut files = source::scan(source_dir.path()).unwrap();
+    let (mut files, empty_dirs) = source::scan_tree(source_dir.path()).unwrap();
     files.retain(|f| !only_in_container(&f.path));
-    let built = plan::build(&files).unwrap();
+    let built = plan::build_tree(&files, &empty_dirs, false).unwrap();
     let mut pkg = PkgFile::open(&report.path).unwrap();
     let head = pkg.read_at(0, fih::HEADER_LEN).unwrap();
     let parsed = fih::parse(&head).unwrap();

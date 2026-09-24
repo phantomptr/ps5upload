@@ -306,7 +306,7 @@ fn build_mode(
     };
 
     progress(&format!("planning {}", tree.describe()));
-    let mut plan = plan::build_with(&files, request.kraken)?;
+    let mut plan = plan::build_tree(&files, tree.empty_dirs(), request.kraken)?;
     plan.mark_modules(|path| {
         tree.read_range(path, 0, 4)
             .is_ok_and(|head| plan::is_module_header(&head))

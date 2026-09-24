@@ -326,6 +326,12 @@ pub fn build(input: &[SourceFile]) -> Result<Plan> {
 /// belongs to the file before it and is never read: an inode addresses its file by logical
 /// offset and size.
 pub fn build_with(input: &[SourceFile], spread: bool) -> Result<Plan> {
+    build_tree(input, &[], spread)
+}
+
+/// Like [`build_with`], keeping `empty_dirs` (source-relative paths) as directories with
+/// nothing in them.
+pub fn build_tree(input: &[SourceFile], empty_dirs: &[String], spread: bool) -> Result<Plan> {
     let mut files: Vec<PlannedFile> = input
         .iter()
         .map(|f| PlannedFile {
@@ -386,6 +392,12 @@ pub fn build_with(input: &[SourceFile], spread: bool) -> Result<Plan> {
             ensure_dir(&mut dirs, &mut index, &parent_path)
         };
         dirs[di].files.push(fi);
+    }
+    for path in empty_dirs {
+        let path = path.trim_matches('/');
+        if !path.is_empty() {
+            ensure_dir(&mut dirs, &mut index, path);
+        }
     }
     let dir_names: Vec<String> = dirs.iter().map(|d| d.name.clone()).collect();
     for d in dirs.iter_mut() {
@@ -519,23 +531,22 @@ pub fn build_with(input: &[SourceFile], spread: bool) -> Result<Plan> {
         }
 
         // Offsets, then push each child's offset back into its record.
-        let mut offset = 0i32;
         let mut file_offsets: Vec<(usize, i32)> = Vec::new();
         let mut dir_offsets: Vec<(usize, i32)> = Vec::new();
         let mut di = 0usize;
-        for (name, _, kind) in &dirents {
+        let extents = dirent_extents(dirents.iter().map(|(n, _, _)| n.as_str()));
+        for ((_, _, kind), &(at, _)) in dirents.iter().zip(&extents) {
             match *kind {
                 DIRENT_DIR => {
-                    dir_offsets.push((subdirs[di], offset));
+                    dir_offsets.push((subdirs[di], at));
                     di += 1;
                 }
                 DIRENT_FILE => {
                     let ordinal = file_offsets.len();
-                    file_offsets.push((dir_files[ordinal], offset));
+                    file_offsets.push((dir_files[ordinal], at));
                 }
                 _ => {}
             }
-            offset += dirent_size(name);
         }
         for (fi, at) in &file_offsets {
             files[*fi].dirent_offset = *at;
@@ -570,30 +581,38 @@ pub fn build_with(input: &[SourceFile], spread: bool) -> Result<Plan> {
 
     // Flat-path tables and the afid table.
     let mut flt_inode: Vec<(u64, u64)> = Vec::new();
+    // The subtree bit marks the non-APR (sce_sys) side for directories as for files, and a
+    // zero-length file carries the empty bit: both as PSVIETHOA's working package writes them.
     for d in planned_dirs.iter().skip(1) {
         flt_inode.push((
             flt::hash_path(&d.path),
-            flt::pack_inode_entry(d.inode, true, false, 0),
+            flt::pack_inode_entry(d.inode, true, d.sce_sys(), 0),
         ));
     }
     let mut flt_apr: Vec<(u64, u64)> = Vec::new();
     for f in &files {
         let apr = !f.sce_sys;
+        let empty = if f.size == 0 { flt::FLAG_EMPTY } else { 0 };
         flt_inode.push((
             flt::hash_path(&f.path),
-            flt::pack_inode_entry(f.inode, false, !apr, f.afid),
+            flt::pack_inode_entry(f.inode, false, !apr, f.afid) | empty,
         ));
         if apr {
             flt_apr.push((flt::hash_path(&f.path), flt::pack_apr_entry(f.size, f.afid)));
         }
     }
+    // The leading word is the number of entries after it. Spider-Man 2's reads 248 over 248
+    // entries; it once looked like "the first file inode" because small trees make the two
+    // equal, and Minecraft's then claimed 2305 afids of 35k, so the console could not resolve
+    // most of the game's files by afid.
     let mut afid_to_ino: Vec<i32> = Vec::with_capacity(afid_order.len() + 3);
-    afid_to_ino.push(first_file_inode as i32);
+    afid_to_ino.push(0);
     for &fi in &afid_order {
         afid_to_ino.push(files[fi].inode as i32);
     }
     afid_to_ino.push(-1);
     afid_to_ino.push(-1);
+    afid_to_ino[0] = (afid_to_ino.len() - 1) as i32;
 
     // Geometry. Every metadata structure is block-aligned at its start and runs on into as many
     // blocks as its bytes need: a real title's inode table, afid table and large directories all
@@ -717,6 +736,30 @@ fn file_name(path: &str) -> &str {
 pub fn dirent_size(name: &str) -> i32 {
     let raw = name.len() as i32 + 17;
     (raw + 7) / 8 * 8
+}
+
+/// Each dirent's `(offset, stored size)` in its directory. A directory is read one 64 KiB
+/// block at a time, so no entry may cross into the next block: when one would, the entry
+/// before it is stretched to the block's end and it starts the next block. Letting it
+/// straddle was the Minecraft black screen — the console read `textures/ui` from its second
+/// block mid-entry (`pfs_readdir ... invalid type 28`) and the game never got its UI.
+pub fn dirent_extents<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<(i32, i32)> {
+    let block = BLOCK as i32;
+    let mut out: Vec<(i32, i32)> = Vec::new();
+    let mut offset = 0i32;
+    for name in names {
+        let size = dirent_size(name);
+        let room = block - offset % block;
+        if offset % block != 0 && size > room {
+            if let Some(last) = out.last_mut() {
+                last.1 += room;
+            }
+            offset += room;
+        }
+        out.push((offset, size));
+        offset += size;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -923,8 +966,46 @@ mod tests {
         );
         assert_eq!(plan.first_file_inode, 8);
         // afids: the sce_sys subtree pre-order first (its own files, then its sub-directory),
-        // then the other directories in pre-order. The leading value is the first file inode.
+        // then the other directories in pre-order. The leading value is the entry count, which
+        // this fixture's first file inode happens to equal.
         assert_eq!(plan.afid_to_ino, vec![8, 11, 12, 10, 13, 8, 9, -1, -1]);
+    }
+
+    /// Minecraft's `textures/ui` put an entry across 0x10000 (at 0xfff8, 40 bytes); the
+    /// console reads each block on its own and failed mid-entry. The entry before a boundary
+    /// takes up the slack instead, and every byte of the stream is still accounted for.
+    #[test]
+    fn no_dirent_crosses_a_block() {
+        let names: Vec<String> = (0..4000)
+            .map(|i| format!("texture_{i:05}_long.png"))
+            .collect();
+        let extents = dirent_extents(names.iter().map(String::as_str));
+        let block = BLOCK as i32;
+        let mut stretched = 0;
+        for (k, &(at, size)) in extents.iter().enumerate() {
+            assert_eq!(
+                at / block,
+                (at + size - 1) / block,
+                "entry {k} at {at:#x} crosses"
+            );
+            assert!(size >= dirent_size(&names[k]));
+            if size > dirent_size(&names[k]) {
+                stretched += 1;
+                assert_eq!((at + size) % block, 0, "a stretched entry ends its block");
+            }
+            if let Some(&(next, _)) = extents.get(k + 1) {
+                assert_eq!(next, at + size, "entries are contiguous");
+            }
+        }
+        assert!(stretched > 0, "the fixture must reach a boundary");
+        let bytes = crate::inner::dirents_bytes(
+            &names
+                .iter()
+                .map(|n| (n.clone(), 9u32, DIRENT_FILE))
+                .collect::<Vec<_>>(),
+        );
+        let &(last_at, last_size) = extents.last().unwrap();
+        assert_eq!(bytes.len() as i32, last_at + last_size);
     }
 
     #[test]
@@ -977,5 +1058,51 @@ mod afid_tests {
         let count = seen.len();
         seen.dedup();
         assert_eq!(seen.len(), count, "two files share an afid: {seen:?}");
+    }
+
+    /// An empty source directory stays a directory: Minecraft ships an empty `data/shaders`,
+    /// and PSVIETHOA's working package keeps it.
+    #[test]
+    fn empty_directories_are_kept() {
+        let files: Vec<SourceFile> = ["data/a.bin", "eboot.bin"]
+            .iter()
+            .map(|p| SourceFile {
+                path: (*p).to_string(),
+                size: 10,
+            })
+            .collect();
+        let plan = build_tree(&files, &["data/shaders".to_string()], false).unwrap();
+        let shaders = plan
+            .dirs
+            .iter()
+            .find(|d| d.path == "data/shaders")
+            .expect("data/shaders planned");
+        assert_eq!(shaders.nlink, 2);
+        assert_eq!(shaders.dirents.len(), 2, "only . and ..");
+        let data = plan.dirs.iter().find(|d| d.path == "data").unwrap();
+        assert_eq!(data.nlink, 3);
+        assert!(data
+            .dirents
+            .iter()
+            .any(|(n, i, k)| n == "shaders" && *i == shaders.inode && *k == DIRENT_DIR));
+        let hash = flt::hash_path("data/shaders");
+        assert!(plan.flt_inode.iter().any(|(h, _)| *h == hash));
+    }
+
+    /// The afid table leads with its entry count. Many directories push the first file inode
+    /// well past the file count, so the two cannot coincide here the way they do in a small tree.
+    #[test]
+    fn afid_table_leads_with_its_entry_count() {
+        let mut paths: Vec<String> = (0..40).map(|i| format!("data/d{i:02}/f.bin")).collect();
+        paths.push("eboot.bin".to_string());
+        let files: Vec<SourceFile> = paths
+            .into_iter()
+            .map(|path| SourceFile { path, size: 10 })
+            .collect();
+        let plan = build(&files).unwrap();
+        let entries = plan.afid_to_ino.len() - 1;
+        assert_eq!(plan.afid_to_ino[0] as usize, entries);
+        assert_eq!(entries, plan.afid_order.len() + 2);
+        assert_ne!(plan.afid_to_ino[0] as u32, plan.first_file_inode);
     }
 }

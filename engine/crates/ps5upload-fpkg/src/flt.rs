@@ -17,6 +17,9 @@ pub const HEADER_SEED: [u8; 16] = [
     0x51, 0x4f, 0xa2, 0x26, 0xab, 0x8a, 0xca, 0x92, 0x4d, 0xc4, 0x1b, 0xa4, 0x61, 0xb7, 0xbb, 0x09,
 ];
 
+/// `inode_flat_path_table` bit for a zero-length file.
+pub const FLAG_EMPTY: u64 = 0x2000_0000;
+
 /// Packs an `inode_flat_path_table` payload: inode in the low 24 bits, bit 30 for a
 /// directory, bit 31 for a node outside the apr (top-level file) set, afid from bit 40.
 pub fn pack_inode_entry(inode: u32, is_dir: bool, is_subtree: bool, afid: u32) -> u64 {

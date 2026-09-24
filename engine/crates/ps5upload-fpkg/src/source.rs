@@ -29,6 +29,12 @@ pub trait SourceTree {
         Ok(all[start..end].to_vec())
     }
 
+    /// Directories with nothing in them, which a file list cannot express. The image keeps
+    /// them: a game may look for one (Minecraft's `data/shaders`) and PSVIETHOA keeps them too.
+    fn empty_dirs(&self) -> &[String] {
+        &[]
+    }
+
     /// One line for logs: what the source is and where it came from.
     fn describe(&self) -> String;
 }
@@ -37,13 +43,16 @@ pub trait SourceTree {
 pub struct FolderSource {
     root: PathBuf,
     files: Vec<SourceFile>,
+    empty_dirs: Vec<String>,
 }
 
 impl FolderSource {
     pub fn open(root: &Path) -> Result<Self> {
+        let (files, empty_dirs) = scan_tree(root)?;
         Ok(Self {
             root: root.to_path_buf(),
-            files: scan(root)?,
+            files,
+            empty_dirs,
         })
     }
 }
@@ -51,6 +60,10 @@ impl FolderSource {
 impl SourceTree for FolderSource {
     fn files(&self) -> &[SourceFile] {
         &self.files
+    }
+
+    fn empty_dirs(&self) -> &[String] {
+        &self.empty_dirs
     }
 
     fn read(&mut self, path: &str) -> Result<Vec<u8>> {
@@ -108,13 +121,34 @@ pub(crate) fn is_junk(name: &str) -> bool {
 
 /// Walk `root` (a game folder) into its file list, sizes from the filesystem only.
 pub fn scan(root: &Path) -> Result<Vec<SourceFile>> {
-    let mut out = Vec::new();
-    walk(root, root, &mut out)?;
-    out.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(out)
+    Ok(scan_tree(root)?.0)
 }
 
-fn walk(root: &Path, dir: &Path, out: &mut Vec<SourceFile>) -> Result<()> {
+/// [`scan`], plus the directories left with nothing in them once junk is skipped.
+pub fn scan_tree(root: &Path) -> Result<(Vec<SourceFile>, Vec<String>)> {
+    let mut out = Vec::new();
+    let mut empty = Vec::new();
+    walk(root, root, &mut out, &mut empty)?;
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    empty.sort();
+    Ok((out, empty))
+}
+
+/// Walks one directory; returns whether anything under it was kept.
+fn walk(
+    root: &Path,
+    dir: &Path,
+    out: &mut Vec<SourceFile>,
+    empty: &mut Vec<String>,
+) -> Result<bool> {
+    let rel = |path: &Path| -> Result<String> {
+        Ok(path
+            .strip_prefix(root)
+            .map_err(|_| Error::Format(format!("{} escaped the source root", path.display())))?
+            .to_string_lossy()
+            .replace('\\', "/"))
+    };
+    let mut kept = false;
     let entries = std::fs::read_dir(dir).map_err(|e| {
         Error::Io(std::io::Error::new(
             e.kind(),
@@ -130,20 +164,19 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<SourceFile>) -> Result<()> {
         let path = entry.path();
         let ty = entry.file_type()?;
         if ty.is_dir() {
-            walk(root, &path, out)?;
+            if !walk(root, &path, out, empty)? {
+                empty.push(rel(&path)?);
+            }
+            kept = true;
         } else if ty.is_file() {
-            let rel = path
-                .strip_prefix(root)
-                .map_err(|_| Error::Format(format!("{} escaped the source root", path.display())))?
-                .to_string_lossy()
-                .replace('\\', "/");
             out.push(SourceFile {
-                path: rel,
+                path: rel(&path)?,
                 size: entry.metadata()?.len(),
             });
+            kept = true;
         }
     }
-    Ok(())
+    Ok(kept)
 }
 
 /// One readiness finding: what was checked, whether it holds, and what was seen.
