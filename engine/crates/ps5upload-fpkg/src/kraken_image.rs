@@ -363,8 +363,13 @@ fn block_record(b: &StoredBlock) -> u128 {
     if b.halves[0].1 {
         flags |= 1 << 1; // even half is LZ, literal mode 1
     }
-    if b.halves.get(1).is_some_and(|h| h.1) {
-        flags |= 1 << 4; // odd half is LZ, literal mode 1
+    match b.halves.get(1) {
+        Some(&(_, true)) => flags |= 1 << 4, // odd half is LZ, literal mode 1
+        // An odd half stored raw restarts the decoder (the console's `odd_reset`, bit 34). Sony
+        // sets it on every such block (over 150,000 in Spider-Man 2); without it the console's
+        // layout check rejects the record (status 0x80010017, measured on a FW 5.10 Phat).
+        Some(&(_, false)) => flags |= 1 << 2,
+        None => {}
     }
     v |= u128::from(flags) << 32;
     v |= u128::from(((b.stored_at + b.stored_len()) % WINDOW) as u32) << 48;
@@ -389,40 +394,57 @@ pub fn layout(image: &KrakenImage, file_starts: &[u64]) -> Result<Vec<u8>> {
     const RUN_END: u128 = 1 << 66;
     const TERMINATOR: u128 = 2 << 66;
     let mut recs: Vec<u128> = vec![0]; // index 0: the start anchor, at stored position 0
+                                       // Each record's key, which the record BEFORE it carries the low four bits of (bits 68–71):
+                                       // a block's exact logical start, an anchor's stored position in 64 KiB units. The record
+                                       // itself holds the start only to 16 bytes, so this nibble is what makes it exact. Verified on
+                                       // every record of Spider-Man 2 (1,140,474) and the Web Browser; the one exception is the
+                                       // record before the terminator, which carries none. We wrote zeros here, so the console read
+                                       // most blocks as starting up to 15 bytes early and decoded the wrong bytes.
+    let mut keys: Vec<Option<u64>> = vec![Some(0)];
     let mut block_index: Vec<(u64, usize)> = Vec::with_capacity(image.blocks.len());
     let mut cursor = 0u64;
     let mut last_block: Option<usize> = None;
-    let push_anchor = |recs: &mut Vec<u128>, last: Option<usize>, at: u64| {
-        if let Some(i) = last {
-            recs[i] |= RUN_END;
-        }
-        recs.push(anchor_record(at));
-    };
+    let push_anchor =
+        |recs: &mut Vec<u128>, keys: &mut Vec<Option<u64>>, last: Option<usize>, at: u64| {
+            if let Some(i) = last {
+                recs[i] |= RUN_END;
+            }
+            recs.push(anchor_record(at));
+            keys.push(Some(at >> 16));
+        };
     for b in &image.blocks {
         // An anchor where the stored position jumps (Sony's layouts do, at file boundaries; ours
         // are contiguous), and one opening every 16-record window. A block always separates two
         // anchors, which is what lets bit 66 announce them.
         let mut anchored = false;
         if b.stored_at != cursor {
-            push_anchor(&mut recs, last_block, b.stored_at);
+            push_anchor(&mut recs, &mut keys, last_block, b.stored_at);
             anchored = true;
         }
         if recs.len().is_multiple_of(16) && !anchored {
-            push_anchor(&mut recs, last_block, b.stored_at);
+            push_anchor(&mut recs, &mut keys, last_block, b.stored_at);
         }
         block_index.push((b.logical, recs.len()));
         last_block = Some(recs.len());
         recs.push(block_record(b));
+        keys.push(Some(b.logical));
         cursor = b.stored_at + b.stored_len();
     }
     if let Some(i) = last_block {
         recs[i] |= RUN_END;
     }
     recs.push(anchor_record(cursor) | TERMINATOR);
+    keys.push(None);
     let sentinel = recs.len();
     recs.push(u128::from(
         ((image.mount_size % WINDOW) >> 4) as u32 & 0x3FFF,
     ));
+    keys.push(None);
+    for i in 0..recs.len() - 1 {
+        if let Some(key) = keys[i + 1] {
+            recs[i] |= u128::from((key & 0xF) as u8) << 68;
+        }
+    }
 
     let ublocks = image.mount_size.div_ceil(UBLOCK);
     let files = file_starts.len() + 3;
@@ -513,7 +535,8 @@ pub struct DescribedBlock {
     pub even_lz: bool,
     pub odd_lz: bool,
     /// The record's mode bits 32..=36, as stored: 32 and 35 are NOT the even and odd halves'
-    /// literal modes, 33 and 36 mark LZ halves, 34 Sony's bare entropy-array forms. Lets a
+    /// literal modes, 33 and 36 mark LZ halves, 34 is `odd_reset` (the odd half restarts the decoder;
+    /// set on every raw odd half and on Sony's bare entropy-array halves). Lets a
     /// reader with a full Kraken decoder read Sony's own blocks, which ours does not.
     pub mode_bits: u8,
 }
@@ -549,17 +572,33 @@ pub fn describe(blob: &[u8]) -> Result<Vec<DescribedBlock>> {
     let mut out = Vec::new();
     let (mut cursor, mut logical) = (0u64, 0u64);
     let mut next_is_anchor = true; // index 0 is the start anchor
+                                   // The previous record's bits 68–71: the low nibble of this record's key (see `layout`).
+    let mut carried_nibble = 0u64;
     for i in 0..records.saturating_sub(1) {
         let r = &blob[rec_at + i * 9..rec_at + i * 9 + 9];
         let mut x = [0u8; 16];
         x[..9].copy_from_slice(r);
         let v = u128::from_le_bytes(x);
         let f = |lo: u32, w: u32| ((v >> lo) & ((1u128 << w) - 1)) as u64;
+        let nibble = std::mem::replace(&mut carried_nibble, f(68, 4));
         let anchor = next_is_anchor;
         next_is_anchor = f(66, 1) == 1 && !anchor;
         if anchor {
             cursor = (f(26, 22) << 18) | f(48, 18);
+            // The terminator (the second-last record) is the one key nobody carries.
+            let terminator = i + 2 == records;
+            if i > 0 && !terminator && nibble != (cursor >> 16) & 0xF {
+                return format_err(format!(
+                    "record {i}: the anchor's position nibble disagrees"
+                ));
+            }
             continue;
+        }
+        if i > 0 && nibble != logical & 0xF {
+            return format_err(format!(
+                "record {i}: the exact start's low nibble disagrees (the console would read the \
+                 block at the wrong offset)"
+            ));
         }
         let next_bound = *bounds.iter().find(|&&b| b > logical).unwrap_or(&mount);
         let len = (next_bound - logical).min(UBLOCK);
@@ -568,14 +607,16 @@ pub fn describe(blob: &[u8]) -> Result<Vec<DescribedBlock>> {
         }
         // A block ends where its record says, within the window. The one case that cannot say
         // so is a block stored whole and raw — exactly 256 KiB, ending where it began modulo the
-        // window — so a raw even half with nothing else to mark it takes the full window. (Sony's
-        // zero-byte blocks, which also end where they begin, carry bit 34.)
+        // window — so a block whose halves are both raw takes the full window.
         let mut end = (cursor & !(WINDOW - 1)) | f(48, 18);
         if end < cursor {
             end += WINDOW;
         }
         let even_raw = f(33, 1) == 0 && f(14, 17) + 1 == len.min(kraken::HALF as u64);
-        if end == cursor && even_raw && f(34, 1) == 0 && len > kraken::HALF as u64 {
+        // Both halves raw is a whole raw block, whatever bit 34 (`odd_reset`) says: Sony sets it
+        // on every raw odd half.
+        let odd_raw = f(36, 1) == 0;
+        if end == cursor && even_raw && odd_raw && len > kraken::HALF as u64 {
             end += WINDOW;
         }
         out.push(DescribedBlock {
@@ -655,8 +696,8 @@ mod tests {
         }
     }
 
-    /// The Web Browser's own descriptor bytes, regenerated from its block list. Sony's hint bits
-    /// (67–71) are not modelled, so they are masked out of the comparison.
+    /// The Web Browser's own descriptor bytes, regenerated from its block list — every bit,
+    /// including the next record's key nibble in bits 68–71 (0x14, 0x25, 0xa2 below are Sony's).
     #[test]
     fn records_and_tables_follow_the_decoded_format() {
         let blocks = vec![
@@ -675,23 +716,23 @@ mod tests {
         let rec = |i: usize| {
             let mut x = [0u8; 16];
             x[..9].copy_from_slice(&blob[rec_at + i * 9..rec_at + i * 9 + 9]);
-            u128::from_le_bytes(x) & !(0x1Fu128 << 67)
+            u128::from_le_bytes(x)
         };
         assert_eq!(rec(0), 0);
         let hex = |v: u128| v.to_le_bytes()[..9].to_vec();
         assert_eq!(
             hex(rec(1)),
-            [0x00, 0xc0, 0x17, 0x80, 0x00, 0x00, 0x60, 0x00, 0x04]
+            [0x00, 0xc0, 0x17, 0x80, 0x00, 0x00, 0x60, 0x00, 0x14]
         );
         assert_eq!(hex(rec(2)), [0, 0, 0, 0, 0, 0, 0, 0, 0x01]);
         assert_eq!(
             hex(rec(3)),
-            [0x06, 0xc0, 0x73, 0x8c, 0x00, 0x00, 0xd0, 0x31, 0x05]
+            [0x06, 0xc0, 0x73, 0x8c, 0x00, 0x00, 0xd0, 0x31, 0x25]
         );
         assert_eq!(hex(rec(4)), [0, 0, 0, 0, 0, 0, 0, 0, 0x02]);
         assert_eq!(
             hex(rec(5)),
-            [0x23, 0x43, 0x02, 0x80, 0x00, 0x00, 0x0a, 0x00, 0x02]
+            [0x23, 0x43, 0x02, 0x80, 0x00, 0x00, 0x0a, 0x00, 0xa2]
         );
         // The LZ block: flags 0x02 (even half LZ, literal mode 1), end 0x206d6.
         assert_eq!(

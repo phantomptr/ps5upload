@@ -320,11 +320,13 @@ fn a_kraken_package_decodes_back_to_its_source() {
         mount[b.logical as usize..(b.logical + b.len) as usize].copy_from_slice(&bytes);
     }
     let files = source::scan(source_dir.path()).unwrap();
-    let meta_base = plan::build(
+    // A Kraken build plans with the compressed image's rules (see plan::build_with).
+    let meta_base = plan::build_with(
         &files
             .into_iter()
             .filter(|f| !ps5upload_fpkg::cnt_write::CONTAINER_ONLY.contains(&f.path.as_str()))
             .collect::<Vec<_>>(),
+        true,
     )
     .unwrap()
     .meta_base;

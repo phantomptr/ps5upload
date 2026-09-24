@@ -22,6 +22,10 @@ pub const FILE_ALIGN: u64 = 0x1_0000;
 /// metadata base is 0x400000); only the 256 KiB alignment is load-bearing here.
 const META_ALIGN: u64 = 0x40000;
 
+/// How far past the end of the file data a compressed image's metadata starts (before rounding
+/// down to [`META_ALIGN`]). Measured on three references; see `build_with`.
+const COMPRESSED_META_GAP: u64 = 0x40_0000;
+
 /// `pfs-version.dat` is a system marker, not app payload — the app-payload count the
 /// finalized-image header carries excludes it (measured: the sample's three uroot files
 /// count as two).
@@ -407,7 +411,21 @@ pub fn build_with(input: &[SourceFile], spread: bool) -> Result<Plan> {
     let mut cursor = 0u64;
     let mut on_disk = 0u64;
     let mut starts = (0u64, 0u32); // (ublock, non-empty files started in it)
+    let mut last_start: Option<u64> = None;
     for &fi in &afid_order {
+        // A block record carries its start only to 16 bytes, so two files starting in one
+        // 16-byte unit read back as one start: the console takes the second for a wrap into the
+        // next 256 KiB window. Measured on a FW 5.10 Phat: nine such pairs in Minecraft gave
+        // status 0x80010022 on each and an image nine windows too long, and the mount failed.
+        // Spider-Man 2 has none. Moving the next file up by at most 15 bytes costs nothing.
+        if spread {
+            if let Some(prev) = last_start {
+                if cursor / 16 == prev / 16 {
+                    cursor = (prev / 16 + 1) * 16;
+                }
+            }
+        }
+        last_start = Some(cursor);
         if starts.0 != cursor / UBLOCK {
             starts = (cursor / UBLOCK, 0);
         }
@@ -542,7 +560,21 @@ pub fn build_with(input: &[SourceFile], spread: bool) -> Result<Plan> {
     // outgrow a single 64 KiB block (Minecraft alone has 37k inodes). The region is one
     // superblock block, the inode table, the super-root dirents, both flat-path tables, the afid
     // table, one dirent stream per directory, then a guard block.
-    let meta_base = (data_end + BLOCK).div_ceil(META_ALIGN) * META_ALIGN;
+    // A compressed image has no on-disk layout: every reference places the metadata 4 MiB past
+    // the end of the file data, rounded down to a ublock — Spider-Man 2 (0x3f68d373fe ->
+    // 0x3f69100000), the Web Browser (0xa626 -> 0x400000) and LibProsperoPkg (0x5736f513 ->
+    // 0x57740000) all fit. Placing it after the 64 KiB-per-file on-disk extent instead put
+    // Minecraft's inner superblock 1.7 GB past its data.
+    let meta_base = if spread {
+        let logical_end = files
+            .iter()
+            .map(|f| f.logical_offset + f.size)
+            .max()
+            .unwrap_or(0);
+        (logical_end + COMPRESSED_META_GAP) / META_ALIGN * META_ALIGN
+    } else {
+        (data_end + BLOCK).div_ceil(META_ALIGN) * META_ALIGN
+    };
     let super_root = super_root_dirents();
     let inode_table_bytes =
         ((4 + planned_dirs.len() + files.len()) * crate::inner::INODE_LEN) as u64;
@@ -700,8 +732,8 @@ mod tests {
     }
 
     /// A compressed image spreads a run of tiny files so no ublock opens more than the layout
-    /// descriptor's one-byte deltas can index; an empty file never owns the gap, and the packed
-    /// plan is untouched.
+    /// descriptor's one-byte deltas can index, starts every file in a 16-byte unit of its own,
+    /// never lets an empty file own a ublock gap, and leaves the packed plan untouched.
     #[test]
     fn spreading_caps_file_starts_per_ublock() {
         let mut paths: Vec<(String, u64)> = (0..200).map(|i| (format!("d/{i:03}"), 4000)).collect();
@@ -726,9 +758,18 @@ mod tests {
                     "{} overlaps",
                     f.path
                 );
+                // Every file starts in a 16-byte unit of its own, so an empty file owns at
+                // most the step to the next unit and never a ublock gap.
+                assert_ne!(
+                    next.logical_offset / 16,
+                    f.logical_offset / 16,
+                    "{} and {} share a 16-byte unit",
+                    f.path,
+                    next.path
+                );
                 if f.size == 0 {
-                    assert_eq!(
-                        next.logical_offset, f.logical_offset,
+                    assert!(
+                        next.logical_offset - f.logical_offset <= 16,
                         "an empty file owns a gap"
                     );
                 }

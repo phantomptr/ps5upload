@@ -76,6 +76,8 @@ In order:
    non-empty files per ublock and moves the next file to a fresh ublock; the zeros in between
    are tiled into the previous file's blocks and never read, since an inode addresses its file
    by logical offset and size. The writer refuses a delta over 255 instead of clamping.
+   A compressed image places the metadata base at (data end + 4 MiB) rounded down to 256 KiB:
+   Spider-Man 2, the Web Browser and LibProsperoPkg all fit.
 5. **Padding to 8 bytes, then `00 00 04`** (24-bit 0x40000, the ublock size).
 6. **Records**, 9 bytes each, `records` of them. Index 0 is an all-zero start anchor.
 7. Zero padding (to 8 or 16 bytes; readers use the counts).
@@ -91,14 +93,14 @@ Records are 72-bit little-endian integers.
 | 31 | 1 |
 | 32 | NOT even half's literal mode (1 = mode 0, delta literals) |
 | 33 | even half is an LZ chunk |
-| 34 | set on halves stored as bare entropy arrays (the all-zero blocks) |
+| 34 | `odd_reset`: the odd half restarts the decoder. Set on every raw odd half (Sony: all 150,000+) and on the bare entropy-array halves. The console rejects an odd raw half without it (status 0x80010017). |
 | 35 | NOT odd half's literal mode |
 | 36 | odd half is an LZ chunk |
 | 37–47 | 0 |
 | 48–65 | the block's stored **end** offset, mod 256 KiB |
 | 66 | **the next record is an anchor.** This is the only thing that tells a reader an anchor from a block (it separates all 1.14 M Spider-Man records; no bit inside an anchor does), so two anchors never follow each other |
-| 67–68 | hint, meaning unknown (Sony writes 0, 2 or 4; 0 appears on compressed metadata blocks) |
-| 69–71 | hint, constant within a file (0–5); 0 appears on compressed metadata blocks |
+| 67 | 0 (set only on the terminator) |
+| 68–71 | **the low 4 bits of the NEXT record's key**: a block's exact logical start, or an anchor's stored position in 64 KiB units. Together with the next record's bits 0–13 (start / 16) this makes each start exact. Verified on all 1,140,474 Spider-Man 2 records and the Web Browser's; the record before the terminator carries 0. Writing zeros here (as we did) makes the console read blocks up to 15 bytes early. |
 
 A raw half is one whose stored length equals its logical length; its flags are 0.
 
@@ -118,9 +120,9 @@ length is `min(256 KiB, next file boundary − start)`; blocks never cross a fid
 16 bytes per 256 KiB block: each half is `27 ff fc 00 03 00 40 00`, a one-symbol Huffman
 array decoding to 128 KiB of zeros, flags `0x04`.
 
-Sony's encoder also uses forms ours never emits: blocks with flag `0x4` and no stored bytes
-(all-zero or deduplicated), anchors that jump **backwards** to reuse stored data, entropy-only
-halves. `kraken_image::describe` walks all of them: all 1,039,050 of Spider-Man's blocks tile its
+A block whose two halves are both raw is stored whole (256 KiB), whatever bit 34 says. Sony's
+encoder also uses forms ours never emits: anchors that jump **backwards** to reuse stored data,
+entropy-only halves. `kraken_image::describe` walks all of them: all 1,039,050 of Spider-Man's blocks tile its
 272 GB mount.
 
 ### Why our uncompressed layouts looked right
