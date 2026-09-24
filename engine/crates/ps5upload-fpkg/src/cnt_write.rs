@@ -86,6 +86,63 @@ pub struct ExtraEntry {
     pub id: u32,
     pub name: &'static str,
     pub data: Vec<u8>,
+    /// `Some(k)` for a protected entry: stored encrypted with entry key `k` (flags2 `k << 12`).
+    pub key_index: Option<u8>,
+}
+
+/// The protected entries a dump carries itself: `(id, source path, entry name, key index)`.
+/// Encrypted with [`crate::crypto::encrypt_entry`], which needs nothing but the content id and
+/// the passcode. Ids, names and key 3 as in Sony's and LibProsperoPkg's packages. The license
+/// entries (0x0400/0x0401) are not here: a valid `license.dat` is signed with Sony's debug RIF
+/// key, which this project does not use.
+pub const PROTECTED: [(u32, &str, &str, u8); 3] = [
+    (0x0402, "sce_sys/nptitle.dat", "nptitle.dat", 3),
+    (0x2020, "sce_sys/uds/npbind.dat", "uds/npbind.dat", 3),
+    (
+        0x2021,
+        "sce_sys/trophy2/npbind.dat",
+        "trophy2/npbind.dat",
+        3,
+    ),
+];
+
+/// The debug license entries for `content_id`: `license.dat` (0x0400, key 3) and
+/// `license.info` (0x0401, key 4), as in Sony's and LibProsperoPkg's packages.
+pub fn license_extras(content_id: &str) -> Vec<ExtraEntry> {
+    vec![
+        ExtraEntry {
+            id: 0x0400,
+            name: "license.dat",
+            data: crate::license::license_dat(content_id).to_vec(),
+            key_index: Some(3),
+        },
+        ExtraEntry {
+            id: 0x0401,
+            name: "license.info",
+            data: crate::license::license_info(content_id).to_vec(),
+            key_index: Some(4),
+        },
+    ]
+}
+
+/// The DRM type of a package that carries a debug license — LibProsperoPkg's, in a package
+/// that launches. `PS5UPLOAD_FPKG_DRM_TYPE` still overrides it.
+pub const LICENSED_DRM_TYPE: u32 = 0x10;
+
+/// The [`PROTECTED`] entries `read` finds (a missing or empty file is skipped).
+pub fn protected_extras(read: &mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Vec<ExtraEntry> {
+    PROTECTED
+        .iter()
+        .filter_map(|(id, path, name, key)| {
+            let data = read(path).filter(|d| !d.is_empty())?;
+            Some(ExtraEntry {
+                id: *id,
+                name,
+                data,
+                key_index: Some(*key),
+            })
+        })
+        .collect()
 }
 
 /// The [`PRESENTATION`] entries `read` finds (a missing or empty file is skipped).
@@ -98,6 +155,7 @@ pub fn presentation_extras(read: &mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Vec
                 id: *id,
                 name,
                 data,
+                key_index: None,
             })
         })
         .collect()
@@ -157,6 +215,13 @@ pub struct CntParams<'a> {
     pub inner_size: u64,
 }
 
+/// `PS5UPLOAD_FPKG_DRM_TYPE` (hex, e.g. `0x10`): a diagnostic override of the container's DRM
+/// type (`0x70`). LibProsperoPkg's application packages carry 0x10 where ours carry 0.
+pub fn drm_type_override() -> Option<u32> {
+    let v = std::env::var("PS5UPLOAD_FPKG_DRM_TYPE").ok()?;
+    u32::from_str_radix(v.trim_start_matches("0x"), 16).ok()
+}
+
 /// The container's `(content_type, content_flags)` for an application package, from its
 /// `param.json`'s `applicationCategoryType`.
 ///
@@ -203,6 +268,14 @@ impl Body {
         let at = self.bytes.len() as u32;
         self.bytes.extend_from_slice(data);
         self.spans.insert(id, (at, data.len() as u32));
+    }
+
+    /// Store `data` but record `size` (<= its length) as the entry's size.
+    fn add_sized(&mut self, id: u32, data: &[u8], size: u32) {
+        self.add(id, data);
+        if let Some(span) = self.spans.get_mut(&id) {
+            span.1 = size;
+        }
     }
 
     fn span(&self, id: u32) -> (u32, u32) {
@@ -338,7 +411,12 @@ fn entry_list(extras: &[ExtraEntry]) -> Result<Vec<(u32, u32, &'static str)>> {
         if entries.iter().any(|(id, _, _)| *id == extra.id) {
             return format_err(format!("container entry {:#06x} given twice", extra.id));
         }
-        entries.push((extra.id, 0x0800_0000, extra.name));
+        let flags1 = if extra.key_index.is_some() {
+            0x8000_0000
+        } else {
+            0x0800_0000
+        };
+        entries.push((extra.id, flags1, extra.name));
     }
     entries.sort_by_key(|(id, _, _)| *id);
     Ok(entries)
@@ -407,9 +485,25 @@ pub fn write(p: &CntParams) -> Result<Container> {
     };
     let mut order: Vec<u32> = entries.iter().map(|(id, _, _)| *id).collect();
     order.sort_by_key(|id| body_rank(*id));
+    let key_of = |id: u32| {
+        p.extras
+            .iter()
+            .find(|e| e.id == id)
+            .and_then(|e| e.key_index)
+    };
     let mut body = Body::new();
     for id in order {
-        body.add(id, payload_of(id));
+        match key_of(id) {
+            // A protected payload is stored padded to 16 (the cipher's block); the table keeps
+            // its real size, so the padding sits in the space the next entry's alignment leaves.
+            Some(_) => {
+                let data = payload_of(id);
+                let mut padded = data.to_vec();
+                padded.resize(data.len().next_multiple_of(16), 0);
+                body.add_sized(id, &padded, data.len() as u32);
+            }
+            None => body.add(id, payload_of(id)),
+        }
     }
     let body_end = body.bytes.len();
     // Every sample's install segment starts on a 64 KiB boundary — `webbrowser.pkg` carries
@@ -427,9 +521,18 @@ pub fn write(p: &CntParams) -> Result<Container> {
         be32_into(entry, 0x00, *id);
         be32_into(entry, 0x04, name_offsets[i]);
         be32_into(entry, 0x08, *flags1);
-        be32_into(entry, 0x0C, 0);
+        be32_into(entry, 0x0C, key_of(*id).map_or(0, |k| u32::from(k) << 12));
         be32_into(entry, 0x10, at);
         be32_into(entry, 0x14, size);
+    }
+    // Protected entries are encrypted now, when their rows (which the key covers) are final.
+    for (i, (id, _, _)) in entries.iter().enumerate() {
+        let Some(k) = key_of(*id) else { continue };
+        let row: [u8; 32] = table[i * 32..(i + 1) * 32].try_into().unwrap();
+        let entry_key = derive_pfs_key(p.content_id, p.passcode, u32::from(k));
+        let (at, size) = body.span(*id);
+        let end = (at + size).next_multiple_of(16) as usize;
+        crate::crypto::encrypt_entry(&row, &entry_key, &mut body.bytes[at as usize..end]);
     }
     let metas_at = body.span(ids::METAS).0;
     body.write_at(metas_at, &table);
@@ -441,7 +544,16 @@ pub fn write(p: &CntParams) -> Result<Container> {
         if *id == ids::DIGESTS || *id == ids::GENERAL_DIGESTS {
             continue;
         }
-        digests[i * 32..(i + 1) * 32].copy_from_slice(&sha3(body.payload(*id)));
+        // A protected entry's digest covers its stored ciphertext, padding included — as
+        // LibProsperoPkg writes it, in a package that launches.
+        let digest = match key_of(*id) {
+            Some(_) => {
+                let (at, size) = body.span(*id);
+                sha3(&body.bytes[at as usize..(at + size).next_multiple_of(16) as usize])
+            }
+            None => sha3(body.payload(*id)),
+        };
+        digests[i * 32..(i + 1) * 32].copy_from_slice(&digest);
     }
 
     // The header's first 0x80 bytes: the prefix the header digest covers and the content
@@ -713,6 +825,7 @@ mod tests {
                 id: *eid,
                 name,
                 data: vec![i as u8 + 1; 1001 + i],
+                key_index: None,
             })
             .collect();
         let mut p = params(

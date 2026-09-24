@@ -65,6 +65,43 @@ pub fn derive_pfs_key(content_id: &str, passcode: &str, index: u32) -> [u8; 32] 
     sha3(&buf)
 }
 
+/// Encrypt a protected container entry in place (flags1 bit 31; `nptitle.dat`, the npbind
+/// files). `data` is the plaintext padded to 16 bytes; `row` is the entry's final 32-byte
+/// table row, which the key depends on, so it is encrypted last.
+///
+/// key/iv = SHA3-256(row || derive_pfs_key(content id, passcode, key index)): iv the first
+/// 16 bytes, AES-128 key the last 16, CBC. Verified by decrypting every protected entry of a
+/// package that launches on a console (LibProsperoPkg's Minecraft): license, nptitle, both
+/// npbind files. Only the content id and the passcode go in — no fixed key.
+pub fn encrypt_entry(row: &[u8; 32], entry_key: &[u8; 32], data: &mut [u8]) {
+    let mut pre = Vec::with_capacity(64);
+    pre.extend_from_slice(row);
+    pre.extend_from_slice(entry_key);
+    let iv_key = sha3(&pre);
+    aes128_cbc_encrypt(
+        &iv_key[16..].try_into().unwrap(),
+        iv_key[..16].try_into().unwrap(),
+        data,
+    );
+}
+
+/// AES-128-CBC encryption in place; `data` must be whole 16-byte blocks.
+pub fn aes128_cbc_encrypt(key: &[u8; 16], iv: [u8; 16], data: &mut [u8]) {
+    use aes::cipher::{BlockCipherEncrypt, KeyInit as _};
+    debug_assert!(data.len().is_multiple_of(16));
+    let cipher = aes::Aes128::new(&(*key).into());
+    let mut prev = iv;
+    for chunk in data.as_chunks_mut::<16>().0 {
+        for (b, p) in chunk.iter_mut().zip(prev) {
+            *b ^= p;
+        }
+        let mut blk = aes::Block::from(*chunk);
+        cipher.encrypt_block(&mut blk);
+        chunk.copy_from_slice(&blk);
+        prev = *chunk;
+    }
+}
+
 /// The PFS image key for a debug package, from its content id and passcode.
 pub fn derive_ekpfs(content_id: &str, passcode: &str) -> [u8; 32] {
     derive_pfs_key(content_id, passcode, 1)

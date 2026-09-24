@@ -270,9 +270,17 @@ fn build_mode(
     let icon_png = tree.read("sce_sys/icon0.png").unwrap_or_default();
     let icon_dds = tree.read("sce_sys/icon0.dds").unwrap_or_default();
     // Only files still in the package: an excluded one must not reappear in the container.
-    let extras = cnt_write::presentation_extras(&mut |path| {
+    let mut extras = cnt_write::presentation_extras(&mut |path| {
         sizes_of(&files, path).and_then(|_| tree.read(path).ok())
     });
+    // The dump's own title and NP binding files, as protected entries (see `PROTECTED`). They
+    // stay in the image too; the container copy is what the console's launch checks read.
+    extras.extend(cnt_write::protected_extras(&mut |path| {
+        sizes_of(&files, path).and_then(|_| tree.read(path).ok())
+    }));
+    // The debug license the console's launch checks need (see `license`), generated for this
+    // content id. A dump's own license files are never used: they belong to another console.
+    extras.extend(cnt_write::license_extras(&content_id));
     // What the container now carries, the image leaves out (see `CONTAINER_ONLY`).
     let mut carried: std::collections::HashSet<&str> = cnt_write::PRESENTATION
         .iter()
@@ -297,7 +305,11 @@ fn build_mode(
     };
 
     progress(&format!("planning {}", tree.describe()));
-    let plan = plan::build_with(&files, request.kraken)?;
+    let mut plan = plan::build_with(&files, request.kraken)?;
+    plan.mark_modules(|path| {
+        tree.read_range(path, 0, 4)
+            .is_ok_and(|head| plan::is_module_header(&head))
+    });
     // Refuse an over-large source here, before a single byte is read.
     if plan.ndblock > outer_write::max_inner_blocks() {
         return format_err(format!(
@@ -505,7 +517,8 @@ fn build_mode(
                 seed,
                 passcode: &request.passcode,
                 content_type: cnt_write::content_class(&param_json).0,
-                drm_type: 0,
+                drm_type: crate::cnt_write::drm_type_override()
+                    .unwrap_or(crate::cnt_write::LICENSED_DRM_TYPE),
                 content_flags: cnt_write::content_class(&param_json).1,
                 inner_size,
             })?;

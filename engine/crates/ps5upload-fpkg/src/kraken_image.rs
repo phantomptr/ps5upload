@@ -137,6 +137,10 @@ fn plan_blocks(plan: &Plan) -> (Vec<Todo>, u64) {
     (todo, end)
 }
 
+fn store_only() -> bool {
+    std::env::var("PS5UPLOAD_FPKG_KRAKEN_STORE").is_ok_and(|v| v == "1")
+}
+
 /// A source-file range reader.
 pub type SourceRead<'r> = &'r mut dyn FnMut(&str, u64, usize) -> Result<Vec<u8>>;
 
@@ -277,7 +281,17 @@ pub fn compress(
             Ok(Some((t, bytes)))
         },
         |(t, bytes)| {
-            let halves = kraken::encode_block(&bytes);
+            // `PS5UPLOAD_FPKG_KRAKEN_STORE=1` stores every half raw: the same layout with nothing
+            // for the decoder to decompress. A diagnostic, to tell a layout fault from an
+            // encoding one on a console.
+            let halves = if store_only() {
+                bytes
+                    .chunks(kraken::HALF)
+                    .map(|h| Half::Raw(h.to_vec()))
+                    .collect()
+            } else {
+                kraken::encode_block(&bytes)
+            };
             // Proof before it is kept: the block decodes back to exactly its source.
             if kraken::decode_block(&halves, bytes.len())? != bytes {
                 return format_err(format!("block at {:#x} does not round-trip", t.logical));

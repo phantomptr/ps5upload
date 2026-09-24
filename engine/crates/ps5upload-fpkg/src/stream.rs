@@ -373,7 +373,8 @@ pub fn write_package(
         seed: request.seed,
         passcode: request.passcode,
         content_type: cnt_write::content_class(&request.param_json).0,
-        drm_type: 0,
+        drm_type: crate::cnt_write::drm_type_override()
+            .unwrap_or(crate::cnt_write::LICENSED_DRM_TYPE),
         content_flags: cnt_write::content_class(&request.param_json).1,
         inner_size,
     })?;

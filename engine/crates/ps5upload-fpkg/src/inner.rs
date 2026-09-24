@@ -284,7 +284,12 @@ fn metadata_region(plan: &Plan, build_time: (i64, u32)) -> Result<Vec<u8>> {
     for t in 0..4 {
         sb[0x88 + t * 4..0x8C + t * 4].copy_from_slice(&build_time.1.to_le_bytes());
     }
-    sb[0xB0..0xB8].copy_from_slice(&1i64.to_le_bytes());
+    // The inode table's length in blocks (its "super inode"'s di_blocks). Every sample's table
+    // fits one block, so this was a constant 1; Minecraft's 37,000 inodes fill 97, and the
+    // console then failed every lookup past the first block (`ppr_get_blkno_sino() no blocks
+    // ... dino->di_blocks=1 blkcnt=97`, then EINVAL from path_lookup on eboot.bin).
+    let table_blocks = plan.metadata.inode_table.1.div_ceil(BLOCK).max(1);
+    sb[0xB0..0xB8].copy_from_slice(&(table_blocks as i64).to_le_bytes());
     // The inode table's absolute block. Both Sony references hold exactly this (the Web
     // Browser 0x41, Spider-Man 2 0x3f6911); the constant 0x89 that stood here was one
     // package's value and pointed every other package's mount at the wrong block.

@@ -110,6 +110,39 @@ pub struct PlannedFile {
     pub sce_sys: bool,
     /// True for the keystone this build generated.
     pub generated: bool,
+    /// An executable (SELF or ELF): `eboot.bin`, the `.prx`/`.sprx` modules. Set by
+    /// [`Plan::mark_modules`], which reads the file's header.
+    pub module: bool,
+}
+
+impl Plan {
+    /// Mark the executables, which the image flags as modules. `is_module` answers for one
+    /// path, normally from the file's first bytes (see [`is_module_header`]).
+    ///
+    /// Measured on Spider-Man 2: `eboot.bin` and every `.prx`/`.sprx`, `sce_sys/about/right.sprx`
+    /// included, carry inode flags 0x50 (data + module) and every other file 0x30 (data + blob).
+    /// We flagged everything 0x30, and the console refused to start the game:
+    /// `sceSblACMgrGetFsSandboxType(.../eboot.bin) failed. 0x80020016` (FW 5.10 Phat).
+    pub fn mark_modules(&mut self, mut is_module: impl FnMut(&str) -> bool) {
+        for f in &mut self.files {
+            f.module = !f.generated && f.size >= 4 && is_module(&f.path);
+        }
+    }
+}
+
+/// Whether a file's first bytes are an executable's: a PS5 or PS4 SELF (fake-signed or
+/// genuine) or a plain ELF.
+pub fn is_module_header(head: &[u8]) -> bool {
+    use crate::source::magic;
+    head.len() >= 4
+        && [
+            magic::SELF_PS5,
+            magic::SELF_PS4,
+            magic::SIGNED_SELF,
+            magic::RAW_ELF,
+        ]
+        .iter()
+        .any(|m| head[..4] == m[..])
 }
 
 impl Plan {
@@ -165,7 +198,12 @@ impl PlannedFile {
     }
 
     pub fn inode_flags(&self) -> u32 {
-        FLAGS_DATA | FLAGS_BLOB | if self.sce_sys { FLAGS_SCE_SYS } else { 0 }
+        let kind = if self.module {
+            FLAGS_MODULE
+        } else {
+            FLAGS_BLOB
+        };
+        FLAGS_DATA | kind | if self.sce_sys { FLAGS_SCE_SYS } else { 0 }
     }
 }
 
@@ -301,6 +339,7 @@ pub fn build_with(input: &[SourceFile], spread: bool) -> Result<Plan> {
             dirent_offset: -1,
             sce_sys: f.path.starts_with("sce_sys/"),
             generated: false,
+            module: false,
         })
         .collect();
     if !files.iter().any(|f| f.path == KEYSTONE) {
@@ -315,6 +354,7 @@ pub fn build_with(input: &[SourceFile], spread: bool) -> Result<Plan> {
             dirent_offset: -1,
             sce_sys: true,
             generated: true,
+            module: false,
         });
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
@@ -786,6 +826,38 @@ mod tests {
             assert_eq!(packed.files[fi].logical_offset, at);
             at += packed.files[fi].size;
         }
+    }
+
+    /// Executables carry the module flag (0x50) and everything else the blob flag (0x30), as on
+    /// Spider-Man 2; the keystone we generate is never a module.
+    #[test]
+    fn executables_are_flagged_as_modules() {
+        let mut plan = build(&src(&[
+            ("eboot.bin", 64),
+            ("sce_sys/about/right.sprx", 64),
+            ("data/level.pak", 64),
+        ]))
+        .unwrap();
+        let heads: BTreeMap<&str, [u8; 4]> = [
+            ("eboot.bin", crate::source::magic::SELF_PS5),
+            ("sce_sys/about/right.sprx", crate::source::magic::SELF_PS4),
+            ("data/level.pak", *b"PAK1"),
+        ]
+        .into_iter()
+        .collect();
+        plan.mark_modules(|p| heads.get(p).is_some_and(|h| is_module_header(h)));
+        let flags = |p: &str| {
+            plan.files
+                .iter()
+                .find(|f| f.path == p)
+                .unwrap()
+                .inode_flags()
+        };
+        assert_eq!(flags("eboot.bin"), 0x50);
+        assert_eq!(flags("sce_sys/about/right.sprx"), 0x0002_0050);
+        assert_eq!(flags("data/level.pak"), 0x30);
+        assert_eq!(flags(KEYSTONE), 0x0002_0030);
+        assert!(!is_module_header(&[0x7F, b'E']));
     }
 
     /// `pfs-version.dat` is a marker, not app payload: the sample's three uroot files

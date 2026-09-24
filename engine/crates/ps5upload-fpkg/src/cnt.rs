@@ -140,6 +140,13 @@ impl Cnt {
         &self.bytes[e.offset as usize..e.offset as usize + e.size as usize]
     }
 
+    /// An entry's stored bytes rounded up to 16 — a protected entry's ciphertext.
+    pub fn padded_payload(&self, e: &Entry) -> &[u8] {
+        let end =
+            (e.offset as usize + (e.size as usize).next_multiple_of(16)).min(self.bytes.len());
+        &self.bytes[e.offset as usize..end]
+    }
+
     /// `CNT+0xFE0 == SHA3(CNT[0..0xFE0])`.
     pub fn package_digest_ok(&self) -> bool {
         sha3(&self.bytes[..0xFE0]) == self.bytes[0xFE0..0x1000]
@@ -293,6 +300,10 @@ impl Cnt {
                         EntryDigest::Mismatch
                     }
                 } else if slot == sha3(self.payload(e)) {
+                    EntryDigest::Match
+                } else if e.flags1 & 0x8000_0000 != 0 && slot == sha3(self.padded_payload(e)) {
+                    // A protected entry is stored padded to the cipher's 16-byte block and
+                    // LibProsperoPkg digests the stored bytes, padding included.
                     EntryDigest::Match
                 } else {
                     EntryDigest::Mismatch

@@ -13,6 +13,8 @@ flate2 = "1"
 crc32fast = "1"
 hmac = "0.13"
 sha2 = "0.11"
+# Big-integer modular exponentiation for the debug license signature (pure Rust, every target).
+num-bigint = "0.4"
 ps5upload-pkg = { path = "../ps5upload-pkg" }
 serde_json.workspace = true
 libc = "0.2"

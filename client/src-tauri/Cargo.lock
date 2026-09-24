@@ -3394,6 +3394,7 @@ name = "ps5upload-fpkg"
 version = "5.33.3"
 dependencies = [
  "aes",
+ "crc32fast",
  "flate2",
  "getrandom 0.4.3",
  "hmac",
