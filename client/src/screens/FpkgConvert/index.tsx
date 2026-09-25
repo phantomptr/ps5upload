@@ -34,6 +34,12 @@ function prettyBytes(n: number): string {
   return `${n} B`;
 }
 
+/** Free space a conversion needs on the output drive: the package, plus the image it
+ *  spools first (both about the package's size while packages are uncompressed). */
+function convertSpaceNeeded(plannedSize: number): number {
+  return plannedSize * 2;
+}
+
 export default function FpkgConvertScreen() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
@@ -184,6 +190,20 @@ export default function FpkgConvertScreen() {
           "fpkg.betaBody",
           undefined,
           "Work in progress: conversion or installation may fail, and a package may install but not launch. Keep your original source and backups. Do not use this on irreplaceable data; we cannot guarantee against data loss or damage.",
+        )}
+      </Callout>
+
+      {/* Packages are stored, not compressed, until the console accepts our Kraken streams.
+          A 250 GB game makes a 250 GB package, and the build spools the image first, so
+          the output drive needs about twice the game's size free while it runs. */}
+      <Callout
+        tone="info"
+        title={tr("fpkg.uncompressedTitle", undefined, "Packages are uncompressed for now")}
+      >
+        {tr(
+          "fpkg.uncompressedBody",
+          undefined,
+          "The .pkg comes out about the size of the game (a 250 GB game makes a 250 GB package), and converting needs about twice that free on the output drive while it runs. Compression is coming in a later version.",
         )}
       </Callout>
 
@@ -341,6 +361,19 @@ export default function FpkgConvertScreen() {
                 </span>
               )}
             </div>
+            {inspection.output_free != null &&
+              inspection.output_free < convertSpaceNeeded(inspection.planned_size) && (
+                <div className="text-[var(--color-warn)]">
+                  {tr(
+                    "fpkg.lowSpace",
+                    {
+                      need: prettyBytes(convertSpaceNeeded(inspection.planned_size)),
+                      free: prettyBytes(inspection.output_free),
+                    },
+                    "Not enough free space: converting needs about {need} on the output drive, which has {free}.",
+                  )}
+                </div>
+              )}
             {inspection.content_id && (
               <div className="text-[var(--color-muted)]">
                 {tr("fpkg.contentId", undefined, "Content id")}: {inspection.content_id}

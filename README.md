@@ -395,6 +395,19 @@ port 9021 — a third-party component, not part of ps5upload.
 * Your computer and PS5 don't have to be on the same subnet, but
   there has to be a route to the IP.
 
+**Q: It connects, then drops within seconds?**
+* If you load ps5upload with an autoloader or PLDMGR, put **elfldr first**
+  in its list, before `ps5upload.elf`. Without elfldr loaded first,
+  ps5upload connects and then drops after a few seconds. Loading elfldr
+  once from PLDMGR and then sending ps5upload again also fixes it.
+
+**Q: Stream install fails before the PS5 downloads anything?**
+* The PS5 pulls the package from your computer, so it has to be able to
+  reach it. Allow ps5upload through your computer's firewall (on Windows,
+  for both Private and Public networks), keep the computer and the PS5 on
+  the same network with any VPN off, and set the PS5's Proxy Server to
+  "Do Not Use". **Upload & install** works without this connection.
+
 **Q: Resume gets stuck on "Checking what's already on your PS5…"?**
 * Reconcile scoped to the *local* tree's parent directories, so a
   single-file upload into a folder that already holds other games

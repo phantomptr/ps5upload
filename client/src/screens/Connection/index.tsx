@@ -735,6 +735,13 @@ export default function ConnectionScreen() {
                 `The PS5Upload helper is a small program your PS5 runs in memory to accept uploads. Sent over port ${PS5_LOADER_PORT}; it takes a few seconds for the PS5 to respond once the bytes arrive.`,
               )}
             </p>
+            <p className="-mt-2 mb-4 text-xs text-[var(--color-muted)]">
+              {tr(
+                "connection_elfldr_first",
+                undefined,
+                "Loading ps5upload with an autoloader or PLDMGR? Put elfldr first in its list, before ps5upload.elf. Without elfldr loaded first, ps5upload connects and then drops within seconds.",
+              )}
+            </p>
             {isTauriEnv() ? (
               <>
                 <BundledPayloadBanner />
@@ -1645,6 +1652,13 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
                 "connection_prior_killed_detail",
                 undefined,
                 "This can mean another payload on the console ended it, the system ran low on memory, or it crashed. stderr.log in a bug report says which. If you load ps5upload through an autoloader, try sending it from here instead.",
+              )}
+            </p>
+            <p className="mt-1 text-[var(--color-muted)]">
+              {tr(
+                "connection_elfldr_first",
+                undefined,
+                "Loading ps5upload with an autoloader or PLDMGR? Put elfldr first in its list, before ps5upload.elf. Without elfldr loaded first, ps5upload connects and then drops within seconds.",
               )}
             </p>
           </div>

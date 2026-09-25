@@ -240,7 +240,11 @@
       "v5_home_setup_required",
       "v5_home_view_all",
       "volumes_mounted_rw",
-      "volumes_upload_safe_capacity"
+      "volumes_upload_safe_capacity",
+      "fpkg.uncompressedTitle",
+      "fpkg.uncompressedBody",
+      "fpkg.lowSpace",
+      "connection_elfldr_first"
     ],
     "stale": [],
     "untranslated": [
@@ -491,7 +495,11 @@
       "v5_home_setup_required",
       "v5_home_view_all",
       "volumes_mounted_rw",
-      "volumes_upload_safe_capacity"
+      "volumes_upload_safe_capacity",
+      "fpkg.uncompressedTitle",
+      "fpkg.uncompressedBody",
+      "fpkg.lowSpace",
+      "connection_elfldr_first"
     ],
     "stale": [],
     "untranslated": [
@@ -743,7 +751,11 @@
       "v5_home_setup_required",
       "v5_home_view_all",
       "volumes_mounted_rw",
-      "volumes_upload_safe_capacity"
+      "volumes_upload_safe_capacity",
+      "fpkg.uncompressedTitle",
+      "fpkg.uncompressedBody",
+      "fpkg.lowSpace",
+      "connection_elfldr_first"
     ],
     "stale": [],
     "untranslated": [
@@ -1002,7 +1014,11 @@
       "v5_home_setup_required",
       "v5_home_view_all",
       "volumes_mounted_rw",
-      "volumes_upload_safe_capacity"
+      "volumes_upload_safe_capacity",
+      "fpkg.uncompressedTitle",
+      "fpkg.uncompressedBody",
+      "fpkg.lowSpace",
+      "connection_elfldr_first"
     ],
     "stale": [],
     "untranslated": [
@@ -1257,7 +1273,11 @@
       "v5_home_setup_required",
       "v5_home_view_all",
       "volumes_mounted_rw",
-      "volumes_upload_safe_capacity"
+      "volumes_upload_safe_capacity",
+      "fpkg.uncompressedTitle",
+      "fpkg.uncompressedBody",
+      "fpkg.lowSpace",
+      "connection_elfldr_first"
     ],
     "stale": [],
     "untranslated": [
@@ -1514,7 +1534,11 @@
       "v5_home_setup_required",
       "v5_home_view_all",
       "volumes_mounted_rw",
-      "volumes_upload_safe_capacity"
+      "volumes_upload_safe_capacity",
+      "fpkg.uncompressedTitle",
+      "fpkg.uncompressedBody",
+      "fpkg.lowSpace",
+      "connection_elfldr_first"
     ],
     "stale": [],
     "untranslated": [
@@ -1532,7 +1556,11 @@
       "fpkg.compressFailed",
       "fpkg.compressed",
       "fpkg.compressedNext",
-      "fpkg.compressing"
+      "fpkg.compressing",
+      "fpkg.uncompressedTitle",
+      "fpkg.uncompressedBody",
+      "fpkg.lowSpace",
+      "connection_elfldr_first"
     ],
     "stale": [],
     "untranslated": [
@@ -1795,7 +1823,11 @@
       "v5_home_setup_required",
       "v5_home_view_all",
       "volumes_mounted_rw",
-      "volumes_upload_safe_capacity"
+      "volumes_upload_safe_capacity",
+      "fpkg.uncompressedTitle",
+      "fpkg.uncompressedBody",
+      "fpkg.lowSpace",
+      "connection_elfldr_first"
     ],
     "stale": [],
     "untranslated": [
@@ -2052,7 +2084,11 @@
       "v5_home_setup_required",
       "v5_home_view_all",
       "volumes_mounted_rw",
-      "volumes_upload_safe_capacity"
+      "volumes_upload_safe_capacity",
+      "fpkg.uncompressedTitle",
+      "fpkg.uncompressedBody",
+      "fpkg.lowSpace",
+      "connection_elfldr_first"
     ],
     "stale": [],
     "untranslated": [
@@ -2308,7 +2344,11 @@
       "v5_home_setup_required",
       "v5_home_view_all",
       "volumes_mounted_rw",
-      "volumes_upload_safe_capacity"
+      "volumes_upload_safe_capacity",
+      "fpkg.uncompressedTitle",
+      "fpkg.uncompressedBody",
+      "fpkg.lowSpace",
+      "connection_elfldr_first"
     ],
     "stale": [],
     "untranslated": [
@@ -2562,7 +2602,11 @@
       "v5_home_setup_required",
       "v5_home_view_all",
       "volumes_mounted_rw",
-      "volumes_upload_safe_capacity"
+      "volumes_upload_safe_capacity",
+      "fpkg.uncompressedTitle",
+      "fpkg.uncompressedBody",
+      "fpkg.lowSpace",
+      "connection_elfldr_first"
     ],
     "stale": [],
     "untranslated": [
@@ -2814,7 +2858,11 @@
       "v5_home_setup_required",
       "v5_home_view_all",
       "volumes_mounted_rw",
-      "volumes_upload_safe_capacity"
+      "volumes_upload_safe_capacity",
+      "fpkg.uncompressedTitle",
+      "fpkg.uncompressedBody",
+      "fpkg.lowSpace",
+      "connection_elfldr_first"
     ],
     "stale": [],
     "untranslated": [
@@ -3067,7 +3115,11 @@
       "v5_home_setup_required",
       "v5_home_view_all",
       "volumes_mounted_rw",
-      "volumes_upload_safe_capacity"
+      "volumes_upload_safe_capacity",
+      "fpkg.uncompressedTitle",
+      "fpkg.uncompressedBody",
+      "fpkg.lowSpace",
+      "connection_elfldr_first"
     ],
     "stale": [],
     "untranslated": [
@@ -3325,7 +3377,11 @@
       "v5_home_setup_required",
       "v5_home_view_all",
       "volumes_mounted_rw",
-      "volumes_upload_safe_capacity"
+      "volumes_upload_safe_capacity",
+      "fpkg.uncompressedTitle",
+      "fpkg.uncompressedBody",
+      "fpkg.lowSpace",
+      "connection_elfldr_first"
     ],
     "stale": [],
     "untranslated": [
@@ -3578,7 +3634,11 @@
       "v5_home_setup_required",
       "v5_home_view_all",
       "volumes_mounted_rw",
-      "volumes_upload_safe_capacity"
+      "volumes_upload_safe_capacity",
+      "fpkg.uncompressedTitle",
+      "fpkg.uncompressedBody",
+      "fpkg.lowSpace",
+      "connection_elfldr_first"
     ],
     "stale": [],
     "untranslated": [
@@ -3830,7 +3890,11 @@
       "v5_home_setup_required",
       "v5_home_view_all",
       "volumes_mounted_rw",
-      "volumes_upload_safe_capacity"
+      "volumes_upload_safe_capacity",
+      "fpkg.uncompressedTitle",
+      "fpkg.uncompressedBody",
+      "fpkg.lowSpace",
+      "connection_elfldr_first"
     ],
     "stale": [],
     "untranslated": [
@@ -4084,7 +4148,11 @@
       "v5_home_setup_required",
       "v5_home_view_all",
       "volumes_mounted_rw",
-      "volumes_upload_safe_capacity"
+      "volumes_upload_safe_capacity",
+      "fpkg.uncompressedTitle",
+      "fpkg.uncompressedBody",
+      "fpkg.lowSpace",
+      "connection_elfldr_first"
     ],
     "stale": [],
     "untranslated": [
@@ -4339,7 +4407,11 @@
       "v5_home_setup_required",
       "v5_home_view_all",
       "volumes_mounted_rw",
-      "volumes_upload_safe_capacity"
+      "volumes_upload_safe_capacity",
+      "fpkg.uncompressedTitle",
+      "fpkg.uncompressedBody",
+      "fpkg.lowSpace",
+      "connection_elfldr_first"
     ],
     "stale": [],
     "untranslated": [
@@ -4591,7 +4663,11 @@
       "v5_home_setup_required",
       "v5_home_view_all",
       "volumes_mounted_rw",
-      "volumes_upload_safe_capacity"
+      "volumes_upload_safe_capacity",
+      "fpkg.uncompressedTitle",
+      "fpkg.uncompressedBody",
+      "fpkg.lowSpace",
+      "connection_elfldr_first"
     ],
     "stale": [],
     "untranslated": [
