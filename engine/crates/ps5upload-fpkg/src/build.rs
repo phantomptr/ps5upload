@@ -78,6 +78,22 @@ impl BuildRequest {
     }
 }
 
+/// Where a compressed build spools its image before the package is written: beside the output,
+/// or in `PS5UPLOAD_FPKG_SPOOL_DIR`. The spool is as large as the image, so a big title
+/// needs twice its size on one drive unless the two are split (Spider-Man 2: 254 GB).
+fn spool_path(partial: &Path) -> PathBuf {
+    let name = format!(
+        "{}.kraken",
+        partial
+            .file_name()
+            .map_or_else(Default::default, |n| n.to_string_lossy())
+    );
+    match std::env::var_os("PS5UPLOAD_FPKG_SPOOL_DIR") {
+        Some(dir) if !dir.is_empty() => PathBuf::from(dir).join(name),
+        _ => partial.with_file_name(name),
+    }
+}
+
 /// A file in a backport's `fakelib/` folder, which is packaged byte for byte.
 fn is_fakelib(path: &str) -> bool {
     path.split('/')
@@ -418,9 +434,7 @@ fn build_mode(
                 icon_dds,
                 extras,
                 playgo_chunks: request.playgo_chunks,
-                kraken_spool: request
-                    .kraken
-                    .then(|| PathBuf::from(format!("{}.kraken", partial.display()))),
+                kraken_spool: request.kraken.then(|| spool_path(&partial)),
                 metadata_codec: request.metadata_codec,
             };
             let written =
