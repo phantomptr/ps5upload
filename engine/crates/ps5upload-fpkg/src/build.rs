@@ -78,6 +78,13 @@ impl BuildRequest {
     }
 }
 
+/// A file in a backport's `fakelib/` folder, which is packaged byte for byte.
+fn is_fakelib(path: &str) -> bool {
+    path.split('/')
+        .next()
+        .is_some_and(|top| top.eq_ignore_ascii_case("fakelib"))
+}
+
 fn chunks_from_env() -> u16 {
     std::env::var("PS5UPLOAD_FPKG_CHUNKS")
         .ok()
@@ -232,7 +239,10 @@ fn build_mode(
     let mut repairs: std::collections::HashMap<String, (self_repair::SelfRepair, u64)> =
         std::collections::HashMap::new();
     for f in files.iter_mut() {
-        if f.size < 0x20 {
+        // A backport's `fakelib/` holds newer system libraries the game loads in place of the
+        // console's own; working releases ship some with the PS4 signature, and every one of
+        // them is used exactly as shipped. Rewriting them is not a repair.
+        if f.size < 0x20 || is_fakelib(&f.path) {
             continue;
         }
         let header = tree.read_range(&f.path, 0, 0x20)?;
@@ -727,6 +737,15 @@ pub fn package_digest(path: &Path) -> Result<[u8; 32]> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fakelib_files_are_never_repaired() {
+        assert!(super::is_fakelib("fakelib/libSceAmpr.sprx"));
+        assert!(super::is_fakelib("FakeLib/libScePlayGo.sprx"));
+        assert!(!super::is_fakelib("sce_module/libc.prx"));
+        assert!(!super::is_fakelib("data/fakelib/x.sprx"));
+        assert!(!super::is_fakelib("eboot.bin"));
+    }
+
     /// The seed must come from the OS, not the clock. Reading `/dev/urandom` meant Windows
     /// always took the clock fallback, so two builds in the same nanosecond window shared a
     /// seed. Clock-derived seeds are recognisable: the first eight bytes are a small
