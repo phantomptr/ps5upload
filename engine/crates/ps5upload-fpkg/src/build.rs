@@ -285,6 +285,26 @@ fn build_mode(
         Ok(None) => param_json,
         Err(e) => return format_err(e),
     };
+    // `PS5UPLOAD_FPKG_PARAM_FILE` packages that exact param.json instead, e.g. one taken from a
+    // known-good release of the same title, whose edits (sdkVersion, userDefinedParam*) the
+    // game may depend on. Its content id must still match the package's.
+    let param_json = match std::env::var_os("PS5UPLOAD_FPKG_PARAM_FILE") {
+        Some(p) if !p.is_empty() => {
+            let replaced = std::fs::read(&p)?;
+            if source::content_id(&replaced).as_deref() != Some(content_id.as_str()) {
+                return format_err(format!(
+                    "{} names a different content id than {content_id}",
+                    std::path::Path::new(&p).display()
+                ));
+            }
+            progress(&format!(
+                "param.json taken from {}",
+                std::path::Path::new(&p).display()
+            ));
+            replaced
+        }
+        _ => param_json,
+    };
     if let Some(entry) = files.iter_mut().find(|f| f.path == "sce_sys/param.json") {
         entry.size = param_json.len() as u64;
     }
