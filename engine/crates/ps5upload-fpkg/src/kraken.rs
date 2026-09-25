@@ -166,17 +166,30 @@ impl<'a> BitReader<'a> {
 
 // ─────────────────────────────── arrays ───────────────────────────────
 
+/// A raw (type 0) array, always with the 3-byte header. Kraken also has a 2-byte form for
+/// arrays under 4 KiB; the console's hardware decoder never sees it from the encoders it
+/// accepts (Sony's, LibProsperoPkg's), so we do not write it.
 fn put_raw_array(out: &mut Vec<u8>, data: &[u8]) {
     let n = data.len();
-    if n < 0x1000 {
-        out.push(0x80 | (n >> 8) as u8);
-        out.push(n as u8);
-    } else {
-        out.push((n >> 16) as u8);
-        out.push((n >> 8) as u8);
-        out.push(n as u8);
-    }
+    out.push((n >> 16) as u8);
+    out.push((n >> 8) as u8);
+    out.push(n as u8);
     out.extend_from_slice(data);
+}
+
+/// A new match distance in Kraken's traditional offset code: `d + 248 = (1n·x)·16 + low`, the
+/// byte carrying `(n − 4) << 4 | low` and the stream carrying `x` in `n` bits. Any `d` from 8 up
+/// to ~8 MB fits in 4..=18 bits; a block never needs more.
+fn traditional_offset(d: usize) -> (u8, u32, u32) {
+    let t = (d + 248) as u32;
+    let low = t & 0xF;
+    let hi = t >> 4;
+    let n = 31 - hi.leading_zeros();
+    debug_assert!(
+        (4..=18).contains(&n),
+        "distance {d} outside the traditional code"
+    );
+    (((n - 4) << 4 | low) as u8, hi - (1 << n), n)
 }
 
 /// A raw (type 0) array at `at`, at most `max` bytes: `(bytes, header + payload length)`.
@@ -371,11 +384,12 @@ fn encode_half(
             }
             None => {
                 recent = [c.dist, recent[0], recent[1]];
-                let offs = (c.dist + 8) as u32;
-                let nb = 31 - offs.leading_zeros() - 3;
-                let top = (offs >> nb) - 8;
-                offs_codes.push(((nb << 3) | top) as u8);
-                offs_bits.push((offs & ((1u32 << nb) - 1), nb));
+                // The traditional code, not the scaled one (`0x80` marker): the console's
+                // decoder rejected our scaled offsets (IOD ec 0x7c/0x7f), and neither Sony's
+                // nor LibProsperoPkg's accepted packages ever use them.
+                let (code, bits, n) = traditional_offset(c.dist);
+                offs_codes.push(code);
+                offs_bits.push((bits, n));
                 3
             }
         };
@@ -431,7 +445,6 @@ fn encode_half(
     }
     put_raw_array(&mut out, &lits);
     put_raw_array(&mut out, &cmd_bytes);
-    out.push(0x80);
     put_raw_array(&mut out, &offs_codes);
     put_raw_array(&mut out, &lens);
     let mut f = fwd.finish();
@@ -526,10 +539,15 @@ fn decode_half(src: &[u8], out: &mut [u8], at: usize, len: usize) -> Result<()> 
     p += n;
     let (cmds, n) = get_raw_array(src, p, main_end, len)?;
     p += n;
-    if p >= main_end || src[p] != 0x80 {
-        return format_err("kraken: expected offsets scaled by 1");
+    if p >= main_end {
+        return format_err("kraken: truncated offsets");
     }
-    p += 1;
+    // `0x80` marks the scaled offset code (what this encoder once wrote); anything else is the
+    // start of the offsets array in the traditional code.
+    let scaled = src[p] == 0x80;
+    if scaled {
+        p += 1;
+    }
     let (offs_codes, n) = get_raw_array(src, p, main_end, cmds.len())?;
     p += n;
     let (lens, n) = get_raw_array(src, p, main_end, len / 4)?;
@@ -540,13 +558,22 @@ fn decode_half(src: &[u8], out: &mut [u8], at: usize, len: usize) -> Result<()> 
     let mut b = BitReader::new(src, p, main_end, true);
     let mut offsets = Vec::with_capacity(offs_codes.len());
     for (k, &c) in offs_codes.iter().enumerate() {
-        let nb = u32::from(c >> 3);
-        if nb > 26 {
-            return format_err("kraken: bad offset code");
-        }
         let r = if k % 2 == 0 { &mut a } else { &mut b };
-        let offs = ((8 + u32::from(c & 7)) << nb) | r.get(nb);
-        offsets.push(offs as usize - 8);
+        if scaled {
+            let nb = u32::from(c >> 3);
+            if nb > 26 {
+                return format_err("kraken: bad offset code");
+            }
+            let offs = ((8 + u32::from(c & 7)) << nb) | r.get(nb);
+            offsets.push(offs as usize - 8);
+        } else {
+            if c >= 0xF0 {
+                return format_err("kraken: offset beyond a block");
+            }
+            let n = u32::from(c >> 4) + 4;
+            let v = (((1u32 << n) | r.get(n)) << 4) + u32::from(c & 0xF) - 248;
+            offsets.push(v as usize);
+        }
     }
     if a.seam() != b.seam() {
         return format_err("kraken: offset streams do not meet");
@@ -692,6 +719,52 @@ mod tests {
         let data = &t.as_bytes()[..BLOCK];
         let stored = roundtrip(data);
         assert!(stored < BLOCK / 4, "{stored}");
+    }
+
+    /// The traditional offset code, checked against the decoder's formula written out
+    /// independently (ooz `read_distance`: `rv = ((1 << n | x) << 4) + (v & 15) − 248`,
+    /// `n = (v >> 4) + 4`), so a mistake shared by our encoder and decoder cannot hide.
+    #[test]
+    fn traditional_offsets_match_the_reference_formula() {
+        for d in (8..70_000).chain([0x1_FFFF, 0x3_FFF8, 0x40_0000]) {
+            let (v, x, n) = traditional_offset(d);
+            assert!(v < 0xF0, "{d}");
+            assert_eq!(n, u32::from(v >> 4) + 4, "{d}");
+            assert!(x < (1 << n), "{d}");
+            let rv = (((1u32 << n) | x) << 4) + u32::from(v & 0xF) - 248;
+            assert_eq!(rv as usize, d);
+        }
+    }
+
+    /// What the console's decoder accepts, as the encoders it accepts write it: every array
+    /// with the 3-byte raw header and offsets in the traditional code (no `0x80` marker).
+    #[test]
+    fn halves_use_only_the_accepted_forms() {
+        let mut t = String::new();
+        let mut i = 0;
+        while t.len() < BLOCK {
+            t.push_str(&format!("{i} lorem ipsum dolor sit amet {}\n", i * 7));
+            i += 1;
+        }
+        for h in encode_block(&t.as_bytes()[..BLOCK]) {
+            let Half::Lz(body) = h else { continue };
+            // Past the seed and the excess framing byte(s), the literals array begins.
+            let mut p = SEED;
+            let flag = body[p];
+            p += 1;
+            if flag & 0x3F > 0x1F {
+                p += 1;
+            }
+            for _ in 0..2 {
+                assert!(body[p] < 0x80, "short raw header at {p}");
+                let n = (usize::from(body[p]) << 16)
+                    | (usize::from(body[p + 1]) << 8)
+                    | usize::from(body[p + 2]);
+                p += 3 + n;
+            }
+            assert_ne!(body[p], 0x80, "scaled-offset marker");
+            break;
+        }
     }
 
     #[test]
