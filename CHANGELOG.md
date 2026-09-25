@@ -4,6 +4,28 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.34.0
+
+**See every install's progress, and a big step for game conversion.**
+
+- **Link installs show their progress.** "Download through this computer" now
+  shows a progress bar, download speed, time left and a Cancel button from the
+  start, instead of nothing until the download finished. Stream installs show
+  time left next to their speeds, and "Let the PS5 download it" now appears in
+  Tasks.
+- **Clearer stream-install error.** When the PS5 can't reach your computer, the
+  app now says so and suggests what to check (firewall, VPN, same network),
+  instead of always blaming the proxy.
+- **Convert to FPKG (beta) uses a new package layout** that got a converted game
+  playing in testing. Packages are uncompressed for now, so they're about the
+  size of the game, and converting needs about twice that free. Games that need
+  an `ampr_emu.index` file get a warning if it's missing.
+- **Using an autoloader or PLDMGR?** Put **elfldr first** in its list, before
+  ps5upload.elf. Without it, ps5upload connects and then drops within seconds.
+  The Connection screen now says this too.
+
+---
+
 ## 5.33.3
 
 **Fewer disconnects.**
