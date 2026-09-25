@@ -305,7 +305,7 @@ fn a_kraken_package_decodes_back_to_its_source() {
     let source_dir = TempDir::new("kraken-src");
     let out = TempDir::new("kraken-out");
     let expected = write_tree(source_dir.path());
-    // The default: the block layout with its blocks stored, the form a console has played.
+    // The default: the block layout, Kraken-compressed.
     let mut request = BuildRequest::new(source_dir.path(), out.path());
     assert!(request.kraken, "the block layout is the default");
     request.time = Some((1_700_000_000, 0));
@@ -316,6 +316,7 @@ fn a_kraken_package_decodes_back_to_its_source() {
     let image = outer_file(&report.path, "pfs_image.dat");
     let blocks = kraken_image::describe(&naps).unwrap();
     let mount_size = blocks.last().map(|b| b.logical + b.len).unwrap();
+    assert!((image.len() as u64) < mount_size, "the image is compressed");
     let mut mount = vec![0u8; mount_size as usize];
     for b in &blocks {
         let bytes = kraken_image::decode_described(&image, b).unwrap();

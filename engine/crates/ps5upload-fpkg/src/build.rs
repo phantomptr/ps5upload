@@ -50,11 +50,11 @@ pub struct BuildRequest {
     pub firmware: Option<String>,
     /// PlayGo chunks (1 through 255). `PS5UPLOAD_FPKG_CHUNKS` overrides the default.
     pub playgo_chunks: u16,
-    /// Lay the inner image out as Sony's packages are, block by block (see
-    /// [`crate::kraken_image`]). On by default: it is the layout a retail game has played from
-    /// (Spider-Man 2 on a FW 5.10 console). Its blocks are stored uncompressed unless
-    /// `PS5UPLOAD_FPKG_KRAKEN_COMPRESS=1`, since the console has not yet accepted our Kraken
-    /// streams. `PS5UPLOAD_FPKG_KRAKEN=0` falls back to the older flat layout.
+    /// Lay the inner image out as Sony's packages are, block by block, Kraken-compressed (see
+    /// [`crate::kraken_image`]). On by default: retail games have played from it on a FW 5.10
+    /// console (Spider-Man 2 stored, Minecraft compressed). `PS5UPLOAD_FPKG_KRAKEN_STORE=1`
+    /// keeps its blocks uncompressed; `PS5UPLOAD_FPKG_KRAKEN=0` falls back to the older flat
+    /// layout.
     pub kraken: bool,
 }
 
