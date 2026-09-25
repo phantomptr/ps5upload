@@ -30,6 +30,7 @@ pub mod ids {
     pub const TROPHY: u32 = 0x1480;
     pub const UDS: u32 = 0x14A0;
     pub const PIC2_DDS: u32 = 0x2060;
+    pub const PLAYGO_SCENARIO_JSON: u32 = 0x3000;
 
     /// The presentation entries the "system" general digest covers, in the id order it
     /// hashes them. Derived from a Publishing Tools package with all eight: the slot is the

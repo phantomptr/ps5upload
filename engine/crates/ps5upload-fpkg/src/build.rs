@@ -282,6 +282,7 @@ fn build_mode(
     // The debug license the console's launch checks need (see `license`), generated for this
     // content id. A dump's own license files are never used: they belong to another console.
     extras.extend(cnt_write::license_extras(&content_id));
+    extras.push(cnt_write::playgo_scenario_extra());
     // What the container now carries, the image leaves out (see `CONTAINER_ONLY`).
     let mut carried: std::collections::HashSet<&str> = cnt_write::PRESENTATION
         .iter()

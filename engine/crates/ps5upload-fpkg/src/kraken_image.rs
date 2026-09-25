@@ -447,7 +447,10 @@ pub fn layout(image: &KrakenImage, file_starts: &[u64]) -> Result<Vec<u8>> {
     if let Some(i) = last_block {
         recs[i] |= RUN_END;
     }
-    recs.push(anchor_record(cursor) | TERMINATOR);
+    // The terminator's anchor carries no tweak index (bits 0–25 zero), as LibProsperoPkg writes
+    // it. Ours carried the cursor's, and the console logged the record after it as
+    // `print_compression_entry ... invalid element` on every mount (FW 5.10 Phat).
+    recs.push(anchor_record(cursor) & !((1u128 << 26) - 1) | TERMINATOR);
     keys.push(None);
     let sentinel = recs.len();
     recs.push(u128::from(

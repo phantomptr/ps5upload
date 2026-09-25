@@ -106,6 +106,46 @@ pub const PROTECTED: [(u32, &str, &str, u8); 3] = [
     ),
 ];
 
+/// The languages a generated PlayGo scenario names, in LibProsperoPkg's order.
+const SCENARIO_LANGUAGES: [&str; 31] = [
+    "ja-JP", "en-US", "fr-FR", "es-ES", "de-DE", "it-IT", "nl-NL", "pt-PT", "ru-RU", "ko-KR",
+    "zh-Hant", "zh-Hans", "fi-FI", "sv-SE", "da-DK", "no-NO", "pl-PL", "pt-BR", "en-GB", "tr-TR",
+    "es-419", "ar-AE", "fr-CA", "cs-CZ", "hu-HU", "el-GR", "ro-RO", "th-TH", "vi-VN", "id-ID",
+    "uk-UA",
+];
+
+/// `playgo-scenario.json` (entry `0x3000`): one play-mode scenario covering the package.
+///
+/// Without it the console logs `[PlayGoCore] ... not found PlayGoScenario json` at every launch,
+/// and Minecraft sat on a black screen with its main thread busy: it waits on PlayGo before
+/// drawing. LibProsperoPkg's packages carry this exact document and play.
+pub fn playgo_scenario_json() -> Vec<u8> {
+    let names = SCENARIO_LANGUAGES
+        .iter()
+        .map(|l| format!(r#""{l}":{{"title":"Scenario #0","description":"Scenario #0"}}"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    let langs = SCENARIO_LANGUAGES
+        .iter()
+        .map(|l| format!(r#""{l}""#))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        r#"{{"scenarioCount":1,"scenarioDefaultId":0,"scenarioDefaultLanguage":"en-US","scenarios":[{{"id":0,"type":"playmode",{names}}}],"chunkDefaultLanguage":"en-US","chunkSupportedLanguages":[{langs}]}}"#
+    )
+    .into_bytes()
+}
+
+/// The PlayGo scenario entry; see [`playgo_scenario_json`].
+pub fn playgo_scenario_extra() -> ExtraEntry {
+    ExtraEntry {
+        id: crate::cnt::ids::PLAYGO_SCENARIO_JSON,
+        name: "playgo-scenario.json",
+        data: playgo_scenario_json(),
+        key_index: None,
+    }
+}
+
 /// The debug license entries for `content_id`: `license.dat` (0x0400, key 3) and
 /// `license.info` (0x0401, key 4), as in Sony's and LibProsperoPkg's packages.
 pub fn license_extras(content_id: &str) -> Vec<ExtraEntry> {
@@ -810,6 +850,18 @@ mod tests {
     /// The layout of a Publishing Tools package with every presentation entry: table in id
     /// order, payloads in its body order and on 16-byte boundaries, the system digest over
     /// all eight presentation entries.
+    /// The document LibProsperoPkg writes, byte for byte (its Minecraft package: 2,293 bytes).
+    #[test]
+    fn playgo_scenario_matches_the_reference() {
+        let json = playgo_scenario_json();
+        assert_eq!(json.len(), 2293);
+        let v: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(v["scenarioCount"], 1);
+        assert_eq!(v["scenarios"][0]["type"], "playmode");
+        assert_eq!(v["chunkSupportedLanguages"].as_array().unwrap().len(), 31);
+        assert_eq!(v["scenarios"][0]["en-US"]["title"], "Scenario #0");
+    }
+
     #[test]
     fn extras_take_the_publishing_tools_layout() {
         let id = "UP0000-PPSA01234_00-TESTGAME00000000";
