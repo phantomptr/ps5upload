@@ -162,16 +162,22 @@ fn walk(
             continue;
         }
         let path = entry.path();
-        let ty = entry.file_type()?;
-        if ty.is_dir() {
+        // A symbolic link counts as what it points at, so a build can be staged as a folder of
+        // links (to add or leave out a file) without copying or touching the game's own folder.
+        let meta = if entry.file_type()?.is_symlink() {
+            std::fs::metadata(&path)?
+        } else {
+            entry.metadata()?
+        };
+        if meta.is_dir() {
             if !walk(root, &path, out, empty)? {
                 empty.push(rel(&path)?);
             }
             kept = true;
-        } else if ty.is_file() {
+        } else if meta.is_file() {
             out.push(SourceFile {
                 path: rel(&path)?,
-                size: entry.metadata()?.len(),
+                size: meta.len(),
             });
             kept = true;
         }
@@ -610,6 +616,25 @@ pub fn readiness(tree: &mut dyn SourceTree) -> Readiness {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_count_as_their_targets() {
+        let base = std::env::temp_dir().join(format!("fpkg-symlink-{}", std::process::id()));
+        let (real, staged) = (base.join("real"), base.join("staged"));
+        std::fs::remove_dir_all(&base).ok();
+        std::fs::create_dir_all(real.join("sub")).unwrap();
+        std::fs::create_dir_all(&staged).unwrap();
+        std::fs::write(real.join("sub/a.bin"), b"abc").unwrap();
+        std::fs::write(real.join("eboot.bin"), b"12345").unwrap();
+        std::os::unix::fs::symlink(real.join("sub"), staged.join("sub")).unwrap();
+        std::os::unix::fs::symlink(real.join("eboot.bin"), staged.join("eboot.bin")).unwrap();
+        let (files, empty) = super::scan_tree(&staged).unwrap();
+        std::fs::remove_dir_all(&base).ok();
+        let got: Vec<(String, u64)> = files.into_iter().map(|f| (f.path, f.size)).collect();
+        assert_eq!(got, vec![("eboot.bin".into(), 5), ("sub/a.bin".into(), 3)]);
+        assert!(empty.is_empty());
+    }
+
     /// The launch rewrite leaves valid JSON with only the three launch fields changed.
     #[test]
     fn launch_rewrite_clears_update_and_patch_fields() {
