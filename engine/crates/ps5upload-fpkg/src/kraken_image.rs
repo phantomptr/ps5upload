@@ -137,8 +137,13 @@ fn plan_blocks(plan: &Plan) -> (Vec<Todo>, u64) {
     (todo, end)
 }
 
+/// Store every block uncompressed: the default, and the only form a console has played so far.
+/// `PS5UPLOAD_FPKG_KRAKEN_COMPRESS=1` compresses them instead (the console's hardware decoder
+/// still rejects our streams); `PS5UPLOAD_FPKG_KRAKEN_STORE=0` is the older spelling of it.
 fn store_only() -> bool {
-    std::env::var("PS5UPLOAD_FPKG_KRAKEN_STORE").is_ok_and(|v| v == "1")
+    let compress = std::env::var("PS5UPLOAD_FPKG_KRAKEN_COMPRESS").is_ok_and(|v| v == "1")
+        || std::env::var("PS5UPLOAD_FPKG_KRAKEN_STORE").is_ok_and(|v| v == "0");
+    !compress
 }
 
 /// A source-file range reader.
@@ -281,9 +286,8 @@ pub fn compress(
             Ok(Some((t, bytes)))
         },
         |(t, bytes)| {
-            // `PS5UPLOAD_FPKG_KRAKEN_STORE=1` stores every half raw: the same layout with nothing
-            // for the decoder to decompress. A diagnostic, to tell a layout fault from an
-            // encoding one on a console.
+            // Stored (the default, see `store_only`): every half raw, the same layout with nothing
+            // for the console's decoder to decompress.
             let halves = if store_only() {
                 bytes
                     .chunks(kraken::HALF)

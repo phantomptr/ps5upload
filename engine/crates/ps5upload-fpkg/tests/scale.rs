@@ -69,6 +69,9 @@ fn request(source: &Path, out: &Path) -> BuildRequest {
         // These tests read the stored image back through the container. The default is `Stored`,
         // whose round trip `mounts.rs` covers.
         metadata_codec: ps5upload_fpkg::inner::MetaCodec::Zlib,
+        // And they exercise the flat layout's writers; the block layout that is now the default
+        // round-trips in `writer.rs`.
+        kraken: false,
         ..BuildRequest::new(source, out)
     }
 }

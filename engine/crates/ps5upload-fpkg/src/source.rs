@@ -407,12 +407,12 @@ fn blank_string_array(param_json: &[u8], key: &str) -> Option<Vec<u8>> {
     let mut out = param_json.to_vec();
     let mut changed = false;
     let mut in_str = false;
-    for i in open + 1..close {
-        match out[i] {
+    for byte in &mut out[open + 1..close] {
+        match *byte {
             b'"' => in_str = !in_str,
             b' ' => {}
             _ if in_str => {
-                out[i] = b' ';
+                *byte = b' ';
                 changed = true;
             }
             _ => {}
@@ -588,12 +588,20 @@ pub fn readiness(tree: &mut dyn SourceTree) -> Readiness {
     );
     // AMPR titles install fine and then will not start without ampr_emu loaded, which looks
     // like a broken package rather than a missing dependency. Say so before the build.
+    // Spider-Man 2 built without `ampr_emu.index` exited at startup ("returned from main",
+    // CE-108255-1); the same build with the index at the folder root played (FW 5.10).
     if imports_ampr(tree, "eboot.bin") {
+        let has_index = tree.files().iter().any(|f| f.path == "ampr_emu.index");
         r.push(
-            "libSceAmpr import",
-            false,
-            "eboot.bin imports libSceAmpr: the title installs but will not start unless \
-             ampr_emu is loaded on the console",
+            "ampr_emu.index for a libSceAmpr title",
+            has_index,
+            if has_index {
+                "eboot.bin imports libSceAmpr and the folder carries ampr_emu.index"
+            } else {
+                "eboot.bin imports libSceAmpr but the folder has no ampr_emu.index at its root: \
+                 the game will likely install and then close at startup. Copy ampr_emu.index \
+                 from a working package of the same game into the folder's root"
+            },
         );
     }
 
@@ -882,19 +890,30 @@ mod tests {
         .unwrap();
 
         let mut tree = open(&dir).unwrap();
-        let readiness = readiness(tree.as_mut());
+        let without_index = readiness(tree.as_mut());
 
         // The AMPR finding is a WARNING, so it surfaces through `warnings()` — the same
         // iterator the build turns into the user-visible list.
-        let ampr = readiness
+        let ampr = without_index
             .warnings()
-            .find(|c| c.name == "libSceAmpr import")
+            .find(|c| c.name == "ampr_emu.index for a libSceAmpr title")
             .expect("an ampr warning");
-        assert!(ampr.detail.contains("ampr_emu"), "{}", ampr.detail);
+        assert!(ampr.detail.contains("ampr_emu.index"), "{}", ampr.detail);
         assert!(
-            !readiness.ok(),
-            "an AMPR dependency must not read as all-clear"
+            !without_index.ok(),
+            "an AMPR title without its index must not read as all-clear"
         );
+
+        // With the index at the root, the same title passes that check.
+        std::fs::write(dir.join("ampr_emu.index"), b"AMPRIDX3").unwrap();
+        let mut tree = open(&dir).unwrap();
+        let with_index = readiness(tree.as_mut());
+        let ampr = with_index
+            .checks
+            .iter()
+            .find(|c| c.name == "ampr_emu.index for a libSceAmpr title")
+            .expect("the ampr check");
+        assert!(ampr.ok, "{}", ampr.detail);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

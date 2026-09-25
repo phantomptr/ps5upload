@@ -289,9 +289,12 @@ fn a_build_from_an_exfat_mount_verifies_and_round_trips() {
         .collect();
     assert_eq!(walked, expected, "{}", tree.describe());
 
+    // The flat layout, which this test reads back directly; the block layout that is now the
+    // default has its own round-trip tests.
     let request = BuildRequest {
         time: Some((1_700_000_000, 0)),
         seed: Some([0x5A; 16]),
+        kraken: false,
         ..BuildRequest::new(&fixture, &out)
     };
     let report = build::build(&request, &mut |_| {}).unwrap();
