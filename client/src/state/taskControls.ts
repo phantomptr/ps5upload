@@ -3,6 +3,7 @@ import { retryInstallReverify } from "./pkgLibrary";
 import { useTransferStore } from "./transfer";
 import { useUploadQueueStore } from "./uploadQueue";
 import type { Task } from "./tasks";
+import { invoke } from "../lib/invokeLogged";
 
 export type TaskCommand = "cancel" | "retry";
 
@@ -31,6 +32,9 @@ export function taskCapabilities(task: Task): TaskCapabilities {
   if (control.owner === "fs-bulk") {
     const op = useFsBulkOpStore.getState().byHost[control.host];
     return { ...none, canCancel: op?.op != null && !op.cancelRequested };
+  }
+  if (control.owner === "link-download") {
+    return { ...none, canCancel: task.status === "running" || task.status === "queued" };
   }
   if (control.owner === "pkg-install") {
     // An install Sony accepted but we could not confirm. Nothing to cancel —
@@ -67,6 +71,10 @@ export async function commandTask(task: Task, command: TaskCommand): Promise<boo
       return true;
     }
     if (control.owner === "pkg-install") return false;
+    if (control.owner === "link-download") {
+      await invoke("pkg_remote_download_cancel", { id: control.downloadId });
+      return true;
+    }
     useUploadQueueStore.getState().cancelItem(control.itemId);
     return true;
   }

@@ -1093,6 +1093,32 @@ const DPI_TRANSIENT_BUSY_RC = 0x80020002;
 /** SCE_HTTP_ERROR_PROXY — Sony's installer rejected its HTTP setup before it
  * requested the package. Staged/file install bypasses this path entirely. */
 const DPI_HTTP_PROXY_RC = 0x80431084;
+
+/** `http://ip:port` of a pkg-host URL, or null when there is none to show. */
+export function originOf(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A stream the PS5 never fetched a byte of. With no proxy error this is the
+ * console failing to reach this computer at all (#327: 0x80431068 on a
+ * network with no proxy), so the proxy is the last thing to check, not the
+ * only one: a firewall blocking the engine's port inbound is the usual cause.
+ */
+export function streamUnreachableMessage(rcHex: string, servedFrom: string | null): string {
+  const where = servedFrom ? ` at ${servedFrom}` : "";
+  return (
+    `The PS5 never reached this computer${where} to fetch the package (${rcHex}). ` +
+    "Allow ps5upload through this computer's firewall (on Windows, for both Private and Public networks), " +
+    "keep the computer and the PS5 on the same network with any VPN off, and set the PS5's Proxy Server to “Do Not Use”. " +
+    "Upload & install works without this connection."
+  );
+}
 /** How many times to (re)attempt a DPI install that keeps hitting the transient
  *  busy rc, each gated on the console becoming ready again. */
 const DPI_MAX_ATTEMPTS = 4;
@@ -1256,6 +1282,25 @@ function fmtBytes(n: number): string {
  * both are lower bounds on the same package measured against the same total, so
  * the max never runs backwards across the download→install handover.
  */
+/** The download leg of "Download through this computer": how far, how fast, how long. */
+export function describeLinkDownload(
+  written: number,
+  total: number,
+  bytesPerSec: number,
+): string {
+  const speed = bytesPerSec > 0 ? ` at ${fmtBytes(bytesPerSec)}/s` : "";
+  if (total <= 0) {
+    return `Downloading to this computer — ${fmtBytes(written)}${speed}`;
+  }
+  const pct = Math.min(100, Math.floor((100 * written) / total));
+  const etaText = fmtEta(Math.max(0, total - written), bytesPerSec);
+  return (
+    `Downloading to this computer — ${pct}% (${fmtBytes(written)} of ${fmtBytes(total)})` +
+    speed +
+    (etaText ? ` · ${etaText}` : "")
+  );
+}
+
 export function describeInstallSample(
   s: InstallSample,
   bytesPerSec = 0,
@@ -3564,6 +3609,41 @@ const makePkgLibraryStore = () =>
       // Two legs, reported separately: people need to know which one is slow.
       // The download is the fragile one; once it finishes, the install is an
       // ordinary local-file install at LAN speed.
+      //
+      // The download leg is a task of its own, with a bar, a rate, an ETA and
+      // a Cancel. Without one this mode sat silent for as long as the download
+      // took — minutes for a big package — and read as "nothing is happening"
+      // (reported from Discord: "waited 5 minutes, it doesn't appear on the PS5").
+      let name = "package";
+      try {
+        name = basenameOf(new URL(url).pathname) || "package";
+      } catch {
+        /* the caller validated the URL; keep the generic name */
+      }
+      const tasks = useTaskStore.getState();
+      const taskId = tasks.registerTask({
+        kind: "download",
+        origin: "pkg.url-download",
+        label: `Downloading ${name} to this computer`,
+        detail: "Connecting to the link…",
+        consoleId: host,
+        // Never record the URL: an install link can carry a signed token.
+        payload: { remote: true },
+        status: "running",
+      });
+      const fail = (message: string, cancelled = false) => {
+        set({ busyNotice: null });
+        useTaskStore
+          .getState()
+          .finishTask(taskId, cancelled ? "cancelled" : "failed", {
+            detail: message,
+            ...(cancelled
+              ? {}
+              : { lastError: { code: "LINK_DOWNLOAD_FAILED", message, recoverable: true } }),
+          });
+        return { ok: false, message };
+      };
+
       let started: { download_id?: string; path?: string; total?: number };
       try {
         started = (await invoke("pkg_remote_download_start", {
@@ -3572,16 +3652,17 @@ const makePkgLibraryStore = () =>
           destDir: null,
         })) as { download_id?: string; path?: string; total?: number };
       } catch (e) {
-        return { ok: false, message: pkgError(e) };
+        return fail(pkgError(e));
       }
       const id = started.download_id;
       const path = started.path;
       if (!id || !path) {
-        return {
-          ok: false,
-          message: "The engine did not start a download for that link.",
-        };
+        return fail("The engine did not start a download for that link.");
       }
+      useTaskStore.getState().updateTask(taskId, {
+        engineJobId: id,
+        control: { owner: "link-download", downloadId: id },
+      });
 
       const total = started.total ?? 0;
       log.info(
@@ -3592,10 +3673,12 @@ const makePkgLibraryStore = () =>
       // Poll until it finishes. Deliberately no timeout on the transfer as a
       // whole: a 100 GB package over a slow link legitimately takes hours,
       // and the engine reports an error the moment one actually occurs.
+      const rateSamples: RateSample[] = [{ ts: Date.now(), bytes: 0 }];
       for (;;) {
         await new Promise((r) => setTimeout(r, 1000));
         let st: {
           written?: number;
+          total?: number;
           done?: boolean;
           cancelled?: boolean;
           error?: string | null;
@@ -3603,20 +3686,38 @@ const makePkgLibraryStore = () =>
         try {
           st = (await invoke("pkg_remote_download_status", { id })) as typeof st;
         } catch (e) {
-          return { ok: false, message: pkgError(e) };
+          return fail(pkgError(e));
         }
         if (st.error) {
-          return {
-            ok: false,
-            message: `The download failed: ${st.error}`,
-          };
+          return fail(`The download failed: ${st.error}`);
         }
         if (st.cancelled) {
-          return { ok: false, message: "The download was cancelled." };
+          return fail("The download was cancelled.", true);
         }
+        const written = st.written ?? 0;
+        const size = st.total && st.total > 0 ? st.total : total;
+        const now = Date.now();
+        pushRateSample(rateSamples, now, written);
+        const bytesPerSec = computeRate(rateSamples, now);
+        const detail = describeLinkDownload(written, size, bytesPerSec);
+        // The install popup and the Install screen show this line, not the task list.
+        set({ busyNotice: detail });
+        useTaskStore.getState().updateTask(taskId, {
+          detail,
+          ...(size > 0
+            ? { progress: { current: written, total: size, unit: "bytes" as const } }
+            : {}),
+          ...(bytesPerSec > 0 ? { rate: { bytesPerSec } } : {}),
+          ...(bytesPerSec > 0 && size > written
+            ? { eta: (size - written) / bytesPerSec }
+            : {}),
+        });
         if (st.done) break;
       }
 
+      useTaskStore.getState().finishTask(taskId, "done", {
+        detail: "Downloaded. Installing on the PS5 from this computer…",
+      });
       log.info("install", "download finished; installing from the local file");
       // From here it is a local file, so the link can expire freely.
       return get().installStream(path, host);
@@ -3681,6 +3782,28 @@ const makePkgLibraryStore = () =>
         //    shorten_for_installer), which is why `shortened` matters below.
         const res = await runDpiInstall(host, trimmed);
         if (res.ok) {
+          // The console downloads this itself, so no byte of it passes through here and
+          // there is no rate to show. Record it anyway, so the install is in the task list
+          // with an honest note instead of leaving no trace at all.
+          let name = "package";
+          try {
+            name = basenameOf(parsed.pathname) || "package";
+          } catch {
+            /* keep the generic name */
+          }
+          const directTask = useTaskStore.getState().registerTask({
+            kind: "pkg-dpi-install",
+            origin: "pkg.url-direct",
+            label: `PS5 downloading ${name}`,
+            consoleId: host,
+            payload: { remote: true, direct: true },
+            status: "running",
+          });
+          useTaskStore.getState().finishTask(directTask, "done", {
+            detail:
+              "Handed to the PS5, which downloads and installs it on its own. " +
+              "Its progress and speed show on the PS5 under Downloads, not here.",
+          });
           return {
             ok: true,
             message: res.shortened
@@ -3966,12 +4089,14 @@ const makePkgLibraryStore = () =>
         })) as {
           err_code?: number;
           session_id?: string;
+          url?: string;
           err_message?: string;
           may_not_launch?: boolean;
         };
 
         const rc = (startResp.err_code ?? 0) >>> 0;
         const sessionId = startResp.session_id;
+        const servedFrom = originOf(startResp.url);
         // The engine creates a pkg-host session even when BGFT register
         // rejects (rc != 0) — but without a session_id there's nothing for
         // the daemon to fetch, so this is a hard fail.
@@ -4047,9 +4172,10 @@ const makePkgLibraryStore = () =>
           const rcHex = `0x${dpi.rc.toString(16).padStart(8, "0")}`;
           const blockedBeforeFetch = dpi.requestsServed === 0;
           const proxyRejected = dpi.rc === DPI_HTTP_PROXY_RC;
-          const detail =
-            proxyRejected || blockedBeforeFetch
-              ? `Stream was blocked before the PS5 requested any package data (${rcHex}${proxyRejected ? ", SCE_HTTP_ERROR_PROXY" : ""}). In the PS5 network's Advanced Settings, set Proxy Server to “Do Not Use”, or use Upload & install. Staged install reads the package from PS5-local storage and bypasses this HTTP/proxy path.`
+          const detail = proxyRejected
+            ? `The PS5's proxy setting blocked the stream (${rcHex}, SCE_HTTP_ERROR_PROXY). In the PS5 network's Advanced Settings, set Proxy Server to “Do Not Use”, or use Upload & install, which reads the package from PS5-local storage.`
+            : blockedBeforeFetch
+              ? streamUnreachableMessage(rcHex, servedFrom)
               : `${dpi.errMessage} (${rcHex}) after ${dpi.requestsServed} package request${dpi.requestsServed === 1 ? "" : "s"} reached this computer. Upload & install uses the more reliable PS5-local staged path.`;
           return finishStreamTask({
             ok: false,
@@ -4105,6 +4231,9 @@ const makePkgLibraryStore = () =>
                 }
               : {}),
             ...(bytesPerSec > 0 ? { rate: { bytesPerSec } } : {}),
+            ...(bytesPerSec > 0 && sample.total > current
+              ? { eta: (sample.total - current) / bytesPerSec }
+              : {}),
           });
         });
         const verdict = verdict0;

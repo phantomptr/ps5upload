@@ -107,7 +107,10 @@ export type TaskControlRef =
   // which re-runs the background verification (the Recheck action) — the
   // install itself is Sony's and cannot be cancelled from here.
   | { owner: "pkg-install"; taskId: string }
-  | { owner: "fs-bulk"; host: string };
+  | { owner: "fs-bulk"; host: string }
+  // A link being downloaded to this computer before it is installed ("Download
+  // through this computer"). Cancel stops the engine's download.
+  | { owner: "link-download"; downloadId: string };
 
 /** Per-kind specifics. Kept loose (record of string→unknown) so each
  *  feature can store what it needs without forcing a union. The typed
