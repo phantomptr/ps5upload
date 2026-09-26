@@ -140,29 +140,6 @@ pub fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-/// Sum of merged half-open [start,end) intervals; overlaps and re-reads
-/// never inflate the total.
-pub fn union_bytes(intervals: &[(u64, u64)]) -> u64 {
-    let mut ivs: Vec<(u64, u64)> = intervals.iter().copied().filter(|(s, e)| e > s).collect();
-    ivs.sort_unstable();
-    let mut total = 0u64;
-    let mut cur: Option<(u64, u64)> = None;
-    for (s, e) in ivs {
-        match cur {
-            None => cur = Some((s, e)),
-            Some((cs, ce)) if s <= ce => cur = Some((cs, ce.max(e))),
-            Some((cs, ce)) => {
-                total += ce - cs;
-                cur = Some((s, e));
-            }
-        }
-    }
-    if let Some((cs, ce)) = cur {
-        total += ce - cs;
-    }
-    total
-}
-
 /// served_bytes as MB (1_000_000) over the deliver phase in seconds.
 pub fn throughput_mbps(served_bytes: u64, deliver_ms: u64) -> f64 {
     if deliver_ms == 0 {
@@ -223,15 +200,6 @@ mod tests {
             serde_json::to_value(FailReason::LoaderUnreachable).unwrap(),
             "loader_unreachable"
         );
-    }
-
-    #[test]
-    fn union_bytes_merges_overlaps_and_rereads() {
-        assert_eq!(union_bytes(&[(0, 100), (100, 200)]), 200);
-        assert_eq!(union_bytes(&[(0, 100), (50, 150)]), 150);
-        assert_eq!(union_bytes(&[(0, 100), (0, 100)]), 100);
-        assert_eq!(union_bytes(&[(200, 300), (0, 100)]), 200);
-        assert_eq!(union_bytes(&[]), 0);
     }
 
     #[test]

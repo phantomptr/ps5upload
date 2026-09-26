@@ -1015,20 +1015,6 @@ impl RemoteSource {
         }
     }
 
-    /// Average origin throughput in bytes/sec across every window fetched so
-    /// far, or `None` before the first fetch completes. This is the DOWNLOAD
-    /// leg only — the console leg is measured separately by the pkg-host — so
-    /// the UI can name which side is slow rather than showing one blended
-    /// figure that explains nothing.
-    pub fn origin_rate_bps(&self) -> Option<u64> {
-        let bytes = self.origin_bytes.load(Ordering::Relaxed);
-        let nanos = self.origin_nanos.load(Ordering::Relaxed);
-        if bytes == 0 || nanos == 0 {
-            return None;
-        }
-        Some(((bytes as u128 * 1_000_000_000u128) / nanos as u128) as u64)
-    }
-
     /// Split a window into the work-queue's chunks: contiguous
     /// `(start, len)` spans of `chunk_bytes`, with the remainder folded into
     /// the last one so no chunk is pathologically small.

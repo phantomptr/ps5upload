@@ -188,20 +188,12 @@ use axum::{
 };
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct InstallOptions {
     #[serde(default)]
     pub delete_source_copy_after: bool,
     #[serde(default)]
     pub allow_destructive_reinstall: bool,
-}
-impl Default for InstallOptions {
-    fn default() -> Self {
-        Self {
-            delete_source_copy_after: false,
-            allow_destructive_reinstall: false,
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -626,6 +618,15 @@ fn finalize(
             metrics: st.metrics.clone(),
         };
         let _ = history::append(&history_dir(), &req.ps5_addr, &entry, history::HISTORY_CAP);
+
+        // Optional cleanup of an engine-side working copy (e.g. a Convert
+        // output) after a successful install. Never touches a file the user
+        // placed on the console themselves (console_path / remote / url).
+        if req.options.delete_source_copy_after && st.verdict == Some(Verdict::Installed) {
+            if let Source::HostFile(path) = &req.source {
+                let _ = std::fs::remove_file(path);
+            }
+        }
     }
     state.jobs.finish(job);
 }
