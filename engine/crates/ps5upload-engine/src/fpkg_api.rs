@@ -217,6 +217,7 @@ pub(crate) async fn fpkg_build_handler(
                 total.store(total_now, Ordering::Relaxed);
             }),
             cancel: Some(&cancel),
+            stage: None,
         };
         // The build's phase lines go to the engine log, where the Log tab shows them.
         let mut phase = |line: &str| {

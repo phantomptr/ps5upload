@@ -412,3 +412,35 @@ fn a_libsceampr_title_gets_an_ampr_index() {
     // The icons the container carries instead of the image are not listed.
     assert!(!listed.iter().any(|(p, _)| p == "/app0/sce_sys/icon0.png"));
 }
+
+/// A build reports its stages in order, each once: what the Convert screen's stage list shows.
+#[test]
+fn a_build_reports_its_stages_in_order() {
+    use ps5upload_fpkg::build::{BuildControl, Stage};
+    let source_dir = TempDir::new("stages-src");
+    let out = TempDir::new("stages-out");
+    write_tree(source_dir.path());
+    let mut request = BuildRequest::new(source_dir.path(), out.path());
+    request.time = Some((1_700_000_000, 0));
+    let mut seen = Vec::new();
+    let mut on_stage = |s: Stage| seen.push(s);
+    let mut control = BuildControl {
+        stage: Some(&mut on_stage),
+        ..BuildControl::default()
+    };
+    let report = build::build_controlled(&request, &mut |_| {}, &mut control).unwrap();
+    assert!(report.verify.ok());
+    let _ = control;
+    assert_eq!(
+        seen,
+        vec![
+            Stage::Check,
+            Stage::Plan,
+            Stage::Compress,
+            Stage::Write,
+            Stage::Verify
+        ]
+    );
+    assert_eq!(Stage::Compress.id(), "compress");
+    assert_eq!(Stage::Verify.index(), 4);
+}

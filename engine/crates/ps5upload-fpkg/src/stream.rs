@@ -57,6 +57,8 @@ pub struct StreamRequest<'a> {
 pub struct Progress<'a> {
     pub phase: &'a mut dyn FnMut(&str),
     pub bytes: &'a mut dyn FnMut(u64, u64),
+    /// Called as each build stage begins.
+    pub stage: &'a mut dyn FnMut(crate::build::Stage),
 }
 
 pub struct StreamedPackage {
@@ -183,6 +185,8 @@ pub fn write_package(
     let inner_size = plan.ndblock * BLOCK;
     // A compressed image is built first, into its spool: the outer image's geometry follows
     // its length, which is only known once every block is compressed.
+    // A stored build passes through this stage at once.
+    (progress.stage)(crate::build::Stage::Compress);
     let kraken = match &request.kraken_spool {
         Some(where_to) => {
             (progress.phase)("compressing the image");
@@ -260,6 +264,7 @@ pub fn write_package(
     let mut crcs: Vec<u32> = vec![0u32; 1 + lay.ndblock as usize];
 
     // ── the data blocks ──────────────────────────────────────────────────────────────
+    (progress.stage)(crate::build::Stage::Write);
     (progress.phase)("writing the image");
     let files = plan.inner_files();
     let mut file_digests = FileDigester::new(files.len());

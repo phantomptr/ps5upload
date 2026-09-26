@@ -116,6 +116,7 @@ fn the_streaming_writer_reports_progress() {
     write_tree(source.path());
     let mut samples: Vec<(u64, u64)> = Vec::new();
     let mut control = build::BuildControl {
+        stage: None,
         bytes: Some(&mut |done, total| samples.push((done, total))),
         cancel: None,
     };
@@ -561,6 +562,7 @@ fn a_cancelled_build_leaves_nothing_behind() {
     write_tree(source.path());
     let cancel = std::sync::atomic::AtomicBool::new(true);
     let mut control = build::BuildControl {
+        stage: None,
         bytes: None,
         cancel: Some(&cancel),
     };

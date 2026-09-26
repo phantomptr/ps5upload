@@ -157,13 +157,55 @@ pub struct BuildReport {
     pub warnings: Vec<String>,
 }
 
-/// Optional controls an asynchronous caller supplies: byte progress and cancellation.
+/// The stages a build goes through, in order: what a caller shows as a stage list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    /// Reading the source and its readiness checks.
+    Check,
+    /// Laying out the package.
+    Plan,
+    /// Compressing the image (a flat or stored build passes straight through).
+    Compress,
+    /// Writing the package file.
+    Write,
+    /// Reading the package back and checking it.
+    Verify,
+}
+
+/// How many [`Stage`]s a build has.
+pub const STAGE_COUNT: u32 = 5;
+
+impl Stage {
+    pub fn id(self) -> &'static str {
+        match self {
+            Stage::Check => "check",
+            Stage::Plan => "plan",
+            Stage::Compress => "compress",
+            Stage::Write => "write",
+            Stage::Verify => "verify",
+        }
+    }
+
+    pub fn index(self) -> u32 {
+        self as u32
+    }
+}
+
+fn enter(control: &mut BuildControl, stage: Stage) {
+    if let Some(f) = control.stage.as_deref_mut() {
+        f(stage);
+    }
+}
+
+/// Optional controls an asynchronous caller supplies: byte progress, stages and cancellation.
 #[derive(Default)]
 pub struct BuildControl<'a> {
     /// Bytes written of the mount image, reported as the write proceeds.
     pub bytes: Option<&'a mut dyn FnMut(u64, u64)>,
     /// Set to abort: the partial file is removed and the error says so.
     pub cancel: Option<&'a std::sync::atomic::AtomicBool>,
+    /// Called as each [`Stage`] begins.
+    pub stage: Option<&'a mut dyn FnMut(Stage)>,
 }
 
 /// Build the package. `progress` receives short phase lines.
@@ -207,6 +249,7 @@ fn build_mode(
     control: &mut BuildControl,
     mode: Mode,
 ) -> Result<BuildReport> {
+    enter(control, Stage::Check);
     let mut tree = source::open(&request.source)?;
     let mut files: Vec<SourceFile> = tree.files().to_vec();
     if files.is_empty() {
@@ -400,6 +443,7 @@ fn build_mode(
         crate::ImageMode::Native => request.seed.unwrap_or_else(random_seed),
     };
 
+    enter(control, Stage::Plan);
     progress(&format!("planning {}", tree.describe()));
     let mut plan = plan::build_tree(&files, tree.empty_dirs(), request.kraken)?;
     plan.mark_modules(|path| {
@@ -488,9 +532,15 @@ fn build_mode(
                     f(done, total);
                 }
             };
+            let mut stage = |s: Stage| {
+                if let Some(f) = control.stage.as_deref_mut() {
+                    f(s);
+                }
+            };
             let mut p = stream::Progress {
                 phase: progress,
                 bytes: &mut bytes,
+                stage: &mut stage,
             };
             let idle = std::sync::atomic::AtomicBool::new(false);
             let cancel = control.cancel.unwrap_or(&idle);
@@ -545,6 +595,8 @@ fn build_mode(
                     )),
                 }
             };
+            enter(control, Stage::Compress);
+            enter(control, Stage::Write);
             progress("writing the inner image");
             let inner = inner::write_with(
                 &plan,
@@ -697,6 +749,7 @@ fn build_mode(
         }
     };
 
+    enter(control, Stage::Verify);
     progress("verifying");
     // The streaming verifier reads the package block by block, so the self-check of a
     // 155 GB package does not need 155 GB of memory.
