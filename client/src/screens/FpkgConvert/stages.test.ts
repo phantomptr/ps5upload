@@ -12,6 +12,7 @@ const base = {
   jobId: "j",
   installTaskId: null,
   taskId: null,
+  copiedSource: null,
   packagePath: null,
   titleId: null,
 };
@@ -83,5 +84,14 @@ describe("stageRows", () => {
     expect(p).toBeGreaterThan(0.3);
     expect(p).toBeLessThan(0.45);
     expect(overallProgress(stageRows({ phase: "idle" }, null))).toBe(0);
+  });
+
+  it("lists the copy first for a game on a saved server", () => {
+    const rows = stageRows(
+      { phase: "running", ...base, source: "remote://nas-1/g", mode: "convert", stage: "copy", stageDone: 5, stageTotal: 10, stageMs: {} },
+      null,
+    );
+    expect(rows.map((r) => r.stage)).toEqual(["copy", "check", "plan", "compress", "write", "verify"]);
+    expect(rows[0]).toMatchObject({ state: "active", done: 5, total: 10 });
   });
 });

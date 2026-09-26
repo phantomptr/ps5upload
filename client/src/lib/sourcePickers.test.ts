@@ -23,6 +23,7 @@ describe("source pickers reach saved servers", () => {
     ["screens/FileSystem/index.tsx", 1],
     ["screens/Payloads/SendPanel.tsx", 1],
     ["screens/Payloads/PlaylistsPanel.tsx", 1],
+    ["screens/FpkgConvert/GameCard.tsx", 2],
   ])("%s offers servers on its source picker", (file, n) => {
     expect(remoteButtons(src(file))).toBe(n);
   });

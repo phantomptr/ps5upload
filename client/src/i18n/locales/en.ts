@@ -3521,6 +3521,8 @@ v5_home_servers: "Servers",
 v5_home_servers_empty: "Pick games straight from your NAS or a shared folder, over SMB, FTP or SFTP.",
 v5_home_servers_connect: "Connect a NAS or server",
 v5_qa_connect_server: "Connect a server",
+"fpkg.stage.copy": "Copy from server",
+"fpkg.remoteSource": "on a server. It is copied to this computer when you start.",
 };
 
 export default en;

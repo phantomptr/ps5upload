@@ -10,8 +10,12 @@ import { useConnectionStore } from "./connection";
 import { pushNotification } from "./notifications";
 import { pkgLibraryStore } from "./pkgLibrary";
 import { useTaskStore } from "./tasks";
+import { remoteApi } from "../api/remote";
+import { fetchRemote } from "../lib/materialize";
+import { isRemotePath } from "../lib/remotePath";
 
 export type PipelineStage =
+  | "copy"
   | "check"
   | "plan"
   | "compress"
@@ -47,6 +51,8 @@ export type Pipeline =
       packagePath: string | null;
       /** The package's title id, from the build's content id (what Launch starts). */
       titleId: string | null;
+      /** A server source copied to this computer for the build; removed once it succeeds. */
+      copiedSource: string | null;
     }
   | {
       phase: "done";
@@ -96,6 +102,7 @@ type Running = Extract<Pipeline, { phase: "running" }>;
 
 /** The stage names Convert's progress card shows. */
 const STAGE_LABEL: Record<PipelineStage, string> = {
+  copy: "Copy from server",
   check: "Check source",
   plan: "Plan package",
   compress: "Compress",
@@ -183,6 +190,7 @@ function finish(packagePath: string, packageBytes: number, convertMs: number) {
   const p = running();
   if (!p) return;
   if (p.taskId) useTaskStore.getState().finishTask(p.taskId, "done");
+  dropCopy(p);
   const now = Date.now();
   useFpkgConversion.setState({
     pipeline: {
@@ -228,6 +236,7 @@ function installDone(packagePath: string, convertMs: number, installMs: number) 
   const p = running();
   if (!p) return;
   if (p.taskId) useTaskStore.getState().finishTask(p.taskId, "done");
+  dropCopy(p);
   const now = Date.now();
   useFpkgConversion.setState({
     pipeline: {
@@ -336,8 +345,46 @@ function beginRun(mode: PipelineMode, source: string, host: string | null, stage
       taskId,
       packagePath: null,
       titleId: null,
+      copiedSource: null,
     },
   });
+}
+
+/** Build from a local copy of a source on a saved server: copy it (a stage of this run, with
+ *  progress and Cancel) into the output folder, then start the job `startJob` makes. */
+async function copyThenStart(
+  source: string,
+  outputDir: string | undefined,
+  startJob: (local: string) => Promise<{ job_id: string }>,
+  install: boolean,
+) {
+  let local: string;
+  try {
+    local = await fetchRemote(source, {
+      destDir: outputDir ? `${outputDir.replace(/[\\/]+$/, "")}/.ps5upload-source` : undefined,
+      pollMs: POLL_MS,
+      onJob: (id) => update({ jobId: id }),
+      onProgress: (done, total) => enterStage("copy", done, total),
+    });
+  } catch (error) {
+    fail("copy", error instanceof Error ? error.message : String(error), null);
+    return;
+  }
+  if (!running()) return;
+  update({ copiedSource: local, jobId: null });
+  enterStage("check");
+  try {
+    const { job_id } = await startJob(local);
+    update({ jobId: job_id });
+    poll(job_id, install);
+  } catch (error) {
+    fail("check", error instanceof Error ? error.message : String(error), null);
+  }
+}
+
+/** The copy of a server source is only scaffolding; drop it once the build has what it needs. */
+function dropCopy(p: Running) {
+  if (p.copiedSource) void remoteApi.cleanupFetched(p.copiedSource).catch(() => {});
 }
 
 /** "UP4433-PPSA17221_00-MINECRAFTPS50000" → "PPSA17221". */
@@ -356,6 +403,11 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
 
   start: async (req, { install, host }) => {
     if (get().pipeline.phase === "running") return;
+    if (isRemotePath(req.source)) {
+      beginRun(install ? "convert-install" : "convert", req.source, host, "copy");
+      void copyThenStart(req.source, req.outputDir, (local) => fpkg.build({ ...req, source: local }), install);
+      return;
+    }
     beginRun(install ? "convert-install" : "convert", req.source, host, "check");
     try {
       const { job_id } = await fpkg.build(req);
@@ -368,6 +420,11 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
 
   compress: async (source, outputDir) => {
     if (get().pipeline.phase === "running") return;
+    if (isRemotePath(source)) {
+      beginRun("ffpfsc", source, null, "copy");
+      void copyThenStart(source, outputDir, (local) => fpkg.compress(local, outputDir), false);
+      return;
+    }
     beginRun("ffpfsc", source, null, "compress");
     try {
       const { job_id } = await fpkg.compress(source, outputDir);

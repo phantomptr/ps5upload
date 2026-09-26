@@ -39,6 +39,14 @@ vi.mock("./pkgLibrary", () => ({
   }),
 }));
 vi.mock("./notifications", () => ({ pushNotification: vi.fn() }));
+const remoteFetch = vi.fn();
+const cleanupFetched = vi.fn(async () => {});
+vi.mock("../api/remote", () => ({
+  remoteApi: {
+    fetch: (...a: unknown[]) => remoteFetch(...a),
+    cleanupFetched: (...a: unknown[]) => cleanupFetched(...(a as [])),
+  },
+}));
 // The console of the moment: what the connection bar says when the install starts.
 const conn = { host: "10.0.0.2", payloadStatus: "up" };
 vi.mock("./connection", () => ({ useConnectionStore: { getState: () => conn } }));
@@ -58,6 +66,8 @@ describe("fpkg pipeline", () => {
     build.mockReset().mockResolvedValue({ job_id: "j1" });
     jobStatus.mockReset();
     installStream.mockReset();
+    remoteFetch.mockReset().mockResolvedValue({ job_id: "c1" });
+    cleanupFetched.mockClear();
     deletePackage.mockClear();
     conn.host = "10.0.0.2";
     conn.payloadStatus = "up";
@@ -310,5 +320,42 @@ describe("fpkg pipeline", () => {
     expect(taskCapabilities(second).canCancel).toBe(true);
     expect(taskCapabilities(first).canCancel).toBe(false);
     expect(await commandTask(first, "cancel")).toBe(false);
+  });
+
+  it("copies a server source first, builds the copy, then removes the copy", async () => {
+    jobStatus
+      .mockResolvedValueOnce({ status: "running", bytes_sent: 5, total_bytes: 10 })
+      .mockResolvedValueOnce({ status: "done", dest: "/out/.ps5upload-source/a", bytes_sent: 10 })
+      .mockResolvedValueOnce({ status: "done", dest: "/out/a.pkg", bytes_sent: 1 });
+    await useFpkgConversion
+      .getState()
+      .start({ source: "remote://nas-1/games/a", outputDir: "/out" }, { install: false, host: null });
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "running", stage: "copy" });
+    expect(remoteFetch).toHaveBeenCalledWith("remote://nas-1/games/a", "/out/.ps5upload-source");
+    await tick();
+    await tick();
+    expect(build).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "/out/.ps5upload-source/a", outputDir: "/out" }),
+    );
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "done",
+      source: "remote://nas-1/games/a",
+    });
+    expect(cleanupFetched).toHaveBeenCalledWith("/out/.ps5upload-source/a");
+  });
+
+  it("fails at the copy when the server copy fails, and keeps nothing to clean", async () => {
+    jobStatus.mockResolvedValueOnce({ status: "failed", error: "Can't reach 10.0.0.9" });
+    await useFpkgConversion
+      .getState()
+      .start({ source: "remote://nas-1/games/a", outputDir: "/out" }, { install: false, host: null });
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "failed",
+      stage: "copy",
+      message: "Can't reach 10.0.0.9",
+    });
+    expect(build).not.toHaveBeenCalled();
   });
 });

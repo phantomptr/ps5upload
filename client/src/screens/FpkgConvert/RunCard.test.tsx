@@ -101,6 +101,7 @@ describe("RunCard", () => {
       jobId: "j",
       installTaskId: null,
       taskId: null,
+      copiedSource: null,
       packagePath: null,
       titleId: null,
     });
@@ -182,6 +183,7 @@ describe("RunCard", () => {
       jobId: "j",
       installTaskId: null,
       taskId: null,
+      copiedSource: null,
       packagePath: null,
       titleId: null,
     });

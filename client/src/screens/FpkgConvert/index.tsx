@@ -6,6 +6,7 @@
 // remembered options, and hands every action the exact package the run names.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { isRemotePath } from "../../lib/remotePath";
 
 import { PackagePlus } from "lucide-react";
 
@@ -77,6 +78,16 @@ export default function FpkgConvertScreen() {
   const check = useCallback(
     async (path: string) => {
       if (!path.trim()) return;
+      // A game on a saved server is read when the run copies it here; looking inside it now
+      // would mean copying it all twice.
+      if (isRemotePath(path.trim())) {
+        latest.current.begin();
+        setInspection(null);
+        setEstimates(null);
+        setChecking(false);
+        setError(null);
+        return;
+      }
       const token = latest.current.begin();
       setChecking(true);
       setError(null);
@@ -248,6 +259,7 @@ export default function FpkgConvertScreen() {
         onCheck={() => void check(source)}
         onBrowseFolder={() => void browse("folder")}
         onBrowseImage={() => void browse("file")}
+        onRemotePick={chooseSource}
         canBrowse={canBrowse}
         inspection={inspection}
         checking={checking}

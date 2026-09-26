@@ -3,7 +3,9 @@
 import { FolderInput } from "lucide-react";
 
 import type { FpkgInspection } from "../../api/fpkg";
-import { Button, Card, Input } from "../../components";
+import { Card, Input } from "../../components";
+import { BrowseButton, PathLabel } from "../../components/BrowseButton";
+import { isRemotePath } from "../../lib/remotePath";
 import { useTr } from "../../state/lang";
 import { prettyBytes } from "./RunCard";
 
@@ -42,6 +44,8 @@ export interface GameCardProps {
   onCheck: () => void;
   onBrowseFolder: () => void;
   onBrowseImage: () => void;
+  /** A folder or image picked on a saved server. */
+  onRemotePick: (path: string) => void;
   canBrowse: boolean;
   inspection: FpkgInspection | null;
   checking: boolean;
@@ -73,12 +77,25 @@ export function GameCard(props: GameCardProps) {
           </div>
           {props.canBrowse && (
             <div className="flex flex-wrap justify-center gap-2">
-              <Button onClick={props.onBrowseFolder} disabled={props.locked || props.checking}>
-                {tr("fpkg.browseFolder", undefined, "Folder…")}
-              </Button>
-              <Button onClick={props.onBrowseImage} disabled={props.locked || props.checking}>
-                {tr("fpkg.browseImage", undefined, "Image…")}
-              </Button>
+              <BrowseButton
+                mode="folder"
+                remote
+                label={tr("fpkg.browseFolder", undefined, "Folder…")}
+                title={tr("fpkg.pickFolder", undefined, "Choose the game folder")}
+                disabled={props.locked || props.checking}
+                onMainClick={props.onBrowseFolder}
+                onPick={props.onRemotePick}
+              />
+              <BrowseButton
+                mode="file"
+                remote
+                label={tr("fpkg.browseImage", undefined, "Image…")}
+                title={tr("fpkg.pickImage", undefined, "Choose an .exfat or .ffpkg image")}
+                filters={[{ name: "Game image", extensions: ["exfat", "ffpkg"] }]}
+                disabled={props.locked || props.checking}
+                onMainClick={props.onBrowseImage}
+                onPick={props.onRemotePick}
+              />
             </div>
           )}
         </div>
@@ -99,6 +116,19 @@ export function GameCard(props: GameCardProps) {
             />
           </div>
         </div>
+        {isRemotePath(props.source) && !props.locked && (
+          <div className="flex items-center gap-1 text-sm text-[var(--color-muted)]">
+            <PathLabel path={props.source} />
+            <span>
+              {"— "}
+              {tr(
+                "fpkg.remoteSource",
+                undefined,
+                "on a server. It is copied to this computer when you start.",
+              )}
+            </span>
+          </div>
+        )}
         {props.checking && (
           <div className="text-sm text-[var(--color-muted)]">
             {tr("fpkg.checking", undefined, "Checking…")}

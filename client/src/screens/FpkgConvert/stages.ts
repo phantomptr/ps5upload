@@ -3,6 +3,7 @@
 
 import type { Pipeline, PipelineMode, PipelineStage } from "../../state/fpkgConversion";
 import type { Task } from "../../state/tasks";
+import { isRemotePath } from "../../lib/remotePath";
 
 export type RowState = "pending" | "active" | "done" | "failed";
 
@@ -21,6 +22,7 @@ const INSTALL: readonly PipelineStage[] = ["send", "install"];
 
 /** Share of the whole run each stage stands for (compressing dominates a build). */
 const WEIGHT: Record<PipelineStage, number> = {
+  copy: 25,
   check: 2,
   plan: 2,
   compress: 55,
@@ -30,14 +32,15 @@ const WEIGHT: Record<PipelineStage, number> = {
   install: 5,
 };
 
-function stagesFor(mode: PipelineMode): readonly PipelineStage[] {
+function stagesFor(mode: PipelineMode, source: string): readonly PipelineStage[] {
+  const copy: PipelineStage[] = mode !== "install" && isRemotePath(source) ? ["copy"] : [];
   switch (mode) {
     case "convert-install":
-      return [...BUILD, ...INSTALL];
+      return [...copy, ...BUILD, ...INSTALL];
     case "install":
       return INSTALL;
     default:
-      return BUILD;
+      return [...copy, ...BUILD];
   }
 }
 
@@ -49,7 +52,7 @@ function installStage(task: Task | null): PipelineStage {
 
 export function stageRows(p: Pipeline, installTask: Task | null): StageRow[] {
   if (p.phase === "idle") return [];
-  const stages = stagesFor(p.mode);
+  const stages = stagesFor(p.mode, p.source);
   const withMs = (stage: PipelineStage, state: RowState): StageRow =>
     p.stageMs[stage] !== undefined ? { stage, state, ms: p.stageMs[stage] } : { stage, state };
   if (p.phase === "done") return stages.map((s) => withMs(s, "done"));
@@ -65,7 +68,7 @@ export function stageRows(p: Pipeline, installTask: Task | null): StageRow[] {
     if (s === "send" && installTask?.progress) {
       return { stage: s, state: "active", done: installTask.progress.current, total: installTask.progress.total };
     }
-    if (BUILD.includes(s) && p.stageTotal > 0) {
+    if ((BUILD.includes(s) || s === "copy") && p.stageTotal > 0) {
       return { stage: s, state: "active", done: p.stageDone, total: p.stageTotal };
     }
     return { stage: s, state: "active" };

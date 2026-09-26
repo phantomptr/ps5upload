@@ -360,7 +360,9 @@
       "v5_home_servers",
       "v5_home_servers_empty",
       "v5_home_servers_connect",
-      "v5_qa_connect_server"
+      "v5_qa_connect_server",
+      "fpkg.stage.copy",
+      "fpkg.remoteSource"
     ],
     "stale": [],
     "untranslated": [
@@ -731,7 +733,9 @@
       "v5_home_servers",
       "v5_home_servers_empty",
       "v5_home_servers_connect",
-      "v5_qa_connect_server"
+      "v5_qa_connect_server",
+      "fpkg.stage.copy",
+      "fpkg.remoteSource"
     ],
     "stale": [],
     "untranslated": [
@@ -1103,7 +1107,9 @@
       "v5_home_servers",
       "v5_home_servers_empty",
       "v5_home_servers_connect",
-      "v5_qa_connect_server"
+      "v5_qa_connect_server",
+      "fpkg.stage.copy",
+      "fpkg.remoteSource"
     ],
     "stale": [],
     "untranslated": [
@@ -1482,7 +1488,9 @@
       "v5_home_servers",
       "v5_home_servers_empty",
       "v5_home_servers_connect",
-      "v5_qa_connect_server"
+      "v5_qa_connect_server",
+      "fpkg.stage.copy",
+      "fpkg.remoteSource"
     ],
     "stale": [],
     "untranslated": [
@@ -1857,7 +1865,9 @@
       "v5_home_servers",
       "v5_home_servers_empty",
       "v5_home_servers_connect",
-      "v5_qa_connect_server"
+      "v5_qa_connect_server",
+      "fpkg.stage.copy",
+      "fpkg.remoteSource"
     ],
     "stale": [],
     "untranslated": [
@@ -2234,7 +2244,9 @@
       "v5_home_servers",
       "v5_home_servers_empty",
       "v5_home_servers_connect",
-      "v5_qa_connect_server"
+      "v5_qa_connect_server",
+      "fpkg.stage.copy",
+      "fpkg.remoteSource"
     ],
     "stale": [],
     "untranslated": [
@@ -2372,7 +2384,9 @@
       "v5_home_servers",
       "v5_home_servers_empty",
       "v5_home_servers_connect",
-      "v5_qa_connect_server"
+      "v5_qa_connect_server",
+      "fpkg.stage.copy",
+      "fpkg.remoteSource"
     ],
     "stale": [],
     "untranslated": [
@@ -2755,7 +2769,9 @@
       "v5_home_servers",
       "v5_home_servers_empty",
       "v5_home_servers_connect",
-      "v5_qa_connect_server"
+      "v5_qa_connect_server",
+      "fpkg.stage.copy",
+      "fpkg.remoteSource"
     ],
     "stale": [],
     "untranslated": [
@@ -3132,7 +3148,9 @@
       "v5_home_servers",
       "v5_home_servers_empty",
       "v5_home_servers_connect",
-      "v5_qa_connect_server"
+      "v5_qa_connect_server",
+      "fpkg.stage.copy",
+      "fpkg.remoteSource"
     ],
     "stale": [],
     "untranslated": [
@@ -3508,7 +3526,9 @@
       "v5_home_servers",
       "v5_home_servers_empty",
       "v5_home_servers_connect",
-      "v5_qa_connect_server"
+      "v5_qa_connect_server",
+      "fpkg.stage.copy",
+      "fpkg.remoteSource"
     ],
     "stale": [],
     "untranslated": [
@@ -3882,7 +3902,9 @@
       "v5_home_servers",
       "v5_home_servers_empty",
       "v5_home_servers_connect",
-      "v5_qa_connect_server"
+      "v5_qa_connect_server",
+      "fpkg.stage.copy",
+      "fpkg.remoteSource"
     ],
     "stale": [],
     "untranslated": [
@@ -4254,7 +4276,9 @@
       "v5_home_servers",
       "v5_home_servers_empty",
       "v5_home_servers_connect",
-      "v5_qa_connect_server"
+      "v5_qa_connect_server",
+      "fpkg.stage.copy",
+      "fpkg.remoteSource"
     ],
     "stale": [],
     "untranslated": [
@@ -4627,7 +4651,9 @@
       "v5_home_servers",
       "v5_home_servers_empty",
       "v5_home_servers_connect",
-      "v5_qa_connect_server"
+      "v5_qa_connect_server",
+      "fpkg.stage.copy",
+      "fpkg.remoteSource"
     ],
     "stale": [],
     "untranslated": [
@@ -5005,7 +5031,9 @@
       "v5_home_servers",
       "v5_home_servers_empty",
       "v5_home_servers_connect",
-      "v5_qa_connect_server"
+      "v5_qa_connect_server",
+      "fpkg.stage.copy",
+      "fpkg.remoteSource"
     ],
     "stale": [],
     "untranslated": [
@@ -5378,7 +5406,9 @@
       "v5_home_servers",
       "v5_home_servers_empty",
       "v5_home_servers_connect",
-      "v5_qa_connect_server"
+      "v5_qa_connect_server",
+      "fpkg.stage.copy",
+      "fpkg.remoteSource"
     ],
     "stale": [],
     "untranslated": [
@@ -5750,7 +5780,9 @@
       "v5_home_servers",
       "v5_home_servers_empty",
       "v5_home_servers_connect",
-      "v5_qa_connect_server"
+      "v5_qa_connect_server",
+      "fpkg.stage.copy",
+      "fpkg.remoteSource"
     ],
     "stale": [],
     "untranslated": [
@@ -6124,7 +6156,9 @@
       "v5_home_servers",
       "v5_home_servers_empty",
       "v5_home_servers_connect",
-      "v5_qa_connect_server"
+      "v5_qa_connect_server",
+      "fpkg.stage.copy",
+      "fpkg.remoteSource"
     ],
     "stale": [],
     "untranslated": [
@@ -6499,7 +6533,9 @@
       "v5_home_servers",
       "v5_home_servers_empty",
       "v5_home_servers_connect",
-      "v5_qa_connect_server"
+      "v5_qa_connect_server",
+      "fpkg.stage.copy",
+      "fpkg.remoteSource"
     ],
     "stale": [],
     "untranslated": [
@@ -6871,7 +6907,9 @@
       "v5_home_servers",
       "v5_home_servers_empty",
       "v5_home_servers_connect",
-      "v5_qa_connect_server"
+      "v5_qa_connect_server",
+      "fpkg.stage.copy",
+      "fpkg.remoteSource"
     ],
     "stale": [],
     "untranslated": [
