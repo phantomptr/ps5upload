@@ -287,7 +287,11 @@
       "fpkg.checking",
       "fpkg.fileCount",
       "fpkg.checksPassed",
-      "fpkg.showChecks"
+      "fpkg.showChecks",
+      "fpkg.timeLeft",
+      "fpkg.installedTitle",
+      "fpkg.ratio",
+      "fpkg.launchUnknown"
     ],
     "stale": [],
     "untranslated": [
@@ -585,7 +589,11 @@
       "fpkg.checking",
       "fpkg.fileCount",
       "fpkg.checksPassed",
-      "fpkg.showChecks"
+      "fpkg.showChecks",
+      "fpkg.timeLeft",
+      "fpkg.installedTitle",
+      "fpkg.ratio",
+      "fpkg.launchUnknown"
     ],
     "stale": [],
     "untranslated": [
@@ -884,7 +892,11 @@
       "fpkg.checking",
       "fpkg.fileCount",
       "fpkg.checksPassed",
-      "fpkg.showChecks"
+      "fpkg.showChecks",
+      "fpkg.timeLeft",
+      "fpkg.installedTitle",
+      "fpkg.ratio",
+      "fpkg.launchUnknown"
     ],
     "stale": [],
     "untranslated": [
@@ -1190,7 +1202,11 @@
       "fpkg.checking",
       "fpkg.fileCount",
       "fpkg.checksPassed",
-      "fpkg.showChecks"
+      "fpkg.showChecks",
+      "fpkg.timeLeft",
+      "fpkg.installedTitle",
+      "fpkg.ratio",
+      "fpkg.launchUnknown"
     ],
     "stale": [],
     "untranslated": [
@@ -1492,7 +1508,11 @@
       "fpkg.checking",
       "fpkg.fileCount",
       "fpkg.checksPassed",
-      "fpkg.showChecks"
+      "fpkg.showChecks",
+      "fpkg.timeLeft",
+      "fpkg.installedTitle",
+      "fpkg.ratio",
+      "fpkg.launchUnknown"
     ],
     "stale": [],
     "untranslated": [
@@ -1796,7 +1816,11 @@
       "fpkg.checking",
       "fpkg.fileCount",
       "fpkg.checksPassed",
-      "fpkg.showChecks"
+      "fpkg.showChecks",
+      "fpkg.timeLeft",
+      "fpkg.installedTitle",
+      "fpkg.ratio",
+      "fpkg.launchUnknown"
     ],
     "stale": [],
     "untranslated": [
@@ -1861,7 +1885,11 @@
       "fpkg.checking",
       "fpkg.fileCount",
       "fpkg.checksPassed",
-      "fpkg.showChecks"
+      "fpkg.showChecks",
+      "fpkg.timeLeft",
+      "fpkg.installedTitle",
+      "fpkg.ratio",
+      "fpkg.launchUnknown"
     ],
     "stale": [],
     "untranslated": [
@@ -2171,7 +2199,11 @@
       "fpkg.checking",
       "fpkg.fileCount",
       "fpkg.checksPassed",
-      "fpkg.showChecks"
+      "fpkg.showChecks",
+      "fpkg.timeLeft",
+      "fpkg.installedTitle",
+      "fpkg.ratio",
+      "fpkg.launchUnknown"
     ],
     "stale": [],
     "untranslated": [
@@ -2475,7 +2507,11 @@
       "fpkg.checking",
       "fpkg.fileCount",
       "fpkg.checksPassed",
-      "fpkg.showChecks"
+      "fpkg.showChecks",
+      "fpkg.timeLeft",
+      "fpkg.installedTitle",
+      "fpkg.ratio",
+      "fpkg.launchUnknown"
     ],
     "stale": [],
     "untranslated": [
@@ -2778,7 +2814,11 @@
       "fpkg.checking",
       "fpkg.fileCount",
       "fpkg.checksPassed",
-      "fpkg.showChecks"
+      "fpkg.showChecks",
+      "fpkg.timeLeft",
+      "fpkg.installedTitle",
+      "fpkg.ratio",
+      "fpkg.launchUnknown"
     ],
     "stale": [],
     "untranslated": [
@@ -3079,7 +3119,11 @@
       "fpkg.checking",
       "fpkg.fileCount",
       "fpkg.checksPassed",
-      "fpkg.showChecks"
+      "fpkg.showChecks",
+      "fpkg.timeLeft",
+      "fpkg.installedTitle",
+      "fpkg.ratio",
+      "fpkg.launchUnknown"
     ],
     "stale": [],
     "untranslated": [
@@ -3378,7 +3422,11 @@
       "fpkg.checking",
       "fpkg.fileCount",
       "fpkg.checksPassed",
-      "fpkg.showChecks"
+      "fpkg.showChecks",
+      "fpkg.timeLeft",
+      "fpkg.installedTitle",
+      "fpkg.ratio",
+      "fpkg.launchUnknown"
     ],
     "stale": [],
     "untranslated": [
@@ -3678,7 +3726,11 @@
       "fpkg.checking",
       "fpkg.fileCount",
       "fpkg.checksPassed",
-      "fpkg.showChecks"
+      "fpkg.showChecks",
+      "fpkg.timeLeft",
+      "fpkg.installedTitle",
+      "fpkg.ratio",
+      "fpkg.launchUnknown"
     ],
     "stale": [],
     "untranslated": [
@@ -3983,7 +4035,11 @@
       "fpkg.checking",
       "fpkg.fileCount",
       "fpkg.checksPassed",
-      "fpkg.showChecks"
+      "fpkg.showChecks",
+      "fpkg.timeLeft",
+      "fpkg.installedTitle",
+      "fpkg.ratio",
+      "fpkg.launchUnknown"
     ],
     "stale": [],
     "untranslated": [
@@ -4283,7 +4339,11 @@
       "fpkg.checking",
       "fpkg.fileCount",
       "fpkg.checksPassed",
-      "fpkg.showChecks"
+      "fpkg.showChecks",
+      "fpkg.timeLeft",
+      "fpkg.installedTitle",
+      "fpkg.ratio",
+      "fpkg.launchUnknown"
     ],
     "stale": [],
     "untranslated": [
@@ -4582,7 +4642,11 @@
       "fpkg.checking",
       "fpkg.fileCount",
       "fpkg.checksPassed",
-      "fpkg.showChecks"
+      "fpkg.showChecks",
+      "fpkg.timeLeft",
+      "fpkg.installedTitle",
+      "fpkg.ratio",
+      "fpkg.launchUnknown"
     ],
     "stale": [],
     "untranslated": [
@@ -4883,7 +4947,11 @@
       "fpkg.checking",
       "fpkg.fileCount",
       "fpkg.checksPassed",
-      "fpkg.showChecks"
+      "fpkg.showChecks",
+      "fpkg.timeLeft",
+      "fpkg.installedTitle",
+      "fpkg.ratio",
+      "fpkg.launchUnknown"
     ],
     "stale": [],
     "untranslated": [
@@ -5185,7 +5253,11 @@
       "fpkg.checking",
       "fpkg.fileCount",
       "fpkg.checksPassed",
-      "fpkg.showChecks"
+      "fpkg.showChecks",
+      "fpkg.timeLeft",
+      "fpkg.installedTitle",
+      "fpkg.ratio",
+      "fpkg.launchUnknown"
     ],
     "stale": [],
     "untranslated": [
@@ -5484,7 +5556,11 @@
       "fpkg.checking",
       "fpkg.fileCount",
       "fpkg.checksPassed",
-      "fpkg.showChecks"
+      "fpkg.showChecks",
+      "fpkg.timeLeft",
+      "fpkg.installedTitle",
+      "fpkg.ratio",
+      "fpkg.launchUnknown"
     ],
     "stale": [],
     "untranslated": [

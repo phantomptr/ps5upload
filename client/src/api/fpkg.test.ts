@@ -10,3 +10,10 @@ describe("fpkg.deletePackage", () => {
     expect(invoke).toHaveBeenCalledWith("fpkg_delete", { path: "/out/PPSA01234.pkg" });
   });
 });
+
+describe("fpkg.estimate", () => {
+  it("asks for the estimates on their own, apart from the check", async () => {
+    await fpkg.estimate("/games/a");
+    expect(invoke).toHaveBeenCalledWith("fpkg_estimate", { source: "/games/a" });
+  });
+});

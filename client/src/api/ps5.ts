@@ -4085,6 +4085,8 @@ export interface JobSnapshot {
   status: JobStatus;
   /** Present on a running job that reports stages (an FPKG build). */
   stage?: JobStageSnapshot;
+  /** A finished FPKG build's content id (the transfer id field, reused). */
+  tx_id_hex?: string;
   started_at_ms?: number;
   elapsed_ms?: number;
   /** Populated for `running` (live counter, 200 ms cadence) AND `done`

@@ -1,6 +1,8 @@
 // Card ③ Build & install: the start buttons, then the stage list while a run goes, then the
 // result with the actions that fit it. Every action targets the package the pipeline names.
 
+import { useEffect, useState } from "react";
+
 import { CheckCircle2, Circle, Loader2, XCircle } from "lucide-react";
 
 import { Button, Card, ProgressBar } from "../../components";
@@ -22,6 +24,11 @@ export function prettyDuration(ms: number): string {
   const m = Math.floor(s / 60);
   if (m < 60) return `${m} min ${s % 60} s`;
   return `${Math.floor(m / 60)} h ${m % 60} min`;
+}
+
+/** Bytes per second over `ms`, or 0 when too little time has passed to say. */
+export function rateOf(bytes: number, ms: number): number {
+  return ms >= 1000 ? (bytes * 1000) / ms : 0;
 }
 
 /** The delete button's label: the first press arms it, the second confirms. */
@@ -51,6 +58,10 @@ export interface RunCardProps {
   /** The source is an .exfat / .ffpkg image (it can also become a .ffpfsc). */
   isImage: boolean;
   deleteArmed: boolean;
+  /** The game's title, for the result line. */
+  title?: string | null;
+  /** The game's size, for the package's share of it. */
+  sourceBytes?: number;
   onConvert: () => void;
   onConvertInstall: () => void;
   onCompress: () => void;
@@ -76,11 +87,42 @@ function RowIcon({ state }: { state: StageRow["state"] }) {
   }
 }
 
+/** The current time, ticking once a second while `live` (speeds and times left move). */
+function useNow(live: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!live) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [live]);
+  return now;
+}
+
 export function RunCard(props: RunCardProps) {
   const tr = useTr();
   const { pipeline: p, installTask } = props;
+  const now = useNow(p.phase === "running");
   const rows = stageRows(p, installTask);
   const label = (s: PipelineStage) => tr(LABEL[s][0], undefined, LABEL[s][1]);
+
+  /** " · 96 MiB/s · 21 min left" for the active row: the install task's figures while sending,
+   *  else measured from the stage's own bytes since it began. */
+  const speedAndEta = (r: StageRow): string => {
+    const remaining = (r.total ?? 0) - (r.done ?? 0);
+    let rate = 0;
+    let eta = 0;
+    if (r.stage === "send") {
+      rate = installTask?.rate?.bytesPerSec ?? 0;
+      eta = (installTask?.eta ?? 0) * 1000;
+    } else if (p.phase === "running") {
+      rate = rateOf(r.done ?? 0, now - p.stageStartedMs);
+      eta = rate > 0 ? (remaining / rate) * 1000 : 0;
+    }
+    return (
+      (rate > 0 ? ` · ${prettyBytes(rate)}/s` : "") +
+      (eta > 0 ? ` · ${tr("fpkg.timeLeft", { time: prettyDuration(eta) }, "{time} left")}` : "")
+    );
+  };
 
   const title = (
     <div className="text-sm font-medium">
@@ -133,10 +175,7 @@ export function RunCard(props: RunCardProps) {
             {r.state === "active" && r.total ? (
               <span className="text-xs text-[var(--color-muted)]">
                 {prettyBytes(r.done ?? 0)} / {prettyBytes(r.total)}
-                {r.stage === "send" && installTask?.rate?.bytesPerSec
-                  ? ` · ${prettyBytes(installTask.rate.bytesPerSec)}/s`
-                  : ""}
-                {r.stage === "send" && installTask?.eta ? ` · ${prettyDuration(installTask.eta * 1000)}` : ""}
+                {speedAndEta(r)}
               </span>
             ) : null}
           </div>
@@ -165,7 +204,16 @@ export function RunCard(props: RunCardProps) {
             label={tr("fpkg.overall", undefined, "Overall")}
           />
           <div className="flex items-center justify-between text-xs text-[var(--color-muted)]">
-            <span>{Math.round(overallProgress(rows) * 100)}%</span>
+            <span>
+              {Math.round(overallProgress(rows) * 100)}%
+              {(() => {
+                const f = overallProgress(rows);
+                const elapsed = now - p.startedMs;
+                return f > 0.02 && elapsed > 5000
+                  ? ` · ${tr("fpkg.timeLeft", { time: prettyDuration((elapsed / f) * (1 - f)) }, "{time} left")}`
+                  : "";
+              })()}
+            </span>
             {building && p.jobId && (
               <Button variant="danger" onClick={props.onCancel}>
                 {tr("fpkg.cancel", undefined, "Cancel")}
@@ -214,13 +262,28 @@ export function RunCard(props: RunCardProps) {
         {stageList}
         <div className="text-sm font-medium text-[var(--color-good)]">
           {installed
-            ? tr("fpkg.installedOn", { host: p.host ?? "" }, "Installed on the PS5 ({host})")
+            ? props.title
+              ? tr("fpkg.installedTitle", { title: props.title }, "Installed on PS5 — {title}")
+              : tr("fpkg.installedOn", { host: p.host ?? "" }, "Installed on the PS5 ({host})")
             : p.mode === "ffpfsc"
               ? tr("fpkg.compressed", undefined, "Compressed image written and verified")
               : tr("fpkg.done", undefined, "Package written")}
         </div>
         <div className="text-sm text-[var(--color-muted)]">
           {p.packageBytes > 0 && <span>{prettyBytes(p.packageBytes)}</span>}
+          {p.packageBytes > 0 && props.sourceBytes ? (
+            <span>
+              {" "}
+              {tr(
+                "fpkg.ratio",
+                {
+                  pct: Math.round((p.packageBytes / props.sourceBytes) * 100),
+                  size: prettyBytes(props.sourceBytes),
+                },
+                "({pct}% of {size})",
+              )}
+            </span>
+          ) : null}
           {p.convertMs > 0 && (
             <span>
               {" · "}

@@ -29,7 +29,10 @@ const actions = {
   onAnother: noop,
 };
 
-function html(pipeline: Pipeline, opts: { canInstall?: boolean; isImage?: boolean } = {}) {
+function html(
+  pipeline: Pipeline,
+  opts: { canInstall?: boolean; isImage?: boolean; title?: string; sourceBytes?: number } = {},
+) {
   return renderToStaticMarkup(
     <RunCard
       pipeline={pipeline}
@@ -38,6 +41,8 @@ function html(pipeline: Pipeline, opts: { canInstall?: boolean; isImage?: boolea
       canInstall={opts.canInstall ?? true}
       isImage={opts.isImage ?? false}
       deleteArmed={false}
+      title={opts.title ?? null}
+      sourceBytes={opts.sourceBytes ?? 0}
       {...actions}
     />,
   );
@@ -64,6 +69,7 @@ const done = {
   installMs: 30_000,
   stageMs: {},
   deleted: false,
+  titleId: "PPSA17221",
 };
 
 describe("RunCard", () => {
@@ -95,6 +101,7 @@ describe("RunCard", () => {
       jobId: "j",
       installTaskId: null,
       packagePath: null,
+      titleId: null,
     });
     for (const label of ["Check source", "Plan package", "Compress", "Write package", "Verify", "Send to PS5", "Install on PS5"]) {
       expect(out).toContain(label);
@@ -113,6 +120,7 @@ describe("RunCard", () => {
       message: "unreachable",
       packagePath: "/out/a.pkg",
       stageMs: {},
+      titleId: null,
     });
     expect(out).toContain("built and kept");
     expect(out).toContain("unreachable");
@@ -129,6 +137,7 @@ describe("RunCard", () => {
       message: "disk full",
       packagePath: null,
       stageMs: {},
+      titleId: null,
     });
     expect(button(out, "Retry install")).toBeNull();
     expect(out).not.toContain("built and kept");
@@ -149,6 +158,33 @@ describe("RunCard", () => {
       expect(button(out, name)).toBeNull();
     }
     expect(button(out, "Convert another game")).not.toBeNull();
+  });
+
+  it("names the game and how much the package saved", () => {
+    const out = html({ ...done, mode: "convert-install", packageBytes: 1024 }, { title: "Minecraft", sourceBytes: 2048 });
+    expect(out).toContain("Installed on PS5 — Minecraft");
+    expect(out).toContain("50%");
+  });
+
+  it("shows speed and time left for a build stage and overall", () => {
+    const out = html({
+      phase: "running",
+      mode: "convert",
+      source: "/g",
+      host: null,
+      stage: "compress",
+      stageDone: 50 * 1024 * 1024,
+      stageTotal: 100 * 1024 * 1024,
+      startedMs: Date.now() - 20_000,
+      stageStartedMs: Date.now() - 10_000,
+      stageMs: {},
+      jobId: "j",
+      installTaskId: null,
+      packagePath: null,
+      titleId: null,
+    });
+    expect(out).toMatch(/MiB\/s/);
+    expect((out.match(/left/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
 
   it("asks before deleting: the first press arms, the second confirms", () => {

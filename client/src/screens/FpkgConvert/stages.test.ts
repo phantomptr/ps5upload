@@ -12,6 +12,7 @@ const base = {
   jobId: "j",
   installTaskId: null,
   packagePath: null,
+  titleId: null,
 };
 
 const task = (current: number, total: number) =>
@@ -44,7 +45,7 @@ describe("stageRows", () => {
 
   it("shows the failed stage and nothing after it as done", () => {
     const rows = stageRows(
-      { phase: "failed", mode: "convert", source: "/g", host: null, stage: "verify", message: "bad", packagePath: null, stageMs: {} },
+      { phase: "failed", mode: "convert", source: "/g", host: null, stage: "verify", message: "bad", packagePath: null, stageMs: {}, titleId: null },
       null,
     );
     expect(rows.map((r) => r.state)).toEqual(["done", "done", "done", "done", "failed"]);
@@ -52,7 +53,7 @@ describe("stageRows", () => {
 
   it("has no install rows for Convert only, and only install rows for a retry", () => {
     const convertOnly = stageRows(
-      { phase: "failed", mode: "convert", source: "/g", host: null, stage: "write", message: "", packagePath: null, stageMs: {} },
+      { phase: "failed", mode: "convert", source: "/g", host: null, stage: "write", message: "", packagePath: null, stageMs: {}, titleId: null },
       null,
     );
     expect(convertOnly.map((r) => r.stage)).not.toContain("send");
@@ -65,7 +66,7 @@ describe("stageRows", () => {
 
   it("is all done once the run finished", () => {
     const rows = stageRows(
-      { phase: "done", mode: "convert-install", source: "/g", host: "h", packagePath: "/p", packageBytes: 1, convertMs: 1, installMs: 1, stageMs: {}, deleted: false },
+      { phase: "done", mode: "convert-install", source: "/g", host: "h", packagePath: "/p", packageBytes: 1, convertMs: 1, installMs: 1, stageMs: {}, deleted: false, titleId: null },
       null,
     );
     expect(rows.every((r) => r.state === "done")).toBe(true);

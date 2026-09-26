@@ -9,10 +9,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { PackagePlus } from "lucide-react";
 
-import { fpkg, type FpkgInspection } from "../../api/fpkg";
+import { fpkg, type FpkgEstimates, type FpkgInspection } from "../../api/fpkg";
 import { appLaunch } from "../../api/ps5";
 import { Callout, Card, PageHeader } from "../../components";
 import { transferAddr } from "../../lib/addr";
+import { createLatest } from "../../lib/latest";
 import { openLocalPath } from "../../lib/openLocalPath";
 import { pickPath } from "../../lib/pickPath";
 import { isIOS } from "../../lib/platform";
@@ -24,7 +25,7 @@ import { useFpkgConversion } from "../../state/fpkgConversion";
 import { useTr } from "../../state/lang";
 import { pickLocalPath } from "../../state/localPicker";
 import { useTaskStore } from "../../state/tasks";
-import { GameCard, titleIdOf } from "./GameCard";
+import { GameCard } from "./GameCard";
 import { OptionsCard } from "./OptionsCard";
 import { RunCard } from "./RunCard";
 
@@ -62,6 +63,11 @@ export default function FpkgConvertScreen() {
   const locked = pipeline.phase === "running";
   const [source, setSource] = useState(pipeline.phase === "idle" ? "" : pipeline.source);
   const [inspection, setInspection] = useState<FpkgInspection | null>(null);
+  // "pending" while the sample runs; null when it failed or there is no game.
+  const [estimates, setEstimates] = useState<FpkgEstimates | "pending" | null>(null);
+  // Only the newest check (and its estimate) may land: a slow check of an earlier game must not
+  // overwrite the one chosen after it.
+  const latest = useRef(createLatest());
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleteArmed, setDeleteArmed] = useState(false);
@@ -71,14 +77,25 @@ export default function FpkgConvertScreen() {
   const check = useCallback(
     async (path: string) => {
       if (!path.trim()) return;
+      const token = latest.current.begin();
       setChecking(true);
       setError(null);
       setInspection(null);
+      setEstimates(null);
       try {
-        setInspection(await fpkg.inspect(path.trim(), outputDir.trim() || undefined));
+        const found = await fpkg.inspect(path.trim(), outputDir.trim() || undefined);
+        if (!latest.current.isCurrent(token)) return;
+        setInspection(found);
+        setChecking(false);
+        // The estimate is a separate, slower sample: it never holds up the check.
+        setEstimates("pending");
+        fpkg
+          .estimate(path.trim())
+          .then((e) => latest.current.isCurrent(token) && setEstimates(e))
+          .catch(() => latest.current.isCurrent(token) && setEstimates(null));
       } catch (e) {
+        if (!latest.current.isCurrent(token)) return;
         setError(e instanceof Error ? e.message : String(e));
-      } finally {
         setChecking(false);
       }
     },
@@ -171,9 +188,13 @@ export default function FpkgConvertScreen() {
   };
 
   const onLaunch = () => {
-    const titleId = titleIdOf(inspection?.content_id);
+    // The title id of the package this result built, never of whatever the Game card shows.
+    const titleId = pipeline.phase === "done" ? pipeline.titleId : null;
     const target = pipeline.phase === "done" ? pipeline.host : null;
-    if (!titleId || !target) return;
+    if (!titleId || !target) {
+      setError(tr("fpkg.launchUnknown", undefined, "Cannot tell which title to launch; start it from the PS5."));
+      return;
+    }
     void appLaunch(transferAddr(target), titleId).catch((e) =>
       setError(e instanceof Error ? e.message : String(e)),
     );
@@ -181,9 +202,12 @@ export default function FpkgConvertScreen() {
 
   const onAnother = () => {
     reset();
+    latest.current.invalidate();
     setDeleteArmed(false);
     setSource("");
     setInspection(null);
+    setEstimates(null);
+    setChecking(false);
     setError(null);
   };
 
@@ -214,6 +238,11 @@ export default function FpkgConvertScreen() {
         onSourceTyped={(v) => {
           if (locked) return;
           reset();
+          // The old check belongs to the old path: drop it until this one is checked.
+          latest.current.invalidate();
+          setInspection(null);
+          setEstimates(null);
+          setChecking(false);
           setSource(v);
         }}
         onCheck={() => void check(source)}
@@ -233,8 +262,10 @@ export default function FpkgConvertScreen() {
         canBrowse={canBrowse}
         compression={compression}
         onCompression={setCompression}
-        estimates={inspection?.estimates ?? (inspection ? null : undefined)}
+        estimates={estimates}
         locked={locked}
+        plannedSize={inspection?.planned_size}
+        outputFree={inspection?.output_free}
       />
 
       {error && (
@@ -251,6 +282,8 @@ export default function FpkgConvertScreen() {
         canConvert={!noFiles && !checking && source.trim() !== ""}
         isImage={isImage}
         deleteArmed={deleteArmed}
+        title={inspection?.title ?? null}
+        sourceBytes={inspection?.bytes ?? 0}
         onConvert={() => run(false)}
         onConvertInstall={() => run(true)}
         onCompress={() => void compress(source.trim(), outputDir.trim() || undefined)}

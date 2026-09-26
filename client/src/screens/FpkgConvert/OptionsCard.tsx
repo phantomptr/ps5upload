@@ -4,6 +4,13 @@ import type { FpkgCompression, FpkgEstimate } from "../../api/fpkg";
 import { Button, Card } from "../../components";
 import { useTr } from "../../state/lang";
 import { CompressionTiles } from "./CompressionTiles";
+import { prettyBytes } from "./RunCard";
+
+/** The most room a conversion needs on the output drive: the package, which the compressed
+ *  image is written straight into, plus a little headroom. */
+export function spaceNeeded(plannedSize: number): number {
+  return Math.ceil(plannedSize * 1.02);
+}
 
 export interface OptionsCardProps {
   outputDir: string;
@@ -12,8 +19,12 @@ export interface OptionsCardProps {
   canBrowse: boolean;
   compression: FpkgCompression;
   onCompression: (c: FpkgCompression) => void;
-  estimates: Record<FpkgCompression, FpkgEstimate> | null | undefined;
+  estimates: Record<FpkgCompression, FpkgEstimate> | "pending" | null | undefined;
   locked: boolean;
+  /** The package's planned (uncompressed) size, once the game is checked. */
+  plannedSize?: number;
+  /** Room on the output drive; absent where the platform does not say. */
+  outputFree?: number | null;
 }
 
 export function OptionsCard(props: OptionsCardProps) {
@@ -42,6 +53,25 @@ export function OptionsCard(props: OptionsCardProps) {
             )}
           </div>
         </div>
+        {props.outputFree != null && (
+          <div className="text-xs text-[var(--color-muted)]">
+            {tr("fpkg.free", undefined, "Free")}: {prettyBytes(props.outputFree)}
+          </div>
+        )}
+        {props.outputFree != null &&
+          props.plannedSize != null &&
+          props.outputFree < spaceNeeded(props.plannedSize) && (
+            <div className="text-xs text-[var(--color-warn)]">
+              {tr(
+                "fpkg.lowSpace",
+                {
+                  need: prettyBytes(spaceNeeded(props.plannedSize)),
+                  free: prettyBytes(props.outputFree),
+                },
+                "Low on free space: converting can need up to {need} on the output drive, which has {free}.",
+              )}
+            </div>
+          )}
         <div className="flex flex-col gap-1">
           <div className="text-[var(--color-muted)]">
             {tr("fpkg.compression", undefined, "Compression")}

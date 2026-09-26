@@ -18,7 +18,9 @@ const TILES: { value: FpkgCompression; icon: string; key: string; label: string 
 export interface CompressionTilesProps {
   value: FpkgCompression;
   onChange: (value: FpkgCompression) => void;
-  estimates: Record<FpkgCompression, FpkgEstimate> | null | undefined;
+  /** This game's estimates; "pending" while they are worked out; null/undefined when there is
+   *  no game yet or the estimate failed (shown as a dash, never as a spinner that never ends). */
+  estimates: Record<FpkgCompression, FpkgEstimate> | "pending" | null | undefined;
   disabled?: boolean;
 }
 
@@ -32,7 +34,7 @@ export function CompressionTiles({ value, onChange, estimates, disabled }: Compr
     >
       {TILES.map((t) => {
         const checked = t.value === value;
-        const e = estimates?.[t.value];
+        const e = estimates && estimates !== "pending" ? estimates[t.value] : undefined;
         return (
           <button
             key={t.value}
@@ -58,7 +60,9 @@ export function CompressionTiles({ value, onChange, estimates, disabled }: Compr
             <span className="text-xs text-[var(--color-muted)]">
               {e
                 ? `~${gb(e.bytes)} · ~${prettyDuration(e.seconds * 1000)}`
-                : tr("fpkg.estimating", undefined, "Estimating…")}
+                : estimates === "pending"
+                  ? tr("fpkg.estimating", undefined, "Estimating…")
+                  : "—"}
             </span>
           </button>
         );

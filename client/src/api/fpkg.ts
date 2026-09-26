@@ -19,6 +19,12 @@ export interface FpkgEstimate {
   seconds: number;
 }
 
+export interface FpkgEstimates {
+  fast: FpkgEstimate;
+  balanced: FpkgEstimate;
+  smallest: FpkgEstimate;
+}
+
 export interface FpkgInspection {
   /** "folder /games/x" or "exfat …/PPSA09519.exfat (64 KiB clusters…)". */
   source: string;
@@ -30,8 +36,7 @@ export interface FpkgInspection {
   /** The lowest firmware the game runs on, from its modules' SDK stamps (e.g. "4.00" for a
    *  backport); the package declares it. Absent/null keeps the game's own. */
   min_firmware?: string | null;
-  /** Size and time at each compression level for this game; null while unknown. */
-  estimates?: { fast: FpkgEstimate; balanced: FpkgEstimate; smallest: FpkgEstimate } | null;
+
   /** What the package is expected to cost, used for the free-space check. */
   planned_size: number;
   /** Bytes free where the output goes; null where the platform does not say. */
@@ -68,6 +73,9 @@ export const fpkg = {
       compression: req.compression,
       firmware: req.firmware,
     }),
+  /** Size and time at each compression level for a game: a separate request from the check,
+   *  since sampling a large game on a slow drive takes a while. */
+  estimate: (source: string) => invoke<FpkgEstimates>("fpkg_estimate", { source }),
   /** Delete a package this engine built (the Convert screen's Delete package); the engine
    *  refuses any other file. */
   deletePackage: (path: string) => invoke<{ ok: boolean }>("fpkg_delete", { path }),

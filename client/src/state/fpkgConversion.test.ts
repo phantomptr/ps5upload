@@ -22,6 +22,9 @@ vi.mock("./pkgLibrary", () => ({
   }),
 }));
 vi.mock("./notifications", () => ({ pushNotification: vi.fn() }));
+// The console of the moment: what the connection bar says when the install starts.
+const conn = { host: "10.0.0.2", payloadStatus: "up" };
+vi.mock("./connection", () => ({ useConnectionStore: { getState: () => conn } }));
 
 import { POLL_MS, useFpkgConversion } from "./fpkgConversion";
 
@@ -36,6 +39,8 @@ describe("fpkg pipeline", () => {
     jobStatus.mockReset();
     installStream.mockReset();
     deletePackage.mockClear();
+    conn.host = "10.0.0.2";
+    conn.payloadStatus = "up";
   });
 
   it("converts through the stages and ends done", async () => {
@@ -114,7 +119,50 @@ describe("fpkg pipeline", () => {
     expect(installStream).toHaveBeenCalledTimes(1);
   });
 
+  it("installs on the console selected when the install starts, not when Convert was pressed", async () => {
+    jobStatus
+      .mockResolvedValueOnce({ status: "running" })
+      .mockResolvedValue({ status: "done", dest: "/out/a.pkg", bytes_sent: 1 });
+    installStream.mockResolvedValue({ ok: true });
+    await useFpkgConversion.getState().start(req, { install: true, host: "10.0.0.2" });
+    await tick();
+    conn.host = "10.0.0.9"; // the user switched consoles during the build
+    await tick();
+    await tick();
+    expect(installStream).toHaveBeenCalledWith("/out/a.pkg", "10.0.0.9", expect.anything());
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "done", host: "10.0.0.9" });
+  });
+
+  it("keeps the built package's title id for Launch", async () => {
+    jobStatus.mockResolvedValue({
+      status: "done",
+      dest: "/out/a.pkg",
+      bytes_sent: 1,
+      tx_id_hex: "UP4433-PPSA17221_00-MINECRAFTPS50000",
+    });
+    await useFpkgConversion.getState().start(req, { install: false, host: null });
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "done", titleId: "PPSA17221" });
+  });
+
+  it("shows a compression job's progress though it reports no stages", async () => {
+    const compressJob = vi.fn().mockResolvedValue({ job_id: "c1" });
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { compress: unknown }).compress = compressJob;
+    jobStatus.mockResolvedValueOnce({ status: "running", bytes_sent: 5, total_bytes: 10 });
+    await useFpkgConversion.getState().compress("/games/a.exfat");
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "running",
+      mode: "ffpfsc",
+      stage: "compress",
+      stageDone: 5,
+      stageTotal: 10,
+    });
+  });
+
   it("without a console, Convert & install stops at send with the package kept", async () => {
+    conn.payloadStatus = "down";
     jobStatus.mockResolvedValue({ status: "done", dest: "/out/a.pkg", bytes_sent: 1 });
     await useFpkgConversion.getState().start(req, { install: true, host: null });
     await tick();
@@ -149,6 +197,7 @@ describe("fpkg pipeline", () => {
       stage: "write",
       message: "disk full",
       packagePath: null,
+      titleId: null,
     });
     expect(installStream).not.toHaveBeenCalled();
   });
@@ -170,6 +219,7 @@ describe("fpkg pipeline", () => {
         message: "x",
         packagePath: null,
         stageMs: {},
+        titleId: null,
       },
     });
     useFpkgConversion.getState().reset();

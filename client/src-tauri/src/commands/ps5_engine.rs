@@ -2559,6 +2559,14 @@ pub async fn fpkg_build(
     .await
 }
 
+/// Package size and time at each compression level for a game. POST /api/fpkg/estimate.
+#[tauri::command]
+pub async fn fpkg_estimate(source: String) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/fpkg/estimate");
+    post_json(&url, &serde_json::json!({ "source": source })).await
+}
+
 /// Delete a package the converter built; the engine refuses any other file.
 /// POST /api/fpkg/delete.
 #[tauri::command]

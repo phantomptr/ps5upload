@@ -6,6 +6,7 @@ import { create } from "zustand";
 
 import { fpkg, type FpkgBuildRequest } from "../api/fpkg";
 import { jobCancel, jobStatus } from "../api/ps5";
+import { useConnectionStore } from "./connection";
 import { pushNotification } from "./notifications";
 import { pkgLibraryStore } from "./pkgLibrary";
 
@@ -40,6 +41,8 @@ export type Pipeline =
       jobId: string | null;
       installTaskId: string | null;
       packagePath: string | null;
+      /** The package's title id, from the build's content id (what Launch starts). */
+      titleId: string | null;
     }
   | {
       phase: "done";
@@ -52,6 +55,7 @@ export type Pipeline =
       installMs: number;
       stageMs: StageMs;
       deleted: boolean;
+      titleId: string | null;
     }
   | {
       phase: "failed";
@@ -62,6 +66,7 @@ export type Pipeline =
       message: string;
       packagePath: string | null;
       stageMs: StageMs;
+      titleId: string | null;
     };
 
 export interface ConversionState {
@@ -127,6 +132,7 @@ function fail(stage: PipelineStage, message: string, packagePath: string | null)
       message,
       packagePath,
       stageMs: { ...p.stageMs, [p.stage]: Date.now() - p.stageStartedMs },
+      titleId: p.titleId,
     },
   });
   pushNotification("error", `${what} failed`, { body: message, link: "/convert" });
@@ -149,6 +155,7 @@ function finish(packagePath: string, packageBytes: number, convertMs: number) {
       installMs: 0,
       stageMs: { ...p.stageMs, [p.stage]: now - p.stageStartedMs },
       deleted: false,
+      titleId: p.titleId,
     },
   });
 }
@@ -192,6 +199,7 @@ function installDone(packagePath: string, convertMs: number, installMs: number) 
       installMs,
       stageMs: { ...p.stageMs, [p.stage]: now - p.stageStartedMs },
       deleted: false,
+      titleId: p.titleId,
     },
   });
 }
@@ -222,6 +230,9 @@ function poll(jobId: string, install: boolean, failures = 0) {
       const s = snapshot.stage;
       if (s && BUILD_STAGES.includes(s.id as PipelineStage)) {
         enterStage(s.id as PipelineStage, s.done, s.total);
+      } else if (!s && p.mode === "ffpfsc") {
+        // A compression job reports no stages, only its overall bytes.
+        enterStage("compress", snapshot.bytes_sent ?? 0, snapshot.total_bytes ?? 0);
       }
       poll(jobId, install);
       return;
@@ -231,9 +242,13 @@ function poll(jobId: string, install: boolean, failures = 0) {
       const bytes = snapshot.bytes_sent ?? 0;
       packageSizes.set(path, bytes);
       const cur = running()!;
-      update({ packagePath: path, jobId: null });
+      update({ packagePath: path, jobId: null, titleId: titleIdOf(snapshot.tx_id_hex) });
       if (install) {
-        await runInstall(path, cur.host);
+        // The console of the moment the install starts: the user may have switched during an
+        // hour-long build.
+        const host = currentHost();
+        update({ host });
+        await runInstall(path, host);
       } else {
         finish(path, bytes, Date.now() - cur.startedMs);
         pushNotification(
@@ -265,8 +280,20 @@ function beginRun(mode: PipelineMode, source: string, host: string | null, stage
       jobId: null,
       installTaskId: null,
       packagePath: null,
+      titleId: null,
     },
   });
+}
+
+/** "UP4433-PPSA17221_00-MINECRAFTPS50000" → "PPSA17221". */
+function titleIdOf(contentId: string | undefined | null): string | null {
+  return contentId && contentId.length >= 16 ? contentId.slice(7, 16) : null;
+}
+
+/** The console the connection bar has now, when a payload answers there. */
+function currentHost(): string | null {
+  const c = useConnectionStore.getState();
+  return c.payloadStatus === "up" && c.host?.trim() ? c.host : null;
 }
 
 export const useFpkgConversion = create<ConversionState>((set, get) => ({
@@ -303,7 +330,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
     if (!path || (p.phase !== "failed" && p.phase !== "done")) return;
     if (p.phase === "done" && p.mode === "ffpfsc") return;
     beginRun("install", p.source, host, "send");
-    update({ packagePath: path });
+    update({ packagePath: path, titleId: p.titleId });
     await runInstall(path, host);
   },
 

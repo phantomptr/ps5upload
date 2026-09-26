@@ -295,6 +295,7 @@ pub fn run() {
             commands::fpkg_inspect,
             commands::fpkg_build,
             commands::fpkg_delete,
+            commands::fpkg_estimate,
             commands::ffpfsc_compress,
             commands::job_status,
             commands::job_cancel,

@@ -109,8 +109,6 @@ struct InspectResponse {
     #[serde(flatten)]
     inspection: build::Inspection,
     min_firmware: Option<String>,
-    /// Size and time at each compression level; absent when the sample could not be read.
-    estimates: Option<build::Estimates>,
 }
 
 fn min_firmware_of(source: &Path, declared: Option<&str>) -> Option<String> {
@@ -132,11 +130,9 @@ pub(crate) async fn fpkg_inspect_handler(
         let inspection = build::inspect(Path::new(&source), &out)?;
         let min_firmware =
             min_firmware_of(Path::new(&source), inspection.required_firmware.as_deref());
-        let estimates = build::estimate(Path::new(&source)).ok();
         Ok::<_, ps5upload_fpkg::Error>(InspectResponse {
             inspection,
             min_firmware,
-            estimates,
         })
     })
     .await;
@@ -183,6 +179,30 @@ pub(crate) async fn fpkg_delete_handler(
     match delete_built(&resolve_engine_path(&req.path)) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
         Err(e) => json_err(StatusCode::BAD_REQUEST, e).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct EstimateReq {
+    source: String,
+}
+
+/// POST /api/fpkg/estimate — package size and time at each compression level, from a sample of
+/// the game's blocks. Separate from the inspection so a slow sample (a large game on a slow
+/// drive) never holds up, or times out, the check itself.
+pub(crate) async fn fpkg_estimate_handler(
+    State(_): State<AppState>,
+    Json(req): Json<EstimateReq>,
+) -> impl IntoResponse {
+    let source = resolve_engine_path(&req.source);
+    match tokio::task::spawn_blocking(move || build::estimate(&source)).await {
+        Ok(Ok(estimates)) => (StatusCode::OK, Json(estimates)).into_response(),
+        Ok(Err(error)) => json_err(StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+        Err(join) => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("the estimate task failed: {join}"),
+        )
+        .into_response(),
     }
 }
 

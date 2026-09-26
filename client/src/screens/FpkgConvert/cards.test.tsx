@@ -14,6 +14,7 @@ vi.mock("../../lib/tauriEnv", () => ({ isTauriEnv: () => false }));
 import type { FpkgInspection } from "../../api/fpkg";
 import { CompressionTiles } from "./CompressionTiles";
 import { firmwareLine } from "./GameCard";
+import { OptionsCard } from "./OptionsCard";
 
 const estimates = {
   fast: { bytes: 117e9, seconds: 900 },
@@ -39,9 +40,38 @@ describe("CompressionTiles", () => {
     expect(out).toContain("~109.0 GB");
     expect(out).toContain("~1 h 0 min");
     const pending = renderToStaticMarkup(
-      <CompressionTiles value="fast" onChange={() => {}} estimates={null} />,
+      <CompressionTiles value="fast" onChange={() => {}} estimates="pending" />,
     );
     expect(pending).toContain("Estimating");
+  });
+
+  it("shows a dash, not a spinner that never ends, with no game or a failed estimate", () => {
+    for (const e of [null, undefined]) {
+      const out = renderToStaticMarkup(<CompressionTiles value="fast" onChange={() => {}} estimates={e} />);
+      expect(out).not.toContain("Estimating");
+      expect(out).toContain("—");
+    }
+  });
+});
+
+describe("OptionsCard free space", () => {
+  const props = {
+    outputDir: "/out",
+    onChangeOutput: () => {},
+    onOutputTyped: () => {},
+    canBrowse: true,
+    compression: "balanced" as const,
+    onCompression: () => {},
+    estimates: undefined,
+    locked: false,
+  };
+
+  it("warns before the build when the output drive is short of room", () => {
+    const low = renderToStaticMarkup(<OptionsCard {...props} plannedSize={100 * 2 ** 30} outputFree={50 * 2 ** 30} />);
+    expect(low).toContain("Low on free space");
+    const fine = renderToStaticMarkup(<OptionsCard {...props} plannedSize={100 * 2 ** 30} outputFree={500 * 2 ** 30} />);
+    expect(fine).not.toContain("Low on free space");
+    expect(fine).toContain("500.00 GiB");
   });
 });
 
