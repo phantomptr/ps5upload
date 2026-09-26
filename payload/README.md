@@ -28,10 +28,20 @@ package install, hardware and sensors, processes, profiles, saves and
 backup, cheats, FTP, remote play, fan curve, notifications, system
 registry and time, firmware spoofing, and the SDK version changer.
 
-`dpi/` builds a separate standalone install daemon
-(`ezremote-dpi.elf`, port 9040) used for package installs on newer
-firmware. The engine sends it automatically when nothing is listening
-there.
+`installer/` builds our own standalone install daemon
+(`ps5upload-installer.elf`, TCP :9115) used for package installs on newer
+firmware. It loads as a companion image on the :9021 loader (never evicting
+the helper), self-escalates, and answers a JSON-lines protocol
+(`hello`/`install`/`job`/`stop`); for a staged file it serves the package to
+Sony's installer over a 127.0.0.1 HTTP URL. The engine sends it automatically
+when nothing is listening on :9115.
+
+### Prior art
+
+The installer daemon is our own implementation. Its design was informed, as
+behavioural references only (no code or names are carried into the daemon),
+by cy33hc's ps5-ezremote-dpi, etaHEN and elf-arsenal's DPI payloads, and
+itsPLK's on-console PKG Manager (the loopback-serving + cacheability rules).
 
 ## Build
 

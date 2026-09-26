@@ -6,6 +6,16 @@ What's new in ps5upload, written for humans.
 
 ## Unreleased
 
+**Our own package installer.**
+
+- **PS5Upload now ships its own on-console install daemon** (`:9115`) in place
+  of the third-party DPI daemon it used before. It runs alongside the helper,
+  and for an "upload & install" it serves the staged package to the console's
+  installer over a local connection — the same path a stream install uses — so
+  both routes now behave the same.
+- **The etaHEN `:12800` install bridge is no longer used**; every console
+  installs through our own daemon, for consistent behaviour everywhere.
+
 **Convert to FPKG compresses, like Sony's own packages.**
 
 - **Compressed packages.** Converted games are Kraken-compressed, the format the

@@ -1328,7 +1328,7 @@ port or carry the daemon ELF itself, so the **engine** must. Use a
 released `ps5upload-engine` / `…-engine-webui` build (or Docker image) —
 those embed the helper images. A plain source build without the PS5
 payload SDK has none; point `PS5UPLOAD_PAYLOAD_DIR` at a directory that
-holds `ps5upload.elf` and `ezremote-dpi.elf`, or the update install will
+holds `ps5upload.elf` and `ps5upload-installer.elf`, or the update install will
 stop before the console ever sees the package.
 
 If the app reports an install failed but the game plays fine, that is a

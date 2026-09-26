@@ -60,12 +60,9 @@ pub fn dpi_send_failure_reason(err: &str) -> &'static str {
     }
 }
 
-/// The standalone DPI install daemon's port (`payload/dpi/`, and the same
-/// port scene daemons like etaHEN/ezRemote listen on).
-pub const DPI_DAEMON_PORT: u16 = 9040;
-
-/// The PS5Upload installer daemon's port. Replaces DPI_DAEMON_PORT (removed
-/// in the switch-over).
+/// The PS5Upload installer daemon's port. It replaced the old standalone DPI
+/// daemon (which listened on :9040); the daemon loads as a companion image on
+/// the :9021 loader and binds this port.
 pub const INSTALLER_PORT: u16 = 9115;
 
 /// Refuse to stream anything larger than this to the loader. The PS5's

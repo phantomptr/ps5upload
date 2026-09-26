@@ -56,12 +56,9 @@ endif
 
 PAYLOAD_DIR := payload
 PAYLOAD_ELF := $(PAYLOAD_DIR)/ps5upload.elf
-# Standalone DPI install daemon (FW 11+ pkg installs). Built from the
-# same SDK; the engine auto-sends it to the loader port when :9040 isn't
-# already listening. See payload/dpi/ezremote_dpi.c.
-DPI_DIR := $(PAYLOAD_DIR)/dpi
-DPI_ELF := $(DPI_DIR)/ezremote-dpi.elf
-# The PS5Upload installer daemon (our own; :9115). Replaces the DPI daemon.
+# The PS5Upload installer daemon (our own; :9115, FW 11+ pkg installs).
+# Built from the same SDK; the engine auto-sends it to the loader port
+# (:9021) as a companion image when :9115 isn't already listening.
 INSTALLER_DIR := $(PAYLOAD_DIR)/installer
 INSTALLER_ELF := $(INSTALLER_DIR)/ps5upload-installer.elf
 ENGINE_DIR  := engine
@@ -101,7 +98,7 @@ ADB ?= $(ANDROID_HOME)/platform-tools/adb
 .PHONY: all help
 .PHONY: install install-ubuntu install-macos install-windows
 .PHONY: setup setup-engine setup-payload setup-client
-.PHONY: build payload dpi installer engine client _engine-release _payload-if-ready _android-build-if-ready
+.PHONY: build payload installer engine client _engine-release _payload-if-ready _android-build-if-ready
 .PHONY: test test-root test-engine test-engine-coverage test-desktop test-payload test-client test-client-coverage
 .PHONY: lint lint-scripts lint-client audit-scripts coverage coverage-engine coverage-client
 .PHONY: quality quality-full quality-hardware ci ci-full
@@ -402,18 +399,10 @@ sync-version:
 sync-version-check:
 	@node scripts/update-version.js --check
 
-payload: setup-payload dpi installer
+payload: setup-payload installer
 	@echo "Building PS5 payload..."
 	@$(MAKE) -C $(PAYLOAD_DIR) -j$(JOBS)
 	@echo "✓ Built $(PAYLOAD_ELF)"
-
-# Standalone DPI install daemon. Separate ELF (clean loader context is
-# what makes pkg install work on FW 11.x — see payload/dpi/ezremote_dpi.c).
-# Built alongside the main payload so the host can embed + auto-load it.
-dpi: setup-payload
-	@echo "Building DPI install daemon..."
-	@$(MAKE) -C $(DPI_DIR) -j$(JOBS)
-	@echo "✓ Built $(DPI_ELF)"
 
 # PS5Upload installer daemon (our own; supersedes the DPI daemon).
 installer: setup-payload
@@ -750,7 +739,7 @@ test-desktop: setup-engine
 
 test-payload: payload
 	@echo "Validating payload binaries..."
-	@for elf in "$(PAYLOAD_ELF)" "$(DPI_ELF)" "$(INSTALLER_ELF)"; do \
+	@for elf in "$(PAYLOAD_ELF)" "$(INSTALLER_ELF)"; do \
 		if [ ! -s "$$elf" ]; then \
 			echo "ERROR: $$elf is missing or empty."; \
 			exit 1; \
@@ -768,7 +757,7 @@ test-payload: payload
 			exit 1; \
 		}; \
 	done
-	@echo "✓ Main payload, DPI installer and PS5Upload installer are PS5 ELFs with gzip resources"
+	@echo "✓ Main payload and PS5Upload installer are PS5 ELFs with gzip resources"
 	@echo "Running play-time launch/resume self-test (host build)..."
 	@echo "Running accept-recovery self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-accept-recovery-selftest \
@@ -1133,7 +1122,6 @@ clean: clean-payload clean-engine clean-client
 
 clean-payload:
 	@echo "Cleaning payload artifacts..."
-	@if [ -d "$(DPI_DIR)" ]; then $(MAKE) -C $(DPI_DIR) clean; fi
 	@if [ -d "$(PAYLOAD_DIR)" ]; then $(MAKE) -C $(PAYLOAD_DIR) clean; fi
 	@echo "✓ Payload cleaned"
 

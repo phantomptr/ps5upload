@@ -9,7 +9,7 @@
 #      stream install — REQUIRED on Docker Desktop macOS/Windows, where the
 #      container's own routing guess is a NAT address the PS5 can't reach back),
 #      PS5UPLOAD_PAYLOAD_DIR (directory holding ps5upload.elf +
-#      ezremote-dpi.elf, overriding the images built into this binary —
+#      ps5upload-installer.elf, overriding the images built into this binary —
 #      only needed if you built the image without them).
 #
 # IMPORTANT for Docker Desktop (macOS/Windows): the engine's loopback guard
@@ -55,7 +55,7 @@ COPY third_party third_party
 # The PS5 helper ELFs the engine embeds (build.rs looks for them at
 # <repo root>/payload). Without this the image builds fine but installs
 # UPDATES and DLC with no installer to send — the exact #152 failure —
-# because `have_bundled_dpi` is never set. ezremote-dpi.elf is committed,
+# because `have_bundled_dpi` is never set. ps5upload-installer.elf is committed,
 # so this always works; ps5upload.elf appears only if you ran
 # `make payload` first (it needs the PS5 payload SDK).
 COPY payload payload

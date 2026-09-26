@@ -476,12 +476,12 @@ jobs:
 
       - name: Verify ELF
         run: |
-          file payload/ps5upload.elf payload/dpi/ezremote-dpi.elf
+          file payload/ps5upload.elf payload/installer/ps5upload-installer.elf
           test -s payload/ps5upload.elf
           test -s payload/ps5upload.elf.gz
-          test -s payload/dpi/ezremote-dpi.elf
-          test -s payload/dpi/ezremote-dpi.elf.gz
-          gzip -t payload/ps5upload.elf.gz payload/dpi/ezremote-dpi.elf.gz
+          test -s payload/installer/ps5upload-installer.elf
+          test -s payload/installer/ps5upload-installer.elf.gz
+          gzip -t payload/ps5upload.elf.gz payload/installer/ps5upload-installer.elf.gz
           # Sanity-check the payload is a real build, not a zero-byte
           # stub. Current payload is ~600 KB (runtime + takeover +
           # register + blake3 SIMD backends); drop the floor to 200 KB
@@ -493,10 +493,10 @@ jobs:
             echo "::error::payload ELF is smaller than expected — build may have failed silently"
             exit 1
           fi
-          dpi_size_bytes=$(stat -c '%s' payload/dpi/ezremote-dpi.elf)
-          echo "ezremote-dpi.elf: ${dpi_size_bytes} bytes"
+          dpi_size_bytes=$(stat -c '%s' payload/installer/ps5upload-installer.elf)
+          echo "ps5upload-installer.elf: ${dpi_size_bytes} bytes"
           if [ "$dpi_size_bytes" -lt 50000 ]; then
-            echo "::error::DPI installer ELF is smaller than expected"
+            echo "::error::PS5Upload installer ELF is smaller than expected"
             exit 1
           fi
 

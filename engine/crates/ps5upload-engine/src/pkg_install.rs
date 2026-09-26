@@ -656,7 +656,7 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         // Install a staged .pkg through the standalone DPI daemon (:9040).
         // The daemon runs sceAppInstUtilAppInstallPkg from a clean loader
         // process — installs without the PlayGo gate. Caller stages the
-        // pkg first and passes the bare PS5 path. See payload/dpi/.
+        // pkg first and passes the bare PS5 path. See payload/installer/.
         .route("/api/pkg/dpi-install", post(dpi_install_handler))
         // Bring that daemon up in the first place, and put the ps5upload
         // helper back afterwards. The desktop client does both itself from
@@ -3942,9 +3942,9 @@ pub struct LoaderRequest {
 #[derive(Debug, Serialize)]
 pub struct DpiEnsureResponse {
     pub ok: bool,
-    /// True when the daemon is answering on :9040 — either it already was
-    /// (a scene daemon like etaHEN, or ours from a previous install) or it
-    /// came up after we streamed it.
+    /// True when the installer daemon is answering on :9115 — either it
+    /// already was (ours from a previous install) or it came up after we
+    /// streamed it to the loader.
     pub listening: bool,
     /// True when we actually pushed the daemon to the loader. The caller
     /// uses this to know the helper was displaced: `sent: false` means
@@ -3958,10 +3958,10 @@ pub struct DpiEnsureResponse {
     /// their console's ELF loader had stopped answering on :9021 — three very
     /// different problems were sharing one message.
     ///
-    ///   * `no_image`           — this engine build carries no DPI daemon.
+    ///   * `no_image`           — this engine build carries no installer daemon.
     ///   * `loader_unreachable` — nothing accepted a connection on :9021.
     ///   * `loader_send_failed` — the loader accepted, the transfer failed.
-    ///   * `no_bringup`         — image delivered, :9040 never came up.
+    ///   * `no_bringup`         — image delivered, :9115 never came up.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<&'static str>,
 }

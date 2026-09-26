@@ -226,7 +226,7 @@ static void appinst_init_locked(void) {
  *
  * NOTE (2026-09-20): the claim that once stood here — that GetInstallStatus is
  * "known-safe" on firmwares where InstallByPackage succeeds — was never
- * measured, and the A/B in payload/dpi/ezremote_dpi.c disproves it. Every tier
+ * measured, and the A/B in payload/installer/ (the standalone installer daemon) disproves it. Every tier
  * now bypasses. These VIA_* flags no longer select between polling and not
  * polling; they are retained because they still identify which backend issued
  * a task id in logs and bug reports. */
@@ -446,7 +446,7 @@ static int appinst_install_start(const char *url,
     AppInstMetaInfo meta;
     memset(&meta, 0, sizeof(meta));
     /* A bare local path ("/user/data/.../x.pkg") is passed as-is — the
-     * DPI daemon (ezremote_dpi.c) uses the bare path directly and it
+     * DPI daemon (the installer daemon (payload/installer/)) uses the bare path directly and it
      * works on FW 9.60. Wrapping with `file://` causes 0x80B21106
      * (parser error) on FW < 11. Already-schemed URLs (http://, file://)
      * pass through unchanged. */
@@ -528,7 +528,7 @@ static int appinst_install_start(const char *url,
      * InstallByPackage call returns 0x80B2116F, and Sony's installer
      * watchdog SIGKILLs our process ~5 s later (issue #152: helper dies
      * after install rejection on FW 10.40). The DPI daemon
-     * (payload/dpi/ezremote_dpi.c) already escalates to SYSTEM_AUTHID
+     * (payload/installer/ (the standalone installer daemon)) already escalates to SYSTEM_AUTHID
      * before sceAppInstUtilInitialize on ALL FWs — this matches that.
      * fw==0 (unknown) → ShellCore, the proven default for the broadest
      * installed base. Both Init and InstallByPackage run under this one
@@ -1704,7 +1704,7 @@ int bgft_install_status(int32_t task_id,
      * process that calls it — measured 2026-09-12 on Pro FW 9.60 and Phat FW
      * 5.10, A/B against an otherwise identical build, 2/2 dead with the poll
      * and 1/1 alive without it. See the block comment in
-     * payload/dpi/ezremote_dpi.c, which also retracts the older theory that
+     * payload/installer/ (the standalone installer daemon), which also retracts the older theory that
      * only a CROSS-process poller is affected: it dies in-process too.
      *
      * The install itself is unaffected — InstallByPackage already returned 0,

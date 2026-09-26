@@ -62,7 +62,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p engine/crates/ps5upload-engine/payload
-          cp -v payload/dpi/ezremote-dpi.elf engine/crates/ps5upload-engine/payload/
+          cp -v payload/installer/ps5upload-installer.elf engine/crates/ps5upload-engine/payload/
 
       - uses: docker/setup-buildx-action@v4
 
@@ -91,7 +91,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p engine/crates/ps5upload-engine/payload
-          cp -v payload/dpi/ezremote-dpi.elf engine/crates/ps5upload-engine/payload/
+          cp -v payload/installer/ps5upload-installer.elf engine/crates/ps5upload-engine/payload/
 
       - uses: docker/setup-buildx-action@v4
 
@@ -196,16 +196,16 @@ jobs:
 
       - name: Sanity-check ELF shape
         run: |
-          file payload/ps5upload.elf payload/dpi/ezremote-dpi.elf
+          file payload/ps5upload.elf payload/installer/ps5upload-installer.elf
           test -s payload/ps5upload.elf
-          test -s payload/dpi/ezremote-dpi.elf
+          test -s payload/installer/ps5upload-installer.elf
 
       - uses: actions/upload-artifact@v7
         with:
           name: ps5upload-payload-elves
           path: |
             payload/ps5upload.elf
-            payload/dpi/ezremote-dpi.elf
+            payload/installer/ps5upload-installer.elf
           if-no-files-found: error
           retention-days: 1
 
@@ -250,7 +250,7 @@ jobs:
           set -euo pipefail
           mkdir -p engine/crates/ps5upload-engine/payload
           cp -v /tmp/payload-elves/ps5upload.elf \
-                /tmp/payload-elves/dpi/ezremote-dpi.elf \
+                /tmp/payload-elves/dpi/ps5upload-installer.elf \
                 engine/crates/ps5upload-engine/payload/
           ls -la engine/crates/ps5upload-engine/payload/
 
@@ -338,7 +338,7 @@ jobs:
           set -euo pipefail
           mkdir -p engine/crates/ps5upload-engine/payload
           cp -v /tmp/payload-elves/ps5upload.elf \
-                /tmp/payload-elves/dpi/ezremote-dpi.elf \
+                /tmp/payload-elves/dpi/ps5upload-installer.elf \
                 engine/crates/ps5upload-engine/payload/
           ls -la engine/crates/ps5upload-engine/payload/
 

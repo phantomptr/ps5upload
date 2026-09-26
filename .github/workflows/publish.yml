@@ -109,17 +109,17 @@ jobs:
 
       - name: Sanity-check ELF shape
         run: |
-          file payload/ps5upload.elf payload/dpi/ezremote-dpi.elf
+          file payload/ps5upload.elf payload/installer/ps5upload-installer.elf
           test -s payload/ps5upload.elf
-          test -s payload/dpi/ezremote-dpi.elf
-          gzip -t payload/ps5upload.elf.gz payload/dpi/ezremote-dpi.elf.gz
+          test -s payload/installer/ps5upload-installer.elf
+          gzip -t payload/ps5upload.elf.gz payload/installer/ps5upload-installer.elf.gz
 
       - name: Gzip payloads for bundling
         run: |
-          gzip -kf payload/ps5upload.elf payload/dpi/ezremote-dpi.elf
+          gzip -kf payload/ps5upload.elf payload/installer/ps5upload-installer.elf
           ls -la \
             payload/ps5upload.elf payload/ps5upload.elf.gz \
-            payload/dpi/ezremote-dpi.elf payload/dpi/ezremote-dpi.elf.gz
+            payload/installer/ps5upload-installer.elf payload/installer/ps5upload-installer.elf.gz
 
       - name: Upload payload artifact
         uses: actions/upload-artifact@v7
@@ -128,8 +128,8 @@ jobs:
           path: |
             payload/ps5upload.elf
             payload/ps5upload.elf.gz
-            payload/dpi/ezremote-dpi.elf
-            payload/dpi/ezremote-dpi.elf.gz
+            payload/installer/ps5upload-installer.elf
+            payload/installer/ps5upload-installer.elf.gz
           if-no-files-found: error
 
   build-client:
@@ -303,8 +303,8 @@ jobs:
         shell: bash
         run: |
           test -s payload/ps5upload.elf.gz
-          test -s payload/dpi/ezremote-dpi.elf.gz
-          ls -la payload/ps5upload.elf.gz payload/dpi/ezremote-dpi.elf.gz
+          test -s payload/installer/ps5upload-installer.elf.gz
+          ls -la payload/ps5upload.elf.gz payload/installer/ps5upload-installer.elf.gz
 
       - name: Build engine sidecar binary
         working-directory: engine
@@ -543,8 +543,8 @@ jobs:
         shell: bash
         run: |
           test -s payload/ps5upload.elf.gz
-          test -s payload/dpi/ezremote-dpi.elf.gz
-          ls -la payload/ps5upload.elf.gz payload/dpi/ezremote-dpi.elf.gz
+          test -s payload/installer/ps5upload-installer.elf.gz
+          ls -la payload/ps5upload.elf.gz payload/installer/ps5upload-installer.elf.gz
 
       - name: Resolve NDK
         shell: bash

@@ -8,7 +8,7 @@
  *   - bgft.c:       PS5_SHELLCORE_AUTHID, PS5_SYSTEM_INSTALL_AUTHID,
  *                   authid_acquire(), authid_release_shellcore()
  *   - register.c:   REG_SHELLCORE_AUTHID, inline restore loop
- *   - dpi/ezremote_dpi.c: DPI_JB_AUTHID, DPI_SHELLCORE_AUTHID,
+ *   - dpi/the installer daemon (payload/installer/): DPI_JB_AUTHID, DPI_SHELLCORE_AUTHID,
  *                   dpi_detect_firmware_major()
  *
  * The DPI daemon is a standalone single-file ELF that does NOT link

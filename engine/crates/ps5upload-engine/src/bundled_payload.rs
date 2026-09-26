@@ -1,9 +1,9 @@
 //! The PS5 ELF images this engine can hand to the console's loader.
 //!
-//! The desktop client embeds `ps5upload.elf` and `ezremote-dpi.elf` and
-//! streams them to :9021 itself. A browser talking to a self-hosted engine
-//! can do neither — no raw socket, no copy of the bytes — so before this
-//! module the web UI could not bring up the DPI install daemon, and the
+//! The desktop client embeds `ps5upload.elf` and `ps5upload-installer.elf`
+//! and streams them to :9021 itself. A browser talking to a self-hosted
+//! engine can do neither — no raw socket, no copy of the bytes — so before
+//! this module the web UI could not bring up the installer daemon, and the
 //! install cascade's DPI fallback was dead. That fallback is the only path
 //! that lands a game *patch*, which is why base games installed from the
 //! web UI and updates did not (the web UI half of #152).

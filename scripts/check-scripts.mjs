@@ -121,11 +121,11 @@ function checkSdkPin() {
     path.join(repoRoot, ".github", "workflows", "publish.yml"),
     "utf8",
   );
-  const dpiArtifact = "payload/dpi/ezremote-dpi.elf.gz";
+  const dpiArtifact = "payload/installer/ps5upload-installer.elf.gz";
   const dpiReferences = publishWorkflow.split(dpiArtifact).length - 1;
   if (dpiReferences < 3) {
     failures.push(
-      "publish.yml must build, upload, and verify the DPI installer gzip for release clients",
+      "publish.yml must build, upload, and verify the PS5Upload installer gzip for release clients",
     );
   }
 

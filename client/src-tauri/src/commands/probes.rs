@@ -635,12 +635,11 @@ fn find_bundled_dpi(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(out_path)
 }
 
-/// Ensure the DPI install daemon is listening on `:9115`. Reuses one
-/// that's already up (ours from a prior call, or a scene daemon like
-/// etaHEN/ezRemote). Otherwise streams the bundled `ps5upload-installer.elf`
-/// to the loader (`:9021`) — which on a single-payload loader REPLACES
-/// our main payload, so the caller must re-send the main payload after
-/// the install — and waits for `:9115`.
+/// Ensure the PS5Upload installer daemon is listening on `:9115`. Reuses
+/// ours if it's already up from a prior call. Otherwise streams the bundled
+/// `ps5upload-installer.elf` to the loader (`:9021`) — which on a
+/// single-payload loader REPLACES our main payload, so the caller must
+/// re-send the main payload after the install — and waits for `:9115`.
 ///
 /// Response: `{ ok, listening, sent, error?, reason? }`. `reason` is the
 /// machine-readable cause of a failure (`no_image`, `loader_unreachable`,
