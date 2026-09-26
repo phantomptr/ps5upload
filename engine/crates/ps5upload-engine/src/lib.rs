@@ -37,6 +37,7 @@ mod bundled_payload;
 mod engine_log;
 mod fakelibs_api;
 mod fpkg_api;
+mod fpkg_firmware;
 mod icon_cache;
 mod local_fs;
 mod log_dedup;

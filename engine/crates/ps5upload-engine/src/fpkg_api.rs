@@ -102,6 +102,20 @@ fn output_dir(requested: Option<&str>) -> PathBuf {
     }
 }
 
+/// What `/api/fpkg/inspect` answers: the inspection, plus the lowest firmware the game can
+/// run on when its modules say so (see `fpkg_firmware`).
+#[derive(serde::Serialize)]
+struct InspectResponse {
+    #[serde(flatten)]
+    inspection: build::Inspection,
+    min_firmware: Option<String>,
+}
+
+fn min_firmware_of(source: &Path, declared: Option<&str>) -> Option<String> {
+    let mut tree = ps5upload_fpkg::source::open(source).ok()?;
+    crate::fpkg_firmware::min_firmware(tree.as_mut(), declared)
+}
+
 /// POST /api/fpkg/inspect — what the source is, whether it looks convertible, and what it
 /// will cost. Synchronous: a walk is fast even for a 286,000-file mount.
 pub(crate) async fn fpkg_inspect_handler(
@@ -112,10 +126,18 @@ pub(crate) async fn fpkg_inspect_handler(
     let source = resolve_engine_path(&req.source)
         .to_string_lossy()
         .into_owned();
-    let result =
-        tokio::task::spawn_blocking(move || build::inspect(Path::new(&source), &out)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        let inspection = build::inspect(Path::new(&source), &out)?;
+        let min_firmware =
+            min_firmware_of(Path::new(&source), inspection.required_firmware.as_deref());
+        Ok::<_, ps5upload_fpkg::Error>(InspectResponse {
+            inspection,
+            min_firmware,
+        })
+    })
+    .await;
     match result {
-        Ok(Ok(inspection)) => (StatusCode::OK, Json(inspection)).into_response(),
+        Ok(Ok(response)) => (StatusCode::OK, Json(response)).into_response(),
         Ok(Err(error)) => json_err(StatusCode::BAD_REQUEST, error.to_string()).into_response(),
         Err(join) => json_err(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -232,6 +254,11 @@ pub(crate) async fn fpkg_build_handler(
             request.passcode = passcode;
         }
         request.firmware = req.firmware.filter(|v| !v.trim().is_empty());
+        // Without an explicit one, the package declares the firmware the game runs on.
+        if request.firmware.is_none() {
+            request.firmware =
+                min_firmware_of(&request_source, inspection.required_firmware.as_deref());
+        }
         if let Some(level) = req.compression.as_deref().and_then(|v| v.parse().ok()) {
             request.level = level;
         }

@@ -444,3 +444,14 @@ fn a_build_reports_its_stages_in_order() {
     assert_eq!(Stage::Compress.id(), "compress");
     assert_eq!(Stage::Verify.index(), 4);
 }
+
+/// A remembered output folder that is gone (an unplugged drive) must not stop the check: the
+/// inspection still answers, reporting the room on the nearest folder that exists.
+#[test]
+fn inspecting_toward_a_missing_output_folder_still_answers() {
+    let dir = TempDir::new("missing-out-src");
+    write_tree(dir.path());
+    let gone = dir.path().join("no/such/drive/fpkg");
+    let inspection = build::inspect(dir.path(), &gone).unwrap();
+    assert!(inspection.files > 0);
+}
