@@ -1532,3 +1532,85 @@ fn live_ps5_folder_upload_perf() {
 //   - `transfer_dir_byte_exact_100x`                       — 100× determinism of the kind==2 packer/framer
 //   - `transfer_dir_adversarial_packed_roundtrip`          — pack-record/path edge cases
 //   - `transfer_dir_refuses_ghost_commit_on_bogus_last_acked` — guard rails on a hostile last_acked
+
+/// A folder served from somewhere other than local disk (a saved server, in the engine) uploads
+/// byte for byte: small files packed, a big one split across shards.
+#[test]
+fn transfer_dir_from_a_source_fs_arrives_byte_for_byte() {
+    use ps5upload_core::source_fs::{ReadSeek, SourceFs, SourceMeta};
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+
+    #[derive(Debug)]
+    struct Mem(BTreeMap<PathBuf, Vec<u8>>);
+    impl SourceFs for Mem {
+        fn open(&self, p: &Path) -> std::io::Result<Box<dyn ReadSeek>> {
+            let b = self.0.get(p).cloned().ok_or(std::io::ErrorKind::NotFound)?;
+            Ok(Box::new(std::io::Cursor::new(b)))
+        }
+        fn metadata(&self, p: &Path) -> std::io::Result<SourceMeta> {
+            if let Some(b) = self.0.get(p) {
+                return Ok(SourceMeta {
+                    len: b.len() as u64,
+                    is_dir: false,
+                    is_file: true,
+                });
+            }
+            if self.0.keys().any(|k| k.starts_with(p)) {
+                return Ok(SourceMeta {
+                    len: 0,
+                    is_dir: true,
+                    is_file: false,
+                });
+            }
+            Err(std::io::ErrorKind::NotFound.into())
+        }
+        fn read_dir(&self, p: &Path) -> std::io::Result<Vec<(PathBuf, bool)>> {
+            let mut out: Vec<(PathBuf, bool)> = Vec::new();
+            for k in self.0.keys() {
+                if let Ok(rest) = k.strip_prefix(p) {
+                    let mut c = rest.components();
+                    let first = p.join(c.next().unwrap());
+                    let is_dir = c.next().is_some();
+                    if !out.iter().any(|(q, _)| *q == first) {
+                        out.push((first, is_dir));
+                    }
+                }
+            }
+            Ok(out)
+        }
+    }
+
+    let root = PathBuf::from("/nas/games/Game");
+    let big: Vec<u8> = (0..(3 * 1024 * 1024 + 123))
+        .map(|i| (i % 241) as u8)
+        .collect();
+    let files: Vec<(&str, Vec<u8>)> = vec![
+        ("eboot.bin", big),
+        (
+            "sce_sys/param.json",
+            b"{\"titleId\":\"PPSA01234\"}".to_vec(),
+        ),
+        ("sce_sys/icon0.png", vec![7u8; 5000]),
+    ];
+    let mem = Mem(files
+        .iter()
+        .map(|(p, b)| (root.join(p), b.clone()))
+        .collect());
+
+    let srv = MockServer::start();
+    let mut cfg = TransferConfig::new(&srv.addr);
+    cfg.shard_size = 1024 * 1024;
+    cfg.source_fs = Some(std::sync::Arc::new(mem));
+    let result = transfer_dir(&cfg, random_tx_id(), "/data/dest", &root).unwrap();
+
+    let st = srv.state.lock().unwrap();
+    assert_eq!(st.txs.get(&result.tx_id_hex).unwrap().state, "committed");
+    for (rel, bytes) in &files {
+        let got = st
+            .applied
+            .get(&format!("/data/dest/{rel}"))
+            .unwrap_or_else(|| panic!("{rel} missing"));
+        assert!(got == bytes, "{rel} differs");
+    }
+}

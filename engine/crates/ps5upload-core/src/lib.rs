@@ -39,6 +39,7 @@ pub mod smp;
 pub mod smp_checkout;
 pub mod smp_image_rw;
 pub mod smp_meta;
+pub mod source_fs;
 pub mod sys_time;
 pub mod system_control;
 pub mod tmdb;

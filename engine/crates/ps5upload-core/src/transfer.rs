@@ -98,6 +98,8 @@ pub const DEFAULT_PACK_FILE_COUNT_MAX: usize = 2000;
 
 #[derive(Debug, Clone)]
 pub struct TransferConfig {
+    /// Where the source files are read from; `None` = this computer's disk.
+    pub source_fs: Option<std::sync::Arc<dyn crate::source_fs::SourceFs>>,
     /// FTX2 server address (e.g. "192.168.137.2:9113")
     pub addr: String,
     /// Maximum bytes per shard
@@ -207,6 +209,15 @@ impl TransferConfig {
             progress_bytes_finalized: None,
             bandwidth_cap_bps: None,
             cancel: None,
+            source_fs: None,
+        }
+    }
+
+    /// The file system the source is read from.
+    pub fn fs(&self) -> &dyn crate::source_fs::SourceFs {
+        match &self.source_fs {
+            Some(fs) => fs.as_ref(),
+            None => &crate::source_fs::LocalFs,
         }
     }
 
@@ -1328,11 +1339,14 @@ fn transfer_file_path_with_flags(
     use std::io::{Read, Seek, SeekFrom};
 
     let tx_id_hex = bytes_to_hex(&tx_id);
-    let meta = std::fs::metadata(src).with_context(|| format!("stat {}", src.display()))?;
-    if !meta.is_file() {
+    let meta = cfg
+        .fs()
+        .metadata(src)
+        .with_context(|| format!("stat {}", src.display()))?;
+    if !meta.is_file {
         bail!("source is not a regular file: {}", src.display());
     }
-    let total_bytes = meta.len();
+    let total_bytes = meta.len;
     // A 0-byte file needs ONE empty shard (not zero) so the payload's direct
     // writer creates the temp file that COMMIT renames into place — otherwise
     // commit fails with `direct_rename_failed` (confirmed on hardware). With
@@ -1379,8 +1393,10 @@ fn transfer_file_path_with_flags(
 
     let mut shards_sent = 0u64;
     {
-        let mut file =
-            std::fs::File::open(src).with_context(|| format!("open {}", src.display()))?;
+        let mut file = cfg
+            .fs()
+            .open(src)
+            .with_context(|| format!("open {}", src.display()))?;
         if last_acked_shard > 0 {
             file.seek(SeekFrom::Start(
                 last_acked_shard.saturating_mul(cfg.shard_size as u64),
@@ -1567,17 +1583,19 @@ pub fn transfer_file_path_resumable(
 
 // ─── Directory transfer ───────────────────────────────────────────────────────
 
-/// Collect all regular files under `dir`, sorted by path.
-pub fn collect_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
+/// Collect all regular files under `dir` on `fs`, sorted by path.
+pub fn collect_files_with(
+    fs: &dyn crate::source_fs::SourceFs,
+    dir: &Path,
+) -> Result<Vec<std::path::PathBuf>> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(cur) = stack.pop() {
-        let entries: Vec<_> = std::fs::read_dir(&cur)
-            .with_context(|| format!("readdir {}", cur.display()))?
-            .collect::<std::result::Result<_, _>>()?;
-        for entry in entries {
-            let p = entry.path();
-            if p.is_dir() {
+        let entries = fs
+            .read_dir(&cur)
+            .with_context(|| format!("readdir {}", cur.display()))?;
+        for (p, is_dir) in entries {
+            if is_dir {
                 stack.push(p);
             } else {
                 out.push(p);
@@ -1586,6 +1604,11 @@ pub fn collect_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
     }
     out.sort();
     Ok(out)
+}
+
+/// Collect all regular files under `dir`, sorted by path.
+pub fn collect_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
+    collect_files_with(&crate::source_fs::LocalFs, dir)
 }
 
 /// Per-destination description to emit into the manifest. One entry per
@@ -1708,6 +1731,7 @@ impl PackPlanner {
 fn materialise_body(
     ps: &PlannedShard,
     progress_files: Option<&std::sync::atomic::AtomicU64>,
+    fs: &dyn crate::source_fs::SourceFs,
 ) -> Result<Vec<u8>> {
     use std::io::{Read, Seek, SeekFrom};
     match ps {
@@ -1718,7 +1742,8 @@ fn materialise_body(
             len,
             ..
         } => {
-            let mut f = std::fs::File::open(source)
+            let mut f = fs
+                .open(source)
                 .with_context(|| format!("open {}", source.display()))?;
             if *offset > 0 {
                 f.seek(SeekFrom::Start(*offset))
@@ -1764,7 +1789,8 @@ fn materialise_body(
                 buf.extend_from_slice(&path_len.to_le_bytes());
                 buf.extend_from_slice(&rec_size.to_le_bytes());
                 buf.extend_from_slice(p);
-                let mut f = std::fs::File::open(&r.source)
+                let mut f = fs
+                    .open(&r.source)
                     .with_context(|| format!("open pack record {}", r.source.display()))?;
                 let start = buf.len();
                 buf.resize(start + r.size as usize, 0);
@@ -1857,7 +1883,7 @@ pub fn transfer_dir_with_flags(
     flags: u32,
 ) -> Result<TransferResult> {
     let tx_id_hex = bytes_to_hex(&tx_id);
-    let all_files = collect_files(src_dir)?;
+    let all_files = collect_files_with(cfg.fs(), src_dir)?;
     // Apply cfg.excludes before the manifest is built. Default is empty
     // (match legacy behavior). Callers set excludes explicitly via
     // `cfg.excludes = ...` or ergonomically via
@@ -1889,11 +1915,14 @@ pub fn transfer_dir_with_flags(
     let mut packer = PackPlanner::new(cfg.pack_size.max(4096), cfg.pack_file_count_max);
 
     for lf in &local_files {
-        let meta = std::fs::metadata(lf).with_context(|| format!("stat {}", lf.display()))?;
-        if !meta.is_file() {
+        let meta = cfg
+            .fs()
+            .metadata(lf)
+            .with_context(|| format!("stat {}", lf.display()))?;
+        if !meta.is_file {
             continue;
         }
-        let size = meta.len();
+        let size = meta.len;
         let rel = lf.strip_prefix(src_dir).unwrap_or(lf.as_path());
         let dest_path = join_ps5_path(dest_root, rel);
         total_bytes += size;
@@ -2013,7 +2042,7 @@ pub fn transfer_dir_with_flags(
             if seq <= last_acked_shard {
                 continue;
             }
-            let body = materialise_body(ps, cfg.progress_files.as_deref())?;
+            let body = materialise_body(ps, cfg.progress_files.as_deref(), cfg.fs())?;
             let (record_count, flags) = planned_shard_meta(ps);
             shards_sent += 1;
             // Non-packed shards (large-file bodies) report their body bytes as
@@ -2193,8 +2222,11 @@ pub fn transfer_file_list_with_flags(
     let mut packer = PackPlanner::new(cfg.pack_size.max(4096), cfg.pack_file_count_max);
 
     for entry in entries {
-        let meta = std::fs::metadata(&entry.src).with_context(|| format!("stat {}", entry.src))?;
-        let size = meta.len();
+        let meta = cfg
+            .fs()
+            .metadata(Path::new(&entry.src))
+            .with_context(|| format!("stat {}", entry.src))?;
+        let size = meta.len;
         let resolved_dest = if entry.dest.starts_with('/') {
             entry.dest.clone()
         } else {
@@ -2315,7 +2347,7 @@ pub fn transfer_file_list_with_flags(
             if seq <= last_acked_shard {
                 continue;
             }
-            let body = materialise_body(ps, cfg.progress_files.as_deref())?;
+            let body = materialise_body(ps, cfg.progress_files.as_deref(), cfg.fs())?;
             let (record_count, flags) = planned_shard_meta(ps);
             shards_sent += 1;
             // Non-packed shards (large-file bodies) report their body bytes as
@@ -2618,7 +2650,12 @@ pub fn transfer_file_list_multistream(
     // when it tries to read the file.
     let weights: Vec<u64> = entries
         .iter()
-        .map(|e| std::fs::metadata(&e.src).map(|m| m.len()).unwrap_or(0))
+        .map(|e| {
+            cfg.fs()
+                .metadata(Path::new(&e.src))
+                .map(|m| m.len)
+                .unwrap_or(0)
+        })
         .collect();
     let buckets = distribute_balanced(&weights, effective);
 
@@ -5281,7 +5318,7 @@ mod materialise_body_tests {
         // (e.g. `.gitkeep`). The body must be empty — non-empty would
         // confuse the payload's record parser.
         let s = PlannedShard::Empty { shard_seq: 7 };
-        let body = materialise_body(&s, None).expect("empty shard");
+        let body = materialise_body(&s, None, &crate::source_fs::LocalFs).expect("empty shard");
         assert_eq!(body.len(), 0);
     }
 
@@ -5303,7 +5340,8 @@ mod materialise_body_tests {
             offset: 50,
             len: 32,
         };
-        let body = materialise_body(&s, None).expect("non-packed shard");
+        let body =
+            materialise_body(&s, None, &crate::source_fs::LocalFs).expect("non-packed shard");
         assert_eq!(body, &payload[50..82]);
         std::fs::remove_dir_all(dir).ok();
     }
@@ -5336,7 +5374,7 @@ mod materialise_body_tests {
             shard_seq: 0,
             records,
         };
-        let body = materialise_body(&s, None).expect("packed shard");
+        let body = materialise_body(&s, None, &crate::source_fs::LocalFs).expect("packed shard");
 
         let mut expected: Vec<u8> = Vec::new();
         // record 1: path_len=17, size=5, "sce_sys/icon0.png", "hello"
@@ -5378,7 +5416,8 @@ mod materialise_body_tests {
                 size: u64::from(u32::MAX) + 1,
             }],
         };
-        let err = materialise_body(&s, None).expect_err("should reject oversize");
+        let err = materialise_body(&s, None, &crate::source_fs::LocalFs)
+            .expect_err("should reject oversize");
         let msg = format!("{err:#}");
         assert!(
             msg.contains("exceeds u32") || msg.contains("pack record size"),
@@ -6109,5 +6148,109 @@ mod rar_param_root_tests {
             pick(&["A/sce_sys/param.json", "B/sce_sys/param.json"]),
             Some("A".to_string())
         );
+    }
+}
+
+#[cfg(test)]
+mod source_fs_tests {
+    use super::*;
+
+    /// An in-memory SourceFs holding the same tree as a temp dir, at the same paths.
+    #[derive(Debug)]
+    struct MemSourceFs(std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>);
+
+    impl crate::source_fs::SourceFs for MemSourceFs {
+        fn open(
+            &self,
+            p: &std::path::Path,
+        ) -> std::io::Result<Box<dyn crate::source_fs::ReadSeek>> {
+            let b = self.0.get(p).cloned().ok_or(std::io::ErrorKind::NotFound)?;
+            Ok(Box::new(std::io::Cursor::new(b)))
+        }
+        fn metadata(&self, p: &std::path::Path) -> std::io::Result<crate::source_fs::SourceMeta> {
+            if let Some(b) = self.0.get(p) {
+                return Ok(crate::source_fs::SourceMeta {
+                    len: b.len() as u64,
+                    is_dir: false,
+                    is_file: true,
+                });
+            }
+            if self.0.keys().any(|k| k.starts_with(p)) {
+                return Ok(crate::source_fs::SourceMeta {
+                    len: 0,
+                    is_dir: true,
+                    is_file: false,
+                });
+            }
+            Err(std::io::ErrorKind::NotFound.into())
+        }
+        fn read_dir(
+            &self,
+            p: &std::path::Path,
+        ) -> std::io::Result<Vec<(std::path::PathBuf, bool)>> {
+            let mut out: Vec<(std::path::PathBuf, bool)> = Vec::new();
+            for k in self.0.keys() {
+                if let Ok(rest) = k.strip_prefix(p) {
+                    let mut comps = rest.components();
+                    let first = p.join(comps.next().unwrap());
+                    let is_dir = comps.next().is_some();
+                    if !out.iter().any(|(q, _)| *q == first) {
+                        out.push((first, is_dir));
+                    }
+                }
+            }
+            Ok(out)
+        }
+    }
+
+    #[test]
+    fn a_source_fs_reads_exactly_what_local_disk_would() {
+        // The same tree, served from memory under paths that do not exist on disk.
+        let root = std::path::PathBuf::from("/remote-only/game");
+        let files: Vec<(&str, Vec<u8>)> = vec![
+            ("eboot.bin", (0u8..=255).cycle().take(10_000).collect()),
+            ("sce_sys/param.json", b"{}".to_vec()),
+            ("sce_sys/icon0.png", vec![9u8; 300]),
+        ];
+        let mem = MemSourceFs(
+            files
+                .iter()
+                .map(|(p, b)| (root.join(p), b.clone()))
+                .collect(),
+        );
+        let listed = collect_files_with(&mem, &root).expect("walk through the source fs");
+        let rel: Vec<_> = listed
+            .iter()
+            .map(|p| {
+                p.strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        assert_eq!(
+            rel,
+            ["eboot.bin", "sce_sys/icon0.png", "sce_sys/param.json"]
+        );
+
+        let s = PlannedShard::NonPacked {
+            shard_seq: 0,
+            source: root.join("eboot.bin"),
+            offset: 100,
+            len: 64,
+        };
+        let body = materialise_body(&s, None, &mem).expect("non-packed shard from the source fs");
+        assert_eq!(body, files[0].1[100..164]);
+
+        let s = PlannedShard::Packed {
+            shard_seq: 0,
+            records: vec![PackRecord {
+                dest_path: "sce_sys/param.json".into(),
+                source: root.join("sce_sys/param.json"),
+                size: 2,
+            }],
+        };
+        let body = materialise_body(&s, None, &mem).expect("packed shard from the source fs");
+        assert!(body.ends_with(b"{}"));
     }
 }

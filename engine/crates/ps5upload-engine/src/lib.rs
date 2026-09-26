@@ -727,6 +727,41 @@ fn walk_plan(root: &std::path::Path, excludes: &[String]) -> (u64, Vec<PlannedFi
     (total, out)
 }
 
+/// `walk_plan` over any source (a saved server): one listing per folder, sizes from the listing.
+fn walk_plan_with(
+    fs: &dyn ps5upload_core::source_fs::SourceFs,
+    root: &std::path::Path,
+    excludes: &[String],
+) -> (u64, Vec<PlannedFile>) {
+    let mut stack = vec![root.to_path_buf()];
+    let mut total = 0u64;
+    let mut out = Vec::new();
+    while let Some(dir) = stack.pop() {
+        let Ok(children) = fs.read_dir(&dir) else {
+            continue;
+        };
+        for (path, is_dir) in children {
+            if is_dir {
+                stack.push(path);
+                continue;
+            }
+            if ps5upload_core::excludes::is_excluded_strings(&path, excludes) {
+                continue;
+            }
+            if let Ok(m) = fs.metadata(&path) {
+                total += m.len;
+                let rel = path.strip_prefix(root).unwrap_or(&path);
+                out.push(PlannedFile {
+                    rel_path: rel.to_string_lossy().replace('\\', "/"),
+                    size: m.len,
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    (total, out)
+}
+
 /// Spawn a 200 ms timer that republishes the Running job state with the
 /// latest `bytes_sent` pulled from the shared progress counter the
 /// transfer loop is incrementing. Returns the stop flag — caller sets
@@ -4683,11 +4718,33 @@ async fn transfer_file_handler(
     // 400 here surfaces the user error immediately at the API level.
     // Stat via spawn_blocking — sources can live on network mounts
     // where a blocking stat would stall the reactor for every console.
-    let src_for_stat = req.src.clone();
-    let total_bytes = match tokio::task::spawn_blocking(move || std::fs::metadata(&src_for_stat))
-        .await
+    // A `remote://` source reads through the saved server; anything else is local disk.
+    let (source_fs, src_path): (
+        Option<Arc<dyn ps5upload_core::source_fs::SourceFs>>,
+        std::path::PathBuf,
+    ) = if remote::path::is_remote(&req.src) {
+        match remote::source_fs::RemoteSourceFs::for_path(&req.src).await {
+            Ok((fs, p)) => (Some(fs), p),
+            Err(e) => {
+                return json_err(StatusCode::BAD_REQUEST, format!("cannot read source: {e}"))
+                    .into_response()
+            }
+        }
+    } else {
+        (None, std::path::PathBuf::from(&req.src))
+    };
+    let stat_fs = source_fs.clone();
+    let src_for_stat = src_path.clone();
+    let total_bytes = match tokio::task::spawn_blocking(move || match stat_fs {
+        Some(fs) => fs.metadata(&src_for_stat),
+        None => ps5upload_core::source_fs::SourceFs::metadata(
+            &ps5upload_core::source_fs::LocalFs,
+            &src_for_stat,
+        ),
+    })
+    .await
     {
-        Ok(Ok(m)) if m.is_file() => m.len(),
+        Ok(Ok(m)) if m.is_file => m.len,
         Ok(Ok(_)) => {
             return json_err(
                 StatusCode::BAD_REQUEST,
@@ -4706,7 +4763,7 @@ async fn transfer_file_handler(
             return json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
         }
     };
-    let src_basename = std::path::Path::new(&req.src)
+    let src_basename = src_path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| req.src.clone());
@@ -4812,7 +4869,7 @@ async fn transfer_file_handler(
         // whole-file Vec allocation and mmap address-space/page-cache
         // failure modes that can look like OOM on Windows/Linux with
         // 50-100 GiB game images.
-        let src_path = std::path::PathBuf::from(&req.src);
+        cfg.source_fs = source_fs;
         let result = transfer_file_path_resumable(
             &cfg,
             tx_id,
@@ -4950,8 +5007,39 @@ async fn transfer_dir_handler(
         // fake "Done, 0 files") instead of a clear error. This used to be a
         // 400 on the POST; now the id is already out, so it lands as a job
         // failure the client surfaces the same way.
-        let src_path = std::path::PathBuf::from(&req.src_dir);
-        if !src_path.is_dir() {
+        // A `remote://` source reads through the saved server; anything else is local disk.
+        let (source_fs, src_path): (
+            Option<Arc<dyn ps5upload_core::source_fs::SourceFs>>,
+            std::path::PathBuf,
+        ) = if remote::path::is_remote(&req.src_dir) {
+            match tokio::runtime::Handle::current()
+                .block_on(remote::source_fs::RemoteSourceFs::for_path(&req.src_dir))
+            {
+                Ok((fs, p)) => (Some(fs), p),
+                Err(e) => {
+                    let completed_at_ms = now_ms();
+                    set_job(
+                        &jobs,
+                        &events_tx,
+                        job_id,
+                        job_failed_from_err(
+                            started_at_ms,
+                            completed_at_ms,
+                            &anyhow::anyhow!("cannot read source: {e}"),
+                        ),
+                    );
+                    fail_guard.mark_succeeded();
+                    return;
+                }
+            }
+        } else {
+            (None, std::path::PathBuf::from(&req.src_dir))
+        };
+        let is_dir = match &source_fs {
+            Some(fs) => fs.metadata(&src_path).map(|m| m.is_dir).unwrap_or(false),
+            None => src_path.is_dir(),
+        };
+        if !is_dir {
             let completed_at_ms = now_ms();
             set_job(
                 &jobs,
@@ -4971,7 +5059,10 @@ async fn transfer_dir_handler(
         }
 
         let walk_started = std::time::Instant::now();
-        let (total_bytes, files) = walk_plan(&src_path, &req.excludes);
+        let (total_bytes, files) = match &source_fs {
+            Some(fs) => walk_plan_with(fs.as_ref(), &src_path, &req.excludes),
+            None => walk_plan(&src_path, &req.excludes),
+        };
         let files_sent_count = files.len() as u64;
         crate::log_info!(
             "transfer_dir: job={job_id} walk done in {} ms — files={} bytes={}",
@@ -5041,6 +5132,7 @@ async fn transfer_dir_handler(
         // See ticker stop-guard rationale at the file-upload spawn site.
         let _stop_guard = TickerStopGuard::new(stop_ticker);
         let mut cfg = make_transfer_config(&addr);
+        cfg.source_fs = source_fs;
         // Make this transfer cancellable: register a flag the core checks at
         // every shard boundary, flipped by POST /api/jobs/{id}/cancel.
         cfg.cancel = Some(register_transfer_cancel(job_id));

@@ -15,6 +15,7 @@ pub mod path;
 pub mod pool;
 pub mod range;
 pub mod smb_fs;
+pub mod source_fs;
 pub mod store;
 
 use std::collections::BTreeMap;
