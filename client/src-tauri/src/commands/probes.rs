@@ -219,7 +219,7 @@ async fn do_payload_send(ip: &str, path: &str, target_port: u16) -> Result<u64, 
     // Does the ELF we're about to load identify as a ps5upload payload?
     // Only ps5upload payloads bind :9114/:9113, so only they contend with a
     // running ps5upload — and only they warrant evicting it (below). Other
-    // ELFs (the DPI install daemon on :9040, scene tools) bind different
+    // ELFs (the DPI install daemon on :9115, scene tools) bind different
     // ports and can load ALONGSIDE ps5upload, so they must NOT knock it
     // offline. Determined here while the file is already open.
     let mut sending_ps5upload = false;
@@ -264,7 +264,7 @@ async fn do_payload_send(ip: &str, path: &str, target_port: u16) -> Result<u64, 
     //
     // GATED on `sending_ps5upload`: we ONLY evict when the incoming ELF is
     // itself a ps5upload payload (the only thing that contends for :9114).
-    // Loading a different-port daemon — e.g. the DPI installer (:9040) —
+    // Loading a different-port daemon — e.g. the DPI installer (:9115) —
     // leaves ps5upload running, so an install no longer drops the transfer
     // connection. (On a single-payload loader the loader itself may still
     // clobber ps5upload; that's outside our control, and the post-install
@@ -543,19 +543,19 @@ pub async fn payload_bundled_path(app: AppHandle) -> serde_json::Value {
     }
 }
 
-// ─── DPI install daemon (ezremote-dpi) auto-load ─────────────────────
+// ─── DPI install daemon (ps5upload-installer) auto-load ─────────────────────
 
-const DPI_DAEMON_PORT: u16 = 9040;
+const DPI_DAEMON_PORT: u16 = 9115;
 
 /// DPI daemon ELF, embedded when present at build time (see build.rs's
-/// `have_dpi` gate). Absent in CI build-verification (no DPI build) —
+/// `have_installer` gate). Absent in CI build-verification (no DPI build) —
 /// then `dpi_ensure` reports it unavailable rather than failing to link.
-#[cfg(have_dpi)]
-const EMBEDDED_DPI_GZ: &[u8] = include_bytes!(env!("PS5UPLOAD_DPI_GZ_BYTES"));
+#[cfg(have_installer)]
+const EMBEDDED_INSTALLER_GZ: &[u8] = include_bytes!(env!("PS5UPLOAD_INSTALLER_GZ_BYTES"));
 
 /// Extract the embedded DPI daemon ELF into the app's local-data dir,
 /// blake3-stamped for reuse. Mirrors `find_bundled_payload`.
-#[cfg(have_dpi)]
+#[cfg(have_installer)]
 fn find_bundled_dpi(app: &AppHandle) -> Result<PathBuf, String> {
     use std::fs;
     use std::io::{Read, Write};
@@ -566,9 +566,9 @@ fn find_bundled_dpi(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("app_local_data_dir: {e}"))?
         .join("payload");
     fs::create_dir_all(&out_dir).map_err(|e| format!("mkdir {}: {e}", out_dir.display()))?;
-    let out_path = out_dir.join("ezremote-dpi.elf");
-    let stamp_path = out_dir.join("ezremote-dpi.elf.gz.blake3");
-    let embedded_hex = blake3::hash(EMBEDDED_DPI_GZ).to_hex().to_string();
+    let out_path = out_dir.join("ps5upload-installer.elf");
+    let stamp_path = out_dir.join("ps5upload-installer.elf.gz.blake3");
+    let embedded_hex = blake3::hash(EMBEDDED_INSTALLER_GZ).to_hex().to_string();
 
     if let (Ok(stored), Ok(meta)) = (fs::read_to_string(&stamp_path), fs::metadata(&out_path)) {
         if stored.trim() == embedded_hex && meta.len() > 0 {
@@ -584,14 +584,14 @@ fn find_bundled_dpi(app: &AppHandle) -> Result<PathBuf, String> {
         }
     }
     let tmp_path = out_dir.join(format!(
-        "ezremote-dpi.elf.tmp.{}.{}",
+        "ps5upload-installer.elf.tmp.{}.{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0),
     ));
-    let mut decoder = flate2::read::GzDecoder::new(EMBEDDED_DPI_GZ);
+    let mut decoder = flate2::read::GzDecoder::new(EMBEDDED_INSTALLER_GZ);
     let mut tmp =
         fs::File::create(&tmp_path).map_err(|e| format!("create {}: {e}", tmp_path.display()))?;
     let mut buf = [0u8; 64 * 1024];
@@ -635,12 +635,12 @@ fn find_bundled_dpi(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(out_path)
 }
 
-/// Ensure the DPI install daemon is listening on `:9040`. Reuses one
+/// Ensure the DPI install daemon is listening on `:9115`. Reuses one
 /// that's already up (ours from a prior call, or a scene daemon like
-/// etaHEN/ezRemote). Otherwise streams the bundled `ezremote-dpi.elf`
+/// etaHEN/ezRemote). Otherwise streams the bundled `ps5upload-installer.elf`
 /// to the loader (`:9021`) — which on a single-payload loader REPLACES
 /// our main payload, so the caller must re-send the main payload after
-/// the install — and waits for `:9040`.
+/// the install — and waits for `:9115`.
 ///
 /// Response: `{ ok, listening, sent, error?, reason? }`. `reason` is the
 /// machine-readable cause of a failure (`no_image`, `loader_unreachable`,
@@ -659,7 +659,7 @@ pub async fn dpi_ensure(app: AppHandle, ip: String) -> serde_json::Value {
     if up().await {
         return serde_json::json!({ "ok": true, "listening": true, "sent": false });
     }
-    #[cfg(have_dpi)]
+    #[cfg(have_installer)]
     {
         let dpi_path = match find_bundled_dpi(&app) {
             Ok(p) => p,
@@ -685,10 +685,10 @@ pub async fn dpi_ensure(app: AppHandle, ip: String) -> serde_json::Value {
             }
         }
         serde_json::json!({ "ok": false, "sent": true, "listening": false,
-                            "error": "DPI daemon did not come up on :9040",
+                            "error": "DPI daemon did not come up on :9115",
                             "reason": ps5upload_core::payload_lifecycle::DPI_REASON_NO_BRINGUP })
     }
-    #[cfg(not(have_dpi))]
+    #[cfg(not(have_installer))]
     {
         let _ = app;
         serde_json::json!({ "ok": false, "listening": false, "sent": false,
@@ -1001,7 +1001,7 @@ mod payload_send_tests {
         // The DPI daemon and other scene ELFs must NOT match — loading
         // them leaves a running ps5upload untouched.
         assert!(!is_ps5upload_payload(
-            "/x/ezremote-dpi.elf",
+            "/x/ps5upload-installer.elf",
             b"\x7FELF some other daemon"
         ));
         assert!(!is_ps5upload_payload("/x/exploit.elf", b"\x7FELF\x00\x00"));

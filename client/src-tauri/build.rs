@@ -47,28 +47,28 @@ fn main() {
     );
     println!("cargo:rerun-if-changed={}", payload_gz.display());
 
-    // ── DPI install daemon (ezremote-dpi.elf.gz): OPTIONAL embed ──
+    // ── PS5Upload installer daemon (ps5upload-installer.elf.gz): OPTIONAL embed ──
     // Unlike the main payload we do NOT require this — CI's build-
-    // verification jobs stub only the main payload, so the DPI gz won't
-    // exist there. We gate the embed behind `have_dpi`: present →
+    // verification jobs stub only the main payload, so the installer gz won't
+    // exist there. We gate the embed behind `have_installer`: present →
     // embed + flag on; absent → flag off and probes.rs ships an empty
-    // bytes/None so the shell still compiles (DPI just unavailable).
-    // Real payload builds (`make payload` depends on `dpi`) produce it,
+    // bytes/None so the shell still compiles (the installer just unavailable).
+    // Real payload builds (`make payload` depends on `installer`) produce it,
     // and publish.yml carries it into the client build for releases.
     // `rustc-check-cfg` is emitted unconditionally so the cfg is a known
     // name and the unexpected_cfgs lint stays quiet under `-D warnings`.
-    println!("cargo::rustc-check-cfg=cfg(have_dpi)");
-    let dpi_gz = repo_root
+    println!("cargo::rustc-check-cfg=cfg(have_installer)");
+    let installer_gz = repo_root
         .join("payload")
-        .join("dpi")
-        .join("ezremote-dpi.elf.gz");
-    println!("cargo:rerun-if-changed={}", dpi_gz.display());
-    if dpi_gz.is_file() {
+        .join("installer")
+        .join("ps5upload-installer.elf.gz");
+    println!("cargo:rerun-if-changed={}", installer_gz.display());
+    if installer_gz.is_file() {
         println!(
-            "cargo:rustc-env=PS5UPLOAD_DPI_GZ_BYTES={}",
-            dpi_gz.display()
+            "cargo:rustc-env=PS5UPLOAD_INSTALLER_GZ_BYTES={}",
+            installer_gz.display()
         );
-        println!("cargo:rustc-cfg=have_dpi");
+        println!("cargo:rustc-cfg=have_installer");
     }
 
     // ── Engine binary: DESKTOP ONLY ──

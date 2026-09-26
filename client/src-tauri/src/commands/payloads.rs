@@ -264,45 +264,6 @@ const CATALOGUE: &[CatalogueEntry] = &[
         homepage: "https://github.com/ps5-payload-dev/websrv",
     },
     CatalogueEntry {
-        // PKG-install daemon — alternative install pipeline to our
-        // payload's in-process AppInstUtil + ShellUI-RPC tiers.
-        //
-        // The trick DPI solves: Sony's installer's `Register/Start`
-        // calls own a long-lived state machine; if the caller process
-        // dies (or the kernel garbage-collects the call's owning
-        // context) before the install finishes, the install
-        // "evaporates" — accepted, then silently aborted. DPI runs
-        // as its own process whose only job is to own that state
-        // machine for the install's lifetime, which is why
-        // sonicloader and ezremote-client both prefer it as the
-        // primary install path.
-        //
-        // Wire protocol on loopback 127.0.0.1:9040: send raw URL or
-        // /user/data path bytes, read up to 256 bytes back; "ok" /
-        // "queued" / "" = success, anything else = the rejection
-        // reason. No framing, no length prefix.
-        //
-        // Caveat: DPI binds 127.0.0.1, so the desktop cannot reach
-        // it directly — only an on-PS5 process can. As of 2.8.0 the
-        // catalogue entry lets users install DPI from the Library
-        // tab; the payload-side proxy frame that lets our install
-        // runner actually USE DPI as a tier ships in a follow-up.
-        id: "ezremote-dpi",
-        display_name: "ezremote-DPI (install daemon)",
-        role: "PKG install daemon",
-        description: "Long-lived loopback install daemon (127.0.0.1:9040). Owns Sony's PlayGo/AppInstUtil install state machine so installs don't evaporate when the calling process exits. Sonicloader and ezremote-client both use this as their primary install path. Once installed, ps5upload's install runner will offer a 'DPI' method that proxies to it (planned for follow-up).",
-        repo_host: "github.com",
-        repo_owner: "cy33hc",
-        repo_name: "ps5-ezremote-dpi",
-        asset_name_hint: "ezremote-dpi",
-        on_console_marker_path: Some("/data/ezremote-dpi.elf"),
-        process_name_hint: Some("ezremote-dpi"),
-        ports: &[],
-        autoload_priority: 3,
-        autoload_delay_ms: 500,
-        homepage: "https://github.com/cy33hc/ps5-ezremote-dpi",
-    },
-    CatalogueEntry {
         id: "ps5-app-dumper",
         display_name: "ps5-app-dumper",
         role: "Dump installed apps to USB",
