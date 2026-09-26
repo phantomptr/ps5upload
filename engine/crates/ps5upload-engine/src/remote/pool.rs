@@ -50,17 +50,14 @@ impl Connector for RealConnector {
     async fn connect(
         &self,
         conn: &Connection,
-        _secret: &Secret,
+        secret: &Secret,
     ) -> Result<Arc<dyn RemoteFs>, RemoteError> {
-        let name = match conn.protocol {
-            Protocol::Smb => "SMB",
-            Protocol::Ftp => "FTP",
-            Protocol::Ftps => "FTPS",
-            Protocol::Sftp => "SFTP",
-        };
-        Err(RemoteError::Io(format!(
-            "{name} servers are not available yet"
-        )))
+        match conn.protocol {
+            Protocol::Smb => Ok(Arc::new(super::smb_fs::SmbFs::connect(conn, secret).await?)),
+            Protocol::Ftp => Err(RemoteError::Io("FTP servers are not available yet".into())),
+            Protocol::Ftps => Err(RemoteError::Io("FTPS servers are not available yet".into())),
+            Protocol::Sftp => Err(RemoteError::Io("SFTP servers are not available yet".into())),
+        }
     }
 }
 

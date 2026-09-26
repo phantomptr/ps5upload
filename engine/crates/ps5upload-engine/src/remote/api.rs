@@ -7,6 +7,8 @@ use axum::Json;
 use serde::Deserialize;
 use serde_json::json;
 
+use super::hints::hint_for;
+use super::path;
 use super::pool::{global, Remote};
 use super::store::{default_port, Connection, Protocol, Secret};
 use super::RemoteError;
@@ -90,13 +92,15 @@ fn parse_body(body: ConnectionBody) -> Result<(Connection, Option<Secret>), Box<
     ))
 }
 
+/// `{ error, hint? }` with a status that says what kind of failure it was.
 fn remote_err(e: &RemoteError) -> Response {
     let code = match e {
         RemoteError::UnknownConnection(_) | RemoteError::NotFound(_) => StatusCode::NOT_FOUND,
         RemoteError::BadPath(_) => StatusCode::BAD_REQUEST,
         _ => StatusCode::BAD_GATEWAY,
     };
-    err(code, e.to_string())
+    let msg = e.to_string();
+    (code, Json(json!({ "error": msg, "hint": hint_for(&msg) }))).into_response()
 }
 
 pub(crate) async fn list_connections(r: &Remote) -> Response {
@@ -152,7 +156,35 @@ async fn try_connection(r: &Remote, conn: &Connection, secret: &Secret) -> Respo
     .map_err(|e| super::pool::scrub(e, secret));
     match result {
         Ok(()) => Json(json!({ "ok": true })).into_response(),
-        Err(e) => Json(json!({ "ok": false, "error": e.to_string() })).into_response(),
+        Err(e) => {
+            let msg = e.to_string();
+            Json(json!({ "ok": false, "error": msg, "hint": hint_for(&msg) })).into_response()
+        }
+    }
+}
+
+/// One page of a folder on a saved server.
+pub(crate) async fn list_dir(r: &Remote, remote: &str, cursor: Option<String>) -> Response {
+    let result = async {
+        let p = path::parse(remote)?;
+        let fs = r.pool.fs(&r.store, &p.connection_id).await?;
+        fs.list(&p.path, cursor).await
+    }
+    .await;
+    match result {
+        Ok(page) => Json(page).into_response(),
+        Err(e) => remote_err(&e),
+    }
+}
+
+/// The shares an SMB server offers (for the connection form's share picker).
+async fn shares_of(conn: &Connection, secret: &Secret) -> Response {
+    if conn.protocol != Protocol::Smb {
+        return err(StatusCode::BAD_REQUEST, "Only SMB servers have shares.");
+    }
+    match super::smb_fs::list_shares(conn, secret).await {
+        Ok(shares) => Json(json!({ "shares": shares })).into_response(),
+        Err(e) => remote_err(&super::pool::scrub(e, secret)),
     }
 }
 
@@ -199,6 +231,35 @@ pub async fn test_saved_handler(Path(id): Path<String>) -> Response {
 }
 pub async fn test_form_handler(Json(body): Json<ConnectionBody>) -> Response {
     with_remote!(r => test_form(&r, body).await)
+}
+
+#[derive(Deserialize)]
+pub struct ListBody {
+    pub path: String,
+    #[serde(default)]
+    pub cursor: Option<String>,
+}
+
+pub async fn list_dir_handler(Json(body): Json<ListBody>) -> Response {
+    with_remote!(r => list_dir(&r, &body.path, body.cursor).await)
+}
+
+pub async fn shares_saved_handler(Path(id): Path<String>) -> Response {
+    with_remote!(r => match r.store.get(&id) {
+        Some((conn, secret)) => shares_of(&conn, &secret).await,
+        None => remote_err(&RemoteError::UnknownConnection(id)),
+    })
+}
+
+pub async fn shares_form_handler(Json(mut body): Json<ConnectionBody>) -> Response {
+    // Listing shares happens before one is chosen, so the form may not name one yet.
+    if body.connection.share.trim().is_empty() {
+        body.connection.share = "IPC$".into();
+    }
+    match parse_body(body) {
+        Ok((conn, secret)) => shares_of(&conn, &secret.unwrap_or(Secret::None)).await,
+        Err(resp) => *resp,
+    }
 }
 
 #[cfg(test)]
@@ -304,5 +365,47 @@ mod tests {
             add_connection(&r, no_share).await.status(),
             StatusCode::BAD_REQUEST
         );
+    }
+
+    #[tokio::test]
+    async fn lists_a_folder_by_remote_path() {
+        let r = remote_with(MemFs::new(&[("/g/a.pkg", b"x"), ("/g/b.pkg", b"yy")]), None);
+        let id = body(add_connection(&r, nas_form()).await).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let out = body(list_dir(&r, &format!("remote://{id}/g"), None).await).await;
+        let names: Vec<_> = out["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names, ["a.pkg", "b.pkg"]);
+        assert!(out["next_cursor"].is_null());
+        let gone = list_dir(&r, "remote://nope-0000/g", None).await;
+        assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+        assert!(body(gone).await["error"]
+            .as_str()
+            .unwrap()
+            .contains("no longer exists"));
+        let bad = list_dir(&r, &format!("remote://{id}/../x"), None).await;
+        assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn a_failure_carries_a_plain_hint() {
+        let r = remote_with(
+            MemFs::new(&[]),
+            Some(|_| RemoteError::Auth("STATUS_ACCOUNT_DISABLED (0xC0000072)".into())),
+        );
+        let id = body(add_connection(&r, nas_form()).await).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let out = body(list_dir(&r, &format!("remote://{id}/"), None).await).await;
+        assert!(out["hint"].as_str().unwrap().contains("Guest account"));
+        let tested = body(test_saved(&r, &id).await).await;
+        assert!(tested["hint"].as_str().unwrap().contains("Guest account"));
     }
 }

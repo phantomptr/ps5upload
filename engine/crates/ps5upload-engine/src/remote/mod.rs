@@ -8,8 +8,12 @@
 #![allow(dead_code)] // Consumers arrive in later steps of the remote-sources plan.
 
 pub mod api;
+#[cfg(test)]
+pub(crate) mod contract;
+pub mod hints;
 pub mod path;
 pub mod pool;
+pub mod smb_fs;
 pub mod store;
 
 use std::collections::BTreeMap;
@@ -293,6 +297,12 @@ mod tests {
             Err(RemoteError::NotFound(_))
         ));
         assert!(matches!(fs.open("/g").await, Err(RemoteError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn memfs_meets_the_contract() {
+        let fs = MemFs::new(&[("/g/a.bin", b"0123456789abcdefXYZ"), ("/g/sub/b", b"x")]);
+        crate::remote::contract::check(&fs, "/g").await;
     }
 
     #[tokio::test]

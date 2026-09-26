@@ -9229,6 +9229,12 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             post(remote::api::test_saved_handler),
         )
         .route("/api/remote/test", post(remote::api::test_form_handler))
+        .route("/api/remote/list", post(remote::api::list_dir_handler))
+        .route("/api/remote/shares", post(remote::api::shares_form_handler))
+        .route(
+            "/api/remote/connections/{id}/shares",
+            get(remote::api::shares_saved_handler),
+        )
         .route("/api/smb/list-shares", post(smb::smb_list_shares))
         .route("/api/smb/list-dir", post(smb::smb_list_dir))
         .route("/api/smb/download", post(smb::smb_download_file))
