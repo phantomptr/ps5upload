@@ -251,3 +251,6 @@ payload/sqlite3.o
 # Populate with scripts/gather-fakelibs.py; the tool sources them from the
 # user's own games at runtime.
 fakelibs/
+
+# Brainstorming mockups (visual companion)
+.superpowers/
