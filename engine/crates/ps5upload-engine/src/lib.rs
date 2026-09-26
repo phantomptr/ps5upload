@@ -4857,7 +4857,7 @@ async fn transfer_dir_handler(
             &cfg,
             tx_id,
             &req.dest_root,
-            std::path::Path::new(&req.src_dir),
+            &src_path,
             DEFAULT_RESUME_RETRIES,
             initial_flags,
         );
@@ -9570,6 +9570,64 @@ mod helpers_tests {
         assert!(
             error.contains("source directory not found"),
             "unexpected error: {error}"
+        );
+    }
+
+    /// A folder on a saved server is walked AND sent from the server: the transfer must get
+    /// the server path, not the raw `remote://` string (which every server answers NotFound).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn transfer_dir_sends_a_server_folder_from_the_server() {
+        let r = crate::remote::pool::testing::install_global(&[
+            ("/g/eboot.bin", b"0123456789"),
+            ("/g/sce_sys/param.json", b"{}"),
+        ]);
+        let id = r
+            .store
+            .add(
+                crate::remote::store::conn("NAS", crate::remote::store::Protocol::Smb),
+                crate::remote::store::Secret::None,
+            )
+            .unwrap()
+            .conn
+            .id;
+        let jobs: Arc<Mutex<HashMap<Uuid, JobState>>> = Arc::new(Mutex::new(HashMap::new()));
+        let (events_tx, _rx) = broadcast::channel(16);
+        let state = AppState {
+            jobs: Arc::clone(&jobs),
+            default_ps5_addr: "127.0.0.1:1".to_string(),
+            events_tx,
+        };
+        let req = TransferDirReq {
+            addr: Some("127.0.0.1:1".to_string()),
+            tx_id: None,
+            dest_root: "/data/x".to_string(),
+            src_dir: format!("remote://{id}/g"),
+            excludes: vec![],
+            bandwidth_cap_mbps: None,
+        };
+        let _ = transfer_dir_handler(State(state), Json(req))
+            .await
+            .into_response();
+        let mut failed = None;
+        for _ in 0..250 {
+            if let Some(JobState::Failed { error, .. }) =
+                jobs.lock().unwrap().values().next().cloned()
+            {
+                failed = Some(error);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        // No console answers at 127.0.0.1:1, so the job fails — but at the console, having
+        // read the folder, not at the source.
+        let error = failed.expect("the job ends (no console to send to)");
+        assert!(
+            !error.contains("remote://"),
+            "read the raw remote path: {error}"
+        );
+        assert!(
+            !error.contains("readdir"),
+            "could not list the source: {error}"
         );
     }
 

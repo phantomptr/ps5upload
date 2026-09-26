@@ -261,6 +261,25 @@ struct CopyJob<'a> {
     report: &'a (dyn Fn(u64) + Send + Sync),
 }
 
+/// `dest` + a relative path from a server listing, refusing anything that would land outside
+/// `dest`: `..`, an absolute path, a drive prefix, or a backslash (a separator on Windows).
+fn safe_join(dest: &Path, rel: &str) -> Result<PathBuf, String> {
+    use std::path::Component;
+    let unsafe_name =
+        || format!("The server listed an unsafe name, {rel:?}; nothing was copied past it.");
+    if rel.is_empty() || rel.contains('\\') || rel.contains('\0') {
+        return Err(unsafe_name());
+    }
+    let mut out = dest.to_path_buf();
+    for c in Path::new(rel).components() {
+        match c {
+            Component::Normal(part) => out.push(part),
+            _ => return Err(unsafe_name()),
+        }
+    }
+    Ok(out)
+}
+
 /// Copy every file, each to `<name>.partial` then renamed. Returns the file count.
 async fn copy_all(job: CopyJob<'_>) -> Result<u64, String> {
     use std::io::Write;
@@ -269,7 +288,7 @@ async fn copy_all(job: CopyJob<'_>) -> Result<u64, String> {
         let (remote, local) = if job.is_dir {
             (
                 format!("{}/{rel}", job.base.trim_end_matches('/')),
-                job.dest.join(rel),
+                safe_join(&job.dest, rel)?,
             )
         } else {
             (job.base.clone(), job.dest.clone())
@@ -572,5 +591,46 @@ mod tests {
         assert_eq!(out["result"]["meta_source"], "param.json");
         assert_eq!(out["result"]["file_count"], 2);
         assert_eq!(out["result"]["path"], format!("remote://{id}/g"));
+    }
+
+    #[test]
+    fn safe_join_keeps_everything_inside() {
+        let d = Path::new("/out");
+        assert_eq!(safe_join(d, "a/b.bin").unwrap(), Path::new("/out/a/b.bin"));
+        for bad in ["../x", "a/../../x", "/etc/x", "a\\..\\x", "", "./../x"] {
+            assert!(safe_join(d, bad).is_err(), "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_hostile_listing_cannot_write_outside_the_destination() {
+        // A server that lists "../escape" (or an absolute name) inside the folder being copied.
+        let (r, id) = setup(&[("/g/ok.bin", b"fine"), ("/g/../escape", b"owned")]);
+        let (d, jobs) = deps(plenty);
+        let dest_dir = crate::remote::store::test_dir().join("inner");
+        std::fs::create_dir_all(&dest_dir).unwrap();
+        let (_, out) = json_of(
+            start_fetch(
+                r,
+                d,
+                FetchBody {
+                    path: format!("remote://{id}/g"),
+                    dest_dir: Some(dest_dir.display().to_string()),
+                },
+            )
+            .await,
+        )
+        .await;
+        let job: Uuid = out["job_id"].as_str().unwrap().parse().unwrap();
+        let end = wait(&jobs, job).await;
+        assert!(
+            matches!(end, JobState::Failed { .. }),
+            "an unsafe name must fail the copy"
+        );
+        assert!(!dest_dir.join("escape").exists());
+        assert!(
+            !dest_dir.parent().unwrap().join("escape").exists(),
+            "wrote outside the destination"
+        );
     }
 }

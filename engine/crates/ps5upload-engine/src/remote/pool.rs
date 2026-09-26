@@ -17,20 +17,22 @@ pub struct Remote {
     pub pool: Arc<Pool>,
 }
 
+static GLOBAL: OnceLock<Result<Arc<Remote>, String>> = OnceLock::new();
+
 pub fn global() -> Result<Arc<Remote>, RemoteError> {
-    static G: OnceLock<Result<Arc<Remote>, String>> = OnceLock::new();
-    G.get_or_init(|| {
-        let dir = super::store::data_dir().ok_or_else(|| {
-            "no home folder to keep saved connections in; set PS5UPLOAD_DATA_DIR".to_string()
-        })?;
-        let store = Store::open(&dir).map_err(|e| format!("saved connections: {e}"))?;
-        Ok(Arc::new(Remote {
-            store: Arc::new(store),
-            pool: Arc::new(Pool::new(Box::new(RealConnector))),
-        }))
-    })
-    .clone()
-    .map_err(RemoteError::Io)
+    GLOBAL
+        .get_or_init(|| {
+            let dir = super::store::data_dir().ok_or_else(|| {
+                "no home folder to keep saved connections in; set PS5UPLOAD_DATA_DIR".to_string()
+            })?;
+            let store = Store::open(&dir).map_err(|e| format!("saved connections: {e}"))?;
+            Ok(Arc::new(Remote {
+                store: Arc::new(store),
+                pool: Arc::new(Pool::new(Box::new(RealConnector))),
+            }))
+        })
+        .clone()
+        .map_err(RemoteError::Io)
 }
 
 #[async_trait::async_trait]
@@ -248,6 +250,14 @@ pub fn scrub(e: RemoteError, secret: &Secret) -> RemoteError {
 #[cfg(test)]
 pub(crate) mod testing {
     use super::*;
+
+    /// Make `global()` serve an in-memory server holding `files` (first caller wins; later
+    /// callers get the same one). For tests that drive the engine's HTTP handlers.
+    pub fn install_global(files: &[(&str, &[u8])]) -> Arc<Remote> {
+        let r = remote_with(crate::remote::MemFs::new(files), None);
+        let _ = GLOBAL.set(Ok(Arc::clone(&r)));
+        global().unwrap()
+    }
     use crate::remote::MemFs;
 
     /// Hands out one shared MemFs, or fails as told.
