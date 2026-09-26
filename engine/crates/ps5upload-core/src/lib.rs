@@ -19,6 +19,7 @@ pub mod fw_spoof;
 pub mod game_meta;
 pub mod health;
 pub mod hw;
+pub mod installer_client;
 pub mod local_image;
 pub mod log;
 pub mod notif;

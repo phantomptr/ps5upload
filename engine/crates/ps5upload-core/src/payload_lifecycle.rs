@@ -64,6 +64,10 @@ pub fn dpi_send_failure_reason(err: &str) -> &'static str {
 /// port scene daemons like etaHEN/ezRemote listen on).
 pub const DPI_DAEMON_PORT: u16 = 9040;
 
+/// The PS5Upload installer daemon's port. Replaces DPI_DAEMON_PORT (removed
+/// in the switch-over).
+pub const INSTALLER_PORT: u16 = 9115;
+
 /// Refuse to stream anything larger than this to the loader. The PS5's
 /// loader has no length prefix — it executes whatever it read at EOF — so
 /// a wrong file picked up by a path/embed mistake should fail here rather
