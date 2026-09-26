@@ -288,6 +288,20 @@ pub enum Level {
     Smallest,
 }
 
+impl std::str::FromStr for Level {
+    type Err = String;
+
+    /// `fast`, `balanced` or `smallest`, in any case.
+    fn from_str(s: &str) -> std::result::Result<Self, String> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "fast" => Ok(Level::Fast),
+            "balanced" => Ok(Level::Balanced),
+            "smallest" => Ok(Level::Smallest),
+            other => Err(format!("unknown compression level {other:?}")),
+        }
+    }
+}
+
 impl Level {
     /// Hash-chain candidates tried per position.
     fn chain(self) -> usize {

@@ -35,7 +35,11 @@ export interface FpkgBuildRequest {
   outputDir?: string;
   contentId?: string;
   name?: string;
+  /** How hard the Kraken encoder works; the engine defaults to balanced. */
+  compression?: FpkgCompression;
 }
+
+export type FpkgCompression = "fast" | "balanced" | "smallest";
 
 export const fpkg = {
   inspect: (source: string, outputDir?: string) =>
@@ -47,6 +51,7 @@ export const fpkg = {
       outputDir: req.outputDir,
       contentId: req.contentId,
       name: req.name,
+      compression: req.compression,
     }),
   /** Compress an .exfat / .ffpkg game image into a .ffpfsc for ShadowMountPlus.
    *  Starts a job; the output lands next to the source unless outputDir says otherwise. */

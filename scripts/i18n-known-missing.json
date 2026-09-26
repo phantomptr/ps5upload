@@ -242,7 +242,14 @@
       "volumes_mounted_rw",
       "volumes_upload_safe_capacity",
       "fpkg.lowSpace",
-      "connection_elfldr_first"
+      "connection_elfldr_first",
+      "fpkg.compression",
+      "fpkg.compressionFast",
+      "fpkg.compressionBalanced",
+      "fpkg.compressionSmallest",
+      "fpkg.compressionFastAbout",
+      "fpkg.compressionBalancedAbout",
+      "fpkg.compressionSmallestAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -495,7 +502,14 @@
       "volumes_mounted_rw",
       "volumes_upload_safe_capacity",
       "fpkg.lowSpace",
-      "connection_elfldr_first"
+      "connection_elfldr_first",
+      "fpkg.compression",
+      "fpkg.compressionFast",
+      "fpkg.compressionBalanced",
+      "fpkg.compressionSmallest",
+      "fpkg.compressionFastAbout",
+      "fpkg.compressionBalancedAbout",
+      "fpkg.compressionSmallestAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -749,7 +763,14 @@
       "volumes_mounted_rw",
       "volumes_upload_safe_capacity",
       "fpkg.lowSpace",
-      "connection_elfldr_first"
+      "connection_elfldr_first",
+      "fpkg.compression",
+      "fpkg.compressionFast",
+      "fpkg.compressionBalanced",
+      "fpkg.compressionSmallest",
+      "fpkg.compressionFastAbout",
+      "fpkg.compressionBalancedAbout",
+      "fpkg.compressionSmallestAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -1010,7 +1031,14 @@
       "volumes_mounted_rw",
       "volumes_upload_safe_capacity",
       "fpkg.lowSpace",
-      "connection_elfldr_first"
+      "connection_elfldr_first",
+      "fpkg.compression",
+      "fpkg.compressionFast",
+      "fpkg.compressionBalanced",
+      "fpkg.compressionSmallest",
+      "fpkg.compressionFastAbout",
+      "fpkg.compressionBalancedAbout",
+      "fpkg.compressionSmallestAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -1267,7 +1295,14 @@
       "volumes_mounted_rw",
       "volumes_upload_safe_capacity",
       "fpkg.lowSpace",
-      "connection_elfldr_first"
+      "connection_elfldr_first",
+      "fpkg.compression",
+      "fpkg.compressionFast",
+      "fpkg.compressionBalanced",
+      "fpkg.compressionSmallest",
+      "fpkg.compressionFastAbout",
+      "fpkg.compressionBalancedAbout",
+      "fpkg.compressionSmallestAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -1526,7 +1561,14 @@
       "volumes_mounted_rw",
       "volumes_upload_safe_capacity",
       "fpkg.lowSpace",
-      "connection_elfldr_first"
+      "connection_elfldr_first",
+      "fpkg.compression",
+      "fpkg.compressionFast",
+      "fpkg.compressionBalanced",
+      "fpkg.compressionSmallest",
+      "fpkg.compressionFastAbout",
+      "fpkg.compressionBalancedAbout",
+      "fpkg.compressionSmallestAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -1546,7 +1588,14 @@
       "fpkg.compressedNext",
       "fpkg.compressing",
       "fpkg.lowSpace",
-      "connection_elfldr_first"
+      "connection_elfldr_first",
+      "fpkg.compression",
+      "fpkg.compressionFast",
+      "fpkg.compressionBalanced",
+      "fpkg.compressionSmallest",
+      "fpkg.compressionFastAbout",
+      "fpkg.compressionBalancedAbout",
+      "fpkg.compressionSmallestAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -1811,7 +1860,14 @@
       "volumes_mounted_rw",
       "volumes_upload_safe_capacity",
       "fpkg.lowSpace",
-      "connection_elfldr_first"
+      "connection_elfldr_first",
+      "fpkg.compression",
+      "fpkg.compressionFast",
+      "fpkg.compressionBalanced",
+      "fpkg.compressionSmallest",
+      "fpkg.compressionFastAbout",
+      "fpkg.compressionBalancedAbout",
+      "fpkg.compressionSmallestAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -2070,7 +2126,14 @@
       "volumes_mounted_rw",
       "volumes_upload_safe_capacity",
       "fpkg.lowSpace",
-      "connection_elfldr_first"
+      "connection_elfldr_first",
+      "fpkg.compression",
+      "fpkg.compressionFast",
+      "fpkg.compressionBalanced",
+      "fpkg.compressionSmallest",
+      "fpkg.compressionFastAbout",
+      "fpkg.compressionBalancedAbout",
+      "fpkg.compressionSmallestAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -2328,7 +2391,14 @@
       "volumes_mounted_rw",
       "volumes_upload_safe_capacity",
       "fpkg.lowSpace",
-      "connection_elfldr_first"
+      "connection_elfldr_first",
+      "fpkg.compression",
+      "fpkg.compressionFast",
+      "fpkg.compressionBalanced",
+      "fpkg.compressionSmallest",
+      "fpkg.compressionFastAbout",
+      "fpkg.compressionBalancedAbout",
+      "fpkg.compressionSmallestAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -2584,7 +2654,14 @@
       "volumes_mounted_rw",
       "volumes_upload_safe_capacity",
       "fpkg.lowSpace",
-      "connection_elfldr_first"
+      "connection_elfldr_first",
+      "fpkg.compression",
+      "fpkg.compressionFast",
+      "fpkg.compressionBalanced",
+      "fpkg.compressionSmallest",
+      "fpkg.compressionFastAbout",
+      "fpkg.compressionBalancedAbout",
+      "fpkg.compressionSmallestAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -2838,7 +2915,14 @@
       "volumes_mounted_rw",
       "volumes_upload_safe_capacity",
       "fpkg.lowSpace",
-      "connection_elfldr_first"
+      "connection_elfldr_first",
+      "fpkg.compression",
+      "fpkg.compressionFast",
+      "fpkg.compressionBalanced",
+      "fpkg.compressionSmallest",
+      "fpkg.compressionFastAbout",
+      "fpkg.compressionBalancedAbout",
+      "fpkg.compressionSmallestAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -3093,7 +3177,14 @@
       "volumes_mounted_rw",
       "volumes_upload_safe_capacity",
       "fpkg.lowSpace",
-      "connection_elfldr_first"
+      "connection_elfldr_first",
+      "fpkg.compression",
+      "fpkg.compressionFast",
+      "fpkg.compressionBalanced",
+      "fpkg.compressionSmallest",
+      "fpkg.compressionFastAbout",
+      "fpkg.compressionBalancedAbout",
+      "fpkg.compressionSmallestAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -3353,7 +3444,14 @@
       "volumes_mounted_rw",
       "volumes_upload_safe_capacity",
       "fpkg.lowSpace",
-      "connection_elfldr_first"
+      "connection_elfldr_first",
+      "fpkg.compression",
+      "fpkg.compressionFast",
+      "fpkg.compressionBalanced",
+      "fpkg.compressionSmallest",
+      "fpkg.compressionFastAbout",
+      "fpkg.compressionBalancedAbout",
+      "fpkg.compressionSmallestAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -3608,7 +3706,14 @@
       "volumes_mounted_rw",
       "volumes_upload_safe_capacity",
       "fpkg.lowSpace",
-      "connection_elfldr_first"
+      "connection_elfldr_first",
+      "fpkg.compression",
+      "fpkg.compressionFast",
+      "fpkg.compressionBalanced",
+      "fpkg.compressionSmallest",
+      "fpkg.compressionFastAbout",
+      "fpkg.compressionBalancedAbout",
+      "fpkg.compressionSmallestAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -3862,7 +3967,14 @@
       "volumes_mounted_rw",
       "volumes_upload_safe_capacity",
       "fpkg.lowSpace",
-      "connection_elfldr_first"
+      "connection_elfldr_first",
+      "fpkg.compression",
+      "fpkg.compressionFast",
+      "fpkg.compressionBalanced",
+      "fpkg.compressionSmallest",
+      "fpkg.compressionFastAbout",
+      "fpkg.compressionBalancedAbout",
+      "fpkg.compressionSmallestAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -4118,7 +4230,14 @@
       "volumes_mounted_rw",
       "volumes_upload_safe_capacity",
       "fpkg.lowSpace",
-      "connection_elfldr_first"
+      "connection_elfldr_first",
+      "fpkg.compression",
+      "fpkg.compressionFast",
+      "fpkg.compressionBalanced",
+      "fpkg.compressionSmallest",
+      "fpkg.compressionFastAbout",
+      "fpkg.compressionBalancedAbout",
+      "fpkg.compressionSmallestAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -4375,7 +4494,14 @@
       "volumes_mounted_rw",
       "volumes_upload_safe_capacity",
       "fpkg.lowSpace",
-      "connection_elfldr_first"
+      "connection_elfldr_first",
+      "fpkg.compression",
+      "fpkg.compressionFast",
+      "fpkg.compressionBalanced",
+      "fpkg.compressionSmallest",
+      "fpkg.compressionFastAbout",
+      "fpkg.compressionBalancedAbout",
+      "fpkg.compressionSmallestAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -4629,7 +4755,14 @@
       "volumes_mounted_rw",
       "volumes_upload_safe_capacity",
       "fpkg.lowSpace",
-      "connection_elfldr_first"
+      "connection_elfldr_first",
+      "fpkg.compression",
+      "fpkg.compressionFast",
+      "fpkg.compressionBalanced",
+      "fpkg.compressionSmallest",
+      "fpkg.compressionFastAbout",
+      "fpkg.compressionBalancedAbout",
+      "fpkg.compressionSmallestAbout"
     ],
     "stale": [],
     "untranslated": [

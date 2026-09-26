@@ -56,6 +56,9 @@ pub struct BuildRequest {
     /// keeps its blocks uncompressed; `PS5UPLOAD_FPKG_KRAKEN=0` falls back to the older flat
     /// layout.
     pub kraken: bool,
+    /// How hard the Kraken encoder works: `PS5UPLOAD_FPKG_LEVEL` (`fast`, `balanced`,
+    /// `smallest`) overrides the default, Balanced.
+    pub level: crate::kraken::Level,
 }
 
 impl BuildRequest {
@@ -76,6 +79,10 @@ impl BuildRequest {
                 std::env::var("PS5UPLOAD_FPKG_KRAKEN").as_deref(),
                 Ok("0") | Ok("false")
             ),
+            level: std::env::var("PS5UPLOAD_FPKG_LEVEL")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or_default(),
         }
     }
 }
@@ -457,6 +464,7 @@ fn build_mode(
                 extras,
                 playgo_chunks: request.playgo_chunks,
                 kraken_spool: request.kraken.then(|| spool_path(&partial)),
+                level: request.level,
                 metadata_codec: request.metadata_codec,
             };
             let written =

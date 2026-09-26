@@ -227,6 +227,7 @@ pub fn compress(
     read: SourceRead<'_>,
     spool: &Path,
     threads: usize,
+    level: kraken::Level,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<KrakenImage> {
@@ -294,7 +295,7 @@ pub fn compress(
                     .map(|h| Half::Raw(h.to_vec()))
                     .collect()
             } else {
-                kraken::encode_block(&bytes)
+                kraken::encode_block_at(&bytes, level)
             };
             // Proof before it is kept: the block decodes back to exactly its source.
             if kraken::decode_block(&halves, bytes.len())? != bytes {

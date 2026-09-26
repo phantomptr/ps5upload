@@ -47,6 +47,9 @@ pub(crate) struct BuildReq {
     /// 5.10). A console older than the declared minimum refuses the install with `0x80a3000d`.
     #[serde(default)]
     firmware: Option<String>,
+    /// `fast`, `balanced` (the default) or `smallest`: how hard the Kraken encoder works.
+    #[serde(default)]
+    compression: Option<String>,
 }
 
 /// Where packages go when the caller does not say: the user's Downloads folder, which is
@@ -205,6 +208,9 @@ pub(crate) async fn fpkg_build_handler(
             request.passcode = passcode;
         }
         request.firmware = req.firmware.filter(|v| !v.trim().is_empty());
+        if let Some(level) = req.compression.as_deref().and_then(|v| v.parse().ok()) {
+            request.level = level;
+        }
         let mut control = BuildControl {
             bytes: Some(&mut |done, total_now| {
                 bytes.store(done, Ordering::Relaxed);

@@ -47,6 +47,8 @@ pub struct StreamRequest<'a> {
     /// Compress the inner image with Kraken, spooling it here first (see
     /// [`crate::kraken_image`]). `None` stores it uncompressed.
     pub kraken_spool: Option<std::path::PathBuf>,
+    /// How hard the Kraken encoder works on a compressed image.
+    pub level: crate::kraken::Level,
     /// How the inner image's metadata region is stored.
     pub metadata_codec: crate::inner::MetaCodec,
 }
@@ -168,6 +170,7 @@ pub fn write_package(
                 read,
                 spool,
                 threads,
+                request.level,
                 cancel,
                 &mut |done, total| (progress.bytes)(done, total),
             )?;

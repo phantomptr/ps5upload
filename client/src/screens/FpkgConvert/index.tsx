@@ -17,8 +17,9 @@ import {
   Input,
   PageHeader,
   ProgressBar,
+  SegmentedControl,
 } from "../../components";
-import { fpkg, type FpkgInspection } from "../../api/fpkg";
+import { fpkg, type FpkgCompression, type FpkgInspection } from "../../api/fpkg";
 import { pickPath } from "../../lib/pickPath";
 import { pickLocalPath } from "../../state/localPicker";
 import { isIOS } from "../../lib/platform";
@@ -59,6 +60,7 @@ export default function FpkgConvertScreen() {
   const startCompression = useFpkgConversion((s) => s.compress);
   const kind = useFpkgConversion((s) => s.kind);
   const cancelConversion = useFpkgConversion((s) => s.cancel);
+  const [compression, setCompression] = useState<FpkgCompression>("balanced");
   const [installing, setInstalling] = useState(false);
   const [installResult, setInstallResult] = useState<string | null>(null);
 
@@ -119,8 +121,12 @@ export default function FpkgConvertScreen() {
     if (!source.trim()) return;
     setError(null);
     setInstallResult(null);
-    await startConversion({ source: source.trim(), outputDir: outputDir.trim() || undefined });
-  }, [source, outputDir, startConversion]);
+    await startConversion({
+      source: source.trim(),
+      outputDir: outputDir.trim() || undefined,
+      compression,
+    });
+  }, [source, outputDir, compression, startConversion]);
 
   const compress = useCallback(async () => {
     if (!source.trim()) return;
@@ -497,6 +503,41 @@ export default function FpkgConvertScreen() {
           </ConnectionGate>
         </>
       )}
+
+      <div className="flex flex-col gap-1">
+        <div className="text-sm font-medium">
+          {tr("fpkg.compression", undefined, "Compression")}
+        </div>
+        <SegmentedControl
+          ariaLabel={tr("fpkg.compression", undefined, "Compression")}
+          value={compression}
+          onChange={(v) => setCompression(v as FpkgCompression)}
+          segments={[
+            { value: "fast", label: tr("fpkg.compressionFast", undefined, "Fast") },
+            { value: "balanced", label: tr("fpkg.compressionBalanced", undefined, "Balanced") },
+            { value: "smallest", label: tr("fpkg.compressionSmallest", undefined, "Smallest") },
+          ]}
+        />
+        <div className="text-xs text-[var(--color-muted)]">
+          {compression === "fast"
+            ? tr(
+                "fpkg.compressionFastAbout",
+                undefined,
+                "About 4× quicker than Balanced; the package comes out roughly 5% larger.",
+              )
+            : compression === "smallest"
+              ? tr(
+                  "fpkg.compressionSmallestAbout",
+                  undefined,
+                  "About 1.5× slower than Balanced for a package under 1% smaller.",
+                )
+              : tr(
+                  "fpkg.compressionBalancedAbout",
+                  undefined,
+                  "Within a few percent of Sony's own packages. Every block is checked against the source before it is kept.",
+                )}
+        </div>
+      </div>
 
       <div className="flex flex-wrap gap-2">
         <Button
