@@ -122,7 +122,9 @@ export type TaskControlRef =
   | { owner: "fs-bulk"; host: string }
   // A link being downloaded to this computer before it is installed ("Download
   // through this computer"). Cancel stops the engine's download.
-  | { owner: "link-download"; downloadId: string };
+  | { owner: "link-download"; downloadId: string }
+  // A Convert or .ffpfsc run; Cancel stops its build job.
+  | { owner: "fpkg-convert" };
 
 /** Per-kind specifics. Kept loose (record of string→unknown) so each
  *  feature can store what it needs without forcing a union. The typed

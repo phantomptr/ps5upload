@@ -1,5 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// The run reports into the real task store, which persists through `window.localStorage`;
+// vitest's node env has no window.
+vi.hoisted(() => {
+  const mem = new Map<string, string>();
+  (globalThis as { window?: unknown }).window = {
+    localStorage: {
+      getItem: (k: string) => (mem.has(k) ? (mem.get(k) as string) : null),
+      setItem: (k: string, v: string) => void mem.set(k, String(v)),
+      removeItem: (k: string) => void mem.delete(k),
+      clear: () => mem.clear(),
+    },
+    location: { origin: "http://127.0.0.1:19113" },
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+});
+
 const build = vi.fn();
 const deletePackage = vi.fn(async () => ({ ok: true }));
 const jobStatus = vi.fn();
@@ -27,6 +44,8 @@ const conn = { host: "10.0.0.2", payloadStatus: "up" };
 vi.mock("./connection", () => ({ useConnectionStore: { getState: () => conn } }));
 
 import { POLL_MS, useFpkgConversion } from "./fpkgConversion";
+import { commandTask, taskCapabilities } from "./taskControls";
+import { useTaskStore } from "./tasks";
 
 const req = { source: "/games/a", outputDir: "/out" };
 const tick = () => vi.advanceTimersByTimeAsync(POLL_MS + 50);
@@ -35,6 +54,7 @@ describe("fpkg pipeline", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     useFpkgConversion.setState({ pipeline: { phase: "idle" } });
+    useTaskStore.setState({ tasks: [] });
     build.mockReset().mockResolvedValue({ job_id: "j1" });
     jobStatus.mockReset();
     installStream.mockReset();
@@ -224,5 +244,56 @@ describe("fpkg pipeline", () => {
     });
     useFpkgConversion.getState().reset();
     expect(useFpkgConversion.getState().pipeline.phase).toBe("idle");
+  });
+
+  it("reports the run as a task through its stages to done", async () => {
+    jobStatus
+      .mockResolvedValueOnce({
+        status: "running",
+        stage: { id: "compress", index: 2, count: 5, done: 5, total: 10 },
+      })
+      .mockResolvedValueOnce({ status: "done", dest: "/out/a.pkg", bytes_sent: 1 });
+    await useFpkgConversion.getState().start(req, { install: false, host: null });
+    const t = () => useTaskStore.getState().tasks.find((x) => x.kind === "fpkg-convert");
+    await tick();
+    expect(t()).toMatchObject({
+      status: "running",
+      stage: "Compress",
+      label: "Convert a",
+      progress: { current: 5, total: 10 },
+    });
+    await tick();
+    expect(t()?.status).toBe("done");
+  });
+
+  it("offers Cancel only while the build runs", async () => {
+    jobStatus.mockResolvedValue({ status: "done", dest: "/out/a.pkg", bytes_sent: 1 });
+    await useFpkgConversion.getState().start(req, { install: false, host: null });
+    const t = () => useTaskStore.getState().tasks.find((x) => x.kind === "fpkg-convert")!;
+    expect(taskCapabilities(t()).canCancel).toBe(true);
+    await tick();
+    expect(taskCapabilities(t()).canCancel).toBe(false);
+    expect(await commandTask(t(), "cancel")).toBe(true); // no-op, no throw
+  });
+
+  it("ends a cancelled build as cancelled and a broken one as failed", async () => {
+    jobStatus.mockResolvedValueOnce({ status: "failed", error: "the build was cancelled" });
+    await useFpkgConversion.getState().start(req, { install: false, host: null });
+    await tick();
+    expect(useTaskStore.getState().tasks[0]?.status).toBe("cancelled");
+    useFpkgConversion.setState({ pipeline: { phase: "idle" } });
+    jobStatus.mockResolvedValueOnce({ status: "failed", error: "disk full" });
+    await useFpkgConversion.getState().start(req, { install: false, host: null });
+    await tick();
+    const failed = useTaskStore.getState().tasks.find((x) => x.status === "failed");
+    expect(failed?.lastError?.message).toBe("disk full");
+  });
+
+  it("names a compression run after its image", async () => {
+    await useFpkgConversion.getState().compress("/games/b.exfat");
+    expect(useTaskStore.getState().tasks[0]).toMatchObject({
+      kind: "ffpfsc-compress",
+      label: "Compress b.exfat",
+    });
   });
 });

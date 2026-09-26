@@ -1,3 +1,4 @@
+import { useFpkgConversion } from "./fpkgConversion";
 import { useFsBulkOpStore } from "./fsBulkOp";
 import { retryInstallReverify } from "./pkgLibrary";
 import { useTransferStore } from "./transfer";
@@ -36,6 +37,10 @@ export function taskCapabilities(task: Task): TaskCapabilities {
   if (control.owner === "link-download") {
     return { ...none, canCancel: task.status === "running" || task.status === "queued" };
   }
+  if (control.owner === "fpkg-convert") {
+    const p = useFpkgConversion.getState().pipeline;
+    return { ...none, canCancel: p.phase === "running" && p.jobId != null };
+  }
   if (control.owner === "pkg-install") {
     // An install Sony accepted but we could not confirm. Nothing to cancel —
     // the install is the console's — but the user can ask us to look again
@@ -71,6 +76,10 @@ export async function commandTask(task: Task, command: TaskCommand): Promise<boo
       return true;
     }
     if (control.owner === "pkg-install") return false;
+    if (control.owner === "fpkg-convert") {
+      await useFpkgConversion.getState().cancel();
+      return true;
+    }
     if (control.owner === "link-download") {
       await invoke("pkg_remote_download_cancel", { id: control.downloadId });
       return true;

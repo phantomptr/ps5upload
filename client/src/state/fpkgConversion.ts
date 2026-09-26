@@ -9,6 +9,7 @@ import { jobCancel, jobStatus } from "../api/ps5";
 import { useConnectionStore } from "./connection";
 import { pushNotification } from "./notifications";
 import { pkgLibraryStore } from "./pkgLibrary";
+import { useTaskStore } from "./tasks";
 
 export type PipelineStage =
   | "check"
@@ -40,6 +41,9 @@ export type Pipeline =
       stageMs: StageMs;
       jobId: string | null;
       installTaskId: string | null;
+      /** This run's row in the activity bar; null for a re-install, which the install's own
+       *  task already shows. */
+      taskId: string | null;
       packagePath: string | null;
       /** The package's title id, from the build's content id (what Launch starts). */
       titleId: string | null;
@@ -90,6 +94,26 @@ const BUILD_STAGES: readonly PipelineStage[] = ["check", "plan", "compress", "wr
 
 type Running = Extract<Pipeline, { phase: "running" }>;
 
+/** The stage names Convert's progress card shows. */
+const STAGE_LABEL: Record<PipelineStage, string> = {
+  check: "Check source",
+  plan: "Plan package",
+  compress: "Compress",
+  write: "Write package",
+  verify: "Verify",
+  send: "Send to PS5",
+  install: "Install on PS5",
+};
+
+function baseName(path: string): string {
+  return path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
+}
+
+/** A cancelled build ends as an error saying so. */
+function isCancelMessage(message: string): boolean {
+  return /\bcancel(l)?ed\b/i.test(message);
+}
+
 function running(): Running | null {
   const p = useFpkgConversion.getState().pipeline;
   return p.phase === "running" ? p : null;
@@ -100,10 +124,19 @@ function update(patch: Partial<Running>) {
   if (p) useFpkgConversion.setState({ pipeline: { ...p, ...patch } });
 }
 
+function reportStage(taskId: string | null, stage: PipelineStage, done: number, total: number) {
+  if (!taskId) return;
+  useTaskStore.getState().updateTask(taskId, {
+    stage: STAGE_LABEL[stage],
+    progress: total > 0 ? { current: done, total, unit: "bytes" } : undefined,
+  });
+}
+
 /** Move to `stage`, recording how long the previous one took. */
 function enterStage(stage: PipelineStage, done = 0, total = 0) {
   const p = running();
   if (!p) return;
+  reportStage(p.taskId, stage, done, total);
   if (p.stage === stage) {
     update({ stageDone: done, stageTotal: total });
     return;
@@ -121,6 +154,13 @@ function enterStage(stage: PipelineStage, done = 0, total = 0) {
 function fail(stage: PipelineStage, message: string, packagePath: string | null) {
   const p = running();
   if (!p) return;
+  if (p.taskId) {
+    if (isCancelMessage(message)) useTaskStore.getState().finishTask(p.taskId, "cancelled");
+    else
+      useTaskStore.getState().finishTask(p.taskId, "failed", {
+        lastError: { code: "FPKG_FAILED", message, recoverable: false },
+      });
+  }
   const what = p.mode === "ffpfsc" ? "Compression" : p.mode === "convert" ? "FPKG conversion" : "Convert & install";
   useFpkgConversion.setState({
     pipeline: {
@@ -142,6 +182,7 @@ function fail(stage: PipelineStage, message: string, packagePath: string | null)
 function finish(packagePath: string, packageBytes: number, convertMs: number) {
   const p = running();
   if (!p) return;
+  if (p.taskId) useTaskStore.getState().finishTask(p.taskId, "done");
   const now = Date.now();
   useFpkgConversion.setState({
     pipeline: {
@@ -186,6 +227,7 @@ async function runInstall(packagePath: string, host: string | null) {
 function installDone(packagePath: string, convertMs: number, installMs: number) {
   const p = running();
   if (!p) return;
+  if (p.taskId) useTaskStore.getState().finishTask(p.taskId, "done");
   const now = Date.now();
   useFpkgConversion.setState({
     pipeline: {
@@ -265,6 +307,18 @@ function poll(jobId: string, install: boolean, failures = 0) {
 
 function beginRun(mode: PipelineMode, source: string, host: string | null, stage: PipelineStage) {
   const now = Date.now();
+  const taskId =
+    mode === "install"
+      ? null
+      : useTaskStore.getState().registerTask({
+          kind: mode === "ffpfsc" ? "ffpfsc-compress" : "fpkg-convert",
+          origin: "convert",
+          label: `${mode === "ffpfsc" ? "Compress" : "Convert"} ${baseName(source)}`,
+          detail: source,
+          consoleId: host ?? "",
+          control: { owner: "fpkg-convert" },
+        });
+  reportStage(taskId, stage, 0, 0);
   useFpkgConversion.setState({
     pipeline: {
       phase: "running",
@@ -279,6 +333,7 @@ function beginRun(mode: PipelineMode, source: string, host: string | null, stage
       stageMs: {},
       jobId: null,
       installTaskId: null,
+      taskId,
       packagePath: null,
       titleId: null,
     },
