@@ -49,8 +49,6 @@ const CheatsScreen = lazy(() => import("./screens/Cheats"));
 const GameActivityScreen = lazy(() => import("./screens/GameActivity"));
 const GameHubScreen = lazy(() => import("./screens/GameHub"));
 const FwSpoofScreen = lazy(() => import("./screens/FwSpoof"));
-const FtpServerScreen = lazy(() => import("./screens/FtpServer"));
-const SmbBrowserScreen = lazy(() => import("./screens/SmbBrowser"));
 const ConnectionsScreen = lazy(() => import("./screens/Connections"));
 const PayloadsScreen = lazy(() => import("./screens/Payloads"));
 const FirstRunScreen = lazy(() => import("./screens/FirstRun"));
@@ -319,14 +317,8 @@ export default function App() {
             </Suspense>
           }
         />
-        <Route
-          path="/ftp-server"
-          element={
-            <Suspense fallback={<ScreenLoader />}>
-              <FtpServerScreen />
-            </Suspense>
-          }
-        />
+        {/* SMB Browser and FTP Server were replaced by Connections; old links land there. */}
+        <Route path="/ftp-server" element={<Navigate to="/connections" replace />} />
         <Route
           path="/connections"
           element={
@@ -335,14 +327,7 @@ export default function App() {
             </Suspense>
           }
         />
-        <Route
-          path="/smb-browser"
-          element={
-            <Suspense fallback={<ScreenLoader />}>
-              <SmbBrowserScreen />
-            </Suspense>
-          }
-        />
+        <Route path="/smb-browser" element={<Navigate to="/connections" replace />} />
         {/* Legacy deep link / bookmark support for pre-2.12 installs.
             The Payloads tab now owns send functionality under ?tab=send.
             Keep the redirect indefinitely for any external bookmarks. */}

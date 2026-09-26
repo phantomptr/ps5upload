@@ -60,7 +60,6 @@ const NATIVE_ONLY: Record<string, string> = {
   screenshot_clear: "native: clears the app's screenshot dir",
   screenshot_open_dir: "native: opens a host file manager",
   screenshot_convert: "native: host image transcode into a temp dir",
-  smb_download_file: "native: writes the fetched bytes to a host path",
   usb_list_removable: "native: enumerates host block devices",
   usb_autoloader_install: "native: writes to a host USB volume",
   fs_index_start: "native: indexes the host filesystem",

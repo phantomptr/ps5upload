@@ -770,7 +770,6 @@ export async function browserInvoke<T>(
         delete_staging: args["deleteStaging"] ?? true,
         serve_only: args["serveOnly"] ?? false,
         insecure_tls: args["insecureTls"] ?? false,
-        smb: args["smb"] ?? null,
       });
 
     // Identify a package behind a link before committing to the install.
@@ -1251,20 +1250,7 @@ export async function browserInvoke<T>(
         points: args["req"]?.points,
       });
 
-    // ── FTP / firmware spoof / SDK changer ───────────────────────────────────
-
-    case "ftp_start":
-      return postJson<T>("/api/ps5/ftp/start", {
-        addr: args["req"]?.addr,
-        port: args["req"]?.port,
-        root: args["req"]?.root,
-        readonly: args["req"]?.readonly,
-        user: args["req"]?.user,
-        pass: args["req"]?.pass,
-      });
-
-    case "ftp_status":
-      return getJson<T>(qs("/api/ps5/ftp/status", { addr: args["req"]?.addr }));
+    // ── Firmware spoof / SDK changer ───────────────────────────────────
 
     case "fw_spoof_status":
       return getJson<T>(
@@ -1448,38 +1434,6 @@ export async function browserInvoke<T>(
         },
         /*long=*/ true,
       );
-
-    // ── SMB ──────────────────────────────────────────────────────────────────
-    // `smb_download_file` is deliberately absent: it writes the fetched bytes
-    // to a host path via `resolve_save_dest()`, which has no browser meaning.
-
-    case "smb_list_shares":
-      return postJson<T>("/api/smb/list-shares", {
-        server: args["req"]?.server,
-        user: args["req"]?.user,
-        password: args["req"]?.password,
-      });
-
-    case "smb_list_dir":
-      return postJson<T>("/api/smb/list-dir", {
-        server: args["req"]?.server,
-        user: args["req"]?.user,
-        password: args["req"]?.password,
-        share: args["req"]?.share,
-        path: args["req"]?.path,
-      });
-
-    case "smb_transfer":
-      return postJson<T>("/api/smb/transfer", {
-        server: args["req"]?.server,
-        user: args["req"]?.user,
-        password: args["req"]?.password,
-        share: args["req"]?.share,
-        path: args["req"]?.path,
-        dest_root: args["req"]?.dest_root,
-        addr: args["req"]?.addr,
-        bandwidth_cap_mbps: args["req"]?.bandwidth_cap_mbps,
-      });
 
     // ── Transfers ────────────────────────────────────────────────────────────
     // Paths here are the ENGINE's filesystem, not the browser's. On a

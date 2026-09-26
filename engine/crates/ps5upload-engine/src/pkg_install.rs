@@ -59,8 +59,6 @@ use uuid::Uuid;
 pub enum RemotePkg {
     /// An HTTP(S) link, fetched over many connections.
     Http(Arc<crate::remote_pkg::RemoteSource>),
-    /// A file on an SMB share, read in positioned pieces.
-    Smb(crate::smb_range::SmbRangeSource),
     /// A file on a saved server (SMB, FTP, FTPS or SFTP), read in positioned pieces.
     Remote(crate::remote::range::RemoteRangeSource),
 }
@@ -70,7 +68,6 @@ impl RemotePkg {
     pub fn read_range(&self, start: u64, end: u64) -> std::io::Result<Vec<u8>> {
         match self {
             RemotePkg::Http(r) => r.read_range(start, end),
-            RemotePkg::Smb(r) => r.read_range(start, end),
             RemotePkg::Remote(r) => r.read_range(start, end),
         }
     }
@@ -87,7 +84,6 @@ impl RemotePkg {
     pub fn origin_rate_bps(&self) -> Option<u64> {
         match self {
             RemotePkg::Http(r) => r.origin_rate_bps(),
-            RemotePkg::Smb(r) => r.origin_rate_bps(),
             RemotePkg::Remote(r) => r.origin_rate_bps(),
         }
     }
@@ -1266,24 +1262,6 @@ async fn parse_remote_handler(_remote_path: &str) -> Response<Body> {
 
 // ─── /api/pkg/install/start ──────────────────────────────────────────
 
-/// Where an SMB install reads from. Credentials arrive in the request body
-/// (loopback-only API) and are held only by the open connection.
-#[derive(Debug, Clone, Deserialize)]
-// Read only where installing from SMB is compiled in; Android keeps the type
-// so one client speaks to every engine, and answers "not available".
-#[cfg_attr(target_os = "android", allow(dead_code))]
-pub struct SmbInstallSource {
-    /// Host or host:port of the SMB server.
-    pub server: String,
-    pub share: String,
-    #[serde(default)]
-    pub user: String,
-    #[serde(default)]
-    pub password: String,
-    /// Path of the .pkg within the share.
-    pub path: String,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct InstallStartRequest {
     /// PS5 mgmt-port address, e.g. "192.168.1.42:9114".
@@ -1319,13 +1297,6 @@ pub struct InstallStartRequest {
     /// `local_ps5_path`. The origin must honour byte ranges.
     #[serde(default)]
     pub remote_url: Option<String>,
-    /// Install a package straight from a file on an SMB share: the engine
-    /// reads it in ranges and re-serves it to the console from the pkg-host,
-    /// exactly as it does for `remote_url`. Nothing is copied to this computer
-    /// or staged on the console. Mutually exclusive with the other sources.
-    #[serde(default)]
-    #[cfg_attr(target_os = "android", allow(dead_code))]
-    pub smb: Option<SmbInstallSource>,
     /// Optional override for the package_type passed to BGFT. When
     /// unset we use whatever `derive_package_type(category)` returns
     /// or fall back to "PS4GD". Useful for unknown-magic PKGs where
@@ -5570,61 +5541,6 @@ async fn resolve_remote_source(
     Err("installing from a link is not available in the Android build".into())
 }
 
-/// Resolve an install that streams from a file on an SMB share.
-#[cfg(not(target_os = "android"))]
-async fn resolve_smb_source(
-    smb: &SmbInstallSource,
-    req: &InstallStartRequest,
-) -> Result<ResolvedSource, String> {
-    if req.path.is_some() || req.split_root.is_some() || req.remote_url.is_some() {
-        return Err("smb cannot be combined with path, split_root or remote_url".into());
-    }
-    if req.local_ps5_path.as_deref().is_some_and(|p| !p.is_empty()) {
-        return Err("smb cannot be combined with local_ps5_path".into());
-    }
-    let source = crate::smb_range::SmbRangeSource::open(
-        &smb.server,
-        &smb.share,
-        &smb.user,
-        &smb.password,
-        &smb.path,
-    )
-    .await
-    .map_err(|e| format!("could not open the package on the share: {e}"))?;
-    let total_size = source.total_size();
-    // Share host only; the path can name a user's folders and the password
-    // never leaves the connection.
-    crate::log_info!("smb install: host={} bytes={}", source.host(), total_size);
-    let remote = Arc::new(RemotePkg::Smb(source));
-    // Header parsing issues blocking range reads, which block on the runtime:
-    // keep them off the reactor.
-    let probe_remote = Arc::clone(&remote);
-    let (head, fingerprint) = tokio::task::spawn_blocking(move || {
-        let read_at = |offset: u64, len: u64| -> Option<Vec<u8>> {
-            if len == 0 {
-                return Some(Vec::new());
-            }
-            probe_remote.read_range(offset, offset + len - 1).ok()
-        };
-        let head = ps5upload_pkg::metadata_from_reader(read_at).ok_or_else(|| {
-            "that file does not look like a PS4/PS5 package (no readable PKG header)".to_string()
-        })?;
-        let fingerprint = ps5upload_pkg::package_fingerprint_from_reader(total_size, &read_at)
-            .unwrap_or_default();
-        Ok::<_, String>((head, fingerprint))
-    })
-    .await
-    .map_err(|e| format!("smb package probe task panicked/cancelled: {e}"))??;
-    let name = smb
-        .path
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(&smb.path)
-        .to_string();
-    let metadata = streamed_metadata(req, head, fingerprint, total_size, &name);
-    Ok((vec![], vec![], total_size, metadata, Some(remote)))
-}
-
 /// Open a package on a saved server and read its header through ranges.
 #[cfg(not(target_os = "android"))]
 async fn open_remote_package(
@@ -5687,8 +5603,8 @@ async fn resolve_remote_fs_source(
     remote_path: &str,
     req: &InstallStartRequest,
 ) -> Result<ResolvedSource, String> {
-    if req.split_root.is_some() || req.remote_url.is_some() || req.smb.is_some() {
-        return Err("a server path cannot be combined with split_root, remote_url or smb".into());
+    if req.split_root.is_some() || req.remote_url.is_some() {
+        return Err("a server path cannot be combined with split_root or remote_url".into());
     }
     if req.local_ps5_path.as_deref().is_some_and(|p| !p.is_empty()) {
         return Err("a server path cannot be combined with local_ps5_path".into());
@@ -5704,14 +5620,6 @@ async fn resolve_remote_fs_source(
     _req: &InstallStartRequest,
 ) -> Result<ResolvedSource, String> {
     Err("installing from a server is not available in the Android build".into())
-}
-
-#[cfg(target_os = "android")]
-async fn resolve_smb_source(
-    _smb: &SmbInstallSource,
-    _req: &InstallStartRequest,
-) -> Result<ResolvedSource, String> {
-    Err("installing from an SMB share is not available in the Android build".into())
 }
 
 // ─── /api/pkg/remote/probe ───────────────────────────────────────────
@@ -5760,7 +5668,6 @@ async fn remote_probe_handler(Json(req): Json<RemoteProbeRequest>) -> Response<B
         path: None,
         split_root: None,
         remote_url: Some(url.clone()),
-        smb: None,
         package_type_override: None,
         local_ps5_path: None,
         content_id: None,
@@ -5814,9 +5721,6 @@ type ResolvedSource = (
 async fn resolve_parts_and_meta(req: &InstallStartRequest) -> Result<ResolvedSource, String> {
     if let Some(url) = req.remote_url.as_deref().filter(|u| !u.is_empty()) {
         return resolve_remote_source(url, req).await;
-    }
-    if let Some(smb) = &req.smb {
-        return resolve_smb_source(smb, req).await;
     }
     if let Some(p) = req
         .path

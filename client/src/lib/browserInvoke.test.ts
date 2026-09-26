@@ -268,10 +268,10 @@ describe("engine-backed commands the web UI depends on (#300)", () => {
   });
 
   it("still refuses commands that write to a host path", async () => {
-    // smb_download_file saves bytes to the desktop's disk; mapping it
-    // would silently write onto the ENGINE's filesystem instead.
+    // screenshot_save writes to the desktop's own screenshot folder; mapping
+    // it would silently write onto the ENGINE's filesystem instead.
     await expect(
-      browserInvoke("smb_download_file", { req: {} }),
+      browserInvoke("screenshot_save", { req: {} }),
     ).rejects.toBeInstanceOf(BrowserUnsupportedError);
   });
 });

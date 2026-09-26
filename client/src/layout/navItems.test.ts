@@ -274,3 +274,31 @@ describe("permanent sidebar rows", () => {
     expect(resolved.map((i) => i.to)).toContain("/settings");
   });
 });
+
+// SMB Browser and FTP Server were replaced by Connections: they are gone from the navigation,
+// and an old link or saved favourite to either lands on Connections.
+describe("retired screens", () => {
+  const APP = Object.values(
+    import.meta.glob("../App.tsx", { query: "?raw", import: "default", eager: true }) as Record<
+      string,
+      string
+    >,
+  )[0];
+
+  it("are not in the navigation, and Connections is", async () => {
+    const { NAV_ITEMS } = await import("./navItems");
+    const paths = NAV_ITEMS.map((i: { to: string }) => i.to);
+    expect(paths).not.toContain("/smb-browser");
+    expect(paths).not.toContain("/ftp-server");
+    expect(paths).toContain("/connections");
+  });
+
+  it("send their old links to Connections", () => {
+    for (const old of ["/smb-browser", "/ftp-server"]) {
+      expect(APP).toMatch(
+        new RegExp(`path="${old}"\\s+element=\\{<Navigate to="/connections" replace />\\}`),
+      );
+    }
+    expect(APP).not.toMatch(/SmbBrowserScreen|FtpServerScreen/);
+  });
+});

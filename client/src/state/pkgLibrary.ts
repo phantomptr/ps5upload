@@ -783,26 +783,12 @@ function pkgError(e: unknown): string {
 }
 
 /** Where a stream install gets its bytes. A local `.pkg` is read off this
- *  computer's disk; a link is fetched from its origin by the engine (several
- *  connections at once) and re-served to the console. Everything downstream —
- *  the DPI hand-off, the transfer tracking, the completion check — is the same
- *  for both, which is why they share one code path. */
-/** A package file on an SMB share, streamed straight into the installer. */
-export interface SmbStreamSource {
-  server: string;
-  share: string;
-  user: string;
-  password: string;
-  /** Path of the .pkg within the share. */
-  path: string;
-  /** Size from the share listing, for progress before the engine reports it. */
-  size?: number;
-}
-
-export type StreamInstallSource =
-  | string
-  | { remoteUrl: string }
-  | { smb: SmbStreamSource };
+ *  computer's disk; a `remote://` path is read off a saved server by the engine;
+ *  a link is fetched from its origin by the engine (several connections at once).
+ *  Everything downstream — the DPI hand-off, the transfer tracking, the
+ *  completion check — is the same for all of them, which is why they share one
+ *  code path. */
+export type StreamInstallSource = string | { remoteUrl: string };
 
 interface PkgLibraryState {
   /** Library contents, derived from the on-PS5 dir + transient row state. */
@@ -3865,15 +3851,12 @@ const makePkgLibraryStore = () =>
       // what we call them; the install itself is one path.
       const remoteUrl =
         typeof source === "object" && "remoteUrl" in source ? source.remoteUrl : null;
-      const smb = typeof source === "object" && "smb" in source ? source.smb : null;
       const localPcPath = typeof source === "string" ? source : null;
       // A package on a saved server: the engine reads it (header included) by its remote path.
       const serverPath = localPcPath && isRemotePath(localPcPath) ? localPcPath : null;
       const sourceName = remoteUrl
         ? basenameOf(new URL(remoteUrl).pathname) || "package"
-        : smb
-          ? basenameOf(smb.path.replace(/\\/g, "/")) || "package"
-          : basenameOf(localPcPath ?? "") || "package";
+        : basenameOf((localPcPath ?? "").replace(/\\/g, "/")) || "package";
       const tasks = useTaskStore.getState();
       const taskId = tasks.registerTask({
         kind: "pkg-dpi-install",
@@ -3883,12 +3866,11 @@ const makePkgLibraryStore = () =>
         consoleId: host,
         // Never record the URL: an install link can carry a signed token and
         // task payloads reach the diagnostic bundle.
-        // Never the SMB password: task payloads are shown and persisted.
+        // Never anything about a saved server beyond its name: task payloads are
+        // shown and persisted.
         payload: remoteUrl
           ? { remote: true }
-          : smb
-            ? { smb: { server: smb.server, share: smb.share, path: smb.path } }
-            : serverPath
+          : serverPath
               ? { remotePath: displayPath(serverPath, (id) => useConnectionsStore.getState().nameOf(id)) }
               : { localPcPath },
         status: "queued",
@@ -3983,12 +3965,12 @@ const makePkgLibraryStore = () =>
           fingerprint?: string;
         };
         let totalBytes: number;
-        if (smb || serverPath) {
+        if (serverPath) {
           // The engine reads the header off the share itself when the install
           // starts (the same ranges it then serves), so there is nothing to
           // probe here — a second read of the share would only add latency.
           head = {};
-          totalBytes = smb?.size ?? 0;
+          totalBytes = 0;
         } else if (remoteUrl) {
           try {
             const probe = (await invoke("pkg_remote_probe", {
@@ -4084,26 +4066,17 @@ const makePkgLibraryStore = () =>
           ps5Addr: mgmtAddr(host),
           path: localPcPath,
           splitRoot: null,
-          // Exactly one of these is set. With remoteUrl the engine fetches the
-          // package from the origin in parallel and serves it from the same
-          // pkg-host session a local file would use; with smb it reads the
-          // share the same way. Nothing is copied or staged for either.
+          // With remoteUrl the engine fetches the package from the origin in
+          // parallel and serves it from the same pkg-host session a local file
+          // would use; a remote:// path is read off the saved server the same
+          // way. Nothing is copied or staged for either.
           remoteUrl,
-          smb: smb
-            ? {
-                server: smb.server,
-                share: smb.share,
-                user: smb.user,
-                password: smb.password,
-                path: smb.path,
-              }
-            : null,
           packageTypeOverride: resolvedPackageType,
           localPs5Path: null,
           contentId: contentId || null,
-          // For SMB the size is the listing's, not a parsed header's: leave
-          // it to the engine, which opened the file and knows it exactly.
-          expectedSize: smb ? null : totalBytes || null,
+          // For a server the size is left to the engine, which opened the file
+          // and knows it exactly.
+          expectedSize: serverPath ? null : totalBytes || null,
           packageFingerprint: head.fingerprint ?? null,
           // No staging file is created, so deleteStaging is moot — pass
           // false so the engine doesn't record a staging_path to clean up.

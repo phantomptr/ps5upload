@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  ftpStart,
   backupSnapshot,
   backupRestore,
   userCreate,
@@ -22,7 +21,7 @@ const mockedInvoke = vi.mocked(invoke);
 /**
  * The payload reports a refused action as `ok:false` inside an otherwise
  * successful HTTP 200, so `await` alone never surfaces it. That is how
- * "Start FTP Server" could fail with `bind_failed` and leave the screen
+ * "Start FTP Server" (a screen since retired) could fail with `bind_failed` and leave the screen
  * looking like nothing had happened.
  *
  * Action wrappers must therefore reject, the way `sendPayload` already
@@ -33,21 +32,6 @@ const mockedInvoke = vi.mocked(invoke);
 describe("ok:false guards on action endpoints", () => {
   beforeEach(() => {
     mockedInvoke.mockReset();
-  });
-
-  it("rejects when the payload refuses to start the FTP server", async () => {
-    mockedInvoke.mockResolvedValue({ ok: false, error: "bind_failed", port: 2121 });
-    await expect(ftpStart({ port: 2121 })).rejects.toThrow(/bind_failed/);
-  });
-
-  it("names the port in the bind_failed message so the cause is obvious", async () => {
-    mockedInvoke.mockResolvedValue({ ok: false, error: "bind_failed", port: 2121 });
-    await expect(ftpStart({ port: 2121 })).rejects.toThrow(/2121/);
-  });
-
-  it("resolves normally when the FTP server does start", async () => {
-    mockedInvoke.mockResolvedValue({ ok: true, port: 2137, root: "/", error: null });
-    await expect(ftpStart({ port: 2137 })).resolves.toMatchObject({ port: 2137 });
   });
 
   it("rejects a refused backup snapshot instead of reporting success", async () => {

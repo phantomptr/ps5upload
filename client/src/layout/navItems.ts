@@ -46,7 +46,6 @@ import {
   Bell,
   Clock,
   ShieldAlert,
-  Server,
   Network,
   Stethoscope,
   HardDrive,
@@ -123,12 +122,6 @@ export const NAV_ITEMS: NavItem[] = [
     key: "connections_title",
     fallback: "Connections",
     icon: Network,
-  },
-  {
-    to: "/ftp-server",
-    key: "ftp_title",
-    fallback: "FTP Server",
-    icon: Server,
   },
   { to: "/backup", key: "backup", fallback: "Backup", icon: Archive },
 
