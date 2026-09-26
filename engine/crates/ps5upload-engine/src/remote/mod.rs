@@ -7,7 +7,10 @@
 
 #![allow(dead_code)] // Consumers arrive in later steps of the remote-sources plan.
 
+pub mod api;
 pub mod path;
+pub mod pool;
+pub mod store;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};

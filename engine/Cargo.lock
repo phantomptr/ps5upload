@@ -1227,12 +1227,14 @@ dependencies = [
 name = "ps5upload-engine"
 version = "5.34.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "async-trait",
  "axum",
  "base64",
  "blake3",
  "ftx2-proto",
+ "getrandom 0.4.3",
  "mime_guess",
  "ps5upload-core",
  "ps5upload-fpkg",

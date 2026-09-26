@@ -9216,6 +9216,19 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/fw-spoof/status", get(fw_spoof_status_handler))
         .route("/api/ps5/ftp/start", post(ftp_start_handler))
         .route("/api/ps5/ftp/status", get(ftp_status_handler))
+        .route(
+            "/api/remote/connections",
+            get(remote::api::list_handler).post(remote::api::add_handler),
+        )
+        .route(
+            "/api/remote/connections/{id}",
+            axum::routing::put(remote::api::update_handler).delete(remote::api::delete_handler),
+        )
+        .route(
+            "/api/remote/connections/{id}/test",
+            post(remote::api::test_saved_handler),
+        )
+        .route("/api/remote/test", post(remote::api::test_form_handler))
         .route("/api/smb/list-shares", post(smb::smb_list_shares))
         .route("/api/smb/list-dir", post(smb::smb_list_dir))
         .route("/api/smb/download", post(smb::smb_download_file))

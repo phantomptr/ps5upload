@@ -21,7 +21,9 @@ webui = ["dep:rust-embed", "dep:mime_guess"]
 
 [dependencies]
 anyhow.workspace = true
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
 async-trait = "0.1"
+getrandom = "0.4"
 thiserror.workspace = true
 axum.workspace = true
 base64 = "0.23"
