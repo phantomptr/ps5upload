@@ -715,7 +715,35 @@ pub fn free_bytes(path: &Path) -> Option<u64> {
     Some(st.f_bavail as u64 * st.f_frsize as u64)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub fn free_bytes(path: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        // ULARGE_INTEGER is a u64 in layout.
+        fn GetDiskFreeSpaceExW(
+            directory: *const u16,
+            free_to_caller: *mut u64,
+            total: *mut u64,
+            total_free: *mut u64,
+        ) -> i32;
+    }
+    let existing = path.ancestors().find(|ancestor| ancestor.exists())?;
+    let wide: Vec<u16> = existing.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut free = 0u64;
+    // SAFETY: `wide` is NUL-terminated and outlives the call; the null outputs are optional.
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then_some(free)
+}
+
+#[cfg(not(any(unix, windows)))]
 pub fn free_bytes(_path: &Path) -> Option<u64> {
     None
 }
