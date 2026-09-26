@@ -4,6 +4,25 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+**Convert to FPKG compresses, like Sony's own packages.**
+
+- **Compressed packages.** Converted games are Kraken-compressed, the format the
+  PS5 decompresses in hardware. Spider-Man 2 comes out within a few percent of
+  Sony's own package size.
+- **Choose Fast, Balanced or Smallest** in Convert. Balanced is the default;
+  Fast is about four times quicker for a slightly bigger package.
+- **Converting needs about the package's size free,** not twice the game: the
+  compressed data goes straight into the package.
+- **Games that need `ampr_emu.index` get one made for them.** No more copying it
+  from another release. Large games that need it are also detected reliably now.
+- **An install keeps going if the app restarts** while the PS5 is still
+  downloading the package.
+- Free space is checked on Windows too.
+
+---
+
 ## 5.34.0
 
 **See every install's progress, and a big step for game conversion.**
