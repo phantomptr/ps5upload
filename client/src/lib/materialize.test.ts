@@ -18,12 +18,18 @@ vi.hoisted(() => {
 
 const fetchJob = vi.fn();
 const jobStatus = vi.fn();
-vi.mock("../api/remote", () => ({ remoteApi: { fetch: (...a: unknown[]) => fetchJob(...a) } }));
+const cleanup = vi.fn(async () => {});
+vi.mock("../api/remote", () => ({
+  remoteApi: {
+    fetch: (...a: unknown[]) => fetchJob(...a),
+    cleanupFetched: (...a: unknown[]) => cleanup(...(a as [])),
+  },
+}));
 vi.mock("../api/ps5", () => ({ jobStatus: (...a: unknown[]) => jobStatus(...a) }));
 
 import { useConnectionsStore } from "../state/connections";
 import { useTaskStore } from "../state/tasks";
-import { materializeRemote } from "./materialize";
+import { materializeRemote, releaseCopy, withLocalCopy } from "./materialize";
 
 describe("materializeRemote", () => {
   beforeEach(() => {
@@ -73,4 +79,28 @@ describe("materializeRemote", () => {
     );
     expect(useTaskStore.getState().tasks[0]?.status).toBe("failed");
   });
+
+  it("removes the copy once the work that needed it is done", async () => {
+    cleanup.mockClear();
+    fetchJob.mockResolvedValue({ job_id: "j3" });
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "/tmp/y/p.elf", bytes_sent: 1 });
+    const used = await withLocalCopy("remote://nas-1/p.elf", async (local) => local, { pollMs: 1 });
+    expect(used).toBe("/tmp/y/p.elf");
+    expect(cleanup).toHaveBeenCalledWith("/tmp/y/p.elf");
+    cleanup.mockClear();
+    await withLocalCopy("/Users/me/p.elf", async (local) => local, { pollMs: 1 });
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  it("releases only copies it made", async () => {
+    cleanup.mockClear();
+    fetchJob.mockResolvedValue({ job_id: "j4" });
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "/tmp/z/a.zip", bytes_sent: 1 });
+    const local = await materializeRemote("remote://nas-1/a.zip", { pollMs: 1 });
+    await releaseCopy("/Users/me/local.zip");
+    expect(cleanup).not.toHaveBeenCalled();
+    await releaseCopy(local);
+    expect(cleanup).toHaveBeenCalledWith("/tmp/z/a.zip");
+  });
 });
+

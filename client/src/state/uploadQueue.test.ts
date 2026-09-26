@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // only override the network-touching functions so we can drive the runner
 // deterministically without a PS5 or engine.
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+const releaseCopy = vi.fn(async () => {});
+vi.mock("../lib/materialize", () => ({ releaseCopy: (...a: unknown[]) => releaseCopy(...(a as [])) }));
 vi.mock("../lib/ensurePayloadCurrent", () => ({
   ensurePayloadCurrent: vi.fn(async () => {}),
 }));
@@ -867,6 +869,9 @@ describe("upload runner — unverified PKG install", () => {
     const item = useUploadQueueStore.getState().items[0];
     expect(item.status).toBe("done");
     expect(item.installPhase).toBe("unverified");
+    // A copy made of a server file for this upload is let go once it is done
+    // (a local path is ignored by releaseCopy).
+    expect(releaseCopy).toHaveBeenCalledWith("/src/Game.pkg");
     expect(item.mountWarnings).toContain(
       "Accepted, but completion was not verified.",
     );

@@ -53,6 +53,7 @@ import { withConsolePrefix } from "./roster";
 import { hostOf, mgmtAddr } from "../lib/addr";
 import { log } from "./logs";
 import { isRemotePath } from "../lib/remotePath";
+import { releaseCopy } from "../lib/materialize";
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import { effectiveUploadStreams } from "../lib/uploadStreams";
 import {
@@ -1033,6 +1034,9 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
             }),
           }));
           scheduleSave();
+          // An archive picked on a saved server was copied here to upload; the copy is done
+          // with now. (Local paths are not copies and are left alone.)
+          void releaseCopy(next.sourcePath);
           if (!isLive()) return;
           break; // success → next item
         } catch (e) {

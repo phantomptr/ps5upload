@@ -161,6 +161,7 @@ function enterStage(stage: PipelineStage, done = 0, total = 0) {
 function fail(stage: PipelineStage, message: string, packagePath: string | null) {
   const p = running();
   if (!p) return;
+  dropCopy(p);
   if (p.taskId) {
     if (isCancelMessage(message)) useTaskStore.getState().finishTask(p.taskId, "cancelled");
     else
@@ -361,7 +362,10 @@ async function copyThenStart(
   let local: string;
   try {
     local = await fetchRemote(source, {
-      destDir: outputDir ? `${outputDir.replace(/[\\/]+$/, "")}/.ps5upload-source` : undefined,
+      // A folder per run, so a copy left by one run never blocks the next.
+      destDir: outputDir
+        ? `${outputDir.replace(/[\\/]+$/, "")}/.ps5upload-source/${runFolder()}`
+        : undefined,
       pollMs: POLL_MS,
       onJob: (id) => update({ jobId: id }),
       onProgress: (done, total) => enterStage("copy", done, total),
@@ -382,7 +386,12 @@ async function copyThenStart(
   }
 }
 
-/** The copy of a server source is only scaffolding; drop it once the build has what it needs. */
+function runFolder(): string {
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+/** The copy of a server source is only scaffolding: drop it once the build is over, whether it
+ *  finished or not (the next run copies again into a folder of its own). */
 function dropCopy(p: Running) {
   if (p.copiedSource) void remoteApi.cleanupFetched(p.copiedSource).catch(() => {});
 }

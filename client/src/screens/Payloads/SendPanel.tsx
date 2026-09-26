@@ -20,7 +20,7 @@ import { sendPayload } from "../../api/ps5";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { BrowseButton } from "../../components/BrowseButton";
-import { materializeRemote } from "../../lib/materialize";
+import { withLocalCopy } from "../../lib/materialize";
 import { isRemotePath } from "../../lib/remotePath";
 import { PlaylistsPanel } from "./PlaylistsPanel";
 
@@ -359,8 +359,9 @@ export default function SendPanel() {
     const startedPort = parsedPort;
     const startedPath = elfPath;
     try {
-      // A payload on a saved server is copied here first; the loader sends local bytes.
-      await sendPayload(startedHost, await materializeRemote(startedPath), startedPort);
+      // A payload on a saved server is copied here first (the loader sends local bytes), and
+      // the copy goes once it is sent.
+      await withLocalCopy(startedPath, (local) => sendPayload(startedHost, local, startedPort));
       setStatus({ kind: "sent", bytes: 0 });
       void commitToHistory({
         path: startedPath,

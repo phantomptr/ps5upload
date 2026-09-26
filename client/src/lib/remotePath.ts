@@ -14,12 +14,21 @@ export function parseRemotePath(p: string): { connectionId: string; path: string
   const connectionId = slash < 0 ? rest : rest.slice(0, slash);
   if (!connectionId) return null;
   const path = slash < 0 ? "/" : rest.slice(slash) || "/";
-  return { connectionId, path };
+  return { connectionId, path: decodePercent(path) };
 }
 
 export function remotePath(connectionId: string, path: string): string {
-  const inner = path.replace(/^\/+|\/+$/g, "");
+  // The engine percent-decodes paths, so a literal % in a name travels as %25.
+  const inner = path.replace(/^\/+|\/+$/g, "").replace(/%/g, "%25");
   return inner ? `${SCHEME}${connectionId}/${inner}` : `${SCHEME}${connectionId}`;
+}
+
+function decodePercent(p: string): string {
+  try {
+    return decodeURIComponent(p);
+  } catch {
+    return p;
+  }
 }
 
 /** "NAS › games/ps5/Minecraft.pkg"; a local path comes back unchanged. */

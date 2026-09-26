@@ -331,7 +331,10 @@ describe("fpkg pipeline", () => {
       .getState()
       .start({ source: "remote://nas-1/games/a", outputDir: "/out" }, { install: false, host: null });
     expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "running", stage: "copy" });
-    expect(remoteFetch).toHaveBeenCalledWith("remote://nas-1/games/a", "/out/.ps5upload-source");
+    expect(remoteFetch).toHaveBeenCalledWith(
+      "remote://nas-1/games/a",
+      expect.stringMatching(/^\/out\/\.ps5upload-source\/[a-z0-9]+$/),
+    );
     await tick();
     await tick();
     expect(build).toHaveBeenCalledWith(
@@ -358,4 +361,28 @@ describe("fpkg pipeline", () => {
     });
     expect(build).not.toHaveBeenCalled();
   });
+
+  it("copies each server run into its own folder and drops the copy when the build fails", async () => {
+    jobStatus
+      .mockResolvedValueOnce({ status: "done", dest: "/out/.ps5upload-source/r1/a", bytes_sent: 1 })
+      .mockResolvedValueOnce({ status: "failed", error: "disk full" });
+    await useFpkgConversion
+      .getState()
+      .start({ source: "remote://nas-1/games/a", outputDir: "/out" }, { install: false, host: null });
+    await tick();
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "failed", message: "disk full" });
+    expect(cleanupFetched).toHaveBeenCalledWith("/out/.ps5upload-source/r1/a");
+    const first = remoteFetch.mock.calls[0][1] as string;
+    useFpkgConversion.setState({ pipeline: { phase: "idle" } });
+    remoteFetch.mockClear();
+    jobStatus.mockResolvedValueOnce({ status: "failed", error: "x" });
+    await useFpkgConversion
+      .getState()
+      .start({ source: "remote://nas-1/games/a", outputDir: "/out" }, { install: false, host: null });
+    const second = remoteFetch.mock.calls[0][1] as string;
+    expect(first.startsWith("/out/.ps5upload-source/")).toBe(true);
+    expect(second).not.toBe(first);
+  });
 });
+

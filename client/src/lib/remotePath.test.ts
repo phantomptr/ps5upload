@@ -23,4 +23,13 @@ describe("remote paths", () => {
     expect(displayPath("remote://gone/x", () => undefined)).toBe("gone › x");
     expect(displayPath("/Users/me/a.pkg", () => "NAS")).toBe("/Users/me/a.pkg");
   });
+
+  it("keeps a % in a file name intact", () => {
+    // The engine percent-decodes paths, so a literal % must travel as %25.
+    const p = remotePath("nas-1", "/games/Game [100%].pkg");
+    expect(p).toBe("remote://nas-1/games/Game [100%25].pkg");
+    expect(parseRemotePath(p)?.path).toBe("/games/Game [100%].pkg");
+    expect(displayPath(p, () => "NAS")).toBe("NAS › games/Game [100%].pkg");
+  });
 });
+

@@ -8,6 +8,29 @@ import { useConnectionsStore } from "../state/connections";
 import { trackTask } from "../state/trackTask";
 import { isRemotePath, parseRemotePath } from "./remotePath";
 
+/** Local copies this app made of server files, so only those are ever cleaned up. */
+const copies = new Set<string>();
+
+/** Remove a copy made by `materializeRemote` once nothing needs it. Anything else is left alone. */
+export async function releaseCopy(path: string): Promise<void> {
+  if (!copies.delete(path)) return;
+  await remoteApi.cleanupFetched(path).catch(() => {});
+}
+
+/** Run `work` on a local copy of `path` (the path itself when local), then remove the copy. */
+export async function withLocalCopy<T>(
+  path: string,
+  work: (local: string) => Promise<T>,
+  opts: { destDir?: string; pollMs?: number } = {},
+): Promise<T> {
+  const local = await materializeRemote(path, opts);
+  try {
+    return await work(local);
+  } finally {
+    await releaseCopy(local);
+  }
+}
+
 /** Run the engine's copy job for `path` and resolve with the local copy. No task of its own:
  *  the caller shows the progress (Convert, as its first stage). */
 export async function fetchRemote(
@@ -46,7 +69,7 @@ export async function materializeRemote(
   const server =
     (parsed && useConnectionsStore.getState().nameOf(parsed.connectionId)) ?? "the server";
   const pollMs = opts.pollMs ?? 500;
-  return trackTask(
+  const local = await trackTask(
     { kind: "download", origin: "remote.fetch", label: `Copy ${name} from ${server}` },
     (report) =>
       fetchRemote(path, {
@@ -56,4 +79,6 @@ export async function materializeRemote(
           report({ progress: { current, total, unit: "bytes" } }),
       }),
   );
+  copies.add(local);
+  return local;
 }
