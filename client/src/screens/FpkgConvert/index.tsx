@@ -236,13 +236,6 @@ export default function FpkgConvertScreen() {
           "Turn a game folder or mount image into an installable package. The work runs on this machine, not the console.",
         )}
       />
-      <div className="text-xs text-[var(--color-warn)]">
-        {tr(
-          "fpkg.betaLine",
-          undefined,
-          "Beta: a package may fail to install or launch. Keep your original game files.",
-        )}
-      </div>
 
       <GameCard
         source={source}

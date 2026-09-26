@@ -144,7 +144,6 @@ export const NAV_ITEMS: NavItem[] = [
     key: "fpkg_title",
     fallback: "Convert to FPKG",
     icon: PackagePlus,
-    beta: true,
   },
   { to: "/saves", key: "saves", fallback: "Save data", icon: Save },
   {

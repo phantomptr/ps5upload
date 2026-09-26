@@ -3,7 +3,6 @@ import { useConnectionStore } from "./state/connection";
 import { Navigate, Route, Routes } from "react-router";
 import AppShell from "./layout/AppShell";
 import { useRosterStore } from "./state/roster";
-import { useBetaFeaturesStore } from "./state/betaFeatures";
 import { isTauriEnv } from "./lib/tauriEnv";
 
 /**
@@ -100,15 +99,6 @@ function NativeOnlyRoute({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-/** Guards a route whose screen is still being finished. Hiding the nav entry
- *  is not enough on its own: a typed URL, a stale favorite or a restored
- *  session all reach the route directly. */
-function BetaRoute({ children }: { children: ReactNode }) {
-  const enabled = useBetaFeaturesStore((s) => s.enabled);
-  if (!enabled) return <Navigate to="/home" replace />;
-  return <>{children}</>;
-}
-
 export default function App() {
   // Screen state is per-console, and nothing from one console should
   // ever be shown against another.
@@ -165,11 +155,9 @@ export default function App() {
         <Route
           path="/convert"
           element={
-            <BetaRoute>
-              <Suspense fallback={<ScreenLoader />}>
-                <ConvertScreen />
-              </Suspense>
-            </BetaRoute>
+            <Suspense fallback={<ScreenLoader />}>
+              <ConvertScreen />
+            </Suspense>
           }
         />
         <Route

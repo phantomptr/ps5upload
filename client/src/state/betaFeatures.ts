@@ -6,10 +6,9 @@ import { safeGetItem, safeSetItem } from "../lib/safeStorage";
  * finished. Off by default, because the things it reveals are, by definition,
  * not ready to be stumbled into.
  *
- * Today it gates the FPKG builder ("Convert to FPKG"), which can produce and
- * install a package but does not yet make the console mount it. Gating it here
- * rather than deleting it keeps the work reachable for testing without putting
- * a broken screen in everyone's sidebar.
+ * Nothing is gated today: Convert to FPKG, the first feature it held back,
+ * graduated once its packages installed and played. The switch stays for the
+ * next feature that needs a quiet trial.
  *
  * Persisted like the other UI preferences and mirrored to settings.json so it
  * survives a storage reset or a reinstall — a user who turned it on to test

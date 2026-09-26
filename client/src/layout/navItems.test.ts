@@ -302,3 +302,23 @@ describe("retired screens", () => {
     expect(APP).not.toMatch(/SmbBrowserScreen|FtpServerScreen/);
   });
 });
+
+// Convert to FPKG left the beta program once its packages installed and played: it shows for
+// everyone, with the beta switch off.
+describe("Convert to FPKG", () => {
+  it("is no longer a beta feature", () => {
+    const convert = NAV_ITEMS.find((i) => i.to === "/convert");
+    expect(convert).toBeDefined();
+    expect(convert?.beta).toBeFalsy();
+  });
+
+  it("is reachable without the beta switch", () => {
+    const APP = Object.values(
+      import.meta.glob("../App.tsx", { query: "?raw", import: "default", eager: true }) as Record<
+        string,
+        string
+      >,
+    )[0];
+    expect(APP).not.toMatch(/BetaRoute/);
+  });
+});

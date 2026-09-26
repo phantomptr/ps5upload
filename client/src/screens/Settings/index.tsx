@@ -1017,7 +1017,7 @@ export default function SettingsScreen() {
             hint={tr(
               "beta_features_hint",
               undefined,
-              "Adds work-in-progress screens to the sidebar. These are usable but not yet reliable, and may change or be removed. Today this reveals the FPKG builder (Convert to FPKG).",
+              "Adds work-in-progress screens to the sidebar when there are any. These are usable but not yet reliable, and may change or be removed.",
             )}
           />
         </Section>
