@@ -467,6 +467,30 @@ describe("installStream — DPI lifecycle and HTTP fallback", () => {
     );
   });
 
+  it("tells the caller which task tracks a stream install", async () => {
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_metadata_split") return metadata;
+      if (cmd === "pkg_install_start")
+        return { err_code: 0, session_id: "task-session" };
+      if (cmd === "dpi_ensure")
+        return { ok: true, listening: true, sent: false };
+      if (cmd === "pkg_dpi_direct_install")
+        return { ok: true, rc: 0, requests_served: 12, bridge: "dpiv2" };
+      if (cmd === "pkg_install_status")
+        return { phase: "done", completed: true, transfer_bytes: 8_192_000 };
+      return {};
+    });
+    const seen: string[] = [];
+
+    await pkgLibraryStore(host)
+      .getState()
+      .installStream(localPath, host, { onTask: (id) => seen.push(id) });
+
+    // Convert follows this task to show its Send / Install stages.
+    expect(seen).toHaveLength(1);
+    expect(useTaskStore.getState().tasks.some((t) => t.id === seen[0])).toBe(true);
+  });
+
   it("still restores the main payload when our own DPI daemon was sent", async () => {
     mockedInvoke.mockImplementation(async (cmd: unknown) => {
       if (cmd === "pkg_metadata_split") return metadata;

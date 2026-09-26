@@ -845,6 +845,9 @@ interface PkgLibraryState {
   installStream: (
     source: StreamInstallSource,
     host: string,
+    /** `onTask` receives the id of the task that tracks this install, as soon as it exists,
+     *  so a caller (Convert) can follow its progress. */
+    opts?: { onTask?: (taskId: string) => void },
   ) => Promise<{
     ok: boolean;
     message?: string;
@@ -3825,7 +3828,7 @@ const makePkgLibraryStore = () =>
       }
       return get().installStream({ remoteUrl: trimmed }, host);
     },
-    async installStream(source, host) {
+    async installStream(source, host, opts) {
       if (!host?.trim()) {
         return { ok: false, message: "No PS5 host selected." };
       }
@@ -3860,6 +3863,7 @@ const makePkgLibraryStore = () =>
             : { localPcPath },
         status: "queued",
       });
+      opts?.onTask?.(taskId);
       let taskFinished = false;
       const finishStreamTask = <T extends { ok: boolean; message?: string }>(
         result: T,
