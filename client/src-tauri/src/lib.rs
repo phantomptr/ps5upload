@@ -294,6 +294,7 @@ pub fn run() {
             commands::ps5_app_unregister,
             commands::fpkg_inspect,
             commands::fpkg_build,
+            commands::fpkg_delete,
             commands::ffpfsc_compress,
             commands::job_status,
             commands::job_cancel,

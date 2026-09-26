@@ -2559,6 +2559,15 @@ pub async fn fpkg_build(
     .await
 }
 
+/// Delete a package the converter built; the engine refuses any other file.
+/// POST /api/fpkg/delete.
+#[tauri::command]
+pub async fn fpkg_delete(path: String) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/fpkg/delete");
+    post_json(&url, &serde_json::json!({ "path": path })).await
+}
+
 /// Compress a game image into a `.ffpfsc` for ShadowMountPlus; runs as an engine job.
 #[tauri::command]
 pub async fn ffpfsc_compress(

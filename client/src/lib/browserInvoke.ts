@@ -709,6 +709,9 @@ export async function browserInvoke<T>(
         firmware: args["firmware"],
       });
     }
+    case "fpkg_delete": {
+      return postJson<T>("/api/fpkg/delete", { path: args["path"] });
+    }
     case "ffpfsc_compress": {
       return postJson<T>("/api/ffpfsc/compress", {
         source: args["source"],

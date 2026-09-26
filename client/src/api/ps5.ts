@@ -4071,8 +4071,20 @@ export interface PlannedFile {
   size: number;
 }
 
+/** Where a staged job (an FPKG build) stands: its stage and that stage's own bytes. */
+export interface JobStageSnapshot {
+  /** "check" | "plan" | "compress" | "write" | "verify" for a build. */
+  id: string;
+  index: number;
+  count: number;
+  done: number;
+  total: number;
+}
+
 export interface JobSnapshot {
   status: JobStatus;
+  /** Present on a running job that reports stages (an FPKG build). */
+  stage?: JobStageSnapshot;
   started_at_ms?: number;
   elapsed_ms?: number;
   /** Populated for `running` (live counter, 200 ms cadence) AND `done`
