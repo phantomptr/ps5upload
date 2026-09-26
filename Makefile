@@ -879,6 +879,15 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/timed_init_selftest.c
 	@/tmp/ps5upload-timed-init-selftest
 	@echo "✓ timed-out Sony initialization cannot overlap a retry"
+	@echo "Running installer daemon logic self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/installer \
+		-o /tmp/ps5upload-installer-selftest \
+		$(PAYLOAD_DIR)/tests/installer_selftest.c \
+		$(PAYLOAD_DIR)/installer/protocol.c \
+		$(PAYLOAD_DIR)/installer/pathsafe.c \
+		$(PAYLOAD_DIR)/installer/jobs.c
+	@/tmp/ps5upload-installer-selftest
+	@echo "✓ installer request parse, replies, path safety and admission are sound"
 	@echo "Running param.json SDK-rewrite self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-sdk-param-selftest \
 		$(PAYLOAD_DIR)/tests/sdk_param_selftest.c
