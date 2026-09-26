@@ -107,7 +107,7 @@ ADB ?= $(ANDROID_HOME)/platform-tools/adb
 .PHONY: run-engine run-client dev start _check-tauri-system-deps
 .PHONY: install-engine uninstall-engine
 .PHONY: dist dist-win dist-win-arm dist-mac dist-mac-x64 dist-linux dist-linux-arm
-.PHONY: android-deps android-init android-build android-deploy _android-install-if-device run-android
+.PHONY: android-deps android-init android-build android-deploy _android-install-if-device run-android run-android-background
 .PHONY: emu-create emu-start emu-stop emu-status emu-test
 .PHONY: send-payload gen-fixtures sweep validate validate-xl
 .PHONY: sync-version sync-version-check
@@ -171,7 +171,8 @@ help:
 	@echo "  make dist-linux|dist-linux-arm"
 	@echo ""
 	@echo "Android (Tauri mobile — needs Android SDK + JDK 17 + NDK + rustup):"
-	@echo "  make run-android      - Build + run on a connected device/emulator (live reload)"
+	@echo "  make run-android      - Build + run with live reload; boots the emulator WITH its window"
+	@echo "  make run-android-background - Same, but the emulator boots headless (no window)"
 	@echo "  make android-deploy   - Build APK + install/update it on connected device(s)"
 	@echo "  make android-build    - Build a debug APK (no device needed)"
 	@echo "  make android-init     - One-time: scaffold src-tauri/gen/android"
@@ -179,7 +180,7 @@ help:
 	@echo "  make emu-test         - Build + run the app on a headless emulator, with a screenshot"
 	@echo "  make emu-start        - Boot the test emulator (headless); emu-stop to shut it down"
 	@echo "  make emu-status       - Show AVDs, whether one is running, and where artifacts go"
-	@echo "  make run-android      - Live dev build; boots the emulator if nothing is attached"
+	@echo "  make run-android      - Boots the emulator (windowed) only if nothing is attached"
 	@echo "      emu-test leaves the emulator up for fast re-runs; PS5UPLOAD_EMU_TEARDOWN=1 stops it"
 	@echo ""
 	@echo "Auto-launch (engine starts at OS login):"
@@ -608,9 +609,14 @@ android-build: android-deps payload setup-client
 # ONLY an emulator this invocation booted -- a phone you plugged in, or an
 # emulator you already had running, is left alone. The trap covers Ctrl-C,
 # which is how `tauri android dev` normally ends.
-run-android: android-deps payload setup-client
+# run-android: the emulator boots WITH its window (foreground) so the app can be
+# seen and used. run-android-background: it boots headless, as emu-test does.
+# Either way the dev server stays attached here for live reload.
+run-android: EMU_WINDOW := 1
+run-android-background: EMU_WINDOW := 0
+run-android run-android-background: android-deps payload setup-client
 	@test -d $(ANDROID_GEN_DIR) || $(MAKE) android-init
-	@state=$$(bash $(CURDIR)/scripts/android-emu.sh ensure) || exit 1; \
+	@state=$$(PS5UPLOAD_EMU_WINDOW=$(EMU_WINDOW) bash $(CURDIR)/scripts/android-emu.sh ensure) || exit 1; \
 	if [ "$$state" = "booted" ]; then \
 		trap 'trap - EXIT INT TERM; echo ""; echo "Shutting down the emulator this run booted..."; bash $(CURDIR)/scripts/android-emu.sh stop' EXIT INT TERM; \
 	else \

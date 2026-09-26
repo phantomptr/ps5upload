@@ -11,6 +11,10 @@
 # `test` leaves the emulator running so re-runs skip the ~25s cold boot; set
 # PS5UPLOAD_EMU_TEARDOWN=1 (CI) to shut down one that this run booted.
 #
+# The emulator boots headless by default. PS5UPLOAD_EMU_WINDOW=1 boots it with
+# its window, so the app can be seen and used (make run-android does this;
+# make run-android-background and make emu-test stay headless).
+#
 # ARTIFACTS LIVE OUTSIDE THE REPO, at ~/.ps5upload/android-test/<stamp>/.
 # That is deliberate and not a style choice: this repo has already leaked
 # debug screenshots into a PUBLIC repo (see the "Dev screenshots" section of
@@ -94,7 +98,13 @@ cmd_start() {
   fi
   "$EMULATOR" -list-avds 2>/dev/null | grep -qx "$AVD_NAME" || cmd_create
 
-  say "Booting '$AVD_NAME' headless (up to ${BOOT_TIMEOUT_SEC}s) ..."
+  local window_flags=(-no-window)
+  if [ "${PS5UPLOAD_EMU_WINDOW:-0}" = "1" ]; then
+    window_flags=()
+    say "Booting '$AVD_NAME' with its window (up to ${BOOT_TIMEOUT_SEC}s) ..."
+  else
+    say "Booting '$AVD_NAME' headless (up to ${BOOT_TIMEOUT_SEC}s) ..."
+  fi
   # -no-window: headless. -no-snapshot-save: never persist a half-booted
   # state, which turns one bad run into every later run failing the same way.
   # -wipe-data would reset each run; we deliberately keep data so an install
@@ -106,7 +116,7 @@ cmd_start() {
   # `adb emu kill`, which is what cmd_stop does.
   set -m
   nohup "$EMULATOR" -avd "$AVD_NAME" \
-    -no-window -no-audio -no-boot-anim -no-snapshot-save \
+    ${window_flags[@]+"${window_flags[@]}"} -no-audio -no-boot-anim -no-snapshot-save \
     -gpu swiftshader_indirect \
     >"$HOME/.ps5upload/android-emu.log" 2>&1 &
   set +m
@@ -145,6 +155,10 @@ cmd_ensure() {
   need_tools
   if [ -n "$(any_device)" ]; then
     say "✓ Using the already-attached device ($(any_device))" >&2
+    # A headless emulator from an earlier background run cannot grow a window.
+    if [ "${PS5UPLOAD_EMU_WINDOW:-0}" = "1" ] && pgrep -f "emulator.*-avd $AVD_NAME.*-no-window" >/dev/null 2>&1; then
+      say "  It is running headless — 'make emu-stop' first to see it in a window." >&2
+    fi
     printf 'preexisting\n'
     return 0
   fi
