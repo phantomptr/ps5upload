@@ -62,6 +62,7 @@ import {
   FS_DEFAULT_PATH,
 } from "../../lib/fsLastPath";
 import { useFsNavStore } from "../../state/fsNavigation";
+import { trackTask } from "../../state/trackTask";
 import { useActivityHistoryStore } from "../../state/activityHistory";
 import { pushNotification } from "../../state/notifications";
 import { usePkgLibrary } from "../../state/pkgLibrary";
@@ -692,7 +693,11 @@ export default function FileSystemScreen() {
     let okOutcome = true;
     let errMsg: string | null = null;
     try {
-      await fsDelete(`${host}:${PS5_PAYLOAD_PORT}`, itemPath);
+      // The activity bar reads the task store; a big folder can take minutes to delete.
+      await trackTask(
+        { kind: "fs-delete", origin: "files.delete", label: `Delete ${name}`, consoleId: host },
+        () => fsDelete(`${host}:${PS5_PAYLOAD_PORT}`, itemPath),
+      );
       await refresh();
     } catch (e) {
       okOutcome = false;

@@ -197,6 +197,10 @@ interface PersistedShape {
   tasks: Task[];
 }
 
+/** Tasks this start-up found still running and marked interrupted: the activity bar lists them
+ *  among this session's finished jobs, though they ended in the previous one. */
+export const interruptedAtLoad = new Set<string>();
+
 function loadInitial(): Task[] {
   if (typeof window === "undefined") return [];
   try {
@@ -206,9 +210,11 @@ function loadInitial(): Task[] {
     if (!parsed || !Array.isArray(parsed.tasks)) return [];
     // Any task that was non-terminal when the app closed is now stale.
     // Mark as "interrupted" so the user sees what happened + can retry.
-    return parsed.tasks.map((t) =>
-      isTerminal(t.status) ? t : { ...t, status: "interrupted" as TaskStatus, endedAtMs: t.updatedAtMs },
-    );
+    return parsed.tasks.map((t) => {
+      if (isTerminal(t.status)) return t;
+      interruptedAtLoad.add(t.id);
+      return { ...t, status: "interrupted" as TaskStatus, endedAtMs: t.updatedAtMs };
+    });
   } catch {
     return [];
   }

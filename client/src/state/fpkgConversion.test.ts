@@ -273,7 +273,7 @@ describe("fpkg pipeline", () => {
     expect(taskCapabilities(t()).canCancel).toBe(true);
     await tick();
     expect(taskCapabilities(t()).canCancel).toBe(false);
-    expect(await commandTask(t(), "cancel")).toBe(true); // no-op, no throw
+    expect(await commandTask(t(), "cancel")).toBe(false); // a no-op, and says so
   });
 
   it("ends a cancelled build as cancelled and a broken one as failed", async () => {
@@ -295,5 +295,20 @@ describe("fpkg pipeline", () => {
       kind: "ffpfsc-compress",
       label: "Compress b.exfat",
     });
+  });
+
+  it("never lets a finished Convert row cancel the conversion running now", async () => {
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/a.pkg", bytes_sent: 1 });
+    await useFpkgConversion.getState().start(req, { install: false, host: null });
+    await tick();
+    const first = useTaskStore.getState().tasks.find((x) => x.kind === "fpkg-convert")!;
+    useFpkgConversion.getState().reset();
+    jobStatus.mockResolvedValue({ status: "running" });
+    build.mockResolvedValueOnce({ job_id: "j2" });
+    await useFpkgConversion.getState().start({ ...req, source: "/games/b" }, { install: false, host: null });
+    const second = useTaskStore.getState().tasks.find((x) => x.label === "Convert b")!;
+    expect(taskCapabilities(second).canCancel).toBe(true);
+    expect(taskCapabilities(first).canCancel).toBe(false);
+    expect(await commandTask(first, "cancel")).toBe(false);
   });
 });

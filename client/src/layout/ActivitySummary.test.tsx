@@ -44,7 +44,13 @@ const summaryWith = (count: number) =>
 const summaryWithRows = () =>
   sum([
     task({ id: "a", kind: "fpkg-convert", label: "Convert Spider-Man 2", stage: "Compress" }),
-    task({ id: "b", kind: "backup-snapshot", label: "Backup PS5", updatedAtMs: NOW - 125_000 }),
+    task({
+      id: "b",
+      kind: "backup-snapshot",
+      label: "Backup PS5",
+      updatedAtMs: NOW - 125_000,
+      progress: { current: 1, total: 4, unit: "items" },
+    }),
     task({
       id: "c",
       kind: "save-restore",

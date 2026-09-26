@@ -3,7 +3,7 @@ import { useFsBulkOpStore } from "./fsBulkOp";
 import { retryInstallReverify } from "./pkgLibrary";
 import { useTransferStore } from "./transfer";
 import { useUploadQueueStore } from "./uploadQueue";
-import type { Task } from "./tasks";
+import { isTerminal, type Task } from "./tasks";
 import { invoke } from "../lib/invokeLogged";
 
 export type TaskCommand = "cancel" | "retry";
@@ -38,8 +38,13 @@ export function taskCapabilities(task: Task): TaskCapabilities {
     return { ...none, canCancel: task.status === "running" || task.status === "queued" };
   }
   if (control.owner === "fpkg-convert") {
+    // Only the run that owns this row: an old Convert row must never stop a newer conversion.
     const p = useFpkgConversion.getState().pipeline;
-    return { ...none, canCancel: p.phase === "running" && p.jobId != null };
+    return {
+      ...none,
+      canCancel:
+        !isTerminal(task.status) && p.phase === "running" && p.taskId === task.id && p.jobId != null,
+    };
   }
   if (control.owner === "pkg-install") {
     // An install Sony accepted but we could not confirm. Nothing to cancel —
@@ -77,6 +82,7 @@ export async function commandTask(task: Task, command: TaskCommand): Promise<boo
     }
     if (control.owner === "pkg-install") return false;
     if (control.owner === "fpkg-convert") {
+      if (!taskCapabilities(task).canCancel) return false;
       await useFpkgConversion.getState().cancel();
       return true;
     }

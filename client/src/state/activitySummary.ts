@@ -116,9 +116,19 @@ function pctOf(task: Task): number | null {
 
 export function summarize(
   tasks: Task[],
-  opts: { now: number; sessionStart: number; seen: ReadonlySet<string> },
+  opts: {
+    now: number;
+    sessionStart: number;
+    seen: ReadonlySet<string>;
+    /** Jobs this start-up interrupted; they count as ending when the session began. */
+    interruptedAtLoad?: ReadonlySet<string>;
+  },
 ): ActivitySummary {
   const { now, sessionStart, seen } = opts;
+  const endOf = (t: Task) =>
+    opts.interruptedAtLoad?.has(t.id)
+      ? Math.max(t.endedAtMs ?? 0, sessionStart)
+      : (t.endedAtMs ?? 0);
   const started = (t: Task) => Date.parse(t.createdAt) || t.updatedAtMs;
   const running = tasks
     .filter((t) => !isTerminal(t.status))
@@ -134,16 +144,21 @@ export function summarize(
         task: t,
         short: shortLabel(t.kind),
         pct: pctOf(t),
-        staleMin: t.status === "running" && quiet >= STALE_MS ? Math.floor(quiet / STALE_MS) : null,
+        // Only a job that reports progress can fall silent; a one-shot job (a backup, a bug
+        // report) says nothing until it ends, and a quiet minute is normal for it.
+        staleMin:
+          t.status === "running" && t.progress && quiet >= STALE_MS
+            ? Math.floor(quiet / STALE_MS)
+            : null,
       };
     });
   const ended = tasks
-    .filter((t) => isTerminal(t.status) && (t.endedAtMs ?? 0) >= sessionStart)
-    .sort((a, b) => (b.endedAtMs ?? 0) - (a.endedAtMs ?? 0));
+    .filter((t) => isTerminal(t.status) && endOf(t) >= sessionStart)
+    .sort((a, b) => endOf(b) - endOf(a));
   const newest = ended[0];
   const flash =
     newest &&
-    now - (newest.endedAtMs ?? 0) < FLASH_MS &&
+    now - endOf(newest) < FLASH_MS &&
     (newest.status === "done" || newest.status === "failed")
       ? { short: shortLabel(newest.kind), label: newest.label, outcome: newest.status }
       : null;
@@ -155,7 +170,7 @@ export function summarize(
       id: t.id,
       task: t,
       outcome: t.status as FinishedOutcome,
-      agoMs: now - (t.endedAtMs ?? now),
+      agoMs: now - endOf(t),
     })),
     failedUnseen: ended.filter((t) => t.status === "failed" && !seen.has(t.id)).length,
     flash,

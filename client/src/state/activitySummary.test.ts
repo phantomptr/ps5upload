@@ -40,7 +40,10 @@ describe("summarize", () => {
   });
 
   it("marks a job with no update for a minute as stale", () => {
-    const s = summarize([task({ updatedAtMs: NOW - 125_000 })], opts());
+    const s = summarize(
+      [task({ updatedAtMs: NOW - 125_000, progress: { current: 1, total: 9, unit: "bytes" } })],
+      opts(),
+    );
     expect(s.running[0].staleMin).toBe(2);
     expect(summarize([task({})], opts()).running[0].staleMin).toBeNull();
   });
@@ -84,5 +87,25 @@ describe("labels and routes", () => {
     expect(routeForTask(task({ kind: "fpkg-convert" }))).toBe("/convert");
     expect(routeForTask(task({ kind: "pkg-dpi-install" }))).toBe("/install-package");
     expect(routeForTask(task({ kind: "library-op" }))).toBe("/library");
+  });
+
+  it("never calls a job stale that has no progress to report", () => {
+    // A backup or bug report runs as one silent await; a minute without news is normal for it.
+    expect(summarize([task({ updatedAtMs: NOW - 125_000 })], opts()).running[0].staleMin).toBeNull();
+  });
+
+  it("lists jobs this start-up interrupted, as ended when the session began", () => {
+    const sessionStart = NOW - 60_000;
+    const cut = task({ status: "interrupted", updatedAtMs: NOW - 7_200_000, endedAtMs: NOW - 7_200_000 });
+    const old = task({ status: "interrupted", endedAtMs: NOW - 7_300_000 });
+    const s = summarize([cut, old], {
+      now: NOW,
+      sessionStart,
+      seen: new Set(),
+      interruptedAtLoad: new Set([cut.id]),
+    });
+    expect(s.finished.map((r) => r.id)).toEqual([cut.id]);
+    expect(s.finished[0]).toMatchObject({ outcome: "interrupted", agoMs: 60_000 });
+    expect(s.failedUnseen).toBe(0);
   });
 });

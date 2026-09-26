@@ -5,7 +5,7 @@ import { useActivityPanel } from "../state/activityPanel";
 import { summarize, type ActivitySummary } from "../state/activitySummary";
 import { profileNameForAddr, useRosterStore } from "../state/roster";
 import { commandTask, taskCapabilities } from "../state/taskControls";
-import { isTerminal, useTaskStore, type Task } from "../state/tasks";
+import { interruptedAtLoad, isTerminal, useTaskStore, type Task } from "../state/tasks";
 import { ActivityPanelView, ActivitySummaryLine } from "./ActivitySummary";
 
 /**
@@ -82,7 +82,7 @@ function useActivitySummary(): { summary: ActivitySummary; now: number } {
     return () => window.clearInterval(id);
   }, [clockBound]);
   const summary = useMemo(
-    () => summarize(tasks, { now, sessionStart, seen }),
+    () => summarize(tasks, { now, sessionStart, seen, interruptedAtLoad }),
     [tasks, now, sessionStart, seen],
   );
   return { summary, now };

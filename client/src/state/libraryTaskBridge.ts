@@ -13,6 +13,15 @@ const SPECIFIC: ReadonlySet<string> = new Set([
   "library-launch",
 ]);
 
+// A library install already registers its own install task (runPkgInstall); mirroring its log
+// entry too would count every install twice.
+const SKIP: ReadonlySet<string> = new Set(["library-install"]);
+
+function kindFor(kind: string): TaskKind {
+  if (kind === "library-download") return "download";
+  return (SPECIFIC.has(kind) ? kind : "library-op") as TaskKind;
+}
+
 let installed = false;
 
 export function installLibraryTaskBridge(): void {
@@ -25,7 +34,7 @@ export function installLibraryTaskBridge(): void {
   const sync = (entries: ActivityEntry[]) => {
     const tasks = useTaskStore.getState();
     for (const e of entries) {
-      if (!e.kind.startsWith("library-")) continue;
+      if (!e.kind.startsWith("library-") || SKIP.has(e.kind)) continue;
       const prev = seen.get(e.id);
       if (prev === e) continue;
       seen.set(e.id, e);
@@ -35,7 +44,7 @@ export function installLibraryTaskBridge(): void {
         // screen owns that history.
         if (e.outcome !== "running") continue;
         taskId = tasks.registerTask({
-          kind: (SPECIFIC.has(e.kind) ? e.kind : "library-op") as TaskKind,
+          kind: kindFor(e.kind),
           origin: "library",
           label: e.label,
           detail: e.detail,

@@ -68,4 +68,17 @@ describe("library task bridge", () => {
     useActivityHistoryStore.getState().start("upload", "Upload A.exfat");
     expect(useTaskStore.getState().tasks.length).toBe(before);
   });
+
+  it("leaves library installs to the install task they already register", () => {
+    const before = useTaskStore.getState().tasks.length;
+    useActivityHistoryStore.getState().start("library-install", "Installing Game.pkg");
+    expect(useTaskStore.getState().tasks.length).toBe(before);
+  });
+
+  it("shows a library download as a download", () => {
+    useActivityHistoryStore.getState().start("library-download", "Downloading Game.exfat");
+    expect(
+      useTaskStore.getState().tasks.find((x) => x.label === "Downloading Game.exfat")?.kind,
+    ).toBe("download");
+  });
 });
