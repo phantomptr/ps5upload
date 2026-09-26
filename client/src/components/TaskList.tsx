@@ -31,6 +31,11 @@ import {
   Pause,
   X,
   RotateCcw,
+  PackagePlus,
+  Archive,
+  Wrench,
+  Search,
+  Bug,
 } from "lucide-react";
 import clsx from "clsx";
 
@@ -79,6 +84,14 @@ const kindIconMap: Record<TaskKind, typeof Upload> = {
   "library-register": Play,
   "library-unregister": Play,
   "library-launch": Play,
+  "library-op": Server,
+  "fpkg-convert": PackagePlus,
+  "ffpfsc-compress": Archive,
+  "backport-patch": Wrench,
+  "fakelib-scan": Search,
+  "fakelib-import": FolderInput,
+  "install-batch": Package,
+  "bug-report": Bug,
 };
 
 /** Status → icon element for the row's left badge. */
