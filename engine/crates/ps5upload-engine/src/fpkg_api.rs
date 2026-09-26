@@ -151,6 +151,41 @@ pub(crate) async fn fpkg_inspect_handler(
     }
 }
 
+/// Packages this engine process built: the only files `/api/fpkg/delete` will remove.
+fn built_packages() -> &'static std::sync::Mutex<std::collections::HashSet<PathBuf>> {
+    static SET: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
+        std::sync::OnceLock::new();
+    SET.get_or_init(Default::default)
+}
+
+/// Remove a package this engine built, and forget it.
+fn delete_built(path: &Path) -> Result<(), String> {
+    let mut set = built_packages().lock().unwrap_or_else(|e| e.into_inner());
+    if !set.contains(path) {
+        return Err("not a package this app built in this session".into());
+    }
+    std::fs::remove_file(path).map_err(|e| e.to_string())?;
+    set.remove(path);
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub(crate) struct DeleteReq {
+    path: String,
+}
+
+/// POST /api/fpkg/delete — remove a package this engine built (the Convert screen's Delete
+/// package). Anything else is refused.
+pub(crate) async fn fpkg_delete_handler(
+    State(_): State<AppState>,
+    Json(req): Json<DeleteReq>,
+) -> impl IntoResponse {
+    match delete_built(&resolve_engine_path(&req.path)) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
+        Err(e) => json_err(StatusCode::BAD_REQUEST, e).into_response(),
+    }
+}
+
 /// POST /api/fpkg/build — start a conversion. Returns `{ job_id }` immediately.
 pub(crate) async fn fpkg_build_handler(
     State(state): State<AppState>,
@@ -289,6 +324,10 @@ pub(crate) async fn fpkg_build_handler(
         ticker.abort();
         match outcome {
             Ok(report) => {
+                built_packages()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(report.path.clone());
                 let warnings = report.warnings.len();
                 crate::engine_log::record(
                     "info",
@@ -551,4 +590,30 @@ pub(crate) async fn ffpfsc_compress_handler(
         }),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod delete_tests {
+    use super::*;
+
+    /// Delete package removes only what this engine built, once.
+    #[test]
+    fn only_a_package_this_engine_built_can_be_deleted() {
+        let dir = std::env::temp_dir().join(format!("fpkg-del-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ours = dir.join("ours.pkg");
+        let theirs = dir.join("theirs.pkg");
+        std::fs::write(&ours, b"x").unwrap();
+        std::fs::write(&theirs, b"x").unwrap();
+        built_packages().lock().unwrap().insert(ours.clone());
+        assert!(delete_built(&theirs).is_err());
+        assert!(theirs.exists());
+        assert!(delete_built(&ours).is_ok());
+        assert!(!ours.exists());
+        // Deleted once, forgotten: a second delete is refused rather than hitting a new file.
+        std::fs::write(&ours, b"x").unwrap();
+        assert!(delete_built(&ours).is_err());
+        assert!(ours.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
