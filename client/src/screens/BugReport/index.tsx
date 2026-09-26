@@ -48,6 +48,7 @@ import { openReportChannel, openGithubIssues } from "../../lib/reportProblem";
 import type { SavedShot } from "../../lib/captureScreenshot";
 import type { LogLevel } from "../../state/logs";
 import { isTauriEnv } from "../../lib/tauriEnv";
+import { trackTask } from "../../state/trackTask";
 
 /** Time windows offered for the log slice, in minutes. Mirrors the user's
  *  request: last 1 / 5 / 10 / 30 / 60 / 120 minutes. */
@@ -335,7 +336,9 @@ export default function BugReportScreen() {
                   },
             )
           : entries;
-        await downloadBugBundle(exportEntries, destFilename);
+        await trackTask({ kind: "bug-report", origin: "bug-report", label: "Bug report" }, () =>
+          downloadBugBundle(exportEntries, destFilename),
+        );
         setResult({
           entries: entries.length,
           bytes: 0,
@@ -358,30 +361,32 @@ export default function BugReportScreen() {
         return;
       }
 
-      const res = await invoke<BuildResult>("bug_report_build", {
-        args: {
-          dest,
-          // On Android `dest` is a content:// SAF URI std::fs can't write to;
-          // the backend redirects to Downloads using this name and returns the
-          // real path it wrote (shown in the success summary).
-          dest_filename: destFilename,
-          report_json: JSON.stringify(manifest, null, 2),
-          redact,
-          window_minutes: windowMinutes,
-          klog_text: include.ps5_logs ? klog : null,
-          syslog_text: include.ps5_logs ? syslog : null,
-          payload_logs: include.ps5_logs ? payloadLogs : [],
-          image_paths: include.images
-            ? [
-                ...shots
-                  .filter((s) => selectedShots.has(s.name))
-                  .map((s) => s.path),
-                ...images.map((i) => i.path),
-              ]
-            : [],
-          include,
-        },
-      });
+      const res = await trackTask({ kind: "bug-report", origin: "bug-report", label: "Bug report" }, () =>
+        invoke<BuildResult>("bug_report_build", {
+          args: {
+            dest,
+            // On Android `dest` is a content:// SAF URI std::fs can't write to;
+            // the backend redirects to Downloads using this name and returns the
+            // real path it wrote (shown in the success summary).
+            dest_filename: destFilename,
+            report_json: JSON.stringify(manifest, null, 2),
+            redact,
+            window_minutes: windowMinutes,
+            klog_text: include.ps5_logs ? klog : null,
+            syslog_text: include.ps5_logs ? syslog : null,
+            payload_logs: include.ps5_logs ? payloadLogs : [],
+            image_paths: include.images
+              ? [
+                  ...shots
+                    .filter((s) => selectedShots.has(s.name))
+                    .map((s) => s.path),
+                  ...images.map((i) => i.path),
+                ]
+              : [],
+            include,
+          },
+        }),
+      );
       setResult(res);
       void refreshStats();
     } catch (e) {

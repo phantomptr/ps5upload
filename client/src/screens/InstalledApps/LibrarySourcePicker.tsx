@@ -12,6 +12,7 @@ import {
   type ScanProgress,
   type ScanTitleInput,
 } from "../../state/fakelibCorpus";
+import { beginTask, trackTask } from "../../state/trackTask";
 
 /** The two ways to get backport libraries.
  *
@@ -56,7 +57,10 @@ export function LibrarySourcePicker({
         // no game has ever run.
         const source = list.length === 1 ? list[0].name : `${list.length} files`;
         const label = deriveLabel(list);
-        const outcome = await importFakelibSet(label, source, list);
+        const outcome = await trackTask(
+          { kind: "fakelib-import", origin: "backport", label: `Library import ${label}` },
+          () => importFakelibSet(label, source, list),
+        );
         if (outcome.duplicate) {
           setNote(tr("fakelibs_import_duplicate", undefined,
             "You already have these libraries — nothing was added."));
@@ -138,23 +142,45 @@ export function LibrarySourcePicker({
         // Pass the HOST as the stable key: the display name comes from the
         // roster and changes when the user renames a console, which used to
         // make one machine count as two sightings.
-        const id = await startFakelibScan(
-          target.host, target.name, titles, hostOf(target.host),
-        );
-        // Poll rather than block: reading every library off a console takes
-        // on the order of a minute, and a silent wait that long reads as a hang.
-        for (;;) {
-          await new Promise((r) => setTimeout(r, 700));
-          const snapshot = await pollFakelibScan(id);
-          if (!snapshot) break;
-          setProgress(snapshot);
-          if (snapshot.done) {
-            totals.added.push(...snapshot.added);
-            totals.skipped += snapshot.skipped;
-            totals.withoutLibraries += snapshot.withoutLibraries;
-            totals.errors.push(...snapshot.errors);
-            break;
+        const task = beginTask({
+          kind: "fakelib-scan",
+          origin: "backport",
+          label: `Library scan ${target.name}`,
+          consoleId: target.host,
+        });
+        try {
+          const id = await startFakelibScan(
+            target.host, target.name, titles, hostOf(target.host),
+          );
+          // Poll rather than block: reading every library off a console takes
+          // on the order of a minute, and a silent wait that long reads as a hang.
+          for (;;) {
+            await new Promise((r) => setTimeout(r, 700));
+            const snapshot = await pollFakelibScan(id);
+            if (!snapshot) {
+              task.fail(new Error("The engine lost track of the scan."));
+              break;
+            }
+            setProgress(snapshot);
+            task.report({
+              stage: snapshot.current || undefined,
+              progress:
+                snapshot.titlesTotal > 0
+                  ? { current: snapshot.titlesDone, total: snapshot.titlesTotal, unit: "items" }
+                  : undefined,
+            });
+            if (snapshot.done) {
+              totals.added.push(...snapshot.added);
+              totals.skipped += snapshot.skipped;
+              totals.withoutLibraries += snapshot.withoutLibraries;
+              totals.errors.push(...snapshot.errors);
+              task.done();
+              break;
+            }
           }
+        } catch (e) {
+          task.fail(e);
+          throw e;
         }
       }
 

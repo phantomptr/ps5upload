@@ -31,6 +31,7 @@ import {
   backupDelete,
   type BackupEntry,
 } from "../../api/ps5";
+import { trackTask } from "../../state/trackTask";
 import { humanizePs5Error } from "../../lib/humanizeError";
 
 function formatTimestamp(ts: number): string {
@@ -127,7 +128,10 @@ export default function BackupScreen() {
     setActionMsg(null);
     setError(null);
     try {
-      const result = await backupSnapshot(tag.trim(), path.trim(), addr);
+      const result = await trackTask(
+        { kind: "backup-snapshot", origin: "backup", label: `Backup ${tag.trim()}`, consoleId: addr },
+        () => backupSnapshot(tag.trim(), path.trim(), addr),
+      );
       setActionMsg(
         tr(
           "backup_snapshot_ok",
@@ -163,7 +167,10 @@ export default function BackupScreen() {
       setActionMsg(null);
       setError(null);
       try {
-        const result = await backupRestore(entry.tag, entry.timestamp, addr);
+        const result = await trackTask(
+          { kind: "backup-restore", origin: "backup", label: `Restore ${entry.tag}`, consoleId: addr },
+          () => backupRestore(entry.tag, entry.timestamp, addr),
+        );
         setActionMsg(
           tr(
             "backup_restore_ok",

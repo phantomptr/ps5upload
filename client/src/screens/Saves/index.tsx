@@ -26,6 +26,7 @@ import {
   saveArchiveRestorePrepare,
   type SaveEntry,
 } from "../../api/ps5";
+import { beginTask, type TaskHandle } from "../../state/trackTask";
 import { localFs } from "../../api/localFs";
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import { getSavePath } from "../../state/saveSettings";
@@ -164,6 +165,7 @@ export default function SavesScreen() {
     // the same PS5 path.
     markBusy(entry.path, true);
     let tempDir: string | null = null;
+    let task: TaskHandle | null = null;
     try {
       // File-save dialog so the user picks a .zip target directly. The
       // default name `<title_id>.zip` matches the layout we enforce on
@@ -177,6 +179,7 @@ export default function SavesScreen() {
       if (!destZip || typeof destZip !== "string") return;
       // 1) Scratch dir under the OS temp root. The engine's download
       // walker will create `<scratch>/<title_id>/<files>` for us.
+      task = beginTask({ kind: "save-backup", origin: "saves", label: `Save backup ${entry.title_id}`, consoleId: host.trim() });
       tempDir = await saveArchiveMakeTemp(entry.title_id);
       // 2) Pull the PS5 save folder into the scratch dir.
       const jobId = await startTransferDownload(
@@ -201,6 +204,7 @@ export default function SavesScreen() {
         },
       );
     } catch (e) {
+      task?.fail(e);
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
       pushNotification(
@@ -214,6 +218,7 @@ export default function SavesScreen() {
       // 4) Best-effort cleanup. The Rust side refuses any path outside
       // the OS temp root, so a stale `tempDir` reference can't trash
       // user data even if state somehow got mixed up.
+      task?.done();
       if (tempDir) await saveArchiveCleanupTemp(tempDir).catch(() => {});
       markBusy(entry.path, false);
     }
@@ -233,6 +238,7 @@ export default function SavesScreen() {
     // Claim before any dialog — see comment in handleDownload.
     markBusy(entry.path, true);
     let tempDir: string | null = null;
+    let task: TaskHandle | null = null;
     try {
       const ok = await confirmDialog({
         title: tr(
@@ -265,6 +271,7 @@ export default function SavesScreen() {
       if (!localZip || typeof localZip !== "string") return;
       // 1) Scratch dir + strict-validate the zip layout before we touch
       // the live save. Bad layout → throw before any delete fires.
+      task = beginTask({ kind: "save-restore", origin: "saves", label: `Save restore ${entry.title_id}`, consoleId: restoreHost });
       tempDir = await saveArchiveMakeTemp(entry.title_id);
       await saveArchiveUnzip(localZip, tempDir, entry.title_id);
       // 1.5) Format-aware prep: re-add `sdimg_` prefix to any bare image
@@ -326,6 +333,7 @@ export default function SavesScreen() {
         },
       );
     } catch (e) {
+      task?.fail(e);
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
       pushNotification(
@@ -336,6 +344,7 @@ export default function SavesScreen() {
         },
       );
     } finally {
+      task?.done();
       if (tempDir) await saveArchiveCleanupTemp(tempDir).catch(() => {});
       markBusy(entry.path, false);
     }
@@ -362,6 +371,7 @@ export default function SavesScreen() {
     const base = getSavePath();
     markBusy(entry.path, true);
     let tempDir: string | null = null;
+    let task: TaskHandle | null = null;
     try {
       if (!opts?.skipPreflight) {
         const preflight = await checkDestinationFreeSpace(addr, base, 0);
@@ -376,6 +386,7 @@ export default function SavesScreen() {
         }
       }
       // 1) Scratch dir + pull the PS5 save folder, same as handleDownload.
+      task = beginTask({ kind: "save-backup", origin: "saves", label: `Save backup ${entry.title_id} to USB`, consoleId: backupHost });
       tempDir = await saveArchiveMakeTemp(entry.title_id);
       const jobId = await startTransferDownload(entry.path, tempDir, addr, "folder");
       await waitForJob(jobId);
@@ -428,6 +439,7 @@ export default function SavesScreen() {
         { body: `Saved to ${remoteZip}` },
       );
     } catch (e) {
+      task?.fail(e);
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
       pushNotification(
@@ -437,6 +449,7 @@ export default function SavesScreen() {
       );
       throw e; // let the bulk handler count this as a failure
     } finally {
+      task?.done();
       if (tempDir) await saveArchiveCleanupTemp(tempDir).catch(() => {});
       markBusy(entry.path, false);
     }
@@ -502,6 +515,7 @@ export default function SavesScreen() {
     // Claim before any async work — same reasoning as handleRestore.
     markBusy(entry.path, true);
     let tempDir: string | null = null;
+    let task: TaskHandle | null = null;
     try {
       if (!opts?.skipPreflight) {
         // Only require the volume to exist and not be a placeholder;
@@ -547,6 +561,7 @@ export default function SavesScreen() {
         if (!ok) return "ok"; // user cancelled — not an error or a skip
       }
       // 1) Scratch dir + pull the zip off the USB drive (single-file download).
+      task = beginTask({ kind: "save-restore", origin: "saves", label: `Save restore ${entry.title_id} from USB`, consoleId: restoreHost });
       tempDir = await saveArchiveMakeTemp(entry.title_id);
       const jobId = await startTransferDownload(remoteZip, tempDir, addr, "file");
       await waitForJob(jobId);
@@ -590,6 +605,7 @@ export default function SavesScreen() {
       );
       return "ok";
     } catch (e) {
+      task?.fail(e);
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
       pushNotification(
@@ -599,6 +615,7 @@ export default function SavesScreen() {
       );
       throw e; // let the bulk handler count this as a failure
     } finally {
+      task?.done();
       if (tempDir) await saveArchiveCleanupTemp(tempDir).catch(() => {});
       markBusy(entry.path, false);
     }

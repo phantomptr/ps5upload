@@ -27,6 +27,7 @@ import {
   type PackInstallRecord,
   type PackTransport,
 } from "../../lib/backportPack";
+import { trackTask } from "../../state/trackTask";
 
 const gb = (bytes: number) =>
   bytes >= 1 << 30
@@ -143,7 +144,10 @@ export function BackportPackCard({
     setError(null);
     setNote(null);
     try {
-      const done = await applyPackInstall(plan, transport);
+      const done = await trackTask(
+        { kind: "fakelib-import", origin: "backport", label: "Install backport pack" },
+        () => applyPackInstall(plan, transport),
+      );
       setRecord(done);
       // The library third of the pack is reusable on any console, so it is
       // worth keeping even though the eboot is not. Duplicates are a no-op.

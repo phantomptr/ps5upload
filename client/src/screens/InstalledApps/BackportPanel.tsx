@@ -24,6 +24,7 @@ import { LibrarySourcePicker } from "./LibrarySourcePicker";
 import { BackportPackCard } from "./BackportPackCard";
 import { appLaunch, klogChunk } from "../../api/ps5";
 import { titleSdkPair, type ScanTitleInput } from "../../state/fakelibCorpus";
+import { trackTask } from "../../state/trackTask";
 import {
   applyBackport,
   backportOverlayReady,
@@ -326,7 +327,11 @@ export function BackportPanel({
     setError(null);
     try {
       await withWritableTitle(
-        () => applyBackport(plan, transport, patchLibc),
+        () =>
+          trackTask(
+            { kind: "backport-patch", origin: "backport", label: `Backport ${title.titleId}`, consoleId: host },
+            () => applyBackport(plan, transport, patchLibc),
+          ),
         (completed) => {
           // Persist before the image is flipped back to read-only. If that
           // final remount fails, recovery still knows exactly what to undo.
@@ -504,7 +509,11 @@ export function BackportPanel({
     setError(null);
     try {
       await withWritableTitle(
-        () => undoBackport(record, transport),
+        () =>
+          trackTask(
+            { kind: "backport-patch", origin: "backport", label: `Undo backport ${title.titleId}`, consoleId: host },
+            () => undoBackport(record, transport),
+          ),
         () => removeBackportRecord(host, title.titleId),
       );
       // Remember that this set did not work, so "try another" moves on
