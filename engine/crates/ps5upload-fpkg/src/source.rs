@@ -313,6 +313,31 @@ pub(crate) fn insert_raw_field(param_json: &[u8], name: &str, raw: &str) -> Opti
 /// The value goes into the install metadata, so a title whose minimum is above the console
 /// can be made installable; whether it then *runs* is a separate question that the
 /// executable's own SDK version decides.
+/// A firmware version as `param.json`'s `requiredSystemSoftwareVersion` word: `5.10` becomes
+/// `0x0510000000000000` (major and minor in BCD, the top two bytes). A word already in that
+/// form is returned as it is. `None` for anything else.
+pub fn firmware_word(version: &str) -> Option<String> {
+    let v = version.trim();
+    if let Some(hex) = v.strip_prefix("0x").or_else(|| v.strip_prefix("0X")) {
+        return (hex.len() == 16 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+            .then(|| format!("0x{}", hex.to_ascii_uppercase()));
+    }
+    let (major, minor) = v.split_once('.')?;
+    let digits = |s: &str| !s.is_empty() && s.len() <= 2 && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(major) || !digits(minor) {
+        return None;
+    }
+    // "9.6" is 9.60: firmware minors are always two digits.
+    let minor = if minor.len() == 1 {
+        format!("{minor}0")
+    } else {
+        minor.to_string()
+    };
+    let bcd = |s: &str| u64::from_str_radix(s, 16).ok();
+    let word = (bcd(major)? << 56) | (bcd(&minor)? << 48);
+    Some(format!("0x{word:016X}"))
+}
+
 pub fn firmware_rewrite(param_json: &[u8], version: &str) -> Option<Vec<u8>> {
     set_string_value(param_json, "\"requiredSystemSoftwareVersion\"", version)
 }
@@ -848,6 +873,27 @@ mod tests {
         eboot[name_at..name_at + 14].fill(0);
         let mut tree = MemTree(vec![("eboot.bin".to_string(), eboot)]);
         assert!(!imports_ampr(&mut tree, "eboot.bin"));
+    }
+
+    #[test]
+    fn firmware_versions_become_the_param_word() {
+        assert_eq!(firmware_word("5.10").as_deref(), Some("0x0510000000000000"));
+        assert_eq!(
+            firmware_word("10.20").as_deref(),
+            Some("0x1020000000000000")
+        );
+        assert_eq!(firmware_word("9.6").as_deref(), Some("0x0960000000000000"));
+        assert_eq!(
+            firmware_word(" 4.03 ").as_deref(),
+            Some("0x0403000000000000")
+        );
+        assert_eq!(
+            firmware_word("0x0510000000000000").as_deref(),
+            Some("0x0510000000000000")
+        );
+        for bad in ["", "5", "5.100", "x.10", "0x0510", "five"] {
+            assert_eq!(firmware_word(bad), None, "{bad:?}");
+        }
     }
 
     #[test]

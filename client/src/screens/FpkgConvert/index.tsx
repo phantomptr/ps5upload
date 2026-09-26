@@ -5,7 +5,7 @@
 // only involved at the install step. The engine's work runs as a job, so this
 // screen starts one and polls it like the transfer screens do.
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { PackagePlus } from "lucide-react";
 
@@ -20,6 +20,9 @@ import {
   SegmentedControl,
 } from "../../components";
 import { fpkg, type FpkgCompression, type FpkgInspection } from "../../api/fpkg";
+import { fetchHwInfo } from "../../api/ps5";
+import { consoleFirmware, firmwareParts } from "../../lib/firmware";
+import { transferAddr } from "../../lib/addr";
 import { pickPath } from "../../lib/pickPath";
 import { pickLocalPath } from "../../state/localPicker";
 import { isIOS } from "../../lib/platform";
@@ -61,6 +64,13 @@ export default function FpkgConvertScreen() {
   const kind = useFpkgConversion((s) => s.kind);
   const cancelConversion = useFpkgConversion((s) => s.cancel);
   const [compression, setCompression] = useState<FpkgCompression>("balanced");
+  // The package's minimum firmware. Empty keeps the game's own; a console older than it
+  // refuses the install (0x80a3000d), so it defaults to the connected console's firmware
+  // whenever the game asks for newer.
+  const [firmware, setFirmware] = useState("");
+  const [firmwareTouched, setFirmwareTouched] = useState(false);
+  const [consoleFw, setConsoleFw] = useState<string | null>(null);
+  const payloadUp = useConnectionStore((s) => s.payloadStatus === "up");
   const [installing, setInstalling] = useState(false);
   const [installResult, setInstallResult] = useState<string | null>(null);
 
@@ -125,8 +135,31 @@ export default function FpkgConvertScreen() {
       source: source.trim(),
       outputDir: outputDir.trim() || undefined,
       compression,
+      firmware: firmware.trim() || undefined,
     });
-  }, [source, outputDir, compression, startConversion]);
+  }, [source, outputDir, compression, firmware, startConversion]);
+
+  useEffect(() => {
+    if (!payloadUp || !host?.trim()) return;
+    let live = true;
+    fetchHwInfo(transferAddr(host))
+      .then((info) => {
+        if (live) setConsoleFw(consoleFirmware(info.kernel_fw_version));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [payloadUp, host]);
+
+  useEffect(() => {
+    if (firmwareTouched || !consoleFw || !inspection) return;
+    const game = firmwareParts(inspection.required_firmware);
+    const mine = firmwareParts(consoleFw);
+    if (game && mine && (game[0] > mine[0] || (game[0] === mine[0] && game[1] > mine[1]))) {
+      setFirmware(consoleFw);
+    }
+  }, [consoleFw, inspection, firmwareTouched]);
 
   const compress = useCallback(async () => {
     if (!source.trim()) return;
@@ -503,6 +536,47 @@ export default function FpkgConvertScreen() {
           </ConnectionGate>
         </>
       )}
+
+      <div className="flex flex-col gap-1">
+        <Input
+          id="fpkg-firmware"
+          label={tr("fpkg.minFirmware", undefined, "Minimum firmware")}
+          placeholder={
+            inspection?.required_firmware
+              ? tr(
+                  "fpkg.minFirmwareKeep",
+                  { version: inspection.required_firmware },
+                  "The game's own ({version})",
+                )
+              : tr("fpkg.minFirmwareExample", undefined, "e.g. 5.10")
+          }
+          value={firmware}
+          onChange={(e) => {
+            setFirmwareTouched(true);
+            setFirmware(e.target.value);
+          }}
+        />
+        {consoleFw && firmware.trim() !== consoleFw && (
+          <div>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setFirmwareTouched(true);
+                setFirmware(consoleFw);
+              }}
+            >
+              {tr("fpkg.minFirmwareConsole", { version: consoleFw }, "Use this PS5's ({version})")}
+            </Button>
+          </div>
+        )}
+        <div className="text-xs text-[var(--color-muted)]">
+          {tr(
+            "fpkg.minFirmwareAbout",
+            undefined,
+            "A PS5 on older firmware than this refuses to install the package. A backported game usually asks for newer firmware than it needs; set it to your console's. Empty keeps the game's own.",
+          )}
+        </div>
+      </div>
 
       <div className="flex flex-col gap-1">
         <div className="text-sm font-medium">

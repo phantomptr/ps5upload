@@ -706,6 +706,7 @@ export async function browserInvoke<T>(
         content_id: args["contentId"],
         name: args["name"],
         compression: args["compression"],
+        firmware: args["firmware"],
       });
     }
     case "ffpfsc_compress": {

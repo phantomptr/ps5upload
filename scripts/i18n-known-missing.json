@@ -249,7 +249,12 @@
       "fpkg.compressionSmallest",
       "fpkg.compressionFastAbout",
       "fpkg.compressionBalancedAbout",
-      "fpkg.compressionSmallestAbout"
+      "fpkg.compressionSmallestAbout",
+      "fpkg.minFirmware",
+      "fpkg.minFirmwareKeep",
+      "fpkg.minFirmwareExample",
+      "fpkg.minFirmwareConsole",
+      "fpkg.minFirmwareAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -509,7 +514,12 @@
       "fpkg.compressionSmallest",
       "fpkg.compressionFastAbout",
       "fpkg.compressionBalancedAbout",
-      "fpkg.compressionSmallestAbout"
+      "fpkg.compressionSmallestAbout",
+      "fpkg.minFirmware",
+      "fpkg.minFirmwareKeep",
+      "fpkg.minFirmwareExample",
+      "fpkg.minFirmwareConsole",
+      "fpkg.minFirmwareAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -770,7 +780,12 @@
       "fpkg.compressionSmallest",
       "fpkg.compressionFastAbout",
       "fpkg.compressionBalancedAbout",
-      "fpkg.compressionSmallestAbout"
+      "fpkg.compressionSmallestAbout",
+      "fpkg.minFirmware",
+      "fpkg.minFirmwareKeep",
+      "fpkg.minFirmwareExample",
+      "fpkg.minFirmwareConsole",
+      "fpkg.minFirmwareAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -1038,7 +1053,12 @@
       "fpkg.compressionSmallest",
       "fpkg.compressionFastAbout",
       "fpkg.compressionBalancedAbout",
-      "fpkg.compressionSmallestAbout"
+      "fpkg.compressionSmallestAbout",
+      "fpkg.minFirmware",
+      "fpkg.minFirmwareKeep",
+      "fpkg.minFirmwareExample",
+      "fpkg.minFirmwareConsole",
+      "fpkg.minFirmwareAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -1302,7 +1322,12 @@
       "fpkg.compressionSmallest",
       "fpkg.compressionFastAbout",
       "fpkg.compressionBalancedAbout",
-      "fpkg.compressionSmallestAbout"
+      "fpkg.compressionSmallestAbout",
+      "fpkg.minFirmware",
+      "fpkg.minFirmwareKeep",
+      "fpkg.minFirmwareExample",
+      "fpkg.minFirmwareConsole",
+      "fpkg.minFirmwareAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -1568,7 +1593,12 @@
       "fpkg.compressionSmallest",
       "fpkg.compressionFastAbout",
       "fpkg.compressionBalancedAbout",
-      "fpkg.compressionSmallestAbout"
+      "fpkg.compressionSmallestAbout",
+      "fpkg.minFirmware",
+      "fpkg.minFirmwareKeep",
+      "fpkg.minFirmwareExample",
+      "fpkg.minFirmwareConsole",
+      "fpkg.minFirmwareAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -1595,7 +1625,12 @@
       "fpkg.compressionSmallest",
       "fpkg.compressionFastAbout",
       "fpkg.compressionBalancedAbout",
-      "fpkg.compressionSmallestAbout"
+      "fpkg.compressionSmallestAbout",
+      "fpkg.minFirmware",
+      "fpkg.minFirmwareKeep",
+      "fpkg.minFirmwareExample",
+      "fpkg.minFirmwareConsole",
+      "fpkg.minFirmwareAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -1867,7 +1902,12 @@
       "fpkg.compressionSmallest",
       "fpkg.compressionFastAbout",
       "fpkg.compressionBalancedAbout",
-      "fpkg.compressionSmallestAbout"
+      "fpkg.compressionSmallestAbout",
+      "fpkg.minFirmware",
+      "fpkg.minFirmwareKeep",
+      "fpkg.minFirmwareExample",
+      "fpkg.minFirmwareConsole",
+      "fpkg.minFirmwareAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -2133,7 +2173,12 @@
       "fpkg.compressionSmallest",
       "fpkg.compressionFastAbout",
       "fpkg.compressionBalancedAbout",
-      "fpkg.compressionSmallestAbout"
+      "fpkg.compressionSmallestAbout",
+      "fpkg.minFirmware",
+      "fpkg.minFirmwareKeep",
+      "fpkg.minFirmwareExample",
+      "fpkg.minFirmwareConsole",
+      "fpkg.minFirmwareAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -2398,7 +2443,12 @@
       "fpkg.compressionSmallest",
       "fpkg.compressionFastAbout",
       "fpkg.compressionBalancedAbout",
-      "fpkg.compressionSmallestAbout"
+      "fpkg.compressionSmallestAbout",
+      "fpkg.minFirmware",
+      "fpkg.minFirmwareKeep",
+      "fpkg.minFirmwareExample",
+      "fpkg.minFirmwareConsole",
+      "fpkg.minFirmwareAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -2661,7 +2711,12 @@
       "fpkg.compressionSmallest",
       "fpkg.compressionFastAbout",
       "fpkg.compressionBalancedAbout",
-      "fpkg.compressionSmallestAbout"
+      "fpkg.compressionSmallestAbout",
+      "fpkg.minFirmware",
+      "fpkg.minFirmwareKeep",
+      "fpkg.minFirmwareExample",
+      "fpkg.minFirmwareConsole",
+      "fpkg.minFirmwareAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -2922,7 +2977,12 @@
       "fpkg.compressionSmallest",
       "fpkg.compressionFastAbout",
       "fpkg.compressionBalancedAbout",
-      "fpkg.compressionSmallestAbout"
+      "fpkg.compressionSmallestAbout",
+      "fpkg.minFirmware",
+      "fpkg.minFirmwareKeep",
+      "fpkg.minFirmwareExample",
+      "fpkg.minFirmwareConsole",
+      "fpkg.minFirmwareAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -3184,7 +3244,12 @@
       "fpkg.compressionSmallest",
       "fpkg.compressionFastAbout",
       "fpkg.compressionBalancedAbout",
-      "fpkg.compressionSmallestAbout"
+      "fpkg.compressionSmallestAbout",
+      "fpkg.minFirmware",
+      "fpkg.minFirmwareKeep",
+      "fpkg.minFirmwareExample",
+      "fpkg.minFirmwareConsole",
+      "fpkg.minFirmwareAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -3451,7 +3516,12 @@
       "fpkg.compressionSmallest",
       "fpkg.compressionFastAbout",
       "fpkg.compressionBalancedAbout",
-      "fpkg.compressionSmallestAbout"
+      "fpkg.compressionSmallestAbout",
+      "fpkg.minFirmware",
+      "fpkg.minFirmwareKeep",
+      "fpkg.minFirmwareExample",
+      "fpkg.minFirmwareConsole",
+      "fpkg.minFirmwareAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -3713,7 +3783,12 @@
       "fpkg.compressionSmallest",
       "fpkg.compressionFastAbout",
       "fpkg.compressionBalancedAbout",
-      "fpkg.compressionSmallestAbout"
+      "fpkg.compressionSmallestAbout",
+      "fpkg.minFirmware",
+      "fpkg.minFirmwareKeep",
+      "fpkg.minFirmwareExample",
+      "fpkg.minFirmwareConsole",
+      "fpkg.minFirmwareAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -3974,7 +4049,12 @@
       "fpkg.compressionSmallest",
       "fpkg.compressionFastAbout",
       "fpkg.compressionBalancedAbout",
-      "fpkg.compressionSmallestAbout"
+      "fpkg.compressionSmallestAbout",
+      "fpkg.minFirmware",
+      "fpkg.minFirmwareKeep",
+      "fpkg.minFirmwareExample",
+      "fpkg.minFirmwareConsole",
+      "fpkg.minFirmwareAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -4237,7 +4317,12 @@
       "fpkg.compressionSmallest",
       "fpkg.compressionFastAbout",
       "fpkg.compressionBalancedAbout",
-      "fpkg.compressionSmallestAbout"
+      "fpkg.compressionSmallestAbout",
+      "fpkg.minFirmware",
+      "fpkg.minFirmwareKeep",
+      "fpkg.minFirmwareExample",
+      "fpkg.minFirmwareConsole",
+      "fpkg.minFirmwareAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -4501,7 +4586,12 @@
       "fpkg.compressionSmallest",
       "fpkg.compressionFastAbout",
       "fpkg.compressionBalancedAbout",
-      "fpkg.compressionSmallestAbout"
+      "fpkg.compressionSmallestAbout",
+      "fpkg.minFirmware",
+      "fpkg.minFirmwareKeep",
+      "fpkg.minFirmwareExample",
+      "fpkg.minFirmwareConsole",
+      "fpkg.minFirmwareAbout"
     ],
     "stale": [],
     "untranslated": [
@@ -4762,7 +4852,12 @@
       "fpkg.compressionSmallest",
       "fpkg.compressionFastAbout",
       "fpkg.compressionBalancedAbout",
-      "fpkg.compressionSmallestAbout"
+      "fpkg.compressionSmallestAbout",
+      "fpkg.minFirmware",
+      "fpkg.minFirmwareKeep",
+      "fpkg.minFirmwareExample",
+      "fpkg.minFirmwareConsole",
+      "fpkg.minFirmwareAbout"
     ],
     "stale": [],
     "untranslated": [

@@ -261,7 +261,15 @@ fn build_mode(
     // Written into the install metadata, where the console compares it against its own
     // firmware and refuses the package when the console is older (0x80a3000d).
     let param_json = match request.firmware.as_deref() {
-        Some(version) => source::firmware_rewrite(&param_json, version).unwrap_or(param_json),
+        Some(version) => {
+            let word = source::firmware_word(version).ok_or_else(|| {
+                crate::Error::Format(format!(
+                    "{version:?} is not a firmware version: use one like 5.10 or \
+                     0x0510000000000000"
+                ))
+            })?;
+            source::firmware_rewrite(&param_json, &word).unwrap_or(param_json)
+        }
         None => param_json,
     };
     // Executables some dumpers leave malformed are served repaired (see `self_repair`).

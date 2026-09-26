@@ -2541,6 +2541,7 @@ pub async fn fpkg_build(
     content_id: Option<String>,
     name: Option<String>,
     compression: Option<String>,
+    firmware: Option<String>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/fpkg/build");
@@ -2552,6 +2553,7 @@ pub async fn fpkg_build(
             "content_id": content_id,
             "name": name,
             "compression": compression,
+            "firmware": firmware,
         }),
     )
     .await

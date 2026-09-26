@@ -37,6 +37,9 @@ export interface FpkgBuildRequest {
   name?: string;
   /** How hard the Kraken encoder works; the engine defaults to balanced. */
   compression?: FpkgCompression;
+  /** The package's minimum firmware, like "5.10"; the game's own when absent. A console older
+   *  than the package's minimum refuses to install it. */
+  firmware?: string;
 }
 
 export type FpkgCompression = "fast" | "balanced" | "smallest";
@@ -52,6 +55,7 @@ export const fpkg = {
       contentId: req.contentId,
       name: req.name,
       compression: req.compression,
+      firmware: req.firmware,
     }),
   /** Compress an .exfat / .ffpkg game image into a .ffpfsc for ShadowMountPlus.
    *  Starts a job; the output lands next to the source unless outputDir says otherwise. */
