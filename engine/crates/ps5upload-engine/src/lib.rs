@@ -39,6 +39,7 @@ mod fakelibs_api;
 mod fpkg_api;
 mod fpkg_firmware;
 mod icon_cache;
+mod install;
 mod local_fs;
 mod log_dedup;
 mod pkg_install;
