@@ -18,7 +18,18 @@ use uuid::Uuid;
 
 use ps5upload_fpkg::build::{self, BuildControl, BuildRequest};
 
-use crate::{json_err, now_ms, register_transfer_cancel, set_job, AppState, JobCreated, JobState};
+use crate::{
+    json_err, now_ms, register_transfer_cancel, set_job, AppState, JobCreated, JobStage, JobState,
+};
+
+/// A build's stages by index, as `build::Stage::index` numbers them.
+const STAGES: [build::Stage; 5] = [
+    build::Stage::Check,
+    build::Stage::Plan,
+    build::Stage::Compress,
+    build::Stage::Write,
+    build::Stage::Verify,
+];
 
 #[derive(Deserialize)]
 pub(crate) struct InspectReq {
@@ -149,12 +160,15 @@ pub(crate) async fn fpkg_build_handler(
     let cancel = register_transfer_cancel(job_id);
     let bytes = Arc::new(AtomicU64::new(0));
     let total = Arc::new(AtomicU64::new(inspection.planned_size));
+    // The stage the build is in, by index (`u64::MAX` before the first).
+    let stage = Arc::new(AtomicU64::new(u64::MAX));
     let started_at_ms = now_ms();
     set_job(
         &state.jobs,
         &state.events_tx,
         job_id,
         JobState::Running {
+            stage: None,
             started_at_ms,
             bytes_sent: 0,
             total_bytes: inspection.planned_size,
@@ -173,6 +187,7 @@ pub(crate) async fn fpkg_build_handler(
     let events_tx = state.events_tx.clone();
     let tick_bytes = bytes.clone();
     let tick_total = total.clone();
+    let tick_stage = stage.clone();
     let ticker = tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_millis(200)).await;
@@ -181,10 +196,19 @@ pub(crate) async fn fpkg_build_handler(
                 Some(JobState::Running {
                     bytes_sent,
                     total_bytes,
+                    stage,
                     ..
                 }) => {
                     *bytes_sent = tick_bytes.load(Ordering::Relaxed);
                     *total_bytes = tick_total.load(Ordering::Relaxed);
+                    let at = tick_stage.load(Ordering::Relaxed);
+                    *stage = STAGES.get(at as usize).map(|s| JobStage {
+                        id: s.id().to_string(),
+                        index: s.index(),
+                        count: build::STAGE_COUNT,
+                        done: *bytes_sent,
+                        total: *total_bytes,
+                    });
                     let state = g.get(&job_id).cloned();
                     drop(g);
                     if let Some(state) = state {
@@ -211,13 +235,19 @@ pub(crate) async fn fpkg_build_handler(
         if let Some(level) = req.compression.as_deref().and_then(|v| v.parse().ok()) {
             request.level = level;
         }
+        // Each stage reports its own bytes; a new one starts from nothing.
+        let mut on_stage = |s: build::Stage| {
+            bytes.store(0, Ordering::Relaxed);
+            total.store(0, Ordering::Relaxed);
+            stage.store(u64::from(s.index()), Ordering::Relaxed);
+        };
         let mut control = BuildControl {
             bytes: Some(&mut |done, total_now| {
                 bytes.store(done, Ordering::Relaxed);
                 total.store(total_now, Ordering::Relaxed);
             }),
             cancel: Some(&cancel),
-            stage: None,
+            stage: Some(&mut on_stage),
         };
         // The build's phase lines go to the engine log, where the Log tab shows them.
         let mut phase = |line: &str| {
@@ -382,6 +412,7 @@ pub(crate) async fn ffpfsc_compress_handler(
         &state.events_tx,
         job_id,
         JobState::Running {
+            stage: None,
             started_at_ms,
             bytes_sent: 0,
             total_bytes: size,

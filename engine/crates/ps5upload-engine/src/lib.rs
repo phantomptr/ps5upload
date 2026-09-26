@@ -193,6 +193,16 @@ struct PlannedFile {
     size: u64,
 }
 
+/// Where a staged job stands: the stage's id and place in the sequence, and its own bytes.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub(crate) struct JobStage {
+    pub id: String,
+    pub index: u32,
+    pub count: u32,
+    pub done: u64,
+    pub total: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub(crate) enum JobState {
@@ -266,6 +276,9 @@ pub(crate) enum JobState {
         /// sizes vary wildly. 0 outside the finalize phase.
         #[serde(default)]
         bytes_finalized: u64,
+        /// The stage a staged job (an FPKG build) is in; `None` for jobs without stages.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stage: Option<JobStage>,
     },
     Done {
         started_at_ms: u64,
@@ -4420,6 +4433,7 @@ async fn smb_transfer_handler(
         &state.events_tx,
         job_id,
         JobState::Running {
+            stage: None,
             started_at_ms,
             bytes_sent: 0,
             total_bytes: 0,
@@ -4501,6 +4515,7 @@ async fn smb_transfer_handler(
             &events_tx,
             job_id,
             JobState::Running {
+                stage: None,
                 started_at_ms,
                 bytes_sent: 0,
                 total_bytes,
@@ -4718,6 +4733,7 @@ async fn transfer_file_handler(
         &state.events_tx,
         job_id,
         JobState::Running {
+            stage: None,
             started_at_ms,
             bytes_sent: 0,
             total_bytes,
@@ -4903,6 +4919,7 @@ async fn transfer_dir_handler(
         &state.events_tx,
         job_id,
         JobState::Running {
+            stage: None,
             started_at_ms,
             bytes_sent: 0,
             total_bytes: 0, // unknown until the walk below finishes
@@ -4995,6 +5012,7 @@ async fn transfer_dir_handler(
             &events_tx,
             job_id,
             JobState::Running {
+                stage: None,
                 started_at_ms,
                 bytes_sent: 0,
                 total_bytes,
@@ -5501,6 +5519,7 @@ async fn transfer_zip_handler(
         &state.events_tx,
         job_id,
         JobState::Running {
+            stage: None,
             started_at_ms,
             bytes_sent: 0,
             total_bytes,
@@ -7027,6 +7046,7 @@ async fn transfer_7z_handler(
         &state.events_tx,
         job_id,
         JobState::Running {
+            stage: None,
             started_at_ms,
             bytes_sent: 0,
             total_bytes,
@@ -7250,6 +7270,7 @@ async fn transfer_rar_handler(
         &state.events_tx,
         job_id,
         JobState::Running {
+            stage: None,
             started_at_ms,
             bytes_sent: 0,
             total_bytes,
@@ -7490,6 +7511,7 @@ async fn transfer_file_list_handler(
         &state.events_tx,
         job_id,
         JobState::Running {
+            stage: None,
             started_at_ms,
             bytes_sent: 0,
             total_bytes,
@@ -7807,6 +7829,7 @@ async fn transfer_download_handler(
         &state.events_tx,
         job_id,
         JobState::Running {
+            stage: None,
             started_at_ms,
             bytes_sent: 0,
             total_bytes,
@@ -8009,6 +8032,7 @@ async fn transfer_download_zip_handler(
         &state.events_tx,
         job_id,
         JobState::Running {
+            stage: None,
             started_at_ms,
             bytes_sent: 0,
             total_bytes,
@@ -8221,6 +8245,7 @@ async fn transfer_dir_reconcile_handler(
         &state.events_tx,
         job_id,
         JobState::Running {
+            stage: None,
             started_at_ms,
             bytes_sent: 0,
             total_bytes: 0, // unknown until reconcile finishes
@@ -8412,6 +8437,7 @@ async fn transfer_dir_reconcile_handler(
             &events_tx,
             job_id,
             JobState::Running {
+                stage: None,
                 started_at_ms,
                 bytes_sent: 0,
                 total_bytes,
@@ -9780,6 +9806,7 @@ mod helpers_tests {
         let jobs = Arc::new(Mutex::new(HashMap::from([(
             job_id,
             JobState::Running {
+                stage: None,
                 started_at_ms: 1,
                 bytes_sent: 0,
                 total_bytes: 0,
@@ -10202,5 +10229,44 @@ mod account_id_input_tests {
             AccountIdInput::Str("0x1ffffffffffffffff".into()).to_u64(),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod job_stage_tests {
+    use super::*;
+
+    fn running(stage: Option<JobStage>) -> JobState {
+        JobState::Running {
+            started_at_ms: 1,
+            bytes_sent: 10,
+            total_bytes: 100,
+            files: Vec::new(),
+            skipped_files: 0,
+            skipped_bytes: 0,
+            files_processing: 0,
+            files_finalized: 0,
+            files_finalizing_total: 0,
+            bytes_finalized: 0,
+            stage,
+        }
+    }
+
+    /// A build job's snapshot names the stage it is in, which the Convert screen lists.
+    #[test]
+    fn a_running_job_carries_its_stage() {
+        let v = serde_json::to_value(running(Some(JobStage {
+            id: "compress".into(),
+            index: 2,
+            count: 5,
+            done: 7,
+            total: 9,
+        })))
+        .unwrap();
+        assert_eq!(v["stage"]["id"], "compress");
+        assert_eq!(v["stage"]["index"], 2);
+        assert_eq!(v["stage"]["done"], 7);
+        let none = serde_json::to_value(running(None)).unwrap();
+        assert!(none.get("stage").is_none());
     }
 }
