@@ -10,6 +10,7 @@
 pub mod api;
 #[cfg(test)]
 pub(crate) mod contract;
+pub mod fetch;
 pub mod hints;
 pub mod path;
 pub mod pool;

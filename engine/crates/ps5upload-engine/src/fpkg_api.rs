@@ -72,7 +72,7 @@ pub(crate) fn default_output_dir() -> PathBuf {
     home.join("Downloads").join("fpkgs")
 }
 
-fn resolve_engine_path(raw: &str) -> PathBuf {
+pub(crate) fn resolve_engine_path(raw: &str) -> PathBuf {
     let raw = raw.trim();
     let expanded = if raw == "~" || raw.starts_with("~/") {
         let home = std::env::var_os("HOME")

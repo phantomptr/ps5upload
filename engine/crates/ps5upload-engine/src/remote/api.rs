@@ -1,5 +1,7 @@
 //! `/api/remote/*`: saved connections and what is on them.
 
+use std::sync::Arc;
+
 use axum::extract::Path;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -93,7 +95,7 @@ fn parse_body(body: ConnectionBody) -> Result<(Connection, Option<Secret>), Box<
 }
 
 /// `{ error, hint? }` with a status that says what kind of failure it was.
-fn remote_err(e: &RemoteError) -> Response {
+pub(crate) fn remote_err(e: &RemoteError) -> Response {
     let code = match e {
         RemoteError::UnknownConnection(_) | RemoteError::NotFound(_) => StatusCode::NOT_FOUND,
         RemoteError::BadPath(_) => StatusCode::BAD_REQUEST,
@@ -408,4 +410,39 @@ mod tests {
         let tested = body(test_saved(&r, &id).await).await;
         assert!(tested["hint"].as_str().unwrap().contains("Guest account"));
     }
+}
+
+pub async fn fetch_handler(
+    axum::extract::State(state): axum::extract::State<crate::AppState>,
+    Json(body): Json<super::fetch::FetchBody>,
+) -> Response {
+    with_remote!(r => super::fetch::start_fetch(
+        r,
+        super::fetch::FetchDeps {
+            jobs: Arc::clone(&state.jobs),
+            events_tx: state.events_tx.clone(),
+            free_bytes: ps5upload_fpkg::build::free_bytes,
+            backoff: super::pool::Backoff::standard(),
+        },
+        body,
+    )
+    .await)
+}
+
+#[derive(Deserialize)]
+pub struct CleanupBody {
+    pub dest: String,
+}
+
+pub async fn fetch_cleanup_handler(Json(body): Json<CleanupBody>) -> Response {
+    super::fetch::cleanup(&body.dest).await
+}
+
+#[derive(Deserialize)]
+pub struct InspectBody {
+    pub path: String,
+}
+
+pub async fn inspect_folder_handler(Json(body): Json<InspectBody>) -> Response {
+    with_remote!(r => super::fetch::inspect_folder(&r, &body.path).await)
 }

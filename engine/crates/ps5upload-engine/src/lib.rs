@@ -9322,6 +9322,15 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         )
         .route("/api/remote/test", post(remote::api::test_form_handler))
         .route("/api/remote/list", post(remote::api::list_dir_handler))
+        .route("/api/remote/fetch", post(remote::api::fetch_handler))
+        .route(
+            "/api/remote/fetch/cleanup",
+            post(remote::api::fetch_cleanup_handler),
+        )
+        .route(
+            "/api/remote/inspect-folder",
+            post(remote::api::inspect_folder_handler),
+        )
         .route("/api/remote/shares", post(remote::api::shares_form_handler))
         .route(
             "/api/remote/connections/{id}/shares",
