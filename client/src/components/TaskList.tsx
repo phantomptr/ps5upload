@@ -58,7 +58,7 @@ import { useRosterStore } from "../state/roster";
 import { commandTask, taskCapabilities } from "../state/taskControls";
 
 /** Render the icon for a TaskKind. */
-function KindIcon({ kind, size = 14 }: { kind: TaskKind; size?: number }) {
+export function KindIcon({ kind, size = 14 }: { kind: TaskKind; size?: number }) {
   const Icon = kindIconMap[kind] ?? SquareDot;
   return <Icon size={size} strokeWidth={1.75} className="shrink-0 text-[var(--color-muted)]" />;
 }

@@ -10,7 +10,7 @@ import {
   useActiveProfile,
   profileAccentForHost,
 } from "../state/roster";
-import { useActivityHistoryStore } from "../state/activityHistory";
+import { ActivityStatusSlot } from "./ActivityBar";
 import { useUploadSettingsStore } from "../state/uploadSettings";
 import { getEngineUrl } from "../state/engine";
 import { Spinner } from "../components/Spinner";
@@ -47,11 +47,6 @@ export default function StatusBar() {
   const otherConsoles = multiConsole
     ? profiles.filter((p) => p.id !== activeProfile?.id)
     : [];
-  // Live "what's running" count — replaces the old hardcoded
-  // "no active transfers" label that never updated.
-  const runningCount = useActivityHistoryStore(
-    (s) => s.entries.filter((e) => e.outcome === "running").length,
-  );
 
   const dot = (status: "up" | "down" | "unknown") => {
     const color =
@@ -164,19 +159,7 @@ export default function StatusBar() {
 
       {/* Right cluster — live activity + power/capture controls. */}
       <div className="ms-auto flex items-center gap-3">
-        <span>
-          {runningCount > 0
-            ? tr(
-                "status_running_count",
-                { count: runningCount },
-                `${runningCount} running`,
-              )
-            : tr(
-                "status_no_active_transfers",
-                undefined,
-                "No active transfers",
-              )}
-        </span>
+        <ActivityStatusSlot />
         <KeepAwakeIndicator />
         <CaptureButton />
       </div>

@@ -3452,6 +3452,22 @@ backport_stop_external: "Stop the external BackPork payload, then resend ps5uplo
 "pkglib.auth.fake": "fake/debug",
 "pkglib.auth.retail.title": "Retail-signed package. Installing it does not grant a license; the console still needs a valid entitlement to launch it.",
 "pkglib.auth.retail": "retail",
+activity_ago_hours: "{hours} h ago",
+activity_ago_min: "{min} min ago",
+activity_ago_now: "just now",
+activity_failed_badge: "{count} failed",
+activity_flash_done: "{label} finished",
+activity_flash_failed: "{label} failed",
+activity_just_finished: "Just finished",
+activity_left: "{time} left",
+activity_more: "+{count} more",
+activity_nothing_running: "Nothing running",
+activity_outcome_other: "Did not finish",
+activity_retry: "Retry",
+activity_running_count: "{count} running",
+activity_see_all: "See all activity",
+activity_stale: "No update for {min} min",
+activity_toggle: "Show activity",
 };
 
 export default en;

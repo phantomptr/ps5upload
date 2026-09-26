@@ -1,184 +1,95 @@
-import { useEffect, useState } from "react";
-import { useShallow } from "zustand/react/shallow";
-import { ChevronUp, ChevronDown } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 
-import {
-  useActivityHistoryStore,
-  type ActivityEntry,
-} from "../state/activityHistory";
-import { formatBytes, formatDuration } from "../lib/format";
-import { averageRate } from "../lib/rollingRate";
-import { useTr } from "../state/lang";
-import { ConsoleChip } from "../components";
-import { Spinner } from "../components/Spinner";
+import { useActivityPanel } from "../state/activityPanel";
+import { summarize, type ActivitySummary } from "../state/activitySummary";
 import { profileNameForAddr, useRosterStore } from "../state/roster";
+import { commandTask, taskCapabilities } from "../state/taskControls";
+import { isTerminal, useTaskStore, type Task } from "../state/tasks";
+import { ActivityPanelView, ActivitySummaryLine } from "./ActivitySummary";
 
 /**
- * Persistent footer bar that surfaces in-flight activity across
- * every screen. Without it, a user who starts a copy on the
- * FileSystem screen and navigates to Library has no global signal
- * that work is still happening — the per-screen banner disappears
- * with the screen.
+ * One place for everything that takes time: uploads, installs, conversions, backups, saves,
+ * library actions… The status strip carries a one-line summary (ActivityStatusSlot); clicking it
+ * opens this panel above the strip with a row per job and what just finished.
  *
- * Collapsed: a single line with the live activity count + a
- * click-through to the Activity tab. Expanded: per-item summary
- * with elapsed + progress numbers + speed.
- *
- * Renders nothing when nothing's in flight, so the chrome stays
- * out of the way during idle.
- *
- * 2.12.0: renamed from OperationBar -> ActivityBar. The
- * conceptual-model audit flagged "operation" as a term used only
- * here while the rest of the app says "activity" (the screen, the
- * history store, the i18n keys). Two names for the same idea was
- * gratuitous; "ActivityBar" pairs with the Activity screen so the
- * user can guess where the bar's "View Activity" link goes.
+ * Reads only the unified task store, which every long-running feature reports into.
  */
 export default function ActivityBar() {
-  const tr = useTr();
+  const open = useActivityPanel((s) => s.open);
+  // The panel's subscriptions (and its once-a-second tick) exist only while it is open.
+  return open ? <OpenPanel /> : null;
+}
+
+/** The strip's summary slot. */
+export function ActivityStatusSlot() {
+  const { summary } = useActivitySummary();
+  const open = useActivityPanel((s) => s.open);
+  const toggle = useActivityPanel((s) => s.toggle);
+  return <ActivitySummaryLine summary={summary} open={open} onToggle={toggle} />;
+}
+
+function OpenPanel() {
+  const { summary, now } = useActivitySummary();
   const navigate = useNavigate();
-  // Subscribe to cheap derived values only — running count plus the
-  // first running entry's label/addr. The store stamps progress bytes
-  // into `entries` ~2× per second during uploads, and a raw `entries`
-  // subscription here re-rendered the bar (and this collapsed line)
-  // on every tick even though nothing visible changed. The shallow
-  // tuple only differs when an activity starts/finishes or the lead
-  // entry's headline changes, so progress ticks no longer touch the
-  // collapsed bar. Live byte counters live in RunningList below.
-  const [runningCount, firstLabel, firstAddr] = useActivityHistoryStore(
-    useShallow((s) => {
-      let count = 0;
-      let label = "";
-      let addr: string | undefined;
-      for (const e of s.entries) {
-        if (e.outcome === "running") {
-          if (count === 0) {
-            label = e.label;
-            addr = e.addr;
-          }
-          count++;
-        }
-      }
-      return [count, label, addr] as const;
-    }),
-  );
-  const [expanded, setExpanded] = useState(false);
+  const close = useActivityPanel((s) => s.close);
+  const markSeen = useActivityPanel((s) => s.markSeen);
   const profiles = useRosterStore((s) => s.profiles);
 
-  if (runningCount === 0) return null;
-
-  // Collapsed one-liner: with several consoles working at once, prefix
-  // the first entry with its console so a glance at the footer answers
-  // "who is doing that?" without expanding the bar.
-  const firstConsole =
-    profiles.length > 1 && firstAddr
-      ? profileNameForAddr(firstAddr, profiles)
-      : null;
-
-  return (
-    <div className="hidden md:block border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
-      <div className="flex w-full items-center gap-2 px-4 py-1.5 text-xs">
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          className="flex flex-1 items-center gap-2 truncate hover:opacity-80"
-          aria-expanded={expanded}
-          aria-label={tr(
-            "activity_bar_toggle",
-            undefined,
-            "Toggle activity panel",
-          )}
-        >
-          <Spinner size={12} tone="accent" />
-          <span className="font-medium">
-            {tr(
-              "activity_bar_in_flight",
-              { count: runningCount },
-              `${runningCount} activity item${runningCount === 1 ? "" : "s"} running`,
-            )}
-          </span>
-          <span className="ml-2 truncate text-[var(--color-muted)]">
-            {firstConsole ? `[${firstConsole}] ` : ""}
-            {firstLabel}
-            {runningCount > 1 && ` · +${runningCount - 1} more`}
-          </span>
-          {expanded ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
-        </button>
-        <button
-          type="button"
-          onClick={() => navigate("/activity")}
-          className="rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
-        >
-          {tr("activity_bar_open", undefined, "View Log")}
-        </button>
-      </div>
-
-      {expanded && <RunningList />}
-    </div>
-  );
-}
-
-/** Expanded row list, split into its own component so the full
- *  `entries` subscription only exists while the bar is expanded
- *  (conditional render = the hook isn't mounted otherwise). These
- *  rows show live byte counters, so re-rendering on every progress
- *  tick is the point here — the split keeps that cost opt-in. */
-function RunningList() {
-  const entries = useActivityHistoryStore((s) => s.entries);
-  const running = entries.filter((e) => e.outcome === "running");
-  return (
-    <div className="border-t border-[var(--color-border)] px-4 py-2">
-      <ul className="space-y-1.5 text-xs">
-        {running.map((entry) => (
-          <RunningRow key={entry.id} entry={entry} />
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function RunningRow({ entry }: { entry: ActivityEntry }) {
-  const [now, setNow] = useState(() => Date.now());
-  // 1 s tick: balances responsive updates against not re-rendering
-  // every screen 4× per second from the global bar.
+  // A failure that lands while the panel is open has been seen.
+  const failedIds = summary.finished.filter((r) => r.outcome === "failed").map((r) => r.id).join(",");
   useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, []);
-  const elapsedMs = Math.max(0, now - entry.startedAtMs);
-  const speed =
-    entry.bytes && entry.bytes > 0 ? averageRate(entry.bytes, elapsedMs) : 0;
-  const pct =
-    entry.totalBytes && entry.totalBytes > 0 && entry.bytes
-      ? Math.min(100, (entry.bytes / entry.totalBytes) * 100)
-      : null;
+    if (failedIds) markSeen(failedIds.split(","));
+  }, [failedIds, markSeen]);
 
   return (
-    <li className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
-      <ConsoleChip addr={entry.addr} />
-      <span className="font-medium text-[var(--color-text)]">
-        {entry.label}
-      </span>
-      <span className="text-[var(--color-muted)]">
-        {formatDuration(elapsedMs / 1000)}
-        {entry.bytes !== undefined && entry.bytes > 0 && (
-          <>
-            {" · "}
-            {formatBytes(entry.bytes)}
-            {entry.totalBytes !== undefined && entry.totalBytes > 0 && (
-              <> / {formatBytes(entry.totalBytes)}</>
-            )}
-            {pct !== null && ` (${pct.toFixed(0)}%)`}
-          </>
-        )}
-        {speed > 0 && ` · ${formatBytes(speed)}/s`}
-      </span>
-      {entry.detail && (
-        <span className="text-xs text-[var(--color-muted)]">
-          {entry.detail}
-        </span>
-      )}
-    </li>
+    <div className="hidden md:block">
+      <ActivityPanelView
+        summary={summary}
+        now={now}
+        onOpen={(route) => {
+          close();
+          navigate(route);
+        }}
+        onCancel={(task) => void commandTask(task, "cancel")}
+        onRetry={(task) => void commandTask(task, "retry")}
+        canCancel={(task) => taskCapabilities(task).canCancel}
+        canRetry={(task) => taskCapabilities(task).canRetry}
+        consoleOf={(task) =>
+          profiles.length > 1 && task.consoleId ? profileNameForAddr(task.consoleId, profiles) : null
+        }
+      />
+    </div>
   );
+}
+
+/** The summary of the task store, refreshed once a second while anything in it depends on the
+ *  clock (a job running, which can go stale, or one that just ended, which flashes). */
+function useActivitySummary(): { summary: ActivitySummary; now: number } {
+  const tasks = useTaskStore((s) => s.tasks);
+  const seen = useActivityPanel((s) => s.seen);
+  const sessionStart = useActivityPanel((s) => s.sessionStart);
+  const [ticked, setTicked] = useState(() => Date.now());
+  // Every task change stamps the time it happened, so the newest stamp is "now" whenever the
+  // store moves; the tick carries the clock between changes.
+  const now = useMemo(() => Math.max(ticked, latestStamp(tasks)), [ticked, tasks]);
+  const clockBound = tasks.some(
+    (t) => !isTerminal(t.status) || (t.endedAtMs != null && now - t.endedAtMs < 6000),
+  );
+  useEffect(() => {
+    if (!clockBound) return;
+    const id = window.setInterval(() => setTicked(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [clockBound]);
+  const summary = useMemo(
+    () => summarize(tasks, { now, sessionStart, seen }),
+    [tasks, now, sessionStart, seen],
+  );
+  return { summary, now };
+}
+
+function latestStamp(tasks: readonly Task[]): number {
+  let latest = 0;
+  for (const t of tasks) latest = Math.max(latest, t.updatedAtMs, t.endedAtMs ?? 0);
+  return latest;
 }
