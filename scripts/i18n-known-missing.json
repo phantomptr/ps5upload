@@ -356,7 +356,11 @@
       "conn_host_key_changed",
       "conn_host_key_new",
       "conn_accept_key",
-      "conn_save"
+      "conn_save",
+      "v5_home_servers",
+      "v5_home_servers_empty",
+      "v5_home_servers_connect",
+      "v5_qa_connect_server"
     ],
     "stale": [],
     "untranslated": [
@@ -723,7 +727,11 @@
       "conn_host_key_changed",
       "conn_host_key_new",
       "conn_accept_key",
-      "conn_save"
+      "conn_save",
+      "v5_home_servers",
+      "v5_home_servers_empty",
+      "v5_home_servers_connect",
+      "v5_qa_connect_server"
     ],
     "stale": [],
     "untranslated": [
@@ -1091,7 +1099,11 @@
       "conn_host_key_changed",
       "conn_host_key_new",
       "conn_accept_key",
-      "conn_save"
+      "conn_save",
+      "v5_home_servers",
+      "v5_home_servers_empty",
+      "v5_home_servers_connect",
+      "v5_qa_connect_server"
     ],
     "stale": [],
     "untranslated": [
@@ -1466,7 +1478,11 @@
       "conn_host_key_changed",
       "conn_host_key_new",
       "conn_accept_key",
-      "conn_save"
+      "conn_save",
+      "v5_home_servers",
+      "v5_home_servers_empty",
+      "v5_home_servers_connect",
+      "v5_qa_connect_server"
     ],
     "stale": [],
     "untranslated": [
@@ -1837,7 +1853,11 @@
       "conn_host_key_changed",
       "conn_host_key_new",
       "conn_accept_key",
-      "conn_save"
+      "conn_save",
+      "v5_home_servers",
+      "v5_home_servers_empty",
+      "v5_home_servers_connect",
+      "v5_qa_connect_server"
     ],
     "stale": [],
     "untranslated": [
@@ -2210,7 +2230,11 @@
       "conn_host_key_changed",
       "conn_host_key_new",
       "conn_accept_key",
-      "conn_save"
+      "conn_save",
+      "v5_home_servers",
+      "v5_home_servers_empty",
+      "v5_home_servers_connect",
+      "v5_qa_connect_server"
     ],
     "stale": [],
     "untranslated": [
@@ -2344,7 +2368,11 @@
       "conn_host_key_changed",
       "conn_host_key_new",
       "conn_accept_key",
-      "conn_save"
+      "conn_save",
+      "v5_home_servers",
+      "v5_home_servers_empty",
+      "v5_home_servers_connect",
+      "v5_qa_connect_server"
     ],
     "stale": [],
     "untranslated": [
@@ -2723,7 +2751,11 @@
       "conn_host_key_changed",
       "conn_host_key_new",
       "conn_accept_key",
-      "conn_save"
+      "conn_save",
+      "v5_home_servers",
+      "v5_home_servers_empty",
+      "v5_home_servers_connect",
+      "v5_qa_connect_server"
     ],
     "stale": [],
     "untranslated": [
@@ -3096,7 +3128,11 @@
       "conn_host_key_changed",
       "conn_host_key_new",
       "conn_accept_key",
-      "conn_save"
+      "conn_save",
+      "v5_home_servers",
+      "v5_home_servers_empty",
+      "v5_home_servers_connect",
+      "v5_qa_connect_server"
     ],
     "stale": [],
     "untranslated": [
@@ -3468,7 +3504,11 @@
       "conn_host_key_changed",
       "conn_host_key_new",
       "conn_accept_key",
-      "conn_save"
+      "conn_save",
+      "v5_home_servers",
+      "v5_home_servers_empty",
+      "v5_home_servers_connect",
+      "v5_qa_connect_server"
     ],
     "stale": [],
     "untranslated": [
@@ -3838,7 +3878,11 @@
       "conn_host_key_changed",
       "conn_host_key_new",
       "conn_accept_key",
-      "conn_save"
+      "conn_save",
+      "v5_home_servers",
+      "v5_home_servers_empty",
+      "v5_home_servers_connect",
+      "v5_qa_connect_server"
     ],
     "stale": [],
     "untranslated": [
@@ -4206,7 +4250,11 @@
       "conn_host_key_changed",
       "conn_host_key_new",
       "conn_accept_key",
-      "conn_save"
+      "conn_save",
+      "v5_home_servers",
+      "v5_home_servers_empty",
+      "v5_home_servers_connect",
+      "v5_qa_connect_server"
     ],
     "stale": [],
     "untranslated": [
@@ -4575,7 +4623,11 @@
       "conn_host_key_changed",
       "conn_host_key_new",
       "conn_accept_key",
-      "conn_save"
+      "conn_save",
+      "v5_home_servers",
+      "v5_home_servers_empty",
+      "v5_home_servers_connect",
+      "v5_qa_connect_server"
     ],
     "stale": [],
     "untranslated": [
@@ -4949,7 +5001,11 @@
       "conn_host_key_changed",
       "conn_host_key_new",
       "conn_accept_key",
-      "conn_save"
+      "conn_save",
+      "v5_home_servers",
+      "v5_home_servers_empty",
+      "v5_home_servers_connect",
+      "v5_qa_connect_server"
     ],
     "stale": [],
     "untranslated": [
@@ -5318,7 +5374,11 @@
       "conn_host_key_changed",
       "conn_host_key_new",
       "conn_accept_key",
-      "conn_save"
+      "conn_save",
+      "v5_home_servers",
+      "v5_home_servers_empty",
+      "v5_home_servers_connect",
+      "v5_qa_connect_server"
     ],
     "stale": [],
     "untranslated": [
@@ -5686,7 +5746,11 @@
       "conn_host_key_changed",
       "conn_host_key_new",
       "conn_accept_key",
-      "conn_save"
+      "conn_save",
+      "v5_home_servers",
+      "v5_home_servers_empty",
+      "v5_home_servers_connect",
+      "v5_qa_connect_server"
     ],
     "stale": [],
     "untranslated": [
@@ -6056,7 +6120,11 @@
       "conn_host_key_changed",
       "conn_host_key_new",
       "conn_accept_key",
-      "conn_save"
+      "conn_save",
+      "v5_home_servers",
+      "v5_home_servers_empty",
+      "v5_home_servers_connect",
+      "v5_qa_connect_server"
     ],
     "stale": [],
     "untranslated": [
@@ -6427,7 +6495,11 @@
       "conn_host_key_changed",
       "conn_host_key_new",
       "conn_accept_key",
-      "conn_save"
+      "conn_save",
+      "v5_home_servers",
+      "v5_home_servers_empty",
+      "v5_home_servers_connect",
+      "v5_qa_connect_server"
     ],
     "stale": [],
     "untranslated": [
@@ -6795,7 +6867,11 @@
       "conn_host_key_changed",
       "conn_host_key_new",
       "conn_accept_key",
-      "conn_save"
+      "conn_save",
+      "v5_home_servers",
+      "v5_home_servers_empty",
+      "v5_home_servers_connect",
+      "v5_qa_connect_server"
     ],
     "stale": [],
     "untranslated": [

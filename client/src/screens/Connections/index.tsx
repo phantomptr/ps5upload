@@ -8,13 +8,9 @@ import { FolderOpen, Network, Pencil, Plus, RefreshCw, Trash2 } from "lucide-rea
 import { Button, Card, ErrorCard, PageHeader } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { remoteApi, type Connection, type TestResult } from "../../api/remote";
-import { pickLocalPath } from "../../state/localPicker";
 import { useConnectionsStore, type ConnStatus } from "../../state/connections";
-import { useConnectionStore } from "../../state/connection";
-import { pkgLibraryStore } from "../../state/pkgLibrary";
-import { useUploadStore } from "../../state/upload";
-import { pushNotification } from "../../state/notifications";
 import { useTr } from "../../state/lang";
+import { browseServer } from "../../lib/browseServer";
 import {
   ConnectionFormView,
   DEFAULT_PORT,
@@ -74,7 +70,6 @@ export default function ConnectionsScreen() {
   const save = useConnectionsStore((s) => s.save);
   const remove = useConnectionsStore((s) => s.remove);
   const check = useConnectionsStore((s) => s.check);
-  const ps5Host = useConnectionStore((s) => s.host);
 
   const [error, setError] = useState<string | null>(null);
   /** null = form closed; "" = adding; otherwise the id being edited. */
@@ -207,26 +202,7 @@ export default function ConnectionsScreen() {
   };
 
   const browse = (c: Connection) =>
-    void pickLocalPath({
-      mode: "file",
-      title: c.name,
-      source: { connectionId: c.id },
-      actions: {
-        onInstall: (path) => {
-          const host = ps5Host?.trim();
-          if (!host) {
-            pushNotification("error", tr("conn_need_ps5", undefined, "Connect to a PS5 to install."));
-            return;
-          }
-          void pkgLibraryStore(host).getState().installStream(path, host);
-          navigate("/install-package");
-        },
-        onSend: (path) => {
-          void useUploadStore.getState().pickFile(path);
-          navigate("/upload");
-        },
-      },
-    });
+    browseServer(c, navigate, tr("conn_need_ps5", undefined, "Connect to a PS5 to install."));
 
   return (
     <div className="p-6">

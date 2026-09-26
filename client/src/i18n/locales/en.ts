@@ -3517,6 +3517,10 @@ conn_host_key_changed: "This server's key has changed since you last connected:"
 conn_host_key_new: "First connection to this server. Its key fingerprint is:",
 conn_accept_key: "Accept",
 conn_save: "Save",
+v5_home_servers: "Servers",
+v5_home_servers_empty: "Pick games straight from your NAS or a shared folder, over SMB, FTP or SFTP.",
+v5_home_servers_connect: "Connect a NAS or server",
+v5_qa_connect_server: "Connect a server",
 };
 
 export default en;

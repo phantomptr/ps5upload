@@ -14,11 +14,11 @@ import {
   PackageOpen,
   Power,
   Save,
-  Server,
   Upload,
   WifiOff,
   XCircle,
   type LucideIcon,
+  Network,
 } from "lucide-react";
 
 import { useConnectionStore } from "../../state/connection";
@@ -28,6 +28,7 @@ import { useRunningAppsStore } from "../../state/runningApps";
 import { useSensors } from "../../state/sensors";
 import { Badge, Card, ConsoleChip, Sparkline, Spinner } from "../../components";
 import { useTr } from "../../state/lang";
+import { ServersCard } from "./ServersCard";
 import {
   evaluateOperationReadiness,
   type Operation,
@@ -175,7 +176,7 @@ export default function HomeScreen() {
             <QuickAction to="/files" icon={FolderTree} label={tr("v5_qa_files", "Browse files")} readiness={readinessFor("browse-console")} />
             <QuickAction to="/games" icon={Gamepad2} label={tr("v5_qa_games", "Open library")} readiness={readinessFor("browse-console")} />
             <QuickAction to="/saves" icon={Save} label={tr("v5_qa_saves", "Back up saves")} readiness={readinessFor("browse-console")} />
-            <QuickAction to="/ftp-server" icon={Server} label={tr("v5_qa_ftp", "Start FTP server")} readiness={readinessFor("manage-system")} />
+            <QuickAction to="/connections?add=1" icon={Network} label={tr("v5_qa_connect_server", "Connect a server")} readiness={{ ready: true, blockers: [], warnings: [] }} />
           </div>
         </Card>
 
@@ -360,6 +361,8 @@ function CompactEmpty({ icon: Icon, title, body }: { icon: LucideIcon; title: st
       <div>
         <div className="text-xs font-semibold">{title}</div>
         <div className="mt-0.5 text-[0.6875rem] text-[var(--color-muted)]">{body}</div>
+
+        <ServersCard />
       </div>
     </div>
   );
