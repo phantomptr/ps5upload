@@ -11,6 +11,7 @@ const base = {
   stageStartedMs: 0,
   jobId: "j",
   installTaskId: null,
+  taskId: null,
   packagePath: null,
   titleId: null,
 };

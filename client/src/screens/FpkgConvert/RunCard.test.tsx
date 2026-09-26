@@ -100,6 +100,7 @@ describe("RunCard", () => {
       stageMs: { check: 1000, plan: 2000 },
       jobId: "j",
       installTaskId: null,
+      taskId: null,
       packagePath: null,
       titleId: null,
     });
@@ -180,6 +181,7 @@ describe("RunCard", () => {
       stageMs: {},
       jobId: "j",
       installTaskId: null,
+      taskId: null,
       packagePath: null,
       titleId: null,
     });
