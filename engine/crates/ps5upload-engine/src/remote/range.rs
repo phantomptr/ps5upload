@@ -45,8 +45,12 @@ impl RemoteRangeSource {
         backoff: Backoff,
     ) -> Result<Self, RemoteError> {
         let p = super::path::parse(remote_path)?;
-        let fs = pool.fs(&store, &p.connection_id).await?;
-        let file = fs.open(&p.path).await?;
+        let file = pool
+            .with_fs(&store, &p.connection_id, |fs| {
+                let path = p.path.clone();
+                async move { fs.open(&path).await }
+            })
+            .await?;
         let host = store
             .get(&p.connection_id)
             .map(|(c, _)| c.host)

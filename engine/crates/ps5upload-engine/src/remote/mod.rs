@@ -83,6 +83,7 @@ pub trait RemoteFs: Send + Sync {
 pub(crate) struct MemFs {
     files: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
     fail_reads: Arc<AtomicUsize>,
+    fail_lists: AtomicUsize,
 }
 
 impl MemFs {
@@ -91,7 +92,19 @@ impl MemFs {
         Self {
             files: Arc::new(Mutex::new(map)),
             fail_reads: Arc::new(AtomicUsize::new(0)),
+            fail_lists: AtomicUsize::new(0),
         }
+    }
+
+    /// The next `n` listings fail, as a dropped session would.
+    pub fn fail_next_lists(&self, n: usize) {
+        self.fail_lists.store(n, Ordering::SeqCst);
+    }
+
+    fn list_fails(&self) -> bool {
+        self.fail_lists
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
     }
 
     /// The next `n` reads fail, as a dropped connection would.
@@ -177,6 +190,9 @@ impl RemoteFile for MemFile {
 #[async_trait::async_trait]
 impl RemoteFs for MemFs {
     async fn list(&self, path: &str, cursor: Option<String>) -> Result<Page, RemoteError> {
+        if self.list_fails() {
+            return Err(RemoteError::Io("connection reset".into()));
+        }
         let dir = normal(path);
         if !self.is_dir(&dir) {
             return Err(RemoteError::NotFound(format!("{dir} not found")));

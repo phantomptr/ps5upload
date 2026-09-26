@@ -81,7 +81,13 @@ fn io_err(e: RemoteError) -> std::io::Error {
 impl SourceFs for RemoteSourceFs {
     fn open(&self, p: &Path) -> std::io::Result<Box<dyn ReadSeek>> {
         let path = server_path(p);
-        let file = self.handle.block_on(self.fs.open(&path)).map_err(io_err)?;
+        let file = self
+            .handle
+            .block_on(self.pool.with_fs(&self.store, &self.id, |fs| {
+                let path = path.clone();
+                async move { fs.open(&path).await }
+            }))
+            .map_err(io_err)?;
         let file = super::pool::retrying(
             Arc::clone(&self.pool),
             Arc::clone(&self.store),
@@ -115,7 +121,13 @@ impl SourceFs for RemoteSourceFs {
                 is_file: !is_dir,
             });
         }
-        let e = self.handle.block_on(self.fs.stat(&path)).map_err(io_err)?;
+        let e = self
+            .handle
+            .block_on(self.pool.with_fs(&self.store, &self.id, |fs| {
+                let path = path.clone();
+                async move { fs.stat(&path).await }
+            }))
+            .map_err(io_err)?;
         Ok(SourceMeta {
             len: e.size,
             is_dir: e.is_dir,
@@ -130,7 +142,10 @@ impl SourceFs for RemoteSourceFs {
         loop {
             let page = self
                 .handle
-                .block_on(self.fs.list(&dir, cursor))
+                .block_on(self.pool.with_fs(&self.store, &self.id, |fs| {
+                    let (dir, cursor) = (dir.clone(), cursor.clone());
+                    async move { fs.list(&dir, cursor).await }
+                }))
                 .map_err(io_err)?;
             for e in page.entries {
                 let child = super::path::join(&dir, &e.name).map_err(|err| {
@@ -293,9 +308,56 @@ mod tests {
             crate::walk_plan_with(&fs, Path::new("/g"), &[".DS_Store".to_string()])
         })
         .await
+        .unwrap()
         .unwrap();
         let names: Vec<_> = files.iter().map(|f| f.rel_path.as_str()).collect();
         assert_eq!(names, ["eboot.bin", "sce_sys/param.json"]);
         assert_eq!(total, 12);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_folder_that_cannot_be_listed_fails_the_upload_plan() {
+        let mem = Arc::new(MemFs::new(&[("/g/a.bin", b"x"), ("/g/sub/b.bin", b"y")]));
+        let r = remote_with_shared(Arc::clone(&mem), None);
+        let id = r
+            .store
+            .add(conn("NAS", Protocol::Smb), Secret::None)
+            .unwrap()
+            .conn
+            .id;
+        let fs = RemoteSourceFs::new(Arc::clone(&r.pool), Arc::clone(&r.store), &id)
+            .await
+            .unwrap();
+        mem.fail_next_lists(50);
+        let plan =
+            tokio::task::spawn_blocking(move || crate::walk_plan_with(&fs, Path::new("/g"), &[]))
+                .await
+                .unwrap();
+        assert!(
+            plan.is_err(),
+            "a listing that failed must not become a smaller upload"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_dropped_session_mid_upload_signs_in_again() {
+        let mem = Arc::new(MemFs::new(&[("/g/a.bin", b"x"), ("/g/sub/b.bin", b"y")]));
+        let r = remote_with_shared(Arc::clone(&mem), None);
+        let id = r
+            .store
+            .add(conn("NAS", Protocol::Smb), Secret::None)
+            .unwrap()
+            .conn
+            .id;
+        let fs = RemoteSourceFs::new(Arc::clone(&r.pool), Arc::clone(&r.store), &id)
+            .await
+            .unwrap();
+        mem.fail_next_lists(1);
+        let plan =
+            tokio::task::spawn_blocking(move || crate::walk_plan_with(&fs, Path::new("/g"), &[]))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(plan.1.len(), 2);
     }
 }

@@ -190,8 +190,12 @@ async fn try_connection(r: &Remote, conn: &Connection, secret: &Secret) -> Respo
 pub(crate) async fn list_dir(r: &Remote, remote: &str, cursor: Option<String>) -> Response {
     let result = async {
         let p = path::parse(remote)?;
-        let fs = r.pool.fs(&r.store, &p.connection_id).await?;
-        fs.list(&p.path, cursor).await
+        r.pool
+            .with_fs(&r.store, &p.connection_id, |fs| {
+                let (dir, cursor) = (p.path.clone(), cursor.clone());
+                async move { fs.list(&dir, cursor).await }
+            })
+            .await
     }
     .await;
     match result {
@@ -233,10 +237,18 @@ pub(crate) async fn test_saved(r: &Remote, id: &str) -> Response {
     }
 }
 
-/// The form's secret, or — for an edit that did not retype it — the saved one.
-fn form_secret(r: &Remote, id: Option<&str>, secret: Option<Secret>) -> Secret {
-    secret
-        .or_else(|| id.and_then(|id| r.store.get(id)).map(|(_, s)| s))
+/// The form's secret, or — for an edit that did not retype it — the saved one, but only while
+/// the form still points at the server that secret was saved for. Otherwise editing the host
+/// and pressing Test would send the NAS password to whatever host was typed.
+fn form_secret(r: &Remote, id: Option<&str>, conn: &Connection, secret: Option<Secret>) -> Secret {
+    if let Some(s) = secret {
+        return s;
+    }
+    id.and_then(|id| r.store.get(id))
+        .filter(|(saved, _)| {
+            saved.host == conn.host && saved.port == conn.port && saved.protocol == conn.protocol
+        })
+        .map(|(_, s)| s)
         .unwrap_or(Secret::None)
 }
 
@@ -246,7 +258,7 @@ pub(crate) async fn test_form(r: &Remote, body: ConnectionBody) -> Response {
         Ok(v) => v,
         Err(resp) => return *resp,
     };
-    let secret = form_secret(r, id.as_deref(), secret);
+    let secret = form_secret(r, id.as_deref(), &conn, secret);
     try_connection(r, &conn, &secret).await
 }
 
@@ -305,7 +317,10 @@ pub async fn shares_form_handler(Json(mut body): Json<ConnectionBody>) -> Respon
     }
     let id = body.id.clone();
     with_remote!(r => match parse_body(body) {
-        Ok((conn, secret)) => shares_of(&conn, &form_secret(&r, id.as_deref(), secret)).await,
+        Ok((conn, secret)) => {
+            let secret = form_secret(&r, id.as_deref(), &conn, secret);
+            shares_of(&conn, &secret).await
+        }
         Err(resp) => *resp,
     })
 }
@@ -473,7 +488,7 @@ mod tests {
             .unwrap()
             .to_string();
         let edit = form(
-            json!({"id": id, "connection": {"name":"NAS","protocol":"smb","host":"10.0.0.6","share":"games","user":"me"}}),
+            json!({"id": id, "connection": {"name":"Home NAS","protocol":"smb","host":"10.0.0.5","share":"games","user":"me"}}),
         );
         let out = body(test_form(&r, edit).await).await;
         assert!(
@@ -522,6 +537,58 @@ mod tests {
             accept_host_key(&r, "nope", "x").await.status(),
             StatusCode::NOT_FOUND
         );
+    }
+
+    #[tokio::test]
+    async fn a_dead_session_is_replaced_instead_of_failing_every_browse() {
+        let mem = std::sync::Arc::new(MemFs::new(&[("/g/a.pkg", b"x")]));
+        let r = crate::remote::pool::testing::remote_with_shared(std::sync::Arc::clone(&mem), None);
+        let id = body(add_connection(&r, nas_form()).await).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        r.pool.fs(&r.store, &id).await.unwrap();
+        mem.fail_next_lists(1); // the NAS rebooted under the pooled session
+        let out = list_dir(&r, &format!("remote://{id}/g"), None).await;
+        assert_eq!(out.status(), StatusCode::OK);
+        assert_eq!(r.pool.connects(), 2, "signed in again");
+    }
+
+    #[tokio::test]
+    async fn a_saved_password_goes_only_to_the_server_it_was_saved_for() {
+        let r = remote_with(
+            MemFs::new(&[]),
+            Some(|s| {
+                RemoteError::Auth(format!(
+                    "got {}",
+                    if matches!(s, Secret::None) {
+                        "none"
+                    } else {
+                        "a password"
+                    }
+                ))
+            }),
+        );
+        let id = body(add_connection(&r, nas_form()).await).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let same = form(
+            json!({"id": id, "connection": {"name":"NAS","protocol":"smb","host":"10.0.0.5","share":"games","user":"me"}}),
+        );
+        assert!(body(test_form(&r, same).await).await["error"]
+            .as_str()
+            .unwrap()
+            .contains("a password"));
+        for other in [
+            json!({"name":"NAS","protocol":"smb","host":"203.0.113.9","share":"games","user":"me"}),
+            json!({"name":"NAS","protocol":"ftp","host":"10.0.0.5","user":"me"}),
+            json!({"name":"NAS","protocol":"smb","host":"10.0.0.5","port":4445,"share":"games","user":"me"}),
+        ] {
+            let edit = form(json!({"id": id, "connection": other}));
+            let out = body(test_form(&r, edit).await).await;
+            assert!(out["error"].as_str().unwrap().contains("none"), "{out}");
+        }
     }
 }
 

@@ -83,14 +83,20 @@ pub(crate) async fn start_fetch(r: Arc<Remote>, deps: FetchDeps, body: FetchBody
         Err(e) => return super::api::remote_err(&e),
     };
     let listed: Result<Listed, RemoteError> = async {
-        let fs = r.pool.fs(&r.store, &p.connection_id).await?;
-        let top = fs.stat(&p.path).await?;
-        if top.is_dir {
-            let files = fs.walk(&p.path, MAX_FILES).await?;
-            Ok((fs, files, true))
-        } else {
-            Ok((fs, vec![(String::new(), top)], false))
-        }
+        r.pool
+            .with_fs(&r.store, &p.connection_id, |fs| {
+                let path = p.path.clone();
+                async move {
+                    let top = fs.stat(&path).await?;
+                    if top.is_dir {
+                        let files = fs.walk(&path, MAX_FILES).await?;
+                        Ok((fs, files, true))
+                    } else {
+                        Ok((fs, vec![(String::new(), top)], false))
+                    }
+                }
+            })
+            .await
     }
     .await;
     let (fs, files, is_dir) = match listed {
@@ -296,7 +302,14 @@ async fn copy_all(job: CopyJob<'_>) -> Result<u64, String> {
         if let Some(parent) = local.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
         }
-        let file = job.fs.open(&remote).await.map_err(|e| e.to_string())?;
+        let file = job
+            .pool
+            .with_fs(&job.store, &job.id, |fs| {
+                let remote = remote.clone();
+                async move { fs.open(&remote).await }
+            })
+            .await
+            .map_err(|e| e.to_string())?;
         let file = super::pool::retrying(
             Arc::clone(&job.pool),
             Arc::clone(&job.store),

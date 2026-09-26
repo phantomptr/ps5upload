@@ -122,6 +122,25 @@ impl Pool {
         Ok(fs)
     }
 
+    /// Run `f` on the session for `id`. If it fails the way a dropped connection does, the
+    /// session is thrown away and `f` runs once more on a fresh sign-in — a NAS that rebooted
+    /// under a pooled session otherwise fails every browse until the app restarts.
+    pub async fn with_fs<T, F, Fut>(&self, store: &Store, id: &str, f: F) -> Result<T, RemoteError>
+    where
+        F: Fn(Arc<dyn RemoteFs>) -> Fut,
+        Fut: std::future::Future<Output = Result<T, RemoteError>>,
+    {
+        let fs = self.fs(store, id).await?;
+        match f(fs).await {
+            Err(e) if is_transient(&e) => {
+                self.invalidate(id);
+                let fs = self.fs(store, id).await?;
+                f(fs).await
+            }
+            other => other,
+        }
+    }
+
     /// Forget the session: the connection was edited or deleted, or the session broke.
     pub fn invalidate(&self, id: &str) {
         self.lock().remove(id);
@@ -224,7 +243,7 @@ impl RemoteFile for Retrying {
 }
 
 /// A dropped connection or a server that went away for a moment — worth another try.
-fn is_transient(e: &RemoteError) -> bool {
+pub(crate) fn is_transient(e: &RemoteError) -> bool {
     matches!(e, RemoteError::Io(_) | RemoteError::Unreachable(_))
 }
 

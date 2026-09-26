@@ -725,18 +725,20 @@ fn walk_plan(root: &std::path::Path, excludes: &[String]) -> (u64, Vec<PlannedFi
 }
 
 /// `walk_plan` over any source (a saved server): one listing per folder, sizes from the listing.
+/// A folder that cannot be listed fails the plan — over a network that is a dropped connection
+/// or a permission problem, and skipping it would upload an incomplete game and call it done.
 fn walk_plan_with(
     fs: &dyn ps5upload_core::source_fs::SourceFs,
     root: &std::path::Path,
     excludes: &[String],
-) -> (u64, Vec<PlannedFile>) {
+) -> Result<(u64, Vec<PlannedFile>), String> {
     let mut stack = vec![root.to_path_buf()];
     let mut total = 0u64;
     let mut out = Vec::new();
     while let Some(dir) = stack.pop() {
-        let Ok(children) = fs.read_dir(&dir) else {
-            continue;
-        };
+        let children = fs
+            .read_dir(&dir)
+            .map_err(|e| format!("could not list {}: {e}", dir.display()))?;
         for (path, is_dir) in children {
             if is_dir {
                 stack.push(path);
@@ -745,7 +747,10 @@ fn walk_plan_with(
             if ps5upload_core::excludes::is_excluded_strings(&path, excludes) {
                 continue;
             }
-            if let Ok(m) = fs.metadata(&path) {
+            let m = fs
+                .metadata(&path)
+                .map_err(|e| format!("could not read {}: {e}", path.display()))?;
+            {
                 total += m.len;
                 let rel = path.strip_prefix(root).unwrap_or(&path);
                 out.push(PlannedFile {
@@ -756,7 +761,7 @@ fn walk_plan_with(
         }
     }
     out.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
-    (total, out)
+    Ok((total, out))
 }
 
 /// Spawn a 200 ms timer that republishes the Running job state with the
@@ -4764,9 +4769,23 @@ async fn transfer_dir_handler(
         }
 
         let walk_started = std::time::Instant::now();
-        let (total_bytes, files) = match &source_fs {
+        let planned = match &source_fs {
             Some(fs) => walk_plan_with(fs.as_ref(), &src_path, &req.excludes),
-            None => walk_plan(&src_path, &req.excludes),
+            None => Ok(walk_plan(&src_path, &req.excludes)),
+        };
+        let (total_bytes, files) = match planned {
+            Ok(p) => p,
+            Err(e) => {
+                let completed_at_ms = now_ms();
+                set_job(
+                    &jobs,
+                    &events_tx,
+                    job_id,
+                    job_failed_from_err(started_at_ms, completed_at_ms, &anyhow::anyhow!(e)),
+                );
+                fail_guard.mark_succeeded();
+                return;
+            }
         };
         let files_sent_count = files.len() as u64;
         crate::log_info!(
