@@ -896,6 +896,16 @@ test-payload: payload
 		$(PAYLOAD_DIR)/installer/jobs.c
 	@/tmp/ps5upload-installer-http-selftest
 	@echo "✓ installer range parse, headers, coverage and job ring are sound"
+	@echo "Running installer loopback server self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/installer \
+		-o /tmp/ps5upload-installer-loopback-selftest \
+		$(PAYLOAD_DIR)/tests/installer_loopback_selftest.c \
+		$(PAYLOAD_DIR)/installer/loopback.c \
+		$(PAYLOAD_DIR)/installer/http_range.c \
+		$(PAYLOAD_DIR)/installer/pathsafe.c \
+		$(PAYLOAD_DIR)/installer/jobs.c
+	@/tmp/ps5upload-installer-loopback-selftest
+	@echo "✓ loopback server ranges, 404s foreign paths and .crc, serves a real sidecar"
 	@echo "Running param.json SDK-rewrite self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-sdk-param-selftest \
 		$(PAYLOAD_DIR)/tests/sdk_param_selftest.c
