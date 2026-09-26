@@ -27,6 +27,7 @@ use axum::{
     Json, Router,
 };
 use ps5upload_core::app_lifecycle::{toast_send, ToastRequest};
+use ps5upload_core::installer_client as ic;
 use ps5upload_core::pkg_install::{
     err_code_message, pkg_install, pkg_install_status, InstallPhase, PkgInstallRequest,
     PkgInstallResponse, PkgInstallStatus, APPINST_TASK_ID_FLAG,
@@ -673,6 +674,9 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
             "/api/pkg/dpi-direct-install",
             post(dpi_direct_install_handler),
         )
+        // Read-only progress of a daemon loopback job (spec §4): bytes_served
+        // / total for an "upload & install" job on :9115.
+        .route("/api/pkg/installer-job", get(installer_job_handler))
         // The session UUID is the lookup key. We allow ANY {filename} so the
         // URL can carry the pkg's canonical `<ContentID>.pkg` name that
         // Sony's installer cross-checks against the pkg header. Without
@@ -2051,15 +2055,15 @@ async fn install_start_handler(
     // Return a typed start rejection; runPkgInstallCore then starts standalone
     // DPI and verifies the exact add-on fingerprint before showing success.
     //
-    // A staged patch is routed the same way, but only when the DPI daemon is
-    // already listening — see `staged_requires_dpi`. Probing :9040 is safe
-    // (it is our own accept loop, and `dpi_ensure` probes it the same way);
-    // probing :9021 is NOT, because a loader that gets a connect-and-close
-    // with no bytes can execute an empty image.
+    // A staged patch is routed the same way, but only when the installer
+    // daemon is already listening — see `staged_requires_dpi`. Probing :9115
+    // is safe (it is our own accept loop, and `dpi_ensure` probes it the same
+    // way); probing :9021 is NOT, because a loader that gets a
+    // connect-and-close with no bytes can execute an empty image.
     let dpi_up = if package_type.ends_with("DP") && is_local && !req.serve_only {
         let dpi_addr = ps5upload_core::payload_lifecycle::join_host_port(
             &strip_host_port(&req.ps5_addr),
-            ps5upload_core::payload_lifecycle::DPI_DAEMON_PORT,
+            ps5upload_core::payload_lifecycle::INSTALLER_PORT,
         );
         // spawn_blocking: `port_is_open` is a synchronous connect with a
         // 1.5 s timeout, and this handler runs on the tokio runtime.
@@ -3925,12 +3929,9 @@ async fn install_cancel_handler(
 // `payload-restore` afterwards — including on the failure paths, or the
 // console is left with no helper and the web UI cannot reach it again.
 
-/// How long to wait for a TCP connect when asking "is :9040 up?".
+/// How long to wait for a TCP connect when asking "is the installer daemon
+/// (:9115) up?".
 const DPI_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
-/// Poll budget after streaming the daemon: 16 × 500 ms, matching the
-/// desktop client so a slow console behaves the same on both transports.
-const DPI_BRINGUP_POLLS: u32 = 16;
-const DPI_BRINGUP_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 
 #[derive(Debug, Deserialize)]
 pub struct LoaderRequest {
@@ -3965,16 +3966,60 @@ pub struct DpiEnsureResponse {
     pub reason: Option<&'static str>,
 }
 
-use ps5upload_core::payload_lifecycle::{
-    dpi_send_failure_reason, DPI_REASON_NO_BRINGUP, DPI_REASON_NO_IMAGE,
-};
-
 #[derive(Debug, Serialize)]
 pub struct PayloadRestoreResponse {
     pub ok: bool,
     pub bytes: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InstallerJobQuery {
+    pub ps5_addr: String,
+    pub job: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InstallerJobResponse {
+    pub ok: bool,
+    pub phase: String,
+    pub bytes_served: u64,
+    pub total: u64,
+    pub code: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+async fn installer_job_handler(Query(q): Query<InstallerJobQuery>) -> Response<Body> {
+    let ps5_ip = strip_host_port(&q.ps5_addr);
+    if ps5_ip.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "ps5_addr is required");
+    }
+    let id = q.job.clone();
+    let res = tokio::task::spawn_blocking(move || ic::job(&ps5_ip, &id)).await;
+    match res {
+        Ok(Ok(j)) => json_ok(&InstallerJobResponse {
+            ok: true,
+            phase: j.phase,
+            bytes_served: j.bytes_served,
+            total: j.total,
+            code: j.code,
+            error: None,
+        }),
+        Ok(Err(e)) => json_ok(&InstallerJobResponse {
+            ok: false,
+            phase: "unknown".into(),
+            bytes_served: 0,
+            total: 0,
+            code: 0,
+            error: Some(e),
+        }),
+        Err(e) => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("installer-job task failed: {e}"),
+        ),
+    }
 }
 
 async fn dpi_ensure_handler(Json(req): Json<LoaderRequest>) -> Response<Body> {
@@ -3995,97 +4040,17 @@ async fn dpi_ensure_handler(Json(req): Json<LoaderRequest>) -> Response<Body> {
 /// The blocking half of `dpi-ensure`. Split out so the decision sequence
 /// — probe, then stream, then wait — reads in one place.
 fn dpi_ensure_blocking(ps5_ip: &str) -> DpiEnsureResponse {
-    use ps5upload_core::payload_lifecycle as pl;
-
-    let dpi_addr = pl::join_host_port(ps5_ip, pl::DPI_DAEMON_PORT);
-    if pl::port_is_open(&dpi_addr, DPI_PROBE_TIMEOUT) {
-        crate::log_info!("dpi-ensure: {} already listening", dpi_addr);
-        return DpiEnsureResponse {
-            ok: true,
-            listening: true,
-            sent: false,
-            error: None,
-            reason: None,
-        };
-    }
-
-    // An etaHEN / elf-arsenal DPI v2 bridge can do the install for us, which
-    // means we do NOT have to send our own daemon to the loader — and so we do
-    // not replace the user's running main payload at all. Checked after our own
-    // daemon only because if that is already up, it costs nothing to use.
-    let v2_addr = pl::join_host_port(ps5_ip, DPI_V2_PORT);
-    if pl::port_is_open(&v2_addr, DPI_PROBE_TIMEOUT) {
-        crate::log_info!(
-            "dpi-ensure: DPI v2 bridge listening on {} — no payload swap needed",
-            v2_addr
-        );
-        return DpiEnsureResponse {
-            ok: true,
-            listening: true,
-            sent: false,
-            error: None,
-            reason: None,
-        };
-    }
-
-    let bytes = match crate::bundled_payload::image_bytes(crate::bundled_payload::Image::Dpi) {
-        Ok(b) => b,
-        Err(e) => {
-            crate::log_warn!("dpi-ensure: no daemon image available: {}", e);
-            return DpiEnsureResponse {
-                ok: false,
-                listening: false,
-                sent: false,
-                error: Some(e),
-                reason: Some(DPI_REASON_NO_IMAGE),
-            };
-        }
-    };
-
-    crate::log_info!(
-        "dpi-ensure: streaming {} bytes of DPI daemon to {}:{}",
-        bytes.len(),
-        ps5_ip,
-        pl::PS5_LOADER_PORT
-    );
-    if let Err(e) = pl::send_elf_to_loader(
-        ps5_ip,
-        pl::PS5_LOADER_PORT,
-        &bytes,
-        pl::LoaderImage::Companion,
-    ) {
-        crate::log_warn!("dpi-ensure: send failed: {}", e);
-        return DpiEnsureResponse {
-            ok: false,
-            listening: false,
-            sent: false,
-            reason: Some(dpi_send_failure_reason(&e)),
-            error: Some(format!("send dpi.elf: {e}")),
-        };
-    }
-
-    for _ in 0..DPI_BRINGUP_POLLS {
-        std::thread::sleep(DPI_BRINGUP_INTERVAL);
-        if pl::port_is_open(&dpi_addr, DPI_PROBE_TIMEOUT) {
-            crate::log_info!("dpi-ensure: daemon up on {}", dpi_addr);
-            return DpiEnsureResponse {
-                ok: true,
-                listening: true,
-                sent: true,
-                error: None,
-                reason: None,
-            };
-        }
-    }
-    // Sent but never answered. `sent: true` is the important half of this
-    // reply: the helper has been displaced, so the caller must restore it.
-    crate::log_warn!("dpi-ensure: daemon never came up on {}", dpi_addr);
+    use crate::bundled_payload::{image_bytes, Image};
+    // image_bytes returns Result<Cow<[u8]>, String>; None -> ensure reports no_image.
+    let elf = image_bytes(Image::Installer).ok();
+    // spec-1 callers do not hold an outstanding loopback job when they ensure.
+    let e = ps5upload_core::installer_client::ensure(ps5_ip, elf.as_deref(), false);
     DpiEnsureResponse {
-        ok: false,
-        listening: false,
-        sent: true,
-        error: Some("DPI daemon did not come up on :9040".to_string()),
-        reason: Some(DPI_REASON_NO_BRINGUP),
+        ok: e.listening,
+        listening: e.listening,
+        sent: e.sent,
+        error: e.error,
+        reason: e.reason,
     }
 }
 
@@ -4197,243 +4162,6 @@ pub struct DpiInstallResponse {
     /// the install finishes. See `shorten_for_installer`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub shortened: bool,
-}
-
-/// One parsed reply from the DPI daemon. The daemon replies in the
-/// reference's ok/error form (elf-arsenal payloads-src/dpi/main.c):
-///   "ok"                  — InstallByPackage accepted
-///   "error:0x%08X"        — InstallByPackage rejected with rc
-///   "error:init:0x%08X"   — sceAppInstUtilInitialize failed with rc
-///   "error:init:timeout"  — sceAppInstUtilInitialize timed out
-///   "error:badpath"       — path rejected by the daemon's safety check
-///   "error:recv"          — daemon saw no valid input on the socket
-/// The old decimal-only form ("0", "-2147003130") is still accepted for
-/// backward compatibility with older daemons still deployed on a console.
-enum DpiReply {
-    Ok,
-    InstallReject(i32),
-    InitFailed(Option<i32>), // None = timeout
-    BadPath,
-    RecvError,
-    Unknown(String),
-}
-
-fn parse_dpi_reply(s: &str) -> DpiReply {
-    let t = s.trim();
-    if t == "ok" || t == "0" {
-        return DpiReply::Ok;
-    }
-    if let Some(rest) = t.strip_prefix("error:init:") {
-        if rest == "timeout" {
-            return DpiReply::InitFailed(None);
-        }
-        // Sony error codes have the high bit set (e.g. 0x80B21106) and
-        // overflow i32 — parse as u32 then cast so the negative i32
-        // representation matches what InstallByPackage actually returns.
-        if let Ok(rc) = u32::from_str_radix(rest.trim_start_matches("0x"), 16) {
-            return DpiReply::InitFailed(Some(rc as i32));
-        }
-        return DpiReply::Unknown(t.to_string());
-    }
-    if let Some(rest) = t.strip_prefix("error:0x") {
-        if let Ok(rc) = u32::from_str_radix(rest, 16) {
-            return DpiReply::InstallReject(rc as i32);
-        }
-        return DpiReply::Unknown(t.to_string());
-    }
-    if t == "error:badpath" {
-        return DpiReply::BadPath;
-    }
-    if t == "error:recv" {
-        return DpiReply::RecvError;
-    }
-    // Backward-compat: old daemon replied with a bare decimal rc.
-    if let Ok(rc) = t.parse::<i32>() {
-        return if rc == 0 {
-            DpiReply::Ok
-        } else {
-            DpiReply::InstallReject(rc)
-        };
-    }
-    DpiReply::Unknown(t.to_string())
-}
-
-/// Connect to the PS5 DPI daemon on `:9040`, send one line (the staged
-/// local path or an http(s):// URL), and read back the daemon's reply.
-/// The daemon runs `sceAppInstUtilInstallByPackage(uri)` from its own
-/// clean loader process, with a timed sceAppInstUtilInitialize + retry
-/// so a cold install can never wedge IPMI (issue #152 root cause).
-/// The de-facto "DPI v2" port. etaHEN exposes an install bridge here, and
-/// elf-arsenal ships a compatible one (`payloads-src/dpiv2/main.c`), so on a
-/// console running either, a package URL can be installed over plain HTTP.
-const DPI_V2_PORT: u16 = 12800;
-
-/// Hand a package URL to an already-running DPI v2 bridge.
-///
-/// Why this is tried first: our own DPI daemon has to be sent to the payload
-/// loader, and doing that **replaces the main ps5upload payload** for the
-/// duration of the install. That swap is the most fragile step in a stream
-/// install — it needs the third-party loader alive on :9021, and users who had
-/// a working stack of payloads reasonably resent having it disturbed. A
-/// console already running etaHEN or elf-arsenal has an installer bridge
-/// listening, so we can simply give it the pkg-host URL and leave every
-/// running payload untouched.
-///
-/// Protocol (etaHEN-compatible): `POST /api/install` with `{"url":"…"}`,
-/// answered `{"res":"0"}` on acceptance. As with our own daemon, acceptance is
-/// NOT proof of a completed install — the caller still verifies through the
-/// session tracker.
-fn dpi_v2_send(ps5_ip: &str, url: &str) -> std::io::Result<DpiReply> {
-    use std::io::{Read, Write};
-    use std::net::ToSocketAddrs;
-
-    // The URL goes into a JSON string; a quote or backslash would let a
-    // crafted pkg-host path break out of it. Our URLs never contain either,
-    // so rejecting is right rather than escaping.
-    if url.contains('"') || url.contains('\\') || url.contains('\n') || url.contains('\r') {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "url is not safe to embed in a JSON request",
-        ));
-    }
-    let body = format!("{{\"url\":\"{url}\"}}");
-    let req = format!(
-        "POST /api/install HTTP/1.0\r\n\
-         Host: {ps5_ip}:{DPI_V2_PORT}\r\n\
-         Content-Type: application/json\r\n\
-         Content-Length: {}\r\n\
-         Connection: close\r\n\
-         \r\n{body}",
-        body.len()
-    );
-
-    let sa = format!("{ps5_ip}:{DPI_V2_PORT}")
-        .to_socket_addrs()?
-        .next()
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("resolve :{DPI_V2_PORT} failed"),
-            )
-        })?;
-    let mut s = std::net::TcpStream::connect_timeout(&sa, std::time::Duration::from_secs(5))?;
-    s.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
-    // The bridge installs synchronously before replying (elf-arsenal's forwards
-    // with `?sync=1` and waits up to 10 minutes), so this needs the same
-    // generous deadline as our own daemon.
-    s.set_read_timeout(Some(std::time::Duration::from_secs(900)))?;
-    s.write_all(req.as_bytes())?;
-    let mut buf = String::new();
-    s.read_to_string(&mut buf)?;
-    Ok(parse_dpi_v2_reply(&buf))
-}
-
-/// Map a DPI v2 HTTP reply onto the same `DpiReply` the native daemon yields,
-/// so the hand-off, the session verdict and the UI stay identical either way.
-fn parse_dpi_v2_reply(resp: &str) -> DpiReply {
-    let body = resp
-        .split_once("\r\n\r\n")
-        .or_else(|| resp.split_once("\n\n"))
-        .map(|(_, b)| b)
-        .unwrap_or(resp);
-    // `"res":"0"` is the etaHEN success token; elf-arsenal also answers
-    // `"ok":true` through the same bridge when it installed synchronously.
-    let accepted = body.contains("\"res\":\"0\"")
-        || body.contains("\"res\": \"0\"")
-        || body.contains("\"ok\":true");
-    if accepted {
-        return DpiReply::Ok;
-    }
-    if body.trim().is_empty() {
-        return DpiReply::RecvError;
-    }
-    // A bridge that answers but refuses is a real rejection, not a transport
-    // problem. It carries no Sony error code, so use the daemon's ambiguous
-    // sentinel and let artifact verification decide.
-    DpiReply::InstallReject(-1)
-}
-
-/// Install `url` through whichever bridge the console actually has.
-///
-/// Prefers an already-listening DPI v2 bridge (etaHEN / elf-arsenal) because
-/// using it disturbs nothing on the console. Falls back to our own daemon on
-/// :9040 when that bridge did not get the install started.
-///
-/// **A listening bridge is not a working bridge**, which hardware proved on the
-/// first real test: elf-arsenal's `dpiv2.elf` forwards to Arsenal's own API on
-/// loopback, so when it is loaded standalone it accepts the request, answers
-/// `{"res":"-1"}`, and the console never fetches a byte. Preferring it blindly
-/// turned an install that our daemon would have completed into a dead end.
-///
-/// `served` reports how many pkg-host requests the console has made. It is the
-/// discriminator that makes a retry safe:
-/// - **zero** — Sony's installer never engaged, so nothing was started and
-///   nothing can be corrupted by trying again through our own daemon.
-/// - **non-zero** — the console really did begin fetching the package. The
-///   bridge's refusal is then a genuine installer verdict, and re-running the
-///   same install through a second path could act on a half-applied one. We
-///   report it and let artifact verification decide.
-fn dpi_send_via_best_bridge(
-    ps5_ip: &str,
-    url: &str,
-    served: impl Fn() -> u64,
-) -> (std::io::Result<DpiReply>, &'static str) {
-    use ps5upload_core::payload_lifecycle as pl;
-
-    let v2_addr = pl::join_host_port(ps5_ip, DPI_V2_PORT);
-    if pl::port_is_open(&v2_addr, DPI_PROBE_TIMEOUT) {
-        crate::log_info!(
-            "dpi: using the DPI v2 bridge already listening on {}",
-            v2_addr
-        );
-        let res = dpi_v2_send(ps5_ip, url);
-        let accepted = matches!(res, Ok(DpiReply::Ok));
-        let fetched = served();
-        if accepted || fetched > 0 {
-            if !accepted {
-                crate::log_warn!(
-                    "dpi: v2 bridge on {} refused after the console fetched {} request(s) —                      reporting its verdict rather than retrying elsewhere",
-                    v2_addr,
-                    fetched
-                );
-            }
-            return (res, "dpiv2");
-        }
-        match &res {
-            Err(e) => crate::log_warn!(
-                "dpi: v2 bridge on {} did not answer ({}); falling back to the ps5upload daemon",
-                v2_addr,
-                e
-            ),
-            Ok(_) => crate::log_warn!(
-                "dpi: v2 bridge on {} answered but the console fetched nothing — the bridge is \
-                 listening without a working installer behind it; falling back to the ps5upload \
-                 daemon",
-                v2_addr
-            ),
-        }
-    }
-    (dpi_send(ps5_ip, url), "ps5upload")
-}
-
-fn dpi_send(ps5_ip: &str, line: &str) -> std::io::Result<DpiReply> {
-    use std::io::{Read, Write};
-    use std::net::ToSocketAddrs;
-    let sa = format!("{ps5_ip}:9040")
-        .to_socket_addrs()?
-        .next()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "resolve :9040 failed"))?;
-    let mut s = std::net::TcpStream::connect_timeout(&sa, std::time::Duration::from_secs(5))?;
-    s.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
-    // InstallByPackage blocks until the full download completes — a 3.6 GB
-    // game over LAN at ~100 MB/s takes ~40 s, but slower links, USB serves,
-    // or large multi-part pkgs can take 10+ minutes. Use a generous cap.
-    s.set_read_timeout(Some(std::time::Duration::from_secs(900)))?;
-    s.write_all(line.as_bytes())?;
-    s.write_all(b"\n")?;
-    let mut buf = String::new();
-    s.read_to_string(&mut buf)?;
-    Ok(parse_dpi_reply(&buf))
 }
 
 /// Normalize whatever address the caller gave into the payload's MANAGEMENT
@@ -4591,6 +4319,69 @@ fn dpi_err_message(code: u32, source_is_url: bool) -> Option<String> {
     err_code_message(code).map(|s| s.to_string())
 }
 
+/// Map an installer_client reply to the (ok, rc, init_failed, ambiguous,
+/// err_message) tuple `dpi_install_handler` already builds its response from.
+fn map_install_reply(
+    reply: ic::InstallReply,
+    source_is_url: bool,
+) -> (bool, i32, bool, bool, Option<String>) {
+    use ic::InstallReply;
+    match reply {
+        InstallReply::Accepted { .. } => (true, 0, false, false, None),
+        InstallReply::Busy { job } => (
+            false,
+            -1,
+            false,
+            false,
+            Some(format!("an install is already in progress (job {job})")),
+        ),
+        InstallReply::NotReady { init_rc } => (
+            false,
+            -1,
+            true,
+            false,
+            Some(format!("sceAppInstUtilInitialize failed: 0x{init_rc:08X}")),
+        ),
+        InstallReply::BadPath => (
+            false,
+            -1,
+            false,
+            false,
+            Some("the installer rejected the package path".to_string()),
+        ),
+        InstallReply::BadRequest => (
+            false,
+            -1,
+            false,
+            false,
+            Some("the installer rejected the request".to_string()),
+        ),
+        InstallReply::UnknownJob => (
+            false,
+            -1,
+            false,
+            false,
+            Some("no such install job".to_string()),
+        ),
+        InstallReply::Sony { code, hint } => {
+            let ambiguous = code == 0xFFFF_FFFF;
+            let msg = if ambiguous {
+                Some("installer acknowledgement was inconclusive".to_string())
+            } else {
+                hint.or_else(|| dpi_err_message(code, source_is_url))
+            };
+            (false, code as i32, false, ambiguous, msg)
+        }
+        InstallReply::Unknown(s) => (
+            false,
+            -1,
+            false,
+            true,
+            Some(format!("installer reply not understood: {s}")),
+        ),
+    }
+}
+
 async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Body> {
     if !valid_dpi_install_source(&req.local_ps5_path) {
         return json_err(
@@ -4663,90 +4454,26 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
         _ => None,
     };
 
+    let name_hint = req
+        .title_id
+        .clone()
+        .filter(|t| !t.trim().is_empty())
+        .map(|t| format!("{t} (Base)"))
+        .unwrap_or_default();
     let ps5_ip_for_send = ps5_ip.clone();
-    let res = tokio::task::spawn_blocking(move || dpi_send(&ps5_ip_for_send, &path)).await;
+    let path_for_send = path.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        if path_for_send.starts_with('/') {
+            ic::install_path(&ps5_ip_for_send, &path_for_send, &name_hint)
+        } else {
+            ic::install_url(&ps5_ip_for_send, &path_for_send, &name_hint)
+        }
+    })
+    .await;
     match res {
         Ok(Ok(reply)) => {
-            let (ok, rc, init_failed, ambiguous, err_message) = match reply {
-                DpiReply::Ok => (true, 0, false, false, None),
-                DpiReply::InstallReject(rc) => {
-                    let ambiguous = rc == -1;
-                    if ambiguous {
-                        crate::log_warn!(
-                            "dpi-install returned daemon sentinel 0xffffffff; verifying artifact"
-                        );
-                    } else {
-                        crate::log_warn!("dpi-install rejected rc=0x{:08x}", rc as u32);
-                    }
-                    (
-                        false,
-                        rc,
-                        false,
-                        ambiguous,
-                        if ambiguous {
-                            Some("installer acknowledgement was inconclusive".to_string())
-                        } else {
-                            dpi_err_message(rc as u32, source_is_url)
-                        },
-                    )
-                }
-                DpiReply::InitFailed(Some(rc)) => {
-                    crate::log_warn!("dpi-install init failed rc=0x{:08x}", rc as u32);
-                    (
-                        false,
-                        -1,
-                        true,
-                        false,
-                        Some(format!(
-                            "sceAppInstUtilInitialize failed: 0x{:08X}",
-                            rc as u32
-                        )),
-                    )
-                }
-                DpiReply::InitFailed(None) => {
-                    crate::log_warn!("dpi-install init timed out");
-                    (
-                        false,
-                        -1,
-                        true,
-                        false,
-                        Some(
-                            "sceAppInstUtilInitialize timed out (IPMI backend not ready)"
-                                .to_string(),
-                        ),
-                    )
-                }
-                DpiReply::BadPath => {
-                    crate::log_warn!("dpi-install daemon rejected path");
-                    (
-                        false,
-                        -1,
-                        false,
-                        false,
-                        Some("daemon rejected the path (unsafe)".to_string()),
-                    )
-                }
-                DpiReply::RecvError => {
-                    crate::log_warn!("dpi-install daemon saw no valid input");
-                    (
-                        false,
-                        -1,
-                        false,
-                        false,
-                        Some("daemon received no valid input".to_string()),
-                    )
-                }
-                DpiReply::Unknown(s) => {
-                    crate::log_warn!("dpi-install unknown reply: {:?}", s);
-                    (
-                        false,
-                        -1,
-                        false,
-                        true,
-                        Some(format!("unexpected daemon reply: {s}")),
-                    )
-                }
-            };
+            let (ok, rc, init_failed, ambiguous, err_message) =
+                map_install_reply(reply, source_is_url);
             if ok {
                 crate::log_info!("dpi-install ok");
             }
@@ -4819,7 +4546,7 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
                     _ => (None, None, ok, err_message),
                 };
             json_ok(&DpiInstallResponse {
-                bridge: None,
+                bridge: Some("ps5upload".to_string()),
                 ok,
                 rc,
                 init_failed,
@@ -4836,7 +4563,7 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
         Ok(Err(e)) => {
             crate::log_warn!("dpi-install connection ended ambiguously: {e}");
             json_ok(&DpiInstallResponse {
-                bridge: None,
+                bridge: Some("ps5upload".to_string()),
                 ok: false,
                 rc: -1,
                 init_failed: false,
@@ -4930,24 +4657,8 @@ async fn dpi_direct_install_handler(
             s.dpi_detail.clear();
         }
     }
-    // Live view of the session's request counter, so the bridge choice can tell
-    // "the console never started" from "the console started and Sony refused".
-    let served_state = state.clone();
-    let served_session = req.session_id.clone();
-    let served = move || {
-        served_state
-            .sessions
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&served_session)
-            .map(|s| s.requests_served)
-            .unwrap_or(0)
-    };
-    let res = tokio::task::spawn_blocking(move || {
-        let (reply, bridge) = dpi_send_via_best_bridge(&ps5_ip, &url, served);
-        reply.map(|r| (r, bridge))
-    })
-    .await;
+    // A direct install is always an http(s) pkg-host URL; no kind-only name.
+    let res = tokio::task::spawn_blocking(move || ic::install_url(&ps5_ip, &url, "")).await;
     let (requests_served, bytes_served) = {
         let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         sessions
@@ -4956,88 +4667,8 @@ async fn dpi_direct_install_handler(
             .unwrap_or((0, 0))
     };
     match res {
-        Ok(Ok((reply, bridge))) => {
-            crate::log_info!("dpi-direct-install: handled by the {} bridge", bridge);
-            let (ok, rc, init_failed, ambiguous, err_message) = match reply {
-                DpiReply::Ok => (true, 0, false, false, None),
-                DpiReply::InstallReject(rc) => {
-                    let ambiguous = rc == -1;
-                    if ambiguous {
-                        crate::log_warn!(
-                            "dpi-direct-install returned daemon sentinel 0xffffffff; verifying artifact"
-                        );
-                    } else {
-                        crate::log_warn!("dpi-direct-install rejected rc=0x{:08x}", rc as u32);
-                    }
-                    (
-                        false,
-                        rc,
-                        false,
-                        ambiguous,
-                        if ambiguous {
-                            Some("installer acknowledgement was inconclusive".to_string())
-                        } else {
-                            err_code_message(rc as u32).map(|s| s.to_string())
-                        },
-                    )
-                }
-                DpiReply::InitFailed(Some(rc)) => {
-                    crate::log_warn!("dpi-direct-install init failed rc=0x{:08x}", rc as u32);
-                    (
-                        false,
-                        -1,
-                        true,
-                        false,
-                        Some(format!(
-                            "sceAppInstUtilInitialize failed: 0x{:08X}",
-                            rc as u32
-                        )),
-                    )
-                }
-                DpiReply::InitFailed(None) => {
-                    crate::log_warn!("dpi-direct-install init timed out");
-                    (
-                        false,
-                        -1,
-                        true,
-                        false,
-                        Some(
-                            "sceAppInstUtilInitialize timed out (IPMI backend not ready)"
-                                .to_string(),
-                        ),
-                    )
-                }
-                DpiReply::BadPath => {
-                    crate::log_warn!("dpi-direct-install daemon rejected URL");
-                    (
-                        false,
-                        -1,
-                        false,
-                        false,
-                        Some("daemon rejected the URL (unsafe)".to_string()),
-                    )
-                }
-                DpiReply::RecvError => {
-                    crate::log_warn!("dpi-direct-install daemon saw no valid input");
-                    (
-                        false,
-                        -1,
-                        false,
-                        false,
-                        Some("daemon received no valid input".to_string()),
-                    )
-                }
-                DpiReply::Unknown(s) => {
-                    crate::log_warn!("dpi-direct-install unknown reply: {:?}", s);
-                    (
-                        false,
-                        -1,
-                        false,
-                        true,
-                        Some(format!("unexpected daemon reply: {s}")),
-                    )
-                }
-            };
+        Ok(Ok(reply)) => {
+            let (ok, rc, init_failed, ambiguous, err_message) = map_install_reply(reply, true);
             if ok {
                 crate::log_info!("dpi-direct-install ok");
             }
@@ -5065,7 +4696,7 @@ async fn dpi_direct_install_handler(
                 err_message,
                 requests_served,
                 bytes_served,
-                bridge: Some(bridge.to_string()),
+                bridge: Some("ps5upload".to_string()),
                 // Stream installs go through the session/status flow, which
                 // does its own verification; nothing to report from here.
                 patch_verdict: None,
@@ -5077,7 +4708,7 @@ async fn dpi_direct_install_handler(
         Ok(Err(e)) => {
             crate::log_warn!("dpi-direct-install connection ended ambiguously: {e}");
             json_ok(&DpiInstallResponse {
-                bridge: None,
+                bridge: Some("ps5upload".to_string()),
                 ok: false,
                 rc: -1,
                 init_failed: false,
@@ -6292,6 +5923,7 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod loader_route_tests {
     use super::*;
+    use ps5upload_core::payload_lifecycle::{dpi_send_failure_reason, DPI_REASON_NO_BRINGUP};
 
     /// The web UI sends the console address the same way it does for every
     /// other pkg route. A rename on either side silently drops the console
@@ -7276,98 +6908,6 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         }
     }
 
-    /// A bridge can be listening without a working installer behind it —
-    /// elf-arsenal's `dpiv2.elf` forwards to Arsenal's own API on loopback, so
-    /// loaded standalone it accepts the request, answers `{"res":"-1"}` and the
-    /// console never fetches a byte. Measured on hardware (Phat, FW 5.10):
-    /// `requests_served: 0`, and an install our own daemon had just completed
-    /// twice became a dead end. Zero fetches therefore MUST fall back; a
-    /// refusal after real fetches must not, because that is Sony's verdict on
-    /// an install that actually started.
-    #[test]
-    fn a_bridge_that_refuses_without_the_console_fetching_falls_back() {
-        // No bridge is listening on this port in the test environment, so the
-        // selection function can only reach the fallback — which is itself the
-        // guarantee we want when nothing answers.
-        let (_res, bridge) =
-            dpi_send_via_best_bridge("127.0.0.1", "http://127.0.0.1:1/x.pkg", || 0);
-        assert_eq!(
-            bridge, "ps5upload",
-            "with no reachable v2 bridge the native daemon must be used"
-        );
-    }
-
-    /// The decision rule itself, isolated from any socket: what the handler
-    /// must do for each (bridge answer, bytes fetched) pair.
-    #[test]
-    fn bridge_fallback_rule_matches_what_hardware_showed() {
-        // (accepted by bridge, requests the console made) -> keep the bridge's answer?
-        let keep = |accepted: bool, fetched: u64| accepted || fetched > 0;
-
-        // Accepted: always the bridge's result, fetches or not.
-        assert!(keep(true, 0));
-        assert!(keep(true, 57));
-        // Refused having fetched nothing: the elf-arsenal-standalone case.
-        // Must NOT be kept — fall back to our daemon.
-        assert!(!keep(false, 0));
-        // Refused after the console really started: Sony's verdict, keep it
-        // rather than re-running the install down a second path.
-        assert!(keep(false, 1));
-        assert!(keep(false, 57));
-    }
-
-    /// etaHEN and elf-arsenal answer the DPI v2 bridge differently on
-    /// success, and a bridge that answers-but-refuses must not be confused
-    /// with one that never answered: the first is Sony's real verdict, the
-    /// second is the only case worth retrying through our own daemon.
-    #[test]
-    fn dpi_v2_replies_map_onto_the_native_daemon_verdicts() {
-        let ok_etahen = "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n{\"res\":\"0\"}";
-        assert!(matches!(parse_dpi_v2_reply(ok_etahen), DpiReply::Ok));
-
-        // elf-arsenal's bridge forwards Arsenal's own synchronous verdict.
-        let ok_arsenal = "HTTP/1.0 200 OK\r\n\r\n{\"ok\":true,\"via\":\"dpi\"}";
-        assert!(matches!(parse_dpi_v2_reply(ok_arsenal), DpiReply::Ok));
-
-        // Whitespace after the colon is still success.
-        let ok_spaced = "HTTP/1.0 200 OK\r\n\r\n{\"res\": \"0\"}";
-        assert!(matches!(parse_dpi_v2_reply(ok_spaced), DpiReply::Ok));
-
-        // A refusal is a real rejection, reported with the ambiguous sentinel
-        // so artifact verification decides rather than a bogus Sony code.
-        let refused = "HTTP/1.0 500 Error\r\n\r\n{\"res\":\"-1\",\"error\":\"install failed\"}";
-        assert!(matches!(
-            parse_dpi_v2_reply(refused),
-            DpiReply::InstallReject(-1)
-        ));
-
-        // Nothing came back at all — transport failure, worth a fallback.
-        assert!(matches!(parse_dpi_v2_reply(""), DpiReply::RecvError));
-        assert!(matches!(
-            parse_dpi_v2_reply("HTTP/1.0 200 OK\r\n\r\n"),
-            DpiReply::RecvError
-        ));
-    }
-
-    /// The URL is interpolated into a JSON string, so anything that could
-    /// close that string has to be refused rather than escaped — our pkg-host
-    /// URLs never contain these, so refusing costs nothing and rules out the
-    /// injection entirely.
-    #[test]
-    fn dpi_v2_refuses_a_url_that_could_break_out_of_the_json_body() {
-        for bad in [
-            "http://host/a\".pkg",
-            "http://host/a\\pkg",
-            "http://host/a\npkg",
-            "http://host/a\rpkg",
-        ] {
-            let Err(err) = dpi_v2_send("127.0.0.1", bad) else {
-                panic!("must refuse {bad:?}");
-            };
-            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "for {bad:?}");
-        }
-    }
-
     /// A long install must not be reaped while the console is still pulling.
     /// Expiry is measured from the last served range, not from creation: a
     /// 200-300 GB package on a modest link runs well past the 2 h ceiling, and
@@ -7707,98 +7247,6 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
             "data inserted before the panic must still be reachable"
         );
         assert!(sessions.contains_key("before-panic"));
-    }
-
-    // ── DPI daemon reply parser (the FW-10.40 helper-death fix, #152) ──
-    //
-    // The daemon now replies in the reference's ok/error form so the
-    // engine can tell accept from reject from init-failure. These pin
-    // every branch of the parser so a future daemon change can't
-    // silently regress to "treat init-failure as install-success".
-
-    #[test]
-    fn dpi_parse_ok() {
-        assert!(matches!(parse_dpi_reply("ok"), DpiReply::Ok));
-        // trailing whitespace / newline tolerated
-        assert!(matches!(parse_dpi_reply("ok\n"), DpiReply::Ok));
-        assert!(matches!(parse_dpi_reply(" ok\r\n"), DpiReply::Ok));
-    }
-
-    #[test]
-    fn dpi_parse_install_reject() {
-        // 0x80B21106 — the FW-11/12 authid gate (the expected first-attempt
-        // rejection that triggers the DPI fallback in the first place).
-        assert!(matches!(
-            parse_dpi_reply("error:0x80B21106"),
-            DpiReply::InstallReject(rc) if rc as u32 == 0x80B21106
-        ));
-        assert!(matches!(
-            parse_dpi_reply("error:0x80b21106\n"),
-            DpiReply::InstallReject(rc) if rc as u32 == 0x80B21106
-        ));
-        // The daemon historically leaked its internal -1 sentinel in this
-        // form. Handlers classify it as ambiguous and verify the installed
-        // artifact; it must never be presented as a Sony error code.
-        assert!(matches!(
-            parse_dpi_reply("error:0xffffffff"),
-            DpiReply::InstallReject(-1)
-        ));
-    }
-
-    #[test]
-    fn dpi_parse_init_failed_with_rc() {
-        // sceAppInstUtilInitialize returned a Sony error — daemon is in
-        // fallback mode and retrying will likely fail the same way.
-        assert!(matches!(
-            parse_dpi_reply("error:init:0x80B21106"),
-            DpiReply::InitFailed(Some(rc)) if rc as u32 == 0x80B21106
-        ));
-    }
-
-    #[test]
-    fn dpi_parse_init_timeout() {
-        // timed_init returned the -0xDEAD sentinel. Distinct from a Sony
-        // error code — IPMI backend never came up.
-        assert!(matches!(
-            parse_dpi_reply("error:init:timeout"),
-            DpiReply::InitFailed(None)
-        ));
-    }
-
-    #[test]
-    fn dpi_parse_badpath_and_recv() {
-        assert!(matches!(
-            parse_dpi_reply("error:badpath"),
-            DpiReply::BadPath
-        ));
-        assert!(matches!(parse_dpi_reply("error:recv"), DpiReply::RecvError));
-    }
-
-    #[test]
-    fn dpi_parse_legacy_decimal_ok() {
-        // Backward compat: an older daemon still deployed on a console
-        // replies with a bare decimal rc. "0" must map to Ok.
-        assert!(matches!(parse_dpi_reply("0"), DpiReply::Ok));
-        assert!(matches!(parse_dpi_reply("0\n"), DpiReply::Ok));
-    }
-
-    #[test]
-    fn dpi_parse_legacy_decimal_reject() {
-        // Legacy decimal reject: 0x80B21106 reinterpreted as i32 is
-        // -2135813882 (i32::MIN + 0x7F8AAFAE + ... — two's complement).
-        let expected: i32 = 0x80B21106_u32 as i32;
-        assert!(matches!(
-            parse_dpi_reply(&expected.to_string()),
-            DpiReply::InstallReject(rc) if rc as u32 == 0x80B21106
-        ));
-    }
-
-    #[test]
-    fn dpi_parse_unknown_is_not_ok() {
-        // An unrecognised reply must NEVER parse as Ok (would mask a
-        // real failure as success) — it falls through to Unknown.
-        assert!(matches!(parse_dpi_reply("error:???"), DpiReply::Unknown(_)));
-        assert!(matches!(parse_dpi_reply(""), DpiReply::Unknown(_)));
     }
 
     #[test]

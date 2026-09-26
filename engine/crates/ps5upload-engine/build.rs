@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(have_bundled_payload)");
-    println!("cargo::rustc-check-cfg=cfg(have_bundled_dpi)");
+    println!("cargo::rustc-check-cfg=cfg(have_bundled_installer)");
 
     let manifest_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
@@ -47,14 +47,14 @@ fn main() {
         ],
     );
     embed(
-        "PS5UPLOAD_BUNDLED_DPI_ELF",
-        "have_bundled_dpi",
+        "PS5UPLOAD_BUNDLED_INSTALLER_ELF",
+        "have_bundled_installer",
         &[
-            manifest_dir.join("payload").join("ezremote-dpi.elf"),
+            manifest_dir.join("payload").join("ps5upload-installer.elf"),
             repo_root
                 .join("payload")
-                .join("dpi")
-                .join("ezremote-dpi.elf"),
+                .join("installer")
+                .join("ps5upload-installer.elf"),
         ],
     );
 }

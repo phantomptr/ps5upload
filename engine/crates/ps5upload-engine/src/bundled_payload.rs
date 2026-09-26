@@ -31,39 +31,39 @@ const EMBEDDED_PAYLOAD: Option<&[u8]> =
 #[cfg(not(have_bundled_payload))]
 const EMBEDDED_PAYLOAD: Option<&[u8]> = None;
 
-#[cfg(have_bundled_dpi)]
-const EMBEDDED_DPI: Option<&[u8]> =
-    Some(include_bytes!(env!("PS5UPLOAD_BUNDLED_DPI_ELF")) as &[u8]);
-#[cfg(not(have_bundled_dpi))]
-const EMBEDDED_DPI: Option<&[u8]> = None;
+#[cfg(have_bundled_installer)]
+const EMBEDDED_INSTALLER: Option<&[u8]> =
+    Some(include_bytes!(env!("PS5UPLOAD_BUNDLED_INSTALLER_ELF")) as &[u8]);
+#[cfg(not(have_bundled_installer))]
+const EMBEDDED_INSTALLER: Option<&[u8]> = None;
 
 /// Which ELF image a caller wants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Image {
     /// The ps5upload helper itself — what "restore the payload" re-sends
-    /// after the DPI daemon has displaced it on a single-payload loader.
+    /// after the installer daemon has displaced it on a single-payload loader.
     Payload,
-    /// The standalone DPI install daemon (`payload/dpi/`).
-    Dpi,
+    /// The PS5Upload installer daemon (`payload/installer/`).
+    Installer,
 }
 
 impl Image {
     /// File name to look for under `PS5UPLOAD_PAYLOAD_DIR`. Deliberately
     /// the same basename `make payload` produces, so an operator can point
     /// the variable straight at a build tree's `payload/` directory (the
-    /// DPI image is looked up by basename in that directory too, not under
-    /// its `dpi/` subdirectory — see `dir_candidates`).
+    /// installer image is looked up by basename in that directory too, not
+    /// under its `installer/` subdirectory — see `dir_candidates`).
     fn file_name(self) -> &'static str {
         match self {
             Image::Payload => "ps5upload.elf",
-            Image::Dpi => "ezremote-dpi.elf",
+            Image::Installer => "ps5upload-installer.elf",
         }
     }
 
     fn embedded(self) -> Option<&'static [u8]> {
         match self {
             Image::Payload => EMBEDDED_PAYLOAD,
-            Image::Dpi => EMBEDDED_DPI,
+            Image::Installer => EMBEDDED_INSTALLER,
         }
     }
 
@@ -72,19 +72,19 @@ impl Image {
     fn label(self) -> &'static str {
         match self {
             Image::Payload => "ps5upload payload",
-            Image::Dpi => "DPI install daemon",
+            Image::Installer => "PS5Upload installer",
         }
     }
 }
 
 /// Paths to try inside the override directory. `make payload` writes the
-/// DPI image to `payload/dpi/`, so accept both that layout and a flat
-/// directory of ELFs.
+/// installer image to `payload/installer/`, so accept both that layout and a
+/// flat directory of ELFs.
 fn dir_candidates(dir: &str, image: Image) -> Vec<PathBuf> {
     let root = PathBuf::from(dir);
     let mut out = vec![root.join(image.file_name())];
-    if image == Image::Dpi {
-        out.push(root.join("dpi").join(image.file_name()));
+    if image == Image::Installer {
+        out.push(root.join("installer").join(image.file_name()));
     }
     out
 }
@@ -143,12 +143,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dpi_is_found_in_a_flat_dir_or_a_make_payload_tree() {
-        let flat = dir_candidates("/opt/elf", Image::Dpi);
-        assert_eq!(flat[0], PathBuf::from("/opt/elf/ezremote-dpi.elf"));
+    fn installer_is_found_in_a_flat_dir_or_a_make_payload_tree() {
+        let flat = dir_candidates("/opt/elf", Image::Installer);
+        assert_eq!(flat[0], PathBuf::from("/opt/elf/ps5upload-installer.elf"));
         // `make payload` writes it one level down; pointing the variable at
         // a build tree must work without the operator reshuffling files.
-        assert_eq!(flat[1], PathBuf::from("/opt/elf/dpi/ezremote-dpi.elf"));
+        assert_eq!(
+            flat[1],
+            PathBuf::from("/opt/elf/installer/ps5upload-installer.elf")
+        );
     }
 
     #[test]
@@ -164,11 +167,11 @@ mod tests {
     /// payload SDK, which is a normal thing to have done.
     #[test]
     fn missing_image_error_names_the_remedy() {
-        let msg = missing_image_message(Image::Dpi);
-        assert!(msg.contains("DPI install daemon"), "unhelpful: {msg}");
+        let msg = missing_image_message(Image::Installer);
+        assert!(msg.contains("PS5Upload installer"), "unhelpful: {msg}");
         assert!(msg.contains("Docker image"), "unhelpful: {msg}");
         assert!(msg.contains("PS5UPLOAD_PAYLOAD_DIR"), "unhelpful: {msg}");
-        assert!(msg.contains("ezremote-dpi.elf"), "unhelpful: {msg}");
+        assert!(msg.contains("ps5upload-installer.elf"), "unhelpful: {msg}");
 
         let msg = missing_image_message(Image::Payload);
         assert!(msg.contains("ps5upload.elf"), "unhelpful: {msg}");
