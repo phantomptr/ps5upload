@@ -2702,6 +2702,37 @@ pub async fn pkg_install_status(session: String) -> Result<JsonValue, String> {
     get_json(&url).await
 }
 
+/// Unified install (spec 2): start an install through the one engine
+/// endpoint. `req` is the full InstallRequest object (ps5_addr, source,
+/// content_id, title_id, package_app_ver, category, options).
+#[tauri::command]
+pub async fn pkg_install(req: JsonValue) -> Result<JsonValue, String> {
+    let url = format!("{}/api/pkg/install", engine::url());
+    post_json_long(&url, &req).await
+}
+
+/// Poll a unified install job by id. Cheap; called every 1-2s.
+#[tauri::command]
+pub async fn pkg_install_status_v2(job: String) -> Result<JsonValue, String> {
+    let url = format!(
+        "{}/api/pkg/install/status?job={}",
+        engine::url(),
+        urlencoding(&job)
+    );
+    get_json(&url).await
+}
+
+/// Recent install history for a console (what/when/route/result).
+#[tauri::command]
+pub async fn pkg_install_history(ps5_addr: String) -> Result<JsonValue, String> {
+    let url = format!(
+        "{}/api/pkg/install/history?ps5_addr={}",
+        engine::url(),
+        urlencoding(&ps5_addr)
+    );
+    get_json(&url).await
+}
+
 /// Cancel an in-flight install. Stops the host-side HTTP listener
 /// for this session; BGFT on the PS5 will surface a download error
 /// in its notifications when it sees the stream drop.

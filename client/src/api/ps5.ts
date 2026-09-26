@@ -5160,3 +5160,72 @@ export async function bpsApply(
   });
 }
 
+
+// ─── Unified install (spec 2) ────────────────────────────────────────────
+// One endpoint owns an install end to end (resolve → deliver → install →
+// verify → record). The client makes one call and polls one status.
+
+/** The install source: exactly one variant. */
+export type InstallSource =
+  | { console_path: string }
+  | { host_file: string }
+  | { remote: { connection: string; path: string } }
+  | { url: string };
+
+export interface InstallRequestBody {
+  ps5_addr: string;
+  source: InstallSource;
+  content_id?: string;
+  title_id?: string | null;
+  package_app_ver?: string | null;
+  category?: string | null;
+  options?: { delete_source_copy_after?: boolean; allow_destructive_reinstall?: boolean };
+}
+
+export interface InstallStatus {
+  job: string;
+  ps5_addr: string;
+  content_id: string;
+  title_id: string | null;
+  phase: "resolve" | "deliver" | "install" | "verify" | "done" | "failed";
+  route: "loopback" | "stream" | "path" | null;
+  verdict: "installed" | "may_not_launch" | "failed" | null;
+  code: number;
+  hint: string | null;
+  reason: string | null;
+  metrics: {
+    total_bytes: number;
+    served_bytes: number;
+    throughput_mbps: number;
+    phase_ms: Record<string, number>;
+    retries: number;
+    sony_rc: number;
+  };
+  app_ver_before: string | null;
+  app_ver_after: string | null;
+  patch_verdict: string | null;
+  shortened: boolean;
+  started_at: number;
+  updated_at: number;
+}
+
+/** Start an install; returns the job id (or a busy error with the active job). */
+export async function pkgInstall(
+  req: InstallRequestBody,
+): Promise<{ ok: boolean; job?: string; error?: string }> {
+  return invoke("pkg_install", { req }) as Promise<{
+    ok: boolean;
+    job?: string;
+    error?: string;
+  }>;
+}
+
+/** Poll a unified install job by id. */
+export async function pkgInstallStatus(job: string): Promise<InstallStatus> {
+  return invoke("pkg_install_status_v2", { job }) as Promise<InstallStatus>;
+}
+
+/** Recent install history for a console, newest first. */
+export async function pkgInstallHistory(ps5Addr: string): Promise<unknown[]> {
+  return invoke("pkg_install_history", { ps5_addr: ps5Addr }) as Promise<unknown[]>;
+}

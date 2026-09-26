@@ -315,6 +315,9 @@ pub fn run() {
             commands::pkg_dpi_direct_install,
             commands::dpi_ensure,
             commands::pkg_install_status,
+            commands::pkg_install,
+            commands::pkg_install_status_v2,
+            commands::pkg_install_history,
             commands::pkg_install_cancel,
             // ── Scene-tool integration ──────────────────────────────
             // `companion_probe` checks which well-known scene tools

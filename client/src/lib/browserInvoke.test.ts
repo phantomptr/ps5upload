@@ -121,6 +121,22 @@ describe("loader-port commands the DPI fallback depends on", () => {
     return calls;
   }
 
+  it("routes the unified pkg_install to POST /api/pkg/install with the req body", async () => {
+    const calls = captureFetch({ ok: true, job: "17-1" });
+    const req = { ps5_addr: "192.168.1.50:9114", source: { console_path: "/user/data/x.pkg" } };
+    const res = await browserInvoke("pkg_install", { req });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("http://engine.test:19113/api/pkg/install");
+    expect(JSON.parse(calls[0].init.body as string)).toEqual(req);
+    expect(res).toEqual({ ok: true, job: "17-1" });
+  });
+
+  it("routes pkg_install_status_v2 to the job-based status", async () => {
+    const calls = captureFetch({ ok: true, phase: "done", verdict: "installed" });
+    await browserInvoke("pkg_install_status_v2", { job: "17-1" });
+    expect(calls[0].url).toBe("http://engine.test:19113/api/pkg/install/status?job=17-1");
+  });
+
   it("routes dpi_ensure to the engine instead of throwing", async () => {
     const calls = captureFetch({ ok: true, listening: true, sent: false });
 

@@ -820,6 +820,20 @@ export async function browserInvoke<T>(
         `/api/pkg/install/status?session=${uenc(args["session"] as string)}`,
       );
 
+    // Unified install (spec 2): one endpoint, per-job status, per-console history.
+    case "pkg_install":
+      return postJson<T>("/api/pkg/install", args["req"]);
+
+    case "pkg_install_status_v2":
+      return getJson<T>(
+        `/api/pkg/install/status?job=${uenc(args["job"] as string)}`,
+      );
+
+    case "pkg_install_history":
+      return getJson<T>(
+        `/api/pkg/install/history?ps5_addr=${uenc(args["ps5_addr"] as string)}`,
+      );
+
     case "pkg_install_cancel":
       return postJson<T>("/api/pkg/install/cancel", {
         session: args["session"],
