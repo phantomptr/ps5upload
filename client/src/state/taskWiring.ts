@@ -25,6 +25,7 @@ import {
   IDLE_BULK,
   IDLE_DOWNLOAD,
 } from "./fsBulkOp";
+import { installLibraryTaskBridge } from "./libraryTaskBridge";
 import { useTransferStore, IDLE_PHASE } from "./transfer";
 import { useUploadQueueStore } from "./uploadQueue";
 import { useTaskStore, type TaskKind } from "./tasks";
@@ -413,4 +414,7 @@ export function installTaskWiring() {
       }
     }
   });
+
+  // ── Library actions (activity log only) ───────────────────────────
+  installLibraryTaskBridge();
 }
