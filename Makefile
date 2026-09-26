@@ -61,6 +61,9 @@ PAYLOAD_ELF := $(PAYLOAD_DIR)/ps5upload.elf
 # already listening. See payload/dpi/ezremote_dpi.c.
 DPI_DIR := $(PAYLOAD_DIR)/dpi
 DPI_ELF := $(DPI_DIR)/ezremote-dpi.elf
+# The PS5Upload installer daemon (our own; :9115). Replaces the DPI daemon.
+INSTALLER_DIR := $(PAYLOAD_DIR)/installer
+INSTALLER_ELF := $(INSTALLER_DIR)/ps5upload-installer.elf
 ENGINE_DIR  := engine
 CLIENT_DIR  := client
 
@@ -98,7 +101,7 @@ ADB ?= $(ANDROID_HOME)/platform-tools/adb
 .PHONY: all help
 .PHONY: install install-ubuntu install-macos install-windows
 .PHONY: setup setup-engine setup-payload setup-client
-.PHONY: build payload engine client _engine-release _payload-if-ready _android-build-if-ready
+.PHONY: build payload dpi installer engine client _engine-release _payload-if-ready _android-build-if-ready
 .PHONY: test test-root test-engine test-engine-coverage test-desktop test-payload test-client test-client-coverage
 .PHONY: lint lint-scripts lint-client audit-scripts coverage coverage-engine coverage-client
 .PHONY: quality quality-full quality-hardware ci ci-full
@@ -399,7 +402,7 @@ sync-version:
 sync-version-check:
 	@node scripts/update-version.js --check
 
-payload: setup-payload dpi
+payload: setup-payload dpi installer
 	@echo "Building PS5 payload..."
 	@$(MAKE) -C $(PAYLOAD_DIR) -j$(JOBS)
 	@echo "✓ Built $(PAYLOAD_ELF)"
@@ -411,6 +414,12 @@ dpi: setup-payload
 	@echo "Building DPI install daemon..."
 	@$(MAKE) -C $(DPI_DIR) -j$(JOBS)
 	@echo "✓ Built $(DPI_ELF)"
+
+# PS5Upload installer daemon (our own; supersedes the DPI daemon).
+installer: setup-payload
+	@echo "Building PS5Upload installer daemon..."
+	@$(MAKE) -C $(INSTALLER_DIR) -j$(JOBS)
+	@echo "✓ Built $(INSTALLER_ELF)"
 
 send-payload: payload
 	@echo "Sending payload to $(PS5_HOST):$(PS5_LOADER_PORT) ..."
@@ -741,7 +750,7 @@ test-desktop: setup-engine
 
 test-payload: payload
 	@echo "Validating payload binaries..."
-	@for elf in "$(PAYLOAD_ELF)" "$(DPI_ELF)"; do \
+	@for elf in "$(PAYLOAD_ELF)" "$(DPI_ELF)" "$(INSTALLER_ELF)"; do \
 		if [ ! -s "$$elf" ]; then \
 			echo "ERROR: $$elf is missing or empty."; \
 			exit 1; \
@@ -759,7 +768,7 @@ test-payload: payload
 			exit 1; \
 		}; \
 	done
-	@echo "✓ Main payload and DPI installer are PS5 ELFs with gzip resources"
+	@echo "✓ Main payload, DPI installer and PS5Upload installer are PS5 ELFs with gzip resources"
 	@echo "Running play-time launch/resume self-test (host build)..."
 	@echo "Running accept-recovery self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-accept-recovery-selftest \
@@ -906,6 +915,13 @@ test-payload: payload
 		$(PAYLOAD_DIR)/installer/jobs.c
 	@/tmp/ps5upload-installer-loopback-selftest
 	@echo "✓ loopback server ranges, 404s foreign paths and .crc, serves a real sidecar"
+	@echo "Running installer hint-table self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/installer \
+		-o /tmp/ps5upload-installer-hints-selftest \
+		$(PAYLOAD_DIR)/tests/installer_hints_selftest.c \
+		$(PAYLOAD_DIR)/installer/hints.c
+	@/tmp/ps5upload-installer-hints-selftest
+	@echo "✓ installer hint table maps known Sony codes without third-party names"
 	@echo "Running param.json SDK-rewrite self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-sdk-param-selftest \
 		$(PAYLOAD_DIR)/tests/sdk_param_selftest.c
