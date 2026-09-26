@@ -211,6 +211,21 @@ async fn shares_of(conn: &Connection, secret: &Secret) -> Response {
     }
 }
 
+/// Trust the server key (SFTP host key or FTPS certificate) the user just accepted.
+pub(crate) async fn accept_host_key(r: &Remote, id: &str, fingerprint: &str) -> Response {
+    if r.store.get(id).is_none() {
+        return remote_err(&RemoteError::UnknownConnection(id.to_string()));
+    }
+    if !fingerprint.starts_with("SHA256:") {
+        return err(StatusCode::BAD_REQUEST, "That is not a key fingerprint.");
+    }
+    r.pool.invalidate(id);
+    match r.store.set_host_key(id, fingerprint) {
+        Ok(()) => Json(json!({ "ok": true })).into_response(),
+        Err(_) => remote_err(&RemoteError::UnknownConnection(id.to_string())),
+    }
+}
+
 pub(crate) async fn test_saved(r: &Remote, id: &str) -> Response {
     match r.store.get(id) {
         Some((conn, secret)) => try_connection(r, &conn, &secret).await,
@@ -486,6 +501,28 @@ mod tests {
         let listed = body(list_dir(&r, &format!("remote://{id}/"), None).await).await;
         assert_eq!(listed["host_key"], "SHA256:abc");
     }
+
+    #[tokio::test]
+    async fn accepting_a_host_key_saves_it_and_signs_in_again() {
+        let r = remote_with(MemFs::new(&[("/a", b"x")]), None);
+        let id = body(add_connection(&r, nas_form()).await).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        r.pool.fs(&r.store, &id).await.unwrap();
+        let resp = accept_host_key(&r, &id, "SHA256:abc").await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            r.store.get(&id).unwrap().0.host_key.as_deref(),
+            Some("SHA256:abc")
+        );
+        r.pool.fs(&r.store, &id).await.unwrap();
+        assert_eq!(r.pool.connects(), 2, "the old session goes");
+        assert_eq!(
+            accept_host_key(&r, "nope", "x").await.status(),
+            StatusCode::NOT_FOUND
+        );
+    }
 }
 
 pub async fn fetch_handler(
@@ -521,4 +558,13 @@ pub struct InspectBody {
 
 pub async fn inspect_folder_handler(Json(body): Json<InspectBody>) -> Response {
     with_remote!(r => super::fetch::inspect_folder(&r, &body.path).await)
+}
+
+#[derive(Deserialize)]
+pub struct HostKeyBody {
+    pub fingerprint: String,
+}
+
+pub async fn host_key_handler(Path(id): Path<String>, Json(body): Json<HostKeyBody>) -> Response {
+    with_remote!(r => accept_host_key(&r, &id, &body.fingerprint).await)
 }

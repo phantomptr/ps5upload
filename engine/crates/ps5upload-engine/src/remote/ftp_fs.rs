@@ -267,7 +267,7 @@ pub struct FtpFs {
 }
 
 /// `path` ("/games/x") under `home` ("/ftp/t") on the server.
-fn under(home: &str, path: &str) -> String {
+pub(crate) fn under(home: &str, path: &str) -> String {
     let home = home.trim_end_matches('/');
     let rest = path.trim_start_matches('/');
     match (home.is_empty(), rest.is_empty()) {

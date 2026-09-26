@@ -17,6 +17,7 @@ pub mod host_key;
 pub mod path;
 pub mod pool;
 pub mod range;
+pub mod sftp_fs;
 pub mod smb_fs;
 pub mod source_fs;
 pub mod store;

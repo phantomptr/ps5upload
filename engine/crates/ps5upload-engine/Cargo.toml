@@ -48,6 +48,8 @@ suppaftp = { version = "12", default-features = false, features = ["tokio-rustls
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 sha2 = "0.11"
+russh = { version = "0.63", default-features = false, features = ["ring", "rsa", "flate2"] }
+russh-sftp = "3"
 
 # Install-from-a-link fetches the package over many HTTP range connections at
 # once (remote_pkg.rs). Target-gated to non-Android for the same reason

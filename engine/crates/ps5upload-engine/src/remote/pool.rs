@@ -60,7 +60,9 @@ impl Connector for RealConnector {
             Protocol::Ftps => Ok(Arc::new(
                 super::ftp_fs::FtpFs::connect(conn, secret, true).await?,
             )),
-            Protocol::Sftp => Err(RemoteError::Io("SFTP servers are not available yet".into())),
+            Protocol::Sftp => Ok(Arc::new(
+                super::sftp_fs::SftpFs::connect(conn, secret).await?,
+            )),
         }
     }
 }
