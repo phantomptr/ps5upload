@@ -483,9 +483,10 @@ fn module_magic(tree: &mut dyn SourceTree, rel: &str) -> Option<[u8; 4]> {
 /// Bytes read per window while looking for an import name. Bounded so a 100 MB `eboot.bin`
 /// costs a megabyte of buffer, not its whole size.
 const AMPR_SCAN_WINDOW: usize = 1024 * 1024;
-/// How far into a module the scan looks. Import names live in the dynamic section near the
-/// front; reading further would cost time on every build for no added detection.
+/// How far into a module the head scan looks, and the most read of the segment holding the
+/// module's import names.
 const AMPR_SCAN_LIMIT: u64 = 16 * 1024 * 1024;
+const AMPR_SEGMENT_LIMIT: u64 = 64 * 1024 * 1024;
 /// The import whose presence means the title needs `ampr_emu` on the console.
 const AMPR_LIB: &[u8] = b"libSceAmpr";
 
@@ -496,13 +497,88 @@ const AMPR_LIB: &[u8] = b"libSceAmpr";
 /// name is looked for as a literal in the module's own bytes: fake-SELF and raw-ELF modules —
 /// the two kinds that can launch here — keep their import names in clear text.
 ///
-/// Windows overlap by the name's length so a match lying across a boundary is still found;
-/// without that, detection would depend on where in the file the string happened to land.
+/// Small modules keep their import names near the front; a large one keeps them in the load
+/// segment that holds its dynamic section, which in Spider-Man 2's 179 MB `eboot.bin` starts
+/// 153 MB in. So the front is scanned, then that segment, found through the module's headers
+/// (or, when they cannot be read, the module's last [`AMPR_SEGMENT_LIMIT`] bytes).
 fn imports_ampr(tree: &mut dyn SourceTree, rel: &str) -> bool {
-    let mut offset = 0u64;
+    if scan_for(tree, rel, 0, AMPR_SCAN_LIMIT, AMPR_LIB) {
+        return true;
+    }
+    let (start, len) = match dynamic_segment(tree, rel) {
+        Some(range) => range,
+        None => {
+            let Some(size) = tree.files().iter().find(|f| f.path == rel).map(|f| f.size) else {
+                return false;
+            };
+            if size <= AMPR_SCAN_LIMIT {
+                return false;
+            }
+            let from = size.saturating_sub(AMPR_SEGMENT_LIMIT).max(AMPR_SCAN_LIMIT);
+            (from, size - from)
+        }
+    };
+    scan_for(tree, rel, start, len.min(AMPR_SEGMENT_LIMIT), AMPR_LIB)
+}
+
+/// Where a module's dynamic section's load segment lies in the file, as `(offset, length)`: in
+/// a fake SELF, through the SELF segment table that places each ELF segment in the file; in a
+/// raw ELF, where the program header says.
+fn dynamic_segment(tree: &mut dyn SourceTree, rel: &str) -> Option<(u64, u64)> {
+    const PT_LOAD: u32 = 1;
+    const PT_DYNAMIC: u32 = 2;
+    let head = tree.read_range(rel, 0, 0x1_0000).ok()?;
+    let u16_at = |at: usize| Some(u16::from_le_bytes(head.get(at..at + 2)?.try_into().ok()?));
+    let u32_at = |at: usize| Some(u32::from_le_bytes(head.get(at..at + 4)?.try_into().ok()?));
+    let u64_at = |at: usize| Some(u64::from_le_bytes(head.get(at..at + 8)?.try_into().ok()?));
+    let magic = head.get(..4)?;
+    let (elf, self_segments) = if magic == magic::SELF_PS5 || magic == magic::SELF_PS4 {
+        let n = usize::from(u16_at(0x18)?);
+        (0x20 + n * 0x20, n)
+    } else if magic == magic::RAW_ELF {
+        (0, 0)
+    } else {
+        return None;
+    };
+    if head.get(elf..elf + 4)? != magic::RAW_ELF {
+        return None;
+    }
+    let phoff = usize::try_from(u64_at(elf + 0x20)?).ok()?;
+    let phentsize = usize::from(u16_at(elf + 0x36)?);
+    let phnum = usize::from(u16_at(elf + 0x38)?);
+    let ph = |i: usize| elf + phoff + i * phentsize;
+    // (type, file offset, file size) per program header.
+    let headers: Vec<(u32, u64, u64)> = (0..phnum)
+        .map(|i| Some((u32_at(ph(i))?, u64_at(ph(i) + 8)?, u64_at(ph(i) + 0x20)?)))
+        .collect::<Option<_>>()?;
+    let (_, dyn_off, _) = *headers.iter().find(|h| h.0 == PT_DYNAMIC)?;
+    let load = headers
+        .iter()
+        .position(|&(t, off, size)| t == PT_LOAD && off <= dyn_off && dyn_off < off + size)?;
+    if self_segments == 0 {
+        return Some((headers[load].1, headers[load].2));
+    }
+    // A SELF segment entry `{props, offset, file size, memory size}` holds ELF segment
+    // `props >> 20 & 0xFFF`; its data (not its block table) has the ELF segment's size.
+    (0..self_segments).find_map(|k| {
+        let at = 0x20 + k * 0x20;
+        let props = u64_at(at)?;
+        let size = u64_at(at + 0x10)?;
+        ((props >> 20) as usize & 0xFFF == load && size == headers[load].2)
+            .then(|| Some((u64_at(at + 8)?, size)))?
+    })
+}
+
+/// Does `rel[start..start + len]` contain `needle`? Read in windows that overlap by the name's
+/// length, so a match lying across a boundary is still found; without that, detection would
+/// depend on where in the file the string happened to land.
+fn scan_for(tree: &mut dyn SourceTree, rel: &str, start: u64, len: u64, needle: &[u8]) -> bool {
+    let end = start + len;
+    let mut offset = start;
     let mut carry: Vec<u8> = Vec::new();
-    while offset < AMPR_SCAN_LIMIT {
-        let Ok(chunk) = tree.read_range(rel, offset, AMPR_SCAN_WINDOW) else {
+    while offset < end {
+        let want = AMPR_SCAN_WINDOW.min((end - offset) as usize);
+        let Ok(chunk) = tree.read_range(rel, offset, want) else {
             return false;
         };
         if chunk.is_empty() {
@@ -512,13 +588,13 @@ fn imports_ampr(tree: &mut dyn SourceTree, rel: &str) -> bool {
         // Prepend the tail of the previous window so a straddling name is contiguous here.
         let mut window = carry;
         window.extend_from_slice(&chunk);
-        if window.windows(AMPR_LIB.len()).any(|w| w == AMPR_LIB) {
+        if window.windows(needle.len()).any(|w| w == needle) {
             return true;
         }
-        let keep = window.len().saturating_sub(AMPR_LIB.len() - 1);
+        let keep = window.len().saturating_sub(needle.len() - 1);
         carry = window.split_off(keep);
         offset += read;
-        if read < AMPR_SCAN_WINDOW as u64 {
+        if read < want as u64 {
             return false; // short read: end of file
         }
     }
@@ -719,6 +795,57 @@ mod tests {
         eboot[at..at + name.len()].copy_from_slice(name);
         let mut tree = MemTree(vec![("eboot.bin".to_string(), eboot)]);
         assert!(imports_ampr(&mut tree, "eboot.bin"));
+    }
+
+    /// A large module keeps its import names in the load segment holding its dynamic section,
+    /// far past the front: Spider-Man 2's 179 MB `eboot.bin` carries `libSceAmpr` 153 MB in.
+    /// The segment is found through the fake SELF's segment table, not by reading everything.
+    #[test]
+    fn an_import_deep_in_a_large_self_is_found_through_its_headers() {
+        let size = 40 * 1024 * 1024;
+        let mut eboot = vec![0u8; size];
+        eboot[0..4].copy_from_slice(&magic::SELF_PS5);
+        // Two SELF segment entries: ELF segment 0 at 0x1000, ELF segment 1 at 30 MiB.
+        let seg1_at: u64 = 30 * 1024 * 1024;
+        let seg1_size: u64 = 4 * 1024 * 1024;
+        eboot[0x18..0x1A].copy_from_slice(&2u16.to_le_bytes());
+        let entry = |e: &mut Vec<u8>, k: usize, idx: u64, off: u64, len: u64| {
+            let at = 0x20 + k * 0x20;
+            e[at..at + 8].copy_from_slice(&((idx << 20) | 0x2804).to_le_bytes());
+            e[at + 8..at + 16].copy_from_slice(&off.to_le_bytes());
+            e[at + 16..at + 24].copy_from_slice(&len.to_le_bytes());
+            e[at + 24..at + 32].copy_from_slice(&len.to_le_bytes());
+        };
+        entry(&mut eboot, 0, 0, 0x1000, 0x1000);
+        entry(&mut eboot, 1, 1, seg1_at, seg1_size);
+        // The ELF header after the SELF table, three program headers: LOAD, LOAD, DYNAMIC.
+        let elf = 0x20 + 2 * 0x20;
+        eboot[elf..elf + 4].copy_from_slice(&magic::RAW_ELF);
+        eboot[elf + 0x20..elf + 0x28].copy_from_slice(&0x40u64.to_le_bytes());
+        eboot[elf + 0x36..elf + 0x38].copy_from_slice(&56u16.to_le_bytes());
+        eboot[elf + 0x38..elf + 0x3A].copy_from_slice(&3u16.to_le_bytes());
+        let phdr = |e: &mut Vec<u8>, i: usize, t: u32, off: u64, len: u64| {
+            let at = elf + 0x40 + i * 56;
+            e[at..at + 4].copy_from_slice(&t.to_le_bytes());
+            e[at + 8..at + 16].copy_from_slice(&off.to_le_bytes());
+            e[at + 0x20..at + 0x28].copy_from_slice(&len.to_le_bytes());
+        };
+        phdr(&mut eboot, 0, 1, 0x4000, 0x1000);
+        phdr(&mut eboot, 1, 1, 0x10_0000, seg1_size);
+        phdr(&mut eboot, 2, 2, 0x10_0000 + seg1_size - 0x100, 0x80);
+        let name_at = (seg1_at + 0x3FE0) as usize;
+        eboot[name_at..name_at + 14].copy_from_slice(b"libSceAmpr.prx");
+        let mut tree = MemTree(vec![("eboot.bin".to_string(), eboot.clone())]);
+        assert_eq!(
+            dynamic_segment(&mut tree, "eboot.bin"),
+            Some((seg1_at, seg1_size))
+        );
+        assert!(imports_ampr(&mut tree, "eboot.bin"));
+
+        // Without the name, the same module is not flagged.
+        eboot[name_at..name_at + 14].fill(0);
+        let mut tree = MemTree(vec![("eboot.bin".to_string(), eboot)]);
+        assert!(!imports_ampr(&mut tree, "eboot.bin"));
     }
 
     #[test]
