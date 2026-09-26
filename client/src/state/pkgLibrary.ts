@@ -3563,8 +3563,20 @@ const makePkgLibraryStore = () =>
       set({ installingAll: true });
       let ok = 0;
       let failed = 0;
+      // One row in the activity bar for the batch; each install still shows its own.
+      const n = targets.length;
+      const batchTaskId = useTaskStore.getState().registerTask({
+        kind: "install-batch",
+        origin: "pkg.install-all",
+        label: `Install all (${n})`,
+        consoleId: host,
+      });
       try {
-        for (const target of targets) {
+        for (const [i, target] of targets.entries()) {
+          useTaskStore.getState().updateTask(batchTaskId, {
+            stage: `Installing ${i + 1} of ${n}`,
+            progress: { current: i, total: n, unit: "items" },
+          });
           // Re-read the row: an earlier item in the batch (or an outside action)
           // may have changed its state. Skip if it's no longer an idle, not-yet-
           // installed row.
@@ -3586,6 +3598,18 @@ const makePkgLibraryStore = () =>
         }
       } finally {
         set({ installingAll: false });
+        useTaskStore.getState().updateTask(batchTaskId, {
+          progress: { current: n, total: n, unit: "items" },
+        });
+        if (failed === 0) useTaskStore.getState().finishTask(batchTaskId, "done");
+        else
+          useTaskStore.getState().finishTask(batchTaskId, "failed", {
+            lastError: {
+              code: "INSTALL_BATCH_FAILED",
+              message: `${failed} of ${ok + failed} failed`,
+              recoverable: false,
+            },
+          });
       }
 
       // One summary bell for the whole batch (each item's own success/failure

@@ -2790,3 +2790,49 @@ describe("refresh — base + update coexistence and badging", () => {
     expect(vi.mocked(pkgMetadataConsole)).toHaveBeenCalled();
   });
 });
+
+describe("installAll as one activity row", () => {
+  beforeEach(() => {
+    useTaskStore.setState({ tasks: [] });
+  });
+
+  function stubInstall(outcome: (path: string) => boolean) {
+    const store = pkgLibraryStore(HOST);
+    store.setState({
+      installing: false,
+      installingAll: false,
+      install: async (path: string) => {
+        const ok = outcome(path);
+        store.setState((s) => ({
+          entries: s.entries.map((e) =>
+            e.path === path ? { ...e, lastResult: { ok, message: ok ? "" : "no" } } : e,
+          ),
+        }));
+      },
+    } as never);
+  }
+
+  const batch = () => useTaskStore.getState().tasks.filter((t) => t.kind === "install-batch");
+
+  it("registers one install-batch task that ends done with its count", async () => {
+    seed([entry({ name: "A.pkg" }), entry({ name: "B.pkg" })]);
+    stubInstall(() => true);
+    await pkgLibraryStore(HOST).getState().installAll(HOST);
+    expect(batch()).toHaveLength(1);
+    expect(batch()[0]).toMatchObject({
+      status: "done",
+      label: "Install all (2)",
+      progress: { total: 2 },
+    });
+  });
+
+  it("ends failed and says how many did not install", async () => {
+    seed([entry({ name: "A.pkg" }), entry({ name: "B.pkg" })]);
+    stubInstall((path) => path.endsWith("A.pkg"));
+    await pkgLibraryStore(HOST).getState().installAll(HOST);
+    expect(batch()[0]).toMatchObject({
+      status: "failed",
+      lastError: { message: "1 of 2 failed" },
+    });
+  });
+});
