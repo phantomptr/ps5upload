@@ -35,7 +35,7 @@ describe("dpiUnavailableCopy", () => {
   it("reports a daemon that was sent but never answered", () => {
     const copy = dpiUnavailableCopy("no_bringup");
     expect(copy.text).toBe(PKG_PATCH_DAEMON_NO_BRINGUP_HINT);
-    expect(copy.text).toContain("9040");
+    expect(copy.text).toContain("9115");
   });
 
   it("falls back to the neutral message rather than guessing", () => {

@@ -122,7 +122,7 @@ const AUTO_LOADER_COOLDOWN_MS = 90_000;
  *  enough to be cheap while the PS5 is asleep. */
 const AUTO_REDEPLOY_INTERVAL_MS = 30_000;
 
-/** How often to verify the DPI daemon (:9040) is still alive on a console it
+/** How often to verify the DPI daemon (:9115) is still alive on a console it
  *  was armed on. DPI is resident and rarely dies while the console stays
  *  awake, so this is deliberately far slower than the 10s status poll — one
  *  extra connect a minute, and only for armed hosts — enough to notice a
@@ -185,7 +185,7 @@ function useStatusPolling() {
   // uploads on its down→up edge. Same cooldown discipline as the auto-loader
   // — a flapping helper must not loop-restart the queue.
   const uploadResumeFiredAtRef = useRef<Record<string, number>>({});
-  // DPI liveness: last ms we probed :9040 for a host. The check runs on a
+  // DPI liveness: last ms we probed :9115 for a host. The check runs on a
   // slower cadence than the 10s poll (a resident daemon rarely dies) so it
   // adds at most one extra connect per DPI_CHECK_INTERVAL_MS, and only for a
   // console DPI was actually armed on.
@@ -529,7 +529,7 @@ function useStatusPolling() {
             // portCheck best-effort — leave transferAlive unchanged.
           }
 
-          // DPI daemon (:9040) liveness — re-arm a resident daemon that died
+          // DPI daemon (:9115) liveness — re-arm a resident daemon that died
           // while the console stayed awake. The motivating shape (2026-09-08):
           // the loader accepted our ELF, then refused connections 255s later
           // in the same session, so an update could never be installed. Only

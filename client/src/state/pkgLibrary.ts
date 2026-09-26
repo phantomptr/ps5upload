@@ -67,7 +67,7 @@ import { parsePS5Firmware } from "../lib/ps5Firmware";
  * Install PRIMARY path (since 2.25.2): the main payload's
  * `sceAppInstUtilInstallByPackage` run in the full jailbreak context, which
  * installs LAUNCHABLE content. If that's rejected we fall back to the DPI
- * daemon on :9040 (also InstallByPackage since 2.25.2), then re-send the main
+ * daemon on :9115 (also InstallByPackage since 2.25.2), then re-send the main
  * payload (the single-payload loader swapped it out). The payload's own tier
  * ladder (bgft.c) only drops to the unlaunchable `sceAppInstUtilAppInstallPkg`
  * as an absolute last resort, flagging it so we warn the user — see
@@ -1182,7 +1182,7 @@ const PKG_STALL_HINT =
  *  people hunting for the wrong base-game version.
  *
  *  Which of the three causes it was — no image in this build, the console's
- *  loader not answering on :9021, or the daemon never coming up on :9040 —
+ *  loader not answering on :9021, or the daemon never coming up on :9115 —
  *  is decided by `dpiUnavailableCopy` from the engine's machine-readable
  *  reason code. Re-exported here so existing importers keep working.
  *  See `lib/dpiUnavailable.ts` for why one message for all three was wrong. */
@@ -2026,14 +2026,14 @@ async function runDpiInstall(
   // dpi_ensure sends the DPI ELF to the loader port (:9021). Whether that
   // displaces the running helper is LOADER-dependent, not ours: we never evict
   // for a companion image, and measured on FW 5.10 and FW 9.60 the helper's
-  // :9113/:9114 stayed up while :9040 came online beside them. A
+  // :9113/:9114 stayed up while :9115 came online beside them. A
   // single-payload loader would still replace it, which is why `sent` drives a
   // restore below. Log around it either way: issue #152's "helper dies ~4s
   // after a rejected update" reports land right here, and the next bundle will
   // show whether dpi_ensure succeeded, timed out, or never returned.
   log.info(
     "install",
-    `DPI ensure: bringing up daemon on ${ip}:9040 (loads via :9021)`,
+    `DPI ensure: bringing up daemon on ${ip}:9115 (loads via :9021)`,
   );
   let ens: {
     ok?: boolean;
@@ -2075,7 +2075,7 @@ async function runDpiInstall(
       daemonFailed: true,
       daemonReason: ens.reason,
       rc: 0,
-      errMessage: ens.error || "the DPI daemon didn't come up on :9040",
+      errMessage: ens.error || "the DPI daemon didn't come up on :9115",
     };
   }
   // Send the install, retrying the transient "console busy" rejection
@@ -2189,7 +2189,7 @@ async function runDpiDirectInstall(
   const ip = hostOf(host);
   log.info(
     "install",
-    `DPI ensure (direct): bringing up daemon on ${ip}:9040 (loads via :9021)`,
+    `DPI ensure (direct): bringing up daemon on ${ip}:9115 (loads via :9021)`,
   );
   let ens: {
     ok?: boolean;
@@ -2229,7 +2229,7 @@ async function runDpiDirectInstall(
       rc: 0,
       requestsServed: 0,
       bytesServed: 0,
-      errMessage: ens.error || "the DPI daemon didn't come up on :9040",
+      errMessage: ens.error || "the DPI daemon didn't come up on :9115",
     };
   }
   let resp: {
@@ -2312,7 +2312,7 @@ async function runDpiDirectInstall(
  * Cascade (HW-proven): the MAIN PAYLOAD's InstallByPackage first — it runs in
  * the full jailbreak context, which is what actually installs LAUNCHABLE
  * content into /user/app/<title>. Only if the firmware rejects that do we fall
- * back to the standalone DPI daemon on :9040 (registers metadata, may not be
+ * back to the standalone DPI daemon on :9115 (registers metadata, may not be
  * launchable on newer firmware), then restore the main payload. A DPI rc=0 is
  * only acceptance and returns `acceptedUnverified`; `installed` is reserved for
  * registration/byte-settle proof from the main engine's status session.
@@ -2499,7 +2499,7 @@ async function runPkgInstallCore(
 
   if (!installed && startRejected) {
     // FALLBACK: the in-process install was rejected. Hand off to the standalone
-    // DPI daemon (:9040), which runs Sony's appinst in a SEPARATE, properly-
+    // DPI daemon (:9115), which runs Sony's appinst in a SEPARATE, properly-
     // authid'd process. This rescues two cases the in-process path can't:
     //   • a patch ("…DP") whose only remaining in-process route is the
     //     destructive shellui-rpc tier the data-loss guard forbids, and
@@ -2519,7 +2519,7 @@ async function runPkgInstallCore(
     log.info(
       "install",
       `in-process install rejected (${mainErr}) for type=${resolvedType || "?"} — ` +
-        `handing off to DPI daemon (:9040)`,
+        `handing off to DPI daemon (:9115)`,
     );
     const dpi = await runDpiInstall(host, localPs5Path, onStatus, {
       titleId: titleIdFromContentId(contentId ?? "") ?? undefined,
@@ -3787,7 +3787,7 @@ const makePkgLibraryStore = () =>
       if (mode === "direct") {
         // Through runDpiInstall, not a bare pkg_dpi_install. The bare call
         // had three faults, each enough on its own to break this mode:
-        //  - it never started the DPI daemon, so it failed whenever :9040
+        //  - it never started the DPI daemon, so it failed whenever :9115
         //    was not already up from an earlier install;
         //  - it ignored the result — a refusal arrives as HTTP 200 with
         //    ok:false — so the user was told "Sent to the PS5, you can close

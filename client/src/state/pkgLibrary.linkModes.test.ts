@@ -78,7 +78,7 @@ describe("link install modes", () => {
 
   /* The daemon that does a direct install is not always running — it was
    * down on the test console until something started it. Direct mode used to
-   * skip starting it and fail whenever :9040 was closed. */
+   * skip starting it and fail whenever :9115 was closed. */
   it("starts the DPI daemon before asking the PS5 to fetch the link", async () => {
     mockedInvoke.mockImplementation(async (cmd: string) => {
       if (cmd === "dpi_ensure") return { ok: true, listening: true, sent: true };

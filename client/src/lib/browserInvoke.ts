@@ -825,7 +825,7 @@ export async function browserInvoke<T>(
         session: args["session"],
       });
 
-    // Bring up the DPI install daemon on :9040, and put the ps5upload
+    // Bring up the DPI install daemon on :9115, and put the ps5upload
     // helper back once the install is done. On the desktop both of these
     // stream an ELF the app has embedded; a browser has no socket and no
     // copy of the bytes, so the engine does it. Missing here, the install

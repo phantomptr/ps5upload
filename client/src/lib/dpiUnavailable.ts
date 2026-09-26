@@ -3,7 +3,7 @@
  *
  * ps5upload applies an update through Sony's safe installer. When the
  * in-process call is rejected, the only remaining route is the standalone DPI
- * daemon on :9040 — and getting that daemon running means handing its ELF to
+ * daemon on :9115 — and getting that daemon running means handing its ELF to
  * the console's payload loader on :9021.
  *
  * Three unrelated things can stop that, and 5.17.6 showed one message for all
@@ -32,7 +32,7 @@ export type DpiEnsureReason =
   | "loader_unreachable"
   /** The loader accepted the connection but the transfer failed. */
   | "loader_send_failed"
-  /** The image was delivered but :9040 never came up. */
+  /** The image was delivered but :9115 never came up. */
   | "no_bringup";
 
 /** An i18n key plus the English text it falls back to. */
@@ -81,7 +81,7 @@ export const PKG_PATCH_DAEMON_UNAVAILABLE_HINT =
 
 /** The image was delivered and the daemon still never answered. */
 export const PKG_PATCH_DAEMON_NO_BRINGUP_HINT =
-  "This update couldn’t be applied because the PS5’s update installer never started — nothing answered on port 9040 after it was sent — so the console never saw the update. Your base game is untouched. Restart the PS5, re-run your loader, and try again. " +
+  "This update couldn’t be applied because the PS5’s update installer never started — nothing answered on port 9115 after it was sent — so the console never saw the update. Your base game is untouched. Restart the PS5, re-run your loader, and try again. " +
   ALREADY_STAGED +
   " " +
   SELF_INSTALL_ROUTE;

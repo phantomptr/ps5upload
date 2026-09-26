@@ -7,7 +7,7 @@ import { restoreMainPayload } from "./restoreMainPayload";
 /**
  * Bring the DPI install daemon up while we KNOW the console's loader works.
  *
- * Why this exists. Applying an update needs the DPI daemon on :9040 once the
+ * Why this exists. Applying an update needs the DPI daemon on :9115 once the
  * in-process installer is rejected, and the only way to start it is to hand
  * its ELF to the console's payload loader on :9021 — a third-party jailbreak
  * component, not ours. A 2026-09-08 bug report showed that loader accepting
@@ -19,7 +19,7 @@ import { restoreMainPayload } from "./restoreMainPayload";
  * never exits — so once it is up it stays up for the rest of the console's
  * uptime. And bringing it up does NOT displace the running ps5upload payload:
  * measured on both a FW 5.10 and a FW 9.60 console, :9113/:9114 stayed up and
- * answering while :9040 came online beside them in well under a second.
+ * answering while :9115 came online beside them in well under a second.
  *
  * So: arm it at the moment we have just proven the loader is alive, instead of
  * discovering it is dead an hour later with a 6 GB upload already committed.
@@ -31,7 +31,7 @@ import { restoreMainPayload } from "./restoreMainPayload";
 
 /** What one pre-arm attempt did. */
 export type PrearmOutcome =
-  /** :9040 was already answering — a probe, nothing sent. */
+  /** :9115 was already answering — a probe, nothing sent. */
   | "already-up"
   /** We sent the daemon and it came up, payload intact. */
   | "armed"
@@ -88,7 +88,7 @@ export function dpiWasArmed(host: string): boolean {
  *  with it, and so does DPI), and the loader that hosts it can flake
  *  mid-session. After any of those DPI is gone but the memo still says
  *  "handled", so "arm early" silently stops holding. Call this on a death
- *  signal (the wake-recovery edge, or an observed :9040 drop) to re-open the
+ *  signal (the wake-recovery edge, or an observed :9115 drop) to re-open the
  *  arming path; the next attempt re-probes and re-sends only if needed
  *  (dpi_ensure is idempotent). */
 export function invalidatePrearm(host: string): void {
@@ -136,7 +136,7 @@ async function attemptPrearm(ip: string): Promise<PrearmResult> {
 
   if (!ens.sent) {
     armedHosts.add(ip);
-    log.info("payload", `DPI daemon already listening on ${ip}:9040`);
+    log.info("payload", `DPI daemon already listening on ${ip}:9115`);
     return { outcome: "already-up" };
   }
 
@@ -152,7 +152,7 @@ async function attemptPrearm(ip: string): Promise<PrearmResult> {
   }
   if (payloadAlive) {
     armedHosts.add(ip);
-    log.info("payload", `DPI daemon armed on ${ip}:9040 (helper intact)`);
+    log.info("payload", `DPI daemon armed on ${ip}:9115 (helper intact)`);
     return { outcome: "armed" };
   }
 

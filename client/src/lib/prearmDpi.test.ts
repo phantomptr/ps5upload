@@ -125,7 +125,7 @@ describe("invalidatePrearm + dpiWasArmed (mid-session / wake re-arm)", () => {
     expect((await prearmDpiDaemon("10.0.0.5")).outcome).toBe("skipped");
     expect(invokeMock).toHaveBeenCalledTimes(1);
 
-    // A death signal (wake edge / observed :9040 drop) clears the memo, and
+    // A death signal (wake edge / observed :9115 drop) clears the memo, and
     // the next call genuinely re-arms instead of returning "skipped".
     invalidatePrearm("10.0.0.5:9114");
     expect((await prearmDpiDaemon("10.0.0.5")).outcome).toBe("armed");
@@ -138,7 +138,7 @@ describe("invalidatePrearm + dpiWasArmed (mid-session / wake re-arm)", () => {
     await prearmDpiDaemon("10.0.0.5:9114");
     expect(dpiWasArmed("10.0.0.5")).toBe(true);
     // Keyed on host, not the probed address.
-    expect(dpiWasArmed("10.0.0.5:9040")).toBe(true);
+    expect(dpiWasArmed("10.0.0.5:9115")).toBe(true);
   });
 
   it("does not mark a host with a dead loader as armed (nothing to watch)", async () => {

@@ -140,7 +140,7 @@ export interface PortState {
  *  state has to be recorded rather than assumed. */
 const PROBED_PORTS: { port: number; role: string }[] = [
   { port: 9021, role: "ELF loader (console's, not ps5upload's)" },
-  { port: 9040, role: "DPI install daemon" },
+  { port: 9115, role: "DPI install daemon" },
   { port: 9113, role: "ps5upload transfer" },
   { port: 9114, role: "ps5upload management" },
   { port: 2121, role: "ps5upload FTP" },

@@ -67,7 +67,7 @@ describe("redactDiagnosticText", () => {
   });
 
   it("leaves diagnostic text untouched when redaction is off", () => {
-    const text = "connect 172.16.1.9:9040";
+    const text = "connect 172.16.1.9:9115";
     expect(redactDiagnosticText(text, false)).toBe(text);
   });
 });
