@@ -220,6 +220,13 @@ fn history_dir() -> std::path::PathBuf {
         .join("install-history")
 }
 
+/// Correlation tag for an install's log lines, so a past failure's engine
+/// lines and the daemon `stderr.log` span can be lined up in a bug bundle.
+pub fn correlation_tag(job: &str) -> String {
+    let short: String = job.chars().take(8).collect();
+    format!("install[{short}]")
+}
+
 /// Kind-only content name for the daemon (never title-bearing).
 fn name_hint(title_id: Option<&str>) -> String {
     match title_id {
@@ -291,7 +298,13 @@ pub async fn install_history_handler(Query(q): Query<AddrQuery>) -> Response {
 /// Always clears the active-job guard and records history at the end.
 async fn run_install(state: PkgInstallStateHandle, job: String, req: InstallRequest) {
     let started = std::time::Instant::now();
+    let tag = correlation_tag(&job);
     let ip = console_id(&req.ps5_addr);
+    crate::log_info!(
+        "{tag}: install start ps5={ip} source={} content_id={}",
+        req.source.kind(),
+        req.content_id
+    );
     let mgmt = crate::pkg_install::normalize_mgmt_addr(&req.ps5_addr);
     let category = req.category.clone().unwrap_or_default();
     let title_id = req.title_id.clone().filter(|t| !t.trim().is_empty());
@@ -606,6 +619,16 @@ fn finalize(
     _started: std::time::Instant,
 ) {
     if let Some(st) = state.jobs.get(job) {
+        crate::log_info!(
+            "{}: done phase={:?} verdict={:?} route={:?} code=0x{:08X} served={} MB/s={:.1}",
+            correlation_tag(job),
+            st.phase,
+            st.verdict,
+            st.route,
+            st.code,
+            st.metrics.served_bytes,
+            st.metrics.throughput_mbps
+        );
         let entry = HistoryEntry {
             job: st.job.clone(),
             at: status::now_unix(),
@@ -712,6 +735,12 @@ mod tests {
         assert_eq!(verdict_from_verify(PV::DidNotApply, true), Verdict::Failed);
         assert_eq!(verdict_no_identity(true), Verdict::Installed);
         assert_eq!(verdict_no_identity(false), Verdict::Failed);
+    }
+
+    #[test]
+    fn correlation_tag_is_install_bracket_short_job() {
+        assert_eq!(correlation_tag("1758-42"), "install[1758-42]");
+        assert_eq!(correlation_tag("1790000000-3"), "install[17900000]"); // first 8
     }
 
     #[test]
