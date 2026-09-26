@@ -2,13 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the three boundaries pickPath dispatches across: platform
 // detection, the in-app picker (Android), and the native dialog (desktop).
-const { mockIsAndroid, mockPickLocal, mockOpenDialog } = vi.hoisted(() => ({
+const { mockIsAndroid, mockIsTauri, mockPickLocal, mockOpenDialog } = vi.hoisted(() => ({
   mockIsAndroid: vi.fn(),
+  mockIsTauri: vi.fn(),
   mockPickLocal: vi.fn(),
   mockOpenDialog: vi.fn(),
 }));
 
 vi.mock("./platform", () => ({ isAndroid: () => mockIsAndroid() }));
+vi.mock("./tauriEnv", () => ({ isTauriEnv: () => mockIsTauri() }));
 vi.mock("../state/localPicker", () => ({
   pickLocalPath: (...a: unknown[]) => mockPickLocal(...a),
 }));
@@ -20,6 +22,7 @@ import { pickPath } from "./pickPath";
 
 beforeEach(() => {
   mockIsAndroid.mockReset();
+  mockIsTauri.mockReset().mockReturnValue(true);
   mockPickLocal.mockReset();
   mockOpenDialog.mockReset();
 });
@@ -80,5 +83,28 @@ describe("pickPath on desktop", () => {
   it("returns null when the native dialog is cancelled (non-string)", async () => {
     mockOpenDialog.mockResolvedValue(null);
     expect(await pickPath({ mode: "file" })).toBeNull();
+  });
+});
+
+describe("pickPath beyond the desktop dialog", () => {
+  beforeEach(() => mockIsAndroid.mockReturnValue(false));
+
+  it("browses in-app in the web build, which has no system dialog", async () => {
+    mockIsTauri.mockReturnValue(false);
+    mockPickLocal.mockResolvedValue("/data/game");
+    expect(await pickPath({ mode: "folder" })).toBe("/data/game");
+    expect(mockOpenDialog).not.toHaveBeenCalled();
+  });
+
+  it("browses a saved server in-app and hands back its remote path", async () => {
+    mockPickLocal.mockResolvedValue("remote://nas-1/games/a.pkg");
+    const filters = [{ name: "PKG", extensions: ["pkg"] }];
+    expect(await pickPath({ mode: "file", filters, source: { connectionId: "nas-1" } })).toBe(
+      "remote://nas-1/games/a.pkg",
+    );
+    expect(mockPickLocal).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "file", filters, source: { connectionId: "nas-1" } }),
+    );
+    expect(mockOpenDialog).not.toHaveBeenCalled();
   });
 });

@@ -13,6 +13,7 @@ export { EmptyState } from "./EmptyState";
 export { ErrorCard, SuccessCard, WarningCard } from "./ErrorCard";
 export { Card } from "./Card";
 export { Button } from "./Button";
+export { BrowseButton, PathLabel } from "./BrowseButton";
 export type { ButtonProps } from "./Button";
 export { MarkdownView } from "./MarkdownView";
 export type {

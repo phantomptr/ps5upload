@@ -10,19 +10,30 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import { isAndroid } from "./platform";
+import { isTauriEnv } from "./tauriEnv";
 import { pickLocalPath } from "../state/localPicker";
 
 export interface PickPathOptions {
   mode: "file" | "folder";
   title?: string;
-  /** Desktop file-dialog filters (ignored by the Android browser). */
+  /** File-type filters (the system dialog's, and the in-app browser's). */
   filters?: { name: string; extensions: string[] }[];
+  /** A saved server to browse instead of this computer; resolves with a `remote://` path. */
+  source?: { connectionId: string };
 }
 
 /** Pick a single real path, or null if cancelled. */
 export async function pickPath(opts: PickPathOptions): Promise<string | null> {
-  if (isAndroid()) {
-    return pickLocalPath({ mode: opts.mode, title: opts.title });
+  // A server, Android, and the web build all browse in-app: the web build has no system
+  // dialog, and the one it could show would browse the wrong machine (the browser's, not the
+  // engine's).
+  if (opts.source || isAndroid() || !isTauriEnv()) {
+    return pickLocalPath({
+      mode: opts.mode,
+      title: opts.title,
+      filters: opts.filters,
+      source: opts.source,
+    });
   }
   const sel = await openDialog({
     directory: opts.mode === "folder",

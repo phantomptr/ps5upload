@@ -311,7 +311,12 @@
       "picker_edit_connection",
       "picker_install",
       "picker_send",
-      "picker_load_more"
+      "picker_load_more",
+      "browse",
+      "browse_this_computer",
+      "browse_not_reachable",
+      "browse_add_connection",
+      "browse_servers"
     ],
     "stale": [],
     "untranslated": [
@@ -633,7 +638,12 @@
       "picker_edit_connection",
       "picker_install",
       "picker_send",
-      "picker_load_more"
+      "picker_load_more",
+      "browse",
+      "browse_this_computer",
+      "browse_not_reachable",
+      "browse_add_connection",
+      "browse_servers"
     ],
     "stale": [],
     "untranslated": [
@@ -956,7 +966,12 @@
       "picker_edit_connection",
       "picker_install",
       "picker_send",
-      "picker_load_more"
+      "picker_load_more",
+      "browse",
+      "browse_this_computer",
+      "browse_not_reachable",
+      "browse_add_connection",
+      "browse_servers"
     ],
     "stale": [],
     "untranslated": [
@@ -1286,7 +1301,12 @@
       "picker_edit_connection",
       "picker_install",
       "picker_send",
-      "picker_load_more"
+      "picker_load_more",
+      "browse",
+      "browse_this_computer",
+      "browse_not_reachable",
+      "browse_add_connection",
+      "browse_servers"
     ],
     "stale": [],
     "untranslated": [
@@ -1612,7 +1632,12 @@
       "picker_edit_connection",
       "picker_install",
       "picker_send",
-      "picker_load_more"
+      "picker_load_more",
+      "browse",
+      "browse_this_computer",
+      "browse_not_reachable",
+      "browse_add_connection",
+      "browse_servers"
     ],
     "stale": [],
     "untranslated": [
@@ -1940,7 +1965,12 @@
       "picker_edit_connection",
       "picker_install",
       "picker_send",
-      "picker_load_more"
+      "picker_load_more",
+      "browse",
+      "browse_this_computer",
+      "browse_not_reachable",
+      "browse_add_connection",
+      "browse_servers"
     ],
     "stale": [],
     "untranslated": [
@@ -2029,7 +2059,12 @@
       "picker_edit_connection",
       "picker_install",
       "picker_send",
-      "picker_load_more"
+      "picker_load_more",
+      "browse",
+      "browse_this_computer",
+      "browse_not_reachable",
+      "browse_add_connection",
+      "browse_servers"
     ],
     "stale": [],
     "untranslated": [
@@ -2363,7 +2398,12 @@
       "picker_edit_connection",
       "picker_install",
       "picker_send",
-      "picker_load_more"
+      "picker_load_more",
+      "browse",
+      "browse_this_computer",
+      "browse_not_reachable",
+      "browse_add_connection",
+      "browse_servers"
     ],
     "stale": [],
     "untranslated": [
@@ -2691,7 +2731,12 @@
       "picker_edit_connection",
       "picker_install",
       "picker_send",
-      "picker_load_more"
+      "picker_load_more",
+      "browse",
+      "browse_this_computer",
+      "browse_not_reachable",
+      "browse_add_connection",
+      "browse_servers"
     ],
     "stale": [],
     "untranslated": [
@@ -3018,7 +3063,12 @@
       "picker_edit_connection",
       "picker_install",
       "picker_send",
-      "picker_load_more"
+      "picker_load_more",
+      "browse",
+      "browse_this_computer",
+      "browse_not_reachable",
+      "browse_add_connection",
+      "browse_servers"
     ],
     "stale": [],
     "untranslated": [
@@ -3343,7 +3393,12 @@
       "picker_edit_connection",
       "picker_install",
       "picker_send",
-      "picker_load_more"
+      "picker_load_more",
+      "browse",
+      "browse_this_computer",
+      "browse_not_reachable",
+      "browse_add_connection",
+      "browse_servers"
     ],
     "stale": [],
     "untranslated": [
@@ -3666,7 +3721,12 @@
       "picker_edit_connection",
       "picker_install",
       "picker_send",
-      "picker_load_more"
+      "picker_load_more",
+      "browse",
+      "browse_this_computer",
+      "browse_not_reachable",
+      "browse_add_connection",
+      "browse_servers"
     ],
     "stale": [],
     "untranslated": [
@@ -3990,7 +4050,12 @@
       "picker_edit_connection",
       "picker_install",
       "picker_send",
-      "picker_load_more"
+      "picker_load_more",
+      "browse",
+      "browse_this_computer",
+      "browse_not_reachable",
+      "browse_add_connection",
+      "browse_servers"
     ],
     "stale": [],
     "untranslated": [
@@ -4319,7 +4384,12 @@
       "picker_edit_connection",
       "picker_install",
       "picker_send",
-      "picker_load_more"
+      "picker_load_more",
+      "browse",
+      "browse_this_computer",
+      "browse_not_reachable",
+      "browse_add_connection",
+      "browse_servers"
     ],
     "stale": [],
     "untranslated": [
@@ -4643,7 +4713,12 @@
       "picker_edit_connection",
       "picker_install",
       "picker_send",
-      "picker_load_more"
+      "picker_load_more",
+      "browse",
+      "browse_this_computer",
+      "browse_not_reachable",
+      "browse_add_connection",
+      "browse_servers"
     ],
     "stale": [],
     "untranslated": [
@@ -4966,7 +5041,12 @@
       "picker_edit_connection",
       "picker_install",
       "picker_send",
-      "picker_load_more"
+      "picker_load_more",
+      "browse",
+      "browse_this_computer",
+      "browse_not_reachable",
+      "browse_add_connection",
+      "browse_servers"
     ],
     "stale": [],
     "untranslated": [
@@ -5291,7 +5371,12 @@
       "picker_edit_connection",
       "picker_install",
       "picker_send",
-      "picker_load_more"
+      "picker_load_more",
+      "browse",
+      "browse_this_computer",
+      "browse_not_reachable",
+      "browse_add_connection",
+      "browse_servers"
     ],
     "stale": [],
     "untranslated": [
@@ -5617,7 +5702,12 @@
       "picker_edit_connection",
       "picker_install",
       "picker_send",
-      "picker_load_more"
+      "picker_load_more",
+      "browse",
+      "browse_this_computer",
+      "browse_not_reachable",
+      "browse_add_connection",
+      "browse_servers"
     ],
     "stale": [],
     "untranslated": [
@@ -5940,7 +6030,12 @@
       "picker_edit_connection",
       "picker_install",
       "picker_send",
-      "picker_load_more"
+      "picker_load_more",
+      "browse",
+      "browse_this_computer",
+      "browse_not_reachable",
+      "browse_add_connection",
+      "browse_servers"
     ],
     "stale": [],
     "untranslated": [

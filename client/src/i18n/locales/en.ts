@@ -3472,6 +3472,11 @@ picker_edit_connection: "Edit connection",
 picker_install: "Install",
 picker_send: "Send to PS5",
 picker_load_more: "Load more",
+browse: "Browse…",
+browse_this_computer: "This computer…",
+browse_not_reachable: "not reachable",
+browse_add_connection: "Add a connection…",
+browse_servers: "Browse a server",
 };
 
 export default en;
