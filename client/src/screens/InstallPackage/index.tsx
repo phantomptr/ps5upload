@@ -39,6 +39,7 @@ import {
   type OverflowMenuItem,
   Toggle,
 } from "../../components";
+import { BrowseButton } from "../../components/BrowseButton";
 import { openInFileSystem } from "../../state/fsNavigation";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useConnectionStore } from "../../state/connection";
@@ -810,6 +811,27 @@ export default function InstallPackageScreen() {
     }
   }
 
+  /** A package picked on a saved server: the engine streams it straight to the console. */
+  async function streamFromServer(path: string) {
+    setPickError(null);
+    if (!host?.trim()) {
+      setPickError(tr("install.error.noHost", "Set a PS5 host on the Connection tab first."));
+      return;
+    }
+    if (!isInstallPackagePath(path)) {
+      setPickError(tr("pkglib.stream.notPkg", undefined, "Pick a .pkg or .fpkg file."));
+      return;
+    }
+    setStreaming(true);
+    try {
+      await runStreamInstall(path, path.split("/").pop() ?? path);
+    } catch (e) {
+      setPickError(`${e}`);
+    } finally {
+      setStreaming(false);
+    }
+  }
+
   async function handleStreamPick() {
     setPickError(null);
     if (!host?.trim()) {
@@ -1324,20 +1346,15 @@ export default function InstallPackageScreen() {
                 {tr("pkglib.stream.fromDevice", undefined, "From this device")}
               </Button>
             )}
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={
-                streaming ? (
-                  <Spinner size={14} tone="inherit" />
-                ) : (
-                  <Download size={14} />
-                )
-              }
-              onClick={handleStreamPick}
-              loading={streaming}
+            <BrowseButton
+              mode="file"
+              remote
+              icon={<Download size={14} />}
+              busy={streaming}
+              filters={[{ name: "PlayStation Package", extensions: ["pkg", "fpkg"] }]}
+              label={tr("pkglib.stream", undefined, "Stream install")}
               disabled={!hostReady || installing || installingAll}
-              title={
+              tooltip={
                 !hostReady
                   ? tr(
                       "install.add.disabledHint",
@@ -1348,9 +1365,9 @@ export default function InstallPackageScreen() {
                       "Install a .pkg straight from this PC over HTTP — no staging upload. The most reliable path.",
                     )
               }
-            >
-              {tr("pkglib.stream", undefined, "Stream install")}
-            </Button>
+              onMainClick={() => void handleStreamPick()}
+              onPick={(p) => void streamFromServer(p)}
+            />
           </div>
         }
       />

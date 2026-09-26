@@ -14,6 +14,9 @@ import { hostOf } from "../lib/addr";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { isInstallPackagePath } from "../lib/pkgDropDedupe";
+import { remoteApi } from "../api/remote";
+import { materializeRemote } from "../lib/materialize";
+import { isRemotePath } from "../lib/remotePath";
 
 /**
  * Detected source kind. Drives which options the Upload screen shows.
@@ -260,6 +263,24 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   excludes: defaultExcludes,
 
   async pickFile(path) {
+    // An archive is inspected (and later extracted) from local disk, so one on a saved server
+    // is copied here first and then handled like any other archive.
+    if (isRemotePath(path) && isArchivePath(path)) {
+      set({
+        source: { kind: "archive", path, meta: null, wrappedHint: null, zipInfo: null },
+        detecting: true,
+        detectError: null,
+      });
+      try {
+        const local = await materializeRemote(path);
+        if (get().source?.path !== path) return;
+        return get().pickFile(local);
+      } catch (e) {
+        if (get().source?.path !== path) return;
+        set({ detecting: false, detectError: e instanceof Error ? e.message : String(e) });
+        return;
+      }
+    }
     // A new pick clears any stale .rar password. `setRarPassword` re-inspects
     // the SAME path, so it deliberately doesn't trip this reset.
     if (get().source?.path !== path) set({ rarPassword: null });
@@ -429,7 +450,10 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       detectError: null,
     });
     try {
-      const inspection = await inspectFolder(path);
+      // A folder on a saved server is read by the engine (its metadata files only).
+      const inspection = isRemotePath(path)
+        ? await remoteApi.inspectFolder(path)
+        : await inspectFolder(path);
       // Stale-result guard. inspectFolder is async (walks the dir,
       // parses param.sfo, etc. — can take seconds on slow disks). If
       // the user picked a different source while this inspect was

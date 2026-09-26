@@ -119,6 +119,20 @@ export const remoteApi = {
   async cleanupFetched(dest: string): Promise<void> {
     await call("POST", "/fetch/cleanup", { dest });
   },
+  /** What a game folder on a server is, read from its metadata files only. */
+  async inspectFolder(
+    path: string,
+  ): Promise<import("./ps5").FolderInspection> {
+    const r = await call<
+      { ok: boolean; error?: string } & import("./ps5").FolderInspection
+    >(
+      "POST",
+      "/inspect-folder",
+      { path },
+    );
+    if (!r.ok) throw new RemoteApiError(r.error ?? "Could not read that folder.");
+    return { result: r.result, wrapped_hint: r.wrapped_hint };
+  },
   async acceptHostKey(id: string, fingerprint: string): Promise<void> {
     await call("POST", `${idPath(id)}/host-key`, { fingerprint });
   },

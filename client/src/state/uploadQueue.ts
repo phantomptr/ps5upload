@@ -52,6 +52,7 @@ import { pushNotification } from "./notifications";
 import { withConsolePrefix } from "./roster";
 import { hostOf, mgmtAddr } from "../lib/addr";
 import { log } from "./logs";
+import { isRemotePath } from "../lib/remotePath";
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import { effectiveUploadStreams } from "../lib/uploadStreams";
 import {
@@ -494,7 +495,9 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
           bandwidthCap,
         );
       }
-    } else if (isFolder && item.strategy === "resume") {
+    } else if (isFolder && item.strategy === "resume" && !isRemotePath(item.sourcePath)) {
+      // (A folder on a saved server always takes the plain folder upload below: the resume
+      // walk compares against local disk. The transfer itself still resumes by tx id.)
       // Pass the persisted tx_id so a Resume after app restart
       // picks up the payload's existing journal entry instead of
       // minting a fresh tx and re-sending everything.

@@ -24,6 +24,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Button, ErrorCard, Modal, Spinner, Badge, Input, Select, Toggle } from "../../components";
 import { ConsoleChip } from "../../components/ConsoleChip";
 import { useTr } from "../../state/lang";
+import { BrowseButton } from "../../components/BrowseButton";
 import {
   runStatusForHost,
   usePayloadPlaylistsStore,
@@ -219,13 +220,16 @@ export function PlaylistsPanel({ host, port }: { host: string; port: number }) {
               {tr("playlist_stop", undefined, "Stop run")}
             </Button>
           )}
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={<FilePlus size={12} />}
-            onClick={handleFromFiles}
+          <BrowseButton
+            mode="file"
+            remote
+            icon={<FilePlus size={12} />}
+            filters={[
+              { name: "Payload", extensions: ["elf", "bin", "js", "lua", "jar"] },
+              { name: "All files", extensions: ["*"] },
+            ]}
             disabled={isBusy}
-            title={
+            tooltip={
               isAndroid()
                 ? tr(
                     "playlist_from_file_title_android",
@@ -238,13 +242,14 @@ export function PlaylistsPanel({ host, port }: { host: string; port: number }) {
                     "Pick one or more payloads to make a playlist",
                   )
             }
-          >
-            {/* Android's picker is single-select, so 'From files…' (which
-                implies bulk) would over-promise — label it honestly there. */}
-            {isAndroid()
-              ? tr("playlist_from_file_android", undefined, "From a file…")
-              : tr("playlist_from_files", undefined, "From files…")}
-          </Button>
+            label={
+              isAndroid()
+                ? tr("playlist_from_file_android", undefined, "From a file…")
+                : tr("playlist_from_files", undefined, "From files…")
+            }
+            onMainClick={() => void handleFromFiles()}
+            onPick={(p) => createFromPaths([p])}
+          />
           <Button
             variant="primary"
             size="sm"

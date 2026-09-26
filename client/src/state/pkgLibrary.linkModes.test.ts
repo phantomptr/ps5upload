@@ -166,6 +166,42 @@ describe("link install modes", () => {
     expect(mockedInvoke.mock.calls.some((c) => c[0] === "pkg_remote_probe")).toBe(false);
   });
 
+  /* A package on a saved server streams from the engine by its remote path; the
+   * task shows it by the server's name and holds nothing about the connection. */
+  it("streams a package from a saved server by its remote path", async () => {
+    const { useConnectionsStore } = await import("./connections");
+    useConnectionsStore.setState({
+      connections: [
+        {
+          id: "nas-1",
+          name: "NAS",
+          protocol: "smb",
+          host: "10.0.0.9",
+          port: 445,
+          share: "g",
+          user: "me",
+          start_path: "",
+          host_key: null,
+          has_secret: true,
+        },
+      ],
+    });
+    mockedInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "pkg_install_start") return { session_id: "s1", err_code: 0 };
+      throw new Error("stop here");
+    });
+    useTaskStore.setState({ tasks: [] });
+    await pkgLibraryStore(HOST).getState().installStream("remote://nas-1/games/a.pkg", HOST);
+    const call = mockedInvoke.mock.calls.find((c) => c[0] === "pkg_install_start");
+    const args = call?.[1] as Record<string, unknown>;
+    expect(args.path).toBe("remote://nas-1/games/a.pkg");
+    expect(args.smb).toBeNull();
+    const task = useTaskStore.getState().tasks[0];
+    expect(task.label).toContain("a.pkg");
+    expect(JSON.stringify(task.payload)).toContain("NAS › games/a.pkg");
+    expect(JSON.stringify(task.payload)).not.toContain("10.0.0.9");
+  });
+
   /* Task records are shown in the UI and persisted to disk. The SMB password
    * must never be in one. */
   it("never records the SMB password in the task", async () => {

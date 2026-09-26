@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { materializeRemote } from "../lib/materialize";
 
 import { hostOf } from "../lib/addr";
 import { randomHexId } from "../lib/randomId";
@@ -368,7 +369,8 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
             }
           }
           if (!isLive()) return;
-          await sendPayload(stepHost, sendPath, stepPort);
+          // A step on a saved server is copied here first; the loader sends local bytes.
+          await sendPayload(stepHost, await materializeRemote(sendPath), stepPort);
           successCount++;
         } catch (e) {
           const errMsg = e instanceof Error ? e.message : String(e);

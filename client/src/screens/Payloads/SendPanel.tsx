@@ -8,7 +8,6 @@ import {
   XCircle,
   AlertTriangle,
   ChevronRight,
-  FolderOpen,
   History,
   Trash2,
   RotateCcw,
@@ -20,6 +19,9 @@ import { useConnectionStore, PS5_LOADER_PORT } from "../../state/connection";
 import { sendPayload } from "../../api/ps5";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
+import { BrowseButton } from "../../components/BrowseButton";
+import { materializeRemote } from "../../lib/materialize";
+import { isRemotePath } from "../../lib/remotePath";
 import { PlaylistsPanel } from "./PlaylistsPanel";
 
 /**
@@ -313,6 +315,11 @@ export default function SendPanel() {
   const latestProbePathRef = useRef<string | null>(null);
   const probeFile = async (path: string) => {
     latestProbePathRef.current = path;
+    if (isRemotePath(path)) {
+      // Nothing to read here yet: it is copied from the server when it is sent.
+      setStatus({ kind: "idle" });
+      return;
+    }
     setStatus({ kind: "probing" });
     try {
       const r = await invoke<{ is_ps5upload: boolean; code: string }>(
@@ -352,7 +359,8 @@ export default function SendPanel() {
     const startedPort = parsedPort;
     const startedPath = elfPath;
     try {
-      await sendPayload(startedHost, startedPath, startedPort);
+      // A payload on a saved server is copied here first; the loader sends local bytes.
+      await sendPayload(startedHost, await materializeRemote(startedPath), startedPort);
       setStatus({ kind: "sent", bytes: 0 });
       void commitToHistory({
         path: startedPath,
@@ -491,15 +499,19 @@ export default function SendPanel() {
             {tr("sendpayload_payload_file", undefined, "Payload file")}
           </label>
           <div className="mt-2 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={pickFile}
+            <BrowseButton
+              mode="file"
+              remote
+              className="shrink-0"
+              label={tr("sendpayload_choose", undefined, "Choose")}
+              filters={[
+                { name: "Payload", extensions: ["elf", "bin", "js", "lua", "jar"] },
+                { name: "All files", extensions: ["*"] },
+              ]}
               disabled={status.kind === "sending"}
-              className="flex shrink-0 items-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-2 text-sm hover:bg-[var(--color-surface-3)] disabled:opacity-50"
-            >
-              <FolderOpen size={14} />
-              {tr("sendpayload_choose", undefined, "Choose")}
-            </button>
+              onMainClick={() => void pickFile()}
+              onPick={(p) => applyPathRef.current(p)}
+            />
             <input
               value={elfPathText}
               onChange={(e) => updateElfPath(e.target.value)}

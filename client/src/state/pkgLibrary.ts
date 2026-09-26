@@ -1,3 +1,5 @@
+import { displayPath, isRemotePath } from "../lib/remotePath";
+import { useConnectionsStore } from "./connections";
 import { trStatic } from "../lib/trStatic";
 import { isInstallPackagePath } from "../lib/pkgDropDedupe";
 import { patchInstallFailure } from "../lib/dpiUnavailable";
@@ -3865,6 +3867,8 @@ const makePkgLibraryStore = () =>
         typeof source === "object" && "remoteUrl" in source ? source.remoteUrl : null;
       const smb = typeof source === "object" && "smb" in source ? source.smb : null;
       const localPcPath = typeof source === "string" ? source : null;
+      // A package on a saved server: the engine reads it (header included) by its remote path.
+      const serverPath = localPcPath && isRemotePath(localPcPath) ? localPcPath : null;
       const sourceName = remoteUrl
         ? basenameOf(new URL(remoteUrl).pathname) || "package"
         : smb
@@ -3884,7 +3888,9 @@ const makePkgLibraryStore = () =>
           ? { remote: true }
           : smb
             ? { smb: { server: smb.server, share: smb.share, path: smb.path } }
-            : { localPcPath },
+            : serverPath
+              ? { remotePath: displayPath(serverPath, (id) => useConnectionsStore.getState().nameOf(id)) }
+              : { localPcPath },
         status: "queued",
       });
       opts?.onTask?.(taskId);
@@ -3977,12 +3983,12 @@ const makePkgLibraryStore = () =>
           fingerprint?: string;
         };
         let totalBytes: number;
-        if (smb) {
+        if (smb || serverPath) {
           // The engine reads the header off the share itself when the install
           // starts (the same ranges it then serves), so there is nothing to
           // probe here — a second read of the share would only add latency.
           head = {};
-          totalBytes = smb.size ?? 0;
+          totalBytes = smb?.size ?? 0;
         } else if (remoteUrl) {
           try {
             const probe = (await invoke("pkg_remote_probe", {

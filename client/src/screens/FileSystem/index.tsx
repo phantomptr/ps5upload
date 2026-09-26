@@ -31,6 +31,7 @@ import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { isInstallPackagePath } from "../../lib/pkgDropDedupe";
 import { PageHeader, Button, ConnectionGate, Spinner, ErrorCard } from "../../components";
+import { BrowseButton } from "../../components/BrowseButton";
 import EditSessionBanner from "../../components/EditSessionBanner";
 // Direct import to avoid the barrel's circular-dep warning at build.
 import {
@@ -1060,6 +1061,12 @@ export default function FileSystemScreen() {
       ),
     });
     if (!picked || picked.length === 0) return;
+    await addPicked(picked);
+  };
+
+  /** Upload picked files (local or on a saved server) into this folder, asking first when
+   *  one would overwrite a file already here. */
+  const addPicked = async (picked: string[]) => {
     // Merge by default, ask on collision. Adding files that don't exist here
     // yet needs no ceremony; overwriting one the user may not have realised
     // was already there does. The upload itself replaces the remote file, so
@@ -1852,15 +1859,16 @@ export default function FileSystemScreen() {
         loading={loading}
         right={
           <div className="flex items-center gap-1.5">
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={<Upload size={12} />}
-              onClick={addFilesHere}
+            <BrowseButton
+              mode="file"
+              remote
+              icon={<Upload size={12} />}
+              label={tr("fs_add_files", "Add files")}
+              title={tr("fs_add_files_dialog_title", undefined, "Pick files to copy onto the PS5")}
               disabled={loading || !host?.trim() || busyEntry !== null}
-            >
-              {tr("fs_add_files", "Add files")}
-            </Button>
+              onMainClick={() => void addFilesHere()}
+              onPick={(p) => void addPicked([p])}
+            />
             <Button
               variant="secondary"
               size="sm"

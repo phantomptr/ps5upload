@@ -9,6 +9,7 @@ import type { Connection } from "../api/remote";
 import { pickPath, type PickPathOptions } from "../lib/pickPath";
 import { displayPath, isRemotePath } from "../lib/remotePath";
 import { useConnectionsStore, type ConnStatus } from "../state/connections";
+import { Spinner } from "./Spinner";
 import { useTr } from "../state/lang";
 
 const PROTOCOL: Record<Connection["protocol"], string> = {
@@ -26,7 +27,15 @@ export interface BrowseButtonProps {
   remote?: boolean;
   label?: string;
   disabled?: boolean;
+  /** Spinner on the main button while its work runs. */
+  busy?: boolean;
+  /** Hover text on the main button. */
+  tooltip?: string;
+  icon?: React.ReactNode;
   className?: string;
+  /** Replaces the main click (a screen with its own local flow keeps it); the ▾ still picks
+   *  from servers and hands the path to `onPick`. */
+  onMainClick?: () => void;
   onPick: (path: string) => void;
 }
 
@@ -127,11 +136,12 @@ export function BrowseButton(props: BrowseButtonProps) {
     <div ref={wrap} className={`relative inline-flex ${props.className ?? ""}`}>
       <button
         type="button"
-        disabled={props.disabled}
+        disabled={props.disabled || props.busy}
+        title={props.tooltip}
         className={`${base} ${props.remote ? "rounded-s-md" : "rounded-md"}`}
-        onClick={() => void pick()}
+        onClick={() => (props.onMainClick ? props.onMainClick() : void pick())}
       >
-        <FolderOpen size={14} />
+        {props.busy ? <Spinner size={14} tone="inherit" /> : (props.icon ?? <FolderOpen size={14} />)}
         {label}
       </button>
       {props.remote && (
@@ -152,7 +162,11 @@ export function BrowseButton(props: BrowseButtonProps) {
         <BrowseMenu
           connections={connections}
           status={status}
-          onLocal={() => void pick()}
+          onLocal={() => {
+            setOpen(false);
+            if (props.onMainClick) props.onMainClick();
+            else void pick();
+          }}
           onPickServer={(id) => void pick({ connectionId: id })}
           onAdd={() => {
             setOpen(false);

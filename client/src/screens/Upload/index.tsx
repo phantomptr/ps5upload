@@ -73,9 +73,10 @@ import {
   type ArchiveSetIssue,
 } from "../../lib/archiveParts";
 import { localFs } from "../../api/localFs";
-import { OverflowMenu } from "../../components/OverflowMenu";
 import FfpkgInspectorPanel from "./FfpkgInspectorPanel";
 import FolderDiffPanel from "./FolderDiffPanel";
+import { BrowseButton } from "../../components/BrowseButton";
+import { isRemotePath } from "../../lib/remotePath";
 import { useUploadSettingsStore } from "../../state/uploadSettings";
 import { useUploadQueueStore } from "../../state/uploadQueue";
 import { usePkgLibrary, PKG_LIBRARY_DIR } from "../../state/pkgLibrary";
@@ -643,6 +644,8 @@ export default function UploadScreen() {
         dropActive={dropActive}
         onFile={handleChooseFile}
         onFolder={handleChooseFolder}
+        onRemoteFile={(p) => void pickFile(p)}
+        onRemoteFolder={(p) => void pickFolder(p)}
       />
 
       {source && (
@@ -700,11 +703,15 @@ function Step1Picker({
   dropActive,
   onFile,
   onFolder,
+  onRemoteFile,
+  onRemoteFolder,
 }: {
   active: boolean;
   dropActive: boolean;
   onFile: () => void;
   onFolder: () => void;
+  onRemoteFile: (path: string) => void;
+  onRemoteFolder: (path: string) => void;
 }) {
   const tr = useTr();
   return (
@@ -736,32 +743,23 @@ function Step1Picker({
             )}
       </div>
       <div className="mt-4 flex items-center justify-center gap-2">
-        {/* One unified picker. Native OS dialogs can't offer "file or folder"
-            in a single prompt, so the menu splits them — but drag-drop above
-            needs no choice at all (it stats the path and auto-detects). */}
-        <OverflowMenu
-          align="left"
-          triggerVariant="secondary"
-          triggerLabel={tr("upload_browse", undefined, "Browse")}
-          triggerIcon={<FolderOpen size={14} />}
-          ariaLabel={tr("upload_browse", undefined, "Browse")}
-          buttonTitle={tr(
-            "upload_browse_title",
-            undefined,
-            "Pick a file or folder",
-          )}
-          items={[
-            {
-              label: tr("upload_choose_file", undefined, "Choose file"),
-              icon: <FileIcon size={14} />,
-              onSelect: onFile,
-            },
-            {
-              label: tr("upload_choose_folder", undefined, "Choose folder"),
-              icon: <FolderOpen size={14} />,
-              onSelect: onFolder,
-            },
-          ]}
+        {/* Native OS dialogs can't offer "file or folder" in one prompt, so there are two
+            pickers — but drag-drop above needs no choice at all (it stats the path and
+            auto-detects). The ▾ on each picks from a saved server instead. */}
+        <BrowseButton
+          mode="file"
+          remote
+          icon={<FileIcon size={14} />}
+          label={tr("upload_choose_file", undefined, "Choose file")}
+          onMainClick={onFile}
+          onPick={onRemoteFile}
+        />
+        <BrowseButton
+          mode="folder"
+          remote
+          label={tr("upload_choose_folder", undefined, "Choose folder")}
+          onMainClick={onFolder}
+          onPick={onRemoteFolder}
         />
       </div>
       <p className="mx-auto mt-3 max-w-md text-xs text-[var(--color-muted)]">
@@ -2885,6 +2883,8 @@ function FolderDiffSlot({
   const host = useConnectionStore((s) => s.host);
   if (source.kind !== "folder" && source.kind !== "game-folder") return null;
   if (!destinationVolume || !host?.trim()) return null;
+  // The diff walks the source on local disk; a folder on a saved server uploads in full.
+  if (isRemotePath(source.path)) return null;
   const leaf =
     source.path.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "";
   const dest =

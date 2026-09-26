@@ -3,12 +3,12 @@
 
 const SCHEME = "remote://";
 
-export function isRemotePath(p: string | null | undefined): p is string {
+export function isRemotePath(p: string | null | undefined): boolean {
   return typeof p === "string" && p.startsWith(SCHEME);
 }
 
 export function parseRemotePath(p: string): { connectionId: string; path: string } | null {
-  if (!isRemotePath(p)) return null;
+  if (!p.startsWith(SCHEME)) return null;
   const rest = p.slice(SCHEME.length);
   const slash = rest.indexOf("/");
   const connectionId = slash < 0 ? rest : rest.slice(0, slash);
