@@ -247,6 +247,175 @@ pub struct PkgInstallState {
 
 pub type PkgInstallStateHandle = Arc<PkgInstallState>;
 
+impl PkgInstallState {
+    /// The state a starting engine opens with: any install sessions the previous engine
+    /// process was serving, so a restart mid-install keeps answering the console.
+    pub fn restored() -> Self {
+        let sessions = persist::load();
+        if !sessions.is_empty() {
+            crate::log_info!(
+                "pkg-host: resumed {} install session(s) from before the engine restarted",
+                sessions.len()
+            );
+        }
+        Self {
+            sessions: Mutex::new(sessions),
+        }
+    }
+}
+
+/// Install sessions that outlive the engine process.
+///
+/// The console fetches a package from a URL naming its session, for hours on a large title, and
+/// retries a range a few times before failing the install (`0x80b22404`). An engine that
+/// restarts meanwhile (an app update, a crash, `tauri dev` rebuilding the desktop app) used to
+/// come back with an empty session map and answer 404, killing a 119 GB install at 13%. Each
+/// session serving local files is therefore written to disk, and a starting engine takes back
+/// those whose files are still exactly as they were. Link sessions are not kept: they hold a
+/// live connection to their origin.
+mod persist {
+    use super::*;
+
+    #[derive(Serialize, Deserialize)]
+    struct Saved {
+        id: String,
+        parts: Vec<PathBuf>,
+        part_sizes: Vec<u64>,
+        total_size: u64,
+        content_id: String,
+        title: String,
+        package_type: String,
+        package_fingerprint: String,
+        ps5_mgmt_addr: String,
+        serve_only: bool,
+        staging_path: Option<String>,
+        created_at_unix: u64,
+        last_activity_unix: u64,
+    }
+
+    /// `PS5UPLOAD_STATE_DIR`, else `~/.ps5upload/state`. Tests use only an explicit directory.
+    fn path() -> Option<PathBuf> {
+        let dir = match std::env::var("PS5UPLOAD_STATE_DIR") {
+            Ok(v) if !v.trim().is_empty() => PathBuf::from(v),
+            _ if cfg!(test) => return None,
+            _ => {
+                let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"));
+                PathBuf::from(home.ok().filter(|h| !h.trim().is_empty())?)
+                    .join(".ps5upload")
+                    .join("state")
+            }
+        };
+        std::fs::create_dir_all(&dir).ok()?;
+        Some(dir.join("pkg-host-sessions.json"))
+    }
+
+    /// Write every session still serving local files. Best effort: a failure only loses the
+    /// ability to resume after a restart.
+    pub(super) fn save(sessions: &HashMap<String, InstallSession>) {
+        if let Some(path) = path() {
+            save_to(&path, sessions);
+        }
+    }
+
+    pub(super) fn save_to(path: &std::path::Path, sessions: &HashMap<String, InstallSession>) {
+        let saved: Vec<Saved> = sessions
+            .values()
+            .filter(|s| {
+                s.remote.is_none()
+                    && !s.parts.is_empty()
+                    && !s.cancelled
+                    && s.terminal_status.is_none()
+            })
+            .map(|s| Saved {
+                id: s.id.clone(),
+                parts: s.parts.clone(),
+                part_sizes: s.part_sizes.clone(),
+                total_size: s.total_size,
+                content_id: s.content_id.clone(),
+                title: s.title.clone(),
+                package_type: s.package_type.clone(),
+                package_fingerprint: s.package_fingerprint.clone(),
+                ps5_mgmt_addr: s.ps5_mgmt_addr.clone(),
+                serve_only: s.serve_only,
+                staging_path: s.staging_path.clone(),
+                created_at_unix: s.created_at_unix,
+                last_activity_unix: s.last_activity_unix,
+            })
+            .collect();
+        let Ok(json) = serde_json::to_vec(&saved) else {
+            return;
+        };
+        let tmp = path.with_extension("json.tmp");
+        if let Err(e) = std::fs::write(&tmp, json).and_then(|()| std::fs::rename(&tmp, path)) {
+            crate::log_warn!("pkg-host: could not save install sessions: {e}");
+        }
+    }
+
+    /// The saved sessions still worth serving: not past the session age limit, every part
+    /// still present at its recorded size.
+    pub(super) fn load() -> HashMap<String, InstallSession> {
+        path().map(|p| load_from(&p)).unwrap_or_default()
+    }
+
+    pub(super) fn load_from(path: &std::path::Path) -> HashMap<String, InstallSession> {
+        let Ok(bytes) = std::fs::read(path) else {
+            return HashMap::new();
+        };
+        let saved: Vec<Saved> = serde_json::from_slice(&bytes).unwrap_or_default();
+        let now = now_unix();
+        let max_age = pkg_session_max_age_sec();
+        saved
+            .into_iter()
+            .filter(|s| now.saturating_sub(s.last_activity_unix) < max_age)
+            .filter(|s| {
+                s.parts.len() == s.part_sizes.len()
+                    && s.parts.iter().zip(&s.part_sizes).all(|(p, &size)| {
+                        std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.len() == size)
+                    })
+            })
+            .map(|s| {
+                let session = InstallSession {
+                    id: s.id.clone(),
+                    parts: s.parts,
+                    part_sizes: s.part_sizes,
+                    total_size: s.total_size,
+                    content_id: s.content_id,
+                    title: s.title,
+                    package_type: s.package_type,
+                    package_fingerprint: s.package_fingerprint,
+                    ps5_mgmt_addr: s.ps5_mgmt_addr,
+                    task_id: None,
+                    err_code: 0,
+                    detail: String::new(),
+                    cancelled: false,
+                    created_at_unix: s.created_at_unix,
+                    last_activity_unix: now,
+                    staging_path: s.staging_path,
+                    terminal_status: None,
+                    launchable: None,
+                    serve_only: s.serve_only,
+                    notified_console: false,
+                    install_start_free_bytes: None,
+                    progress_consumed_bytes: 0,
+                    last_progress_unix: None,
+                    stalled: false,
+                    accepted_unverified: false,
+                    requests_served: 0,
+                    last_rate_log_unix: 0,
+                    bytes_served: 0,
+                    transfer_bytes: 0,
+                    transfer: TransferCoverage::new(s.total_size),
+                    dpi_ok: None,
+                    dpi_rc: None,
+                    dpi_detail: String::new(),
+                    remote: None,
+                };
+                (s.id, session)
+            })
+            .collect()
+    }
+}
+
 /// Where uploaded packages land before a stream install serves them. Beside the
 /// engine's other scratch state; each upload gets a UUID subdir so concurrent
 /// uploads and the same filename don't collide.
@@ -1816,6 +1985,7 @@ async fn install_start_handler(
         if rival_info.is_none() {
             sessions.insert(session_id.clone(), session.clone());
         }
+        persist::save(&sessions);
         rival_info
     };
     if let Some((rid, served, total, reqs)) = rival {
@@ -2877,6 +3047,7 @@ fn gc_old_sessions(state: &PkgInstallStateHandle) {
     let now = now_unix();
     let max_age = pkg_session_max_age_sec();
     let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+    let before = sessions.len();
     sessions.retain(|_, s| {
         // Always keep sessions younger than the GC threshold; drop
         // older ones regardless of state. A session that's still
@@ -2886,6 +3057,10 @@ fn gc_old_sessions(state: &PkgInstallStateHandle) {
         // legitimately polling a 2h-old session anyway).
         now.saturating_sub(s.last_activity_unix.max(s.created_at_unix)) < max_age
     });
+    // Runs on every status poll: rewrite the saved sessions only when some went.
+    if sessions.len() != before {
+        persist::save(&sessions);
+    }
 }
 
 async fn install_status_handler(
@@ -6174,6 +6349,62 @@ mod loader_route_tests {
             dpi_send_failure_reason(&err),
             pl::DPI_REASON_LOADER_UNREACHABLE
         );
+    }
+}
+
+#[cfg(test)]
+mod persist_tests {
+    use super::*;
+
+    fn session(id: &str, part: PathBuf, size: u64) -> InstallSession {
+        let mut sessions = persist::load_from(std::path::Path::new("/nonexistent"));
+        assert!(sessions.is_empty());
+        let saved = serde_json::json!([{
+            "id": id, "parts": [part], "part_sizes": [size], "total_size": size,
+            "content_id": "UP0000-TEST00000_00-0000000000000000", "title": "t",
+            "package_type": "app", "package_fingerprint": "f", "ps5_mgmt_addr": "1.2.3.4:9114",
+            "serve_only": true, "staging_path": null,
+            "created_at_unix": now_unix(), "last_activity_unix": now_unix()
+        }]);
+        let dir = std::env::temp_dir().join(format!("ps5u-persist-{id}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("s.json");
+        std::fs::write(&file, saved.to_string()).unwrap();
+        sessions = persist::load_from(&file);
+        sessions.remove(id).expect("restored")
+    }
+
+    /// A restarted engine serves the sessions it was serving, and only while their files are
+    /// unchanged.
+    #[test]
+    fn sessions_survive_a_restart_while_their_files_do() {
+        let dir = std::env::temp_dir().join(format!("ps5u-persist-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pkg = dir.join("game.pkg");
+        std::fs::write(&pkg, vec![7u8; 4096]).unwrap();
+        let file = dir.join("sessions.json");
+
+        let s = session("a", pkg.clone(), 4096);
+        let mut map = HashMap::new();
+        map.insert(s.id.clone(), s);
+        persist::save_to(&file, &map);
+        let back = persist::load_from(&file);
+        let got = back.get("a").expect("the session comes back");
+        assert_eq!(got.parts, vec![pkg.clone()]);
+        assert_eq!(got.total_size, 4096);
+        assert!(got.serve_only);
+
+        // A finished or cancelled session is not kept.
+        map.get_mut("a").unwrap().cancelled = true;
+        persist::save_to(&file, &map);
+        assert!(persist::load_from(&file).is_empty());
+
+        // A package that changed size is not served in the old one's place.
+        map.get_mut("a").unwrap().cancelled = false;
+        persist::save_to(&file, &map);
+        std::fs::write(&pkg, vec![7u8; 100]).unwrap();
+        assert!(persist::load_from(&file).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

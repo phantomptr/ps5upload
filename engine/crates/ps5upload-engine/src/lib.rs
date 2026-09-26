@@ -9309,7 +9309,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         // independent of the main engine state. Merged at this point
         // so the pkg routes share the same listener + CORS + body limit.
         .merge(pkg_install::router(std::sync::Arc::new(
-            pkg_install::PkgInstallState::default(),
+            pkg_install::PkgInstallState::restored(),
         )))
         // Downloading a link to disk before installing it. Separate state for
         // the same reason as the install sessions: its progress is polled
