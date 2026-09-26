@@ -55,14 +55,25 @@ export default function FpkgConvertScreen() {
   const [inspection, setInspection] = useState<FpkgInspection | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const jobId = useFpkgConversion((s) => s.jobId);
-  const job = useFpkgConversion((s) => s.job);
-  const jobError = useFpkgConversion((s) => s.error);
-  const starting = useFpkgConversion((s) => s.starting);
-  const startConversion = useFpkgConversion((s) => s.start);
+  // Interim bridge onto the pipeline store; the redesigned screen replaces all of this.
+  const pipeline = useFpkgConversion((s) => s.pipeline);
+  const startPipeline = useFpkgConversion((s) => s.start);
+  const startConversion = (req: Parameters<typeof startPipeline>[0]) =>
+    startPipeline(req, { install: false, host: null });
   const startCompression = useFpkgConversion((s) => s.compress);
-  const kind = useFpkgConversion((s) => s.kind);
   const cancelConversion = useFpkgConversion((s) => s.cancel);
+  const kind = pipeline.phase !== "idle" && pipeline.mode === "ffpfsc" ? "ffpfsc" : "fpkg";
+  const jobId = pipeline.phase === "running" ? pipeline.jobId : null;
+  const starting = false;
+  const jobError = pipeline.phase === "failed" ? pipeline.message : null;
+  const job =
+    pipeline.phase === "running"
+      ? { status: "running" as const, bytes_sent: pipeline.stageDone, total_bytes: pipeline.stageTotal, dest: undefined as string | undefined, error: undefined as string | undefined }
+      : pipeline.phase === "done"
+        ? { status: "done" as const, bytes_sent: pipeline.packageBytes, total_bytes: pipeline.packageBytes, dest: pipeline.packagePath as string | undefined, error: undefined as string | undefined }
+        : pipeline.phase === "failed"
+          ? { status: "failed" as const, bytes_sent: 0, total_bytes: 0, dest: undefined as string | undefined, error: pipeline.message as string | undefined }
+          : null;
   const [compression, setCompression] = useState<FpkgCompression>("balanced");
   // The package's minimum firmware. Empty keeps the game's own; a console older than it
   // refuses the install (0x80a3000d), so it defaults to the connected console's firmware
