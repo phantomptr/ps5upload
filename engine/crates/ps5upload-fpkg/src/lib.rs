@@ -6,6 +6,7 @@
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
+pub mod ampr_index;
 pub mod build;
 pub mod cnt;
 pub mod cnt_write;

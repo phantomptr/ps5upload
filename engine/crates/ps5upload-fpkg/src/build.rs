@@ -103,6 +103,9 @@ fn spool_path(partial: &Path) -> PathBuf {
     }
 }
 
+/// The AMPR file index a libSceAmpr title reads from the image root.
+const AMPR_INDEX: &str = "ampr_emu.index";
+
 /// A file in a backport's `fakelib/` folder, which is packaged byte for byte.
 fn is_fakelib(path: &str) -> bool {
     path.split('/')
@@ -354,6 +357,33 @@ fn build_mode(
         !(cnt_write::CONTAINER_ONLY.contains(&f.path.as_str()) && carried.contains(f.path.as_str()))
     });
     let time = request.time.unwrap_or_else(now);
+    // A libSceAmpr title looks its files up through `ampr_emu.index` at the image root (see
+    // `ampr_index`); a dump without one gets one generated from exactly the files packaged.
+    let mut generated: std::collections::HashMap<String, Vec<u8>> =
+        std::collections::HashMap::new();
+    if !files
+        .iter()
+        .any(|f| f.path.eq_ignore_ascii_case(AMPR_INDEX))
+        && source::imports_ampr(tree.as_mut(), "eboot.bin")
+    {
+        let listed: Vec<(String, u64)> = files.iter().map(|f| (f.path.clone(), f.size)).collect();
+        match crate::ampr_index::build(&listed, time.0) {
+            Some(index) => {
+                progress(&format!(
+                    "generating {AMPR_INDEX} for libSceAmpr ({} files)",
+                    listed.len()
+                ));
+                files.push(SourceFile {
+                    path: AMPR_INDEX.to_string(),
+                    size: index.len() as u64,
+                });
+                generated.insert(AMPR_INDEX.to_string(), index);
+            }
+            None => progress(&format!(
+                "not generating {AMPR_INDEX}: two files differ only in case"
+            )),
+        }
+    }
     // A plaintext package carries the marker where a native one carries its random seed, so the
     // slot and the mode can never disagree and `request.seed` only has meaning in the native mode.
     let seed = match request.image_mode {
@@ -432,6 +462,10 @@ fn build_mode(
                     let at = (offset as usize).min(param_json.len());
                     return Ok(param_json[at..(at + len).min(param_json.len())].to_vec());
                 }
+                if let Some(bytes) = generated.get(path) {
+                    let at = (offset as usize).min(bytes.len());
+                    return Ok(bytes[at..(at + len).min(bytes.len())].to_vec());
+                }
                 if let Some((repair, original)) = repairs.get(path) {
                     let mut read = |o: u64, l: usize| tree.read_range(path, o, l);
                     return repair.read(*original, offset, len, &mut read);
@@ -487,6 +521,7 @@ fn build_mode(
                 match sizes.get(path) {
                     Some(0) => Ok(Vec::new()),
                     Some(_) if path == "sce_sys/param.json" => Ok(param_json.clone()),
+                    Some(_) if generated.contains_key(path) => Ok(generated[path].clone()),
                     Some(&size) => match repairs.get(path) {
                         Some((repair, original)) => {
                             let mut read = |o: u64, l: usize| tree.read_range(path, o, l);

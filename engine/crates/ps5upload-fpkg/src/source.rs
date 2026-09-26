@@ -501,7 +501,7 @@ const AMPR_LIB: &[u8] = b"libSceAmpr";
 /// segment that holds its dynamic section, which in Spider-Man 2's 179 MB `eboot.bin` starts
 /// 153 MB in. So the front is scanned, then that segment, found through the module's headers
 /// (or, when they cannot be read, the module's last [`AMPR_SEGMENT_LIMIT`] bytes).
-fn imports_ampr(tree: &mut dyn SourceTree, rel: &str) -> bool {
+pub(crate) fn imports_ampr(tree: &mut dyn SourceTree, rel: &str) -> bool {
     if scan_for(tree, rel, 0, AMPR_SCAN_LIMIT, AMPR_LIB) {
         return true;
     }
@@ -667,16 +667,18 @@ pub fn readiness(tree: &mut dyn SourceTree) -> Readiness {
     // Spider-Man 2 built without `ampr_emu.index` exited at startup ("returned from main",
     // CE-108255-1); the same build with the index at the folder root played (FW 5.10).
     if imports_ampr(tree, "eboot.bin") {
-        let has_index = tree.files().iter().any(|f| f.path == "ampr_emu.index");
+        let has_index = tree
+            .files()
+            .iter()
+            .any(|f| f.path.eq_ignore_ascii_case("ampr_emu.index"));
         r.push(
             "ampr_emu.index for a libSceAmpr title",
-            has_index,
+            true,
             if has_index {
                 "eboot.bin imports libSceAmpr and the folder carries ampr_emu.index"
             } else {
-                "eboot.bin imports libSceAmpr but the folder has no ampr_emu.index at its root: \
-                 the game will likely install and then close at startup. Copy ampr_emu.index \
-                 from a working package of the same game into the folder's root"
+                "eboot.bin imports libSceAmpr; the package will carry an ampr_emu.index \
+                 generated from its files (the folder has none)"
             },
         );
     }
@@ -1019,17 +1021,15 @@ mod tests {
         let mut tree = open(&dir).unwrap();
         let without_index = readiness(tree.as_mut());
 
-        // The AMPR finding is a WARNING, so it surfaces through `warnings()` — the same
-        // iterator the build turns into the user-visible list.
+        // The build generates the index, so the finding is reported as handled: it says the
+        // package will carry a generated one rather than warning of a startup failure.
         let ampr = without_index
-            .warnings()
+            .checks
+            .iter()
             .find(|c| c.name == "ampr_emu.index for a libSceAmpr title")
-            .expect("an ampr warning");
-        assert!(ampr.detail.contains("ampr_emu.index"), "{}", ampr.detail);
-        assert!(
-            !without_index.ok(),
-            "an AMPR title without its index must not read as all-clear"
-        );
+            .expect("the ampr check");
+        assert!(ampr.ok, "{}", ampr.detail);
+        assert!(ampr.detail.contains("generated"), "{}", ampr.detail);
 
         // With the index at the root, the same title passes that check.
         std::fs::write(dir.join("ampr_emu.index"), b"AMPRIDX3").unwrap();

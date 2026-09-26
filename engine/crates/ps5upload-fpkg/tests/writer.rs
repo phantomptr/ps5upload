@@ -353,3 +353,62 @@ fn a_kraken_package_decodes_back_to_its_source() {
         );
     }
 }
+
+/// A title whose module imports libSceAmpr gets an `ampr_emu.index` generated into its image
+/// root when the dump has none, listing every packaged file at its packaged size; a title that
+/// does not import it gets none.
+#[test]
+fn a_libsceampr_title_gets_an_ampr_index() {
+    use ps5upload_fpkg::kraken_image;
+    let mount_of = |source: &Path, name: &str| -> Vec<u8> {
+        let out = TempDir::new(name);
+        let mut request = BuildRequest::new(source, out.path());
+        request.time = Some((1_700_000_000, 0));
+        let mut phases = Vec::new();
+        let report = build::build(&request, &mut |p| phases.push(p.to_string())).unwrap();
+        assert!(report.verify.ok(), "{}", report.verify);
+        let naps = outer_file(&report.path, "naps_pkg_layout.dat");
+        let image = outer_file(&report.path, "pfs_image.dat");
+        let blocks = kraken_image::describe(&naps).unwrap();
+        let size = blocks.last().map(|b| b.logical + b.len).unwrap();
+        let mut mount = vec![0u8; size as usize];
+        for b in &blocks {
+            let bytes = kraken_image::decode_described(&image, b).unwrap();
+            mount[b.logical as usize..(b.logical + b.len) as usize].copy_from_slice(&bytes);
+        }
+        mount
+    };
+    let find = |hay: &[u8], needle: &[u8]| hay.windows(needle.len()).position(|w| w == needle);
+
+    let plain = TempDir::new("ampr-plain");
+    write_tree(plain.path());
+    assert!(find(&mount_of(plain.path(), "ampr-plain-out"), b"AMPRIDX3").is_none());
+
+    let ampr = TempDir::new("ampr-src");
+    write_tree(ampr.path());
+    let mut eboot: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
+    eboot[1000..1014].copy_from_slice(b"libSceAmpr.prx");
+    std::fs::write(ampr.path().join("eboot.bin"), &eboot).unwrap();
+    let mount = mount_of(ampr.path(), "ampr-out");
+    let at = find(&mount, b"AMPRIDX3").expect("the image carries an ampr_emu.index");
+    let index = &mount[at..];
+    let u64_at = |o: usize| u64::from_le_bytes(index[o..o + 8].try_into().unwrap());
+    let u32_at = |o: usize| u32::from_le_bytes(index[o..o + 4].try_into().unwrap());
+    let n = u64_at(0x10) as usize;
+    let paths_at = 0x30 + n * 24;
+    let listed: Vec<(String, u64)> = (0..n)
+        .map(|i| {
+            let r = 0x30 + i * 24;
+            let (off, len) = (u32_at(r) as usize, u32_at(r + 4) as usize);
+            let path = std::str::from_utf8(&index[paths_at + off..paths_at + off + len]).unwrap();
+            (path.to_string(), u64_at(r + 8))
+        })
+        .collect();
+    assert!(
+        listed.contains(&("/app0/eboot.bin".to_string(), 4096)),
+        "{listed:?}"
+    );
+    assert!(listed.contains(&("/app0/data/large.bin".to_string(), 600 * 1024)));
+    // The icons the container carries instead of the image are not listed.
+    assert!(!listed.iter().any(|(p, _)| p == "/app0/sce_sys/icon0.png"));
+}
