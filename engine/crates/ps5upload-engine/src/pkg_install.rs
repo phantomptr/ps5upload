@@ -244,6 +244,9 @@ pub struct PkgInstallState {
     /// partially-mutated session row is no worse than a stale row,
     /// and the next status poll / GC pass cleans it up.
     pub sessions: Mutex<HashMap<String, InstallSession>>,
+    /// Unified-install (spec 2) job store: one install per console, statuses
+    /// polled via `/api/pkg/install/status`.
+    pub jobs: crate::install::JobStore,
 }
 
 pub type PkgInstallStateHandle = Arc<PkgInstallState>;
@@ -261,6 +264,7 @@ impl PkgInstallState {
         }
         Self {
             sessions: Mutex::new(sessions),
+            jobs: crate::install::JobStore::new(),
         }
     }
 }
@@ -644,8 +648,19 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         // the whole image to the PS5 first.
         .route("/api/ffpkg/extract", post(extract_handler))
         .route("/api/pkg/remote/probe", post(remote_probe_handler))
-        .route("/api/pkg/install/start", post(install_start_handler))
-        .route("/api/pkg/install/status", get(install_status_handler))
+        // Unified install (spec 2): one endpoint owns resolve → deliver →
+        // install (through the :9115 daemon) → verify → record. Replaces the
+        // old install/start + dpi-* surface. Status is per-job; history is a
+        // per-console log.
+        .route("/api/pkg/install", post(crate::install::install_handler))
+        .route(
+            "/api/pkg/install/status",
+            get(crate::install::install_status_handler),
+        )
+        .route(
+            "/api/pkg/install/history",
+            get(crate::install::install_history_handler),
+        )
         .route("/api/pkg/install/sessions", get(install_sessions_handler))
         .route("/api/pkg/install/cancel", post(install_cancel_handler))
         .route("/api/pkg/installed", get(installed_pkg_inventory_handler))
@@ -653,30 +668,6 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         // install tracker uses, so the UI and the completion check can't
         // disagree. Read-only; safe to poll from the package list.
         .route("/api/pkg/install/preflight", get(install_preflight_handler))
-        // Install a staged .pkg through the standalone DPI daemon (:9040).
-        // The daemon runs sceAppInstUtilAppInstallPkg from a clean loader
-        // process — installs without the PlayGo gate. Caller stages the
-        // pkg first and passes the bare PS5 path. See payload/installer/.
-        .route("/api/pkg/dpi-install", post(dpi_install_handler))
-        // Bring that daemon up in the first place, and put the ps5upload
-        // helper back afterwards. The desktop client does both itself from
-        // its own embedded ELFs; a browser can do neither, which left the
-        // web UI with no DPI fallback at all — so no way to install a game
-        // patch (the web UI half of #152). See `bundled_payload`.
-        .route("/api/pkg/dpi-ensure", post(dpi_ensure_handler))
-        .route("/api/pkg/payload-restore", post(payload_restore_handler))
-        // Direct/streaming install (beta, #81): skip the staging upload
-        // entirely — the engine serves the pkg at /pkg-host/ and the DPI
-        // daemon pulls it straight over HTTP. Useful when PS5 disk space
-        // is tight or for a quick one-shot install from a machine that
-        // already has the pkg mounted.
-        .route(
-            "/api/pkg/dpi-direct-install",
-            post(dpi_direct_install_handler),
-        )
-        // Read-only progress of a daemon loopback job (spec §4): bytes_served
-        // / total for an "upload & install" job on :9115.
-        .route("/api/pkg/installer-job", get(installer_job_handler))
         // The session UUID is the lookup key. We allow ANY {filename} so the
         // URL can carry the pkg's canonical `<ContentID>.pkg` name that
         // Sony's installer cross-checks against the pkg header. Without
@@ -1496,7 +1487,7 @@ fn delete_staging_with_retry(addr: &str, path: &str, label: &str) -> Result<(), 
     Err(last_err.unwrap_or_else(|| "unknown error".to_string()))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct InstallStartResponse {
     pub session_id: String,
     pub url: String,
@@ -1544,7 +1535,7 @@ pub struct InstallStartResponse {
     pub package_type: String,
 }
 
-async fn install_start_handler(
+pub(crate) async fn install_start_handler(
     State(state): State<PkgInstallStateHandle>,
     Json(req): Json<InstallStartRequest>,
 ) -> Response<Body> {
@@ -4175,7 +4166,7 @@ pub struct DpiInstallResponse {
 /// session with a portless address sat at `phase=install` for the full 600 s
 /// stall while the exact package was already installed on the console
 /// (measured 2026-09-14).
-fn normalize_mgmt_addr(addr: &str) -> String {
+pub(crate) fn normalize_mgmt_addr(addr: &str) -> String {
     let host = strip_host_port(addr);
     if host.is_empty() {
         return addr.to_string();
@@ -4196,7 +4187,7 @@ const PS5_MGMT_PORT: u16 = 9114;
 /// Read a title's installed `APP_VER`, or `None` when it cannot be read (title
 /// absent, payload too old, console busy). `None` deliberately means "unknown"
 /// and never "failed" — see patch_verify, which stays inconclusive on it.
-fn read_installed_app_ver(mgmt_addr: &str, title_id: &str) -> Option<String> {
+pub(crate) fn read_installed_app_ver(mgmt_addr: &str, title_id: &str) -> Option<String> {
     let rows =
         ps5upload_core::diagnostics::appinfo_query(mgmt_addr, title_id, Some("APP_VER")).ok()?;
     rows.rows
@@ -4212,7 +4203,7 @@ fn read_installed_app_ver(mgmt_addr: &str, title_id: &str) -> Option<String> {
 /// after the call returned. Polling too early is exactly how this bug was
 /// twice mis-diagnosed, so this waits, and returns the moment the version
 /// moves rather than burning the whole budget on a success.
-fn verify_patch_after_install(
+pub(crate) fn verify_patch_after_install(
     mgmt_addr: &str,
     title_id: &str,
     before: Option<&str>,
@@ -5657,7 +5648,11 @@ pub fn lan_ip_for_ps5(ps5_host: &str) -> std::io::Result<IpAddr> {
 /// Shared by the regular install-start flow (which embeds the URL in
 /// the BGFT register request) and the direct/streaming install flow
 /// (which hands the URL to the DPI daemon instead of a local path).
-fn pkg_host_url_for(ps5_addr: &str, session_id: &str, content_id: &str) -> std::io::Result<String> {
+pub(crate) fn pkg_host_url_for(
+    ps5_addr: &str,
+    session_id: &str,
+    content_id: &str,
+) -> std::io::Result<String> {
     let origin = engine_origin_for_ps5(ps5_addr)?;
     let url_filename = pkg_url_filename(content_id);
     Ok(format!("{origin}/pkg-host/{session_id}/{url_filename}"))
@@ -5755,7 +5750,7 @@ fn link_alias_target(id: &str) -> Option<String> {
 /// that the console re-resolves the alias on every range request (measured:
 /// one redirect per request), so this computer has to stay reachable until
 /// the install finishes, answering tiny redirects.
-fn shorten_for_installer(ps5_addr: &str, url: &str) -> std::io::Result<Option<String>> {
+pub(crate) fn shorten_for_installer(ps5_addr: &str, url: &str) -> std::io::Result<Option<String>> {
     if url.starts_with('/') || url.len() <= MAX_INSTALL_SOURCE_LEN {
         return Ok(None);
     }
@@ -5842,7 +5837,7 @@ fn plain_response(status: StatusCode, msg: &str) -> Response<Body> {
 ///   - input with no port (`1.2.3.4`, `::1`) → returned as-is (without
 ///     brackets if present)
 ///   - empty input → empty string (caller is expected to handle)
-fn strip_host_port(host_port: &str) -> String {
+pub(crate) fn strip_host_port(host_port: &str) -> String {
     // Bracketed IPv6 with port: `[2001:db8::1]:9114` →
     // rsplit_once on `]:` gives `[2001:db8::1` (with leading bracket).
     if let Some((host, port)) = host_port.rsplit_once("]:") {

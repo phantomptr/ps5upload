@@ -176,6 +176,460 @@ pub fn verdict_no_identity(accepted: bool) -> Verdict {
     }
 }
 
+use crate::install::deliver::{decide_delivery, needs_short_alias, Delivery, Source};
+use crate::install::history::HistoryEntry;
+use crate::install::status::Route;
+use crate::pkg_install::PkgInstallStateHandle;
+
+use axum::{
+    extract::{Json, Query, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+pub struct InstallOptions {
+    #[serde(default)]
+    pub delete_source_copy_after: bool,
+    #[serde(default)]
+    pub allow_destructive_reinstall: bool,
+}
+impl Default for InstallOptions {
+    fn default() -> Self {
+        Self {
+            delete_source_copy_after: false,
+            allow_destructive_reinstall: false,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InstallRequest {
+    pub ps5_addr: String,
+    pub source: Source,
+    #[serde(default)]
+    pub content_id: String,
+    #[serde(default)]
+    pub title_id: Option<String>,
+    #[serde(default)]
+    pub package_app_ver: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub options: InstallOptions,
+}
+
+/// Where the install history log lives: `<data>/install-history/`
+/// (`PS5UPLOAD_DATA_DIR`, else `~/.ps5upload`, else a relative dir).
+fn history_dir() -> std::path::PathBuf {
+    crate::remote::store::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from(".ps5upload"))
+        .join("install-history")
+}
+
+/// Kind-only content name for the daemon (never title-bearing).
+fn name_hint(title_id: Option<&str>) -> String {
+    match title_id {
+        Some(t) if !t.trim().is_empty() => format!("{t} (Base)"),
+        _ => String::new(),
+    }
+}
+
+/// `POST /api/pkg/install` — reserve the console, start the async state
+/// machine, return the job id. `busy` (with the active job) if an install is
+/// already running for that console.
+pub async fn install_handler(
+    State(state): State<PkgInstallStateHandle>,
+    Json(req): Json<InstallRequest>,
+) -> Response {
+    let ip = console_id(&req.ps5_addr);
+    if ip.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"ok":false,"error":"ps5_addr is required"})),
+        )
+            .into_response();
+    }
+    let job = match state.jobs.begin(&req.ps5_addr) {
+        Ok(j) => j,
+        Err(active) => {
+            return Json(serde_json::json!({"ok":false,"error":"busy","job":active}))
+                .into_response()
+        }
+    };
+    let st = state.clone();
+    let job2 = job.clone();
+    tokio::spawn(async move {
+        run_install(st, job2, req).await;
+    });
+    Json(serde_json::json!({"ok":true,"job":job})).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct JobQuery {
+    pub job: String,
+}
+
+pub async fn install_status_handler(
+    State(state): State<PkgInstallStateHandle>,
+    Query(q): Query<JobQuery>,
+) -> Response {
+    match state.jobs.get(&q.job) {
+        Some(st) => Json(st).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"ok":false,"error":"no such job"})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AddrQuery {
+    pub ps5_addr: String,
+}
+
+pub async fn install_history_handler(Query(q): Query<AddrQuery>) -> Response {
+    let entries = history::read_recent(&history_dir(), &q.ps5_addr, 50);
+    Json(entries).into_response()
+}
+
+/// The async state machine: resolve → deliver → install → verify → done/failed.
+/// Always clears the active-job guard and records history at the end.
+async fn run_install(state: PkgInstallStateHandle, job: String, req: InstallRequest) {
+    let started = std::time::Instant::now();
+    let ip = console_id(&req.ps5_addr);
+    let mgmt = crate::pkg_install::normalize_mgmt_addr(&req.ps5_addr);
+    let category = req.category.clone().unwrap_or_default();
+    let title_id = req.title_id.clone().filter(|t| !t.trim().is_empty());
+    let route = match decide_delivery(&req.source) {
+        Delivery::Loopback => Route::Loopback,
+        Delivery::Stream => Route::Stream,
+    };
+    state.jobs.update(&job, |s| {
+        s.content_id = req.content_id.clone();
+        s.title_id = title_id.clone();
+        s.route = Some(route);
+        s.phase = Phase::Resolve;
+    });
+
+    // resolve: destructive-reinstall guard.
+    let already_installed = match &title_id {
+        Some(t) => {
+            let (m, t) = (mgmt.clone(), t.clone());
+            tokio::task::spawn_blocking(move || {
+                crate::pkg_install::read_installed_app_ver(&m, &t).is_some()
+            })
+            .await
+            .unwrap_or(false)
+        }
+        None => false,
+    };
+    if let GuardDecision::Refuse = guard_decision(
+        &category,
+        already_installed,
+        req.options.allow_destructive_reinstall,
+    ) {
+        state.jobs.update(&job, |s| {
+            s.phase = Phase::Failed;
+            s.verdict = Some(Verdict::Failed);
+            s.reason = Some(FailReason::DestructiveGuard);
+            s.hint = Some(
+                "this would erase the installed game first; re-run with allow_destructive_reinstall"
+                    .into(),
+            );
+        });
+        finalize(&state, &job, &req, started);
+        return;
+    }
+
+    // deliver: for a stream source, create a serve-only pkg-host session and
+    // get its URL by reusing the existing start handler internally.
+    let app_ver_before = match (&title_id, &req.package_app_ver) {
+        (Some(t), Some(_)) => {
+            let (m, t) = (mgmt.clone(), t.clone());
+            tokio::task::spawn_blocking(move || crate::pkg_install::read_installed_app_ver(&m, &t))
+                .await
+                .ok()
+                .flatten()
+        }
+        _ => None,
+    };
+    state.jobs.update(&job, |s| {
+        s.phase = Phase::Deliver;
+        s.app_ver_before = app_ver_before.clone();
+    });
+    let deliver_started = std::time::Instant::now();
+
+    // ensure the daemon (restore the helper afterwards if it was displaced).
+    let elf = crate::bundled_payload::image_bytes(crate::bundled_payload::Image::Installer).ok();
+    let ip_for_ensure = ip.clone();
+    let ens =
+        tokio::task::spawn_blocking(move || ic::ensure(&ip_for_ensure, elf.as_deref(), false))
+            .await
+            .unwrap_or(ic::Ensure {
+                listening: false,
+                sent: false,
+                state: None,
+                reason: Some("no_bringup"),
+                error: Some("ensure task failed".into()),
+            });
+    if !ens.listening {
+        let mapped = status_from_ensure(&ens);
+        state.jobs.update(&job, |s| {
+            s.phase = Phase::Failed;
+            s.verdict = mapped.verdict;
+            s.reason = mapped.reason;
+            s.hint = mapped.hint.clone();
+        });
+        finalize(&state, &job, &req, started);
+        return;
+    }
+    let displaced = ens.sent;
+
+    // build the install call per source.
+    let hint_name = name_hint(title_id.as_deref());
+    state.jobs.update(&job, |s| s.phase = Phase::Install);
+    let (reply, session_id, shortened): (Result<ic::InstallReply, String>, Option<String>, bool) =
+        match &req.source {
+            Source::ConsolePath(path) => {
+                let (i, p, h) = (ip.clone(), path.clone(), hint_name.clone());
+                let r = tokio::task::spawn_blocking(move || ic::install_path(&i, &p, &h))
+                    .await
+                    .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
+                (r, None, false)
+            }
+            Source::Url(url) => {
+                // The daemon installs the URL directly; alias it if too long.
+                let (i, u) = (ip.clone(), url.clone());
+                let short = if needs_short_alias(url) {
+                    tokio::task::spawn_blocking({
+                        let (a, u) = (req.ps5_addr.clone(), url.clone());
+                        move || crate::pkg_install::shorten_for_installer(&a, &u)
+                    })
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok())
+                    .flatten()
+                } else {
+                    None
+                };
+                let was_short = short.is_some();
+                let final_url = short.unwrap_or(u);
+                let h = hint_name.clone();
+                let r = tokio::task::spawn_blocking(move || ic::install_url(&i, &final_url, &h))
+                    .await
+                    .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
+                (r, None, was_short)
+            }
+            Source::HostFile(_) | Source::Remote { .. } => {
+                match create_serve_session(&state, &req).await {
+                    Ok((sid, url)) => {
+                        let (i, u, h) = (ip.clone(), url, hint_name.clone());
+                        let r = tokio::task::spawn_blocking(move || ic::install_url(&i, &u, &h))
+                            .await
+                            .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
+                        (r, Some(sid), false)
+                    }
+                    Err(e) => (Err(e), None, false),
+                }
+            }
+        };
+    let deliver_ms = deliver_started.elapsed().as_millis() as u64;
+
+    // interpret the daemon reply.
+    let (accepted, code, hint) = match &reply {
+        Ok(ic::InstallReply::Accepted { .. }) => (true, 0u32, None),
+        Ok(ic::InstallReply::Busy { job: j }) => (
+            false,
+            0,
+            Some(format!("an install is already in progress (job {j})")),
+        ),
+        Ok(ic::InstallReply::NotReady { init_rc }) => (
+            false,
+            *init_rc,
+            Some(format!("installer not ready (init 0x{init_rc:08X})")),
+        ),
+        Ok(ic::InstallReply::BadPath) => (
+            false,
+            0,
+            Some("the installer rejected the package path".into()),
+        ),
+        Ok(ic::InstallReply::BadRequest) => {
+            (false, 0, Some("the installer rejected the request".into()))
+        }
+        Ok(ic::InstallReply::UnknownJob) => (false, 0, Some("no such install job".into())),
+        Ok(ic::InstallReply::Sony { code, hint }) => (false, *code, hint.clone()),
+        Ok(ic::InstallReply::Unknown(s)) => (
+            false,
+            0,
+            Some(format!("installer reply not understood: {s}")),
+        ),
+        Err(e) => (false, 0, Some(e.clone())),
+    };
+    let install_job_id = match &reply {
+        Ok(ic::InstallReply::Accepted { job, .. }) => Some(job.clone()),
+        _ => None,
+    };
+
+    // restore the main payload if the ensure displaced it.
+    if displaced {
+        let ip_r = ip.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Ok(bytes) =
+                crate::bundled_payload::image_bytes(crate::bundled_payload::Image::Payload)
+            {
+                let _ = ps5upload_core::payload_lifecycle::send_elf_to_loader(
+                    &ip_r,
+                    ps5upload_core::payload_lifecycle::PS5_LOADER_PORT,
+                    &bytes,
+                    ps5upload_core::payload_lifecycle::LoaderImage::Ps5Upload,
+                );
+            }
+        })
+        .await;
+    }
+
+    if !accepted {
+        state.jobs.update(&job, |s| {
+            s.phase = Phase::Failed;
+            s.verdict = Some(Verdict::Failed);
+            s.reason = Some(FailReason::SonyRefused);
+            s.code = code;
+            s.hint = hint.clone();
+            s.shortened = shortened;
+            s.metrics.sony_rc = code;
+            s.metrics.phase_ms.insert("deliver".into(), deliver_ms);
+        });
+        finalize(&state, &job, &req, started);
+        return;
+    }
+
+    // verify.
+    state.jobs.update(&job, |s| s.phase = Phase::Verify);
+    let verify_started = std::time::Instant::now();
+    let (verdict, patch_verdict, app_ver_after) = match (&title_id, &req.package_app_ver) {
+        (Some(t), Some(pv)) => {
+            let (m, t, pv, before) = (mgmt.clone(), t.clone(), pv.clone(), app_ver_before.clone());
+            let (cv, after) = tokio::task::spawn_blocking(move || {
+                crate::pkg_install::verify_patch_after_install(&m, &t, before.as_deref(), &pv)
+            })
+            .await
+            .unwrap_or((
+                ps5upload_core::patch_verify::PatchVerdict::Inconclusive,
+                None,
+            ));
+            let launchable = !matches!(
+                cv,
+                ps5upload_core::patch_verify::PatchVerdict::DidNotApply
+                    | ps5upload_core::patch_verify::PatchVerdict::Regressed
+            );
+            (
+                verdict_from_verify(cv, launchable),
+                Some(status::PatchVerdict::from(cv)),
+                after,
+            )
+        }
+        _ => (verdict_no_identity(true), None, None),
+    };
+    let verify_ms = verify_started.elapsed().as_millis() as u64;
+
+    // metrics: served bytes + throughput.
+    let (served, total) = match (&route, &session_id, &install_job_id) {
+        (Route::Stream, Some(sid), _) => {
+            let s = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            s.get(sid)
+                .map(|x| (x.bytes_served, x.total_size))
+                .unwrap_or((0, 0))
+        }
+        (Route::Loopback, _, Some(jid)) => {
+            let (i, jid) = (ip.clone(), jid.clone());
+            tokio::task::spawn_blocking(move || ic::job(&i, &jid))
+                .await
+                .ok()
+                .and_then(|r| r.ok())
+                .map(|j| (j.bytes_served, j.total))
+                .unwrap_or((0, 0))
+        }
+        _ => (0, 0),
+    };
+
+    state.jobs.update(&job, |s| {
+        s.phase = Phase::Done;
+        s.verdict = Some(verdict);
+        s.patch_verdict = patch_verdict;
+        s.app_ver_after = app_ver_after.clone();
+        s.shortened = shortened;
+        s.metrics.total_bytes = total;
+        s.metrics.served_bytes = served;
+        s.metrics.throughput_mbps = status::throughput_mbps(served, deliver_ms);
+        s.metrics.phase_ms.insert("deliver".into(), deliver_ms);
+        s.metrics.phase_ms.insert("verify".into(), verify_ms);
+    });
+    finalize(&state, &job, &req, started);
+}
+
+/// Reuse the existing start handler in serve-only mode to create a pkg-host
+/// session for a host/remote source, returning (session_id, url).
+async fn create_serve_session(
+    state: &PkgInstallStateHandle,
+    req: &InstallRequest,
+) -> Result<(String, String), String> {
+    let path = match &req.source {
+        Source::HostFile(p) => p.clone(),
+        Source::Remote { connection, path } => format!("remote://{connection}/{path}"),
+        _ => return Err("create_serve_session called for a non-stream source".into()),
+    };
+    let start_req = serde_json::json!({
+        "ps5_addr": req.ps5_addr,
+        "serve_only": true,
+        "path": path,
+        "content_id": req.content_id,
+    });
+    let start_req: crate::pkg_install::InstallStartRequest =
+        serde_json::from_value(start_req).map_err(|e| format!("build start request: {e}"))?;
+    let resp =
+        crate::pkg_install::install_start_handler(State(state.clone()), Json(start_req)).await;
+    let (parts, body) = resp.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .map_err(|e| format!("read start response: {e}"))?;
+    if !parts.status.is_success() {
+        return Err(format!(
+            "serve session failed: {}",
+            String::from_utf8_lossy(&bytes)
+        ));
+    }
+    let start: crate::pkg_install::InstallStartResponse =
+        serde_json::from_slice(&bytes).map_err(|e| format!("parse start response: {e}"))?;
+    Ok((start.session_id, start.url))
+}
+
+/// Record history and release the console's active-job guard. Always runs.
+fn finalize(
+    state: &PkgInstallStateHandle,
+    job: &str,
+    req: &InstallRequest,
+    _started: std::time::Instant,
+) {
+    if let Some(st) = state.jobs.get(job) {
+        let entry = HistoryEntry {
+            job: st.job.clone(),
+            at: status::now_unix(),
+            source_kind: req.source.kind().to_string(),
+            content_id: st.content_id.clone(),
+            title_id: st.title_id.clone(),
+            route: st.route,
+            verdict: st.verdict,
+            code: st.code,
+            metrics: st.metrics.clone(),
+        };
+        let _ = history::append(&history_dir(), &req.ps5_addr, &entry, history::HISTORY_CAP);
+    }
+    state.jobs.finish(job);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
