@@ -1,8 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// vitest's node env has no `window`; the store reads `window.localStorage` through
+// safeStorage. One in-memory stub, kept across module reloads, as a page reload keeps storage.
+const stored = new globalThis.Map<string, string>();
+(globalThis as { window?: unknown }).window = {
+  localStorage: {
+    getItem: (k: string) => (stored.has(k) ? (stored.get(k) as string) : null),
+    setItem: (k: string, v: string) => void stored.set(k, String(v)),
+    removeItem: (k: string) => void stored.delete(k),
+  },
+};
+
 describe("convertPrefs", () => {
   beforeEach(() => {
-    localStorage.clear();
+    stored.clear();
     vi.resetModules();
   });
 
@@ -25,7 +36,7 @@ describe("convertPrefs", () => {
   });
 
   it("ignores a corrupt stored level", async () => {
-    localStorage.setItem("ps5upload.convert.compression", "turbo");
+    stored.set("ps5upload.convert.compression", "turbo");
     const { useConvertPrefs } = await import("./convertPrefs");
     expect(useConvertPrefs.getState().compression).toBe("balanced");
   });
