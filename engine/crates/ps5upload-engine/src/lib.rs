@@ -43,6 +43,7 @@ mod local_fs;
 mod log_dedup;
 mod pkg_install;
 mod pkg_sidecar;
+mod remote;
 mod remote_download;
 #[cfg(not(target_os = "android"))]
 mod remote_pkg;

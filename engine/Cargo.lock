@@ -1228,6 +1228,7 @@ name = "ps5upload-engine"
 version = "5.34.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "base64",
  "blake3",
@@ -1240,6 +1241,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smb2",
+ "thiserror",
  "tokio",
  "tokio-stream",
  "tower-http",
