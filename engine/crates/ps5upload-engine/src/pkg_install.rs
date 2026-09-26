@@ -61,6 +61,8 @@ pub enum RemotePkg {
     Http(Arc<crate::remote_pkg::RemoteSource>),
     /// A file on an SMB share, read in positioned pieces.
     Smb(crate::smb_range::SmbRangeSource),
+    /// A file on a saved server (SMB, FTP, FTPS or SFTP), read in positioned pieces.
+    Remote(crate::remote::range::RemoteRangeSource),
 }
 
 #[cfg(not(target_os = "android"))]
@@ -69,6 +71,7 @@ impl RemotePkg {
         match self {
             RemotePkg::Http(r) => r.read_range(start, end),
             RemotePkg::Smb(r) => r.read_range(start, end),
+            RemotePkg::Remote(r) => r.read_range(start, end),
         }
     }
 
@@ -85,6 +88,7 @@ impl RemotePkg {
         match self {
             RemotePkg::Http(r) => r.origin_rate_bps(),
             RemotePkg::Smb(r) => r.origin_rate_bps(),
+            RemotePkg::Remote(r) => r.origin_rate_bps(),
         }
     }
 }
@@ -1220,6 +1224,9 @@ async fn parse_handler(Json(req): Json<ParseRequest>) -> Response<Body> {
 }
 
 async fn parse_split_handler(Json(req): Json<ParseRequest>) -> Response<Body> {
+    if crate::remote::path::is_remote(&req.path) {
+        return parse_remote_handler(&req.path).await;
+    }
     let res =
         tokio::task::spawn_blocking(move || parse_split_pkg(std::path::Path::new(&req.path))).await;
     match res {
@@ -1230,6 +1237,31 @@ async fn parse_split_handler(Json(req): Json<ParseRequest>) -> Response<Body> {
             &format!("split parse task panicked: {e}"),
         ),
     }
+}
+
+/// A package on a saved server, described the way a local one is (a single part).
+#[cfg(not(target_os = "android"))]
+async fn parse_remote_handler(remote_path: &str) -> Response<Body> {
+    match open_remote_package(remote_path).await {
+        Ok((_remote, total_size, head, fingerprint, name)) => {
+            let head = stream_metadata(head, fingerprint, total_size, &name, None);
+            json_ok(&SplitPkgMetadata {
+                parts: vec![PathBuf::from(remote_path)],
+                part_sizes: vec![total_size],
+                total_size,
+                head,
+            })
+        }
+        Err(e) => json_err(StatusCode::BAD_REQUEST, &e),
+    }
+}
+
+#[cfg(target_os = "android")]
+async fn parse_remote_handler(_remote_path: &str) -> Response<Body> {
+    json_err(
+        StatusCode::BAD_REQUEST,
+        "reading packages on a server is not available in the Android build",
+    )
 }
 
 // ─── /api/pkg/install/start ──────────────────────────────────────────
@@ -5454,6 +5486,23 @@ fn streamed_metadata(
     total_size: u64,
     display_name: &str,
 ) -> PkgMetadata {
+    stream_metadata(
+        head,
+        fingerprint,
+        total_size,
+        display_name,
+        req.package_type_override.clone(),
+    )
+}
+
+/// Metadata for a package read through ranges rather than from a local file.
+fn stream_metadata(
+    head: ps5upload_pkg::ReaderMetadata,
+    fingerprint: String,
+    total_size: u64,
+    display_name: &str,
+    package_type_override: Option<String>,
+) -> PkgMetadata {
     PkgMetadata {
         // No local file exists; the name is for display and logging only.
         path: PathBuf::from(display_name),
@@ -5474,7 +5523,7 @@ fn streamed_metadata(
         // fallback tier would re-register that id and WIPE the installed
         // base. That is the exact failure the guard was added for, already
         // hardware-confirmed once on the staged path.
-        package_type: req.package_type_override.clone().or_else(|| {
+        package_type: package_type_override.or_else(|| {
             ps5upload_pkg::package_type_for_category_and_platform(&head.category, &head.platform)
         }),
         category: head.category,
@@ -5574,6 +5623,87 @@ async fn resolve_smb_source(
         .to_string();
     let metadata = streamed_metadata(req, head, fingerprint, total_size, &name);
     Ok((vec![], vec![], total_size, metadata, Some(remote)))
+}
+
+/// Open a package on a saved server and read its header through ranges.
+#[cfg(not(target_os = "android"))]
+async fn open_remote_package(
+    remote_path: &str,
+) -> Result<
+    (
+        Arc<RemotePkg>,
+        u64,
+        ps5upload_pkg::ReaderMetadata,
+        String,
+        String,
+    ),
+    String,
+> {
+    let r = crate::remote::pool::global().map_err(|e| e.to_string())?;
+    let source = crate::remote::range::RemoteRangeSource::open(
+        Arc::clone(&r.pool),
+        Arc::clone(&r.store),
+        remote_path,
+        crate::remote::pool::Backoff::standard(),
+    )
+    .await
+    .map_err(|e| format!("could not open the package on the server: {e}"))?;
+    let total_size = source.total_size();
+    // Server host only; the path can name a user's folders.
+    crate::log_info!(
+        "remote install: host={} bytes={}",
+        source.host(),
+        total_size
+    );
+    let remote = Arc::new(RemotePkg::Remote(source));
+    let probe = Arc::clone(&remote);
+    let (head, fingerprint) = tokio::task::spawn_blocking(move || {
+        let read_at = |offset: u64, len: u64| -> Option<Vec<u8>> {
+            if len == 0 {
+                return Some(Vec::new());
+            }
+            probe.read_range(offset, offset + len - 1).ok()
+        };
+        let head = ps5upload_pkg::metadata_from_reader(read_at).ok_or_else(|| {
+            "that file does not look like a PS4/PS5 package (no readable PKG header)".to_string()
+        })?;
+        let fingerprint = ps5upload_pkg::package_fingerprint_from_reader(total_size, &read_at)
+            .unwrap_or_default();
+        Ok::<_, String>((head, fingerprint))
+    })
+    .await
+    .map_err(|e| format!("remote package probe task panicked/cancelled: {e}"))??;
+    let name = remote_path
+        .rsplit('/')
+        .next()
+        .unwrap_or(remote_path)
+        .to_string();
+    Ok((remote, total_size, head, fingerprint, name))
+}
+
+/// Resolve an install that streams from a package on a saved server.
+#[cfg(not(target_os = "android"))]
+async fn resolve_remote_fs_source(
+    remote_path: &str,
+    req: &InstallStartRequest,
+) -> Result<ResolvedSource, String> {
+    if req.split_root.is_some() || req.remote_url.is_some() || req.smb.is_some() {
+        return Err("a server path cannot be combined with split_root, remote_url or smb".into());
+    }
+    if req.local_ps5_path.as_deref().is_some_and(|p| !p.is_empty()) {
+        return Err("a server path cannot be combined with local_ps5_path".into());
+    }
+    let (remote, total_size, head, fingerprint, name) = open_remote_package(remote_path).await?;
+    let metadata = streamed_metadata(req, head, fingerprint, total_size, &name);
+    Ok((vec![], vec![], total_size, metadata, Some(remote)))
+}
+
+#[cfg(target_os = "android")]
+async fn resolve_remote_fs_source(
+    _remote_path: &str,
+    _req: &InstallStartRequest,
+) -> Result<ResolvedSource, String> {
+    Err("installing from a server is not available in the Android build".into())
 }
 
 #[cfg(target_os = "android")]
@@ -5687,6 +5817,13 @@ async fn resolve_parts_and_meta(req: &InstallStartRequest) -> Result<ResolvedSou
     }
     if let Some(smb) = &req.smb {
         return resolve_smb_source(smb, req).await;
+    }
+    if let Some(p) = req
+        .path
+        .as_deref()
+        .filter(|p| crate::remote::path::is_remote(p))
+    {
+        return resolve_remote_fs_source(p, req).await;
     }
     // The two `parse_*` calls open and read .pkg / split-part headers (and stat
     // each split part) from disk. On a cold or network-hosted pkg that's

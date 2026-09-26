@@ -13,6 +13,7 @@ pub(crate) mod contract;
 pub mod hints;
 pub mod path;
 pub mod pool;
+pub mod range;
 pub mod smb_fs;
 pub mod store;
 
