@@ -14,13 +14,17 @@
 //! ```
 //!
 //! Each array is Huffman-coded (type 2, see `huff`) when that is smaller, raw (type 0) otherwise.
-//! Literals are not delta-coded (literal mode 1). New offsets use the traditional code (see
-//! `traditional_offset`). A command
+//! Literals are stored as they are (literal mode 1) or, where that codes smaller, less the byte at
+//! the last match distance (literal mode 0, flagged in the block's layout record). New offsets use
+//! the traditional code (see `traditional_offset`). A command
 //! byte is `offset kind << 6 | (match length − 2) << 2 | literal run`, where kind 0–2 reuses one
 //! of the three recent offsets and 3 takes the next new one; a run of 3 or a length code of 15
 //! takes its value from the lengths array (value − 3, 255 escaping to the excess stream).
 //!
 //! The decoder copies matches eight bytes at a time, so a match is never closer than 8 bytes.
+//! Matches are chosen by a lazy parse ([`Level::Fast`]) or an optimal parse priced from the
+//! half's own symbol statistics (the other levels); on Spider-Man 2's blocks the default level
+//! stores 33.6% of the logical size against Sony's own encoder's 32.8%.
 //! The encoder is written from the format (documented by powzix/ooz, GPL-3, and the PS5 framing
 //! decoded from Sony's packages); the decoder here reads exactly what the encoder writes and is
 //! what proves every block before a package keeps it.
@@ -269,18 +273,87 @@ fn put_array(out: &mut Vec<u8>, data: &[u8]) {
 // ─────────────────────────────── encoder ───────────────────────────────
 
 const HASH_BITS: u32 = 16;
-const CHAIN_DEPTH: usize = 24;
+
+/// How hard the encoder searches. The format, and so what the console decodes, is the same at
+/// every level; only the ratio and the time it takes change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Level {
+    /// A lazy parse: at each position the match that saves the most, unless the next position's
+    /// saves more.
+    Fast,
+    /// An optimal parse priced twice. The default.
+    #[default]
+    Balanced,
+    /// An optimal parse with deeper match searches, priced three times.
+    Smallest,
+}
+
+impl Level {
+    /// Hash-chain candidates tried per position.
+    fn chain(self) -> usize {
+        match self {
+            Level::Fast => 16,
+            Level::Balanced => 32,
+            Level::Smallest => 128,
+        }
+    }
+
+    /// Optimal-parse passes, each priced from the one before (0: the lazy parse).
+    fn passes(self) -> usize {
+        match self {
+            Level::Fast => 0,
+            Level::Balanced => 2,
+            Level::Smallest => 3,
+        }
+    }
+}
+
+/// How many bytes at `buf[i..limit]` repeat those at `buf[c..]` (`c < i`).
+fn match_len(buf: &[u8], c: usize, i: usize, limit: usize) -> usize {
+    let mut l = 0;
+    while i + l + 8 <= limit {
+        let a = u64::from_le_bytes(buf[c + l..c + l + 8].try_into().unwrap());
+        let b = u64::from_le_bytes(buf[i + l..i + l + 8].try_into().unwrap());
+        if a != b {
+            return l + ((a ^ b).trailing_zeros() / 8) as usize;
+        }
+        l += 8;
+    }
+    while i + l < limit && buf[c + l] == buf[i + l] {
+        l += 1;
+    }
+    l
+}
+
+/// A literal's approximate cost in bits once the literals are Huffman-coded.
+const LIT_BITS: isize = 8;
+
+/// Roughly how many bits a match saves over sending its bytes as literals: each byte saves a
+/// literal; the match costs a command byte, a lengths entry when it is long, and for a new
+/// distance an offset code plus its extra bits.
+fn gain(len: usize, dist: usize, recent: bool) -> isize {
+    let mut cost = 7;
+    if len > 16 {
+        cost += 8;
+    }
+    if !recent {
+        cost += 7 + traditional_offset(dist).2 as isize;
+    }
+    len as isize * LIT_BITS - cost
+}
 
 struct Matcher {
     head: Vec<i32>,
     prev: Vec<i32>,
+    chain: usize,
 }
 
 impl Matcher {
-    fn new(len: usize) -> Self {
+    fn new(len: usize, level: Level) -> Self {
         Self {
             head: vec![-1; 1 << HASH_BITS],
             prev: vec![-1; len],
+            chain: level.chain(),
         }
     }
 
@@ -305,19 +378,16 @@ impl Matcher {
         }
         let mut cand = self.head[Self::hash(buf, i)];
         let mut depth = 0;
-        while cand >= 0 && depth < CHAIN_DEPTH {
+        while cand >= 0 && depth < self.chain {
             let c = cand as usize;
             let dist = i - c;
             if dist > MAX_DISTANCE {
                 break;
             }
-            if dist >= MIN_DISTANCE
-                && buf[c + best.0.min(limit - i - 1)] == buf[i + best.0.min(limit - i - 1)]
-            {
-                let mut l = 0;
-                while i + l < limit && buf[c + l] == buf[i + l] {
-                    l += 1;
-                }
+            // A candidate can only win if it matches one byte past the best so far.
+            let probe = best.0.min(limit - i - 1);
+            if dist >= MIN_DISTANCE && buf[c + probe] == buf[i + probe] {
+                let l = match_len(buf, c, i, limit);
                 if l > best.0 {
                     best = (l, dist);
                     if i + l == limit {
@@ -330,6 +400,67 @@ impl Matcher {
         }
         best
     }
+
+    /// Every hash-chain match at `i` longer than the ones before it, as `(len, dist)`.
+    fn candidates(&self, buf: &[u8], i: usize, limit: usize, out: &mut Vec<(usize, usize)>) {
+        if i + 4 > limit {
+            return;
+        }
+        let mut longest = MIN_MATCH - 1;
+        let mut cand = self.head[Self::hash(buf, i)];
+        let mut depth = 0;
+        while cand >= 0 && depth < self.chain {
+            let c = cand as usize;
+            let dist = i - c;
+            if dist > MAX_DISTANCE {
+                break;
+            }
+            let probe = longest.min(limit - i - 1);
+            if dist >= MIN_DISTANCE && buf[c + probe] == buf[i + probe] {
+                let l = match_len(buf, c, i, limit);
+                if l > longest {
+                    longest = l;
+                    out.push((l, dist));
+                    if i + l == limit {
+                        break;
+                    }
+                }
+            }
+            cand = self.prev[c];
+            depth += 1;
+        }
+    }
+}
+
+/// The match at `i` that saves the most: one of the three recent distances (which cost no
+/// offset) or `hash`, the longest the hash chain found. `(gain, len, dist)`.
+fn choose(
+    buf: &[u8],
+    i: usize,
+    limit: usize,
+    recent: &[usize; 3],
+    hash: (usize, usize),
+) -> (isize, usize, usize) {
+    let mut best = (0isize, 0usize, 0usize);
+    for &d in recent {
+        if d <= i {
+            let l = match_len(buf, i - d, i, limit);
+            if l >= 2 {
+                let g = gain(l, d, true);
+                if g > best.0 {
+                    best = (g, l, d);
+                }
+            }
+        }
+    }
+    let (l, d) = hash;
+    if l >= MIN_MATCH {
+        let g = gain(l, d, recent.contains(&d));
+        if g > best.0 {
+            best = (g, l, d);
+        }
+    }
+    best
 }
 
 /// One LZ command: `lit` literals, then a match of `len` bytes at `dist` back.
@@ -339,16 +470,418 @@ struct Cmd {
     dist: usize,
 }
 
+/// The decoder's recent-offset update for a match at `dist`.
+fn remember(recent: &mut [usize; 3], dist: usize) {
+    match recent.iter().position(|&r| r == dist) {
+        Some(k) => {
+            for j in (1..=k).rev() {
+                recent[j] = recent[j - 1];
+            }
+            recent[0] = dist;
+        }
+        None => *recent = [dist, recent[0], recent[1]],
+    }
+}
+
+/// Cost-guided lazy parse of `buf[from..end]`: at each position take the match that saves the
+/// most bits, unless the one starting a byte later saves more.
+///
+/// `longest(i)` is the longest hash-chain match at `i`, asked for at positions that only grow.
+fn parse_lazy(
+    buf: &[u8],
+    from: usize,
+    end: usize,
+    mut longest: impl FnMut(usize) -> (usize, usize),
+) -> Vec<Cmd> {
+    let mut cmds: Vec<Cmd> = Vec::new();
+    let mut recent = [8usize; 3];
+    let mut anchor = from;
+    let mut i = from;
+    while i + 2 <= end {
+        let mut pick = choose(buf, i, end, &recent, longest(i));
+        let mut at = i;
+        if pick.0 > 0 && i + 3 <= end {
+            let next = choose(buf, i + 1, end, &recent, longest(i + 1));
+            if next.0 > pick.0 {
+                pick = next;
+                at = i + 1;
+            }
+        }
+        if pick.0 > 0 {
+            let (_, len, dist) = pick;
+            cmds.push(Cmd {
+                lit: at - anchor,
+                len,
+                dist,
+            });
+            remember(&mut recent, dist);
+            i = at + len;
+            anchor = i;
+        } else {
+            i += 1;
+        }
+    }
+    cmds
+}
+
+/// Matches at least this long are taken whole, with no shorter cut tried and no search inside.
+const NICE_LEN: usize = 96;
+
+/// The streams a list of commands becomes, before the arrays are entropy-coded.
+#[derive(Default)]
+struct Streams {
+    lits: Vec<u8>,
+    /// The same literals as literal mode 0 codes them: less the byte at the last match distance.
+    delta_lits: Vec<u8>,
+    cmd_bytes: Vec<u8>,
+    offs_codes: Vec<u8>,
+    offs_bits: Vec<(u32, u32)>,
+    lens: Vec<u8>,
+    escapes: Vec<u32>,
+}
+
+/// Commands, offsets, lengths and literals for `cmds` over `buf[from..end]`, with the three
+/// recent offsets tracked as the decoder does.
+fn streams(buf: &[u8], from: usize, end: usize, cmds: &[Cmd]) -> Streams {
+    let mut s = Streams::default();
+    let mut recent = [8usize; 3];
+    let push_len = |v: usize, s: &mut Streams| {
+        let p = v - 3;
+        if p < 255 {
+            s.lens.push(p as u8);
+        } else {
+            s.lens.push(255);
+            s.escapes.push((p - 255) as u32);
+        }
+    };
+    let mut p = from;
+    for c in cmds {
+        s.lits.extend_from_slice(&buf[p..p + c.lit]);
+        s.delta_lits
+            .extend((p..p + c.lit).map(|q| buf[q].wrapping_sub(buf[q - recent[0]])));
+        p += c.lit + c.len;
+        let lit_code = if c.lit < 3 {
+            c.lit as u8
+        } else {
+            push_len(c.lit, &mut s);
+            3
+        };
+        let kind = match recent.iter().position(|&r| r == c.dist) {
+            Some(k) => k as u8,
+            None => {
+                // The traditional code, not the scaled one (`0x80` marker): the console's
+                // decoder rejected our scaled offsets (IOD ec 0x7c/0x7f), and neither Sony's
+                // nor LibProsperoPkg's accepted packages ever use them.
+                let (code, bits, n) = traditional_offset(c.dist);
+                s.offs_codes.push(code);
+                s.offs_bits.push((bits, n));
+                3
+            }
+        };
+        remember(&mut recent, c.dist);
+        let len_code = if c.len - 2 < 15 {
+            (c.len - 2) as u8
+        } else {
+            push_len(c.len - 14, &mut s);
+            15
+        };
+        s.cmd_bytes.push(kind << 6 | len_code << 2 | lit_code);
+    }
+    s.lits.extend_from_slice(&buf[p..end]);
+    s.delta_lits
+        .extend((p..end).map(|q| buf[q].wrapping_sub(buf[q - recent[0]])));
+    s
+}
+
+/// Roughly the bytes a half's streams code to: each array as `put_array` stores it (literals in
+/// the smaller mode), plus the offset bits and length escapes.
+fn coded_size(s: &Streams) -> usize {
+    let array = |d: &[u8]| {
+        let mut o = Vec::new();
+        put_array(&mut o, d);
+        o.len()
+    };
+    let bits: usize = s.offs_bits.iter().map(|b| b.1 as usize).sum();
+    array(&s.lits).min(array(&s.delta_lits))
+        + array(&s.cmd_bytes)
+        + array(&s.offs_codes)
+        + array(&s.lens)
+        + bits.div_ceil(8)
+        + s.escapes.len() * 3
+}
+
+/// What each symbol of each array costs, in bits, as the optimal parse prices a path.
+struct Costs {
+    lit: [f32; 256],
+    cmd: [f32; 256],
+    offs: [f32; 256],
+    lens: [f32; 256],
+    /// Literals priced as literal mode 0 codes them.
+    delta: bool,
+}
+
+/// Bits per symbol as the array coder will spend them: 8 for an array too short to be Huffman-
+/// coded (it is stored raw), else the order-0 entropy, smoothed so a symbol the last pass did not
+/// use is dearer but not ruled out.
+fn symbol_bits(data: &[u8], default: f32) -> [f32; 256] {
+    if data.is_empty() {
+        return [default; 256];
+    }
+    if data.len() < huff::MIN_ARRAY {
+        return [8.0; 256];
+    }
+    let mut hist = [0u32; 256];
+    for &b in data {
+        hist[b as usize] += 1;
+    }
+    let total = data.len() as f32 + 128.0;
+    std::array::from_fn(|b| (total / (hist[b] as f32 + 0.5)).log2().clamp(1.0, 11.0))
+}
+
+impl Costs {
+    /// Prices from what a parse actually produced.
+    fn measured(s: &Streams) -> Costs {
+        let raw = symbol_bits(&s.lits, 8.0);
+        let sub = symbol_bits(&s.delta_lits, 8.0);
+        let sum = |c: &[f32; 256], d: &[u8]| d.iter().map(|&b| c[b as usize]).sum::<f32>();
+        let delta = sum(&sub, &s.delta_lits) < sum(&raw, &s.lits);
+        Costs {
+            lit: if delta { sub } else { raw },
+            cmd: symbol_bits(&s.cmd_bytes, 6.0),
+            offs: symbol_bits(&s.offs_codes, 5.0),
+            lens: symbol_bits(&s.lens, 6.0),
+            delta,
+        }
+    }
+
+    /// A lengths-array value `v` (≥ 0), escaping past 254.
+    fn len_value(&self, v: usize) -> f32 {
+        if v < 255 {
+            self.lens[v]
+        } else {
+            self.lens[255] + 2.0 * (usize::BITS - (v - 255 + 64).leading_zeros()) as f32 - 7.0
+        }
+    }
+
+    /// A match's command and lengths entries, after `run` literals, reusing recent distance
+    /// `kind` (0–2) or a new one (3; the caller adds the offset).
+    fn matched(&self, run: usize, len: usize, kind: usize) -> f32 {
+        let lit_code = run.min(3);
+        let len_code = (len - 2).min(15);
+        let mut bits = self.cmd[kind << 6 | len_code << 2 | lit_code];
+        if run >= 3 {
+            bits += self.len_value(run - 3);
+        }
+        if len_code == 15 {
+            bits += self.len_value(len - 17);
+        }
+        bits
+    }
+}
+
+/// The lengths of a match worth pricing: each short one (whose command byte differs) and the
+/// whole match; past 18 bytes a cut saves only a lengths-array difference.
+fn priced_lengths(lo: usize, l: usize) -> impl Iterator<Item = usize> {
+    let short_end = if l >= NICE_LEN {
+        lo
+    } else {
+        l.min(SHORT_CUTS) + 1
+    };
+    (lo..short_end).chain((l >= lo).then_some(l).filter(|&l| l >= short_end))
+}
+
+/// Match lengths below this are each priced; longer matches only whole.
+const SHORT_CUTS: usize = 18;
+
+/// One position of the optimal parse: the cheapest way found to reach it.
+#[derive(Clone, Copy)]
+struct Node {
+    cost: f32,
+    /// The match that ends here (`len` 0 for a literal), from `at − len`.
+    len: u32,
+    dist: u32,
+    recent: [u32; 3],
+    /// Literals since the last match on this path.
+    run: u32,
+}
+
+/// Hash-chain match candidates for every position of `buf[from..end]`, as `(len, dist)` lists:
+/// `(starts, all)` where position `i`'s are `all[starts[i]..starts[i + 1]]`. Positions inside a
+/// match of [`NICE_LEN`] or more get none.
+fn all_candidates(
+    buf: &[u8],
+    from: usize,
+    end: usize,
+    m: &mut Matcher,
+) -> (Vec<u32>, Vec<(u32, u32)>) {
+    let n = end - from;
+    let mut starts = Vec::with_capacity(n + 1);
+    let mut all = Vec::new();
+    let mut found = Vec::new();
+    let mut skip_until = from;
+    for p in from..end {
+        starts.push(all.len() as u32);
+        if p >= skip_until {
+            found.clear();
+            m.candidates(buf, p, end, &mut found);
+            for &(l, d) in &found {
+                all.push((l as u32, d as u32));
+                if l >= NICE_LEN {
+                    skip_until = skip_until.max(p + l);
+                }
+            }
+        }
+        m.insert(buf, p);
+    }
+    starts.push(all.len() as u32);
+    (starts, all)
+}
+
+/// Optimal parse of `buf[from..end]`: the cheapest path through every literal and match choice
+/// at `costs`. Each position keeps the recent distances of the cheapest path reaching it, so
+/// recent-distance matches and delta literals are priced as the decoder will see them.
+fn parse_optimal(
+    buf: &[u8],
+    from: usize,
+    end: usize,
+    cands: &(Vec<u32>, Vec<(u32, u32)>),
+    costs: &Costs,
+) -> Vec<Cmd> {
+    let n = end - from;
+    let mut nodes = vec![
+        Node {
+            cost: f32::INFINITY,
+            len: 0,
+            dist: 0,
+            recent: [8; 3],
+            run: 0,
+        };
+        n + 1
+    ];
+    nodes[0].cost = 0.0;
+    let mut skip_until = 0;
+    for i in 0..n {
+        let p = from + i;
+        let node = nodes[i];
+        let byte = if costs.delta {
+            buf[p].wrapping_sub(buf[p - node.recent[0] as usize])
+        } else {
+            buf[p]
+        };
+        let lit = node.cost + costs.lit[byte as usize];
+        if lit < nodes[i + 1].cost {
+            nodes[i + 1] = Node {
+                cost: lit,
+                len: 0,
+                dist: 0,
+                recent: node.recent,
+                run: node.run + 1,
+            };
+        }
+        // Inside a long match already priced, searching again would find the same match from
+        // every position (quadratic on long runs); literals still relax.
+        if p + 2 > end || p < skip_until {
+            continue;
+        }
+        let relax = |nodes: &mut [Node], len: usize, dist: usize, bits: f32, recent: [u32; 3]| {
+            let c = node.cost + bits;
+            let at = &mut nodes[i + len];
+            if c < at.cost {
+                *at = Node {
+                    cost: c,
+                    len: len as u32,
+                    dist: dist as u32,
+                    recent,
+                    run: 0,
+                };
+            }
+        };
+        let run = node.run as usize;
+        // Recent distances: no offset to send, so every length from 2 is worth pricing.
+        for (kind, &d) in node.recent.iter().enumerate() {
+            let d = d as usize;
+            if d > p || node.recent[..kind].contains(&(d as u32)) {
+                continue;
+            }
+            let l = match_len(buf, p - d, p, end);
+            if l < 2 {
+                continue;
+            }
+            if l >= NICE_LEN {
+                skip_until = skip_until.max(p + l);
+            }
+            let mut recent = node.recent.map(|r| r as usize);
+            remember(&mut recent, d);
+            let recent = recent.map(|r| r as u32);
+            for len in priced_lengths(2, l) {
+                relax(&mut nodes, len, d, costs.matched(run, len, kind), recent);
+            }
+        }
+        // New distances. The chain's candidates grow longer as they grow farther, so each length
+        // is priced only with the nearest candidate that reaches it: the cheapest offset.
+        let (starts, all) = cands;
+        let mut next_len = MIN_MATCH;
+        for &(l, d) in &all[starts[i] as usize..starts[i + 1] as usize] {
+            let (l, d) = (l as usize, d as usize);
+            if l >= NICE_LEN {
+                skip_until = skip_until.max(p + l);
+            }
+            if node.recent.contains(&(d as u32)) {
+                next_len = next_len.max(l + 1);
+                continue;
+            }
+            let (code, _, nbits) = traditional_offset(d);
+            let offset_bits = costs.offs[code as usize] + nbits as f32;
+            let recent = [d as u32, node.recent[0], node.recent[1]];
+            for len in priced_lengths(next_len, l) {
+                relax(
+                    &mut nodes,
+                    len,
+                    d,
+                    costs.matched(run, len, 3) + offset_bits,
+                    recent,
+                );
+            }
+            next_len = next_len.max(l + 1);
+        }
+    }
+    // Walk the cheapest path back from the end.
+    let mut steps = Vec::new();
+    let mut i = n;
+    while i > 0 {
+        let node = nodes[i];
+        if node.len == 0 {
+            i -= 1;
+        } else {
+            steps.push((i - node.len as usize, node.len as usize, node.dist as usize));
+            i -= node.len as usize;
+        }
+    }
+    let mut cmds = Vec::with_capacity(steps.len());
+    let mut anchor = 0;
+    for &(at, len, dist) in steps.iter().rev() {
+        cmds.push(Cmd {
+            lit: at - anchor,
+            len,
+            dist,
+        });
+        anchor = at + len;
+    }
+    cmds
+}
+
 /// Encode the half `buf[start..end]` of a block buffer (so matches may reach back into the
-/// block's even half). `seed` is set for a block's first half. Returns `None` when the encoded
-/// half would not be smaller than the raw bytes.
+/// block's even half). `seed` is set for a block's first half. Returns the chunk body and whether
+/// its literals are delta-coded (literal mode 0), or `None` when the encoded half would not be
+/// smaller than the raw bytes.
 fn encode_half(
     buf: &[u8],
     start: usize,
     end: usize,
     seed: bool,
     m: &mut Matcher,
-) -> Option<Vec<u8>> {
+    level: Level,
+) -> Option<(Vec<u8>, bool)> {
     let data_start = if seed { start + SEED } else { start };
     if end < data_start + 16 {
         return None;
@@ -356,98 +889,53 @@ fn encode_half(
     for i in start..data_start {
         m.insert(buf, i);
     }
-    // Greedy parse with one step of lazy matching.
-    let mut cmds: Vec<Cmd> = Vec::new();
-    let mut lits: Vec<u8> = Vec::new();
-    let mut anchor = data_start;
-    let mut i = data_start;
-    while i + MIN_MATCH <= end {
-        let (mut len, mut dist) = m.best(buf, i, end);
-        if len >= MIN_MATCH && i + 1 + MIN_MATCH <= end {
-            m.insert(buf, i);
-            let (l2, d2) = m.best(buf, i + 1, end);
-            if l2 > len + 1 {
-                i += 1;
-                len = l2;
-                dist = d2;
-            }
-        } else {
-            m.insert(buf, i);
+    let cmds = match level.passes() {
+        0 => {
+            let mut inserted = data_start;
+            parse_lazy(buf, data_start, end, |i| {
+                while inserted < i {
+                    m.insert(buf, inserted);
+                    inserted += 1;
+                }
+                m.best(buf, i, end)
+            })
         }
-        if len >= MIN_MATCH {
-            lits.extend_from_slice(&buf[anchor..i]);
-            cmds.push(Cmd {
-                lit: i - anchor,
-                len,
-                dist,
+        passes => {
+            // Seed the prices from a lazy parse, re-price from each optimal pass, and keep
+            // whichever parse codes smallest: prices from one parse can mislead the next (delta
+            // literals look nearly free where a recent-distance match would have fit).
+            let cands = all_candidates(buf, data_start, end, m);
+            let (starts, all) = &cands;
+            let lazy = parse_lazy(buf, data_start, end, |i| {
+                let k = i - data_start;
+                all[starts[k] as usize..starts[k + 1] as usize]
+                    .last()
+                    .map_or((0, 0), |&(l, d)| (l as usize, d as usize))
             });
-            for j in i + 1..i + len {
-                m.insert(buf, j);
+            let s = streams(buf, data_start, end, &lazy);
+            let mut best = (coded_size(&s), lazy);
+            let mut costs = Costs::measured(&s);
+            for _ in 0..passes {
+                let cmds = parse_optimal(buf, data_start, end, &cands, &costs);
+                let s = streams(buf, data_start, end, &cmds);
+                let size = coded_size(&s);
+                costs = Costs::measured(&s);
+                if size < best.0 {
+                    best = (size, cmds);
+                }
             }
-            i += len;
-            anchor = i;
-        } else {
-            i += 1;
-        }
-    }
-    for j in i..end {
-        m.insert(buf, j);
-    }
-    lits.extend_from_slice(&buf[anchor..end]);
-
-    // Commands, offsets and lengths, with the three recent offsets tracked as the decoder does.
-    let mut cmd_bytes = Vec::with_capacity(cmds.len());
-    let mut offs_codes = Vec::new();
-    let mut offs_bits: Vec<(u32, u32)> = Vec::new();
-    let mut lens: Vec<u8> = Vec::new();
-    let mut escapes: Vec<u32> = Vec::new();
-    let mut recent = [8usize, 8, 8];
-    let push_len = |v: usize, lens: &mut Vec<u8>, escapes: &mut Vec<u32>| {
-        let p = v - 3;
-        if p < 255 {
-            lens.push(p as u8);
-        } else {
-            lens.push(255);
-            escapes.push((p - 255) as u32);
+            best.1
         }
     };
-    for c in &cmds {
-        let lit_code = if c.lit < 3 {
-            c.lit as u8
-        } else {
-            push_len(c.lit, &mut lens, &mut escapes);
-            3
-        };
-        let kind = recent.iter().position(|&r| r == c.dist);
-        let kind = match kind {
-            Some(k) => {
-                // Move to front, as the decoder's recent-offset shuffle does.
-                let d = recent[k];
-                for j in (1..=k).rev() {
-                    recent[j] = recent[j - 1];
-                }
-                recent[0] = d;
-                k as u8
-            }
-            None => {
-                recent = [c.dist, recent[0], recent[1]];
-                // The traditional code, not the scaled one (`0x80` marker): the console's
-                // decoder rejected our scaled offsets (IOD ec 0x7c/0x7f), and neither Sony's
-                // nor LibProsperoPkg's accepted packages ever use them.
-                let (code, bits, n) = traditional_offset(c.dist);
-                offs_codes.push(code);
-                offs_bits.push((bits, n));
-                3
-            }
-        };
-        let len_code = if c.len - 2 < 15 {
-            (c.len - 2) as u8
-        } else {
-            push_len(c.len - 14, &mut lens, &mut escapes);
-            15
-        };
-        cmd_bytes.push(kind << 6 | len_code << 2 | lit_code);
-    }
+    let Streams {
+        lits,
+        delta_lits,
+        cmd_bytes,
+        offs_codes,
+        offs_bits,
+        lens,
+        escapes,
+    } = streams(buf, data_start, end, &cmds);
     if escapes.len() > 512 {
         return None;
     }
@@ -490,7 +978,13 @@ fn encode_half(
     } else {
         out.push(0x80 | e as u8);
     }
-    put_array(&mut out, &lits);
+    // Literal mode 0 when delta-coding makes the literals smaller: structured data (vertices,
+    // tables) often repeats with small differences at the distance it last matched.
+    let (mut raw_lits, mut sub_lits) = (Vec::new(), Vec::new());
+    put_array(&mut raw_lits, &lits);
+    put_array(&mut sub_lits, &delta_lits);
+    let delta = sub_lits.len() < raw_lits.len();
+    out.extend(if delta { sub_lits } else { raw_lits });
     put_array(&mut out, &cmd_bytes);
     put_array(&mut out, &offs_codes);
     put_array(&mut out, &lens);
@@ -507,7 +1001,7 @@ fn encode_half(
     if out.len() + raw / 50 >= raw || out.len() < 13 {
         return None;
     }
-    Some(out)
+    Some((out, delta))
 }
 
 /// How one half of a block is stored.
@@ -515,45 +1009,81 @@ fn encode_half(
 pub enum Half {
     /// The logical bytes as they are.
     Raw(Vec<u8>),
-    /// A Kraken LZ chunk body (literal mode 1).
+    /// A Kraken LZ chunk body with its literals as they are (literal mode 1).
     Lz(Vec<u8>),
+    /// A Kraken LZ chunk body with delta literals (literal mode 0): each literal is stored less
+    /// the byte at the last match distance.
+    LzDelta(Vec<u8>),
 }
 
 impl Half {
     pub fn bytes(&self) -> &[u8] {
         match self {
-            Half::Raw(b) | Half::Lz(b) => b,
+            Half::Raw(b) | Half::Lz(b) | Half::LzDelta(b) => b,
+        }
+    }
+
+    pub fn is_lz(&self) -> bool {
+        !matches!(self, Half::Raw(_))
+    }
+
+    pub fn is_delta(&self) -> bool {
+        matches!(self, Half::LzDelta(_))
+    }
+
+    fn from_encoded(encoded: Option<(Vec<u8>, bool)>, raw: &[u8]) -> Half {
+        match encoded {
+            Some((b, false)) => Half::Lz(b),
+            Some((b, true)) => Half::LzDelta(b),
+            None => Half::Raw(raw.to_vec()),
         }
     }
 }
 
-/// Encode one block (up to 256 KiB) into its halves. A half that does not shrink is raw.
+/// Encode one block (up to 256 KiB) into its halves at the default level.
 pub fn encode_block(block: &[u8]) -> Vec<Half> {
+    encode_block_at(block, Level::default())
+}
+
+/// Encode one block (up to 256 KiB) into its halves. A half that does not shrink is raw.
+pub fn encode_block_at(block: &[u8], level: Level) -> Vec<Half> {
     assert!(!block.is_empty() && block.len() <= BLOCK);
-    let mut m = Matcher::new(block.len());
+    let mut m = Matcher::new(block.len(), level);
     let even_end = block.len().min(HALF);
-    let mut halves = vec![match encode_half(block, 0, even_end, true, &mut m) {
-        Some(b) => Half::Lz(b),
-        None => Half::Raw(block[..even_end].to_vec()),
-    }];
+    let mut halves = vec![Half::from_encoded(
+        encode_half(block, 0, even_end, true, &mut m, level),
+        &block[..even_end],
+    )];
     if block.len() > HALF {
         // The odd half may reach back into the even half, so its matcher starts out knowing it.
-        m = Matcher::new(block.len());
+        m = Matcher::new(block.len(), level);
         for i in 0..even_end {
             m.insert(block, i);
         }
-        halves.push(match encode_half(block, HALF, block.len(), false, &mut m) {
-            Some(b) => Half::Lz(b),
-            None => Half::Raw(block[HALF..].to_vec()),
-        });
+        halves.push(Half::from_encoded(
+            encode_half(block, HALF, block.len(), false, &mut m, level),
+            &block[HALF..],
+        ));
     }
     halves
 }
 
 // ─────────────────────────────── decoder ───────────────────────────────
 
-/// Decode one LZ half into `out[at..at + len]`; `out[..at]` is the block's history.
-fn decode_half(src: &[u8], out: &mut [u8], at: usize, len: usize) -> Result<()> {
+/// Literals into `out[dst..dst + n]`, delta-coded against the byte `last` back when `delta`.
+fn put_literals(out: &mut [u8], dst: usize, lits: &[u8], delta: bool, last: usize) {
+    if delta {
+        for (k, &l) in lits.iter().enumerate() {
+            out[dst + k] = l.wrapping_add(out[dst + k - last]);
+        }
+    } else {
+        out[dst..dst + lits.len()].copy_from_slice(lits);
+    }
+}
+
+/// Decode one LZ half into `out[at..at + len]`; `out[..at]` is the block's history. `delta`
+/// selects literal mode 0.
+fn decode_half(src: &[u8], out: &mut [u8], at: usize, len: usize, delta: bool) -> Result<()> {
     let end = at + len;
     let mut p = 0usize;
     let mut dst = at;
@@ -664,7 +1194,7 @@ fn decode_half(src: &[u8], out: &mut [u8], at: usize, len: usize) -> Result<()> 
         if lit_at + lit > lits.len() || dst + lit > end {
             return format_err("kraken: literal run overruns");
         }
-        out[dst..dst + lit].copy_from_slice(&lits[lit_at..lit_at + lit]);
+        put_literals(out, dst, &lits[lit_at..lit_at + lit], delta, recent[0]);
         dst += lit;
         lit_at += lit;
         let dist = if kind == 3 {
@@ -700,7 +1230,7 @@ fn decode_half(src: &[u8], out: &mut [u8], at: usize, len: usize) -> Result<()> 
     if lits.len() - lit_at != tail {
         return format_err("kraken: trailing literals do not fill the half");
     }
-    out[dst..end].copy_from_slice(&lits[lit_at..]);
+    put_literals(out, dst, &lits[lit_at..], delta, recent[0]);
     if offs.next().is_some() || lens.next().is_some() {
         return format_err("kraken: unused offsets or lengths");
     }
@@ -720,7 +1250,8 @@ pub fn decode_block(halves: &[Half], len: usize) -> Result<Vec<u8>> {
                 }
                 out[at..at + hl].copy_from_slice(b);
             }
-            Half::Lz(b) => decode_half(b, &mut out, at, hl)?,
+            Half::Lz(b) => decode_half(b, &mut out, at, hl, false)?,
+            Half::LzDelta(b) => decode_half(b, &mut out, at, hl, true)?,
         }
         at += hl;
     }
@@ -796,7 +1327,10 @@ mod tests {
         }
         let mut huffman = 0;
         for (half, h) in encode_block(&t.as_bytes()[..BLOCK]).into_iter().enumerate() {
-            let Half::Lz(body) = h else { continue };
+            if !h.is_lz() {
+                continue;
+            }
+            let body = h.bytes();
             // Past the even half's seed and the excess framing byte(s), the arrays begin.
             let mut p = if half == 0 { SEED } else { 0 };
             let flag = body[p];
@@ -865,6 +1399,78 @@ mod tests {
         }
         roundtrip(&vec![0u8; BLOCK]);
         roundtrip(&vec![0xABu8; HALF + 77]);
+    }
+
+    const LEVELS: [Level; 3] = [Level::Fast, Level::Balanced, Level::Smallest];
+
+    /// Structured data: 32-bit records whose fields step by small amounts, the case literal
+    /// mode 0 exists for.
+    fn records(n: usize) -> Vec<u8> {
+        let mut d = Vec::with_capacity(n);
+        let mut i = 0u32;
+        while d.len() < n {
+            d.extend_from_slice(&(i * 3).to_le_bytes());
+            d.extend_from_slice(&(1000 + i / 7).to_le_bytes());
+            d.extend_from_slice(&[(i % 5) as u8, 0x40, 0, 0]);
+            i += 1;
+        }
+        d.truncate(n);
+        d
+    }
+
+    #[test]
+    fn every_level_round_trips() {
+        let mut mixed = noise(BLOCK, 3);
+        mixed[5000..60_000].copy_from_slice(&records(55_000));
+        mixed[HALF + 100..HALF + 40_000].fill(0);
+        let (a, b) = mixed.split_at_mut(HALF);
+        b[50_000..70_000].copy_from_slice(&a[1000..21_000]);
+        for level in LEVELS {
+            for data in [
+                &mixed[..],
+                &records(BLOCK),
+                &records(HALF + 99),
+                &[9u8; 300][..],
+            ] {
+                let halves = encode_block_at(data, level);
+                assert_eq!(
+                    decode_block(&halves, data.len()).unwrap(),
+                    data,
+                    "{level:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn delta_literals_are_chosen_where_they_help() {
+        let data = records(BLOCK);
+        let halves = encode_block(&data);
+        assert!(
+            halves.iter().any(Half::is_delta),
+            "records should use literal mode 0"
+        );
+        assert_eq!(decode_block(&halves, BLOCK).unwrap(), data);
+    }
+
+    /// The levels trade time for size, never the other way round.
+    #[test]
+    fn slower_levels_are_not_larger() {
+        let mut t = records(BLOCK);
+        for (k, b) in t.iter_mut().enumerate().step_by(11) {
+            *b ^= (k / 13) as u8;
+        }
+        let size = |l| -> usize { encode_block_at(&t, l).iter().map(|h| h.bytes().len()).sum() };
+        let (fast, balanced, smallest) = (
+            size(Level::Fast),
+            size(Level::Balanced),
+            size(Level::Smallest),
+        );
+        assert!(balanced <= fast, "{balanced} > {fast}");
+        assert!(
+            smallest <= balanced + balanced / 200,
+            "{smallest} > {balanced}"
+        );
     }
 
     #[test]

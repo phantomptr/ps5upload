@@ -45,6 +45,8 @@ pub struct StoredBlock {
     pub stored_at: u64,
     /// `(stored length, is LZ)` per half, even then odd.
     pub halves: Vec<(u32, bool)>,
+    /// Per half: literals delta-coded (literal mode 0).
+    pub delta: [bool; 2],
     pub owner: Owner,
 }
 
@@ -317,17 +319,20 @@ pub fn compress(
             }
             let stored_at = cursor;
             let mut parts = Vec::with_capacity(2);
-            for h in &halves {
+            let mut delta = [false; 2];
+            for (k, h) in halves.iter().enumerate() {
                 let b = h.bytes();
                 out.write_all(b)?;
                 cursor += b.len() as u64;
-                parts.push((b.len() as u32, matches!(h, Half::Lz(_))));
+                parts.push((b.len() as u32, h.is_lz()));
+                delta[k] = h.is_delta();
             }
             blocks.push(StoredBlock {
                 logical: t.logical,
                 len: t.len as u32,
                 stored_at,
                 halves: parts,
+                delta,
                 owner: t.owner,
             });
             done += t.len as u64;
@@ -377,10 +382,18 @@ fn block_record(b: &StoredBlock) -> u128 {
     v |= 1u128 << 31;
     let mut flags = 0u32;
     if b.halves[0].1 {
-        flags |= 1 << 1; // even half is LZ, literal mode 1
+        flags |= 1 << 1; // even half is LZ
+        if b.delta[0] {
+            flags |= 1; // ... with delta literals (literal mode 0)
+        }
     }
     match b.halves.get(1) {
-        Some(&(_, true)) => flags |= 1 << 4, // odd half is LZ, literal mode 1
+        Some(&(_, true)) => {
+            flags |= 1 << 4; // odd half is LZ
+            if b.delta[1] {
+                flags |= 1 << 3; // ... with delta literals
+            }
+        }
         // An odd half stored raw restarts the decoder (the console's `odd_reset`, bit 34). Sony
         // sets it on every such block (over 150,000 in Spider-Man 2); without it the console's
         // layout check rejects the record (status 0x80010017, measured on a FW 5.10 Phat).
@@ -553,8 +566,8 @@ pub struct DescribedBlock {
     pub stored_len: u64,
     pub even_lz: bool,
     pub odd_lz: bool,
-    /// The record's mode bits 32..=36, as stored: 32 and 35 are NOT the even and odd halves'
-    /// literal modes, 33 and 36 mark LZ halves, 34 is `odd_reset` (the odd half restarts the decoder;
+    /// The record's mode bits 32..=36, as stored: 32 and 35 mark delta literals (literal mode 0)
+    /// in the even and odd halves, 33 and 36 mark LZ halves, 34 is `odd_reset` (the odd half restarts the decoder;
     /// set on every raw odd half and on Sony's bare entropy-array halves). Lets a
     /// reader with a full Kraken decoder read Sony's own blocks, which ours does not.
     pub mode_bits: u8,
@@ -667,15 +680,22 @@ pub fn decode_described(image: &[u8], b: &DescribedBlock) -> Result<Vec<u8>> {
     let even_logical = b.len.min(kraken::HALF as u64);
     let mut halves = Vec::new();
     let (e, o) = src.split_at((b.even_len as usize).min(src.len()));
+    let lz = |bytes: &[u8], delta: bool| {
+        if delta {
+            Half::LzDelta(bytes.to_vec())
+        } else {
+            Half::Lz(bytes.to_vec())
+        }
+    };
     halves.push(if b.even_lz || (e.len() as u64) < even_logical {
-        Half::Lz(e.to_vec())
+        lz(e, b.mode_bits & 1 != 0)
     } else {
         Half::Raw(e.to_vec())
     });
     if b.len > kraken::HALF as u64 {
         let odd_logical = b.len - kraken::HALF as u64;
         halves.push(if b.odd_lz || (o.len() as u64) < odd_logical {
-            Half::Lz(o.to_vec())
+            lz(o, b.mode_bits & 0b1000 != 0)
         } else {
             Half::Raw(o.to_vec())
         });
@@ -711,6 +731,7 @@ mod tests {
             len,
             stored_at: at,
             halves: halves.to_vec(),
+            delta: [false; 2],
             owner,
         }
     }
