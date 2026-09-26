@@ -13,8 +13,9 @@
 //! [excess: long-length escapes, forward ... backward]
 //! ```
 //!
-//! Arrays are stored raw (Oodle's type 0). Literals are raw (literal mode 1). Offsets use the
-//! scaled form: `cmd = nbits << 3 | top`, `offset = ((8 + top) << nbits | bits) - 8`. A command
+//! Each array is Huffman-coded (type 2, see `huff`) when that is smaller, raw (type 0) otherwise.
+//! Literals are not delta-coded (literal mode 1). New offsets use the traditional code (see
+//! `traditional_offset`). A command
 //! byte is `offset kind << 6 | (match length − 2) << 2 | literal run`, where kind 0–2 reuses one
 //! of the three recent offsets and 3 takes the next new one; a run of 3 or a length code of 15
 //! takes its value from the lengths array (value − 3, 255 escaping to the excess stream).
@@ -23,6 +24,8 @@
 //! The encoder is written from the format (documented by powzix/ooz, GPL-3, and the PS5 framing
 //! decoded from Sony's packages); the decoder here reads exactly what the encoder writes and is
 //! what proves every block before a package keeps it.
+
+mod huff;
 
 use crate::{format_err, Result};
 
@@ -192,31 +195,75 @@ fn traditional_offset(d: usize) -> (u8, u32, u32) {
     (((n - 4) << 4 | low) as u8, hi - (1 << n), n)
 }
 
-/// A raw (type 0) array at `at`, at most `max` bytes: `(bytes, header + payload length)`.
-fn get_raw_array(src: &[u8], at: usize, end: usize, max: usize) -> Result<(&[u8], usize)> {
+/// An array at `at`, raw (type 0) or Huffman (type 2): `(bytes, header + payload length)`.
+/// `max` bounds the decoded size.
+fn get_array(src: &[u8], at: usize, end: usize, max: usize) -> Result<(Vec<u8>, usize)> {
     if end < at + 2 {
         return format_err("kraken: truncated array");
     }
     let b0 = src[at];
-    if (b0 >> 4) & 7 != 0 {
-        return format_err("kraken: only raw arrays are supported");
-    }
-    let (n, h) = if b0 >= 0x80 {
-        ((((b0 as usize) << 8) | src[at + 1] as usize) & 0xFFF, 2)
-    } else {
-        if end < at + 3 {
-            return format_err("kraken: truncated array");
+    match (b0 >> 4) & 7 {
+        0 => {
+            let (n, h) = if b0 >= 0x80 {
+                ((((b0 as usize) << 8) | src[at + 1] as usize) & 0xFFF, 2)
+            } else {
+                if end < at + 3 {
+                    return format_err("kraken: truncated array");
+                }
+                let n =
+                    ((b0 as usize) << 16) | ((src[at + 1] as usize) << 8) | src[at + 2] as usize;
+                if n & !0x3FFFF != 0 {
+                    return format_err("kraken: bad array size");
+                }
+                (n, 3)
+            };
+            if n > max || at + h + n > end {
+                return format_err("kraken: array overruns its chunk");
+            }
+            Ok((src[at + h..at + h + n].to_vec(), h + n))
         }
-        let n = ((b0 as usize) << 16) | ((src[at + 1] as usize) << 8) | src[at + 2] as usize;
-        if n & !0x3FFFF != 0 {
-            return format_err("kraken: bad array size");
+        2 => {
+            let (src_size, dst_size, h) = if b0 >= 0x80 {
+                if end < at + 3 {
+                    return format_err("kraken: truncated array");
+                }
+                let v = (usize::from(b0) << 16)
+                    | (usize::from(src[at + 1]) << 8)
+                    | usize::from(src[at + 2]);
+                let s = v & 0x3FF;
+                (s, s + ((v >> 10) & 0x3FF) + 1, 3)
+            } else {
+                if end < at + 5 {
+                    return format_err("kraken: truncated array");
+                }
+                let v = u32::from_be_bytes([src[at + 1], src[at + 2], src[at + 3], src[at + 4]])
+                    as usize;
+                let s = v & 0x3FFFF;
+                let d = (((v >> 18) | (usize::from(b0) << 14)) & 0x3FFFF) + 1;
+                (s, d, 5)
+            };
+            if src_size >= dst_size || dst_size > max || at + h + src_size > end {
+                return format_err("kraken: bad Huffman array size");
+            }
+            let body = &src[at + h..at + h + src_size];
+            Ok((huff::decode(body, dst_size)?, h + src_size))
         }
-        (n, 3)
-    };
-    if n > max || at + h + n > end {
-        return format_err("kraken: array overruns its chunk");
+        _ => format_err("kraken: unsupported array type"),
     }
-    Ok((&src[at + h..at + h + n], h + n))
+}
+
+/// An array as Huffman when that is smaller, raw otherwise.
+fn put_array(out: &mut Vec<u8>, data: &[u8]) {
+    if let Some(body) = huff::encode(data) {
+        if body.len() + 5 < data.len() + 3 {
+            let d = data.len() - 1;
+            out.push(0x20 | (d >> 14) as u8);
+            out.extend_from_slice(&((((d & 0x3FFF) << 18) | body.len()) as u32).to_be_bytes());
+            out.extend_from_slice(&body);
+            return;
+        }
+    }
+    put_raw_array(out, data);
 }
 
 // ─────────────────────────────── encoder ───────────────────────────────
@@ -443,10 +490,10 @@ fn encode_half(
     } else {
         out.push(0x80 | e as u8);
     }
-    put_raw_array(&mut out, &lits);
-    put_raw_array(&mut out, &cmd_bytes);
-    put_raw_array(&mut out, &offs_codes);
-    put_raw_array(&mut out, &lens);
+    put_array(&mut out, &lits);
+    put_array(&mut out, &cmd_bytes);
+    put_array(&mut out, &offs_codes);
+    put_array(&mut out, &lens);
     let mut f = fwd.finish();
     let mut b = bwd.finish();
     b.reverse();
@@ -535,9 +582,9 @@ fn decode_half(src: &[u8], out: &mut [u8], at: usize, len: usize) -> Result<()> 
         return format_err("kraken: excess overruns the chunk");
     }
     let main_end = src.len() - excess;
-    let (lits, n) = get_raw_array(src, p, main_end, len)?;
+    let (lits, n) = get_array(src, p, main_end, len)?;
     p += n;
-    let (cmds, n) = get_raw_array(src, p, main_end, len)?;
+    let (cmds, n) = get_array(src, p, main_end, len)?;
     p += n;
     if p >= main_end {
         return format_err("kraken: truncated offsets");
@@ -548,9 +595,9 @@ fn decode_half(src: &[u8], out: &mut [u8], at: usize, len: usize) -> Result<()> 
     if scaled {
         p += 1;
     }
-    let (offs_codes, n) = get_raw_array(src, p, main_end, cmds.len())?;
+    let (offs_codes, n) = get_array(src, p, main_end, cmds.len())?;
     p += n;
-    let (lens, n) = get_raw_array(src, p, main_end, len / 4)?;
+    let (lens, n) = get_array(src, p, main_end, len / 4)?;
     p += n;
 
     // Offsets from the two main streams.
@@ -605,7 +652,7 @@ fn decode_half(src: &[u8], out: &mut [u8], at: usize, len: usize) -> Result<()> 
     let mut lit_at = 0usize;
     let mut offs = offsets.into_iter();
     let mut recent = [8usize, 8, 8];
-    for &f in cmds {
+    for &f in &cmds {
         let mut lit = (f & 3) as usize;
         if lit == 3 {
             lit = lens
@@ -737,7 +784,8 @@ mod tests {
     }
 
     /// What the console's decoder accepts, as the encoders it accepts write it: every array
-    /// with the 3-byte raw header and offsets in the traditional code (no `0x80` marker).
+    /// raw with the 3-byte header or Huffman with the 5-byte one, and offsets in the traditional
+    /// code (no `0x80` marker).
     #[test]
     fn halves_use_only_the_accepted_forms() {
         let mut t = String::new();
@@ -746,25 +794,38 @@ mod tests {
             t.push_str(&format!("{i} lorem ipsum dolor sit amet {}\n", i * 7));
             i += 1;
         }
-        for h in encode_block(&t.as_bytes()[..BLOCK]) {
+        let mut huffman = 0;
+        for (half, h) in encode_block(&t.as_bytes()[..BLOCK]).into_iter().enumerate() {
             let Half::Lz(body) = h else { continue };
-            // Past the seed and the excess framing byte(s), the literals array begins.
-            let mut p = SEED;
+            // Past the even half's seed and the excess framing byte(s), the arrays begin.
+            let mut p = if half == 0 { SEED } else { 0 };
             let flag = body[p];
             p += 1;
             if flag & 0x3F > 0x1F {
                 p += 1;
             }
-            for _ in 0..2 {
-                assert!(body[p] < 0x80, "short raw header at {p}");
-                let n = (usize::from(body[p]) << 16)
-                    | (usize::from(body[p + 1]) << 8)
-                    | usize::from(body[p + 2]);
-                p += 3 + n;
+            for k in 0..4 {
+                let b0 = body[p];
+                assert!(b0 < 0x80, "short array header at {p}");
+                let be = |at: usize, n: usize| {
+                    body[at..at + n]
+                        .iter()
+                        .fold(0usize, |v, &b| v << 8 | usize::from(b))
+                };
+                p += match b0 >> 4 {
+                    0 => 3 + be(p, 3),
+                    2 => {
+                        huffman += 1;
+                        5 + (be(p + 1, 4) & 0x3FFFF)
+                    }
+                    other => panic!("array type {other}"),
+                };
+                if k == 1 {
+                    assert_ne!(body[p], 0x80, "scaled-offset marker");
+                }
             }
-            assert_ne!(body[p], 0x80, "scaled-offset marker");
-            break;
         }
+        assert!(huffman > 0, "text should get Huffman arrays");
     }
 
     #[test]
