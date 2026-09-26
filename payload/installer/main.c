@@ -122,20 +122,28 @@ static int do_install(const inst_request_t *req, char *out, size_t cap) {
             return inst_reply_err_not_ready(out, cap, (uint32_t)rc);
     }
 
-    /* admission: only a serving loopback job blocks a new install */
+    /* Admission: only a serving loopback job blocks a new install. Take the
+     * sony_lock FIRST, then decide admission under state_lock. The check must
+     * be inside the sony_lock, not before it: active_phase is not set to
+     * SERVING until an accepted loopback install finishes below, so a
+     * pre-lock check would let a second install slip in while the first's
+     * Sony call is still in flight — starting a second loopback (leaking the
+     * first) and issuing a duplicate InstallByPackage. Serialising the check
+     * behind sony_lock closes that window. */
+    pthread_mutex_lock(&g_d.sony_lock);
     pthread_mutex_lock(&g_d.state_lock);
     inst_job_phase_t active = g_d.active_phase;
     char busy_id[INST_JOBID_MAX];
     snprintf(busy_id, sizeof(busy_id), "%s", g_d.active_id);
     pthread_mutex_unlock(&g_d.state_lock);
-    if (!inst_admit_install(active))
+    if (!inst_admit_install(active)) {
+        pthread_mutex_unlock(&g_d.sony_lock);
         return inst_reply_err_busy(out, cap, busy_id);
+    }
 
     char job_id[INST_JOBID_MAX];
     make_job_id(job_id, sizeof(job_id));
 
-    /* serialize the Sony call */
-    pthread_mutex_lock(&g_d.sony_lock);
     inst_loopback_t *lb = NULL;
     inst_install_result_t res = inst_sony_install(req, &g_d.sony, &lb, job_id);
     pthread_mutex_lock(&g_d.state_lock);
