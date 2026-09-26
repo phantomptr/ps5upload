@@ -888,6 +888,14 @@ test-payload: payload
 		$(PAYLOAD_DIR)/installer/jobs.c
 	@/tmp/ps5upload-installer-selftest
 	@echo "✓ installer request parse, replies, path safety and admission are sound"
+	@echo "Running installer HTTP/coverage self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/installer \
+		-o /tmp/ps5upload-installer-http-selftest \
+		$(PAYLOAD_DIR)/tests/installer_http_selftest.c \
+		$(PAYLOAD_DIR)/installer/http_range.c \
+		$(PAYLOAD_DIR)/installer/jobs.c
+	@/tmp/ps5upload-installer-http-selftest
+	@echo "✓ installer range parse, headers, coverage and job ring are sound"
 	@echo "Running param.json SDK-rewrite self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-sdk-param-selftest \
 		$(PAYLOAD_DIR)/tests/sdk_param_selftest.c
