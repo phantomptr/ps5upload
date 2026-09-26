@@ -26,6 +26,13 @@ describe("taskStore lifecycle", () => {
     resetStore();
   });
 
+  it("carries a stage name through updates", () => {
+    const s = useTaskStore.getState();
+    const id = s.registerTask({ kind: "fpkg-convert", origin: "convert", label: "Convert Minecraft", consoleId: "" });
+    s.updateTask(id, { stage: "Compress", progress: { current: 5, total: 10, unit: "bytes" } });
+    expect(useTaskStore.getState().getTask(id)).toMatchObject({ stage: "Compress", kind: "fpkg-convert" });
+  });
+
   it("registerTask creates a running task with a stable id", () => {
     const id = useTaskStore.getState().registerTask({
       kind: "upload-file",

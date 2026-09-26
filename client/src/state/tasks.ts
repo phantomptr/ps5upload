@@ -58,7 +58,19 @@ export type TaskKind =
   | "library-mount"
   | "library-register"
   | "library-unregister"
-  | "library-launch";
+  | "library-launch"
+  // any other library action bridged from the activity log (move, delete, chmod…)
+  | "library-op"
+  // conversion (engine jobs)
+  | "fpkg-convert"
+  | "ffpfsc-compress"
+  // backporting
+  | "backport-patch"
+  | "fakelib-scan"
+  | "fakelib-import"
+  // a batch of installs driven by Install All (its installs are their own tasks)
+  | "install-batch"
+  | "bug-report";
 
 export type TaskStatus =
   | "queued"
@@ -144,6 +156,8 @@ export interface Task {
   label: string;
   /** Optional second line — typically From/To paths. */
   detail?: string;
+  /** The step the job is on, e.g. "Compress" or "Sending"; shown in the activity panel. */
+  stage?: string;
   /** Timestamp (ms) of the last status change. Drives the "recently
    *  changed" sort in the Tasks tab and the stale-detection heuristic. */
   updatedAtMs: number;
@@ -262,7 +276,10 @@ interface TaskState {
   updateTask: (
     id: string,
     patch: Partial<
-      Pick<Task, "label" | "progress" | "rate" | "eta" | "status" | "detail" | "engineJobId" | "lastError" | "control" | "payload">
+      Pick<
+        Task,
+        "label" | "progress" | "rate" | "eta" | "status" | "detail" | "stage" | "engineJobId" | "lastError" | "control" | "payload"
+      >
     >,
   ) => void;
 
