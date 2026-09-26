@@ -119,9 +119,9 @@ export const NAV_ITEMS: NavItem[] = [
     icon: PieChart,
   },
   {
-    to: "/smb-browser",
-    key: "smb_title",
-    fallback: "SMB Browser",
+    to: "/connections",
+    key: "connections_title",
+    fallback: "Connections",
     icon: Network,
   },
   {

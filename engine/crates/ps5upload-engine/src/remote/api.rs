@@ -32,6 +32,9 @@ pub struct ConnectionInput {
 
 #[derive(Deserialize)]
 pub struct ConnectionBody {
+    /// Editing a saved connection: a form without a new secret borrows the saved one.
+    #[serde(default)]
+    pub id: Option<String>,
     pub connection: ConnectionInput,
     #[serde(default)]
     pub password: Option<String>,
@@ -197,12 +200,21 @@ pub(crate) async fn test_saved(r: &Remote, id: &str) -> Response {
     }
 }
 
+/// The form's secret, or — for an edit that did not retype it — the saved one.
+fn form_secret(r: &Remote, id: Option<&str>, secret: Option<Secret>) -> Secret {
+    secret
+        .or_else(|| id.and_then(|id| r.store.get(id)).map(|(_, s)| s))
+        .unwrap_or(Secret::None)
+}
+
 pub(crate) async fn test_form(r: &Remote, body: ConnectionBody) -> Response {
+    let id = body.id.clone();
     let (conn, secret) = match parse_body(body) {
         Ok(v) => v,
         Err(resp) => return *resp,
     };
-    try_connection(r, &conn, &secret.unwrap_or(Secret::None)).await
+    let secret = form_secret(r, id.as_deref(), secret);
+    try_connection(r, &conn, &secret).await
 }
 
 // ─── axum handlers over the engine's store ──────────────────────────────────
@@ -258,10 +270,11 @@ pub async fn shares_form_handler(Json(mut body): Json<ConnectionBody>) -> Respon
     if body.connection.share.trim().is_empty() {
         body.connection.share = "IPC$".into();
     }
-    match parse_body(body) {
-        Ok((conn, secret)) => shares_of(&conn, &secret.unwrap_or(Secret::None)).await,
+    let id = body.id.clone();
+    with_remote!(r => match parse_body(body) {
+        Ok((conn, secret)) => shares_of(&conn, &form_secret(&r, id.as_deref(), secret)).await,
         Err(resp) => *resp,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -409,6 +422,31 @@ mod tests {
         assert!(out["hint"].as_str().unwrap().contains("Guest account"));
         let tested = body(test_saved(&r, &id).await).await;
         assert!(tested["hint"].as_str().unwrap().contains("Guest account"));
+    }
+
+    #[tokio::test]
+    async fn testing_an_edit_borrows_the_saved_password() {
+        let r = remote_with(
+            MemFs::new(&[("/a", b"x")]),
+            Some(|s| match s {
+                Secret::Password { password } if password == "hunter2" => {
+                    RemoteError::Io("signed in".into())
+                }
+                _ => RemoteError::Auth("no password".into()),
+            }),
+        );
+        let id = body(add_connection(&r, nas_form()).await).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let edit = form(
+            json!({"id": id, "connection": {"name":"NAS","protocol":"smb","host":"10.0.0.6","share":"games","user":"me"}}),
+        );
+        let out = body(test_form(&r, edit).await).await;
+        assert!(
+            out["error"].as_str().unwrap().contains("signed in"),
+            "{out}"
+        );
     }
 }
 

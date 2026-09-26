@@ -51,6 +51,7 @@ const GameHubScreen = lazy(() => import("./screens/GameHub"));
 const FwSpoofScreen = lazy(() => import("./screens/FwSpoof"));
 const FtpServerScreen = lazy(() => import("./screens/FtpServer"));
 const SmbBrowserScreen = lazy(() => import("./screens/SmbBrowser"));
+const ConnectionsScreen = lazy(() => import("./screens/Connections"));
 const PayloadsScreen = lazy(() => import("./screens/Payloads"));
 const FirstRunScreen = lazy(() => import("./screens/FirstRun"));
 const SavesScreen = lazy(() => import("./screens/Saves"));
@@ -323,6 +324,14 @@ export default function App() {
           element={
             <Suspense fallback={<ScreenLoader />}>
               <FtpServerScreen />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/connections"
+          element={
+            <Suspense fallback={<ScreenLoader />}>
+              <ConnectionsScreen />
             </Suspense>
           }
         />

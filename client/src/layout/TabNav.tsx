@@ -85,6 +85,7 @@ const TABS: TabDef[] = [
       "/volumes",
       "/smb",
       "/smb-browser",
+      "/connections",
       "/disk-usage",
     ],
   },

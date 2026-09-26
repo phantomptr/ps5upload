@@ -49,7 +49,8 @@ export interface RemoteFailure {
 
 export type TestResult = { ok: true } | ({ ok: false } & RemoteFailure);
 
-export type FormBody = { connection: ConnectionInput } & SecretInput;
+/** An unsaved form; `id` (editing) lets the engine borrow the saved secret when none is typed. */
+export type FormBody = { id?: string; connection: ConnectionInput } & SecretInput;
 
 /** A failed call, carrying the engine's plain-language hint when it has one. */
 export class RemoteApiError extends Error {
