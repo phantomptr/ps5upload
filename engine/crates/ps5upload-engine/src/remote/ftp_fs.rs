@@ -254,11 +254,17 @@ async fn sign_in(t: &Target) -> Result<Ftp, RemoteError> {
 }
 
 pub struct FtpFs {
+    /// (sign-ins, listings) so far — tests read them to catch per-file round trips.
+    counts: Arc<(
+        std::sync::atomic::AtomicUsize,
+        std::sync::atomic::AtomicUsize,
+    )>,
     target: Target,
     host: String,
     /// The folder the server signs in to. Paths here are relative to it, so "/" is the user's
     /// own folder even on a server that does not confine them to it.
     home: String,
+    readers: Readers,
     /// The server lists with MLSD (from FEAT). Asked once: on FTPS a command the server rejects
     /// leaves the data connection's TLS handshake waiting forever, so trying MLSD and falling
     /// back is not an option there.
@@ -279,6 +285,11 @@ pub(crate) fn under(home: &str, path: &str) -> String {
 }
 
 impl FtpFs {
+    pub fn counters(&self) -> (usize, usize) {
+        use std::sync::atomic::Ordering::SeqCst;
+        (self.counts.0.load(SeqCst), self.counts.1.load(SeqCst))
+    }
+
     pub async fn connect(
         conn: &Connection,
         secret: &Secret,
@@ -302,9 +313,11 @@ impl FtpFs {
             .unwrap_or(false);
         crate::log_info!("remote ftp: signed in to {host} tls={tls}");
         Ok(Self {
+            counts: Arc::new((1.into(), 0.into())),
             target,
             host,
             home,
+            readers: Arc::new(Mutex::new(Vec::new())),
             mlsd,
             session: Mutex::new(session),
         })
@@ -313,6 +326,9 @@ impl FtpFs {
     async fn entries(&self, path: &str) -> Result<Vec<Entry>, RemoteError> {
         let dir = under(&self.home, path);
         let dir = dir.as_str();
+        self.counts
+            .1
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let mut s = self.session.lock().await;
         let host = self.host.as_str();
         let mlsd = self.mlsd;
@@ -334,24 +350,34 @@ impl FtpFs {
     }
 }
 
-/// A transfer left open mid-file, and where it has got to.
+/// A transfer left open mid-file: the stream, the file it reads, and how far it has got.
 type OpenTransfer = (
     suppaftp::tokio::TransferStream<suppaftp::tokio::AsyncRustlsStream>,
+    String,
     u64,
 );
 
-/// A signed-in session, perhaps partway through reading this file.
+/// A signed-in session for reads, perhaps partway through reading a file.
 struct Session {
     ftp: Ftp,
     open: Option<OpenTransfer>,
 }
 
+/// The read sessions of one connection, shared by every file opened on it: a packed folder
+/// upload opens thousands of small files, and one sign-in each would be slow and trip a NAS's
+/// per-address connection limit.
+type Readers = Arc<Mutex<Vec<Session>>>;
+
 struct FtpFile {
+    counts: Arc<(
+        std::sync::atomic::AtomicUsize,
+        std::sync::atomic::AtomicUsize,
+    )>,
     target: Target,
     host: String,
     path: String,
     size: u64,
-    idle: Mutex<Vec<Session>>,
+    idle: Readers,
 }
 
 impl FtpFile {
@@ -362,10 +388,11 @@ impl FtpFile {
     async fn session_at(&self, offset: u64) -> Result<Session, RemoteError> {
         {
             let mut idle = self.idle.lock().await;
-            if let Some(i) = idle
-                .iter()
-                .position(|s| s.open.as_ref().is_some_and(|(_, at)| *at == offset))
-            {
+            if let Some(i) = idle.iter().position(|s| {
+                s.open
+                    .as_ref()
+                    .is_some_and(|(_, p, at)| *p == self.path && *at == offset)
+            }) {
                 return Ok(idle.swap_remove(i));
             }
             if let Some(i) = idle.iter().position(|s| s.open.is_none()) {
@@ -375,6 +402,9 @@ impl FtpFile {
                 idle.remove(0);
             }
         }
+        self.counts
+            .0
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(Session {
             ftp: sign_in(&self.target).await?,
             open: None,
@@ -395,7 +425,7 @@ impl RemoteFile for FtpFile {
         let len = len.min(self.size - offset);
         let mut s = self.session_at(offset).await?;
         let mut stream = match s.open.take() {
-            Some((stream, _)) => stream,
+            Some((stream, _, _)) => stream,
             None => {
                 let (ftp, path, host) = (&mut s.ftp, self.path.as_str(), self.host.as_str());
                 timed(host, "a read", async move {
@@ -427,7 +457,7 @@ impl RemoteFile for FtpFile {
                 return Ok(out);
             }
         } else {
-            s.open = Some((stream, at));
+            s.open = Some((stream, self.path.clone(), at));
         }
         let mut idle = self.idle.lock().await;
         if idle.len() < READ_SESSIONS {
@@ -472,16 +502,35 @@ impl RemoteFs for FtpFs {
     }
 
     async fn open(&self, path: &str) -> Result<Arc<dyn RemoteFile>, RemoteError> {
-        let e = self.stat(path).await?;
-        if e.is_dir {
-            return Err(RemoteError::NotFound(format!("{path} is a folder")));
-        }
+        // SIZE answers in one command; listing the parent folder for every file opened is
+        // what made a packed upload of thousands of small files crawl. A server without SIZE
+        // (or a folder, which SIZE refuses) falls back to the listing.
+        let full = under(&self.home, path);
+        let sized = {
+            let mut s = self.session.lock().await;
+            let host = self.host.as_str();
+            timed(host, "a file size", async {
+                s.size(full.as_str()).await.map_err(|e| map_err(host, e))
+            })
+            .await
+        };
+        let size = match sized {
+            Ok(n) => n as u64,
+            Err(_) => {
+                let e = self.stat(path).await?;
+                if e.is_dir {
+                    return Err(RemoteError::NotFound(format!("{path} is a folder")));
+                }
+                e.size
+            }
+        };
         Ok(Arc::new(FtpFile {
+            counts: Arc::clone(&self.counts),
             target: self.target.clone(),
             host: self.host.clone(),
             path: under(&self.home, path),
-            size: e.size,
-            idle: Mutex::new(Vec::new()),
+            size,
+            idle: Arc::clone(&self.readers),
         }))
     }
 
@@ -637,5 +686,43 @@ mod tests {
             FtpFs::connect(&conn, &secret, true).await,
             Err(RemoteError::HostKey { changed: true, .. })
         ));
+    }
+
+    /// A folder of small files (a packed upload opens each one) must not sign in or list the
+    /// folder once per file. Uses the FTP server of `ftp_meets_the_remote_contract`, with a
+    /// folder `many/` of 12 small files.
+    #[tokio::test]
+    #[ignore = "needs an FTP server; see ftp_meets_the_remote_contract"]
+    async fn many_small_files_reuse_sessions() {
+        let Ok(addr) = std::env::var("PS5UPLOAD_FTP_TEST") else {
+            return;
+        };
+        let (host, port) = addr.split_once(':').unwrap();
+        let mut conn = crate::remote::store::conn("t", crate::remote::store::Protocol::Ftp);
+        conn.host = host.into();
+        conn.port = port.parse().unwrap();
+        conn.user = "t".into();
+        let fs = FtpFs::connect(
+            &conn,
+            &Secret::Password {
+                password: "t".into(),
+            },
+            false,
+        )
+        .await
+        .unwrap();
+        let before = fs.counters();
+        for i in 1..=12 {
+            let f = fs.open(&format!("/many/f{i}.bin")).await.unwrap();
+            let got = f.read_at(0, f.size()).await.unwrap();
+            assert_eq!(got, format!("file {i}").as_bytes());
+        }
+        let (sign_ins, listings) = fs.counters();
+        assert!(
+            sign_ins - before.0 <= READ_SESSIONS,
+            "signed in {} times",
+            sign_ins - before.0
+        );
+        assert_eq!(listings - before.1, 0, "listed a folder to open a file");
     }
 }
