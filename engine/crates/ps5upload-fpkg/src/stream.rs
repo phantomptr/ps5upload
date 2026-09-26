@@ -44,9 +44,9 @@ pub struct StreamRequest<'a> {
     pub extras: Vec<cnt_write::ExtraEntry>,
     /// PlayGo chunks; see [`crate::playgo`].
     pub playgo_chunks: u16,
-    /// Compress the inner image with Kraken, spooling it here first (see
-    /// [`crate::kraken_image`]). `None` stores it uncompressed.
-    pub kraken_spool: Option<std::path::PathBuf>,
+    /// Compress the inner image with Kraken (see [`crate::kraken_image`]), spooling it where
+    /// this says. `None` stores it uncompressed.
+    pub kraken_spool: Option<KrakenSpool>,
     /// How hard the Kraken encoder works on a compressed image.
     pub level: crate::kraken::Level,
     /// How the inner image's metadata region is stored.
@@ -132,6 +132,32 @@ fn block_spans(
     }
 }
 
+/// Where a compressed build spools its image while the outer image's size is still unknown.
+#[derive(Debug, Clone)]
+pub enum KrakenSpool {
+    /// In the package itself, where the outer image's data starts (one block in): every block
+    /// of the outer image after the stored inner image, and everything after that, depends on
+    /// the stored length, but the stored image's own place does not. No copy, and no second
+    /// image's worth of disk.
+    InPlace,
+    /// A separate file, e.g. on another drive; read back and copied in.
+    File(std::path::PathBuf),
+}
+
+fn spool_file(out: &File, spool: &KrakenSpool) -> Result<File> {
+    Ok(match spool {
+        KrakenSpool::InPlace => out.try_clone()?,
+        KrakenSpool::File(path) => File::create(path)?,
+    })
+}
+
+fn spool_base(spool: &KrakenSpool) -> u64 {
+    match spool {
+        KrakenSpool::InPlace => BLOCK,
+        KrakenSpool::File(_) => 0,
+    }
+}
+
 fn cancelled() -> crate::Error {
     crate::Error::Format("the build was cancelled".to_string())
 }
@@ -158,7 +184,7 @@ pub fn write_package(
     // A compressed image is built first, into its spool: the outer image's geometry follows
     // its length, which is only known once every block is compressed.
     let kraken = match &request.kraken_spool {
-        Some(spool) => {
+        Some(where_to) => {
             (progress.phase)("compressing the image");
             let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
             let keystone = crate::inner::keystone(request.passcode);
@@ -168,7 +194,8 @@ pub fn write_package(
                 &metadata,
                 &keystone,
                 read,
-                spool,
+                spool_file(out, where_to)?,
+                spool_base(where_to),
                 threads,
                 request.level,
                 cancel,
@@ -203,10 +230,15 @@ pub fn write_package(
             )?,
         ),
     };
+    // Where the compressed image is read back from: the package itself when it was written in
+    // place, where it already sits, or its separate spool file.
+    let in_place = matches!(request.kraken_spool, Some(KrakenSpool::InPlace));
     let mut spool = match &request.kraken_spool {
-        Some(path) if kraken.is_some() => Some(File::open(path)?),
+        Some(KrakenSpool::InPlace) if kraken.is_some() => Some(out.try_clone()?),
+        Some(KrakenSpool::File(path)) if kraken.is_some() => Some(File::open(path)?),
         _ => None,
     };
+    let spool_at = request.kraken_spool.as_ref().map_or(0, spool_base);
     // The layout follows the descriptor's length, which fixes how many blocks it spans.
     let lay = layout(inner_blocks, naps.len() as u64)?;
     let outer_size = lay.ndblock * BLOCK;
@@ -239,7 +271,7 @@ pub fn write_package(
         }
         if let Some(spool) = spool.as_mut() {
             // The compressed image: its files' digests were taken as it was compressed.
-            crate::kraken_image::spool_block(spool, index, &mut block)?;
+            crate::kraken_image::spool_block(spool, spool_at, index, &mut block)?;
             file_digests.block(&block, &[]);
         } else {
             block_spans(&source, plan, index, &mut spans);
@@ -253,8 +285,12 @@ pub fn write_package(
             xts.encrypt(index, &mut block);
         }
         crcs[1 + index as usize] = crc32c(&block);
-        out.seek(SeekFrom::Start(BLOCK + index * BLOCK))?;
-        out.write_all(&block)?;
+        // A compressed image written in place is already where the outer image keeps it;
+        // only a transformed block has to go back.
+        if !(in_place && spool.is_some() && xts.is_none()) {
+            out.seek(SeekFrom::Start(BLOCK + index * BLOCK))?;
+            out.write_all(&block)?;
+        }
         if index.is_multiple_of(512) {
             // Bytes of the outer image, the same measure the verifier reports.
             (progress.bytes)(((index + 1) * BLOCK).min(outer_size), outer_size);

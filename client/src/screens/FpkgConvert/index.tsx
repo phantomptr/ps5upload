@@ -35,11 +35,11 @@ function prettyBytes(n: number): string {
   return `${n} B`;
 }
 
-/** The most free space a conversion can need on the output drive: the package, plus the
- *  image it spools first. Compression usually makes both far smaller; this is the bound for
- *  a game whose data does not compress. */
+/** The most free space a conversion can need on the output drive: the package, which the
+ *  compressed image is written straight into, plus a little headroom. Compression usually
+ *  makes it far smaller; this is the bound for a game whose data does not compress. */
 function convertSpaceNeeded(plannedSize: number): number {
-  return plannedSize * 2;
+  return Math.ceil(plannedSize * 1.02);
 }
 
 export default function FpkgConvertScreen() {

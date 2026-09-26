@@ -87,19 +87,20 @@ impl BuildRequest {
     }
 }
 
-/// Where a compressed build spools its image before the package is written: beside the output,
-/// or in `PS5UPLOAD_FPKG_SPOOL_DIR`. The spool is as large as the image, so a big title
-/// needs twice its size on one drive unless the two are split (Spider-Man 2: 254 GB).
-fn spool_path(partial: &Path) -> PathBuf {
-    let name = format!(
-        "{}.kraken",
-        partial
-            .file_name()
-            .map_or_else(Default::default, |n| n.to_string_lossy())
-    );
+/// Where a compressed build spools its image: in the package itself, or in
+/// `PS5UPLOAD_FPKG_SPOOL_DIR` when set (a separate file, copied in once the image is done).
+fn spool_for(partial: &Path) -> stream::KrakenSpool {
     match std::env::var_os("PS5UPLOAD_FPKG_SPOOL_DIR") {
-        Some(dir) if !dir.is_empty() => PathBuf::from(dir).join(name),
-        _ => partial.with_file_name(name),
+        Some(dir) if !dir.is_empty() => {
+            let name = format!(
+                "{}.kraken",
+                partial
+                    .file_name()
+                    .map_or_else(Default::default, |n| n.to_string_lossy())
+            );
+            stream::KrakenSpool::File(PathBuf::from(dir).join(name))
+        }
+        _ => stream::KrakenSpool::InPlace,
     }
 }
 
@@ -445,7 +446,9 @@ fn build_mode(
 
     let written = match mode {
         Mode::Streaming => {
+            // Read too: a compressed image is written in place and read back for its digests.
             let mut file = std::fs::OpenOptions::new()
+                .read(true)
                 .write(true)
                 .create_new(true)
                 .open(&partial)?;
@@ -497,13 +500,13 @@ fn build_mode(
                 icon_dds,
                 extras,
                 playgo_chunks: request.playgo_chunks,
-                kraken_spool: request.kraken.then(|| spool_path(&partial)),
+                kraken_spool: request.kraken.then(|| spool_for(&partial)),
                 level: request.level,
                 metadata_codec: request.metadata_codec,
             };
             let written =
                 stream::write_package(&mut file, &stream_request, &mut read_range, &mut p, cancel);
-            if let Some(spool) = &stream_request.kraken_spool {
+            if let Some(stream::KrakenSpool::File(spool)) = &stream_request.kraken_spool {
                 std::fs::remove_file(spool).ok();
             }
             match written {

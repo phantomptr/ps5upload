@@ -14,7 +14,6 @@
 
 use std::fs::File;
 use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::crypto::Hasher;
@@ -217,7 +216,7 @@ fn pipeline_local<T: Send, U: Send>(
     })
 }
 
-/// Compress the image described by `plan` into `spool`. `read` fetches a byte range of a source
+/// Compress the image described by `plan` into `spool` from byte `base` on. `read` fetches a byte range of a source
 /// file, `metadata` is the metadata region's logical bytes and `keystone` the generated one.
 #[allow(clippy::too_many_arguments)]
 pub fn compress(
@@ -225,7 +224,8 @@ pub fn compress(
     metadata: &[u8],
     keystone: &[u8],
     read: SourceRead<'_>,
-    spool: &Path,
+    spool: File,
+    base: u64,
     threads: usize,
     level: kraken::Level,
     cancel: &AtomicBool,
@@ -237,7 +237,9 @@ pub fn compress(
         return format_err("the metadata region does not fill the mount above its base");
     }
     let total: u64 = todo.iter().map(|t| t.len as u64).sum();
-    let mut out = BufWriter::with_capacity(8 << 20, File::create(spool)?);
+    let mut spool = spool;
+    spool.seek(SeekFrom::Start(base))?;
+    let mut out = BufWriter::with_capacity(8 << 20, spool);
     let mut next = todo.into_iter();
     let mut blocks: Vec<StoredBlock> = Vec::new();
     let mut cursor = 0u64;
@@ -368,9 +370,9 @@ pub fn compress(
     })
 }
 
-/// Read the spooled image back one 64 KiB block at a time.
-pub fn spool_block(spool: &mut File, index: u64, buf: &mut [u8]) -> Result<()> {
-    spool.seek(SeekFrom::Start(index * crate::BLOCK))?;
+/// Read the spooled image back one 64 KiB block at a time; it starts at byte `base`.
+pub fn spool_block(spool: &mut File, base: u64, index: u64, buf: &mut [u8]) -> Result<()> {
+    spool.seek(SeekFrom::Start(base + index * crate::BLOCK))?;
     spool.read_exact(buf)?;
     Ok(())
 }
