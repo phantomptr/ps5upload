@@ -14,6 +14,8 @@ pub fn hint_for(error: &str) -> Option<&'static str> {
         "accessdenied",
     ]) {
         Some("Access denied. Check the share's permissions and the folder's security permissions for this user.")
+    } else if has(&["session reuse", "ssl_reuse", " 522"]) {
+        Some("The FTP server requires TLS session reuse and refused it. Set require_ssl_reuse=NO on the server, or use SFTP.")
     } else if has(&["signing"]) {
         Some("The server requires SMB signing, which a guest cannot use. Sign in with a user and password.")
     } else if has(&["certificate", "tls", "handshake"]) {
@@ -61,6 +63,11 @@ mod tests {
         assert!(hint_for("invalid peer certificate")
             .unwrap()
             .contains("certificate"));
+        assert!(
+            hint_for("522 SSL connection failed: session reuse required")
+                .unwrap()
+                .contains("session reuse")
+        );
         assert_eq!(hint_for("something else"), None);
     }
 }

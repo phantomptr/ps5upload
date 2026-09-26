@@ -44,6 +44,10 @@ tokio.workspace = true
 tokio-stream.workspace = true
 tower-http.workspace = true
 uuid.workspace = true
+suppaftp = { version = "12", default-features = false, features = ["tokio-rustls-ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+sha2 = "0.11"
 
 # Install-from-a-link fetches the package over many HTTP range connections at
 # once (remote_pkg.rs). Target-gated to non-Android for the same reason

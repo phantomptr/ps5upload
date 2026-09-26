@@ -105,7 +105,19 @@ pub(crate) fn remote_err(e: &RemoteError) -> Response {
         _ => StatusCode::BAD_GATEWAY,
     };
     let msg = e.to_string();
-    (code, Json(json!({ "error": msg, "hint": hint_for(&msg) }))).into_response()
+    (
+        code,
+        Json(json!({ "error": msg, "hint": hint_for(&msg), "host_key": host_key_of(e) })),
+    )
+        .into_response()
+}
+
+/// The fingerprint to offer for acceptance when the server's identity is unknown or changed.
+fn host_key_of(e: &RemoteError) -> Option<&str> {
+    match e {
+        RemoteError::HostKey { fingerprint, .. } => Some(fingerprint),
+        _ => None,
+    }
 }
 
 pub(crate) async fn list_connections(r: &Remote) -> Response {
@@ -163,7 +175,13 @@ async fn try_connection(r: &Remote, conn: &Connection, secret: &Secret) -> Respo
         Ok(()) => Json(json!({ "ok": true })).into_response(),
         Err(e) => {
             let msg = e.to_string();
-            Json(json!({ "ok": false, "error": msg, "hint": hint_for(&msg) })).into_response()
+            Json(json!({
+                "ok": false,
+                "error": msg,
+                "hint": hint_for(&msg),
+                "host_key": host_key_of(&e),
+            }))
+            .into_response()
         }
     }
 }
@@ -447,6 +465,26 @@ mod tests {
             out["error"].as_str().unwrap().contains("signed in"),
             "{out}"
         );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_server_key_comes_back_to_accept() {
+        let r = remote_with(
+            MemFs::new(&[]),
+            Some(|_| RemoteError::HostKey {
+                fingerprint: "SHA256:abc".into(),
+                changed: false,
+            }),
+        );
+        let out = body(test_form(&r, nas_form()).await).await;
+        assert_eq!(out["ok"], false);
+        assert_eq!(out["host_key"], "SHA256:abc");
+        let id = body(add_connection(&r, nas_form()).await).await["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let listed = body(list_dir(&r, &format!("remote://{id}/"), None).await).await;
+        assert_eq!(listed["host_key"], "SHA256:abc");
     }
 }
 

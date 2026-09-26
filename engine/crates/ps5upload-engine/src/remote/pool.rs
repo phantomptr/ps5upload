@@ -54,8 +54,12 @@ impl Connector for RealConnector {
     ) -> Result<Arc<dyn RemoteFs>, RemoteError> {
         match conn.protocol {
             Protocol::Smb => Ok(Arc::new(super::smb_fs::SmbFs::connect(conn, secret).await?)),
-            Protocol::Ftp => Err(RemoteError::Io("FTP servers are not available yet".into())),
-            Protocol::Ftps => Err(RemoteError::Io("FTPS servers are not available yet".into())),
+            Protocol::Ftp => Ok(Arc::new(
+                super::ftp_fs::FtpFs::connect(conn, secret, false).await?,
+            )),
+            Protocol::Ftps => Ok(Arc::new(
+                super::ftp_fs::FtpFs::connect(conn, secret, true).await?,
+            )),
             Protocol::Sftp => Err(RemoteError::Io("SFTP servers are not available yet".into())),
         }
     }
@@ -235,6 +239,7 @@ pub fn scrub(e: RemoteError, secret: &Secret) -> RemoteError {
         RemoteError::Unreachable(m) => RemoteError::Unreachable(clean(m)),
         RemoteError::NotFound(m) => RemoteError::NotFound(clean(m)),
         RemoteError::Io(m) => RemoteError::Io(clean(m)),
+        e @ RemoteError::HostKey { .. } => e,
     }
 }
 

@@ -11,7 +11,9 @@ pub mod api;
 #[cfg(test)]
 pub(crate) mod contract;
 pub mod fetch;
+pub mod ftp_fs;
 pub mod hints;
+pub mod host_key;
 pub mod path;
 pub mod pool;
 pub mod range;
@@ -56,6 +58,9 @@ pub enum RemoteError {
     NotFound(String),
     #[error("{0}")]
     Io(String),
+    /// The server's identity (SFTP host key, FTPS certificate) is not the one the user accepted.
+    #[error("Sign-in failed: {}", if *changed { "the server's key has changed since you last connected" } else { "unknown server key — accept it to connect" })]
+    HostKey { fingerprint: String, changed: bool },
 }
 
 #[async_trait::async_trait]
