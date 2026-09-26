@@ -3468,6 +3468,10 @@ activity_running_count: "{count} running",
 activity_see_all: "See all activity",
 activity_stale: "No update for {min} min",
 activity_toggle: "Show activity",
+picker_edit_connection: "Edit connection",
+picker_install: "Install",
+picker_send: "Send to PS5",
+picker_load_more: "Load more",
 };
 
 export default en;

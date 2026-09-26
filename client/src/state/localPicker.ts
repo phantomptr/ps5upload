@@ -7,7 +7,8 @@
 //   const path = await pickLocalPath({ mode: "folder" });
 //
 // Desktop screens keep using @tauri-apps/plugin-dialog (real paths); they
-// branch on isAndroid() before calling this.
+// branch on isAndroid() before calling this. Every platform uses it to browse
+// a saved server (`source: { connectionId }`).
 
 import { create } from "zustand";
 
@@ -15,6 +16,12 @@ export interface LocalPickOptions {
   mode: "file" | "folder";
   /** Optional modal title override. */
   title?: string;
+  /** Only show files with these extensions (folders are always shown). */
+  filters?: { name: string; extensions: string[] }[];
+  /** A saved server to browse instead of this device. Resolves with a `remote://` path. */
+  source?: "local" | { connectionId: string };
+  /** Opened to look around (Connections → Browse): each file row gets Install / Send to PS5. */
+  actions?: { onInstall: (path: string) => void; onSend: (path: string) => void };
 }
 
 interface PendingReq extends LocalPickOptions {

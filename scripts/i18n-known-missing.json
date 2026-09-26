@@ -307,7 +307,11 @@
       "activity_running_count",
       "activity_see_all",
       "activity_stale",
-      "activity_toggle"
+      "activity_toggle",
+      "picker_edit_connection",
+      "picker_install",
+      "picker_send",
+      "picker_load_more"
     ],
     "stale": [],
     "untranslated": [
@@ -625,7 +629,11 @@
       "activity_running_count",
       "activity_see_all",
       "activity_stale",
-      "activity_toggle"
+      "activity_toggle",
+      "picker_edit_connection",
+      "picker_install",
+      "picker_send",
+      "picker_load_more"
     ],
     "stale": [],
     "untranslated": [
@@ -944,7 +952,11 @@
       "activity_running_count",
       "activity_see_all",
       "activity_stale",
-      "activity_toggle"
+      "activity_toggle",
+      "picker_edit_connection",
+      "picker_install",
+      "picker_send",
+      "picker_load_more"
     ],
     "stale": [],
     "untranslated": [
@@ -1270,7 +1282,11 @@
       "activity_running_count",
       "activity_see_all",
       "activity_stale",
-      "activity_toggle"
+      "activity_toggle",
+      "picker_edit_connection",
+      "picker_install",
+      "picker_send",
+      "picker_load_more"
     ],
     "stale": [],
     "untranslated": [
@@ -1592,7 +1608,11 @@
       "activity_running_count",
       "activity_see_all",
       "activity_stale",
-      "activity_toggle"
+      "activity_toggle",
+      "picker_edit_connection",
+      "picker_install",
+      "picker_send",
+      "picker_load_more"
     ],
     "stale": [],
     "untranslated": [
@@ -1916,7 +1936,11 @@
       "activity_running_count",
       "activity_see_all",
       "activity_stale",
-      "activity_toggle"
+      "activity_toggle",
+      "picker_edit_connection",
+      "picker_install",
+      "picker_send",
+      "picker_load_more"
     ],
     "stale": [],
     "untranslated": [
@@ -2001,7 +2025,11 @@
       "activity_running_count",
       "activity_see_all",
       "activity_stale",
-      "activity_toggle"
+      "activity_toggle",
+      "picker_edit_connection",
+      "picker_install",
+      "picker_send",
+      "picker_load_more"
     ],
     "stale": [],
     "untranslated": [
@@ -2331,7 +2359,11 @@
       "activity_running_count",
       "activity_see_all",
       "activity_stale",
-      "activity_toggle"
+      "activity_toggle",
+      "picker_edit_connection",
+      "picker_install",
+      "picker_send",
+      "picker_load_more"
     ],
     "stale": [],
     "untranslated": [
@@ -2655,7 +2687,11 @@
       "activity_running_count",
       "activity_see_all",
       "activity_stale",
-      "activity_toggle"
+      "activity_toggle",
+      "picker_edit_connection",
+      "picker_install",
+      "picker_send",
+      "picker_load_more"
     ],
     "stale": [],
     "untranslated": [
@@ -2978,7 +3014,11 @@
       "activity_running_count",
       "activity_see_all",
       "activity_stale",
-      "activity_toggle"
+      "activity_toggle",
+      "picker_edit_connection",
+      "picker_install",
+      "picker_send",
+      "picker_load_more"
     ],
     "stale": [],
     "untranslated": [
@@ -3299,7 +3339,11 @@
       "activity_running_count",
       "activity_see_all",
       "activity_stale",
-      "activity_toggle"
+      "activity_toggle",
+      "picker_edit_connection",
+      "picker_install",
+      "picker_send",
+      "picker_load_more"
     ],
     "stale": [],
     "untranslated": [
@@ -3618,7 +3662,11 @@
       "activity_running_count",
       "activity_see_all",
       "activity_stale",
-      "activity_toggle"
+      "activity_toggle",
+      "picker_edit_connection",
+      "picker_install",
+      "picker_send",
+      "picker_load_more"
     ],
     "stale": [],
     "untranslated": [
@@ -3938,7 +3986,11 @@
       "activity_running_count",
       "activity_see_all",
       "activity_stale",
-      "activity_toggle"
+      "activity_toggle",
+      "picker_edit_connection",
+      "picker_install",
+      "picker_send",
+      "picker_load_more"
     ],
     "stale": [],
     "untranslated": [
@@ -4263,7 +4315,11 @@
       "activity_running_count",
       "activity_see_all",
       "activity_stale",
-      "activity_toggle"
+      "activity_toggle",
+      "picker_edit_connection",
+      "picker_install",
+      "picker_send",
+      "picker_load_more"
     ],
     "stale": [],
     "untranslated": [
@@ -4583,7 +4639,11 @@
       "activity_running_count",
       "activity_see_all",
       "activity_stale",
-      "activity_toggle"
+      "activity_toggle",
+      "picker_edit_connection",
+      "picker_install",
+      "picker_send",
+      "picker_load_more"
     ],
     "stale": [],
     "untranslated": [
@@ -4902,7 +4962,11 @@
       "activity_running_count",
       "activity_see_all",
       "activity_stale",
-      "activity_toggle"
+      "activity_toggle",
+      "picker_edit_connection",
+      "picker_install",
+      "picker_send",
+      "picker_load_more"
     ],
     "stale": [],
     "untranslated": [
@@ -5223,7 +5287,11 @@
       "activity_running_count",
       "activity_see_all",
       "activity_stale",
-      "activity_toggle"
+      "activity_toggle",
+      "picker_edit_connection",
+      "picker_install",
+      "picker_send",
+      "picker_load_more"
     ],
     "stale": [],
     "untranslated": [
@@ -5545,7 +5613,11 @@
       "activity_running_count",
       "activity_see_all",
       "activity_stale",
-      "activity_toggle"
+      "activity_toggle",
+      "picker_edit_connection",
+      "picker_install",
+      "picker_send",
+      "picker_load_more"
     ],
     "stale": [],
     "untranslated": [
@@ -5864,7 +5936,11 @@
       "activity_running_count",
       "activity_see_all",
       "activity_stale",
-      "activity_toggle"
+      "activity_toggle",
+      "picker_edit_connection",
+      "picker_install",
+      "picker_send",
+      "picker_load_more"
     ],
     "stale": [],
     "untranslated": [
