@@ -109,6 +109,8 @@ struct InspectResponse {
     #[serde(flatten)]
     inspection: build::Inspection,
     min_firmware: Option<String>,
+    /// Size and time at each compression level; absent when the sample could not be read.
+    estimates: Option<build::Estimates>,
 }
 
 fn min_firmware_of(source: &Path, declared: Option<&str>) -> Option<String> {
@@ -130,9 +132,11 @@ pub(crate) async fn fpkg_inspect_handler(
         let inspection = build::inspect(Path::new(&source), &out)?;
         let min_firmware =
             min_firmware_of(Path::new(&source), inspection.required_firmware.as_deref());
+        let estimates = build::estimate(Path::new(&source)).ok();
         Ok::<_, ps5upload_fpkg::Error>(InspectResponse {
             inspection,
             min_firmware,
+            estimates,
         })
     })
     .await;

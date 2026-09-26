@@ -1031,6 +1031,86 @@ impl Inspection {
     }
 }
 
+/// One compression level's estimated package size and build time.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct Estimate {
+    pub bytes: u64,
+    pub seconds: u64,
+}
+
+/// What each level would cost for one game, for the Convert screen's tiles.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct Estimates {
+    pub fast: Estimate,
+    pub balanced: Estimate,
+    pub smallest: Estimate,
+}
+
+/// Blocks sampled for an estimate.
+const ESTIMATE_BLOCKS: usize = 60;
+
+/// Estimated package size and build time at each level: a sample of the game's blocks, spread
+/// evenly through its files, compressed at every level, scaled to the whole game and to every
+/// core of this machine. Sizes are kept in level order (a slower level never shows larger) and
+/// times are whole seconds, at least one.
+pub fn estimate(source_path: &Path) -> Result<Estimates> {
+    use crate::kraken::{encode_block_at, Level, BLOCK};
+    let mut tree = source::open(source_path)?;
+    let files: Vec<SourceFile> = tree
+        .files()
+        .iter()
+        .filter(|f| f.size > 0)
+        .cloned()
+        .collect();
+    let total: u64 = files.iter().map(|f| f.size).sum();
+    if total == 0 {
+        return format_err("the source has no data to estimate");
+    }
+    let step = (total / ESTIMATE_BLOCKS as u64).max(1);
+    let mut blocks = Vec::new();
+    let (mut at, mut base) = (0u64, 0u64);
+    for f in &files {
+        while at < base + f.size && blocks.len() < ESTIMATE_BLOCKS {
+            let offset = at - base;
+            let len = (f.size - offset).min(BLOCK as u64) as usize;
+            blocks.push(tree.read_range(&f.path, offset, len)?);
+            at += step;
+        }
+        base += f.size;
+    }
+    let raw: usize = blocks.iter().map(Vec::len).sum();
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()) as f64;
+    let measure = |level: Level| {
+        let started = std::time::Instant::now();
+        let stored: usize = blocks
+            .iter()
+            .map(|b| {
+                encode_block_at(b, level)
+                    .iter()
+                    .map(|h| h.bytes().len())
+                    .sum::<usize>()
+            })
+            .sum();
+        let rate = raw as f64 / started.elapsed().as_secs_f64().max(1e-6) * threads;
+        Estimate {
+            bytes: (total as f64 * stored as f64 / raw.max(1) as f64) as u64,
+            seconds: ((total as f64 / rate).ceil() as u64).max(1),
+        }
+    };
+    let fast = measure(Level::Fast);
+    let mut balanced = measure(Level::Balanced);
+    let mut smallest = measure(Level::Smallest);
+    balanced.bytes = balanced.bytes.min(fast.bytes);
+    balanced.seconds = balanced.seconds.max(fast.seconds);
+    smallest.bytes = smallest.bytes.min(balanced.bytes);
+    smallest.seconds = smallest.seconds.max(balanced.seconds);
+    Ok(Estimates {
+        fast,
+        balanced,
+        smallest,
+    })
+}
+
 /// Look at a source without building it: readiness, geometry, cost and room.
 pub fn inspect(source_path: &Path, output_dir: &Path) -> Result<Inspection> {
     let mut tree = source::open(source_path)?;
