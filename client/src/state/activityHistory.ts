@@ -1,0 +1,377 @@
+import { create } from "zustand";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
+
+/**
+ * Cross-screen log of every operation the user has triggered: uploads,
+ * downloads, FS bulk ops, Library actions. Persists the last
+ * `MAX_ENTRIES` to localStorage so the Activity tab survives reloads
+ * and remounts.
+ *
+ * Why a separate store rather than aggregating from the per-feature
+ * stores at read time:
+ *   - The per-feature stores reset on idle, so a successful upload
+ *     leaves no trace once the banner clears. The user has no way to
+ *     answer "did that thing I started 10 minutes ago actually
+ *     finish?" without scrolling back through engine logs.
+ *   - The Activity tab needs *historical* outcomes (failed/done) the
+ *     per-feature stores actively forget.
+ *
+ * Lifecycle: callers `start()` an entry when they kick off the op,
+ * `update()` it with progress or label refinements, and `finish()` it
+ * on terminal transition. The id returned by `start()` is the handle.
+ */
+
+const STORAGE_KEY = "ps5upload.activityHistory";
+const MAX_ENTRIES = 100;
+
+export type ActivityKind =
+  | "upload"
+  | "upload-dir"
+  | "upload-reconcile"
+  | "upload-queue"
+  | "download"
+  | "fs-delete"
+  | "fs-paste-copy"
+  | "fs-paste-move"
+  | "library-delete"
+  | "library-move"
+  | "library-chmod"
+  | "library-mount"
+  | "library-unmount"
+  | "library-launch"
+  | "library-register"
+  | "library-unregister"
+  | "library-download"
+  | "library-install"
+  /** Checking a disk image out of ShadowMount+ so it can be edited in
+   *  place. Slow (it waits on SMP's scan sweep), so it belongs in Activity. */
+  | "library-edit-checkout";
+
+export type ActivityOutcome = "running" | "done" | "failed" | "stopped";
+
+/** Sub-state of an `outcome === "running"` entry.
+ *
+ *  - `"uploading"` (or absent): bytes are still flowing — the byte
+ *    counter ticks, the rate samplers see new data, the progress bar
+ *    moves. Standard live-transfer rendering.
+ *  - `"finalizing"`: all bytes are on the wire (`bytes >= totalBytes`)
+ *    but the engine job hasn't transitioned to `done` yet, because the
+ *    PS5 is committing the manifest / fsyncing inodes / journaling.
+ *    For large-file-count uploads (e.g. 80k+ files), this phase can
+ *    take many minutes even on healthy hardware — the user reported
+ *    1h+ at 100% on 84,216 files. Renderers branch on this to show
+ *    "Finalizing on PS5…" instead of a frozen "Uploading 100%" row.
+ *
+ *  Absent on terminal outcomes (done/failed/stopped) and on entries
+ *  from older versions of the app — both rendering paths must treat
+ *  `undefined` as "no special phase", i.e. the default uploading copy.
+ */
+export type ActivityPhase = "uploading" | "finalizing";
+
+export interface ActivityEntry {
+  id: string;
+  kind: ActivityKind;
+  /** Short user-readable headline (e.g. "Copy PPSA09519.exfat"). */
+  label: string;
+  /** Optional second line — typically From/To paths or the dest dir. */
+  detail?: string;
+  /** Source path (where data came from on the PS5). Stored
+   *  separately from `detail` so the Activity row can render
+   *  "From: …" and "To: …" on their own lines. */
+  fromPath?: string;
+  /** Destination path. Same rationale as `fromPath`. */
+  toPath?: string;
+  startedAtMs: number;
+  /** null while outcome === "running". */
+  endedAtMs: number | null;
+  outcome: ActivityOutcome;
+  /** Last-known error string if outcome === "failed" or "stopped". */
+  error?: string;
+  /** Optional progress fields for currently-running entries. */
+  bytes?: number;
+  totalBytes?: number;
+  /** Files involved (count). Helps the Activity row summarize a
+   *  bulk op as "Copying 3 items, 12.4 GiB total" instead of a
+   *  bare "Copying 3 items". */
+  files?: number;
+  /** When set, the activity row knows how to actually cancel the
+   *  in-flight op via fsOpCancel — required for Library row ops
+   *  whose state isn't in any global Zustand store the row can
+   *  reach. The `addr` is the transfer-port host:port the op was
+   *  fired against, used to route the cancel call. */
+  opId?: number;
+  addr?: string;
+  /** Sub-state of a running upload — see `ActivityPhase`. Forward-
+   *  compatible (older app versions persist entries without this
+   *  field; renderers treat `undefined` as "uploading"). */
+  phase?: ActivityPhase;
+  /** P3 / v2.18.0 — only meaningful when phase === "finalizing".
+   *  Surfaces the payload's "Finalized N of M files" progress
+   *  during the post-100% commit-apply phase. Both undefined on
+   *  old payloads that don't emit APPLY_PROGRESS, and the UI
+   *  degrades to the legacy "Finalizing on PS5…" pill without a
+   *  counter. */
+  filesFinalized?: number;
+  filesFinalizingTotal?: number;
+}
+
+interface ActivityHistoryState {
+  entries: ActivityEntry[];
+  /** Begin a new entry. Returns its id so the caller can pair the
+   *  `finish()` call later. */
+  start: (
+    kind: ActivityKind,
+    label: string,
+    extras?: Partial<Omit<ActivityEntry, "id" | "kind" | "label" | "startedAtMs" | "endedAtMs" | "outcome">>,
+  ) => string;
+  /** Patch an in-flight entry — typically progress numbers. No-op
+   *  if the id has been evicted or already finished. */
+  update: (id: string, patch: Partial<Omit<ActivityEntry, "id" | "kind">>) => void;
+  /** Move an entry to a terminal state. Idempotent — finishing an
+   *  already-finished entry replaces its outcome (useful when, e.g.,
+   *  a "stopped" wins out over an in-flight "running"). */
+  finish: (
+    id: string,
+    outcome: Exclude<ActivityOutcome, "running">,
+    extras?: Partial<Pick<ActivityEntry, "error" | "bytes" | "totalBytes" | "detail">>,
+  ) => void;
+  /** Clear the history — terminal (done/failed/stopped) entries only.
+   *  Still-`running` entries are preserved so a clear can't make an
+   *  in-flight transfer/op disappear. */
+  clear: () => void;
+  /** Delete a single history row by id. No-op for a still-`running`
+   *  entry (Stop/Cancel it first). */
+  remove: (id: string) => void;
+  /** Force every still-`running` entry into a terminal `stopped`
+   *  state with a synthetic note. Use case: rows that got orphaned
+   *  because their underlying op died without firing `finish()` —
+   *  the desktop process was killed, the engine restarted, the
+   *  payload disconnected mid-poll, etc. Without this the ActivityBar
+   *  shows a forever-running ghost until the user restarts the app
+   *  (which `loadInitial` then converts via the same logic). Past
+   *  entries are left alone — only running rows get touched. */
+  clearRunning: () => void;
+  /** All entries currently in `running` state — the ActivityBar
+   *  reads this to show the global in-flight indicator. Computed
+   *  in-place so callers don't need a selector. */
+  runningEntries: () => ActivityEntry[];
+}
+
+function loadInitial(): ActivityEntry[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = safeGetItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    // Defensive: any entry that was "running" when the app last
+    // closed is now stale (the underlying op didn't actually keep
+    // running). Mark those as "stopped" with a synthetic note so the
+    // history stays accurate. Without this, restarting the app
+    // leaves the ActivityBar showing forever-running ghosts.
+    return parsed
+      .filter((e: unknown): e is ActivityEntry =>
+        typeof e === "object" && e !== null && typeof (e as ActivityEntry).id === "string",
+      )
+      .map((e: ActivityEntry) =>
+        e.outcome === "running"
+          ? {
+              ...e,
+              outcome: "stopped" as ActivityOutcome,
+              endedAtMs: e.endedAtMs ?? Date.now(),
+              error: e.error ?? "ended when the app closed",
+            }
+          : e,
+      )
+      .slice(0, MAX_ENTRIES);
+  } catch {
+    return [];
+  }
+}
+
+// Debounced localStorage writer. activityWiring fires update() on
+// every transfer poll tick (~5 Hz during uploads) — without
+// debouncing, a multi-hour upload writes the full entries JSON
+// ~18,000 times, which causes UI jank during big transfers and
+// pressures Linux WebKit's localStorage quota. The debounce
+// collapses bursts to one disk write per quiet window.
+//
+// Synchronous flush before unload guarantees we don't lose the
+// last in-flight write when the user closes the app.
+const PERSIST_DEBOUNCE_MS = 500;
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingEntries: ActivityEntry[] | null = null;
+
+function persistNow(entries: ActivityEntry[]) {
+  if (typeof window === "undefined") return;
+  try {
+    safeSetItem(STORAGE_KEY, JSON.stringify(entries));
+  } catch {
+    // localStorage write can fail (quota exceeded, private mode).
+    // Activity history is nice-to-have; swallow rather than crash.
+  }
+}
+
+function persist(entries: ActivityEntry[]) {
+  pendingEntries = entries;
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    if (pendingEntries) {
+      persistNow(pendingEntries);
+      pendingEntries = null;
+    }
+  }, PERSIST_DEBOUNCE_MS);
+}
+
+if (typeof window !== "undefined") {
+  // Best-effort flush on tab close. localStorage.setItem is
+  // synchronous so this completes before the page unloads even
+  // when the debounce window hasn't elapsed.
+  window.addEventListener("beforeunload", () => {
+    if (pendingEntries) {
+      persistNow(pendingEntries);
+      pendingEntries = null;
+      if (persistTimer) {
+        clearTimeout(persistTimer);
+        persistTimer = null;
+      }
+    }
+  });
+}
+
+let nextIdCounter = 0;
+function nextId(): string {
+  // Time-prefixed counter — uniqueness across the same render frame
+  // (which Date.now() alone can't guarantee) and across sessions
+  // (the counter resets but Date.now() doesn't).
+  return `${Date.now().toString(36)}-${(nextIdCounter++).toString(36)}`;
+}
+
+export const useActivityHistoryStore = create<ActivityHistoryState>(
+  (set, get) => ({
+    entries: loadInitial(),
+
+    start(kind, label, extras) {
+      const id = nextId();
+      const entry: ActivityEntry = {
+        id,
+        kind,
+        label,
+        startedAtMs: Date.now(),
+        endedAtMs: null,
+        outcome: "running",
+        ...(extras ?? {}),
+      };
+      set((s) => {
+        // Bound history to MAX_ENTRIES, but prefer evicting
+        // terminal entries over running ones. The naive
+        // `slice(0, MAX_ENTRIES)` would silently drop the *oldest*
+        // entry — which can be a still-running operation, leaving
+        // its work in flight but invisible to the ActivityBar
+        // and Activity tab. Walk from oldest backwards looking for
+        // a terminal entry to drop; only fall back to dropping a
+        // running one if every existing entry is still running
+        // (would imply 100+ concurrent in-flight ops, which is
+        // not a real workload but we don't want to crash either).
+        const next: ActivityEntry[] = [entry, ...s.entries];
+        while (next.length > MAX_ENTRIES) {
+          let evictAt = -1;
+          for (let i = next.length - 1; i >= 0; i--) {
+            if (next[i].outcome !== "running") {
+              evictAt = i;
+              break;
+            }
+          }
+          if (evictAt < 0) evictAt = next.length - 1;
+          next.splice(evictAt, 1);
+        }
+        persist(next);
+        return { entries: next };
+      });
+      return id;
+    },
+
+    update(id, patch) {
+      set((s) => {
+        let changed = false;
+        const next = s.entries.map((e) => {
+          if (e.id !== id) return e;
+          changed = true;
+          return { ...e, ...patch };
+        });
+        if (!changed) return s;
+        persist(next);
+        return { entries: next };
+      });
+    },
+
+    finish(id, outcome, extras) {
+      set((s) => {
+        let changed = false;
+        const next = s.entries.map((e) => {
+          if (e.id !== id) return e;
+          changed = true;
+          return {
+            ...e,
+            ...(extras ?? {}),
+            outcome,
+            endedAtMs: Date.now(),
+          };
+        });
+        if (!changed) return s;
+        persist(next);
+        return { entries: next };
+      });
+    },
+
+    clear() {
+      // Clear the HISTORY only — keep any still-running entries (a clear
+      // shouldn't make an in-flight transfer/op vanish from the UI). There is
+      // no separate "queued" activity state today; queue-pending items aren't
+      // activity records, so nothing queued is lost here either.
+      set((s) => {
+        const kept = s.entries.filter((e) => e.outcome === "running");
+        persist(kept);
+        return { entries: kept };
+      });
+    },
+
+    remove(id) {
+      // Delete one history row. Refuses to remove a still-running entry —
+      // use Stop/Cancel first (otherwise the row would vanish while its op
+      // keeps going, with no way to see or stop it).
+      set((s) => {
+        const target = s.entries.find((e) => e.id === id);
+        if (!target || target.outcome === "running") return s;
+        const next = s.entries.filter((e) => e.id !== id);
+        persist(next);
+        return { entries: next };
+      });
+    },
+
+    clearRunning() {
+      set((s) => {
+        const now = Date.now();
+        let changed = false;
+        const next = s.entries.map((e) => {
+          if (e.outcome !== "running") return e;
+          changed = true;
+          return {
+            ...e,
+            outcome: "stopped" as ActivityOutcome,
+            endedAtMs: e.endedAtMs ?? now,
+            error: e.error ?? "cleared manually (orphaned running entry)",
+          };
+        });
+        if (!changed) return s;
+        persist(next);
+        return { entries: next };
+      });
+    },
+
+    runningEntries() {
+      return get().entries.filter((e) => e.outcome === "running");
+    },
+  }),
+);

@@ -1,0 +1,58 @@
+[package]
+name = "ps5upload-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "ps5upload_engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ps5upload-engine"
+path = "src/main.rs"
+
+[features]
+## Embed the Vite-built React bundle so the engine serves the full web UI
+## when accessed from a browser. Build requires a pre-populated `webui/`
+## directory next to this Cargo.toml (populated from `client/dist` by the
+## Docker multi-stage build or manually with `cp -r client/dist/* engine/crates/ps5upload-engine/webui/`).
+webui = ["dep:rust-embed", "dep:mime_guess"]
+
+[dependencies]
+anyhow.workspace = true
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
+async-trait = "0.1"
+getrandom = "0.4"
+thiserror.workspace = true
+axum.workspace = true
+base64 = "0.23"
+zip = { version = "8", default-features = false, features = ["deflate"] }
+# Cache keys and ETags for the on-disk artwork cache (icon_cache.rs).
+# Already a workspace dependency via ps5upload-core; not a new build cost.
+blake3.workspace = true
+ftx2-proto = { path = "../ftx2-proto" }
+mime_guess = { version = "2", optional = true }
+smb2 = "0.23"
+ps5upload-core = { path = "../ps5upload-core" }
+ps5upload-pkg = { path = "../ps5upload-pkg" }
+ps5upload-fpkg = { path = "../ps5upload-fpkg" }
+rust-embed = { version = "8", optional = true }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tower-http.workspace = true
+uuid.workspace = true
+suppaftp = { version = "12", default-features = false, features = ["tokio-rustls-ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+sha2 = "0.11"
+russh = { version = "0.63", default-features = false, features = ["ring", "rsa", "flate2"] }
+russh-sftp = "3"
+
+# Install-from-a-link fetches the package over many HTTP range connections at
+# once (remote_pkg.rs). Target-gated to non-Android for the same reason
+# ps5upload-core gates it: the Android cross-compile stays pure Rust.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+ureq = { version = "3", features = ["rustls"] }

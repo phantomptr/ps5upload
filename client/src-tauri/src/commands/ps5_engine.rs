@@ -1,0 +1,2734 @@
+//! Tauri commands exposed to the renderer via `invoke('name', args)`.
+//!
+//! Every command is an async function with a stable signature: JSON-in /
+//! JSON-out. Most are thin proxies to the ps5upload-engine HTTP API so
+//! the UI can use a single `invoke()` call instead of juggling its own
+//! fetch client with connection retry, auth headers, etc.
+//!
+//! Config/profile/queue/history persistence will also live here in a
+//! later commit; the first pass (`config_load`, `config_save`) covers
+//! enough for App.tsx to boot without Electron.
+
+use std::sync::OnceLock;
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+
+use crate::engine;
+
+// Generic JSON object passthrough — lets commands return heterogeneous
+// responses from the engine without dragging every schema into Rust.
+type JsonValue = serde_json::Value;
+
+/// Shared HTTP client with explicit timeouts. Without these, a wedged
+/// engine sidecar would leave every UI panel's invoke promise hanging
+/// forever — visible to users as Library/Volumes/Stats panels stuck in
+/// the loading state until app restart.
+///
+/// `connect_timeout` is short because the engine is local (loopback);
+/// 2s is generous for "is the local sidecar up." `timeout` (60s) covers
+/// the slowest expected payload-side operation for the "fast" trio of
+/// endpoints (status, list-dir, volumes, etc.).
+///
+/// Long-running destructive endpoints (fs_delete, fs_copy, fs_move) go
+/// through `http_client_long` instead — see its rationale below.
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(2))
+            .timeout(Duration::from_secs(60))
+            .build()
+            .expect("failed to build engine HTTP client")
+    })
+}
+
+/// Long-deadline HTTP client for the destructive-trio endpoints
+/// (fs_delete, fs_copy, fs_move). The engine's handler for those holds
+/// the HTTP request open for the entire payload-side run with a 1-hour
+/// deadline of its own — deleting tens of thousands of files on PS5
+/// UFS (e.g. a 46k-file game folder) routinely takes many minutes,
+/// well past the 60 s ceiling on `http_client`. Pre-v2.18.4 those
+/// requests timed out client-side with a misleading "engine request
+/// failed: error sending request" message while the engine continued
+/// running and the operation actually succeeded.
+///
+/// Match the engine's own deadline so a real wedge still surfaces as
+/// a timeout (eventually) rather than hanging forever. The
+/// connect_timeout stays short — if the local sidecar isn't there,
+/// fail fast regardless of which endpoint family.
+fn http_client_long() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(2))
+            .timeout(Duration::from_secs(60 * 60))
+            .build()
+            .expect("failed to build long-deadline engine HTTP client")
+    })
+}
+
+async fn get_json(url: &str) -> Result<JsonValue, String> {
+    let resp = http_client()
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("engine request failed: {e}"))?;
+    let status = resp.status();
+    // Read the body first so error responses can include the engine's
+    // own diagnostic (e.g., "payload rejected FS_LIST_VOLUMES: ...").
+    // Before this, a 502 from the engine collapsed to the useless
+    // "engine returned HTTP 502 Bad Gateway" message in the UI.
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("engine response body read failed: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("engine HTTP {status}: {body}"));
+    }
+    serde_json::from_str::<JsonValue>(&body)
+        .map_err(|e| format!("engine returned invalid JSON: {e}"))
+}
+
+async fn post_json(url: &str, body: &JsonValue) -> Result<JsonValue, String> {
+    post_json_with_client(http_client(), url, body).await
+}
+
+/// `post_json` variant that uses the long-deadline client. Use for the
+/// destructive trio (fs_delete, fs_copy, fs_move) whose payload-side
+/// runs routinely exceed `http_client`'s 60 s ceiling on large trees.
+async fn post_json_long(url: &str, body: &JsonValue) -> Result<JsonValue, String> {
+    post_json_with_client(http_client_long(), url, body).await
+}
+
+async fn post_json_with_client(
+    client: &reqwest::Client,
+    url: &str,
+    body: &JsonValue,
+) -> Result<JsonValue, String> {
+    let resp = client
+        .post(url)
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| format!("engine request failed: {e}"))?;
+    let status = resp.status();
+    // Read the body first so error responses can include the engine's
+    // own diagnostic, and so a 4xx/5xx with an empty or non-JSON body
+    // doesn't collapse into "engine returned invalid JSON" — that
+    // message hides the real HTTP status the user needs to debug. Same
+    // pattern as get_json above.
+    let body_text = resp
+        .text()
+        .await
+        .map_err(|e| format!("engine response body read failed: {e}"))?;
+    if !status.is_success() {
+        // Try to extract the engine's `{"error":"..."}` field for a
+        // cleaner message; fall back to the raw body text if it's not
+        // JSON-shaped.
+        let detail = serde_json::from_str::<JsonValue>(&body_text)
+            .ok()
+            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+            .unwrap_or_else(|| {
+                if body_text.is_empty() {
+                    "(empty body)".to_string()
+                } else {
+                    body_text.clone()
+                }
+            });
+        return Err(format!("engine HTTP {status}: {detail}"));
+    }
+    serde_json::from_str::<JsonValue>(&body_text)
+        .map_err(|e| format!("engine returned invalid JSON: {e}"))
+}
+
+/// Update the engine base URL the command proxies hit. The renderer
+/// calls this on hydrate and whenever the Settings field changes so the
+/// Rust side follows the setting live (switching the spawn mode still
+/// needs an app restart).
+#[tauri::command]
+pub async fn engine_url_set(url: String) -> Result<(), String> {
+    engine::set_url(url);
+    Ok(())
+}
+
+/// Return the engine base URL the command proxies currently hit. The
+/// renderer calls this on startup (and on the `ps5upload-engine-ready`
+/// event) to learn where the sidecar actually landed — normally
+/// 127.0.0.1:19113, but possibly an OS-assigned fallback port when 19113
+/// was occupied by another process. Without this the renderer's DIRECT
+/// fetches (job polling, cover-art `img-src`, streaming) would keep
+/// hitting the wrong port and silently fail.
+#[tauri::command]
+pub async fn engine_url_get() -> Result<String, String> {
+    Ok(engine::url().to_string())
+}
+
+#[tauri::command]
+pub async fn ps5_volumes(addr: Option<String>) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = match addr {
+        Some(a) => format!("{base}/api/ps5/volumes?addr={}", urlencoding(&a)),
+        None => format!("{base}/api/ps5/volumes"),
+    };
+    get_json(&url).await
+}
+
+/// Scan connected external/USB drives for installable `.pkg` files (header
+/// parsed for platform + content id). They install in place via an on-console
+/// copy to /user/data + the normal install cascade — no upload.
+#[tauri::command]
+pub async fn pkg_scan_external(addr: Option<String>) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = match addr {
+        Some(a) => format!("{base}/api/ps5/pkg/scan-external?addr={}", urlencoding(&a)),
+        None => format!("{base}/api/ps5/pkg/scan-external"),
+    };
+    get_json(&url).await
+}
+
+/// Parse one on-console pkg's content id + PARAM.SFO (title, category,
+/// APP_VER) via ranged reads. Lazily enriches the External Packages listing
+/// (the bulk scan stays filename-fast). Proxies GET /api/ps5/pkg/metadata.
+#[tauri::command]
+pub async fn pkg_metadata_console(
+    addr: Option<String>,
+    path: String,
+    size: Option<u64>,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let p = urlencoding(&path);
+    let mut url = match addr {
+        Some(a) => format!(
+            "{base}/api/ps5/pkg/metadata?addr={}&path={}",
+            urlencoding(&a),
+            p
+        ),
+        None => format!("{base}/api/ps5/pkg/metadata?path={}", p),
+    };
+    if let Some(size) = size.filter(|n| *n > 0) {
+        url.push_str(&format!("&size={size}"));
+    }
+    get_json(&url).await
+}
+
+/// List every installed title on the PS5, tagged by origin (registered/
+/// mounted by us vs installed from a .pkg) with a system flag. Proxies
+/// GET /api/ps5/apps/installed. Cover art is fetched separately by the
+/// renderer via an <img> pointing at /api/ps5/app-icon (see app_icon_url
+/// in the TS layer) — same cross-client pattern as game-icon.
+#[tauri::command]
+pub async fn ps5_apps_installed(addr: Option<String>) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = match addr {
+        Some(a) => format!("{base}/api/ps5/apps/installed?addr={}", urlencoding(&a)),
+        None => format!("{base}/api/ps5/apps/installed"),
+    };
+    get_json(&url).await
+}
+
+/// Probe whether the console is settled enough to take a .pkg install (the
+/// AppListRegistered frame round-trips cleanly). Proxies GET
+/// /api/ps5/readiness. Used as a pre-install + post-install gate so we don't
+/// fire an install into the post-install SceShellUI recovery window.
+#[tauri::command]
+pub async fn ps5_readiness(addr: Option<String>) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = match addr {
+        Some(a) => format!("{base}/api/ps5/readiness?addr={}", urlencoding(&a)),
+        None => format!("{base}/api/ps5/readiness"),
+    };
+    get_json(&url).await
+}
+
+#[tauri::command]
+pub async fn ps5_list_dir(
+    path: String,
+    addr: Option<String>,
+    offset: Option<u64>,
+    limit: Option<u64>,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/list-dir?path={}", urlencoding(&path));
+    if let Some(a) = addr {
+        url.push_str(&format!("&addr={}", urlencoding(&a)));
+    }
+    if let Some(o) = offset {
+        url.push_str(&format!("&offset={o}"));
+    }
+    if let Some(l) = limit {
+        url.push_str(&format!("&limit={l}"));
+    }
+    get_json(&url).await
+}
+
+// ── Transfer jobs ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct TransferFileReq {
+    pub src: String,
+    pub dest: String,
+    pub addr: Option<String>,
+    pub tx_id: Option<String>,
+}
+
+#[tauri::command]
+pub async fn transfer_file(req: TransferFileReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/transfer/file");
+    let body = serde_json::json!({
+        "src": req.src,
+        "dest": req.dest,
+        "addr": req.addr,
+        "tx_id": req.tx_id,
+    });
+    post_json(&url, &body).await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TransferDirReq {
+    pub src_dir: String,
+    pub dest_root: String,
+    pub addr: Option<String>,
+    pub tx_id: Option<String>,
+    #[serde(default)]
+    pub excludes: Vec<String>,
+    /// Outbound bandwidth cap in MB/s. None or 0 means uncapped.
+    #[serde(default)]
+    pub bandwidth_cap_mbps: Option<f64>,
+}
+
+#[tauri::command]
+pub async fn transfer_dir(req: TransferDirReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/transfer/dir");
+    let body = serde_json::json!({
+        "src_dir": req.src_dir,
+        "dest_root": req.dest_root,
+        "addr": req.addr,
+        "tx_id": req.tx_id,
+        "excludes": req.excludes,
+        "bandwidth_cap_mbps": req.bandwidth_cap_mbps,
+    });
+    post_json(&url, &body).await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TransferZipReq {
+    pub zip_path: String,
+    pub dest_root: String,
+    pub addr: Option<String>,
+    pub tx_id: Option<String>,
+    #[serde(default)]
+    pub excludes: Vec<String>,
+    #[serde(default)]
+    pub bandwidth_cap_mbps: Option<f64>,
+}
+
+/// Upload a `.zip`'s contents, decompressing on the host so files land
+/// already extracted on the PS5. Proxies the engine's `/api/transfer/zip`.
+///
+/// Uses `post_json_long` rather than `post_json` because the engine
+/// handler runs the central-directory plan synchronously **before**
+/// returning a job_id — and zip-plan time scales with entry count and
+/// disk-seek latency. A 70 GB game dump with 80–100k files on a slow
+/// USB HDD has been observed to take >60s in plan, blowing the short
+/// client timeout with the same "engine request failed: error sending
+/// request" symptom that hit the destructive trio pre-2.18.4 (see
+/// `http_client_long`'s rationale). Once plan completes the job is
+/// asynchronous, so we only need the long deadline to cover the
+/// front-loaded planning phase.
+#[tauri::command]
+pub async fn transfer_zip(req: TransferZipReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/transfer/zip");
+    let body = serde_json::json!({
+        "zip_path": req.zip_path,
+        "dest_root": req.dest_root,
+        "addr": req.addr,
+        "tx_id": req.tx_id,
+        "excludes": req.excludes,
+        "bandwidth_cap_mbps": req.bandwidth_cap_mbps,
+    });
+    post_json_long(&url, &body).await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BpsInspectReq {
+    pub patch_path: String,
+}
+
+/// Read a `.bps` patch header without applying it, so the UI can show
+/// what the patch expects before anything is written.
+#[tauri::command]
+pub async fn bps_inspect(req: BpsInspectReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/bps/inspect");
+    let body = serde_json::json!({ "patch_path": req.patch_path });
+    post_json(&url, &body).await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BpsApplyReq {
+    pub source_path: String,
+    pub patch_path: String,
+    pub dest_path: String,
+}
+
+/// Apply a `.bps` patch to a library on this machine. Long client: the
+/// libraries run to hundreds of KB and the whole file is read, patched
+/// and written back out.
+#[tauri::command]
+pub async fn bps_apply(req: BpsApplyReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/bps/apply");
+    let body = serde_json::json!({
+        "source_path": req.source_path,
+        "patch_path": req.patch_path,
+        "dest_path": req.dest_path,
+    });
+    post_json_long(&url, &body).await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ZipInspectReq {
+    pub zip_path: String,
+}
+
+/// Preview a `.zip` (file count, compressed vs uncompressed size, embedded
+/// game metadata) without extracting it. Proxies `/api/zip/inspect`.
+///
+/// Uses `post_json_long`: inspect reads the EOCD + central directory
+/// (potentially tens of MB for a dump with 100k+ entries) from
+/// user-supplied storage that may be a cold-cache external HDD. The
+/// rare worst case is bounded by central-dir size, not by uncompressed
+/// game size — so a 1h ceiling is over-generous but matches the
+/// destructive-trio pattern (see `http_client_long`). The streaming
+/// variant `zip_inspect_stream` supersedes this for the UI path with a
+/// watchdog + progress events; this one stays for tests and any caller
+/// that doesn't want to plumb a Channel through.
+#[tauri::command]
+pub async fn zip_inspect(req: ZipInspectReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/zip/inspect");
+    let body = serde_json::json!({ "zip_path": req.zip_path });
+    post_json_long(&url, &body).await
+}
+
+/// One progress tick from the engine's inspect-stream worker.
+/// Mirrors the `data:` payload of the `progress` SSE event so the
+/// renderer can show "Scanning archive… N entries" while the
+/// central-directory walk is in flight.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct ZipInspectProgress {
+    pub entries_seen: u64,
+}
+
+/// Streaming variant of `zip_inspect`: subscribes to the engine's
+/// `/api/zip/inspect/stream` SSE endpoint, forwards `progress` events
+/// through a Tauri channel for live UI feedback, and returns the final
+/// inspect result.
+///
+/// Watchdog: if no SSE chunk (including the engine's 1 s heartbeat)
+/// arrives for `INSPECT_IDLE_TIMEOUT_SECS`, the call fails with
+/// "engine stopped responding". That's the dead-man-switch the user
+/// asked for — instead of a fixed wall-clock deadline, the success
+/// criterion is *continuous forward signal*. A genuinely wedged engine
+/// (no heartbeat, no progress) fails fast; a healthy engine that's
+/// legitimately taking minutes to walk a 200 k-entry CD over a slow
+/// network mount stays alive as long as it keeps signalling.
+///
+/// The renderer creates the channel as `new Channel<ZipInspectProgress>(cb)`
+/// and passes it as `onProgress`; this Rust handler receives a typed
+/// `tauri::ipc::Channel` and `send()`s each progress event back to JS.
+#[tauri::command]
+pub async fn zip_inspect_stream(
+    req: ZipInspectReq,
+    on_progress: tauri::ipc::Channel<ZipInspectProgress>,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/zip/inspect/stream");
+    let body = serde_json::json!({ "zip_path": req.zip_path });
+    post_sse_inspect_with_watchdog(&url, &body, on_progress).await
+}
+
+// ── .7z proxies ── mirror the zip commands. Same long-deadline / SSE-watchdog
+//    rationale (the engine plans the archive header synchronously before
+//    returning a job_id, and the inspect-stream uses a heartbeat watchdog).
+
+#[derive(Debug, Deserialize)]
+pub struct Transfer7zReq {
+    pub archive_path: String,
+    pub dest_root: String,
+    pub addr: Option<String>,
+    pub tx_id: Option<String>,
+    #[serde(default)]
+    pub excludes: Vec<String>,
+    #[serde(default)]
+    pub bandwidth_cap_mbps: Option<f64>,
+}
+
+/// Upload a `.7z`'s contents, decompressing on the host so files land already
+/// extracted on the PS5 (commonly a single `.exfat` image). Proxies the
+/// engine's `/api/transfer/7z`.
+#[tauri::command]
+pub async fn transfer_7z(req: Transfer7zReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/transfer/7z");
+    let body = serde_json::json!({
+        "archive_path": req.archive_path,
+        "dest_root": req.dest_root,
+        "addr": req.addr,
+        "tx_id": req.tx_id,
+        "excludes": req.excludes,
+        "bandwidth_cap_mbps": req.bandwidth_cap_mbps,
+    });
+    post_json_long(&url, &body).await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SevenzInspectReq {
+    pub archive_path: String,
+}
+
+/// Preview a `.7z` (file count, compressed vs uncompressed size) without
+/// extracting it. Proxies `/api/7z/inspect`.
+#[tauri::command]
+pub async fn sevenz_inspect(req: SevenzInspectReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/7z/inspect");
+    let body = serde_json::json!({ "archive_path": req.archive_path });
+    post_json_long(&url, &body).await
+}
+
+// ── .rar proxies ── desktop-only (engine returns 501 on the Android build,
+//    which is feature-detected via /api/version `caps.rar`). `password` is
+//    optional and only forwarded; it is never logged or persisted here.
+
+#[derive(Debug, Deserialize)]
+pub struct TransferRarReq {
+    pub archive_path: String,
+    pub dest_root: String,
+    pub addr: Option<String>,
+    pub tx_id: Option<String>,
+    #[serde(default)]
+    pub excludes: Vec<String>,
+    #[serde(default)]
+    pub bandwidth_cap_mbps: Option<f64>,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+/// Upload a `.rar`'s contents (any volume set, optional password), extracting
+/// on the host so files land already-extracted on the PS5. Proxies
+/// `/api/transfer/rar`.
+#[tauri::command]
+pub async fn transfer_rar(req: TransferRarReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/transfer/rar");
+    let body = serde_json::json!({
+        "archive_path": req.archive_path,
+        "dest_root": req.dest_root,
+        "addr": req.addr,
+        "tx_id": req.tx_id,
+        "excludes": req.excludes,
+        "bandwidth_cap_mbps": req.bandwidth_cap_mbps,
+        "password": req.password,
+    });
+    post_json_long(&url, &body).await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RarInspectReq {
+    pub archive_path: String,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+/// Preview a `.rar` (file count + uncompressed size) without extracting.
+/// Proxies `/api/rar/inspect`.
+#[tauri::command]
+pub async fn rar_inspect(req: RarInspectReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/rar/inspect");
+    let body = serde_json::json!({ "archive_path": req.archive_path, "password": req.password });
+    post_json_long(&url, &body).await
+}
+
+/// Streaming variant of `sevenz_inspect`: subscribes to the engine's
+/// `/api/7z/inspect/stream` SSE endpoint with the same watchdog + progress
+/// channel as `zip_inspect_stream` (reuses `ZipInspectProgress`).
+#[tauri::command]
+pub async fn sevenz_inspect_stream(
+    req: SevenzInspectReq,
+    on_progress: tauri::ipc::Channel<ZipInspectProgress>,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/7z/inspect/stream");
+    let body = serde_json::json!({ "archive_path": req.archive_path });
+    post_sse_inspect_with_watchdog(&url, &body, on_progress).await
+}
+
+// ─── Profile (avatar + offline-account username) ────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct ProfileAddrReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProfileAvatarCurrentReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub uid: u32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProfileUsernameReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub slot: i32,
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProfileLocalUsernameReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub uid: u32,
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProfileActivateReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub slot: i32,
+    #[serde(default)]
+    pub id: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProfileSlotReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub slot: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UserCreateReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UserDeleteReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub uid: i32,
+    #[serde(default)]
+    pub wipe_saves: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BackupSnapshotReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub tag: String,
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BackupListReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    #[serde(default)]
+    pub tag: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BackupRestoreReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub tag: String,
+    pub timestamp: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BackupDeleteReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub tag: String,
+    pub timestamp: i64,
+}
+
+// ── Remote Play ───────────────────────────────────────────────────────
+#[derive(Debug, Deserialize)]
+pub struct RemotePlayReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    #[serde(default)]
+    pub manual_account_id: Option<String>,
+}
+
+// ── Fan curve ─────────────────────────────────────────────────────────
+#[derive(Debug, Deserialize)]
+pub struct FanCurveSetReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub points: Vec<FanCurvePoint>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FanCurvePoint {
+    pub temp_c: i32,
+    pub duty_pct: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FanCurveGetReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+}
+
+// ── Notifications ─────────────────────────────────────────────────────
+#[derive(Debug, Deserialize)]
+pub struct NotifListReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    #[serde(default)]
+    pub since_seq: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProfileAvatarReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub image_path: String,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub uid: Option<u32>,
+    #[serde(default)]
+    pub username: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProfilePreviewReq {
+    pub image_path: String,
+    #[serde(default)]
+    pub mode: Option<String>,
+}
+
+/// Foreground user + local users + offline-account name slots.
+/// Proxies `/api/profile/info`.
+#[tauri::command]
+pub async fn profile_info(req: ProfileAddrReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = match req.addr {
+        Some(a) => format!("{base}/api/profile/info?addr={}", urlencoding(&a)),
+        None => format!("{base}/api/profile/info"),
+    };
+    get_json(&url).await
+}
+
+/// Read a user's CURRENT avatar image. Proxies `/api/profile/avatar/current`.
+/// Returns `{ data_url: string | null }` — null when no readable avatar exists.
+#[tauri::command]
+pub async fn profile_avatar_current(req: ProfileAvatarCurrentReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = match req.addr {
+        Some(a) => format!(
+            "{base}/api/profile/avatar/current?addr={}&uid={}",
+            urlencoding(&a),
+            req.uid
+        ),
+        None => format!("{base}/api/profile/avatar/current?uid={}", req.uid),
+    };
+    get_json(&url).await
+}
+
+/// Rename an offline-account name slot. Proxies `/api/profile/username`.
+#[tauri::command]
+pub async fn profile_set_username(req: ProfileUsernameReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/profile/username");
+    let body = serde_json::json!({ "addr": req.addr, "slot": req.slot, "name": req.name });
+    post_json(&url, &body).await
+}
+
+/// Rename a local console user (active profile display name).
+/// Proxies `/api/profile/local-username`.
+#[tauri::command]
+pub async fn profile_rename_user(req: ProfileLocalUsernameReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/profile/local-username");
+    let body = serde_json::json!({ "addr": req.addr, "uid": req.uid, "name": req.name });
+    post_json(&url, &body).await
+}
+
+/// Activate an offline-account slot. Proxies `/api/profile/activate`.
+#[tauri::command]
+pub async fn profile_activate(req: ProfileActivateReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/profile/activate");
+    let body = serde_json::json!({ "addr": req.addr, "slot": req.slot, "id": req.id });
+    post_json(&url, &body).await
+}
+
+/// De-activate (clear id+flags) an offline-account slot.
+/// Proxies `/api/profile/clear-slot`.
+#[tauri::command]
+pub async fn profile_clear_slot(req: ProfileSlotReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/profile/clear-slot");
+    let body = serde_json::json!({ "addr": req.addr, "slot": req.slot });
+    post_json(&url, &body).await
+}
+
+/// Create a new local user account.
+/// Proxies `/api/ps5/users/create`.
+#[tauri::command]
+pub async fn user_create(req: UserCreateReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/users/create");
+    let body = serde_json::json!({ "addr": req.addr, "name": req.name });
+    post_json(&url, &body).await
+}
+
+/// Delete a local user account.
+/// Proxies `/api/ps5/users/delete`.
+#[tauri::command]
+pub async fn user_delete(req: UserDeleteReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/users/delete");
+    let body =
+        serde_json::json!({ "addr": req.addr, "uid": req.uid, "wipe_saves": req.wipe_saves });
+    post_json(&url, &body).await
+}
+
+/// Snapshot a file or directory tree under a backup tag.
+/// Proxies `/api/ps5/backup/snapshot`.
+#[tauri::command]
+pub async fn backup_snapshot(req: BackupSnapshotReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/backup/snapshot");
+    let body = serde_json::json!({ "addr": req.addr, "tag": req.tag, "path": req.path });
+    post_json_long(&url, &body).await
+}
+
+/// List snapshots (optionally filtered by tag).
+/// Proxies `/api/ps5/backup/list`.
+#[tauri::command]
+pub async fn backup_list(req: BackupListReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/backup/list");
+    let mut params = Vec::new();
+    if let Some(ref addr) = req.addr {
+        params.push(format!("addr={}", urlencoding(addr)));
+    }
+    if let Some(ref tag) = req.tag {
+        if !tag.is_empty() {
+            params.push(format!("tag={}", urlencoding(tag)));
+        }
+    }
+    if !params.is_empty() {
+        url.push('?');
+        url.push_str(&params.join("&"));
+    }
+    get_json(&url).await
+}
+
+/// Restore a snapshot by tag + timestamp.
+/// Proxies `/api/ps5/backup/restore`.
+#[tauri::command]
+pub async fn backup_restore(req: BackupRestoreReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/backup/restore");
+    let body = serde_json::json!({ "addr": req.addr, "tag": req.tag, "timestamp": req.timestamp });
+    post_json_long(&url, &body).await
+}
+
+/// Delete a snapshot by tag + timestamp.
+/// Proxies `/api/ps5/backup/delete`.
+#[tauri::command]
+pub async fn backup_delete(req: BackupDeleteReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/backup/delete");
+    let body = serde_json::json!({ "addr": req.addr, "tag": req.tag, "timestamp": req.timestamp });
+    post_json_long(&url, &body).await
+}
+
+// ── Remote Play ───────────────────────────────────────────────────────
+#[tauri::command]
+pub async fn remoteplay_request(req: RemotePlayReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/remoteplay/request");
+    let body = serde_json::json!({ "addr": req.addr, "manual_account_id": req.manual_account_id });
+    post_json(&url, &body).await
+}
+
+#[tauri::command]
+pub async fn remoteplay_status(addr: Option<String>) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/remoteplay/status");
+    if let Some(a) = addr {
+        url.push_str(&format!("?addr={}", urlencoding(&a)));
+    }
+    get_json(&url).await
+}
+
+#[tauri::command]
+pub async fn health_scan(addr: Option<String>) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/health/scan");
+    if let Some(a) = addr {
+        url.push_str(&format!("?addr={}", urlencoding(&a)));
+    }
+    get_json(&url).await
+}
+
+#[tauri::command]
+pub async fn health_junk(addr: Option<String>) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/health/junk");
+    if let Some(a) = addr {
+        url.push_str(&format!("?addr={}", urlencoding(&a)));
+    }
+    get_json(&url).await
+}
+
+#[tauri::command]
+pub async fn health_fix(addr: Option<String>, action: String) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/health/fix");
+    post_json(&url, &serde_json::json!({ "addr": addr, "action": action })).await
+}
+
+#[tauri::command]
+pub async fn remoteplay_readiness(addr: Option<String>) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/remoteplay/readiness");
+    if let Some(a) = addr {
+        url.push_str(&format!("?addr={}", urlencoding(&a)));
+    }
+    get_json(&url).await
+}
+
+#[tauri::command]
+pub async fn remoteplay_devices(addr: Option<String>) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/remoteplay/devices");
+    if let Some(a) = addr {
+        url.push_str(&format!("?addr={}", urlencoding(&a)));
+    }
+    get_json(&url).await
+}
+
+#[tauri::command]
+pub async fn remoteplay_enable(addr: Option<String>, scope: String) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/remoteplay/enable");
+    if let Some(a) = addr {
+        url.push_str(&format!("?addr={}", urlencoding(&a)));
+    }
+    post_json(&url, &serde_json::json!({ "scope": scope })).await
+}
+
+#[tauri::command]
+pub async fn remoteplay_cancel(addr: Option<String>) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/remoteplay/cancel");
+    if let Some(a) = addr {
+        url.push_str(&format!("?addr={}", urlencoding(&a)));
+    }
+    post_json(&url, &serde_json::json!({})).await
+}
+
+// ── Fan curve ─────────────────────────────────────────────────────────
+#[tauri::command]
+pub async fn fan_curve_set(req: FanCurveSetReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/hw/fan-curve");
+    let body = serde_json::json!({ "addr": req.addr, "points": req.points });
+    post_json(&url, &body).await
+}
+
+#[tauri::command]
+pub async fn fan_curve_get(req: FanCurveGetReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/hw/fan-curve/get");
+    if let Some(ref addr) = req.addr {
+        url.push('?');
+        url.push_str(&format!("addr={}", urlencoding(addr)));
+    }
+    get_json(&url).await
+}
+
+// ── Notifications ─────────────────────────────────────────────────────
+#[tauri::command]
+pub async fn local_image_attach(path: String) -> Result<JsonValue, String> {
+    let base = engine::url();
+    post_json(
+        &format!("{base}/api/local/image/attach"),
+        &serde_json::json!({ "path": path }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn local_image_detach(device: String) -> Result<JsonValue, String> {
+    let base = engine::url();
+    post_json(
+        &format!("{base}/api/local/image/detach"),
+        &serde_json::json!({ "device": device }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn local_image_status() -> Result<JsonValue, String> {
+    let base = engine::url();
+    get_json(&format!("{base}/api/local/image/status")).await
+}
+
+#[tauri::command]
+pub async fn activity_reset(addr: Option<String>) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/activity/reset");
+    if let Some(a) = addr {
+        url.push_str(&format!("?addr={}", urlencoding(&a)));
+    }
+    post_json(&url, &serde_json::json!({})).await
+}
+
+#[tauri::command]
+pub async fn notif_clear(addr: Option<String>) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/notif/clear");
+    if let Some(a) = addr {
+        url.push_str(&format!("?addr={}", urlencoding(&a)));
+    }
+    post_json(&url, &serde_json::json!({})).await
+}
+
+#[tauri::command]
+pub async fn notif_list(req: NotifListReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/notif/list");
+    let mut params = Vec::new();
+    if let Some(ref addr) = req.addr {
+        params.push(format!("addr={}", urlencoding(addr)));
+    }
+    params.push(format!("since_seq={}", req.since_seq));
+    if !params.is_empty() {
+        url.push('?');
+        url.push_str(&params.join("&"));
+    }
+    get_json(&url).await
+}
+
+// ── Cheat engine ─────────────────────────────────────────────────────
+#[derive(Debug, Deserialize)]
+pub struct CheatsAddrReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CheatsGetReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub title_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CheatsToggleReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub title_id: String,
+    pub index: i32,
+    #[serde(default = "crate::commands::default_true")]
+    pub on: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CheatsDeleteReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub title_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CheatsEngineSetReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub enabled: bool,
+}
+
+#[tauri::command]
+pub async fn cheats_list(req: CheatsAddrReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/cheats/list");
+    if let Some(ref addr) = req.addr {
+        url.push('?');
+        url.push_str(&format!("addr={}", urlencoding(addr)));
+    }
+    get_json(&url).await
+}
+
+#[tauri::command]
+pub async fn cheats_get(req: CheatsGetReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/cheats/get");
+    let mut params = Vec::new();
+    if let Some(ref addr) = req.addr {
+        params.push(format!("addr={}", urlencoding(addr)));
+    }
+    params.push(format!("title_id={}", urlencoding(&req.title_id)));
+    if !params.is_empty() {
+        url.push('?');
+        url.push_str(&params.join("&"));
+    }
+    get_json(&url).await
+}
+
+#[tauri::command]
+pub async fn cheats_toggle(req: CheatsToggleReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/cheats/toggle");
+    post_json(
+        &url,
+        &serde_json::json!({
+            "addr": req.addr,
+            "title_id": req.title_id,
+            "index": req.index,
+            "on": req.on,
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn cheats_delete(req: CheatsDeleteReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/cheats/delete");
+    let mut params = Vec::new();
+    if let Some(ref addr) = req.addr {
+        params.push(format!("addr={}", urlencoding(addr)));
+    }
+    params.push(format!("title_id={}", urlencoding(&req.title_id)));
+    if !params.is_empty() {
+        url.push('?');
+        url.push_str(&params.join("&"));
+    }
+    get_json(&url).await
+}
+
+#[tauri::command]
+pub async fn cheats_reload(req: CheatsAddrReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/cheats/reload");
+    if let Some(ref addr) = req.addr {
+        url.push('?');
+        url.push_str(&format!("addr={}", urlencoding(addr)));
+    }
+    get_json(&url).await
+}
+
+#[tauri::command]
+pub async fn cheats_status(req: CheatsAddrReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/cheats/status");
+    if let Some(ref addr) = req.addr {
+        url.push('?');
+        url.push_str(&format!("addr={}", urlencoding(addr)));
+    }
+    get_json(&url).await
+}
+
+#[tauri::command]
+pub async fn cheats_engine_set(req: CheatsEngineSetReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/cheats/engine-set");
+    post_json(
+        &url,
+        &serde_json::json!({
+            "addr": req.addr,
+            "enabled": req.enabled,
+        }),
+    )
+    .await
+}
+
+// ── Community cheat repo browse + download ────────────────────────────
+#[derive(Debug, Deserialize)]
+pub struct CheatsRepoSearchReq {
+    #[serde(default)]
+    pub query: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CheatsRepoDownloadReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub repo_id: String,
+    pub filename: String,
+    pub title_id: String,
+}
+
+#[tauri::command]
+pub async fn cheats_repos_list() -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/cheats/repos/list");
+    get_json(&url).await
+}
+
+#[tauri::command]
+pub async fn cheats_repos_search(req: CheatsRepoSearchReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!(
+        "{base}/api/ps5/cheats/repos/search?query={}",
+        urlencoding(&req.query)
+    );
+    get_json(&url).await
+}
+
+#[tauri::command]
+pub async fn cheats_repos_download(req: CheatsRepoDownloadReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/cheats/repos/download");
+    post_json(
+        &url,
+        &serde_json::json!({
+            "addr": req.addr,
+            "repo_id": req.repo_id,
+            "filename": req.filename,
+            "title_id": req.title_id,
+        }),
+    )
+    .await
+}
+
+// ── Activity tracker ─────────────────────────────────────────────────
+#[derive(Debug, Deserialize)]
+pub struct ActivityDbQueryReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    #[serde(default = "default_db_query")]
+    pub query: String,
+}
+
+fn default_db_query() -> String {
+    "recently_played".to_string()
+}
+
+#[tauri::command]
+pub async fn activity_get(req: CheatsAddrReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/activity/get");
+    if let Some(ref addr) = req.addr {
+        url.push('?');
+        url.push_str(&format!("addr={}", urlencoding(addr)));
+    }
+    get_json(&url).await
+}
+
+#[tauri::command]
+pub async fn activity_db_query(req: ActivityDbQueryReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/activity/db-query");
+    let mut params = Vec::new();
+    if let Some(ref addr) = req.addr {
+        params.push(format!("addr={}", urlencoding(addr)));
+    }
+    params.push(format!("query={}", urlencoding(&req.query)));
+    if !params.is_empty() {
+        url.push('?');
+        url.push_str(&params.join("&"));
+    }
+    get_json(&url).await
+}
+
+// ── SDK Changer ──────────────────────────────────────────────────────
+#[derive(Debug, Deserialize)]
+pub struct SdkPatchReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub title_id: String,
+    pub target_sdk: String,
+    /// Opt-in libc.prx symbol swap. Off unless the user asked: it helps some
+    /// titles and breaks others.
+    #[serde(default)]
+    pub patch_libc: bool,
+}
+
+fn sdk_patch_body(req: &SdkPatchReq) -> JsonValue {
+    serde_json::json!({
+        "addr": req.addr,
+        "title_id": req.title_id,
+        "target_sdk": req.target_sdk,
+        "patch_libc": req.patch_libc,
+    })
+}
+
+#[tauri::command]
+pub async fn sdk_scan(req: CheatsAddrReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/sdk/scan");
+    if let Some(ref addr) = req.addr {
+        url.push('?');
+        url.push_str(&format!("addr={}", urlencoding(addr)));
+    }
+    get_json(&url).await
+}
+
+#[tauri::command]
+pub async fn sdk_patch(req: SdkPatchReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/sdk/patch");
+    post_json(&url, &sdk_patch_body(&req)).await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SdkRestoreReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub title_id: String,
+}
+
+#[tauri::command]
+pub async fn sdk_restore(req: SdkRestoreReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/sdk/restore");
+    post_json(
+        &url,
+        &serde_json::json!({
+            "addr": req.addr,
+            "title_id": req.title_id,
+        }),
+    )
+    .await
+}
+
+// ── TMDB / PlayStation Store metadata ────────────────────────────────
+#[derive(Debug, Deserialize)]
+pub struct TmdbFetchReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub title_id: String,
+    #[serde(default)]
+    pub refresh: bool,
+    #[serde(default)]
+    pub region: Option<String>,
+}
+
+#[tauri::command]
+pub async fn tmdb_fetch(req: TmdbFetchReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/tmdb/fetch");
+    let mut params = Vec::new();
+    if let Some(ref addr) = req.addr {
+        params.push(format!("addr={}", urlencoding(addr)));
+    }
+    params.push(format!("title_id={}", urlencoding(&req.title_id)));
+    if req.refresh {
+        params.push("refresh=true".to_string());
+    }
+    if let Some(ref region) = req.region {
+        params.push(format!("region={}", urlencoding(region)));
+    }
+    url.push('?');
+    url.push_str(&params.join("&"));
+    get_json(&url).await
+}
+
+// ── FW Spoof detection ───────────────────────────────────────────────
+#[tauri::command]
+pub async fn fw_spoof_status(req: CheatsAddrReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/fw-spoof/status");
+    if let Some(ref addr) = req.addr {
+        url.push('?');
+        url.push_str(&format!("addr={}", urlencoding(addr)));
+    }
+    get_json(&url).await
+}
+
+/// Render a 440² crop/fit preview (returns `{ "data_url": "data:image/png;..." }`).
+/// Proxies `/api/profile/avatar/preview`.
+#[tauri::command]
+pub async fn profile_avatar_preview(req: ProfilePreviewReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/profile/avatar/preview");
+    let body = serde_json::json!({ "image_path": req.image_path, "mode": req.mode });
+    post_json(&url, &body).await
+}
+
+/// Build + stage + apply a profile avatar (long-running: decode/resize/encode +
+/// stage 11 files + privileged copy). Proxies `/api/profile/avatar`.
+#[tauri::command]
+pub async fn profile_apply_avatar(req: ProfileAvatarReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/profile/avatar");
+    let body = serde_json::json!({
+        "addr": req.addr,
+        "image_path": req.image_path,
+        "mode": req.mode,
+        "uid": req.uid,
+        "username": req.username,
+    });
+    post_json_long(&url, &body).await
+}
+
+/// How long to wait for ANY SSE chunk (event or heartbeat) before
+/// declaring the engine wedged. The engine's `KeepAlive::interval(1s)`
+/// makes 30 s = 30× the expected heartbeat cadence, which leaves room
+/// for a momentarily-blocked tokio runtime without triggering a false
+/// "stopped responding" while still cutting off a real wedge promptly.
+const INSPECT_IDLE_TIMEOUT_SECS: u64 = 30;
+
+/// Drive the engine's `/api/zip/inspect/stream` SSE response with a
+/// per-chunk idle watchdog.
+///
+/// `reqwest`'s `bytes_stream()` is byte-level, not event-level, so we
+/// run a small SSE state machine here: accumulate bytes into a buffer,
+/// look for the spec-defined `\n\n` event-boundary, split, parse the
+/// `event:`/`data:` fields, and dispatch. Comments (`:` lines, which
+/// is what our heartbeat is) reset the watchdog without invoking any
+/// callback — that's exactly the "engine still alive" signal we need.
+async fn post_sse_inspect_with_watchdog(
+    url: &str,
+    body: &serde_json::Value,
+    on_progress: tauri::ipc::Channel<ZipInspectProgress>,
+) -> Result<JsonValue, String> {
+    use futures_util::StreamExt;
+
+    let resp = http_client_long()
+        .post(url)
+        .header("accept", "text/event-stream")
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| format!("engine request failed: {e}"))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        // The streaming endpoint sends errors as a final `event: error`
+        // line with HTTP 200, but a non-200 here means the engine
+        // rejected the request shape outright (or the local sidecar is
+        // down). Surface the body so the user sees the engine's own
+        // message instead of an opaque status code.
+        let body_text = resp
+            .text()
+            .await
+            .map_err(|e| format!("engine response body read failed: {e}"))?;
+        return Err(format!("engine HTTP {status}: {body_text}"));
+    }
+
+    let mut stream = resp.bytes_stream();
+    let idle = Duration::from_secs(INSPECT_IDLE_TIMEOUT_SECS);
+    let mut buf: Vec<u8> = Vec::with_capacity(4096);
+
+    loop {
+        let chunk = match tokio::time::timeout(idle, stream.next()).await {
+            Ok(Some(Ok(bytes))) => bytes,
+            Ok(Some(Err(e))) => return Err(format!("engine stream error: {e}")),
+            Ok(None) => {
+                return Err(
+                    "engine closed the inspect stream before sending a done/error event"
+                        .to_string(),
+                );
+            }
+            Err(_) => {
+                return Err(format!(
+                    "engine stopped responding (no SSE event for {INSPECT_IDLE_TIMEOUT_SECS}s)"
+                ));
+            }
+        };
+        buf.extend_from_slice(&chunk);
+
+        // SSE event boundary is a blank line, i.e. two consecutive
+        // newlines. Some servers (and our axum one) only emit `\n\n`,
+        // but we accept `\r\n\r\n` too for safety against any future
+        // proxy that rewrites line endings.
+        while let Some(end) = find_event_boundary(&buf) {
+            let event_bytes = buf.drain(..end.end).collect::<Vec<u8>>();
+            // Strip the boundary itself before parsing.
+            let block_bytes = &event_bytes[..end.start];
+            let block = std::str::from_utf8(block_bytes)
+                .map_err(|e| format!("engine sent non-UTF-8 SSE block: {e}"))?;
+            if let Some(parsed) = parse_sse_block(block) {
+                match parsed.event.as_deref() {
+                    Some("progress") => {
+                        if let Ok(p) = serde_json::from_str::<ZipInspectProgress>(&parsed.data) {
+                            // Channel send is fire-and-forget: if the
+                            // renderer is gone, we still let the inspect
+                            // complete so the caller's awaited future
+                            // resolves rather than dangling.
+                            let _ = on_progress.send(p);
+                        }
+                    }
+                    Some("done") => {
+                        return serde_json::from_str::<JsonValue>(&parsed.data).map_err(|e| {
+                            format!(
+                                "engine sent invalid `done` JSON: {e} — body={}",
+                                parsed.data
+                            )
+                        });
+                    }
+                    Some("error") => {
+                        // Pull the {"error": "..."} envelope; fall back
+                        // to the raw data if it doesn't parse.
+                        let msg = serde_json::from_str::<JsonValue>(&parsed.data)
+                            .ok()
+                            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+                            .unwrap_or_else(|| parsed.data.clone());
+                        return Err(format!("engine reported: {msg}"));
+                    }
+                    _ => {
+                        // Unknown event type — ignore but keep the
+                        // watchdog reset (which already happened via
+                        // chunk receipt).
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Where in `buf` the next event-boundary lives, and where the boundary
+/// itself ends. `start` excludes the boundary so the caller can slice
+/// the block; `end` is past-the-end of the boundary so the caller can
+/// drain.
+struct EventBoundary {
+    start: usize,
+    end: usize,
+}
+
+fn find_event_boundary(buf: &[u8]) -> Option<EventBoundary> {
+    if let Some(i) = memchr_pair(buf, b"\n\n") {
+        return Some(EventBoundary {
+            start: i,
+            end: i + 2,
+        });
+    }
+    if let Some(i) = memchr_pair(buf, b"\r\n\r\n") {
+        return Some(EventBoundary {
+            start: i,
+            end: i + 4,
+        });
+    }
+    None
+}
+
+fn memchr_pair(buf: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || buf.len() < needle.len() {
+        return None;
+    }
+    buf.windows(needle.len()).position(|w| w == needle)
+}
+
+struct ParsedSseEvent {
+    event: Option<String>,
+    data: String,
+}
+
+/// Parse one SSE event block (everything between two blank lines).
+/// We only need `event:` and `data:` for the inspect protocol; `id:`
+/// and `retry:` aren't used. `data:` lines are joined with `\n` per
+/// spec, in case the engine ever splits a long JSON payload.
+fn parse_sse_block(block: &str) -> Option<ParsedSseEvent> {
+    let mut event_name: Option<String> = None;
+    let mut data_parts: Vec<String> = Vec::new();
+    for line in block.split('\n') {
+        // Tolerate CR left over by \r\n line endings.
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() || line.starts_with(':') {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("event:") {
+            event_name = Some(value.trim_start_matches(' ').to_string());
+        } else if let Some(value) = line.strip_prefix("data:") {
+            data_parts.push(value.trim_start_matches(' ').to_string());
+        }
+    }
+    if event_name.is_none() && data_parts.is_empty() {
+        return None;
+    }
+    Some(ParsedSseEvent {
+        event: event_name,
+        data: data_parts.join("\n"),
+    })
+}
+
+/// PS5 → host download. The engine walks the remote tree (or single
+/// file) and pulls bytes via FS_READ on the management port. Response
+/// is the standard `{ job_id }` shape — poll job_status to see
+/// progress + errors. `kind` is the caller's known classification
+/// ("file" | "folder") — saves a round-trip vs having the engine stat.
+#[derive(Debug, Deserialize)]
+pub struct TransferDownloadReq {
+    pub src_path: String,
+    pub dest_dir: String,
+    pub addr: Option<String>,
+    pub kind: String,
+    /// When true, allows reading files outside the normal payload path
+    /// allow-list (e.g. /system, /system_data). Read-only; destructive
+    /// ops never honor this flag. Default false.
+    #[serde(default)]
+    pub unsafe_read: bool,
+}
+
+/// PS5 → host download streamed straight into a `.zip` (one pass, no scratch
+/// dir). `dest_zip` is the full path of the archive to create. Same `{ job_id }`
+/// response — poll job_status for progress.
+#[derive(Debug, Deserialize)]
+pub struct TransferDownloadZipReq {
+    pub src_path: String,
+    pub dest_zip: String,
+    pub addr: Option<String>,
+    pub kind: String,
+    /// When true, allows reading files outside the normal payload path
+    /// allow-list (e.g. /system, /system_data). Read-only. Default false.
+    #[serde(default)]
+    pub unsafe_read: bool,
+}
+
+#[tauri::command]
+pub async fn transfer_download_zip(req: TransferDownloadZipReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/transfer/download-zip");
+    let body = serde_json::json!({
+        "src_path": req.src_path,
+        "dest_zip": req.dest_zip,
+        "addr": req.addr,
+        "kind": req.kind,
+        "unsafe_read": req.unsafe_read,
+    });
+    post_json(&url, &body).await
+}
+
+#[tauri::command]
+pub async fn transfer_download(req: TransferDownloadReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/transfer/download");
+    let body = serde_json::json!({
+        "src_path": req.src_path,
+        "dest_dir": req.dest_dir,
+        "addr": req.addr,
+        "kind": req.kind,
+        "unsafe_read": req.unsafe_read,
+    });
+    post_json(&url, &body).await
+}
+
+/// Resume-friendly folder upload: the engine reconciles local source
+/// against PS5 destination first and only sends the delta. `mode` is
+/// `"fast"` (size-only, default) or `"safe"` (size + BLAKE3). Response
+/// is `{ job_id }` just like the other transfer handlers — poll via
+/// `job_status` to see progress on the delta.
+#[derive(Debug, Deserialize)]
+pub struct TransferDirReconcileReq {
+    pub src_dir: String,
+    pub dest_root: String,
+    pub addr: Option<String>,
+    pub tx_id: Option<String>,
+    pub mode: Option<String>, // "fast" | "safe"
+    #[serde(default)]
+    pub excludes: Vec<String>,
+    /// Outbound bandwidth cap in MB/s. None or 0 means uncapped.
+    #[serde(default)]
+    pub bandwidth_cap_mbps: Option<f64>,
+    /// Parallel upload streams (resolved by the client as
+    /// min(user setting, payload's max_transfer_streams)). None / <=1 →
+    /// single stream. See docs/multistream-upload.md.
+    #[serde(default)]
+    pub streams: Option<usize>,
+}
+
+// ── Destructive FS ops ──────────────────────────────────────────────────────
+//
+// Thin wrappers over the engine's /api/ps5/fs/* endpoints. Each one
+// takes the JSON request body as-is and proxies to the engine, which
+// does the actual payload round-trip on the PS5 mgmt port.
+
+#[derive(Debug, Deserialize)]
+pub struct FsPathReq {
+    pub addr: Option<String>,
+    pub path: String,
+    /// Optional unique 64-bit id the client generates so it can poll
+    /// progress / cancel the in-flight delete. Forwarded to the engine
+    /// which forwards to the payload as the FS_DELETE frame's
+    /// trace_id. Only used by `ps5_fs_delete`; other handlers that
+    /// share this struct (e.g. `ps5_fs_mkdir`) ignore it.
+    #[serde(default)]
+    pub op_id: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FsMoveReq {
+    pub addr: Option<String>,
+    pub from: String,
+    pub to: String,
+    /// Merge into an existing destination rather than refusing it. Only set
+    /// by a caller that has asked the user; see the engine's FsMoveReq.
+    #[serde(default)]
+    pub overwrite: Option<bool>,
+    /// Optional unique 64-bit id the client generates so it can poll
+    /// progress / cancel the in-flight copy. Forwarded to the engine
+    /// which forwards to the payload as the FS_COPY frame's trace_id.
+    /// Omit (or 0) for ops where progress/cancel isn't needed.
+    #[serde(default)]
+    pub op_id: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FsOpRefReq {
+    pub addr: Option<String>,
+    pub op_id: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FsChmodReq {
+    pub addr: Option<String>,
+    pub path: String,
+    pub mode: String,
+    pub recursive: Option<bool>,
+}
+
+#[tauri::command]
+pub async fn ps5_fs_delete(req: FsPathReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/fs/delete");
+    post_json_long(
+        &url,
+        &serde_json::json!({
+            "addr": req.addr,
+            "path": req.path,
+            "op_id": req.op_id.unwrap_or(0),
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn ps5_fs_move(req: FsMoveReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/fs/move");
+    post_json_long(
+        &url,
+        &serde_json::json!({
+            "addr": req.addr,
+            "from": req.from,
+            "to": req.to,
+            "op_id": req.op_id.unwrap_or(0),
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn ps5_fs_copy(req: FsMoveReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/fs/copy");
+    post_json_long(
+        &url,
+        &serde_json::json!({
+            "addr": req.addr,
+            "from": req.from,
+            "to": req.to,
+            "op_id": req.op_id.unwrap_or(0),
+            "overwrite": req.overwrite.unwrap_or(false),
+        }),
+    )
+    .await
+}
+
+/// Snapshot the in-flight FS op identified by `op_id`. Returns the
+/// payload's bytes_copied / total_bytes / cancel_requested so the
+/// client can drive a per-byte progress + speed indicator while the
+/// fs/copy call is still blocked. 404 from the engine surfaces as
+/// an error string here so callers can stop polling.
+#[tauri::command]
+pub async fn ps5_fs_op_status(req: FsOpRefReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/fs/op-status?op_id={}", req.op_id);
+    if let Some(a) = req.addr {
+        url.push_str(&format!("&addr={}", urlencoding(&a)));
+    }
+    get_json(&url).await
+}
+
+/// Ask the payload to cancel the in-flight FS op identified by
+/// `op_id`. Returns `{ cancelled: bool }` — `false` means the op
+/// already finished (or was never running), which is fine from the
+/// client's perspective: the goal of "stop that copy" is met either
+/// way.
+#[tauri::command]
+pub async fn ps5_fs_op_cancel(req: FsOpRefReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/fs/op-cancel");
+    post_json(
+        &url,
+        &serde_json::json!({ "addr": req.addr, "op_id": req.op_id }),
+    )
+    .await
+}
+
+#[derive(serde::Deserialize)]
+pub struct FsMountReq {
+    pub addr: Option<String>,
+    pub image_path: String,
+    /// Optional leaf name under `/mnt/ps5upload/`. Mutually exclusive
+    /// with `mount_point` — if both are provided, the engine prefers
+    /// `mount_point` (full path wins over leaf). Kept for backward
+    /// compatibility with 2.2.24 and earlier callers.
+    #[serde(default)]
+    pub mount_name: Option<String>,
+    /// Optional full mount path. New in 2.2.25. When provided, the
+    /// payload mounts at this exact path instead of the legacy
+    /// `/mnt/ps5upload/<derived-name>/` location. Path must be under
+    /// a writable root the payload's `is_path_allowed` accepts
+    /// (`/data`, `/mnt/ext*`, `/mnt/usb*`, `/mnt/ps5upload/*`).
+    #[serde(default)]
+    pub mount_point: Option<String>,
+    /// Mount the image read-only. New in 2.2.26. Default false (RW).
+    /// When true, payload selects the RO LVD attach flag and the RO
+    /// nmount third-arg flag (UFS magic 0x10000001 / MNT_RDONLY for
+    /// exfatfs and pfs).
+    #[serde(default)]
+    pub read_only: Option<bool>,
+}
+
+#[tauri::command]
+pub async fn ps5_fs_mount(req: FsMountReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/fs/mount");
+    post_json(
+        &url,
+        &serde_json::json!({
+            "addr": req.addr,
+            "image_path": req.image_path,
+            "mount_name": req.mount_name,
+            "mount_point": req.mount_point,
+            "read_only": req.read_only,
+        }),
+    )
+    .await
+}
+
+#[derive(serde::Deserialize)]
+pub struct FsUnmountReq {
+    pub addr: Option<String>,
+    pub mount_point: String,
+}
+
+/// Launch a registered title (re-exposed in 2.2.26). Payload-side
+/// `launch_title` runs the triple-strategy chain
+/// (`sceLncUtilLaunchApp` zeroed-param → NULL-param →
+/// `sceSystemServiceLaunchApp`); errors here surface the composite
+/// reason from that chain so the user can tell whether it was a
+/// title-not-found or a kernel-side wedge.
+#[derive(serde::Deserialize)]
+pub struct AppLaunchReq {
+    pub addr: Option<String>,
+    pub title_id: String,
+}
+
+#[tauri::command]
+pub async fn ps5_app_launch(req: AppLaunchReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/app/launch");
+    post_json(
+        &url,
+        &serde_json::json!({
+            "addr": req.addr,
+            "title_id": req.title_id,
+        }),
+    )
+    .await
+}
+
+/// Stage + register a game folder so it appears in the PS5 XMB
+/// (re-exposed in 2.2.26). `src_path` is the directory that contains
+/// `sce_sys/param.json` or `param.sfo` — works for direct folders
+/// AND content under a mounted `/mnt/ps5upload/<name>/`. The payload
+/// reports `{title_id, title_name, used_nullfs}` on the way back.
+#[derive(serde::Deserialize)]
+pub struct AppRegisterReq {
+    pub addr: Option<String>,
+    pub src_path: String,
+    /// 2.2.26 opt-in DRM-type patcher.
+    pub patch_drm_type: Option<bool>,
+}
+
+#[tauri::command]
+pub async fn ps5_app_register(req: AppRegisterReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/app/register");
+    post_json(
+        &url,
+        &serde_json::json!({
+            "addr": req.addr,
+            "src_path": req.src_path,
+            "patch_drm_type": req.patch_drm_type,
+        }),
+    )
+    .await
+}
+
+/// Reverse of `app_register`. Succeeds when the nullfs at
+/// `/system_ex/app/<title_id>` is fully torn down, even if the Sony
+/// AppUninstall API isn't available on the firmware.
+#[derive(serde::Deserialize)]
+pub struct AppUnregisterReq {
+    pub addr: Option<String>,
+    pub title_id: String,
+}
+
+#[tauri::command]
+pub async fn ps5_app_unregister(req: AppUnregisterReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/app/unregister");
+    post_json(
+        &url,
+        &serde_json::json!({
+            "addr": req.addr,
+            "title_id": req.title_id,
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn ps5_fs_unmount(req: FsUnmountReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/fs/unmount");
+    post_json(
+        &url,
+        &serde_json::json!({
+            "addr": req.addr,
+            "mount_point": req.mount_point,
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn ps5_fs_chmod(req: FsChmodReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/fs/chmod");
+    post_json(
+        &url,
+        &serde_json::json!({
+            "addr": req.addr,
+            "path": req.path,
+            "mode": req.mode,
+            "recursive": req.recursive.unwrap_or(false),
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn ps5_fs_mkdir(req: FsPathReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/fs/mkdir");
+    post_json(
+        &url,
+        &serde_json::json!({ "addr": req.addr, "path": req.path }),
+    )
+    .await
+}
+
+/* Hardware monitoring ---- */
+fn addr_url(path: &str, addr: Option<&str>) -> String {
+    let base = engine::url();
+    match addr {
+        Some(a) if !a.is_empty() => {
+            format!("{base}{path}?addr={}", urlencoding(a))
+        }
+        _ => format!("{base}{path}"),
+    }
+}
+
+#[tauri::command]
+pub async fn ps5_hw_info(addr: Option<String>) -> Result<JsonValue, String> {
+    get_json(&addr_url("/api/ps5/hw/info", addr.as_deref())).await
+}
+
+/// `extended = Some(true)` requests the on-demand telemetry (SoC power /
+/// CPU usage / fan duty / product shape) used by the explicit "Read
+/// sensors" click. The Dashboard's auto-poll omits it (or passes false),
+/// so its 5 s tick only ever triggers the basic, always-safe read.
+#[tauri::command]
+pub async fn ps5_hw_temps(
+    addr: Option<String>,
+    extended: Option<bool>,
+) -> Result<JsonValue, String> {
+    let mut url = addr_url("/api/ps5/hw/temps", addr.as_deref());
+    if extended.unwrap_or(false) {
+        let sep = if url.contains('?') { '&' } else { '?' };
+        url.push(sep);
+        url.push_str("extended=1");
+    }
+    get_json(&url).await
+}
+
+#[tauri::command]
+pub async fn ps5_hw_power(addr: Option<String>) -> Result<JsonValue, String> {
+    get_json(&addr_url("/api/ps5/hw/power", addr.as_deref())).await
+}
+
+/// Recent PS5 kernel log (sysctl kern.msgbuf). Returned as
+/// `{"text": "..."}` — UI renders verbatim in a scrollable monospace
+/// area for diagnosing "why did the helper fail / what silently broke"
+/// without making the user FTP/ssh into the console.
+#[tauri::command]
+pub async fn ps5_syslog_tail(addr: Option<String>) -> Result<JsonValue, String> {
+    get_json(&addr_url("/api/ps5/syslog/tail", addr.as_deref())).await
+}
+
+/// Which application currently owns the screen, plus which focus symbols
+/// this firmware exports. Read-only; the payload answers via dlsym and never
+/// ptraces ShellUI. Newer helpers only — an older payload rejects the frame,
+/// which callers record as a per-probe error.
+#[tauri::command]
+pub async fn ps5_focus(addr: Option<String>) -> Result<JsonValue, String> {
+    get_json(&addr_url("/api/ps5/focus", addr.as_deref())).await
+}
+
+/// Cover art fetched through the Rust shell and returned as a `data:` URL.
+///
+/// Why this exists, when the renderer can already point an `<img>` straight
+/// at `/api/ps5/app-icon`: in the desktop webview that direct load is the
+/// ONLY part of the UI that leaves the renderer over plain HTTP. Everything
+/// else goes through this IPC. When the webview refuses that load — a CSP
+/// or mixed-content decision made by whatever WebKit ships with the user's
+/// OS, not by us — every cover in the app silently falls back to a
+/// controller glyph, while the engine logs a perfectly healthy 200.
+///
+/// That is exactly the failure we could not reproduce anywhere else: the
+/// route returns real PNG bytes to `curl` and renders correctly in Chrome,
+/// and still shows nothing in the packaged app.
+///
+/// So this routes the same bytes over the channel that demonstrably works,
+/// and the CSP already allows `data:` in `img-src`. It is a fallback, not
+/// the default: the direct URL is cheaper (no base64 inflation, browser
+/// caching) and is still tried first.
+async fn engine_icon_data_url(url: String) -> Result<String, String> {
+    let resp = http_client()
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("engine request failed: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("engine HTTP {status}"));
+    }
+    let mime = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("image/png")
+        .to_string();
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("engine response body read failed: {e}"))?;
+    if bytes.is_empty() {
+        return Err("empty image".into());
+    }
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{mime};base64,{b64}"))
+}
+
+/// Cover art for an installed title, as a `data:` URL. See
+/// [`engine_icon_data_url`].
+#[tauri::command]
+pub async fn ps5_app_icon_data(addr: Option<String>, title_id: String) -> Result<String, String> {
+    let mut url = addr_url("/api/ps5/app-icon", addr.as_deref());
+    url.push_str(if url.contains('?') { "&" } else { "?" });
+    url.push_str(&format!("title_id={}", urlencoding(&title_id)));
+    engine_icon_data_url(url).await
+}
+
+/// Cover art for an on-console game folder, as a `data:` URL. See
+/// [`engine_icon_data_url`].
+#[tauri::command]
+pub async fn ps5_game_icon_data(addr: Option<String>, path: String) -> Result<String, String> {
+    let mut url = addr_url("/api/ps5/game-icon", addr.as_deref());
+    url.push_str(if url.contains('?') { "&" } else { "?" });
+    url.push_str(&format!("path={}", urlencoding(&path)));
+    engine_icon_data_url(url).await
+}
+
+/// How much disk the engine's artwork cache is using.
+#[tauri::command]
+pub async fn cache_artwork_stats() -> Result<JsonValue, String> {
+    get_json(&format!("{}/api/cache/artwork", engine::url())).await
+}
+
+/// Delete every cached cover. Safe at any time — the cache is an
+/// optimisation, so the next render reads from the console again.
+#[tauri::command]
+pub async fn cache_artwork_clear() -> Result<JsonValue, String> {
+    let resp = http_client()
+        .delete(format!("{}/api/cache/artwork", engine::url()))
+        .send()
+        .await
+        .map_err(|e| format!("engine request failed: {e}"))?;
+    let status = resp.status();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("engine response body read failed: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("engine HTTP {status}: {body}"));
+    }
+    serde_json::from_str::<JsonValue>(&body)
+        .map_err(|e| format!("engine returned invalid JSON: {e}"))
+}
+
+/// Per-title rows from appinfo.db — the database behind Settings →
+/// Storage. Read-only.
+///
+/// Worth having alongside the app.db view: the two databases can disagree
+/// with each other and with what is on disk, and telling those apart is
+/// the whole diagnosis when a title lists but will not launch or delete.
+#[tauri::command]
+pub async fn ps5_appinfo_query(
+    addr: Option<String>,
+    title_id: String,
+    keys: Option<String>,
+) -> Result<JsonValue, String> {
+    let mut url = addr_url("/api/ps5/appinfo", addr.as_deref());
+    url.push_str(if url.contains('?') { "&" } else { "?" });
+    url.push_str(&format!("title_id={}", urlencoding(&title_id)));
+    if let Some(k) = keys.as_deref().filter(|k| !k.is_empty()) {
+        url.push_str(&format!("&keys={}", urlencoding(k)));
+    }
+    get_json(&url).await
+}
+
+/// Change one appinfo.db value on the console.
+///
+/// This edits a live system database. The engine snapshots both content
+/// databases before the write and refuses the write outright if the
+/// snapshot fails; the payload refuses if the title is running or if the
+/// row does not already exist. Callers should still confirm with the user
+/// first — the visible failure mode is a title whose Settings entry stops
+/// rendering.
+#[tauri::command]
+pub async fn ps5_appinfo_set(
+    addr: Option<String>,
+    title_id: String,
+    key: String,
+    val: String,
+    backup_dir: Option<String>,
+) -> Result<JsonValue, String> {
+    post_json(
+        &format!("{}/api/ps5/appinfo/set", engine::url()),
+        &serde_json::json!({
+            "addr": addr,
+            "title_id": title_id,
+            "key": key,
+            "val": val,
+            "backup_dir": backup_dir,
+        }),
+    )
+    .await
+}
+
+/// Read the PS5's current system clock. Cheap; safe to call once on
+/// the Hardware screen render and again right after a sync.
+#[tauri::command]
+pub async fn ps5_time_get(addr: Option<String>) -> Result<JsonValue, String> {
+    get_json(&addr_url("/api/ps5/time/get", addr.as_deref())).await
+}
+
+/// Set the PS5's system clock to `target_unix_seconds` (UTC). The
+/// payload bookends the set with a get-before + get-after so the
+/// response can flag the "rc=0 but the clock didn't move" SDK-stub
+/// no-op case (response field `stub_no_op: true`). Caller typically
+/// passes `Math.floor(Date.now() / 1000)` to sync to PC time.
+#[tauri::command]
+pub async fn ps5_time_sync(
+    addr: Option<String>,
+    target_unix_seconds: Option<i64>,
+    use_ntp: Option<bool>,
+    ntp_server: Option<String>,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/time/sync");
+    let use_ntp = use_ntp.unwrap_or(false);
+    let mut body = serde_json::json!({ "addr": addr, "use_ntp": use_ntp });
+    if use_ntp {
+        // Only forward a server the user actually chose; absent means
+        // "use the engine's default list".
+        if let Some(s) = ntp_server {
+            body["ntp_server"] = serde_json::Value::from(s);
+        }
+    } else {
+        // Omitted rather than defaulted to 0 — a 0 here would ask the
+        // console to set its clock to 1970.
+        body["target_unix_seconds"] = serde_json::Value::from(
+            target_unix_seconds.ok_or("target_unix_seconds is required unless use_ntp is set")?,
+        );
+    }
+    post_json(&url, &body).await
+}
+
+/// Read all PS5 Date & Time state (timezone, DST, NTP flag,
+/// date/time format, tzdata version, NTP-error counter, cached
+/// NTP-tick) in one call. Returns the flat JSON the payload emits;
+/// per-field availability flags let the UI grey out fields that
+/// failed to read on this firmware. New in 2.10.0 — depends on the
+/// novel DATE_* registry read path, see
+/// reference_ps5_date_registry_keys.md for hardware status.
+#[tauri::command]
+pub async fn ps5_time_state_get(addr: Option<String>) -> Result<JsonValue, String> {
+    get_json(&addr_url("/api/ps5/time/state/get", addr.as_deref())).await
+}
+
+/// Write a partial subset of PS5 Date & Time state. Pass any subset
+/// of `tz_index`, `date_format`, `time_format`, `summer_policy`,
+/// `set_auto` — None / omitted fields are NOT written. Response
+/// surfaces per-field rc + err_code so the UI can show "set_auto
+/// took, tz_index rejected" instead of one opaque ok/fail. Same
+/// ucred-elevation envelope as ps5_time_sync.
+#[tauri::command]
+pub async fn ps5_time_state_set(
+    addr: Option<String>,
+    tz_index: Option<i32>,
+    date_format: Option<i32>,
+    time_format: Option<i32>,
+    summer_policy: Option<i32>,
+    set_auto: Option<i32>,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/time/state/set");
+    // Build the request body with only present fields. serde's
+    // skip_serializing_if + Option<T> on the engine side already
+    // handles this, but we ALSO build the JSON conditionally so a
+    // future engine-side change that flips defaults can't silently
+    // start writing unintended fields. Belt-and-suspenders given
+    // we're writing to a novel registry surface.
+    let mut body = serde_json::Map::new();
+    if let Some(a) = addr {
+        body.insert("addr".into(), serde_json::Value::String(a));
+    }
+    if let Some(v) = tz_index {
+        body.insert("tz_index".into(), serde_json::Value::Number(v.into()));
+    }
+    if let Some(v) = date_format {
+        body.insert("date_format".into(), serde_json::Value::Number(v.into()));
+    }
+    if let Some(v) = time_format {
+        body.insert("time_format".into(), serde_json::Value::Number(v.into()));
+    }
+    if let Some(v) = summer_policy {
+        body.insert("summer_policy".into(), serde_json::Value::Number(v.into()));
+    }
+    if let Some(v) = set_auto {
+        body.insert("set_auto".into(), serde_json::Value::Number(v.into()));
+    }
+    post_json(&url, &serde_json::Value::Object(body)).await
+}
+
+/// "Console Storage" aggregate matching what PS5 Settings shows
+/// (added in 2.2.26). Returns total/free/used/reserved across
+/// `/user effective + /system_data + /system_ex` plus per-partition
+/// breakdown.
+#[tauri::command]
+pub async fn ps5_hw_storage(addr: Option<String>) -> Result<JsonValue, String> {
+    get_json(&addr_url("/api/ps5/hw/storage", addr.as_deref())).await
+}
+
+/// Drive SMART / temperature sensors. Returns per-drive temp, capacity,
+/// ident, and filesystem usage for `/dev/daN` disks, plus fixed-storage
+/// summaries (internal SSD + M.2 expansion).
+#[tauri::command]
+pub async fn ps5_hw_drive_sensors(addr: Option<String>) -> Result<JsonValue, String> {
+    get_json(&addr_url("/api/ps5/hw/drive-sensors", addr.as_deref())).await
+}
+
+/// Write the PS5 fan-turbo threshold. `threshold_c` is clamped on the
+/// engine side (returns 400 BAD_REQUEST if out of the safe [45, 80]
+/// range) before ever reaching the payload, so the UI gets a clear
+/// error rather than a silent clamp.
+#[tauri::command]
+pub async fn ps5_hw_set_fan_threshold(
+    addr: Option<String>,
+    threshold_c: u8,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/hw/fan-threshold");
+    post_json(
+        &url,
+        &serde_json::json!({ "addr": addr, "threshold_c": threshold_c }),
+    )
+    .await
+}
+
+/// ShadowMountPlus metadata self-healer control. `action` must be one
+/// of `"start"`, `"run_now"`, `"set_poll"` — anything else is silently
+/// a no-op inside the payload. `interval` is only consulted on
+/// `set_poll`; clamped to [5, 600] by the payload. The UI calls this
+/// the first time the user clicks "Enable" in the SMP Meta Heal panel
+/// (action=start), then occasionally on slider changes (set_poll) or
+/// manual triggers (run_now).
+#[tauri::command]
+pub async fn ps5_smp_meta_control(
+    addr: Option<String>,
+    action: String,
+    interval: Option<i32>,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/smp-meta/control");
+    let mut body = serde_json::Map::new();
+    if let Some(a) = addr {
+        body.insert("addr".into(), serde_json::Value::String(a));
+    }
+    body.insert("action".into(), serde_json::Value::String(action));
+    if let Some(v) = interval {
+        body.insert("interval".into(), serde_json::Value::Number(v.into()));
+    }
+    post_json(&url, &serde_json::Value::Object(body)).await
+}
+
+/// Snapshot of the SMP-meta worker's stats. Safe to call even before
+/// the worker is started — returns `running:false` with zeroed
+/// counters. The panel polls this on a slow tick (10–30 s) so the
+/// user can see "N icons healed this sweep" land without manually
+/// refreshing.
+#[tauri::command]
+pub async fn ps5_smp_meta_stats(addr: Option<String>) -> Result<JsonValue, String> {
+    get_json(&addr_url("/api/ps5/smp-meta/stats", addr.as_deref())).await
+}
+
+#[tauri::command]
+pub async fn transfer_dir_reconcile(req: TransferDirReconcileReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/transfer/dir-reconcile");
+    let body = serde_json::json!({
+        "src_dir": req.src_dir,
+        "dest_root": req.dest_root,
+        "addr": req.addr,
+        "tx_id": req.tx_id,
+        "mode": req.mode,
+        "excludes": req.excludes,
+        "bandwidth_cap_mbps": req.bandwidth_cap_mbps,
+        "streams": req.streams,
+    });
+    post_json(&url, &body).await
+}
+
+/// What a game source is, before converting it: readiness, size and cost.
+/// POST /api/fpkg/inspect.
+#[tauri::command]
+pub async fn fpkg_inspect(source: String, output_dir: Option<String>) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/fpkg/inspect");
+    post_json(
+        &url,
+        &serde_json::json!({ "source": source, "output_dir": output_dir }),
+    )
+    .await
+}
+
+/// Start converting a game source into an installable FPKG. Returns a job id
+/// to poll with `job_status`; the finished job carries the package's path.
+/// POST /api/fpkg/build.
+#[tauri::command]
+pub async fn fpkg_build(
+    source: String,
+    output_dir: Option<String>,
+    content_id: Option<String>,
+    name: Option<String>,
+    compression: Option<String>,
+    firmware: Option<String>,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/fpkg/build");
+    post_json(
+        &url,
+        &serde_json::json!({
+            "source": source,
+            "output_dir": output_dir,
+            "content_id": content_id,
+            "name": name,
+            "compression": compression,
+            "firmware": firmware,
+        }),
+    )
+    .await
+}
+
+/// Package size and time at each compression level for a game. POST /api/fpkg/estimate.
+#[tauri::command]
+pub async fn fpkg_estimate(source: String) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/fpkg/estimate");
+    post_json(&url, &serde_json::json!({ "source": source })).await
+}
+
+/// Delete a package the converter built; the engine refuses any other file.
+/// POST /api/fpkg/delete.
+#[tauri::command]
+pub async fn fpkg_delete(path: String) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/fpkg/delete");
+    post_json(&url, &serde_json::json!({ "path": path })).await
+}
+
+/// Compress a game image into a `.ffpfsc` for ShadowMountPlus; runs as an engine job.
+#[tauri::command]
+pub async fn ffpfsc_compress(
+    source: String,
+    output_dir: Option<String>,
+    level: Option<u32>,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ffpfsc/compress");
+    post_json(
+        &url,
+        &serde_json::json!({
+            "source": source,
+            "output_dir": output_dir,
+            "level": level,
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn job_status(job_id: String) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/jobs/{job_id}");
+    get_json(&url).await
+}
+
+/// Truly stop a running transfer job: POST /api/jobs/{id}/cancel flips the
+/// engine's cancel flag so the transfer aborts at its next shard boundary
+/// (partial tx left resumable). Idempotent — a finished/unknown job is a no-op.
+#[tauri::command]
+pub async fn job_cancel(job_id: String) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/jobs/{job_id}/cancel");
+    post_json(&url, &serde_json::json!({})).await
+}
+
+/// Pull recent engine log lines from the sidecar's in-memory ring so the
+/// renderer can mirror them into its Log tab. `since` is the highest
+/// `seq` the caller has already seen; pass `0` on first call. Response
+/// shape: `{ entries: [...], next_seq: N }`.
+#[tauri::command]
+pub async fn engine_logs_tail(since: u64) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/engine-logs?since={since}");
+    get_json(&url).await
+}
+
+// ── PKG install ─────────────────────────────────────────────────────────────
+
+/// Parse a single `.pkg` file's header. Returns metadata: content_id,
+/// title (from PARAM.SFO), category, ICON0.PNG (base64), warnings.
+/// Files with non-stock magic surface as `kind:"unknown"` with a warning
+/// rather than a hard error so the user can still attempt install.
+#[tauri::command]
+pub async fn pkg_metadata(path: String) -> Result<JsonValue, String> {
+    let url = format!("{}/api/pkg/parse", engine::url());
+    post_json(&url, &serde_json::json!({ "path": path })).await
+}
+
+/// Same as `pkg_metadata` but auto-detects sibling split parts
+/// (`<root>.0`, `<root>.1`, ...) in the same directory and returns
+/// the assembled total size + per-part list.
+#[tauri::command]
+pub async fn pkg_metadata_split(path: String) -> Result<JsonValue, String> {
+    let url = format!("{}/api/pkg/parse-split", engine::url());
+    post_json(&url, &serde_json::json!({ "path": path })).await
+}
+
+/// Pre-flight folder diff: walks local + remote, returns the
+/// "what would actually change" stats without uploading. UI uses
+/// this to show "X new, Y replaced" before the user commits to a
+/// multi-GB transfer.
+#[tauri::command]
+pub async fn transfer_dir_diff_preview(
+    src_dir: String,
+    dest_root: String,
+    addr: String,
+    excludes: Vec<String>,
+) -> Result<JsonValue, String> {
+    let url = format!("{}/api/transfer/dir-diff-preview", engine::url());
+    post_json(
+        &url,
+        &serde_json::json!({
+            "src_dir": src_dir,
+            "dest_root": dest_root,
+            "addr": addr,
+            "excludes": excludes,
+        }),
+    )
+    .await
+}
+
+/// Inspect a local UFS2 image file (`.ffpkg`, `.ufs`) without
+/// uploading. Returns superblock info, root directory contents, and
+/// PARAM.SFO metadata when sce_sys/param.sfo exists. Read-only —
+/// safe to run on any file the user picks.
+#[tauri::command]
+pub async fn ffpkg_inspect(path: String) -> Result<JsonValue, String> {
+    let url = format!("{}/api/ffpkg/inspect", engine::url());
+    post_json(&url, &serde_json::json!({ "path": path })).await
+}
+
+/// Extract a file or subtree from a local `.ffpkg` to a local dir.
+/// `inner_path` is slash-separated and refers to the path inside the
+/// image (empty string = whole image root). Read-only on the image.
+#[tauri::command]
+pub async fn ffpkg_extract(
+    ffpkg_path: String,
+    inner_path: String,
+    dest_dir: String,
+) -> Result<JsonValue, String> {
+    let url = format!("{}/api/ffpkg/extract", engine::url());
+    post_json(
+        &url,
+        &serde_json::json!({
+            "ffpkg_path": ffpkg_path,
+            "inner_path": inner_path,
+            "dest_dir": dest_dir,
+        }),
+    )
+    .await
+}
+
+/// Category-aware inventory of installed package artifacts for one title.
+/// Returns base app.pkg, patch.pkg, and DLC package files with sampled
+/// fingerprints so the UI can identify the exact staged variant.
+#[tauri::command]
+pub async fn pkg_installed_inventory(addr: String, title_id: String) -> Result<JsonValue, String> {
+    let mut url = reqwest::Url::parse(&format!("{}/api/pkg/installed", engine::url()))
+        .map_err(|e| format!("build installed-pkg URL: {e}"))?;
+    url.query_pairs_mut()
+        .append_pair("addr", &addr)
+        .append_pair("title_id", &title_id);
+    get_json(url.as_str()).await
+}
+
+/// Ask the engine what the console already has for this package, using the
+/// same artifact matching its completion check uses. Answers "already
+/// installed" for a PS5 debug package, whose console artifact is the inner
+/// image — a comparison the client cannot make from fingerprints alone.
+#[tauri::command]
+pub async fn pkg_install_preflight(
+    addr: String,
+    content_id: String,
+    package_type: Option<String>,
+    expected_size: Option<u64>,
+    package_fingerprint: Option<String>,
+) -> Result<JsonValue, String> {
+    let mut url = reqwest::Url::parse(&format!("{}/api/pkg/install/preflight", engine::url()))
+        .map_err(|e| format!("build preflight URL: {e}"))?;
+    url.query_pairs_mut()
+        .append_pair("addr", &addr)
+        .append_pair("content_id", &content_id)
+        .append_pair("package_type", package_type.as_deref().unwrap_or(""))
+        .append_pair("expected_size", &expected_size.unwrap_or(0).to_string())
+        .append_pair(
+            "package_fingerprint",
+            package_fingerprint.as_deref().unwrap_or(""),
+        );
+    get_json(url.as_str()).await
+}
+
+/// Kick off an install. Returns the session_id, the HTTP URL the PS5
+/// will fetch from, and the BGFT task_id. Caller polls `pkg_install_status`
+/// until phase=done|error.
+// Tauri command: the parameter list mirrors the JS call site (each becomes a
+// key in the invoke args object), so the count is dictated by the install API
+// surface, not Rust ergonomics — the standard exception to too_many_arguments.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn pkg_install_start(
+    ps5_addr: String,
+    path: Option<String>,
+    split_root: Option<String>,
+    // Install-from-a-link: the engine fetches the package from this HTTP(S)
+    // URL over many connections at once and re-serves it to the console from
+    // the pkg-host. Mutually exclusive with path/split_root/local_ps5_path.
+    remote_url: Option<String>,
+    package_type_override: Option<String>,
+    local_ps5_path: Option<String>,
+    content_id: Option<String>,
+    expected_size: Option<u64>,
+    package_fingerprint: Option<String>,
+    // The user's "Auto Delete after installation" preference. When false, the
+    // engine keeps the staged pkg instead of deleting it post-install. Optional
+    // so any caller that omits it gets the safe default (true) via serde.
+    delete_staging: Option<bool>,
+    // Serve-only (Stream beta): create the /pkg-host/ serving session but skip
+    // the in-process install — the caller finishes via dpi-direct-install. See
+    // InstallStartRequest::serve_only. Optional; defaults false (normal install).
+    serve_only: Option<bool>,
+    // Skip TLS verification while THIS COMPUTER downloads from remote_url.
+    // Per install, never global, and it has no bearing on a direct install,
+    // where the console performs its own handshake. Optional so an older
+    // caller keeps verification on.
+    insecure_tls: Option<bool>,
+) -> Result<JsonValue, String> {
+    let url = format!("{}/api/pkg/install/start", engine::url());
+    let body = serde_json::json!({
+        "ps5_addr": ps5_addr,
+        "path": path,
+        "split_root": split_root,
+        "remote_url": remote_url,
+        "package_type_override": package_type_override,
+        "local_ps5_path": local_ps5_path,
+        "content_id": content_id,
+        "expected_size": expected_size,
+        "package_fingerprint": package_fingerprint,
+        "delete_staging": delete_staging.unwrap_or(true),
+        "serve_only": serve_only.unwrap_or(false),
+        "insecure_tls": insecure_tls.unwrap_or(false),
+    });
+    post_json(&url, &body).await
+}
+
+/// Download a package from a link to this computer's disk, to be installed
+/// from the local file afterwards. Returns immediately with an id to poll;
+/// the transfer runs in the engine.
+#[tauri::command]
+pub async fn pkg_remote_download_start(
+    url: String,
+    insecure_tls: Option<bool>,
+    dest_dir: Option<String>,
+) -> Result<JsonValue, String> {
+    let endpoint = format!("{}/api/pkg/remote/download/start", engine::url());
+    let body = serde_json::json!({
+        "url": url,
+        "insecure_tls": insecure_tls.unwrap_or(false),
+        "dest_dir": dest_dir,
+    });
+    post_json(&endpoint, &body).await
+}
+
+/// Progress of a link download: bytes written, whether it finished, and the
+/// error if it did not.
+#[tauri::command]
+pub async fn pkg_remote_download_status(id: String) -> Result<JsonValue, String> {
+    let endpoint = format!(
+        "{}/api/pkg/remote/download/status?id={}",
+        engine::url(),
+        urlencoding(&id)
+    );
+    get_json(&endpoint).await
+}
+
+/// Stop a link download and delete the partial file.
+#[tauri::command]
+pub async fn pkg_remote_download_cancel(id: String) -> Result<JsonValue, String> {
+    let endpoint = format!("{}/api/pkg/remote/download/cancel", engine::url());
+    post_json(&endpoint, &serde_json::json!({ "id": id })).await
+}
+
+/// Identify the package behind an HTTP(S) link without downloading it, so the
+/// UI can show what it is (and reject a share page) before the user commits to
+/// a multi-hour install. Reads only a few byte ranges from the origin.
+#[tauri::command]
+pub async fn pkg_remote_probe(url: String) -> Result<JsonValue, String> {
+    let endpoint = format!("{}/api/pkg/remote/probe", engine::url());
+    post_json(&endpoint, &serde_json::json!({ "url": url })).await
+}
+
+/// Install a staged .pkg through the DPI daemon on :9040 (the engine
+/// POSTs the bare PS5 path; the daemon runs sceAppInstUtilInstallByPackage
+/// with that local path — the launchable path, since 2.25.2). Long-deadline
+/// client — the installer ingests the pkg before replying.
+#[tauri::command]
+pub async fn pkg_dpi_install(
+    ps5_addr: String,
+    local_ps5_path: String,
+    // Identity of the staged package. The engine cannot parse a file that
+    // lives on the console, so it needs these to verify afterwards that an
+    // update actually took effect. Optional: absent skips the check.
+    title_id: Option<String>,
+    package_app_ver: Option<String>,
+) -> Result<JsonValue, String> {
+    let url = format!("{}/api/pkg/dpi-install", engine::url());
+    let body = serde_json::json!({
+        "ps5_addr": ps5_addr,
+        "local_ps5_path": local_ps5_path,
+        "title_id": title_id,
+        "package_app_ver": package_app_ver,
+    });
+    post_json_long(&url, &body).await
+}
+
+/// Direct/streaming install (beta, #81): hand the DPI daemon the engine's
+/// /pkg-host/ URL for an existing session instead of a staged PS5 path.
+/// The daemon pulls the pkg over HTTP — no staging copy uploaded to the
+/// PS5 first. The session must already be registered with the engine via
+/// a prior `pkg_install_start` (which creates the pkg-host listener).
+/// Long-deadline client — the installer ingests the pkg before replying.
+#[tauri::command]
+pub async fn pkg_dpi_direct_install(
+    ps5_addr: String,
+    session_id: String,
+) -> Result<JsonValue, String> {
+    let url = format!("{}/api/pkg/dpi-direct-install", engine::url());
+    let body = serde_json::json!({
+        "ps5_addr": ps5_addr,
+        "session_id": session_id,
+    });
+    post_json_long(&url, &body).await
+}
+
+/// Poll an in-flight install for status. Cheap; called every 1-2s.
+#[tauri::command]
+pub async fn pkg_install_status(session: String) -> Result<JsonValue, String> {
+    let url = format!(
+        "{}/api/pkg/install/status?session={}",
+        engine::url(),
+        urlencoding(&session)
+    );
+    get_json(&url).await
+}
+
+/// Cancel an in-flight install. Stops the host-side HTTP listener
+/// for this session; BGFT on the PS5 will surface a download error
+/// in its notifications when it sees the stream drop.
+#[tauri::command]
+pub async fn pkg_install_cancel(session: String) -> Result<JsonValue, String> {
+    let url = format!("{}/api/pkg/install/cancel", engine::url());
+    post_json(&url, &serde_json::json!({ "session": session })).await
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+/// Tiny URL-encode that handles the characters we feed into query strings
+/// (slashes, colons, spaces). We don't take a dep on the `urlencoding`
+/// crate — a 15-char allow-set is plenty.
+pub(crate) fn urlencoding(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "-_.~".contains(c) {
+                c.to_string()
+            } else {
+                let mut buf = [0u8; 4];
+                c.encode_utf8(&mut buf)
+                    .as_bytes()
+                    .iter()
+                    .map(|b| format!("%{b:02X}"))
+                    .collect::<String>()
+            }
+        })
+        .collect()
+}

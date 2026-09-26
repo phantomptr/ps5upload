@@ -1,0 +1,67 @@
+{
+  "name": "ps5upload-client",
+  "private": true,
+  "type": "module",
+  "version": "5.34.0",
+  "description": "The all-in-one PS5 companion app.",
+  "homepage": "https://github.com/phantomptr/ps5upload",
+  "author": "PhantomPtr <phantomptr@gmail.com>",
+  "scripts": {
+    "dev": "tauri dev",
+    "dev:vite": "vite",
+    "build:vite": "vite build",
+    "build": "tauri build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "tauri": "tauri",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "dist": "tauri build",
+    "dist:win": "tauri build --target x86_64-pc-windows-msvc",
+    "dist:win-arm": "tauri build --target aarch64-pc-windows-msvc",
+    "dist:mac": "tauri build --target aarch64-apple-darwin",
+    "dist:mac-x64": "tauri build --target x86_64-apple-darwin",
+    "dist:linux": "tauri build --target x86_64-unknown-linux-gnu",
+    "dist:linux-arm": "tauri build --target aarch64-unknown-linux-gnu",
+    "dist:android": "tauri android build --apk --target aarch64 --target armv7"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/plugin-dialog": "^2.7.3",
+    "@tauri-apps/plugin-notification": "^2.4.0",
+    "@tauri-apps/plugin-opener": "^2.5.5",
+    "clsx": "^2.1.1",
+    "html-to-image": "^1.11.13",
+    "lucide-react": "^1.47.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-router": "^8.4.0",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.63.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "@tauri-apps/cli": "^2.11.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "@vitest/coverage-v8": "^5.0.1",
+    "eslint": "^10.11.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.70.1",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.0"
+  },
+  "overrides": {
+    "tar": "7.5.7"
+  },
+  "allowScripts": {
+    "fsevents@2.3.3": true
+  }
+}

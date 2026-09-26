@@ -1,0 +1,635 @@
+//! Writing a package block by block, so a 100 GB game never has to be resident.
+//!
+//! The in-memory writers (`inner::write`, `outer_write::write`) stay as the oracle: they
+//! are what gate G2 verified. This module walks the same plan and emits the same bytes —
+//! a test asserts the two packages are identical, which is what keeps the streaming path
+//! honest as the formats evolve.
+//!
+//! Resident state is bounded by the *file count* (the plan, the flat-path table, the
+//! metadata region, the container) and by the *block count* (32 B per block for the image
+//! digests) — never by the size of the game.
+
+use std::fs::File;
+use std::io::{Seek, SeekFrom, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use crate::cnt_write::{self, CntParams};
+use crate::crypto::{crc32c, derive_ekpfs, derive_xts_keys, sha3, Hasher};
+use crate::fih_write::{self, FihParams};
+use crate::inner::{BlockSource, RangeRead};
+use crate::naps;
+use crate::outer_write::{self, layout};
+use crate::pfsimage;
+use crate::plan::Plan;
+use crate::si_write;
+use crate::xts::{Xts, SIGNED_SECTOR_FLAG};
+use crate::{format_err, Result, BLOCK};
+
+/// What a streaming build needs beyond the plan.
+pub struct StreamRequest<'a> {
+    pub plan: &'a Plan,
+    pub passcode: &'a str,
+    /// The superblock's seed slot: random in the native mode, [`crate::PLAINTEXT_MARKER`] in the
+    /// plaintext one, whose blocks are stored as they are.
+    pub seed: [u8; 16],
+    pub image_mode: crate::ImageMode,
+    pub time: (i64, u32),
+    pub content_id: &'a str,
+    pub content_version: u32,
+    /// The container's payloads, read from the source before the pass — all small.
+    pub param_json: Vec<u8>,
+    pub icon_png: Vec<u8>,
+    pub icon_dds: Vec<u8>,
+    /// The presentation entries beyond the icons.
+    pub extras: Vec<cnt_write::ExtraEntry>,
+    /// PlayGo chunks; see [`crate::playgo`].
+    pub playgo_chunks: u16,
+    /// Compress the inner image with Kraken (see [`crate::kraken_image`]), spooling it where
+    /// this says. `None` stores it uncompressed.
+    pub kraken_spool: Option<KrakenSpool>,
+    /// How hard the Kraken encoder works on a compressed image.
+    pub level: crate::kraken::Level,
+    /// How the inner image's metadata region is stored.
+    pub metadata_codec: crate::inner::MetaCodec,
+}
+
+/// How a build reports itself: phase names, and bytes written of the mount image.
+pub struct Progress<'a> {
+    pub phase: &'a mut dyn FnMut(&str),
+    pub bytes: &'a mut dyn FnMut(u64, u64),
+    /// Called as each build stage begins.
+    pub stage: &'a mut dyn FnMut(crate::build::Stage),
+}
+
+pub struct StreamedPackage {
+    pub size: u64,
+    pub outer_size: u64,
+    pub cnt_offset: u64,
+    pub game_digest: [u8; 32],
+    pub content_id: String,
+}
+
+/// The digests the metric blob wants, accumulated while the image streams by: one per
+/// stored 64 KiB block, one per content file (in afid order). Files are laid out in afid
+/// order and never interleave, so one open hasher at a time is enough — the state of a
+/// 300,000-file image stays constant.
+struct FileDigester {
+    files: Vec<[u8; 32]>,
+    open: Option<(usize, Hasher)>,
+    blocks: Vec<[u8; 32]>,
+}
+
+impl FileDigester {
+    fn new(file_count: usize) -> Self {
+        Self {
+            files: vec![[0u8; 32]; file_count],
+            open: None,
+            blocks: Vec::new(),
+        }
+    }
+
+    /// Feed one block: `spans` are `(afid, from, to)` byte ranges within it, in image
+    /// order — one per file the block touches.
+    fn block(&mut self, block: &[u8], spans: &[(usize, usize, usize)]) {
+        self.blocks.push(sha3(block));
+        for &(afid, from, to) in spans {
+            if self.open.as_ref().is_none_or(|(open, _)| *open != afid) {
+                if let Some((previous, hasher)) = self.open.take() {
+                    self.files[previous] = hasher.finish();
+                }
+                self.open = Some((afid, Hasher::new()));
+            }
+            if let Some((_, hasher)) = self.open.as_mut() {
+                hasher.update(&block[from..to]);
+            }
+        }
+    }
+
+    fn finish(mut self) -> (Vec<[u8; 32]>, Vec<[u8; 32]>) {
+        if let Some((previous, hasher)) = self.open.take() {
+            self.files[previous] = hasher.finish();
+        }
+        (self.files, self.blocks)
+    }
+}
+
+/// The files' byte ranges within one block, as `(afid, from, to)` offsets into the block,
+/// in image order. A block can hold many files — a game's first block holds every small
+/// file that was packed before the first large one — so the caller passes a buffer that is
+/// reused between blocks rather than allocated per block.
+fn block_spans(
+    source: &BlockSource,
+    plan: &Plan,
+    index: u64,
+    out: &mut Vec<(usize, usize, usize)>,
+) {
+    let lo = index * BLOCK;
+    out.clear();
+    for span in source.block_spans(index) {
+        out.push((
+            plan.files[span.file].afid as usize,
+            (span.start.max(lo) - lo) as usize,
+            (span.end.min(lo + BLOCK) - lo) as usize,
+        ));
+    }
+}
+
+/// Where a compressed build spools its image while the outer image's size is still unknown.
+#[derive(Debug, Clone)]
+pub enum KrakenSpool {
+    /// In the package itself, where the outer image's data starts (one block in): every block
+    /// of the outer image after the stored inner image, and everything after that, depends on
+    /// the stored length, but the stored image's own place does not. No copy, and no second
+    /// image's worth of disk.
+    InPlace,
+    /// A separate file, e.g. on another drive; read back and copied in.
+    File(std::path::PathBuf),
+}
+
+fn spool_file(out: &File, spool: &KrakenSpool) -> Result<File> {
+    Ok(match spool {
+        KrakenSpool::InPlace => out.try_clone()?,
+        KrakenSpool::File(path) => File::create(path)?,
+    })
+}
+
+fn spool_base(spool: &KrakenSpool) -> u64 {
+    match spool {
+        KrakenSpool::InPlace => BLOCK,
+        KrakenSpool::File(_) => 0,
+    }
+}
+
+fn cancelled() -> crate::Error {
+    crate::Error::Format("the build was cancelled".to_string())
+}
+
+/// Write the whole package to `out`, which must be empty and seekable.
+pub fn write_package(
+    out: &mut File,
+    request: &StreamRequest,
+    read: RangeRead,
+    progress: &mut Progress,
+    cancel: &AtomicBool,
+) -> Result<StreamedPackage> {
+    let plan = request.plan;
+    let mut source = BlockSource::new_with(
+        plan,
+        request.passcode,
+        image_time(request.image_mode, request.time),
+        request.metadata_codec,
+    )?;
+    // The image the outer PFS stores is the stored one, so its block count is what the outer
+    // metadata, the header's `0x90` and the descriptor's image length all follow. The mount the
+    // install metadata describes is the larger logical one.
+    let inner_size = plan.ndblock * BLOCK;
+    // A compressed image is built first, into its spool: the outer image's geometry follows
+    // its length, which is only known once every block is compressed.
+    // A stored build passes through this stage at once.
+    (progress.stage)(crate::build::Stage::Compress);
+    let kraken = match &request.kraken_spool {
+        Some(where_to) => {
+            (progress.phase)("compressing the image");
+            let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+            let keystone = crate::inner::keystone(request.passcode);
+            let metadata = source.metadata_region();
+            let image = crate::kraken_image::compress(
+                plan,
+                &metadata,
+                &keystone,
+                read,
+                spool_file(out, where_to)?,
+                spool_base(where_to),
+                threads,
+                request.level,
+                cancel,
+                &mut |done, total| (progress.bytes)(done, total),
+            )?;
+            Some(image)
+        }
+        None => None,
+    };
+    let (inner_blocks, naps) = match &kraken {
+        Some(image) => {
+            let starts: Vec<u64> = plan
+                .afid_order
+                .iter()
+                .map(|&fi| plan.files[fi].logical_offset)
+                .collect();
+            (
+                image.image_len / BLOCK,
+                crate::kraken_image::layout(image, &starts)?,
+            )
+        }
+        None => (
+            source.disk_blocks(),
+            naps::build_with_meta(
+                source.disk_blocks() * BLOCK,
+                plan.ndblock,
+                &plan.placements(),
+                plan.data_end,
+                plan.meta_base,
+                &source.metadata().blocks,
+                request.metadata_codec.compression_type(),
+            )?,
+        ),
+    };
+    // Where the compressed image is read back from: the package itself when it was written in
+    // place, where it already sits, or its separate spool file.
+    let in_place = matches!(request.kraken_spool, Some(KrakenSpool::InPlace));
+    let mut spool = match &request.kraken_spool {
+        Some(KrakenSpool::InPlace) if kraken.is_some() => Some(out.try_clone()?),
+        Some(KrakenSpool::File(path)) if kraken.is_some() => Some(File::open(path)?),
+        _ => None,
+    };
+    let spool_at = request.kraken_spool.as_ref().map_or(0, spool_base);
+    // The layout follows the descriptor's length, which fixes how many blocks it spans.
+    let lay = layout(inner_blocks, naps.len() as u64)?;
+    let outer_size = lay.ndblock * BLOCK;
+    let cnt_offset = BLOCK + outer_size;
+
+    // The mode decides one thing: whether every block but the superblock is XTS-transformed.
+    // A plaintext image never is, so its keys are not even derived.
+    let xts = match request.image_mode {
+        crate::ImageMode::Native => Some(Xts::new(&derive_xts_keys(
+            &derive_ekpfs(request.content_id, request.passcode),
+            &request.seed,
+        ))),
+        crate::ImageMode::PlaintextNoAuth => None,
+    };
+    // `imagedigs` and `playgo-chunk.crc`, both indexed by file block: the header's block
+    // first, then the outer image's. 32 B and 4 B per block — the only tables that scale
+    // with the package, and they stay resident on purpose.
+    let mut digests: Vec<[u8; 32]> = vec![[0u8; 32]; lay.ndblock as usize];
+    let mut crcs: Vec<u32> = vec![0u32; 1 + lay.ndblock as usize];
+
+    // ── the data blocks ──────────────────────────────────────────────────────────────
+    (progress.stage)(crate::build::Stage::Write);
+    (progress.phase)("writing the image");
+    let files = plan.inner_files();
+    let mut file_digests = FileDigester::new(files.len());
+    let mut block = vec![0u8; BLOCK as usize];
+    let mut spans: Vec<(usize, usize, usize)> = Vec::with_capacity(8);
+    for index in 0..inner_blocks {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(cancelled());
+        }
+        if let Some(spool) = spool.as_mut() {
+            // The compressed image: its files' digests were taken as it was compressed.
+            crate::kraken_image::spool_block(spool, spool_at, index, &mut block)?;
+            file_digests.block(&block, &[]);
+        } else {
+            block_spans(&source, plan, index, &mut spans);
+            let plaintext = source.block(index, read)?;
+            block.copy_from_slice(plaintext);
+            file_digests.block(&block, &spans);
+        }
+
+        digests[index as usize] = crate::crypto::sha3(&block);
+        if let Some(xts) = &xts {
+            xts.encrypt(index, &mut block);
+        }
+        crcs[1 + index as usize] = crc32c(&block);
+        // A compressed image written in place is already where the outer image keeps it;
+        // only a transformed block has to go back.
+        if !(in_place && spool.is_some() && xts.is_none()) {
+            out.seek(SeekFrom::Start(BLOCK + index * BLOCK))?;
+            out.write_all(&block)?;
+        }
+        if index.is_multiple_of(512) {
+            // Bytes of the outer image, the same measure the verifier reports.
+            (progress.bytes)(((index + 1) * BLOCK).min(outer_size), outer_size);
+        }
+    }
+    let (file_digests, block_digests) = file_digests.finish();
+    let file_digests = match &kraken {
+        Some(image) => image.file_digests.clone(),
+        None => file_digests,
+    };
+
+    // ── the outer metadata ───────────────────────────────────────────────────────────
+    (progress.phase)("writing the layout");
+    let mut game_digest = [0u8; 32];
+    let mut superblock = Vec::new();
+    for (index, digest, mut plaintext) in outer_write::metadata_blocks(
+        &lay,
+        inner_blocks,
+        &naps,
+        &digests[..inner_blocks as usize],
+        request.seed,
+        image_time(request.image_mode, request.time),
+        kraken.as_ref().map(|_| inner_size),
+    )? {
+        if index != lay.superblock_block {
+            if let Some(xts) = &xts {
+                let sector = if index < lay.superblock_block {
+                    index
+                } else {
+                    SIGNED_SECTOR_FLAG | index
+                };
+                xts.encrypt(sector, &mut plaintext);
+            }
+        }
+        digests[index as usize] = digest;
+        if index == lay.superblock_block {
+            game_digest = digest;
+            superblock = plaintext.clone();
+        }
+        crcs[1 + index as usize] = crc32c(&plaintext);
+        out.seek(SeekFrom::Start(BLOCK + index * BLOCK))?;
+        out.write_all(&plaintext)?;
+    }
+
+    // ── the header, which needs the game digest the metadata pass just produced ──────
+    (progress.phase)("writing the header");
+    let fih = fih_write::write(&FihParams {
+        outer_size,
+        superblock_block: lay.superblock_block,
+        game_digest,
+        cnt_offset,
+        naps: &naps,
+        inner_size,
+        meta_base: plan.meta_base,
+        inner_blocks: inner_blocks as u32,
+        content_inodes: plan.content_inodes,
+        content_version: request.content_version,
+        app_file_count: plan.app_file_count,
+        flt_count: u32::from(!plan.flt_apr.is_empty()) + 1,
+    });
+    crcs[0] = crc32c(&fih);
+    out.seek(SeekFrom::Start(0))?;
+    out.write_all(&fih)?;
+
+    // ── the container ────────────────────────────────────────────────────────────────
+    (progress.phase)("writing the container");
+    // PlayGo maps files to chunks by where their bytes sit in the mount image — for a compressed
+    // image, where their compressed blocks are.
+    let mount_files = match &kraken {
+        Some(image) => {
+            let mut extent = vec![(u64::MAX, 0u64); plan.afid_order.len()];
+            for b in &image.blocks {
+                if let crate::kraken_image::Owner::File(afid) = b.owner {
+                    let e = &mut extent[afid];
+                    e.0 = e.0.min(b.stored_at);
+                    e.1 = e.1.max(b.stored_at + b.stored_len());
+                }
+            }
+            plan.afid_order
+                .iter()
+                .enumerate()
+                .map(|(afid, &fi)| {
+                    let (lo, hi) = extent[afid];
+                    let lo = if lo == u64::MAX {
+                        image.file_stored_at[afid]
+                    } else {
+                        lo
+                    };
+                    (
+                        plan.files[fi].path.clone(),
+                        BLOCK + lo,
+                        hi.saturating_sub(lo),
+                    )
+                })
+                .collect()
+        }
+        None => plan.mount_files(),
+    };
+    let playgo = crate::playgo::build(
+        request.content_id,
+        &mount_files,
+        cnt_offset,
+        request.playgo_chunks,
+    )?;
+    let cnt = cnt_write::write(&CntParams {
+        content_id: request.content_id,
+        param_json: &request.param_json,
+        icon_png: &request.icon_png,
+        icon_dds: &request.icon_dds,
+        extras: &request.extras,
+        playgo_chunk: &playgo.chunk_dat,
+        playgo_hash_table: &playgo.hash_table,
+        playgo_ficm: &playgo.ficm,
+        imagedigs: &digests,
+        game_digest,
+        fih_block: &fih,
+        outer_size,
+        cnt_offset,
+        seed: request.seed,
+        passcode: request.passcode,
+        content_type: cnt_write::content_class(&request.param_json).0,
+        drm_type: crate::cnt_write::drm_type_override()
+            .unwrap_or(crate::cnt_write::LICENSED_DRM_TYPE),
+        content_flags: cnt_write::content_class(&request.param_json).1,
+        inner_size,
+    })?;
+    out.seek(SeekFrom::Start(cnt_offset))?;
+    out.write_all(&cnt.bytes)?;
+    // The mount image is the header, the outer image and the container; its CRC is the
+    // container's chunks appended to the blocks already crc'd above.
+    let mut crc_table: Vec<u8> = crcs.iter().flat_map(|c| c.to_le_bytes()).collect();
+    crc_table.extend_from_slice(&si_write::chunk_crc(&cnt.bytes));
+
+    // ── the install metadata ─────────────────────────────────────────────────────────
+    (progress.phase)("writing the install metadata");
+    let digests_18 = si_write::InnerDigests {
+        blocks: block_digests,
+        files: file_digests,
+    };
+    let meta_18 = match &kraken {
+        Some(image) => si_write::naps_meta_18_blocks(
+            image.image_len,
+            inner_size,
+            &digests_18,
+            &source.metadata_region(),
+            &files,
+            &si_write::kraken_blocks(image),
+            plan.meta_base,
+            &game_digest,
+        )?,
+        None => si_write::naps_meta_18(
+            inner_size,
+            &digests_18,
+            &source.metadata_region(),
+            &files,
+            plan.data_end,
+            plan.meta_base,
+            &game_digest,
+        )?,
+    };
+    let meta_300 = si_write::naps_meta_300(inner_size);
+    let manifest = pfsimage::build(&pfsimage::ManifestParams {
+        facts: &cnt.facts,
+        content_id: request.content_id,
+        content_type: cnt_write::content_class(&request.param_json).0,
+        param_json: &request.param_json,
+        content_version: request.content_version,
+        cnt_offset,
+        si_offset: cnt_offset + cnt.facts.container_size,
+        outer_size,
+        inner_size,
+        seed: request.seed,
+        game_digest,
+        icv: outer_write::superblock_icv(&superblock),
+        playgo: &playgo,
+        outer: &lay,
+        naps_len: naps.len() as u64,
+        plan,
+    });
+    let members = vec![
+        ("common/etc/naps_meta_18.dat".to_string(), meta_18),
+        ("common/etc/naps_meta_300.dat".to_string(), meta_300.clone()),
+        ("common/etc/naps_meta_301.dat".to_string(), meta_300.clone()),
+        ("common/etc/naps_meta_302.dat".to_string(), meta_300.clone()),
+        ("common/etc/naps_meta_308.dat".to_string(), meta_300),
+        ("common/etc/pfsimage.xml".to_string(), manifest),
+        (
+            "common/etc/playgo-chunk.dat".to_string(),
+            playgo.chunk_dat.clone(),
+        ),
+        (
+            format!("config/{}/playgo-chunk.crc", request.content_id),
+            crc_table,
+        ),
+    ];
+    let si = si_write::zip(&members, request.time);
+    out.seek(SeekFrom::Start(cnt_offset + cnt.bytes.len() as u64))?;
+    out.write_all(&si)?;
+    out.sync_all()?;
+
+    let size = cnt_offset + cnt.bytes.len() as u64 + si.len() as u64;
+    (progress.bytes)(outer_size, outer_size);
+    Ok(StreamedPackage {
+        size,
+        outer_size,
+        cnt_offset,
+        game_digest,
+        content_id: request.content_id.to_string(),
+    })
+}
+
+/// The write is interruptible and the file is left as it is: the caller removes the
+/// partial. Sized so a cancel during a long data pass is noticed within a block.
+pub fn check_cancelled(cancel: &AtomicBool) -> Result<()> {
+    if cancel.load(Ordering::Relaxed) {
+        return format_err("the build was cancelled");
+    }
+    Ok(())
+}
+
+/// The timestamps a build writes into both images. Publishing Tools' plaintext packages (the
+/// sdk-fpkg279 kit's output, Spider-Man 2) leave every one zero — outer and inner superblocks,
+/// dinodes and inodes — while its encrypted ones carry the build time. A plaintext build does
+/// the same.
+pub(crate) fn image_time(mode: crate::ImageMode, time: (i64, u32)) -> (i64, u32) {
+    match mode {
+        crate::ImageMode::PlaintextNoAuth => (0, 0),
+        crate::ImageMode::Native => time,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plan;
+    use crate::source::SourceFile;
+
+    /// The metric blob's digests must be the image's: one per stored block and one per file
+    /// in afid order, whether they come from the stream or from a built image.
+    #[test]
+    fn the_streamed_digests_are_the_image_digests() {
+        let files: Vec<SourceFile> = [
+            ("eboot.bin", 4000u64),
+            ("data/one.bin", 600_000),
+            ("data/two.bin", 5000),
+            ("sce_sys/param.json", 197),
+            ("sce_sys/icon0.png", 2048),
+            ("sce_sys/icon0.dds", 4096),
+            ("sce_sys/about/right.sprx", 4),
+        ]
+        .iter()
+        .map(|(p, s)| SourceFile {
+            path: (*p).to_string(),
+            size: *s,
+        })
+        .collect();
+        let plan = plan::build(&files).unwrap();
+        let payloads: std::collections::HashMap<&str, Vec<u8>> = plan
+            .files
+            .iter()
+            .map(|f| {
+                let data: Vec<u8> = (0..f.size).map(|i| (i % 251) as u8).collect();
+                (f.path.as_str(), data)
+            })
+            .collect();
+        let time = (1_700_000_000i64, 0);
+        let mut read_all =
+            |path: &str| -> Result<Vec<u8>> { Ok(payloads.get(path).cloned().unwrap_or_default()) };
+        let built =
+            crate::inner::write(&plan, crate::crypto::DEFAULT_PASSCODE, &mut read_all, time)
+                .unwrap();
+        let image = built.image.clone();
+        // One digest per *stored* block: a compressed metadata region makes that fewer than the
+        // mount's block count, and the metric blob's table follows the image.
+        let expected = crate::si_write::InnerDigests::of_image(&image, &plan.placements());
+
+        let mut source = BlockSource::new(&plan, crate::crypto::DEFAULT_PASSCODE, time).unwrap();
+        assert_eq!(source.disk_blocks(), built.disk_blocks());
+        let mut digester = FileDigester::new(plan.inner_files().len());
+        let mut spans = Vec::new();
+        for index in 0..source.disk_blocks() {
+            block_spans(&source, &plan, index, &mut spans);
+            let block = source
+                .block(index, &mut |path, offset, len| {
+                    let data = payloads.get(path).cloned().unwrap_or_default();
+                    let at = (offset as usize).min(data.len());
+                    Ok(data[at..(at + len).min(data.len())].to_vec())
+                })
+                .unwrap()
+                .to_vec();
+            digester.block(&block, &spans);
+        }
+        let (files_streamed, blocks_streamed) = digester.finish();
+        for (i, (a, b)) in blocks_streamed.iter().zip(&expected.blocks).enumerate() {
+            assert_eq!(a, b, "block {i} digest");
+        }
+        for (i, (a, b)) in files_streamed.iter().zip(&expected.files).enumerate() {
+            assert_eq!(a, b, "file {i} digest ({})", plan.inner_files()[i].0);
+        }
+
+        // The metric blob itself, from both sets of inputs.
+        let game = [7u8; 32];
+        let list = plan.inner_files();
+        let from_image = crate::si_write::naps_meta_18(
+            plan.ndblock * BLOCK,
+            &expected,
+            &built.metadata.plain,
+            &list,
+            plan.data_end,
+            plan.meta_base,
+            &game,
+        )
+        .unwrap();
+        let from_stream = crate::si_write::naps_meta_18(
+            plan.ndblock * BLOCK,
+            &crate::si_write::InnerDigests {
+                blocks: blocks_streamed,
+                files: files_streamed,
+            },
+            &source.metadata_region(),
+            &list,
+            plan.data_end,
+            plan.meta_base,
+            &game,
+        )
+        .unwrap();
+        assert_eq!(from_stream.len(), from_image.len());
+        if from_stream != from_image {
+            let at = from_stream
+                .iter()
+                .zip(&from_image)
+                .position(|(a, b)| a != b)
+                .unwrap();
+            panic!("the metric blobs differ at {at}");
+        }
+    }
+}

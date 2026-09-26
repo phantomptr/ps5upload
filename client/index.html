@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- viewport-fit=cover is required on Android/iOS so the WebView
+         exposes system-bar / display-cutout sizes via the CSS
+         env(safe-area-inset-*) variables. Without it those are always 0
+         and our top/bottom bars draw underneath the status bar and the
+         gesture-nav pill (edge-to-edge is the default on Android 15+).
+         Harmless on desktop, where the insets resolve to 0. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <link rel="icon" type="image/png" href="/logo-square.png" />
+    <title>PS5 Upload</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,752 @@
+name: publish
+
+# The release artifact builder. Fires automatically on every `vX.Y.Z`
+# tag push (the normal release path, driven by scripts/release.sh) and
+# can also be dispatched by hand for the same tag.
+#
+# Dual trigger, on purpose:
+#   * push: tags  -> the tag push from a release cuts the GitHub Release
+#                    with no extra step to remember. (`ci` deliberately
+#                    ignores tags via `tags-ignore`, so this is the only
+#                    workflow that reacts to a tag.)
+#   * workflow_dispatch -> manual override. The predecessor `release.yml`
+#                    was deleted because GitHub's tag-push trigger can
+#                    land a run in an uncancellable pre-queue state
+#                    during an Actions outage, and new tag pushes won't
+#                    fire fresh runs while it's wedged. Keeping a manual
+#                    dispatch here means that even if a tag-push run
+#                    wedges, you can still ship by re-dispatching:
+#                      gh workflow run publish.yml -f tag=v2.17.0
+#                    (or the Actions UI "Run workflow" button).
+#
+# See https://github.com/orgs/community/discussions/51410 for the
+# upstream wedge symptom + the "create+merge a PR to nudge repo
+# activity" workaround when a queued workflow_id won't accept
+# cancel/dispatch.
+#
+# Tag resolution: `github.event.inputs.tag || github.ref_name` — the
+# dispatch input when present, otherwise the pushed tag's name. Every
+# interpolation of that value into a shell run-block goes through
+# `env: INPUT_TAG:` indirection. Action `with:` parameters and
+# YAML-level keys (concurrency.group, checkout ref) are not shell
+# contexts and are safe by construction. The `Resolve tag` step also
+# regex-validates the tag before anything downstream consumes it.
+# See https://securitylab.github.com/research/github-actions-untrusted-input/
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build & publish (e.g. v2.17.0). The tag must already exist."
+        required: true
+
+permissions:
+  contents: write
+
+# Distinct group for publish runs so manual dispatches and tag pushes
+# for the same version cancel superseded publish attempts without
+# touching the normal ci workflow.
+concurrency:
+  group: publish-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-payload:
+    name: build-payload
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Sync version from VERSION
+        run: node scripts/update-version.js
+
+      - name: Install payload toolchain
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          # See the note on the Tauri prerequisites step: apt has no default
+          # network timeout, so a stalled mirror hangs until the job dies.
+          apt_retry() {
+            for attempt in 1 2 3; do
+              if sudo DEBIAN_FRONTEND=noninteractive apt-get \
+                   -o Acquire::Retries=3 \
+                   -o Acquire::http::Timeout=20 \
+                   -o Acquire::https::Timeout=20 \
+                   "$@"; then
+                return 0
+              fi
+              echo "apt attempt $attempt failed; retrying in 15s" >&2
+              sleep 15
+            done
+            echo "apt failed after 3 attempts: apt-get $*" >&2
+            return 1
+          }
+          apt_retry update
+          # Add LLVM apt repo for llvm-22 (not in Ubuntu 24.04 default repos)
+          curl -fsSL --retry 3 --retry-delay 5 https://apt.llvm.org/llvm.sh | sudo bash -s -- 22
+          apt_retry install -y clang-22 llvm-22-dev lld-22 unzip python3
+
+      - name: Install pinned PS5 Payload SDK
+        run: sudo env PS5_SDK_INSTALL_DIR=/opt/ps5-payload-sdk bash scripts/install-ps5-sdk.sh
+
+      - name: Build payload ELF
+        env:
+          PS5_PAYLOAD_SDK: /opt/ps5-payload-sdk
+          # SDK v0.42's prospero-llvm-config candidate search maxes at 21,
+          # so point it at the CI-installed LLVM 22 explicitly.
+          LLVM_CONFIG: /usr/bin/llvm-config-22
+        run: make payload
+
+      - name: Sanity-check ELF shape
+        run: |
+          file payload/ps5upload.elf payload/dpi/ezremote-dpi.elf
+          test -s payload/ps5upload.elf
+          test -s payload/dpi/ezremote-dpi.elf
+          gzip -t payload/ps5upload.elf.gz payload/dpi/ezremote-dpi.elf.gz
+
+      - name: Gzip payloads for bundling
+        run: |
+          gzip -kf payload/ps5upload.elf payload/dpi/ezremote-dpi.elf
+          ls -la \
+            payload/ps5upload.elf payload/ps5upload.elf.gz \
+            payload/dpi/ezremote-dpi.elf payload/dpi/ezremote-dpi.elf.gz
+
+      - name: Upload payload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ps5upload-payload
+          path: |
+            payload/ps5upload.elf
+            payload/ps5upload.elf.gz
+            payload/dpi/ezremote-dpi.elf
+            payload/dpi/ezremote-dpi.elf.gz
+          if-no-files-found: error
+
+  build-client:
+    name: build-client-${{ matrix.platform }}-${{ matrix.arch }}
+    needs: build-payload
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            platform: macos
+            arch: arm64
+            rust_target: aarch64-apple-darwin
+          - os: macos-15-intel
+            platform: macos
+            arch: x64
+            rust_target: x86_64-apple-darwin
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x64
+            rust_target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            rust_target: aarch64-unknown-linux-gnu
+          - os: windows-2022
+            platform: windows
+            arch: x64
+            rust_target: x86_64-pc-windows-msvc
+          - os: windows-11-arm
+            platform: windows
+            arch: arm64
+            rust_target: aarch64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Sync version from VERSION
+        run: node scripts/update-version.js
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache cargo target
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            client/src-tauri/target
+          key: ${{ runner.os }}-${{ matrix.arch }}-tauri-${{ hashFiles('client/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-tauri-
+
+      # Bounded and retried on purpose. During the v5.3.3 publish this step
+      # stalled inside apt for 45 minutes, ate the whole job budget, and took
+      # the release down with it — every other platform had already built
+      # fine. A hung mirror should cost one short retry, not the release, so
+      # the step gets its own timeout well under the job's 45 and three
+      # attempts at each apt call.
+      - name: Install Linux Tauri prerequisites
+        if: matrix.platform == 'linux'
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          # apt has NO default network timeout: if a mirror stalls mid-fetch it
+          # waits forever. That is exactly what sank the v5.3.3 publish — the
+          # Azure mirror went quiet after "Ign: .../noble-updates/main amd64
+          # Packages" and the step sat there for 45 minutes until the job
+          # timeout killed it, skipping create-release. Acquire::*::Timeout is
+          # the part that actually fixes it; the retry loop is only useful
+          # because of it, since without a timeout every attempt would hang
+          # the same way.
+          apt_retry() {
+            for attempt in 1 2 3; do
+              if sudo DEBIAN_FRONTEND=noninteractive apt-get \
+                   -o Acquire::Retries=3 \
+                   -o Acquire::http::Timeout=20 \
+                   -o Acquire::https::Timeout=20 \
+                   "$@"; then
+                return 0
+              fi
+              echo "apt attempt $attempt failed; retrying in 15s" >&2
+              sleep 15
+            done
+            echo "apt failed after 3 attempts: apt-get $*" >&2
+            return 1
+          }
+          apt_retry update
+          apt_retry install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libfuse2 \
+            patchelf \
+            build-essential \
+            clang \
+            libclang-dev \
+            curl \
+            wget \
+            file \
+            xdg-utils
+
+      - name: Ensure libclang for bindgen (Windows)
+        if: matrix.platform == 'windows'
+        shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          # jpegxr's build runs bindgen, which loads libclang.dll into the
+          # HOST build process. windows-2022 ships LLVM; the leaner
+          # windows-11-arm image may not. Locate a host-arch libclang and
+          # pin LIBCLANG_PATH so clang-sys resolves it deterministically.
+          # Non-destructive: when a usable LLVM is already present we only
+          # export the path — a runner that already builds keeps working.
+          set -u
+          find_libclang() {
+            for d in \
+              "/c/Program Files/LLVM/bin" \
+              "/c/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/Llvm/ARM64/bin" \
+              "/c/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/Llvm/bin" \
+              "/c/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/ARM64/bin" \
+              "/c/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/bin"; do
+              if [ -f "$d/libclang.dll" ]; then echo "$d"; return 0; fi
+            done
+            return 1
+          }
+          dir="$(find_libclang || true)"
+          # Only auto-install on x64: choco's llvm is an x64 build and an
+          # x64 libclang.dll can't load into an arm64 host process, so on
+          # arm64 we rely on the image's preinstalled (arm64) LLVM above.
+          if [ -z "$dir" ] && [ "$ARCH" = "x64" ]; then
+            choco install llvm -y --no-progress
+            dir="$(find_libclang || true)"
+          fi
+          if [ -n "$dir" ]; then
+            win="$(cygpath -w "$dir")"
+            echo "LIBCLANG_PATH=$win" >> "$GITHUB_ENV"
+            echo "Using libclang at: $win"
+          else
+            echo "WARNING: no host libclang found; jpegxr/bindgen may fail" >&2
+          fi
+
+      - name: Install client deps
+        working-directory: client
+        run: npm ci --no-audit --no-fund
+
+      - name: Restore payload ELF
+        uses: actions/download-artifact@v8
+        with:
+          name: ps5upload-payload
+          path: payload
+
+      - name: Verify payload resource in place
+        shell: bash
+        run: |
+          test -s payload/ps5upload.elf.gz
+          test -s payload/dpi/ezremote-dpi.elf.gz
+          ls -la payload/ps5upload.elf.gz payload/dpi/ezremote-dpi.elf.gz
+
+      - name: Build engine sidecar binary
+        working-directory: engine
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: cargo build --release -p ps5upload-engine --target "$RUST_TARGET"
+
+      - name: Verify engine binary in place
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          target_root="engine/target/${RUST_TARGET}/release"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            test -s "$target_root/ps5upload-engine.exe"
+            ls -la "$target_root/ps5upload-engine.exe"
+          else
+            test -s "$target_root/ps5upload-engine"
+            ls -la "$target_root/ps5upload-engine"
+          fi
+
+      - name: Diagnose linuxdeploy (Linux only)
+        if: matrix.platform == 'linux'
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set +e
+          cd "$RUNNER_TEMP"
+          url="https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous"
+          case "$ARCH" in
+            x64)   asset=linuxdeploy-x86_64.AppImage ;;
+            arm64) asset=linuxdeploy-aarch64.AppImage ;;
+          esac
+          curl --retry 3 --fail -L -o linuxdeploy "$url/$asset"
+          chmod +x linuxdeploy
+          echo "=== linuxdeploy --version (direct) ==="
+          ./linuxdeploy --version
+          rc=$?
+          echo "=== linuxdeploy exit code: $rc ==="
+          if [ $rc -ne 0 ]; then
+            echo "=== retry with extract-and-run explicit ==="
+            ./linuxdeploy --appimage-extract-and-run --version
+          fi
+          exit 0
+
+      - name: Build Tauri bundle
+        working-directory: client
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          RUST_TARGET: ${{ matrix.rust_target }}
+          PLATFORM: ${{ matrix.platform }}
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          NO_STRIP: "true"
+          LINUXDEPLOY_VERBOSE: "1"
+        run: |
+          if [ "$PLATFORM" = "windows" ]; then
+            # Build the raw exe (--no-bundle) AND the NSIS installer. The
+            # NSIS installer bundles the WebView2 bootstrapper, which is
+            # essential on Windows 10 where WebView2 is not pre-installed
+            # (issue #221: app shows in Task Manager but no window appears).
+            npx tauri build --target "$RUST_TARGET" --ci --no-bundle
+            npx tauri build --target "$RUST_TARGET" --ci --bundles nsis
+          else
+            npx tauri build --target "$RUST_TARGET" --ci --verbose
+          fi
+
+      - name: Collect bundle artefacts
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          dist_abs="$PWD/dist"
+          mkdir -p "$dist_abs"
+          target_root="client/src-tauri/target/${RUST_TARGET}/release"
+          bundle="$target_root/bundle"
+          echo "Scanning $bundle"
+          ls -R "$bundle" || true
+          case "$PLATFORM" in
+            macos)
+              find "$bundle" -type f -name "*.dmg" -exec cp -v {} "$dist_abs/" \;
+              ;;
+            linux)
+              app="$(find "$bundle" -type f -name "*.AppImage" | head -n1)"
+              if [ -z "$app" ]; then
+                echo "::error::no .AppImage produced by tauri"
+                exit 1
+              fi
+              staging="$(mktemp -d)"
+              cp -v "$app" "$staging/PS5Upload.AppImage"
+              chmod +x "$staging/PS5Upload.AppImage"
+              cp -v scripts/release/linux-launcher.sh "$staging/PS5Upload.sh"
+              chmod +x "$staging/PS5Upload.sh"
+              (cd "$staging" && zip -9 "$dist_abs/PS5Upload.zip" PS5Upload.AppImage PS5Upload.sh)
+              rm -rf "$staging"
+              deb="$(find "$bundle" -type f -name "*.deb" | head -n1)"
+              if [ -z "$deb" ]; then
+                echo "::error::no .deb produced by tauri"
+                exit 1
+              fi
+              cp -v "$deb" "$dist_abs/PS5Upload.deb"
+              rpm="$(find "$bundle" -type f -name "*.rpm" | head -n1)"
+              if [ -z "$rpm" ]; then
+                echo "::error::no .rpm produced by tauri"
+                exit 1
+              fi
+              cp -v "$rpm" "$dist_abs/PS5Upload.rpm"
+              ;;
+            windows)
+              raw_exe="$target_root/ps5upload-desktop.exe"
+              if [ ! -f "$raw_exe" ]; then
+                echo "::error::raw .exe not found at $raw_exe"
+                ls -la "$target_root" || true
+                exit 1
+              fi
+              staging="$dist_abs/_stage"
+              mkdir -p "$staging"
+              cp -v "$raw_exe" "$staging/PS5Upload.exe"
+              rm -f "$dist_abs/PS5Upload.zip"
+              # PowerShell, rather than Bash, expands the $env variables below.
+              # shellcheck disable=SC2016
+              PS5UP_EXE="$staging/PS5Upload.exe" \
+              PS5UP_ZIP="$dist_abs/PS5Upload.zip" \
+                pwsh -NoProfile -Command 'Compress-Archive -LiteralPath $env:PS5UP_EXE -DestinationPath $env:PS5UP_ZIP -CompressionLevel Optimal'
+              rm -rf "$staging"
+              # Also ship the NSIS installer (includes WebView2 bootstrapper
+              # for Windows 10 users who don't have Edge/WebView2 installed).
+              nsis_setup="$(find "$bundle" -type f -name "*-setup.exe" 2>/dev/null | head -n1)"
+              if [ -n "$nsis_setup" ] && [ -f "$nsis_setup" ]; then
+                cp -v "$nsis_setup" "$dist_abs/PS5Upload-setup.exe"
+              else
+                echo "::warning::NSIS installer not found (WebView2 bootstrapper not bundled)"
+              fi
+              ;;
+          esac
+          # Ship the engine sidecar binary standalone too (it's also bundled
+          # inside the app). Lets users run/inspect the engine on its own and
+          # keeps a per-OS/arch engine artifact on every release.
+          eng_root="engine/target/${RUST_TARGET}/release"
+          if [ "$PLATFORM" = windows ]; then
+            cp -v "$eng_root/ps5upload-engine.exe" "$dist_abs/ps5upload-engine.exe"
+          else
+            cp -v "$eng_root/ps5upload-engine" "$dist_abs/ps5upload-engine"
+          fi
+          ls -la "$dist_abs"
+
+      - name: Upload platform bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: ps5upload-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Android APK. The engine is linked in-process (no sidecar), the real
+  # payload (from build-payload) is embedded, and we build a universal
+  # release APK for arm64 + armv7 then sign it (see android-sign.sh).
+  # Signing uses the ANDROID_KEYSTORE_* repo secrets when present (stable
+  # signature → seamless updates), else an ephemeral keystore so the
+  # artifact is still sideload-installable.
+  # ─────────────────────────────────────────────────────────────────────
+  build-android:
+    name: build-android
+    needs: build-payload
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    # The Android port is newer than the desktop builds, and the desktop
+    # bundles are the shipped product. If the Android pipeline flakes (NDK
+    # rotation, Gradle, signing), the release must still go out — create-
+    # release's asset step already guards the APK copy with `if [ -f … ]`,
+    # so a missing APK just means "no Android asset this release".
+    #
+    # We keep continue-on-error so a flaky Android build doesn't block the
+    # release, but we emit a prominent warning annotation so the failure
+    # is never silent.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Warn if Android build fails
+        if: failure()
+        run: |
+          echo "::warning::Android APK build failed — release will ship without an Android artifact. Check the build-android job logs."
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Sync version from VERSION
+        run: node scripts/update-version.js
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Gradle's dependency cache. The release APK build has the same
+      # exposure that failed CI on v5.4.5: Maven Central answered 403
+      # for kotlin-stdlib and Gradle could not configure the project.
+      # That run happened to succeed here; caching removes the luck.
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-android-gradle-${{ hashFiles('client/src-tauri/tauri.conf.json') }}
+          restore-keys: ${{ runner.os }}-android-gradle-
+
+      - name: Setup Rust + Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+
+      - name: Install client deps
+        working-directory: client
+        run: npm ci --no-audit --no-fund
+
+      - name: Restore real payload ELF
+        uses: actions/download-artifact@v8
+        with:
+          name: ps5upload-payload
+          path: payload
+
+      - name: Verify payload resource in place
+        shell: bash
+        run: |
+          test -s payload/ps5upload.elf.gz
+          test -s payload/dpi/ezremote-dpi.elf.gz
+          ls -la payload/ps5upload.elf.gz payload/dpi/ezremote-dpi.elf.gz
+
+      - name: Resolve NDK
+        shell: bash
+        run: |
+          PREFERRED_MAJOR="27"
+          ndk=""
+          for candidate in \
+            "$ANDROID_HOME/ndk/${PREFERRED_MAJOR}."* \
+            "$ANDROID_HOME/ndk/"*; do
+            if [ -d "$candidate" ]; then
+              ndk="$candidate"
+              break
+            fi
+          done
+          if [ -z "$ndk" ]; then
+            echo "::error::no NDK found under $ANDROID_HOME/ndk"
+            exit 1
+          fi
+          case "$(basename "$ndk")" in
+            "${PREFERRED_MAJOR}"*) ;;
+            *) echo "::warning::preferred NDK r${PREFERRED_MAJOR} not found, using $(basename "$ndk")" ;;
+          esac
+          echo "NDK_HOME=$ndk" >> "$GITHUB_ENV"
+          echo "Using NDK: $ndk"
+
+      - name: Scaffold Android project (gen/ is gitignored)
+        working-directory: client
+        run: npx tauri android init
+
+      # `android init` seeds placeholder launcher icons; re-apply ours so
+      # the released Android app icon matches the desktop app icon.
+      - name: Apply app icon
+        working-directory: client
+        run: npx tauri icon src-tauri/icons/sources/macos_squircle_1024.png
+
+      # Post-init manifest patches: (1) loopback-only cleartext so the
+      # renderer can reach the in-process engine in release builds
+      # (otherwise the engine shows "red"), and (2) backup rules so user
+      # settings survive a reinstall.
+      - name: Patch manifest (loopback cleartext + backup rules)
+        run: bash scripts/release/android-postinit-patch.sh
+
+      - name: Build release APK (arm64 + armv7)
+        working-directory: client
+        run: npx tauri android build --apk --target aarch64 --target armv7
+
+      - name: Sign APK
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: bash scripts/release/android-sign.sh
+
+      - name: Upload signed APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: ps5upload-android
+          path: PS5Upload-android.apk
+          if-no-files-found: error
+
+  create-release:
+    name: create-release
+    needs:
+      - build-payload
+      - build-client
+      - build-android
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Resolve tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          raw_tag="$INPUT_TAG"
+          if ! echo "$raw_tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+._A-Za-z0-9]*)?$'; then
+            echo "::error::Refusing to proceed: '$raw_tag' does not look like a version tag"
+            exit 1
+          fi
+          version="${raw_tag#v}"
+          echo "tag=$raw_tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag=$raw_tag version=$version"
+
+      - name: Sanity-check tag vs VERSION file
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          expected="$(tr -d '[:space:]' < VERSION)"
+          if [ "$expected" != "$TAG_VERSION" ]; then
+            echo "::warning::VERSION file says '$expected' but tag says '$TAG_VERSION'. Proceeding anyway, but update VERSION in a follow-up commit."
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Normalise release assets
+        id: assets
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          mkdir -p release
+          shopt -s nullglob
+          for f in artifacts/ps5upload-macos-*/*.dmg; do
+            arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-macos-//')"
+            cp -v "$f" "release/PS5Upload-${TAG_VERSION}-mac-${arch}.dmg"
+          done
+          for f in artifacts/ps5upload-windows-*/PS5Upload.zip; do
+            arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-windows-//')"
+            cp -v "$f" "release/PS5Upload-${TAG_VERSION}-win-${arch}.zip"
+          done
+          # NSIS installer (includes WebView2 bootstrapper for Win10 users).
+          for f in artifacts/ps5upload-windows-*/PS5Upload-setup.exe; do
+            arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-windows-//')"
+            cp -v "$f" "release/PS5Upload-${TAG_VERSION}-win-${arch}-setup.exe"
+          done
+          for f in artifacts/ps5upload-linux-*/PS5Upload.zip; do
+            arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-linux-//')"
+            cp -v "$f" "release/PS5Upload-${TAG_VERSION}-linux-${arch}.zip"
+          done
+          for f in artifacts/ps5upload-linux-*/PS5Upload.deb; do
+            arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-linux-//')"
+            cp -v "$f" "release/PS5Upload-${TAG_VERSION}-linux-${arch}.deb"
+          done
+          for f in artifacts/ps5upload-linux-*/PS5Upload.rpm; do
+            arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-linux-//')"
+            cp -v "$f" "release/PS5Upload-${TAG_VERSION}-linux-${arch}.rpm"
+          done
+          # Standalone engine binary per OS/arch (matches the desktop bundles).
+          for f in artifacts/ps5upload-*/ps5upload-engine artifacts/ps5upload-*/ps5upload-engine.exe; do
+            [ -f "$f" ] || continue
+            pa="$(basename "$(dirname "$f")")"; pa="${pa#ps5upload-}"  # e.g. macos-aarch64
+            ext=""; [ "${f##*.}" = exe ] && ext=".exe"
+            cp -v "$f" "release/ps5upload-engine-${TAG_VERSION}-${pa}${ext}"
+          done
+          if [ -f artifacts/ps5upload-payload/ps5upload.elf ]; then
+            cp -v artifacts/ps5upload-payload/ps5upload.elf \
+              "release/ps5upload-${TAG_VERSION}.elf"
+          fi
+          if [ -f artifacts/ps5upload-android/PS5Upload-android.apk ]; then
+            cp -v artifacts/ps5upload-android/PS5Upload-android.apk \
+              "release/PS5Upload-${TAG_VERSION}-android.apk"
+          fi
+          echo "---release/ contents---"
+          ls -la release
+          count="$(find release -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+      - name: Extract release notes from CHANGELOG
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          notes="release/RELEASE_NOTES.md"
+          awk -v ver="$TAG_VERSION" '
+            $0 == "## " ver { found=1; next }
+            found && $0 ~ "^## " { exit }
+            found && $0 ~ "^---$" { exit }
+            found { print }
+          ' CHANGELOG.md > "$notes"
+          if [ ! -s "$notes" ]; then
+            printf "Release %s.\n\nSee CHANGELOG.md for details.\n" "$TAG_VERSION" > "$notes"
+          fi
+          echo "---RELEASE_NOTES.md---"
+          cat "$notes"
+
+      - name: Generate latest.json updater manifest
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+          TAG_NAME: ${{ steps.tag.outputs.tag }}
+        run: |
+          python3 scripts/gen-updater-manifest.py \
+            --release-dir release \
+            --version "$TAG_VERSION" \
+            --tag "$TAG_NAME" \
+            --repo phantomptr/ps5upload \
+            --notes release/RELEASE_NOTES.md \
+            --out release/latest.json
+          echo "---latest.json---"
+          cat release/latest.json
+
+      - name: Move release notes out of assets dir
+        run: mv release/RELEASE_NOTES.md "$RUNNER_TEMP/RELEASE_NOTES.md"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          body_path: ${{ runner.temp }}/RELEASE_NOTES.md
+          draft: false
+          # Every release ships as a PRE-RELEASE and is promoted by hand on
+          # GitHub once it has been checked on real hardware. The old rule
+          # (prerelease only when the tag had a "-") meant a plain vX.Y.Z tag
+          # went straight to "Latest" the moment CI finished, with nobody
+          # having run it on a console.
+          prerelease: true
+          files: release/*

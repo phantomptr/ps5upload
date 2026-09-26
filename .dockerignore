@@ -1,0 +1,71 @@
+# Root-level .dockerignore. Applies to every image build — both
+# engine/Dockerfile (engine only) and engine/Dockerfile.webui (full-stack
+# web UI). Both use the repo root as their context, because the cargo
+# workspaces patch `unrar` to the vendored copy at third_party/unrar and a
+# narrower context would put that path outside it.
+#
+# (engine/.dockerignore is now dead for CI builds; it only applies if
+# someone runs `docker build engine/` by hand.)
+#
+# Keeping the context small speeds up the `COPY client/ .` and `COPY
+# engine/ .` steps (the build context is sent to the Docker daemon in
+# full on every build) and avoids leaking local artifacts, caches, and
+# development-only files into the image layer cache.
+
+# Build outputs (rebuilt inside the image)
+engine/target/
+client/dist/
+client/src-tauri/target/
+client/src-tauri/gen/
+# NOT excluded: payload/*.elf. The engine embeds these at build time
+# (engine/crates/ps5upload-engine/build.rs); excluding them here silently
+# produced images that could install base games but not updates (#295).
+payload/ps5upload.elf.gz
+
+# Node (installed fresh in the frontend stage)
+client/node_modules/
+
+# Version control + CI (not needed in the image)
+.git/
+.github/
+
+# Docs, tests, scripts (not needed at runtime)
+docs/
+*.md
+LICENSE*
+# ...but keep the vendored crate whole: its licences must travel with the
+# source we build from, and excluding them here would quietly drop the
+# attribution that MIT/Apache-2.0 requires.
+!third_party/**
+tests/
+coverage/
+client/coverage/
+
+# IDE + OS files
+.vscode/
+.idea/
+.DS_Store
+# Dev screenshots dropped at the repo root. They are gitignored, but a
+# local stray still lands in the build context and ships bytes nobody
+# asked for. Anchored, so real assets under client/ are untouched.
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.webp
+/*.mp4
+/*.mov
+!/logo.png
+
+*.swp
+*.swo
+
+# Docker files themselves
+Dockerfile*
+.dockerignore
+
+# Local env / config that should never leak into an image
+.env
+.env.*
+*.pem
+*.key

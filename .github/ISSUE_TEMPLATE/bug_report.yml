@@ -1,0 +1,55 @@
+name: Bug report
+description: Something isn't working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report!
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug. What did you expect? What actually happened?
+      placeholder: "When I ..."
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows (x64)
+        - Windows (ARM64)
+        - Linux (x64)
+        - Linux (ARM64)
+        - Android
+        - Browser / self-hosted web UI
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      placeholder: "e.g. 4.1.0 (see Help → About or the title bar)"
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: PS5 firmware
+      placeholder: "e.g. 9.60, 5.10"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste any error messages from the Logs tab or browser console. No need for the full log dump — just the error and a few lines of context.
+      render: shell
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: If the bug is reproducible, list the exact steps.
+      placeholder: "1. ...\n2. ...\n3. ..."

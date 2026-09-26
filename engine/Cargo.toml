@@ -1,0 +1,49 @@
+[workspace]
+members = [
+  "crates/ftx2-proto",
+  "crates/ps5upload-core",
+  "crates/ps5upload-lab",
+  "crates/ps5upload-engine",
+  "crates/ps5upload-pkg",
+  "crates/ps5upload-fpkg",
+  "crates/ps5upload-tests",
+  "crates/ps5upload-bench",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "GPL-3.0-or-later"
+version = "5.34.0"
+
+[workspace.dependencies]
+anyhow = "1.0"
+# "multipart" is for the backport library import (fakelibs_api.rs): users pick
+# library files and upload them as one set. Same crate, just the extractor.
+axum = { version = "0.8", features = ["multipart"] }
+blake3 = "1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "io-util"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+tower-http = { version = "0.7", features = ["cors"] }
+uuid = { version = "1", features = ["v4"] }
+
+# Speed up debug builds: thinner debug info on macOS, more parallelism.
+[profile.dev]
+split-debuginfo = "unpacked"
+
+# Same for the release engine binary — not a shipped bundle, so trade a
+# little size for faster link times.
+[profile.release]
+debug = false
+
+# Vendored `unrar` with a one-line bounds fix in the volume-change callback.
+# Upstream 0.5.8 reads ~8 KB out of a much smaller buffer on every volume
+# transition, which aborts debug builds on any multi-part .rar and is a
+# latent out-of-bounds read in release. 0.5.8 is the latest release, so
+# there is nothing upstream to take. See third_party/unrar/README.md and
+# docs/unrar-upstream-bug.md.
+[patch.crates-io]
+unrar = { path = "../third_party/unrar" }

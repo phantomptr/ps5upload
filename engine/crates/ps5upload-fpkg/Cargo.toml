@@ -1,0 +1,23 @@
+[package]
+name = "ps5upload-fpkg"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+# Cross-platform OS randomness for the outer PFS seed. Opening /dev/urandom
+# directly meant Windows silently fell back to the clock. Already in the tree.
+getrandom = "0.4"
+aes = "0.9"
+flate2 = "1"
+crc32fast = "1"
+hmac = "0.13"
+sha2 = "0.11"
+# Big-integer modular exponentiation for the debug license signature (pure Rust, every target).
+num-bigint = "0.4"
+ps5upload-pkg = { path = "../ps5upload-pkg" }
+serde_json.workspace = true
+libc = "0.2"
+serde = { workspace = true }
+sha3 = "0.12"
+thiserror.workspace = true

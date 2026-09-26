@@ -1,0 +1,27 @@
+# Vendored copy of the `unrar` crate (0.5.8) carrying ONE local fix.
+# See README.md in this directory for what was changed and why.
+#
+# Library only — the upstream examples, tests and .rar test data are not
+# vendored, so this stays a small patch to review rather than a fork to
+# maintain.
+[package]
+name = "unrar"
+version = "0.5.8"
+authors = [
+  "Danyel Bayraktar <rust@danyel.io>",
+  "vjoki <vjoki@zv.fi>",
+]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "list and extract RAR archives (vendored with a bounds fix; see README.md)"
+repository = "https://github.com/muja/unrar.rs"
+
+[lib]
+name = "unrar"
+path = "src/lib.rs"
+
+[dependencies]
+regex = "1"
+bitflags = "2"
+widestring = "1"
+unrar_sys = "0.5"

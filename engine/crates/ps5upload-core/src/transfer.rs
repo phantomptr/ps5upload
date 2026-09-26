@@ -1,0 +1,6256 @@
+//! Reusable blocking transfer logic (single-file and directory).
+//!
+//! One TCP connection is opened per transaction and reused across BEGIN_TX,
+//! every STREAM_SHARD, and COMMIT_TX. This removes per-frame connect overhead
+//! and keeps the TCP congestion window warm, which is the primary throughput
+//! constraint on a LAN.
+
+use crate::connection::Connection;
+use crate::{hash_shard, Manifest, ManifestFile};
+use anyhow::{bail, Context, Result};
+use ftx2_proto::{
+    FrameType, ShardAck, ShardHeader, TxMeta, PACKED_RECORD_PREFIX_LEN, SHARD_FLAG_PACKED,
+};
+pub use ftx2_proto::{TX_FLAG_APPLY_PROGRESS_REQUESTED, TX_FLAG_RESUME};
+use std::collections::VecDeque;
+use std::path::{Component, Path};
+use std::time::Duration;
+
+pub const DEFAULT_SHARD_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
+pub const DEFAULT_MAX_SHARD_RETRIES: u32 = 3;
+/// Default resume-on-drop retries for whole-transfer wrappers (folder,
+/// file-list, single-file). One fresh attempt + this many RESUME retries.
+///
+/// Sized to outlast the PAYLOAD's serial transfer-accept loop being briefly
+/// unable to `accept()` a reconnect while it's still draining the dropped
+/// connection (its `SO_RCVTIMEO` is 120s in the worst case of a true network
+/// partition; in the common case — engine closes the socket, or the payload
+/// finishes its current shard write — it frees in seconds). Folder + file-list
+/// uploads previously used only 2 here while single-file used 5, so a single
+/// transient blip killed a multi-hour folder upload that single-file shrugged
+/// off. Paired with the raised backoff cap in `resumable_retry`. A genuinely
+/// dead PS5 still fails fast: `ConnectionRefused` is non-retryable.
+pub const DEFAULT_RESUME_RETRIES: u32 = 6;
+/// Default maximum number of STREAM_SHARD frames outstanding (no ACK yet).
+/// Pipelining past 1 is what hides per-shard RTT on small-file directories.
+/// Set conservatively: 32 small shards (~128 KiB total at 4 KiB each) or a
+/// few large shards (64 MiB) never come close to kernel socket buffer size.
+pub const DEFAULT_INFLIGHT_SHARDS: usize = 32;
+/// Default byte cap on shards outstanding at once.
+///
+/// 256 MiB — four full 64 MiB shards in flight, enough headroom to keep
+/// a slow-disk PS5 (phat-class ~40 MiB/s sustained) continuously fed
+/// while the writer thread variance smooths out.
+///
+/// History:
+///   - 2026-04-17 audit: suggested 4–8 MiB on the theory that PS5's
+///     512 KiB recv-buffer cap made larger host-side caps bufferbloat.
+///     Measured: 8 MiB and 32 MiB caps regressed ~2-4% vs 64 MiB on
+///     the e1000 lab NIC (PS5 Pro). Audit was Pro-only.
+///   - 2026-05-28 phat report: same hardware ratio inverts on the phat.
+///     The slower internal SSD (~40 MiB/s sustained vs Pro ~85) means
+///     the PS5's writer thread occasionally stalls; a larger inflight
+///     reservoir keeps engine→payload feeding continuous instead of
+///     spiking-then-pausing at ACK-byte-cap. Combined with the
+///     32→64 MiB shard size bump (DEFAULT_SHARD_SIZE), 64 MiB cap
+///     would have allowed only 1 shard inflight — strictly worse.
+///
+/// Memory: only metadata is tracked in the engine's inflight queue
+/// (16 bytes per shard, not the shard payload). The actual buffering
+/// happens in the TCP socket buffer (8 MiB SNDBUF, see Connection)
+/// and in the next-shard-in-progress read buffer. Peak engine RAM is
+/// `shard_size + inflight_shards_in_flight` ≈ 64 MiB + 4 × 64 MiB
+/// shards already serialized into kernel buffers ≈ 320 MiB worst
+/// case. Acceptable on desktop; we don't ship mobile.
+///
+/// Tunable via `FTX2_INFLIGHT_BYTES` env var.
+pub const DEFAULT_INFLIGHT_BYTES: usize = 256 * 1024 * 1024;
+/// Default pack shard target size — the cap on total packed body bytes per
+/// STREAM_SHARD frame. 4 MiB trades payload-side pack-parse cost against
+/// shard-count reduction.
+pub const DEFAULT_PACK_SIZE: usize = 4 * 1024 * 1024;
+/// Default per-file cap for packing. Files at or above this size get their
+/// own non-packed shard, which on the payload side goes through the
+/// double-buffered writer thread (overlaps recv + disk write). Packing that
+/// regime would lose the overlap since the packed path is serialised per
+/// record. 128 KiB tracks the observed PS5 `pthread_create` crossover cost
+/// (~4–6 ms) vs small-file write time (~µs).
+pub const DEFAULT_PACK_FILE_MAX: usize = 128 * 1024;
+/// Default cap on how many files may share one packed shard.
+///
+/// `DEFAULT_PACK_SIZE` bounds a packed shard by BYTES only, which says
+/// nothing about how much work the payload must do before it can ACK.
+/// The payload creates, writes and fsyncs every record in a shard
+/// serially — hardware-measured at ~4.3 ms/file on FW 5.10 — so a tree
+/// of tiny files packs thousands of records into one 4 MiB shard and the
+/// ACK lands long after the engine's 30-second `POST_BEGIN_DEFAULT_TIMEOUT`.
+/// Verified on a live console: 5,000 × 64 B files produced `shards_sent: 1`
+/// and took 21.4 s; 10,000 files timed out with "Resource temporarily
+/// unavailable (os error 35)" after all bytes had already landed in 3 s.
+///
+/// 2,000 records ≈ 8.6 s of payload-side apply work — comfortably inside
+/// the 30 s ACK budget with room for a slower USB drive or a busy console,
+/// while still coalescing aggressively enough to keep shard counts sane.
+/// Pinned by `packed_shard_file_count_stays_inside_ack_budget`.
+pub const DEFAULT_PACK_FILE_COUNT_MAX: usize = 2000;
+
+// ─── Config ───────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct TransferConfig {
+    /// Where the source files are read from; `None` = this computer's disk.
+    pub source_fs: Option<std::sync::Arc<dyn crate::source_fs::SourceFs>>,
+    /// FTX2 server address (e.g. "192.168.137.2:9113")
+    pub addr: String,
+    /// Maximum bytes per shard
+    pub shard_size: usize,
+    /// Max retry attempts per shard on digest mismatch (non-pipelined path only).
+    pub max_shard_retries: u32,
+    /// Maximum number of shards sent without a matching ACK. Set to 1 to
+    /// force strict send-wait-send lockstep (matches pre-pipelining behaviour).
+    pub inflight_shards: usize,
+    /// Maximum total bytes of shard payload sent without a matching ACK.
+    /// Whichever of inflight_shards / inflight_bytes is reached first causes
+    /// the sender to block until the oldest outstanding shard is ACKed.
+    pub inflight_bytes: usize,
+    /// Target packed-shard body size in bytes. Multiple files are coalesced
+    /// into packed shards up to this cap. Set to 0 to disable packing entirely
+    /// (one file = one shard, pre-B2 behaviour).
+    pub pack_size: usize,
+    /// Per-file cap for packing. Files at or above this size get their own
+    /// non-packed shard so they benefit from the payload's double-buffered
+    /// writer thread (packed records are written serially). Only files with
+    /// `size < pack_file_max` are packing candidates.
+    pub pack_file_max: usize,
+    /// Cap on records per packed shard. Bounds the payload-side apply work
+    /// one shard can represent, so the ACK arrives inside the engine's
+    /// read timeout even when the byte budget is nowhere near full. See
+    /// `DEFAULT_PACK_FILE_COUNT_MAX`. 0 = no count limit (bytes only).
+    pub pack_file_count_max: usize,
+    /// Glob-ish patterns to exclude from `transfer_dir` walks. See
+    /// `crate::excludes` for the pattern grammar. Empty = include
+    /// everything; populated = skip matching files before they enter the
+    /// manifest. The common case is passing
+    /// `excludes::DEFAULT_EXCLUDES` to skip `.DS_Store`, `*.esbak`,
+    /// `.git/**`, `Thumbs.db`, `desktop.ini`.
+    pub excludes: Vec<String>,
+    /// Optional cumulative-bytes progress counter. When set, the transfer
+    /// loop `fetch_add`s each shard's wire size into this counter right
+    /// after it's queued. Consumers (the HTTP engine's transfer handlers)
+    /// poll the counter on a separate cadence to drive progress-bar
+    /// updates without adding a lock to the hot send loop. A `None` here
+    /// keeps the single-shot legacy behavior (no progress reporting).
+    pub progress_bytes: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    /// Optional per-file progress counter — `fetch_add(1)` once per file as
+    /// it's pulled into a pack frame (packed shards) or as its first chunk
+    /// is materialised (non-packed). Sized at one bump per *source file* so
+    /// a 5-shard non-packed file counts as 1 and an 8 MiB packed shard with
+    /// 200 records counts as 200. Lets the UI show a counter that climbs
+    /// continuously inside the read-many-small-files phase instead of
+    /// jumping per packed-shard ACK — the latter looked like
+    /// "start → finished" on 46 k-file game folders. `None` keeps legacy
+    /// callers' behaviour (no per-file tick).
+    pub progress_files: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    /// Optional COMMIT-phase progress counters — both bumped from the
+    /// engine's commit-wait loop as APPLY_PROGRESS frames arrive from
+    /// the payload (P3, v2.18.0). `files_finalized` reports how many
+    /// files the payload has fully written to the destination so far;
+    /// `bytes_finalized` the cumulative bytes of those files. The
+    /// engine ticker on the main side reads both and surfaces a live
+    /// "Finalized N of M files" counter in JobState::Running so the
+    /// UI shows motion through the otherwise-silent commit phase.
+    /// `None` keeps the legacy single-CommitTxAck behaviour (no
+    /// post-100% counters surface to the UI). Payload-side toggle is
+    /// independent: setting these counters here also adds
+    /// `TX_FLAG_APPLY_PROGRESS_REQUESTED` to multi-file BEGIN_TX
+    /// flags so the payload knows to emit. Old payloads ignore the
+    /// flag and the counters stay at zero — the UI degrades to the
+    /// silent-finalize behaviour from before P3 cleanly.
+    pub progress_files_finalized: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    pub progress_bytes_finalized: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    /// Optional outbound bandwidth cap, in bytes per second. `None` =
+    /// unlimited (current behaviour). When set, the transfer loop
+    /// sleeps after each shard's wire write to bring the running
+    /// average below this cap. Useful when uploading from a connection
+    /// that's also carrying video calls / game streaming and you want
+    /// to leave headroom.
+    ///
+    /// Implementation: token-bucket-style sleep — track wall time +
+    /// bytes written since the throttle started, sleep enough to
+    /// bring the average down to the cap. Coarse-grained (sleeps
+    /// happen between shards, not within a single shard's TCP write),
+    /// so the actual rate may briefly spike above the cap by one
+    /// shard's worth of bytes.
+    pub bandwidth_cap_bps: Option<u64>,
+    /// Optional cooperative cancel flag. When set and flipped to `true`, the
+    /// pipelined sender stops at the next shard boundary and returns a
+    /// `transfer_cancelled` error instead of finishing the transaction. Two
+    /// uses: (1) the multi-stream orchestrator flips it so sibling streams stop
+    /// promptly once any one stream fails; (2) a user-facing Cancel button.
+    /// `None` = never cancel (legacy behaviour).
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl TransferConfig {
+    pub fn new(addr: impl Into<String>) -> Self {
+        Self {
+            addr: addr.into(),
+            shard_size: DEFAULT_SHARD_SIZE,
+            max_shard_retries: DEFAULT_MAX_SHARD_RETRIES,
+            inflight_shards: DEFAULT_INFLIGHT_SHARDS,
+            inflight_bytes: DEFAULT_INFLIGHT_BYTES,
+            pack_size: DEFAULT_PACK_SIZE,
+            pack_file_max: DEFAULT_PACK_FILE_MAX,
+            pack_file_count_max: DEFAULT_PACK_FILE_COUNT_MAX,
+            excludes: Vec::new(),
+            progress_bytes: None,
+            progress_files: None,
+            progress_files_finalized: None,
+            progress_bytes_finalized: None,
+            bandwidth_cap_bps: None,
+            cancel: None,
+            source_fs: None,
+        }
+    }
+
+    /// The file system the source is read from.
+    pub fn fs(&self) -> &dyn crate::source_fs::SourceFs {
+        match &self.source_fs {
+            Some(fs) => fs.as_ref(),
+            None => &crate::source_fs::LocalFs,
+        }
+    }
+
+    /// Convenience: enable the built-in default exclude list (dotfile /
+    /// OS-junk / editor-backup filter). Mutates the config in place.
+    pub fn with_default_excludes(mut self) -> Self {
+        self.excludes = crate::excludes::DEFAULT_EXCLUDES
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        self
+    }
+}
+
+// ─── Result ───────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct TransferResult {
+    pub tx_id_hex: String,
+    pub shards_sent: u64,
+    pub bytes_sent: u64,
+    pub dest: String,
+    /// Raw JSON body of the final CommitTxAck. Callers that want detailed
+    /// payload-side timing breakdown (`timing_us.{recv,write,verify,apply}`)
+    /// can parse this as JSON.
+    pub commit_ack_body: String,
+}
+
+// ─── Internal helpers ─────────────────────────────────────────────────────────
+
+fn bytes_to_hex(b: &[u8; 16]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn ps5_relative_path(path: &Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(part) => Some(part.to_string_lossy().replace('\\', "/")),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn join_ps5_path(root: &str, rel: &Path) -> String {
+    let rel = ps5_relative_path(rel);
+    if rel.is_empty() {
+        root.trim_end_matches('/').to_string()
+    } else {
+        format!("{}/{}", root.trim_end_matches('/'), rel)
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn ps5_dest_paths_use_forward_slashes() {
+        assert_eq!(
+            join_ps5_path("/data/game", Path::new(r"sce_sys\param.json")),
+            "/data/game/sce_sys/param.json"
+        );
+        assert_eq!(
+            join_ps5_path("/data/game/", Path::new("sce_sys/icon0.png")),
+            "/data/game/sce_sys/icon0.png"
+        );
+    }
+}
+
+/// Hard cap on a single destination path in a multi-file manifest, mirroring
+/// the on-console payload. `build_manifest_index` in `payload/src/runtime.c`
+/// rejects any `files[].path` whose JSON-encoded span between the quotes is
+/// `>= 512` and copies paths into fixed `char[512]` buffers, so this is a
+/// protocol limit rather than a tunable — it stays a hard cap even on the
+/// brace-safe payload.
+const MAX_PS5_MANIFEST_PATH_LEN: usize = 512;
+
+/// Byte length of `s` as it appears *inside the quotes* of its JSON encoding —
+/// i.e. exactly the `plen` the payload measures. JSON escaping (`"`, `\`,
+/// control chars) only grows this beyond the raw UTF-8 length, so measuring the
+/// escaped form is what makes the guard agree with the payload for paths that
+/// contain escapable characters (not just plain ASCII paths).
+fn json_encoded_inner_len(s: &str) -> usize {
+    // `to_string` of a `&str` never fails; the result is `"…"`, so subtract the
+    // two surrounding quotes. Fall back to the raw length on the impossible
+    // error path rather than under-counting.
+    serde_json::to_string(s)
+        .map(|q| q.len().saturating_sub(2))
+        .unwrap_or_else(|_| s.len())
+}
+
+/// Pre-flight the manifest so an over-long destination path fails here with a
+/// clear, file-named error instead of as the opaque `manifest_invalid` the
+/// payload returns at BEGIN_TX. Only the length is checked: other "unusual
+/// name" cases (e.g. a `}` in a filename) are handled by the brace-safe
+/// payload parser, so we deliberately do NOT reject them here — doing so would
+/// block names the current payload accepts.
+fn ensure_manifest_paths_fit(files: &[ManifestFile]) -> Result<()> {
+    for f in files {
+        let encoded = json_encoded_inner_len(&f.path);
+        if encoded >= MAX_PS5_MANIFEST_PATH_LEN {
+            bail!(
+                "destination path is too long for the PS5 ({} bytes encoded, limit {}): {}",
+                encoded,
+                MAX_PS5_MANIFEST_PATH_LEN - 1,
+                f.path
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod manifest_path_guard_tests {
+    use super::*;
+
+    fn mf(path: &str) -> ManifestFile {
+        ManifestFile {
+            path: path.to_string(),
+            size: 0,
+            shard_start: 1,
+            shard_count: 1,
+        }
+    }
+
+    #[test]
+    fn accepts_normal_and_brace_paths() {
+        // A '}' in the name is fine — the payload parser handles it; the
+        // guard must not reject it.
+        let ok = [mf("/data/game/eboot.bin"), mf("/data/My}Game/x.bin")];
+        assert!(ensure_manifest_paths_fit(&ok).is_ok());
+    }
+
+    #[test]
+    fn rejects_overlong_path_naming_the_file() {
+        let long = format!("/data/{}", "a".repeat(MAX_PS5_MANIFEST_PATH_LEN));
+        let files = [mf("/data/ok.bin"), mf(&long)];
+        let err = ensure_manifest_paths_fit(&files).unwrap_err().to_string();
+        assert!(err.contains("too long"), "got: {err}");
+        assert!(err.contains(&long), "error should name the offending path");
+    }
+
+    #[test]
+    fn boundary_511_ok_512_rejected() {
+        // 511 bytes total -> accepted; 512 -> rejected (matches payload `>= 512`).
+        let p511 = "/".to_string() + &"a".repeat(510);
+        assert_eq!(p511.len(), 511);
+        assert!(ensure_manifest_paths_fit(&[mf(&p511)]).is_ok());
+        let p512 = "/".to_string() + &"a".repeat(511);
+        assert_eq!(p512.len(), 512);
+        assert!(ensure_manifest_paths_fit(&[mf(&p512)]).is_err());
+    }
+
+    #[test]
+    fn measures_json_escaped_length_not_raw() {
+        // A path whose raw length is < 512 but whose JSON-escaped span is
+        // >= 512 must be rejected — that's what the payload actually measures.
+        // Backslash escapes to two bytes (\\), so 300 backslashes = 600 encoded.
+        let escapey = "/".to_string() + &"\\".repeat(300);
+        assert!(escapey.len() < MAX_PS5_MANIFEST_PATH_LEN);
+        assert!(json_encoded_inner_len(&escapey) >= MAX_PS5_MANIFEST_PATH_LEN);
+        assert!(ensure_manifest_paths_fit(&[mf(&escapey)]).is_err());
+    }
+}
+
+fn tx_meta_buf(tx_id: [u8; 16], kind: u32, extra: &[u8]) -> Vec<u8> {
+    tx_meta_buf_flags(tx_id, kind, 0, extra)
+}
+
+/// Variant that lets the caller pass explicit BeginTx flags. The reconnect
+/// wrapper uses this with `ftx2_proto::TX_FLAG_RESUME` to signal "this is
+/// a resume, the tx_id already exists in your journal." All other call
+/// sites go through `tx_meta_buf` with flags=0.
+pub(crate) fn tx_meta_buf_flags(tx_id: [u8; 16], kind: u32, flags: u32, extra: &[u8]) -> Vec<u8> {
+    let mut buf = TxMeta { tx_id, kind, flags }.encode().to_vec();
+    buf.extend_from_slice(extra);
+    buf
+}
+
+/// True when this error is (or wraps) the `transfer_cancelled` sentinel a
+/// stream raises when the shared cancel flag is set — i.e. it's a CONSEQUENCE
+/// of some other stream's failure, not a root cause. Used by the multistream
+/// aggregator to prefer a real error over a sibling's induced cancellation.
+fn is_cancel_err(err: &anyhow::Error) -> bool {
+    err.chain().any(|c| c.to_string() == "transfer_cancelled")
+}
+
+/// Returns true when an error from a transfer is network-drop-ish and
+/// worth retrying via resume. Intentionally conservative: we only retry
+/// on errors whose root cause is "the TCP stream broke mid-transfer,"
+/// not on protocol errors like `direct_tx_corrupt` (the payload has
+/// already aborted the tx — a retry can't help).
+pub fn is_retryable_transfer_error(err: &anyhow::Error) -> bool {
+    // A cancelled transfer is never retried. The user asked for it to stop —
+    // resuming would put bytes back on the wire after the UI said "cancelled",
+    // which is the exact symptom reported in 5.4.7. Today's cancel sentinel
+    // carries no io::Error so it would fall through to `false` anyway; this
+    // makes the guarantee explicit rather than incidental, so a future cancel
+    // path that wraps an io::Error (a killed socket, say) can't reintroduce it.
+    if is_cancel_err(err) {
+        return false;
+    }
+    // Walk the chain looking for std::io::Error with a retryable kind.
+    // Covers: mid-transfer TCP resets (ConnectionReset/ConnectionAborted/
+    // BrokenPipe), server-side hang on shutdown (UnexpectedEof), wifi
+    // drop on write (TimedOut), EINTR during signal delivery on macOS
+    // (Interrupted), and the half-open state seen after a macOS
+    // sleep/wake cycle (NotConnected).
+    for cause in err.chain() {
+        if let Some(ioerr) = cause.downcast_ref::<std::io::Error>() {
+            if matches!(
+                ioerr.kind(),
+                std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::TimedOut
+                    | std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::Interrupted
+                    | std::io::ErrorKind::NotConnected
+            ) {
+                return true;
+            }
+            // Backstop for transient *local* network-stack resource
+            // exhaustion (Windows WSAENOBUFS 10055 under multi-stream
+            // churn). `Connection::connect` already retries these inline
+            // with a short backoff; if the host is so starved that even
+            // those retries are exhausted, let `resumable_retry`'s longer
+            // (up to 16 s) backoff give the stack more time to recover
+            // rather than aborting the whole upload. These map to
+            // `ErrorKind::Other`, so they must be matched by OS code, not
+            // kind.
+            //
+            // `if` rather than `return`: this used to return on the FIRST
+            // io::Error in the chain, so a wrapper io::Error with a
+            // non-retryable kind hid a retryable one underneath it and the
+            // upload aborted instead of resuming. The loop is meant to walk
+            // the whole chain.
+            if crate::connection::is_transient_local_resource_error(ioerr) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Send a control frame on an existing connection and expect a specific ACK back.
+fn send_and_expect(
+    c: &mut Connection,
+    ft_send: FrameType,
+    body: &[u8],
+    ft_expect: FrameType,
+) -> Result<Vec<u8>> {
+    c.send_frame(ft_send, body)?;
+    let (hdr, resp) = c.recv_frame()?;
+    let ft = hdr.frame_type().unwrap_or(FrameType::Error);
+    if ft != ft_expect {
+        bail!(
+            "{ft_send:?} rejected ({ft:?}): {}",
+            String::from_utf8_lossy(&resp)
+        );
+    }
+    Ok(resp)
+}
+
+/// Read-timeout cap for the per-commit ACK wait on multi-file uploads.
+///
+/// The payload's COMMIT_TX handler walks the manifest synchronously —
+/// for the spool-then-apply path it opens / streams / closes / fsync's
+/// each file in the manifest before sending CommitTxAck. A game folder
+/// with ~85k small files routinely takes 10–15 minutes on a healthy
+/// USB drive (PS5 filesystems are bottlenecked on per-inode fsync;
+/// user-reported case 2026-05-27 — Ghost of Yotei, 85,216 files, all
+/// bytes on wire, ACK never made it back before the engine's retry
+/// budget exhausted on what was actually a still-working payload).
+///
+/// At the default 30-second SO_RCVTIMEO the engine timed out long
+/// before the payload finished, then `resumable_retry` would loop
+/// through 7 attempts and finally surface "upload failed" while the
+/// PS5 was still mid-apply. Bumping the per-commit-ACK timeout here
+/// to 30 minutes outlasts realistic worst-case commit times on large
+/// folders, while still surfacing a truly dead PS5 within ~30 min
+/// (vs forever). A genuinely crashed PS5 still surfaces immediately
+/// via TCP RST regardless of this timeout.
+///
+/// A future refinement would have the payload emit progress heartbeats
+/// during the apply loop so the engine's idle-clock could be much
+/// tighter — until then, this is the conservative client-side fix.
+const COMMIT_TX_ACK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// Read-timeout cap for the BeginTxAck wait.
+///
+/// The BeginTx body carries the full manifest JSON — for a multi-file
+/// transfer of an 84,216-file game folder (the user-reported Ghost of
+/// Yotei case) the manifest is ~17 MB. The payload has to receive
+/// that body, parse it, allocate tx state, write the manifest to its
+/// spool dir, and ack. On hardware-verified PS5s with healthy USB
+/// drives that round-trip ran past the default 30-second SO_RCVTIMEO
+/// during the v2.17.7 verification pass: the upload errored with
+/// "Resource temporarily unavailable" before a single shard could
+/// land. 5 minutes is the conservative cap — enough for legitimate
+/// 100k+ file manifests, short enough that a truly stuck PS5 still
+/// surfaces inside a coffee break. The connection's default 30-second
+/// timeout is restored *after* BeginTxAck so shard-level reads keep
+/// the fast-detection behaviour they had before (per-shard ACKs are
+/// tiny and should return within ms; a 30-second stall on a shard
+/// ACK is a real network problem and we want to surface it quickly).
+const BEGIN_TX_ACK_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+/// Match the constant baked into `connection::Connection::connect` —
+/// we restore reads to this after the BeginTxAck wait. Keeping the
+/// number here in sync with connection.rs is a manual rule; pinned
+/// by `commit_ack_timeout_outlasts_realistic_apply_phase`-style
+/// tests so a future drift surfaces in CI rather than as a silent
+/// behaviour change at runtime.
+const POST_BEGIN_DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Variant of `send_and_expect` for the BEGIN_TX → BeginTxAck round-
+/// trip. Raises the connection's read timeout to
+/// `BEGIN_TX_ACK_TIMEOUT` before sending so the engine doesn't give
+/// up on a payload that's legitimately busy parsing a 17 MB manifest
+/// (84k-file folder upload from the v2.17.7 verification run).
+/// Restores the default 30-second read timeout before returning so
+/// subsequent shard-ACK reads keep the fast-detection behaviour they
+/// had under the prior code.
+fn send_begin_and_expect_ack(c: &mut Connection, body: &[u8]) -> Result<Vec<u8>> {
+    c.set_io_timeout(BEGIN_TX_ACK_TIMEOUT)
+        .context("raise read timeout for BeginTxAck wait")?;
+    let result = send_and_expect(c, FrameType::BeginTx, body, FrameType::BeginTxAck);
+    // Restore the short timeout for shard ACKs regardless of whether
+    // the BeginTxAck succeeded — even on error, the next attempt
+    // (resumable_retry) wants the default in effect. set_io_timeout
+    // is best-effort here; if it itself fails the worst case is a
+    // shard-ack wait of up to 5 min instead of 30 s, which is no
+    // worse than not having this fix at all.
+    let _ = c.set_io_timeout(POST_BEGIN_DEFAULT_TIMEOUT);
+    result
+}
+
+/// Variant of `send_and_expect` for the COMMIT_TX → CommitTxAck round-
+/// trip. Raises the connection's read timeout to `COMMIT_TX_ACK_TIMEOUT`
+/// before sending so the engine doesn't give up on a payload that's
+/// legitimately busy applying tens of thousands of files.
+///
+/// Used by every transfer path that commits — multi-file paths bear
+/// the worst case (the 85k-file user report that motivated this fix),
+/// but a single-file 100 GiB image commit can also take minutes of
+/// fsync time on a slow USB drive, so the longer timeout is applied
+/// uniformly. A truly dead PS5 (panicked, rebooted, unplugged) still
+/// surfaces immediately via TCP RST/FIN regardless of this timeout —
+/// the read timeout only fires when the PS5 is alive but silent.
+///
+/// The connection is dropped by every caller right after this returns
+/// (no transfer path reuses the connection post-commit), so we don't
+/// bother restoring the prior timeout.
+/// Parsed body of an APPLY_PROGRESS frame (P3, v2.18.0).
+///
+/// Emitted one-way by the payload during the multi-file COMMIT_TX
+/// apply loop when the client opted in via
+/// `TX_FLAG_APPLY_PROGRESS_REQUESTED`. The engine consumes these
+/// inside the commit-wait loop and forwards into the progress
+/// counters on `TransferConfig`, which the main-process ticker
+/// surfaces on `JobState::Running` so the UI can render a live
+/// counter through the otherwise-silent commit phase.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct ApplyProgress {
+    files_applied: u64,
+    #[allow(dead_code)] // surfaced via the cfg sink, not used in this helper
+    total_files: u64,
+    bytes_applied: u64,
+}
+
+/// Send `COMMIT_TX` and wait for `CommitTxAck`, interleaving any
+/// `ApplyProgress` frames the payload emits along the way (P3,
+/// v2.18.0).
+///
+/// Each `ApplyProgress` frame is parsed and the counters fed into
+/// `cfg.progress_files_finalized` and `cfg.progress_bytes_finalized`
+/// (if present). The loop only exits on:
+///   - `CommitTxAck`: success, return the ack body
+///   - `Error`: bail with the payload's error body
+///   - any other frame type: bail (unexpected protocol drift)
+///
+/// Read timeout starts at `COMMIT_TX_ACK_TIMEOUT` (30 min, set by
+/// the existing helper) — once the first ApplyProgress arrives we
+/// tighten to `Duration::from_secs(120)` because progress frames
+/// emit at ~1 sec cadence per the payload's throttle, so 2 min of
+/// silence after we've seen one frame is a real stall worth
+/// surfacing fast (vs the 30 min fallback for payloads that never
+/// emit progress at all).
+fn send_commit_and_expect_ack(
+    c: &mut Connection,
+    body: &[u8],
+    cfg: &TransferConfig,
+) -> Result<Vec<u8>> {
+    c.set_io_timeout(COMMIT_TX_ACK_TIMEOUT)
+        .context("raise read timeout for CommitTxAck wait")?;
+    c.send_frame(FrameType::CommitTx, body)?;
+    let mut tightened = false;
+    loop {
+        let (hdr, resp) = c.recv_frame()?;
+        let ft = hdr.frame_type().unwrap_or(FrameType::Error);
+        match ft {
+            FrameType::ApplyProgress => {
+                if let Ok(p) = serde_json::from_slice::<ApplyProgress>(&resp) {
+                    if let Some(sink) = &cfg.progress_files_finalized {
+                        sink.store(p.files_applied, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    if let Some(sink) = &cfg.progress_bytes_finalized {
+                        sink.store(p.bytes_applied, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                // First progress frame seen — tighten the inter-frame
+                // timeout. Subsequent frames are expected at ~1 sec
+                // cadence by the payload throttle; 2 min of silence
+                // means the apply loop genuinely stalled.
+                if !tightened {
+                    let _ = c.set_io_timeout(Duration::from_secs(120));
+                    tightened = true;
+                }
+            }
+            FrameType::CommitTxAck => return Ok(resp),
+            FrameType::Error => {
+                bail!(
+                    "CommitTx rejected (Error): {}",
+                    String::from_utf8_lossy(&resp)
+                );
+            }
+            other => {
+                bail!("unexpected frame during commit wait: {other:?}");
+            }
+        }
+    }
+}
+
+/// Parse `last_acked_shard` out of a BeginTxAck body. Returns 0 for both
+/// "fresh transfer, field absent" (old payload) and "resume but field
+/// missing" (payload doesn't yet support TX_FLAG_RESUME) — safe
+/// degradation since direct-write and spool-then-apply are both
+/// idempotent on shard_seq.
+///
+/// When `is_resume` is true, also logs a warning if the field is missing
+/// or the body isn't JSON — the caller set TX_FLAG_RESUME expecting the
+/// new protocol, and a missing field is a compatibility signal worth
+/// surfacing to the investigation log so the user learns their client
+/// upgrade is ahead of their payload.
+///
+/// When non-zero, the client MUST skip streaming shards with
+/// `shard_seq <= last_acked_shard` — the payload has already journalled
+/// them from a prior (interrupted) connection. The wire-level resume
+/// flow lives in the FrameType doc comments (`BeginTxAck` body bits).
+fn parse_last_acked_shard(body: &[u8], is_resume: bool) -> u64 {
+    match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(v) => match v.get("last_acked_shard").and_then(|s| s.as_u64()) {
+            Some(n) => n,
+            None => {
+                if is_resume {
+                    eprintln!(
+                        "[resume] BeginTxAck lacks last_acked_shard field \
+                         (payload predates 2.1 protocol); resending from shard 1 — \
+                         correct but slower than true resume"
+                    );
+                }
+                0
+            }
+        },
+        Err(e) => {
+            if is_resume {
+                eprintln!(
+                    "[resume] BeginTxAck body not parseable as JSON ({e}); \
+                     falling back to full resend. Body: {}",
+                    String::from_utf8_lossy(body)
+                );
+            }
+            0
+        }
+    }
+}
+
+/// Reject a payload-reported resume cursor that's past the end of the
+/// current plan. A `last_acked_shard > total_shards` makes every
+/// `seq <= last_acked_shard` skip fire, so the send loop transmits ZERO
+/// shards and the caller proceeds straight to CommitTx — a "ghost
+/// commit" that finalizes a transfer this attempt never sent. This
+/// happens when a reused `tx_id` still references the payload's journal
+/// from a different/larger prior upload. ALL transfer paths (single
+/// file, dir, file-list, zip) share the same resume contract, so they
+/// must share this guard — keeping it in one place stops the multi-file
+/// paths from drifting out of sync with the single-file ones (they did:
+/// the guard was originally only on the single-file paths).
+fn guard_last_acked(last_acked_shard: u64, total_shards: u64) -> Result<()> {
+    if total_shards > 0 && last_acked_shard > total_shards {
+        bail!(
+            "payload reported last_acked_shard={last_acked_shard} > total_shards={total_shards}; \
+             refusing to commit a transfer that hasn't been transmitted"
+        );
+    }
+    Ok(())
+}
+
+/// Send one shard on an existing connection, retrying on `shard_digest_mismatch`.
+fn send_shard_on(
+    c: &mut Connection,
+    tx_id: [u8; 16],
+    shard_seq: u64,
+    total_shards: u64,
+    data: &[u8],
+    max_retries: u32,
+) -> Result<ShardAck> {
+    let digest = hash_shard(data);
+    let hdr_bytes = ShardHeader {
+        tx_id,
+        shard_seq,
+        shard_digest: digest,
+        record_count: 1,
+        flags: 0,
+    }
+    .encode();
+
+    let max = max_retries.max(1);
+    for attempt in 1..=max {
+        c.send_frame_split(FrameType::StreamShard, &hdr_bytes, data)?;
+        let (resp_hdr, resp_body) = c.recv_frame()?;
+        let ft = resp_hdr.frame_type().unwrap_or(FrameType::Error);
+        match ft {
+            FrameType::ShardAck => {
+                return ShardAck::decode(&resp_body).context("decode SHARD_ACK");
+            }
+            FrameType::Error => {
+                let msg = String::from_utf8_lossy(&resp_body);
+                if msg.contains("shard_digest_mismatch") && attempt < max {
+                    eprintln!(
+                        "shard {shard_seq}/{total_shards}: digest mismatch, retry {attempt}/{max}"
+                    );
+                    continue;
+                }
+                bail!("shard {shard_seq} error after {attempt} attempt(s): {msg}");
+            }
+            other => bail!("shard {shard_seq}: expected SHARD_ACK, got {other:?}"),
+        }
+    }
+    bail!("shard {shard_seq}: exhausted {max} retries");
+}
+
+// ─── Pipelined shard sender ───────────────────────────────────────────────────
+
+/// A bounded-window pipelined sender over an existing `Connection`.
+///
+/// Sending `N` shards with `send()` queues up to `max_inflight_shards` / bytes
+/// on the wire without waiting for their SHARD_ACKs. When the window fills,
+/// `send()` blocks on the oldest outstanding ACK before issuing the next
+/// STREAM_SHARD. Call `drain()` before COMMIT_TX to flush all outstanding ACKs
+/// — the payload must see every shard ACKed before CommitTx so its internal
+/// `shards_received` count is consistent.
+///
+/// **Ordering.** The payload processes frames serially per connection
+/// (single-threaded inner loop). ACKs therefore arrive in send order, and we
+/// validate that — if the observed `shard_seq` doesn't match the expected
+/// head of the queue, the sender returns an error rather than guessing.
+///
+/// **Error handling.** No per-shard retry. If any shard reports
+/// `shard_digest_mismatch` or any other error frame, the whole transaction
+/// fails: we've already sent shards beyond the failing one, and for direct
+/// write mode those are not individually undoable. Callers who need retry
+/// must use the legacy non-pipelined path (`send_shard_on`) and accept its
+/// lockstep performance.
+struct PipelinedSender<'a> {
+    c: &'a mut Connection,
+    /// (shard_seq, payload_bytes) for each shard awaiting an ACK, in send order.
+    inflight: VecDeque<(u64, usize)>,
+    inflight_bytes: usize,
+    max_inflight_shards: usize,
+    max_inflight_bytes: usize,
+    tx_id: [u8; 16],
+    total_shards: u64,
+    /// Bandwidth throttle state. `None` = unlimited (no sleeps).
+    /// `Some(BandwidthThrottle)` = sleep between shards to enforce
+    /// the configured bytes-per-second ceiling.
+    throttle: Option<BandwidthThrottle>,
+    /// Cooperative cancel flag (see `TransferConfig::cancel`). Checked at each
+    /// shard boundary; when `true` the sender aborts with `transfer_cancelled`.
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+/// Token-bucket throttle. `allowance` (in bytes) refills continuously at
+/// `cap_bps`, capped at a one-second burst; each send spends `n` tokens and
+/// sleeps off any deficit.
+///
+/// Why a bucket and not a cumulative bytes/elapsed average: the old version
+/// compared total `bytes_sent` against `cap_bps * elapsed_since_start`. Once
+/// real elapsed time ran ahead of the byte target — which any stall (slow
+/// ACK, network hiccup, a long drain) guarantees — it concluded "behind
+/// pace" forever and stopped sleeping, silently abandoning the cap for the
+/// rest of the transfer. That's the opposite of what the cap is for (leave
+/// headroom when the link is contended). The bucket can't bank more than one
+/// second of unspent credit, so a stall grants at most a one-second burst
+/// and pacing resumes immediately after.
+struct BandwidthThrottle {
+    cap_bps: f64,
+    /// Available send budget in bytes. May go negative between the spend and
+    /// the compensating sleep; carried forward so oversized shards still get
+    /// fully paced across calls.
+    allowance: f64,
+    last_refill: std::time::Instant,
+}
+
+impl BandwidthThrottle {
+    fn new(cap_bps: u64) -> Self {
+        let cap = cap_bps.max(1) as f64;
+        Self {
+            cap_bps: cap,
+            allowance: cap, // start with one second of burst headroom
+            last_refill: std::time::Instant::now(),
+        }
+    }
+
+    /// Pure pacing math: refill against `now`, spend `n`, and return how long
+    /// the caller must sleep. Split out from the wall-clock sleep so it's
+    /// unit-testable with synthetic timestamps.
+    fn charge(&mut self, n: usize, now: std::time::Instant) -> std::time::Duration {
+        let dt = now
+            .saturating_duration_since(self.last_refill)
+            .as_secs_f64();
+        self.last_refill = now;
+        // Refill, capped at one second of burst — this clamp is the fix: a
+        // long idle stretch can't accumulate unbounded credit.
+        self.allowance = (self.allowance + dt * self.cap_bps).min(self.cap_bps);
+        self.allowance -= n as f64;
+        if self.allowance < 0.0 {
+            // Sleep off the deficit, clamped to 1s so one huge shard against
+            // a low cap is paced over several short sleeps. Credit the time
+            // we'll sleep so the deficit isn't also charged on the next call.
+            let deficit_secs = (-self.allowance / self.cap_bps).min(1.0);
+            self.allowance += deficit_secs * self.cap_bps;
+            std::time::Duration::from_secs_f64(deficit_secs)
+        } else {
+            std::time::Duration::ZERO
+        }
+    }
+
+    /// Record `n` bytes just sent and sleep if we're ahead of pace.
+    /// Called after each successful shard send.
+    fn account_and_pace(&mut self, n: usize) {
+        let sleep_for = self.charge(n, std::time::Instant::now());
+        if !sleep_for.is_zero() {
+            std::thread::sleep(sleep_for);
+        }
+    }
+}
+
+impl<'a> PipelinedSender<'a> {
+    fn new(
+        c: &'a mut Connection,
+        cfg: &TransferConfig,
+        tx_id: [u8; 16],
+        total_shards: u64,
+    ) -> Self {
+        let max_inflight_shards = cfg.inflight_shards.max(1);
+        let max_inflight_bytes = cfg.inflight_bytes.max(1);
+        let throttle = cfg.bandwidth_cap_bps.map(BandwidthThrottle::new);
+        Self {
+            c,
+            inflight: VecDeque::with_capacity(max_inflight_shards),
+            inflight_bytes: 0,
+            max_inflight_shards,
+            max_inflight_bytes,
+            tx_id,
+            total_shards,
+            throttle,
+            cancel: cfg.cancel.clone(),
+        }
+    }
+
+    /// True once the caller has requested cancellation via `cfg.cancel`.
+    fn cancelled(&self) -> bool {
+        self.cancel
+            .as_ref()
+            .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// Send a single shard. Blocks on prior ACKs only as needed to stay under
+    /// the configured window. First shard always sends regardless of byte cap
+    /// (otherwise shard_size > cap would deadlock).
+    fn send(&mut self, shard_seq: u64, data: &[u8]) -> Result<()> {
+        self.send_with(shard_seq, data, 1, 0)
+    }
+
+    /// Send a shard with explicit flags / record_count. Used by the pack-shard
+    /// path to set `SHARD_FLAG_PACKED` and the multi-record count. BLAKE3 digest
+    /// is computed over `data` (the full shard body exactly as sent).
+    fn send_with(
+        &mut self,
+        shard_seq: u64,
+        data: &[u8],
+        record_count: u32,
+        flags: u32,
+    ) -> Result<()> {
+        let digest = hash_shard(data);
+        self.send_prehashed_with(shard_seq, data, digest, record_count, flags)
+    }
+
+    /// Send a shard whose BLAKE3 digest was computed by the caller (e.g. a
+    /// read-ahead producer thread that hashes off the send path so hashing
+    /// overlaps the network write instead of serializing before it). `digest`
+    /// MUST be `hash_shard(data)` — the payload re-hashes and rejects a
+    /// mismatch, so a wrong digest fails the shard rather than corrupting data.
+    fn send_prehashed_with(
+        &mut self,
+        shard_seq: u64,
+        data: &[u8],
+        digest: [u8; 32],
+        record_count: u32,
+        flags: u32,
+    ) -> Result<()> {
+        self.send_prehashed_with_progress(shard_seq, data, digest, record_count, flags, None)
+    }
+
+    /// Core shard send. When `progress` is `Some`, the shard BODY is reported
+    /// into the counter in ~1 MiB increments as the kernel accepts it (smooth
+    /// speed/ETA on slow links) — see `Connection::send_frame_split_progress`.
+    /// Callers pass `Some` ONLY for non-packed shards (body bytes == file-data
+    /// bytes) and then skip their own per-shard `fetch_add`; packed/zip shards
+    /// pass `None` and keep their `planned_shard_data_len` accounting.
+    fn send_prehashed_with_progress(
+        &mut self,
+        shard_seq: u64,
+        data: &[u8],
+        digest: [u8; 32],
+        record_count: u32,
+        flags: u32,
+        progress: Option<&std::sync::atomic::AtomicU64>,
+    ) -> Result<()> {
+        // Abort at the shard boundary if cancellation was requested. Bailing
+        // before sending the next shard leaves the transaction un-committed; the
+        // payload marks it interrupted on disconnect, so a later resume can pick
+        // it up (or the orchestrator surfaces the cancel to the user).
+        if self.cancelled() {
+            bail!("transfer_cancelled");
+        }
+        while !self.inflight.is_empty()
+            && (self.inflight.len() >= self.max_inflight_shards
+                || self.inflight_bytes + data.len() > self.max_inflight_bytes)
+        {
+            self.await_one_ack()?;
+        }
+        let hdr_bytes = ShardHeader {
+            tx_id: self.tx_id,
+            shard_seq,
+            shard_digest: digest,
+            record_count,
+            flags,
+        }
+        .encode();
+        match progress {
+            Some(p) => {
+                self.c
+                    .send_frame_split_progress(FrameType::StreamShard, &hdr_bytes, data, p)?
+            }
+            None => self
+                .c
+                .send_frame_split(FrameType::StreamShard, &hdr_bytes, data)?,
+        }
+        self.inflight.push_back((shard_seq, data.len()));
+        self.inflight_bytes += data.len();
+        // Pace AFTER the frame is on the wire — gives a tighter bound
+        // than sleeping before the send (where outstanding inflight
+        // bytes from earlier shards would skew the math).
+        if let Some(t) = self.throttle.as_mut() {
+            t.account_and_pace(data.len());
+        }
+        Ok(())
+    }
+
+    /// Send a non-packed shard, reporting body bytes into `progress` as they go
+    /// on the wire. The caller must NOT also `fetch_add` for this shard.
+    fn send_with_progress(
+        &mut self,
+        shard_seq: u64,
+        data: &[u8],
+        record_count: u32,
+        flags: u32,
+        progress: &std::sync::atomic::AtomicU64,
+    ) -> Result<()> {
+        let digest = hash_shard(data);
+        self.send_prehashed_with_progress(
+            shard_seq,
+            data,
+            digest,
+            record_count,
+            flags,
+            Some(progress),
+        )
+    }
+
+    /// Pre-hashed single-shard send (record_count=1, flags=0).
+    fn send_prehashed(&mut self, shard_seq: u64, data: &[u8], digest: [u8; 32]) -> Result<()> {
+        self.send_prehashed_with(shard_seq, data, digest, 1, 0)
+    }
+
+    /// Pre-hashed single-shard send with fine-grained body progress (non-packed
+    /// single-file path). Caller must NOT also `fetch_add` for this shard.
+    fn send_prehashed_progress(
+        &mut self,
+        shard_seq: u64,
+        data: &[u8],
+        digest: [u8; 32],
+        progress: &std::sync::atomic::AtomicU64,
+    ) -> Result<()> {
+        self.send_prehashed_with_progress(shard_seq, data, digest, 1, 0, Some(progress))
+    }
+
+    /// Receive and validate the ACK at the head of the queue.
+    fn await_one_ack(&mut self) -> Result<ShardAck> {
+        let (expected, bytes) = self
+            .inflight
+            .pop_front()
+            .context("await_one_ack with empty queue")?;
+        let (hdr, body) = self.c.recv_frame()?;
+        self.inflight_bytes = self.inflight_bytes.saturating_sub(bytes);
+        let ft = hdr.frame_type().unwrap_or(FrameType::Error);
+        match ft {
+            FrameType::ShardAck => {
+                let ack = ShardAck::decode(&body).context("decode SHARD_ACK")?;
+                if ack.shard_seq != expected {
+                    bail!(
+                        "SHARD_ACK out of order: expected shard {}/{}, got {}",
+                        expected,
+                        self.total_shards,
+                        ack.shard_seq
+                    );
+                }
+                Ok(ack)
+            }
+            FrameType::Error => bail!(
+                "shard {}/{} error: {}",
+                expected,
+                self.total_shards,
+                String::from_utf8_lossy(&body)
+            ),
+            other => bail!(
+                "shard {}/{}: expected SHARD_ACK, got {:?}",
+                expected,
+                self.total_shards,
+                other
+            ),
+        }
+    }
+
+    /// Drain all outstanding ACKs. MUST be called before CommitTx.
+    fn drain(&mut self) -> Result<()> {
+        while !self.inflight.is_empty() {
+            self.await_one_ack()?;
+        }
+        Ok(())
+    }
+}
+
+// ─── Abort ────────────────────────────────────────────────────────────────────
+
+/// Result of an `abort_transaction` call. Mostly informational —
+/// callers usually treat the function as fire-and-forget once they
+/// see it didn't error.
+#[derive(Debug, Clone)]
+pub struct AbortResult {
+    /// Raw payload of the ABORT_TX_ACK frame (a small JSON object —
+    /// `{"aborted":true,"tx_id":"…","active_transactions":N}` on
+    /// success). Returned as bytes so the caller decides whether to
+    /// parse, log, or discard.
+    pub ack_body: Vec<u8>,
+}
+
+/// Send `ABORT_TX` for the given tx_id and wait for the ACK.
+///
+/// Opens a fresh connection — typically called on the mgmt port
+/// (`:9114`) while a transfer is in flight on the transfer port
+/// (`:9113`). The payload's runtime acquires the tx entry
+/// exclusively, marks the entry `aborted`, releases its resources,
+/// and ACKs. Any subsequent `STREAM_SHARD` for the same tx on the
+/// transfer connection will fail with `tx_not_found`.
+///
+/// Returns `Err(tx_not_found)` if the tx_id isn't known to the
+/// payload — typically because it never reached BEGIN_TX, the
+/// payload was restarted, or the abort raced a successful COMMIT_TX.
+///
+/// Wiring this to a user-facing "Cancel" button requires verifying on
+/// PS5 hardware that the abort actually preempts a long-running
+/// shard write (the exclusive-acquire serialises with shard handling,
+/// but the wall-clock latency between request and effect depends on
+/// shard size + NVMe write speed). The mock-server test exercises the
+/// frame round-trip; end-to-end "cancel mid-upload" needs a real
+/// console.
+pub fn abort_transaction(addr: &str, tx_id: [u8; 16]) -> Result<AbortResult> {
+    use anyhow::Context;
+    use ftx2_proto::FrameType;
+    // Hex tx_id is the lever for log diagnosis — without it the
+    // user sees "read frame header: ..." with no clue which
+    // transaction was being aborted on which host. Format once
+    // and reuse on every error branch.
+    let tx_hex: String = tx_id.iter().fold(String::with_capacity(32), |mut acc, b| {
+        use std::fmt::Write as _;
+        let _ = write!(acc, "{b:02x}");
+        acc
+    });
+    let body = tx_meta_buf(tx_id, 0, b"");
+    let mut c = Connection::connect(addr)
+        .with_context(|| format!("ABORT_TX connect to {addr} for tx_id={tx_hex}"))?;
+    c.send_frame(FrameType::AbortTx, &body)
+        .with_context(|| format!("ABORT_TX send for tx_id={tx_hex}"))?;
+    let (hdr, body) = c
+        .recv_frame()
+        .with_context(|| format!("ABORT_TX recv ACK for tx_id={tx_hex}"))?;
+    match hdr.frame_type() {
+        Ok(FrameType::AbortTxAck) => Ok(AbortResult { ack_body: body }),
+        Ok(FrameType::Error) => {
+            let msg = String::from_utf8_lossy(&body).into_owned();
+            anyhow::bail!("ABORT_TX error for tx_id={tx_hex}: {msg}");
+        }
+        Ok(other) => {
+            anyhow::bail!("unexpected response to ABORT_TX (tx_id={tx_hex}): {other:?}");
+        }
+        Err(e) => {
+            anyhow::bail!(
+                "ABORT_TX response had undecodable frame_type ({}) for tx_id={tx_hex}: {e:?}",
+                hdr.frame_type
+            );
+        }
+    }
+}
+
+// ─── Standalone shard send (kept for `lab send-shard` convenience) ────────────
+
+/// Open a fresh connection and send one shard. Used by the lab CLI's
+/// `send-shard` command; production transfers use the connection-reusing
+/// helpers below.
+pub fn send_shard(
+    addr: &str,
+    tx_id: [u8; 16],
+    shard_seq: u64,
+    total_shards: u64,
+    data: &[u8],
+    max_retries: u32,
+) -> Result<ShardAck> {
+    let mut c = Connection::connect(addr)?;
+    send_shard_on(&mut c, tx_id, shard_seq, total_shards, data, max_retries)
+}
+
+// ─── Single-file transfer ─────────────────────────────────────────────────────
+
+/// Transfer a file (already read into memory) to `dest` on the PS5.
+///
+/// Single-attempt — aborts on any connection drop. For auto-resume on
+/// network-flake, use `transfer_file_resumable` instead.
+pub fn transfer_file(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest: &str,
+    data: &[u8],
+) -> Result<TransferResult> {
+    transfer_file_with_flags(cfg, tx_id, dest, data, 0)
+}
+
+/// Transfer a file from disk without reading or mapping the whole file.
+///
+/// Peak host RAM is bounded by `cfg.shard_size` plus socket buffers. This is
+/// the production path for large game images; the slice-based `transfer_file`
+/// remains for tests/benchmarks and callers that already own the bytes.
+pub fn transfer_file_path(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest: &str,
+    src: &Path,
+) -> Result<TransferResult> {
+    transfer_file_path_with_flags(cfg, tx_id, dest, src, 0)
+}
+
+/// Transfer a file with explicit BeginTx flags. `flags=TX_FLAG_RESUME`
+/// asks the payload to reuse an existing (interrupted) tx_id. Internal
+/// helper — public consumers should use `transfer_file` (fresh) or
+/// `transfer_file_resumable` (with retry loop).
+fn transfer_file_with_flags(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest: &str,
+    data: &[u8],
+    flags: u32,
+) -> Result<TransferResult> {
+    let tx_id_hex = bytes_to_hex(&tx_id);
+    let total_bytes = data.len() as u64;
+    // A 0-byte file still needs ONE (empty) shard: the payload's direct
+    // writer only creates the `.ps5up2-tmp` file when it receives a shard,
+    // so with zero shards COMMIT's temp→final rename fails with
+    // `direct_rename_failed` (confirmed on hardware). The dir path handles
+    // this via PlannedShard::Empty; mirror it here.
+    let total_shards = if data.is_empty() {
+        1
+    } else {
+        data.chunks(cfg.shard_size).count() as u64
+    };
+
+    let manifest_json = serde_json::to_vec(&Manifest {
+        dest_root: dest.to_string(),
+        file_count: 1,
+        total_bytes,
+        total_shards,
+        files: vec![],
+    })?;
+
+    let mut c = Connection::connect(&cfg.addr)?;
+    // Single-file path: manifest body is ~1 KB (file_count=1, tiny `files`
+    // array). The connection's default 30-second read timeout for the
+    // BeginTxAck wait is fine — the long `send_begin_and_expect_ack`
+    // helper exists for the multi-file paths whose manifests can run
+    // into tens of MB (v2.17.7 fix). See that helper's docstring for
+    // the rationale on the asymmetry.
+    let begin_ack = send_and_expect(
+        &mut c,
+        FrameType::BeginTx,
+        &tx_meta_buf_flags(tx_id, 1, flags, &manifest_json),
+        FrameType::BeginTxAck,
+    )?;
+    // `last_acked_shard` is non-zero only when a prior (interrupted)
+    // connection for this tx_id reached the payload journal. For fresh
+    // transfers (flags=0) it's always 0 and the skip branch becomes
+    // unreachable; for resume attempts (flags=TX_FLAG_RESUME) it's how
+    // we know where to pick up.
+    let last_acked_shard = parse_last_acked_shard(&begin_ack, flags & TX_FLAG_RESUME != 0);
+    // Defensive: shared guard (see guard_last_acked). A bogus
+    // last_acked_shard > total_shards would otherwise ghost-commit here.
+    guard_last_acked(last_acked_shard, total_shards)?;
+
+    // `shards_sent` counts only what this call actually transmitted — on a
+    // resume, shards 1..=last_acked_shard are skipped because they're
+    // already on the payload's disk from the interrupted prior attempt.
+    // `bytes_sent` reflects the full plan (`total_bytes`) so benchmarks
+    // and UI progress readouts don't have to special-case resume — the
+    // payload ends up with `total_bytes` regardless of split across
+    // attempts. Callers that need "wire bytes this call" can subtract
+    // shards below `last_acked_shard` times `shard_size`.
+    let mut shards_sent = 0u64;
+    {
+        let mut sender = PipelinedSender::new(&mut c, cfg, tx_id, total_shards);
+        if data.is_empty() {
+            // Single empty shard so the payload materialises the 0-byte file.
+            if last_acked_shard < 1 {
+                sender.send(1, &[])?;
+                shards_sent += 1;
+            }
+        } else {
+            for (i, chunk) in data.chunks(cfg.shard_size).enumerate() {
+                let shard_seq = i as u64 + 1;
+                if shard_seq > last_acked_shard {
+                    sender.send(shard_seq, chunk)?;
+                    shards_sent += 1;
+                    if let Some(p) = &cfg.progress_bytes {
+                        p.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+        sender.drain()?;
+    }
+
+    let commit_ack = send_commit_and_expect_ack(&mut c, &tx_meta_buf(tx_id, 0, b""), cfg)?;
+
+    Ok(TransferResult {
+        tx_id_hex,
+        shards_sent,
+        bytes_sent: total_bytes,
+        dest: dest.to_string(),
+        commit_ack_body: String::from_utf8_lossy(&commit_ack).into_owned(),
+    })
+}
+
+/// Transfer a file with automatic resume-on-network-drop. The first
+/// attempt is a fresh BeginTx; if it fails with a retryable IO error
+/// (ConnectionReset / BrokenPipe / TimedOut / UnexpectedEof /
+/// ConnectionAborted), the wrapper waits with exponential backoff
+/// (500 ms → 1 s → 2 s → …) and retries with `TX_FLAG_RESUME` set,
+/// re-using the same `tx_id` so the payload's journal can report
+/// `last_acked_shard` and the client can skip past already-ACKed shards.
+///
+/// Non-retryable errors (protocol rejects, digest corruption, tx table
+/// full, etc.) surface immediately. A zero `max_retries` means "no
+/// retry" — equivalent to `transfer_file`.
+///
+/// The payload side of this must support `TX_FLAG_RESUME` (2.1+); older
+/// payloads will treat the flag as a no-op and allocate a fresh entry,
+/// which means the retry will double-send shards rather than resume.
+/// That's still correct (the payload overwrites on direct-write, and
+/// spool-then-apply dedups on shard_seq), but slower than the true
+/// resume path.
+/// Slice-based counterpart to `transfer_file_path_resumable`. Same
+/// `initial_flags` contract — see that function's doc comment.
+pub fn transfer_file_resumable(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest: &str,
+    data: &[u8],
+    max_retries: u32,
+    initial_flags: u32,
+) -> Result<TransferResult> {
+    resumable_retry(
+        cfg,
+        dest,
+        max_retries,
+        "transfer_file",
+        initial_flags,
+        |flags| transfer_file_with_flags(cfg, tx_id, dest, data, flags),
+    )
+}
+
+fn transfer_file_path_with_flags(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest: &str,
+    src: &Path,
+    flags: u32,
+) -> Result<TransferResult> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let tx_id_hex = bytes_to_hex(&tx_id);
+    let meta = cfg
+        .fs()
+        .metadata(src)
+        .with_context(|| format!("stat {}", src.display()))?;
+    if !meta.is_file {
+        bail!("source is not a regular file: {}", src.display());
+    }
+    let total_bytes = meta.len;
+    // A 0-byte file needs ONE empty shard (not zero) so the payload's direct
+    // writer creates the temp file that COMMIT renames into place — otherwise
+    // commit fails with `direct_rename_failed` (confirmed on hardware). With
+    // total_shards=1 the size-driven send loop below reads a 0-length chunk
+    // and emits the empty shard naturally.
+    let total_shards = if total_bytes == 0 {
+        1
+    } else {
+        total_bytes.div_ceil(cfg.shard_size as u64)
+    };
+
+    let manifest_json = serde_json::to_vec(&Manifest {
+        dest_root: dest.to_string(),
+        file_count: 1,
+        total_bytes,
+        total_shards,
+        files: vec![],
+    })?;
+
+    let mut c = Connection::connect(&cfg.addr)?;
+    // Single-file path: manifest body is ~1 KB (file_count=1, tiny `files`
+    // array). The connection's default 30-second read timeout for the
+    // BeginTxAck wait is fine — the long `send_begin_and_expect_ack`
+    // helper exists for the multi-file paths whose manifests can run
+    // into tens of MB (v2.17.7 fix). See that helper's docstring for
+    // the rationale on the asymmetry.
+    let begin_ack = send_and_expect(
+        &mut c,
+        FrameType::BeginTx,
+        &tx_meta_buf_flags(tx_id, 1, flags, &manifest_json),
+        FrameType::BeginTxAck,
+    )?;
+    let last_acked_shard = parse_last_acked_shard(&begin_ack, flags & TX_FLAG_RESUME != 0);
+    // Defensive: a payload reporting last_acked_shard >= total_shards
+    // would otherwise cause the engine to skip the entire send loop
+    // and immediately COMMIT — a "ghost commit" that finalises a tx
+    // with no actual bytes from this attempt. That's only valid if
+    // the prior attempt truly completed all shards; otherwise it's a
+    // payload bookkeeping bug we should surface, not silently
+    // collude with. (Specifically allow `==` since a fully-acked
+    // prior attempt that lost only the COMMIT_TX round-trip is a
+    // legitimate "all shards in journal, just need to commit" case.)
+    guard_last_acked(last_acked_shard, total_shards)?;
+
+    let mut shards_sent = 0u64;
+    {
+        let mut file = cfg
+            .fs()
+            .open(src)
+            .with_context(|| format!("open {}", src.display()))?;
+        if last_acked_shard > 0 {
+            file.seek(SeekFrom::Start(
+                last_acked_shard.saturating_mul(cfg.shard_size as u64),
+            ))
+            .with_context(|| format!("seek {}", src.display()))?;
+        }
+        let mut sender = PipelinedSender::new(&mut c, cfg, tx_id, total_shards);
+        let first_seq = last_acked_shard + 1;
+        let shard_size = cfg.shard_size;
+
+        // Overlapped read+hash: a producer thread reads each shard from disk and
+        // BLAKE3-hashes it while the main thread is busy writing the PREVIOUS
+        // shard to the socket. Measured motivation: on a fast-disk PS5 (Pro) the
+        // payload is recv-bound (it waits ~89% of the time for our bytes), and on
+        // a slow source (NAS/exFAT) the wire would otherwise idle during every
+        // disk read. Without overlap the loop is read → hash → send in series, so
+        // the link sits idle during read+hash. See docs/throughput-analysis.md.
+        //
+        // Buffers are recycled between the two threads via an `empty` channel so
+        // we don't allocate per shard (the single-buffer reuse this replaces
+        // avoided "~1,600 × 64 MiB allocate/free cycles"); READAHEAD buffers cap
+        // the extra RAM at READAHEAD × shard_size.
+        const READAHEAD: usize = 3;
+        struct Prepared {
+            seq: u64,
+            buf: Vec<u8>,
+            len: usize,
+            digest: [u8; 32],
+        }
+        let (empty_tx, empty_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let (full_tx, full_rx) = std::sync::mpsc::sync_channel::<Result<Prepared>>(READAHEAD);
+        for _ in 0..READAHEAD {
+            let _ = empty_tx.send(vec![0u8; shard_size]);
+        }
+        let cancel = cfg.cancel.clone();
+        let src_disp = src.display().to_string();
+
+        std::thread::scope(|scope| -> Result<()> {
+            // Take ownership of the consumer-side channel endpoints so they drop
+            // when THIS closure returns — including every `?` early-return below —
+            // BEFORE `thread::scope` joins the producer. If they stayed owned by
+            // the outer frame (the default for a non-`move` scope closure), a
+            // mid-transfer network send error would return Err from the consumer
+            // while the producer is still blocked on `empty_rx.recv()` or
+            // `full_tx.send()`; with `empty_tx`/`full_rx` still alive those calls
+            // never error, the producer never breaks, and the scope join (hence
+            // the whole spawn_blocking transfer thread) hangs forever instead of
+            // surfacing the retryable error to `resumable_retry`. Moving them in
+            // here closes the channels on the error path so the producer unblocks.
+            // (`let x = x;` forces a by-move capture of just these two; `sender`,
+            // `shards_sent`, and `cfg` stay borrowed and keep working.)
+            let empty_tx = empty_tx;
+            let full_rx = full_rx;
+            // Producer: read + hash ahead, hand prepared shards to the sender.
+            scope.spawn(move || {
+                let mut seq = first_seq;
+                while seq <= total_shards {
+                    if cancel
+                        .as_ref()
+                        .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+                    {
+                        break; // consumer will see the closed channel and stop
+                    }
+                    // Wait for a recycled buffer; Err means the consumer is gone.
+                    let mut buf = match empty_rx.recv() {
+                        Ok(b) => b,
+                        Err(_) => break,
+                    };
+                    let remaining = total_bytes.saturating_sub((seq - 1) * shard_size as u64);
+                    let len = std::cmp::min(shard_size as u64, remaining) as usize;
+                    if let Err(e) = file.read_exact(&mut buf[..len]) {
+                        let _ = full_tx
+                            .send(Err(anyhow::Error::from(e)
+                                .context(format!("read {src_disp} shard {seq}"))));
+                        break;
+                    }
+                    let digest = hash_shard(&buf[..len]);
+                    if full_tx
+                        .send(Ok(Prepared {
+                            seq,
+                            buf,
+                            len,
+                            digest,
+                        }))
+                        .is_err()
+                    {
+                        break; // consumer dropped (error/cancel) — stop cleanly
+                    }
+                    seq += 1;
+                }
+                // Dropping full_tx closes the channel so the consumer's recv ends.
+            });
+
+            // Consumer (this thread): send prepared shards in order, recycle bufs.
+            let mut next = first_seq;
+            while next <= total_shards {
+                let prepared = match full_rx.recv() {
+                    Ok(Ok(p)) => p,
+                    Ok(Err(e)) => return Err(e),
+                    Err(_) => break, // producer ended early (cancel handled below)
+                };
+                debug_assert_eq!(prepared.seq, next);
+                // Single-file shards are always non-packed → report body bytes
+                // as they go on the wire so a big single file's speed/ETA stays
+                // smooth on slow links (no per-64-MiB sawtooth).
+                if let Some(p) = cfg.progress_bytes.as_deref() {
+                    sender.send_prehashed_progress(
+                        prepared.seq,
+                        &prepared.buf[..prepared.len],
+                        prepared.digest,
+                        p,
+                    )?;
+                } else {
+                    sender.send_prehashed(
+                        prepared.seq,
+                        &prepared.buf[..prepared.len],
+                        prepared.digest,
+                    )?;
+                }
+                shards_sent += 1;
+                let _ = empty_tx.send(prepared.buf); // recycle
+                next += 1;
+            }
+            // The consumer reaches here either by sending every shard (normal
+            // completion) or because the producer broke out early and closed
+            // the channel. The only reason the producer breaks early is a
+            // cancellation request, so re-check the flag and abort before
+            // draining — otherwise a cancelled transfer would fall through to
+            // commit a partial transaction.
+            if cfg
+                .cancel
+                .as_ref()
+                .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+            {
+                bail!("transfer_cancelled");
+            }
+            sender.drain()?;
+            Ok(())
+        })?;
+    }
+
+    let commit_ack = send_commit_and_expect_ack(&mut c, &tx_meta_buf(tx_id, 0, b""), cfg)?;
+
+    Ok(TransferResult {
+        tx_id_hex,
+        shards_sent,
+        bytes_sent: total_bytes,
+        dest: dest.to_string(),
+        commit_ack_body: String::from_utf8_lossy(&commit_ack).into_owned(),
+    })
+}
+
+/// `transfer_file_path` with automatic resume-on-network-drop.
+///
+/// `initial_flags` controls the very first BEGIN_TX: pass `0` for a
+/// fresh upload (random or newly-minted tx_id), or `TX_FLAG_RESUME`
+/// when handing in a tx_id that the payload is expected to already
+/// know about (user-initiated resume after a prior failure). Retries
+/// always use `TX_FLAG_RESUME`. Mirrors `transfer_dir_resumable`'s
+/// contract.
+///
+/// The payload's `TX_FLAG_RESUME` is a no-op when the tx_id is unknown
+/// (falls through to fresh-allocate), so it's safe to always pass
+/// `TX_FLAG_RESUME` even on the first attempt — the flag is effectively
+/// "adopt the existing entry if you have one." That's the pattern the
+/// folder uploader uses; the file uploader follows it now.
+pub fn transfer_file_path_resumable(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest: &str,
+    src: &Path,
+    max_retries: u32,
+    initial_flags: u32,
+) -> Result<TransferResult> {
+    resumable_retry(
+        cfg,
+        dest,
+        max_retries,
+        "transfer_file_path",
+        initial_flags,
+        |flags| transfer_file_path_with_flags(cfg, tx_id, dest, src, flags),
+    )
+}
+
+// ─── Directory transfer ───────────────────────────────────────────────────────
+
+/// Collect all regular files under `dir` on `fs`, sorted by path.
+pub fn collect_files_with(
+    fs: &dyn crate::source_fs::SourceFs,
+    dir: &Path,
+) -> Result<Vec<std::path::PathBuf>> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(cur) = stack.pop() {
+        let entries = fs
+            .read_dir(&cur)
+            .with_context(|| format!("readdir {}", cur.display()))?;
+        for (p, is_dir) in entries {
+            if is_dir {
+                stack.push(p);
+            } else {
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// Collect all regular files under `dir`, sorted by path.
+pub fn collect_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
+    collect_files_with(&crate::source_fs::LocalFs, dir)
+}
+
+/// Per-destination description to emit into the manifest. One entry per
+/// logical file the payload will land on disk.
+struct PlannedFile {
+    dest_path: String,
+    size: u64,
+    shard_start: u64,
+    shard_count: u64,
+}
+
+/// One packed record, as planned from the file walk. The source file is
+/// opened and read lazily at send time, not at plan time, so a 129 GiB
+/// directory plan is O(file_count × path_size) bytes of RAM, not O(total_bytes).
+#[derive(Clone)]
+struct PackRecord {
+    dest_path: String,
+    source: std::path::PathBuf,
+    size: u64,
+}
+
+/// A planned shard — either a packed shard (many small records from many
+/// source files) or a non-packed chunk (one source file, possibly a slice of
+/// a larger file if we're splitting by `cfg.shard_size`). The actual body
+/// bytes aren't materialised until just before send (`materialise_body`).
+enum PlannedShard {
+    /// `record_count == 1`, `flags == 0`, body is the file slice.
+    NonPacked {
+        shard_seq: u64,
+        source: std::path::PathBuf,
+        offset: u64,
+        len: u64,
+    },
+    /// Zero-byte file — an empty non-packed shard so the payload still opens
+    /// the destination and creates the file at COMMIT.
+    Empty { shard_seq: u64 },
+    /// `record_count == records.len()`, `flags == SHARD_FLAG_PACKED`.
+    Packed {
+        shard_seq: u64,
+        records: Vec<PackRecord>,
+    },
+}
+
+/// Plan-time pack accumulator. Collects `PackRecord`s, emitting a complete
+/// `PlannedShard::Packed` when the next record would exceed the pack target.
+struct PackPlanner {
+    records: Vec<PackRecord>,
+    body_size: usize,
+    shard_seq: u64,
+    target: usize,
+    /// Max records per shard; 0 = unbounded (byte budget only).
+    count_max: usize,
+}
+
+impl PackPlanner {
+    fn new(target: usize, count_max: usize) -> Self {
+        Self {
+            records: Vec::new(),
+            body_size: 0,
+            shard_seq: 0,
+            target,
+            count_max,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+
+    fn record_size(dest_path: &str, size: u64) -> usize {
+        let s = usize::try_from(size).unwrap_or(usize::MAX);
+        PACKED_RECORD_PREFIX_LEN
+            .saturating_add(dest_path.len())
+            .saturating_add(s)
+    }
+
+    /// Close the current shard when EITHER budget would be blown: total body
+    /// bytes, or record count. The count guard is what keeps a tree of tiny
+    /// files from packing thousands of records — and thus tens of seconds of
+    /// payload-side apply work — behind a single ACK the engine waits only
+    /// 30 s for. Never closes an empty shard: one oversized record still has
+    /// to go somewhere.
+    fn would_exceed(&self, rec_size: usize) -> bool {
+        if self.records.is_empty() {
+            return false;
+        }
+        if self.count_max > 0 && self.records.len() >= self.count_max {
+            return true;
+        }
+        self.body_size.saturating_add(rec_size) > self.target
+    }
+
+    fn start(&mut self, shard_seq: u64) {
+        debug_assert!(self.is_empty());
+        self.shard_seq = shard_seq;
+        self.body_size = 0;
+    }
+
+    fn push(&mut self, rec: PackRecord) {
+        self.body_size += Self::record_size(&rec.dest_path, rec.size);
+        self.records.push(rec);
+    }
+
+    fn take(&mut self) -> PlannedShard {
+        let records = std::mem::take(&mut self.records);
+        let shard = PlannedShard::Packed {
+            shard_seq: self.shard_seq,
+            records,
+        };
+        self.body_size = 0;
+        self.shard_seq = 0;
+        shard
+    }
+}
+
+/// Materialise a shard's wire body. Reads from disk lazily — for a packed
+/// shard, opens each source file in turn and copies its bytes into the
+/// output buffer. Total host RAM for one shard = shard body size, bounded
+/// by `pack_size` (for packed) or `shard_size` (for non-packed).
+fn materialise_body(
+    ps: &PlannedShard,
+    progress_files: Option<&std::sync::atomic::AtomicU64>,
+    fs: &dyn crate::source_fs::SourceFs,
+) -> Result<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    match ps {
+        PlannedShard::Empty { .. } => Ok(Vec::new()),
+        PlannedShard::NonPacked {
+            source,
+            offset,
+            len,
+            ..
+        } => {
+            let mut f = fs
+                .open(source)
+                .with_context(|| format!("open {}", source.display()))?;
+            if *offset > 0 {
+                f.seek(SeekFrom::Start(*offset))
+                    .with_context(|| format!("seek {} to {}", source.display(), offset))?;
+            }
+            let mut buf = vec![0u8; *len as usize];
+            f.read_exact(&mut buf)
+                .with_context(|| format!("read {} at {}+{}", source.display(), offset, len))?;
+            // Count one file-start per non-packed FIRST chunk (offset==0).
+            // Multi-shard files chunk into multiple PlannedShards but the
+            // user-meaningful unit is the source file, so only the first
+            // chunk bumps the per-file counter. Subsequent chunks advance
+            // progress_bytes (file is in flight) without re-bumping files.
+            if *offset == 0 {
+                if let Some(pf) = progress_files {
+                    pf.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            Ok(buf)
+        }
+        PlannedShard::Packed { records, .. } => {
+            let total: usize = records
+                .iter()
+                .map(|r| PackPlanner::record_size(&r.dest_path, r.size))
+                .sum();
+            let mut buf = Vec::with_capacity(total);
+            for r in records {
+                let p = r.dest_path.as_bytes();
+                // Packed-shard record header is two LE u32s (path_len, size).
+                // Both fields are u32 by wire spec; the planner only routes
+                // small files (PACK_FILE_MAX = 128 KiB) into the packed
+                // path, but assert the bound at the cast site so a future
+                // change to PACK_FILE_MAX can't silently truncate >4 GiB
+                // sizes / paths into a corrupted record stream.
+                let path_len = u32::try_from(p.len())
+                    .with_context(|| format!("pack record path too long: {}", r.dest_path))?;
+                let rec_size = u32::try_from(r.size).with_context(|| {
+                    format!(
+                        "pack record size {} exceeds u32 (file: {})",
+                        r.size, r.dest_path
+                    )
+                })?;
+                buf.extend_from_slice(&path_len.to_le_bytes());
+                buf.extend_from_slice(&rec_size.to_le_bytes());
+                buf.extend_from_slice(p);
+                let mut f = fs
+                    .open(&r.source)
+                    .with_context(|| format!("open pack record {}", r.source.display()))?;
+                let start = buf.len();
+                buf.resize(start + r.size as usize, 0);
+                f.read_exact(&mut buf[start..])
+                    .with_context(|| format!("read pack record {}", r.source.display()))?;
+                // Per-record file-progress bump. Bumping HERE (inside the
+                // per-record loop) is what makes the UI's file counter
+                // climb smoothly during the pack-frame build for many-
+                // tiny-files folders, instead of jumping by ~200 every
+                // time a packed shard finally goes out. Bytes still
+                // advance per-shard via progress_bytes (the wire-truth
+                // counter); this is the user-perceived "we're working"
+                // signal.
+                if let Some(pf) = progress_files {
+                    pf.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            Ok(buf)
+        }
+    }
+}
+
+fn planned_shard_seq(ps: &PlannedShard) -> u64 {
+    match ps {
+        PlannedShard::Empty { shard_seq }
+        | PlannedShard::NonPacked { shard_seq, .. }
+        | PlannedShard::Packed { shard_seq, .. } => *shard_seq,
+    }
+}
+
+fn planned_shard_meta(ps: &PlannedShard) -> (u32, u32) {
+    match ps {
+        // Empty and NonPacked both carry "1 record, no flags" — packed
+        // flag is only set when multiple small files were coalesced.
+        PlannedShard::Empty { .. } | PlannedShard::NonPacked { .. } => (1, 0),
+        PlannedShard::Packed { records, .. } => (records.len() as u32, SHARD_FLAG_PACKED),
+    }
+}
+
+/// File-data bytes a shard carries, EXCLUDING packed-record framing.
+/// The live-progress denominator is the sum of uncompressed file sizes
+/// (`walk_plan` / file-size sum), so the numerator must count file bytes
+/// too — a packed shard's wire body adds `[u32 path_len][u32 size][path]`
+/// per record, and counting that (body.len()) pushed the progress bar
+/// past 100% on directories of many small files.
+fn planned_shard_data_len(ps: &PlannedShard) -> u64 {
+    match ps {
+        PlannedShard::Empty { .. } => 0,
+        PlannedShard::NonPacked { len, .. } => *len,
+        PlannedShard::Packed { records, .. } => records.iter().map(|r| r.size).sum(),
+    }
+}
+
+/// Transfer every file under `src_dir` to `dest_root` on the PS5.
+///
+/// Sharding strategy:
+///   - Files smaller than `cfg.pack_file_max` are coalesced into packed shards
+///     whose body carries `[u32 path_len, u32 data_len, path, data]` per
+///     record, up to `cfg.pack_size` total body bytes.
+///   - Files ≥ that threshold are sent as their own non-packed shard(s), split
+///     into `cfg.shard_size` chunks if needed. The payload's double-buffered
+///     writer thread handles these so recv and disk-write overlap.
+///   - Both paths share the same pipelined ACK window.
+///
+/// **Streaming.** Files are *not* read into RAM up front. A planning pass
+/// walks the directory using `metadata` only, builds a `PlannedShard` list
+/// and manifest, and sends the manifest in BEGIN_TX. During the send phase,
+/// each shard body is materialised from disk just before it goes on the wire.
+/// Peak host RAM ≈ `inflight_bytes` (default 64 MiB) + one shard being built,
+/// independent of the total transfer size — so a 129 GiB directory works.
+pub fn transfer_dir(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest_root: &str,
+    src_dir: &Path,
+) -> Result<TransferResult> {
+    transfer_dir_with_flags(cfg, tx_id, dest_root, src_dir, 0)
+}
+
+/// Directory transfer with explicit BeginTx flags. `flags = TX_FLAG_RESUME`
+/// asks the payload to adopt an existing (interrupted) tx entry with the
+/// same tx_id, skipping shards it already acked. Used by
+/// `transfer_dir_resumable`; direct callers should use `transfer_dir`
+/// (fresh) or the resumable wrapper.
+pub fn transfer_dir_with_flags(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest_root: &str,
+    src_dir: &Path,
+    flags: u32,
+) -> Result<TransferResult> {
+    let tx_id_hex = bytes_to_hex(&tx_id);
+    let all_files = collect_files_with(cfg.fs(), src_dir)?;
+    // Apply cfg.excludes before the manifest is built. Default is empty
+    // (match legacy behavior). Callers set excludes explicitly via
+    // `cfg.excludes = ...` or ergonomically via
+    // `cfg.with_default_excludes()`.
+    let local_files: Vec<_> = if cfg.excludes.is_empty() {
+        all_files
+    } else {
+        let pat_refs: Vec<&str> = cfg.excludes.iter().map(String::as_str).collect();
+        all_files
+            .into_iter()
+            .filter(|p| !crate::excludes::is_excluded(p, &pat_refs))
+            .collect()
+    };
+    if local_files.is_empty() {
+        bail!(
+            "source directory is empty or fully excluded: {}",
+            src_dir.display()
+        );
+    }
+
+    // ── Planning pass ── metadata-only, builds the manifest and the plan
+    //    of how every shard will be assembled at send time.
+    let mut planned_files: Vec<PlannedFile> = Vec::with_capacity(local_files.len());
+    let mut planned_shards: Vec<PlannedShard> = Vec::new();
+    let mut total_bytes = 0u64;
+    let mut next_seq: u64 = 1;
+    let pack_enabled = cfg.pack_size > 0;
+    let pack_threshold = if pack_enabled { cfg.pack_file_max } else { 0 };
+    let mut packer = PackPlanner::new(cfg.pack_size.max(4096), cfg.pack_file_count_max);
+
+    for lf in &local_files {
+        let meta = cfg
+            .fs()
+            .metadata(lf)
+            .with_context(|| format!("stat {}", lf.display()))?;
+        if !meta.is_file {
+            continue;
+        }
+        let size = meta.len;
+        let rel = lf.strip_prefix(src_dir).unwrap_or(lf.as_path());
+        let dest_path = join_ps5_path(dest_root, rel);
+        total_bytes += size;
+
+        if pack_enabled && (size as usize) < pack_threshold {
+            let rec_size = PackPlanner::record_size(&dest_path, size);
+            if packer.would_exceed(rec_size) {
+                planned_shards.push(packer.take());
+            }
+            if packer.is_empty() {
+                packer.start(next_seq);
+                next_seq += 1;
+            }
+            packer.push(PackRecord {
+                dest_path: dest_path.clone(),
+                source: lf.clone(),
+                size,
+            });
+            planned_files.push(PlannedFile {
+                dest_path,
+                size,
+                shard_start: packer.shard_seq,
+                shard_count: 1,
+            });
+        } else {
+            if !packer.is_empty() {
+                planned_shards.push(packer.take());
+            }
+            let shard_start = next_seq;
+            let mut shard_count = 0u64;
+            if size == 0 {
+                planned_shards.push(PlannedShard::Empty {
+                    shard_seq: next_seq,
+                });
+                next_seq += 1;
+                shard_count = 1;
+            } else {
+                let mut offset = 0u64;
+                while offset < size {
+                    let chunk_len = std::cmp::min(cfg.shard_size as u64, size - offset);
+                    planned_shards.push(PlannedShard::NonPacked {
+                        shard_seq: next_seq,
+                        source: lf.clone(),
+                        offset,
+                        len: chunk_len,
+                    });
+                    next_seq += 1;
+                    shard_count += 1;
+                    offset += chunk_len;
+                }
+            }
+            planned_files.push(PlannedFile {
+                dest_path,
+                size,
+                shard_start,
+                shard_count,
+            });
+        }
+    }
+    if !packer.is_empty() {
+        planned_shards.push(packer.take());
+    }
+
+    let total_shards = next_seq - 1;
+    let file_count = planned_files.len() as u64;
+
+    let manifest_files: Vec<ManifestFile> = planned_files
+        .into_iter()
+        .map(|p| ManifestFile {
+            path: p.dest_path,
+            size: p.size,
+            shard_start: p.shard_start,
+            shard_count: p.shard_count,
+        })
+        .collect();
+
+    ensure_manifest_paths_fit(&manifest_files)?;
+    let manifest_json = serde_json::to_vec(&Manifest {
+        dest_root: dest_root.to_string(),
+        file_count,
+        total_bytes,
+        total_shards,
+        files: manifest_files,
+    })?;
+
+    let mut c = Connection::connect(&cfg.addr)?;
+    let begin_ack = send_begin_and_expect_ack(
+        &mut c,
+        &tx_meta_buf_flags(
+            tx_id,
+            2,
+            // Multi-file: always opt in to APPLY_PROGRESS so the
+            // client gets a live counter through the commit-apply
+            // phase (P3 / v2.18.0). Old payloads ignore unknown
+            // flag bits, so this is back-compat-clean — they
+            // simply don't emit progress frames and the commit
+            // wait sees only the final CommitTxAck (the new
+            // helper handles both paths transparently).
+            flags | TX_FLAG_APPLY_PROGRESS_REQUESTED,
+            &manifest_json,
+        ),
+    )?;
+    let last_acked_shard = parse_last_acked_shard(&begin_ack, flags & TX_FLAG_RESUME != 0);
+    // Same ghost-commit guard as the single-file paths (the multi-file
+    // paths previously lacked it). See guard_last_acked.
+    guard_last_acked(last_acked_shard, total_shards)?;
+
+    // ── Send pass ── materialise each shard body just before it goes out.
+    // Skip shards that were already journalled by a prior (interrupted)
+    // connection — their bytes are on the payload's disk, don't re-send.
+    // `shards_sent` counts only what this call transmitted.
+    let mut shards_sent = 0u64;
+    {
+        let mut sender = PipelinedSender::new(&mut c, cfg, tx_id, total_shards);
+        for ps in &planned_shards {
+            let seq = planned_shard_seq(ps);
+            if seq <= last_acked_shard {
+                continue;
+            }
+            let body = materialise_body(ps, cfg.progress_files.as_deref(), cfg.fs())?;
+            let (record_count, flags) = planned_shard_meta(ps);
+            shards_sent += 1;
+            // Non-packed shards (large-file bodies) report their body bytes as
+            // the kernel accepts them, so the speed/ETA stays smooth on slow
+            // links instead of jumping once per 64 MiB shard (the "speed keeps
+            // dropping" sawtooth). Packed (small-file) shards keep per-shard
+            // file-data accounting — their body carries per-record framing the
+            // progress denominator excludes.
+            if flags & SHARD_FLAG_PACKED == 0 {
+                if let Some(p) = cfg.progress_bytes.as_deref() {
+                    sender.send_with_progress(seq, &body, record_count, flags, p)?;
+                } else {
+                    sender.send_with(seq, &body, record_count, flags)?;
+                }
+            } else {
+                sender.send_with(seq, &body, record_count, flags)?;
+                if let Some(p) = &cfg.progress_bytes {
+                    p.fetch_add(
+                        planned_shard_data_len(ps),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                }
+            }
+        }
+        sender.drain()?;
+    }
+
+    let commit_ack = send_commit_and_expect_ack(&mut c, &tx_meta_buf(tx_id, 0, b""), cfg)?;
+
+    // `bytes_sent` reflects the full plan, not this call's wire bytes.
+    // Rationale: for packed multi-file shards, wire bytes include pack
+    // prefix overhead which isn't a user-meaningful number. The plan
+    // total is what benchmarks + UI progress bars actually care about.
+    Ok(TransferResult {
+        tx_id_hex,
+        shards_sent,
+        bytes_sent: total_bytes,
+        dest: dest_root.to_string(),
+        commit_ack_body: String::from_utf8_lossy(&commit_ack).into_owned(),
+    })
+}
+
+// ─── Explicit file-list transfer ──────────────────────────────────────────────
+
+/// An entry in an explicit file-list transfer.
+#[derive(Debug, Clone)]
+pub struct FileListEntry {
+    /// Absolute path to the local file.
+    pub src: String,
+    /// Destination path on PS5 storage (absolute).
+    pub dest: String,
+}
+
+// ─── Multi-stream distribution (see docs/multistream-upload.md) ─────────────────
+
+/// Distribute item weights (file sizes) across `buckets` streams using greedy
+/// longest-processing-time: sort items descending by weight, then assign each to
+/// the currently-lightest bucket. Returns, for each bucket, the original item
+/// indices assigned to it.
+///
+/// Why LPT: a single oversized file would otherwise make one stream the long
+/// pole while the others finish early and idle; LPT keeps total bytes-per-stream
+/// as even as a whole-file split allows (we never split a file across streams,
+/// so two streams never write the same file — the property the payload's
+/// concurrent-write safety relies on).
+///
+/// Invariants (checked by tests): every index in `0..weights.len()` appears
+/// exactly once across the returned buckets (disjoint + complete); exactly
+/// `max(buckets, 1)` inner vecs are returned (empty ones kept so callers can map
+/// bucket-index → stream-index directly).
+pub(crate) fn distribute_balanced(weights: &[u64], buckets: usize) -> Vec<Vec<usize>> {
+    let buckets = buckets.max(1);
+    let mut out: Vec<Vec<usize>> = vec![Vec::new(); buckets];
+    if weights.is_empty() {
+        return out;
+    }
+    // Indices sorted by weight descending; ties broken by index for determinism.
+    let mut order: Vec<usize> = (0..weights.len()).collect();
+    order.sort_by(|&a, &b| weights[b].cmp(&weights[a]).then(a.cmp(&b)));
+    // u128 load accumulator so summing many u64 sizes can't overflow.
+    let mut load = vec![0u128; buckets];
+    for idx in order {
+        // Lightest bucket wins; ties broken by lowest bucket index.
+        let mut best = 0usize;
+        for b in 1..buckets {
+            if load[b] < load[best] {
+                best = b;
+            }
+        }
+        out[best].push(idx);
+        load[best] += u128::from(weights[idx]);
+    }
+    out
+}
+
+/// Derive a per-stream `tx_id` from a base id by XOR-ing a stream-index-
+/// derived value into bytes 14–15. We hash `(base, stream_index)` via
+/// FNV-1a to produce a 16-bit value that's XOR-ed into bytes 14–15.
+///
+/// This avoids the collision problem of a plain `base[15] ^= stream_index`:
+/// if two base ids differ by exactly `stream_index` in byte 15, their
+/// per-stream ids would collide (XOR is its own inverse). The hash-based
+/// approach makes collisions astronomically unlikely (~1/65536 per pair).
+///
+/// Stream 0 maps to the base id unchanged (hash of 0 over a 16-bit field
+/// is 0, so XOR is a no-op), so the single-stream path keeps its original
+/// tx_id. The mapping is deterministic so a retry of stream N reuses the
+/// same id and `TX_FLAG_RESUME` picks up where it left off.
+fn stream_tx_id(base: [u8; 16], stream_index: usize) -> [u8; 16] {
+    let mut id = base;
+    if stream_index == 0 {
+        return id;
+    }
+    // FNV-1a 16-bit hash of (base[14..16], stream_index) to derive a
+    // per-stream mask that's unique to this (base, index) pair.
+    let mut h: u16 = 0x811c;
+    h ^= id[14] as u16;
+    h = h.wrapping_mul(0x0019);
+    h ^= id[15] as u16;
+    h = h.wrapping_mul(0x0019);
+    h ^= (stream_index & 0xff) as u16;
+    h = h.wrapping_mul(0x0019);
+    h ^= ((stream_index >> 8) & 0xff) as u16;
+    h = h.wrapping_mul(0x0019);
+    // Ensure the mask is non-zero (otherwise stream N would collide with
+    // stream 0). FNV-1a can produce 0 for specific inputs; OR in the
+    // stream_index+1 bit to guarantee non-zero for index > 0.
+    if h == 0 {
+        h = ((stream_index as u16).wrapping_add(1)) | 0x8000;
+    }
+    id[14] ^= ((h >> 8) & 0xff) as u8;
+    id[15] ^= (h & 0xff) as u8;
+    id
+}
+
+/// Transfer an explicit list of `(local_src, ps5_dest)` pairs in a single
+/// FTX2 transaction. This is used when the caller already has the file list
+/// (e.g. from `app/server.js` `uploadFiles`) and wants one atomic transaction.
+///
+/// `dest_root` is stored in the manifest for informational purposes only;
+/// each file's `dest` is its absolute PS5 path.
+pub fn transfer_file_list(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest_root: &str,
+    entries: &[FileListEntry],
+) -> Result<TransferResult> {
+    transfer_file_list_with_flags(cfg, tx_id, dest_root, entries, 0)
+}
+
+/// Like `transfer_file_list` but with explicit BeginTx flags.
+/// `flags = TX_FLAG_RESUME` asks the payload to adopt an existing
+/// (interrupted) tx entry with the same tx_id, skipping shards it
+/// already acked. Used by the engine's retry loop so a transient
+/// payload hiccup doesn't force the caller to resend shards that
+/// already landed.
+pub fn transfer_file_list_with_flags(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest_root: &str,
+    entries: &[FileListEntry],
+    flags: u32,
+) -> Result<TransferResult> {
+    if entries.is_empty() {
+        bail!("file list is empty");
+    }
+
+    let tx_id_hex = bytes_to_hex(&tx_id);
+
+    // Planning pass (metadata only — no file contents read yet).
+    let mut planned_files: Vec<PlannedFile> = Vec::with_capacity(entries.len());
+    let mut planned_shards: Vec<PlannedShard> = Vec::new();
+    let mut total_bytes = 0u64;
+    let mut next_seq: u64 = 1;
+    let pack_enabled = cfg.pack_size > 0;
+    let pack_threshold = if pack_enabled { cfg.pack_file_max } else { 0 };
+    let mut packer = PackPlanner::new(cfg.pack_size.max(4096), cfg.pack_file_count_max);
+
+    for entry in entries {
+        let meta = cfg
+            .fs()
+            .metadata(Path::new(&entry.src))
+            .with_context(|| format!("stat {}", entry.src))?;
+        let size = meta.len;
+        let resolved_dest = if entry.dest.starts_with('/') {
+            entry.dest.clone()
+        } else {
+            let root = dest_root.trim_end_matches('/');
+            format!("{}/{}", root, entry.dest)
+        };
+        total_bytes += size;
+
+        if pack_enabled && (size as usize) < pack_threshold {
+            let rec_size = PackPlanner::record_size(&resolved_dest, size);
+            if packer.would_exceed(rec_size) {
+                planned_shards.push(packer.take());
+            }
+            if packer.is_empty() {
+                packer.start(next_seq);
+                next_seq += 1;
+            }
+            packer.push(PackRecord {
+                dest_path: resolved_dest.clone(),
+                source: std::path::PathBuf::from(&entry.src),
+                size,
+            });
+            planned_files.push(PlannedFile {
+                dest_path: resolved_dest,
+                size,
+                shard_start: packer.shard_seq,
+                shard_count: 1,
+            });
+        } else {
+            if !packer.is_empty() {
+                planned_shards.push(packer.take());
+            }
+            let shard_start = next_seq;
+            let mut shard_count = 0u64;
+            if size == 0 {
+                planned_shards.push(PlannedShard::Empty {
+                    shard_seq: next_seq,
+                });
+                next_seq += 1;
+                shard_count = 1;
+            } else {
+                let mut offset = 0u64;
+                while offset < size {
+                    let chunk_len = std::cmp::min(cfg.shard_size as u64, size - offset);
+                    planned_shards.push(PlannedShard::NonPacked {
+                        shard_seq: next_seq,
+                        source: std::path::PathBuf::from(&entry.src),
+                        offset,
+                        len: chunk_len,
+                    });
+                    next_seq += 1;
+                    shard_count += 1;
+                    offset += chunk_len;
+                }
+            }
+            planned_files.push(PlannedFile {
+                dest_path: resolved_dest,
+                size,
+                shard_start,
+                shard_count,
+            });
+        }
+    }
+    if !packer.is_empty() {
+        planned_shards.push(packer.take());
+    }
+
+    let total_shards = next_seq - 1;
+    let file_count = entries.len() as u64;
+
+    let manifest_files: Vec<ManifestFile> = planned_files
+        .into_iter()
+        .map(|p| ManifestFile {
+            path: p.dest_path,
+            size: p.size,
+            shard_start: p.shard_start,
+            shard_count: p.shard_count,
+        })
+        .collect();
+
+    ensure_manifest_paths_fit(&manifest_files)?;
+    let manifest_json = serde_json::to_vec(&Manifest {
+        dest_root: dest_root.to_string(),
+        file_count,
+        total_bytes,
+        total_shards,
+        files: manifest_files,
+    })?;
+
+    let mut c = Connection::connect(&cfg.addr)?;
+    let begin_ack = send_begin_and_expect_ack(
+        &mut c,
+        &tx_meta_buf_flags(
+            tx_id,
+            2,
+            // Multi-file: always opt in to APPLY_PROGRESS so the
+            // client gets a live counter through the commit-apply
+            // phase (P3 / v2.18.0). Old payloads ignore unknown
+            // flag bits, so this is back-compat-clean — they
+            // simply don't emit progress frames and the commit
+            // wait sees only the final CommitTxAck (the new
+            // helper handles both paths transparently).
+            flags | TX_FLAG_APPLY_PROGRESS_REQUESTED,
+            &manifest_json,
+        ),
+    )?;
+    let last_acked_shard = parse_last_acked_shard(&begin_ack, flags & TX_FLAG_RESUME != 0);
+    // Same ghost-commit guard as the single-file paths. See guard_last_acked.
+    guard_last_acked(last_acked_shard, total_shards)?;
+
+    // `shards_sent` reflects this call's transmission; skipped shards
+    // (from a resumed prior attempt) are excluded.
+    let mut shards_sent = 0u64;
+    {
+        let mut sender = PipelinedSender::new(&mut c, cfg, tx_id, total_shards);
+        for ps in &planned_shards {
+            let seq = planned_shard_seq(ps);
+            if seq <= last_acked_shard {
+                continue;
+            }
+            let body = materialise_body(ps, cfg.progress_files.as_deref(), cfg.fs())?;
+            let (record_count, flags) = planned_shard_meta(ps);
+            shards_sent += 1;
+            // Non-packed shards (large-file bodies) report their body bytes as
+            // the kernel accepts them, so the speed/ETA stays smooth on slow
+            // links instead of jumping once per 64 MiB shard (the "speed keeps
+            // dropping" sawtooth). Packed (small-file) shards keep per-shard
+            // file-data accounting — their body carries per-record framing the
+            // progress denominator excludes.
+            if flags & SHARD_FLAG_PACKED == 0 {
+                if let Some(p) = cfg.progress_bytes.as_deref() {
+                    sender.send_with_progress(seq, &body, record_count, flags, p)?;
+                } else {
+                    sender.send_with(seq, &body, record_count, flags)?;
+                }
+            } else {
+                sender.send_with(seq, &body, record_count, flags)?;
+                if let Some(p) = &cfg.progress_bytes {
+                    p.fetch_add(
+                        planned_shard_data_len(ps),
+                        std::sync::atomic::Ordering::Relaxed,
+                    );
+                }
+            }
+        }
+        sender.drain()?;
+    }
+
+    let commit_ack = send_commit_and_expect_ack(&mut c, &tx_meta_buf(tx_id, 0, b""), cfg)?;
+
+    Ok(TransferResult {
+        tx_id_hex,
+        shards_sent,
+        bytes_sent: total_bytes,
+        dest: dest_root.to_string(),
+        commit_ack_body: String::from_utf8_lossy(&commit_ack).into_owned(),
+    })
+}
+
+// ─── Resumable wrappers ──────────────────────────────────────────────────────
+//
+// These mirror `transfer_file_resumable` for the dir and file-list paths:
+// retries set `TX_FLAG_RESUME` and reuse the tx_id so the payload's
+// journal can report `last_acked_shard`. The first attempt's flags are
+// controlled by `initial_flags`:
+//
+//   - `initial_flags = 0` — the common "fresh upload" case. A random or
+//     caller-minted tx_id with no prior state on the payload. The first
+//     BEGIN_TX takes the payload's fresh-allocation branch.
+//   - `initial_flags = TX_FLAG_RESUME` — the "user-initiated resume"
+//     case. The caller has a tx_id they believe the payload's journal
+//     still carries (e.g., our client's cross-session resume flow
+//     persists the tx_id and re-supplies it on the next upload attempt).
+//     Sending `TX_FLAG_RESUME` on the very first BEGIN_TX signals
+//     "adopt the existing entry, preserve partial data" instead of
+//     falling into the payload's restart-in-place branch (which would
+//     destroy the on-disk tmp + reset shards_received).
+//
+// Backoff between attempts is exponential (500 ms → 1 s → 2 s → 4 s
+// capped). Non-retryable errors short-circuit the loop.
+
+/// The payload's management port. Mirrors `mgmt_addr_for` in the engine.
+const PS5_MGMT_PORT: u16 = 9114;
+
+fn mgmt_addr_for_transfer(transfer_addr: &str) -> String {
+    match transfer_addr.rsplit_once(':') {
+        Some((host, _)) => format!("{host}:{PS5_MGMT_PORT}"),
+        None => format!("{transfer_addr}:{PS5_MGMT_PORT}"),
+    }
+}
+
+/// A destination is treated as full once its *allocatable* headroom is gone.
+///
+/// Raw `free_bytes` cannot be used for this. On a real FW 12.00 console that
+/// hit ENOSPC mid-upload, `statfs` still advertised **86 GB free** on `/data`
+/// long after the filesystem had started refusing writes — the PS5 holds back
+/// a large content-allocator reserve that `free_bytes` never reflects. The
+/// same capture showed the write stopping after 67.5 GB while
+/// `free - INTERNAL_STORAGE_SAFETY_RESERVE` predicted 67.6 GB, so
+/// `allocatable_bytes()` tracks the real limit and `free_bytes` does not.
+const CAPACITY_EXHAUSTED_FLOOR: u64 = 1024 * 1024 * 1024;
+
+/// Probe the destination volume after a dropped connection to tell
+/// "the PS5 ran out of room" apart from "the network blipped".
+///
+/// Returns a `{"error":..,"detail":..}` body when the destination is out of
+/// usable room. That shape is deliberate: the engine's `extract_payload_error`
+/// already mines the anyhow chain for it, so the job surfaces
+/// `error_reason = "insufficient_space"` with no engine-side change.
+///
+/// Telemetry failure returns `None` — a busy management port must never
+/// invent a disk-full verdict.
+fn capacity_exhausted_body(volume: &crate::volumes::Volume) -> Option<String> {
+    // Diagnosis, not gating, so this may use the pessimistic hidden-pool
+    // estimate that `allocatable_bytes()` deliberately does not. Being wrong
+    // here costs a mis-worded error on a transfer that already failed; being
+    // wrong in the gate costs the user the transfer itself.
+    let allocatable = volume.diagnostic_allocatable_bytes();
+    if allocatable >= CAPACITY_EXHAUSTED_FLOOR {
+        return None;
+    }
+    // Built with serde_json rather than string formatting: a volume path is
+    // attacker-adjacent free text, and an unescaped quote would produce a body
+    // the engine's extractor silently fails to parse — turning this clear
+    // message back into the raw socket error it exists to replace.
+    let detail = format!(
+        "The PS5 ran out of usable space on {} while writing, so it closed the connection. \
+         {} reports {} bytes free, but the console holds back a large pool for its own \
+         content allocator that this figure never reflects, leaving roughly {} bytes \
+         actually usable. Free up space on the PS5 (or pick another drive) and start the \
+         upload again — retrying now cannot succeed.",
+        volume.path, volume.path, volume.free_bytes, allocatable,
+    );
+    Some(serde_json::json!({ "error": "insufficient_space", "detail": detail }).to_string())
+}
+
+fn destination_capacity_exhausted(cfg: &TransferConfig, dest: &str) -> Option<String> {
+    let mgmt = mgmt_addr_for_transfer(&cfg.addr);
+    let volumes = crate::volumes::list_volumes(&mgmt).ok()?;
+    capacity_exhausted_body(volumes.find_for_path(dest)?)
+}
+
+/// Shared retry-loop helper used by the resumable wrappers.
+fn resumable_retry<F>(
+    cfg: &TransferConfig,
+    dest: &str,
+    max_retries: u32,
+    label: &str,
+    initial_flags: u32,
+    mut attempt_fn: F,
+) -> Result<TransferResult>
+where
+    F: FnMut(u32) -> Result<TransferResult>,
+{
+    let mut attempt: u32 = 0;
+    let mut prior_failures: Vec<String> = Vec::new();
+    loop {
+        // Attempt 0 honors the caller's requested initial_flags; all
+        // retries unconditionally set TX_FLAG_RESUME (the payload's
+        // journal, if it has anything, must carry last_acked_shard).
+        let flags = if attempt == 0 {
+            initial_flags
+        } else {
+            TX_FLAG_RESUME
+        };
+        match attempt_fn(flags) {
+            Ok(r) => {
+                if !prior_failures.is_empty() {
+                    eprintln!(
+                        "[resume] {label} succeeded on attempt {} after prior: {}",
+                        attempt,
+                        prior_failures.join(" | ")
+                    );
+                }
+                return Ok(r);
+            }
+            Err(e) => {
+                if attempt >= max_retries || !is_retryable_transfer_error(&e) {
+                    if !prior_failures.is_empty() {
+                        return Err(e.context(format!(
+                            "{label} gave up after {attempt} retries. Prior: {}",
+                            prior_failures.join(" | ")
+                        )));
+                    }
+                    return Err(e);
+                }
+                // Before burning the remaining attempts, find out WHY the
+                // connection died. A payload that ran out of disk closes the
+                // socket exactly like a network drop does, and every retry
+                // then fails instantly on the first write — the reported case
+                // spent 17 minutes uploading, then emitted six identical
+                // "connection forcibly closed (os error 10054)" lines that
+                // never once mentioned the disk. Checking once here converts
+                // that into a single actionable error and stops retrying a
+                // condition that cannot clear on its own.
+                //
+                // Safe to place here specifically because the transfer socket
+                // is already dead: this adds a management-port round trip only
+                // while nothing is on the wire, so it cannot reintroduce the
+                // mgmt-poller/transfer contention that cost throughput before.
+                if let Some(space_err) = destination_capacity_exhausted(cfg, dest) {
+                    eprintln!(
+                        "[resume] {label} attempt {attempt} failed ({e:#}); destination is out of \
+                         usable space — not retrying"
+                    );
+                    return Err(e.context(space_err));
+                }
+                // 500ms → 1s → 2s → 4s → 8s → 16s (capped). The 16s cap (was
+                // 8s) widens the total retry window so it can outlast the
+                // payload's serial accept loop briefly being unable to take a
+                // reconnect while it drains the dropped connection.
+                let backoff_ms = 500u64.saturating_mul(1u64 << attempt.min(5));
+                eprintln!("[resume] {label} attempt {attempt} failed ({e:#}); retrying in {backoff_ms} ms");
+                // `{e:#}` (not `{e}`): the bare Display prints only the outermost
+                // context, so a prior attempt read as "attempt 0: write frame split"
+                // with no cause — the one thing the user needed in order to tell a
+                // timed-out console apart from a refused one. The alternate form
+                // walks the whole anyhow chain down to the io::Error.
+                prior_failures.push(format!("attempt {attempt}: {e:#}"));
+                std::thread::sleep(std::time::Duration::from_millis(backoff_ms));
+                attempt += 1;
+            }
+        }
+    }
+}
+
+/// `transfer_dir` with automatic resume-on-network-drop.
+///
+/// `initial_flags` controls the very first BEGIN_TX: pass `0` for a
+/// fresh upload (random or newly-minted tx_id), or `TX_FLAG_RESUME`
+/// when you're handing in a tx_id that the payload is expected to
+/// already know about (user-initiated resume). Retries always use
+/// `TX_FLAG_RESUME`. See the retry-contract block above `resumable_retry`.
+pub fn transfer_dir_resumable(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest_root: &str,
+    src_dir: &Path,
+    max_retries: u32,
+    initial_flags: u32,
+) -> Result<TransferResult> {
+    resumable_retry(
+        cfg,
+        dest_root,
+        max_retries,
+        "transfer_dir",
+        initial_flags,
+        |flags| transfer_dir_with_flags(cfg, tx_id, dest_root, src_dir, flags),
+    )
+}
+
+/// `transfer_file_list` with automatic resume-on-network-drop.
+/// See `transfer_dir_resumable` for the `initial_flags` contract.
+pub fn transfer_file_list_resumable(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest_root: &str,
+    entries: &[FileListEntry],
+    max_retries: u32,
+    initial_flags: u32,
+) -> Result<TransferResult> {
+    resumable_retry(
+        cfg,
+        dest_root,
+        max_retries,
+        "transfer_file_list",
+        initial_flags,
+        |flags| transfer_file_list_with_flags(cfg, tx_id, dest_root, entries, flags),
+    )
+}
+
+/// Hard ceiling on parallel upload streams, independent of the user setting and
+/// the payload's advertised max. Beyond ~4 the gains flatten (the small-file
+/// pack pool already saturates at 4 workers) while the risk of overrunning the
+/// payload's accept backlog grows. See `docs/multistream-upload.md`.
+pub const MAX_TRANSFER_STREAMS: usize = 4;
+
+/// Multi-stream sibling of `transfer_file_list_resumable`: split `entries` into
+/// `streams` disjoint, byte-balanced buckets and upload them concurrently, each
+/// as its own resumable FTX2 transaction over its own connection. Breaks the
+/// single-stream ~40 MB/s write ceiling on non-Pro PS5s (see
+/// `docs/multistream-upload.md`).
+///
+/// Safety: streams write disjoint file sets to the same `dest_root`; the payload
+/// already serialises per-file writes and runs a concurrent pack pool, so
+/// distinct-file concurrent writes are safe. Each stream gets a deterministic
+/// per-stream `tx_id` (`stream_tx_id`) so a retry resumes that stream exactly.
+///
+/// Falls back to the single-stream path verbatim when `streams <= 1` or there's
+/// at most one file — so callers can always route through this function and the
+/// behaviour is unchanged until they actually ask for >1 stream against a
+/// capable payload.
+///
+/// Progress: all streams share `cfg`'s `Arc<AtomicU64>` counters, so the
+/// existing per-job progress bar aggregates across streams with no change.
+pub fn transfer_file_list_multistream(
+    cfg: &TransferConfig,
+    base_tx_id: [u8; 16],
+    dest_root: &str,
+    entries: &[FileListEntry],
+    streams: usize,
+    max_retries: u32,
+    initial_flags: u32,
+) -> Result<TransferResult> {
+    let effective = streams.clamp(1, MAX_TRANSFER_STREAMS);
+    // Single-stream fast path: behave exactly like the resumable single-stream
+    // transfer. Nothing below this point runs unless we truly go parallel.
+    if effective <= 1 || entries.len() <= 1 {
+        return transfer_file_list_resumable(
+            cfg,
+            base_tx_id,
+            dest_root,
+            entries,
+            max_retries,
+            initial_flags,
+        );
+    }
+
+    // Weights for balancing = file sizes (metadata only). A stat failure here
+    // contributes weight 0; the owning stream will surface the precise error
+    // when it tries to read the file.
+    let weights: Vec<u64> = entries
+        .iter()
+        .map(|e| {
+            cfg.fs()
+                .metadata(Path::new(&e.src))
+                .map(|m| m.len)
+                .unwrap_or(0)
+        })
+        .collect();
+    let buckets = distribute_balanced(&weights, effective);
+
+    // Shared cancel flag so the first stream to fail stops its siblings promptly
+    // instead of letting them run a doomed transfer to completion. Reuse the
+    // caller's flag if they supplied one (e.g. a user Cancel button).
+    let cancel = cfg
+        .cancel
+        .clone()
+        .unwrap_or_else(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
+
+    crate::core_log!(
+        "multistream: {} file(s) across {} stream(s) → {}",
+        entries.len(),
+        effective,
+        dest_root,
+    );
+
+    // Spawn one OS thread per non-empty bucket. Scoped threads let each borrow
+    // `dest_root`/`cfg` without `'static`; the scope joins them all before
+    // returning. Per-stream cfg carries the shared cancel flag.
+    let results: Vec<(usize, Result<TransferResult>)> = std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for (stream_idx, idxs) in buckets.iter().enumerate() {
+            if idxs.is_empty() {
+                continue; // fewer files than streams — nothing for this stream
+            }
+            let sub_entries: Vec<FileListEntry> =
+                idxs.iter().map(|&i| entries[i].clone()).collect();
+            let mut stream_cfg = cfg.clone();
+            stream_cfg.cancel = Some(cancel.clone());
+            let tx_id = stream_tx_id(base_tx_id, stream_idx);
+            let cancel_on_err = cancel.clone();
+            let handle = scope.spawn(move || {
+                let r = transfer_file_list_resumable(
+                    &stream_cfg,
+                    tx_id,
+                    dest_root,
+                    &sub_entries,
+                    max_retries,
+                    initial_flags,
+                );
+                if r.is_err() {
+                    // Tell siblings to stop at their next shard boundary.
+                    cancel_on_err.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                r
+            });
+            handles.push((stream_idx, handle));
+        }
+        handles
+            .into_iter()
+            .map(|(idx, h)| {
+                // A panicked stream thread is itself a failure; map join error
+                // into an Err so it's surfaced rather than aborting the process.
+                let r = h
+                    .join()
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("stream {idx} panicked")));
+                (idx, r)
+            })
+            .collect()
+    });
+
+    // Aggregate. Sum bytes/shards across streams; surface the first error (after
+    // all threads have joined). A failed multi-stream job is resumable: re-running
+    // re-derives the same per-stream tx_ids and each stream resumes via RESUME.
+    let mut bytes_sent = 0u64;
+    let mut shards_sent = 0u64;
+    let mut first_err: Option<anyhow::Error> = None;
+    let mut last_commit_ack = String::new();
+    for (idx, r) in results {
+        match r {
+            Ok(res) => {
+                bytes_sent += res.bytes_sent;
+                shards_sent += res.shards_sent;
+                last_commit_ack = res.commit_ack_body;
+            }
+            Err(e) => {
+                crate::core_log!("multistream: stream {} failed: {}", idx, e);
+                // When one stream fails it sets the shared cancel flag, so sibling
+                // streams abort at their next shard boundary with the generic
+                // `transfer_cancelled`. That's a CONSEQUENCE, not the root cause.
+                // Keep the first genuine error; only fall back to a cancellation
+                // error if nothing real was seen. Without this, a real failure in
+                // a higher-indexed stream could be masked by a lower-indexed
+                // sibling's `transfer_cancelled`, hiding the actionable cause.
+                let is_cancel = is_cancel_err(&e);
+                match &first_err {
+                    None => first_err = Some(e),
+                    Some(prev) if is_cancel_err(prev) && !is_cancel => first_err = Some(e),
+                    _ => {}
+                }
+            }
+        }
+    }
+    if let Some(e) = first_err {
+        return Err(e);
+    }
+    Ok(TransferResult {
+        tx_id_hex: bytes_to_hex(&base_tx_id),
+        shards_sent,
+        bytes_sent,
+        dest: dest_root.to_string(),
+        commit_ack_body: last_commit_ack,
+    })
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Zip-archive transfer — stream-decompress a .zip straight into the FTX2 pipe
+// ════════════════════════════════════════════════════════════════════════════
+//
+// The goal (feature request: "compress game dumps … extract them directly to
+// the console"): let users keep a game as a single `.zip` on the PC and upload
+// it so the files land *already extracted* on the PS5 — no temp copy of the
+// whole game, and no payload changes (the console receives raw files exactly as
+// it does for a folder upload).
+//
+// ── Why this is just `transfer_dir` with a different byte source ─────────────
+//
+// NonPacked zip entries stream like `.7z`: open the Deflate reader once per
+// entry and emit each shard-sized chunk as soon as it inflates. That keeps the
+// transfer socket busy so the payload's SO_RCVTIMEO never fires during a
+// multi-GB decompress (the pre-5.4.14 full-entry-cache path went silent for
+// minutes, then died at the 120s idle cap — Black Myth Wukong bug report).
+//
+// Packed (tiny) entries still inflate whole into a small buffer — they're
+// below `pack_file_max` (128 KiB). The Mem/Tmp cache helpers remain for that
+// packed path and for tests that call `read_range` directly.
+
+/// Entries whose *uncompressed* size is at or above this inflate to a temp
+/// file when using the seekable cache helpers; smaller entries use RAM.
+/// The live NonPacked send path streams and does not depend on this for
+/// keeping the wire busy.
+pub const DEFAULT_ZIP_ENTRY_RAM_THRESHOLD: u64 = 512 * 1024 * 1024;
+
+/// Distinct cache-file id per `ZipMaterialiser`, so two concurrent zip
+/// transfers in the same process can't collide on `pid-index` temp names.
+static ZIP_MATERIALISER_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Sanitize a zip entry name into a safe POSIX-relative path (forward
+/// slashes for the PS5). Rejects traversal (`..`), NUL, backslash segments,
+/// and absolute/empty paths — the same zip-slip defense as the client's
+/// `save_archive::sanitize_entry`, returning a string instead of a host
+/// `PathBuf`. Returns `None` for directory-only or unsafe names.
+fn sanitize_zip_entry(name: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in name.split('/') {
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        if seg == ".." {
+            return None;
+        }
+        if seg.contains('\\') || seg.contains('\0') {
+            return None;
+        }
+        parts.push(seg);
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts.join("/"))
+}
+
+/// One file entry inside the source zip, resolved from the central directory.
+/// `entry_index` indexes back into `ZipArchive::by_index`.
+struct ZipPlanFile {
+    dest_path: String,
+    entry_index: usize,
+    size: u64,
+}
+
+/// One packed record sourced from a zip entry (parallels `PackRecord`, which
+/// is file-backed).
+struct ZipPackRecord {
+    dest_path: String,
+    entry_index: usize,
+    size: u64,
+}
+
+/// A planned zip shard. Parallels `PlannedShard` but sources bytes from zip
+/// entries via a `ZipMaterialiser` instead of from files on disk.
+enum ZipShard {
+    Empty {
+        shard_seq: u64,
+    },
+    /// A slice `[offset, offset+len)` of one entry's *uncompressed* bytes.
+    /// `entry_size` is the entry's full uncompressed length (from the central
+    /// directory) — needed so the materialiser sizes its cache and validates
+    /// the inflate against the true size, not just this shard's slice.
+    NonPacked {
+        shard_seq: u64,
+        entry_index: usize,
+        entry_size: u64,
+        offset: u64,
+        len: u64,
+    },
+    /// Many small entries coalesced into one packed shard body.
+    Packed {
+        shard_seq: u64,
+        records: Vec<ZipPackRecord>,
+    },
+}
+
+fn zip_shard_seq(zs: &ZipShard) -> u64 {
+    match zs {
+        ZipShard::Empty { shard_seq }
+        | ZipShard::NonPacked { shard_seq, .. }
+        | ZipShard::Packed { shard_seq, .. } => *shard_seq,
+    }
+}
+
+fn zip_shard_meta(zs: &ZipShard) -> (u32, u32) {
+    match zs {
+        ZipShard::Empty { .. } | ZipShard::NonPacked { .. } => (1, 0),
+        ZipShard::Packed { records, .. } => (records.len() as u32, SHARD_FLAG_PACKED),
+    }
+}
+
+/// File-data bytes a zip shard carries, excluding packed-record framing.
+/// See `planned_shard_data_len` for why the progress numerator needs this.
+fn zip_shard_data_len(zs: &ZipShard) -> u64 {
+    match zs {
+        ZipShard::Empty { .. } => 0,
+        ZipShard::NonPacked { len, .. } => *len,
+        ZipShard::Packed { records, .. } => records.iter().map(|r| r.size).sum(),
+    }
+}
+
+/// The currently-inflated entry, kept seekable so shard byte-ranges can be
+/// served without re-decompressing.
+enum ZipEntryCache {
+    Mem {
+        index: usize,
+        data: Vec<u8>,
+    },
+    Tmp {
+        index: usize,
+        file: std::fs::File,
+        path: std::path::PathBuf,
+    },
+}
+
+impl ZipEntryCache {
+    fn index(&self) -> usize {
+        match self {
+            ZipEntryCache::Mem { index, .. } | ZipEntryCache::Tmp { index, .. } => *index,
+        }
+    }
+}
+
+/// Owns the open archive and the single-entry inflate cache. Drops/evicts the
+/// temp file on drop so an aborted transfer doesn't leak cache files.
+struct ZipMaterialiser {
+    archive: zip::ZipArchive<std::io::BufReader<std::fs::File>>,
+    ram_threshold: u64,
+    tmp_dir: std::path::PathBuf,
+    id: u64,
+    cache: Option<ZipEntryCache>,
+}
+
+impl ZipMaterialiser {
+    fn new(
+        archive: zip::ZipArchive<std::io::BufReader<std::fs::File>>,
+        ram_threshold: u64,
+        tmp_dir: std::path::PathBuf,
+    ) -> Self {
+        Self {
+            archive,
+            ram_threshold,
+            tmp_dir,
+            id: ZIP_MATERIALISER_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            cache: None,
+        }
+    }
+
+    /// Drop the cached entry, deleting the temp file if there was one.
+    fn evict(&mut self) {
+        if let Some(ZipEntryCache::Tmp { path, .. }) = self.cache.take() {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    /// Turn a `by_index` failure into an actionable message. The common
+    /// real case is an entry compressed with a method we don't build
+    /// support for (Deflate64 / BZip2 / LZMA / Zstd / AES). The `zip`
+    /// crate surfaces a terse `UnsupportedArchive`, which on the engine's
+    /// HTTP 400 the user saw as the baffling "read zip entry 0"
+    /// (Constantine-HD: "deflate64 and lzma … always error"). Rewrite it
+    /// to name the offending entry + method and how to fix it. Non-
+    /// compression failures (I/O, corruption) pass through with the
+    /// original `open zip entry N` context.
+    fn map_open_error(&mut self, index: usize, e: zip::result::ZipError) -> anyhow::Error {
+        if !matches!(e, zip::result::ZipError::UnsupportedArchive(_)) {
+            return anyhow::Error::new(e).context(format!("open zip entry {index}"));
+        }
+        let name = self
+            .archive
+            .name_for_index(index)
+            .unwrap_or("<unknown>")
+            .to_string();
+        // by_index_raw skips decoder construction, so it succeeds where
+        // by_index failed — letting us name the actual method. One seek,
+        // only on this already-failing path.
+        let method = self
+            .archive
+            .by_index_raw(index)
+            .ok()
+            .map(|zf| format!("{:?}", zf.compression()))
+            .unwrap_or_else(|| "an unsupported method".to_string());
+        anyhow::anyhow!(
+            "zip entry \"{name}\" uses compression method {method}, which ps5upload \
+             can't decompress. Only STORE and standard DEFLATE zips are supported — \
+             re-create the archive with standard Deflate (e.g. `zip -r`, 7-Zip's \
+             \"Deflate\" method, or Windows \"Send to → Compressed (zipped) folder\"). \
+             Deflate64, LZMA, BZip2, Zstd and AES-encrypted zips won't work."
+        )
+    }
+
+    /// Ensure `index` is the cached entry, inflating it whole if not. The
+    /// inflated length is checked against the central-directory size we
+    /// planned with — a mismatch means a corrupt/lying zip and fails loudly
+    /// rather than silently truncating the file delivered to the PS5.
+    /// Decompress zip entry `index` into the cache if not already cached.
+    ///
+    /// **Contract:** on `Ok(())`, `self.cache` is guaranteed to be `Some`
+    /// with entry `index`. Callers may rely on this (e.g. the
+    /// `self.cache.as_mut().expect(...)` in `read_shard`).
+    fn ensure_entry(&mut self, index: usize, expected: u64) -> Result<()> {
+        if self.cache.as_ref().map(ZipEntryCache::index) == Some(index) {
+            return Ok(());
+        }
+        self.evict();
+        use std::io::Read;
+        // The by_index Result borrows self.archive AND ZipFile has a Drop
+        // impl, so the matched temporary keeps the borrow live across the
+        // whole match — meaning no arm can call self.map_open_error (a
+        // second &mut self borrow). So the Err arm only stashes the OWNED
+        // error; we build the message after the match statement, once the
+        // temporary (and its borrow) is gone. The Ok arm does the whole
+        // inflate in-place — self.cache / tmp_dir / id are disjoint fields
+        // from self.archive, so they're usable while it's borrowed.
+        let mut open_err: Option<zip::result::ZipError> = None;
+        match self.archive.by_index(index) {
+            Ok(mut zf) => {
+                if expected < self.ram_threshold {
+                    let mut data = Vec::with_capacity(expected as usize);
+                    zf.read_to_end(&mut data)
+                        .with_context(|| format!("inflate zip entry {index} to memory"))?;
+                    if data.len() as u64 != expected {
+                        bail!(
+                            "zip entry {index} inflated to {} bytes, central directory said {expected}",
+                            data.len()
+                        );
+                    }
+                    self.cache = Some(ZipEntryCache::Mem { index, data });
+                } else {
+                    let path = self.tmp_dir.join(format!(
+                        "ps5upload-zipcache-{}-{}-{index}.tmp",
+                        std::process::id(),
+                        self.id
+                    ));
+                    // Spill the inflated entry to a temp file. Do the fallible work
+                    // in an IIFE so EVERY error path (failed create, a corrupt or
+                    // truncated DEFLATE stream, a disk that fills mid-copy, a
+                    // size mismatch, or a failed reopen) cleans up the temp file
+                    // below. Before this, those `?` early-returns leaked a
+                    // potentially multi-GB spill file: self.cache wasn't the `Tmp`
+                    // variant yet, so neither evict() nor Drop for ZipMaterialiser
+                    // could ever remove it. The IIFE captures `zf` by move (it
+                    // owns the drop) and `path` by shared ref, so `path` is free
+                    // to move into the cache / be removed once the IIFE returns.
+                    let materialise = || -> Result<std::fs::File> {
+                        let mut zf = zf;
+                        let mut wf = std::fs::File::create(&path)
+                            .with_context(|| format!("create zip cache file {}", path.display()))?;
+                        let written = std::io::copy(&mut zf, &mut wf).with_context(|| {
+                            format!("inflate zip entry {index} to {}", path.display())
+                        })?;
+                        drop(zf);
+                        wf.sync_all().ok();
+                        drop(wf);
+                        if written != expected {
+                            bail!("zip entry {index} inflated to {written} bytes, central directory said {expected}");
+                        }
+                        std::fs::File::open(&path)
+                            .with_context(|| format!("reopen zip cache file {}", path.display()))
+                    };
+                    match materialise() {
+                        Ok(file) => {
+                            self.cache = Some(ZipEntryCache::Tmp { index, file, path });
+                        }
+                        Err(e) => {
+                            let _ = std::fs::remove_file(&path);
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+            Err(e) => open_err = Some(e),
+        }
+        if let Some(e) = open_err {
+            return Err(self.map_open_error(index, e));
+        }
+        Ok(())
+    }
+
+    /// Serve `[offset, offset+len)` of entry `index` (uncompressed) from the
+    /// cache, inflating the entry first if needed. `entry_size` is the entry's
+    /// full uncompressed length, used to size the cache and bounds-check.
+    fn read_range(
+        &mut self,
+        index: usize,
+        entry_size: u64,
+        offset: u64,
+        len: u64,
+    ) -> Result<Vec<u8>> {
+        // checked_add: `entry_size` originates from the (untrusted) zip
+        // central directory, so guard the bound itself against u64 wrap —
+        // not just the slice math below.
+        if offset.checked_add(len).is_none_or(|end| end > entry_size) {
+            bail!("zip shard range {offset}+{len} exceeds entry {index} size {entry_size}");
+        }
+        self.ensure_entry(index, entry_size)?;
+        use std::io::{Read, Seek, SeekFrom};
+        match self.cache.as_mut().expect("ensure_entry populated cache") {
+            ZipEntryCache::Mem { data, .. } => {
+                let start = offset as usize;
+                let end = start
+                    .checked_add(len as usize)
+                    .context("zip shard range overflow")?;
+                let slice = data
+                    .get(start..end)
+                    .context("zip shard range out of bounds (mem cache)")?;
+                Ok(slice.to_vec())
+            }
+            ZipEntryCache::Tmp { file, .. } => {
+                file.seek(SeekFrom::Start(offset))
+                    .context("seek zip cache file")?;
+                let mut buf = vec![0u8; len as usize];
+                file.read_exact(&mut buf).context("read zip cache file")?;
+                Ok(buf)
+            }
+        }
+    }
+
+    /// Inflate an entire small entry without disturbing the single-entry
+    /// cache. Used for packed records, which are below `pack_file_max`.
+    fn read_whole_small(&mut self, index: usize, expected: u64) -> Result<Vec<u8>> {
+        use std::io::Read;
+        // Same borrow dance as ensure_entry: the Err arm only stashes the
+        // owned error; map_open_error runs after the match, once the
+        // by_index temporary's archive borrow is gone.
+        let mut out: Option<Vec<u8>> = None;
+        let mut open_err: Option<zip::result::ZipError> = None;
+        match self.archive.by_index(index) {
+            Ok(mut zf) => {
+                let mut data = Vec::with_capacity(expected as usize);
+                zf.read_to_end(&mut data)
+                    .with_context(|| format!("inflate packed zip entry {index}"))?;
+                if data.len() as u64 != expected {
+                    bail!(
+                        "packed zip entry {index} inflated to {} bytes, central directory said {expected}",
+                        data.len()
+                    );
+                }
+                out = Some(data);
+            }
+            Err(e) => open_err = Some(e),
+        }
+        if let Some(e) = open_err {
+            return Err(self.map_open_error(index, e));
+        }
+        Ok(out.expect("Ok arm populates out when there was no open error"))
+    }
+
+    /// Stream one NonPacked entry's shards as Deflate bytes arrive.
+    ///
+    /// Opens the zip entry once, `read_exact`s each shard-sized chunk in
+    /// plan order, and sends immediately (or discards on resume when
+    /// `seq <= last_acked_shard`). Returns the number of shards actually
+    /// transmitted. This is what keeps the transfer socket alive during
+    /// multi-GB inflates — contrast the old full-entry cache which
+    /// blocked for minutes before the first STREAM_SHARD.
+    fn stream_nonpacked_run(
+        &mut self,
+        run: &[ZipShard],
+        entry_index: usize,
+        entry_size: u64,
+        last_acked_shard: u64,
+        sender: &mut PipelinedSender<'_>,
+        progress_bytes: Option<&std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    ) -> Result<u64> {
+        use std::io::Read;
+        // Don't leave a stale packed-path cache pinned while we borrow
+        // the archive for streaming.
+        self.evict();
+
+        let mut open_err: Option<zip::result::ZipError> = None;
+        let mut shards_sent = 0u64;
+        let mut send_err: Option<anyhow::Error> = None;
+        match self.archive.by_index(entry_index) {
+            Ok(mut zf) => {
+                let mut consumed = 0u64;
+                for zs in run {
+                    let (seq, offset, len) = match zs {
+                        ZipShard::NonPacked {
+                            shard_seq,
+                            offset,
+                            len,
+                            entry_index: ei,
+                            entry_size: es,
+                            ..
+                        } => {
+                            if *ei != entry_index || *es != entry_size {
+                                bail!(
+                                    "zip stream run desynced: expected entry {entry_index}/{entry_size}, got {ei}/{es}"
+                                );
+                            }
+                            if *offset != consumed {
+                                bail!(
+                                    "zip stream run non-contiguous: expected offset {consumed}, got {offset}"
+                                );
+                            }
+                            (*shard_seq, *offset, *len)
+                        }
+                        _ => bail!("zip stream_nonpacked_run got non-NonPacked shard"),
+                    };
+                    let _ = offset; // validated against consumed
+                    let mut buf = vec![0u8; len as usize];
+                    zf.read_exact(&mut buf).with_context(|| {
+                        format!(
+                            "inflate zip entry {entry_index} shard seq={seq} ({len} bytes at {consumed})"
+                        )
+                    })?;
+                    consumed += len;
+                    if seq <= last_acked_shard {
+                        continue;
+                    }
+                    if let Err(e) = sender.send_with(seq, &buf, 1, 0) {
+                        send_err = Some(e);
+                        break;
+                    }
+                    shards_sent += 1;
+                    if let Some(p) = progress_bytes {
+                        p.fetch_add(len, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                if send_err.is_none() && consumed != entry_size {
+                    bail!(
+                        "zip entry {entry_index} streamed {consumed} bytes, central directory said {entry_size}"
+                    );
+                }
+            }
+            Err(e) => open_err = Some(e),
+        }
+        if let Some(e) = open_err {
+            return Err(self.map_open_error(entry_index, e));
+        }
+        if let Some(e) = send_err {
+            return Err(e);
+        }
+        Ok(shards_sent)
+    }
+
+    /// Materialise one shard's wire body — the zip analogue of
+    /// `materialise_body`. Packed bodies use the same
+    /// `[u32 path_len][u32 size][path][data]` record layout the payload's
+    /// pack parser expects.
+    fn body(&mut self, zs: &ZipShard) -> Result<Vec<u8>> {
+        match zs {
+            ZipShard::Empty { .. } => Ok(Vec::new()),
+            ZipShard::NonPacked {
+                entry_index,
+                entry_size,
+                offset,
+                len,
+                ..
+            } => self.read_range(*entry_index, *entry_size, *offset, *len),
+            ZipShard::Packed { records, .. } => {
+                // Don't pin a large cached entry while emitting tiny records.
+                self.evict();
+                let mut buf = Vec::new();
+                for r in records {
+                    let data = self.read_whole_small(r.entry_index, r.size)?;
+                    let p = r.dest_path.as_bytes();
+                    let path_len = u32::try_from(p.len())
+                        .with_context(|| format!("packed zip path too long: {}", r.dest_path))?;
+                    let rec_size = u32::try_from(r.size).with_context(|| {
+                        format!("packed zip size {} exceeds u32: {}", r.size, r.dest_path)
+                    })?;
+                    buf.extend_from_slice(&path_len.to_le_bytes());
+                    buf.extend_from_slice(&rec_size.to_le_bytes());
+                    buf.extend_from_slice(p);
+                    buf.extend_from_slice(&data);
+                }
+                Ok(buf)
+            }
+        }
+    }
+}
+
+impl Drop for ZipMaterialiser {
+    fn drop(&mut self) {
+        self.evict();
+    }
+}
+
+/// Lightweight preview of a `.zip` for the Upload screen: how much it expands
+/// to, how many files, and the game it contains (if it carries a
+/// `sce_sys/param.json`). Reads only the central directory plus, at most, one
+/// small `param.json` — never inflates the bulk of the archive.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ZipInspect {
+    /// Number of extractable file entries (directories excluded).
+    pub file_count: u64,
+    /// Sum of uncompressed sizes — what lands on the PS5.
+    pub total_uncompressed: u64,
+    /// Size of the `.zip` on disk — what the user is storing.
+    pub compressed_size: u64,
+    /// Game title from an embedded `sce_sys/param.json`, if any.
+    pub title: Option<String>,
+    /// Title ID, e.g. "PPSA00000".
+    pub title_id: Option<String>,
+    /// Content ID, e.g. "EP0000-PPSA00000_00-…".
+    pub content_id: Option<String>,
+    /// `applicationCategoryType` (0 = game).
+    pub application_category_type: Option<i64>,
+    /// The path *inside the zip* that contains `sce_sys/` (the game root),
+    /// e.g. "MyGame" for `MyGame/sce_sys/param.json`, or "" if param.json is
+    /// at the archive root. `None` when no game metadata was found.
+    pub game_root: Option<String>,
+}
+
+/// Inspect a `.zip` without extracting it. Walks the central directory for
+/// counts/sizes and, if it finds the shallowest `sce_sys/param.json`, parses
+/// it in memory for game metadata.
+pub fn inspect_zip(zip_path: &Path) -> Result<ZipInspect> {
+    inspect_zip_with_progress(zip_path, |_| {})
+}
+
+/// `inspect_zip` variant that calls `on_progress(entries_seen)` every
+/// 1,000 entries during the central-directory walk so streaming HTTP
+/// handlers can emit watchdog-resetting heartbeats. The progress is
+/// proportional to entry count, not bytes — the bytes side is bounded
+/// by central-directory size which is small. Used by
+/// `zip_inspect_handler`'s NDJSON streaming response.
+pub fn inspect_zip_with_progress(
+    zip_path: &Path,
+    on_progress: impl FnMut(u64),
+) -> Result<ZipInspect> {
+    let compressed_size = std::fs::metadata(zip_path)
+        .with_context(|| format!("stat zip {}", zip_path.display()))?
+        .len();
+
+    // Read the central directory via our own zero-seek parser
+    // (`zip_cd`) instead of `zip::ZipArchive::new`. We get per-entry
+    // (name, uncompressed_size, is_dir) for free, so total_uncompressed
+    // is computed by direct summation instead of going through
+    // `archive.decompressed_size()` — which returned `None` on any
+    // archive with general-purpose bit 3 set (bsdtar / libarchive
+    // streaming zippers; see the "Windows zip bit-3 trap" lesson). With
+    // direct summation we surface the real extracted size in the
+    // Upload card on those archives too, instead of the misleading
+    // count-only display.
+    let entries = crate::zip_cd::read_central_directory_with_progress(zip_path, on_progress)
+        .with_context(|| format!("read zip central directory {}", zip_path.display()))?;
+
+    let mut file_count = 0u64;
+    let mut total_uncompressed = 0u64;
+    // Find the shallowest "<root>/sce_sys/param.json" (fewest path
+    // segments) so a wrapped dump (`MyGame/sce_sys/…`) and a root dump
+    // (`sce_sys/…`) both resolve to the real game root. Keep the entry's
+    // ORIGINAL name so we can look it up by-name for the single
+    // content read below.
+    let mut param_hit: Option<(usize, String, String)> = None; // (depth, original_name, game_root)
+    for entry in &entries {
+        // Directory entries (trailing '/') don't count as files —
+        // matches the old behaviour. sanitize_zip_entry keeps "foo/"
+        // as "foo", so we must filter dirs by name first.
+        if entry.is_dir {
+            continue;
+        }
+        let Some(rel) = sanitize_zip_entry(&entry.name) else {
+            continue;
+        };
+        file_count += 1;
+        total_uncompressed = total_uncompressed.saturating_add(entry.uncompressed_size);
+        if let Some(root) = rel.strip_suffix("sce_sys/param.json") {
+            let game_root = root.trim_end_matches('/').to_string();
+            let depth = rel.split('/').count();
+            if param_hit.as_ref().is_none_or(|(d, _, _)| depth < *d) {
+                param_hit = Some((depth, entry.name.clone(), game_root));
+            }
+        }
+    }
+    drop(entries);
+
+    let mut inspect = ZipInspect {
+        file_count,
+        total_uncompressed,
+        compressed_size,
+        title: None,
+        title_id: None,
+        content_id: None,
+        application_category_type: None,
+        game_root: None,
+    };
+
+    // Only open the zip-crate archive when we actually need to inflate
+    // param.json — most game dumps have one, but skipping the open for
+    // archives without one saves a redundant central-directory parse on
+    // top of our own.
+    if let Some((_, original_name, game_root)) = param_hit {
+        use std::io::Read;
+        let file = std::fs::File::open(zip_path)
+            .with_context(|| format!("re-open zip for param.json {}", zip_path.display()))?;
+        if let Ok(mut archive) = zip::ZipArchive::new(std::io::BufReader::new(file)) {
+            // Cap the inflate: a real param.json is a few KiB, but
+            // inspect_zip runs on user-supplied archives just to render
+            // the Upload preview, so a crafted entry named
+            // sce_sys/param.json that decompresses to gigabytes (zip
+            // bomb) must not OOM the engine before any upload even
+            // starts. `take` bounds the read.
+            //
+            // Everything here is non-fatal: a param.json that's itself
+            // in an unsupported method, won't fit in 4 MiB, or doesn't
+            // parse just falls through to the size/count-only preview —
+            // the transfer path surfaces any real compression error.
+            const MAX_PARAM_JSON: u64 = 4 * 1024 * 1024;
+            if let Ok(zf) = archive.by_name(&original_name) {
+                let mut bytes = Vec::new();
+                if zf.take(MAX_PARAM_JSON).read_to_end(&mut bytes).is_ok() {
+                    if let Ok(meta) = crate::game_meta::parse_param_json_bytes(&bytes) {
+                        inspect.title = meta.title;
+                        inspect.title_id = meta.title_id;
+                        inspect.content_id = meta.content_id;
+                        inspect.application_category_type = meta.application_category_type;
+                        inspect.game_root = Some(game_root);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(inspect)
+}
+
+/// Engine-facing preview of what a zip transfer will send: total uncompressed
+/// bytes (the progress-bar denominator) and a sorted `(rel_path, size)` list
+/// (the UI file tree). Applies the same sanitize + excludes the transfer does,
+/// reading only the central directory. Lets the HTTP engine render a zip job
+/// without taking its own dependency on the `zip` crate.
+///
+/// Backed by `zip_cd::read_central_directory` rather than the `zip`
+/// crate's `by_index_raw`: the crate API forces a per-entry seek
+/// (`find_content`) to return metadata that already lives in memory.
+/// On a 6.7 GB / 1,548-entry zip from cold-cache exFAT external the
+/// old path took 17 s (one seek per entry); the new path reads the
+/// EOCD + central directory in two bulk reads and parses linearly
+/// (~ms). For huge dumps (100k+ tiny files) the difference is even
+/// larger — the per-entry-seek path would have blown the Tauri client's
+/// 60 s deadline (the reported "engine request failed" symptom).
+pub fn zip_plan_preview(zip_path: &Path, excludes: &[String]) -> Result<(u64, Vec<(String, u64)>)> {
+    zip_plan_preview_with_progress(zip_path, excludes, |_| {})
+}
+
+/// `zip_plan_preview` variant that forwards a per-N-entries callback so
+/// a streaming HTTP handler can emit progress heartbeats while the
+/// central directory is parsed. The walk itself is fast once the bulk
+/// read lands; the callback exists purely so a client-side watchdog has
+/// a continuous "engine still alive" signal during cold-cache reads of
+/// the central directory itself.
+pub fn zip_plan_preview_with_progress(
+    zip_path: &Path,
+    excludes: &[String],
+    on_progress: impl FnMut(u64),
+) -> Result<(u64, Vec<(String, u64)>)> {
+    let entries = crate::zip_cd::read_central_directory_with_progress(zip_path, on_progress)
+        .with_context(|| format!("read zip central directory {}", zip_path.display()))?;
+    let mut files: Vec<(String, u64)> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if entry.is_dir {
+            continue;
+        }
+        let Some(rel) = sanitize_zip_entry(&entry.name) else {
+            continue;
+        };
+        if !excludes.is_empty() && crate::excludes::is_excluded_strings(Path::new(&rel), excludes) {
+            continue;
+        }
+        files.push((rel, entry.uncompressed_size));
+    }
+    // Collapse duplicate paths keeping the last (same rule as
+    // transfer_zip_with_opts) so the preview's total + file count match
+    // exactly what the transfer sends — otherwise the progress bar's
+    // denominator would exceed the bytes actually streamed.
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut deduped: Vec<(String, u64)> = Vec::with_capacity(files.len());
+    for f in files {
+        if deduped.last().is_some_and(|(p, _)| *p == f.0) {
+            deduped.pop();
+        }
+        deduped.push(f);
+    }
+    let total = deduped.iter().map(|(_, s)| *s).sum();
+    Ok((total, deduped))
+}
+
+/// Transfer a `.zip`'s contents to `dest_root` on the PS5, decompressing on
+/// the host so files land already extracted. Default RAM threshold, fresh
+/// transaction. See `transfer_zip_with_opts` for the full contract.
+pub fn transfer_zip(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest_root: &str,
+    zip_path: &Path,
+) -> Result<TransferResult> {
+    transfer_zip_with_opts(
+        cfg,
+        tx_id,
+        dest_root,
+        zip_path,
+        DEFAULT_ZIP_ENTRY_RAM_THRESHOLD,
+        0,
+    )
+}
+
+/// Full-control zip transfer. `ram_threshold` is the per-entry RAM/temp-spill
+/// cutoff for packed-entry helpers (see `DEFAULT_ZIP_ENTRY_RAM_THRESHOLD`);
+/// `flags` is the BEGIN_TX flag word (`TX_FLAG_RESUME` to adopt an interrupted
+/// tx of the same `tx_id`). Planning is central-directory only; the send pass
+/// **streams** NonPacked Deflate entries shard-by-shard (like `.7z`) so the
+/// wire stays busy during multi-GB inflates.
+pub fn transfer_zip_with_opts(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest_root: &str,
+    zip_path: &Path,
+    ram_threshold: u64,
+    flags: u32,
+) -> Result<TransferResult> {
+    let tx_id_hex = bytes_to_hex(&tx_id);
+
+    let file = std::fs::File::open(zip_path)
+        .with_context(|| format!("open zip {}", zip_path.display()))?;
+    let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file))
+        .with_context(|| format!("read zip central directory {}", zip_path.display()))?;
+
+    // ── Planning pass ── central-directory only, no inflation. Enumerate file
+    //    entries, sanitize names (zip-slip), apply excludes, sort for a stable
+    //    manifest, then split/pack into shards exactly like `transfer_dir`.
+    let mut plan_files: Vec<ZipPlanFile> = Vec::new();
+    for i in 0..archive.len() {
+        let (name, size, is_dir) = {
+            // by_index_raw, not by_index: planning only needs central-
+            // directory metadata, and the raw variant skips building a
+            // decoder — so it doesn't seek per entry the way by_index does
+            // (the 100%-disk inspect thrash, here on the transfer's own
+            // planning pass) and doesn't hard-fail on an unsupported-
+            // compression entry. The clear "unsupported compression"
+            // error is raised at send time by ZipMaterialiser, one place.
+            let e = archive
+                .by_index_raw(i)
+                .with_context(|| format!("read zip entry {i}"))?;
+            (e.name().to_string(), e.size(), e.is_dir())
+        };
+        if is_dir {
+            continue;
+        }
+        let Some(rel) = sanitize_zip_entry(&name) else {
+            bail!("zip contains an unsafe or invalid entry path: {name:?}");
+        };
+        if !cfg.excludes.is_empty()
+            && crate::excludes::is_excluded_strings(Path::new(&rel), &cfg.excludes)
+        {
+            continue;
+        }
+        let dest_path = join_ps5_path(dest_root, Path::new(&rel));
+        plan_files.push(ZipPlanFile {
+            dest_path,
+            entry_index: i,
+            size,
+        });
+    }
+    if plan_files.is_empty() {
+        bail!(
+            "zip has no extractable files (after exclusions): {}",
+            zip_path.display()
+        );
+    }
+    // Stable sort by dest_path → duplicates land adjacent. Two distinct zip
+    // entries can map to one dest_path (ZIP permits duplicate names, and
+    // sanitize collapses `a/./b`, `a//b`, `a/b`). Collapse them keeping the
+    // *last* (the copy that would win on disk anyway, since the payload
+    // writes shards in manifest order) — otherwise we'd send the bytes
+    // twice and report an inflated file_count. Stable sort preserves the
+    // original relative order within a run, so "last" is deterministic.
+    plan_files.sort_by(|a, b| a.dest_path.cmp(&b.dest_path));
+    let before_dedup = plan_files.len();
+    {
+        let mut deduped: Vec<ZipPlanFile> = Vec::with_capacity(plan_files.len());
+        for pf in plan_files.drain(..) {
+            if deduped.last().is_some_and(|p| p.dest_path == pf.dest_path) {
+                deduped.pop();
+            }
+            deduped.push(pf);
+        }
+        plan_files = deduped;
+    }
+    if plan_files.len() < before_dedup {
+        eprintln!(
+            "[zip] {} duplicate destination path(s) in archive collapsed (last-writer-wins)",
+            before_dedup - plan_files.len()
+        );
+    }
+
+    let mut planned_files: Vec<ManifestFile> = Vec::with_capacity(plan_files.len());
+    let mut planned_shards: Vec<ZipShard> = Vec::new();
+    let mut total_bytes = 0u64;
+    let mut next_seq: u64 = 1;
+    let pack_enabled = cfg.pack_size > 0;
+    let pack_threshold = if pack_enabled { cfg.pack_file_max } else { 0 };
+    let pack_target = cfg.pack_size.max(4096);
+    let pack_count_max = cfg.pack_file_count_max;
+    // Inline packer — `PackPlanner` is file-source-specific, so the zip path
+    // keeps its own small accumulator with the identical coalescing rule.
+    let mut pack_records: Vec<ZipPackRecord> = Vec::new();
+    let mut pack_body: usize = 0;
+    let mut pack_seq: u64 = 0;
+
+    for pf in &plan_files {
+        total_bytes += pf.size;
+        if pack_enabled && (pf.size as usize) < pack_threshold {
+            let rec_size = PACKED_RECORD_PREFIX_LEN + pf.dest_path.len() + pf.size as usize;
+            // Same dual budget as `PackPlanner::would_exceed` — bytes OR
+            // record count. An archive of many tiny entries would otherwise
+            // pack thousands of records behind one ACK the engine waits
+            // only 30 s for.
+            let count_full = pack_count_max > 0 && pack_records.len() >= pack_count_max;
+            if !pack_records.is_empty() && (count_full || pack_body + rec_size > pack_target) {
+                planned_shards.push(ZipShard::Packed {
+                    shard_seq: pack_seq,
+                    records: std::mem::take(&mut pack_records),
+                });
+                pack_body = 0;
+            }
+            if pack_records.is_empty() {
+                pack_seq = next_seq;
+                next_seq += 1;
+            }
+            pack_body += rec_size;
+            pack_records.push(ZipPackRecord {
+                dest_path: pf.dest_path.clone(),
+                entry_index: pf.entry_index,
+                size: pf.size,
+            });
+            planned_files.push(ManifestFile {
+                path: pf.dest_path.clone(),
+                size: pf.size,
+                shard_start: pack_seq,
+                shard_count: 1,
+            });
+        } else {
+            if !pack_records.is_empty() {
+                planned_shards.push(ZipShard::Packed {
+                    shard_seq: pack_seq,
+                    records: std::mem::take(&mut pack_records),
+                });
+                pack_body = 0;
+            }
+            let shard_start = next_seq;
+            let mut shard_count = 0u64;
+            if pf.size == 0 {
+                planned_shards.push(ZipShard::Empty {
+                    shard_seq: next_seq,
+                });
+                next_seq += 1;
+                shard_count = 1;
+            } else {
+                let mut offset = 0u64;
+                while offset < pf.size {
+                    let chunk_len = std::cmp::min(cfg.shard_size as u64, pf.size - offset);
+                    planned_shards.push(ZipShard::NonPacked {
+                        shard_seq: next_seq,
+                        entry_index: pf.entry_index,
+                        entry_size: pf.size,
+                        offset,
+                        len: chunk_len,
+                    });
+                    next_seq += 1;
+                    shard_count += 1;
+                    offset += chunk_len;
+                }
+            }
+            planned_files.push(ManifestFile {
+                path: pf.dest_path.clone(),
+                size: pf.size,
+                shard_start,
+                shard_count,
+            });
+        }
+    }
+    if !pack_records.is_empty() {
+        planned_shards.push(ZipShard::Packed {
+            shard_seq: pack_seq,
+            records: std::mem::take(&mut pack_records),
+        });
+    }
+
+    let total_shards = next_seq - 1;
+    let file_count = planned_files.len() as u64;
+
+    ensure_manifest_paths_fit(&planned_files)?;
+    let manifest_json = serde_json::to_vec(&Manifest {
+        dest_root: dest_root.to_string(),
+        file_count,
+        total_bytes,
+        total_shards,
+        files: planned_files,
+    })?;
+
+    let mut c = Connection::connect(&cfg.addr)?;
+    let begin_ack = send_begin_and_expect_ack(
+        &mut c,
+        &tx_meta_buf_flags(
+            tx_id,
+            2,
+            // Multi-file: always opt in to APPLY_PROGRESS so the
+            // client gets a live counter through the commit-apply
+            // phase (P3 / v2.18.0). Old payloads ignore unknown
+            // flag bits, so this is back-compat-clean — they
+            // simply don't emit progress frames and the commit
+            // wait sees only the final CommitTxAck (the new
+            // helper handles both paths transparently).
+            flags | TX_FLAG_APPLY_PROGRESS_REQUESTED,
+            &manifest_json,
+        ),
+    )?;
+    let last_acked_shard = parse_last_acked_shard(&begin_ack, flags & TX_FLAG_RESUME != 0);
+    // Same ghost-commit guard as the single-file paths. See guard_last_acked.
+    guard_last_acked(last_acked_shard, total_shards)?;
+
+    // ── Send pass ── stream NonPacked Deflate entries shard-by-shard (keep
+    //    the wire busy during multi-GB inflates). Packed/Empty still go
+    //    through the small-entry materialiser. On resume, fully-acked
+    //    entries are skipped without opening; mid-entry resumes discard
+    //    already-acked inflate bytes then resume sending.
+    let mut mat = ZipMaterialiser::new(archive, ram_threshold, std::env::temp_dir());
+    let mut shards_sent = 0u64;
+    {
+        let mut sender = PipelinedSender::new(&mut c, cfg, tx_id, total_shards);
+        let mut i = 0usize;
+        while i < planned_shards.len() {
+            match &planned_shards[i] {
+                ZipShard::Empty { .. } | ZipShard::Packed { .. } => {
+                    let zs = &planned_shards[i];
+                    let seq = zip_shard_seq(zs);
+                    i += 1;
+                    if seq <= last_acked_shard {
+                        continue;
+                    }
+                    let body = mat.body(zs)?;
+                    let (record_count, sflags) = zip_shard_meta(zs);
+                    shards_sent += 1;
+                    sender.send_with(seq, &body, record_count, sflags)?;
+                    if let Some(p) = &cfg.progress_bytes {
+                        p.fetch_add(zip_shard_data_len(zs), std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                ZipShard::NonPacked {
+                    entry_index,
+                    entry_size,
+                    ..
+                } => {
+                    let entry_index = *entry_index;
+                    let entry_size = *entry_size;
+                    let run_start = i;
+                    i += 1;
+                    while i < planned_shards.len() {
+                        match &planned_shards[i] {
+                            ZipShard::NonPacked {
+                                entry_index: ei, ..
+                            } if *ei == entry_index => i += 1,
+                            _ => break,
+                        }
+                    }
+                    let run = &planned_shards[run_start..i];
+                    // Fast path: every shard of this entry already landed —
+                    // don't touch Deflate at all.
+                    if run.iter().all(|zs| zip_shard_seq(zs) <= last_acked_shard) {
+                        continue;
+                    }
+                    shards_sent += mat.stream_nonpacked_run(
+                        run,
+                        entry_index,
+                        entry_size,
+                        last_acked_shard,
+                        &mut sender,
+                        cfg.progress_bytes.as_ref(),
+                    )?;
+                }
+            }
+        }
+        sender.drain()?;
+    }
+    drop(mat); // evict any packed-path temp cache before COMMIT
+
+    let commit_ack = send_commit_and_expect_ack(&mut c, &tx_meta_buf(tx_id, 0, b""), cfg)?;
+
+    Ok(TransferResult {
+        tx_id_hex,
+        shards_sent,
+        bytes_sent: total_bytes,
+        dest: dest_root.to_string(),
+        commit_ack_body: String::from_utf8_lossy(&commit_ack).into_owned(),
+    })
+}
+
+/// `transfer_zip` with automatic resume-on-network-drop. See
+/// `transfer_dir_resumable` for the `initial_flags` contract.
+pub fn transfer_zip_resumable(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest_root: &str,
+    zip_path: &Path,
+    ram_threshold: u64,
+    max_retries: u32,
+    initial_flags: u32,
+) -> Result<TransferResult> {
+    resumable_retry(
+        cfg,
+        dest_root,
+        max_retries,
+        "transfer_zip",
+        initial_flags,
+        |flags| transfer_zip_with_opts(cfg, tx_id, dest_root, zip_path, ram_threshold, flags),
+    )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// .7z archive support
+//
+// Mirrors the .zip path (decompress host-side, stream files straight into the
+// FTX2 shard pipeline so they land already-extracted on the PS5) but with a
+// FORWARD-ONLY streaming model: 7z's LZMA2 streams can't be seeked, so each
+// entry's decompressed bytes are read sequentially and emitted as shards in
+// order — no random-access materialiser, no temp-file spill. Peak host RAM is
+// one shard plus the LZMA2 decoder window, regardless of archive size (the
+// 124 GB → 205 GB .exfat case streams in bounded memory).
+//
+// Single-file (the common "PPSAxxxxx.exfat" case), multi-file, solid and
+// non-solid archives all work. Two deliberate simplifications vs zip:
+//   1. No small-file packing. 7z game dumps are a handful of large files (or
+//      one image), not the 200k-tiny-file extracted-folder shape that the zip
+//      pack optimisation targets. Every file becomes Empty or sequential
+//      NonPacked shards.
+//   2. Game metadata (sce_sys/param.json) is not extracted at inspect time —
+//      a 7z-of-.exfat has no host-visible param.json (it lives inside the
+//      image), and read_file() on a solid archive would decompress everything
+//      before it. inspect_7z reports counts/sizes; title stays None.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Normalise + validate a 7z entry path. Same zip-slip rules as
+/// `sanitize_zip_entry`, except 7z archives created on Windows legitimately use
+/// '\\' as the path separator (zip always uses '/'), so backslashes are
+/// translated to forward slashes rather than rejected.
+fn sanitize_7z_entry(name: &str) -> Option<String> {
+    sanitize_zip_entry(&name.replace('\\', "/"))
+}
+
+/// One planned 7z file. Forward-only: we record only the size and the
+/// first shard seq — bytes are pulled from the decompression stream at send
+/// time, never seeked. `src_path` is kept so the send pass can assert it stays
+/// in lock-step with the plan. (Dest path + shard count already live in the
+/// manifest; the send pass doesn't re-derive them.)
+struct SevenzPlanFile {
+    src_path: String,
+    size: u64,
+    shard_start: u64,
+}
+
+/// Pick the LZMA2 worker-thread count. Defaults to 1 — multi-threaded decode
+/// is opt-in via `PS5UPLOAD_7Z_THREADS` because it trades a bounded streaming
+/// footprint for one proportional to the whole archive.
+///
+/// Measured on a 2.5 GB corpus (sevenz-rust2 0.22.2 / lzma-rust2 0.20.1),
+/// peak RSS for the decode alone:
+///
+/// | archive packed with | threads=1 | threads>1        |
+/// |---------------------|-----------|------------------|
+/// | `-mmt=8` (MT LZMA2) | 74 MiB    | 2.3 GiB, +24%    |
+/// | `-mmt=1` (solid)    | 74 MiB    | 4.4 GiB, +0%     |
+///
+/// The reason is structural: `Lzma2ReaderMt` splits work on LZMA2
+/// dictionary-reset chunks (control byte `>= 0xE0` or `== 0x01`) and buffers
+/// each unit's *decompressed* output in a `Vec<u8>`. A solid stream contains a
+/// single dict reset, so the one work unit is the entire archive — the reader
+/// stops streaming and materialises everything in RAM. Halving a 205 GB game
+/// dump's transfer time is worthless if the engine is OOM-killed first, and
+/// Docker hosts and Android have the tightest budgets of anyone.
+///
+/// So: honour an explicit opt-in (clamped to a sane range), otherwise stay on
+/// the single-threaded path that keeps peak RAM at one LZMA2 window.
+fn select_sevenz_decode_threads(configured: Option<&str>) -> u32 {
+    const HARD_MAX: usize = 16;
+
+    configured
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| value.clamp(1, HARD_MAX))
+        .unwrap_or(1) as u32
+}
+
+fn sevenz_decode_threads() -> u32 {
+    select_sevenz_decode_threads(std::env::var("PS5UPLOAD_7Z_THREADS").ok().as_deref())
+}
+
+/// Reconstruct the exact order `ArchiveReader::for_each_entries` visits files:
+/// every file that belongs to a block (ordered by block index, then file
+/// index), followed by every block-less file (empties / directories). This
+/// matches `BlockDecoder`'s `start..start+count` ascending walk plus the
+/// trailing empty-file loop, using only public `Archive` fields so we never
+/// touch crate internals. O(n log n), so a non-solid archive with one block
+/// per file (n blocks) stays cheap.
+fn sevenz_visit_order(archive: &sevenz_rust2::Archive) -> Vec<usize> {
+    let fbi = &archive.stream_map.file_block_index;
+    let mut order: Vec<usize> = (0..archive.files.len()).collect();
+    order.sort_by_key(|&fi| match fbi.get(fi).copied().flatten() {
+        // Block files first, grouped by block index then ascending file index.
+        Some(block) => (0u8, block, fi),
+        // Block-less files (empties, directories) last, ascending file index.
+        None => (1u8, usize::MAX, fi),
+    });
+    order
+}
+
+/// Inspect a `.7z` without extracting it. Reads only the (tiny) header for
+/// counts + sizes — instant even on a 124 GB archive. Game metadata is left
+/// `None` (see the module note); the Upload card renders fine without it.
+pub fn inspect_7z(archive_path: &Path) -> Result<ZipInspect> {
+    inspect_7z_with_progress(archive_path, |_| {})
+}
+
+/// `inspect_7z` variant that calls `on_progress(files_seen)` so streaming HTTP
+/// handlers can emit watchdog-resetting heartbeats while a many-file header is
+/// walked.
+pub fn inspect_7z_with_progress(
+    archive_path: &Path,
+    mut on_progress: impl FnMut(u64),
+) -> Result<ZipInspect> {
+    let compressed_size = std::fs::metadata(archive_path)
+        .with_context(|| format!("stat 7z {}", archive_path.display()))?
+        .len();
+    let mut src = std::io::BufReader::new(
+        std::fs::File::open(archive_path)
+            .with_context(|| format!("open 7z {}", archive_path.display()))?,
+    );
+    let pw = sevenz_rust2::Password::from("");
+    let archive = sevenz_rust2::Archive::read(&mut src, &pw)
+        .map_err(|e| anyhow::anyhow!("read 7z header {}: {e}", archive_path.display()))?;
+
+    let mut file_count = 0u64;
+    let mut total_uncompressed = 0u64;
+    for (i, e) in archive.files.iter().enumerate() {
+        if e.is_directory() {
+            continue;
+        }
+        file_count += 1;
+        total_uncompressed += e.size();
+        if i.is_multiple_of(1000) {
+            on_progress(file_count);
+        }
+    }
+    on_progress(file_count); // always emit a final tick
+
+    Ok(ZipInspect {
+        file_count,
+        total_uncompressed,
+        compressed_size,
+        title: None,
+        title_id: None,
+        content_id: None,
+        application_category_type: None,
+        game_root: None,
+    })
+}
+
+/// Metadata-only plan preview for the HTTP handler's synchronous pre-flight:
+/// total file-data bytes + the sanitised dest paths (sorted) for the live file
+/// tree. No decompression.
+pub fn sevenz_plan_preview(
+    archive_path: &Path,
+    excludes: &[String],
+) -> Result<(u64, Vec<(String, u64)>)> {
+    sevenz_plan_preview_with_progress(archive_path, excludes, |_| {})
+}
+
+/// `sevenz_plan_preview` with a per-N-files progress callback.
+pub fn sevenz_plan_preview_with_progress(
+    archive_path: &Path,
+    excludes: &[String],
+    mut on_progress: impl FnMut(u64),
+) -> Result<(u64, Vec<(String, u64)>)> {
+    let mut src = std::io::BufReader::new(
+        std::fs::File::open(archive_path)
+            .with_context(|| format!("open 7z {}", archive_path.display()))?,
+    );
+    let pw = sevenz_rust2::Password::from("");
+    let archive = sevenz_rust2::Archive::read(&mut src, &pw)
+        .map_err(|e| anyhow::anyhow!("read 7z header {}: {e}", archive_path.display()))?;
+
+    let mut total = 0u64;
+    let mut files: Vec<(String, u64)> = Vec::new();
+    let mut seen = 0u64;
+    for &fi in &sevenz_visit_order(&archive) {
+        let e = &archive.files[fi];
+        if e.is_directory() {
+            continue;
+        }
+        let Some(rel) = sanitize_7z_entry(e.name()) else {
+            bail!(
+                "7z contains an unsafe or invalid entry path: {:?}",
+                e.name()
+            );
+        };
+        if !excludes.is_empty() && crate::excludes::is_excluded_strings(Path::new(&rel), excludes) {
+            continue;
+        }
+        total += e.size();
+        files.push((rel, e.size()));
+        seen += 1;
+        if seen.is_multiple_of(1000) {
+            on_progress(seen);
+        }
+    }
+    on_progress(seen);
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok((total, files))
+}
+
+/// Transfer a `.7z`, streaming each entry's decompressed bytes into the FTX2
+/// shard pipeline. See the module note for the forward-only model. On resume
+/// (`flags & TX_FLAG_RESUME`) the archive is re-decompressed from the start and
+/// shards at or below the payload's last-acked cursor are decoded-but-not-sent
+/// (LZMA2 can't seek, so re-decompression is unavoidable — but the network
+/// re-send is skipped).
+pub fn transfer_7z_with_opts(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest_root: &str,
+    archive_path: &Path,
+    flags: u32,
+) -> Result<TransferResult> {
+    let tx_id_hex = bytes_to_hex(&tx_id);
+    let pw = sevenz_rust2::Password::from("");
+
+    // ── Planning pass ── header metadata only, no decompression. Enumerate
+    //    files in for_each_entries order, sanitize (zip-slip), apply excludes,
+    //    assign sequential shard ranges.
+    let archive = {
+        let mut src = std::io::BufReader::new(
+            std::fs::File::open(archive_path)
+                .with_context(|| format!("open 7z {}", archive_path.display()))?,
+        );
+        sevenz_rust2::Archive::read(&mut src, &pw)
+            .map_err(|e| anyhow::anyhow!("read 7z header {}: {e}", archive_path.display()))?
+    };
+
+    let mut plan: Vec<SevenzPlanFile> = Vec::new();
+    let mut planned_files: Vec<ManifestFile> = Vec::new();
+    let mut total_bytes = 0u64;
+    let mut next_seq: u64 = 1;
+    for &fi in &sevenz_visit_order(&archive) {
+        let e = &archive.files[fi];
+        if e.is_directory() {
+            continue;
+        }
+        let Some(rel) = sanitize_7z_entry(e.name()) else {
+            bail!(
+                "7z contains an unsafe or invalid entry path: {:?}",
+                e.name()
+            );
+        };
+        if !cfg.excludes.is_empty()
+            && crate::excludes::is_excluded_strings(Path::new(&rel), &cfg.excludes)
+        {
+            continue;
+        }
+        let size = e.size();
+        let dest_path = join_ps5_path(dest_root, Path::new(&rel));
+        let shard_start = next_seq;
+        let shard_count = if size == 0 {
+            1
+        } else {
+            size.div_ceil(cfg.shard_size as u64)
+        };
+        next_seq += shard_count;
+        total_bytes += size;
+        planned_files.push(ManifestFile {
+            path: dest_path,
+            size,
+            shard_start,
+            shard_count,
+        });
+        plan.push(SevenzPlanFile {
+            src_path: rel,
+            size,
+            shard_start,
+        });
+    }
+    if plan.is_empty() {
+        bail!(
+            "7z has no extractable files (after exclusions): {}",
+            archive_path.display()
+        );
+    }
+    let total_shards = next_seq - 1;
+    let file_count = planned_files.len() as u64;
+    ensure_manifest_paths_fit(&planned_files)?;
+    let manifest_json = serde_json::to_vec(&Manifest {
+        dest_root: dest_root.to_string(),
+        file_count,
+        total_bytes,
+        total_shards,
+        files: planned_files,
+    })?;
+
+    // ── BEGIN_TX ── tx_kind=2 (multi-file), same as zip.
+    let mut c = Connection::connect(&cfg.addr)?;
+    let begin_ack = send_begin_and_expect_ack(
+        &mut c,
+        &tx_meta_buf_flags(
+            tx_id,
+            2,
+            flags | TX_FLAG_APPLY_PROGRESS_REQUESTED,
+            &manifest_json,
+        ),
+    )?;
+    let last_acked_shard = parse_last_acked_shard(&begin_ack, flags & TX_FLAG_RESUME != 0);
+    guard_last_acked(last_acked_shard, total_shards)?;
+
+    // ── Send pass ── one forward-only decompression of the archive; emit each
+    //    entry's shards as the bytes flow. The for_each_entries closure visits
+    //    files in the SAME order the plan was built, so `pos` walks `plan` in
+    //    lock-step. Dirs/excluded entries are drained (read + discard) so a
+    //    solid block's shared stream stays aligned for the following entries.
+    let mut shards_sent = 0u64;
+    {
+        let mut reader = sevenz_rust2::ArchiveReader::new(
+            std::io::BufReader::new(
+                std::fs::File::open(archive_path)
+                    .with_context(|| format!("open 7z {}", archive_path.display()))?,
+            ),
+            pw.clone(),
+        )
+        .map_err(|e| anyhow::anyhow!("open 7z reader {}: {e}", archive_path.display()))?;
+        // Single-threaded decode by default: it is the only setting whose peak
+        // RAM is one LZMA2 window rather than the archive's whole uncompressed
+        // size (see select_sevenz_decode_threads for the measurements). Users
+        // who are CPU-bound on an MT-packed archive can opt in with
+        // PS5UPLOAD_7Z_THREADS. Either way file/block visitation stays ordered,
+        // so resume still observes a contiguous shard prefix.
+        reader.set_thread_count(sevenz_decode_threads());
+
+        let mut sender = PipelinedSender::new(&mut c, cfg, tx_id, total_shards);
+        let mut buf = vec![0u8; cfg.shard_size];
+        let mut pos = 0usize;
+        // Errors from the sender (anyhow) can't cross the closure's 7z Error
+        // boundary, so capture and surface after iteration stops.
+        let mut send_err: Option<anyhow::Error> = None;
+
+        let iter = reader.for_each_entries(|entry, rd| {
+            if entry.is_directory() {
+                std::io::copy(rd, &mut std::io::sink())?; // dir = empty reader
+                return Ok(true);
+            }
+            let Some(san) = sanitize_7z_entry(entry.name()) else {
+                // Planning already bailed on unsafe paths; defensively drain.
+                std::io::copy(rd, &mut std::io::sink())?;
+                return Ok(true);
+            };
+            if !cfg.excludes.is_empty()
+                && crate::excludes::is_excluded_strings(Path::new(&san), &cfg.excludes)
+            {
+                std::io::copy(rd, &mut std::io::sink())?; // keep solid stream aligned
+                return Ok(true);
+            }
+
+            // Lock-step with the plan. A mismatch means the reconstructed visit
+            // order diverged from for_each_entries — fail loudly rather than
+            // write the wrong bytes to a dest path.
+            if pos >= plan.len() || plan[pos].src_path != san {
+                send_err = Some(anyhow::anyhow!(
+                    "7z stream desynced from plan at entry {san:?}"
+                ));
+                return Ok(false);
+            }
+            let pf = &plan[pos];
+            pos += 1;
+
+            if pf.size == 0 {
+                if pf.shard_start > last_acked_shard {
+                    if let Err(e) = sender.send_with(pf.shard_start, &[], 1, 0) {
+                        send_err = Some(e);
+                        return Ok(false);
+                    }
+                    shards_sent += 1;
+                }
+                return Ok(true);
+            }
+
+            let mut seq = pf.shard_start;
+            let mut remaining = pf.size;
+            while remaining > 0 {
+                let n = std::cmp::min(cfg.shard_size as u64, remaining) as usize;
+                rd.read_exact(&mut buf[..n])?; // io::Error → 7z Error via `?`
+                if seq > last_acked_shard {
+                    if let Err(e) = sender.send_with(seq, &buf[..n], 1, 0) {
+                        send_err = Some(e);
+                        return Ok(false);
+                    }
+                    shards_sent += 1;
+                    if let Some(p) = &cfg.progress_bytes {
+                        p.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                seq += 1;
+                remaining -= n as u64;
+            }
+            Ok(true)
+        });
+
+        if let Some(e) = send_err {
+            return Err(e);
+        }
+        iter.map_err(|e| anyhow::anyhow!("decompress 7z {}: {e}", archive_path.display()))?;
+        sender.drain()?;
+    }
+
+    let commit_ack = send_commit_and_expect_ack(&mut c, &tx_meta_buf(tx_id, 0, b""), cfg)?;
+    Ok(TransferResult {
+        tx_id_hex,
+        shards_sent,
+        bytes_sent: total_bytes,
+        dest: dest_root.to_string(),
+        commit_ack_body: String::from_utf8_lossy(&commit_ack).into_owned(),
+    })
+}
+
+/// `transfer_7z` with automatic resume-on-network-drop. Mirrors
+/// `transfer_zip_resumable`.
+pub fn transfer_7z_resumable(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest_root: &str,
+    archive_path: &Path,
+    max_retries: u32,
+    initial_flags: u32,
+) -> Result<TransferResult> {
+    resumable_retry(
+        cfg,
+        dest_root,
+        max_retries,
+        "transfer_7z",
+        initial_flags,
+        |flags| transfer_7z_with_opts(cfg, tx_id, dest_root, archive_path, flags),
+    )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  .rar transfer  (feature = "rar", desktop-only)
+//
+//  Real RAR support needs the UnRAR C++ source (the `unrar` crate): there is no
+//  production-grade pure-Rust RAR decoder, and only UnRAR covers RAR5 +
+//  multi-volume + AES passwords. That's a C dependency, which would break the
+//  Android pure-Rust cross-compile the zip/7z pins guard — so the whole feature
+//  is gated behind the `rar` Cargo feature, which the desktop build enables and
+//  the Android build does NOT (Android keeps zip/7z only).
+//
+//  Streaming model differs from zip/7z: the `unrar` crate reads a whole entry
+//  into memory at once (no chunked reader), which would OOM on a .rar wrapping
+//  a single huge image. So a .rar is EXTRACTED to a host temp dir and then
+//  handed to the existing directory transfer — bounded memory, any entry size,
+//  and the same resume/hash/progress machinery. The PS5 still receives only the
+//  extracted files (no double storage on the console; the host staging dir is
+//  transient and removed afterwards). Multi-volume sets are opened from the
+//  first volume (UnRAR pulls in the siblings automatically); a password flows
+//  in but is never logged or persisted.
+//
+//  REQUIRED UnRAR NOTICE (UnRAR license, paragraph 2 — reproduced verbatim, as
+//  the license mandates it appear "in source code comments of resulting
+//  package"):
+//    UnRAR source code may be used in any software to handle RAR archives
+//    without limitations free of charge, but cannot be used to develop RAR
+//    (WinRAR) compatible archiver and to re-create RAR compression algorithm,
+//    which is proprietary. Distribution of modified UnRAR source code in
+//    separate form or as a part of other software is permitted, provided that
+//    full text of this paragraph, starting from "UnRAR source code" words, is
+//    included in license, or in documentation if license is not available, and
+//    in source code comments of resulting package.
+//  ps5upload uses UnRAR ONLY to extract; it never compresses RAR. GPLv3 §7
+//  linking exception + the full UnRAR license: see LICENSES/UnRAR-exception.md
+//  and LICENSES/UnRAR-license.txt.
+// ═══════════════════════════════════════════════════════════════════════════
+#[cfg(not(target_os = "android"))]
+pub use rar_support::{
+    inspect_rar, rar_plan_entries_for_test, rar_plan_preview, spawn_rar_worker_for_test,
+    transfer_rar_resumable, transfer_rar_streaming,
+};
+
+#[cfg(not(target_os = "android"))]
+mod rar_support {
+    use super::*;
+    use unrar::error::{Code as RarCode, UnrarError};
+    use unrar::{Archive, FileHeader, StreamSink};
+
+    /// Map UnRAR errors to stable, UI-detectable strings for the two cases the
+    /// UI must react to (prompt for / re-prompt the password); everything else
+    /// passes through verbatim with context.
+    fn map_rar_err(ctx: &str, e: UnrarError) -> anyhow::Error {
+        match e.code {
+            RarCode::MissingPassword => anyhow::anyhow!("rar_password_required"),
+            RarCode::BadPassword => anyhow::anyhow!("rar_password_wrong"),
+            _ => anyhow::anyhow!("{ctx}: {e}"),
+        }
+    }
+
+    /// Same, but first check whether a volume of the set is simply absent.
+    ///
+    /// UnRAR reports a missing sibling as a generic open failure, which the
+    /// UI turned into "select the FIRST part and keep every volume in one
+    /// folder" — useless to someone who had done both. Checking the set
+    /// ourselves lets us name the file that is actually missing.
+    fn map_rar_open_err(path: &str, ctx: &str, e: UnrarError) -> anyhow::Error {
+        if !matches!(e.code, RarCode::MissingPassword | RarCode::BadPassword) {
+            let on_disk = |p: &str| std::path::Path::new(p).exists();
+            if let Some(missing) = missing_volume(path, &on_disk) {
+                return anyhow::anyhow!("rar_missing_volume: {missing}");
+            }
+        }
+        map_rar_err(ctx, e)
+    }
+
+    /// Name the first missing volume of a multi-part set, if one is missing.
+    ///
+    /// UnRAR opens siblings itself and, when one is absent, fails with a
+    /// generic open error. The UI then showed "select the FIRST part and
+    /// make sure every volume is in the same folder" — advice a user who
+    /// had already done both could not act on (reported with a screenshot
+    /// showing exactly that). Naming the missing file turns it into
+    /// something they can fix.
+    ///
+    /// Handles both schemes in the wild:
+    ///   name.part1.rar / name.part2.rar …  (any digit width, 1-based)
+    ///   name.rar / name.r00 / name.r01 …   (older split scheme)
+    ///
+    /// `exists` is injected so the scan is testable without a filesystem.
+    pub(crate) fn missing_volume(path: &str, exists: &dyn Fn(&str) -> bool) -> Option<String> {
+        let (dir, file) = match path.rfind(['/', '\\']) {
+            Some(i) => (&path[..=i], &path[i + 1..]),
+            None => ("", path),
+        };
+        let lower = file.to_ascii_lowercase();
+
+        // .partN.rar — walk forward until a volume is absent, and only
+        // report a gap if a LATER volume exists (otherwise we are simply
+        // past the end of the set).
+        if let Some(pos) = lower.rfind(".part") {
+            let rest = &lower[pos + 5..];
+            if let Some(dot) = rest.find(".rar") {
+                let digits = &rest[..dot];
+                if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) {
+                    let width = digits.len();
+                    let start: u32 = digits.parse().ok()?;
+                    let stem = &file[..pos];
+                    let name_of = |n: u32| format!("{stem}.part{n:0width$}.rar", width = width);
+                    let mut n = start;
+                    loop {
+                        n += 1;
+                        let cand = name_of(n);
+                        if exists(&format!("{dir}{cand}")) {
+                            continue;
+                        }
+                        // Absent: a gap only matters if the set continues.
+                        for ahead in 1..=3 {
+                            if exists(&format!("{dir}{}", name_of(n + ahead))) {
+                                return Some(cand);
+                            }
+                        }
+                        return None;
+                    }
+                }
+            }
+        }
+
+        // name.rar + name.r00, r01 … — same idea on the older scheme.
+        if lower.ends_with(".rar") {
+            let stem = &file[..file.len() - 4];
+            let name_of = |n: u32| format!("{stem}.r{n:02}");
+            if exists(&format!("{dir}{}", name_of(0))) {
+                let mut n = 0u32;
+                loop {
+                    n += 1;
+                    let cand = name_of(n);
+                    if exists(&format!("{dir}{cand}")) {
+                        continue;
+                    }
+                    for ahead in 1..=3 {
+                        if exists(&format!("{dir}{}", name_of(n + ahead))) {
+                            return Some(cand);
+                        }
+                    }
+                    return None;
+                }
+            }
+        }
+        None
+    }
+
+    /// Sanitise a RAR entry path with the same zip-slip rules as 7z (RAR, like
+    /// 7z, can use '\\' separators on Windows-created archives).
+    fn sanitize_rar_entry(name: &Path) -> Option<String> {
+        sanitize_7z_entry(&name.to_string_lossy())
+    }
+
+    /// Open the archive's file list (with or without a password) as an iterator
+    /// of headers. The returned `OpenArchive` owns its handle, so the borrowed
+    /// `path` / `password` only need to live across this call.
+    /// Multi-volume note: upstream `unrar 0.5.8` reads ~8 KB out of a much
+    /// smaller buffer on every volume transition (a ~7.7 KB out-of-bounds
+    /// heap read), which aborts debug builds on any multi-part archive.
+    /// The crate is vendored at `third_party/unrar` with that fixed, wired
+    /// up through `[patch.crates-io]` — so this is safe to call on a
+    /// multi-part set. If you ever bump or un-vendor `unrar`, check the
+    /// `UCM_CHANGEVOLUMEW` arm first: see `third_party/unrar/README.md`.
+    fn list_headers(
+        path: &str,
+        password: Option<&str>,
+    ) -> std::result::Result<
+        impl Iterator<Item = std::result::Result<FileHeader, UnrarError>>,
+        UnrarError,
+    > {
+        match password {
+            Some(pw) => Archive::with_password(path, pw).open_for_listing(),
+            None => Archive::new(path).open_for_listing(),
+        }
+    }
+
+    /// Inspect a `.rar` (counts + uncompressed bytes) without extracting. Opens
+    /// the first volume; UnRAR spans the rest of the set. `compressed_size` is
+    /// the first volume's size only (a rough hint); `total_uncompressed` is the
+    /// meaningful figure.
+    pub fn inspect_rar(archive_path: &Path, password: Option<&str>) -> Result<ZipInspect> {
+        let path_str = archive_path.to_string_lossy().into_owned();
+        let compressed_size = std::fs::metadata(archive_path)
+            .with_context(|| format!("stat rar {}", archive_path.display()))?
+            .len();
+        let mut file_count = 0u64;
+        let mut total_uncompressed = 0u64;
+        // Shallowest "<root>/sce_sys/param.json" wins, so a dump wrapped in an
+        // extra folder (`[SITE]-PPSA12345/PPSA12345-app/sce_sys/…`) and a bare
+        // one (`sce_sys/…`) both resolve to the real game root. Same rule as
+        // the zip path.
+        let mut param_hit: Option<(usize, String)> = None; // (depth, game_root)
+        for entry in list_headers(&path_str, password)
+            .map_err(|e| map_rar_open_err(&path_str, "open rar", e))?
+        {
+            let e = entry.map_err(|e| map_rar_err("read rar header", e))?;
+            if e.is_directory() {
+                continue;
+            }
+            file_count += 1;
+            total_uncompressed += e.unpacked_size;
+            if let Some(rel) = sanitize_rar_entry(&e.filename) {
+                param_hit = better_param_hit(param_hit, &rel);
+            }
+        }
+
+        let mut inspect = ZipInspect {
+            file_count,
+            total_uncompressed,
+            compressed_size,
+            title: None,
+            title_id: None,
+            content_id: None,
+            application_category_type: None,
+            game_root: None,
+        };
+
+        // Pull the title out of param.json. Without this a .rar upload showed
+        // no game name and landed in a folder named after the archive —
+        // `/data/homebrew/[DLPSGAME.COM]- 01.021 PPSA23226` in one real
+        // report — while the identical .zip resolved a clean title.
+        //
+        // Entirely best-effort: any failure leaves the size/count-only
+        // preview, exactly as before. This runs on user-supplied archives
+        // just to render the Upload card, so it must never be able to fail
+        // an upload that would otherwise work.
+        if let Some((_, game_root)) = param_hit {
+            if let Some(meta) = read_param_json(archive_path, password, &game_root) {
+                inspect.title = meta.title;
+                inspect.title_id = meta.title_id;
+                inspect.content_id = meta.content_id;
+                inspect.application_category_type = meta.application_category_type;
+                inspect.game_root = Some(game_root);
+            }
+        }
+
+        Ok(inspect)
+    }
+
+    /// Fold one entry path into the running "best param.json" choice.
+    ///
+    /// Shallowest wins, so a dump wrapped in an extra folder
+    /// (`[SITE]-PPSA12345/PPSA12345-app/sce_sys/param.json`) and a bare one
+    /// (`sce_sys/param.json`) both resolve to the real game root, and a
+    /// nested DLC or update folder deeper in the tree cannot outrank the
+    /// base game.
+    pub(crate) fn better_param_hit(
+        current: Option<(usize, String)>,
+        rel: &str,
+    ) -> Option<(usize, String)> {
+        let Some(root) = rel.strip_suffix("sce_sys/param.json") else {
+            return current;
+        };
+        // Guard against a file merely *ending* in that text, e.g.
+        // "notsce_sys/param.json" — the boundary must be a real path
+        // separator or the very start of the path.
+        if !(root.is_empty() || root.ends_with('/')) {
+            return current;
+        }
+        let depth = rel.split('/').count();
+        match &current {
+            Some((d, _)) if *d <= depth => current,
+            _ => Some((depth, root.trim_end_matches('/').to_string())),
+        }
+    }
+
+    /// Extract just `<game_root>/sce_sys/param.json` and parse it.
+    ///
+    /// Stops at the entry rather than walking the whole set: on a nine-volume
+    /// archive there is no reason to cross eight volume boundaries to read a
+    /// few KB. Returns `None` on anything unexpected — callers treat metadata
+    /// as a nicety, never a precondition.
+    fn read_param_json(
+        archive_path: &Path,
+        password: Option<&str>,
+        game_root: &str,
+    ) -> Option<crate::game_meta::FolderInspectResult> {
+        // A real param.json is a few KB. Refuse a huge one rather than write
+        // it to disk: this runs on untrusted archives before any upload.
+        const MAX_PARAM_JSON: u64 = 4 * 1024 * 1024;
+
+        let want = if game_root.is_empty() {
+            "sce_sys/param.json".to_string()
+        } else {
+            format!("{game_root}/sce_sys/param.json")
+        };
+
+        let tmp = std::env::temp_dir().join(format!(".ps5upload-param-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).ok()?;
+
+        let result = (|| -> Option<crate::game_meta::FolderInspectResult> {
+            let path_str = archive_path.to_string_lossy().into_owned();
+            let mut open = match password {
+                Some(pw) => Archive::with_password(&path_str, pw).open_for_processing(),
+                None => Archive::new(&path_str).open_for_processing(),
+            }
+            .ok()?;
+
+            loop {
+                let header = open.read_header().ok()??;
+                let name = header.entry().filename.clone();
+                let matches = sanitize_rar_entry(&name).as_deref() == Some(want.as_str());
+                if !matches || header.entry().unpacked_size > MAX_PARAM_JSON {
+                    open = header.skip().ok()?;
+                    continue;
+                }
+                let dest = tmp.join("param.json");
+                let _ = header.extract_to(&dest).ok()?;
+                let bytes = std::fs::read(&dest).ok()?;
+                return crate::game_meta::parse_param_json_bytes(&bytes).ok();
+            }
+        })();
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        result
+    }
+
+    /// Metadata-only plan preview: total bytes + sanitised dest paths (sorted)
+    /// for the live file tree. No extraction.
+    /// Entries in **archive order** — the order a processing walk produces.
+    ///
+    /// Keep this distinct from `rar_plan_preview`, which sorts. The streaming
+    /// upload builds its manifest from this: shard numbers are assigned in
+    /// send order, and the resume rule ("skip anything at or below the last
+    /// acked shard") is only sound if shards go out ascending. Feeding it
+    /// sorted names transposed two adjacent pairs in a real 181-file archive
+    /// — `precisionarrow` vs `precision_precisionplus`, where `_` sorts
+    /// before a letter — and the lock-step check caught it.
+    pub(crate) fn rar_plan_entries(
+        archive_path: &Path,
+        password: Option<&str>,
+        excludes: &[String],
+    ) -> Result<(u64, Vec<(String, u64)>)> {
+        let path_str = archive_path.to_string_lossy().into_owned();
+        let mut total = 0u64;
+        let mut files: Vec<(String, u64)> = Vec::new();
+        for entry in list_headers(&path_str, password)
+            .map_err(|e| map_rar_open_err(&path_str, "open rar", e))?
+        {
+            let e = entry.map_err(|e| map_rar_err("read rar header", e))?;
+            if e.is_directory() {
+                continue;
+            }
+            let Some(rel) = sanitize_rar_entry(&e.filename) else {
+                bail!(
+                    "rar contains an unsafe or invalid entry path: {:?}",
+                    e.filename
+                );
+            };
+            if !excludes.is_empty()
+                && crate::excludes::is_excluded_strings(Path::new(&rel), excludes)
+            {
+                continue;
+            }
+            total += e.unpacked_size;
+            files.push((rel, e.unpacked_size));
+        }
+        Ok((total, files))
+    }
+
+    /// Entries sorted by path, for showing a human a file list.
+    ///
+    /// Do NOT use this to build a transfer manifest — see `rar_plan_entries`.
+    pub fn rar_plan_preview(
+        archive_path: &Path,
+        password: Option<&str>,
+        excludes: &[String],
+    ) -> Result<(u64, Vec<(String, u64)>)> {
+        let (total, mut files) = rar_plan_entries(archive_path, password, excludes)?;
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok((total, files))
+    }
+
+    /// Walk the archive on a worker thread, pushing entry-framed messages.
+    ///
+    /// Runs on its own thread because UnRAR pushes bytes at us while the shard
+    /// sender pulls; the bounded channel between them is the backpressure, so
+    /// peak memory is a few chunks rather than a whole entry.
+    fn spawn_rar_worker(
+        archive_path: &Path,
+        password: Option<&str>,
+        excludes: Vec<String>,
+    ) -> (
+        std::sync::mpsc::Receiver<crate::rar_stream::StreamMsg>,
+        std::thread::JoinHandle<()>,
+    ) {
+        use crate::rar_stream::StreamMsg;
+
+        let path_str = archive_path.to_string_lossy().into_owned();
+        let password = password.map(str::to_string);
+        // 4 chunks is enough to keep the sender fed without letting the worker
+        // run far ahead of the network.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<StreamMsg>(4);
+
+        let handle = std::thread::spawn(move || {
+            let fail = |tx: &std::sync::mpsc::SyncSender<StreamMsg>, msg: String| {
+                let _ = tx.send(StreamMsg::Failed(msg));
+            };
+
+            let opened = match password.as_deref() {
+                Some(pw) => Archive::with_password(&path_str, pw).open_for_processing(),
+                None => Archive::new(&path_str).open_for_processing(),
+            };
+            let mut open = match opened {
+                Ok(o) => o,
+                Err(e) => {
+                    fail(
+                        &tx,
+                        format!("{:#}", map_rar_open_err(&path_str, "open rar", e)),
+                    );
+                    return;
+                }
+            };
+
+            loop {
+                let header = match open.read_header() {
+                    Ok(Some(h)) => h,
+                    Ok(None) => {
+                        let _ = tx.send(StreamMsg::Finished);
+                        return;
+                    }
+                    Err(e) => {
+                        fail(&tx, format!("{:#}", map_rar_err("read rar header", e)));
+                        return;
+                    }
+                };
+
+                let name = header.entry().filename.clone();
+                let sanitised = sanitize_rar_entry(&name);
+                let skip_this = header.entry().is_directory()
+                    || match &sanitised {
+                        None => true,
+                        Some(rel) => {
+                            !excludes.is_empty()
+                                && crate::excludes::is_excluded_strings(Path::new(rel), &excludes)
+                        }
+                    };
+
+                if skip_this {
+                    match header.skip() {
+                        Ok(next) => {
+                            open = next;
+                            continue;
+                        }
+                        Err(e) => {
+                            fail(&tx, format!("{:#}", map_rar_err("skip rar entry", e)));
+                            return;
+                        }
+                    }
+                }
+
+                let Some(rel) = sanitised else {
+                    fail(&tx, format!("rar contains an unsafe entry path: {name:?}"));
+                    return;
+                };
+                if tx.send(StreamMsg::Entry(rel)).is_err() {
+                    return; // consumer gone (cancel or error) — unwind quietly
+                }
+
+                let (chunk_tx, chunk_rx) = std::sync::mpsc::sync_channel::<Box<[u8]>>(4);
+                // Forward this entry's chunks on a helper thread: UnRAR's walk
+                // blocks inside read_to_sink, so something else has to move
+                // bytes onto the framed channel or the two capacities deadlock.
+                let fwd_tx = tx.clone();
+                let fwd = std::thread::spawn(move || {
+                    for c in chunk_rx {
+                        if fwd_tx.send(StreamMsg::Chunk(c)).is_err() {
+                            return false;
+                        }
+                    }
+                    true
+                });
+
+                let sink = StreamSink::new(chunk_tx);
+                let result = header.read_to_sink(sink);
+
+                match result {
+                    Ok((sink, next)) => {
+                        // Drop the sink BEFORE joining: it still owns the
+                        // chunk sender, and the forwarder's `for c in
+                        // chunk_rx` only ends when every sender is gone.
+                        // Joining first deadlocks.
+                        let disconnected = sink.disconnected();
+                        drop(sink);
+                        let alive = fwd.join().unwrap_or(false);
+                        if disconnected || !alive {
+                            return; // consumer went away
+                        }
+                        if tx.send(StreamMsg::EntryEnd).is_err() {
+                            return;
+                        }
+                        open = next;
+                    }
+                    Err(e) => {
+                        // The sink was consumed (and its sender dropped)
+                        // inside the failed call, so the forwarder can finish.
+                        let _ = fwd.join();
+                        fail(&tx, format!("{:#}", map_rar_err("extract rar entry", e)));
+                        return;
+                    }
+                }
+            }
+        });
+
+        (rx, handle)
+    }
+
+    /// Test-only shim: archive-order entries, for harnesses that need to
+    /// check the streaming manifest rather than the sorted preview.
+    #[doc(hidden)]
+    pub fn rar_plan_entries_for_test(
+        archive_path: &Path,
+        password: Option<&str>,
+        excludes: &[String],
+    ) -> Result<(u64, Vec<(String, u64)>)> {
+        rar_plan_entries(archive_path, password, excludes)
+    }
+
+    /// Test-only shim so an out-of-crate harness can drive the worker
+    /// directly. Not part of the public surface beyond tests.
+    #[doc(hidden)]
+    pub fn spawn_rar_worker_for_test(
+        archive_path: &Path,
+        password: Option<&str>,
+        excludes: Vec<String>,
+    ) -> (
+        std::sync::mpsc::Receiver<crate::rar_stream::StreamMsg>,
+        std::thread::JoinHandle<()>,
+    ) {
+        spawn_rar_worker(archive_path, password, excludes)
+    }
+
+    /// Stream a `.rar` to the console: one forward-only decompression, shards
+    /// emitted as the bytes arrive.
+    ///
+    /// No staging directory, so a `.rar` upload needs no free host disk beyond
+    /// the archive itself. Structurally this mirrors `transfer_7z_with_opts`
+    /// on purpose — same sender, same resume rule, same lock-step plan check.
+    /// Bind one streamed rar entry to its slot in the plan.
+    ///
+    /// Extracted so the rule is testable without a real archive whose
+    /// listing and extraction orders diverge — the situation that motivated
+    /// it and which cannot be synthesised here.
+    ///
+    /// Returns `(plan index, reordered)`. `reordered` is true when the entry
+    /// did not arrive in planned order, which is harmless for a fresh upload
+    /// (each entry carries its own absolute shard numbers) but unsafe to
+    /// resume through.
+    pub(crate) fn bind_plan_entry(
+        plan_index: &std::collections::HashMap<&str, usize>,
+        seen: &[bool],
+        planned_len: usize,
+        name: &str,
+        emitted: usize,
+        resuming: bool,
+    ) -> Result<(usize, bool)> {
+        let Some(&i) = plan_index.get(name) else {
+            bail!(
+                "rar entry {name:?} is missing from the archive listing \
+                 ({planned_len} files planned). The archive's listing and \
+                 extraction passes disagree — usually an incomplete or damaged \
+                 multi-part set. Test-extract it locally; if it extracts \
+                 cleanly, please report this with the archive's layout."
+            );
+        };
+        if seen[i] {
+            bail!("rar produced entry {name:?} more than once");
+        }
+        let reordered = i != emitted;
+        if reordered && resuming {
+            bail!(
+                "this archive's listing and extraction order differ, so a \
+                 resumed upload could skip the wrong parts. Start the upload \
+                 again with Overwrite instead of Resume."
+            );
+        }
+        Ok((i, reordered))
+    }
+
+    pub fn transfer_rar_streaming(
+        cfg: &TransferConfig,
+        tx_id: [u8; 16],
+        dest_root: &str,
+        archive_path: &Path,
+        password: Option<&str>,
+        flags: u32,
+    ) -> Result<TransferResult> {
+        use crate::rar_stream::{next_entry, EntryReader};
+        use std::io::Read;
+
+        let tx_id_hex = bytes_to_hex(&tx_id);
+
+        // ── Planning pass ── headers only, no decompression. Sizes come from
+        //    archive metadata, so the manifest is complete before a byte is
+        //    decoded.
+        // Archive order, NOT the sorted preview: shard numbers are assigned in
+        // send order and the resume rule depends on them ascending.
+        let (_, plan_files) = rar_plan_entries(archive_path, password, &cfg.excludes)?;
+        if plan_files.is_empty() {
+            bail!(
+                "rar has no extractable files (after exclusions): {}",
+                archive_path.display()
+            );
+        }
+
+        let mut planned_files: Vec<ManifestFile> = Vec::with_capacity(plan_files.len());
+        let mut plan: Vec<(String, u64, u64)> = Vec::with_capacity(plan_files.len());
+        let mut next_seq: u64 = 1;
+        let mut total_bytes: u64 = 0;
+        for (rel, size) in &plan_files {
+            let dest_path = join_ps5_path(dest_root, Path::new(rel));
+            let shard_start = next_seq;
+            let shard_count = if *size == 0 {
+                1
+            } else {
+                size.div_ceil(cfg.shard_size as u64)
+            };
+            next_seq += shard_count;
+            total_bytes += *size;
+            planned_files.push(ManifestFile {
+                path: dest_path,
+                size: *size,
+                shard_start,
+                shard_count,
+            });
+            plan.push((rel.clone(), *size, shard_start));
+        }
+        let total_shards = next_seq - 1;
+        let file_count = planned_files.len() as u64;
+        ensure_manifest_paths_fit(&planned_files)?;
+        let manifest_json = serde_json::to_vec(&Manifest {
+            dest_root: dest_root.to_string(),
+            file_count,
+            total_bytes,
+            total_shards,
+            files: planned_files,
+        })?;
+
+        let mut c = Connection::connect(&cfg.addr)?;
+        let begin_ack = send_begin_and_expect_ack(
+            &mut c,
+            &tx_meta_buf_flags(
+                tx_id,
+                2,
+                flags | TX_FLAG_APPLY_PROGRESS_REQUESTED,
+                &manifest_json,
+            ),
+        )?;
+        let last_acked_shard = parse_last_acked_shard(&begin_ack, flags & TX_FLAG_RESUME != 0);
+        guard_last_acked(last_acked_shard, total_shards)?;
+
+        // ── Send pass ──
+        let (rx, worker) = spawn_rar_worker(archive_path, password, cfg.excludes.clone());
+        let mut shards_sent = 0u64;
+        let send_result = (|| -> Result<()> {
+            let mut sender = PipelinedSender::new(&mut c, cfg, tx_id, total_shards);
+            let mut buf = vec![0u8; cfg.shard_size];
+
+            // Bind each streamed entry to ITS OWN manifest slot by name.
+            //
+            // This used to be positional lock-step: entry N of the send pass
+            // had to be entry N of the plan, or the transfer aborted. But the
+            // two passes walk the archive with DIFFERENT UnRAR modes — the
+            // plan uses open_for_listing(), the send uses
+            // open_for_processing() — and nothing guarantees those enumerate
+            // in the same order for every archive shape. A user hit exactly
+            // that and could not upload at all.
+            //
+            // Looking the entry up by name is strictly SAFER than trusting
+            // position: the guard exists to stop one file's bytes landing at
+            // another file's destination, and a name lookup enforces that
+            // directly rather than inferring it from ordering. Shard numbers
+            // are absolute and come from the entry's own plan slot, so the
+            // payload places the bytes correctly whatever order they arrive
+            // in.
+            let plan_index: std::collections::HashMap<&str, usize> = plan
+                .iter()
+                .enumerate()
+                .map(|(i, (n, _, _))| (n.as_str(), i))
+                .collect();
+            let mut seen = vec![false; plan.len()];
+            let mut emitted = 0usize;
+            let mut reordered = false;
+
+            while let Some(name) = next_entry(&rx)? {
+                // Lock-step with the plan. Both passes walk the archive in the
+                // same order, so a mismatch means something is wrong — fail
+                // rather than write one file's bytes to another's dest path.
+                let (i, was_reordered) = bind_plan_entry(
+                    &plan_index,
+                    &seen,
+                    plan.len(),
+                    name.as_str(),
+                    emitted,
+                    last_acked_shard > 0,
+                )?;
+                seen[i] = true;
+                reordered |= was_reordered;
+                emitted += 1;
+                let (_, size, shard_start) = plan[i].clone();
+
+                let mut rd = EntryReader::new(&rx);
+                if size == 0 {
+                    // Drain the (empty) entry so framing stays aligned.
+                    std::io::copy(&mut rd, &mut std::io::sink())?;
+                    if shard_start > last_acked_shard {
+                        sender.send_with(shard_start, &[], 1, 0)?;
+                        shards_sent += 1;
+                    }
+                    if let Some(p) = &cfg.progress_files {
+                        p.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    continue;
+                }
+
+                let mut seq = shard_start;
+                let mut remaining = size;
+                while remaining > 0 {
+                    let n = std::cmp::min(cfg.shard_size as u64, remaining) as usize;
+                    // Enforces the header's size: a short entry errors here
+                    // rather than committing a truncated file.
+                    rd.read_exact(&mut buf[..n])?;
+                    if seq > last_acked_shard {
+                        sender.send_with(seq, &buf[..n], 1, 0)?;
+                        shards_sent += 1;
+                        if let Some(p) = &cfg.progress_bytes {
+                            p.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                    seq += 1;
+                    remaining -= n as u64;
+                }
+                // The entry must be exactly its declared size: anything left
+                // means the plan and the stream disagree.
+                let mut extra = [0u8; 1];
+                if rd.read(&mut extra)? != 0 {
+                    bail!("rar entry {name:?} produced more bytes than its header declared");
+                }
+                if let Some(p) = &cfg.progress_files {
+                    p.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+
+            if emitted != plan.len() {
+                let missing: Vec<&str> = seen
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, ok)| !**ok)
+                    .map(|(i, _)| plan[i].0.as_str())
+                    .take(3)
+                    .collect();
+                bail!(
+                    "rar stream ended after {emitted} of {} planned files \
+                     (never received: {missing:?}). The archive is likely \
+                     incomplete or damaged — test-extract it locally.",
+                    plan.len()
+                );
+            }
+            if reordered {
+                crate::log::log(&format!(
+                    "rar: archive listed and extracted its entries in different \
+                     orders; every file was still sent to its own planned \
+                     destination ({} files)",
+                    plan.len()
+                ));
+            }
+            sender.drain()?;
+            Ok(())
+        })();
+
+        // Always release the worker: dropping the receiver unblocks it if it is
+        // waiting on a full channel, and joining keeps it from outliving us.
+        drop(rx);
+        let _ = worker.join();
+        send_result?;
+
+        let commit_ack = send_commit_and_expect_ack(&mut c, &tx_meta_buf(tx_id, 0, b""), cfg)?;
+        Ok(TransferResult {
+            tx_id_hex,
+            shards_sent,
+            bytes_sent: total_bytes,
+            dest: dest_root.to_string(),
+            commit_ack_body: String::from_utf8_lossy(&commit_ack).into_owned(),
+        })
+    }
+
+    /// Transfer a `.rar` (any volume set) with automatic resume-on-drop.
+    ///
+    /// Streams: the archive is decompressed and sent at the same time, so no
+    /// host staging directory and no free disk space are needed. A dropped
+    /// connection re-opens the archive and decodes from the start, sending
+    /// only the shards the console does not already have.
+    pub fn transfer_rar_resumable(
+        cfg: &TransferConfig,
+        tx_id: [u8; 16],
+        dest_root: &str,
+        archive_path: &Path,
+        password: Option<&str>,
+        max_retries: u32,
+        initial_flags: u32,
+    ) -> Result<TransferResult> {
+        resumable_retry(
+            cfg,
+            dest_root,
+            max_retries,
+            "transfer_rar",
+            initial_flags,
+            |flags| transfer_rar_streaming(cfg, tx_id, dest_root, archive_path, password, flags),
+        )
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn fixture(name: &str) -> std::path::PathBuf {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("testdata/rar")
+                .join(name)
+        }
+
+        // crypted.rar: content-encrypted (names listable without a password),
+        // password "unrar", first entry ".gitignore" = "target\nCargo.lock\n".
+        #[test]
+        fn content_encrypted_lists_names_without_password() {
+            let (_total, files) = rar_plan_preview(&fixture("crypted.rar"), None, &[]).unwrap();
+            assert!(
+                files.iter().any(|(p, _)| p == ".gitignore"),
+                "names should be listable without a password: {files:?}"
+            );
+        }
+
+        /// Ported from the staged extractor: it asserted the decompressed
+        /// bytes exactly. That is worth keeping, so it now drives the
+        /// streaming bridge directly — no mock server, no network, just
+        /// "does UnRAR hand us the right bytes through the channel".
+        /// The manifest must be built in ARCHIVE order, never the sorted
+        /// preview order.
+        ///
+        /// This is a regression test for a real failure: streaming used
+        /// `rar_plan_preview`, which sorts, and two adjacent files in a
+        /// 181-entry archive transposed because `_` sorts before a letter
+        /// (`precision_precisionplus` vs `precisionarrow`). Every shipped
+        /// fixture holds a single entry, where sorting is a no-op, so no
+        /// fixture test could see it. Asserting the two functions are
+        /// *different functions* is the part CI can actually hold onto.
+        #[test]
+        fn the_streaming_plan_is_archive_order_not_sorted() {
+            let a = fixture("crypted.rar");
+            let (t1, archive_order) = rar_plan_entries(&a, Some("unrar"), &[]).unwrap();
+            let (t2, sorted) = rar_plan_preview(&a, Some("unrar"), &[]).unwrap();
+            // Same content either way...
+            assert_eq!(t1, t2);
+            let mut a_sorted = archive_order.clone();
+            a_sorted.sort_by(|x, y| x.0.cmp(&y.0));
+            assert_eq!(a_sorted, sorted, "the two must agree once sorted");
+            // ...and the preview is sorted by construction.
+            let mut check = sorted.clone();
+            check.sort_by(|x, y| x.0.cmp(&y.0));
+            assert_eq!(check, sorted, "rar_plan_preview must stay sorted");
+        }
+
+        #[test]
+        fn streaming_decompresses_content_exactly() {
+            use crate::rar_stream::{next_entry, EntryReader};
+            use std::io::Read;
+
+            let (rx, worker) = spawn_rar_worker(&fixture("crypted.rar"), Some("unrar"), vec![]);
+            let name = next_entry(&rx).unwrap().expect("an entry");
+            assert_eq!(name, ".gitignore");
+            let mut out = Vec::new();
+            EntryReader::new(&rx).read_to_end(&mut out).unwrap();
+            assert_eq!(String::from_utf8(out).unwrap(), "target\nCargo.lock\n");
+            drop(rx);
+            let _ = worker.join();
+        }
+
+        #[test]
+        fn content_encrypted_stream_needs_password() {
+            use crate::rar_stream::{next_entry, EntryReader};
+            use std::io::Read;
+
+            // Content-encrypted: the name lists fine, so the entry is
+            // announced and the failure only surfaces when the data is read.
+            let (rx, worker) = spawn_rar_worker(&fixture("crypted.rar"), None, vec![]);
+            let _ = next_entry(&rx).unwrap().expect("an entry");
+            let mut out = Vec::new();
+            let err = EntryReader::new(&rx).read_to_end(&mut out).unwrap_err();
+            assert!(
+                err.to_string().contains("rar_password_required"),
+                "got: {err}"
+            );
+            drop(rx);
+            let _ = worker.join();
+        }
+
+        // comment-hpw-password.rar: HEADER-encrypted (names need the password),
+        // password "password".
+        #[test]
+        fn header_encrypted_list_needs_password() {
+            let err = inspect_rar(&fixture("comment-hpw-password.rar"), None).unwrap_err();
+            assert!(
+                err.to_string().contains("rar_password_required"),
+                "got: {err}"
+            );
+        }
+
+        #[test]
+        fn header_encrypted_inspect_with_password() {
+            let ins = inspect_rar(&fixture("comment-hpw-password.rar"), Some("password")).unwrap();
+            assert!(ins.file_count >= 1);
+            assert!(ins.total_uncompressed > 0);
+        }
+
+        #[test]
+        fn wrong_password_is_reported() {
+            use crate::rar_stream::next_entry;
+
+            // HEADER-encrypted, so UnRAR really can tell a wrong password
+            // from corruption here — unlike the content-encrypted fixture,
+            // where it reports a CRC error instead.
+            let (rx, worker) = spawn_rar_worker(
+                &fixture("comment-hpw-password.rar"),
+                Some("definitely-wrong"),
+                vec![],
+            );
+            let err = next_entry(&rx).unwrap_err();
+            assert!(err.to_string().contains("rar_password_wrong"), "got: {err}");
+            drop(rx);
+            let _ = worker.join();
+        }
+
+        // Excludes drop matching entries from the plan.
+        #[test]
+        fn excludes_apply_to_plan() {
+            let (_t, all) = rar_plan_preview(&fixture("crypted.rar"), None, &[]).unwrap();
+            let (_t2, filtered) =
+                rar_plan_preview(&fixture("crypted.rar"), None, &[".gitignore".to_string()])
+                    .unwrap();
+            assert!(all.iter().any(|(p, _)| p == ".gitignore"));
+            assert!(filtered.iter().all(|(p, _)| p != ".gitignore"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod sevenz_thread_tests {
+    use super::select_sevenz_decode_threads;
+
+    /// Multi-threaded decode buffers whole dict-reset units in RAM, so an
+    /// unset/unparseable value must never silently opt a 205 GB transfer into
+    /// it. Absence means single-threaded, not "guess from the CPU count".
+    #[test]
+    fn defaults_to_single_threaded_streaming_decode() {
+        assert_eq!(select_sevenz_decode_threads(None), 1);
+        assert_eq!(select_sevenz_decode_threads(Some("")), 1);
+        assert_eq!(select_sevenz_decode_threads(Some("invalid")), 1);
+    }
+
+    #[test]
+    fn explicit_override_is_validated_and_hard_capped() {
+        assert_eq!(select_sevenz_decode_threads(Some("2")), 2);
+        assert_eq!(select_sevenz_decode_threads(Some("0")), 1);
+        assert_eq!(select_sevenz_decode_threads(Some("999")), 16);
+    }
+}
+
+#[cfg(test)]
+mod bandwidth_throttle_tests {
+    use super::BandwidthThrottle;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn stall_does_not_disable_pacing() {
+        // Regression for the cumulative-average bug: a stall used to bank
+        // unlimited credit and silently stop pacing for the rest of the tx.
+        let mut t = BandwidthThrottle::new(1000); // 1000 B/s
+        let t0 = Instant::now();
+        assert!(t.charge(1000, t0).is_zero()); // spend initial 1s burst
+                                               // 100-second stall, then resume sending.
+        let after = t0 + Duration::from_secs(100);
+        // The stall grants at most one second of burst, not 100.
+        assert!(t.charge(1000, after).is_zero());
+        // With the burst spent and no further time elapsed, the next at-cap
+        // send must pace (~1s) — proving the cap wasn't abandoned.
+        let sleep = t.charge(1000, after);
+        assert!(
+            sleep >= Duration::from_millis(900),
+            "expected ~1s pacing after stall, got {sleep:?}"
+        );
+    }
+
+    #[test]
+    fn steady_send_at_cap_does_not_sleep() {
+        let mut t = BandwidthThrottle::new(1000);
+        let mut now = Instant::now();
+        assert!(t.charge(1000, now).is_zero()); // burst
+        for _ in 0..5 {
+            now += Duration::from_secs(1);
+            assert!(
+                t.charge(1000, now).is_zero(),
+                "1000 B/s under a 1000 B/s cap should not sleep"
+            );
+        }
+    }
+
+    #[test]
+    fn oversized_send_paces_over_multiple_calls() {
+        let mut t = BandwidthThrottle::new(1000);
+        let now = Instant::now();
+        // 3000 B against a 1000 B/s cap: burst covers 1000, deficit paced
+        // out in 1s-clamped slices across calls.
+        assert_eq!(t.charge(3000, now), Duration::from_secs(1));
+        let second = t.charge(0, now);
+        assert!(
+            second >= Duration::from_millis(900) && second <= Duration::from_secs(1),
+            "remaining deficit should pace ~1s, got {second:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod zip_sanitize_tests {
+    use super::sanitize_zip_entry;
+
+    #[test]
+    fn rejects_traversal_and_unsafe() {
+        assert_eq!(sanitize_zip_entry("../etc/passwd"), None);
+        assert_eq!(sanitize_zip_entry("a/../../b"), None);
+        assert_eq!(sanitize_zip_entry("a/b\0c"), None);
+        assert_eq!(sanitize_zip_entry("a\\b"), None); // backslash segment
+        assert_eq!(sanitize_zip_entry(""), None);
+        // Note: directory entries are filtered out upstream via is_dir(), so
+        // sanitize never has to reject a trailing-slash name — "dir/" simply
+        // drops the empty segment and yields "dir".
+        assert_eq!(sanitize_zip_entry("dir/").as_deref(), Some("dir"));
+    }
+
+    #[test]
+    fn normalises_safe_paths_to_forward_slashes() {
+        assert_eq!(
+            sanitize_zip_entry("CUSA03474/sce_sys/icon0.png").as_deref(),
+            Some("CUSA03474/sce_sys/icon0.png")
+        );
+        // Redundant separators and "." segments are collapsed.
+        assert_eq!(
+            sanitize_zip_entry("a//./b/c.txt").as_deref(),
+            Some("a/b/c.txt")
+        );
+        assert_eq!(
+            sanitize_zip_entry("eboot.bin").as_deref(),
+            Some("eboot.bin")
+        );
+    }
+}
+
+#[cfg(test)]
+mod materialise_body_tests {
+    //! Tests for the shard-body encoder. The packed-shard wire format
+    //! is a sequence of `[u32 path_len LE][u32 size LE][path bytes][file
+    //! bytes]` records — the payload's reverse parser depends on each
+    //! header field being exactly 4 bytes in the documented order. A
+    //! regression here corrupts every multi-file upload silently, so we
+    //! pin the encoding rather than trusting the comments.
+    use super::*;
+    use std::io::Write;
+
+    fn unique_tempdir(label: &str) -> std::path::PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "ps5upload_transfer_test_{}_{}_{}",
+            label,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn empty_shard_materialises_to_zero_bytes() {
+        // `PlannedShard::Empty` exists so the payload still opens and
+        // creates the destination on COMMIT for a 0-byte source file
+        // (e.g. `.gitkeep`). The body must be empty — non-empty would
+        // confuse the payload's record parser.
+        let s = PlannedShard::Empty { shard_seq: 7 };
+        let body = materialise_body(&s, None, &crate::source_fs::LocalFs).expect("empty shard");
+        assert_eq!(body.len(), 0);
+    }
+
+    #[test]
+    fn non_packed_shard_reads_file_slice() {
+        // Verify the seek+read for the NonPacked path: writing a known
+        // byte pattern and reading back a slice must return exactly
+        // the slice — not too-short, not too-long, not the whole file.
+        let dir = unique_tempdir("nonpacked");
+        let p = dir.join("blob.bin");
+        let mut f = std::fs::File::create(&p).unwrap();
+        let payload: Vec<u8> = (0u8..200u8).collect();
+        f.write_all(&payload).unwrap();
+        drop(f);
+
+        let s = PlannedShard::NonPacked {
+            shard_seq: 0,
+            source: p,
+            offset: 50,
+            len: 32,
+        };
+        let body =
+            materialise_body(&s, None, &crate::source_fs::LocalFs).expect("non-packed shard");
+        assert_eq!(body, &payload[50..82]);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn packed_shard_emits_documented_record_layout() {
+        // Two records, distinct paths and contents. The body must be:
+        //   [path_len_LE u32][size_LE u32][path bytes][file bytes]
+        // for each record, concatenated with no padding. This is the
+        // contract the payload's reverse parser depends on.
+        let dir = unique_tempdir("packed");
+        let p1 = dir.join("a.bin");
+        let p2 = dir.join("b.bin");
+        std::fs::write(&p1, b"hello").unwrap();
+        std::fs::write(&p2, b"world!!").unwrap();
+
+        let records = vec![
+            PackRecord {
+                dest_path: "sce_sys/icon0.png".to_string(),
+                source: p1,
+                size: 5,
+            },
+            PackRecord {
+                dest_path: "eboot.bin".to_string(),
+                source: p2,
+                size: 7,
+            },
+        ];
+        let s = PlannedShard::Packed {
+            shard_seq: 0,
+            records,
+        };
+        let body = materialise_body(&s, None, &crate::source_fs::LocalFs).expect("packed shard");
+
+        let mut expected: Vec<u8> = Vec::new();
+        // record 1: path_len=17, size=5, "sce_sys/icon0.png", "hello"
+        expected.extend_from_slice(&17u32.to_le_bytes());
+        expected.extend_from_slice(&5u32.to_le_bytes());
+        expected.extend_from_slice(b"sce_sys/icon0.png");
+        expected.extend_from_slice(b"hello");
+        // record 2: path_len=9, size=7, "eboot.bin", "world!!"
+        expected.extend_from_slice(&9u32.to_le_bytes());
+        expected.extend_from_slice(&7u32.to_le_bytes());
+        expected.extend_from_slice(b"eboot.bin");
+        expected.extend_from_slice(b"world!!");
+
+        assert_eq!(body, expected);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn packed_record_size_overflow_is_rejected() {
+        // The planner only sends files < PACK_FILE_MAX (128 KiB) into
+        // the packed path, so the `u32::try_from` guard is theoretical
+        // today — but a future bump to PACK_FILE_MAX must NOT silently
+        // truncate >4 GiB sizes into a corrupted record stream. Here we
+        // construct a PackRecord whose declared size exceeds u32::MAX
+        // and assert the encoder errors out before opening the file.
+        let dir = unique_tempdir("oversize");
+        let p = dir.join("dummy.bin");
+        // The file is small — the encoder must fail at the size cast,
+        // before reaching the read_exact. If it ever reads the file
+        // first (then casts), this test would fail with a different
+        // error message and signal that the bounds check was bypassed.
+        std::fs::write(&p, b"short").unwrap();
+
+        let s = PlannedShard::Packed {
+            shard_seq: 0,
+            records: vec![PackRecord {
+                dest_path: "huge.bin".to_string(),
+                source: p,
+                size: u64::from(u32::MAX) + 1,
+            }],
+        };
+        let err = materialise_body(&s, None, &crate::source_fs::LocalFs)
+            .expect_err("should reject oversize");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("exceeds u32") || msg.contains("pack record size"),
+            "unexpected error: {msg}"
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod retry_classification_tests {
+    //! Tests for `is_retryable_transfer_error`. The retry budget is
+    //! cheap (3 attempts, exp backoff) but a misclassification either
+    //! way is expensive: retrying a permission error wastes user time
+    //! with no chance of success, and NOT retrying a real network drop
+    //! turns a recoverable hiccup into a failed upload.
+    use super::rar_support::bind_plan_entry;
+    use super::*;
+    use std::collections::HashMap;
+
+    fn idx<'a>(names: &'a [&'a str]) -> HashMap<&'a str, usize> {
+        names.iter().enumerate().map(|(i, n)| (*n, i)).collect()
+    }
+
+    /// The plan and the send pass walk the archive with different UnRAR
+    /// modes (open_for_listing vs open_for_processing), and nothing
+    /// guarantees they enumerate in the same order. This used to be a hard
+    /// positional lock-step that aborted the whole upload; a user could not
+    /// upload at all because of it. Binding by NAME is both tolerant of the
+    /// order AND stricter about identity.
+    #[test]
+    fn entries_bind_to_their_own_slot_whatever_the_order() {
+        let names = ["a/one.pak", "a/two.pak", "a/three.pak"];
+        let index = idx(&names);
+        let mut seen = vec![false; 3];
+
+        // Arrives LAST-first — the exact shape that used to abort.
+        let (i, reordered) = bind_plan_entry(&index, &seen, 3, "a/three.pak", 0, false).unwrap();
+        assert_eq!(i, 2, "bytes must go to three.pak's own slot, not slot 0");
+        assert!(reordered);
+        seen[i] = true;
+
+        let (i, _) = bind_plan_entry(&index, &seen, 3, "a/one.pak", 1, false).unwrap();
+        assert_eq!(i, 0);
+    }
+
+    #[test]
+    fn in_order_delivery_is_not_flagged_as_reordered() {
+        let names = ["a", "b"];
+        let index = idx(&names);
+        let seen = vec![false; 2];
+        let (i, reordered) = bind_plan_entry(&index, &seen, 2, "a", 0, false).unwrap();
+        assert_eq!((i, reordered), (0, false));
+    }
+
+    /// A file the extraction pass produces but the listing never reported has
+    /// no manifest slot, so the console has nowhere to put it. Dropping it
+    /// silently would install an incomplete game.
+    #[test]
+    fn an_unplanned_entry_is_refused() {
+        let names = ["a"];
+        let index = idx(&names);
+        let seen = vec![false; 1];
+        let e = bind_plan_entry(&index, &seen, 1, "ghost.pak", 0, false).unwrap_err();
+        assert!(format!("{e}").contains("missing from the archive listing"));
+    }
+
+    #[test]
+    fn the_same_entry_twice_is_refused() {
+        let names = ["a"];
+        let index = idx(&names);
+        let seen = vec![true];
+        let e = bind_plan_entry(&index, &seen, 1, "a", 0, false).unwrap_err();
+        assert!(format!("{e}").contains("more than once"));
+    }
+
+    /// Resume skips every shard at or below `last_acked_shard`, which only
+    /// means "already sent" while shards ascend. Out of order, that would
+    /// skip the WRONG parts and commit a corrupt install — so refuse, and
+    /// tell the user how to proceed.
+    #[test]
+    fn reordering_is_refused_while_resuming_but_allowed_fresh() {
+        let names = ["a", "b"];
+        let index = idx(&names);
+        let seen = vec![false; 2];
+        // Fresh upload: fine.
+        assert!(bind_plan_entry(&index, &seen, 2, "b", 0, false).is_ok());
+        // Resuming: refused, with an actionable instruction.
+        let e = bind_plan_entry(&index, &seen, 2, "b", 0, true).unwrap_err();
+        let msg = format!("{e}");
+        assert!(msg.contains("Overwrite instead of Resume"), "{msg}");
+    }
+
+    fn ioerr(kind: std::io::ErrorKind) -> anyhow::Error {
+        anyhow::Error::from(std::io::Error::new(kind, "test"))
+    }
+
+    #[test]
+    fn never_retries_a_cancelled_transfer() {
+        // Cancel means stop. A retry here would put bytes back on the wire
+        // after the UI reported the upload cancelled — the 5.4.7 symptom.
+        let bare = anyhow::anyhow!("transfer_cancelled");
+        assert!(!is_retryable_transfer_error(&bare));
+
+        // Wrapped in the context the streaming paths add on the way out.
+        let wrapped = bare.context("transfer_rar attempt 0");
+        assert!(!is_retryable_transfer_error(&wrapped));
+
+        // And it must win even when a retryable io::Error rides along — a
+        // cancelled transfer whose socket also died is still cancelled.
+        let with_io = anyhow::Error::from(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "peer went away",
+        ))
+        .context("transfer_cancelled");
+        assert!(!is_retryable_transfer_error(&with_io));
+    }
+
+    #[test]
+    fn retries_network_drop_kinds() {
+        for k in [
+            std::io::ErrorKind::ConnectionReset,
+            std::io::ErrorKind::ConnectionAborted,
+            std::io::ErrorKind::BrokenPipe,
+            std::io::ErrorKind::TimedOut,
+            std::io::ErrorKind::UnexpectedEof,
+            std::io::ErrorKind::Interrupted,
+            std::io::ErrorKind::NotConnected,
+        ] {
+            assert!(
+                is_retryable_transfer_error(&ioerr(k)),
+                "expected retry for {k:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn does_not_retry_terminal_kinds() {
+        for k in [
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::NotFound,
+            std::io::ErrorKind::InvalidData,
+            std::io::ErrorKind::AlreadyExists,
+            std::io::ErrorKind::WriteZero,
+        ] {
+            assert!(
+                !is_retryable_transfer_error(&ioerr(k)),
+                "expected NO retry for {k:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn walks_past_a_non_retryable_io_error_to_a_retryable_one() {
+        // A chain can carry more than one io::Error — anyhow context is any
+        // Display type, io::Error included. Classification used to stop at the
+        // first one it found and judge the whole chain on that, so a
+        // terminal-looking outer error hid the retryable cause underneath and
+        // aborted an upload a resume would have recovered.
+        let err = anyhow::Error::from(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "peer stopped reading",
+        ))
+        .context(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "outer",
+        ))
+        .context("write frame split");
+        assert!(is_retryable_transfer_error(&err));
+    }
+
+    #[test]
+    fn unwraps_through_anyhow_context() {
+        // The transfer-loop wraps every IO error with .with_context(),
+        // so the retry classifier must walk anyhow's cause chain to
+        // find the underlying io::Error. Without this walk every error
+        // is "not retryable" and resume never kicks in.
+        let inner = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "wifi");
+        let wrapped: anyhow::Error = anyhow::Error::from(inner)
+            .context("write_all_parts")
+            .context("send shard 7");
+        assert!(is_retryable_transfer_error(&wrapped));
+    }
+
+    #[test]
+    fn protocol_errors_do_not_retry() {
+        // A bare anyhow::anyhow! string error has no io::Error in its
+        // chain — these are protocol-level rejections like "tx_id
+        // mismatch" or "unknown frame type", which the payload has
+        // already aborted. Retrying can't help.
+        let e: anyhow::Error = anyhow::anyhow!("direct_tx_corrupt");
+        assert!(!is_retryable_transfer_error(&e));
+    }
+
+    #[test]
+    fn begin_ack_timeout_outlasts_large_manifest_parse() {
+        // Pins the contract that motivated v2.17.7: an 84k-file
+        // manifest is ~17 MB JSON; the payload's BeginTx handler
+        // has to receive, parse, and persist it before sending
+        // BeginTxAck. The constant must be comfortably above
+        // worst-case manifest-parse time on PS5 hardware — anything
+        // tighter and the engine gives up before the first shard
+        // can land. 5 min is the cap.
+        assert!(
+            BEGIN_TX_ACK_TIMEOUT >= Duration::from_secs(2 * 60),
+            "begin-ack timeout must outlast a worst-case ~17 MB manifest \
+             parse (~5 min for safety); got {:?}",
+            BEGIN_TX_ACK_TIMEOUT,
+        );
+        // Upper-bound: keep within 10 min. Longer and a truly stuck
+        // payload at the begin-handshake stage holds the upload row
+        // open in the UI for too long without a clear failure.
+        assert!(
+            BEGIN_TX_ACK_TIMEOUT <= Duration::from_secs(10 * 60),
+            "begin-ack timeout too generous — stuck PS5 should surface \
+             within 10 min at most; got {:?}",
+            BEGIN_TX_ACK_TIMEOUT,
+        );
+    }
+
+    #[test]
+    fn post_begin_default_timeout_matches_connection_default() {
+        // Manual sync rule: this constant must match
+        // `connection::DEFAULT_IO_TIMEOUT`. Pin the value here so a
+        // drift surfaces as a test failure. If connection's default
+        // changes the test catches it and the developer has to
+        // decide intentionally how to keep the two in sync.
+        assert_eq!(
+            POST_BEGIN_DEFAULT_TIMEOUT,
+            Duration::from_secs(30),
+            "post-begin shard-ACK timeout must mirror connection's \
+             DEFAULT_IO_TIMEOUT (30 s); got {:?}",
+            POST_BEGIN_DEFAULT_TIMEOUT,
+        );
+    }
+
+    #[test]
+    fn apply_progress_body_parses() {
+        // Pin the JSON shape the payload emits during the multi-file
+        // apply loop when the client opted into APPLY_PROGRESS. Body
+        // is intentionally tiny (~80 bytes) so the throttled ~1 Hz
+        // emission doesn't pressure the wire during a long commit.
+        let body = br#"{"files_applied":12400,"total_files":84216,"bytes_applied":42949672960}"#;
+        let parsed: ApplyProgress =
+            serde_json::from_slice(body).expect("APPLY_PROGRESS body must parse");
+        assert_eq!(parsed.files_applied, 12_400);
+        assert_eq!(parsed.total_files, 84_216);
+        assert_eq!(parsed.bytes_applied, 42_949_672_960);
+    }
+
+    #[test]
+    fn apply_progress_body_tolerates_extra_fields() {
+        // Forward-compat: payload may add fields in future releases
+        // (apply-stage label, per-file rate, etc.). Engine consumer
+        // ignores unknown fields rather than failing the whole
+        // commit-wait — a robust client must handle "I see new
+        // field names from the future" cleanly.
+        let body = br#"{"files_applied":1,"total_files":2,"bytes_applied":3,"future_field":"hello","another":42}"#;
+        let parsed: ApplyProgress =
+            serde_json::from_slice(body).expect("forward-compat body must parse");
+        assert_eq!(parsed.files_applied, 1);
+        assert_eq!(parsed.total_files, 2);
+        assert_eq!(parsed.bytes_applied, 3);
+    }
+
+    #[test]
+    fn apply_progress_flag_value_is_stable() {
+        // Pin the on-wire bit position of TX_FLAG_APPLY_PROGRESS_REQUESTED.
+        // Payload-side macro FTX2_TX_FLAG_APPLY_PROGRESS_REQUESTED must
+        // mirror this; a divergence here is a wire-protocol break.
+        assert_eq!(TX_FLAG_APPLY_PROGRESS_REQUESTED, 0x4);
+        // Distinct from TX_FLAG_RESUME so they can be OR'd cleanly.
+        assert_eq!(
+            TX_FLAG_RESUME & TX_FLAG_APPLY_PROGRESS_REQUESTED,
+            0,
+            "TX_FLAG_RESUME and TX_FLAG_APPLY_PROGRESS_REQUESTED must occupy different bits"
+        );
+    }
+
+    #[test]
+    fn commit_ack_timeout_outlasts_realistic_apply_phase() {
+        // Pins the contract that motivated this constant: a multi-file
+        // commit on a slow USB drive at ~100 fsyncs/sec processes ~36k
+        // files in 6 minutes, ~85k files (user-reported Ghost of Yotei
+        // case) in ~14 minutes. The constant must be comfortably above
+        // those real-world maxima — anything tighter and the engine
+        // gives up on a payload that's still working. The 30-min
+        // ceiling also acts as a sanity check: a payload that hasn't
+        // ACKed in 30 minutes is almost certainly stuck, not just slow.
+        assert!(
+            COMMIT_TX_ACK_TIMEOUT >= Duration::from_secs(15 * 60),
+            "commit ack timeout must outlast a worst-case ~85k-file fsync \
+             apply loop (~14 min); got {:?}",
+            COMMIT_TX_ACK_TIMEOUT,
+        );
+        // Upper-bound assertion: keep this within an hour. Anything
+        // longer and a truly-stuck PS5 holds the upload row forever in
+        // the UI, and the user only finds out via force-quit. A future
+        // payload-side heartbeat would let us tighten this further.
+        assert!(
+            COMMIT_TX_ACK_TIMEOUT <= Duration::from_secs(60 * 60),
+            "commit ack timeout too generous — a stuck PS5 should surface \
+             within an hour at most; got {:?}",
+            COMMIT_TX_ACK_TIMEOUT,
+        );
+    }
+
+    #[test]
+    fn out_of_space_is_reported_instead_of_a_bare_socket_error() {
+        use crate::volumes::{Volume, INTERNAL_STORAGE_HIDDEN_RESERVE_ESTIMATE_BYTES};
+        let full = Volume {
+            path: "/data".into(),
+            mount_from: "/user/data".into(),
+            fs_type: "nullfs".into(),
+            total_bytes: 947_229_556_736,
+            // Straight from the FW 12.00 report: statfs still advertises 86 GB
+            // free on a filesystem that has already started refusing writes.
+            free_bytes: 85_962_588_160,
+            writable: true,
+            is_placeholder: false,
+            source_image: String::new(),
+            safety_reserve_bytes: 0,
+            allocatable_bytes: 0,
+        };
+        assert!(
+            full.free_bytes > 80_000_000_000,
+            "the point of this case is that free_bytes looks healthy"
+        );
+        let body = capacity_exhausted_body(&full).expect("must flag a full destination");
+
+        // The engine mines this exact shape out of the anyhow chain, so it has
+        // to be valid JSON with both fields or the user is back to os error 10054.
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("valid JSON body");
+        assert_eq!(parsed["error"], "insufficient_space");
+        let detail = parsed["detail"].as_str().unwrap();
+        assert!(
+            detail.contains("/data"),
+            "detail names the volume: {detail}"
+        );
+        assert!(
+            detail.contains("ran out of usable space"),
+            "detail says what happened in words: {detail}"
+        );
+
+        // A destination with real headroom must NOT be blamed: a genuine
+        // network drop still has to retry.
+        let roomy = Volume {
+            free_bytes: 600_000_000_000,
+            ..full.clone()
+        };
+        assert!(
+            roomy.diagnostic_allocatable_bytes() > INTERNAL_STORAGE_HIDDEN_RESERVE_ESTIMATE_BYTES,
+            "sanity: this volume really does have room"
+        );
+        assert!(
+            capacity_exhausted_body(&roomy).is_none(),
+            "a healthy volume must not be reported as full"
+        );
+    }
+
+    #[test]
+    fn packed_shard_file_count_stays_inside_ack_budget() {
+        // Hardware-measured on FW 5.10 (192.168.86.99): the payload applies
+        // a packed record in ~4.3 ms (create + write + fsync, serially).
+        // A shard's ACK is read under POST_BEGIN_DEFAULT_TIMEOUT, so the
+        // worst-case per-shard apply work must fit inside it with margin.
+        const MEASURED_APPLY_MICROS_PER_FILE: u64 = 4_300;
+        let worst_case = Duration::from_micros(
+            MEASURED_APPLY_MICROS_PER_FILE * DEFAULT_PACK_FILE_COUNT_MAX as u64,
+        );
+        assert!(
+            worst_case * 2 <= POST_BEGIN_DEFAULT_TIMEOUT,
+            "a full packed shard must apply in well under the {:?} shard-ACK \
+             timeout (2x margin for a slow USB drive or a busy console); \
+             {} files x {} us = {:?}",
+            POST_BEGIN_DEFAULT_TIMEOUT,
+            DEFAULT_PACK_FILE_COUNT_MAX,
+            MEASURED_APPLY_MICROS_PER_FILE,
+            worst_case,
+        );
+        // Lower bound: packing exists to cut shard count. A cap this small
+        // would make the round-trips dominate again. Both sides are consts,
+        // so this is checked at compile time rather than when the test runs.
+        const _: () = assert!(
+            DEFAULT_PACK_FILE_COUNT_MAX >= 500,
+            "pack file-count cap too aggressive — packing stops paying for itself"
+        );
+    }
+
+    #[test]
+    fn pack_planner_closes_shard_on_file_count_not_just_bytes() {
+        // The regression this guards: 10,000 x 64 B files all fit the 4 MiB
+        // byte budget, so the byte rule alone produced shards_sent: 1 and the
+        // transfer died on the 30 s shard-ACK timeout after every byte had
+        // already landed. Reproduced live before the fix.
+        let count_max = 2000;
+        let mut packer = PackPlanner::new(4 * 1024 * 1024, count_max);
+        packer.start(1);
+        let rec_size = PackPlanner::record_size("f.bin", 64);
+        let mut shards = 1;
+        for _ in 0..10_000 {
+            if packer.would_exceed(rec_size) {
+                let _ = packer.take();
+                packer.start(1);
+                shards += 1;
+            }
+            packer.push(PackRecord {
+                source: std::path::PathBuf::from("f.bin"),
+                dest_path: "f.bin".to_string(),
+                size: 64,
+            });
+        }
+        assert_eq!(
+            shards, 5,
+            "10k tiny files must split across ceil(10000/{count_max}) shards, \
+             not ride in one; got {shards}"
+        );
+
+        // The byte budget must still win when records are large enough to
+        // blow it before the count cap is reached.
+        let mut fat = PackPlanner::new(4 * 1024, count_max);
+        fat.start(1);
+        fat.push(PackRecord {
+            source: std::path::PathBuf::from("a.bin"),
+            dest_path: "a.bin".to_string(),
+            size: 4096,
+        });
+        assert!(
+            fat.would_exceed(PackPlanner::record_size("b.bin", 4096)),
+            "byte budget must still close a shard well before the count cap"
+        );
+
+        // count_max = 0 disables the count rule entirely.
+        let mut unbounded = PackPlanner::new(4 * 1024 * 1024, 0);
+        unbounded.start(1);
+        for _ in 0..count_max + 1 {
+            unbounded.push(PackRecord {
+                source: std::path::PathBuf::from("f.bin"),
+                dest_path: "f.bin".to_string(),
+                size: 1,
+            });
+        }
+        assert!(
+            !unbounded.would_exceed(PackPlanner::record_size("f.bin", 1)),
+            "count_max = 0 must fall back to the byte budget alone"
+        );
+    }
+}
+
+#[cfg(test)]
+mod multistream_tests {
+    //! Tests for the multi-stream distribution + tx_id derivation. These are
+    //! the pure pieces of the multi-stream upload (see
+    //! `docs/multistream-upload.md`); the network orchestration itself is
+    //! exercised on hardware.
+    use super::*;
+    use std::collections::BTreeSet;
+
+    /// Every index appears exactly once across all buckets (disjoint + complete)
+    /// and the bucket count is always `max(streams, 1)`.
+    fn assert_partition(weights: &[u64], buckets: &[Vec<usize>], streams: usize) {
+        assert_eq!(buckets.len(), streams.max(1), "bucket count");
+        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        for b in buckets {
+            for &i in b {
+                assert!(seen.insert(i), "index {i} appears in more than one bucket");
+            }
+        }
+        let expected: BTreeSet<usize> = (0..weights.len()).collect();
+        assert_eq!(seen, expected, "every index must be assigned exactly once");
+    }
+
+    fn bucket_load(weights: &[u64], bucket: &[usize]) -> u128 {
+        bucket.iter().map(|&i| u128::from(weights[i])).sum()
+    }
+
+    #[test]
+    fn empty_input_yields_empty_buckets() {
+        let buckets = distribute_balanced(&[], 4);
+        assert_eq!(buckets.len(), 4);
+        assert!(buckets.iter().all(|b| b.is_empty()));
+    }
+
+    #[test]
+    fn fewer_files_than_streams_leaves_empty_buckets() {
+        let weights = [100, 200];
+        let buckets = distribute_balanced(&weights, 4);
+        assert_partition(&weights, &buckets, 4);
+        let non_empty = buckets.iter().filter(|b| !b.is_empty()).count();
+        assert_eq!(non_empty, 2, "two files spread over distinct streams");
+    }
+
+    #[test]
+    fn equal_weights_split_evenly() {
+        let weights = [10, 10, 10, 10];
+        let buckets = distribute_balanced(&weights, 2);
+        assert_partition(&weights, &buckets, 2);
+        for b in &buckets {
+            assert_eq!(bucket_load(&weights, b), 20, "each stream gets half");
+        }
+    }
+
+    #[test]
+    fn lpt_keeps_one_huge_file_from_skewing() {
+        // One 1 GiB file + many tiny ones across 4 streams: the big file owns a
+        // stream and the rest are balanced around it — no stream is empty and
+        // the max/min load gap stays bounded by the largest single file.
+        let mut weights = vec![1_073_741_824u64];
+        weights.extend(std::iter::repeat_n(1_000u64, 40));
+        let buckets = distribute_balanced(&weights, 4);
+        assert_partition(&weights, &buckets, 4);
+        assert!(buckets.iter().all(|b| !b.is_empty()), "no idle stream");
+        let loads: Vec<u128> = buckets.iter().map(|b| bucket_load(&weights, b)).collect();
+        let max = loads.iter().max().copied().unwrap();
+        let min = loads.iter().min().copied().unwrap();
+        // The imbalance can't exceed the largest single item (greedy LPT bound).
+        assert!(
+            max - min <= 1_073_741_824,
+            "imbalance bounded by largest file"
+        );
+    }
+
+    #[test]
+    fn zero_streams_clamps_to_one() {
+        let weights = [5, 6, 7];
+        let buckets = distribute_balanced(&weights, 0);
+        assert_partition(&weights, &buckets, 1);
+        assert_eq!(buckets[0].len(), 3, "all files in the single bucket");
+    }
+
+    #[test]
+    fn stream_tx_ids_are_distinct_and_stable() {
+        let base = [0xAAu8; 16];
+        let ids: Vec<[u8; 16]> = (0..4).map(|i| stream_tx_id(base, i)).collect();
+        // Stream 0 is the base id unchanged (single-stream compatibility).
+        assert_eq!(ids[0], base);
+        // All distinct.
+        let set: BTreeSet<[u8; 16]> = ids.iter().copied().collect();
+        assert_eq!(set.len(), 4, "per-stream ids must be distinct");
+        // Deterministic / stable across calls (so retries resume the same tx).
+        assert_eq!(stream_tx_id(base, 2), ids[2]);
+        // Only bytes 14–15 differ (the wider 16-bit field prevents collisions
+        // between concurrent transfers whose base ids differ in byte 15).
+        assert_eq!(&ids[3][..14], &base[..14]);
+    }
+
+    #[test]
+    fn stream_tx_id_no_collision_for_nearby_base_ids() {
+        // Two base tx_ids that differ by exactly 1 in byte 15 — the old
+        // single-byte XOR scheme would collide on stream 1 vs stream 0.
+        // With the 16-bit field, they remain distinct.
+        let base_a = [0u8; 16];
+        let mut base_b = base_a;
+        base_b[15] = 1;
+        let a_stream1 = stream_tx_id(base_a, 1);
+        let b_stream0 = stream_tx_id(base_b, 0); // = base_b
+        assert_ne!(
+            a_stream1, b_stream0,
+            "stream 1 of base_a must not collide with stream 0 of base_b"
+        );
+    }
+}
+
+#[cfg(test)]
+mod rar_volume_tests {
+    use super::rar_support::missing_volume;
+    use std::collections::HashSet;
+
+    fn fs(files: &[&str]) -> impl Fn(&str) -> bool {
+        let set: HashSet<String> = files.iter().map(|s| s.to_string()).collect();
+        move |p: &str| set.contains(p)
+    }
+
+    /// The reported case: every volume present, first part selected. The
+    /// old message told the user to do what they had already done, so a
+    /// complete set must report nothing and let UnRAR speak.
+    #[test]
+    fn complete_set_reports_nothing() {
+        let have = fs(&[
+            "/g/game.part1.rar",
+            "/g/game.part2.rar",
+            "/g/game.part3.rar",
+        ]);
+        assert_eq!(missing_volume("/g/game.part1.rar", &have), None);
+    }
+
+    #[test]
+    fn names_the_volume_that_is_actually_missing() {
+        let have = fs(&["/g/game.part1.rar", "/g/game.part3.rar"]);
+        assert_eq!(
+            missing_volume("/g/game.part1.rar", &have).as_deref(),
+            Some("game.part2.rar")
+        );
+    }
+
+    /// Zero-padded widths must round-trip, or the name we print is wrong.
+    #[test]
+    fn preserves_the_padding_width() {
+        let have = fs(&["/g/game.part01.rar", "/g/game.part03.rar"]);
+        assert_eq!(
+            missing_volume("/g/game.part01.rar", &have).as_deref(),
+            Some("game.part02.rar")
+        );
+        let have3 = fs(&["/g/g.part001.rar", "/g/g.part003.rar"]);
+        assert_eq!(
+            missing_volume("/g/g.part001.rar", &have3).as_deref(),
+            Some("g.part002.rar")
+        );
+    }
+
+    /// A single-volume archive is not an incomplete set.
+    #[test]
+    fn single_volume_is_not_a_gap() {
+        let have = fs(&["/g/game.rar"]);
+        assert_eq!(missing_volume("/g/game.rar", &have), None);
+    }
+
+    /// Older split scheme: name.rar + name.r00, r01 …
+    #[test]
+    fn handles_the_legacy_r_nn_scheme() {
+        let have = fs(&["/g/game.rar", "/g/game.r00", "/g/game.r02"]);
+        assert_eq!(
+            missing_volume("/g/game.rar", &have).as_deref(),
+            Some("game.r01")
+        );
+        let complete = fs(&["/g/game.rar", "/g/game.r00", "/g/game.r01"]);
+        assert_eq!(missing_volume("/g/game.rar", &complete), None);
+    }
+
+    /// Windows paths and no-directory paths must not break the split.
+    #[test]
+    fn handles_windows_and_bare_paths() {
+        let have = fs(&["C:\\dumps\\g.part1.rar", "C:\\dumps\\g.part3.rar"]);
+        assert_eq!(
+            missing_volume("C:\\dumps\\g.part1.rar", &have).as_deref(),
+            Some("g.part2.rar")
+        );
+        let bare = fs(&["g.part1.rar", "g.part3.rar"]);
+        assert_eq!(
+            missing_volume("g.part1.rar", &bare).as_deref(),
+            Some("g.part2.rar")
+        );
+    }
+
+    /// A gap at the very end is the end of the set, not a hole.
+    #[test]
+    fn trailing_absence_is_the_end_of_the_set() {
+        let have = fs(&["/g/game.part1.rar", "/g/game.part2.rar"]);
+        assert_eq!(missing_volume("/g/game.part1.rar", &have), None);
+    }
+}
+
+#[cfg(test)]
+mod rar_param_root_tests {
+    use super::rar_support::better_param_hit;
+
+    /// Fold a whole archive listing, in order, the way inspect_rar does.
+    fn pick(entries: &[&str]) -> Option<String> {
+        let mut hit: Option<(usize, String)> = None;
+        for e in entries {
+            hit = better_param_hit(hit, e);
+        }
+        hit.map(|(_, root)| root)
+    }
+
+    #[test]
+    fn a_bare_dump_has_an_empty_root() {
+        assert_eq!(pick(&["sce_sys/param.json"]), Some(String::new()));
+    }
+
+    #[test]
+    fn a_wrapped_dump_resolves_to_the_wrapper() {
+        // The real shape from a scene release: an outer site-named folder,
+        // then the app folder.
+        assert_eq!(
+            pick(&[
+                "[SITE]-PPSA13428/PPSA13428-app/eboot.bin",
+                "[SITE]-PPSA13428/PPSA13428-app/sce_sys/param.json",
+            ]),
+            Some("[SITE]-PPSA13428/PPSA13428-app".to_string())
+        );
+    }
+
+    #[test]
+    fn the_shallowest_wins_regardless_of_listing_order() {
+        let deep_first = pick(&["Game/patch/sce_sys/param.json", "Game/sce_sys/param.json"]);
+        let shallow_first = pick(&["Game/sce_sys/param.json", "Game/patch/sce_sys/param.json"]);
+        assert_eq!(deep_first, Some("Game".to_string()));
+        assert_eq!(
+            deep_first, shallow_first,
+            "the answer must not depend on archive order"
+        );
+    }
+
+    #[test]
+    fn a_dlc_or_update_folder_cannot_outrank_the_base_game() {
+        assert_eq!(
+            pick(&[
+                "Game/sce_sys/param.json",
+                "Game/dlc0/sce_sys/param.json",
+                "Game/dlc1/sce_sys/param.json",
+            ]),
+            Some("Game".to_string())
+        );
+    }
+
+    #[test]
+    fn an_archive_without_param_json_has_no_root() {
+        assert_eq!(pick(&["Game/eboot.bin", "Game/sce_sys/icon0.png"]), None);
+    }
+
+    #[test]
+    fn a_path_merely_ending_in_the_text_is_not_a_match() {
+        // "notsce_sys" ends with "sce_sys" as a substring; only a real path
+        // boundary counts, or every such folder would claim to be a root.
+        assert_eq!(pick(&["Game/notsce_sys/param.json"]), None);
+    }
+
+    #[test]
+    fn param_json_elsewhere_is_ignored() {
+        assert_eq!(pick(&["Game/sce_sys/param.sfo", "Game/param.json"]), None);
+    }
+
+    #[test]
+    fn ties_keep_the_first_seen() {
+        // Two roots at the same depth: stable choice, no flapping.
+        assert_eq!(
+            pick(&["A/sce_sys/param.json", "B/sce_sys/param.json"]),
+            Some("A".to_string())
+        );
+    }
+}
+
+#[cfg(test)]
+mod source_fs_tests {
+    use super::*;
+
+    /// An in-memory SourceFs holding the same tree as a temp dir, at the same paths.
+    #[derive(Debug)]
+    struct MemSourceFs(std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>);
+
+    impl crate::source_fs::SourceFs for MemSourceFs {
+        fn open(
+            &self,
+            p: &std::path::Path,
+        ) -> std::io::Result<Box<dyn crate::source_fs::ReadSeek>> {
+            let b = self.0.get(p).cloned().ok_or(std::io::ErrorKind::NotFound)?;
+            Ok(Box::new(std::io::Cursor::new(b)))
+        }
+        fn metadata(&self, p: &std::path::Path) -> std::io::Result<crate::source_fs::SourceMeta> {
+            if let Some(b) = self.0.get(p) {
+                return Ok(crate::source_fs::SourceMeta {
+                    len: b.len() as u64,
+                    is_dir: false,
+                    is_file: true,
+                });
+            }
+            if self.0.keys().any(|k| k.starts_with(p)) {
+                return Ok(crate::source_fs::SourceMeta {
+                    len: 0,
+                    is_dir: true,
+                    is_file: false,
+                });
+            }
+            Err(std::io::ErrorKind::NotFound.into())
+        }
+        fn read_dir(
+            &self,
+            p: &std::path::Path,
+        ) -> std::io::Result<Vec<(std::path::PathBuf, bool)>> {
+            let mut out: Vec<(std::path::PathBuf, bool)> = Vec::new();
+            for k in self.0.keys() {
+                if let Ok(rest) = k.strip_prefix(p) {
+                    let mut comps = rest.components();
+                    let first = p.join(comps.next().unwrap());
+                    let is_dir = comps.next().is_some();
+                    if !out.iter().any(|(q, _)| *q == first) {
+                        out.push((first, is_dir));
+                    }
+                }
+            }
+            Ok(out)
+        }
+    }
+
+    #[test]
+    fn a_source_fs_reads_exactly_what_local_disk_would() {
+        // The same tree, served from memory under paths that do not exist on disk.
+        let root = std::path::PathBuf::from("/remote-only/game");
+        let files: Vec<(&str, Vec<u8>)> = vec![
+            ("eboot.bin", (0u8..=255).cycle().take(10_000).collect()),
+            ("sce_sys/param.json", b"{}".to_vec()),
+            ("sce_sys/icon0.png", vec![9u8; 300]),
+        ];
+        let mem = MemSourceFs(
+            files
+                .iter()
+                .map(|(p, b)| (root.join(p), b.clone()))
+                .collect(),
+        );
+        let listed = collect_files_with(&mem, &root).expect("walk through the source fs");
+        let rel: Vec<_> = listed
+            .iter()
+            .map(|p| {
+                p.strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        assert_eq!(
+            rel,
+            ["eboot.bin", "sce_sys/icon0.png", "sce_sys/param.json"]
+        );
+
+        let s = PlannedShard::NonPacked {
+            shard_seq: 0,
+            source: root.join("eboot.bin"),
+            offset: 100,
+            len: 64,
+        };
+        let body = materialise_body(&s, None, &mem).expect("non-packed shard from the source fs");
+        assert_eq!(body, files[0].1[100..164]);
+
+        let s = PlannedShard::Packed {
+            shard_seq: 0,
+            records: vec![PackRecord {
+                dest_path: "sce_sys/param.json".into(),
+                source: root.join("sce_sys/param.json"),
+                size: 2,
+            }],
+        };
+        let body = materialise_body(&s, None, &mem).expect("packed shard from the source fs");
+        assert!(body.ends_with(b"{}"));
+    }
+}

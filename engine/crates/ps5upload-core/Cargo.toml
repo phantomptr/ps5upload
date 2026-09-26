@@ -1,0 +1,64 @@
+[package]
+name = "ps5upload-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+# Cross-platform OS randomness for the Remote Play registration nonce. The old
+# code opened /dev/urandom directly, which does not exist on Windows — the
+# reported "opening /dev/urandom: os error 3" on Wake & sign in. Already in the
+# tree via the dependency graph, so this pulls in no new code.
+getrandom = "0.4"
+base64 = "0.23"
+blake3.workspace = true
+# BPS patch checksums (bps.rs). Already in the tree via zip's dependency
+# graph, so this pulls in no new code.
+crc32fast = "1"
+# Content addressing for the backport library corpus (fakelibs.rs). Pure Rust,
+# already in the lockfile via an existing transitive dependency, so this adds
+# no new supply-chain surface and keeps the aarch64-linux-android cross-compile
+# dependency-free.
+sha2 = "0.11"
+hmac = "0.13"
+aes = "0.9"
+cfb-mode = "0.9"
+ftx2-proto = { path = "../ftx2-proto" }
+libc = "0.2"
+serde.workspace = true
+serde_json.workspace = true
+# Read .zip game dumps and stream-decompress them straight into the FTX2
+# shard pipeline (transfer.rs `transfer_zip`). Deflate-only, matching the
+# pin already vetted in client/src-tauri (save_archive.rs) — no bzip2/zstd
+# C libs.
+zip = { version = "8", default-features = false, features = ["deflate"] }
+# Read .7z game dumps (commonly a single .exfat image) the same way — host
+# decompress + stream into the shard pipeline (transfer.rs `transfer_7z`).
+# `default-features = false` keeps ONLY the always-on pure-Rust LZMA/LZMA2
+# decoder (lzma-rust2) + crc32fast, dropping the optional bzip2 (C dep), aes/
+# getrandom, ppmd, brotli and zstd defaults — so the dependency cross-compiles
+# cleanly to aarch64-linux-android with no C toolchain. LZMA2 covers the
+# overwhelming majority of real-world 7z game dumps; an archive using an
+# unsupported codec fails with a clear "re-pack with LZMA2" message.
+sevenz-rust2 = { version = "0.23", default-features = false }
+# Decode user-supplied avatar images (profile.rs). Pure-Rust decoders only
+# (png/jpeg/webp/bmp/gif) — no C deps, so the Android cross-compile stays
+# clean, same care as the zip/sevenz pins above. We hand-roll the bilinear
+# resize + DXT5/DDS encode (ported to match the PS5 reference byte-for-byte),
+# so only the decode + PNG re-encode sides of `image` are exercised.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif"] }
+# Read .rar game dumps (incl. multi-volume + AES password) — host-extract to a
+# temp dir, then stream via the directory transfer (transfer.rs `rar_support`).
+# UnRAR is the only thing that fully handles RAR5 + multi-volume + passwords;
+# the `unrar` crate bundles the UnRAR C++ source (a C dependency, built via cc).
+# To keep the pure-Rust aarch64-linux-android cross-compile the zip/7z pins
+# protect, RAR is desktop-ONLY: the dependency is target-gated to non-Android
+# targets, and the code is `#[cfg(not(target_os = "android"))]`. This needs NO
+# `--features` plumbing — desktop builds include it automatically, the Android
+# target excludes it automatically (Android keeps zip/7z only). Note also: the
+# UnRAR license is GPL-incompatible; see docs/rar-support-design.md for the
+# distribution/licensing decision.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+unrar = "0.5"
+ureq = { version = "3", features = ["rustls"] }

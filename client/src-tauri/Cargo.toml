@@ -1,0 +1,164 @@
+[package]
+name = "ps5upload-desktop"
+version = "5.34.0"
+description = "The all-in-one PS5 companion app."
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "ps5upload_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri core + the built-in plugins we rely on for dialogs, fs and OS shell
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-shell = "2"
+# Native OS notifications (system tray/center) — mirrors the in-app
+# notification inbox to the desktop notification center and the Android
+# notification shade. Cross-platform (macOS/Windows/Linux/Android/iOS).
+tauri-plugin-notification = "2"
+# Single-instance enforcement. Without it, double-clicking the desktop
+# icon (or launching from a second shortcut) starts a second desktop
+# process. Both probe :19113, the second's orphan-reaper kills the
+# first's engine, and the first window is left talking to a dead
+# sidecar. The plugin's callback fires in the *original* instance with
+# the second-launch argv, so we can focus its window and let the
+# duplicate exit cleanly. Desktop-only — mobile targets don't ship
+# this path.
+tauri-plugin-single-instance = "2"
+
+# HTTP client for both the localhost engine sidecar (no TLS) and the
+# public GitHub update manifest/asset downloads (needs TLS via
+# rustls-tls). `stream` feature lets `update_download` stream bundles
+# chunk-by-chunk instead of buffering hundreds of MB in RAM.
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
+# `StreamExt` is what lets us await chunks out of `reqwest::Response::bytes_stream`.
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "process", "time", "macros", "io-util", "sync"] }
+
+# JSON (for both IPC payloads and on-disk persistence)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error plumbing
+anyhow = "1"
+
+# Cross-platform browser launcher for the `open_external` command.
+open = "5"
+
+# Gunzip the bundled payload (`ps5upload.elf.gz`) on first use — see
+# `probes.rs::decompress_to_cache`. Pure-Rust miniz backend, no
+# system-lib linkage, so cross-compilation to arm64/Windows stays simple.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+# Engine core modules invoked directly in-process by Tauri commands
+# (no HTTP hop). Same workspace, different manifest root.
+ps5upload-core = { path = "../../engine/crates/ps5upload-core" }
+
+# BLAKE3 for hash-stamping the extracted engine binary + payload.
+# Replaces the previous full-byte compare on every launch — hashing
+# the embedded bytes once (a few ms for ~14 MiB) and comparing
+# against a 64-char hex stamp file is constant-time vs the file's
+# size, and avoids the Windows file-lock issue (re-reading an .exe
+# the OS has open elsewhere).
+blake3 = "1"
+
+# Base64 encoding for the file-preview Tauri command — the
+# `commands/diagnostics.rs::fs_read_preview` returns the file bytes
+# as base64 so the renderer can use them as a `data:` URL for image
+# previews. Pure-Rust, no system deps.
+base64 = "0.23"
+
+# Save-data backup/restore as .zip archives. Pure-Rust deflate backend
+# (no system zlib linkage) so cross-compilation stays single-toolchain.
+# Default features pull in bzip2/zstd C libs we don't need — opt in to
+# `deflate` only. Used from commands/save_archive.rs to zip a downloaded
+# save folder into <title_id>.zip and validate/extract restore zips.
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
+# mDNS service discovery for the Connection screen's "Find PS5s on the
+# network" button. Pure-Rust implementation — no system avahi/bonjour
+# linkage, so cross-compilation to all desktop targets (macOS arm64/x64,
+# Windows x64/arm64, Linux x64/arm64) stays single-toolchain. Used only
+# from `commands/discover.rs`; a discovery is a single 3-second LAN
+# browse, not a long-running daemon.
+mdns-sd = { version = "0.21", default-features = false, features = ["async"] }
+
+# Enumerate ALL local network interfaces (not just the default-route one) so
+# the LAN sweep in commands/discover.rs probes every subnet the host is on —
+# Ethernet + Wi-Fi + USB-tether simultaneously. Pure-Rust, cross-platform
+# (macOS/Windows/Linux), no system linkage; keeps the single-toolchain
+# cross-compile story intact.
+if-addrs = "0.15"
+tauri-plugin-opener = "2"
+
+# libc for `statvfs` in the USB autoloader's drive enumeration
+# (commands/usb_autoloader.rs). Already pulled in transitively via
+# ps5upload-core, but listed explicitly here so a future change to
+# core's deps doesn't silently remove our access.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Desktop-only: PS5 screenshot (.jxr / JPEG XR) -> PNG conversion.
+# `jpegxr` wraps Microsoft's BSD-licensed jxrlib C codec (decode-only)
+# and bundles the C in-tree, compiling it with `cc` + generating bindings
+# with `bindgen` (so the build host needs a C compiler + libclang —
+# every desktop CI runner already has these). `image` encodes the
+# tone-mapped pixels to PNG (png feature only — no extra format C libs).
+#
+# Gated to NON-mobile targets on purpose: this is the ONLY C-compiling
+# dependency in the desktop crate, and we keep it off the Android/iOS
+# builds so the mobile cross-compile story stays pure-Rust. Conversion
+# is a desktop action (decode a downloaded screenshot on your computer);
+# the command returns a clear "desktop only" error on mobile. Used from
+# commands/screenshot_convert.rs.
+[target.'cfg(not(any(target_os = "android", target_os = "ios", all(target_os = "windows", target_arch = "aarch64"))))'.dependencies]
+jpegxr = "0.3"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Mobile (Android/iOS): link the engine as a library and run it
+# in-process (engine_mobile.rs). Desktop spawns it as a sidecar binary
+# instead, so this dependency is mobile-only. `cfg(mobile)` isn't a
+# cargo-known cfg, so gate on the concrete target OSes.
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+ps5upload-engine = { path = "../../engine/crates/ps5upload-engine" }
+
+# Android-only: call the platform APIs needed for all-files storage access
+# (Environment.isExternalStorageManager + the settings intent) from Rust.
+# We capture the JavaVM ourselves in JNI_OnLoad and get the Application
+# context via ActivityThread.currentApplication() — Tauri 2's Android
+# backend does NOT initialize the ndk_context global, so we can't use it.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+
+[features]
+# Default: build Tauri-native (no custom features yet)
+default = []
+
+[profile.release]
+# Smaller binary + slightly faster; Tauri recommends these.
+codegen-units = 1
+lto = true
+opt-level = "s"
+# `strip = true` removed deliberately. Stripping the desktop binary
+# drops the PDB linkage on Windows and the dSYM pointers on macOS,
+# which makes any post-release crash report impossible to
+# symbolicate. The ~2 MB we'd save is negligible against webkit2gtk
+# (~30 MB on Linux) and WebView2 (system-shared on Windows). If a
+# future size crunch ever justifies stripping, scope it to specific
+# packages via [profile.release.package.X] with `strip = true`.
+panic = "abort"
+
+# Vendored `unrar` with a one-line bounds fix in the volume-change callback.
+# Upstream 0.5.8 reads ~8 KB out of a much smaller buffer on every volume
+# transition, which aborts debug builds on any multi-part .rar and is a
+# latent out-of-bounds read in release. 0.5.8 is the latest release, so
+# there is nothing upstream to take. See third_party/unrar/README.md and
+# docs/unrar-upstream-bug.md.
+[patch.crates-io]
+unrar = { path = "../../third_party/unrar" }

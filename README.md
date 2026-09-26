@@ -1,0 +1,692 @@
+# ps5upload
+
+<p align="center">
+  <img src="logo.png" alt="ps5upload" width="420" />
+</p>
+
+<p align="center">
+  <strong>Fast, reliable transfers from your computer to your PS5.</strong><br/>
+  Transfer · Mount · Browse — designed to live alongside your PS5-side tools.
+</p>
+
+<p align="center">
+  <a href="https://github.com/phantomptr/ps5upload/releases"><img alt="release" src="https://img.shields.io/github/v/release/phantomptr/ps5upload?display_name=tag&sort=semver&color=blue" /></a>
+  <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-GPL--3-green" /></a>
+  <img alt="platforms" src="https://img.shields.io/badge/platforms-macOS_·_Linux_·_Windows-lightgrey" />
+  <img alt="firmware" src="https://img.shields.io/badge/PS5_firmware-1.00_–_13.60_supported_•_9.x–12.x_tested-brightgreen" />
+  <a href="https://discord.gg/fzK3xddtrM"><img alt="discord" src="https://img.shields.io/badge/discord-join-5865F2" /></a>
+</p>
+
+---
+
+## What it does
+
+- **Fast transfer** — FTX2 binary protocol with BLAKE3 per-shard
+  verification, small-file packing, and resume on disconnect.
+  Uses your LAN flat-out. Pack worker absorbs transient
+  `EIO`/`EMFILE` hiccups so a 200k-file game upload doesn't get
+  killed by one unlucky syscall.
+- **Upload queue** — line up multiple games or images, hit Start,
+  walk away. Every running row shows live MiB/s and ETA; done
+  rows show the wall-clock-average rate so you can spot a slow
+  destination. Queue state survives app restarts.
+- **Compressed archive uploads (`.zip` / `.7z` / `.rar`)** — keep a game
+  dump as a single archive on your PC (less disk, easier to move) and
+  upload it directly. ps5upload decompresses on the host and streams
+  the files into the same FTX2 pipeline, so they land **already
+  extracted** on the PS5 — no manual unpack, no temp copy of the whole
+  game. The Upload screen previews the expansion (`zipped → extracted`,
+  file count, space saved) and detects the embedded game. Decompresses
+  one file at a time, so a 100 GB archive doesn't need 100 GB of RAM.
+  `.7z` and `.rar` stream straight into the pipeline and write nothing to
+  your disk at all; `.zip` spills large entries to a temp file because its
+  format needs random access. `.rar` is desktop-only (the UnRAR C dep is
+  excluded from the Android build).
+- **Native image mount** — attach `.exfat` and `.ffpkg` images on
+  the PS5 (MDIOCATTACH + nmount) with no third-party helper. Every
+  mount survives payload restarts and auto-reconciles on startup.
+  Mount read-write to **edit an image in place** — add DLC, swap
+  assets, or apply a backport patch to a game that ships as an image
+  rather than a folder. Edits go straight into the image file, so the
+  app warns before you start.
+  When ShadowMount+ owns the image (it mounts everything read-only and
+  re-adopts anything it finds), **Edit files…** checks the image out —
+  moving it out of ShadowMount+'s scan folder, mounting it read-write
+  where you choose, and putting it back when you finish. The checkout is
+  journalled on the console, so an edit interrupted by a crash or a
+  reboot can still be finished later, from any machine.
+- **Browse everything** — list games anywhere on the PS5 (including
+  inside mounted images), disk images, files, and volumes. Run FS
+  ops (add files, replace a file, chmod, delete, move, copy, mkdir)
+  with a real directory tree. Bulk delete of a 200k-file folder
+  shows live progress with a working Stop button.
+- **NAS / SMB upload** — browse a Windows share or Samba NAS from the
+  app, download to this computer, or **upload a file or folder
+  straight to the PS5** in one step (streamed to a host temp dir, then
+  FTX2 — no 2 GiB memory cap on that path).
+- **FTP server on the PS5** — optional built-in FTP for FileZilla and
+  other clients (default port **2122**, so it coexists with ftpsrv on
+  2121). Not a replacement for FTX2 Upload.
+- **Backport helpers** — Fakelib folder manager, BPS patch apply, and
+  SDK Version Changer for folder dumps that need newer system libs.
+  Runtime mount is still BackPork or ShadowMount+ (don’t run both).
+- **Stay-in-the-loop notifications** — in-app alerts mirror to your
+  computer's notification center (macOS / Windows / Linux, plus the
+  Android shade) when a transfer finishes or fails in the background,
+  and the PS5 itself shows a toast when an upload starts and completes.
+  Your machine is kept awake automatically while a transfer runs.
+- **Hardware view** — model, serial, uptime, storage and RAM, refreshed
+  live; plus a fan-threshold control that rings through to
+  `/dev/icc_fan` for quieter operation. Temperatures (CPU, SoC, M.2) and
+  CPU frequency are read **on demand** (a button), not auto-polled — each
+  read briefly pauses the system UI, so polling them could destabilize the
+  console. Some readings on that panel are simply not available on retail
+  firmware and show `—`: SoC clock, SoC power, CPU usage, fan duty, and
+  the per-drive sensor list. Storage totals and temperatures do work.
+- **Power control & wake** — reboot, rest mode, or shut down the PS5 from
+  the app, and **wake it from standby** over the network (Sony's discovery
+  protocol — a PS5 does not respond to Wake-on-LAN). With the console's
+  Remote Play session keys stored, **Wake & sign in** brings it up straight
+  on your user's home screen instead of the user-select screen, the way the
+  PS Remote Play app does. Waking needs three console settings enabled
+  (Remote Play, plus *Stay Connected to the Internet* and *Enable Turning On
+  PS5 from Network* under Rest Mode) — the app spells them out, since without
+  them the wake fails silently.
+- **Send any payload** — push `.elf`, `.bin`, `.js`, `.lua`, or
+  `.jar` files to the PS5's loader port (typical defaults: `.elf` →
+  9021 elfldr, `.js` → 50000 WebKit-stage, `.lua` → 9026, `.jar` →
+  9025 BD-JB / BDJ; custom loaders may listen anywhere). Recent-sends
+  history with click-to-replay and per-row success/fail badges. Curated
+  payload catalogue (kstuff, ShadowMount+, etaHEN, …) fetches releases on
+  demand — or **add your own GitHub/Gitea repo** and it tracks + caches
+  that too. **Payload playlists** run a scripted boot sequence, and a
+  playlist step can pull straight from a repo at run time so you don't
+  keep a pile of `.elf` files on your PC.
+- **Install packages (package library)** — add a PS4 `.pkg` or PS5 `.fpkg`
+  install package and it uploads to your PS5 once and stays there.
+  **Install Package** lists every
+  uploaded package with cover art and size; **Install**, **Reinstall**,
+  or **Delete** any of them in a click — no re-uploading to install
+  again. **Install all** does a whole set in one tap, in base → update →
+  DLC order. Installs use Sony's game-package service and are only marked
+  complete after console-side verification; a clean rejection can fall back
+  to the standalone DPI daemon. Verified end-to-end on FW 9.60. FW 11.60+
+  has reported `0x80B2116F` AppInst/PlayGo incompatibilities, so ps5upload
+  keeps the staged package and directs users to the on-PS5 Settings → System →
+  Debug Settings → Game → Package Installer instead of claiming success.
+  **Stream (beta)** installs a
+  package straight from your PC over HTTP with no staging upload — handy
+  when console storage is tight.
+- **Web browser access** — run the engine (or the official Docker image)
+  and manage your PS5 from any browser on the LAN, the full app served
+  over HTTP. No desktop install needed on that machine. Unauthenticated —
+  keep it on a trusted LAN. See the self-hosted-engine FAQ below.
+- **Screenshots & video clips** — browse the PS5's Capture Gallery,
+  preview, and download screenshots (HDR `.jxr` auto-converted to PNG) or
+  gameplay video clips to your computer.
+- **Register + launch** — Library row's Play button always registers
+  first (idempotent if already registered), retries with DRM-type
+  patch on rejection, then launches. Unmount unregisters every
+  title inside the image first so the dashboard stays clean —
+  no ghost tiles after unmount.
+- **Speaks your language** — the whole UI, including error messages
+  and troubleshooting hints, is translated into 18 languages: English,
+  Simplified & Traditional Chinese, Spanish, Hindi, Arabic, Bengali,
+  Brazilian Portuguese, Russian, Japanese, German, French, Korean,
+  Turkish, Vietnamese, Indonesian, Italian, and Thai.
+
+## What it doesn't do
+
+- **System pkg patches.** `sceAppInstUtilInstallByPackage` is built
+  for game pkgs; NPXS-prefix system pkgs (Store updates, Settings
+  app patches) register but the install path freezes Sony's mgmt
+  service mid-flight on most firmwares. Use the on-PS5 Settings →
+  Debug Settings → Game → Package Installer for those.
+- **Insecure pkg signing keys.** The engine only installs pkgs signed
+  with keys already in the PS5's trust store. It does not generate or
+  inject fake signing keys.
+
+## A quick look
+
+<img width="1790" height="1425" alt="image" src="https://github.com/user-attachments/assets/a455f9b6-a7d4-49c2-a127-bf923c61d901" />
+
+## Install
+
+Pre-built downloads land on the
+[Releases page](https://github.com/phantomptr/ps5upload/releases):
+
+| Platform | File | How to install |
+|---|---|---|
+| macOS (Apple Silicon / Intel) | `PS5Upload-<ver>-mac-{arm64,x64}.dmg` | Open the `.dmg`, drag PS5Upload into Applications. See **First launch on macOS** below — Gatekeeper blocks downloaded apps the first time. |
+| Windows (x64 / ARM64) | `PS5Upload-<ver>-win-{x64,arm64}.zip` | Unzip, double-click `PS5Upload.exe` — portable, no installer. See **First launch on Windows** — SmartScreen warns on first run. |
+| Linux — Debian / Ubuntu (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.deb` | `sudo apt install ./PS5Upload-<ver>-linux-<arch>.deb` — installs a normal app with a menu entry; pulls in the WebKitGTK deps automatically. |
+| Linux — Fedora / RHEL / Bazzite (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.rpm` | `sudo dnf install ./PS5Upload-<ver>-linux-<arch>.rpm` (Bazzite/Silverblue: `rpm-ostree install`) — menu entry + auto deps. |
+| Linux — any distro (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.zip` | Universal fallback (no install). Unzip, then `chmod +x PS5Upload.sh PS5Upload.AppImage` and run **`./PS5Upload.sh`** (the wrapper — handles the FUSE-less and WebKit white-screen cases for you). Running `./PS5Upload.AppImage` directly also works if your system has libfuse2 and a happy WebKitGTK. |
+| Android | `PS5Upload-<ver>-android.apk` | Enable "install unknown apps" for your browser/file manager, then open the `.apk`. Same interface, mobile-friendly; connects to and manages your PS5 over Wi-Fi. |
+
+### First-launch warnings (and why they're there)
+
+ps5upload is not code-signed with paid OS certificates — same as
+every other PS5 scene tool. The OS's verification layers
+(Gatekeeper on macOS, SmartScreen on Windows) treat unsigned downloads
+as suspicious until you allow them once. The one-time bypass:
+
+**macOS** — "App is damaged" or "cannot be opened":
+```bash
+xattr -dr com.apple.quarantine /Applications/PS5Upload.app
+```
+That removes the *quarantine* attribute macOS slaps on every file
+downloaded from a browser. Alternatively, right-click PS5Upload in
+Applications → **Open** → click **Open** in the prompt. Either method
+only needs to be done once per install.
+
+**Windows** — "Windows protected your PC" SmartScreen prompt:
+- Click **More info** → **Run anyway**.
+- Only shown until SmartScreen builds reputation for the binary;
+  subsequent launches are silent.
+- If your IT policy blocks "Run anyway", unzip + right-click
+  `PS5Upload.exe` → **Properties** → check **Unblock** → **OK**.
+
+**Linux** — no equivalent warning. Just `chmod +x` and launch.
+
+### System requirements
+
+- **macOS** 11 (Big Sur) or newer. No dependencies — ad-hoc signed,
+  see *First launch* above for the one-line quarantine bypass.
+- **Windows** 10 (build 19041+) or Windows 11. Ships with the
+  Microsoft Edge WebView2 runtime by default; LTSC / stripped
+  installs may need
+  [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)
+  installed once.
+- **Linux** — the `.deb` and `.rpm` packages **pull in their
+  dependencies automatically** (WebKitGTK 4.1, gtk3, libsoup3, etc.) via
+  the package manager, so they're the easiest route on Debian/Ubuntu and
+  Fedora/RHEL/Bazzite. The universal `.AppImage` instead expects those
+  libraries already on the host (libfuse2, gtk3, webkit2gtk 4.1,
+  libsoup3, libappindicator, librsvg2); install commands for
+  Debian/Ubuntu/Fedora/RHEL/Arch are in
+  [the FAQ](FAQ.md#prerequisites).
+  **Minimum distro version:** all three Linux artifacts are built against
+  **glibc 2.39**, so they need a reasonably recent distro — **Ubuntu
+  24.04+, Debian 13+ (trixie), Fedora 40+**, or equivalent. (This is a
+  glibc floor, not a package dependency — the `.deb`/`.rpm` install fine
+  on older releases but the app won't launch, and the AppImage bundles
+  WebKitGTK yet still uses the host's glibc.) On an older distro, build
+  from source with `make dist-linux` on that machine.
+
+The app checks GitHub for updates once per launch (Settings → Updates)
+and downloads a fresh archive to your Downloads folder when you click
+Download — replace the old app manually and relaunch.
+
+Building from source:
+
+```bash
+git clone https://github.com/phantomptr/ps5upload.git
+cd ps5upload
+make install       # bootstrap dev env (auto-detects host OS)
+make build         # payload ELF + engine + client UI
+make run-client    # launch the Tauri dev app
+```
+
+`make install` auto-detects your OS and runs one of:
+
+- **`make install-ubuntu`** — Debian / Ubuntu / WSL2: `apt` deps for Tauri
+  (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `librsvg2-dev`,
+  `libayatana-appindicator3-dev`, `libxdo-dev`, `libssl-dev`,
+  `build-essential`), Node.js 22 LTS via NodeSource (only if missing),
+  Rust via rustup, and checksum-verified PS5 Payload SDK v0.42 →
+  `~/ps5-payload-sdk`.
+- **`make install-macos`** — macOS: Xcode CLT, Homebrew, `node`, current
+  `llvm` (LLVM 22 at this release), Rust via rustup, and checksum-verified
+  PS5 Payload SDK v0.42.
+- **`make install-windows`** — Windows 11: Node.js LTS, Rust, VS 2022 Build
+  Tools (C++ workload), WebView2 Runtime, 7-Zip, and PS5 Payload SDK
+  via `winget`. Run from an elevated PowerShell (or any shell with
+  `pwsh` / `powershell.exe` on PATH).
+
+All three install scripts are idempotent — re-running them after a partial
+setup is safe. A stale or unmarked SDK is upgraded to the repository pin and
+moved to a timestamped backup instead of being deleted. Local and GitHub
+Actions builds read the same tag and official release checksum from
+`scripts/ps5-sdk.env`.
+
+For per-platform bundles only (no full dev env): `make dist-mac`,
+`make dist-mac-x64`, `make dist-linux`, `make dist-linux-arm`,
+`make dist-win`, and `make dist-win-arm`.
+
+## Quick start
+
+1. Launch ps5upload on your computer.
+2. Open the **Connection** tab and enter your PS5's IP address.
+3. Click **Check**, then **Send payload**.
+4. Once the third step turns green, go to any other tab — you're
+   connected.
+
+The payload stays loaded until the PS5 reboots or goes into rest mode.
+
+## Architecture
+
+```
+client/ (Tauri 2 · React · TypeScript)
+   │
+   └── spawns ── ps5upload-engine (HTTP :19113)
+                          │
+                          ▼  FTX2 binary framing
+                payload/ps5upload.elf  (PS5 C payload, ports 9113 + 9114)
+```
+
+Three layers:
+
+- **`payload/`** — C payload that runs on the PS5 (FreeBSD 11).
+  Ports 9113 (transfer) + 9114 (management). Handles FTX2 framing,
+  BLAKE3 verification, mount pipelines, and FS ops.
+- **`engine/`** — Rust workspace with the protocol types, transfer
+  logic, HTTP service, lab CLI, mock server, and benchmarks.
+- **`client/`** — Tauri 2 desktop app. Tauri IPC commands proxy to the
+  sidecar HTTP engine, keeping the engine usable from CLI / CI too.
+
+## Build
+
+All workflows go through the root `Makefile` (see `make help`).
+
+| Target | What it does |
+|---|---|
+| `make build` | Payload + engine + client |
+| `make payload` | PS5 ELF at `payload/ps5upload.elf` (requires `PS5_PAYLOAD_SDK` env var) |
+| `make engine` | `cargo build --workspace` |
+| `make client` | `vite build` in `client/` |
+| `make run-client` | Tauri dev (vite + Rust main process) |
+| `make run-engine` | `ps5upload-engine` on `localhost:19113` |
+| `make send-payload` | Send the built ELF to `PS5_HOST:PS5_LOADER_PORT` |
+| `npm run validate` | Full non-hardware quality gate |
+| `make quality` | Same full non-hardware quality gate via Make |
+| `npm run coverage` | Generate frontend + Rust coverage reports |
+| `make coverage` | Same coverage reports via Make |
+| `make test` | Script syntax + engine tests + payload validation + client build |
+| `make test-engine` | `cargo test --workspace` (no hardware needed) |
+| `make dist` | Tauri bundle under `client/src-tauri/target/release/bundle/` |
+
+## Test
+
+Unit and integration tests run entirely against an in-process mock
+FTX2 server — no PS5 needed:
+
+```bash
+make test-engine
+```
+
+Full local quality gate and coverage reports:
+
+```bash
+npm run validate
+npm run coverage
+```
+
+Real-hardware smoke test (requires payload already loaded):
+
+```bash
+npm run smoke:hardware
+```
+
+See [`TESTING.md`](TESTING.md) for the complete mock-test, coverage,
+cross-platform, and live-PS5 validation workflow.
+
+## Tech stack
+
+- **Payload** — C (FreeBSD 11), prospero-clang toolchain
+- **Engine** — Rust (edition 2021), tokio + axum 0.8
+- **Desktop client** — Tauri 2, React, TypeScript, Zustand,
+  Tailwind CSS v4, Vite
+- **Protocol** — FTX2 (custom binary framing, BLAKE3 shard
+  verification)
+
+## Supported platforms
+
+**Desktop client**
+
+| | x64 | arm64 |
+|---|---|---|
+| **macOS**   | ✓ | ✓ |
+| **Linux**   | ✓ | ✓ |
+| **Windows** | ✓ | ✓ |
+
+**PS5 payload** — every firmware the PS5 Payload SDK supports,
+currently **1.00 through 13.60** on every console model (original
+CFI-1xxx, Slim CFI-2xxx, Pro CFI-7xxx, Digital). Built against SDK
+v0.42, which ships per-firmware kernel offsets and resolves them at
+payload startup via `kernel_get_fw_version()` — the same binary
+runs on every supported firmware without per-release rebuilds.
+
+| Ceiling | Range | Meaning |
+|---|---|---|
+| **Payload binary** | **1.00 – 13.60** | Same ELF runs on every FW the SDK has offsets for |
+| **Practical jailbreak** | **~1.00 – 12.70** | Limited by the public ELF loader / exploit chain, not by our payload |
+| Hardware-tested here | **5.10** and **9.60** | Core transfer, mount, browse, install, FTP, metadata |
+
+> Fake/debug package install depends on the console's jailbreak having live kernel
+> patches (kstuff / fpkg-enable). On builds where those aren't active the
+> installer reports it honestly rather than claiming a false success — see
+> the FAQ on install firmware support. `.ffpkg` / `.ffpfs` are UFS images for
+> the mount flow, not install-package filename variants.
+
+The process-list feature (Hardware tab's process snapshot) reads
+`kinfo_proc` via `sysctl(KERN_PROC_PROC)` with field offsets that
+have been stable across every SDK-supported firmware — pid at
+byte 72, thread name at byte 447. No firmware-specific fallback
+table required; real command names appear across the full 1.00 –
+13.60 range. Transfer, mount, file browse, hardware monitor and FS
+ops work identically across all supported firmwares. The Hardware
+tab's blank readings (SoC clock, SoC power, CPU usage, fan duty,
+date/time) are values retail firmware doesn't expose at all, not a
+firmware-version difference — temperatures and CPU frequency read
+fine on 5.10 and 9.60 alike.
+
+**What actually gates users in practice is the ELF loader** on
+port 9021 — a third-party component, not part of ps5upload.
+
+## FAQ
+
+**Q: "Connection Refused" or it won't connect?**
+* Did you load the payload first? The PS5 stops listening after a
+  reboot or rest-mode cycle — send the payload again from the
+  **Connection** tab.
+* Is your computer's firewall blocking outbound connections to
+  port 9113 / 9114 / 9021 on your PS5?
+* Your computer and PS5 don't have to be on the same subnet, but
+  there has to be a route to the IP.
+
+**Q: It connects, then drops within seconds?**
+* If you load ps5upload with an autoloader or PLDMGR, put **elfldr first**
+  in its list, before `ps5upload.elf`. Without elfldr loaded first,
+  ps5upload connects and then drops after a few seconds. Loading elfldr
+  once from PLDMGR and then sending ps5upload again also fixes it.
+
+**Q: Stream install fails before the PS5 downloads anything?**
+* The PS5 pulls the package from your computer, so it has to be able to
+  reach it. Allow ps5upload through your computer's firewall (on Windows,
+  for both Private and Public networks), keep the computer and the PS5 on
+  the same network with any VPN off, and set the PS5's Proxy Server to
+  "Do Not Use". **Upload & install** works without this connection.
+
+**Q: Resume gets stuck on "Checking what's already on your PS5…"?**
+* Reconcile scoped to the *local* tree's parent directories, so a
+  single-file upload into a folder that already holds other games
+  is now one `FS_LIST_DIR` call instead of a recursive walk of the
+  whole destination. Update to the latest build.
+* Safe-mode reconcile still hashes every same-size remote file via
+  BLAKE3 — that's ~2–3 s per GiB on PS5 UFS. Use Fast mode for
+  single-file or large-file transfers.
+
+**Q: Do I need a LAN cable?**
+* Not strictly, but Wi-Fi caps throughput well below what the PS5
+  NIC can actually do. Plug in an Ethernet cable for the best
+  experience.
+
+**Q: Can I use this over the Internet?**
+* Yes, technically. If you forward ports 9113 / 9114 to your PS5
+  it will work. However, the FTX2 protocol is optimised for speed,
+  not for authentication — we don't recommend exposing an
+  exploited PS5 to the open Internet.
+
+**Q: How do I install / launch a game from the Library tab?**
+* The Library row exposes **Mount** for `.exfat` / `.ffpkg` /
+  `.ffpfs` images plus **Register** / **Register (patch DRM)** /
+  **Launch** / **Unregister** buttons on the games inside.
+* **Mount** is hardware-validated on FW 9.60 — a 76 GiB UFS
+  `.ffpkg` mounts on `/dev/lvd1`, appears in Volumes with the
+  correct `source_image`, and unmounts cleanly. The new round's
+  payload uses compile-time `-lSce*` linkage so the rtld
+  initialises the Sony sprx state via `DT_NEEDED` before main()
+  runs.
+* **Register** is hardware-validated: pointing it at a folder
+  game with `eboot.bin` + `sce_sys/param.json` succeeds end to
+  end — `sceAppInstUtilAppInstallTitleDir` returns 0, the title
+  appears in `app.db` with the correct title name, and a nullfs
+  bind is installed at `/system_ex/app/<title_id>`. Idempotent —
+  re-registering the same path returns the same result.
+* **Register (patch DRM)** rewrites the source's
+  `sce_sys/param.json`'s `applicationDrmType` to `"standard"`
+  before staging — needed for PSN-extracted dumps that ship with
+  `"PSN"` or `"disc"`. Modifies the source file in place; only
+  use when a normal Register fails with a DRM error.
+* **Launch** routes `sceLncUtilLaunchApp` through a ptrace RPC
+  into `SceShellUI` so Sony's `getpid() == SceShellUI.pid`
+  caller-context check passes natively. Hardware-validated on
+  FW 9.60: hitting Launch on a registered title actually starts
+  the game (SoC power draw confirms the title comes up). Falls
+  back to a direct call when ShellUI RPC isn't available.
+* **Listing inside an active mount** (`/mnt/ps5upload/<name>/...`)
+  is gated by the PS5 sandbox / LVD mount permission set rather
+  than payload privilege. We re-check after every credential
+  elevation; treat "ENOTDIR descending into a mount" as
+  expected for now. Other PS5-side tools see the mount via
+  `/mnt/ps5upload/`, and the source path is recorded in our
+  tracker so reconcile-on-next-boot keeps state consistent.
+* Sensors are read **on demand** (the Hardware tab's "Read sensors"
+  button), not on a timer. Each read briefly ptrace-pauses the system UI,
+  and doing that on a loop could destabilize the console — it powered
+  some consoles off — so the auto-refresh covers only the ptrace-free
+  data (info, uptime, storage).
+* Which readings actually work, measured on FW 9.60 and 5.10:
+  * **Work:** CPU / SoC / M.2 temperature, CPU frequency, storage totals.
+  * **Show `—`:** SoC clock, SoC power, CPU usage, fan duty, per-drive
+    sensors, and the console date/time. These aren't broken payload code
+    — retail firmware doesn't expose them to us. A persistent `—` there
+    is the expected result, not a fault to report.
+
+**Q: "No writable storage found"?**
+* The tool blocks writes to read-only system partitions. If you
+  want to write to a USB drive, make sure it's formatted (exFAT is
+  best) and plugged in *before* you load the payload.
+
+**Q: macOS: "App is damaged" or "Unidentified Developer"?**
+* This is normal for unsigned apps. Right-click the app, select
+  **Open**, then click **Open** in the dialog.
+* If macOS still blocks it, **System Settings → Privacy &
+  Security → Open Anyway**.
+* Last resort — remove the quarantine flag:
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/ps5upload.app
+  ```
+* No Apple Developer account is required; the app is intentionally
+  unsigned.
+
+**Q: Where are config and logs saved?**
+* The desktop client uses the OS app-data directory:
+  * **Windows:** `%APPDATA%\com.phantomptr.ps5upload`
+  * **macOS:** `~/Library/Application Support/com.phantomptr.ps5upload`
+  * **Linux:** `~/.local/share/com.phantomptr.ps5upload`
+
+**Q: Does this work on PS4?**
+* No. The payload is compiled specifically for the PS5 (FreeBSD
+  11, Zen 2) and calls PS5-only kernel entry points.
+
+**Q: What about older firmware (≤ 9.00)?**
+* The FTX2 payload itself doesn't call firmware-gated APIs, but
+  the ELF loader workflow on port 9021 depends on what your
+  jailbreak exposes. Patches welcome.
+
+**Q: Can I run ps5upload headless / over SSH?**
+* Not the GUI. The `ps5upload-engine` binary speaks HTTP on
+  `:19113` and exposes the full transfer / reconcile / FS API, so
+  you can script transfers from a terminal or CI job without ever
+  opening the desktop client.
+
+**Q: Can the engine run on a different machine (remote / self-hosted)?**
+* Yes (3.3.7+). Host the engine elsewhere and point the desktop app at it via
+  **Settings → Engine URL**. An official multi-arch image is published at
+  `ghcr.io/phantomptr/ps5upload-engine` (`:latest` or `:<version>`); you can
+  also build from `engine/Dockerfile`. To let a remote box reach it, set
+  `PS5UPLOAD_ALLOW_IP` to that box's IP. **Security:** the engine's API is
+  unauthenticated (it can read/write/delete PS5 files), so only do this on a
+  trusted LAN — never expose the engine to the internet.
+
+**Q: Can I run ps5upload from a browser, with no desktop app at all (self-hosted web UI)?**
+* Yes (3.3.25+). A separate `webui` build of the engine serves the **full
+  React app over HTTP**, so you can manage your PS5 from any browser on the
+  LAN — handy for a NAS or headless box you don't want to install the desktop
+  client on. An official multi-arch image is published at
+  `ghcr.io/phantomptr/ps5upload-engine-webui` (`:latest` or `:<version>`); or
+  build it yourself with
+  `docker build -f engine/Dockerfile.webui -t ps5upload-engine-webui .`
+  (build context is the **repo root**, not `engine/` — it needs `client/` to
+  build the frontend first). Run it the same way as the plain engine image
+  (`PS5_ADDR`, `PS5UPLOAD_ALLOW_IP`) and open `http://<host>:19113` in a
+  browser on an allowlisted IP. Same security model as the remote engine
+  above: **unauthenticated**, LAN-only, never expose it to the internet.
+  **Upload works in the browser** too, operating on files already
+  present on the **engine's own machine** — e.g. mount a folder into the
+  container with `-v /host/games:/data/games`, then browse to `/data/games`
+  in the in-app file picker. That picker browses the *engine's* filesystem,
+  not the browser's own machine — a browser tab has no way to reach a
+  remote engine's disk except through what the engine itself can already
+  read. A few things are still desktop-only and hidden in the browser UI:
+  archive uploads (`.zip`/`.7z`/`.rar`), Payloads (sending a `.elf`/etc. from
+  disk), installing a `.pkg` you pick from your PC, and saving a save-data
+  backup to your computer — everything else that operates on the PS5 itself
+  (browse, transfer, install from a PS5-connected USB drive, hardware
+  monitor, saves list, …) works the same as the desktop app. The upload
+  queue also doesn't persist across a full page reload in browser mode
+  (queue persistence is desktop-only).
+* Installing a **game update or DLC** from the browser needs an engine that
+  carries the two PS5 helper images. Those installs go through a separate
+  on-console install daemon, and the engine has to send it to the console
+  and put the ps5upload helper back afterwards — the desktop app does this
+  from its own copies, which a browser tab cannot reach. The released
+  engine binaries and the official Docker images include them, and a
+  Docker image you build yourself does too — `ezremote-dpi.elf` is in the
+  repository, and that is the one the update install needs. A plain
+  `cargo build` picks it up only if you build from a full checkout; the
+  ps5upload helper itself is built by `make payload` (it needs the PS5
+  payload SDK). Either way you can point the engine at your own copies
+  with `-e PS5UPLOAD_PAYLOAD_DIR=/path/to/elves`. Base games install
+  regardless.
+
+## Contributing
+
+- Report bugs:
+  [GitHub Issues](https://github.com/phantomptr/ps5upload/issues)
+- Pull requests welcome — please read
+  `.github/PULL_REQUEST_TEMPLATE.md` and run `make test` locally
+  before opening.
+
+## Disclaimer
+
+> **ps5upload is provided for research, educational, interoperability,
+> and homebrew development purposes only.** It is not affiliated with,
+> endorsed by, or connected to Sony Interactive Entertainment Inc.
+> "PlayStation", "PS4" and "PS5" are trademarks of Sony Interactive
+> Entertainment Inc., used here for identification only.
+>
+> **Use this software entirely at your own risk.** It is provided
+> "as is", without warranty of any kind, express or implied,
+> including but not limited to warranties of merchantability, fitness
+> for a particular purpose, and non-infringement.
+
+**➡ Full terms: [DISCLAIMER.md](DISCLAIMER.md).** By downloading,
+building, installing, or using this software you accept them in full.
+If you do not agree, do not use it.
+
+You are solely responsible for how, where, and on what hardware you
+use this tool. By downloading, installing, or running it, you
+acknowledge and accept that:
+
+- **It interacts with a modified PS5.** This tool only works on a
+  console that has been jailbroken / has kernel exploits loaded by
+  the user. Modifying console state, bypassing platform integrity
+  checks, or running unsigned code may void your manufacturer
+  warranty, violate the platform's terms of service, and — under
+  certain operations — leave your console unrecoverable without a
+  reinstall. You took those steps before this tool entered the
+  picture; this tool does not put you in that state and cannot
+  reverse it.
+- **It writes to your PS5's filesystem and can install / register
+  packages with Sony's installer.** Mistakes can corrupt the
+  console's app database, leave orphaned mount points, or wedge
+  Sony's mgmt service mid-install. Recovery normally means a
+  reboot or — worst case — a factory reset. Back up anything
+  important before bulk operations.
+- **It is intended for use only with content you legally own and
+  hardware that belongs to you.** Using it to install, mount, or
+  distribute software you do not have the legal right to use is
+  your responsibility, not the project's.
+- **No support is guaranteed.** This is a free, volunteer-built
+  tool. The author may answer questions on Discord but is under no
+  obligation to provide fixes, updates, or compensation if anything
+  goes wrong.
+- **No piracy.** This tool must not be used to copy, distribute, or
+  run software you do not lawfully own or are licensed to use. The
+  authors do not condone or assist with piracy in any form, and
+  requests for such help will be refused.
+- **You accept the real risks.** Operating a modified console can
+  permanently damage it, irreversibly destroy saves and licences, and
+  get your account or console banned from online services. Back up
+  anything you cannot afford to lose *before* you begin.
+- **Indemnity.** You agree to hold the authors, contributors, and
+  distributors harmless from any claim arising out of your use or
+  misuse of this software.
+
+If any of the above is not acceptable to you, do not use this
+software.
+
+## Third-Party Libraries
+
+This software builds on the following open-source projects:
+
+**Desktop client (Tauri 2 + React):**
+* [Tauri](https://tauri.app/) — Rust-backed cross-platform desktop runtime
+* [React](https://react.dev/) — UI library
+* [Zustand](https://github.com/pmndrs/zustand) — Client state management
+* [Tailwind CSS](https://tailwindcss.com/) — Styling
+* [Vite](https://vitejs.dev/) — Build + dev server
+* [lucide-react](https://lucide.dev/) — Icons
+* [react-router](https://reactrouter.com/) — Routing
+
+**Engine (Rust):**
+* [tokio](https://tokio.rs/) — Async runtime
+* [axum](https://github.com/tokio-rs/axum) — HTTP service
+* [serde](https://serde.rs/) — Serialization
+* [anyhow](https://github.com/dtolnay/anyhow) — Error handling
+* [uuid](https://github.com/uuid-rs/uuid) — Job IDs
+* [zip](https://github.com/zip-rs/zip2) + [sevenz-rust2](https://crates.io/crates/sevenz-rust2) — pure-Rust `.zip` / `.7z` extraction
+* [unrar / unrar_sys](https://crates.io/crates/unrar) — `.rar` extraction on **desktop** (bundles the **UnRAR** source by Alexander Roshal; used to *extract only*, never to compress). See the required notice and the GPLv3 §7 linking exception in [`LICENSES/`](LICENSES/). The `unrar` wrapper (MIT OR Apache-2.0) is **vendored** at [`third_party/unrar`](third_party/unrar) carrying one local fix for an out-of-bounds read on multi-volume archives — upstream 0.5.8 has no fix; see that directory's README.
+
+**Payload (PS5):**
+* [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) — Open-source SDK for PS5 payload development
+* [BLAKE3](https://github.com/BLAKE3-team/BLAKE3) — Fast cryptographic hashing (per-shard verification)
+
+## Thanks
+
+ps5upload stands on the shoulders of the **PS5 homebrew scene**. Huge
+thanks to everyone who makes this ecosystem possible — the exploit and
+kernel researchers, the ELF/payload loader authors, the PS5 Payload SDK
+maintainers, the homebrew tool developers whose work this lives alongside,
+and everyone in the community who tests, reports bugs, and shares
+knowledge. None of this exists without your collective effort. 🙏
+
+## License
+
+GNU General Public License v3.0 (GPLv3).
+Free to use, free to modify. See [`LICENSE`](LICENSE).
+
+**`.rar` support / UnRAR:** the desktop build bundles the UnRAR source (used
+only to *extract* RAR — never to compress or build a RAR-compatible archiver).
+A GPLv3 §7 linking exception covers combining it with this GPL code, and
+UnRAR's own license is reproduced as required. See
+[`LICENSES/UnRAR-exception.md`](LICENSES/UnRAR-exception.md) and
+[`LICENSES/UnRAR-license.txt`](LICENSES/UnRAR-license.txt).
+
+## Author
+
+Created and maintained by **PhantomPtr**.
+
+* [Follow me on X (@phantomptr)](https://x.com/phantomptr)
+
+## Support
+
+If you find this tool useful, consider buying me a coffee!
+
+* Discord server: [https://discord.gg/fzK3xddtrM](https://discord.gg/fzK3xddtrM)
+* Support me on Ko-fi: [https://ko-fi.com/B0B81S0WUA](https://ko-fi.com/B0B81S0WUA)
+
+[![Support me on Ko-fi](https://storage.ko-fi.com/cdn/kofi3.png?v=3)](https://ko-fi.com/B0B81S0WUA)

@@ -1,0 +1,684 @@
+name: ci
+
+# Runs on every push to main and every PR. No user-controlled inputs
+# interpolate into shell commands anywhere in this file — all `run:`
+# blocks use static strings only.
+
+on:
+  push:
+    branches: [main]
+    # Explicitly *not* tags — tag pushes are the release workflow's
+    # trigger. Leaving this list out would inherit the "all refs"
+    # default and double-fire on `vX.Y.Z` tags that point at HEAD,
+    # wasting a full CI run on a commit the release workflow is
+    # already validating end-to-end.
+    tags-ignore: ['**']
+  pull_request:
+  workflow_dispatch:
+
+# One concurrency group per ref: if you push twice in a row (e.g.
+# CHANGELOG typo fix on main), the first run cancels instead of
+# keeping two redundant jobs alive.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # Version sync gate. VERSION (repo root) is the canonical source of
+  # truth; downstream files (payload config.h, Tauri conf, Cargo.toml,
+  # package manifests) must all match it. Runs first because if this
+  # fails there's no point burning cycles on clippy/tests for a release
+  # that would ship with mismatched version strings on the payload
+  # binary vs the desktop bundle.
+  # ─────────────────────────────────────────────────────────────────────
+  version-sync:
+    name: version sync (VERSION is canonical)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Verify downstream files match VERSION
+        run: node scripts/update-version.js --check
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Rust workspace (engine + core + ftx2-proto). Format, clippy, tests.
+  # Gates PRs that touch any Rust code.
+  # ─────────────────────────────────────────────────────────────────────
+  rust-engine:
+    name: rust (engine workspace)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: ${{ runner.os }}-engine-cargo-${{ hashFiles('engine/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-engine-cargo-
+
+      - name: cargo fmt
+        working-directory: engine
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        working-directory: engine
+        run: cargo clippy --workspace -- -D warnings
+
+      # The webui feature (rust-embed + static serving) is only enabled
+      # in the Docker webui build, not the default workspace clippy/test
+      # above. Compile-check it here so a broken #[cfg(feature = "webui")]
+      # branch doesn't slip through CI and only surface at Docker build
+      # time (as happened in 4.1.0). Full test/lint of the feature isn't
+      # needed — a type-check catches the class of bug we're guarding.
+      #
+      # rust-embed's #[derive(RustEmbed)] #[folder = "webui/"] requires
+      # the directory to exist at compile time — without it the macro
+      # generates no impl and WebAssets::get fails (E0599). The real
+      # content is the Vite build output (client/dist/) and is only
+      # copied in by Dockerfile.webui; here we create a stub with a
+      # dummy index.html so the derive macro is satisfied.
+      - name: create webui stub for rust-embed
+        working-directory: engine/crates/ps5upload-engine
+        run: mkdir -p webui && echo '<!DOCTYPE html><title>stub</title>' > webui/index.html
+      - name: cargo check (webui feature)
+        working-directory: engine
+        run: cargo check -p ps5upload-engine --features webui
+
+      - name: cargo test
+        working-directory: engine
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo test --workspace -- --nocapture
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Engine/core target portability. This is intentionally separate from
+  # the full release matrix: PRs get a fast compile-only signal that the
+  # host-side engine code still type-checks for the OS/arch combinations
+  # we ship, while publish.yml remains the authoritative bundle builder.
+  # ─────────────────────────────────────────────────────────────────────
+  rust-engine-targets:
+    name: rust engine target (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          # Native arm64 runner — cross-compiling to aarch64 from x86_64
+          # ubuntu-24.04 fails because blake3's NEON SIMD path needs
+          # aarch64-linux-gnu-gcc (not preinstalled, and bringing it in
+          # would mean threading TARGET_CC env vars through every step).
+          # Matches publish.yml's arm64 build leg.
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-14
+            target: x86_64-apple-darwin
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+          - os: windows-2022
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: cargo check core
+        working-directory: engine
+        run: cargo check -p ps5upload-core --target ${{ matrix.target }}
+
+      - name: cargo check engine
+        working-directory: engine
+        run: cargo check -p ps5upload-engine --target ${{ matrix.target }}
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Rust desktop shell (client/src-tauri). Uses its own workspace so
+  # it doesn't share target/ with the engine. Tauri pulls heavy
+  # system deps on Linux (webkit/gtk), so we cache aggressively.
+  # ─────────────────────────────────────────────────────────────────────
+  rust-desktop:
+    name: rust desktop (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # Formatting is platform-independent, so gate it on one runner
+      # rather than paying for it three times. This job previously
+      # installed clippy ONLY, so client/src-tauri was never format-
+      # gated at all while the engine workspace was — six files had
+      # quietly drifted by 5.1.1.
+      - name: cargo fmt
+        if: matrix.os == 'ubuntu-24.04'
+        working-directory: client/src-tauri
+        run: cargo fmt --all -- --check
+
+      # Bounded + retried for the same reason as publish.yml's copy: a
+      # stalled apt mirror once burned a whole 45-minute job budget there.
+      - name: Install Tauri Linux deps
+        if: runner.os == 'Linux'
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          # apt has NO default network timeout: if a mirror stalls mid-fetch it
+          # waits forever. That is exactly what sank the v5.3.3 publish — the
+          # Azure mirror went quiet after "Ign: .../noble-updates/main amd64
+          # Packages" and the step sat there for 45 minutes until the job
+          # timeout killed it, skipping create-release. Acquire::*::Timeout is
+          # the part that actually fixes it; the retry loop is only useful
+          # because of it, since without a timeout every attempt would hang
+          # the same way.
+          apt_retry() {
+            for attempt in 1 2 3; do
+              if sudo DEBIAN_FRONTEND=noninteractive apt-get \
+                   -o Acquire::Retries=3 \
+                   -o Acquire::http::Timeout=20 \
+                   -o Acquire::https::Timeout=20 \
+                   "$@"; then
+                return 0
+              fi
+              echo "apt attempt $attempt failed; retrying in 15s" >&2
+              sleep 15
+            done
+            echo "apt failed after 3 attempts: apt-get $*" >&2
+            return 1
+          }
+          apt_retry update
+          apt_retry install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            patchelf \
+            build-essential \
+            clang \
+            libclang-dev
+
+      - name: Cache cargo target
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            client/src-tauri/target
+          key: ${{ matrix.os }}-desktop-cargo-${{ hashFiles('client/src-tauri/Cargo.lock') }}
+          restore-keys: ${{ matrix.os }}-desktop-cargo-
+
+      # tauri.conf.json bundles two out-of-tree resources: the PS5
+      # payload (ps5upload.elf.gz) and the engine sidecar binary.
+      # cargo check parses those resource paths and errors out if
+      # anything is missing, long before any code compiles. Stub the
+      # payload .gz and build the engine binary for real so its target
+      # path exists.
+      #
+      # The stub is a *fake ELF* (ELF magic + 200 KB of zeros, gzipped),
+      # not an empty gzip: `cargo test` runs probes.rs::
+      # embedded_payload_decompresses_to_elf, which gunzips the embedded
+      # payload and asserts ELF magic + >100 KB. That test guards the
+      # "Send payload" decode path (an empty stub once shipped on mobile
+      # and broke it). The real ~1 MB payload is built + embedded by the
+      # `payload` job here and by publish.yml for releases; this fake one
+      # only has to satisfy the decode plumbing.
+      - name: Stub payload resource
+        shell: bash
+        run: |
+          mkdir -p payload
+          { printf '\x7fELF'; head -c 204800 /dev/zero; } > payload/ps5upload.elf
+          gzip -nf payload/ps5upload.elf   # -> payload/ps5upload.elf.gz
+
+      - name: Build engine sidecar (needed as a Tauri resource)
+        working-directory: engine
+        run: cargo build --release -p ps5upload-engine
+
+      - name: cargo check
+        working-directory: client/src-tauri
+        run: cargo check --all-targets
+
+      - name: cargo clippy
+        working-directory: client/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        working-directory: client/src-tauri
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo test
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Client frontend — TypeScript typecheck, ESLint, Vitest, Vite build.
+  # ─────────────────────────────────────────────────────────────────────
+  client-frontend:
+    name: client (ts + vite)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install deps
+        working-directory: client
+        run: npm ci --no-audit --no-fund
+
+      - name: TypeScript typecheck
+        working-directory: client
+        run: npm run typecheck
+
+      - name: ESLint
+        working-directory: client
+        run: npm run lint
+
+      - name: Vitest
+        working-directory: client
+        run: npm test
+
+      # i18n coverage gate. validate-repo runs this locally and
+      # TESTING.md elevates it to a release gate; CI was the missing
+      # link. Static command, no event-derived input. Reviewed for
+      # GitHub Actions injection risk: safe.
+      - name: i18n coverage
+        run: npm run i18n:check
+
+      - name: Vite production build
+        working-directory: client
+        run: npm run build:vite
+
+      - name: Install Playwright Chromium
+        working-directory: client
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser workflow smoke test
+        working-directory: client
+        run: npm run test:e2e
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Repo scripts and hygiene. Runs the same parser/audit layer exposed by
+  # `make lint-scripts` / `npm run scripts:check`.
+  # ─────────────────────────────────────────────────────────────────────
+  repo-scripts:
+    name: repo scripts
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Check script syntax
+        run: npm run scripts:check
+
+      - name: Audit scripts
+        # Strict mode: fail CI if any tracked script/test utility
+        # has zero references AND isn't on the manualEntrypoints
+        # allowlist. Previously this only printed warnings, so a
+        # renamed-without-callers script silently slipped through.
+        # Static command, no event-derived input.
+        run: node scripts/audit-scripts.mjs --strict
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Coverage reports. This is a reporting job, not the primary gate:
+  # rust-engine and client-frontend above fail fast on correctness.
+  # Artifacts contain HTML + lcov for trend tracking and local inspection.
+  # ─────────────────────────────────────────────────────────────────────
+  coverage:
+    name: coverage reports
+    runs-on: ubuntu-24.04
+    # `continue-on-error` below does NOT cover the timeout: a job that hits
+    # `timeout-minutes` is reported as *cancelled*, which cancels the whole
+    # run and leaves main red over a job that is explicitly not a gate. It
+    # reached 20m17s on 2026-09-16 against a 16m02s green run the day
+    # before, so the headroom here is deliberate — keep it well clear of
+    # the real runtime as the test suite grows.
+    timeout-minutes: 40
+    # Reporting job — not a gate. cargo-llvm-cov occasionally trails
+    # rustc's profraw format version (we hit "raw profile version
+    # mismatch: ... expected version = 9" when rustc bumped to v10),
+    # and we don't want a coverage tool's release cadence to block
+    # PRs on unrelated correctness work. The artifact is for trend
+    # inspection, not enforcement.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install client deps
+        working-directory: client
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate coverage
+        run: npm run coverage
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-reports
+          path: |
+            coverage/
+            client/coverage/
+          retention-days: 14
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Payload ELF — compile against the ps5-payload-sdk so we catch any
+  # breakage to the C code. Doesn't upload artifacts; publish.yml does
+  # that on tagged runs. Keeps PR feedback loop tight.
+  # ─────────────────────────────────────────────────────────────────────
+  payload:
+    name: payload (ELF)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install payload toolchain
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          # apt has NO default network timeout: if a mirror stalls mid-fetch it
+          # waits forever. That is exactly what sank the v5.3.3 publish — the
+          # Azure mirror went quiet after "Ign: .../noble-updates/main amd64
+          # Packages" and the step sat there for 45 minutes until the job
+          # timeout killed it, skipping create-release. Acquire::*::Timeout is
+          # the part that actually fixes it; the retry loop is only useful
+          # because of it, since without a timeout every attempt would hang
+          # the same way.
+          apt_retry() {
+            for attempt in 1 2 3; do
+              if sudo DEBIAN_FRONTEND=noninteractive apt-get \
+                   -o Acquire::Retries=3 \
+                   -o Acquire::http::Timeout=20 \
+                   -o Acquire::https::Timeout=20 \
+                   "$@"; then
+                return 0
+              fi
+              echo "apt attempt $attempt failed; retrying in 15s" >&2
+              sleep 15
+            done
+            echo "apt failed after 3 attempts: apt-get $*" >&2
+            return 1
+          }
+          apt_retry update
+          # Add LLVM apt repo for llvm-22 (not in Ubuntu 24.04 default repos)
+          curl -fsSL --retry 3 --retry-delay 5 https://apt.llvm.org/llvm.sh | sudo bash -s -- 22
+          apt_retry install -y clang-22 llvm-22-dev lld-22 unzip python3
+
+      # The shared installer reads scripts/ps5-sdk.env, verifies the official
+      # release checksum, and is also used by developer bootstrap scripts and
+      # publish.yml. One pin therefore controls every payload build.
+      - name: Install pinned PS5 Payload SDK
+        run: sudo env PS5_SDK_INSTALL_DIR=/opt/ps5-payload-sdk bash scripts/install-ps5-sdk.sh
+
+      - name: Build payload
+        env:
+          PS5_PAYLOAD_SDK: /opt/ps5-payload-sdk
+          # SDK v0.42's prospero-llvm-config candidate search maxes at 21,
+          # so point it at the CI-installed LLVM 22 explicitly.
+          LLVM_CONFIG: /usr/bin/llvm-config-22
+        run: make payload
+
+      - name: Verify ELF
+        run: |
+          file payload/ps5upload.elf payload/dpi/ezremote-dpi.elf
+          test -s payload/ps5upload.elf
+          test -s payload/ps5upload.elf.gz
+          test -s payload/dpi/ezremote-dpi.elf
+          test -s payload/dpi/ezremote-dpi.elf.gz
+          gzip -t payload/ps5upload.elf.gz payload/dpi/ezremote-dpi.elf.gz
+          # Sanity-check the payload is a real build, not a zero-byte
+          # stub. Current payload is ~600 KB (runtime + takeover +
+          # register + blake3 SIMD backends); drop the floor to 200 KB
+          # so legitimate shrinkage from future refactors doesn't false-
+          # positive while still catching a broken/empty build.
+          size_bytes=$(stat -c '%s' payload/ps5upload.elf)
+          echo "ps5upload.elf: ${size_bytes} bytes"
+          if [ "$size_bytes" -lt 200000 ]; then
+            echo "::error::payload ELF is smaller than expected — build may have failed silently"
+            exit 1
+          fi
+          dpi_size_bytes=$(stat -c '%s' payload/dpi/ezremote-dpi.elf)
+          echo "ezremote-dpi.elf: ${dpi_size_bytes} bytes"
+          if [ "$dpi_size_bytes" -lt 50000 ]; then
+            echo "::error::DPI installer ELF is smaller than expected"
+            exit 1
+          fi
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Android APK (Tauri mobile). Verifies the whole mobile pipeline builds
+  # end-to-end: the engine linked in-process, the payload embedded, the
+  # Tauri lib cross-compiled to aarch64-linux-android, and Gradle
+  # assembling an installable debug APK. Uses the same fake-ELF payload
+  # stub as rust-desktop — this is a build-verification job, not a
+  # release. publish.yml builds the real, signed APK with the actual
+  # payload. The debug APK is uploaded as an artifact for manual testing.
+  # ─────────────────────────────────────────────────────────────────────
+  android:
+    name: android (apk build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Rust + Android targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+
+      - name: Cache cargo target
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            client/src-tauri/target
+          key: ${{ runner.os }}-android-cargo-${{ hashFiles('client/src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-android-cargo-
+
+      # Gradle's dependency cache.
+      #
+      # v5.4.5's CI failed here: Maven Central answered 403 for
+      # kotlin-stdlib and Gradle could not configure the project, so the
+      # build died before compiling anything of ours. Nothing was wrong
+      # with the code -- the publish workflow built the same commit
+      # minutes later.
+      #
+      # gen/android is scaffolded fresh every run, so the Gradle project
+      # is new each time, but ~/.gradle/caches persists across runs when
+      # cached. With the artifacts already local, a transient Maven
+      # outage stops being a build failure.
+      #
+      # Keyed loosely on purpose: the generated project pins its own
+      # versions, so any recent cache is a useful starting point and a
+      # miss only costs a download.
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-android-gradle-${{ hashFiles('client/src-tauri/tauri.conf.json') }}
+          restore-keys: ${{ runner.os }}-android-gradle-
+
+      - name: Install client deps
+        working-directory: client
+        run: npm ci --no-audit --no-fund
+
+      # Fake-ELF payload stub (see rust-desktop's note): satisfies the
+      # embedded-payload decode + this build without the real ~1 MB ELF.
+      - name: Stub payload resource
+        shell: bash
+        run: |
+          mkdir -p payload
+          { printf '\x7fELF'; head -c 204800 /dev/zero; } > payload/ps5upload.elf
+          gzip -nf payload/ps5upload.elf
+
+      # Pin the NDK to a known-good major version rather than blindly
+      # taking whatever the runner image ships. An NDK rotation on the
+      # runner image can silently break the build (new clang warnings →
+      # errors, libc symbol changes, etc.). If the pinned major is absent
+      # we fall back to the newest available and warn.
+      - name: Resolve NDK
+        shell: bash
+        run: |
+          # Preferred NDK major (r27 = NDK 27.x). Update when CI is
+          # validated against a newer one.
+          PREFERRED_MAJOR="27"
+          ndk=""
+          for candidate in \
+            "$ANDROID_HOME/ndk/${PREFERRED_MAJOR}."* \
+            "$ANDROID_HOME/ndk/"*; do
+            if [ -d "$candidate" ]; then
+              ndk="$candidate"
+              break
+            fi
+          done
+          if [ -z "$ndk" ]; then
+            echo "::error::no NDK found under $ANDROID_HOME/ndk"
+            exit 1
+          fi
+          # Warn if we couldn't get the preferred major.
+          case "$(basename "$ndk")" in
+            "${PREFERRED_MAJOR}"*) ;;
+            *) echo "::warning::preferred NDK r${PREFERRED_MAJOR} not found, using $(basename "$ndk")" ;;
+          esac
+          echo "NDK_HOME=$ndk" >> "$GITHUB_ENV"
+          echo "Using NDK: $ndk"
+
+      - name: Scaffold Android project (gen/ is gitignored)
+        working-directory: client
+        run: npx tauri android init
+
+      # `android init` seeds placeholder launcher icons; re-apply ours so
+      # the Android app icon matches the desktop app icon.
+      - name: Apply app icon
+        working-directory: client
+        run: npx tauri icon src-tauri/icons/sources/macos_squircle_1024.png
+
+      # Keep the manifest patch in the build-verification path too, so a
+      # regression in android-postinit-patch.sh is caught by CI (release
+      # parity; the loopback + backup config is harmless for debug).
+      - name: Patch manifest (loopback cleartext + backup rules)
+        run: bash scripts/release/android-postinit-patch.sh
+
+      - name: Build debug APK (arm64 + armv7)
+        working-directory: client
+        run: npx tauri android build --debug --apk --target aarch64 --target armv7
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: ps5upload-android-debug-apk
+          path: client/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Aggregate gate. One stable check that turns green only when every
+  # required job above succeeded. Branch protection on `main` requires
+  # THIS single context ("PR gate") instead of each matrix job by name,
+  # so adding/removing a matrix leg never silently drops it from the gate.
+  #
+  # `coverage` is deliberately excluded — it's continue-on-error (a
+  # reporting job, not a correctness gate), so a flaky coverage tool must
+  # not block a PR.
+  #
+  # `if: always()` is load-bearing: without it a FAILED dependency would
+  # SKIP this job, and GitHub counts a skipped required check as passing —
+  # letting a broken PR merge. With always() + the result check below, the
+  # gate runs regardless and fails when any dependency didn't succeed.
+  # ─────────────────────────────────────────────────────────────────────
+  pr-gate:
+    name: PR gate
+    if: always()
+    needs:
+      - version-sync
+      - rust-engine
+      - rust-engine-targets
+      - rust-desktop
+      - client-frontend
+      - repo-scripts
+      - payload
+      - android
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every gating job to have succeeded
+        run: |
+          results="${{ join(needs.*.result, ' ') }}"
+          echo "dependency results: $results"
+          for r in $results; do
+            if [ "$r" != "success" ]; then
+              echo "::error::a required CI job did not succeed (saw '$r') — PR is not mergeable"
+              exit 1
+            fi
+          done
+          echo "✓ all required CI jobs succeeded"

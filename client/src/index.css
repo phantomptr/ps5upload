@@ -1,0 +1,1052 @@
+@import "tailwindcss";
+
+/*
+ * ─── ps5upload v3 design system — "Control Deck" ─────────────────────────
+ *
+ * Theme tokens are referenced everywhere via `var(--color-*)` through
+ * Tailwind's arbitrary-value syntax (e.g. `bg-[var(--color-surface)]`).
+ * Switching themes only needs to redefine the tokens; no component has
+ * to know which theme is active.
+ *
+ * Default (no data-theme attr) = dark. The theme store rewrites
+ * `document.documentElement.dataset.theme` to "light" when the user
+ * toggles, which overrides the `@theme` tokens via `:root[data-theme="light"]`.
+ *
+ * v3 direction: console-grade "machined panel" depth instead of flat
+ * borders — every theme now also defines an elevation ramp (--shadow-1..3),
+ * a top-edge highlight for raised panels (--edge-highlight), and a subtle
+ * background atmosphere (--atmosphere). The accent is a more luminous
+ * PlayStation blue (hue 255). Type identity deliberately stays on the
+ * system stack: the app ships in 17 languages including Arabic, Thai,
+ * Hindi and Japanese, and a custom Latin display font would fracture
+ * those scripts — the brand carries through color, depth and motion.
+ */
+
+/* PS5 Dark — the console's black-plastic centre panel: a deep, cool
+ * charcoal (not pure black), lit by the PlayStation-blue accent. */
+@theme {
+  --color-surface: oklch(0.17 0.013 262);
+  --color-surface-2: oklch(0.21 0.014 260);
+  --color-surface-3: oklch(0.258 0.015 258);
+  --color-border: oklch(0.31 0.02 258);
+  --color-border-strong: oklch(0.41 0.025 256);
+  --color-muted: oklch(0.70 0.025 252);
+  --color-text: oklch(0.955 0.008 250);
+  --color-accent: oklch(0.7 0.17 255);
+  --color-accent-contrast: oklch(0.1 0.02 255);
+  /* Soft accent for hover/selected chip backgrounds that should read
+   * as "accent-adjacent" without competing with the primary accent. */
+  --color-accent-soft: oklch(0.34 0.09 255);
+  --color-good: oklch(0.78 0.14 150);
+  --color-good-soft: oklch(0.3 0.07 150);
+  --color-warn: oklch(0.82 0.15 75);
+  --color-warn-soft: oklch(0.32 0.08 75);
+  --color-bad: oklch(0.72 0.2 25);
+  --color-bad-soft: oklch(0.26 0.1 25);
+  /* Platform badge colors (Installed Apps): PS4 = blue, PS5 = violet.
+   * Tuned per theme — lighter text on dark surfaces, darker on light. */
+  --color-ps4: oklch(0.7 0.14 255);
+  --color-ps4-soft: oklch(0.3 0.07 255);
+  --color-ps5: oklch(0.72 0.15 295);
+  --color-ps5-soft: oklch(0.32 0.08 295);
+  /* Hero logo drop shadow (About screen) — heavy on dark, soft on light. */
+  --shadow-logo: 0 12px 40px -10px rgba(0, 0, 0, 0.5);
+  /* Monospace gets a proper stack (paths, content-ids, kernel strings are
+   * everywhere in this app) instead of the browser default. */
+  --font-mono:
+    ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+/* Elevation ramp + atmosphere. Declared on :root (not @theme) because they
+ * are consumed only via var() in CSS below and in component classNames —
+ * they don't need Tailwind utility generation. */
+:root {
+  /* Raised panel (cards): hairline lift, barely-there. */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35);
+  /* Floating chrome (menus, popovers). */
+  --shadow-2: 0 4px 16px -4px rgba(0, 0, 0, 0.5);
+  /* Modal layer. */
+  --shadow-3: 0 16px 48px -12px rgba(0, 0, 0, 0.65);
+  /* Machined top edge on raised panels: a 1px light catch along the top,
+   * like a chamfered aluminum edge under overhead light. */
+  --edge-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  /* Background atmosphere: a faint accent-tinted glow bleeding down from
+   * the top of the window so large empty regions feel lit, not void. */
+  --atmosphere: radial-gradient(
+    120% 70% at 50% -10%,
+    oklch(0.28 0.06 255 / 0.35),
+    transparent 60%
+  );
+  --overlay-scrim: rgba(0, 0, 0, 0.45);
+
+  /* Product shell — one shared rhythm for every screen. */
+  --color-surface-raised: color-mix(
+    in oklab,
+    var(--color-surface-2) 92%,
+    var(--color-text) 8%
+  );
+  --color-accent-glow: color-mix(
+    in oklab,
+    var(--color-accent) 22%,
+    transparent
+  );
+  --radius-control: 0.625rem;
+  --radius-panel: 0.875rem;
+  --content-max: 76rem;
+
+  /* ── Density tokens (v5 §17) ─────────────────────────────────────────
+   * Default = "comfortable". The data-density attribute overrides these
+   * (see below). Components reference var(--row-min) / var(--card-pad)
+   * instead of hard-coded padding so density modes work uniformly. */
+  --row-min: 40px;
+  --card-pad: 1rem;
+}
+
+/* PS5 Light — the console's white-plastic outer panels: a clean, cool
+ * bright white with the PlayStation-blue accent. */
+:root[data-theme="light"] {
+  --color-surface: oklch(0.975 0.004 255);
+  --color-surface-2: oklch(0.945 0.006 252);
+  --color-surface-3: oklch(0.905 0.01 252);
+  --color-border: oklch(0.86 0.012 252);
+  --color-border-strong: oklch(0.75 0.016 252);
+  --color-muted: oklch(0.49 0.02 252);
+  --color-text: oklch(0.21 0.02 250);
+  --color-accent: oklch(0.52 0.19 255);
+  --color-accent-contrast: oklch(0.99 0.005 250);
+  --color-accent-soft: oklch(0.92 0.05 255);
+  --color-good: oklch(0.52 0.14 150);
+  --color-good-soft: oklch(0.92 0.05 150);
+  --color-warn: oklch(0.6 0.14 75);
+  --color-warn-soft: oklch(0.94 0.05 75);
+  --color-bad: oklch(0.54 0.2 25);
+  --color-bad-soft: oklch(0.94 0.05 25);
+  --color-ps4: oklch(0.48 0.16 255);
+  --color-ps4-soft: oklch(0.92 0.05 255);
+  --color-ps5: oklch(0.48 0.18 295);
+  --color-ps5-soft: oklch(0.93 0.05 295);
+  --shadow-logo: 0 12px 40px -10px rgba(0, 0, 0, 0.15);
+  --shadow-1: 0 1px 2px rgba(30, 41, 59, 0.08);
+  --shadow-2: 0 4px 16px -4px rgba(30, 41, 59, 0.18);
+  --shadow-3: 0 16px 48px -12px rgba(30, 41, 59, 0.25);
+  --edge-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --atmosphere: radial-gradient(
+    120% 70% at 50% -10%,
+    oklch(0.93 0.025 255 / 0.55),
+    transparent 60%
+  );
+  --overlay-scrim: rgba(15, 23, 42, 0.3);
+}
+
+/* OLED variant of the dark theme.
+ *
+ * Pure-#000 background instead of the standard dark theme's slight
+ * lift. The point is to mitigate burn-in on OLED panels — every pixel
+ * set to #000 is literally off, which both reduces the heat budget and
+ * removes the "ghost image" risk for persistent UI like the sidebar.
+ * Surfaces step up by very small amounts so card boundaries remain
+ * visible without forcing the panel to drive low-luminance pixels
+ * (which is where banding shows up on OLED).
+ *
+ * No atmosphere gradient on OLED — the whole point is pixels-off black.
+ * Colours are cooler-shifted than the dark theme by design — pure
+ * black backgrounds make slightly-warm greys read as muddy. */
+:root[data-theme="oled"] {
+  --color-surface: oklch(0 0 0);
+  --color-surface-2: oklch(0.1 0.005 250);
+  --color-surface-3: oklch(0.16 0.005 250);
+  --color-border: oklch(0.22 0.005 250);
+  --color-border-strong: oklch(0.32 0.005 250);
+  --color-muted: oklch(0.62 0.012 250);
+  --color-text: oklch(0.96 0.005 250);
+  --color-accent: oklch(0.72 0.17 255);
+  --color-accent-contrast: oklch(0 0 0);
+  --color-accent-soft: oklch(0.22 0.07 255);
+  --color-good: oklch(0.8 0.14 150);
+  --color-good-soft: oklch(0.18 0.06 150);
+  --color-warn: oklch(0.84 0.15 75);
+  --color-warn-soft: oklch(0.2 0.07 75);
+  --color-bad: oklch(0.74 0.2 25);
+  --color-bad-soft: oklch(0.16 0.1 25);
+  --color-ps4: oklch(0.72 0.14 255);
+  --color-ps4-soft: oklch(0.2 0.06 255);
+  --color-ps5: oklch(0.74 0.15 295);
+  --color-ps5-soft: oklch(0.22 0.07 295);
+  --shadow-logo: 0 12px 40px -10px rgba(0, 0, 0, 0.6);
+  --shadow-1: none;
+  --shadow-2: 0 4px 16px -4px rgba(0, 0, 0, 0.8);
+  --shadow-3: 0 16px 48px -12px rgba(0, 0, 0, 0.9);
+  --edge-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --atmosphere: none;
+  --overlay-scrim: rgba(0, 0, 0, 0.6);
+}
+
+/* Rose — a warm, bright theme built around a bold rose accent.
+ *
+ * Surfaces are a warm off-white with a barely-there pink tint (very low
+ * chroma at hue ~350) so the screen reads soft and light rather than
+ * clinical, while the deep rose accent (the signature) carries the
+ * personality on buttons, links, and selected states. Text stays a dark
+ * warm plum for strong, comfortable contrast on the pale surface. The
+ * semantic good/warn/bad and PS4/PS5 badge colours are kept distinct from
+ * the rose accent so status never reads as "just pink". */
+:root[data-theme="rose"] {
+  --color-surface: oklch(0.985 0.006 350);
+  --color-surface-2: oklch(0.96 0.012 350);
+  --color-surface-3: oklch(0.925 0.022 350);
+  --color-border: oklch(0.88 0.025 350);
+  --color-border-strong: oklch(0.76 0.04 350);
+  --color-muted: oklch(0.5 0.045 350);
+  --color-text: oklch(0.26 0.045 350);
+  --color-accent: oklch(0.56 0.21 350);
+  --color-accent-contrast: oklch(0.99 0.005 350);
+  --color-accent-soft: oklch(0.93 0.06 350);
+  --color-good: oklch(0.54 0.13 158);
+  --color-good-soft: oklch(0.93 0.05 158);
+  --color-warn: oklch(0.62 0.14 65);
+  --color-warn-soft: oklch(0.95 0.05 65);
+  --color-bad: oklch(0.55 0.22 22);
+  --color-bad-soft: oklch(0.95 0.05 22);
+  --color-ps4: oklch(0.48 0.16 255);
+  --color-ps4-soft: oklch(0.92 0.05 255);
+  --color-ps5: oklch(0.5 0.2 305);
+  --color-ps5-soft: oklch(0.93 0.05 305);
+  --shadow-logo: 0 12px 40px -10px oklch(0.56 0.21 350 / 0.25);
+  --shadow-1: 0 1px 2px oklch(0.4 0.1 350 / 0.1);
+  --shadow-2: 0 4px 16px -4px oklch(0.4 0.12 350 / 0.2);
+  --shadow-3: 0 16px 48px -12px oklch(0.4 0.12 350 / 0.28);
+  --edge-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --atmosphere: radial-gradient(
+    120% 70% at 50% -10%,
+    oklch(0.9 0.05 350 / 0.6),
+    transparent 60%
+  );
+  --overlay-scrim: oklch(0.3 0.08 350 / 0.32);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  height: 100dvh;
+  margin: 0;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
+  /* Base size that scales the whole app: every Tailwind text/spacing class
+   * is rem-based, so this one value proportionally enlarges text AND layout.
+   * 18px (up from the 16px OS baseline) for comfortable, human-friendly
+   * readability. Verified not to overflow dense data tables at phone width.
+   *
+   * Driven by the `--ui-base-size` custom property so the in-app "Text size"
+   * setting (state/uiScale.ts) can rescale the entire UI — the durable,
+   * cross-platform fix for Android's system Font/Display-size inflation
+   * clipping list rows. Default mirrors BASE_PX in uiScale.ts; keep in sync. */
+  font-size: var(--ui-base-size, 18px);
+  /* Pin text to its specified size on mobile WebViews. Android System
+   * WebView enables "font boosting" (text autosizing) by default, which
+   * inflates the font size of text blocks based on their container width —
+   * independently of our rem layout. That made e.g. a Library folder name
+   * render huge and clip to "PPS…". `text-size-adjust: 100%` disables the
+   * inflation so text matches the size we set. No-op on desktop (which is
+   * why the bug only showed on Android). */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  /* Stable digit widths app-wide: this UI is full of live counters (bytes,
+   * MiB/s, ETAs, temperatures) and proportional digits make them jitter
+   * horizontally every tick. Tabular numerals pin each digit to one width. */
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+}
+
+/* v5 §6.3 (mobile): kill the browser's pull-to-refresh globally. Lists
+ * that WANT pull-to-refresh use the <PullToRefresh> component, which
+ * handles the gesture itself — the browser's never fires. Also prevents
+ * scroll chaining (a scroll reaching the edge propagating to body). */
+body {
+  overscroll-behavior-y: contain;
+}
+
+/* Shared content frame. Screens can opt into this without inheriting a
+ * rigid layout, while the shell gets a consistent readable line length. */
+.app-page {
+  width: 100%;
+  max-width: var(--content-max);
+  margin-inline: auto;
+  padding: 1.5rem;
+}
+
+.page-kicker {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+  color: var(--color-accent);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.surface-panel {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel);
+  background: var(--color-surface-raised);
+  box-shadow: var(--edge-highlight), var(--shadow-1);
+}
+
+.dashboard-hero {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  overflow: hidden;
+  padding: 1.1rem 1.25rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel);
+  background:
+    linear-gradient(105deg, var(--color-surface-raised), var(--color-surface-2));
+  box-shadow: var(--edge-highlight), var(--shadow-1);
+}
+
+.dashboard-hero::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -100% -8% -100% 58%;
+  opacity: 0.7;
+  background: radial-gradient(circle, var(--color-accent-glow), transparent 62%);
+  pointer-events: none;
+}
+
+.dashboard-hero.is-offline::after {
+  background: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--color-warn) 13%, transparent),
+    transparent 62%
+  );
+}
+
+.dashboard-hero-icon {
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex: none;
+  place-items: center;
+  border: 1px solid color-mix(in oklab, var(--color-accent) 25%, var(--color-border));
+  border-radius: 0.8rem;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.dashboard-hero.is-offline .dashboard-hero-icon {
+  border-color: color-mix(in oklab, var(--color-warn) 28%, var(--color-border));
+  background: var(--color-warn-soft);
+  color: var(--color-warn);
+}
+
+.action-tile {
+  display: flex;
+  min-height: 4.25rem;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem;
+  background: color-mix(in oklab, var(--color-surface) 54%, transparent);
+  text-align: left;
+  transition:
+    transform 140ms ease,
+    border-color 140ms ease,
+    background-color 140ms ease;
+}
+
+.action-tile:not([aria-disabled="true"]):hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in oklab, var(--color-accent) 55%, var(--color-border));
+  background: var(--color-surface-3);
+}
+
+.action-tile[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.action-tile-icon {
+  display: grid;
+  width: 2.35rem;
+  height: 2.35rem;
+  flex: none;
+  place-items: center;
+  border-radius: 0.65rem;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.action-tile[aria-disabled="true"] .action-tile-icon {
+  background: var(--color-surface-3);
+  color: var(--color-muted);
+}
+
+.metric-row {
+  display: flex;
+  min-height: 2.25rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border-bottom: 1px solid color-mix(in oklab, var(--color-border) 68%, transparent);
+  font-size: 0.8125rem;
+}
+
+.metric-row:last-child {
+  border-bottom: 0;
+}
+
+/* The window atmosphere — painted on #root so it sits under the app shell.
+ * Most screens are transparent containers over it; solid surface-2 cards
+ * float above it with their elevation shadows. */
+#root {
+  background-color: var(--color-surface);
+  background-image: var(--atmosphere);
+  background-repeat: no-repeat;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button {
+  font: inherit;
+}
+
+::selection {
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+}
+
+/* ── Universal keyboard focus ─────────────────────────────────────────────
+ * Every interactive element gets a visible focus ring for keyboard users —
+ * previously only the shared <Button> had one, leaving raw buttons, inputs,
+ * nav links and menu items invisible to keyboard navigation. `:where()`
+ * keeps specificity at zero so any component can still override; being
+ * un-layered, this still beats Tailwind's `outline-none` utility (layered),
+ * so focus can never be accidentally removed. `:focus-visible` keeps mouse
+ * clicks ring-free. */
+:where(a, button, [role="button"], [role="menuitem"], [role="tab"], [tabindex]):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+:where(input, select, textarea):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+/* ── Themed scrollbars ────────────────────────────────────────────────────
+ * Slim, surface-matched rails instead of OS-default chrome — this app is
+ * wall-to-wall scrolling lists (library, logs, file system). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 8px;
+  /* Padding trick: transparent border shrinks the visible thumb inside the
+   * 10px rail so it reads as a slim 6px pill. */
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted);
+  background-clip: padding-box;
+}
+
+/* ── Motion system ────────────────────────────────────────────────────────
+ * A small set of named entrances used by overlays, popovers, route content
+ * and progress surfaces. All are opt-in classes, all are disabled wholesale
+ * under prefers-reduced-motion. Timing follows one curve — fast out, soft
+ * landing — so the whole app moves like one machine. */
+
+@keyframes ps-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes ps-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes ps-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ps-drawer-in {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes ps-sheet-in {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes ps-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes ps-soft-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* Overlay scrim fade. */
+.anim-scrim {
+  animation: ps-fade-in 150ms ease-out both;
+}
+
+/* Modal / dialog entrance. */
+.anim-pop {
+  animation: ps-pop-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* Popover / menu entrance (smaller travel than modals). */
+.anim-rise {
+  animation: ps-rise-in 140ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* Route content entrance — applied to the screen container on navigation.
+ * fill-mode is `backwards` (NOT `both`): with `both`, the element keeps the
+ * final keyframe's `transform: translateY(0)` forever, and a non-none transform
+ * makes the element a containing block for `position: fixed` descendants — so a
+ * `fixed inset-0` modal rendered inside a screen would size/position to this
+ * scrolled container instead of the viewport (it rendered off-screen on small
+ * Android viewports, so opening it looked like nothing happened). `backwards`
+ * still applies the start keyframe before the first frame (no entrance flash)
+ * but leaves no transform once the 200ms animation ends. */
+.anim-screen {
+  animation: ps-rise-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+/* Mobile sidebar drawer. */
+.anim-drawer {
+  animation: ps-drawer-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* Mobile bottom sheet. */
+.anim-sheet {
+  animation: ps-sheet-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* Bottom-sheet-up: variant used by Modal variant="sheet" for its panel
+ * entrance. Same keyframes as anim-sheet; kept as a separate class so the
+ * modal's panel animation can be themed/killed independently from the
+ * Sheet primitive if needed. */
+.anim-sheet-up {
+  animation: ps-sheet-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* Skeleton shimmer: a moving light band over a surface-3 base. */
+.anim-skeleton {
+  background: linear-gradient(
+    100deg,
+    var(--color-surface-2) 40%,
+    var(--color-surface-3) 50%,
+    var(--color-surface-2) 60%
+  );
+  background-size: 200% 100%;
+  /* 2.2s (was 1.6s) — a slower, gentler sweep reads as "loading" rather than
+   * a fast strobe across a tall stack of placeholder rows. */
+  animation: ps-shimmer 2.2s linear infinite;
+}
+
+/* Gentle status pulse — calmer than Tailwind's animate-pulse, for live
+ * status dots that shouldn't read as alarms. */
+.anim-status-pulse {
+  animation: ps-soft-pulse 2.4s ease-in-out infinite;
+}
+
+/* Raised panel: the v3 card treatment. Pair with bg-[var(--color-surface-2)]
+ * and a border utility; this adds the elevation + machined top edge. */
+.elev-1 {
+  box-shadow: var(--edge-highlight), var(--shadow-1);
+}
+
+@media (max-width: 767px) {
+  .app-page {
+    padding: 1rem;
+  }
+
+  .dashboard-hero {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    padding: 1rem;
+  }
+
+  .dashboard-hero > :last-child {
+    width: 100%;
+  }
+}
+
+.elev-2 {
+  box-shadow: var(--edge-highlight), var(--shadow-2);
+}
+
+.elev-3 {
+  box-shadow: var(--edge-highlight), var(--shadow-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-scrim,
+  .anim-pop,
+  .anim-rise,
+  .anim-screen,
+  .anim-drawer,
+  .anim-sheet,
+  .anim-sheet-up,
+  .anim-skeleton,
+  .anim-status-pulse {
+    animation: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* ── v5 Accessibility data-attribute modes (§7, §6.3, §8.2, §17) ────────
+ * Driven by the accessibility store (state/accessibility.ts), which sets
+ * data-motion / data-contrast / data-density / data-dyslexia on <html>.
+ * These are progressive overrides on top of the theme + reduced-motion
+ * media query above. */
+
+/* Motion: "reduced" halves durations, kills route entrance + parallax. */
+:root[data-motion="reduced"] .anim-pop {
+  animation-duration: 90ms;
+}
+:root[data-motion="reduced"] .anim-screen {
+  animation: none;
+}
+
+/* Motion: "none" kills all animation + transitions entirely. */
+:root[data-motion="none"] .anim-scrim,
+:root[data-motion="none"] .anim-pop,
+:root[data-motion="none"] .anim-rise,
+:root[data-motion="none"] .anim-screen,
+:root[data-motion="none"] .anim-drawer,
+:root[data-motion="none"] .anim-sheet,
+:root[data-motion="none"] .anim-sheet-up,
+:root[data-motion="none"] .anim-skeleton,
+:root[data-motion="none"] .anim-status-pulse {
+  animation: none;
+}
+:root[data-motion="none"] *,
+:root[data-motion="none"] *::before,
+:root[data-motion="none"] *::after {
+  transition-duration: 0.01ms !important;
+}
+
+/* High contrast: stronger borders, unmute secondary text, wider focus. */
+:root[data-contrast="high"] {
+  --color-border: var(--color-border-strong);
+  --color-muted: var(--color-text);
+}
+:root[data-contrast="high"] :where(a, button, [role="button"], [role="menuitem"], [role="tab"], [tabindex]):focus-visible {
+  outline-width: 3px;
+  outline-offset: 4px;
+}
+
+/* Density: compact (desktop power) vs spacious (a11y / motor). */
+:root[data-density="compact"] {
+  --row-min: 32px;
+  --card-pad: 0.75rem;
+}
+:root[data-density="spacious"] {
+  --row-min: 52px;
+  --card-pad: 1.5rem;
+}
+
+/* Dyslexia-friendly font: swap to Atkinson Hyperlegible / OpenDyslexic
+ * if installed, with slightly increased spacing for readability. */
+:root[data-dyslexia="true"] body {
+  font-family: "Atkinson Hyperlegible", "OpenDyslexic", system-ui, -apple-system, sans-serif;
+  letter-spacing: 0.01em;
+  line-height: 1.5;
+}
+
+/* ── Screen-reader-only utility (v5 §19.28) ────────────────────────────
+ * Standard visually-hidden pattern. Used by LiveRegion, SkipNav, and
+ * anywhere text is for AT only. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── Skip-nav (v5 §19.19) ──────────────────────────────────────────────
+ * Visually hidden until focused (Tab from URL bar). Then appears
+ * top-left as a visible link so keyboard users can jump to #main. */
+.skip-link {
+  position: absolute;
+  top: -100%;
+  left: 0;
+  z-index: 100;
+  padding: 0.5rem 1rem;
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+  font-size: 0.875rem;
+  font-weight: 500;
+  border-radius: 0 0 0.375rem 0;
+  transition: top 0.15s ease;
+}
+.skip-link:focus {
+  top: 0;
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* ── Safe-area utilities (v5 §6.2 mobile) ───────────────────────────────
+ * Tailwind v4 doesn't generate env(safe-area-inset-*) utilities, so we
+ * provide shorthand classes. The `max()` pattern guarantees a minimum
+ * even when the device reports 0 (older Android). Use these on any edge
+ * that touches the viewport bezel: top bars, bottom navs, drawer sides,
+ * modal sheets, full-bleed lists. */
+.safe-top { padding-top: env(safe-area-inset-top); }
+/* The bottom safe area. env() where the browser reports it; otherwise the
+   value the Android shell hands the page (lib/androidInsets.ts). Android
+   WebView reports safe-area-inset-bottom as 0 for the navigation bar even when
+   the app draws edge-to-edge — measured: top 49px, bottom 0px — which put the
+   bottom tab bar under the gesture bar. */
+:root { --safe-bottom: max(env(safe-area-inset-bottom), var(--nav-inset-bottom, 0px)); }
+.safe-bottom { padding-bottom: var(--safe-bottom); }
+.safe-left { padding-left: env(safe-area-inset-left); }
+.safe-right { padding-right: env(safe-area-inset-right); }
+.safe-pad {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: var(--safe-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+/* Fixed-height chrome that needs to account for the inset in its height
+ * (bottom nav = 56px + inset, top bar = 44px + inset). */
+.h-bottom-nav { height: calc(56px + var(--safe-bottom)); }
+.h-top-bar { height: calc(44px + env(safe-area-inset-top)); }
+
+/* ── Responsive width safety net ──────────────────────────────────────────
+ * Hard requirement: content must always fit the viewport WIDTH (vertical
+ * scrolling is fine). Three rules, validated on a real Android device (Pixel,
+ * 448 CSS-px wide) via CDP — they take an overflowing page from 105 clipped
+ * elements to 0 with no horizontal scroll:
+ *
+ * 1. `min-width: 0` on everything. Flex AND grid items default to
+ *    `min-width: auto`, which refuses to shrink below their content's
+ *    min-content size — so a single wide child (a long path, or a <select>
+ *    whose widest option is a CJK language name) blows out a whole grid track
+ *    or flex row and pushes the page wider than the screen. Resetting to 0
+ *    lets them shrink. This is specificity (0,0,0), so any intentional
+ *    Tailwind `min-w-[Npx]` (e.g. tables inside `overflow-x-auto`, which are
+ *    SUPPOSED to scroll within their own block) still wins.
+ * 2. `overflow-wrap: break-word` (inherited from body) lets long unbreakable
+ *    tokens — PS5 paths, content-ids, kernel build strings, MACs — wrap
+ *    instead of forcing width. CRITICAL: this is `break-word`, NOT `anywhere`.
+ *    `anywhere` additionally collapses an element's min-content intrinsic
+ *    width to a single CHARACTER, so any flex/grid item under width pressure
+ *    (min-width:0 above) shrinks to ~1 char and its text wraps vertically —
+ *    one letter per line ("J-u-g-a-r", "R-e-g-i-s-t-e-r"). `break-word` wraps
+ *    the same long tokens but keeps the min-content at the widest WORD, so
+ *    short labels (buttons, menu items, status chips) stay intact and only
+ *    genuinely-too-long tokens break. (Regression introduced in the v3.0.0
+ *    responsive pass; reported as "the update enlarged the text / nothing is
+ *    visible" on both Android and desktop.)
+ * 3. media + form controls never exceed their container.
+ *
+ * `flex-shrink: 0` (Tailwind `shrink-0`, e.g. icons) still pins size, so this
+ * doesn't squish things that must keep their dimensions. */
+
+/* IMPORTANT: these live in @layer base, NOT un-layered. Un-layered author
+ * CSS outranks every @layer rule regardless of specificity, so an
+ * un-layered `* { min-width: 0 }` was silently defeating ALL `min-w-*`
+ * utilities app-wide (Tailwind v4 emits utilities in @layer utilities).
+ * In the base layer the safety net still applies everywhere by default,
+ * but an explicit `min-w-[14rem]` on an element wins again — which is
+ * exactly what the note above promises. */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    min-width: 0;
+  }
+
+  body {
+    overflow-wrap: break-word;
+  }
+
+  img,
+  svg,
+  video,
+  canvas,
+  select,
+  input,
+  textarea {
+    max-width: 100%;
+  }
+}
+
+/* ── Touch-target sizing ──────────────────────────────────────────────────
+ * On touch devices (phones/tablets — `pointer: coarse`), make interactive
+ * controls at least ~44px tall so they're comfortable to tap for an average
+ * finger (Apple HIG 44pt / Material 48dp). Desktop (`pointer: fine`, a mouse)
+ * is untouched, keeping its denser layout. Body text stays at the 18px root,
+ * which is already very legible on a phone — the gap was tap size, not read
+ * size. Checkboxes/radios keep their intrinsic size.
+ *
+ * role="switch" (the Toggle component) is excluded because it's a visual
+ * slider whose dimensions are fixed by the component — the 44px rule
+ * distorts it into a tall rectangle. The Toggle already meets 44px width.
+ * Similarly, tightly-packed segmented controls inside [role="tablist"],
+ * [role="menu"], and [role="radiogroup"] get per-item targets via their
+ * child [role="tab"/"menuitem"/"radio"] selectors below. */
+@media (pointer: coarse) {
+  button:not([role="switch"]),
+  [role="button"]:not([role="switch"]),
+  [role="tab"],
+  [role="menuitem"],
+  [role="menuitemcheckbox"],
+  [role="menuitemradio"],
+  [role="option"],
+  [role="treeitem"],
+  select,
+  textarea,
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) {
+    min-height: 44px;
+  }
+}
+
+/* Checkboxes & radios render at the browser's tiny intrinsic size, which
+ * looks cramped at the app's 18px root — and many call sites don't set an
+ * explicit size. Bump them a bit and theme the check to the accent colour.
+ * A plain attribute selector outweighs Tailwind's h-* / w-* utility classes,
+ * so this uniformly resizes EVERY checkbox/radio (settings + everywhere).
+ * On touch they grow a touch more for comfortable tapping. */
+input[type="checkbox"],
+input[type="radio"] {
+  width: 1.15rem;
+  height: 1.15rem;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+@media (pointer: coarse) {
+  input[type="checkbox"],
+  input[type="radio"] {
+    width: 1.4rem;
+    height: 1.4rem;
+  }
+}
+
+/* ── Shared form + badge utility classes ──────────────────────────────────
+ * Used by v4.3+ screens as a shorthand for the standard input/chip styling.
+ * Keeps the Tailwind utility soup out of every form field while respecting
+ * the theme system (all colors are CSS vars). */
+.input {
+  width: 100%;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-raised);
+  padding: 0.375rem 0.625rem;
+  font-size: 0.875rem;
+  color: var(--color-text);
+  transition: border-color 0.15s ease;
+}
+.input:focus {
+  border-color: var(--color-accent);
+}
+.input::placeholder {
+  color: var(--color-muted);
+}
+.input-sm {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+/* Touch-target floor for form controls (docs/v5-mobile-design.md §4.1).
+ *
+ * Applied here rather than as a Tailwind utility on each component: these
+ * base classes are UNLAYERED css and set the `padding` shorthand, so a
+ * layered `min-h-*` utility loses the cascade to them (the same trap that
+ * made Input's leftIcon render on top of its text). A plain rule in the
+ * same layer wins reliably.
+ *
+ * 767px is the md breakpoint — the boundary the rest of the app already
+ * uses to mean "mobile". Desktop density is untouched. */
+@media (max-width: 767px) {
+  .input,
+  .input-sm,
+  .select {
+    min-height: 2.75rem;
+  }
+}
+.select {
+  width: 100%;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-raised);
+  padding: 0.375rem 0.625rem;
+  font-size: 0.875rem;
+  color: var(--color-text);
+  transition: border-color 0.15s ease;
+}
+.select:focus {
+  border-color: var(--color-accent);
+}
+.radio {
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.checkbox {
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 9999px;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+}
+.badge-sm {
+  padding: 0.0625rem 0.375rem;
+  font-size: 0.6875rem;
+}
+.badge-success {
+  background: var(--color-good-soft);
+  color: var(--color-good);
+}
+.badge-warn {
+  background: var(--color-warn-soft);
+  color: var(--color-warn);
+}
+.badge-bad {
+  background: var(--color-bad-soft);
+  color: var(--color-bad);
+}
+
+/* ── Long-list scroll containment ────────────────────────────────────────
+ *
+ * Lets the engine SKIP layout and paint for rows that are off-screen. A
+ * directory of thousands of files otherwise pays full layout + paint for
+ * every row on every scroll frame, which is what makes the Linux
+ * (WebKitGTK) build feel sluggish where Android — which composites
+ * scrolling on the GPU far more aggressively — feels smooth.
+ *
+ * `contain-intrinsic-size` is the placeholder height used while a row is
+ * skipped. It only needs to be the right ORDER of magnitude: too far off and
+ * the scrollbar rescales as real heights resolve. The value below is
+ * measured against the actual row markup, not guessed.
+ *
+ * Safe to ship without a Linux device to test on: an engine that doesn't
+ * support `content-visibility` ignores both properties entirely and renders
+ * exactly as before. There is no fallback path to get wrong.
+ *
+ * NOT applied to short lists — for a handful of rows the bookkeeping costs
+ * more than it saves.
+ *
+ * ── Do not apply this to a list whose rows contain cover art ────────────
+ *
+ * It shipped on the Library rows and the Installed game cards in 5.9.2 and
+ * blanked every cover, so both were reverted to plain rows. The reason is
+ * worth keeping, because the obvious fix is wrong:
+ *
+ *   - Those rows carry `loading="lazy"` images. A skipped subtree has no
+ *     layout box, so the lazy-load observer has nothing to intersect and
+ *     the image can stay unloaded even once the row is scrolled into view.
+ *   - Dropping `loading="lazy"` does NOT fix it. `content-visibility` skips
+ *     *rendering*, not resource loading — a non-lazy <img> still fetches
+ *     immediately. That trades blank covers for 200 simultaneous icon0.png
+ *     reads against a console that serves one client at a time, which is
+ *     exactly what the lazy attribute was there to prevent.
+ *
+ * So the two are mutually exclusive, and for image lists the lazy fetch
+ * matters more than the paint saving. The file browser keeps containment
+ * because its rows are a line of text and an icon font — nothing to fetch.
+ */
+
+/* File-browser rows: a single line of text with an icon. */
+.list-row-contain-sm {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 2.25rem;
+}

@@ -1,0 +1,1157 @@
+# PS5 Upload - Root Makefile
+#
+# Tree layout (current):
+#   payload/   — PS5 C payload (FreeBSD 11)
+#   engine/    — Rust workspace: ftx2-proto, ps5upload-core, -engine HTTP service,
+#                -lab CLI, -tests mock server, -bench, -pkg
+#   client/    — Tauri 2 desktop app, cross-platform (Linux/macOS/Windows, x64+arm64)
+#   tests/     — root integration smoke + tests/lab/ (real-hardware shell scripts)
+#   bench/     — golden workloads, baselines, perf-gate helpers
+#   scripts/   — install + dev helpers (one per OS, plus shared mjs utilities)
+#
+# Retired pre-2.1: app/ (browser server), shared/ (legacy JS modules),
+# ui/ (empty scaffold), client/electron/ (Tauri replaces Electron),
+# specs/ (consolidated into in-tree doc comments + CHANGELOG), tools/
+# (folded into scripts/). The 1.x C payload was already gone pre-rename.
+
+JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 4)
+# `npm ci` — NOT `npm install`. The lockfile carries `libc` fields that select
+# musl vs glibc native binaries for the Alpine-based web UI image
+# (engine/Dockerfile.webui, node:26-alpine). npm 11 writes them; npm 10 does
+# not know the field and DELETES it on every `npm install`. Since this target
+# runs on every build, an older npm silently stripped that metadata and it had
+# to be hand-reverted before each release. `npm ci` installs strictly FROM the
+# lockfile and never rewrites it, which is also what CI does.
+NPM_INSTALL ?= npm ci --no-audit --no-fund
+CARGO ?= cargo
+
+PS5_HOST ?= 192.168.137.2
+PS5_LOADER_PORT ?= 9021
+
+# Default PS5 payload SDK location — override on the command line if installed
+# elsewhere. `setup-payload` validates this path exists before any C build.
+PS5_PAYLOAD_SDK ?= /opt/ps5-payload-sdk
+export PS5_PAYLOAD_SDK
+PS5_SDK_TAG := $(shell sed -n 's/^PS5_SDK_TAG=//p' scripts/ps5-sdk.env 2>/dev/null)
+
+# On macOS the payload SDK's `prospero-clang` wrapper resolves `ld.lld`
+# and `clang` through `prospero-llvm-config`. SDK v0.42 supports LLVM 16–22.
+# Homebrew exposes the current major as `llvm` (not `llvm@22`), so discover
+# its real prefix and retain versioned fallbacks for older installations.
+# Linux/WSL picks up `llvm-config-<N>` from apt naturally.
+ifeq ($(shell uname -s),Darwin)
+  MACOS_LLVM_CONFIG := $(shell \
+    if command -v brew >/dev/null 2>&1; then \
+      for formula in llvm llvm@22 llvm@18; do \
+        prefix="$$(brew --prefix "$$formula" 2>/dev/null || true)"; \
+        if [ -n "$$prefix" ] && [ -x "$$prefix/bin/llvm-config" ]; then \
+          printf '%s\n' "$$prefix/bin/llvm-config"; \
+          break; \
+        fi; \
+      done; \
+    fi)
+  LLVM_CONFIG ?= $(MACOS_LLVM_CONFIG)
+  export LLVM_CONFIG
+endif
+
+PAYLOAD_DIR := payload
+PAYLOAD_ELF := $(PAYLOAD_DIR)/ps5upload.elf
+# Standalone DPI install daemon (FW 11+ pkg installs). Built from the
+# same SDK; the engine auto-sends it to the loader port when :9040 isn't
+# already listening. See payload/dpi/ezremote_dpi.c.
+DPI_DIR := $(PAYLOAD_DIR)/dpi
+DPI_ELF := $(DPI_DIR)/ezremote-dpi.elf
+ENGINE_DIR  := engine
+CLIENT_DIR  := client
+
+# Android (Tauri mobile). The engine is linked in-process (no sidecar);
+# only the PS5 payload is bundled. Needs the Android SDK (ANDROID_HOME),
+# a JDK 17, an NDK, and the aarch64-linux-android Rust target via rustup
+# (Homebrew `rust` ships only the host std and can't cross-compile).
+# JDK/NDK are auto-detected where possible — override any on the CLI.
+ANDROID_TARGET     ?= aarch64
+ANDROID_RUST_TARGET ?= aarch64-linux-android
+# macOS resolves a JDK 17 via java_home; elsewhere fall back to $JAVA_HOME.
+ANDROID_JAVA_HOME  ?= $(shell /usr/libexec/java_home -v 17 2>/dev/null || echo "$$JAVA_HOME")
+# Newest NDK installed under the SDK.
+ANDROID_NDK_HOME   ?= $(shell ls -d "$(ANDROID_HOME)"/ndk/* 2>/dev/null | sort -V | tail -1)
+ANDROID_GEN_DIR    := $(CLIENT_DIR)/src-tauri/gen/android
+ANDROID_APK        := $(ANDROID_GEN_DIR)/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+# Package id (matches tauri.conf.json `identifier`). Used to recover from a
+# signature-mismatched prior install during the convenience deploy step.
+ANDROID_APP_ID     := com.phantomptr.ps5upload
+# App-icon source (relative to CLIENT_DIR). `tauri android init` seeds
+# placeholder launcher icons; we re-apply ours so the Android icon matches
+# the desktop app icon. gen/ is gitignored, so this runs at init time.
+ANDROID_ICON_SRC   := src-tauri/icons/sources/macos_squircle_1024.png
+# rustup's *real* toolchain bin (not the ~/.cargo/bin shim). The Android std
+# lives only here; Homebrew `rust` ships only the host std. We pin PATH to this
+# dir for the android recipes so cross-compilation works even when Homebrew's
+# cargo precedes rustup on PATH (otherwise `cargo --target aarch64-linux-android`
+# picks Homebrew's cargo and fails with "can't find crate for `core`/`std`").
+RUSTUP_CARGO_BIN := $(shell dirname "$$(rustup which cargo 2>/dev/null)" 2>/dev/null)
+# Env preamble shared by the android recipes.
+ANDROID_ENV = JAVA_HOME="$(ANDROID_JAVA_HOME)" ANDROID_HOME="$(ANDROID_HOME)" NDK_HOME="$(ANDROID_NDK_HOME)" $(if $(RUSTUP_CARGO_BIN),PATH="$(RUSTUP_CARGO_BIN):$$PATH")
+# adb from the SDK (falls back to PATH if a device-only adb is installed).
+ADB ?= $(ANDROID_HOME)/platform-tools/adb
+
+.PHONY: all help
+.PHONY: install install-ubuntu install-macos install-windows
+.PHONY: setup setup-engine setup-payload setup-client
+.PHONY: build payload engine client _engine-release _payload-if-ready _android-build-if-ready
+.PHONY: test test-root test-engine test-engine-coverage test-desktop test-payload test-client test-client-coverage
+.PHONY: lint lint-scripts lint-client audit-scripts coverage coverage-engine coverage-client
+.PHONY: quality quality-full quality-hardware ci ci-full
+.PHONY: clean clean-payload clean-engine clean-client
+.PHONY: verify info install-hooks
+.PHONY: run-engine run-client dev start _check-tauri-system-deps
+.PHONY: install-engine uninstall-engine
+.PHONY: dist dist-win dist-win-arm dist-mac dist-mac-x64 dist-linux dist-linux-arm
+.PHONY: android-deps android-init android-build android-deploy _android-install-if-device run-android run-android-background
+.PHONY: emu-create emu-start emu-stop emu-status emu-test
+.PHONY: send-payload gen-fixtures sweep validate validate-xl
+.PHONY: sync-version sync-version-check
+.PHONY: docker-engine docker-engine-run
+
+# Default target
+all: build
+
+#──────────────────────────────────────────────────────────────────────────────
+# Help
+#──────────────────────────────────────────────────────────────────────────────
+
+help:
+	@echo "PS5 Upload - Build System"
+	@echo ""
+	@echo "First-time setup (fresh machine):"
+	@echo "  make install          - Auto-detect host OS and install all dev deps"
+	@echo "  make install-ubuntu   - Ubuntu/Debian/WSL2: apt + rustup + node + PS5 SDK $(PS5_SDK_TAG)"
+	@echo "  make install-macos    - macOS: brew + rustup + LLVM + PS5 SDK $(PS5_SDK_TAG)"
+	@echo "  make install-windows  - Windows 11: winget + rustup + VS Build Tools + PS5 SDK $(PS5_SDK_TAG)"
+	@echo ""
+	@echo "Quick start (after install):"
+	@echo "  1. make setup         - Check toolchains, install client deps"
+	@echo "  2. make build         - Build payload ELF + Rust engine + client UI"
+	@echo "  3. make send-payload  - Upload payload ELF to PS5 (PS5_HOST=$(PS5_HOST))"
+	@echo "  4. make run-client    - Start the Tauri desktop app (spawns engine automatically)"
+	@echo ""
+	@echo "Validation:"
+	@echo "  make validate         - Rebuild + send + smoke + full sweep + timestamped report"
+	@echo "  make validate-xl      - Same as validate plus the 200k-file stress profile"
+	@echo "  make sweep            - Run sweep against an already-loaded payload"
+	@echo ""
+	@echo "Build parts:"
+	@echo "  make payload          - Build the PS5 payload in $(PAYLOAD_DIR)/"
+	@echo "  make engine           - Build the Rust engine workspace"
+	@echo "  make client           - Build the Tauri/React UI"
+	@echo ""
+	@echo "Testing:"
+	@echo "  make lint             - script syntax + frontend ESLint"
+	@echo "  make lint-scripts     - Node/Bash/Python/PowerShell syntax checks"
+	@echo "  make audit-scripts    - Inventory script/test utilities"
+	@echo "  make quality          - Full non-hardware validation gate"
+	@echo "  make quality-full     - quality + payload validation"
+	@echo "  make quality-hardware - quality + live PS5 validate"
+	@echo "  make coverage         - Rust + frontend coverage reports"
+	@echo "  make coverage-engine  - Rust coverage report only"
+	@echo "  make coverage-client  - Frontend coverage report only"
+	@echo "  make test-engine      - cargo test --workspace"
+	@echo "  make test-desktop     - Tauri Rust cargo check/clippy/test"
+	@echo "  make test-payload     - Validate $(PAYLOAD_ELF)"
+	@echo "  make test-client      - Type-check + lint + unit tests + build client UI"
+	@echo ""
+	@echo "Version:"
+	@echo "  make sync-version       - Sync downstream files from VERSION (canonical source)"
+	@echo "  make sync-version-check - Fail if any downstream file drifts from VERSION"
+	@echo ""
+	@echo "Packaging:"
+	@echo "  make dist             - Tauri bundle for the current OS"
+	@echo "  make dist-win|dist-win-arm"
+	@echo "  make dist-mac|dist-mac-x64"
+	@echo "  make dist-linux|dist-linux-arm"
+	@echo ""
+	@echo "Android (Tauri mobile — needs Android SDK + JDK 17 + NDK + rustup):"
+	@echo "  make run-android      - Build + run with live reload; boots the emulator WITH its window"
+	@echo "  make run-android-background - Same, but the emulator boots headless (no window)"
+	@echo "  make android-deploy   - Build APK + install/update it on connected device(s)"
+	@echo "  make android-build    - Build a debug APK (no device needed)"
+	@echo "  make android-init     - One-time: scaffold src-tauri/gen/android"
+	@echo "  make android-deps     - Check the Android toolchain is ready"
+	@echo "  make emu-test         - Build + run the app on a headless emulator, with a screenshot"
+	@echo "  make emu-start        - Boot the test emulator (headless); emu-stop to shut it down"
+	@echo "  make emu-status       - Show AVDs, whether one is running, and where artifacts go"
+	@echo "  make run-android      - Boots the emulator (windowed) only if nothing is attached"
+	@echo "      emu-test leaves the emulator up for fast re-runs; PS5UPLOAD_EMU_TEARDOWN=1 stops it"
+	@echo ""
+	@echo "Auto-launch (engine starts at OS login):"
+	@echo "  make install-engine    - Register systemd/launchd/Task Scheduler job"
+	@echo "  make uninstall-engine  - Remove the auto-launch registration"
+	@echo ""
+	@echo "Docker (self-hosted engine; CI publishes the same image to GHCR):"
+	@echo "  make docker-engine      - Build the engine image locally (scratch + static binary)"
+	@echo "  make docker-engine-run  - Run it (PS5_HOST=$(PS5_HOST)); exposes :19113"
+	@echo ""
+	@echo "Environment overrides (defaults shown):"
+	@echo "  PS5_HOST=$(PS5_HOST)          PS5 IP address"
+	@echo "  PS5_LOADER_PORT=$(PS5_LOADER_PORT)               PS5 payload loader port"
+	@echo "  PS5_PAYLOAD_SDK=$(PS5_PAYLOAD_SDK)     PS5 C payload SDK install"
+ifeq ($(shell uname -s),Darwin)
+	@echo "  LLVM_CONFIG=$(LLVM_CONFIG)"
+	@echo "                                Auto-set on macOS (needs Homebrew llvm)"
+endif
+
+#──────────────────────────────────────────────────────────────────────────────
+# Install — fresh-machine bootstrap (apt/brew/winget + rustup + Node + PS5 SDK)
+#
+# `setup` only *checks* toolchains and runs `npm install`; `install` actually
+# installs everything from scratch. The per-OS scripts live in `scripts/` and
+# are idempotent — each step skips if already satisfied — so re-running them
+# after a partial setup is safe.
+#──────────────────────────────────────────────────────────────────────────────
+
+install:
+	@os="$$(uname -s)"; \
+	case "$$os" in \
+	  Linux*)                $(MAKE) install-ubuntu ;; \
+	  Darwin*)               $(MAKE) install-macos ;; \
+	  MINGW*|MSYS*|CYGWIN*)  $(MAKE) install-windows ;; \
+	  *) echo "Unsupported host OS: $$os"; \
+	     echo "Run install-ubuntu / install-macos / install-windows directly."; \
+	     exit 1 ;; \
+	esac
+
+install-ubuntu:
+	@bash scripts/install-ubuntu.sh
+
+install-macos:
+	@bash scripts/install-macos.sh
+
+# On Windows the script is invoked via PowerShell. Tries pwsh (PowerShell 7+)
+# first, then falls back to legacy Windows PowerShell. Run from any shell where
+# `powershell.exe` or `pwsh` is on PATH (Git Bash, MSYS2, native PowerShell).
+install-windows:
+	@if command -v pwsh >/dev/null 2>&1; then \
+	  pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-windows.ps1; \
+	elif command -v powershell.exe >/dev/null 2>&1; then \
+	  powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-windows.ps1; \
+	else \
+	  echo "ERROR: neither pwsh nor powershell.exe on PATH."; \
+	  echo "  Run scripts/install-windows.ps1 directly from a PowerShell prompt."; \
+	  exit 1; \
+	fi
+
+#──────────────────────────────────────────────────────────────────────────────
+# Setup
+#──────────────────────────────────────────────────────────────────────────────
+
+setup: setup-payload setup-engine setup-client
+	@echo ""
+	@echo "✓ Setup complete"
+	@echo ""
+	@echo "Suggested next steps:"
+	@echo "  1. make build"
+	@echo "  2. make run-client"
+	@echo ""
+
+setup-payload:
+	@echo "Checking PS5 Payload SDK..."
+	@if [ -z "$(PS5_PAYLOAD_SDK)" ]; then \
+		echo ""; \
+		echo "ERROR: PS5_PAYLOAD_SDK is not set."; \
+		echo "Install the PS5 Payload SDK and export PS5_PAYLOAD_SDK=/opt/ps5-payload-sdk"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(PS5_PAYLOAD_SDK)/toolchain/prospero.mk" ]; then \
+		echo ""; \
+		echo "ERROR: SDK files not found at $(PS5_PAYLOAD_SDK)"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@echo "✓ PS5 SDK found: $(PS5_PAYLOAD_SDK)"
+ifeq ($(shell uname -s),Darwin)
+	@if [ -z "$(LLVM_CONFIG)" ] || [ ! -x "$(LLVM_CONFIG)" ]; then \
+		echo ""; \
+		echo "ERROR: Homebrew llvm-config was not found."; \
+		echo "Install it with: brew install llvm"; \
+		echo "Or export LLVM_CONFIG=/path/to/llvm-config"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@echo "✓ LLVM found: $(LLVM_CONFIG) ($$($(LLVM_CONFIG) --version))"
+endif
+
+setup-engine:
+	@echo "Checking Rust toolchain..."
+	@command -v rustc >/dev/null 2>&1 || { \
+		echo "ERROR: rustc is not installed."; \
+		echo "Install Rust via https://rustup.rs"; \
+		exit 1; \
+	}
+	@command -v $(CARGO) >/dev/null 2>&1 || { \
+		echo "ERROR: cargo is not installed."; \
+		echo "Install Rust via https://rustup.rs"; \
+		exit 1; \
+	}
+	@echo "✓ Rust toolchain found: rustc $$(rustc --version), cargo $$($(CARGO) --version)"
+
+setup-client:
+	@echo "Checking client toolchain..."
+	@command -v node >/dev/null 2>&1 || { echo "ERROR: Node.js is not installed."; exit 1; }
+	@command -v npm >/dev/null 2>&1 || { echo "ERROR: npm is not installed."; exit 1; }
+	@echo "✓ Node.js toolchain found: node $$(node --version), npm $$(npm --version)"
+	@echo "Installing client dependencies..."
+	@cd $(CLIENT_DIR) && $(NPM_INSTALL)
+	@echo "✓ Client dependencies installed"
+
+#──────────────────────────────────────────────────────────────────────────────
+# Build
+#──────────────────────────────────────────────────────────────────────────────
+
+# Build the Android APK only when the toolchain is configured; otherwise skip
+# with a notice so `make build` still works on machines without the Android
+# SDK/NDK/JDK 17 (desktop-only contributors, CI desktop jobs). Uses the same
+# vars `android-deps` checks. `android-build` self-depends on `payload`, so the
+# embedded ELF is always current.
+_android-build-if-ready:
+	@if command -v rustup >/dev/null 2>&1 && [ -n "$(ANDROID_HOME)" ] && [ -n "$(ANDROID_NDK_HOME)" ] && [ -n "$(ANDROID_JAVA_HOME)" ]; then \
+		echo "Android toolchain detected — building/refreshing the APK..."; \
+		$(MAKE) android-build && $(MAKE) _android-install-if-device; \
+	else \
+		echo "⚠ Skipping Android APK build — toolchain not configured."; \
+		echo "  Need rustup + ANDROID_HOME + an NDK + JDK 17. Run 'make android-deps' to see what's missing."; \
+	fi
+
+# Install the freshly-built universal debug APK onto every connected device
+# (`adb install -r` updates in place, keeping app data). This is the step that
+# actually refreshes the app ON the phone after a build. No-op with a notice
+# when no device is attached — so it's safe in CI and on dev machines with no
+# phone plugged in.
+_android-install-if-device:
+	@apk="$(ANDROID_APK)"; \
+	adb="$(ADB)"; command -v "$$adb" >/dev/null 2>&1 || adb="adb"; \
+	if [ ! -f "$$apk" ]; then echo "⚠ No APK at $$apk — run 'make android-build' first."; exit 0; fi; \
+	if ! command -v "$$adb" >/dev/null 2>&1; then echo "⚠ adb not found — APK is at $$apk."; exit 0; fi; \
+	devs=$$("$$adb" devices 2>/dev/null | awk 'NR>1 && $$2=="device"{print $$1}'); \
+	if [ -z "$$devs" ]; then \
+		echo "⚠ No Android device connected — APK is at $$apk."; \
+		echo "  Plug in a device (USB debugging on), then: $$adb install -r \"$$apk\""; \
+	else \
+		for d in $$devs; do \
+			echo "Updating the app on device $$d (adb install -r)..."; \
+			out=$$("$$adb" -s "$$d" install -r "$$apk" 2>&1); \
+			if [ $$? -eq 0 ] && ! printf '%s' "$$out" | grep -qi 'Failure'; then \
+				echo "✓ App updated on $$d"; \
+			elif printf '%s' "$$out" | grep -qi 'UPDATE_INCOMPATIBLE\|signatures do not match'; then \
+				echo "⚠ Existing install on $$d was signed with a different key — reinstalling fresh (its app data is cleared)..."; \
+				"$$adb" -s "$$d" uninstall "$(ANDROID_APP_ID)" >/dev/null 2>&1 || true; \
+				if "$$adb" -s "$$d" install "$$apk" >/dev/null 2>&1; then \
+					echo "✓ App reinstalled on $$d"; \
+				else \
+					echo "⚠ Could not install on $$d — APK is at $$apk (install manually: $$adb -s $$d install -r \"$$apk\")."; \
+				fi; \
+			else \
+				echo "⚠ adb install failed on $$d (build is fine — APK is at $$apk):"; \
+				printf '%s\n' "$$out" | sed 's/^/    /'; \
+			fi; \
+		done; \
+	fi
+
+# Build the Android APK and install/update it on the connected device(s) in
+# one step — the simplest "push my latest changes to the phone".
+android-deploy: android-build _android-install-if-device
+	@echo "✓ Android build deployed to connected device(s)."
+
+# Rebuild the payload only when the PS5 SDK is configured; otherwise skip so a
+# frontend-only `make run-client` keeps working without the SDK. The shell
+# embeds whatever ps5upload.elf.gz is on disk (build.rs re-embeds on change).
+_payload-if-ready:
+	@if [ -n "$(PS5_PAYLOAD_SDK)" ] && [ -f "$(PS5_PAYLOAD_SDK)/toolchain/prospero.mk" ]; then \
+		$(MAKE) payload; \
+	else \
+		echo "⚠ Skipping payload rebuild (PS5_PAYLOAD_SDK not set) — using existing $(PAYLOAD_ELF) if present."; \
+	fi
+
+# Build only the release engine binary (the binary Tauri spawns). Skips the
+# dev-profile workspace build that the standalone `engine` target does —
+# `make build` only needs the release binary, not the dev workspace.
+build: sync-version-check payload _engine-release client
+	@$(MAKE) _android-build-if-ready
+	@echo ""
+	@echo "✓ Build complete"
+	@echo ""
+	@echo "Outputs:"
+	@echo "  - $(PAYLOAD_ELF)"
+	@echo "  - $(ENGINE_DIR)/target/"
+	@echo "  - $(CLIENT_DIR)/dist/"
+	@echo "  - $(ANDROID_APK) (when the Android toolchain is present)"
+	@echo ""
+
+# VERSION (repo root) is the canonical source of truth. `sync-version`
+# rewrites downstream files (payload config.h macro, client package
+# manifests, Tauri conf + Cargo.toml) from it; `sync-version-check`
+# fails if any downstream file has drifted — wired into `build` so
+# a desync gets caught before we ship an ELF + bundle with mismatched
+# version strings.
+sync-version:
+	@node scripts/update-version.js
+
+sync-version-check:
+	@node scripts/update-version.js --check
+
+payload: setup-payload dpi
+	@echo "Building PS5 payload..."
+	@$(MAKE) -C $(PAYLOAD_DIR) -j$(JOBS)
+	@echo "✓ Built $(PAYLOAD_ELF)"
+
+# Standalone DPI install daemon. Separate ELF (clean loader context is
+# what makes pkg install work on FW 11.x — see payload/dpi/ezremote_dpi.c).
+# Built alongside the main payload so the host can embed + auto-load it.
+dpi: setup-payload
+	@echo "Building DPI install daemon..."
+	@$(MAKE) -C $(DPI_DIR) -j$(JOBS)
+	@echo "✓ Built $(DPI_ELF)"
+
+send-payload: payload
+	@echo "Sending payload to $(PS5_HOST):$(PS5_LOADER_PORT) ..."
+	@if ! command -v python3 >/dev/null 2>&1; then \
+		echo "ERROR: python3 not found — required for bounded payload upload"; exit 1; \
+	fi
+	@python3 -c 'import pathlib, socket, sys; host, port, payload_path = sys.argv[1], int(sys.argv[2]), pathlib.Path(sys.argv[3]); payload = payload_path.read_bytes(); sock = socket.create_connection((host, port), timeout=5); sock.settimeout(5); sock.sendall(payload); sock.shutdown(socket.SHUT_WR); sock.close()' "$(PS5_HOST)" "$(PS5_LOADER_PORT)" "$(PAYLOAD_ELF)"
+	@echo "✓ Payload sent — wait for PS5 notification before testing"
+
+engine: setup-engine
+	@echo "Building Rust engine workspace..."
+	@cd $(ENGINE_DIR) && $(CARGO) build --workspace
+	@echo "Building release ps5upload-engine (the binary Tauri spawns)..."
+	@cd $(ENGINE_DIR) && $(CARGO) build --release -p ps5upload-engine
+	@echo "✓ Engine workspace built"
+
+# Internal helper: build the `ps5upload-engine` release binary, which the
+# Tauri setup hook (client/src-tauri/src/engine.rs) spawns as a child of
+# the window process. `cargo build --release` is itself incremental, so
+# this is a cheap no-op when sources are unchanged — and a real rebuild
+# the moment they aren't. (An earlier version guarded with
+# `[ ! -x binary ]`, which stayed stale through code changes; removed.)
+_engine-release: setup-engine
+	@if [ -n "$(ENGINE_TARGET)" ]; then \
+		cd $(ENGINE_DIR) && $(CARGO) build --release -p ps5upload-engine --target "$(ENGINE_TARGET)"; \
+	else \
+		cd $(ENGINE_DIR) && $(CARGO) build --release -p ps5upload-engine; \
+	fi
+
+client: setup-client
+	@echo "Building client UI..."
+	@cd $(CLIENT_DIR) && npm run build:vite
+	@echo "✓ Client UI built"
+
+#──────────────────────────────────────────────────────────────────────────────
+# Benchmarking + validation
+#
+# `make validate` is the single-command flow for "we are still progressing":
+# rebuild payload, send to PS5, wait for ready, run smoke + full sweep, write
+# a timestamped report under bench/reports/ and print a summary table.
+# `make validate-xl` adds the 200k-file stress profile.
+#──────────────────────────────────────────────────────────────────────────────
+
+gen-fixtures:
+	@echo "Generating benchmark fixtures under bench/fixtures/..."
+	@node scripts/gen-fixtures.mjs
+
+sweep:
+	@echo "Running FTX2 sweep against live PS5 at $(PS5_HOST):9113 ..."
+	@node bench/run-ftx2-sweep.mjs --spawn-engine --gen-fixtures
+
+# Wait for the payload's runtime port to accept connections after send.
+# Retries 15×/2s = 30s ceiling; exits non-zero if the port never opens.
+_wait-payload-ready:
+	@echo "Waiting for PS5 runtime port 9113 ..."
+	@i=0; while [ $$i -lt 15 ]; do \
+		if nc -z -w 1 "$(PS5_HOST)" 9113 >/dev/null 2>&1; then \
+			echo "✓ runtime port open"; exit 0; \
+		fi; \
+		i=$$((i+1)); sleep 2; \
+	done; \
+	echo "ERROR: PS5 runtime port 9113 did not open within 30s"; exit 1
+
+validate: send-payload _wait-payload-ready
+	@echo ""
+	@echo "── Running smoke suite ────────────────────────────────"
+	@npm run --silent smoke:hardware
+	@echo ""
+	@echo "── Running sweep (default profiles) ────────────────────"
+	@node bench/run-ftx2-sweep.mjs --spawn-engine --gen-fixtures
+	@echo ""
+	@echo "✓ validate complete — see bench/reports/ for the full report"
+
+validate-xl: send-payload _wait-payload-ready
+	@echo ""
+	@echo "── Running smoke suite ────────────────────────────────"
+	@npm run --silent smoke:hardware
+	@echo ""
+	@echo "── Running sweep (INCLUDING XL 200k-file stress) ───────"
+	@node bench/run-ftx2-sweep.mjs --spawn-engine --gen-fixtures --xl
+	@echo ""
+	@echo "✓ validate-xl complete — see bench/reports/ for the full report"
+
+#──────────────────────────────────────────────────────────────────────────────
+# Distribution — all drive `tauri build`, producing ~14 MB .app/.AppImage/.msi
+# instead of Electron's ~300 MB bundles. The Rust engine binary is bundled as
+# a Tauri resource and discovered at runtime by client/src-tauri/src/engine.rs.
+# `payload` and `_engine-release` run first so the bundle includes a current
+# ELF and a freshly-built engine.
+#──────────────────────────────────────────────────────────────────────────────
+
+dist: payload _engine-release setup-client
+	@echo "Building desktop distribution (Tauri)..."
+	@cd $(CLIENT_DIR) && npm run dist
+	@echo "✓ Distribution packages built: $(CLIENT_DIR)/src-tauri/target/release/bundle/"
+
+dist-win: ENGINE_TARGET := x86_64-pc-windows-msvc
+dist-win: payload setup-client
+	@$(MAKE) _engine-release ENGINE_TARGET=$(ENGINE_TARGET)
+	@echo "Building Windows distribution (Tauri)..."
+	@cd $(CLIENT_DIR) && npm run dist:win
+	@echo "✓ Windows packages built: $(CLIENT_DIR)/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/"
+
+dist-win-arm: ENGINE_TARGET := aarch64-pc-windows-msvc
+dist-win-arm: payload setup-client
+	@$(MAKE) _engine-release ENGINE_TARGET=$(ENGINE_TARGET)
+	@echo "Building Windows ARM64 distribution (Tauri)..."
+	@cd $(CLIENT_DIR) && npm run dist:win-arm
+	@echo "✓ Windows ARM64 packages built: $(CLIENT_DIR)/src-tauri/target/aarch64-pc-windows-msvc/release/bundle/"
+
+dist-mac: ENGINE_TARGET := aarch64-apple-darwin
+dist-mac: payload setup-client
+	@$(MAKE) _engine-release ENGINE_TARGET=$(ENGINE_TARGET)
+	@echo "Building macOS Apple Silicon distribution (Tauri)..."
+	@cd $(CLIENT_DIR) && npm run dist:mac
+	@echo "✓ macOS Apple Silicon packages built: $(CLIENT_DIR)/src-tauri/target/aarch64-apple-darwin/release/bundle/"
+
+dist-mac-x64: ENGINE_TARGET := x86_64-apple-darwin
+dist-mac-x64: payload setup-client
+	@$(MAKE) _engine-release ENGINE_TARGET=$(ENGINE_TARGET)
+	@echo "Building macOS Intel distribution (Tauri)..."
+	@cd $(CLIENT_DIR) && npm run dist:mac-x64
+	@echo "✓ macOS Intel packages built: $(CLIENT_DIR)/src-tauri/target/x86_64-apple-darwin/release/bundle/"
+
+dist-linux: ENGINE_TARGET := x86_64-unknown-linux-gnu
+dist-linux: payload setup-client
+	@$(MAKE) _engine-release ENGINE_TARGET=$(ENGINE_TARGET)
+	@echo "Building Linux x64 distribution (Tauri)..."
+	@cd $(CLIENT_DIR) && npm run dist:linux
+	@echo "✓ Linux x64 packages built: $(CLIENT_DIR)/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/"
+
+dist-linux-arm: ENGINE_TARGET := aarch64-unknown-linux-gnu
+dist-linux-arm: payload setup-client
+	@$(MAKE) _engine-release ENGINE_TARGET=$(ENGINE_TARGET)
+	@echo "Building Linux ARM64 distribution (Tauri)..."
+	@cd $(CLIENT_DIR) && npm run dist:linux-arm
+	@echo "✓ Linux ARM64 packages built: $(CLIENT_DIR)/src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/"
+
+#──────────────────────────────────────────────────────────────────────────────
+# Android (Tauri mobile). Like the `dist` targets but produces an APK. The
+# engine is linked in-process (engine_mobile.rs) rather than spawned, and only
+# the PS5 payload is bundled — so `payload` runs first to embed a current ELF.
+# gen/ is gitignored, so the recipes auto-run `android-init` if it's missing.
+#──────────────────────────────────────────────────────────────────────────────
+
+android-deps:
+	@command -v rustup >/dev/null 2>&1 || { echo "ERROR: rustup is required for Android cross-compilation (Homebrew 'rust' ships only the host std). Install from https://rustup.rs"; exit 1; }
+	@test -n "$(ANDROID_HOME)" || { echo "ERROR: ANDROID_HOME is not set — point it at your Android SDK (e.g. ~/Library/Android/sdk)"; exit 1; }
+	@test -n "$(ANDROID_NDK_HOME)" || { echo "ERROR: no NDK under $(ANDROID_HOME)/ndk — install via Android Studio or 'sdkmanager \"ndk;28.0.12916984\"'"; exit 1; }
+	@test -n "$(ANDROID_JAVA_HOME)" || { echo "ERROR: JDK 17 not found — set JAVA_HOME or install Temurin 17"; exit 1; }
+	@rustup target list --installed 2>/dev/null | grep -qx '$(ANDROID_RUST_TARGET)' || rustup target add $(ANDROID_RUST_TARGET)
+	@echo "Android toolchain OK — JDK=$(ANDROID_JAVA_HOME) NDK=$(ANDROID_NDK_HOME) target=$(ANDROID_RUST_TARGET)"
+
+# ─── Headless emulator for testing without a physical device ─────────────
+# Lifecycle lives in scripts/android-emu.sh. Artifacts (screenshots, logcat,
+# install logs) are written OUTSIDE the repo, to ~/.ps5upload/android-test/ —
+# this repo has already leaked debug screenshots into a public repo, and a
+# file that is not in the working tree cannot be committed by accident.
+emu-create:
+	@bash scripts/android-emu.sh create
+
+emu-start:
+	@bash scripts/android-emu.sh start
+
+emu-stop:
+	@bash scripts/android-emu.sh stop
+
+emu-status:
+	@bash scripts/android-emu.sh status
+
+# Build the APK, then install + launch it on the emulator and capture proof.
+# Depends on android-build so `make emu-test` is the single command.
+emu-test: android-build
+	@bash scripts/android-emu.sh test
+
+android-init: android-deps setup-client
+	@echo "Scaffolding Android project (tauri android init)..."
+	@cd $(CLIENT_DIR) && $(ANDROID_ENV) npx tauri android init
+	@echo "Applying app icon from $(ANDROID_ICON_SRC) (matches the desktop icon)..."
+	@cd $(CLIENT_DIR) && $(ANDROID_ENV) npx tauri icon $(ANDROID_ICON_SRC) >/dev/null
+	@echo "Allowing loopback cleartext so the in-process engine is reachable..."
+	@bash scripts/release/android-postinit-patch.sh
+
+android-build: android-deps payload setup-client
+	@test -d $(ANDROID_GEN_DIR) || $(MAKE) android-init
+	@# Re-apply the (idempotent) post-init patches on every build. They used to
+	@# run only at init, so an existing gen/ never picked up a new patch step and
+	@# a local APK silently differed from the CI one, which inits fresh.
+	@bash scripts/release/android-postinit-patch.sh
+	@echo "Building Android APK (debug, $(ANDROID_TARGET))..."
+	@cd $(CLIENT_DIR) && $(ANDROID_ENV) npx tauri android build --debug --apk --target $(ANDROID_TARGET)
+	@apk=$$(find "$(ANDROID_GEN_DIR)/app/build/outputs/apk" -name 'app-*-debug.apk' -print -quit 2>/dev/null); \
+		echo "✓ APK built: $${apk:-under $(ANDROID_GEN_DIR)/app/build/outputs/apk}"
+
+# Boots the headless test emulator when nothing is attached, and shuts down
+# ONLY an emulator this invocation booted -- a phone you plugged in, or an
+# emulator you already had running, is left alone. The trap covers Ctrl-C,
+# which is how `tauri android dev` normally ends.
+# run-android: the emulator boots WITH its window (foreground) so the app can be
+# seen and used. run-android-background: it boots headless, as emu-test does.
+# Either way the dev server stays attached here for live reload.
+run-android: EMU_WINDOW := 1
+run-android-background: EMU_WINDOW := 0
+run-android run-android-background: android-deps payload setup-client
+	@test -d $(ANDROID_GEN_DIR) || $(MAKE) android-init
+	@state=$$(PS5UPLOAD_EMU_WINDOW=$(EMU_WINDOW) bash $(CURDIR)/scripts/android-emu.sh ensure) || exit 1; \
+	if [ "$$state" = "booted" ]; then \
+		trap 'trap - EXIT INT TERM; echo ""; echo "Shutting down the emulator this run booted..."; bash $(CURDIR)/scripts/android-emu.sh stop' EXIT INT TERM; \
+	else \
+		echo "  (leaving the existing device/emulator running)"; \
+	fi; \
+	echo "Launching on the attached Android device/emulator (tauri android dev)..."; \
+	cd $(CLIENT_DIR) && $(ANDROID_ENV) npx tauri android dev
+
+#──────────────────────────────────────────────────────────────────────────────
+# Docker — self-hosted engine image. Mirrors what .github/workflows/
+# docker-engine.yml publishes to ghcr.io/<owner>/ps5upload-engine on each
+# release tag (multi-arch there; single-arch host build here). `engine/` is the
+# build context; the Dockerfile is a scratch image wrapping the static binary.
+#
+# SECURITY: the engine API is unauthenticated. Bind to a LAN interface and set
+# PS5UPLOAD_ALLOW_IP only on a trusted network — never expose it to the
+# internet. See the header of engine/Dockerfile.
+#──────────────────────────────────────────────────────────────────────────────
+
+DOCKER ?= docker
+DOCKER_ENGINE_IMAGE ?= ps5upload-engine
+
+docker-engine:
+	@command -v $(DOCKER) >/dev/null 2>&1 || { echo "ERROR: docker not found on PATH."; exit 1; }
+	@echo "Building $(DOCKER_ENGINE_IMAGE) image (context: $(ENGINE_DIR)/)..."
+	@$(DOCKER) build -t $(DOCKER_ENGINE_IMAGE) $(ENGINE_DIR)
+	@echo "✓ Built image $(DOCKER_ENGINE_IMAGE) — run with: make docker-engine-run"
+
+# Run the locally-built engine image. Binds the published port and points it at
+# the PS5's transfer port. Override PS5_HOST / the bind address as needed.
+docker-engine-run: docker-engine
+	@echo "Running $(DOCKER_ENGINE_IMAGE) — engine on :19113, PS5 at $(PS5_HOST):9113 ..."
+	@$(DOCKER) run --rm -p 19113:19113 -e PS5_ADDR=$(PS5_HOST):9113 $(DOCKER_ENGINE_IMAGE)
+
+#──────────────────────────────────────────────────────────────────────────────
+# Testing
+#──────────────────────────────────────────────────────────────────────────────
+
+test: test-root test-engine test-desktop test-payload test-client
+	@echo ""
+	@echo "✓ All tests passed"
+	@echo ""
+
+lint: lint-scripts lint-client
+
+lint-scripts:
+	@npm run scripts:check
+
+lint-client:
+	@cd $(CLIENT_DIR) && npm run lint
+
+audit-scripts:
+	@npm run scripts:audit
+
+coverage:
+	@npm run coverage
+
+coverage-engine:
+	@npm run coverage -- --engine-only
+
+coverage-client:
+	@npm run coverage -- --client-only
+
+quality:
+	@npm run validate
+
+quality-full:
+	@npm run validate:full
+
+quality-hardware:
+	@npm run validate:hardware
+
+ci: quality
+
+ci-full: quality-full
+
+# Root-level tests: syntax-check the node scripts that back the bench + smoke
+# harnesses. Hardware smoke coverage lives in `make sweep` / `make validate`.
+test-root:
+	@echo "Syntax-checking root node scripts..."
+	@node --check tests/smoke-hardware.mjs
+	@node --check bench/run-ftx2-sweep.mjs
+	@node --check bench/run-ftx2-upload.mjs
+	@node --check bench/check-ftx2-baseline.mjs
+	@node --check scripts/gen-fixtures.mjs
+	@node --check scripts/check-lockfile.mjs
+	@node scripts/check-lockfile.mjs --self-test
+	@echo "Checking the client lockfile kept its libc metadata..."
+	@node scripts/check-lockfile.mjs
+	@echo "✓ Root scripts valid"
+
+test-engine: setup-engine
+	@echo "Running Rust engine tests..."
+	@cd $(ENGINE_DIR) && $(CARGO) test --workspace
+	@echo "✓ Engine tests passed"
+	@# Android cross-compile check. The engine cfg's some modules out on
+	@# Android (remote_pkg, which needs an HTTP client), so a call site added
+	@# without the matching cfg builds fine on every desktop target and fails
+	@# ONLY here. That is exactly how v5.31.0 shipped with no APK: every local
+	@# gate was green on macOS while the Android build was broken, and it was
+	@# not caught until the release workflow. `cargo check` is enough — this
+	@# needs to catch a compile error, not produce an artifact.
+	@if rustup target list --installed 2>/dev/null | grep -q aarch64-linux-android; then \
+		echo "Checking engine against the Android target..."; \
+		cd $(ENGINE_DIR) && $(CARGO) check -p ps5upload-engine --target aarch64-linux-android; \
+		echo "✓ Engine compiles for Android"; \
+	else \
+		echo "⚠ aarch64-linux-android target not installed — SKIPPING the Android check."; \
+		echo "  CI still runs it, so a cfg mistake will surface there instead of here."; \
+		echo "  Install with: rustup target add aarch64-linux-android"; \
+	fi
+
+test-engine-coverage:
+	@$(MAKE) coverage-engine
+
+test-desktop: setup-engine
+	@echo "Checking Tauri Rust shell..."
+	@cd $(CLIENT_DIR)/src-tauri && $(CARGO) check --all-targets
+	@cd $(CLIENT_DIR)/src-tauri && $(CARGO) clippy --all-targets -- -D warnings
+	@cd $(CLIENT_DIR)/src-tauri && $(CARGO) test
+	@echo "✓ Desktop Rust checks passed"
+
+test-payload: payload
+	@echo "Validating payload binaries..."
+	@for elf in "$(PAYLOAD_ELF)" "$(DPI_ELF)"; do \
+		if [ ! -s "$$elf" ]; then \
+			echo "ERROR: $$elf is missing or empty."; \
+			exit 1; \
+		fi; \
+		file "$$elf" | grep -q "ELF.*FreeBSD" || { \
+			echo "ERROR: $$elf is not a PS5/FreeBSD ELF file."; \
+			exit 1; \
+		}; \
+		if [ ! -s "$$elf.gz" ]; then \
+			echo "ERROR: $$elf.gz is missing or empty."; \
+			exit 1; \
+		fi; \
+		gzip -t "$$elf.gz" || { \
+			echo "ERROR: $$elf.gz is not a valid gzip resource."; \
+			exit 1; \
+		}; \
+	done
+	@echo "✓ Main payload and DPI installer are PS5 ELFs with gzip resources"
+	@echo "Running play-time launch/resume self-test (host build)..."
+	@echo "Running accept-recovery self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-accept-recovery-selftest \
+		$(PAYLOAD_DIR)/tests/accept_recovery_selftest.c
+	@/tmp/ps5upload-accept-recovery-selftest
+	@echo "✓ accept() failures keep the helper serving until its network is gone"
+	@echo "Running direct-commit apply self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-commit-apply-selftest \
+		$(PAYLOAD_DIR)/tests/commit_apply_selftest.c
+	@/tmp/ps5upload-commit-apply-selftest
+	@echo "✓ a repeat COMMIT never unlinks a destination it cannot replace"
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-activity-selftest \
+		$(PAYLOAD_DIR)/tests/activity_launch_selftest.c
+	@/tmp/ps5upload-activity-selftest
+	@echo "Running app-info layout self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-app-info-selftest \
+		$(PAYLOAD_DIR)/tests/app_info_selftest.c
+	@/tmp/ps5upload-app-info-selftest
+	@echo "Running metadata title-id normalizer self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-tmdb-id-selftest \
+		$(PAYLOAD_DIR)/tests/tmdb_id_selftest.c
+	@/tmp/ps5upload-tmdb-id-selftest
+	@echo "Running cheat XML UTF-16 normalizer self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-xml-encoding-selftest \
+		$(PAYLOAD_DIR)/tests/xml_encoding_selftest.c
+	@/tmp/ps5upload-xml-encoding-selftest
+	@echo "✓ UTF-16 SHN/MC4 cheat files convert so their cheats appear"
+	@echo "Checking per-console isolation..."
+	@./scripts/check-per-console-isolation.sh
+	@echo "✓ one console's data cannot be shown under another's name"
+	@echo "Checking Sony-API lock coverage..."
+	@./scripts/check-sony-api-lock.sh $(PAYLOAD_DIR)/src
+	@echo "✓ every sceUserService/sceRegMgr caller is serialized"
+	@echo "Running hw-guard fault-recovery self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-hw-guard-selftest \
+		$(PAYLOAD_DIR)/tests/hw_guard_selftest.c
+	@/tmp/ps5upload-hw-guard-selftest
+	@echo "✓ hw-guard recovers Sony-getter faults without dropping the helper"
+	@echo "Running wake-watchdog safety self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-wake-watchdog-selftest \
+		$(PAYLOAD_DIR)/tests/wake_watchdog_selftest.c
+	@/tmp/ps5upload-wake-watchdog-selftest
+	@echo "✓ clock adjustments and unknown firmware state cannot trigger kernel writes"
+	@echo "Running process-identity self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-proc-identity-selftest \
+		$(PAYLOAD_DIR)/tests/proc_identity_selftest.c
+	@/tmp/ps5upload-proc-identity-selftest
+	@echo "✓ only our own threads are ever in SIGKILL range"
+	@echo "Running prior-instance verdict self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-instance-verdict-selftest \
+		$(PAYLOAD_DIR)/tests/instance_verdict_selftest.c
+	@/tmp/ps5upload-instance-verdict-selftest
+	@echo "✓ an externally-killed predecessor is reported, never guessed at"
+	@echo "Running ptrace timeout-recovery self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-ptrace-recovery-selftest \
+		$(PAYLOAD_DIR)/tests/ptrace_recovery_selftest.c
+	@/tmp/ps5upload-ptrace-recovery-selftest
+	@echo "✓ ptrace timeout recovery never resumes injected registers"
+	@echo "Running app.db raw-scan self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-appdb-scan-selftest \
+		$(PAYLOAD_DIR)/tests/appdb_scan_selftest.c
+	@/tmp/ps5upload-appdb-scan-selftest
+	@echo "✓ app.db scan recovers titles without sqlite"
+	@echo "Running content-database self-test (host build)..."
+	@mkdir -p /tmp/ps5upload-cdb
+	@cc -O1 -w -c -o /tmp/ps5upload-cdb/sqlite3.o \
+		-DSQLITE_OS_UNIX=1 -DSQLITE_THREADSAFE=1 -DSQLITE_TEMP_STORE=2 \
+		-DSQLITE_OMIT_LOAD_EXTENSION=1 -DSQLITE_OMIT_DEPRECATED=1 \
+		-DSQLITE_OMIT_JSON=1 -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_DQS=0 \
+		-DSQLITE_UNTESTABLE=1 \
+		$(PAYLOAD_DIR)/third_party/sqlite3/sqlite3.c
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-I$(PAYLOAD_DIR)/third_party/sqlite3 \
+		-DCONTENT_DB_APP='"/tmp/ps5upload-cdb/app.db"' \
+		-DCONTENT_DB_APPINFO='"/tmp/ps5upload-cdb/appinfo.db"' \
+		-o /tmp/ps5upload-content-db-selftest \
+		$(PAYLOAD_DIR)/src/content_db.c \
+		$(PAYLOAD_DIR)/tests/content_db_selftest.c \
+		/tmp/ps5upload-cdb/sqlite3.o
+	@/tmp/ps5upload-content-db-selftest
+	@echo "✓ content databases read via SQL, with guarded writes"
+	@echo "Running Game Activity JSON self-test (host build)..."
+	@mkdir -p /tmp/ps5upload-actjson
+	@cc -O2 -Wall -Wextra -Werror -pthread \
+		-I$(PAYLOAD_DIR)/include -I$(PAYLOAD_DIR)/tests/hostshim \
+		-I$(PAYLOAD_DIR)/third_party/sqlite3 \
+		-DKERN_PROC_PROC=8 \
+		-DCONTENT_DB_APP='"/tmp/ps5upload-actjson/app.db"' \
+		-DCONTENT_DB_APPINFO='"/tmp/ps5upload-actjson/appinfo.db"' \
+		-DACTIVITY_FILE='"/tmp/ps5upload-actjson/activity.json"' \
+		-DACTIVITY_DIR='"/tmp/ps5upload-actjson"' \
+		-DACTIVITY_SL2_DB='"/tmp/ps5upload-actjson/sl2_log.db"' \
+		-o /tmp/ps5upload-actjson/selftest \
+		$(PAYLOAD_DIR)/src/content_db.c \
+		$(PAYLOAD_DIR)/tests/activity_json_selftest.c \
+		/tmp/ps5upload-cdb/sqlite3.o
+	@/tmp/ps5upload-actjson/selftest
+	@echo "✓ every Game Activity tab names its titles, in the keys the engine reads"
+	@echo "Running FTP wire-format self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-ftp-format-selftest \
+		$(PAYLOAD_DIR)/tests/ftp_format_selftest.c
+	@/tmp/ps5upload-ftp-format-selftest
+	@echo "✓ FTP PASV/EPSV/LIST replies match the shapes clients parse"
+	@echo "Running FTP lifecycle self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-ftp-lifecycle-selftest \
+		$(PAYLOAD_DIR)/tests/ftp_lifecycle_selftest.c
+	@/tmp/ps5upload-ftp-lifecycle-selftest
+	@echo "✓ FTP stop/start drains sessions without stale listeners or fd reuse"
+	@echo "Running timed initializer serialization self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-timed-init-selftest \
+		$(PAYLOAD_DIR)/tests/timed_init_selftest.c
+	@/tmp/ps5upload-timed-init-selftest
+	@echo "✓ timed-out Sony initialization cannot overlap a retry"
+	@echo "Running param.json SDK-rewrite self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-sdk-param-selftest \
+		$(PAYLOAD_DIR)/tests/sdk_param_selftest.c
+	@/tmp/ps5upload-sdk-param-selftest
+	@echo "✓ SDK version rewrite reports what it actually changed"
+	@echo "Running ELF param-segment self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-elf-param-selftest \
+		$(PAYLOAD_DIR)/tests/elf_param_selftest.c
+	@/tmp/ps5upload-elf-param-selftest
+	@echo "✓ SDK patcher targets param segments, not stray magic bytes"
+	@echo "Running sandbox library-overlay unmount self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-sandbox-unmount-selftest \
+		$(PAYLOAD_DIR)/tests/sandbox_unmount_selftest.c
+	@/tmp/ps5upload-sandbox-unmount-selftest
+	@echo "✓ only a game sandbox's unionfs lib overlay may be force-unmounted"
+	@echo "Running SDK version-pair self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-sdk-pairs-selftest \
+		$(PAYLOAD_DIR)/tests/sdk_pairs_selftest.c
+	@/tmp/ps5upload-sdk-pairs-selftest
+	@echo "✓ an SDK downgrade writes both halves of the version pair"
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-bgft-escalate-selftest \
+		$(PAYLOAD_DIR)/tests/bgft_escalate_selftest.c
+	@/tmp/ps5upload-bgft-escalate-selftest
+	@echo "✓ full-escalation patch install is default-off and FW11-gated"
+	@echo "Running libc.prx backport-patch self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-libc-backport-selftest \
+		$(PAYLOAD_DIR)/tests/libc_backport_selftest.c
+	@/tmp/ps5upload-libc-backport-selftest
+	@echo "✓ the libc.prx symbol swap is same-length and idempotent"
+	@echo "Running fakelib overlay path/refusal self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-fakelib-overlay-selftest \
+		$(PAYLOAD_DIR)/tests/fakelib_overlay_selftest.c
+	@/tmp/ps5upload-fakelib-overlay-selftest
+	@echo "✓ fakelib overlay accepts only game sandbox library targets"
+	@echo "Running sys_time settimeofday-fallback self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-sys-time-fallback-selftest \
+		$(PAYLOAD_DIR)/src/sys_time.c \
+		$(PAYLOAD_DIR)/tests/sys_time_fallback_selftest.c
+	@/tmp/ps5upload-sys-time-fallback-selftest
+	@echo "✓ clock set falls back to settimeofday only when the SCE path did not take"
+	@echo "Running cross-device rename-guard self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-cross-device-selftest \
+		$(PAYLOAD_DIR)/tests/cross_device_selftest.c
+	@/tmp/ps5upload-cross-device-selftest
+	@echo "✓ cross-mount renames are refused before they can panic the kernel"
+	@echo "Running Remote Play registry-key self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-rp-keys-selftest \
+		$(PAYLOAD_DIR)/tests/rp_keys_selftest.c
+	@/tmp/ps5upload-rp-keys-selftest
+	@echo "✓ Remote Play keys match Sony's entry-number formula"
+	@echo "Running SDK Changer filesystem-safety self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-sdk-changer-file-selftest \
+		$(PAYLOAD_DIR)/tests/sdk_changer_file_selftest.c
+	@/tmp/ps5upload-sdk-changer-file-selftest
+	@echo "✓ SDK Changer patches only tracked sources and restores durable backups"
+
+test-client: setup-client
+	@echo "Testing client build..."
+	@cd $(CLIENT_DIR) && npm run typecheck
+	@cd $(CLIENT_DIR) && npm run lint
+	@cd $(CLIENT_DIR) && npm test
+	@cd $(CLIENT_DIR) && npm run build:vite
+	@if [ ! -d "$(CLIENT_DIR)/dist" ]; then \
+		echo "ERROR: client build failed - dist directory not found."; \
+		exit 1; \
+	fi
+	@echo "✓ Client checks passed"
+
+test-client-coverage:
+	@$(MAKE) coverage-client
+
+verify: test
+	@echo "Running client packaging validation (Tauri)..."
+	@cd $(CLIENT_DIR) && npm run build
+	@echo "✓ Client packaging validation passed"
+
+#──────────────────────────────────────────────────────────────────────────────
+# Auto-launch (engine starts on OS login)
+#──────────────────────────────────────────────────────────────────────────────
+
+install-engine: setup-engine
+	@echo "Installing engine auto-launch for this platform..."
+	@case "$$(uname -s)" in \
+		Linux)  bash scripts/autolaunch/install-linux.sh ;; \
+		Darwin) bash scripts/autolaunch/install-macos.sh ;; \
+		*)      echo "Use scripts/autolaunch/install-windows.ps1 on Windows" ;; \
+	esac
+
+uninstall-engine:
+	@case "$$(uname -s)" in \
+		Linux)  bash scripts/autolaunch/uninstall-linux.sh ;; \
+		Darwin) bash scripts/autolaunch/uninstall-macos.sh ;; \
+		*)      echo "Use scripts/autolaunch/uninstall-windows.ps1 on Windows" ;; \
+	esac
+
+#──────────────────────────────────────────────────────────────────────────────
+# Run
+#──────────────────────────────────────────────────────────────────────────────
+
+run-engine: setup-engine
+	@echo "Starting ps5upload-engine (standalone; kept for diagnostics —"
+	@echo "in normal use the Tauri client spawns the engine automatically)..."
+	@cd $(ENGINE_DIR) && $(CARGO) run --release -p ps5upload-engine
+
+# `run-client` is the one-command dev flow. `npm run dev` in client/ is wired
+# to `tauri dev`, which starts Vite + the Rust main process. The Rust setup
+# hook in client/src-tauri/src/engine.rs spawns ps5upload-engine as a child
+# of the window process; killing the window tears the engine down cleanly.
+run-client: setup-client _payload-if-ready _check-tauri-system-deps _engine-release _kill-stale-client
+	@echo "Starting PS5 Upload client (Tauri + Rust + Vite)..."
+	@if [ -z "$$DISPLAY" ] && [ -z "$$WAYLAND_DISPLAY" ] && [ "$$(uname -s)" = "Linux" ]; then \
+		if command -v xvfb-run >/dev/null 2>&1; then \
+			echo "No display detected, using xvfb-run..."; \
+			cd $(CLIENT_DIR) && xvfb-run --auto-servernum npm run dev; \
+		else \
+			echo "ERROR: No display server found ($$DISPLAY / $$WAYLAND_DISPLAY not set)."; \
+			echo "  Install xvfb to run headless: sudo apt-get install -y xvfb"; \
+			exit 1; \
+		fi; \
+	else \
+		cd $(CLIENT_DIR) && npm run dev; \
+	fi
+
+# Pre-flight system-library check for `tauri dev`. Tauri's Rust crates
+# (gdk-sys, gio-sys, javascriptcore-rs-sys, soup3-sys, ...) link against
+# native GTK/WebKit on Linux, system WebKit on macOS, and MSVC + WebView2
+# on Windows. Without them, cargo gets ~30s into compilation before
+# emitting a wall of pkg-config errors. This target fails fast with a
+# copy-pasteable install command for the host OS.
+_check-tauri-system-deps:
+	@os="$$(uname -s)"; \
+	case "$$os" in \
+	  Linux) \
+	    missing=""; \
+	    command -v pkg-config >/dev/null 2>&1 || missing="$$missing pkg-config"; \
+	    if command -v pkg-config >/dev/null 2>&1; then \
+	      pkg-config --exists webkit2gtk-4.1 2>/dev/null || missing="$$missing libwebkit2gtk-4.1-dev"; \
+	      pkg-config --exists gtk+-3.0    2>/dev/null || missing="$$missing libgtk-3-dev"; \
+	      pkg-config --exists librsvg-2.0 2>/dev/null || missing="$$missing librsvg2-dev"; \
+	      pkg-config --exists ayatana-appindicator3-0.1 2>/dev/null || missing="$$missing libayatana-appindicator3-dev"; \
+	    fi; \
+	    if [ -n "$$missing" ]; then \
+	      echo "ERROR: Tauri requires Linux system libraries that are not installed."; \
+	      echo "  Missing:$$missing"; \
+	      echo ""; \
+	      if command -v apt-get >/dev/null 2>&1; then \
+	        echo "  Install (Debian / Ubuntu / WSL Ubuntu):"; \
+	        echo "    sudo apt update && sudo apt install -y \\"; \
+	        echo "      libwebkit2gtk-4.1-dev build-essential curl wget file \\"; \
+	        echo "      libxdo-dev libssl-dev libayatana-appindicator3-dev \\"; \
+	        echo "      librsvg2-dev pkg-config"; \
+	      elif command -v dnf >/dev/null 2>&1; then \
+	        echo "  Install (Fedora / RHEL):"; \
+	        echo "    sudo dnf install -y webkit2gtk4.1-devel openssl-devel \\"; \
+	        echo "      curl wget file libappindicator-gtk3-devel librsvg2-devel \\"; \
+	        echo "      pkgconf-pkg-config @development-tools"; \
+	      elif command -v pacman >/dev/null 2>&1; then \
+	        echo "  Install (Arch / Manjaro):"; \
+	        echo "    sudo pacman -S --needed webkit2gtk-4.1 base-devel curl wget \\"; \
+	        echo "      file openssl libappindicator-gtk3 librsvg pkgconf"; \
+	      else \
+	        echo "  See https://tauri.app/start/prerequisites/ for your distro."; \
+	      fi; \
+	      exit 1; \
+	    fi; \
+	    ;; \
+	  Darwin) \
+	    if ! xcode-select -p >/dev/null 2>&1; then \
+	      echo "ERROR: Xcode Command Line Tools are not installed (Tauri needs the system WebKit framework)."; \
+	      echo "  Install with: xcode-select --install"; \
+	      exit 1; \
+	    fi; \
+	    ;; \
+	  MINGW*|MSYS*|CYGWIN*) \
+	    if ! command -v cl >/dev/null 2>&1 && ! command -v link >/dev/null 2>&1; then \
+	      echo "ERROR: MSVC build tools (cl.exe / link.exe) not on PATH."; \
+	      echo "  Install 'Visual Studio Build Tools 2022' with the C++ workload:"; \
+	      echo "    https://visualstudio.microsoft.com/visual-cpp-build-tools/"; \
+	      echo "  Then run this from a 'Developer Command Prompt' or 'x64 Native Tools' shell."; \
+	      echo "  WebView2 is pre-installed on Windows 11; on Windows 10 install via:"; \
+	      echo "    https://developer.microsoft.com/microsoft-edge/webview2/"; \
+	      exit 1; \
+	    fi; \
+	    ;; \
+	esac
+
+# Kill any stale ps5upload processes + Vite on :1420 that belongs to us.
+# Narrow enough not to touch unrelated node servers. Invoked as a dep of
+# run-client so repeated launches after a mis-terminated session don't
+# fail with "Port 1420 already in use".
+#
+# Implementation lives in scripts/kill-stale-client.mjs because the native
+# tooling differs across the three supported host OSes (pkill/lsof/ps on
+# Linux+macOS vs. taskkill/netstat/PowerShell on Windows), and a pure-shell
+# recipe doing both branches becomes unreadable. Node is already a hard
+# dependency for run-client (via setup-client), so this adds no new tools.
+.PHONY: _kill-stale-client
+_kill-stale-client:
+	@node scripts/kill-stale-client.mjs
+
+#──────────────────────────────────────────────────────────────────────────────
+# Clean
+#──────────────────────────────────────────────────────────────────────────────
+
+clean: clean-payload clean-engine clean-client
+	@echo "✓ All clean"
+
+clean-payload:
+	@echo "Cleaning payload artifacts..."
+	@if [ -d "$(DPI_DIR)" ]; then $(MAKE) -C $(DPI_DIR) clean; fi
+	@if [ -d "$(PAYLOAD_DIR)" ]; then $(MAKE) -C $(PAYLOAD_DIR) clean; fi
+	@echo "✓ Payload cleaned"
+
+clean-engine:
+	@echo "Cleaning Rust engine artifacts..."
+	@if [ -d "$(ENGINE_DIR)" ]; then cd $(ENGINE_DIR) && $(CARGO) clean; fi
+	@echo "✓ Engine cleaned"
+
+clean-client:
+	@echo "Cleaning client artifacts..."
+	@rm -rf $(CLIENT_DIR)/dist
+	@rm -rf $(CLIENT_DIR)/release
+	@rm -rf $(CLIENT_DIR)/node_modules/.vite
+	@rm -rf $(CLIENT_DIR)/src-tauri/target
+	@echo "✓ Client cleaned"
+
+#──────────────────────────────────────────────────────────────────────────────
+# Development / Utility
+#──────────────────────────────────────────────────────────────────────────────
+
+info:
+	@echo "PS5 Upload - Build Information"
+	@echo ""
+	@echo "Environment:"
+	@echo "  Pinned PS5 SDK: $(PS5_SDK_TAG)"
+	@echo "  PS5_PAYLOAD_SDK: $(PS5_PAYLOAD_SDK)"
+ifeq ($(shell uname -s),Darwin)
+	@echo "  LLVM_CONFIG: $(LLVM_CONFIG)"
+endif
+	@echo "  Rust: $$(rustc --version 2>/dev/null || echo 'Not found')"
+	@echo "  Cargo: $$($(CARGO) --version 2>/dev/null || echo 'Not found')"
+	@echo "  Node: $$(node --version 2>/dev/null || echo 'Not found')"
+	@echo "  npm: $$(npm --version 2>/dev/null || echo 'Not found')"
+	@echo "  Make: $$(make --version | head -1)"
+	@echo ""
+	@echo "Artifacts:"
+	@echo "  Payload:"
+	@[ -f "$(PAYLOAD_ELF)" ] && echo "    ✓ $(PAYLOAD_ELF)" || echo "    ✗ missing (run: make payload)"
+	@echo "  Engine target dir:"
+	@[ -d "$(ENGINE_DIR)/target" ] && echo "    ✓ $(ENGINE_DIR)/target" || echo "    ✗ missing (run: make engine)"
+	@echo "  Client build:"
+	@[ -d "$(CLIENT_DIR)/dist" ] && echo "    ✓ $(CLIENT_DIR)/dist" || echo "    ✗ missing (run: make client)"
+	@echo "  Tauri bundles:"
+	@[ -d "$(CLIENT_DIR)/src-tauri/target/release/bundle" ] && echo "    ✓ $(CLIENT_DIR)/src-tauri/target/release/bundle" || echo "    ✗ missing (run: make dist)"
+	@echo ""
+
+install-hooks:
+	@echo "Installing git hooks..."
+	@mkdir -p .git/hooks
+	@echo '#!/bin/bash' > .git/hooks/pre-commit
+	@echo 'echo "Checking documentation..."' >> .git/hooks/pre-commit
+	@echo 'git diff --cached --name-only | grep -E "\.(c|rs|py|h|md)$$" > /dev/null' >> .git/hooks/pre-commit
+	@echo 'if [ $$? -eq 0 ]; then' >> .git/hooks/pre-commit
+	@echo '  echo "Code or docs changed. Update README.md / FAQ.md / CHANGELOG.md if user-visible."' >> .git/hooks/pre-commit
+	@echo 'fi' >> .git/hooks/pre-commit
+	@chmod +x .git/hooks/pre-commit
+	@echo "✓ Git hooks installed"
+
+# Convenience aliases
+dev: run-client
+start: run-client
+
+release-post:
+	@./scripts/release-posts.sh

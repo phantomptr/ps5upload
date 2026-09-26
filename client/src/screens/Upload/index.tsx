@@ -1,0 +1,3382 @@
+import { useEffect, useMemo, useState } from "react";
+import {
+  Upload as UploadIcon,
+  FolderOpen,
+  FileIcon,
+  HardDrive,
+  Gamepad2,
+  FileArchive,
+  Info,
+  Check,
+  Package,
+  X,
+  Plus,
+  type LucideIcon,
+} from "lucide-react";
+import clsx from "clsx";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { isAndroid } from "../../lib/platform";
+import { pickLocalPath } from "../../state/localPicker";
+import { isTauriEnv, safeUnlisten } from "../../lib/tauriEnv";
+import { isInstallPackagePath } from "../../lib/pkgDropDedupe";
+import { localFileSrc } from "../../lib/fileSrc";
+import { useShallow } from "zustand/react/shallow";
+
+import {
+  useUploadStore,
+  payloadCanMountImage,
+  archiveFormat,
+  type ExcludeMode,
+  type PickedSource,
+  type PkgSourceInfo,
+  type SourceKind,
+} from "../../state/upload";
+import {
+  fetchVolumes,
+  pathKind,
+  probeDestination,
+  volumeAllocatableBytes,
+  type PlannedFile,
+  type Volume,
+  type ZipInspect,
+} from "../../api/ps5";
+import {
+  useTransferStore,
+  phaseForHost,
+  type TransferPhase,
+  type UploadStrategy,
+} from "../../state/transfer";
+import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
+import { log } from "../../state/logs";
+import { hostOf } from "../../lib/addr";
+import { useScrollLock } from "../../lib/useScrollLock";
+import { pushNotification } from "../../state/notifications";
+import { useRosterStore } from "../../state/roster";
+import { useNavigate } from "react-router";
+import {
+  PageHeader,
+  WarningCard,
+  ErrorCard,
+  Button,
+  ConsoleChip,
+  Spinner,
+  Input,
+  Select,
+  Toggle,
+} from "../../components";
+import {
+  parseArchivePart,
+  siblingParts,
+  siblingPartPaths,
+  diagnoseArchiveSet,
+  type ArchiveSetIssue,
+} from "../../lib/archiveParts";
+import { localFs } from "../../api/localFs";
+import FfpkgInspectorPanel from "./FfpkgInspectorPanel";
+import FolderDiffPanel from "./FolderDiffPanel";
+import { BrowseButton } from "../../components/BrowseButton";
+import { isRemotePath } from "../../lib/remotePath";
+import { useUploadSettingsStore } from "../../state/uploadSettings";
+import { useUploadQueueStore } from "../../state/uploadQueue";
+import { usePkgLibrary, PKG_LIBRARY_DIR } from "../../state/pkgLibrary";
+import {
+  stagingBasename,
+  stagingSubdirForCategory,
+} from "../../lib/pkgStagingPath";
+import { useInstallSettingsStore } from "../../state/installSettings";
+import { useRecentHostMetricsStore } from "../../state/recentHostMetrics";
+import {
+  computeUploadEta,
+  formatEtaSeconds,
+  pickBannerMode,
+} from "../../lib/uploadEta";
+import { resolveUploadDest } from "../../lib/uploadDest";
+import { QueuePanel } from "./QueuePanel";
+import { humanizePs5Error } from "../../lib/humanizeError";
+import { formatBytes } from "../../lib/format";
+import { useTr, type Translator } from "../../state/lang";
+
+// formatBytes moved to lib/format.ts.
+
+/** Map discriminated SourceKind to its one-line "Detected: ..." string.
+ *  Localized (takes the screen's `tr`) and, for archives, format-aware: it
+ *  shows the actual `.zip` / `.7z` / `.rar` extension instead of a hardcoded
+ *  ".zip / .7z" that was wrong for the other two formats. */
+function detectedLabel(
+  source: PickedSource,
+  tr: Translator,
+): {
+  icon: LucideIcon;
+  label: string;
+} {
+  switch (source.kind) {
+    case "file":
+      return { icon: FileIcon, label: tr("upload_kind_file", "Plain file") };
+    case "image": {
+      // Show the actual extension in the label so users know whether
+      // it's exFAT (.exfat) or UFS2 (.ffpkg) — both are "disk images"
+      // to us but require different fstype args to nmount.
+      const ext = source.path.toLowerCase().endsWith(".ffpkg")
+        ? ".ffpkg"
+        : ".exfat";
+      return {
+        icon: FileArchive,
+        label: tr("upload_kind_image", { ext }, "Disk image ({ext})"),
+      };
+    }
+    case "folder":
+      return { icon: FolderOpen, label: tr("upload_kind_folder", "Folder") };
+    case "game-folder":
+      return {
+        icon: Gamepad2,
+        label: tr("upload_kind_game_folder", "Game folder"),
+      };
+    case "archive": {
+      const fmt = archiveFormat(source.path);
+      const ext = fmt ? `.${fmt}` : "";
+      return {
+        icon: FileArchive,
+        label: tr("upload_kind_archive", { ext }, "Compressed archive ({ext})"),
+      };
+    }
+    case "pkg":
+      return {
+        icon: Package,
+        label: tr("upload_kind_pkg", "PS5 package (.pkg)"),
+      };
+  }
+}
+
+export default function UploadScreen() {
+  const tr = useTr();
+  const {
+    source,
+    detecting,
+    detectError,
+    zipInspectEntries,
+    mountAfterUpload,
+    mountReadOnly,
+    registerAfterUpload,
+    destinationVolume,
+    destinationSubpath,
+    excludeMode,
+    excludes,
+    rarPassword,
+    pickFile,
+    pickFolder,
+    reset,
+    setMountAfterUpload,
+    setMountReadOnly,
+    setRegisterAfterUpload,
+    setDestination,
+    setExcludeMode,
+    toggleExclude,
+    addExclude,
+    removeExclude,
+  } = useUploadStore(
+    useShallow((s) => ({
+      source: s.source,
+      detecting: s.detecting,
+      detectError: s.detectError,
+      zipInspectEntries: s.zipInspectEntries,
+      mountAfterUpload: s.mountAfterUpload,
+      mountReadOnly: s.mountReadOnly,
+      registerAfterUpload: s.registerAfterUpload,
+      destinationVolume: s.destinationVolume,
+      destinationSubpath: s.destinationSubpath,
+      excludeMode: s.excludeMode,
+      excludes: s.excludes,
+      rarPassword: s.rarPassword,
+      pickFile: s.pickFile,
+      pickFolder: s.pickFolder,
+      reset: s.reset,
+      setMountAfterUpload: s.setMountAfterUpload,
+      setMountReadOnly: s.setMountReadOnly,
+      setRegisterAfterUpload: s.setRegisterAfterUpload,
+      setDestination: s.setDestination,
+      setExcludeMode: s.setExcludeMode,
+      toggleExclude: s.toggleExclude,
+      addExclude: s.addExclude,
+      removeExclude: s.removeExclude,
+    })),
+  );
+
+  const [dropActive, setDropActive] = useState(false);
+
+  // For a `.zip` source: wrap its contents in a folder named after the
+  // zip ("subfolder", the default) or extract them straight into the
+  // chosen destination ("flat"). Only surfaced for archives; ignored
+  // otherwise. Sticky across sources within a session.
+  const [archiveExtractMode, setArchiveExtractMode] = useState<
+    "subfolder" | "flat"
+  >("subfolder");
+  const archiveIntoSubfolder = archiveExtractMode === "subfolder";
+
+  // Subscribe to the webview's drag-drop events. Tauri delivers the paths
+  // already resolved to the host filesystem, so we only need to stat one
+  // to decide file-vs-folder and route to the right picker.
+  //
+  // Cleanup covers two races:
+  //   • `onDragDropEvent` returns a promise; if the component unmounts
+  //     before it resolves, `unlisten` would still be null when the
+  //     cleanup fn runs and the listener would leak. The `cancelled`
+  //     flag lets the resolution chain unregister immediately when the
+  //     promise finally fires post-unmount.
+  //   • The event callback does `await pathKind(...)`; if the user
+  //     navigates away mid-await and Upload remounts later, the stale
+  //     callback could touch the store for the wrong screen. Short-
+  //     circuit on `cancelled` at entry.
+  useEffect(() => {
+    if (!isTauriEnv()) return; // browser dev/test contexts skip Tauri-only APIs
+    if (isAndroid()) return; // no drag-and-drop on Android; pickers below cover it
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    const p = getCurrentWebview().onDragDropEvent(async (e) => {
+      if (cancelled) return;
+      if (e.payload.type === "enter" || e.payload.type === "over") {
+        setDropActive(true);
+      } else if (e.payload.type === "leave") {
+        setDropActive(false);
+      } else if (e.payload.type === "drop") {
+        setDropActive(false);
+        const first = e.payload.paths?.[0];
+        if (!first) return;
+        // A .pkg is a package to INSTALL, not a blob to drop on a volume —
+        // AppShell's app-wide drop listener routes it to /install-package, so
+        // skip it here to avoid creating a stale plain-"file" source the user
+        // never asked for (it would upload the .pkg raw and never install it).
+        if (isInstallPackagePath(first)) return;
+        const kind = await pathKind(first);
+        if (cancelled) return;
+        if (kind === "folder") await pickFolder(first);
+        else if (kind === "file") await pickFile(first);
+      }
+    });
+    p.then((fn) => {
+      if (cancelled) safeUnlisten(fn);
+      else unlisten = fn;
+    }).catch(() => {
+      // onDragDropEvent's Promise can reject if the webview is gone
+      // before subscription completes. Silently ignore — there's no
+      // listener to unregister.
+    });
+    return () => {
+      cancelled = true;
+      if (unlisten) safeUnlisten(unlisten);
+    };
+  }, [pickFile, pickFolder]);
+
+  const handleChooseFile = async () => {
+    try {
+      // Android: the native dialog returns content:// URIs the engine
+      // can't read, so browse the real filesystem in-app instead. Browser
+      // (no Tauri): there's no native dialog at all, and it would browse
+      // the wrong machine anyway (the browser's, not the engine's) — same
+      // in-app browser, pointed at the engine's filesystem instead (see
+      // api/localFs.ts).
+      const selected = isAndroid() || !isTauriEnv()
+        ? await pickLocalPath({ mode: "file" })
+        : await openDialog({ directory: false, multiple: false });
+      if (typeof selected !== "string") return;
+      // .pkg is handled as a first-class "pkg" source by pickFile (it becomes a
+      // queue item that uploads → installs → cleans up). No special redirect.
+      await pickFile(selected);
+    } catch (e) {
+      // A picker/dialog throw would otherwise surface only as an uncategorized
+      // unhandled rejection — log which gesture failed for the bug bundle.
+      log.warn(
+        "upload",
+        `file picker failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  };
+
+  const handleChooseFolder = async () => {
+    try {
+      // Android: directory:true is a no-op in plugin-dialog; use the
+      // in-app real-path browser so folder upload works. Browser (no
+      // Tauri): same in-app browser, pointed at the engine's own
+      // filesystem instead — see handleChooseFile above.
+      const selected = isAndroid() || !isTauriEnv()
+        ? await pickLocalPath({ mode: "folder" })
+        : await openDialog({ directory: true, multiple: false });
+      if (typeof selected === "string") await pickFolder(selected);
+    } catch (e) {
+      log.warn(
+        "upload",
+        `folder picker failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  };
+
+  const host = useConnectionStore((s) => s.host);
+  // Per-console one-shot phase: bind to THIS console's slot so switching tabs
+  // shows the right upload (and a one-shot on another console never appears
+  // here). phaseForHost falls back to the shared IDLE_PHASE singleton, so the
+  // selector stays referentially stable.
+  const transferPhase = useTransferStore((s) => phaseForHost(s, host));
+  const startTransfer = useTransferStore((s) => s.start);
+  const resetTransfer = useTransferStore((s) => s.reset);
+  const alwaysOverwrite = useUploadSettingsStore((s) => s.alwaysOverwrite);
+  const reconcileMode = useUploadSettingsStore((s) => s.reconcileMode);
+  const queueAdd = useUploadQueueStore((s) => s.add);
+  const queueStartHost = useUploadQueueStore((s) => s.startHost);
+  const activeExcludes =
+    excludeMode === "rules"
+      ? excludes.filter((rule) => rule.enabled).map((rule) => rule.pattern)
+      : [];
+
+  /** Snapshot the current source + destination + options into a queue
+   *  item. Captured at click time, so subsequent edits to the form
+   *  don't bleed into the queued item. */
+  const handleAddToQueue = (strategy: "overwrite" | "resume") => {
+    if (!source || !host?.trim()) return;
+    const addr0 = `${host}:${PS5_PAYLOAD_PORT}`;
+    // A .pkg is a package: it stages into the package library and the queue's
+    // pkg finisher installs it (and optionally deletes the staged copy). The
+    // destination is the library staging path (not the user's volume/subpath),
+    // and the install/delete defaults come from the Install Package settings.
+    if (source.kind === "pkg") {
+      const pkgInfo = source.pkgInfo ?? null;
+      const cid = pkgInfo?.contentId ?? "";
+      const basename = stagingBasename(
+        cid,
+        Math.random().toString(36).slice(2),
+        Date.now(),
+      );
+      const subdir = stagingSubdirForCategory(pkgInfo?.category ?? null);
+      const dest = subdir
+        ? `${PKG_LIBRARY_DIR}/${subdir}/${basename}`
+        : `${PKG_LIBRARY_DIR}/${basename}`;
+      const settings = useInstallSettingsStore.getState();
+      const displayName =
+        pkgInfo?.title?.trim() ||
+        (source.path.split(/[\\/]/).pop() ?? source.path);
+      queueAdd({
+        sourceKind: "pkg",
+        sourcePath: source.path,
+        displayName,
+        resolvedDest: dest,
+        addr: addr0,
+        strategy: "overwrite",
+        reconcileMode,
+        excludes: [],
+        contentId: cid,
+        category: pkgInfo?.category ?? null,
+        installAfterUpload: settings.autoInstallAfterUpload,
+        deletePkgAfterInstall: settings.autoRemoveAfterInstall,
+        mountAfterUpload: false,
+        mountReadOnly,
+        registerAfterUpload: false,
+      });
+      return;
+    }
+    const { dest } = resolveUploadDest(
+      destinationVolume,
+      destinationSubpath,
+      source.path,
+      source.kind === "archive",
+      archiveIntoSubfolder,
+    );
+    const addr = `${host}:${PS5_PAYLOAD_PORT}`;
+    const displayName =
+      source.path
+        .replace(/[\\/]+$/, "")
+        .split(/[\\/]/)
+        .pop() ?? source.path;
+    queueAdd({
+      sourceKind: source.kind,
+      sourcePath: source.path,
+      displayName,
+      resolvedDest: dest,
+      addr,
+      strategy,
+      reconcileMode,
+      excludes: activeExcludes,
+      // Capture the .rar password (if any) into the queued item; the direct
+      // startTransfer paths read it from the store instead.
+      rarPassword: source.kind === "archive" ? rarPassword : null,
+      mountAfterUpload: source.kind === "image" && mountAfterUpload,
+      mountReadOnly,
+      registerAfterUpload: source.kind === "game-folder" && registerAfterUpload,
+    });
+  };
+
+  /** Queue every part of a multi-part archive set in one click.
+   *
+   *  A game published as `Game.part01.zip` … `Game.part06.zip` is six
+   *  separate archives that each have to be uploaded. Users reasonably
+   *  expect picking part 1 to handle the rest — desktop unpackers behave
+   *  that way for SPANNED sets — and were finishing part 1, seeing
+   *  "Upload complete", and assuming the whole game had arrived.
+   *
+   *  Every part resolves to the SAME destination (resolveUploadDest strips
+   *  the `.partN` marker), so the queue runs them in order into one folder.
+   */
+  const handleQueueAllParts = (paths: string[]) => {
+    if (!host?.trim() || paths.length === 0) return;
+    const addr = `${host}:${PS5_PAYLOAD_PORT}`;
+    for (const partPath of paths) {
+      const { dest } = resolveUploadDest(
+        destinationVolume,
+        destinationSubpath,
+        partPath,
+        true,
+        archiveIntoSubfolder,
+      );
+      const displayName =
+        partPath
+          .replace(/[\\/]+$/, "")
+          .split(/[\\/]/)
+          .pop() ?? partPath;
+      queueAdd({
+        sourceKind: "archive",
+        sourcePath: partPath,
+        displayName,
+        resolvedDest: dest,
+        addr,
+        // Overwrite: a fresh set of parts, each into the shared folder.
+        strategy: "overwrite",
+        reconcileMode,
+        excludes: activeExcludes,
+        rarPassword,
+        mountAfterUpload: false,
+        mountReadOnly,
+        registerAfterUpload: false,
+      });
+    }
+  };
+
+  const [pending, setPending] = useState<null | {
+    dest: string;
+    addr: string;
+    entryCount: number;
+    isFolder: boolean;
+  }>(null);
+  // Separate from transferPhase — covers the pre-flight window (probe
+  // in flight, dialog not yet open) where phase is still "idle" but
+  // the button shouldn't accept a second click.
+  const [preflightBusy, setPreflightBusy] = useState(false);
+  // Preflight probe can fail (engine down, PS5 unreachable, port refused);
+  // before the catch was added the button silently de-busied and nothing
+  // happened. Surface the error inline so the user knows why the upload
+  // dialog never appeared. We clear on source change (useEffect below)
+  // because otherwise a "preflight failed for /old/path" banner sticks
+  // around after the user picks a fresh source — misleading.
+  const [preflightError, setPreflightError] = useState<string | null>(null);
+
+  // Live list of writable PS5 volumes for the destination dropdown.
+  // Refreshed when the host changes; previously the dropdown was a
+  // hardcoded `/data /mnt/ext0 /mnt/usb0` list which hid every other
+  // mount point (e.g. `/mnt/ext1`, `/mnt/usbN` for N>0, and any
+  // ps5upload-mounted images).
+  const [availableVolumes, setAvailableVolumes] = useState<Volume[]>([]);
+  // Clear preflight error whenever the source changes (new file/folder
+  // pick, or source cleared). The error is tied to the OLD source's
+  // destination probe and would otherwise stick around as a misleading
+  // banner over an entirely different upload.
+  // Destination changes clear it too: the error names a specific probed
+  // path ("…/old-dest not found"), so after the user picks a different
+  // volume/subpath to FIX the problem, the stale banner would still
+  // accuse the new destination.
+  useEffect(() => {
+    setPreflightError(null);
+  }, [source?.path, source?.kind, destinationVolume, destinationSubpath]);
+  useEffect(() => {
+    if (!host?.trim()) {
+      setAvailableVolumes([]);
+      return;
+    }
+    let cancelled = false;
+    const addr = `${host}:${PS5_PAYLOAD_PORT}`;
+    fetchVolumes(addr)
+      .then((vols) => {
+        if (cancelled) return;
+        // Only writable, non-placeholder volumes are valid upload
+        // targets. Placeholders are mount-points the payload reports
+        // even when nothing is mounted there.
+        setAvailableVolumes(
+          vols.filter((v) => v.writable && !v.is_placeholder),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setAvailableVolumes([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [host]);
+
+  const beginUpload = async (strategy: UploadStrategy) => {
+    if (!source) return;
+    if (!pending) return;
+    setPending(null);
+    await startTransfer({
+      sourceKind: source.kind,
+      srcPath: source.path,
+      dest: pending.dest,
+      addr: pending.addr,
+      strategy,
+      reconcileMode,
+      excludes: activeExcludes,
+      mountAfterUpload: source.kind === "image" && mountAfterUpload,
+      mountReadOnly,
+      registerAfterUpload: source.kind === "game-folder" && registerAfterUpload,
+    });
+  };
+
+  const handleUpload = async () => {
+    // detectError set = source couldn't be inspected (corrupt/unreadable
+    // zip, failed folder walk). Don't ship a half-detected source — for an
+    // archive that's `zipInfo: null`, which would fail deep in the flow.
+    if (!source || detecting || preflightBusy || detectError) return;
+    // A .pkg installs via the queue's finisher (the single-shot transfer path
+    // has no installer). "Upload now" therefore enqueues it and starts this
+    // console's queue immediately — same end state, just routed through the
+    // unified queue so it uploads → installs → cleans up as one item.
+    if (!host?.trim()) {
+      // No console selected — store the error under the "" sentinel key so
+      // phaseForHost(s, "") (this screen with an empty host) renders it.
+      // Hoisted ABOVE the .pkg branch so a .pkg upload with no console gives
+      // the same inline feedback instead of a silent dead click.
+      useTransferStore.setState((s) => ({
+        phasesByHost: {
+          ...s.phasesByHost,
+          "": {
+            kind: "failed",
+            error: "Set your PS5's IP on the Connection tab first.",
+          },
+        },
+      }));
+      return;
+    }
+    if (source.kind === "pkg") {
+      handleAddToQueue("overwrite");
+      void queueStartHost(host);
+      return;
+    }
+    // Archives extract into a directory, so the pre-flight probe treats them
+    // as a folder destination (check the named subdir, not a same-named file).
+    const isFolder =
+      source.kind === "folder" ||
+      source.kind === "game-folder" ||
+      source.kind === "archive";
+    const { dest } = resolveUploadDest(
+      destinationVolume,
+      destinationSubpath,
+      source.path,
+      source.kind === "archive",
+      archiveIntoSubfolder,
+    );
+    const addr = `${host}:${PS5_PAYLOAD_PORT}`;
+
+    // Pre-flight: does the destination already have content? If no,
+    // just go. If yes, the user needs to pick Override / Resume / Cancel
+    // (unless they've set "always overwrite" in Settings).
+    if (alwaysOverwrite) {
+      await startTransfer({
+        sourceKind: source.kind,
+        srcPath: source.path,
+        dest,
+        addr,
+        strategy: "overwrite",
+        excludes: activeExcludes,
+        mountAfterUpload: source.kind === "image" && mountAfterUpload,
+        mountReadOnly,
+        registerAfterUpload:
+          source.kind === "game-folder" && registerAfterUpload,
+      });
+      return;
+    }
+    setPreflightBusy(true);
+    setPreflightError(null);
+    try {
+      // Always probe the FINAL destination path — for folders that means
+      // listing `.../<folder-name>` to see if the named subdir exists and
+      // how full it is; for files it means checking the parent for a
+      // same-named entry. Either way we want the dialog to reflect what
+      // the upload will actually land on, not the parent dir.
+      const probe = await probeDestination(addr, dest, isFolder);
+      setPending({
+        dest,
+        addr,
+        entryCount: probe.exists ? probe.entryCount : 0,
+        isFolder,
+      });
+    } catch (e) {
+      // Network/engine failure on probe — surface inline. Without this
+      // catch the try/finally swallowed the throw and the button just
+      // de-busied with no UI feedback, so the user clicked Upload and
+      // nothing visible happened.
+      setPreflightError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPreflightBusy(false);
+    }
+  };
+
+  return (
+    <div className="p-6">
+      {pending && (
+        <ExistingDestinationDialog
+          entryCount={pending.entryCount}
+          dest={pending.dest}
+          isFolder={pending.isFolder}
+          onOverride={() => beginUpload("overwrite")}
+          onResume={() => beginUpload("resume")}
+          onCancel={() => setPending(null)}
+        />
+      )}
+      <PageHeader
+        icon={UploadIcon}
+        title={tr("upload", undefined, "Upload")}
+        description={tr(
+          "upload_description",
+          undefined,
+          "Drag a game folder, an .exfat image, or any file onto this window — or use the buttons below. ps5upload figures out what to do based on what you drop.",
+        )}
+      />
+
+      <PayloadReadinessBanner />
+
+      <Step1Picker
+        active={!source}
+        dropActive={dropActive}
+        onFile={handleChooseFile}
+        onFolder={handleChooseFolder}
+        onRemoteFile={(p) => void pickFile(p)}
+        onRemoteFolder={(p) => void pickFolder(p)}
+      />
+
+      {source && (
+        <Step2Options
+          source={source}
+          detecting={detecting}
+          detectError={detectError}
+          zipInspectEntries={zipInspectEntries}
+          mountAfterUpload={mountAfterUpload}
+          mountReadOnly={mountReadOnly}
+          registerAfterUpload={registerAfterUpload}
+          archiveExtractMode={archiveExtractMode}
+          onSetArchiveExtractMode={setArchiveExtractMode}
+          onQueueAllParts={handleQueueAllParts}
+          destinationVolume={destinationVolume}
+          destinationSubpath={destinationSubpath}
+          availableVolumes={availableVolumes}
+          excludeMode={excludeMode}
+          excludes={excludes}
+          transferPhase={transferPhase}
+          preflightBusy={preflightBusy}
+          preflightError={preflightError}
+          onClear={() => {
+            resetTransfer(host);
+            reset();
+            // Also dismiss the Override/Resume dialog if it's open —
+            // it refers to a source the user just cleared, and leaving
+            // it visible would let them click Override on a gone source
+            // (beginUpload silently returns when source is null).
+            setPending(null);
+          }}
+          onUseWrappedHint={(p) => pickFolder(p)}
+          onSetMountAfterUpload={setMountAfterUpload}
+          onSetMountReadOnly={setMountReadOnly}
+          onSetRegisterAfterUpload={setRegisterAfterUpload}
+          onSetDestination={setDestination}
+          onSetExcludeMode={setExcludeMode}
+          onToggleExclude={toggleExclude}
+          onAddExclude={addExclude}
+          onRemoveExclude={removeExclude}
+          onUpload={handleUpload}
+          onAddToQueue={handleAddToQueue}
+        />
+      )}
+
+      <QueuePanel />
+    </div>
+  );
+}
+
+// ─── Step 1: picker ────────────────────────────────────────────────────────
+
+function Step1Picker({
+  active,
+  dropActive,
+  onFile,
+  onFolder,
+  onRemoteFile,
+  onRemoteFolder,
+}: {
+  active: boolean;
+  dropActive: boolean;
+  onFile: () => void;
+  onFolder: () => void;
+  onRemoteFile: (path: string) => void;
+  onRemoteFolder: (path: string) => void;
+}) {
+  const tr = useTr();
+  return (
+    <section
+      className={clsx(
+        "mb-6 rounded-lg border-2 border-dashed p-8 text-center transition-colors",
+        dropActive
+          ? "border-[var(--color-accent)] bg-[var(--color-surface-3)]"
+          : "border-[var(--color-border)] bg-[var(--color-surface-2)]",
+        !active && "opacity-70",
+      )}
+    >
+      <div className="mb-3 flex items-center justify-center gap-3 text-[var(--color-muted)]">
+        <FileIcon size={22} />
+        <span className="text-xs">{tr("upload_or", undefined, "or")}</span>
+        <FolderOpen size={22} />
+      </div>
+      <div className="text-sm">
+        {isAndroid()
+          ? tr(
+              "upload_pick_here_mobile",
+              undefined,
+              "Pick a file or folder to upload",
+            )
+          : tr(
+              "upload_drop_here",
+              undefined,
+              "Drop a file or folder here — it's detected automatically",
+            )}
+      </div>
+      <div className="mt-4 flex items-center justify-center gap-2">
+        {/* Native OS dialogs can't offer "file or folder" in one prompt, so there are two
+            pickers — but drag-drop above needs no choice at all (it stats the path and
+            auto-detects). The ▾ on each picks from a saved server instead. */}
+        <BrowseButton
+          mode="file"
+          remote
+          icon={<FileIcon size={14} />}
+          label={tr("upload_choose_file", undefined, "Choose file")}
+          onMainClick={onFile}
+          onPick={onRemoteFile}
+        />
+        <BrowseButton
+          mode="folder"
+          remote
+          label={tr("upload_choose_folder", undefined, "Choose folder")}
+          onMainClick={onFolder}
+          onPick={onRemoteFolder}
+        />
+      </div>
+      <p className="mx-auto mt-3 max-w-md text-xs text-[var(--color-muted)]">
+        {tr(
+          "upload_picker_hint",
+          undefined,
+          "Files: any file — .exfat images unlock a mount-after-upload option. Folders: game folders are auto-detected from sce_sys/param.sfo.",
+        )}
+      </p>
+    </section>
+  );
+}
+
+// ─── Step 2: options (branching by kind) ───────────────────────────────────
+
+function Step2Options(props: {
+  source: PickedSource;
+  detecting: boolean;
+  detectError: string | null;
+  zipInspectEntries: number | null;
+  onQueueAllParts: (paths: string[]) => void;
+  mountAfterUpload: boolean;
+  mountReadOnly: boolean;
+  registerAfterUpload: boolean;
+  archiveExtractMode: "subfolder" | "flat";
+  onSetArchiveExtractMode: (m: "subfolder" | "flat") => void;
+  destinationVolume: string | null;
+  destinationSubpath: string;
+  availableVolumes: Volume[];
+  excludeMode: ExcludeMode;
+  excludes: { pattern: string; enabled: boolean }[];
+  transferPhase: TransferPhase;
+  preflightBusy: boolean;
+  preflightError: string | null;
+  onClear: () => void;
+  onUseWrappedHint: (path: string) => void;
+  onSetMountAfterUpload: (on: boolean) => void;
+  onSetMountReadOnly: (on: boolean) => void;
+  onSetRegisterAfterUpload: (on: boolean) => void;
+  onSetDestination: (v: string | null, s?: string) => void;
+  onSetExcludeMode: (m: ExcludeMode) => void;
+  onToggleExclude: (p: string) => void;
+  onAddExclude: (p: string) => void;
+  onRemoveExclude: (p: string) => void;
+  onUpload: () => void;
+  onAddToQueue: (strategy: "overwrite" | "resume") => void;
+}) {
+  const {
+    source,
+    detecting,
+    detectError,
+    zipInspectEntries,
+    mountAfterUpload,
+    mountReadOnly,
+    registerAfterUpload,
+    archiveExtractMode,
+    onSetArchiveExtractMode,
+    destinationVolume,
+    destinationSubpath,
+    availableVolumes,
+    excludeMode,
+    excludes,
+    transferPhase,
+    preflightBusy,
+    preflightError,
+    onClear,
+    onUseWrappedHint,
+    onSetMountAfterUpload,
+    onSetMountReadOnly,
+    onSetRegisterAfterUpload,
+    onSetDestination,
+    onSetExcludeMode,
+    onToggleExclude,
+    onAddExclude,
+    onRemoveExclude,
+    onUpload,
+    onAddToQueue,
+    onQueueAllParts,
+  } = props;
+  const tr = useTr();
+
+  // Multi-part archive detection. `Game.part01.zip` … `Game.part06.zip` are
+  // SEPARATE self-contained archives (unlike a rar volume set, which UnRAR
+  // pulls in from the first volume), so uploading one sends only its slice
+  // of the game. Nothing downstream can fix that for the user — but saying
+  // so up front is the difference between "why is my game broken" and a
+  // known five-more-uploads-to-go.
+  const [partSet, setPartSet] = useState<{
+    index: number;
+    total: number;
+    paths: string[];
+  } | null>(null);
+  const [issue, setIssue] = useState<Exclude<
+    ArchiveSetIssue,
+    { kind: "manual-parts" }
+  > | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setPartSet(null);
+    setIssue(null);
+    // Not just archives: a natively-split volume (`Game.7z.001`, `Game.z01`,
+    // `Game.r00`) doesn't end in a known archive extension, so it arrives
+    // here as kind "file". That is exactly the case that needs warning
+    // about — left alone it uploads as a raw blob.
+    if (source.kind !== "archive" && source.kind !== "file") return;
+    const path = source.path;
+    const sep = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+    if (sep <= 0) return;
+    const dir = path.slice(0, sep);
+    const name = path.slice(sep + 1);
+    void (async () => {
+      try {
+        const entries = await localFs.listDir(dir);
+        if (cancelled) return;
+        const names = entries.filter((e) => !e.is_dir).map((e) => e.name);
+        const issue = diagnoseArchiveSet(name, names);
+        if (!issue) return;
+        if (issue.kind !== "manual-parts") {
+          // Everything except a plain zip/7z part set is a problem to
+          // explain, not a queue to build: the neighbouring parts are a
+          // different format, or this is a split volume we cannot open.
+          // Saying "upload the rest too" would send the user down hours of
+          // uploads that cannot work.
+          log.debug("upload", `archive set issue: ${issue.kind}`, issue);
+          setIssue(issue);
+          return;
+        }
+        const self = parseArchivePart(name);
+        if (!self) return;
+        const paths = siblingPartPaths(path, names);
+        // Debug, not trace: bug reports are captured at debug, and "did the
+        // multi-part warning fire?" is the first question we ask when a user
+        // says only part of their game arrived.
+        log.debug(
+          "upload",
+          `multi-part set detected: part ${self.index} of ${paths.length}`,
+          { name, total: paths.length },
+        );
+        setPartSet({
+          index: self.index,
+          total: siblingParts(name, names).length,
+          paths,
+        });
+      } catch {
+        // Listing the folder is best-effort: a permission error or an
+        // Android content:// path just means no hint, never a failed upload.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [source]);
+
+  const { icon: KindIcon, label: kindLabel } = detectedLabel(source, tr);
+  // A .rar source has its own dedicated card (RarSourceCard) that owns ALL of
+  // its messaging — password prompt, wrong-password, missing-volume. So the
+  // generic detectError box below is suppressed for rar; otherwise the raw
+  // `rar_password_required` token would show in red next to the friendly card.
+  const isRarSource =
+    source.kind === "archive" && archiveFormat(source.path) === "rar";
+  // A rar whose inspect hasn't succeeded yet (needs/wrong password, missing
+  // volume, or still scanning) — the downstream extract-mode config is
+  // premature until we can actually read the archive, so lead with the rar
+  // card and hold the rest until it's readable.
+  const rarBlocked = isRarSource && !source.zipInfo;
+  const showExcludes =
+    source.kind === "folder" ||
+    source.kind === "game-folder" ||
+    source.kind === "archive";
+  // Only offer ps5upload's own mount-after-upload for images the payload can
+  // attach itself (exFAT/UFS/PFS). A .ffpfsc (compressed/nested PFS container)
+  // is mountable only by ShadowMount+, so we hide the toggle and let SMP pick
+  // it up from a scan folder.
+  const showMountToggle =
+    source.kind === "image" && payloadCanMountImage(source.path);
+  const inFlight =
+    transferPhase.kind === "starting" || transferPhase.kind === "running";
+  // (2.11.0) Mutual-exclusion with QueuePanel. The PS5 payload's
+  // transfer port is single-client — concurrent FTX2 connections
+  // serialize at the socket, but the UI would say both are
+  // "running" while one silently waits. Worse: a user clicking
+  // "Upload" with a queue already running can stack work the user
+  // doesn't realise will take twice as long. Disable both Upload
+  // buttons while the queue runs; QueuePanel does the symmetric
+  // disable of its Start button while a one-shot is in flight.
+  //
+  // (2.31.0) Scoped per console: the single-client constraint is per
+  // PS5, and the queue drains each console independently. Console B's
+  // queue running must not grey out console A's one-shot Upload — they
+  // are different consoles with different transfer ports.
+  const stepHost = useConnectionStore((s) => s.host);
+  const queueRunning = useUploadQueueStore(
+    (s) => !!s.runningHosts[hostOf(stepHost)],
+  );
+  // With two consoles in the roster, surface WHICH one this upload targets via
+  // a chip next to the actions (not in the button label — a long profile name
+  // would bloat the button). The form is shared across tabs, so this is where
+  // the user confirms the destination console.
+  const rosterProfiles = useRosterStore((s) => s.profiles);
+  const multiConsole = rosterProfiles.length > 1;
+  // An install streams the DPI loader to the single-payload loader, which
+  // replaces the payload that owns the transfer port — so starting an upload
+  // mid-install would just fail (or race the payload swap). Disable while an
+  // install is running, symmetric to InstallPackage disabling install during
+  // an upload. Per-console store: disable upload only when THIS PS5 is
+  // mid-install, not when some other console is.
+  const installing = usePkgLibrary(stepHost, (s) => s.installing);
+  const uploadDisabled =
+    detecting ||
+    inFlight ||
+    preflightBusy ||
+    queueRunning ||
+    installing ||
+    !!detectError;
+
+  return (
+    <>
+      <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[var(--color-surface-3)]">
+            <KindIcon size={18} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="rounded-full bg-[var(--color-surface-3)] px-2 py-0.5 text-xs font-medium">
+                {tr("upload_detected_label", "Detected:")} {kindLabel}
+              </span>
+              {detecting && (
+                <span className="inline-flex items-center gap-1 text-xs text-[var(--color-muted)]">
+                  <Spinner size={12} />
+                  {tr("upload_inspecting", "Inspecting…")}
+                </span>
+              )}
+            </div>
+            <div className="mt-1 truncate font-mono text-xs text-[var(--color-muted)]">
+              {source.path}
+            </div>
+            {issue && (
+              <div className="mt-2 rounded-md border border-[var(--color-danger,var(--color-border))] bg-[var(--color-surface-3)] p-2.5 text-xs">
+                {issue.kind === "mixed-extensions" && (
+                  <>
+                    <div className="font-medium">
+                      {tr(
+                        "upload_partset_mismatch_title",
+                        {
+                          selected: issue.selectedExt.toUpperCase(),
+                          other: issue.otherExt.toUpperCase(),
+                          count: String(issue.otherCount),
+                        },
+                        `The other ${issue.otherCount} parts are .${issue.otherExt} files, but you picked a .${issue.selectedExt}`,
+                      )}
+                    </div>
+                    <div className="mt-1 text-[var(--color-muted)]">
+                      {tr(
+                        "upload_partset_mismatch_body",
+                        { other: issue.otherExt.toUpperCase() },
+                        `They belong to a different download, so this archive can't open them — uploading it sends only its own files. The parts don't mix.`,
+                      )}
+                    </div>
+                    {issue.missingFirst && (
+                      <div className="mt-1 text-[var(--color-muted)]">
+                        {tr(
+                          "upload_partset_mismatch_fix",
+                          { name: issue.missingFirst },
+                          `To use the other parts you need their first volume, "${issue.missingFirst}", which isn't in this folder. Re-download it from the same source, then pick it instead.`,
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+                {issue.kind === "pick-entry-volume" && (
+                  <>
+                    <div className="font-medium">
+                      {tr(
+                        "upload_split_pick_entry_title",
+                        { name: issue.entryName },
+                        `Pick "${issue.entryName}" instead`,
+                      )}
+                    </div>
+                    <div className="mt-1 text-[var(--color-muted)]">
+                      {tr(
+                        "upload_split_pick_entry_body",
+                        { name: issue.entryName },
+                        `This is one volume of a split set, not the whole archive. Choose the file above and the remaining volumes are read automatically — you don't need to upload them separately.`,
+                      )}
+                    </div>
+                  </>
+                )}
+                {issue.kind === "split-unsupported" && (
+                  <>
+                    <div className="font-medium">
+                      {tr(
+                        "upload_split_unsupported_title",
+                        { count: String(issue.volumeCount) },
+                        `This is a split archive (${issue.volumeCount} volumes) that ps5upload can't open`,
+                      )}
+                    </div>
+                    <div className="mt-1 text-[var(--color-muted)]">
+                      {tr(
+                        "upload_split_unsupported_body",
+                        undefined,
+                        "Uploading it sends the raw volume to your PS5, which can't use it. Join the volumes back into one archive first — open the first volume with 7-Zip or WinRAR and extract, then upload the extracted folder or a single archive of it.",
+                      )}
+                    </div>
+                    {issue.entryName && (
+                      <div className="mt-1 font-mono text-[var(--color-muted)]">
+                        {tr(
+                          "upload_split_unsupported_target",
+                          { name: issue.entryName },
+                          `Joins into: ${issue.entryName}`,
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+            {partSet && (
+              <div className="mt-2 rounded-md border border-[var(--color-warn-border,var(--color-border))] bg-[var(--color-surface-3)] p-2.5 text-xs">
+                <div className="font-medium">
+                  {tr(
+                    "upload_multipart_title",
+                    { index: String(partSet.index), total: String(partSet.total) },
+                    `This is part ${partSet.index} of ${partSet.total}`,
+                  )}
+                </div>
+                <div className="mt-1 text-[var(--color-muted)]">
+                  {tr(
+                    "upload_multipart_body",
+                    undefined,
+                    "Each part is its own archive holding different files, so only this part's files are sent. Upload every part to the SAME destination and they'll merge into one folder.",
+                  )}
+                </div>
+                {partSet.paths.length > 1 && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="mt-2"
+                    disabled={inFlight || queueRunning}
+                    onClick={() => onQueueAllParts(partSet.paths)}
+                  >
+                    {tr(
+                      "upload_multipart_queue_all",
+                      { count: String(partSet.paths.length) },
+                      `Add all ${partSet.paths.length} parts to the queue`,
+                    )}
+                  </Button>
+                )}
+              </div>
+            )}
+            {detecting && (
+              // Prominent scanning banner. The small inline spinner up
+              // top is easy to miss for users staring at the disabled
+              // Upload / Add-to-Queue buttons further down the page —
+              // a 200k-file game folder walks for ~30 sec on an
+              // external HDD with no visible feedback explaining why
+              // those buttons aren't clickable. The banner lives
+              // inside the source card so it's the second thing the
+              // user reads after the path, and a hint line tells them
+              // it's normal and what to expect.
+              //
+              // For .zip dumps the engine streams a live entry-count
+              // via the inspect SSE channel; we surface it inline so
+              // the user can see the central-directory walk is
+              // actually moving (especially valuable when the
+              // archive is on a spun-down USB HDD).
+              <div className="mt-2 flex items-start gap-2 rounded-md border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/5 p-2 text-xs">
+                <Spinner
+                  size={14}
+                  tone="accent"
+                  className="mt-0.5 shrink-0"
+                />
+                <div>
+                  <div className="font-medium text-[var(--color-text)]">
+                    {source.kind === "archive"
+                      ? zipInspectEntries !== null
+                        ? tr(
+                            "upload_scanning_archive_title_with_count",
+                            "Scanning archive… {count} entries",
+                          ).replace(
+                            "{count}",
+                            zipInspectEntries.toLocaleString(),
+                          )
+                        : tr(
+                            "upload_scanning_archive_title",
+                            "Scanning archive…",
+                          )
+                      : tr("upload_scanning_title", "Scanning game folder…")}
+                  </div>
+                  <div className="text-[var(--color-muted)]">
+                    {source.kind === "archive"
+                      ? tr(
+                          "upload_scanning_archive_hint_v2",
+                          "Reading the archive index and parsing embedded game metadata. Upload buttons will enable when this finishes.",
+                        )
+                      : tr(
+                          "upload_scanning_hint",
+                          "Counting files and building the upload plan. Large folders (100k+ files) take 30 seconds or so. Upload buttons will enable when this finishes.",
+                        )}
+                  </div>
+                </div>
+              </div>
+            )}
+            {detectError && !isRarSource && (
+              <div className="mt-2">
+                <ErrorCard
+                  title={tr("upload_detect_error_title", "Error")}
+                  detail={humanizePs5Error(detectError)}
+                />
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={onClear}
+            title={tr("upload_choose_diff_source", "Choose a different source")}
+            className="rounded-md p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Local UFS2 inspector — only meaningful for .ffpkg images.
+            Lets the user see "what's in this image" before uploading
+            multiple GB. Read-only, no PS5 needed. */}
+        {source.kind === "image" &&
+          source.path.toLowerCase().endsWith(".ffpkg") && (
+            // key on path so swapping one .ffpkg for another resets the panel's
+            // internal inspection state (meta/extractResult) — otherwise it
+            // shows image A's tree for image B and Extract targets the wrong
+            // entry. Mirrors the RarSourceCard reset.
+            <FfpkgInspectorPanel key={source.path} path={source.path} />
+          )}
+
+        {source.wrappedHint && (
+          <WrappedHintChip
+            hint={source.wrappedHint}
+            onUse={() => onUseWrappedHint(source.wrappedHint!.path)}
+          />
+        )}
+      </section>
+
+      {source.kind === "game-folder" && source.meta && (
+        <GameMetaCard meta={source.meta} />
+      )}
+
+      {source.kind === "folder" && source.meta && (
+        <FolderStatsCard
+          totalBytes={source.meta.total_size}
+          fileCount={source.meta.file_count}
+        />
+      )}
+
+      {(source.kind === "folder" || source.kind === "game-folder") &&
+        source.meta && (
+          <PreflightEtaBanner
+            fileCount={source.meta.file_count}
+            totalBytes={source.meta.total_size}
+          />
+        )}
+
+      {/* Lead with the RAR card (multi-part guidance + password) so a blocked
+          archive prompts first, before the extract/destination config. */}
+      {isRarSource && <RarSourceCard key={source.path} />}
+
+      {source.kind === "archive" && source.zipInfo && (
+        <ZipArchiveCard info={source.zipInfo} />
+      )}
+
+      {source.kind === "archive" && !rarBlocked && (
+        <ArchiveExtractModeCard
+          mode={archiveExtractMode}
+          onChange={onSetArchiveExtractMode}
+          destinationVolume={destinationVolume}
+          destinationSubpath={destinationSubpath}
+          sourcePath={source.path}
+        />
+      )}
+
+      <FolderDiffSlot
+        source={source}
+        destinationVolume={destinationVolume}
+        destinationSubpath={destinationSubpath}
+        excludes={excludes}
+      />
+
+      {showMountToggle && (
+        <MountAfterUploadCard
+          checked={mountAfterUpload}
+          onChange={onSetMountAfterUpload}
+          readOnly={mountReadOnly}
+          onChangeReadOnly={onSetMountReadOnly}
+        />
+      )}
+
+      {source.kind === "game-folder" && (
+        <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+          <Toggle
+            checked={registerAfterUpload}
+            onChange={(c) => onSetRegisterAfterUpload(c)}
+            label={
+              <div>
+                <div className="font-medium">
+                  {tr(
+                    "upload_register_after_title",
+                    "Add to PS5 home screen when done",
+                  )}
+                </div>
+                <div className="mt-0.5 text-xs text-[var(--color-muted)]">
+                  {tr(
+                    "upload_register_after_desc",
+                    "Registers the game with the PS5 right after the upload finishes, so it's ready to launch — no Library visit needed. If this step fails the upload itself is unaffected and you can still add it from the Library.",
+                  )}
+                </div>
+              </div>
+            }
+          />
+        </section>
+      )}
+
+      {/* A .pkg has a fixed destination (the package library) and installs
+          itself after upload — show the finisher summary instead of the
+          volume/bandwidth/excludes config that doesn't apply. */}
+      {source.kind === "pkg" ? (
+        <PkgFinisherCard pkgInfo={source.pkgInfo ?? null} />
+      ) : (
+        <>
+          <DestinationCard
+            volume={destinationVolume}
+            subpath={destinationSubpath}
+            onChange={onSetDestination}
+            availableVolumes={availableVolumes}
+            resolvedDest={
+              resolveUploadDest(
+                destinationVolume,
+                destinationSubpath,
+                source.path,
+                source.kind === "archive",
+                archiveExtractMode === "subfolder",
+              ).dest
+            }
+          />
+
+          <BandwidthCard />
+
+          {showExcludes && (
+            <ExcludesCard
+              mode={excludeMode}
+              excludes={excludes}
+              onSetMode={onSetExcludeMode}
+              onToggle={onToggleExclude}
+              onAdd={onAddExclude}
+              onRemove={onRemoveExclude}
+            />
+          )}
+        </>
+      )}
+
+      <TransferStatus phase={transferPhase} />
+
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {/* Which PS5 this upload targets — a chip instead of baking a
+            (possibly long) console name into the button label. Auto-hides for
+            single-console users. Pushed to the left; actions stay right. */}
+        {multiConsole && (
+          <span className="mr-auto inline-flex items-center gap-1.5 text-xs text-[var(--color-muted)]">
+            {tr("upload_target_label", "Uploading to")}
+            <ConsoleChip addr={stepHost} />
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={onClear}
+          className="rounded-md border border-[var(--color-border)] px-4 py-2 text-sm hover:bg-[var(--color-surface-3)]"
+        >
+          {tr("upload_cancel", "Cancel")}
+        </button>
+        {/* Add-to-queue: capture the current source + options into the
+            persisted upload queue without starting the transfer. The
+            Resume variant only makes sense for folders (single files
+            don't reconcile), so it's hidden for image/file sources. */}
+        <button
+          type="button"
+          onClick={() => onAddToQueue("overwrite")}
+          disabled={detecting || preflightBusy || !!detectError}
+          className="rounded-md border border-[var(--color-border)] px-4 py-2 text-sm hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+          title={
+            detecting
+              ? tr(
+                  "upload_disabled_scanning",
+                  undefined,
+                  "Scanning game folder — wait for the scan to finish, then this button enables.",
+                )
+              : tr(
+                  "upload_add_to_queue_tooltip",
+                  "Add this upload to the queue without starting it",
+                )
+          }
+        >
+          {tr("upload_add_to_queue", "Add to queue")}
+        </button>
+        <button
+          type="button"
+          onClick={onUpload}
+          disabled={uploadDisabled}
+          title={
+            detecting
+              ? tr(
+                  "upload_disabled_scanning",
+                  undefined,
+                  "Scanning game folder — wait for the scan to finish, then this button enables.",
+                )
+              : queueRunning
+                ? tr(
+                    "upload_disabled_queue_running",
+                    undefined,
+                    "Upload queue is running — pause the queue to start a one-shot upload, or use 'Add to queue' to append.",
+                  )
+                : undefined
+          }
+          className="rounded-md bg-[var(--color-accent)] px-6 py-2 text-sm font-medium text-[var(--color-accent-contrast)] disabled:opacity-50"
+        >
+          {preflightBusy
+            ? tr("upload_checking", "Checking…")
+            : inFlight
+              ? transferPhase.kind === "starting"
+                ? tr("upload_starting", "Starting…")
+                : tr("upload_uploading", "Uploading…")
+              : tr("upload_now", "Upload")}
+        </button>
+      </div>
+      {preflightError && (
+        <div className="mt-2">
+          <ErrorCard
+            title={tr("upload_preflight_error_title", "Preflight check failed")}
+            detail={tr(
+              "upload_preflight_failed",
+              { msg: preflightError },
+              `Couldn't check the destination: ${preflightError}. Make sure the PS5 is reachable, then try again.`,
+            )}
+          />
+        </div>
+      )}
+      <MirrorToRosterButton
+        sourceKind={source.kind}
+        srcPath={source.path}
+        archiveIntoSubfolder={archiveExtractMode === "subfolder"}
+        destinationVolume={destinationVolume}
+        destinationSubpath={destinationSubpath}
+        excludes={excludes.filter((e) => e.enabled).map((e) => e.pattern)}
+      />
+    </>
+  );
+}
+
+/** Fan-out the current upload to every other PS5 in the roster.
+ *  Bypasses the regular transfer store — each mirrored upload runs
+ *  via direct invoke so it doesn't compete for the store's
+ *  single-job slot. Each appears in the Activity tab as its own
+ *  entry. Best-effort: failures are logged as notifications, the
+ *  rest of the fan-out continues. */
+function MirrorToRosterButton({
+  sourceKind,
+  srcPath,
+  archiveIntoSubfolder,
+  destinationVolume,
+  destinationSubpath,
+  excludes,
+}: {
+  sourceKind: PickedSource["kind"];
+  srcPath: string;
+  archiveIntoSubfolder: boolean;
+  destinationVolume: string | null;
+  destinationSubpath: string;
+  excludes: string[];
+}) {
+  const tr = useTr();
+  const profiles = useRosterStore((s) => s.profiles);
+  const activeId = useRosterStore((s) => s.active_id);
+  const others = profiles.filter((p) => p.id !== activeId);
+  const [busy, setBusy] = useState(false);
+  if (others.length === 0) return null;
+  if (
+    sourceKind !== "folder" &&
+    sourceKind !== "game-folder" &&
+    sourceKind !== "file" &&
+    sourceKind !== "archive"
+  ) {
+    return null;
+  }
+  if (!destinationVolume) return null;
+
+  async function fanOut() {
+    setBusy(true);
+    try {
+      const {
+        startTransferDir,
+        startTransferFile,
+        startTransferZip,
+        waitForJob,
+      } = await import("../../api/ps5");
+      // Same path rule as the one-shot upload, so a mirror lands exactly
+      // where the primary PS5 got it — including the archive subfolder /
+      // flat-extract choice.
+      const { dest } = resolveUploadDest(
+        destinationVolume,
+        destinationSubpath,
+        srcPath,
+        sourceKind === "archive",
+        archiveIntoSubfolder,
+      );
+      const tasks = others.map(async (p) => {
+        const addr = `${p.host}:${PS5_PAYLOAD_PORT}`;
+        try {
+          // startTransferFile/Dir only ENQUEUE the job; pre-fix we
+          // fired a success notification here and walked away. A
+          // 30 GB mirror to four PS5s would toast "Mirrored to X"
+          // within a second per peer, even if half of them later
+          // failed mid-stream (offline, full, path-denied). Await
+          // waitForJob so the notification reflects actual outcome.
+          const jobId =
+            sourceKind === "file"
+              ? await startTransferFile(srcPath, dest, addr)
+              : sourceKind === "archive"
+                ? await startTransferZip(srcPath, dest, addr, null, excludes)
+                : await startTransferDir(srcPath, dest, addr, null, excludes);
+          await waitForJob(jobId);
+          pushNotification("info", `Mirrored to ${p.name}`, {
+            body: `${srcPath} → ${dest}`,
+          });
+        } catch (e) {
+          pushNotification("error", `Mirror failed: ${p.name}`, {
+            body: e instanceof Error ? e.message : String(e),
+          });
+        }
+      });
+      await Promise.allSettled(tasks);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-md border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs">
+      <div className="flex items-center gap-2">
+        <span className="flex-1 text-[var(--color-muted)]">
+          {tr(
+            "upload_mirror_label",
+            { count: others.length },
+            `Also send to other PS5s in roster (${others.length})`,
+          )}
+        </span>
+        <button
+          type="button"
+          onClick={fanOut}
+          disabled={busy}
+          className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs hover:bg-[var(--color-surface-2)] disabled:opacity-50"
+        >
+          {busy
+            ? tr("upload_mirror_busy", undefined, "Mirroring…")
+            : tr("upload_mirror_send", undefined, "Mirror now")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ExistingDestinationDialog({
+  entryCount,
+  dest,
+  isFolder,
+  onOverride,
+  onResume,
+  onCancel,
+}: {
+  entryCount: number;
+  dest: string;
+  isFolder: boolean;
+  onOverride: () => void;
+  onResume: () => void;
+  onCancel: () => void;
+}) {
+  const tr = useTr();
+  // This dialog mounts only while shown — lock background scroll for its life.
+  useScrollLock();
+  // Clean destination → simple Start/Cancel confirm.
+  // Existing content → three-way Override/Resume/Cancel for folders,
+  // two-way Override/Cancel for single files (no resume concept on a
+  // single blob).
+  const hasExisting = entryCount > 0;
+  const canResume = hasExisting && isFolder;
+
+  const title = !hasExisting
+    ? "Start upload?"
+    : isFolder
+      ? "Folder already has files"
+      : "File already exists";
+
+  const subtitle = !hasExisting ? (
+    <>
+      {tr("upload_dialog_upload_to", "Upload to")}{" "}
+      <span className="font-mono text-xs">{dest}</span>?
+    </>
+  ) : (
+    <>
+      <span className="font-mono text-xs">{dest}</span>
+      {isFolder
+        ? ` contains ${entryCount.toLocaleString()} item${entryCount === 1 ? "" : "s"} already.`
+        : ` is already on your PS5.`}
+    </>
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5 shadow-2xl">
+        <h2 className="mb-1 text-base font-semibold">{title}</h2>
+        <p className="mb-4 text-sm text-[var(--color-muted)]">{subtitle}</p>
+
+        <div className="grid gap-2">
+          {canResume && (
+            <button
+              type="button"
+              onClick={onResume}
+              className="flex items-start gap-3 rounded-md border border-[var(--color-accent)] bg-[var(--color-accent)] p-3 text-left text-sm text-[var(--color-accent-contrast)] hover:opacity-90"
+            >
+              <span className="font-medium">
+                {tr("upload_dialog_resume", "Resume")}
+              </span>
+              <span className="text-xs opacity-90">
+                {tr(
+                  "upload_dialog_resume_desc",
+                  "Skip files that are already there; only send what's new or changed. Compares file sizes -- per-shard BLAKE3 verification on the actual upload catches any mismatch.",
+                )}
+              </span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onOverride}
+            className={
+              "flex items-start gap-3 rounded-md border p-3 text-left text-sm " +
+              (hasExisting
+                ? "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-3)]"
+                : "border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-accent-contrast)] hover:opacity-90")
+            }
+          >
+            <span className="font-medium">
+              {hasExisting
+                ? tr("upload_override", "Override")
+                : tr("upload_start_upload", "Start upload")}
+            </span>
+            <span
+              className={
+                "text-xs " +
+                (hasExisting ? "text-[var(--color-muted)]" : "opacity-90")
+              }
+            >
+              {hasExisting
+                ? tr("upload_override_desc", "Replace everything — re-send the entire source.")
+                : tr("upload_start_desc", "Send all files to the PS5.")}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-left text-sm hover:bg-[var(--color-surface-3)]"
+          >
+            <span className="font-medium">
+              {tr("upload_dialog_cancel", "Cancel")}
+            </span>
+            <span className="text-xs text-[var(--color-muted)]">
+              {hasExisting
+                ? tr("upload_cancel_existing_desc", "Don't upload. Pick a different destination or source.")
+                : tr("upload_cancel_desc", "Don't upload.")}
+            </span>
+          </button>
+        </div>
+
+        <p className="mt-3 text-xs text-[var(--color-muted)]">
+          {tr(
+            "upload_dialog_turn_off_prompt",
+            "You can turn off this prompt in Settings → Upload.",
+          )}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function TransferStatus({ phase }: { phase: TransferPhase }) {
+  const navigate = useNavigate();
+  const tr = useTr();
+  // The parent binds `phase` to the ACTIVE console's slot, so the Stop button
+  // resets that same console's one-shot. Read the active host here rather than
+  // thread it through the intermediate sub-component.
+  const host = useConnectionStore((s) => s.host);
+  // Read settings directly — threading through Step2Options just to get
+  // here would add props for something that's a rendering decision.
+  const showFiles = useUploadSettingsStore((s) => s.showTransferFiles);
+  // For the Stop button in the running phase. Bumps the transfer
+  // runId so the in-flight poll loop's next state-write is a no-op
+  // and the UI returns to idle. Engine job continues server-side
+  // until completion or the next reconnect — the payload's single-
+  // client transfer port serializes the next BEGIN_TX behind it.
+  const resetTransfer = useTransferStore((s) => s.reset);
+  // Dismiss the upload's one-shot status (idle + in-flight poll no-op).
+  const clearPhase = () => resetTransfer(host);
+  if (phase.kind === "idle") return null;
+
+  if (phase.kind === "starting") {
+    return (
+      <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-sm">
+        <Spinner size={14} tone="accent" />
+        {tr("upload_status_preparing", "Preparing upload…")}
+      </div>
+    );
+  }
+
+  if (phase.kind === "running") {
+    const {
+      bytesSent,
+      totalBytes,
+      bytesPerSec,
+      files,
+      filesCompleted,
+      skippedFiles,
+    } = phase;
+    // Reconcile Phase 1 interstitial: the engine set Running before the
+    // walk completed, so we have nothing to show yet. "Uploading 0 B"
+    // would be misleading — describe what's actually happening.
+    if (totalBytes === 0 && files.length === 0) {
+      return (
+        <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-sm">
+          <Spinner size={14} tone="accent" />
+          {tr(
+            "upload_status_checking_existing",
+            "Checking what's already on your PS5…",
+          )}
+        </div>
+      );
+    }
+    // Pre-byte interstitial: reconcile is done (we have the to-send file
+    // list and total bytes), but the first packed shard hasn't gone out yet.
+    // The gap is engine-side: build the manifest JSON for N files, send
+    // BEGIN_TX, then materialise the first shard (read + pack ~200 small
+    // files from disk). On large folders sourced from a slow external drive
+    // this can run minutes BEFORE any byte hits the wire, and showing
+    // "Uploading 0 B · 0 of N files" makes it look stuck. Show an explicit
+    // "Preparing N files…" so the user sees we know about the workload and
+    // are working — without lying about the bytes.
+    if (bytesSent === 0 && files.length > 0) {
+      return (
+        <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-sm">
+          <Spinner size={14} tone="accent" />
+          <span>
+            {tr(
+              "upload_status_preparing_files",
+              { count: files.length.toLocaleString() },
+              "Preparing transfer of {count} files…",
+            )}
+          </span>
+          <span className="text-xs text-[var(--color-muted)]">
+            {tr(
+              "upload_status_preparing_hint",
+              "(building the file list and reading the first batch — large folders or slow source disks take a minute)",
+            )}
+          </span>
+        </div>
+      );
+    }
+    const pct =
+      totalBytes > 0 ? Math.min(100, (bytesSent / totalBytes) * 100) : 0;
+    const remaining = Math.max(0, totalBytes - bytesSent);
+    const etaSec = bytesPerSec > 0 ? remaining / bytesPerSec : null;
+    // Finalize phase: every shard has been pushed onto the wire but the
+    // engine is still waiting for the PS5's COMMIT_TX_ACK / drain ACKs.
+    // For large file counts this round-trip waits on the PS5 fsyncing
+    // tens of thousands of inodes — many minutes is normal. Without
+    // distinct copy here the user sees "Uploading 100%" with a frozen
+    // bytes counter and force-quits, defeating the whole transfer.
+    // Gate on totalBytes > 0 so a not-yet-stat'd transfer doesn't
+    // false-positive on its first tick (the earlier 0-bytes/0-files
+    // interstitial above also catches this, but defense in depth).
+    const isFinalizing = totalBytes > 0 && bytesSent >= totalBytes;
+    return (
+      <div className="mb-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-sm">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Spinner size={14} tone="accent" />
+            <span className="font-medium">
+              {isFinalizing
+                ? tr("upload_status_finalizing", "Finalizing on PS5")
+                : tr("upload_status_uploading", "Uploading")}
+            </span>
+            <span className="text-xs text-[var(--color-muted)]">
+              {formatBytes(bytesSent)}
+              {totalBytes > 0 && ` / ${formatBytes(totalBytes)}`}
+              {totalBytes > 0 && ` · ${pct.toFixed(1)}%`}
+              {files.length > 0 && (
+                <>
+                  {" · "}
+                  {filesCompleted.toLocaleString()}{" "}
+                  {tr("upload_status_of", "of")} {files.length.toLocaleString()}{" "}
+                  {tr("upload_status_files", "files")}
+                </>
+              )}
+              {skippedFiles > 0 && (
+                <>
+                  {" · "}
+                  {skippedFiles.toLocaleString()}{" "}
+                  {tr("upload_status_skipped", "skipped")}
+                </>
+              )}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
+            {!isFinalizing && (
+              // Speed + ETA are meaningless once bytes hit 100% — speed
+              // collapses to a stale prior reading (the smoother carries
+              // the last live sample) and ETA divides "remaining: 0" by
+              // a speed that may already be 0. The finalize hint below
+              // replaces this readout entirely.
+              <span>
+                {bytesPerSec > 0 ? `${formatBytes(bytesPerSec)}/s` : "—"}
+                {etaSec !== null && bytesPerSec > 0 && (
+                  <>
+                    {" · "}
+                    {tr("upload_status_eta", "ETA")} {formatDuration(etaSec)}
+                  </>
+                )}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => resetTransfer(host)}
+              className="rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-text)] hover:bg-[var(--color-surface-3)]"
+              title={tr(
+                "upload_status_stop_tooltip",
+                "Stop watching this upload (engine job continues server-side until next BEGIN_TX preempts it)",
+              )}
+            >
+              {tr("upload_status_stop", "Stop")}
+            </button>
+          </div>
+        </div>
+        {isFinalizing && (
+          // Explanatory line so users with big multi-file uploads
+          // understand that 100% is not the end — the PS5 still has
+          // to commit the manifest, and for 80k-file folders that
+          // legitimately takes minutes (a user-reported 1h+ stall was
+          // mistaken for a hang and force-quit).
+          //
+          // P3 / v2.18.0 — when the payload streams APPLY_PROGRESS,
+          // we have a live counter to surface alongside the hint.
+          // Falls back to just the hint on old payloads.
+          <div className="mb-2 text-xs text-[var(--color-warn)]">
+            {phase.filesFinalizingTotal > 0 ? (
+              <>
+                {tr(
+                  "upload_status_finalizing_counter",
+                  {
+                    done: phase.filesFinalized.toLocaleString(),
+                    total: phase.filesFinalizingTotal.toLocaleString(),
+                  },
+                  `Finalized ${phase.filesFinalized.toLocaleString()} / ${phase.filesFinalizingTotal.toLocaleString()} files. `,
+                )}
+              </>
+            ) : null}
+            {tr(
+              "upload_status_finalizing_hint",
+              "PS5 is committing the file index. This can take a while for large file counts — don't close the app.",
+            )}
+          </div>
+        )}
+        {totalBytes > 0 && (
+          <div className="h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-3)]">
+            <div
+              className="h-full bg-[var(--color-accent)] transition-[width] duration-300 ease-out"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        )}
+        {showFiles && files.length > 1 && (
+          <FileListPanel files={files} completed={filesCompleted} />
+        )}
+      </div>
+    );
+  }
+
+  if (phase.kind === "done") {
+    const avg =
+      phase.elapsedMs > 0 ? (phase.bytesSent * 1000) / phase.elapsedMs : 0;
+    // Reconcile "nothing to do" — everything was already on the PS5.
+    // A "0 B sent across 0 files" line would read like a failure.
+    const allSkipped =
+      phase.bytesSent === 0 && phase.filesSent === 0 && phase.skippedFiles > 0;
+    return (
+      <div className="mb-3 rounded-md border border-[var(--color-good)] bg-[var(--color-surface-2)] p-4 text-sm">
+        <div className="mb-2 font-medium text-[var(--color-good)]">
+          {allSkipped
+            ? tr("upload_already_up_to_date", "Already up to date")
+            : tr("upload_complete", "Upload complete")}
+        </div>
+        <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs text-[var(--color-muted)]">
+          {!allSkipped && (
+            <>
+              <dt>{tr("upload_done_sent", "Sent")}</dt>
+              <dd className="text-[var(--color-text)]">
+                {formatBytes(phase.bytesSent)}
+                {phase.filesSent > 0 && (
+                  <>
+                    {" "}
+                    {tr("upload_done_across", "across")}{" "}
+                    {phase.filesSent.toLocaleString()}{" "}
+                    {tr("upload_done_files", "files")}
+                  </>
+                )}
+              </dd>
+            </>
+          )}
+          {phase.skippedFiles > 0 && (
+            <>
+              <dt>{allSkipped
+                ? tr("upload_already_present", "Already present")
+                : tr("upload_skipped", "Skipped")}</dt>
+              <dd className="text-[var(--color-text)]">
+                {phase.skippedFiles.toLocaleString()}{" "}
+                {tr("upload_done_skipped_files", "files (")}
+                {formatBytes(phase.skippedBytes)}
+                {tr("upload_done_skipped_suffix", ") already on PS5")}
+              </dd>
+            </>
+          )}
+          <dt>{tr("upload_done_time", "Time")}</dt>
+          <dd className="text-[var(--color-text)]">
+            {formatDuration(phase.elapsedMs / 1000)}
+            {avg > 0 && (
+              <span className="text-[var(--color-muted)]">
+                {" "}
+                {tr("upload_done_avg", "— avg")} {formatBytes(avg)}/s
+              </span>
+            )}
+          </dd>
+          <dt>{tr("upload_done_destination", "Destination")}</dt>
+          <dd className="font-mono text-[var(--color-text)]">{phase.dest}</dd>
+          {phase.mountedAt && (
+            <>
+              <dt>{tr("upload_done_mounted_at", "Mounted at")}</dt>
+              <dd className="font-mono text-[var(--color-text)]">
+                {phase.mountedAt}
+              </dd>
+            </>
+          )}
+        </dl>
+        {phase.mountWarnings && phase.mountWarnings.length > 0 && (
+          <ul className="mt-2 space-y-1 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]">
+            {phase.mountWarnings.map((w) => (
+              <li key={w}>⚠ {w}</li>
+            ))}
+          </ul>
+        )}
+        {phase.registerWarning && (
+          <div className="mt-2 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]">
+            ⚠ {phase.registerWarning}
+          </div>
+        )}
+        {/* The #1 post-upload question is "why isn't it on my home
+            screen?" — either it already IS (register-after-upload ran),
+            or we point at the Library to finish the job. */}
+        <div className="mt-3 flex items-center gap-2 border-t border-[var(--color-border)] pt-3">
+          <span className="text-xs text-[var(--color-muted)]">
+            {phase.registeredAs
+              ? tr(
+                  "upload_done_registered",
+                  { name: phase.registeredAs },
+                  `On your PS5 home screen as "${phase.registeredAs}" — ready to launch.`,
+                )
+              : tr(
+                  "upload_done_next_hint",
+                  "Next: open the Library to register or mount it so it shows up on the PS5 home screen.",
+                )}
+          </span>
+          <div className="ml-auto flex items-center gap-2">
+            {!phase.registeredAs && (
+              <Button
+                variant="primary"
+                size="sm"
+                className="shrink-0"
+                onClick={() => navigate("/games")}
+              >
+                {tr("upload_done_open_library", "Open Library")}
+              </Button>
+            )}
+            <Button
+              variant="secondary"
+              size="sm"
+              className="shrink-0"
+              onClick={clearPhase}
+            >
+              {tr("upload_done_close", "Close")}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // failed
+  return (
+    <div className="mb-3">
+      <ErrorCard
+        title={tr("upload_failed_title", "Upload failed")}
+        detail={humanizeUploadError(phase.error)}
+      />
+    </div>
+  );
+}
+
+/** Thin wrapper delegating to the shared humanizer — the rules live in
+ *  `lib/humanizeError.ts` so Upload, Volumes, and any future screen
+ *  share one ruleset. */
+const humanizeUploadError = humanizePs5Error;
+
+/** Maximum number of file rows we ever render to the DOM.
+ *
+ *  Below this we render the full sorted list (current → pending → done-
+ *  reversed). At or above it we render a moving window around the current
+ *  file. The cap exists because a single poll tick (~500 ms) was rendering
+ *  one `<li>` per planned file, so a 50,000-file game folder produced 50k
+ *  DOM nodes plus 3 × O(n) array.map().filter() passes every 500 ms — the
+ *  main thread saturated and the UI froze until the upload finished.
+ *  The scroll viewport is 192 px tall (~12 visible rows) so 200 is well
+ *  past the user-visible band; rows beyond it were never scrolled to.
+ *
+ *  Wins both ways: small uploads keep their full scrollable history,
+ *  large uploads stay responsive. The header counts (`completed / total`)
+ *  carry the bigger picture either way. */
+const FILE_LIST_RENDER_CAP = 200;
+
+/** Build the visible rows for the panel.
+ *
+ *  Exported (via `for-test`) so the windowing logic is unit-testable
+ *  without standing up React. The shape is intentionally narrow — just
+ *  `{ file, idx }` per row, in render order — to keep the test crisp.
+ *
+ *  Three regimes:
+ *    1. total ≤ cap:   full list in [current, pending..., done-rev...] order.
+ *    2. total >  cap:  windowed [current, pending-slice..., done-slice-rev...]
+ *                      bounded so the total row count is ≤ cap.
+ *
+ *  Pending and done slices stay in the same order as the unwindowed
+ *  version so the user's mental model ("see what's coming → scroll for
+ *  history") survives unchanged. */
+export function buildFileListRows_forTest(
+  files: PlannedFile[],
+  completed: number,
+  cap: number = FILE_LIST_RENDER_CAP,
+): Array<{ idx: number; rel_path: string; size: number }> {
+  const total = files.length;
+  if (total === 0) return [];
+
+  // Two regimes for `completed`:
+  //   - `completed < total`: there's a "current" file at index `completed`.
+  //     Pending = indices > completed, done = indices < completed.
+  //   - `completed >= total`: every file is done. No current row, no
+  //     pending. This is the finalize-phase state — engine reports the
+  //     full file count once shards are all on the wire. Done covers
+  //     the entire list.
+  // A separate `hasCurrent` flag keeps both regimes readable; without it
+  // the earlier impl clamped `completed` and then dropped the last index
+  // (because the done-loop started at clamped-1 and the current branch
+  // was gated on the raw, un-clamped value).
+  const hasCurrent = completed >= 0 && completed < total;
+  const currentIdx = hasCurrent
+    ? completed
+    : // For the all-done case the "anchor" sits past the last index so
+      // the done window walks backward from total-1 naturally.
+      total;
+  const pendingCount = hasCurrent ? total - completed - 1 : 0;
+  const doneCount = hasCurrent ? completed : total;
+  const fullSize = (hasCurrent ? 1 : 0) + pendingCount + doneCount;
+
+  if (fullSize <= cap) {
+    // Small list — render every row in a single pass. Beats the old
+    // 3 × array.map().filter() shape (3n allocations → ~n).
+    const rows: Array<{ idx: number; rel_path: string; size: number }> = [];
+    if (hasCurrent) {
+      rows.push({ idx: currentIdx, ...files[currentIdx] });
+    }
+    for (let i = currentIdx + 1; i < total; i++) {
+      rows.push({ idx: i, ...files[i] });
+    }
+    for (let i = currentIdx - 1; i >= 0; i--) {
+      rows.push({ idx: i, ...files[i] });
+    }
+    return rows;
+  }
+
+  // Windowed mode. Reserve 1 slot for the current row when present,
+  // then split the remainder between "next-up pending" and
+  // "recently-done" so the user sees both directions of context
+  // without 50k DOM nodes.
+  const currentSlot = hasCurrent ? 1 : 0;
+  const remaining = cap - currentSlot;
+  // 2:1 lean toward pending — users care more about what's *next* than
+  // what's already done. The engine's per-file completion counter is
+  // coarse (see PlannedFile docs), so deep done-history is the lower-
+  // value side to truncate first.
+  const pendingBudget = Math.min(pendingCount, Math.ceil((remaining * 2) / 3));
+  const doneBudget = Math.min(doneCount, remaining - pendingBudget);
+
+  const rows: Array<{ idx: number; rel_path: string; size: number }> = [];
+  if (hasCurrent) {
+    rows.push({ idx: currentIdx, ...files[currentIdx] });
+  }
+  for (let i = 1; i <= pendingBudget; i++) {
+    const idx = currentIdx + i;
+    rows.push({ idx, ...files[idx] });
+  }
+  for (let i = 1; i <= doneBudget; i++) {
+    const idx = currentIdx - i;
+    rows.push({ idx, ...files[idx] });
+  }
+  return rows;
+}
+
+/**
+ * Scrollable per-file status panel.
+ *
+ * Renders the planned file list in a 192-px (h-48) scroll container,
+ * current row pinned at the top. Done files get ✓, pending get ○.
+ *
+ * Above ~200 files we switch to a windowed slice (see
+ * `FILE_LIST_RENDER_CAP`); below, we render the full list. Both modes
+ * are memoised so the sort/window work doesn't repeat on every poll
+ * tick — only when the underlying file list or the completed index
+ * changes.
+ *
+ * `completed` is the engine-reported count of files whose cumulative
+ * wire bytes are below `bytes_sent`. That's a *coarse* signal: for a
+ * folder with one big file, it jumps from 0 → all-but-one → N only
+ * at transfer boundaries. That's honest — until core emits per-file
+ * completion events, there's no finer truth available.
+ */
+function FileListPanel({
+  files,
+  completed,
+}: {
+  files: PlannedFile[];
+  completed: number;
+}) {
+  const tr = useTr();
+  const total = files.length;
+  // Memoise the row build so a parent re-render (every 500 ms while
+  // uploading) doesn't redo the sort on 50k entries. Re-runs only when
+  // the file list changes (length proxy — engine doesn't mutate planned
+  // entries mid-upload) or the completed index moves.
+  const rows = useMemo(
+    () => buildFileListRows_forTest(files, completed),
+    [files, completed],
+  );
+  const windowed = total > FILE_LIST_RENDER_CAP;
+
+  return (
+    <div className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs">
+      <div className="mb-1 flex items-center justify-between text-[var(--color-muted)]">
+        <span>{tr("upload_file_list_files", "Files")}</span>
+        <span>
+          {completed.toLocaleString()} / {total.toLocaleString()}
+          {windowed && (
+            <>
+              {" · "}
+              <span
+                title={tr(
+                  "upload_file_list_windowed_hint",
+                  undefined,
+                  "Showing a window around the current file; rendering every entry of a 50k+ folder would freeze the app.",
+                )}
+              >
+                {tr(
+                  "upload_file_list_windowed",
+                  { shown: rows.length },
+                  `showing {shown}`,
+                )}
+              </span>
+            </>
+          )}
+        </span>
+      </div>
+      <ul className="max-h-48 overflow-y-auto font-mono">
+        {/* Rendering order:
+         *   1. Current file (▶) — top, highlighted, always visible
+         *      without scrolling.
+         *   2. Pending files (○) — next up, in queue order so the
+         *      user sees what's about to go.
+         *   3. Done files (✓) — below, most-recent first so the last
+         *      thing that finished is right under the pending block.
+         *
+         *   "Current at top, older uploaded at bottom" — matches the
+         *   user's ask: glance at the panel → see what's happening
+         *   right now + what's coming, scroll down for history. */}
+        {rows.map(({ idx, rel_path, size }) => {
+          const status =
+            idx < completed
+              ? "done"
+              : idx === completed
+                ? "current"
+                : "pending";
+          return (
+            <li
+              key={`${idx}-${rel_path}`}
+              className={
+                "flex items-center gap-2 px-1 py-0.5 " +
+                (status === "pending"
+                  ? "text-[var(--color-muted)]"
+                  : status === "current"
+                    ? "rounded bg-[var(--color-surface-3)] font-medium text-[var(--color-text)]"
+                    : "text-[var(--color-muted)]")
+              }
+            >
+              <span
+                className={
+                  "shrink-0 " +
+                  (status === "done"
+                    ? "text-[var(--color-good)]"
+                    : status === "current"
+                      ? "text-[var(--color-accent)]"
+                      : "opacity-50")
+                }
+                aria-hidden
+              >
+                {status === "done" ? "✓" : status === "current" ? "▶" : "○"}
+              </span>
+              <span className="flex-1 truncate">{rel_path}</span>
+              <span className="shrink-0 tabular-nums">{formatBytes(size)}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+/** Human-friendly duration: "3s", "1m 22s", "2h 14m". Used for
+ *  ETA display in the progress row — rounds to whole seconds because
+ *  a sub-second ETA is meaningless (noise from the rate smoother). */
+function formatDuration(sec: number): string {
+  if (!isFinite(sec) || sec < 0) return "—";
+  if (sec < 60) return `${Math.ceil(sec)}s`;
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  if (m < 60) return `${m}m ${s}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
+function WrappedHintChip({
+  hint,
+  onUse,
+}: {
+  hint: { path: string; title: string | null; title_id: string | null };
+  onUse: () => void;
+}) {
+  const tr = useTr();
+  const name = hint.title || hint.title_id || hint.path;
+  return (
+    <div className="mt-3 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-3)] p-3 text-xs">
+      <Info size={14} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
+      <div className="flex-1">
+        {tr(
+          "upload_wrapped_hint_intro",
+          "This folder isn't a game on its own, but it contains a game folder inside:",
+        )}{" "}
+        <span className="font-medium">{name}</span>
+        {tr("upload_wrapped_hint_suffix", ". Did you mean to upload that one?")}
+      </div>
+      <button
+        type="button"
+        onClick={onUse}
+        className="shrink-0 rounded-md bg-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent-contrast)]"
+      >
+        {tr("upload_wrapped_hint_use", "Use it")}
+      </button>
+    </div>
+  );
+}
+
+function GameMetaCard({
+  meta,
+}: {
+  meta: {
+    title: string | null;
+    title_id: string | null;
+    content_id: string | null;
+    content_version: string | null;
+    icon0_path: string | null;
+    total_size: number;
+    file_count: number;
+    meta_source: string;
+  };
+}) {
+  const tr = useTr();
+  // localFileSrc returns null outside Tauri instead of throwing on a
+  // missing global (#271: this took down the whole upload flow in the
+  // web UI the instant a folder was picked). The fallback below already
+  // renders for a missing icon.
+  const coverSrc = useMemo(() => localFileSrc(meta.icon0_path), [
+    meta.icon0_path,
+  ]);
+  const [coverFailed, setCoverFailed] = useState(false);
+
+  return (
+    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+      <div className="flex items-start gap-4">
+        <div className="h-20 w-20 shrink-0 overflow-hidden rounded-md bg-[var(--color-surface-3)]">
+          {coverSrc && !coverFailed ? (
+            <img
+              src={coverSrc}
+              alt={tr("upload_game_cover_alt", "cover")}
+              // `contain`, not `cover`: PS4 cover art isn't always square
+              // (matches InstalledApps' treatment of the same artwork).
+              className="h-full w-full object-contain"
+              onError={() => setCoverFailed(true)}
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center text-xs text-[var(--color-muted)]">
+              <Gamepad2 size={28} />
+            </div>
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-xs text-[var(--color-muted)]">
+            {meta.title_id ?? "—"}
+            {meta.content_id ? <> · {meta.content_id}</> : null}
+          </div>
+          <div className="truncate text-lg font-semibold">
+            {meta.title ?? "(untitled)"}
+          </div>
+          <div className="mt-0.5 text-xs text-[var(--color-muted)]">
+            {meta.content_version ? `v${meta.content_version} · ` : ""}
+            {formatBytes(meta.total_size)} · {meta.file_count.toLocaleString()}{" "}
+            {tr("upload_game_meta_files", "files")}
+          </div>
+          <div className="mt-1 flex items-center gap-1 text-xs text-[var(--color-muted)]">
+            <Info size={12} />{" "}
+            {tr("upload_game_meta_parsed_from", "parsed from")}{" "}
+            <code>{meta.meta_source}</code>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function FolderStatsCard({
+  totalBytes,
+  fileCount,
+}: {
+  totalBytes: number;
+  fileCount: number;
+}) {
+  const tr = useTr();
+  return (
+    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 text-sm text-[var(--color-muted)]">
+      {formatBytes(totalBytes)} {tr("upload_folder_stats_across", "across")}{" "}
+      {fileCount.toLocaleString()} {tr("upload_folder_stats_files", "files")}
+    </section>
+  );
+}
+
+/**
+ * Pre-flight ETA banner for medium-and-large folder uploads.
+ *
+ * Suppressed for tiny folders (<1k files). Shows a one-line "≈ N min"
+ * estimate in the 1k–10k band. Shows the full transfer + commit
+ * breakdown for ≥10k file folders — that's where the post-100%
+ * PS5 commit phase becomes the user-perceived dominant cost and
+ * users absolutely need to know about it before they kick off a
+ * 45-minute upload.
+ *
+ * Reads the per-host metrics store so the estimate gets sharper after
+ * the first successful upload to a given PS5. First-ever upload uses
+ * conservative defaults (100 MiB/s, 10 ms/file) and surfaces a
+ * "(estimated)" qualifier in the banner copy so users don't read the
+ * number as a promise.
+ *
+ * Design: `.claude/ralph-design-notes.md` §2 (gitignored).
+ */
+function PreflightEtaBanner({
+  fileCount,
+  totalBytes,
+}: {
+  fileCount: number;
+  totalBytes: number;
+}) {
+  const tr = useTr();
+  // Read host directly from the connection store rather than threading
+  // it through props — the banner only needs it for the per-host
+  // metrics lookup, and the source card it sits inside doesn't have
+  // host in scope.
+  const host = useConnectionStore((s) => s.host);
+  const mode = useMemo(() => pickBannerMode(fileCount), [fileCount]);
+  const hostMetrics = useRecentHostMetricsStore((s) =>
+    host?.trim() ? s.lookup(`${host}:${PS5_PAYLOAD_PORT}`) : undefined,
+  );
+  // Staleness aging (MAX_AGE_MS, 7 days) is intentionally not applied
+  // here — Date.now() in render trips the react-hooks/purity rule, and
+  // the practical impact is nil: a session typically lives minutes
+  // while the staleness cap is days. P3 (per-file apply progress) will
+  // re-introduce a freshness check via a useEffect-based pattern once
+  // commit-ms-per-file is a measurement we actively want to refresh.
+  const eta = useMemo(
+    () =>
+      computeUploadEta({
+        fileCount,
+        totalBytes,
+        throughputMibps: hostMetrics?.throughputMibps,
+        commitMsPerFile: hostMetrics?.commitMsPerFile,
+      }),
+    [fileCount, totalBytes, hostMetrics],
+  );
+
+  if (mode === "hidden") return null;
+
+  // Simplified band: medium folders just get a one-line estimate.
+  if (mode === "simplified") {
+    return (
+      <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs text-[var(--color-muted)]">
+        <span className="font-medium text-[var(--color-text)]">
+          {tr(
+            "upload_eta_simplified",
+            { eta: formatEtaSeconds(eta.totalSeconds) },
+            "Estimated upload time: {eta}",
+          )}
+        </span>
+        {eta.throughputDefaulted && (
+          <span className="ml-2 italic">
+            (
+            {tr(
+              "upload_eta_default_qualifier",
+              undefined,
+              "estimate — first upload to this PS5",
+            )}
+            )
+          </span>
+        )}
+      </section>
+    );
+  }
+
+  // Detailed band: huge folders get the full breakdown so the post-
+  // 100% commit phase isn't a surprise.
+  return (
+    <section className="mb-4 rounded-lg border border-[var(--color-warn)]/40 bg-[var(--color-warn)]/5 p-4 text-sm">
+      <div className="mb-1 flex items-center gap-2 font-medium text-[var(--color-warn)]">
+        <span aria-hidden>ⓘ</span>
+        {tr(
+          "upload_eta_banner_title",
+          undefined,
+          "This is a large folder upload.",
+        )}
+      </div>
+      <div className="mb-3 text-[var(--color-muted)]">
+        {fileCount.toLocaleString()} {tr("upload_folder_stats_files", "files")}{" "}
+        · {formatBytes(totalBytes)}
+      </div>
+      <div className="mb-2 text-xs uppercase tracking-wide text-[var(--color-muted)]">
+        {tr("upload_eta_section_title", undefined, "Estimated time")}
+        {eta.throughputDefaulted && (
+          <span className="ml-2 normal-case tracking-normal italic">
+            (
+            {tr(
+              "upload_eta_default_qualifier",
+              undefined,
+              "estimate — first upload to this PS5",
+            )}
+            )
+          </span>
+        )}
+      </div>
+      <table className="text-xs">
+        <tbody>
+          <tr>
+            <td className="pr-3 text-[var(--color-muted)]">
+              {tr("upload_eta_row_transfer", undefined, "Transfer")}
+            </td>
+            <td className="pr-3 tabular-nums">
+              ≈ {formatEtaSeconds(eta.transferSeconds)}
+            </td>
+          </tr>
+          <tr>
+            <td className="pr-3 text-[var(--color-muted)]">
+              {tr("upload_eta_row_commit", undefined, "PS5 commit")}
+            </td>
+            <td className="pr-3 tabular-nums">
+              ≈ {formatEtaSeconds(eta.commitSeconds)}
+            </td>
+          </tr>
+          <tr className="border-t border-[var(--color-border)]">
+            <td className="pr-3 pt-1 font-medium">
+              {tr("upload_eta_row_total", undefined, "Total")}
+            </td>
+            <td className="pr-3 pt-1 font-medium tabular-nums">
+              ≈ {formatEtaSeconds(eta.totalSeconds)}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div className="mt-3 text-xs text-[var(--color-muted)]">
+        {tr(
+          "upload_eta_resume_hint",
+          undefined,
+          "For folders this size, Resume mode (skip files already on the PS5) saves an hour or more on repeat uploads. You'll see the choice when you click Upload.",
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** Preview card for a `.zip` source: what it stores vs. what lands on the
+ *  PS5, the space saved, and the embedded game (if any). Reassures the user
+ *  that the archive is decompressed on the host and lands extracted on the
+ *  console — no extra step, no temp copy of the whole game. */
+/** Source card for a `.rar`: multi-volume guidance + an (optional) password
+ *  input. The inspect error string carries `rar_password_required` (encrypted,
+ *  needs one) / `rar_password_wrong` / a generic open failure; we map those to
+ *  friendly hints (full copy lives in lib/humanizeError.ts). Applying a
+ *  password re-inspects via the store, so the file tree appears once it's
+ *  right. Render with `key={source.path}` so the input resets per archive.
+ *
+ *  RAR is desktop-only (the unrar dep is excluded from the Android build); on
+ *  Android we render a friendly "not supported" notice instead of inspecting. */
+function RarSourceCard() {
+  const tr = useTr();
+  const password = useUploadStore((s) => s.rarPassword);
+  const detecting = useUploadStore((s) => s.detecting);
+  const error = useUploadStore((s) => s.detectError);
+  const inspected = useUploadStore((s) => !!s.source?.zipInfo);
+  const setRarPassword = useUploadStore((s) => s.setRarPassword);
+  const onApply = (pw: string) => void setRarPassword(pw);
+  const [draft, setDraft] = useState(password ?? "");
+  const needsPw = !!error && error.includes("rar_password_required");
+  const wrongPw = !!error && error.includes("rar_password_wrong");
+  // A non-password failure (most often an incomplete multi-volume set, or the
+  // user picked a middle part). The generic open-failure copy explains it.
+  const otherErr = !!error && !needsPw && !wrongPw;
+
+  if (isAndroid()) {
+    return (
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+        <p className="mb-1 text-sm font-medium">
+          {tr("upload_rar_title", "RAR archive")}
+        </p>
+        <p className="text-xs text-[var(--color-warn)]">
+          {tr(
+            "err_rar_unsupported",
+            "RAR archives aren't supported on this build (Android uploads .zip and .7z only). Extract the .rar on a computer first, or use the desktop app.",
+          )}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+      <p className="mb-1 text-sm font-medium">
+        {tr("upload_rar_title", "RAR archive")}
+      </p>
+      {/* Multi-volume guidance, always shown — the #1 source of confusion. */}
+      <div className="mb-3 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-3)]/40 p-2 text-xs text-[var(--color-muted)]">
+        <Info size={13} className="mt-0.5 shrink-0" />
+        <span>
+          {tr(
+            "upload_rar_multipart_hint",
+            "Multi-part set? Pick the FIRST part — part1.rar / part01.rar / .rar. The other volumes are found automatically as long as they're in the same folder.",
+          )}
+        </span>
+      </div>
+      <p className="mb-2 text-xs text-[var(--color-muted)]">
+        {tr(
+          "upload_rar_password_hint",
+          "If this archive is password-protected, enter the password so it can be extracted. Leave blank if it isn't.",
+        )}
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          type="password"
+          block={false}
+          className="min-w-0 flex-1"
+          value={draft}
+          autoComplete="off"
+          placeholder={tr("upload_rar_password_placeholder", "Password")}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onApply(draft);
+          }}
+        />
+        <Button
+          variant="secondary"
+          size="sm"
+          loading={detecting}
+          onClick={() => onApply(draft)}
+        >
+          {tr("upload_rar_apply", "Apply")}
+        </Button>
+      </div>
+      {needsPw && (
+        <p className="mt-2 text-xs text-[var(--color-warn)]">
+          {tr(
+            "err_rar_password_required",
+            "This RAR archive is password-protected. Enter its password below to read and upload its contents.",
+          )}
+        </p>
+      )}
+      {wrongPw && (
+        <p className="mt-2 text-xs text-[var(--color-bad)]">
+          {tr(
+            "err_rar_password_wrong",
+            "Wrong password for this RAR archive. Check it and try again.",
+          )}
+        </p>
+      )}
+      {otherErr && (
+        <p className="mt-2 text-xs text-[var(--color-bad)]">
+          {humanizePs5Error(error)}
+        </p>
+      )}
+      {inspected && !error && (
+        <p className="mt-2 inline-flex items-center gap-1 text-xs text-[var(--color-good)]">
+          <Check size={12} />
+          {tr(
+            "upload_rar_ready",
+            "Archive read successfully — ready to upload.",
+          )}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Finisher card for a picked `.pkg` source. Shows the parsed package +
+ *  the upload→install→cleanup behavior, with the install/auto-delete toggles
+ *  (shared with the Install Package screen's settings). The destination is
+ *  fixed (the package library) so there's no volume/path picker. */
+function PkgFinisherCard({ pkgInfo }: { pkgInfo: PkgSourceInfo | null }) {
+  const tr = useTr();
+  const autoInstall = useInstallSettingsStore((s) => s.autoInstallAfterUpload);
+  const setAutoInstall = useInstallSettingsStore(
+    (s) => s.setAutoInstallAfterUpload,
+  );
+  const autoRemove = useInstallSettingsStore((s) => s.autoRemoveAfterInstall);
+  const setAutoRemove = useInstallSettingsStore(
+    (s) => s.setAutoRemoveAfterInstall,
+  );
+  const label = pkgInfo?.title?.trim() || pkgInfo?.contentId || null;
+  return (
+    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+      <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+        <Package size={16} className="text-[var(--color-muted)]" />
+        {tr("upload_pkg_card_title", "Package install")}
+      </div>
+      {label && (
+        <div className="mb-2 truncate text-xs text-[var(--color-muted)]">
+          {label}
+          {pkgInfo && pkgInfo.totalBytes > 0 ? (
+            <> · {formatBytes(pkgInfo.totalBytes)}</>
+          ) : null}
+        </div>
+      )}
+      <p className="mb-3 text-xs text-[var(--color-muted)]">
+        {tr(
+          "upload_pkg_card_desc",
+          "Uploads into the PS5 package library, then installs — one queued step. The staged copy lives in the library until removed.",
+        )}
+      </p>
+      <Toggle
+        checked={autoInstall}
+        onChange={(c) => setAutoInstall(c)}
+        className="text-xs text-[var(--color-text)]"
+        label={tr(
+          "pkglib.autoInstall",
+          undefined,
+          "Install automatically once the upload finishes",
+        )}
+      />
+      <Toggle
+        checked={autoRemove}
+        onChange={(c) => setAutoRemove(c)}
+        className="mt-2 text-xs text-[var(--color-text)]"
+        label={tr(
+          "pkglib.autoRemove",
+          undefined,
+          "Auto-delete each package from the PS5 after it installs",
+        )}
+      />
+      <p className="mt-3 flex items-start gap-1.5 text-xs text-[var(--color-muted)]">
+        <Info size={12} className="mt-0.5 shrink-0" />
+        {tr(
+          "upload_pkg_fw12_note",
+          "On FW 12+ the PS5 screen may go black for a few seconds during install — that's normal.",
+        )}
+      </p>
+    </section>
+  );
+}
+
+function ZipArchiveCard({ info }: { info: ZipInspect }) {
+  const tr = useTr();
+  // Space saved by keeping the dump zipped, as a percentage. Guard against a
+  // zero/over-100% reading (already-compressed game data can make a "zip"
+  // marginally larger than its contents).
+  const savedPct =
+    info.total_uncompressed > 0 &&
+    info.compressed_size < info.total_uncompressed
+      ? Math.round((1 - info.compressed_size / info.total_uncompressed) * 100)
+      : 0;
+  const isGame = !!(info.title || info.title_id);
+  return (
+    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+      <div className="flex items-start gap-3">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-[var(--color-surface-3)] text-[var(--color-muted)]">
+          {isGame ? <Gamepad2 size={22} /> : <FileArchive size={22} />}
+        </div>
+        <div className="min-w-0 flex-1">
+          {isGame && (
+            <>
+              <div className="text-xs text-[var(--color-muted)]">
+                {info.title_id ?? "—"}
+                {info.content_id ? <> · {info.content_id}</> : null}
+              </div>
+              <div className="truncate text-lg font-semibold">
+                {info.title ?? "(untitled)"}
+              </div>
+            </>
+          )}
+          <div className="mt-0.5 text-sm">
+            <span className="font-medium">
+              {formatBytes(info.compressed_size)}
+            </span>{" "}
+            {tr("upload_zip_zipped", "zipped")}
+            {/* The extracted size is only shown when known. inspect_zip
+                reports total_uncompressed=0 for archives whose entries use
+                data descriptors (common with bsdtar/streaming zippers),
+                where the seek-free size read isn't available — show
+                count-only instead of a self-contradictory "→ 0 B". */}
+            {info.total_uncompressed > 0 && (
+              <>
+                {" → "}
+                <span className="font-medium">
+                  {formatBytes(info.total_uncompressed)}
+                </span>{" "}
+                {tr("upload_zip_extracted", "extracted")}
+              </>
+            )}{" "}
+            · {info.file_count.toLocaleString()}{" "}
+            {tr("upload_folder_stats_files", "files")}
+          </div>
+          {savedPct > 0 && (
+            <div className="mt-0.5 text-xs text-[var(--color-good)]">
+              {tr("upload_zip_saves", "saves")} {savedPct}%{" "}
+              {tr("upload_zip_on_disk", "on disk")}
+            </div>
+          )}
+          <div className="mt-1 flex items-center gap-1 text-xs text-[var(--color-muted)]">
+            <Info size={12} />{" "}
+            {tr(
+              "upload_zip_explainer",
+              "Decompressed on your computer and streamed in — files land already extracted on the PS5.",
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** Lets the user choose how a `.zip` lands on the PS5: wrapped in a
+ *  folder named after the archive, or extracted straight into the
+ *  destination. Shows a live preview of the resulting path for each
+ *  choice so the outcome is unambiguous before they upload. */
+function ArchiveExtractModeCard({
+  mode,
+  onChange,
+  destinationVolume,
+  destinationSubpath,
+  sourcePath,
+}: {
+  mode: "subfolder" | "flat";
+  onChange: (m: "subfolder" | "flat") => void;
+  destinationVolume: string | null;
+  destinationSubpath: string;
+  sourcePath: string;
+}) {
+  const tr = useTr();
+  // The archive's own extension, so the copy reads ".rar"/".7z"/".zip" instead
+  // of a hardcoded ".zip" that was wrong for the other two formats.
+  const fmt = archiveFormat(sourcePath);
+  const ext = fmt ? `.${fmt}` : tr("upload_archive_word", "archive");
+  const subfolderDest = resolveUploadDest(
+    destinationVolume,
+    destinationSubpath,
+    sourcePath,
+    true,
+    true,
+  ).dest;
+  const flatDest = resolveUploadDest(
+    destinationVolume,
+    destinationSubpath,
+    sourcePath,
+    true,
+    false,
+  ).dest;
+
+  const options: {
+    value: "subfolder" | "flat";
+    label: string;
+    desc: string;
+    preview: string;
+  }[] = [
+    {
+      value: "subfolder",
+      label: tr(
+        "upload_archive_extract_subfolder_label",
+        "Put everything in a new folder named after the archive",
+      ),
+      desc: tr(
+        "upload_archive_extract_subfolder_desc",
+        "Creates that folder in the destination and extracts the files inside it. Best for a plain archive of loose game files.",
+      ),
+      preview: `${subfolderDest}/…`,
+    },
+    {
+      value: "flat",
+      label: tr(
+        "upload_archive_extract_flat_label",
+        "Extract the contents straight into the destination",
+      ),
+      desc: tr(
+        "upload_archive_extract_flat_desc",
+        { ext },
+        "Drops the files directly into the destination with no wrapper folder. Choose this when the {ext} already contains the game's own folder (e.g. CUSA12345/).",
+      ),
+      preview: `${flatDest}/…`,
+    },
+  ];
+
+  return (
+    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+      <div className="mb-3 flex items-center gap-2 text-sm font-medium">
+        <FileArchive size={16} className="text-[var(--color-muted)]" />
+        {tr(
+          "upload_archive_extract_heading",
+          { ext },
+          "Where should the {ext} unpack?",
+        )}
+      </div>
+      <div className="flex flex-col gap-2">
+        {options.map((opt) => {
+          const selected = mode === opt.value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => onChange(opt.value)}
+              className={
+                "flex items-start gap-3 rounded-md border p-3 text-left transition-colors " +
+                (selected
+                  ? "border-[var(--color-accent)] bg-[var(--color-accent)]/5"
+                  : "border-[var(--color-border)] hover:bg-[var(--color-surface-3)]")
+              }
+            >
+              <span
+                className={
+                  "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border " +
+                  (selected
+                    ? "border-[var(--color-accent)]"
+                    : "border-[var(--color-border)]")
+                }
+              >
+                {selected && (
+                  <span className="h-2 w-2 rounded-full bg-[var(--color-accent)]" />
+                )}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium text-[var(--color-text)]">
+                  {opt.label}
+                </span>
+                <span className="mt-0.5 block text-xs text-[var(--color-muted)]">
+                  {opt.desc}
+                </span>
+                <span className="mt-1 block truncate font-mono text-xs text-[var(--color-muted)]">
+                  {tr("upload_zip_extract_lands_at", "Lands at:")}{" "}
+                  <span className="text-[var(--color-text)]">
+                    {opt.preview}
+                  </span>
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/** Wrapper that pulls `host` from the connection store and adapts the
+ *  Upload screen's exclude shape to FolderDiffPanel's API. Renders
+ *  null when the inputs aren't sufficient (no host, no destination,
+ *  not a folder upload) — keeps Step2Options' main render clean. */
+function FolderDiffSlot({
+  source,
+  destinationVolume,
+  destinationSubpath,
+  excludes,
+}: {
+  source: PickedSource;
+  destinationVolume: string | null;
+  destinationSubpath: string;
+  excludes: { pattern: string; enabled: boolean }[];
+}) {
+  const host = useConnectionStore((s) => s.host);
+  if (source.kind !== "folder" && source.kind !== "game-folder") return null;
+  if (!destinationVolume || !host?.trim()) return null;
+  // The diff walks the source on local disk; a folder on a saved server uploads in full.
+  if (isRemotePath(source.path)) return null;
+  const leaf =
+    source.path.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "";
+  const dest =
+    `${destinationVolume}` +
+    (destinationSubpath ? `/${destinationSubpath}` : "") +
+    `/${leaf}`;
+  const enabledPatterns = excludes
+    .filter((e) => e.enabled)
+    .map((e) => e.pattern);
+  return (
+    <FolderDiffPanel
+      srcDir={source.path}
+      destRoot={dest}
+      transferAddr={`${host.trim()}:${PS5_PAYLOAD_PORT}`}
+      excludes={enabledPatterns}
+    />
+  );
+}
+
+/** Per-job bandwidth-cap input. Persists to localStorage via the
+ *  upload settings store so the user's preferred cap survives app
+ *  restarts. 0 = no cap. The actual transport-layer pacing happens
+ *  inside the engine's PipelinedSender (Phase 29's BandwidthThrottle). */
+function BandwidthCard() {
+  const tr = useTr();
+  const cap = useUploadSettingsStore((s) => s.bandwidthCapMbps);
+  const setCap = useUploadSettingsStore((s) => s.setBandwidthCapMbps);
+  return (
+    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+      <div className="flex items-center gap-2">
+        <label className="text-sm font-medium">
+          {tr("upload_bandwidth_label", undefined, "Upload speed cap")}
+        </label>
+        <Input
+          type="number"
+          block={false}
+          className="w-20"
+          min={0}
+          step={0.5}
+          value={cap}
+          inputMode="decimal"
+          onChange={(e) => {
+            const n = parseFloat(e.target.value);
+            setCap(isFinite(n) && n > 0 ? n : 0);
+          }}
+          placeholder="0"
+        />
+        <span className="text-xs text-[var(--color-muted)]">{tr("upload_unit_mbs", "MB/s")}</span>
+        {cap > 0 && (
+          <button
+            type="button"
+            onClick={() => setCap(0)}
+            className="text-xs text-[var(--color-muted)] underline-offset-2 hover:underline"
+          >
+            {tr("upload_bandwidth_clear", undefined, "remove cap")}
+          </button>
+        )}
+      </div>
+      <p className="mt-1 text-xs text-[var(--color-muted)]">
+        {cap > 0
+          ? tr(
+              "upload_bandwidth_active",
+              { cap },
+              `Outbound shards paced to ~${cap} MB/s. Useful when sharing the LAN with video calls or game streaming.`,
+            )
+          : tr(
+              "upload_bandwidth_off",
+              undefined,
+              "0 = no cap (default). Set a positive value to throttle uploads when sharing bandwidth.",
+            )}
+      </p>
+    </section>
+  );
+}
+
+function MountAfterUploadCard({
+  checked,
+  onChange,
+  readOnly,
+  onChangeReadOnly,
+}: {
+  checked: boolean;
+  onChange: (on: boolean) => void;
+  readOnly: boolean;
+  onChangeReadOnly: (on: boolean) => void;
+}) {
+  const tr = useTr();
+  return (
+    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+      <Toggle
+        checked={checked}
+        onChange={(c) => onChange(c)}
+        label={
+          <div>
+            <div className="font-medium">
+              {tr("upload_mount_after_title", "Mount after upload")}
+            </div>
+            <div className="mt-0.5 text-xs text-[var(--color-muted)]">
+              {tr(
+                "upload_mount_after_desc",
+                "After the image lands on the PS5, the payload mounts it via the kernel's LVD backend. Off by default — turn on if you also want the image attached so the title shows up in the launcher immediately.",
+              )}
+            </div>
+          </div>
+        }
+      />
+
+      {/* Sub-toggle: read-only mode. Visible (greyed when mount-after-upload
+          is off) so users can see the option exists. Default on — keeps the
+          PS5 from silently writing save-data back into the image and
+          corrupting it on next mount. */}
+      <Toggle
+        className={`mt-3 ml-6 ${checked ? "" : "opacity-50"}`}
+        checked={readOnly}
+        disabled={!checked}
+        onChange={(c) => onChangeReadOnly(c)}
+        label={
+          <div>
+            <div className="font-medium">
+              {tr("upload_mount_readonly_title", "Mount read-only")}
+            </div>
+            <div className="mt-0.5 text-xs text-[var(--color-muted)]">
+              {tr(
+                "upload_mount_readonly_desc",
+                "Recommended. Prevents the PS5 from writing save data into the image (which would silently corrupt the file on disk and break re-mount). Turn it off when you intend to edit the image — replacing files, adding DLC, or applying a backport patch — and remember those edits are permanent.",
+              )}
+            </div>
+          </div>
+        }
+      />
+    </section>
+  );
+}
+
+/** Path-suffix presets corresponding to established on-disk conventions
+ *  under any writable storage root. Subpaths match what third-party
+ *  managers already look for, so uploads appear where users expect —
+ *  but hint copy stays neutral and describes the destination in plain
+ *  "what goes here" terms rather than naming specific managers. */
+const DESTINATION_PRESETS: { label: string; subpath: string; hintKey: string; hintFallback: string }[] =
+  [
+    // homebrew is first because it's the community-standard scan path
+    // — most PS5 game scanners read from <volume>/homebrew, so files
+    // landed here are auto-discoverable.
+    {
+      label: "homebrew",
+      subpath: "homebrew",
+      hintKey: "upload_preset_homebrew_hint",
+      hintFallback: "Homebrew apps & games (recommended)",
+    },
+    // etaHEN's app loader scans <volume>/etaHEN/games — common for users who
+    // jailbreak via etaHEN/Backpork and launch from there. Requested by users.
+    {
+      label: "etaHEN/games",
+      subpath: "etaHEN/games",
+      hintKey: "upload_preset_etahen_hint",
+      hintFallback: "etaHEN game folder (etaHEN app loader scans here)",
+    },
+    { label: "exfat", subpath: "exfat", hintKey: "upload_preset_exfat_hint", hintFallback: "Disk images" },
+    {
+      label: "ps5upload",
+      subpath: "ps5upload",
+      hintKey: "upload_preset_ps5upload_hint",
+      hintFallback: "Tool-specific generic folder",
+    },
+  ];
+
+function DestinationCard({
+  volume,
+  subpath,
+  onChange,
+  resolvedDest,
+  availableVolumes,
+}: {
+  volume: string | null;
+  subpath: string;
+  onChange: (v: string | null, s?: string) => void;
+  /** The fully-resolved on-PS5 path (`<volume>/<subpath>/<source-name>`)
+   *  as surfaced to the user so they see exactly where the source will
+   *  land — catches preset + typo mistakes before the upload starts. */
+  resolvedDest: string;
+  /** Live list of writable volumes from FS_LIST_VOLUMES. Drives the
+   *  dropdown so users see every mount point the PS5 actually exposes
+   *  (e.g. `/mnt/ext1`, multiple USB drives, ps5upload-mounted images)
+   *  rather than a hardcoded short list. Empty when host isn't set or
+   *  the payload isn't reachable yet. */
+  availableVolumes: Volume[];
+}) {
+  const tr = useTr();
+  // Trust the payload when it answers: it already filters to writable
+  // non-placeholder volumes (see the upstream filter where
+  // availableVolumes is set). Hardcoded roots are only a placeholder
+  // for the brief window before the probe completes — surfacing them
+  // afterwards re-introduces phantom mount points like /mnt/ext0 when
+  // nothing is plugged into that slot, which contradicts the Volumes
+  // screen and lets the user pick a destination the upload will fail
+  // on.
+  const FALLBACK_VOLUMES = ["/data", "/mnt/ext0", "/mnt/usb0"];
+  const dropdownPaths =
+    availableVolumes.length > 0
+      ? availableVolumes.map((v) => v.path).sort()
+      : [...FALLBACK_VOLUMES].sort();
+  // Build a {path → usable-bytes} map so we can show "/mnt/ext1 (450 GB
+  // usable)" inline. Only when we actually got the live list back.
+  //
+  // Deliberately the ALLOCATABLE figure, not raw free_bytes. On internal
+  // storage the PS5 holds back a large content-allocator reserve that
+  // statfs never reflects, so free_bytes overstates what an upload can
+  // actually use — a FW 12.00 report showed /data advertising 143 GB free
+  // while only ~63 GB was writable, and the 118 GiB upload it green-lit
+  // died at 53% after 17 minutes. Showing the number that actually governs
+  // is what lets someone pick a workable destination up front.
+  const usableBytesByPath = new Map<string, number>();
+  for (const v of availableVolumes) {
+    usableBytesByPath.set(v.path, volumeAllocatableBytes(v));
+  }
+  const formatUsable = (bytes: number) => {
+    const gib = bytes / 1024 ** 3;
+    if (gib >= 1024) return `${(gib / 1024).toFixed(1)} TB usable`;
+    if (gib >= 10) return `${gib.toFixed(0)} GB usable`;
+    return `${gib.toFixed(1)} GB usable`;
+  };
+
+  return (
+    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+      <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
+        <HardDrive size={14} />
+        {tr("upload_dest_card_title", "Destination")}
+      </div>
+
+      <div className="mb-3 flex items-center gap-2 text-sm">
+        <Select
+          block={false}
+          className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm"
+          value={volume ?? ""}
+          onChange={(e) => onChange(e.target.value || null)}
+          options={[]}
+        >
+          <option value="">
+            {tr("upload_dest_auto", "(default — /data)")}
+          </option>
+          {dropdownPaths.map((p) => {
+            const usable = usableBytesByPath.get(p);
+            return (
+              <option key={p} value={p}>
+                {usable !== undefined ? `${p} (${formatUsable(usable)})` : p}
+              </option>
+            );
+          })}
+        </Select>
+        <span className="text-[var(--color-muted)]">/</span>
+        <Input
+          block={false}
+          className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm"
+          value={subpath}
+          onChange={(e) => onChange(volume, e.target.value)}
+        />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-xs text-[var(--color-muted)]">
+          {tr("upload_dest_presets", "Presets:")}
+        </span>
+        {DESTINATION_PRESETS.map((p) => {
+          const active = subpath === p.subpath;
+          return (
+            <button
+              key={p.subpath}
+              type="button"
+              onClick={() => onChange(volume, p.subpath)}
+              title={tr(p.hintKey, p.hintFallback)}
+              className={clsx(
+                "rounded-full border px-2.5 py-0.5 text-xs transition-colors",
+                active
+                  ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
+                  : "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-3)]",
+              )}
+            >
+              {p.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2.5">
+        <div className="text-xs uppercase tracking-wide text-[var(--color-muted)]">
+          {tr("upload_dest_final_path", "Final path on PS5")}
+        </div>
+        <div className="mt-0.5 break-all font-mono text-xs text-[var(--color-text)]">
+          {resolvedDest}
+        </div>
+      </div>
+      <p className="mt-2 text-xs text-[var(--color-muted)]">
+        {tr(
+          "upload_dest_will_create",
+          "If the destination folder doesn't exist yet on the PS5, it will be created when you start the upload.",
+        )}
+      </p>
+    </section>
+  );
+}
+
+function ExcludesCard({
+  mode,
+  excludes,
+  onSetMode,
+  onToggle,
+  onAdd,
+  onRemove,
+}: {
+  mode: ExcludeMode;
+  excludes: { pattern: string; enabled: boolean }[];
+  onSetMode: (m: ExcludeMode) => void;
+  onToggle: (p: string) => void;
+  onAdd: (p: string) => void;
+  onRemove: (p: string) => void;
+}) {
+  const tr = useTr();
+  const [draft, setDraft] = useState("");
+  return (
+    <section className="mb-6 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+      <h2 className="mb-3 text-sm font-semibold">
+        {tr("upload_files_to_upload", "Files to upload")}
+      </h2>
+
+      <div className="mb-3 grid gap-2 sm:grid-cols-2">
+        <ModeRadio
+          label={tr("upload_include_all_files", "Include all files")}
+          hint={tr("upload_mode_all_hint", "Default. Nothing is filtered.")}
+          checked={mode === "all"}
+          onCheck={() => onSetMode("all")}
+        />
+        <ModeRadio
+          label={tr("upload_apply_exclude_rules", "Apply exclude rules")}
+          hint={tr("upload_mode_rules_hint", "Skip junk files and anything you add below.")}
+          checked={mode === "rules"}
+          onCheck={() => onSetMode("rules")}
+        />
+      </div>
+
+      {mode === "rules" && (
+        <div>
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            {excludes.map((rule) => (
+              <div
+                key={rule.pattern}
+                className="flex items-center gap-2 text-sm"
+              >
+                <Toggle
+                  className="min-w-0 flex-1"
+                  checked={rule.enabled}
+                  onChange={() => onToggle(rule.pattern)}
+                  label={
+                    <code className="block rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-xs">
+                      {rule.pattern}
+                    </code>
+                  }
+                />
+                <button
+                  type="button"
+                  onClick={() => onRemove(rule.pattern)}
+                  className="rounded-md p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+                  title={`Remove ${rule.pattern}`}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+          <form
+            className="mt-3 flex items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (draft.trim()) {
+                onAdd(draft);
+                setDraft("");
+              }
+            }}
+          >
+            <Input
+              block={false}
+              className="flex-1"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder={tr("upload_add_pattern_placeholder", "Add pattern (e.g. *.log)")}
+            />
+            <button
+              type="submit"
+              disabled={!draft.trim()}
+              className="flex items-center gap-1 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+            >
+              <Plus size={12} />
+              {tr("upload_exclude_add", "Add")}
+            </button>
+          </form>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ModeRadio({
+  label,
+  hint,
+  checked,
+  onCheck,
+}: {
+  label: string;
+  hint: string;
+  checked: boolean;
+  onCheck: () => void;
+}) {
+  return (
+    <label
+      className={clsx(
+        "cursor-pointer rounded-md border px-3 py-2 text-sm transition-colors",
+        checked
+          ? "border-[var(--color-accent)] bg-[var(--color-surface-3)]"
+          : "border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-muted)]",
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <input
+          type="radio"
+          checked={checked}
+          onChange={onCheck}
+          className="accent-[var(--color-accent)]"
+        />
+        <span className="font-medium">{label}</span>
+      </div>
+      <div className="mt-0.5 pl-6 text-xs text-[var(--color-muted)]">
+        {hint}
+      </div>
+    </label>
+  );
+}
+
+// Suppress an "unused" warning for the SourceKind re-export in the file —
+// we only re-import the type for clarity above.
+export type { SourceKind };
+
+/**
+ * Warning card shown at the top of Upload when the PS5 payload isn't
+ * currently reachable. Appears for `payloadStatus !== "up"` — covers
+ * both "never connected" (user navigated straight to Upload) and
+ * "payload was up but dropped" (network toggle, crash).
+ *
+ * A button sends the user back to Connection to resolve. This is
+ * softer than an outright "Upload disabled" block — the upload flow
+ * still lets you set up a drop and tweak excludes; it just tells you
+ * the actual transfer won't work until the PS5 is listening.
+ */
+function PayloadReadinessBanner() {
+  const tr = useTr();
+  const status = useConnectionStore((s) => s.payloadStatus);
+  const navigate = useNavigate();
+  if (status === "up") return null;
+  // "Helper" (not "payload") — the ps5upload ELF is called the Helper
+  // everywhere on Connection/Dashboard; "payload" here meant the same
+  // thing but collided with the separate Payloads catalog. And these were
+  // raw English in an otherwise fully-translated screen.
+  const title =
+    status === "down"
+      ? tr("upload_helper_down", undefined, "PS5 helper isn't reachable")
+      : tr("upload_helper_unknown", undefined, "PS5 helper status unknown");
+  const detail =
+    status === "down"
+      ? tr(
+          "upload_helper_down_detail",
+          undefined,
+          "Uploads will fail until the helper is running. Head back to Connection, press Send, and wait for the third step to turn green.",
+        )
+      : tr(
+          "upload_helper_unknown_detail",
+          undefined,
+          "We haven't confirmed your PS5 is running the helper yet. Set your IP and send the helper on the Connection screen first.",
+        );
+  return (
+    <div className="mb-4">
+      <WarningCard
+        title={title}
+        detail={detail}
+        action={
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => navigate("/connection")}
+          >
+            {tr("upload_go_to_connection", "Go to Connection")}
+          </Button>
+        }
+      />
+    </div>
+  );
+}

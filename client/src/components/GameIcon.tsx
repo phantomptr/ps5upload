@@ -1,0 +1,128 @@
+import { useCallback, useEffect, useState } from "react";
+import { Gamepad2 } from "lucide-react";
+
+import {
+  appIconUrl,
+  appIconDataUrl,
+  cachedAppIcon,
+  cachedGameIcon,
+  gameIconUrl,
+  gameIconDataUrl,
+} from "../api/ps5";
+import { transferAddr } from "../lib/addr";
+import { useImageRetry } from "../lib/useImageRetry";
+
+/**
+ * Shared game cover/icon with a graceful glyph fallback.
+ *
+ * Sources are tried in order, matching the ways the app knows about a title:
+ *   - `titleId` → `/user/appmeta/<id>/icon0.png` (installed / registered titles)
+ *   - `gamePath` → `<game folder>/sce_sys/icon0.png` (library scan, pre-install)
+ *   - `fallbackSrc` → any URL (e.g. an external cover-art CDN) for titles the
+ *     console has no local art for — a save for a game that isn't installed.
+ * Pass whichever you have; `titleId` wins, then `gamePath`. On a 404 at one
+ * source it advances to the next, and only shows a controller glyph once every
+ * candidate has failed — same fallback the Install Package / Installed Apps /
+ * Library screens each reimplemented inline before this consolidated them.
+ */
+export function GameIcon({
+  host,
+  titleId,
+  gamePath,
+  fallbackSrc,
+  alt = "",
+  size = 56,
+  rounded = "rounded-md",
+  className = "",
+}: {
+  host: string;
+  titleId?: string | null;
+  gamePath?: string | null;
+  /** Last-resort cover URL (e.g. external CDN) tried after the local sources. */
+  fallbackSrc?: string | null;
+  /** Alt text for the icon. Defaults to "" (decorative — use when the
+   *  game title is already shown next to the icon). Pass the title
+   *  when the icon stands alone (grid tiles, hero cards). */
+  alt?: string;
+  /** Square edge length in px. */
+  size?: number;
+  /** Tailwind rounding class for the frame. */
+  rounded?: string;
+  className?: string;
+}) {
+  const hostReady = !!host.trim();
+  // Ordered candidate list: local appmeta → local game folder → external cover.
+  // Filtering nulls here means the fallback chain naturally skips sources we
+  // don't have rather than rendering a broken <img>.
+  const candidates = [
+    hostReady && titleId ? appIconUrl(transferAddr(host), titleId) : null,
+    hostReady && gamePath ? gameIconUrl(transferAddr(host), gamePath) : null,
+    fallbackSrc || null,
+  ].filter((s): s is string => !!s);
+  const [idx, setIdx] = useState(0);
+  // Reset to the first candidate whenever the set changes — otherwise an
+  // instance reused for a different title (list reorder) would stay on a
+  // stale fallback index even when the new title's primary art exists.
+  const key = candidates.join("|");
+  useEffect(() => {
+    setIdx(0);
+  }, [key]);
+  const candidate = idx < candidates.length ? candidates[idx] : null;
+  // Retry the current candidate a couple of times before moving on. Every
+  // source here answers 404 for a transient read miss as readily as for a
+  // real absence, so advancing on the first error threw away art that was
+  // simply a moment late. Only after the retries are spent does the chain
+  // step to the next source, and then to the glyph.
+  // The IPC fallback only applies to the two console-served sources; a
+  // `fallbackSrc` CDN URL is already a different transport and needs none.
+  const { src, onError, failed } = useImageRetry(candidate, {
+    // Whichever console-served source this attempt is on, if the session
+    // already holds its bytes there is nothing to fetch.
+    cached:
+      idx === 0 && hostReady && titleId
+        ? cachedAppIcon(transferAddr(host), titleId)
+        : idx === (titleId && hostReady ? 1 : 0) && hostReady && gamePath
+          ? cachedGameIcon(transferAddr(host), gamePath)
+          : undefined,
+    fallbackLoader: () =>
+      idx === 0 && hostReady && titleId
+        ? appIconDataUrl(transferAddr(host), titleId)
+        : idx === (titleId && hostReady ? 1 : 0) && hostReady && gamePath
+          ? gameIconDataUrl(transferAddr(host), gamePath)
+          : Promise.resolve(null),
+  });
+  const advance = useCallback(() => setIdx((i) => i + 1), []);
+  useEffect(() => {
+    if (failed) advance();
+  }, [failed, advance]);
+  return (
+    <div
+      className={`flex shrink-0 items-center justify-center overflow-hidden bg-[var(--color-surface-3)] ${rounded} ${className}`}
+      style={{ width: size, height: size }}
+    >
+      {src ? (
+        <img
+          src={src}
+          alt={alt}
+          className="h-full w-full object-cover"
+          // Safe here: none of this component's call sites sit inside a
+          // `content-visibility: auto` row. If you ever place a <GameIcon>
+          // inside one of index.css's *-contain classes, drop this — the
+          // two together leave the image unloaded. See index.css.
+          loading="lazy"
+          // Failures go through useImageRetry first; it advances `failed`
+          // only once the retries for this candidate are spent, and the
+          // effect above then steps to the next source.
+          onError={onError}
+        />
+      ) : (
+        <Gamepad2
+          size={Math.round(size * 0.36)}
+          className="text-[var(--color-muted)]"
+        />
+      )}
+    </div>
+  );
+}
+
+export default GameIcon;

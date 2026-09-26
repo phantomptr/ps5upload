@@ -1,0 +1,33 @@
+# Repo-wide cargo config. Cargo walks up the directory tree looking
+# for `.cargo/config.toml`, so this single file applies to both the
+# `engine/` workspace and the `client/src-tauri/` Tauri crate — no
+# duplication.
+#
+# ── Why `+crt-static` for both MSVC targets ─────────────────────────
+# Default Rust MSVC builds dynamically link the Visual C++ runtime
+# (`VCRUNTIME140.dll`, `MSVCP140.dll`). On a freshly-installed
+# Windows 11 — especially the arm64 image, where almost nothing has
+# pulled in the C++ Redistributable yet — those DLLs aren't present,
+# and the binary refuses to launch with "The code execution cannot
+# proceed because VCRUNTIME140.dll was not found." Bundling the
+# Redist installer is awkward for a single-file portable .exe model.
+# `+crt-static` instead statically links the MSVC CRT into each
+# binary, making them self-contained at the cost of ~200 KB per exe.
+# The user runs `PS5Upload.exe` on a vanilla system and it just
+# works.
+#
+# Affects ONLY the MSVC Windows targets — the linux / darwin / gnu
+# triples are untouched, so dev builds on macOS / Linux / WSL behave
+# exactly as before.
+#
+# Both crt-static-relevant binaries shipped to Windows users get this
+# automatically:
+#   - client/src-tauri  → PS5Upload.exe (the Tauri desktop shell)
+#   - engine            → ps5upload-engine.exe (the sidecar; embedded
+#                         in the desktop bundle as an external bin)
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

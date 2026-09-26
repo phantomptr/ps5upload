@@ -1,0 +1,489 @@
+name: docker-engine
+
+# Builds and publishes two GHCR images from the engine crate:
+#   - ps5upload-engine        (engine/Dockerfile)       — minimal, no UI
+#   - ps5upload-engine-webui  (engine/Dockerfile.webui) — engine + the full
+#     React app served over HTTP, for browser/NAS/headless use (no Tauri
+#     client needed). Its build context is the REPO ROOT, not engine/, since
+#     it needs to `npm ci && npm run build:vite` in client/ before the Rust
+#     build embeds the output.
+#
+# Tag pushes (v*) publish multi-arch (amd64 + arm64) manifests for both
+# images, in lockstep — one release cuts both. PRs that touch engine/ or
+# client/ get a build-only smoke-check of both Dockerfiles (no push).
+#
+# Both images embed the two PS5 ELF images (ps5upload.elf and the DPI
+# install daemon) so a browser driving a self-hosted engine can bring the
+# DPI daemon up and put the helper back afterwards — the fallback that
+# installs a game PATCH. The desktop client does this from its own embeds;
+# a browser has no socket and no bytes, so without them the web UI could
+# install base games and nothing else (the web UI half of #152). That is why the tag
+# builds now start with a `build-payload` job: the main payload is not
+# committed (see .gitignore) and needs the PS5 payload SDK.
+#
+# Manual re-run (e.g. after an Actions outage wedges a tag-push run):
+#   gh workflow run docker-engine.yml -f tag=v3.3.16
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths: ['engine/**', 'client/**', '.github/workflows/docker-engine.yml']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v3.3.16). Must already exist."
+        required: true
+
+# Least privilege at the top: read-only by default. Only the jobs that actually
+# push to GHCR (build*, merge*) opt into packages:write below — the PR
+# `verify`/`verify-webui` jobs inherit read-only and never get a write-capable
+# token.
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-engine-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── PR gate: build amd64, no push ──────────────────────────────────────────
+  verify:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Stage the committed DPI daemon for the embed
+        # ps5upload.elf is not in the repo (it needs the payload SDK), so a
+        # PR build can only cover the DPI half. That is the half the web
+        # UI's patch install depends on, and staging it here means a broken
+        # embed fails the PR rather than the release.
+        run: |
+          set -euo pipefail
+          mkdir -p engine/crates/ps5upload-engine/payload
+          cp -v payload/dpi/ezremote-dpi.elf engine/crates/ps5upload-engine/payload/
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: engine/Dockerfile
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── PR gate for the webui image: same idea, root context + Dockerfile.webui ─
+  verify-webui:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Stage the committed DPI daemon for the embed
+        # ps5upload.elf is not in the repo (it needs the payload SDK), so a
+        # PR build can only cover the DPI half. That is the half the web
+        # UI's patch install depends on, and staging it here means a broken
+        # embed fails the PR rather than the release.
+        run: |
+          set -euo pipefail
+          mkdir -p engine/crates/ps5upload-engine/payload
+          cp -v payload/dpi/ezremote-dpi.elf engine/crates/ps5upload-engine/payload/
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: engine/Dockerfile.webui
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=webui
+          cache-to: type=gha,mode=max,scope=webui
+
+  # ── Resolve + validate the tag ONCE, hand the trusted values to build/merge ─
+  # Centralizing this means the tag is regex-validated before it ever reaches a
+  # checkout `ref:` (no ref injection from a hand-typed workflow_dispatch input),
+  # and the lowercased image names are computed once via the safe env pattern
+  # instead of interpolating ${{ github.repository_owner }} into shell.
+  resolve:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.t.outputs.tag }}
+      version: ${{ steps.t.outputs.version }}
+      major_minor: ${{ steps.t.outputs.major_minor }}
+      image: ${{ steps.t.outputs.image }}
+      image_webui: ${{ steps.t.outputs.image_webui }}
+    steps:
+      - name: Validate tag + derive image names
+        id: t
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          raw_tag="$INPUT_TAG"
+          if ! printf '%s' "$raw_tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+._A-Za-z0-9]*)?$'; then
+            echo "::error::Refusing to proceed: '$raw_tag' is not a valid version tag"
+            exit 1
+          fi
+          version="${raw_tag#v}"
+          owner_lc="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "tag=$raw_tag"
+            echo "version=$version"
+            echo "major_minor=${version%.*}"
+            echo "image=ghcr.io/${owner_lc}/ps5upload-engine"
+            echo "image_webui=ghcr.io/${owner_lc}/ps5upload-engine-webui"
+          } >> "$GITHUB_OUTPUT"
+
+  # ── Build the two PS5 ELF images the engine embeds ─────────────────────────
+  # Mirrors publish.yml's job of the same name. Duplicated rather than shared
+  # because the two workflows run independently on a tag push and neither can
+  # wait on the other's artifacts. The DPI daemon is committed, but the main
+  # payload is not (see .gitignore), and the engine needs BOTH: it streams the
+  # daemon to the loader on :9021 and then puts ps5upload back afterwards.
+  build-payload:
+    needs: resolve
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+
+      - name: Install payload toolchain
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          # apt has no default network timeout, so a stalled mirror hangs
+          # until the job dies. Retry with explicit timeouts.
+          apt_retry() {
+            for attempt in 1 2 3; do
+              if sudo DEBIAN_FRONTEND=noninteractive apt-get \
+                   -o Acquire::Retries=3 \
+                   -o Acquire::http::Timeout=20 \
+                   -o Acquire::https::Timeout=20 \
+                   "$@"; then
+                return 0
+              fi
+              echo "apt attempt $attempt failed; retrying in 15s" >&2
+              sleep 15
+            done
+            echo "apt failed after 3 attempts: apt-get $*" >&2
+            return 1
+          }
+          apt_retry update
+          # llvm-22 is not in Ubuntu 24.04's default repos.
+          curl -fsSL --retry 3 --retry-delay 5 https://apt.llvm.org/llvm.sh | sudo bash -s -- 22
+          apt_retry install -y clang-22 llvm-22-dev lld-22 unzip python3
+
+      - name: Install pinned PS5 Payload SDK
+        run: sudo env PS5_SDK_INSTALL_DIR=/opt/ps5-payload-sdk bash scripts/install-ps5-sdk.sh
+
+      - name: Build payload ELFs
+        env:
+          PS5_PAYLOAD_SDK: /opt/ps5-payload-sdk
+          # SDK v0.42's prospero-llvm-config candidate search maxes at 21,
+          # so point it at the CI-installed LLVM 22 explicitly.
+          LLVM_CONFIG: /usr/bin/llvm-config-22
+        run: make payload
+
+      - name: Sanity-check ELF shape
+        run: |
+          file payload/ps5upload.elf payload/dpi/ezremote-dpi.elf
+          test -s payload/ps5upload.elf
+          test -s payload/dpi/ezremote-dpi.elf
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ps5upload-payload-elves
+          path: |
+            payload/ps5upload.elf
+            payload/dpi/ezremote-dpi.elf
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── Per-arch native build, push by digest (no tag yet) ─────────────────────
+  build:
+    needs: [resolve, build-payload]
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04,     platform: linux/amd64 }
+          - { os: ubuntu-24.04-arm, platform: linux/arm64 }
+    env:
+      IMAGE: ${{ needs.resolve.outputs.image }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+
+      - name: Prepare environment
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: echo "PLATFORM_PAIR=$(printf '%s' "$PLATFORM" | tr '/' '-')" >> "$GITHUB_ENV"
+
+      - name: Stage the PS5 ELF images for the engine embed
+        uses: actions/download-artifact@v8
+        with:
+          name: ps5upload-payload-elves
+          path: /tmp/payload-elves
+
+      - name: Move them into the engine's embed directory
+        # `build.rs` looks here first — the same convention `webui/` uses for
+        # the React bundle, so the images ride along in the existing
+        # `COPY engine/` layer and no Dockerfile needs a second context path.
+        run: |
+          set -euo pipefail
+          mkdir -p engine/crates/ps5upload-engine/payload
+          cp -v /tmp/payload-elves/ps5upload.elf \
+                /tmp/payload-elves/dpi/ezremote-dpi.elf \
+                engine/crates/ps5upload-engine/payload/
+          ls -la engine/crates/ps5upload-engine/payload/
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+
+      - name: Build and push by digest
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: engine/Dockerfile
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
+
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── Per-arch native build of the webui image, push by digest ───────────────
+  # Mirrors `build` above; only the context/file/image/artifact-name/cache-
+  # scope differ. Kept as a separate job (not a matrix dimension on `build`)
+  # so a webui-only failure doesn't need `fail-fast: false` gymnastics to
+  # keep the plain engine image publishing on time.
+  build-webui:
+    needs: [resolve, build-payload]
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04,     platform: linux/amd64 }
+          - { os: ubuntu-24.04-arm, platform: linux/arm64 }
+    env:
+      IMAGE: ${{ needs.resolve.outputs.image_webui }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+
+      - name: Prepare environment
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: echo "PLATFORM_PAIR=$(printf '%s' "$PLATFORM" | tr '/' '-')" >> "$GITHUB_ENV"
+
+      - name: Stage the PS5 ELF images for the engine embed
+        uses: actions/download-artifact@v8
+        with:
+          name: ps5upload-payload-elves
+          path: /tmp/payload-elves
+
+      - name: Move them into the engine's embed directory
+        # `build.rs` looks here first — the same convention `webui/` uses for
+        # the React bundle, so the images ride along in the existing
+        # `COPY engine/` layer and no Dockerfile needs a second context path.
+        run: |
+          set -euo pipefail
+          mkdir -p engine/crates/ps5upload-engine/payload
+          cp -v /tmp/payload-elves/ps5upload.elf \
+                /tmp/payload-elves/dpi/ezremote-dpi.elf \
+                engine/crates/ps5upload-engine/payload/
+          ls -la engine/crates/ps5upload-engine/payload/
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+
+      - name: Build and push by digest
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: engine/Dockerfile.webui
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=webui-${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=webui-${{ env.PLATFORM_PAIR }}
+
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      # Distinct "webui-digests-" prefix (not just a "webui-" infix) so the
+      # plain engine `merge` job's `pattern: digests-*` can't glob-match
+      # these artifacts and fold a webui digest into the minimal image's
+      # manifest.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: webui-digests-${{ env.PLATFORM_PAIR }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── Merge per-arch digests into a multi-arch manifest ──────────────────────
+  merge:
+    needs: [resolve, build]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ${{ needs.resolve.outputs.image }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      MAJOR_MINOR: ${{ needs.resolve.outputs.major_minor }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=${{ env.VERSION }}
+            type=raw,value=${{ env.MAJOR_MINOR }}
+            type=raw,value=latest
+
+      - name: Create and push multi-arch manifest
+        working-directory: /tmp/digests
+        env:
+          META_JSON: ${{ steps.meta.outputs.json }}
+        run: |
+          # Word-splitting here is intentional: the jq output expands to
+          # `-t tagA -t tagB ...` and the printf to space-separated
+          # `image@sha256:<digest>` operands, each a distinct argv entry.
+          # shellcheck disable=SC2046
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$META_JSON") \
+            $(printf "${IMAGE}@sha256:%s " *)
+
+      - name: Inspect manifest
+        run: docker buildx imagetools inspect "${IMAGE}:${VERSION}"
+
+  # ── Merge the webui image's per-arch digests ────────────────────────────────
+  merge-webui:
+    needs: [resolve, build-webui]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ${{ needs.resolve.outputs.image_webui }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      MAJOR_MINOR: ${{ needs.resolve.outputs.major_minor }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: webui-digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=${{ env.VERSION }}
+            type=raw,value=${{ env.MAJOR_MINOR }}
+            type=raw,value=latest
+
+      - name: Create and push multi-arch manifest
+        working-directory: /tmp/digests
+        env:
+          META_JSON: ${{ steps.meta.outputs.json }}
+        run: |
+          # shellcheck disable=SC2046
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$META_JSON") \
+            $(printf "${IMAGE}@sha256:%s " *)
+
+      - name: Inspect manifest
+        run: docker buildx imagetools inspect "${IMAGE}:${VERSION}"

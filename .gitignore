@@ -1,0 +1,259 @@
+# ─── OS / editor ─────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.iml
+.cursor/
+.aider*
+
+# ─── Node / pnpm / yarn ──────────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/releases
+!.yarn/plugins
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ─── Rust / Cargo ────────────────────────────────────────────────────────
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# rust-embed webui stub — created by engine-ci.yml and Dockerfile.webui
+# before building with --features webui. Real content is Vite output
+# (client/dist/) copied in at build time; this is a type-check stub only.
+engine/crates/ps5upload-engine/webui/
+
+# PS5 ELF images staged for the engine's optional build-time embed
+# (build.rs). Populated by docker-engine.yml before an image build so the
+# files ride along in the existing `COPY engine/` layer; a source build
+# picks them up from the repo's own payload/ directory instead.
+engine/crates/ps5upload-engine/payload/
+
+# ─── Python ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+scripts/.translate-cache.json
+
+# ─── Client (Vite / Tauri) ───────────────────────────────────────────────
+client/dist/
+client/.vite/
+client/out/
+client/.cache/
+client/release/
+client/src-tauri/target/
+client/src-tauri/gen/schemas/
+
+# ─── Payload build outputs ───────────────────────────────────────────────
+# The built ELF is embedded as a Tauri resource; we check it in as a
+# release artifact. Object files + build dirs are not.
+payload/build/
+*.o
+*.a
+*.so
+*.dylib
+tests/lab/elev_probe/*.elf
+
+# ─── Bench artefacts (generated on demand) ───────────────────────────────
+bench/fixtures/
+bench/results/
+bench/reports/
+bench/baselines/*.tmp
+
+# ─── Logs / debug dumps ──────────────────────────────────────────────────
+# Anchor `logs/` and `debug/` to the repo root so the patterns don't
+# case-insensitively swallow `client/src/screens/Logs/` on macOS/Windows
+# filesystems — that happened once and left a real source file
+# un-tracked until CI noticed on a clean checkout.
+*.log
+/logs/
+/debug/
+*.dmp
+crash-*.txt
+
+# ─── Secrets + local config ──────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+.envrc
+*.pem
+*.key
+!tests/lab/*.key
+
+# ─── Coverage ────────────────────────────────────────────────────────────
+coverage/
+*.lcov
+.nyc_output/
+
+# ─── Archives / test data ────────────────────────────────────────────────
+test_games/
+fixtures_out/
+*.rar
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+
+# ─── Backup / temp ───────────────────────────────────────────────────────
+*.bak
+*.tmp
+*.orig
+*.rej
+.*.sw?
+temp/
+tmp/
+
+# ─── AI-assistant + agent artefacts ──────────────────────────────────────
+.claude/
+.codex/
+.anthropic/
+AGENTS.md
+CLAUDE.local.md
+
+# ─── Per-platform packaging outputs ──────────────────────────────────────
+# .app / .dmg / .msi / .exe / .deb / .AppImage / .rpm all live under
+# client/src-tauri/target, already covered above. This section
+# catches copies made outside the build tree.
+*.dmg
+*.msi
+*.AppImage
+*.deb
+*.rpm
+*.apk
+*.aab
+
+# ─── Playwright + UI test artefacts ──────────────────────────────────────
+# Browser automation drops snapshots and console logs here during
+# development. Reproducible from a fresh test run, not checked in.
+.playwright-mcp/
+*.playwright-mcp/
+playwright-report/
+test-results/
+/output/playwright/
+/output/research-*/
+/.playwright-cli/
+
+# ─── Dev screenshots / debug captures ────────────────────────────────────
+# Screenshots taken while debugging the UI land at the repo ROOT, and this
+# used to be a list of the exact filenames people had happened to use
+# (dashboard.png, shell-now.png, …). That only ever catches the capture
+# someone already made: `.search.png`, `connection-448.png` and
+# `desktop-hardware-1280.jpeg` all got committed to a PUBLIC repo because
+# they were not on the list.
+#
+# So ignore image/video files AT THE ROOT by default and name the
+# exceptions. Anchored with a leading slash, so real assets under
+# client/icons/, client/public/ and client/src-tauri/icons/ are untouched.
+/*.png
+/*.jpg
+/*.jpeg
+/*.gif
+/*.webp
+/*.bmp
+/*.mp4
+/*.mov
+/*.webm
+# The one root image that belongs here — README.md renders it.
+!/logo.png
+
+# ─── Local /tmp helpers + diagnostic scripts ─────────────────────────────
+# Ad-hoc Python scripts written during debugging sessions
+# (sendpayload, test_shell, klog_monitor, …) — they live in /tmp
+# during dev and shouldn't get committed if copied into the repo root.
+sendpayload.py
+test_shell.py
+test_screens.py
+klog_monitor.py
+klog_now.txt
+klog_phase*.txt
+ps5_startup.log
+ps5upload_*.log
+ps5upload_main_entered
+
+# ─── macOS Application Support cache (extracted payload at runtime) ─────
+# In case anyone runs the bundle from inside this checkout.
+ps5upload.elf.tmp
+ps5upload.elf.tmp.*
+ps5upload.elf.gz.blake3.tmp
+
+# ─── Built payload artifacts ────────────────────────────────────────────
+# CI rebuilds these from C source on every release (see
+# .github/workflows/release.yml: "make payload" step). Tracking them
+# caused two recurring problems:
+#   1. Binary churn: contributors who run `make payload` locally get a
+#      diff-noise commit they have to revert (hit twice in 2.8.0 dev).
+#   2. Stale-payload risk: a contributor changing payload C source
+#      could commit without rebuilding, shipping a desktop build that
+#      embeds the OLD .elf while CI release ships the NEW one.
+# The desktop build script (client/src-tauri/build.rs::require_file)
+# errors with "Build it first: make -C payload all" when missing, so
+# the dev experience for fresh clones is still clean.
+payload/ps5upload.elf
+payload/ps5upload.elf.gz
+
+# ─── Personal scratch + notes ───────────────────────────────────────────
+# Anything in /scratch or /notes-local that a dev wants to keep
+# locally without checking in.
+/scratch/
+/notes-local/
+NOTES.local.md
+TODO.local.md
+
+# Tauri mobile generated projects (regenerate with: tauri android init / ios init)
+client/src-tauri/gen/
+
+# Locally-built/signed Android artifacts (release flow produces these)
+PS5Upload-android.apk
+PS5Upload-android.apk.idsig
+*.idsig
+
+# NEVER commit signing material. The Android release keystore + passwords
+# live in GitHub Actions secrets (ANDROID_KEYSTORE_BASE64 etc.) and an
+# off-repo backup (password manager). Committing a keystore to this PUBLIC
+# repo would expose the app's signing identity — anyone could push a
+# malicious "update" your users' devices would trust. This is a guard so a
+# keystore can't be added by accident.
+*.jks
+*.keystore
+*.p12
+*.pepk
+*.pfx
+key.properties
+
+# Vendored SQLite amalgamation, fetched + checksum-verified by
+# scripts/install-ps5-sdk.sh (pinned in scripts/ps5-sdk.env). A 9 MB
+# generated file that never changes between pins, so it is fetched
+# rather than tracked.
+payload/third_party/sqlite3/
+payload/sqlite3.o
+
+# Local corpus of PS5 system libraries ("fakelibs") gathered from the
+# developer's own console for backport work. NEVER committed: these are Sony
+# binaries, and every comparable project (BackPork, Backport Kitchen,
+# Auto-Backpork, MacPork) refuses to redistribute them for the same reason.
+# Populate with scripts/gather-fakelibs.py; the tool sources them from the
+# user's own games at runtime.
+fakelibs/
+
+# Brainstorming mockups (visual companion)
+.superpowers/
+
+# ─── Local-only docs (specs, plans, research — kept off GitHub) ──────────
+docs/

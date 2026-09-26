@@ -1,0 +1,165 @@
+#ifndef PS5UPLOAD2_CONFIG_H
+#define PS5UPLOAD2_CONFIG_H
+
+/* Compile-time version reported in the STATUS_ACK body. Lets the desktop
+ * UI tell apart an old payload still running from a build that includes
+ * a particular fix, without having to boot the console. Keep in sync
+ * with the desktop app's package.json during releases. */
+#define PS5UPLOAD2_VERSION "5.34.0"
+/* Author credit — embedded in the startup toast so anyone looking at
+ * the console screen knows who wrote the software that just loaded.
+ * Kept separate from VERSION so release scripts can bump the version
+ * without touching this line. */
+#define PS5UPLOAD2_AUTHOR "PhantomPtr"
+
+/* Transfer port — handles bulk-data frames (BEGIN_TX, STREAM_SHARD,
+ * COMMIT_TX, ABORT_TX). Multi-stream: each accepted connection is handled
+ * on its own worker thread, so the engine may open up to
+ * PS5UPLOAD2_TRANSFER_STREAMS_ADVERTISED parallel connections (distinct
+ * tx_ids writing disjoint file sets). See docs/multistream-upload.md. */
+#define PS5UPLOAD2_RUNTIME_PORT 9113
+/* Parallel transfer streams advertised to the engine in STATUS_ACK
+ * (`max_transfer_streams`). The engine opens at most this many concurrent
+ * connections; an old engine that ignores the field opens one. Breaks the
+ * single-stream ~40 MB/s write ceiling on non-Pro consoles. */
+#define PS5UPLOAD2_TRANSFER_STREAMS_ADVERTISED 4
+/* Management port — HELLO, STATUS, FS_LIST_DIR, CLEANUP, QUERY_TX,
+ * TAKEOVER_REQUEST, and FS mutation frames. Served by a separate
+ * pthread so it stays responsive during an active transfer. */
+#define PS5UPLOAD2_MGMT_PORT 9114
+#define PS5UPLOAD2_RUNTIME_ROOT "/data/ps5upload"
+#define PS5UPLOAD2_RUNTIME_DIR "/data/ps5upload/runtime"
+#define PS5UPLOAD2_TX_DIR "/data/ps5upload/tx"
+#define PS5UPLOAD2_SPOOL_DIR "/data/ps5upload/spool"
+#define PS5UPLOAD2_DEBUG_DIR "/data/ps5upload/debug"
+/* 2.2.52 Tier-1 install staging. 2.2.54-fix-round-15 moved this to
+ * /user/data/... after empirical testing showed Sony path-allowlists
+ * the URI argument to sceAppInstUtilInstallByPackage:
+ *   /user/data/  -- accepted
+ *   /mnt/usb / --  accepted (Sony debug menu uses this)
+ *   /data/       -- rejected with 0x80B2_116F (parser group) or
+ *                   0x80B2_150F (install-state group)
+ * Confirmed via curl test on the user 41 MB Store pkg: stage to /data
+ * register fails; stage to /user/data register accepts (err_code=0). */
+#define PS5UPLOAD2_PKG_TEMP_DIR "/user/data/ps5upload/pkg_temp"
+/* Parent dir for the staging tree -- created by runtime_ensure_directories. */
+#define PS5UPLOAD2_USER_DATA_ROOT "/user/data/ps5upload"
+/* Per-mount tracking files (name.src containing the source image
+ * path). Used by FS_LIST_VOLUMES to surface which .exfat/.ffpkg
+ * backs each /mnt/ps5upload/<name> mount point, and by payload
+ * startup reconciliation to detect orphaned mounts. */
+#define PS5UPLOAD2_MOUNTS_DIR "/data/ps5upload/mounts"
+
+/* Socket tuning for the accepted client connection.
+ * PS5/FreeBSD caps SO_RCVBUF at ~512 KiB per socket (kern.ipc.maxsockbuf
+ * policy); asking for 8 MiB silently clamps. 512 KiB is enough for
+ * ~800 Mbps on a 0.6 ms RTT LAN.
+ * Note: listener's SO_RCVBUF is clamped harder (to ~64 KiB) on PS5, so the
+ * per-socket setting happens on the *accepted* fd after each accept(2).
+ */
+#define PS5UPLOAD2_CLIENT_RCVBUF_BYTES (512 * 1024)
+#define PS5UPLOAD2_CLIENT_SNDBUF_BYTES (512 * 1024)
+/* Idle-socket read timeout (seconds). Stops a misbehaving client from
+ * pinning a worker on a persistent connection forever — applied to every
+ * freshly accepted fd (pre-BEGIN_TX probes, Hello, etc.).
+ *
+ * After BEGIN_TX succeeds we raise this to CLIENT_IDLE_IN_TX_SEC: the host
+ * may legitimately go quiet for minutes while decompressing a multi-GB zip
+ * entry before the next STREAM_SHARD. The old 120s cap killed those
+ * transfers mid-inflate (conn_drop every ~2 min) even on a healthy LAN.
+ */
+#define PS5UPLOAD2_CLIENT_IDLE_SEC 120
+/* Per-connection read timeout once a transfer has begun on this socket.
+ * 30 minutes outlasts realistic host-side inflate of huge Deflate entries
+ * while still surfacing a truly wedged client. Restored implicitly when
+ * the connection closes (next accept gets CLIENT_IDLE_SEC again). */
+#define PS5UPLOAD2_CLIENT_IDLE_IN_TX_SEC (30 * 60)
+
+/* In-memory per-shard receive buffer size. Larger = fewer recv syscalls
+ * and better disk-write batching.
+ *
+ * History:
+ *   - Started at 4 MiB to match legacy payload's BUFFER_SIZE.
+ *   - v2.18.2 bumped to 8 MiB chasing a phat-disk perf win. The single-
+ *     file direct-write path tolerated this fine, but the MULTI-FILE
+ *     path's per-shard `runtime_write_shard_to_path` does
+ *     malloc(SHARD_IO_BUF) × 2 + pthread_create + ... + free + join on
+ *     every non-packed shard. On a 46k-file folder (PPSA17221-app, 13
+ *     GB on disk, ~1.2 GB of logical data) that pattern crashed the
+ *     payload deterministically: with 2× 8 MiB = 16 MiB churning over
+ *     hundreds of shards, the heap fragmented faster than PS5's
+ *     allocator could pack — listener died within ~5 minutes.
+ *   - v2.18.3 reverts the constant to 4 MiB. The phat perf bump was
+ *     within run-to-run noise anyway (see v2.18.2 CHANGELOG) — there
+ *     is no benefit to keeping the larger buffer at the cost of
+ *     crashing multi-file uploads. The proper fix for the per-shard
+ *     alloc churn is to share buffers across non-packed shards (would
+ *     match the single-file persistent-writer pattern); deferred to a
+ *     later release.
+ */
+#define PS5UPLOAD2_SHARD_IO_BUF (4 * 1024 * 1024)
+
+/* Periodic writeback interval for the single-file persistent writer. After
+ * this many bytes of streamed data, the writer thread issues one fsync() to
+ * flush accumulated dirty pages to storage.
+ *
+ * Why: the streaming write path intentionally never fsync'd mid-transfer (only
+ * at COMMIT). For a SINGLE very large file (e.g. a 150+ GiB disk image), dirty
+ * pages then accumulate in the PS5 kernel page cache faster than the backing
+ * store can flush them. Once the dirty backlog crosses the kernel's throttle
+ * threshold, the kernel hard-throttles every write(2) and throughput collapses
+ * ~1000× (observed: >100 MB/s decaying to ~100 KiB/s over a 154 GiB upload).
+ * A reconnect "recovered" it only because closing the fd let writeback drain.
+ *
+ * A coarse periodic fsync converts the backlog to clean (reclaimable) pages so
+ * the dirty count stays bounded and throughput settles at the storage's honest
+ * sustained rate instead of collapsing. Coarse (256 MiB) on purpose: an earlier
+ * per-record posix_fadvise(DONTNEED) experiment regressed the 1 GiB path
+ * (synchronous writeback through the single writer thread, every record); at
+ * 256 MiB the flush cost is amortized to noise while still bounding the
+ * backlog. 0 would disable the periodic flush. */
+#define PS5UPLOAD2_WRITEBACK_FSYNC_BYTES (256u * 1024u * 1024u)
+
+/* Minimum shard size (payload bytes) for spawning the double-buffered writer
+ * thread. Below this, the pthread_create/join cost — measured at ~4–6 ms per
+ * shard on FreeBSD 11 / PS5 — dominates the write itself. For small shards
+ * we fall through to the in-thread recv+write path (still POSIX `write(2)`,
+ * same disk performance, just no pthread lifecycle cost).
+ * Sized at 64 KiB: covers the bulk of small-file workloads (15k+ of the
+ * 223k files in a real game dir are <64 KiB) while still using the writer
+ * thread for 1 MiB+ shards where overlap earns its keep. */
+#define PS5UPLOAD2_PIPED_THREAD_MIN_BYTES (64u * 1024u)
+
+/* Packed-shard worker pool — parallelism for many-small-file workloads.
+ * Every packed shard carries up to ~256 records (16 KiB files into 4 MiB
+ * pack). Processing these serially on FreeBSD 11 UFS ran ~23 ms/file dominated
+ * by directory-entry insertion and close-time metadata sync. A small pool of
+ * real kernel threads lets those metadata operations overlap across files in
+ * different directories (main gain), and lets open/close syscalls overlap
+ * even in the same directory (smaller gain).
+ *
+ * Bounds are intentionally conservative — the PS5 has tight per-process
+ * memory + thread limits, only one transaction is active on the single TCP
+ * connection at a time, and the queue capacity bounds peak RAM per pool at
+ * QUEUE_DEPTH * pack_file_max ≈ 4 MiB.
+ */
+/* Empirical note (2026-04-17 sweep): on PS5 UFS, increasing workers from 4 to
+ * 8 gives zero wall-time improvement on 5000×16 KiB — PS5's filesystem
+ * serializes file creation at a deep kernel level, capping real parallelism
+ * at ~3.8× regardless of worker count. 4 workers is the Pareto-optimal
+ * choice: saturates the kernel's per-file-create concurrency without wasting
+ * stack memory or thread-context switches. */
+#define PS5UPLOAD2_PACK_WORKERS 4u
+#define PS5UPLOAD2_PACK_QUEUE_DEPTH 32u
+
+/* Bounded retry budget for transient pack-worker open()/write() failures.
+ * On the small-file-heavy regime (PPSA01342: 223k files / 19k dirs / 75k
+ * shards) a single transient errno (EIO/EMFILE/ENOMEM) used to flip the
+ * pool's sticky worker_error and abort the whole transaction — even a
+ * 99.99% per-syscall success rate yielded ~50% chance of finishing. With 3
+ * retries on transient errnos (backoff 20/50/100 ms) the same per-syscall
+ * rate completes with effectively-1.0 probability. Terminal errnos
+ * (ENOSPC/EROFS/EACCES/ENAMETOOLONG) bypass retry. */
+#define PS5UPLOAD2_PACK_RETRY_MAX 3u
+
+#endif

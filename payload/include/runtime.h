@@ -1,0 +1,304 @@
+#ifndef PS5UPLOAD2_RUNTIME_H
+#define PS5UPLOAD2_RUNTIME_H
+
+#include <stdint.h>
+#include <stddef.h>
+#include <pthread.h>
+
+#include "instance_verdict.h"
+
+#define PS5UPLOAD2_MAX_TX 32
+
+/* Hard upper bounds on the manifest we will accept at BEGIN_TX.
+ * These cap PS5-heap usage for a pathological client manifest so a broken
+ * request fails fast instead of OOMing the payload. Current sizing:
+ *   - 128 MiB blob covers a 223k-file real-game manifest (~35 MiB) with
+ *     ~3× headroom for any future per-entry enrichment.
+ *   - 1M file entries × 32 B index = 32 MiB; same 223k × 4 headroom. */
+#define PS5UPLOAD2_MAX_MANIFEST_BLOB   (128u * 1024u * 1024u)
+#define PS5UPLOAD2_MAX_MANIFEST_FILES  (1u * 1000u * 1000u)
+
+typedef struct {
+    int in_use;
+    unsigned char tx_id[16];
+    char tx_id_hex[33];
+    uint64_t tx_seq;
+    char state[16];
+    uint64_t shards_received;
+    uint64_t bytes_received;
+    /* manifest fields — populated from BEGIN_TX body */
+    char dest_root[256];
+    uint64_t file_count;    /* number of files in this transaction */
+    uint64_t total_shards;  /* 0 = unknown */
+    uint64_t total_bytes;   /* 0 = unknown */
+    /* cumulative wall-clock microseconds per phase (for throughput tracing) */
+    uint64_t recv_us;       /* recv() of shard body from socket */
+    uint64_t write_us;      /* producer time blocked on writer slot */
+    uint64_t verify_us;     /* BLAKE3 verify (streaming — always 0 now) */
+    uint64_t apply_us;      /* COMMIT rename (direct) or spool-to-dest copy */
+    uint64_t open_us;       /* open(2) + ftruncate per shard */
+    uint64_t join_us;       /* pthread_join waiting for writer to drain */
+    uint64_t close_us;      /* close(fd) per shard */
+    uint64_t hash_us;       /* BLAKE3 hasher_update aggregate */
+    uint64_t shard_func_us; /* total time inside runtime_write_shard_to_path */
+    int      sock_rcvbuf;   /* kernel-actual SO_RCVBUF on accepted fd */
+    /* errno (or a synthetic code: ENOMEM for a buffer-alloc failure) captured
+     * at the point a direct-write shard helper failed. The STREAM_SHARD
+     * dispatcher reads this to send a `fs_write_failed_errno_<N>` ERROR frame
+     * to the host instead of just closing the socket — without it a disk-full
+     * (ENOSPC) write surfaces as a bare EOF, which the desktop app renders as
+     * the misleading "your PS5 stopped responding / crashed" message. 0 = no
+     * failure recorded. */
+    int      last_io_errno;
+    /* direct-write optimisation: skip spool entirely and write straight to a
+     * `.ps5up2-tmp` sibling of the destination, rename on commit. Eliminates
+     * the spool-then-apply I/O amplification. */
+    int direct_mode;        /* 1 = direct write to tmp + rename on commit */
+    /* 1 = multi-file transaction (BEGIN_TX kind==2), 0 = single-file (kind==1).
+     * This is the AUTHORITATIVE single-vs-multi discriminator. Do NOT use
+     * `file_count <= 1` for that decision: a multi-file (kind==2) folder
+     * upload can legitimately carry exactly ONE file (e.g. a resume/reconcile
+     * that narrowed to a single remaining small file), and the engine still
+     * packs that lone small file into a PACKED shard. Gating packed-shard
+     * acceptance / multi-file routing on `file_count > 1` made the payload
+     * reject that shard as `packed_unsupported`. Persisted in the tx journal
+     * so a restart-resume restores the correct routing. */
+    int multi_file;
+    char tmp_path[512];     /* fully-qualified `.ps5up2-tmp` path (single-file) */
+    /* Parsed manifest held in memory for the lifetime of an active multi-file
+     * transaction. Built once at BEGIN_TX so per-shard routing is O(log N)
+     * binary search, not O(N) JSON rescan. Both pointers are NULL outside an
+     * active multi-file direct tx and always freed in lockstep via
+     * runtime_release_tx_resources() on every terminal transition. */
+    char  *manifest_blob;       /* heap copy of the manifest JSON, NUL-terminated */
+    size_t manifest_blob_len;   /* blob length in bytes (excluding the NUL) */
+    void  *manifest_index;      /* opaque manifest_index_entry_t * array */
+    uint64_t manifest_index_count; /* number of entries in manifest_index */
+    /* Cached last parent dir that ensure_parent_dir() succeeded on. Sibling
+     * files in the same directory can skip the whole mkdir walk when their
+     * dirname matches. For a 200k-file game dir this saves ~19k × depth × mkdir
+     * EEXIST syscalls, a sizeable chunk of commit-time apply work. */
+    char last_parent_dir[512];
+    /* Cached FILE* for this tx's shard log. Opened lazily on first shard
+     * so empty/aborted-at-BEGIN transactions don't leave stray log files.
+     * Closed (and NULLed) in runtime_release_tx_resources on terminal
+     * transition. `void*` to avoid pulling stdio into this header. */
+    void *shard_log_fp;
+    /* Persistent direct-write state (single-file direct mode only).
+     * First STREAM_SHARD of a direct-mode single-file tx opens the tmp file
+     * and (if total_bytes is large enough) spawns a long-lived writer
+     * thread. Subsequent shards reuse both without any per-shard
+     * open/close/join cost. COMMIT_TX drains the writer, closes the fd,
+     * and renames tmp_path → dest_root. Any terminal transition
+     * (ABORT / takeover / shutdown / fatal error) goes through
+     * runtime_release_tx_resources which tears this state down and unlinks
+     * the stale tmp so no zombie `.ps5up2-tmp` survives.
+     *
+     * `direct_fd_open` disambiguates fd==0 from "not yet opened" without
+     * forcing us to memset-to-(-1). All other fields zero-init correctly.
+     * `direct_writer` is opaque to this header (holds piped_writer_t +
+     * pthread_t + double-buffer handles inside runtime.c). */
+    int      direct_fd;             /* valid only when direct_fd_open==1 */
+    int      direct_fd_open;        /* 1 = direct_fd refers to an open tmp */
+    void    *direct_writer;         /* heap-owned writer handle (see runtime.c) */
+    int      direct_slot;           /* next producer slot (0 or 1) across shards */
+    /* Per-tx shared 4 MiB shard I/O buffers for the MULTI-FILE direct path
+     * (runtime_write_shard_to_path). Allocated lazily on the first non-packed
+     * shard and reused for every subsequent shard in this tx, then freed in
+     * runtime_release_tx_resources. Replaces the old malloc(SHARD_IO_BUF)x2 +
+     * free PER shard, which fragmented the heap and crashed large multi-file
+     * folders (see config.h history) — and which 4-way multi-stream would
+     * otherwise multiply (4 x 2 x 4 MiB of concurrent churn). NULL until first
+     * use. Accessed only under the per-slot g_entry_mtx, so single-writer. */
+    void    *shard_io_buf[2];
+    /* Packed-shard worker pool state. Lazily created on the first packed
+     * STREAM_SHARD, persists across subsequent packed shards in the same tx,
+     * torn down through runtime_release_tx_resources on any terminal
+     * transition. Timing fields are summed from all workers at teardown and
+     * reported in COMMIT_TX_ACK so bench sweep output shows where a
+     * many-small-file run is actually spending time. */
+    void    *pack_pool;             /* opaque pack_worker_pool_t * (runtime.c) */
+    uint64_t pack_records;          /* total packed records processed */
+    uint64_t pack_unlink_us;        /* sum of per-worker unlink time */
+    uint64_t pack_open_us;          /* sum of per-worker open time */
+    uint64_t pack_ftruncate_us;     /* sum of per-worker ftruncate time */
+    uint64_t pack_write_us;         /* sum of per-worker write_full time */
+    uint64_t pack_close_us;         /* sum of per-worker close time */
+    uint64_t pack_open_retries;     /* transient open() retries absorbed */
+    uint64_t pack_write_retries;    /* transient write_full() retries absorbed */
+    /* 1 if the BEGIN_TX flags carried FTX2_TX_FLAG_APPLY_PROGRESS_REQUESTED.
+     * Toggles the multi-file COMMIT_TX apply loop's emission of one-way
+     * APPLY_PROGRESS frames every ~1 sec / 1024 files so the client can
+     * surface a live "Finalized N of M files" counter instead of an
+     * indeterminate wait. Capture happens once at BEGIN_TX and survives
+     * resume (the client must set the flag again on resume BEGIN_TX or
+     * the server reverts to silent apply for the resumed attempt). */
+    int      apply_progress_enabled;
+} runtime_tx_entry_t;
+
+typedef struct {
+    uint64_t instance_id;
+    int runtime_port;           /* transfer port (9113) */
+    int mgmt_port;              /* management port (9114) */
+    int listener_fd;            /* transfer listener */
+    int mgmt_listener_fd;       /* management listener */
+    pthread_t mgmt_thread;      /* thread running runtime_mgmt_server_loop */
+    int mgmt_thread_started;    /* 1 if mgmt_thread is joinable */
+    /* Mutex guarding cross-thread state reads/writes. The mgmt listener
+     * lives in its own pthread (runtime_mgmt_server_loop) while the
+     * transfer listener runs in the main thread; both touch the counters
+     * below and tx_entries[]. Keep critical sections short — never hold
+     * across socket I/O. */
+    pthread_mutex_t state_mtx;
+    int shutdown_requested;
+    int startup_reason;
+    /* How the PREVIOUS instance ended, classified once at startup before
+     * runtime_write_ownership overwrites the record. Holds a
+     * ps5upload2_prior_verdict_t. Reported on STATUS_ACK so the client and
+     * the bug bundle can show it — an externally SIGKILLed predecessor is
+     * otherwise completely invisible. */
+    int prior_verdict;
+    int takeover_requested;
+    uint64_t started_at_unix;
+    uint64_t command_count;
+    uint64_t active_transactions;
+    uint64_t last_tx_seq;
+    uint64_t recovered_transactions;
+    char ownership_path[256];
+    char tx_state_path[256];
+    char tx_journal_path[256];
+    runtime_tx_entry_t tx_entries[PS5UPLOAD2_MAX_TX];
+    int last_client_rcvbuf;       /* kernel-actual SO_RCVBUF on most recent accepted fd */
+    int listener_rcvbuf_asked;    /* value we passed to setsockopt on listener */
+    int listener_rcvbuf_actual;   /* what getsockopt returned on listener */
+    int listener_sndbuf_actual;
+    int max_rcvbuf_probed;        /* largest SO_RCVBUF the kernel will honor */
+} runtime_state_t;
+
+#define PS5UPLOAD2_STARTUP_FRESH 1
+#define PS5UPLOAD2_STARTUP_TAKEOVER 2
+
+int runtime_init(runtime_state_t *state);
+int runtime_write_ownership(const runtime_state_t *state);
+int runtime_clear_ownership(const runtime_state_t *state);
+/* Best-effort SIGKILL of a previous instance that crashed and lingered (the
+ * cooperative takeover only handles a healthy old instance). Call AFTER
+ * runtime_try_takeover and BEFORE runtime_write_ownership. See runtime.c. */
+void runtime_reap_prior_instance(runtime_state_t *state);
+/* Classify how the previous instance ended and store it on `state`.
+ * MUST be called after runtime_init (which fills ownership_path) and
+ * BEFORE runtime_write_ownership overwrites the prior record. MUST also be
+ * called before any worker thread starts (mgmt thread, shutdown watchdog,
+ * etc.): it writes state->prior_verdict WITHOUT holding state_mtx, while
+ * handle_status_frame reads it under that mutex. That is only safe because
+ * today's one call site runs on the main thread long before any other
+ * thread that could read prior_verdict exists — a later call, or a second
+ * call from a worker thread, would race. This is a threading contract, not
+ * locking: no lock has been added here on purpose. */
+void runtime_classify_prior_instance(runtime_state_t *state);
+/* LAST RESORT. SIGKILL every process whose name carries our own
+ * "ps5upload" prefix, except this one. Returns how many were killed.
+ *
+ * Only ever called after BOTH the cooperative TAKEOVER_REQUEST handshake
+ * AND the pid-based reap have failed. The graceful path stays primary
+ * because it calls runtime_mark_active_transactions(..., "interrupted")
+ * first, which tears the journal down cleanly so upload resume survives;
+ * a SIGKILL skips all of that.
+ *
+ * Unlike the pid-based reap this does NOT need an ownership record, which
+ * is the case it exists for: a predecessor whose record was lost or
+ * overwritten is otherwise unreachable and the new payload just exits.
+ *
+ * Deliberately has NO boot-session guard, unlike runtime_reap_prior_instance.
+ * That guard exists there because a pid comes from a persisted file that
+ * survives reboots. Here every pid comes from a live KERN_PROC_PROC sysctl
+ * snapshot taken at call time — the live snapshot IS the boot-session proof,
+ * so there is nothing for a started_at/boottime check to add. See the
+ * comment at the top of the implementation for the full reasoning. */
+int runtime_sweep_our_instances(void);
+/* Arm a detached watchdog that force-`_exit()`s the process if the graceful
+ * shutdown wedges, so a stuck shutdown can't leave an orphan. Call once when
+ * shutdown begins (after runtime_server_loop returns).
+ *
+ * `state` is used ONLY to clear the ownership record before the forced
+ * `_exit()` — a shutdown that wedges past this watchdog is a deliberate exit
+ * we caused, not an external kill, and the ownership record must not
+ * outlive it (see instance_verdict.h: a leftover record + dead pid is
+ * indistinguishable from `killed_externally` to the next instance). May be
+ * NULL to skip that step. */
+void runtime_arm_shutdown_watchdog(const runtime_state_t *state, int exit_code);
+int runtime_ensure_directories(void);
+/* Post-startup cleanup: unmount `/mnt/ps5upload/` mounts whose backing
+ * dev node is gone (orphans from a previous session). Called once at
+ * startup from main.c, after runtime_init completes. Failure-tolerant —
+ * any single reconcile error logs + continues so payload still starts. */
+void runtime_reconcile_mounts(void);
+
+/* 2.2.52 Tier-1 staging sweep. Removes *.pkg files in
+ * PS5UPLOAD2_PKG_TEMP_DIR with mtime older than 24 h — orphans
+ * left by desktop crashes mid-install. Call once at payload init,
+ * after runtime_ensure_directories. Failure-tolerant: opendir/stat
+ * errors are silent so payload still starts even if the dir was
+ * never created (e.g. read-only /data, fresh PS5 startup). */
+void runtime_sweep_stale_pkg_temp(void);
+int runtime_try_takeover(runtime_state_t *state);
+int runtime_server_loop(runtime_state_t *state);
+/* Management listener: started from main.c via pthread_create *before*
+ * runtime_server_loop begins. Binds :9114 and handles all non-transfer
+ * frames — HELLO, STATUS, FS_* ops, QUERY_TX, CLEANUP, TAKEOVER_REQUEST.
+ * Exits when state->shutdown_requested transitions to 1. */
+void *runtime_mgmt_server_loop(void *state_ptr);
+void runtime_cleanup_listener(runtime_state_t *state);
+
+/* Pop a system toast on the PS5 UI (top-right corner). Defined in
+ * main.c. Used by mount/unmount/register/launch handlers in
+ * runtime.c so users see status on the PS5 even when the desktop
+ * client is closed. Empty/NULL message is a no-op. The kernel API
+ * caps message length at ~3 KiB internally, but in practice we
+ * format ~100-character strings. */
+void pop_notification(const char *message);
+
+/* (Re-)apply the full ucred jailbreak: uid/ruid/svuid=0, all-FF
+ * sceCaps, sceAttr=0x80000000, debugger authid, root vnode for
+ * rootdir + jaildir. Idempotent and safe to call multiple times.
+ * Sets `g_ucred_elevation_rc` to the aggregate result (0 = full
+ * elevation succeeded, non-zero = at least one kernel write
+ * failed — typically because kernel R/W isn't available yet).
+ * Called once at startup from main.c, and again lazily from
+ * shellui_rpc_init() if the prior elevation attempt failed —
+ * lets users load kstuff after the payload was already running
+ * and have sensors/launch start working without a reboot. */
+void runtime_apply_ucred_jailbreak(void);
+
+/* `volatile` matches the definition in main.c — without it, the
+ * compiler is allowed to cache reads across function calls into a
+ * register, which on a multi-thread frame dispatcher (where every
+ * connection thread re-runs runtime_apply_ucred_jailbreak() and
+ * mutates this) means a reader could observe a stale -1 long after
+ * elevation succeeded, or vice versa. The qualifier is the cheapest
+ * fix that preserves the existing int-shape extern across all
+ * call sites. */
+extern volatile int g_ucred_elevation_rc;
+
+/* Writable-roots allowlist check. Returns 1 if the path starts with an
+ * allowed root (/data, /user, /mnt/extN, /mnt/usbN, /mnt/ps5upload/<name>,
+ * /mnt/shadowmnt) and contains no ".."/"." components that escape it.
+ * Also resolves symlinks via realpath() and re-validates the canonical
+ * form. Used by every destructive FS handler and backup.c's restore
+ * path. NOTE: realpath() fails for not-yet-existing paths (write/mkdir
+ * targets) — in that case the lexical check result is returned as-is
+ * (there's no symlink to follow yet). */
+int is_path_allowed(const char *p);
+
+/* The FTX2 frame type this thread is currently dispatching, or 0 when it is
+ * not inside a request. Thread-local and written only by its own thread, so
+ * the fatal-signal handler can read it without a lock.
+ *
+ * Why it exists: when the helper dies, the persisted stderr.log used to name
+ * the faulting call only if it was one of the fault-guarded hardware getters.
+ * A crash anywhere else left no trace of what was running. Recording the
+ * frame type turns "the helper disconnected" into "the helper died on
+ * SIGSEGV while serving frame 68" for EVERY request. */
+extern __thread volatile unsigned int g_inflight_frame_type;
+
+#endif

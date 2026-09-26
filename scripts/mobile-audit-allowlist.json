@@ -1,0 +1,5 @@
+{
+  "_comment": "Accepted exceptions for scripts/mobile-audit-probe.mjs, keyed by route then element key. Mirrors scripts/i18n-known-missing.json. Every entry needs a reason in _reasons — an unexplained allowlist entry is how a real defect gets buried.",
+  "routes": {},
+  "_reasons": {}
+}
