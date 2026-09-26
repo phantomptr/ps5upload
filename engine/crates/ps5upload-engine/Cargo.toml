@@ -33,7 +33,7 @@ zip = { version = "8", default-features = false, features = ["deflate"] }
 blake3.workspace = true
 ftx2-proto = { path = "../ftx2-proto" }
 mime_guess = { version = "2", optional = true }
-smb2 = "0.21"
+smb2 = "0.23"
 ps5upload-core = { path = "../ps5upload-core" }
 ps5upload-pkg = { path = "../ps5upload-pkg" }
 ps5upload-fpkg = { path = "../ps5upload-fpkg" }
