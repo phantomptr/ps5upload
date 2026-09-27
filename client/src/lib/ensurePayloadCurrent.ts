@@ -4,7 +4,6 @@ import { isTauriEnv } from "./tauriEnv";
 import { restoreMainPayload } from "./restoreMainPayload";
 import { compareVersions } from "./semver";
 import { log } from "../state/logs";
-import { prearmDpiDaemon } from "./prearmDpi";
 
 export type EnsurePayloadResult =
   | "current"
@@ -116,12 +115,9 @@ async function ensurePayloadCurrentOnce(
     // payloadCheck threw — fall through to push attempt.
   }
   if (!force && running && compareVersions(running, appVersion) === 0) {
-    // The helper is current, which also means the console answered us just
-    // now. Take the opportunity to arm the update installer (see prearmDpi):
-    // it is one probe when the daemon is already up, and once per console per
-    // session otherwise. Deliberately not awaited — nothing here depends on
-    // it, and an unreachable loader must not slow down a healthy connect.
-    void prearmDpiDaemon(host);
+    // The helper is current. The install daemon is no longer pre-armed here —
+    // the engine brings it up per-install during `POST /api/pkg/install` — so
+    // a healthy connect does no extra work.
     return "current";
   }
   // Need to push — unless we already did, moments ago, and that helper is
@@ -176,11 +172,6 @@ async function ensurePayloadCurrentOnce(
         probe.payloadVersion &&
         compareVersions(probe.payloadVersion, appVersion) === 0
       ) {
-        // The loader just took an ELF, so we know it is alive THIS second.
-        // That is the whole point of arming here: a loader that works now can
-        // be gone by the time an update install needs it, and then the
-        // installer can never be delivered at all.
-        void prearmDpiDaemon(host);
         return "pushed";
       }
     } catch {

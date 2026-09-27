@@ -756,22 +756,6 @@ export async function browserInvoke<T>(
       return getJson<T>(url);
     }
 
-    case "pkg_install_start":
-      return postJson<T>("/api/pkg/install/start", {
-        ps5_addr: args["ps5Addr"],
-        path: args["path"],
-        split_root: args["splitRoot"],
-        remote_url: args["remoteUrl"],
-        package_type_override: args["packageTypeOverride"],
-        local_ps5_path: args["localPs5Path"],
-        content_id: args["contentId"],
-        expected_size: args["expectedSize"],
-        package_fingerprint: args["packageFingerprint"],
-        delete_staging: args["deleteStaging"] ?? true,
-        serve_only: args["serveOnly"] ?? false,
-        insecure_tls: args["insecureTls"] ?? false,
-      });
-
     // Identify a package behind a link before committing to the install.
     case "pkg_remote_probe":
       return postJson<T>("/api/pkg/remote/probe", { url: args["url"] });
@@ -839,21 +823,6 @@ export async function browserInvoke<T>(
         session: args["session"],
       });
 
-    // Bring up the DPI install daemon on :9115, and put the ps5upload
-    // helper back once the install is done. On the desktop both of these
-    // stream an ELF the app has embedded; a browser has no socket and no
-    // copy of the bytes, so the engine does it. Missing here, the install
-    // cascade's DPI fallback was unreachable from the web UI — and that
-    // fallback is the only path that lands a game PATCH, which is why
-    // base games installed from the browser and updates did not (#152).
-    case "dpi_ensure":
-      // TS caller: { ip }. Response shape matches the Tauri command's
-      // { ok, listening, sent, error? } — the cascade reads `sent` to
-      // decide whether the helper needs restoring.
-      return postJson<T>("/api/pkg/dpi-ensure", {
-        ps5_addr: args["ip"],
-      });
-
     case "payload_restore":
       // Browser-only command (no Tauri twin): the desktop resolves its
       // bundled payload path and calls `payload_send`, which a browser
@@ -863,38 +832,11 @@ export async function browserInvoke<T>(
         ps5_addr: args["ip"],
       });
 
-    case "pkg_dpi_install":
-      // TS caller: { ps5Addr, localPs5Path } (Tauri 2 camelCase)
-      return postJson<T>(
-        "/api/pkg/dpi-install",
-        {
-          ps5_addr: args["ps5Addr"],
-          local_ps5_path: args["localPs5Path"],
-          title_id: args["titleId"],
-          package_app_ver: args["packageAppVer"],
-        },
-        /*long=*/ true,
-      );
-
     // Local .pkg header/split parse. Missing here meant the browser build
     // could not stream-install at all: installStream reads metadata through
     // this before it can open a serve-only session.
     case "pkg_metadata_split":
       return postJson<T>("/api/pkg/parse-split", { path: args["path"] });
-
-    case "pkg_dpi_direct_install":
-      // TS caller: { ps5Addr, sessionId } (Tauri 2 camelCase).
-      // Direct/streaming install (beta, #81): the engine serves the pkg
-      // at /pkg-host/{session}/ and the DPI daemon pulls it over HTTP —
-      // no staging copy uploaded to the PS5 first.
-      return postJson<T>(
-        "/api/pkg/dpi-direct-install",
-        {
-          ps5_addr: args["ps5Addr"],
-          session_id: args["sessionId"],
-        },
-        /*long=*/ true,
-      );
 
     // ── Payload probe ────────────────────────────────────────────────────────
 

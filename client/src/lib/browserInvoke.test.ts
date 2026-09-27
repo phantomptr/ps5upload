@@ -137,23 +137,6 @@ describe("loader-port commands the DPI fallback depends on", () => {
     expect(calls[0].url).toBe("http://engine.test:19113/api/pkg/install/status?job=17-1");
   });
 
-  it("routes dpi_ensure to the engine instead of throwing", async () => {
-    const calls = captureFetch({ ok: true, listening: true, sent: false });
-
-    const res = await browserInvoke("dpi_ensure", { ip: "192.168.1.50" });
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe("http://engine.test:19113/api/pkg/dpi-ensure");
-    // The engine route names the console the same way every other pkg
-    // route does; `ip` is the Tauri command's spelling.
-    expect(JSON.parse(calls[0].init.body as string)).toEqual({
-      ps5_addr: "192.168.1.50",
-    });
-    // `sent` has to survive the translation — the cascade uses it to
-    // decide whether the helper was displaced and needs restoring.
-    expect(res).toEqual({ ok: true, listening: true, sent: false });
-  });
-
   it("routes payload_restore to the engine", async () => {
     const calls = captureFetch({ ok: true, bytes: 2230616 });
 

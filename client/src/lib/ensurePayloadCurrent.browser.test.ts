@@ -7,7 +7,6 @@ const payloadCheckMock = vi.fn();
 const bundledPathMock = vi.fn();
 const sendPayloadMock = vi.fn();
 const restoreMock = vi.fn();
-const prearmMock = vi.fn();
 const appVersionMock = vi.fn();
 
 vi.mock("./tauriEnv", () => ({ isTauriEnv: () => false }));
@@ -20,12 +19,6 @@ vi.mock("../api/ps5", () => ({
 vi.mock("./restoreMainPayload", () => ({
   restoreMainPayload: (...a: unknown[]) => restoreMock(...a),
 }));
-vi.mock("./prearmDpi", () => ({
-  prearmDpiDaemon: (...a: unknown[]) => {
-    prearmMock(...a);
-    return Promise.resolve({ outcome: "already-up" });
-  },
-}));
 vi.mock("../state/logs", () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -33,7 +26,7 @@ vi.mock("../state/logs", () => ({
 import { ensurePayloadCurrent } from "./ensurePayloadCurrent";
 
 beforeEach(() => {
-  [payloadCheckMock, bundledPathMock, sendPayloadMock, restoreMock, prearmMock, appVersionMock]
+  [payloadCheckMock, bundledPathMock, sendPayloadMock, restoreMock, appVersionMock]
     .forEach((m) => m.mockReset());
   appVersionMock.mockResolvedValue("5.17.7");
 });
@@ -46,12 +39,6 @@ describe("ensurePayloadCurrent in a browser", () => {
     payloadCheckMock.mockResolvedValue({ reachable: true, payloadVersion: "5.17.7" });
     await expect(ensurePayloadCurrent("10.0.0.5")).resolves.toBe("current");
     expect(appVersionMock).toHaveBeenCalled();
-  });
-
-  it("arms the update installer once the console has answered", async () => {
-    payloadCheckMock.mockResolvedValue({ reachable: true, payloadVersion: "5.17.7" });
-    await ensurePayloadCurrent("10.0.0.5");
-    expect(prearmMock).toHaveBeenCalledWith("10.0.0.5");
   });
 
   it("redeploys through the engine, never through desktop-only commands", async () => {

@@ -2549,59 +2549,6 @@ pub async fn pkg_install_preflight(
     get_json(url.as_str()).await
 }
 
-/// Kick off an install. Returns the session_id, the HTTP URL the PS5
-/// will fetch from, and the BGFT task_id. Caller polls `pkg_install_status`
-/// until phase=done|error.
-// Tauri command: the parameter list mirrors the JS call site (each becomes a
-// key in the invoke args object), so the count is dictated by the install API
-// surface, not Rust ergonomics — the standard exception to too_many_arguments.
-#[allow(clippy::too_many_arguments)]
-#[tauri::command]
-pub async fn pkg_install_start(
-    ps5_addr: String,
-    path: Option<String>,
-    split_root: Option<String>,
-    // Install-from-a-link: the engine fetches the package from this HTTP(S)
-    // URL over many connections at once and re-serves it to the console from
-    // the pkg-host. Mutually exclusive with path/split_root/local_ps5_path.
-    remote_url: Option<String>,
-    package_type_override: Option<String>,
-    local_ps5_path: Option<String>,
-    content_id: Option<String>,
-    expected_size: Option<u64>,
-    package_fingerprint: Option<String>,
-    // The user's "Auto Delete after installation" preference. When false, the
-    // engine keeps the staged pkg instead of deleting it post-install. Optional
-    // so any caller that omits it gets the safe default (true) via serde.
-    delete_staging: Option<bool>,
-    // Serve-only (Stream beta): create the /pkg-host/ serving session but skip
-    // the in-process install — the caller finishes via dpi-direct-install. See
-    // InstallStartRequest::serve_only. Optional; defaults false (normal install).
-    serve_only: Option<bool>,
-    // Skip TLS verification while THIS COMPUTER downloads from remote_url.
-    // Per install, never global, and it has no bearing on a direct install,
-    // where the console performs its own handshake. Optional so an older
-    // caller keeps verification on.
-    insecure_tls: Option<bool>,
-) -> Result<JsonValue, String> {
-    let url = format!("{}/api/pkg/install/start", engine::url());
-    let body = serde_json::json!({
-        "ps5_addr": ps5_addr,
-        "path": path,
-        "split_root": split_root,
-        "remote_url": remote_url,
-        "package_type_override": package_type_override,
-        "local_ps5_path": local_ps5_path,
-        "content_id": content_id,
-        "expected_size": expected_size,
-        "package_fingerprint": package_fingerprint,
-        "delete_staging": delete_staging.unwrap_or(true),
-        "serve_only": serve_only.unwrap_or(false),
-        "insecure_tls": insecure_tls.unwrap_or(false),
-    });
-    post_json(&url, &body).await
-}
-
 /// Download a package from a link to this computer's disk, to be installed
 /// from the local file afterwards. Returns immediately with an id to poll;
 /// the transfer runs in the engine.
@@ -2647,50 +2594,6 @@ pub async fn pkg_remote_probe(url: String) -> Result<JsonValue, String> {
     let endpoint = format!("{}/api/pkg/remote/probe", engine::url());
     post_json(&endpoint, &serde_json::json!({ "url": url })).await
 }
-
-/// Install a staged .pkg through the DPI daemon on :9040 (the engine
-/// POSTs the bare PS5 path; the daemon runs sceAppInstUtilInstallByPackage
-/// with that local path — the launchable path, since 2.25.2). Long-deadline
-/// client — the installer ingests the pkg before replying.
-#[tauri::command]
-pub async fn pkg_dpi_install(
-    ps5_addr: String,
-    local_ps5_path: String,
-    // Identity of the staged package. The engine cannot parse a file that
-    // lives on the console, so it needs these to verify afterwards that an
-    // update actually took effect. Optional: absent skips the check.
-    title_id: Option<String>,
-    package_app_ver: Option<String>,
-) -> Result<JsonValue, String> {
-    let url = format!("{}/api/pkg/dpi-install", engine::url());
-    let body = serde_json::json!({
-        "ps5_addr": ps5_addr,
-        "local_ps5_path": local_ps5_path,
-        "title_id": title_id,
-        "package_app_ver": package_app_ver,
-    });
-    post_json_long(&url, &body).await
-}
-
-/// Direct/streaming install (beta, #81): hand the DPI daemon the engine's
-/// /pkg-host/ URL for an existing session instead of a staged PS5 path.
-/// The daemon pulls the pkg over HTTP — no staging copy uploaded to the
-/// PS5 first. The session must already be registered with the engine via
-/// a prior `pkg_install_start` (which creates the pkg-host listener).
-/// Long-deadline client — the installer ingests the pkg before replying.
-#[tauri::command]
-pub async fn pkg_dpi_direct_install(
-    ps5_addr: String,
-    session_id: String,
-) -> Result<JsonValue, String> {
-    let url = format!("{}/api/pkg/dpi-direct-install", engine::url());
-    let body = serde_json::json!({
-        "ps5_addr": ps5_addr,
-        "session_id": session_id,
-    });
-    post_json_long(&url, &body).await
-}
-
 /// Poll an in-flight install for status. Cheap; called every 1-2s.
 #[tauri::command]
 pub async fn pkg_install_status(session: String) -> Result<JsonValue, String> {

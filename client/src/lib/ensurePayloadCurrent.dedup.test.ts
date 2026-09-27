@@ -16,9 +16,6 @@ vi.mock("../api/ps5", () => ({
 vi.mock("./restoreMainPayload", () => ({
   restoreMainPayload: (...a: unknown[]) => restoreMock(...a),
 }));
-vi.mock("./prearmDpi", () => ({
-  prearmDpiDaemon: () => Promise.resolve({ outcome: "already-up" }),
-}));
 vi.mock("../state/logs", () => ({
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
