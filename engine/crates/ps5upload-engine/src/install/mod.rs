@@ -298,6 +298,13 @@ pub fn delivery_progress(served: u64, total: u64, idle_ms: u64, stall_ms: u64) -
     }
 }
 
+/// The daemon's own job phase, when it settles delivery by itself: "done"
+/// (the loopback source was fully read) or "accepted" (the path was handed to
+/// Sony directly, so there is nothing for the daemon to serve).
+pub fn daemon_phase_progress(phase: &str) -> Option<DeliveryProgress> {
+    matches!(phase, "done" | "accepted").then_some(DeliveryProgress::Complete)
+}
+
 use crate::install::deliver::{decide_delivery, needs_short_alias, Delivery, Source};
 use crate::install::history::HistoryEntry;
 use crate::install::status::Route;
@@ -517,7 +524,8 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     });
     let deliver_started = std::time::Instant::now();
 
-    // ensure the daemon (restore the helper afterwards if it was displaced).
+    // ensure the daemon. It is sent as a companion image, so it runs alongside
+    // the helper and never displaces it.
     let elf = crate::bundled_payload::image_bytes(crate::bundled_payload::Image::Installer).ok();
     let ip_for_ensure = ip.clone();
     let ens =
@@ -541,7 +549,6 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         finalize(&state, &job, &req, started);
         return;
     }
-    let displaced = ens.sent;
 
     // build the install call per source.
     let hint_name = name_hint(title_id.as_deref());
@@ -629,24 +636,6 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         Ok(ic::InstallReply::Accepted { job, .. }) => Some(job.clone()),
         _ => None,
     };
-
-    // restore the main payload if the ensure displaced it.
-    if displaced {
-        let ip_r = ip.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            if let Ok(bytes) =
-                crate::bundled_payload::image_bytes(crate::bundled_payload::Image::Payload)
-            {
-                let _ = ps5upload_core::payload_lifecycle::send_elf_to_loader(
-                    &ip_r,
-                    ps5upload_core::payload_lifecycle::PS5_LOADER_PORT,
-                    &bytes,
-                    ps5upload_core::payload_lifecycle::LoaderImage::Ps5Upload,
-                );
-            }
-        })
-        .await;
-    }
 
     if !accepted {
         // Sony (or the daemon) refused the start, so the console never pulled
@@ -743,8 +732,8 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                     s.metrics.total_bytes = total;
                 }
             });
-            let p = if dphase.as_deref() == Some("done") {
-                DeliveryProgress::Complete
+            let p = if let Some(p) = dphase.as_deref().and_then(daemon_phase_progress) {
+                p
             } else {
                 delivery_progress(
                     served,
@@ -1038,6 +1027,23 @@ mod tests {
         // Fetched, or no Sony code: an ordinary refusal.
         assert_eq!(refusal_reason(false, 0x80431064), FailReason::SonyRefused);
         assert_eq!(refusal_reason(true, 0), FailReason::SonyRefused);
+    }
+
+    #[test]
+    fn a_daemon_that_handed_the_path_to_sony_has_nothing_left_to_serve() {
+        // The loopback route was refused and the daemon fell back to a bare
+        // path: the job is "accepted" with no bytes to watch. Waiting on it
+        // ran the 5-minute stall clock and reported a working install as
+        // stalled.
+        assert_eq!(
+            daemon_phase_progress("accepted"),
+            Some(DeliveryProgress::Complete)
+        );
+        assert_eq!(
+            daemon_phase_progress("done"),
+            Some(DeliveryProgress::Complete)
+        );
+        assert_eq!(daemon_phase_progress("serving"), None);
     }
 
     #[test]
