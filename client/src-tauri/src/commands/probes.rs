@@ -648,7 +648,15 @@ fn memmem_ascii(haystack: &[u8], needle: &[u8]) -> bool {
 /// should trigger eviction of the current payload. `head` is the leading
 /// chunk of the file (payload_probe / do_payload_send both pass 512 KiB).
 fn is_ps5upload_payload(path: &str, head: &[u8]) -> bool {
-    path.to_ascii_lowercase().contains("ps5upload")
+    // Our installer daemon is a companion that runs alongside the helper, but
+    // it shares the name and carries "ps5upload" in its strings: rule it out
+    // first, by its file name or its own log marker.
+    let name = path.to_ascii_lowercase();
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(&name);
+    if base.contains("installer") || memmem_ascii(head, b"PS5Upload installer") {
+        return false;
+    }
+    base.contains("ps5upload")
         || memmem_ascii(head, b"ps5upload")
         || memmem_ascii(head, b"PS5UPLOAD")
 }
@@ -828,6 +836,18 @@ mod payload_send_tests {
             .await
             .unwrap_err();
         assert!(err.contains("too large"), "expected size cap, got: {err}");
+    }
+
+    #[test]
+    fn the_real_installer_daemon_never_evicts_the_helper() {
+        // The shipped daemon carries "ps5upload" in its debug paths, so the
+        // generic signature match took it for the helper — sending it would
+        // have evicted the running ps5upload. Checked under its own name and
+        // a neutral one.
+        let elf = include_bytes!("../../../../payload/installer/ps5upload-installer.elf");
+        let head = &elf[..elf.len().min(512 * 1024)];
+        assert!(!is_ps5upload_payload("/x/ps5upload-installer.elf", head));
+        assert!(!is_ps5upload_payload("/x/daemon.elf", head));
     }
 
     #[test]

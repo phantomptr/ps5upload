@@ -7,6 +7,9 @@ const repoRoot = path.resolve(import.meta.dirname, "..");
 const strict = process.argv.includes("--strict");
 
 const manualEntrypoints = new Set([
+  // Manual throughput harness against a live PS5 (see its header). Its only
+  // mention was in docs/, which moved to the ps5upload-docs repo.
+  "bench/multistream-hw-test.mjs",
   "scripts/bundle-fonts.py",
   "scripts/find-orphan-i18n.mjs",
   "scripts/hw-test-loop.sh",
