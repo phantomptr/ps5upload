@@ -26,9 +26,7 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
-use ps5upload_core::pkg_install::{
-    err_code_message, pkg_install, PkgInstallRequest, PkgInstallResponse, PkgInstallStatus,
-};
+use ps5upload_core::pkg_install::PkgInstallStatus;
 use ps5upload_pkg::{
     extract_from_ffpkg, inspect_ffpkg, metadata_from_reader, package_fingerprint_from_reader,
     parse_pkg, parse_split_pkg, PkgKind, PkgMetadata, SplitPkgMetadata,
@@ -1394,34 +1392,6 @@ fn default_true() -> bool {
     true
 }
 
-/// Internal hand-off code shared with the payload's `BGFT_ERR_DPI_REQUIRED`.
-/// It is intentionally non-zero so every existing client follows its normal
-/// rejected-start -> standalone-DPI fallback without mistaking the hand-off
-/// for a completed install.
-const DLC_DPI_REQUIRED_ERR: u32 = 0xE000_0008;
-
-/// Whether a staged install should skip the main payload and go straight to
-/// the standalone DPI daemon. Stream mode already invokes DPI directly, and a
-/// non-local install has no staged path to hand to the local-path DPI route.
-///
-/// DLC (`…AC`) always: on FW 9.60 the in-process call can remove an
-/// already-installed add-on before returning a rejection, so the payload's
-/// whole cascade is unsafe for it.
-///
-/// Patch (`…DP`) only when DPI is `dpi_up`: the in-process attempt is measured
-/// to fail on both of our consoles (0x80B2150F on FW 5.10, 0x80B2116F on FW
-/// 9.60), so with DPI already listening the attempt is a guaranteed rejection
-/// worth skipping. Without DPI it is NOT safe to skip — the in-process path
-/// does apply patches on some firmware points, and refusing up front would
-/// turn a working install into a failure on a console whose loader is simply
-/// not running.
-fn staged_requires_dpi(is_local: bool, serve_only: bool, package_type: &str, dpi_up: bool) -> bool {
-    if !is_local || serve_only {
-        return false;
-    }
-    package_type.ends_with("AC") || (package_type.ends_with("DP") && dpi_up)
-}
-
 /// Decide the session's `staging_path` — the file the terminal-phase handler
 /// deletes after install. Returns `Some(path)` ONLY when the caller asked us to
 /// clean up (`delete_staging`) AND a non-empty local path was supplied; `None`
@@ -1580,6 +1550,14 @@ pub(crate) async fn install_start_handler(
     State(state): State<PkgInstallStateHandle>,
     Json(req): Json<InstallStartRequest>,
 ) -> Response<Body> {
+    // Only the unified install orchestrator calls this, always serve-only.
+    // Refuse anything else BEFORE a session is registered so nothing leaks.
+    if !req.serve_only {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "the in-process install path was removed; use POST /api/pkg/install",
+        );
+    }
     let (parts, part_sizes, total_size, head_meta, remote) =
         match resolve_parts_and_meta(&req).await {
             Ok(t) => t,
@@ -2054,212 +2032,32 @@ pub(crate) async fn install_start_handler(
     // in-process InstallByPackage — on FW < 11 that call against an http:// URL
     // hangs the payload until the watchdog kills the helper. The client's next
     // step (`/api/pkg/dpi-direct-install`) performs the real install.
-    if req.serve_only {
-        crate::log_info!(
-            "pkg_install serve-only: addr={} session={} url={} content_id={} title={:?} — skipping in-process install; DPI daemon will pull",
-            req.ps5_addr,
-            session_id,
-            url,
-            session.content_id,
-            session.title,
-        );
-        return json_ok(&InstallStartResponse {
-            session_id,
-            url,
-            task_id: 0,
-            err_code: 0,
-            err_message: None,
-            detail: String::new(),
-            may_not_launch: false,
-            register_path: "serve-only".to_string(),
-            intdebug_avail: false,
-            kernel_rw: false,
-            shellui_err: None,
-            appinst_err: None,
-            via: "serve-only".to_string(),
-            package_type,
-        });
-    }
-
-    // Do not even send a staged DLC install frame to the main payload. This is
-    // deliberately enforced engine-side as well as payload-side so a current
-    // desktop remains safe when the console still has an older payload loaded.
-    // Return a typed start rejection; runPkgInstallCore then starts standalone
-    // DPI and verifies the exact add-on fingerprint before showing success.
-    //
-    // A staged patch is routed the same way, but only when the installer
-    // daemon is already listening — see `staged_requires_dpi`. Probing :9115
-    // is safe (it is our own accept loop, and `dpi_ensure` probes it the same
-    // way); probing :9021 is NOT, because a loader that gets a
-    // connect-and-close with no bytes can execute an empty image.
-    let dpi_up = if package_type.ends_with("DP") && is_local && !req.serve_only {
-        let dpi_addr = ps5upload_core::payload_lifecycle::join_host_port(
-            &strip_host_port(&req.ps5_addr),
-            ps5upload_core::payload_lifecycle::INSTALLER_PORT,
-        );
-        // spawn_blocking: `port_is_open` is a synchronous connect with a
-        // 1.5 s timeout, and this handler runs on the tokio runtime.
-        tokio::task::spawn_blocking(move || {
-            ps5upload_core::payload_lifecycle::port_is_open(&dpi_addr, DPI_PROBE_TIMEOUT)
-        })
-        .await
-        .unwrap_or(false)
-    } else {
-        false
-    };
-    if staged_requires_dpi(is_local, req.serve_only, &package_type, dpi_up) {
-        crate::log_info!(
-            "pkg_install: staged {} session={} routed directly to standalone DPI; main payload skipped",
-            if package_type.ends_with("AC") { "DLC" } else { "patch" },
-            session_id,
-        );
-        return json_ok(&InstallStartResponse {
-            session_id,
-            url,
-            task_id: -1,
-            err_code: DLC_DPI_REQUIRED_ERR,
-            err_message: err_code_message(DLC_DPI_REQUIRED_ERR).map(str::to_string),
-            detail: "safe staged-DLC hand-off".to_string(),
-            may_not_launch: false,
-            register_path: "dpi-required".to_string(),
-            intdebug_avail: false,
-            kernel_rw: false,
-            shellui_err: None,
-            appinst_err: None,
-            via: "dpi-required".to_string(),
-            package_type,
-        });
-    }
-
-    let install_req = PkgInstallRequest {
-        url: url.clone(),
-        content_id: session.content_id.clone(),
-        size: session.total_size,
-        title: session.title.clone(),
-        package_type: package_type.clone(),
-        method: None,
-    };
-
+    // Serve-only by construction: the session + its /pkg-host/ listener are
+    // now live and the unified install state machine hands the URL to the
+    // installer daemon. The in-process InstallByPackage cascade that used to
+    // follow here is gone (on FW < 11 it hung the payload on an http:// URL).
     crate::log_info!(
-        "pkg_install: addr={} session={} url={} content_id={} title={:?} package_type={} parts={} total={} bytes delete_staging={} staging_path={:?}",
+        "pkg_install serve-only: addr={} session={} url={} content_id={} title={:?} — skipping in-process install; DPI daemon will pull",
         req.ps5_addr,
         session_id,
         url,
         session.content_id,
         session.title,
-        install_req.package_type,
-        session.parts.len(),
-        total_size,
-        req.delete_staging,
-        session.staging_path,
     );
-
-    // Run the blocking PS5 frame exchange OFF the async reactor. `pkg_install`
-    // does synchronous TCP I/O (connect backoff + up-to-30s read timeout); the
-    // bare `#[tokio::main]` runtime has only num_cpus worker threads, so calling
-    // it inline would park a reactor thread for the whole RPC. Against a wedged
-    // or unreachable console a few concurrent installs would occupy every
-    // worker thread and stall the ENTIRE engine — SSE, /pkg-host serving, and
-    // every OTHER console's requests. spawn_blocking keeps the reactor free so
-    // 12 consoles stay independent. (Mirrors dpi_install_handler.)
-    let resp: PkgInstallResponse = {
-        let addr = req.ps5_addr.clone();
-        let rollback = |e: String| {
-            state
-                .sessions
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .remove(&session_id);
-            crate::log_warn!(
-                "pkg_install RPC failed: session={} addr={} err={}",
-                session_id,
-                req.ps5_addr,
-                e,
-            );
-            json_err(
-                StatusCode::BAD_GATEWAY,
-                &format!("payload PKG_INSTALL failed: {e}"),
-            )
-        };
-        match tokio::task::spawn_blocking(move || pkg_install(&addr, &install_req)).await {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => return rollback(e.to_string()),
-            Err(e) => return rollback(format!("install task panicked/cancelled: {e}")),
-        }
-    };
-
-    {
-        let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(sess) = sessions.get_mut(&session_id) {
-            sess.task_id = Some(resp.task_id);
-            sess.err_code = resp.err_code;
-            sess.detail = resp.detail.clone();
-        }
-    }
-
-    let err_message = err_code_message(resp.err_code).map(|s| s.to_string());
-
-    if resp.err_code == 0 {
-        crate::log_info!(
-            "pkg_install ok: session={} task_id={} register_path={} intdebug_avail={} kernel_rw={}",
-            session_id,
-            resp.task_id,
-            resp.register_path,
-            resp.intdebug_avail,
-            resp.kernel_rw,
-        );
-    } else {
-        // Sony rejected the register call. Log enough context to
-        // diagnose post-mortem without ssh — the diagnostic disclosure
-        // in the UI shows the same fields, but engine.log gives an
-        // append-only history per attempt.
-        // `error`: Sony refused the install outright, so the user's package
-        // did not land. Terminal and user-visible — see the note in
-        // `job_failed_from_err` on why this is not a `warn`.
-        crate::log_error!(
-            "pkg_install rejected: session={} err_code=0x{:08x} detail={:?} register_path={} intdebug_avail={} kernel_rw={} shellui_err={} appinst_err={}",
-            session_id,
-            resp.err_code,
-            resp.detail,
-            resp.register_path,
-            resp.intdebug_avail,
-            resp.kernel_rw,
-            resp.shellui_err.map_or("null".to_string(), |e| format!("0x{e:08x}")),
-            resp.appinst_err.map_or("null".to_string(), |e| format!("0x{e:08x}")),
-        );
-        // A rejected start can still continue through the standalone DPI
-        // daemon for every package type. DPI consumes this SAME on-console
-        // path, so register rejection must never take()/delete it first. This
-        // also matches the setting's promise: "Auto Delete after installation"
-        // cannot fire when no installation has completed. The client keeps the
-        // package for retry and terminal confirmed-complete cleanup remains the
-        // sole deletion authority.
-        debug_assert!(ps5upload_core::pkg_install::preserve_staging_on_reject(
-            &package_type
-        ));
-        crate::log_info!(
-            "register-reject staging PRESERVED for DPI fallback: session={} package_type={}",
-            session_id,
-            package_type,
-        );
-    }
-
     json_ok(&InstallStartResponse {
         session_id,
         url,
-        task_id: resp.task_id,
-        err_code: resp.err_code,
-        err_message,
-        detail: resp.detail,
-        // Borrow register_path for may_not_launch BEFORE the move below —
-        // struct fields evaluate in source order.
-        may_not_launch: ps5upload_core::pkg_install::install_may_not_launch(&resp.register_path),
-        register_path: resp.register_path,
-        intdebug_avail: resp.intdebug_avail,
-        kernel_rw: resp.kernel_rw,
-        shellui_err: resp.shellui_err,
-        appinst_err: resp.appinst_err,
-        via: ps5upload_core::pkg_install::via_tier(resp.task_id).to_string(),
+        task_id: 0,
+        err_code: 0,
+        err_message: None,
+        detail: String::new(),
+        may_not_launch: false,
+        register_path: "serve-only".to_string(),
+        intdebug_avail: false,
+        kernel_rw: false,
+        shellui_err: None,
+        appinst_err: None,
+        via: "serve-only".to_string(),
         package_type,
     })
 }
@@ -2543,25 +2341,6 @@ async fn install_cancel_handler(
         host_stopped: true,
     })
 }
-
-// ─── /api/pkg/dpi-ensure + /api/pkg/payload-restore ──────────────────
-//
-// Loader-port (:9021) delivery of the two ELF images the install cascade
-// swaps between. The desktop client owns an identical pair of commands
-// (`dpi_ensure` / `payload_send`) backed by its own embedded copies; these
-// routes are what a browser-driven, self-hosted engine calls instead.
-//
-// Order matters to the caller and is the same on both transports:
-// `dpi-ensure` may REPLACE the running ps5upload helper (a single-payload
-// loader runs one process), so whoever calls it must call
-// `payload-restore` afterwards — including on the failure paths, or the
-// console is left with no helper and the web UI cannot reach it again.
-
-/// How long to wait for a TCP connect when asking "is the installer daemon
-/// (:9115) up?".
-const DPI_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
-
-// ─── /api/pkg/dpi-install ────────────────────────────────────────────
 
 /// Normalize whatever address the caller gave into the payload's MANAGEMENT
 /// address (`ip:9114`), whatever port it arrived on.
@@ -4232,43 +4011,6 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
     // failure they guard against: a 25 GB / 200 GB install reported "done"
     // after a fixed timer, deleting the staged pkg WHILE Sony was still
     // installing from it. The cure is "Complete only on observed completion".
-
-    // ── staged DLC/patch routing (the FW 9.60 destructive-reject fix) ──
-
-    #[test]
-    fn staged_dlc_is_routed_to_dpi_before_main_payload() {
-        // DLC routes whether or not DPI is already listening: the in-process
-        // cascade can delete an installed add-on before it returns.
-        assert!(staged_requires_dpi(true, false, "PS4AC", false));
-        assert!(staged_requires_dpi(true, false, "PS5AC", false));
-        assert!(staged_requires_dpi(true, false, "PS4AC", true));
-    }
-
-    #[test]
-    fn staged_patch_skips_the_main_payload_only_when_dpi_is_up() {
-        // The in-process attempt is a measured rejection on both consoles
-        // (0x80B2150F on FW 5.10, 0x80B2116F on FW 9.60), so skip it — but
-        // only while the route that does apply patches is actually up.
-        assert!(staged_requires_dpi(true, false, "PS4DP", true));
-        assert!(staged_requires_dpi(true, false, "PS5DP", true));
-        // No DPI listening: keep the in-process cascade, which does apply
-        // patches on some firmware points. Refusing here would turn a
-        // working install into a failure on a console whose loader is
-        // simply not running.
-        assert!(!staged_requires_dpi(true, false, "PS4DP", false));
-        assert!(!staged_requires_dpi(true, false, "PS5DP", false));
-    }
-
-    #[test]
-    fn staged_dpi_route_does_not_capture_stream_or_other_types() {
-        // Stream already invokes DPI directly, so its serve-only setup must
-        // still create an HTTP session instead of returning the staged handoff.
-        assert!(!staged_requires_dpi(true, true, "PS4AC", true));
-        assert!(!staged_requires_dpi(false, false, "PS4AC", true));
-        assert!(!staged_requires_dpi(true, true, "PS4DP", true));
-        assert!(!staged_requires_dpi(false, false, "PS4DP", true));
-        assert!(!staged_requires_dpi(true, false, "PS4GD", true));
-    }
 
     // ── delete_staging / staging cleanup (the Auto-Delete data-loss fix) ──
 
