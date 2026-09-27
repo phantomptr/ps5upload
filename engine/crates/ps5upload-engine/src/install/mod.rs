@@ -176,6 +176,20 @@ pub fn verdict_no_identity(accepted: bool) -> Verdict {
     }
 }
 
+/// The version to check after install, or `None` when the "did the installed
+/// APP_VER rise?" check does not apply. Only a patch (`…DP` / `gp`) bumps an
+/// installed title's version; a base game or DLC carries its own `APP_VER`,
+/// and comparing a DLC's 01.00 against a base at 01.09 would read as
+/// "regressed" and fail a good install.
+pub fn patch_check_version(category: &str, package_app_ver: Option<&str>) -> Option<String> {
+    let c = category.to_ascii_lowercase();
+    let is_patch = c.ends_with("dp") || c.ends_with("gp");
+    match package_app_ver.map(str::trim) {
+        Some(v) if is_patch && !v.is_empty() => Some(v.to_string()),
+        _ => None,
+    }
+}
+
 /// How long delivery may make no progress before the install is judged
 /// stalled. Generous: a healthy console pulls continuously, and a large title
 /// must never be written off for a pause.
@@ -338,6 +352,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, req: InstallRequ
     );
     let mgmt = crate::pkg_install::normalize_mgmt_addr(&req.ps5_addr);
     let category = req.category.clone().unwrap_or_default();
+    let patch_ver = patch_check_version(&category, req.package_app_ver.as_deref());
     let title_id = req.title_id.clone().filter(|t| !t.trim().is_empty());
     let route = match decide_delivery(&req.source) {
         Delivery::Loopback => Route::Loopback,
@@ -382,7 +397,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, req: InstallRequ
 
     // deliver: for a stream source, create a serve-only pkg-host session and
     // get its URL by reusing the existing start handler internally.
-    let app_ver_before = match (&title_id, &req.package_app_ver) {
+    let app_ver_before = match (&title_id, &patch_ver) {
         (Some(t), Some(_)) => {
             let (m, t) = (mgmt.clone(), t.clone());
             tokio::task::spawn_blocking(move || crate::pkg_install::read_installed_app_ver(&m, &t))
@@ -635,7 +650,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, req: InstallRequ
     // verify.
     state.jobs.update(&job, |s| s.phase = Phase::Verify);
     let verify_started = std::time::Instant::now();
-    let (verdict, patch_verdict, app_ver_after) = match (&title_id, &req.package_app_ver) {
+    let (verdict, patch_verdict, app_ver_after) = match (&title_id, &patch_ver) {
         (Some(t), Some(pv)) => {
             let (m, t, pv, before) = (mgmt.clone(), t.clone(), pv.clone(), app_ver_before.clone());
             let (cv, after) = tokio::task::spawn_blocking(move || {
@@ -779,6 +794,28 @@ fn finalize(
 mod tests {
     use super::*;
     use crate::install::deliver::{decide_delivery, Delivery, Source};
+
+    // ── the "did the version rise?" check is for patches only ──
+
+    #[test]
+    fn version_check_runs_only_for_a_patch_with_a_version() {
+        assert_eq!(
+            patch_check_version("PS4DP", Some("01.09")),
+            Some("01.09".to_string())
+        );
+        assert_eq!(
+            patch_check_version("gp", Some("01.02")),
+            Some("01.02".to_string())
+        );
+        // Base games and DLC are not version bumps of an installed title: a DLC
+        // at 01.00 over a base at 01.09 must never read as "regressed".
+        assert_eq!(patch_check_version("PS4GD", Some("01.00")), None);
+        assert_eq!(patch_check_version("PS4AC", Some("01.00")), None);
+        assert_eq!(patch_check_version("PS5GD", Some("01.044.000")), None);
+        // A patch with no usable version has nothing to compare.
+        assert_eq!(patch_check_version("PS4DP", Some("  ")), None);
+        assert_eq!(patch_check_version("PS4DP", None), None);
+    }
 
     // ── delivery wait: "Sony accepted" is not "installed" ──
     // Measured on the Phat (FW 5.10): a stream install of an 820 MB package
