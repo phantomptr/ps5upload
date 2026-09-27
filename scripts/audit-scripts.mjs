@@ -15,7 +15,6 @@ const manualEntrypoints = new Set([
   "scripts/hw-test-loop.sh",
   "scripts/i18n-fill-missing.mjs",
   "scripts/i18n-prune-unused.mjs",
-  "scripts/pull_ps5_debug.py",
   "scripts/release-posts.js",
   "scripts/translate-i18n.py",
   "tests/lab/README.md",

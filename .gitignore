@@ -248,8 +248,8 @@ payload/sqlite3.o
 # developer's own console for backport work. NEVER committed: these are Sony
 # binaries, and every comparable project (BackPork, Backport Kitchen,
 # Auto-Backpork, MacPork) refuses to redistribute them for the same reason.
-# Populate with scripts/gather-fakelibs.py; the tool sources them from the
-# user's own games at runtime.
+# The app gathers them itself (Backport > Scan this console) from the user's
+# own games, into ~/.ps5upload/fakelibs.
 fakelibs/
 
 # Brainstorming mockups (visual companion)

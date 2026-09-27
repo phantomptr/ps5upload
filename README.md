@@ -6,16 +6,44 @@
 
 <p align="center">
   <strong>Fast, reliable transfers from your computer to your PS5.</strong><br/>
-  Transfer · Mount · Browse — designed to live alongside your PS5-side tools.
+  Transfer · Install · Convert · Mount · Browse — designed to live alongside your PS5-side tools.
 </p>
 
 <p align="center">
   <a href="https://github.com/phantomptr/ps5upload/releases"><img alt="release" src="https://img.shields.io/github/v/release/phantomptr/ps5upload?display_name=tag&sort=semver&color=blue" /></a>
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-GPL--3-green" /></a>
-  <img alt="platforms" src="https://img.shields.io/badge/platforms-macOS_·_Linux_·_Windows-lightgrey" />
-  <img alt="firmware" src="https://img.shields.io/badge/PS5_firmware-1.00_–_13.60_supported_•_9.x–12.x_tested-brightgreen" />
+  <img alt="platforms" src="https://img.shields.io/badge/platforms-macOS_·_Linux_·_Windows_·_Android_·_Web-lightgrey" />
+  <img alt="firmware" src="https://img.shields.io/badge/PS5_firmware-1.00_–_13.60_supported_•_5.10_&_9.60_tested-brightgreen" />
   <a href="https://discord.gg/fzK3xddtrM"><img alt="discord" src="https://img.shields.io/badge/discord-join-5865F2" /></a>
 </p>
+
+---
+
+## Highlights
+
+- **One way to install any package.** PS4 `.pkg` and PS5 fake packages —
+  base games, updates and DLC — install through ps5upload's own on-console
+  installer, whether you **Stream install** straight from your PC (nothing
+  copied to the PS5), **Upload & install** (copied first, kept for
+  reinstalls), or install from a NAS, a USB drive or a download link. Every
+  route shows the same live progress, only says "installed" once the console
+  has the whole package, checks that an update really raised the game's
+  version, and never wipes your base game.
+- **Turn a game into an installable PS5 package.** **Convert to FPKG** (beta)
+  builds a fake package from a decrypted game folder or an `.exfat` / `.ffpkg`
+  image, on your computer, compressed the way Sony's own packages are — then
+  installs it with Stream install or Upload & install in one click.
+- **Sleep, wake and power from your desk.** Put the PS5 in rest mode, reboot
+  or shut it down, and **wake it back up over the network** — even straight
+  into your signed-in user with Wake & sign in. The app keeps the console and
+  your computer awake while a transfer runs.
+- **Fast, resumable transfers** of games, folders, disk images and `.zip` /
+  `.7z` / `.rar` archives, with an upload queue and live speed.
+- **Mount, browse and manage** disk images, files, installed games, saves,
+  screenshots and video clips; register, launch and uninstall games.
+- **Backport tools, payload sender, FTP server, hardware view** and more.
+- **Runs everywhere:** macOS, Windows, Linux, Android, or any web browser via
+  the self-hosted engine / Docker image — in 20 languages.
 
 ---
 

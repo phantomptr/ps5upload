@@ -2905,7 +2905,7 @@ struct FakelibManifestReq {
 /// GET /api/fakelibs/manifest — read the local fakelib corpus manifest.
 ///
 /// The corpus lives on the USER'S machine, not the console: profiles are
-/// gathered from their own games by `scripts/gather-fakelibs.py`. The desktop
+/// gathered from their own games by the app's Backport scan. The desktop
 /// build could read it through Tauri, but the browser build cannot touch the
 /// filesystem at all, so it goes through the engine — the same missing-half
 /// problem as fs_read_preview and fs_write_bytes.

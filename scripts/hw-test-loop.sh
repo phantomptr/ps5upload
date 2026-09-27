@@ -66,12 +66,12 @@ done
 
 # --- 5. exercise via lab CLI -----------------------------------------
 say "5. status (basic health)"
-cargo run -q -p ps5upload-lab -- "$PS5_IP:$MGMT_PORT" status 2>&1 | head -20
+cargo run -q --manifest-path engine/Cargo.toml -p ps5upload-lab -- "$PS5_IP:$MGMT_PORT" status 2>&1 | head -20
 
 say "6. volumes (FS_LIST_VOLUMES)"
-cargo run -q -p ps5upload-lab -- "$PS5_IP:$MGMT_PORT" volumes 2>&1 | head -20
+cargo run -q --manifest-path engine/Cargo.toml -p ps5upload-lab -- "$PS5_IP:$MGMT_PORT" volumes 2>&1 | head -20
 
 say "7. apps (APP_LIST_REGISTERED via sqlite)"
-cargo run -q -p ps5upload-lab -- "$PS5_IP:$MGMT_PORT" apps 2>&1 | head -20
+cargo run -q --manifest-path engine/Cargo.toml -p ps5upload-lab -- "$PS5_IP:$MGMT_PORT" apps 2>&1 | head -20
 
 say "DONE"

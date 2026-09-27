@@ -1181,4 +1181,4 @@ dev: run-client
 start: run-client
 
 release-post:
-	@./scripts/release-posts.sh
+	@node scripts/release-posts.js $(ARGS)
