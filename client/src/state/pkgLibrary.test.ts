@@ -30,6 +30,10 @@ vi.mock("../api/ps5", () => ({
   // Pre-install "do you already have this?" probe. `null` = unknown, which
   // must never block or relabel an install.
   pkgInstallPreflight: vi.fn(async () => null),
+  // Unified install endpoint: start returns a job; status is polled to a
+  // terminal phase. Individual install tests set these per-case.
+  pkgInstall: vi.fn(async () => ({ ok: true, job: "job1" })),
+  pkgInstallStatus: vi.fn(async () => ({ phase: "done", verdict: "installed" })),
 }));
 // No active transfer in tests → installs proceed immediately.
 vi.mock("../lib/ps5Transfers", () => ({ transferScreenBusy: () => false }));
@@ -41,8 +45,9 @@ import {
   fsCopy,
   pkgMetadataConsole,
   consoleReadiness,
-  pkgInstalledInventory,
-  pkgInstallPreflight,
+  pkgInstall,
+  pkgInstallStatus,
+  type InstallStatus,
 } from "../api/ps5";
 import {
   titleIdFromContentId,
@@ -70,13 +75,10 @@ import {
   skipPkgAlternativeSelection,
   PKG_ALTERNATIVE_SKIP,
   PKG_MAY_NOT_LAUNCH_MESSAGE,
-  PKG_ACCEPTED_UNVERIFIED_HINT,
   PKG_ENGINE_BLIND_HINT,
-  PKG_PATCH_REJECTED_HINT,
-  verifyDpiInstalledArtifact,
   type PkgEntry,
 } from "./pkgLibrary";
-import { isTerminal, useTaskStore } from "./tasks";
+import { useTaskStore } from "./tasks";
 
 describe("link install input", () => {
   it("rejects unsafe URLs before contacting the console", async () => {
@@ -409,579 +411,7 @@ describe("addAndUpload drag-event deduplication", () => {
   });
 });
 
-describe("installStream — DPI lifecycle and HTTP fallback", () => {
-  const host = "192.168.55.9";
-  const localPath = "/tmp/game.pkg";
-  const mockedInvoke = vi.mocked(invoke);
-  const mockedInventory = vi.mocked(pkgInstalledInventory);
-  const mockedPreflight = vi.mocked(pkgInstallPreflight);
-  const metadata = {
-    parts: [localPath],
-    total_size: 8_192_000,
-    head: {
-      content_id: "UP0000-CUSA33334_00-TEST000000000000",
-      title: "Test Game",
-      category: "gd",
-      fingerprint: "a".repeat(64),
-    },
-  };
 
-  afterEach(() => {
-    vi.useRealTimers();
-    mockedInvoke.mockReset();
-    mockedPreflight.mockReset();
-    mockedPreflight.mockResolvedValue(null);
-    evictPkgLibraryStore(host);
-  });
-
-  beforeEach(() => {
-    useTaskStore.setState({ tasks: [] });
-    mockedInventory.mockReset().mockResolvedValue([]);
-  });
-
-  it("leaves the running payloads alone when an existing DPI bridge did the install", async () => {
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_metadata_split") return metadata;
-      if (cmd === "pkg_install_start")
-        return { err_code: 0, session_id: "bridge-session" };
-      // dpi_ensure reports a bridge already listening: ok, but nothing sent.
-      if (cmd === "dpi_ensure")
-        return { ok: true, listening: true, sent: false };
-      if (cmd === "pkg_dpi_direct_install")
-        return { ok: true, rc: 0, requests_served: 12, bridge: "dpiv2" };
-      if (cmd === "pkg_install_status")
-        return { phase: "done", completed: true, transfer_bytes: 8_192_000 };
-      if (cmd === "payload_bundled_path")
-        return { ok: true, path: "/tmp/ps5upload.elf" };
-      return {};
-    });
-
-    await pkgLibraryStore(host).getState().installStream(localPath, host);
-
-    // The whole point: nothing was sent to the loader, so nothing may be
-    // re-sent to "restore" it either — that would disturb the very payloads
-    // using the bridge is meant to preserve.
-    expect(mockedInvoke).not.toHaveBeenCalledWith(
-      "payload_send",
-      expect.anything(),
-    );
-  });
-
-  it("tells the caller which task tracks a stream install", async () => {
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_metadata_split") return metadata;
-      if (cmd === "pkg_install_start")
-        return { err_code: 0, session_id: "task-session" };
-      if (cmd === "dpi_ensure")
-        return { ok: true, listening: true, sent: false };
-      if (cmd === "pkg_dpi_direct_install")
-        return { ok: true, rc: 0, requests_served: 12, bridge: "dpiv2" };
-      if (cmd === "pkg_install_status")
-        return { phase: "done", completed: true, transfer_bytes: 8_192_000 };
-      return {};
-    });
-    const seen: string[] = [];
-
-    await pkgLibraryStore(host)
-      .getState()
-      .installStream(localPath, host, { onTask: (id) => seen.push(id) });
-
-    // Convert follows this task to show its Send / Install stages.
-    expect(seen).toHaveLength(1);
-    expect(useTaskStore.getState().tasks.some((t) => t.id === seen[0])).toBe(true);
-  });
-
-  it("still restores the main payload when our own DPI daemon was sent", async () => {
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_metadata_split") return metadata;
-      if (cmd === "pkg_install_start")
-        return { err_code: 0, session_id: "swap-session" };
-      // No bridge: our ELF was sent to the loader.
-      if (cmd === "dpi_ensure")
-        return { ok: true, listening: true, sent: true };
-      if (cmd === "pkg_dpi_direct_install")
-        return { ok: true, rc: 0, requests_served: 12, bridge: "ps5upload" };
-      if (cmd === "pkg_install_status")
-        return { phase: "done", completed: true, transfer_bytes: 8_192_000 };
-      if (cmd === "payload_bundled_path")
-        return { ok: true, path: "/tmp/ps5upload.elf" };
-      return {};
-    });
-
-    await pkgLibraryStore(host).getState().installStream(localPath, host);
-
-    expect(mockedInvoke).toHaveBeenCalledWith("payload_send", {
-      ip: host,
-      path: "/tmp/ps5upload.elf",
-      port: null,
-    });
-  });
-
-  it("routes a link through the engine's range proxy instead of parsing a local file", async () => {
-    const url = "https://files.example/game.pkg?token=secret";
-    let startArgs: Record<string, unknown> | undefined;
-    mockedInvoke.mockImplementation(async (cmd: unknown, args?: unknown) => {
-      // A link has no PC-side file, so the local header parse must not run.
-      if (cmd === "pkg_metadata_split") {
-        throw new Error("a link install must not parse a local .pkg");
-      }
-      if (cmd === "pkg_remote_probe") {
-        expect((args as { url: string }).url).toBe(url);
-        return {
-          total_size: 8_192_000,
-          content_id: "UP0000-CUSA33334_00-TEST000000000000",
-          title: "Test Game",
-          category: "gd",
-          platform: "ps4",
-          package_type: "PS4GD",
-          fingerprint: "a".repeat(64),
-        };
-      }
-      if (cmd === "pkg_install_start") {
-        startArgs = args as Record<string, unknown>;
-        return { err_code: 0, session_id: "link-session" };
-      }
-      // Stop after the hand-off; the DPI lifecycle is covered by the tests
-      // below and is identical for both sources.
-      if (cmd === "dpi_ensure")
-        return { ok: false, sent: false, listening: false, error: "stop here" };
-      if (cmd === "payload_bundled_path")
-        return { ok: true, path: "/tmp/ps5upload.elf" };
-      return {};
-    });
-
-    await pkgLibraryStore(host).getState().installUrl(url, host);
-
-    expect(startArgs).toBeDefined();
-    // The engine is told to fetch the URL; no local or staged path is used.
-    expect(startArgs?.["remoteUrl"]).toBe(url);
-    expect(startArgs?.["path"]).toBeNull();
-    expect(startArgs?.["localPs5Path"]).toBeNull();
-    // Serve-only: the DPI daemon performs the install, as for a local stream.
-    expect(startArgs?.["serveOnly"]).toBe(true);
-    // Metadata the probe resolved is what gets registered.
-    expect(startArgs?.["expectedSize"]).toBe(8_192_000);
-    expect(startArgs?.["packageTypeOverride"]).toBe("PS4GD");
-
-    // The URL can carry a signed token, so it must not reach the task record
-    // that feeds the diagnostic bundle.
-    const recorded = JSON.stringify(useTaskStore.getState().tasks);
-    expect(recorded).not.toContain("secret");
-    expect(recorded).not.toContain("files.example");
-  });
-
-  it("restores the main payload and closes the host session when DPI was sent but never became ready", async () => {
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_metadata_split") return metadata;
-      if (cmd === "pkg_install_start")
-        return { err_code: 0, session_id: "stream-timeout" };
-      if (cmd === "dpi_ensure")
-        return {
-          ok: false,
-          sent: true,
-          listening: false,
-          error: "DPI daemon did not come up",
-        };
-      if (cmd === "payload_bundled_path")
-        return { ok: true, path: "/tmp/ps5upload.elf" };
-      return {};
-    });
-
-    const result = await pkgLibraryStore(host)
-      .getState()
-      .installStream(localPath, host);
-
-    expect(result.ok).toBe(false);
-    expect(result.stagedFallbackRecommended).toBe(true);
-    expect(mockedInvoke).toHaveBeenCalledWith("payload_send", {
-      ip: host,
-      path: "/tmp/ps5upload.elf",
-      port: null,
-    });
-    expect(mockedInvoke).toHaveBeenCalledWith("pkg_install_cancel", {
-      session: "stream-timeout",
-    });
-  });
-
-  it("does not recommend a staging upload when the loader itself is unreachable", async () => {
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_metadata_split") return metadata;
-      if (cmd === "pkg_install_start")
-        return { err_code: 0, session_id: "stream-loader-down" };
-      if (cmd === "dpi_ensure")
-        return {
-          ok: false,
-          sent: false,
-          listening: false,
-          reason: "loader_unreachable",
-          error: "send dpi.elf: connection refused",
-        };
-      return {};
-    });
-
-    const result = await pkgLibraryStore(host)
-      .getState()
-      .installStream(localPath, host);
-
-    expect(result.ok).toBe(false);
-    expect(result.stagedFallbackRecommended).toBe(false);
-    expect(result.message).toMatch(/reload the payload loader/i);
-    expect(result.message).toMatch(/staging cannot repair/i);
-    expect(mockedInvoke).toHaveBeenCalledWith("pkg_install_cancel", {
-      session: "stream-loader-down",
-    });
-  });
-
-  it("explains a pre-fetch Sony proxy reject and still restores/cleans up", async () => {
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_metadata_split") return metadata;
-      if (cmd === "pkg_install_start")
-        return { err_code: 0, session_id: "stream-proxy" };
-      if (cmd === "dpi_ensure") return { ok: true, sent: true };
-      if (cmd === "pkg_dpi_direct_install")
-        return {
-          ok: false,
-          rc: 0x80431084,
-          requests_served: 0,
-          bytes_served: 0,
-        };
-      if (cmd === "payload_bundled_path")
-        return { ok: true, path: "/tmp/ps5upload.elf" };
-      return {};
-    });
-
-    const result = await pkgLibraryStore(host)
-      .getState()
-      .installStream(localPath, host);
-
-    expect(result.ok).toBe(false);
-    expect(result.stagedFallbackRecommended).toBe(true);
-    expect(result.message).toMatch(/SCE_HTTP_ERROR_PROXY/);
-    expect(result.message).toMatch(/Do Not Use/);
-    expect(mockedInvoke).toHaveBeenCalledWith(
-      "payload_send",
-      expect.anything(),
-    );
-    expect(mockedInvoke).toHaveBeenCalledWith("pkg_install_cancel", {
-      session: "stream-proxy",
-    });
-  });
-
-  it("keeps serving through async verification, then closes the session on success", async () => {
-    vi.useFakeTimers();
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_metadata_split") return metadata;
-      if (cmd === "pkg_install_start")
-        return { err_code: 0, session_id: "stream-ok" };
-      if (cmd === "dpi_ensure") return { ok: true, sent: true };
-      if (cmd === "pkg_dpi_direct_install")
-        return {
-          ok: true,
-          rc: 0,
-          requests_served: 4,
-          bytes_served: metadata.total_size,
-        };
-      if (cmd === "payload_bundled_path")
-        return { ok: true, path: "/tmp/ps5upload.elf" };
-      if (cmd === "pkg_install_status")
-        return {
-          phase: "done",
-          launchable: true,
-          installed_bytes: metadata.total_size,
-          total: metadata.total_size,
-        };
-      return {};
-    });
-
-    const pending = pkgLibraryStore(host)
-      .getState()
-      .installStream(localPath, host);
-    await vi.advanceTimersByTimeAsync(3_000);
-    const result = await pending;
-
-    expect(result.ok).toBe(true);
-    const task = useTaskStore
-      .getState()
-      .tasks.find((candidate) => candidate.kind === "pkg-dpi-install");
-    expect(task?.status).toBe("done");
-    expect(task?.engineJobId).toBe("stream-ok");
-    expect(mockedInvoke).toHaveBeenCalledWith("pkg_install_cancel", {
-      session: "stream-ok",
-    });
-  });
-
-  it("verifies the exact streamed artifact when FW 9.60 loses the daemon acknowledgement", async () => {
-    const fingerprint = metadata.head.fingerprint;
-    mockedInventory.mockResolvedValue([
-      {
-        kind: "base",
-        path: "/mnt/ext1/user/app/CUSA33334/app.pkg",
-        size: metadata.total_size,
-        fingerprint,
-        contentId: metadata.head.content_id,
-      },
-    ]);
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_metadata_split") return metadata;
-      if (cmd === "pkg_install_start") {
-        return { err_code: 0, session_id: "stream-ambiguous" };
-      }
-      if (cmd === "dpi_ensure") return { ok: true, sent: true };
-      if (cmd === "pkg_dpi_direct_install") {
-        return {
-          ok: false,
-          ambiguous: true,
-          rc: -1,
-          requests_served: 23,
-          bytes_served: metadata.total_size,
-        };
-      }
-      if (cmd === "payload_bundled_path") {
-        return { ok: true, path: "/tmp/ps5upload.elf" };
-      }
-      return {};
-    });
-
-    const result = await pkgLibraryStore(host)
-      .getState()
-      .installStream(localPath, host);
-
-    expect(result.ok).toBe(true);
-    expect(mockedInventory).toHaveBeenCalledWith(`${host}:9113`, "CUSA33334");
-    expect(useTaskStore.getState().tasks[0]?.status).toBe("done");
-  });
-
-  it("tells the user the package is already installed before transferring", async () => {
-    vi.useFakeTimers();
-    mockedPreflight.mockResolvedValue({
-      state: "installed",
-      titleId: "CUSA33334",
-      detail: "this exact package is already installed",
-      category: "gd",
-      installedVersion: "01.04",
-      installedArtifacts: [],
-    });
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_metadata_split") return metadata;
-      if (cmd === "pkg_install_start")
-        return { err_code: 0, session_id: "stream-pre" };
-      if (cmd === "dpi_ensure") return { ok: true, sent: true };
-      if (cmd === "pkg_dpi_direct_install")
-        return { ok: true, rc: 0, requests_served: 2, bytes_served: 8192 };
-      if (cmd === "payload_bundled_path")
-        return { ok: true, path: "/tmp/ps5upload.elf" };
-      if (cmd === "pkg_install_status")
-        return {
-          phase: "done",
-          installed_bytes: metadata.total_size,
-          total: metadata.total_size,
-        };
-      return {};
-    });
-
-    // The notice is the user-visible surface; it is cleared when the run ends,
-    // so collect it as it changes.
-    const notices: string[] = [];
-    const unsubscribe = pkgLibraryStore(host).subscribe((s) => {
-      if (s.busyNotice) notices.push(s.busyNotice);
-    });
-    const pending = pkgLibraryStore(host)
-      .getState()
-      .installStream(localPath, host);
-    await vi.advanceTimersByTimeAsync(5_000);
-    await pending;
-    unsubscribe();
-
-    // Reported, not refused: re-installing is a legitimate repair, so the
-    // install still runs and still ends green.
-    expect(mockedPreflight).toHaveBeenCalled();
-    expect(notices.join("\n")).toMatch(/already installed on the PS5/);
-    expect(notices.join("\n")).toMatch(/version 01\.04/);
-    const task = useTaskStore
-      .getState()
-      .tasks.find((candidate) => candidate.kind === "pkg-dpi-install");
-    expect(task?.status).toBe("done");
-  });
-
-  it("keeps serving when verification gives up before a terminal state", async () => {
-    // Five consecutive poll failures make verifyInstallCompleted stop watching.
-    // The engine never said the install ended, so the console may still be
-    // pulling — cancelling the session here answers its next fetch with 410
-    // Gone and kills a live install. That was the unconditional behaviour.
-    vi.useFakeTimers();
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_metadata_split") return metadata;
-      if (cmd === "pkg_install_start")
-        return { err_code: 0, session_id: "stream-gaveup" };
-      if (cmd === "dpi_ensure") return { ok: true, sent: true };
-      if (cmd === "pkg_dpi_direct_install")
-        return { ok: true, rc: 0, requests_served: 3, bytes_served: 4096 };
-      if (cmd === "payload_bundled_path")
-        return { ok: true, path: "/tmp/ps5upload.elf" };
-      if (cmd === "pkg_install_status") throw new Error("engine HTTP 502");
-      return {};
-    });
-
-    const pending = pkgLibraryStore(host)
-      .getState()
-      .installStream(localPath, host);
-    await vi.advanceTimersByTimeAsync(30_000);
-    const result = await pending;
-
-    expect(result.ok).toBe(false);
-    expect(result.acceptedUnverified).toBe(true);
-    expect(mockedInvoke).not.toHaveBeenCalledWith("pkg_install_cancel", {
-      session: "stream-gaveup",
-    });
-    // The payload still comes back — the daemon is not left running.
-    expect(mockedInvoke).toHaveBeenCalledWith(
-      "payload_send",
-      expect.anything(),
-    );
-  });
-});
-
-// ── install tracking vs engine availability ─────────────────────────────────
-//
-// The engine owns install state, and for a Stream install it is also the HTTP
-// server the console pulls the package from. So "the engine didn't answer" and
-// "the install is failing" are different facts, and only the second is news
-// about the install. Collapsing them meant ~12 s of engine downtime — shorter
-// than a desktop engine restart — ended the watch on a healthy install and told
-// the user it couldn't be verified.
-describe("install tracking when the engine is unreachable", () => {
-  const mockedInvoke = vi.mocked(invoke);
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    mockedInvoke.mockReset();
-    useTaskStore.setState({ tasks: [] });
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  const ENGINE_DOWN = () =>
-    new Error("engine request failed: error sending request");
-
-  it("keeps watching through an engine outage longer than the error budget", async () => {
-    // Well past PKG_VERIFY_MAX_POLL_ERRORS (5) consecutive failures, which is
-    // what used to end the watch — the outage is the engine's problem, not the
-    // install's, so tracking must survive it and still report the real result.
-    let n = 0;
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start")
-        return { err_code: 0, register_path: "shellui-rpc", session_id: "s1" };
-      if (cmd === "pkg_install_status") {
-        n += 1;
-        if (n <= 8) throw ENGINE_DOWN();
-        return {
-          phase: "done",
-          launchable: true,
-          installed_bytes: 9,
-          total: 9,
-        };
-      }
-      return {};
-    });
-    const promise = runPkgInstall(
-      "192.168.1.50",
-      "/user/data/x.pkg",
-      "CID",
-      null,
-      true,
-    );
-    await vi.advanceTimersByTimeAsync(2600 * 12);
-    const r = await promise;
-    expect(n).toBeGreaterThan(5);
-    expect(r.installed).toBe(true);
-  });
-
-  it("tells the user why the numbers stopped moving, without calling it a failure", async () => {
-    let n = 0;
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start")
-        return { err_code: 0, register_path: "shellui-rpc", session_id: "s1" };
-      if (cmd === "pkg_install_status") {
-        n += 1;
-        // One good poll to establish a live state, then the engine goes away.
-        if (n === 1)
-          return { phase: "install", installed_bytes: 10, total: 100 };
-        if (n <= 4) throw ENGINE_DOWN();
-        return { phase: "done", launchable: true };
-      }
-      return {};
-    });
-    const notes: Array<string | undefined> = [];
-    const promise = runPkgInstall(
-      "192.168.1.50",
-      "/user/data/x.pkg",
-      "CID",
-      null,
-      true,
-      (s) => notes.push(s.note),
-    );
-    await vi.advanceTimersByTimeAsync(2600 * 6);
-    const r = await promise;
-    expect(notes).toContain(PKG_ENGINE_BLIND_HINT);
-    expect(r.installed).toBe(true);
-  });
-
-  it("stops polling at once when the engine says the session is gone", async () => {
-    // Sessions live in engine memory, so this state never comes back. Waiting
-    // out the error budget would only delay the same answer.
-    let statusCalls = 0;
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start")
-        return { err_code: 0, register_path: "shellui-rpc", session_id: "s1" };
-      if (cmd === "pkg_install_status") {
-        statusCalls += 1;
-        throw new Error("engine HTTP 404 Not Found: no install session s1");
-      }
-      return {};
-    });
-    const promise = runPkgInstall(
-      "192.168.1.50",
-      "/user/data/x.pkg",
-      "CID",
-      null,
-      true,
-    );
-    await vi.advanceTimersByTimeAsync(2600 * 8);
-    const r = await promise;
-    expect(statusCalls).toBe(1);
-    expect(r.installed).toBe(false);
-    expect(r.acceptedUnverified).toBe(true);
-    expect(r.errMessage).toBe(PKG_ACCEPTED_UNVERIFIED_HINT);
-  });
-
-  it("gives up watching after the blind cap — and keeps the path for a live install", async () => {
-    // An engine that never comes back must not leave the UI claiming to watch
-    // an install forever. Giving up is honest, keeps the pkg, and must not
-    // cancel anything that may still be running.
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start")
-        return { err_code: 0, register_path: "shellui-rpc", session_id: "s1" };
-      if (cmd === "pkg_install_status") throw ENGINE_DOWN();
-      return {};
-    });
-    const promise = runPkgInstall(
-      "192.168.1.50",
-      "/user/data/x.pkg",
-      "CID",
-      null,
-      true,
-    );
-    await vi.advanceTimersByTimeAsync(6 * 60 * 1000);
-    const r = await promise;
-    expect(r.installed).toBe(false);
-    expect(r.acceptedUnverified).toBe(true);
-    expect(r.errMessage).toBe(PKG_ENGINE_BLIND_HINT);
-    expect(mockedInvoke).not.toHaveBeenCalledWith("pkg_install_cancel", {
-      session: "s1",
-    });
-  });
-});
 
 describe("describeInstallSample (stream state naming)", () => {
   const base = {
@@ -1584,645 +1014,180 @@ describe("pkgInstallMayNotLaunch", () => {
   });
 });
 
-// ── delete_staging threading (the Auto-Delete data-loss fix) ────────────────
-//
-describe("post-install verification waits on progress, not a fixed clock", () => {
-  const mockedInvoke = vi.mocked(invoke);
-  const mockedInventory = vi.mocked(pkgInstalledInventory);
-  const host = "192.168.55.77";
-  const contentId = "EP0082-PPSA10665_00-FF16000000000000";
-  const titleId = "PPSA10665";
-  const total = 121 * 1024 * 1024 * 1024; // a 121 GB title, as reported
 
-  beforeEach(() => {
-    vi.useFakeTimers();
-    useTaskStore.setState({ tasks: [] });
-    mockedInvoke.mockReset();
-    mockedInventory.mockReset();
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-    evictPkgLibraryStore(host);
-  });
+// ── Unified install: verdict mapping + Auto-Delete of the staged pkg ─────────
+// runPkgInstall now posts one request to the engine and polls one status; the
+// engine owns the guard/deliver/DPI/restore/verify. The client's remaining
+// jobs: choose the console_path source, map the verdict, and — because the
+// engine will NOT delete an on-console file — delete the staged copy itself
+// after a CONFIRMED install (the Auto-Delete data-loss fix lives here now).
 
-  /** Drive the fake clock until `p` settles, so the poll loop can advance. */
-  async function runOut<T>(p: Promise<T>): Promise<T> {
-    let done = false;
-    const wrapped = p.finally(() => {
-      done = true;
-    });
-    while (!done) {
-      await vi.advanceTimersByTimeAsync(5_000);
-    }
-    return wrapped;
-  }
-
-  it("keeps waiting while the PS5 is still writing a huge title, then confirms it", async () => {
-    // The install writes in stages and only reaches full size well past the
-    // old 3-minute cap — the exact shape that made ps5upload report an error
-    // for an install the console went on to finish.
-    let polls = 0;
-    mockedInventory.mockImplementation(async () => {
-      polls += 1;
-      // ~50 polls in, the artifact finally lands complete.
-      const size =
-        polls < 50 ? Math.min(total - 1, polls * 2_000_000_000) : total;
-      return [
-        {
-          kind: "base" as const,
-          path: `/user/app/${titleId}/app.pkg`,
-          size,
-          fingerprint: size === total ? "f".repeat(64) : "",
-          contentId,
-        },
-      ];
-    });
-
-    const verified = await runOut(
-      verifyDpiInstalledArtifact(host, contentId, "PS5GD", {
-        size: total,
-        fingerprint: "f".repeat(64),
-      }),
-    );
-
-    expect(verified).toBe(true);
-    // It must have polled far past the old 3-minute / ~90-poll ceiling.
-    expect(polls).toBeGreaterThan(40);
-  });
-
-  it("still gives up when the install is genuinely not writing anything", async () => {
-    // Artifact never appears and nothing grows: the idle window must expire
-    // rather than waiting out the multi-hour ceiling.
-    mockedInventory.mockResolvedValue([]);
-
-    const started = Date.now();
-    const verified = await runOut(
-      verifyDpiInstalledArtifact(host, contentId, "PS5GD", {
-        size: total,
-        fingerprint: "f".repeat(64),
-      }),
-    );
-
-    expect(verified).toBe(false);
-    // Bounded by the idle window, nowhere near the absolute ceiling.
-    expect(Date.now() - started).toBeLessThan(30 * 60 * 1000);
-  });
-});
-
-// runPkgInstall MUST forward the caller's delete-staging intent to the engine
-// (pkg_install_start). Before the fix the engine always deleted the uploaded
-// pkg regardless; the regression we're guarding is "Auto Delete off but the pkg
-// was deleted anyway". A response without a status session is deliberately
-// unverified (never installed), which also keeps this test fast.
-describe("runPkgInstall — forwards deleteStaging to the engine", () => {
-  const mockedInvoke = vi.mocked(invoke);
-  const mockedInventory = vi.mocked(pkgInstalledInventory);
-
-  beforeEach(() => {
-    mockedInventory.mockReset().mockResolvedValue([]);
-    mockedInvoke.mockReset();
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start") {
-        // err_code 0 + no session_id ⇒ accepted, but completion unverified.
-        return { err_code: 0, register_path: "shellui-rpc" };
-      }
-      return {};
-    });
-  });
-
-  const startArgs = () =>
-    mockedInvoke.mock.calls.find((c) => c[0] === "pkg_install_start")?.[1] as
-      { deleteStaging?: boolean } | undefined;
-
-  it("passes deleteStaging=false → engine KEEPS the pkg (Auto Delete off)", async () => {
-    const r = await runPkgInstall(
-      "192.168.1.50",
-      "/user/data/x.pkg",
-      "CID",
-      null,
-      false,
-    );
-    expect(r.installed).toBe(false);
-    expect(r.acceptedUnverified).toBe(true);
-    expect(startArgs()?.deleteStaging).toBe(false);
-  });
-
-  it("passes deleteStaging=true as a confirmed-completion cleanup preference", async () => {
-    await runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", null, true);
-    expect(startArgs()?.deleteStaging).toBe(true);
-  });
-
-  it("a rejected patch (…DP) reaches DPI but is not called installed on rc=0 alone", async () => {
-    // The user-reported case: a Jak X update rejected in-process with 0x80B21106
-    // (a firmware authid gate; the base game itself lands via shellui-rpc, which
-    // a patch can't use). The DPI daemon runs Sony's appinst in a separate
-    // process and applies the update on top of the base — HW-proven safe. So a
-    // patch MUST fall through to DPI, not bail with the raw error.
-    mockedInvoke.mockReset();
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start") {
-        return {
-          err_code: 0x80b21106,
-          err_message:
-            "PS5 rejected the PKG header — file may be corrupt or wrongly named",
-          register_path: "none",
-          package_type: "PS4DP",
-        };
-      }
-      if (cmd === "dpi_ensure") return { ok: true };
-      if (cmd === "pkg_dpi_install") return { ok: true, rc: 0 };
-      if (cmd === "payload_bundled_path")
-        return { ok: true, path: "/tmp/p.elf" };
-      return {};
-    });
-    const r = await runPkgInstall(
-      "192.168.1.50",
-      "/user/data/ps5upload/pkg_library/updates/CID.pkg",
-      "CID",
-      "PS4DP",
-      false,
-    );
-    expect(r.installed).toBe(false);
-    expect(r.acceptedUnverified).toBe(true);
-    expect(r.errMessage).toBe(PKG_ACCEPTED_UNVERIFIED_HINT);
-    expect(
-      mockedInvoke.mock.calls.some((c) => c[0] === "pkg_dpi_install"),
-    ).toBe(true);
-  });
-
-  it("a rejected base game also reaches DPI with its staging path intact", async () => {
-    mockedInvoke.mockReset();
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start") {
-        return {
-          err_code: 0x80b21106,
-          register_path: "none",
-          package_type: "PS4GD",
-        };
-      }
-      if (cmd === "dpi_ensure") return { ok: true };
-      if (cmd === "pkg_dpi_install") return { ok: true, rc: 0 };
-      if (cmd === "payload_bundled_path") {
-        return { ok: true, path: "/tmp/p.elf" };
-      }
-      return {};
-    });
-
-    const localPs5Path = "/user/data/ps5upload/pkg_library/CID.pkg";
-    const r = await runPkgInstall(
-      "192.168.1.50",
-      localPs5Path,
-      "CID",
-      "PS4GD",
-      true,
-    );
-
-    expect(r.acceptedUnverified).toBe(true);
-    const dpiArgs = mockedInvoke.mock.calls.find(
-      (call) => call[0] === "pkg_dpi_install",
-    )?.[1] as { localPs5Path?: string } | undefined;
-    expect(dpiArgs?.localPs5Path).toBe(localPs5Path);
-  });
-
-  it("issue #277: firmware-12 INVALID_SLOT is never reported as accepted or installed", async () => {
-    mockedInvoke.mockReset();
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start") {
-        return {
-          err_code: 0x80b2116f,
-          err_message:
-            "PS5 AppInst/PlayGo rejected this firmware/package combination (0x80B2116F) — the staged pkg was kept; use Settings → System → Debug Settings → Game → Package Installer",
-          register_path: "none",
-          package_type: "PS4GD",
-        };
-      }
-      if (cmd === "dpi_ensure") return { ok: true };
-      if (cmd === "pkg_dpi_install") {
-        return {
-          ok: false,
-          rc: 0x80b2116f,
-          err_message:
-            "PS5 AppInst/PlayGo rejected this firmware/package combination (0x80B2116F) — the staged pkg was kept; use Settings → System → Debug Settings → Game → Package Installer",
-        };
-      }
-      if (cmd === "payload_bundled_path") {
-        return { ok: true, path: "/tmp/p.elf" };
-      }
-      return {};
-    });
-
-    const localPs5Path =
-      "/user/data/ps5upload/pkg_library/EP1004-CUSA08519_00-REDEMPTION000002.pkg";
-    const r = await runPkgInstall(
-      "192.168.50.200",
-      localPs5Path,
-      "EP1004-CUSA08519_00-REDEMPTION000002",
-      "PS4GD",
-      true,
-    );
-
-    expect(r.installed).toBe(false);
-    expect(r.acceptedUnverified).toBe(false);
-    expect(r.errMessage).toContain("0x80B2116F");
-    const dpiArgs = mockedInvoke.mock.calls.find(
-      (call) => call[0] === "pkg_dpi_install",
-    )?.[1] as { localPs5Path?: string } | undefined;
-    expect(dpiArgs?.localPs5Path).toBe(localPs5Path);
-  });
-
-  it("confirms a staged DLC routed directly to DPI by exact fingerprint", async () => {
-    const fingerprint = "a".repeat(64);
-    const contentId = "UP9000-CUSA00900_00-SPDLCMESSENGER00";
-    mockedInventory.mockResolvedValue([
-      {
-        kind: "dlc",
-        path: "/mnt/ext1/user/addcont/CUSA00900/SPDLCMESSENGER00/ac.pkg",
-        size: 1_048_576,
-        fingerprint,
-        contentId,
-      },
-    ]);
-    mockedInvoke.mockReset();
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start") {
-        return {
-          err_code: 0xe0000008,
-          err_message:
-            "Staged DLC or patch is being handed to the safer standalone DPI installer",
-          register_path: "dpi-required",
-          package_type: "PS4AC",
-        };
-      }
-      if (cmd === "dpi_ensure") return { ok: true };
-      if (cmd === "pkg_dpi_install") return { ok: true, rc: 0 };
-      if (cmd === "payload_bundled_path") {
-        return { ok: true, path: "/tmp/p.elf" };
-      }
-      return {};
-    });
-
-    const r = await runPkgInstall(
-      "192.168.1.50",
-      "/user/data/ps5upload/pkg_library/dlc/fp/addon.pkg",
-      contentId,
-      "PS4AC",
-      false,
-      undefined,
-      undefined,
-      { size: 1_048_576, fingerprint },
-    );
-
-    expect(r.installed).toBe(true);
-    expect(r.acceptedUnverified).toBe(false);
-    expect(
-      mockedInvoke.mock.calls.some((c) => c[0] === "pkg_dpi_install"),
-    ).toBe(true);
-  });
-
-  it("confirms a DPI patch only when the exact installed fingerprint matches", async () => {
-    const fingerprint = "7".repeat(64);
-    const contentId = "UP1082-CUSA33334_00-SLUS008930000000";
-    mockedInventory.mockResolvedValue([
-      {
-        kind: "patch",
-        path: "/user/patch/CUSA33334/patch.pkg",
-        size: 8_192_000,
-        fingerprint,
-        contentId,
-      },
-    ]);
-    mockedInvoke.mockReset();
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start") {
-        return {
-          err_code: 0x80b21106,
-          register_path: "none",
-          package_type: "PS4DP",
-        };
-      }
-      if (cmd === "dpi_ensure") return { ok: true };
-      if (cmd === "pkg_dpi_install") return { ok: true, rc: 0 };
-      if (cmd === "payload_bundled_path") {
-        return { ok: true, path: "/tmp/p.elf" };
-      }
-      return {};
-    });
-
-    const r = await runPkgInstall(
-      "192.168.1.50",
-      "/user/data/ps5upload/pkg_library/updates/fp/CID.pkg",
-      contentId,
-      "PS4DP",
-      false,
-      undefined,
-      undefined,
-      { size: 8_192_000, fingerprint },
-    );
-
-    expect(r.installed).toBe(true);
-    expect(r.acceptedUnverified).toBe(false);
-    expect(mockedInventory).toHaveBeenCalledWith(
-      "192.168.1.50:9113",
-      "CUSA33334",
-    );
-  });
-
-  it("FW 9.60: verifies an exact patch after the daemon returns 0xffffffff", async () => {
-    const fingerprint = "8".repeat(64);
-    const contentId = "UP9000-CUSA07842_00-SCUS974290000001";
-    mockedInventory.mockResolvedValue([
-      {
-        kind: "patch",
-        path: "/mnt/ext1/user/patch/CUSA07842/patch.pkg",
-        size: 22_347_776,
-        fingerprint,
-        contentId,
-      },
-    ]);
-    mockedInvoke.mockReset();
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start") {
-        return {
-          err_code: 0x80b2116f,
-          register_path: "none",
-          package_type: "PS4DP",
-        };
-      }
-      if (cmd === "dpi_ensure") return { ok: true };
-      if (cmd === "pkg_dpi_install") {
-        return {
-          ok: false,
-          ambiguous: true,
-          rc: -1,
-          err_message: "installer acknowledgement was inconclusive",
-        };
-      }
-      if (cmd === "payload_bundled_path") {
-        return { ok: true, path: "/tmp/p.elf" };
-      }
-      return {};
-    });
-
-    const result = await runPkgInstall(
-      "192.168.86.100",
-      "/user/data/ps5upload/pkg_library/updates/fp/CID.pkg",
-      contentId,
-      "PS4DP",
-      false,
-      undefined,
-      undefined,
-      { size: 22_347_776, fingerprint },
-      "01.04",
-    );
-
-    expect(result.installed).toBe(true);
-    expect(result.acceptedUnverified).toBe(false);
-    expect(mockedInventory).toHaveBeenCalledWith(
-      "192.168.86.100:9113",
-      "CUSA07842",
-    );
-  });
-
-  it("a patch DPI can't apply gets update-specific guidance, not the raw error", async () => {
-    mockedInvoke.mockReset();
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start") {
-        return {
-          err_code: 0x80b21106,
-          register_path: "none",
-          package_type: "PS4DP",
-        };
-      }
-      if (cmd === "dpi_ensure") return { ok: true };
-      if (cmd === "pkg_dpi_install")
-        return { ok: false, rc: 0x80b21106, err_message: "raw" };
-      if (cmd === "payload_bundled_path")
-        return { ok: true, path: "/tmp/p.elf" };
-      return {};
-    });
-    const r = await runPkgInstall(
-      "192.168.1.50",
-      "/user/data/ps5upload/pkg_library/updates/CID.pkg",
-      "CID",
-      "PS4DP",
-      false,
-    );
-    expect(r.installed).toBe(false);
-    expect(r.errMessage).toBe(PKG_PATCH_REJECTED_HINT);
-  });
-});
-
-// ── progress-tracked completion (the large-pkg / Bloodborne data-loss fix) ──
-//
-// runPkgInstall must report `installed:true` ONLY when the engine confirms the
-// install actually completed — never on a timer. A stall or async failure must
-// leave `installed:false` (so callers KEEP the pkg) and carry the right copy.
-// We drive the poll loop with fake timers so the 2.5s interval doesn't slow the
-// suite.
-describe("runPkgInstall — tracks the install to genuine completion", () => {
-  const mockedInvoke = vi.mocked(invoke);
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    mockedInvoke.mockReset();
-    useTaskStore.setState({ tasks: [] });
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  const START_OK = {
-    err_code: 0,
-    register_path: "shellui-rpc",
-    session_id: "s1",
+/** A terminal InstallStatus with sensible defaults; override per case. */
+function installStatus(over: Partial<InstallStatus>): InstallStatus {
+  return {
+    job: "j1",
+    ps5_addr: "192.168.1.50:9114",
+    content_id: "CID",
+    title_id: null,
+    phase: "done",
+    route: "loopback",
+    verdict: "installed",
+    code: 0,
+    hint: null,
+    reason: null,
+    metrics: {
+      total_bytes: 0,
+      served_bytes: 0,
+      throughput_mbps: 0,
+      phase_ms: {},
+      retries: 0,
+      sony_rc: 0,
+    },
+    app_ver_before: null,
+    app_ver_after: null,
+    patch_verdict: null,
+    shortened: false,
+    started_at: 0,
+    updated_at: 0,
+    ...over,
   };
+}
 
-  it("reports completed only after the engine says 'done' — and surfaces live %", async () => {
-    // Two "still installing" polls (growing bytes) then a confirmed done. The
-    // old fixed-window code would have declared success on the FIRST poll.
-    let n = 0;
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start") return START_OK;
-      if (cmd === "pkg_install_status") {
-        n += 1;
-        if (n < 3)
-          return { phase: "install", installed_bytes: n * 1000, total: 3000 };
-        return {
-          phase: "done",
-          launchable: true,
-          installed_bytes: 3000,
-          total: 3000,
-        };
-      }
-      return {};
-    });
-    const progress: Array<[number, number]> = [];
-    const promise = runPkgInstall(
-      "192.168.1.50",
-      "/user/data/x.pkg",
-      "CID",
-      null,
-      true,
-      (s) => progress.push([s.installedBytes, s.total]),
+describe("runPkgInstall — unified endpoint: verdict + Auto-Delete staging", () => {
+  const mockedInstall = vi.mocked(pkgInstall);
+  const mockedStatus = vi.mocked(pkgInstallStatus);
+  const mockedDelete = vi.mocked(fsDelete);
+  const host = "192.168.1.50";
+  const path = "/user/data/ps5upload/pkg_library/x.pkg";
+
+  beforeEach(() => {
+    useTaskStore.setState({ tasks: [] });
+    mockedInstall.mockReset();
+    mockedStatus.mockReset();
+    mockedDelete.mockReset();
+    mockedInstall.mockResolvedValue({ ok: true, job: "job1" });
+  });
+
+  it("deletes the staged pkg after a confirmed install when Auto-Delete is on", async () => {
+    mockedStatus.mockResolvedValue(
+      installStatus({ phase: "done", verdict: "installed" }),
     );
-    await vi.advanceTimersByTimeAsync(2600 * 4);
-    const r = await promise;
+    const r = await runPkgInstall(host, path, "CID", "PS4GD", true);
     expect(r.installed).toBe(true);
-    expect(r.stalled).toBeFalsy();
-    // The live % was surfaced for the UI, ending at 100%-equivalent bytes.
-    expect(progress.length).toBeGreaterThan(0);
-    expect(progress[progress.length - 1]).toEqual([3000, 3000]);
-    expect(useTaskStore.getState().tasks[0]).toMatchObject({
-      kind: "pkg-install",
-      status: "done",
-      consoleId: "192.168.1.50",
-    });
+    expect(mockedDelete).toHaveBeenCalledWith(
+      expect.stringContaining("192.168.1.50"),
+      path,
+    );
   });
 
-  it("a STALL keeps the pkg: installed=false, stalled=true, retry copy", async () => {
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start") return START_OK;
-      if (cmd === "pkg_install_status")
-        return {
-          phase: "error",
-          stalled: true,
-          installed_bytes: 5_000_000_000,
-          total: 25_000_000_000,
-        };
-      return {};
-    });
-    const promise = runPkgInstall(
-      "192.168.1.50",
-      "/user/data/x.pkg",
-      "CID",
-      null,
-      true,
+  it("KEEPS the staged pkg when Auto-Delete is off", async () => {
+    mockedStatus.mockResolvedValue(
+      installStatus({ phase: "done", verdict: "installed" }),
     );
-    await vi.advanceTimersByTimeAsync(2600);
-    const r = await promise;
-    expect(r.installed).toBe(false); // ⇒ callers KEEP the pkg
-    expect(r.stalled).toBe(true);
-    expect(r.errMessage).toMatch(/kept on the PS5/i);
+    await runPkgInstall(host, path, "CID", "PS4GD", false);
+    expect(mockedDelete).not.toHaveBeenCalled();
   });
 
-  it("a Sony async failure is a (non-stall) failure, pkg kept", async () => {
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start") return START_OK;
-      if (cmd === "pkg_install_status")
-        return { phase: "error", err_code: 0x80b21106, total: 25_000_000_000 };
-      return {};
-    });
-    const promise = runPkgInstall(
-      "192.168.1.50",
-      "/user/data/x.pkg",
-      "CID",
-      null,
-      true,
+  it("never deletes the pkg on a failed install, even with Auto-Delete on", async () => {
+    mockedStatus.mockResolvedValue(
+      installStatus({ phase: "failed", verdict: "failed", hint: "0x80B2116F" }),
     );
-    await vi.advanceTimersByTimeAsync(2600);
-    const r = await promise;
+    const r = await runPkgInstall(host, path, "CID", "PS4GD", true);
     expect(r.installed).toBe(false);
-    expect(r.stalled).toBeFalsy();
-    expect(r.errMessage).toMatch(/Package Installer/);
+    expect(mockedDelete).not.toHaveBeenCalled();
   });
 
-  it("keeps polling across a transient status blip instead of giving up", async () => {
-    // A single failed poll must NOT end tracking (it once would have, and an
-    // engine-GC'd-mid-large-install would falsely resolve). Recover → done.
-    let n = 0;
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start") return START_OK;
-      if (cmd === "pkg_install_status") {
-        n += 1;
-        if (n === 1) throw new Error("transient socket blip");
-        if (n === 2) return { phase: "install", installed_bytes: 1, total: 2 };
-        return { phase: "done", launchable: null };
-      }
-      return {};
-    });
-    const promise = runPkgInstall(
-      "192.168.1.50",
-      "/user/data/x.pkg",
-      "CID",
-      null,
-      true,
+  it("sends the console_path source with derived title/category/app_ver", async () => {
+    mockedStatus.mockResolvedValue(
+      installStatus({ phase: "done", verdict: "installed" }),
     );
-    await vi.advanceTimersByTimeAsync(2600 * 4);
-    const r = await promise;
-    expect(r.installed).toBe(true);
-  });
-
-  it("treats the engine's accepted_unverified terminal state as awaiting, not failed", async () => {
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start") return START_OK;
-      if (cmd === "pkg_install_status") {
-        return {
-          phase: "done",
-          accepted_unverified: true,
-          installed_bytes: 1_000_000,
-          total: 25_000_000_000,
-        };
-      }
-      return {};
-    });
-    // A real identity (title id + fingerprint) — otherwise the background
-    // re-verify has nothing to probe with and closes the row immediately
-    // instead of leaving it awaiting (see the next test).
-    const promise = runPkgInstall(
-      "192.168.1.50",
-      "/user/data/x.pkg",
-      "UP0000-CUSA07842_00-0000000000000001",
-      null,
-      true,
+    await runPkgInstall(
+      host,
+      path,
+      "IV0000-CUSA07842_00-0000000000000001",
+      "PS4DP",
+      false,
       undefined,
       undefined,
-      { fingerprint: "a".repeat(64) },
+      undefined,
+      "01.09",
     );
-    await vi.advanceTimersByTimeAsync(2600);
-    const r = await promise;
-    expect(r.installed).toBe(false);
-    expect(r.acceptedUnverified).toBe(true);
-    expect(r.errMessage).toBe(PKG_ACCEPTED_UNVERIFIED_HINT);
-    expect(useTaskStore.getState().tasks[0]).toMatchObject({
-      kind: "pkg-install",
-      status: "awaiting",
-      lastError: undefined,
-    });
+    const req = mockedInstall.mock.calls[0][0];
+    expect(req.source).toEqual({ console_path: path });
+    expect(req.title_id).toBe("CUSA07842");
+    expect(req.category).toBe("PS4DP");
+    expect(req.package_app_ver).toBe("01.09");
+    // The user explicitly chose this install; the guard must not block a
+    // re-install (preserves the prior warn-not-block behaviour).
+    expect(req.options?.allow_destructive_reinstall).toBe(true);
   });
 
-  it("closes the row instead of scheduling a re-verify that cannot succeed", async () => {
-    // No title id and no fingerprint/size: verifyDpiInstalledArtifact returns
-    // false at its first line, forever. Parking the row in `awaiting` against
-    // that probe left a permanently inert row telling the user ps5upload
-    // "keeps checking". It must reach a terminal, dismissible state.
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start") return START_OK;
-      if (cmd === "pkg_install_status") {
-        return {
-          phase: "done",
-          accepted_unverified: true,
-          installed_bytes: 1_000_000,
-          total: 25_000_000_000,
-        };
-      }
-      return {};
-    });
-    const promise = runPkgInstall(
-      "192.168.1.50",
-      "/user/data/x.pkg",
-      "CID",
-      null,
-      true,
+  it("a may_not_launch verdict is a success WITH a caution (still deletable)", async () => {
+    mockedStatus.mockResolvedValue(
+      installStatus({ phase: "done", verdict: "may_not_launch" }),
     );
-    await vi.advanceTimersByTimeAsync(2600);
-    const r = await promise;
-    expect(r.acceptedUnverified).toBe(true);
-    const task = useTaskStore.getState().tasks[0];
-    expect(task.kind).toBe("pkg-install");
-    expect(isTerminal(task.status)).toBe(true);
-    expect(task.detail).toContain("Notifications");
+    const r = await runPkgInstall(host, path, "CID", "PS4GD", true);
+    expect(r.installed).toBe(true);
+    expect(r.mayNotLaunch).toBe(true);
+    expect(mockedDelete).toHaveBeenCalled();
+  });
+
+  it("a regressed patch is reported failed, pkg kept", async () => {
+    mockedStatus.mockResolvedValue(
+      installStatus({
+        phase: "failed",
+        verdict: "failed",
+        patch_verdict: "regressed",
+      }),
+    );
+    const r = await runPkgInstall(host, path, "CID", "PS4DP", true);
+    expect(r.installed).toBe(false);
+    expect(mockedDelete).not.toHaveBeenCalled();
+  });
+
+  it("a busy engine surfaces as a failure, pkg kept", async () => {
+    // A refused start throws (the task row is marked failed by the catch), so
+    // the outcome is a rejection — never a silent success — and nothing is
+    // deleted.
+    mockedInstall.mockResolvedValue({ ok: false, error: "busy", job: "other" });
+    await expect(
+      runPkgInstall(host, path, "CID", "PS4GD", true),
+    ).rejects.toThrow(/already running/i);
+    expect(mockedDelete).not.toHaveBeenCalled();
+  });
+
+  it("surfaces live progress from the status metrics", async () => {
+    // The sample callback fires on every poll, including the terminal one, so a
+    // single done status carrying metrics is enough to prove the wiring without
+    // a real inter-poll sleep.
+    mockedStatus.mockResolvedValue(
+      installStatus({
+        phase: "done",
+        verdict: "installed",
+        metrics: {
+          total_bytes: 1000,
+          served_bytes: 400,
+          throughput_mbps: 10,
+          phase_ms: {},
+          retries: 0,
+          sony_rc: 0,
+        },
+      }),
+    );
+    const samples: number[] = [];
+    const r = await runPkgInstall(
+      host,
+      path,
+      "CID",
+      "PS4GD",
+      false,
+      (s) => samples.push(Math.max(s.transferBytes, s.installedBytes)),
+    );
+    expect(r.installed).toBe(true);
+    expect(samples.some((n) => n === 400)).toBe(true);
   });
 });
+
 
 // ── install-from-USB: copy USB→internal, then install ───────────────────────
 //
@@ -2232,7 +1197,8 @@ describe("runPkgInstall — tracks the install to genuine completion", () => {
 // tile — Bloodborne, 3.3.4). So we always copy to internal first, then install
 // from there. This pins that copy-then-install path.
 describe("installExternal — copies USB→internal, then installs", () => {
-  const mockedInvoke = vi.mocked(invoke);
+  const mockedInstall = vi.mocked(pkgInstall);
+  const mockedStatus = vi.mocked(pkgInstallStatus);
   const mockedCopy = vi.mocked(fsCopy);
   const mockedList = vi.mocked(fsListDir);
   const mockedDeleteUsb = vi.mocked(fsDelete);
@@ -2248,43 +1214,27 @@ describe("installExternal — copies USB→internal, then installs", () => {
   };
 
   beforeEach(() => {
-    vi.useFakeTimers();
-    mockedInvoke.mockReset();
+    mockedInstall.mockReset();
+    mockedStatus.mockReset();
+    mockedInstall.mockResolvedValue({ ok: true, job: "j1" });
     mockedCopy.mockClear();
     mockedDeleteUsb.mockClear();
     mockedList.mockReset();
     mockedList.mockResolvedValue([]);
   });
   afterEach(() => {
-    vi.useRealTimers();
     evictPkgLibraryStore(USBHOST);
   });
 
   it("copies USB→internal and installs from there (never installs off /mnt/usb)", async () => {
     // The install must run against the INTERNAL staging path, never the USB
     // path — installing off /mnt/usb is what registers the broken download tile.
-    const startPaths: string[] = [];
-    mockedInvoke.mockImplementation(async (cmd: unknown, args: unknown) => {
-      if (cmd === "pkg_install_start") {
-        startPaths.push(
-          (args as { localPs5Path?: string })?.localPs5Path ?? "",
-        );
-        return { err_code: 0, register_path: "shellui-rpc", session_id: "s1" };
-      }
-      if (cmd === "pkg_install_status")
-        return {
-          phase: "done",
-          launchable: true,
-          installed_bytes: 1,
-          total: 1,
-        };
-      return {};
-    });
-    const p = pkgLibraryStore(USBHOST)
+    mockedStatus.mockResolvedValue(
+      installStatus({ phase: "done", verdict: "installed" }),
+    );
+    const r = await pkgLibraryStore(USBHOST)
       .getState()
       .installExternal(usbPkg, USBHOST);
-    await vi.advanceTimersByTimeAsync(2600 * 2);
-    const r = await p;
     expect(r.ok).toBe(true);
     // The copy ran, USB → internal pkg_temp.
     expect(mockedCopy).toHaveBeenCalledTimes(1);
@@ -2295,33 +1245,27 @@ describe("installExternal — copies USB→internal, then installs", () => {
       expect.any(Number), // trackable op_id for the drop-tolerant copy
     );
     // The install targeted the internal copy, NOT the /mnt/usb path.
-    expect(startPaths.every((p) => p.includes("/pkg_temp/"))).toBe(true);
-    expect(startPaths.some((p) => p.startsWith("/mnt/usb"))).toBe(false);
+    const sources = mockedInstall.mock.calls.map(
+      (c) => (c[0].source as { console_path?: string }).console_path ?? "",
+    );
+    expect(sources.length).toBeGreaterThan(0);
+    expect(sources.every((p) => p.includes("/pkg_temp/"))).toBe(true);
+    expect(sources.some((p) => p.startsWith("/mnt/usb"))).toBe(false);
   });
 
-  it("keeps the internal copy when install acceptance is unverified", async () => {
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start") {
-        return { err_code: 0, register_path: "shellui-rpc", session_id: "s1" };
-      }
-      if (cmd === "pkg_install_status") {
-        return {
-          phase: "done",
-          accepted_unverified: true,
-          installed_bytes: 1_000_000,
-          total: 25_000_000_000,
-        };
-      }
-      return {};
-    });
-    const p = pkgLibraryStore(USBHOST)
+  it("keeps the internal copy when the install fails", async () => {
+    // A failed verdict must not delete the internal staging copy — the original
+    // USB file is untouched and the copy stays for a retry.
+    mockedStatus.mockResolvedValue(
+      installStatus({ phase: "failed", verdict: "failed", hint: "rejected" }),
+    );
+    const r = await pkgLibraryStore(USBHOST)
       .getState()
       .installExternal(usbPkg, USBHOST);
-    await vi.advanceTimersByTimeAsync(2600 * 2);
-    const r = await p;
     expect(r.ok).toBe(false);
-    expect(r.acceptedUnverified).toBe(true);
     expect(r.message).toMatch(/staging was kept/i);
+    // fsDelete is only reached on a confirmed install (and the dest-exists
+    // copy retry, which didn't fire here).
     expect(mockedDeleteUsb).not.toHaveBeenCalled();
   });
 });

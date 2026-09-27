@@ -32,7 +32,6 @@ import { pkgInstalledInventory } from "../api/ps5";
 import {
   installReverifyDelaysMs,
   retryInstallReverify,
-  runPkgInstall,
 } from "./pkgLibrary";
 import { useTaskStore } from "./tasks";
 
@@ -59,86 +58,6 @@ describe("installReverifyDelaysMs", () => {
     for (let i = 0; i < 50; i++) {
       expect(installReverifyDelaysMs(i)).toBeGreaterThan(0);
     }
-  });
-});
-
-// Regression: uploadQueue.ts calls runPkgInstall(..., null, ...) unconditionally
-// (it has no PARAM.SFO category to send), so `packageType === null` is a live
-// mainline case, not an edge case. The background re-verify must use the
-// engine's OWN resolved package_type (authoritative — it inspects the staged
-// pkg), never fall back to "" (which verifyDpiInstalledArtifact treats as the
-// base-game category "gd" and so filters out the real DLC/patch artifact,
-// stranding an accepted DLC/patch install in "awaiting" forever).
-describe("runPkgInstall — hands the ENGINE's resolved package_type to the background re-verify", () => {
-  const mockedInvoke = vi.mocked(invoke);
-  const mockedInventory = vi.mocked(pkgInstalledInventory);
-  const host = "192.168.1.50";
-  const contentId = "IV0000-CUSA07842_00-0000000000000001";
-  const localPath = "/user/data/dlc.pkg";
-  const fingerprint = "f".repeat(64);
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    useTaskStore.setState({ tasks: [] });
-    mockedInventory.mockReset();
-    mockedInvoke.mockReset();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("matches the DLC artifact via the engine's package_type, not the caller's null", async () => {
-    // The caller (mirroring uploadQueue.ts) sends packageType=null. The engine
-    // resolves it from the staged pkg's own PARAM.SFO and reports it back as
-    // "AC". A response with no session_id is accepted-but-unverified
-    // immediately (see the "forwards deleteStaging" tests in
-    // pkgLibrary.test.ts for the same fast path).
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start") {
-        return {
-          err_code: 0,
-          register_path: "shellui-rpc",
-          package_type: "AC",
-        };
-      }
-      return {};
-    });
-    // Only a "dlc"-kind artifact is present — never a "base". If the reverify
-    // used the caller's null (⇒ "" ⇒ category "gd" ⇒ kind "base"), it would
-    // filter this artifact out entirely and never match.
-    mockedInventory.mockResolvedValue([
-      {
-        kind: "dlc",
-        path: `/user/addcont/CUSA07842/CUSA07842-AC0001/ac.pkg`,
-        size: 12_345,
-        fingerprint,
-        contentId,
-      },
-    ]);
-
-    const result = await runPkgInstall(
-      host,
-      localPath,
-      contentId,
-      null,
-      true,
-      undefined,
-      undefined,
-      { fingerprint },
-    );
-
-    expect(result.acceptedUnverified).toBe(true);
-    expect(result.resolvedPackageType).toBe("AC");
-
-    const taskId = useTaskStore.getState().tasks[0]?.id;
-    expect(taskId).toBeTruthy();
-    expect(useTaskStore.getState().tasks[0]?.status).toBe("awaiting");
-
-    // Drive the background re-verify's first tick (installReverifyDelaysMs(0)).
-    await vi.advanceTimersByTimeAsync(30_000);
-
-    expect(useTaskStore.getState().getTask(taskId!)?.status).toBe("done");
   });
 });
 

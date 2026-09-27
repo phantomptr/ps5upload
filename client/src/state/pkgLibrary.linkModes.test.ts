@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Same module-load stubs as pkgLibrary.reverify.test.ts: importing the store
-// pulls in the Tauri bridge and the ps5 api.
+// pulls in the Tauri bridge and the ps5 api. The install itself now goes
+// through the unified `pkgInstall`/`pkgInstallStatus` api (mocked here); only
+// the metadata probe still rides the raw `invoke` bridge.
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("../lib/tauriEnv", () => ({ isTauriEnv: () => true }));
 vi.mock("../api/ps5", () => ({
@@ -16,19 +18,66 @@ vi.mock("../api/ps5", () => ({
   consoleReadiness: vi.fn(async () => true),
   pkgInstalledInventory: vi.fn(async () => []),
   pkgInstallPreflight: vi.fn(async () => null),
+  pkgInstall: vi.fn(async () => ({ ok: true, job: "job1" })),
+  pkgInstallStatus: vi.fn(async () => ({ phase: "done", verdict: "installed" })),
 }));
 vi.mock("../lib/ps5Transfers", () => ({ transferScreenBusy: () => false }));
 
 import { invoke } from "@tauri-apps/api/core";
 import { pkgLibraryStore } from "./pkgLibrary";
+import {
+  pkgInstall,
+  pkgInstallStatus,
+  type InstallSource,
+  type InstallStatus,
+  type InstallRequestBody,
+} from "../api/ps5";
 import { useLinkInstallPrefs } from "./linkInstallPrefs";
 import { useTaskStore } from "./tasks";
 
 const HOST = "10.0.0.5:9114";
 const URL_OK = "https://h.example/game.pkg";
 
+/** A terminal InstallStatus with defaults; override per case. */
+function installStatus(over: Partial<InstallStatus>): InstallStatus {
+  return {
+    job: "job1",
+    ps5_addr: HOST,
+    content_id: "",
+    title_id: null,
+    phase: "done",
+    route: "stream",
+    verdict: "installed",
+    code: 0,
+    hint: null,
+    reason: null,
+    metrics: {
+      total_bytes: 0,
+      served_bytes: 0,
+      throughput_mbps: 0,
+      phase_ms: {},
+      retries: 0,
+      sony_rc: 0,
+    },
+    app_ver_before: null,
+    app_ver_after: null,
+    patch_verdict: null,
+    shortened: false,
+    started_at: 0,
+    updated_at: 0,
+    ...over,
+  };
+}
+
+const sourcesPosted = (): InstallSource[] =>
+  vi
+    .mocked(pkgInstall)
+    .mock.calls.map((c) => (c[0] as InstallRequestBody).source);
+
 describe("link install modes", () => {
   const mockedInvoke = vi.mocked(invoke);
+  const mockedInstall = vi.mocked(pkgInstall);
+  const mockedStatus = vi.mocked(pkgInstallStatus);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -41,82 +90,71 @@ describe("link install modes", () => {
       },
     };
     useLinkInstallPrefs.setState({ modes: {}, insecure: {} });
+    mockedInstall.mockResolvedValue({ ok: true, job: "job1" });
+    mockedStatus.mockResolvedValue(
+      installStatus({ phase: "done", verdict: "installed" }),
+    );
   });
 
-  /* Direct hands the URL to the console's own installer and never opens the
-   * engine's proxy — that is the entire point: the computer can then sleep. */
+  /* Direct hands the URL to the console's own installer via the unified
+   * endpoint (source: {url}). The engine brings the daemon up internally. */
   it("direct mode asks the PS5 to fetch the url itself", async () => {
-    mockedInvoke.mockResolvedValue({ ok: true, rc: 0 });
     const r = await pkgLibraryStore(HOST)
       .getState()
       .installUrl(URL_OK, HOST, { mode: "direct" });
-    const call = mockedInvoke.mock.calls.find((c) => c[0] === "pkg_dpi_install");
-    expect(call, "expected a pkg_dpi_install call").toBeTruthy();
-    expect((call?.[1] as { localPs5Path: string }).localPs5Path).toBe(URL_OK);
+    expect(sourcesPosted()).toContainEqual({ url: URL_OK });
     expect(r.ok).toBe(true);
   });
 
-  /* A refusal must not dead-end the user: the streaming path needs neither
-   * the DPI daemon nor a console-reachable URL. */
+  /* A refusal must not dead-end the user: after the direct attempt fails, the
+   * streaming path takes over — which first probes the link. */
   it("falls back to this computer when the PS5 cannot fetch it", async () => {
-    mockedInvoke.mockImplementation(async (cmd: string) => {
-      if (cmd === "dpi_ensure") return { ok: true, listening: true, sent: false };
-      if (cmd === "pkg_dpi_install") throw new Error("dpi daemon unreachable");
-      throw new Error("probe not stubbed");
+    mockedStatus.mockResolvedValue(
+      installStatus({ phase: "failed", verdict: "failed", hint: "refused" }),
+    );
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_remote_probe")
+        return { total_size: 10, content_id: "CID", title: "Game" };
+      return {};
     });
     await pkgLibraryStore(HOST)
       .getState()
       .installUrl(URL_OK, HOST, { mode: "direct" });
-    // It tried direct, then moved on rather than returning the DPI error.
-    expect(
-      mockedInvoke.mock.calls.some((c) => c[0] === "pkg_dpi_install"),
-    ).toBe(true);
+    // It tried direct (a {url} install), then moved on to the streaming path,
+    // which probes the link rather than returning the direct failure.
+    expect(sourcesPosted()).toContainEqual({ url: URL_OK });
     expect(
       mockedInvoke.mock.calls.some((c) => c[0] === "pkg_remote_probe"),
     ).toBe(true);
   });
 
-  /* The daemon that does a direct install is not always running — it was
-   * down on the test console until something started it. Direct mode used to
-   * skip starting it and fail whenever :9115 was closed. */
-  it("starts the DPI daemon before asking the PS5 to fetch the link", async () => {
-    mockedInvoke.mockImplementation(async (cmd: string) => {
-      if (cmd === "dpi_ensure") return { ok: true, listening: true, sent: true };
-      if (cmd === "pkg_dpi_install") return { ok: true, rc: 0 };
-      return {};
-    });
-    await pkgLibraryStore(HOST).getState().installUrl(URL_OK, HOST, { mode: "direct" });
-    const order = mockedInvoke.mock.calls.map((c) => c[0]);
-    expect(order.indexOf("dpi_ensure")).toBeGreaterThanOrEqual(0);
-    expect(order.indexOf("dpi_ensure")).toBeLessThan(order.indexOf("pkg_dpi_install"));
-  });
-
-  /* A refusal arrives as HTTP 200 with ok:false. It used to be read as
-   * success — "Sent to the PS5, you can close ps5upload" — while nothing was
-   * installing. It must be treated as a failure and fall back instead. */
+  /* A refusal must be treated as a failure and fall back, never reported as a
+   * successful "Sent to the PS5". */
   it("never reports a refused link as sent", async () => {
-    mockedInvoke.mockImplementation(async (cmd: string) => {
-      if (cmd === "dpi_ensure") return { ok: true, listening: true, sent: false };
-      if (cmd === "pkg_dpi_install")
-        return { ok: false, rc: 0x80a30003 | 0, err_message: "refused" };
-      throw new Error("probe not stubbed");
+    mockedStatus.mockResolvedValue(
+      installStatus({ phase: "failed", verdict: "failed", hint: "refused" }),
+    );
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_remote_probe")
+        return { total_size: 10, content_id: "CID", title: "Game" };
+      return {};
     });
     const r = await pkgLibraryStore(HOST)
       .getState()
       .installUrl(URL_OK, HOST, { mode: "direct" });
     expect(r.message ?? "").not.toMatch(/Sent to the PS5/);
-    expect(mockedInvoke.mock.calls.some((c) => c[0] === "pkg_remote_probe")).toBe(true);
+    expect(
+      mockedInvoke.mock.calls.some((c) => c[0] === "pkg_remote_probe"),
+    ).toBe(true);
   });
 
   /* A link too long for the installer goes through a short alias on this
-   * computer, which the console keeps re-resolving — so this is the one
-   * direct install where closing the app would break it. Say so. */
+   * computer, which the console keeps re-resolving — so this is the one direct
+   * install where closing the app would break it. Say so. */
   it("tells the user to keep the app running when the link was shortened", async () => {
-    mockedInvoke.mockImplementation(async (cmd: string) => {
-      if (cmd === "dpi_ensure") return { ok: true, listening: true, sent: false };
-      if (cmd === "pkg_dpi_install") return { ok: true, rc: 0, shortened: true };
-      return {};
-    });
+    mockedStatus.mockResolvedValue(
+      installStatus({ phase: "done", verdict: "installed", shortened: true }),
+    );
     const r = await pkgLibraryStore(HOST)
       .getState()
       .installUrl(URL_OK, HOST, { mode: "direct" });
@@ -126,7 +164,8 @@ describe("link install modes", () => {
   });
 
   /* A package on a saved server streams from the engine by its remote path; the
-   * task shows it by the server's name and holds nothing about the connection. */
+   * request carries the connection + path, and the task shows it by the
+   * server's name and holds nothing about the connection. */
   it("streams a package from a saved server by its remote path", async () => {
     const { useConnectionsStore } = await import("./connections");
     useConnectionsStore.setState({
@@ -145,44 +184,45 @@ describe("link install modes", () => {
         },
       ],
     });
-    mockedInvoke.mockImplementation(async (cmd: string) => {
-      if (cmd === "pkg_install_start") return { session_id: "s1", err_code: 0 };
-      throw new Error("stop here");
-    });
     useTaskStore.setState({ tasks: [] });
-    await pkgLibraryStore(HOST).getState().installStream("remote://nas-1/games/a.pkg", HOST);
-    const call = mockedInvoke.mock.calls.find((c) => c[0] === "pkg_install_start");
-    const args = call?.[1] as Record<string, unknown>;
-    expect(args.path).toBe("remote://nas-1/games/a.pkg");
-    expect("smb" in args).toBe(false);
+    await pkgLibraryStore(HOST)
+      .getState()
+      .installStream("remote://nas-1/games/a.pkg", HOST);
+    expect(sourcesPosted()).toContainEqual({
+      remote: { connection: "nas-1", path: "games/a.pkg" },
+    });
     const task = useTaskStore.getState().tasks[0];
     expect(task.label).toContain("a.pkg");
     expect(JSON.stringify(task.payload)).toContain("NAS › games/a.pkg");
     expect(JSON.stringify(task.payload)).not.toContain("10.0.0.9");
   });
 
-  /* Accelerated must never reach for the console's installer. */
-  it("stream mode does not call the DPI daemon", async () => {
-    mockedInvoke.mockImplementation(async () => {
-      throw new Error("probe not stubbed");
+  /* Stream mode posts a {url} source and lets the engine choose stream
+   * delivery — it never hands a console_path or reaches a client daemon. */
+  it("stream mode posts a url source", async () => {
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_remote_probe")
+        return { total_size: 10, content_id: "CID", title: "Game" };
+      return {};
     });
     await pkgLibraryStore(HOST)
       .getState()
       .installUrl(URL_OK, HOST, { mode: "stream" });
-    expect(
-      mockedInvoke.mock.calls.some((c) => c[0] === "pkg_dpi_install"),
-    ).toBe(false);
+    expect(sourcesPosted()).toContainEqual({ url: URL_OK });
   });
 
-  /* With no explicit mode the stored per-host choice decides. */
+  /* With no explicit mode the stored per-host choice decides. Stream probes the
+   * link first; direct does not — so the probe proves the remembered choice. */
   it("uses the remembered choice when no mode is passed", async () => {
     useLinkInstallPrefs.getState().setMode(HOST, "stream");
-    mockedInvoke.mockImplementation(async () => {
-      throw new Error("probe not stubbed");
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_remote_probe")
+        return { total_size: 10, content_id: "CID", title: "Game" };
+      return {};
     });
     await pkgLibraryStore(HOST).getState().installUrl(URL_OK, HOST);
     expect(
-      mockedInvoke.mock.calls.some((c) => c[0] === "pkg_dpi_install"),
-    ).toBe(false);
+      mockedInvoke.mock.calls.some((c) => c[0] === "pkg_remote_probe"),
+    ).toBe(true);
   });
 });

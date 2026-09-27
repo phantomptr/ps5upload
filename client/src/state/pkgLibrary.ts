@@ -2,8 +2,6 @@ import { displayPath, isRemotePath } from "../lib/remotePath";
 import { useConnectionsStore } from "./connections";
 import { trStatic } from "../lib/trStatic";
 import { isInstallPackagePath } from "../lib/pkgDropDedupe";
-import { patchInstallFailure } from "../lib/dpiUnavailable";
-import { restoreMainPayload } from "../lib/restoreMainPayload";
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 import { invoke } from "../lib/invokeLogged";
@@ -21,6 +19,10 @@ import {
   consoleReadiness,
   pkgInstalledInventory,
   pkgInstallPreflight,
+  pkgInstall,
+  pkgInstallStatus,
+  type InstallSource,
+  type InstallStatus,
 } from "../api/ps5";
 import { processList, type ExternalPkg } from "../api/ps5";
 import { formatBytes } from "../lib/format";
@@ -171,6 +173,89 @@ export function installedLastResult(mayNotLaunch: boolean): {
   return mayNotLaunch
     ? { ok: true, warn: true, message: PKG_MAY_NOT_LAUNCH_MESSAGE }
     : { ok: true, message: "Installed package verified on the console." };
+}
+
+/** Human guidance for a unified-status `reason` (the machine-readable failure
+ *  class the engine reports when there is no better `hint`). Kept small: the
+ *  engine's `hint` is preferred whenever present. */
+function reasonGuidance(reason: string | null): string {
+  switch (reason) {
+    case "loader_unreachable":
+      return "The PS5's payload loader wasn't reachable — reload it and retry.";
+    case "no_bringup":
+      return "The install daemon couldn't be brought up on the PS5.";
+    case "no_image":
+      return "This build has no bundled installer daemon image.";
+    case "source_gone":
+      return "The package source was no longer available when the install ran.";
+    case "destructive_guard":
+      return "This would erase the installed game first; re-run allowing a destructive re-install.";
+    case "bad_request":
+      return "The installer rejected the request.";
+    case "sony_refused":
+      return "The PS5 declined the install.";
+    default:
+      return "";
+  }
+}
+
+/** Map the engine's unified terminal `InstallStatus` onto the outcome the UI
+ *  already renders. The engine now owns guard/deliver/DPI/restore/verify, so
+ *  the client only interprets the verdict:
+ *    installed        → success
+ *    may_not_launch   → success WITH a launch caution (artifact IS on disk)
+ *    failed           → not installed, with the best available message
+ *  There is no longer a client-side "stalled"/"acceptedUnverified" state — the
+ *  engine's state machine always resolves to done|failed. */
+export function statusToOutcome(st: InstallStatus): PkgInstallOutcome {
+  const installed = st.verdict === "installed" || st.verdict === "may_not_launch";
+  const mayNotLaunch = st.verdict === "may_not_launch";
+  let errMessage = "";
+  if (!installed) {
+    if (st.patch_verdict === "regressed") {
+      errMessage = trStatic("pkg.patch_regressed", PKG_PATCH_REGRESSED_HINT);
+    } else if (st.patch_verdict === "did_not_apply") {
+      errMessage = trStatic(
+        "pkg.patch_did_not_apply",
+        PKG_PATCH_DID_NOT_APPLY_HINT,
+      );
+    } else {
+      errMessage =
+        (st.hint && st.hint.trim()) ||
+        reasonGuidance(st.reason) ||
+        `0x${(st.code >>> 0).toString(16).padStart(8, "0")}`;
+    }
+  }
+  return {
+    installed,
+    mayNotLaunch,
+    errMessage,
+    stalled: false,
+    acceptedUnverified: false,
+  };
+}
+
+/** Derive a live progress sample from the unified status. The unified metrics
+ *  do not split transfer bytes from install bytes, so both progress fields read
+ *  the same served/total counters (the max of them never runs backwards). */
+export function sampleFromStatus(st: InstallStatus): InstallSample {
+  const phase =
+    st.phase === "resolve" || st.phase === "deliver"
+      ? "download"
+      : st.phase === "install" || st.phase === "verify"
+        ? "install"
+        : st.phase; // done | failed
+  const served = st.metrics.served_bytes;
+  const past = st.phase === "install" || st.phase === "verify" || st.phase === "done";
+  return {
+    phase,
+    installedBytes: past ? served : 0,
+    transferBytes: served,
+    total: st.metrics.total_bytes,
+    servedRequests: served > 0 ? 1 : 0,
+    stalled: false,
+    acceptedUnverified: false,
+  };
 }
 
 /** A warning when a pkg likely won't fit, else null. `neededBytes` is the pkg
@@ -1020,49 +1105,6 @@ export interface PkgInstallOutcome {
  * mid-install). We poll until the engine says terminal, scaling to any size.
  */
 const PKG_VERIFY_POLL_MS = 2_500;
-/** Give up tracking after this many consecutive poll errors (e.g. the engine
- *  GC'd the session, or a sustained socket failure). On give-up we do NOT
- *  assume success — `completed` stays false so the pkg is KEPT (never delete on
- *  uncertainty). */
-const PKG_VERIFY_MAX_POLL_ERRORS = 5;
-/** How long an install may stay UNWATCHED because the engine is unreachable
- *  before we stop claiming to watch it. Generous on purpose: an engine restart
- *  is seconds, and a healthy install must not be written off for one. */
-const PKG_VERIFY_ENGINE_BLIND_MS = 5 * 60 * 1000;
-
-/**
- * Tell the two shapes of a `pkg_install_status` failure apart, because only
- * one of them is bad news.
- *
- * The engine owns install state, and (for a Stream install) is also the HTTP
- * server the console pulls the package from — so it is the only thing that can
- * report on an install, and the only thing whose absence proves nothing about
- * it. An unreachable ENGINE therefore means "state unknown, keep watching";
- * an engine that answers "no install session <id>" means the state is gone for
- * good, since sessions live in engine memory and die with the process. Both
- * arrive here as strings, which is why this is a string match rather than a
- * typed error — and why both shapes are listed: the desktop app's errors come
- * from `get_json` in ps5_engine.rs ("engine request failed: …"), while the
- * browser build's come straight from `fetch` (Chrome "Failed to fetch",
- * Safari "Load failed", an AbortSignal timeout, a refused socket). A message
- * that matches neither is classified as a real error and burns the retry
- * budget, which is the safe direction: that budget only ends the watch.
- */
-function classifyStatusPollError(
-  raw: string,
-): "engine-unreachable" | "session-gone" | "other" {
-  // Checked first: a 404 body is the engine answering, whatever else it says.
-  if (/no install session/i.test(raw)) return "session-gone";
-  if (
-    /engine request failed|failed to fetch|fetch failed|networkerror|load failed|signal timed out|timeouterror|econnrefused|connection refused/i.test(
-      raw,
-    )
-  ) {
-    return "engine-unreachable";
-  }
-  return "other";
-}
-
 // ── Console-readiness gate ───────────────────────────────────────────────────
 // A console goes unresponsive on the AppListRegistered frame while it recovers
 // from a prior install (the post-install SceShellUI black-screen blip). Firing
@@ -1078,12 +1120,6 @@ const READY_POLL_MS = 1_500;
  *  console whose probe never clears adds a bounded delay, not a 90s stall; the
  *  real post-install blip settles well within this. */
 const READY_WAIT_TIMEOUT_MS = 30_000;
-/** The DPI daemon's "console not in an installable state" rejection — transient
- *  (clears on settle). Retried with a readiness gate rather than failed outright. */
-const DPI_TRANSIENT_BUSY_RC = 0x80020002;
-/** SCE_HTTP_ERROR_PROXY — Sony's installer rejected its HTTP setup before it
- * requested the package. Staged/file install bypasses this path entirely. */
-const DPI_HTTP_PROXY_RC = 0x80431084;
 
 /** `http://ip:port` of a pkg-host URL, or null when there is none to show. */
 export function originOf(url: string | undefined): string | null {
@@ -1110,9 +1146,6 @@ export function streamUnreachableMessage(rcHex: string, servedFrom: string | nul
     "Upload & install works without this connection."
   );
 }
-/** How many times to (re)attempt a DPI install that keeps hitting the transient
- *  busy rc, each gated on the console becoming ready again. */
-const DPI_MAX_ATTEMPTS = 4;
 
 /**
  * Poll the console-readiness probe (the AppListRegistered round-trip) until it
@@ -1137,11 +1170,6 @@ export async function waitForConsoleReady(
   }
   return false;
 }
-/** Absolute backstop so a pathological engine that keeps returning "install"
- *  forever can't block the queue indefinitely. Generously past the engine's
- *  own 2h session GC — under normal operation the engine reaches a terminal
- *  verdict (done/stalled) long before this. On hitting it we KEEP the pkg. */
-const PKG_VERIFY_SAFETY_CAP_MS = 3 * 60 * 60 * 1000;
 /** DPI's synchronous rc=0 is only acceptance. Once the main payload is
  * restored, allow enough time for its live installed-artifact inventory to
  * observe the exact patch/DLC/base that landed. */
@@ -1153,18 +1181,6 @@ const DPI_VERIFY_IDLE_MS = 3 * 60 * 1000;
  *  forever cannot pin the UI open indefinitely. Sized for a ~200-300 GB title
  *  on a slow internal copy. */
 const DPI_VERIFY_MAX_MS = 4 * 60 * 60 * 1000;
-
-/** Re-install guidance appended when Sony fails the async install — mirrors the
- *  may-not-launch copy so the user has a concrete next step. */
-const PKG_ASYNC_FAILED_HINT =
-  'the PS5 reported the install didn’t complete (the tile may show "Can’t start the game or app"). That tile is empty and safe to delete from the PS5. Re-install from the PS5: Settings → System → Debug Settings → Game → Package Installer.';
-
-/** Stall guidance — the install accepted but disk progress flatlined. The
- *  staged pkg was KEPT, so the user can simply retry. We deliberately do NOT
- *  blame free space (a stall has many causes, and users with plenty of space
- *  found that misleading) and we tell them the empty tile is safe to delete. */
-const PKG_STALL_HINT =
-  'ps5upload couldn’t confirm the install finished. On newer firmware the PS5 often keeps installing in the background — if a tile appeared on your PS5 and it’s downloading or shows progress, let it finish; it becomes playable when that completes (check the PS5 home screen, or its Notifications / Downloads). Your package was kept on the PS5, so if nothing appeared — or a tile appeared that won’t open ("Can’t start the game or app", which is empty and safe to delete) — you can simply try again. For stubborn .pkg files (often PS4 backports), the PS5’s own Package Installer (Settings → System → Debug Settings → Game → Package Installer) is the most reliable.';
 
 /** Guidance when a PATCH/UPDATE (a "…DP" package) can't be applied even after
  *  the DPI fallback. ps5upload applies updates through Sony's safe installer
@@ -1342,216 +1358,6 @@ export function describeInstallSample(
   return { detail, current, pct };
 }
 
-/** What the install tracker concludes. */
-interface VerifyOutcome {
-  /** Confirmed complete — the title registered (or byte-settled on
-   *  unverifiable FW). The ONLY state that permits deleting the staged pkg. */
-  completed: boolean;
-  /** Terminal failure or stall — `completed` is false and the pkg is KEPT. */
-  failed: boolean;
-  /** Specifically a stall (flatlined), as opposed to a Sony-reported error. */
-  stalled: boolean;
-  /** The request was accepted but completion could not be proven. */
-  acceptedUnverified: boolean;
-  message: string;
-  launchable?: boolean | null;
-  /**
-   * Whether the engine reported a terminal state. `false` means we stopped
-   * watching while the install may still be running (safety cap, poll errors,
-   * an engine too old to answer) — the caller must then NOT tear down the
-   * serving session, because doing so aborts a live install.
-   */
-  trackedToTerminal: boolean;
-}
-
-/**
- * Track an install to a genuine terminal state by polling `pkg_install_status`.
- *
- * Unlike the old fixed-window verify, this NEVER assumes success on a timeout —
- * the engine's progress tracker observes the install (on-disk launch check +
- * bytes landing) and tells us `done` (confirmed), `error`/`stalled` (terminal,
- * pkg kept), or keeps reporting `install` while bytes are still landing. We
- * poll until terminal, so a 25 GB or 200 GB install is tracked to actual
- * completion instead of being declared done after 100s and deleted mid-write.
- *
- * `onState(sample)` is called each poll so callers can render a live % and name
- * the phase. A Stream install spends most of its wall clock in the transfer, so
- * `transferBytes` (not `installedBytes`) is what moves then.
- */
-async function verifyInstallCompleted(
-  session: string | undefined,
-  onState?: (sample: InstallSample) => void,
-): Promise<VerifyOutcome> {
-  // `trackedToTerminal` is false for every give-up path: the engine never said
-  // the install ended, so it may still be running and reading from the session.
-  const unverified = (trackedToTerminal = false): VerifyOutcome => ({
-    completed: false,
-    failed: false,
-    stalled: false,
-    acceptedUnverified: true,
-    message: PKG_ACCEPTED_UNVERIFIED_HINT,
-    trackedToTerminal,
-  });
-  // No session id ⇒ older engine (or a test harness) that can't report status.
-  // Acceptance without a status session is not proof of completion.
-  if (!session) return unverified();
-  // Backstop only — the ENGINE decides when an install has genuinely stalled
-  // (it watches real disk progress and reports `stalled`). This deadline exists
-  // so a forgotten session can't be watched forever, so it must be measured
-  // from the last sign of progress rather than from the start: a 200-300 GB
-  // title on a modest link legitimately runs past any fixed clock, and a fixed
-  // one would stop watching a perfectly healthy install and report it
-  // unverified.
-  let safetyDeadline = Date.now() + PKG_VERIFY_SAFETY_CAP_MS;
-  let bestProgress = 0;
-  let pollErrors = 0;
-  // When the engine stopped answering, and the last state we managed to read.
-  // Both only matter while it is unreachable; see the catch below.
-  let engineBlindSince = 0;
-  let lastSample: InstallSample | null = null;
-  while (Date.now() < safetyDeadline) {
-    await sleep(PKG_VERIFY_POLL_MS);
-    try {
-      const s = (await invoke("pkg_install_status", { session })) as {
-        phase?: string;
-        err_code?: number;
-        err_message?: string;
-        launchable?: boolean | null;
-        // Progress-tracker fields (engine ≥ this release). Absent on older
-        // engines (serde default) — then we just don't render a live %.
-        installed_bytes?: number;
-        total?: number;
-        stalled?: boolean;
-        accepted_unverified?: boolean;
-        // Transfer counters (engine ≥ this release). Absent on older engines,
-        // so the stream UI falls back to the phase alone.
-        transfer_bytes?: number;
-        served_requests?: number;
-        origin_rate_bps?: number;
-      };
-      // An engine that doesn't speak status returns no `phase` — treat as
-      // accepted-but-unverified, not as a manufactured success.
-      if (typeof s?.phase !== "string") return unverified();
-      // The engine answered, so whatever outage was in progress is over.
-      engineBlindSince = 0;
-      if (
-        typeof s.installed_bytes === "number" &&
-        typeof s.total === "number"
-      ) {
-        lastSample = {
-          phase: s.phase,
-          installedBytes: s.installed_bytes,
-          transferBytes: s.transfer_bytes ?? 0,
-          total: s.total,
-          servedRequests: s.served_requests ?? 0,
-          originRateBps:
-            typeof s.origin_rate_bps === "number" ? s.origin_rate_bps : undefined,
-          stalled: !!s.stalled,
-          acceptedUnverified: !!s.accepted_unverified,
-        };
-        onState?.(lastSample);
-        // Any forward movement — bytes landing on the console, or ranges
-        // being pulled from us — restarts the watch window.
-        const progressed = Math.max(
-          lastSample.installedBytes,
-          lastSample.transferBytes,
-        );
-        if (progressed > bestProgress) {
-          bestProgress = progressed;
-          safetyDeadline = Date.now() + PKG_VERIFY_SAFETY_CAP_MS;
-        }
-      }
-      if (s.phase === "error") {
-        // Distinguish a stall (flatlined, pkg kept, retry) from a Sony-reported
-        // async failure — both are terminal and both KEEP the pkg.
-        if (s.stalled) {
-          return {
-            completed: false,
-            failed: true,
-            stalled: true,
-            acceptedUnverified: false,
-            message: PKG_STALL_HINT,
-            launchable: s.launchable,
-            trackedToTerminal: true,
-          };
-        }
-        const code = (s.err_code ?? 0) >>> 0;
-        const sony =
-          s.err_message ||
-          (code ? `0x${code.toString(16).padStart(8, "0")}` : "");
-        return {
-          completed: false,
-          failed: true,
-          stalled: false,
-          acceptedUnverified: false,
-          message: sony
-            ? `${sony} — ${PKG_ASYNC_FAILED_HINT}`
-            : PKG_ASYNC_FAILED_HINT,
-          launchable: s.launchable,
-          trackedToTerminal: true,
-        };
-      }
-      if (s.phase === "done") {
-        if (s.accepted_unverified) {
-          // The engine reported a terminal state (it stopped tracking); this is
-          // the one unverified outcome that IS terminal.
-          return {
-            ...unverified(true),
-            launchable: s.launchable,
-          };
-        }
-        // Confirmed terminal success — the engine only reports `done` once the
-        // title actually registered (or byte-settled). Safe to delete.
-        return {
-          completed: true,
-          failed: false,
-          stalled: false,
-          acceptedUnverified: false,
-          message: "",
-          launchable: s.launchable,
-          trackedToTerminal: true,
-        };
-      }
-      pollErrors = 0; // a clean in-progress poll resets the error streak
-    } catch (e) {
-      const raw = e instanceof Error ? e.message : String(e);
-      const kind = classifyStatusPollError(raw);
-      // The ENGINE is the holder of install state — and for a Stream install
-      // it is also the web server the console is pulling from. So an engine
-      // that doesn't answer says nothing about the install: it is UNWATCHED,
-      // and it is most likely still running fine. Treating this like any
-      // other poll error used to abandon the watch after 5 polls (~12 s) —
-      // shorter than a desktop engine restart — and report "couldn't verify"
-      // for an install that then completed perfectly. Keep watching instead,
-      // and say so, but only for so long: past the blind cap, holding the
-      // install "in progress" in the UI forever is worse than admitting we
-      // lost sight of it (the session is kept either way, so nothing that may
-      // still be running gets cancelled).
-      if (kind === "engine-unreachable") {
-        if (!engineBlindSince) engineBlindSince = Date.now();
-        if (lastSample)
-          onState?.({ ...lastSample, note: PKG_ENGINE_BLIND_HINT });
-        if (Date.now() - engineBlindSince >= PKG_VERIFY_ENGINE_BLIND_MS) {
-          return { ...unverified(), message: PKG_ENGINE_BLIND_HINT };
-        }
-        continue;
-      }
-      // The engine answered and doesn't have this session. Sessions live in
-      // engine memory, so this state is gone for good — polling on cannot
-      // learn anything more, and neither can the caller cancel it.
-      if (kind === "session-gone") return unverified();
-      // Anything else: a real, repeating error. After a few, give up tracking
-      // — but do NOT assume success. `completed:false` keeps the pkg (never
-      // delete on uncertainty); the install may well have finished, so don't
-      // shout error.
-      if (++pollErrors >= PKG_VERIFY_MAX_POLL_ERRORS) {
-        return unverified();
-      }
-    }
-  }
-  // Safety cap hit (pathological): keep the pkg, don't claim success.
-  return unverified();
-}
 
 /** Confirm a DPI fallback by comparing the installed app.pkg/patch.pkg/DLC
  * artifact to the exact source identity. This closes the old gap where DPI
@@ -1998,328 +1804,76 @@ export async function loaderProcessSeen(host: string): Promise<boolean> {
   }
 }
 
-async function runDpiInstall(
+
+/** Post to the ONE install endpoint and poll its status to a terminal phase,
+ *  feeding live samples to the caller. The engine owns everything in between —
+ *  the destructive-reinstall guard, daemon bring-up + restore, stream/loopback
+ *  delivery, the DPI hand-off, and post-install verify — so the client only
+ *  starts the job and interprets the result. Returns the terminal
+ *  `InstallStatus` (phase "done" or "failed"). Throws only when the endpoint is
+ *  unreachable or refuses to start a job. */
+async function driveUnifiedInstall(
   host: string,
-  localPs5Path: string,
+  source: InstallSource,
+  meta: {
+    contentId?: string | null;
+    titleId?: string | null;
+    packageAppVer?: string | null;
+    /** The pkg's PARAM.SFO category (or the equivalent BGFT package_type — both
+     *  end in gd/gp/ac, which is all the engine's guard inspects). Drives the
+     *  destructive-reinstall guard. */
+    category?: string | null;
+    options?: {
+      delete_source_copy_after?: boolean;
+      allow_destructive_reinstall?: boolean;
+    };
+  },
+  onSample?: (s: InstallSample) => void,
   onStatus?: (msg: string) => void,
-  // Identity of the package being installed. The engine cannot parse a file
-  // that lives on the console, so it needs these to check afterwards whether
-  // an update actually took effect. Optional: absent simply skips the check.
-  verify?: { titleId?: string; packageAppVer?: string },
-): Promise<{
-  ok: boolean;
-  ambiguous: boolean;
-  errMessage: string;
-  daemonFailed: boolean;
-  /** Machine-readable cause when `daemonFailed` — see `dpiUnavailableCopy`. */
-  daemonReason?: string;
-  rc: number;
-  patchVerdict?: string;
-  appVerBefore?: string;
-  appVerAfter?: string;
-  /** The link was too long for the PS5's installer, so the engine handed it
-   *  a short alias on this computer that redirects to the link. The console
-   *  re-resolves it during the install, so this computer must stay up. */
-  shortened?: boolean;
-}> {
-  const ip = hostOf(host);
-  // dpi_ensure sends the DPI ELF to the loader port (:9021). Whether that
-  // displaces the running helper is LOADER-dependent, not ours: we never evict
-  // for a companion image, and measured on FW 5.10 and FW 9.60 the helper's
-  // :9113/:9114 stayed up while :9115 came online beside them. A
-  // single-payload loader would still replace it, which is why `sent` drives a
-  // restore below. Log around it either way: issue #152's "helper dies ~4s
-  // after a rejected update" reports land right here, and the next bundle will
-  // show whether dpi_ensure succeeded, timed out, or never returned.
-  log.info(
-    "install",
-    `DPI ensure: bringing up daemon on ${ip}:9115 (loads via :9021)`,
-  );
-  let ens: {
-    ok?: boolean;
-    error?: string;
-    listening?: boolean;
-    sent?: boolean;
-    reason?: string;
-  };
-  try {
-    ens = (await invoke("dpi_ensure", { ip })) as typeof ens;
-  } catch (e) {
-    // The bridge can lose the response after the loader already replaced the
-    // helper. Restore defensively; no transfer is active while this lock runs.
-    await restoreMainPayload(ip);
-    return {
-      ok: false,
-      ambiguous: false,
-      daemonFailed: true,
-      // The bridge, not the console, is what failed here — no reason code
-      // applies, so the neutral fallback copy is the honest one.
-      daemonReason: undefined,
-      rc: 0,
-      errMessage: `couldn't start the DPI daemon: ${pkgError(e)}`,
-    };
+): Promise<InstallStatus> {
+  const start = await pkgInstall({
+    ps5_addr: mgmtAddr(host),
+    source,
+    content_id: meta.contentId ?? "",
+    title_id: meta.titleId ?? null,
+    package_app_ver: meta.packageAppVer ?? null,
+    category: meta.category ?? null,
+    options: meta.options,
+  });
+  if (!start.ok || !start.job) {
+    throw new Error(
+      start.error === "busy"
+        ? "Another install is already running on this PS5."
+        : start.error || "The engine wouldn't start the install.",
+    );
   }
-  log.info(
-    "install",
-    `DPI ensure result: ok=${ens.ok} listening=${ens.listening ?? "?"} sent=${ens.sent ?? "?"}` +
-      (ens.reason ? ` reason=${ens.reason}` : "") +
-      (ens.error ? ` error="${ens.error}"` : ""),
-  );
-  if (!ens.ok) {
-    // A sent-but-not-listening daemon has already displaced the main payload.
-    // Leaving it that way was the cause of the apparent post-install disconnect.
-    if (ens.sent) await restoreMainPayload(ip);
-    return {
-      ok: false,
-      ambiguous: false,
-      daemonFailed: true,
-      daemonReason: ens.reason,
-      rc: 0,
-      errMessage: ens.error || "the DPI daemon didn't come up on :9115",
-    };
-  }
-  // Send the install, retrying the transient "console busy" rejection
-  // (0x80020002) — it clears once the console settles, so we gate each retry on
-  // the readiness probe instead of failing the way a single attempt used to.
-  let resp: {
-    ok?: boolean;
-    rc?: number;
-    err_message?: string;
-    ambiguous?: boolean;
-    patch_verdict?: string;
-    app_ver_before?: string;
-    app_ver_after?: string;
-    shortened?: boolean;
-  } = {};
-  try {
-    for (let attempt = 1; attempt <= DPI_MAX_ATTEMPTS; attempt++) {
-      try {
-        resp = (await invoke("pkg_dpi_install", {
-          ps5Addr: mgmtAddr(host),
-          localPs5Path,
-          titleId: verify?.titleId,
-          packageAppVer: verify?.packageAppVer,
-        })) as typeof resp;
-      } catch (e) {
-        resp = {
-          ok: false,
-          ambiguous: true,
-          rc: -1,
-          err_message: pkgError(e),
-        };
-      }
-      const rcNow = (resp.rc ?? 0) >>> 0;
-      if (
-        resp.ok ||
-        rcNow !== DPI_TRANSIENT_BUSY_RC ||
-        attempt === DPI_MAX_ATTEMPTS
-      ) {
-        break;
-      }
-      // Transient busy → wait for the console to settle, then retry.
-      onStatus?.(
-        `PS5 is busy finishing the last install — waiting for it to be ready (attempt ${attempt}/${DPI_MAX_ATTEMPTS})…`,
-      );
-      await waitForConsoleReady(host, {
-        onWait: () => onStatus?.("Waiting for the PS5 to be ready…"),
-      });
+  const job = start.job;
+  // Poll until the engine's state machine is terminal. There is NO client-side
+  // deadline: a large install writes for as long as it needs, and the engine
+  // reports "done" only when its own verify agrees (the size-blind client timer
+  // that deleted a 25 GB install mid-write is gone). A short error budget rides
+  // out a transient engine blip instead of failing a live install.
+  let errBudget = 8;
+  for (;;) {
+    let st: InstallStatus;
+    try {
+      st = await pkgInstallStatus(job);
+      errBudget = 8;
+    } catch (e) {
+      if (--errBudget <= 0) throw e;
+      onStatus?.("Waiting for the engine…");
+      await sleep(PKG_VERIFY_POLL_MS);
+      continue;
     }
-  } finally {
-    // Always restore, including a thrown readiness probe or DPI bridge error.
-    await restoreMainPayload(ip);
+    const sample = sampleFromStatus(st);
+    onSample?.(sample);
+    const line = describeInstallSample(sample).detail;
+    if (line) onStatus?.(line);
+    if (st.phase === "done" || st.phase === "failed") return st;
+    await sleep(PKG_VERIFY_POLL_MS);
   }
-  const ok = !!resp.ok;
-  const rc = (resp.rc ?? 0) >>> 0;
-  return {
-    ok,
-    ambiguous: !!resp.ambiguous,
-    daemonFailed: false,
-    rc,
-    errMessage: ok
-      ? ""
-      : resp.err_message ||
-        `Install was rejected (0x${rc.toString(16).padStart(8, "0")}).`,
-    patchVerdict: resp.patch_verdict,
-    appVerBefore: resp.app_ver_before,
-    appVerAfter: resp.app_ver_after,
-    shortened: !!resp.shortened,
-  };
 }
 
-/**
- * Streaming/direct install (beta, #81): hand the DPI daemon the engine's
- * `/pkg-host/` URL for an existing session instead of a staged PS5 path.
- * The daemon pulls the pkg over HTTP — no staging copy is uploaded to
- * the PS5 first. Mirrors `runDpiInstall`'s daemon-bring-up + restore
- * dance, but sends a session_id rather than a local path.
- *
- * The engine prefers an etaHEN / elf-arsenal "DPI v2" bridge if one is already
- * listening on the console (:12800). When it is, nothing is sent to the payload
- * loader at all and the user's running payloads are left alone; our own DPI ELF
- * — which does replace the main payload for the duration — is only used when no
- * bridge is there. `bridge` says which one ran.
- *
- * The caller MUST have already registered the session with the engine
- * (via `pkg_install_start` with `localPs5Path: null` and a PC-side file
- * path) so `/pkg-host/{session}/` is serving bytes when the daemon comes
- * asking. Returns `daemonFailed:true` distinctly so callers can treat a
- * "daemon never came up" dead-end separately from a Sony-side reject.
- *
- * Like `runDpiInstall`, `ok:true` here is the daemon's word that
- * `InstallByPackage` accepted — callers should confirm with
- * the engine's registration/byte-settle tracker before claiming a real install.
- */
-async function runDpiDirectInstall(
-  host: string,
-  sessionId: string,
-  onStatus?: (msg: string) => void,
-): Promise<{
-  ok: boolean;
-  ambiguous: boolean;
-  errMessage: string;
-  daemonFailed: boolean;
-  daemonReason?: string;
-  rc: number;
-  requestsServed: number;
-  bytesServed: number;
-  /** "dpiv2" = an existing etaHEN/Arsenal bridge did it, no payload swap.
-   *  "ps5upload" = our own DPI daemon. Undefined on failures before hand-off. */
-  bridge?: string;
-}> {
-  const ip = hostOf(host);
-  log.info(
-    "install",
-    `DPI ensure (direct): bringing up daemon on ${ip}:9115 (loads via :9021)`,
-  );
-  let ens: {
-    ok?: boolean;
-    error?: string;
-    listening?: boolean;
-    sent?: boolean;
-    reason?: string;
-  };
-  try {
-    ens = (await invoke("dpi_ensure", { ip })) as typeof ens;
-  } catch (e) {
-    await restoreMainPayload(ip);
-    return {
-      ok: false,
-      ambiguous: false,
-      daemonFailed: true,
-      daemonReason: undefined,
-      rc: 0,
-      requestsServed: 0,
-      bytesServed: 0,
-      errMessage: `couldn't start the DPI daemon: ${pkgError(e)}`,
-    };
-  }
-  log.info(
-    "install",
-    `DPI ensure (direct) result: ok=${ens.ok} listening=${ens.listening ?? "?"} sent=${ens.sent ?? "?"}` +
-      (ens.reason ? ` reason=${ens.reason}` : "") +
-      (ens.error ? ` error="${ens.error}"` : ""),
-  );
-  if (!ens.ok) {
-    if (ens.sent) await restoreMainPayload(ip);
-    return {
-      ok: false,
-      ambiguous: false,
-      daemonFailed: true,
-      daemonReason: ens.reason,
-      rc: 0,
-      requestsServed: 0,
-      bytesServed: 0,
-      errMessage: ens.error || "the DPI daemon didn't come up on :9115",
-    };
-  }
-  let resp: {
-    ok?: boolean;
-    rc?: number;
-    err_message?: string;
-    ambiguous?: boolean;
-    requests_served?: number;
-    bytes_served?: number;
-    bridge?: string;
-  } = {};
-  try {
-    for (let attempt = 1; attempt <= DPI_MAX_ATTEMPTS; attempt++) {
-      try {
-        resp = (await invoke("pkg_dpi_direct_install", {
-          ps5Addr: mgmtAddr(host),
-          sessionId,
-        })) as typeof resp;
-      } catch (e) {
-        resp = {
-          ok: false,
-          ambiguous: true,
-          rc: -1,
-          err_message: pkgError(e),
-        };
-      }
-      const rcNow = (resp.rc ?? 0) >>> 0;
-      if (
-        resp.ok ||
-        rcNow !== DPI_TRANSIENT_BUSY_RC ||
-        attempt === DPI_MAX_ATTEMPTS
-      ) {
-        break;
-      }
-      onStatus?.(
-        `PS5 is busy finishing the last install — waiting for it to be ready (attempt ${attempt}/${DPI_MAX_ATTEMPTS})…`,
-      );
-      await waitForConsoleReady(host, {
-        onWait: () => onStatus?.("Waiting for the PS5 to be ready…"),
-      });
-    }
-  } finally {
-    // Only restore what we actually displaced. When an etaHEN / elf-arsenal
-    // bridge was already listening, `dpi_ensure` sent nothing, so the main
-    // payload is still running — re-sending it here would cause the very
-    // disruption using the bridge is meant to avoid.
-    if (ens.sent) {
-      await restoreMainPayload(ip);
-    } else {
-      log.info(
-        "install",
-        "DPI: nothing was sent to the loader, leaving the running payloads alone",
-      );
-    }
-  }
-  const ok = !!resp.ok;
-  const rc = (resp.rc ?? 0) >>> 0;
-  return {
-    ok,
-    ambiguous: !!resp.ambiguous,
-    daemonFailed: false,
-    daemonReason: undefined,
-    rc,
-    bridge: resp.bridge,
-    requestsServed: resp.requests_served ?? 0,
-    bytesServed: resp.bytes_served ?? 0,
-    errMessage: ok
-      ? ""
-      : resp.err_message ||
-        `Install was rejected (0x${rc.toString(16).padStart(8, "0")}).`,
-  };
-}
-
-/**
- * The bare `.pkg` install mechanism, with NO store/UI side effects — shared by
- * the Install Package screen's manual install (`install()`) and the upload
- * queue's pkg finisher (`uploadQueue.runOne`). The `.pkg` must already be
- * staged on the PS5 at `localPs5Path`.
- *
- * Cascade (HW-proven): the MAIN PAYLOAD's InstallByPackage first — it runs in
- * the full jailbreak context, which is what actually installs LAUNCHABLE
- * content into /user/app/<title>. Only if the firmware rejects that do we fall
- * back to the standalone DPI daemon on :9115 (registers metadata, may not be
- * launchable on newer firmware), then restore the main payload. A DPI rc=0 is
- * only acceptance and returns `acceptedUnverified`; `installed` is reserved for
- * registration/byte-settle proof from the main engine's status session.
- *
- * Throws only if the DPI daemon itself can't come up after a main-payload
- * reject (a genuine dead-end) — callers should catch and treat as failure.
- */
 /** Map a PARAM.SFO CATEGORY to BGFT's package_type string. MUST mirror the
  *  engine's `derive_package_type` (ps5upload-pkg). The "…DP" suffix is what
  *  arms the payload's patch guard — a patch (`gp`) shares the base game's
@@ -2356,312 +1910,6 @@ export interface PkgExpectedIdentity {
   fingerprint?: string;
 }
 
-async function runPkgInstallCore(
-  host: string,
-  localPs5Path: string,
-  contentId: string | null,
-  /** BGFT package_type for the staged pkg, derived from its PARAM.SFO category
-   *  (see `pkgTypeForCategory`). Passed straight through to the payload so a
-   *  patch ("…DP") arms the data-loss guard. Null ⇒ payload default. */
-  packageType: string | null,
-  // The user's "Auto Delete after installation" preference. When false, the
-  // engine KEEPS the staged pkg after install instead of deleting it. This is
-  // the single source of truth for staging deletion now — previously the engine
-  // always deleted, ignoring the setting (the reported data-loss bug).
-  deleteStaging: boolean,
-  // Called each status poll with the install's live state, so the UI can render
-  // a real % and name the phase (Sony's BGFT progress isn't meaningful on the
-  // file:// staging path). Optional — no-op if omitted.
-  onProgress?: (sample: InstallSample) => void,
-  // Called with a human-readable status line while the install waits on the
-  // console-readiness gate (pre-install + DPI transient retry). Lets the caller
-  // surface "Waiting for the PS5 to be ready…" instead of a frozen UI.
-  onStatus?: (msg: string) => void,
-  expected?: PkgExpectedIdentity,
-  /** `APP_VER` the package declares (from its PARAM.SFO). Lets the engine
-   *  check afterwards that an update actually raised the installed version —
-   *  Sony returns success for an update it silently discards. */
-  packageAppVer?: string,
-): Promise<PkgInstallOutcome> {
-  // PRE-INSTALL GATE: don't fire an install into the post-install SceShellUI
-  // recovery window — that's what produces the transient rejections. Wait for
-  // the console to answer the readiness probe cleanly first. Best-effort: on
-  // timeout we proceed anyway (an older payload may never report ready, and the
-  // transient-retry below still rescues a genuinely-busy console).
-  await waitForConsoleReady(host, {
-    onWait: () => onStatus?.("Waiting for the PS5 to be ready…"),
-  });
-
-  let installed = false;
-  // True when the install accepted but stalled (flatlined) before completing —
-  // the pkg is KEPT and the caller shows a retry message, not a hard failure.
-  let stalled = false;
-  let acceptedUnverified = false;
-  // Whether the payload *rejected* the install at register time (rc != 0 or an
-  // RPC error). Only a genuine start rejection should trigger the DPI fallback
-  // — an install that was ACCEPTED but then failed Sony's async install must
-  // NOT fall back to DPI, since DPI's local-path install is the metadata-only
-  // path that produces the very "data is corrupted" tile we're guarding against
-  // on FW 12.xx.
-  let startRejected = false;
-  let mainErr = "";
-  let mayNotLaunch = false;
-  // The package_type the install actually ran with — the engine resolves it
-  // from the staged pkg when we didn't send one, so this is authoritative for
-  // "was this treated as a patch" even on the USB/queue/File-System paths.
-  let resolvedType = packageType ?? "";
-  // Local name for the messages below. NOT the bare identifier `name`, which
-  // resolves to `window.name` in this scope (and is deprecated) — there is no
-  // local one here, since the caller owns the display label.
-  const pkgLabel = basenameOf(localPs5Path) || contentId || "package";
-  try {
-    // Say what the console already has, using the engine's own verdict, before
-    // the install frame is sent. The engine's guards cover some of this (a
-    // staged re-install of a full game is refused outright, a patch with no base
-    // likewise), but nothing reported the ordinary case — "this exact package is
-    // already here" — and a client-side check cannot see a PS5 debug package at
-    // all, whose console artifact is the inner image rather than the container
-    // we hold. Informational: a re-install is a legitimate repair.
-    if (contentId) {
-      const pre = await pkgInstallPreflight(host, contentId, {
-        packageType,
-        size: expected?.size,
-        fingerprint: expected?.fingerprint,
-      });
-      if (pre?.state === "installed") {
-        onStatus?.(
-          `${pkgLabel} is already installed on the PS5${pre.installedVersion ? ` (version ${pre.installedVersion})` : ""} — reinstalling over it…`,
-        );
-      } else if (pre?.state === "different_version_installed") {
-        onStatus?.(
-          `${pkgLabel}: ${pre.detail} — installing this build over it…`,
-        );
-      }
-    }
-    const r = (await invoke("pkg_install_start", {
-      ps5Addr: mgmtAddr(host),
-      path: null,
-      splitRoot: null,
-      packageTypeOverride: packageType,
-      localPs5Path,
-      contentId: contentId || null,
-      expectedSize: expected?.size ?? null,
-      // Only a complete sampled identity may override the engine's own remote
-      // sampling. A cold library scan initially knows the 32-hex directory
-      // token; passing that as though it were a full fingerprint would make
-      // completion verification impossible.
-      packageFingerprint: /^[a-f0-9]{64}$/i.test(expected?.fingerprint || "")
-        ? expected?.fingerprint
-        : null,
-      deleteStaging,
-    })) as {
-      err_code?: number;
-      register_path?: string;
-      err_message?: string;
-      may_not_launch?: boolean;
-      session_id?: string;
-      package_type?: string;
-    };
-    if (r.package_type) resolvedType = r.package_type;
-    const rc = (r.err_code ?? 0) >>> 0;
-    if (rc === 0) {
-      // Accept != complete. TRACK the async install to a genuine terminal state
-      // before reporting success — the engine observes it to completion (no
-      // size-blind timer), so a large install isn't declared done early and its
-      // staged pkg deleted mid-write (the Bloodborne data-loss).
-      const verdict = await verifyInstallCompleted(r.session_id, onProgress);
-      if (verdict.completed) {
-        installed = true;
-        // Prefer the engine's definitive app.db verdict captured during
-        // verification; fall back to the register_path heuristic when the
-        // status poll didn't carry one (older engine, or app.db unreadable).
-        mayNotLaunch = pkgInstallMayNotLaunch({
-          ...r,
-          launchable: verdict.launchable,
-        });
-      } else {
-        // Stall, async failure, or unconfirmed. `installed` stays false → the
-        // pkg is KEPT (never deleted on a non-confirmed install). startRejected
-        // stays false → NO DPI fallback (the task was accepted; DPI's
-        // metadata-only install would just produce the corrupted tile).
-        mainErr = verdict.message;
-        stalled = verdict.stalled;
-        acceptedUnverified = verdict.acceptedUnverified;
-      }
-    } else {
-      startRejected = true;
-      mainErr = r.err_message || `0x${rc.toString(16).padStart(8, "0")}`;
-    }
-  } catch (e) {
-    startRejected = true;
-    mainErr = pkgError(e);
-  }
-
-  if (!installed && startRejected) {
-    // FALLBACK: the in-process install was rejected. Hand off to the standalone
-    // DPI daemon (:9115), which runs Sony's appinst in a SEPARATE, properly-
-    // authid'd process. This rescues two cases the in-process path can't:
-    //   • a patch ("…DP") whose only remaining in-process route is the
-    //     destructive shellui-rpc tier the data-loss guard forbids, and
-    //   • firmware (e.g. FW 5.10) where the in-process appinst file:// install
-    //     hits an authid gate (err 0x80B21106 — the base game itself lands via
-    //     shellui-rpc, but a patch can't use that tier).
-    // DPI is NON-destructive: appinst applies an update on top of the base, so
-    // it's safe for patches. HW-proven on the Phat — a Jak X v01.04 patch landed
-    // in /user/patch/CUSA07842/patch.pkg with the 3.8 GB base in
-    // /user/app/CUSA07842/app.pkg fully intact.
-    // Instrument the whole DPI cascade at info level. Before this, the fallback
-    // ran entirely through busyNotice/onStatus (UI-only, never logged), so a
-    // bug bundle at the default `info` level showed the in-process rejection and
-    // then the payload dying with NO trace of whether DPI was even attempted —
-    // which made the "updates crash the helper" reports (issue #152) impossible
-    // to pin down from logs alone. Now the bundle shows the exact cascade.
-    log.info(
-      "install",
-      `in-process install rejected (${mainErr}) for type=${resolvedType || "?"} — ` +
-        `handing off to DPI daemon (:9115)`,
-    );
-    const dpi = await runDpiInstall(host, localPs5Path, onStatus, {
-      titleId: titleIdFromContentId(contentId ?? "") ?? undefined,
-      packageAppVer,
-    });
-    log.info(
-      "install",
-      `DPI fallback result: ok=${dpi.ok} daemonFailed=${dpi.daemonFailed} ` +
-        `rc=0x${(dpi.rc >>> 0).toString(16).padStart(8, "0")}` +
-        (dpi.errMessage ? ` err="${dpi.errMessage}"` : ""),
-    );
-    if (dpi.daemonFailed) {
-      // DPI couldn't even come up. For a patch, give update-specific guidance
-      // (base is safe; try the PS5's Package Installer) rather than a raw
-      // daemon error — but say that the console never saw the update, which
-      // is a different problem from "the PS5 declined it" and has a
-      // different fix. WHICH guidance depends on why the daemon didn't
-      // start: a missing image in this build, a console loader that isn't
-      // answering on :9021, or a daemon that was sent and never came up.
-      // Those have nothing in common but the symptom.
-      // Is a loader PROCESS there? Four reports on 2026-09-09 had elfldr.elf
-      // running while :9021 refused, and "re-run your loader" reads as wrong
-      // to someone looking at a running loader. Best-effort: never let this
-      // diagnostic turn a failed install into a thrown error.
-      const loaderProcessRunning = await loaderProcessSeen(host);
-      log.error(
-        "install",
-        `update installer never started: reason=${dpi.daemonReason ?? "unknown"} ` +
-          `loader_process=${loaderProcessRunning} main=${mainErr} ` +
-          `err="${dpi.errMessage}"`,
-      );
-      if (resolvedType.endsWith("DP")) {
-        return {
-          installed: false,
-          mayNotLaunch,
-          // Carries BOTH halves: why the console refused the install, and why
-          // the fallback could not be delivered. The first used to be dropped
-          // here, so the code naming the real problem never reached the user.
-          errMessage: patchInstallFailure({
-            mainErr,
-            reason: dpi.daemonReason,
-            dpiErr: dpi.errMessage,
-            loaderProcessRunning,
-            translate: (key, fallback) => trStatic(key, fallback),
-          }),
-          stalled,
-          resolvedPackageType: resolvedType,
-        };
-      }
-      throw new Error(
-        `Main-payload install failed (${mainErr}) and ${dpi.errMessage}`,
-      );
-    }
-    if (dpi.ambiguous) {
-      // FW 9.60 can close the DPI connection, or return the daemon's
-      // 0xffffffff sentinel, after the package has already landed. A missing
-      // acknowledgement is not a Sony rejection: restore happened in
-      // runDpiInstall, so ask the main payload for the exact category/size/
-      // fingerprint before saying anything failed.
-      installed = await verifyDpiInstalledArtifact(
-        host,
-        contentId,
-        resolvedType,
-        expected,
-        onStatus,
-      );
-      acceptedUnverified = !installed;
-      mainErr = installed
-        ? ""
-        : "The installer connection ended before the PS5 acknowledged the result. ps5upload could not find the exact package afterward, so the outcome is still unverified. The staged package was kept for a safe retry.";
-    } else if (dpi.patchVerdict === "regressed") {
-      // Re-applying an already-installed update makes the console DELETE it:
-      // hardware-observed on FW 5.10, /user/patch/<TID>/ removed and the title
-      // back from 01.09 to 01.00. Never report that as success.
-      log.error(
-        "install",
-        `update was removed by re-applying it: ${dpi.appVerBefore ?? "?"} -> ${dpi.appVerAfter ?? "?"}`,
-      );
-      return {
-        installed: false,
-        stalled: false,
-        acceptedUnverified: false,
-        mayNotLaunch: false,
-        errMessage: trStatic("pkg.patch_regressed", PKG_PATCH_REGRESSED_HINT),
-        resolvedPackageType: resolvedType,
-      };
-    } else if (dpi.patchVerdict === "did_not_apply") {
-      // The engine watched APP_VER and it never moved: Sony accepted the
-      // package and copied nothing. Proven on hardware — the same patch that
-      // no-ops over a base installed by another tool applies in 150 s once
-      // the base is re-installed through ps5upload. `dpi.errMessage` carries
-      // that workaround.
-      log.error(
-        "install",
-        `update did not apply: ${dpi.appVerBefore ?? "?"} -> ${dpi.appVerAfter ?? "?"} ` +
-          `(package declares ${packageAppVer ?? "?"})`,
-      );
-      return {
-        installed: false,
-        stalled: false,
-        acceptedUnverified: false,
-        mayNotLaunch: false,
-        // Use our own translated copy rather than the engine's English
-        // prose; the engine's text is for logs and bug reports.
-        errMessage: trStatic(
-          "pkg.patch_did_not_apply",
-          PKG_PATCH_DID_NOT_APPLY_HINT,
-        ),
-        resolvedPackageType: resolvedType,
-      };
-    } else if (dpi.ok) {
-      // DPI's rc=0 proves only that Sony accepted InstallByPackage. Confirm the
-      // exact category-specific artifact after the main payload comes back.
-      // This distinguishes same-version alternatives (Optional Fix/Backport)
-      // and independent DLC instead of checking only the shared base title.
-      installed = await verifyDpiInstalledArtifact(
-        host,
-        contentId,
-        resolvedType,
-        expected,
-        onStatus,
-      );
-      acceptedUnverified = !installed;
-      mainErr = installed ? "" : PKG_ACCEPTED_UNVERIFIED_HINT;
-    } else {
-      // DPI ran but the PS5 declined the install. An update that can't apply
-      // (wrong base version, or no base) gets the update-specific guidance;
-      // everything else keeps DPI's own error.
-      mainErr = resolvedType.endsWith("DP")
-        ? PKG_PATCH_REJECTED_HINT
-        : dpi.errMessage || mainErr;
-    }
-  }
-  return {
-    installed,
-    mayNotLaunch,
-    errMessage: mainErr,
-    stalled,
-    acceptedUnverified,
-    resolvedPackageType: resolvedType,
-  };
-}
 
 /**
  * Public install entrypoint. In addition to running the safety-gated install
@@ -2695,90 +1943,90 @@ export async function runPkgInstall(
   let latestProgress:
     { current: number; total: number; unit: "bytes" } | undefined;
   try {
-    const result = await runPkgInstallCore(
+    // Pre-install readiness gate: don't fire an install into the post-install
+    // SceShellUI recovery window (the source of transient rejections). Wait for
+    // the console to answer the readiness probe first. Best-effort — on timeout
+    // we proceed anyway (the engine's own bring-up still rescues a busy console).
+    await waitForConsoleReady(host, {
+      onWait: () => {
+        useTaskStore
+          .getState()
+          .updateTask(taskId, { detail: "Waiting for the PS5 to be ready…" });
+        onStatus?.("Waiting for the PS5 to be ready…");
+      },
+    });
+
+    // Informational: say what the console already has, using the engine's own
+    // verdict, before the install runs. A re-install is a legitimate repair.
+    if (contentId) {
+      const pre = await pkgInstallPreflight(host, contentId, {
+        packageType,
+        size: expected?.size,
+        fingerprint: expected?.fingerprint,
+      });
+      if (pre?.state === "installed") {
+        onStatus?.(
+          `${name} is already installed on the PS5${pre.installedVersion ? ` (version ${pre.installedVersion})` : ""} — reinstalling over it…`,
+        );
+      } else if (pre?.state === "different_version_installed") {
+        onStatus?.(`${name}: ${pre.detail} — installing this build over it…`);
+      }
+    }
+
+    const terminal = await driveUnifiedInstall(
       host,
-      localPs5Path,
-      contentId,
-      packageType,
-      deleteStaging,
+      { console_path: localPs5Path },
+      {
+        contentId,
+        titleId: titleIdFromContentId(contentId ?? "") ?? null,
+        packageAppVer: packageAppVer ?? null,
+        // The caller carries a BGFT package_type (e.g. "PS4DP"); it ends in
+        // gd/gp/ac just like a PARAM.SFO category, which is all the engine's
+        // destructive-reinstall guard inspects.
+        category: packageType ?? null,
+        // The user explicitly chose to (re)install this package and the
+        // preflight above already surfaced any "already installed" state, so
+        // let the engine's guard proceed — matching the prior behaviour, where
+        // a re-install was warned about, never blocked.
+        options: { allow_destructive_reinstall: true },
+      },
       (sample) => {
         latestProgress = {
           current: sample.installedBytes,
           total: sample.total,
           unit: "bytes",
         };
-        useTaskStore
-          .getState()
-          .updateTask(taskId, { progress: latestProgress });
+        useTaskStore.getState().updateTask(taskId, { progress: latestProgress });
         onProgress?.(sample);
       },
       (message) => {
         useTaskStore.getState().updateTask(taskId, { detail: message });
         onStatus?.(message);
       },
-      expected,
-      packageAppVer,
     );
 
-    const kind = installOutcomeKind(result);
-    if (kind === "done") {
+    const result = statusToOutcome(terminal);
+    if (result.installed) {
       useTaskStore.getState().finishTask(taskId, "done", {
         progress: latestProgress
           ? { ...latestProgress, current: latestProgress.total }
           : undefined,
         detail: localPs5Path,
       });
-    } else if (kind === "unverified") {
-      // NOT terminal and NOT failed: the PS5 took the install and is probably
-      // still writing it. `awaiting` keeps the row live so the background
-      // re-verify (see scheduleInstallReverify) can flip it to done.
-      //
-      // Persist the engine-resolved package type and mayNotLaunch into the
-      // payload alongside the caller's original args: `retryInstallReverify`
-      // (the Recheck action) rebuilds its args from this payload alone, and
-      // without these two fields it falls back to the caller's (often null)
-      // packageType — silently re-probing with the wrong artifact type and
-      // losing the launch caution. See pkgLibrary.reverify.test.ts.
-      const awaitingTask = useTaskStore.getState().getTask(taskId);
-      useTaskStore.getState().updateTask(taskId, {
-        status: "awaiting",
-        progress: latestProgress,
-        detail: localPs5Path,
-        lastError: undefined,
-        payload: {
-          ...(awaitingTask?.payload ?? {}),
-          resolvedPackageType: result.resolvedPackageType ?? packageType ?? "",
-          mayNotLaunch: result.mayNotLaunch,
-        },
-      });
-      // Only promise "ps5upload keeps checking" when the background re-verify
-      // can actually run. When there is nothing to identify the package by,
-      // scheduleInstallReverify closes the row on its first act, and that
-      // toast would be sitting next to an already-closed row telling the user
-      // to wait for a check that will never happen.
-      if (installReverifyProbeViable(contentId, expected)) {
-        showInstallUnverifiedToast(name);
-      } else {
-        showInstallUnconfirmableToast(name);
+      // Auto-Delete: the engine will NOT delete a `console_path` source — it
+      // treats an on-console file as the user's own (see the engine's
+      // `finalize`). We staged this copy, so its cleanup is ours, and only
+      // after a CONFIRMED install. Best-effort: a failed delete must never turn
+      // a successful install into an error.
+      if (deleteStaging) {
+        await fsDelete(mgmtAddr(host), localPs5Path).catch(() => {});
       }
-      scheduleInstallReverify({
-        taskId,
-        host,
-        name,
-        contentId,
-        packageType: result.resolvedPackageType ?? packageType ?? "",
-        expected,
-        // A late success must do everything a normal completion does.
-        path: localPs5Path,
-        autoRemove: deleteStaging,
-        mayNotLaunch: result.mayNotLaunch,
-      });
     } else {
       useTaskStore.getState().finishTask(taskId, "failed", {
         progress: latestProgress,
         detail: localPs5Path,
         lastError: {
-          code: kind === "stalled" ? "INSTALL_STALLED" : "INSTALL_FAILED",
+          code: "INSTALL_FAILED",
           message: result.errMessage || "Install was not confirmed.",
           recoverable: true,
         },
@@ -2815,40 +2063,6 @@ function showInstallFailureToast(name: string, detail: string): void {
     message: `${name} was not verified as installed. ${compact}`,
     action: {
       label: "Open Tasks",
-      onClick: () => {
-        window.history.pushState({}, "", "/tasks");
-        window.dispatchEvent(new PopStateEvent("popstate"));
-      },
-    },
-  });
-}
-
-/** The PS5 accepted the install but we could not confirm completion yet.
- *  Informational, never critical — a large install routinely outlives the
- *  engine's grace window while the console is still copying files. */
-function showInstallUnverifiedToast(name: string): void {
-  useToastStore.getState().push({
-    tone: "info",
-    message: `${name} ${trStatic("pkg.install_unverified_toast", PKG_INSTALL_UNVERIFIED_TOAST)}`,
-    action: {
-      label: trStatic("pkg.open_tasks", "Open Tasks"),
-      onClick: () => {
-        window.history.pushState({}, "", "/tasks");
-        window.dispatchEvent(new PopStateEvent("popstate"));
-      },
-    },
-  });
-}
-
-/** The PS5 accepted the install but nothing identifies the package, so no
- *  background check is possible. Says so, rather than promising a re-verify
- *  that `scheduleInstallReverify` is about to decline. */
-function showInstallUnconfirmableToast(name: string): void {
-  useToastStore.getState().push({
-    tone: "info",
-    message: `${name}: ${trStatic("pkg.reverify_impossible", PKG_REVERIFY_IMPOSSIBLE_HINT)}`,
-    action: {
-      label: trStatic("pkg.open_tasks", "Open Tasks"),
       onClick: () => {
         window.history.pushState({}, "", "/tasks");
         window.dispatchEvent(new PopStateEvent("popstate"));
@@ -3785,58 +2999,74 @@ const makePkgLibraryStore = () =>
       // connections; on a slow or distant source that gap widens. Its
       // installer also refuses a link longer than 127 bytes.
       if (mode === "direct") {
-        // Through runDpiInstall, not a bare pkg_dpi_install. The bare call
-        // had three faults, each enough on its own to break this mode:
-        //  - it never started the DPI daemon, so it failed whenever :9115
-        //    was not already up from an earlier install;
-        //  - it ignored the result — a refusal arrives as HTTP 200 with
-        //    ok:false — so the user was told "Sent to the PS5, you can close
-        //    ps5upload" while nothing was installing;
-        //  - a link over the installer's 127-byte limit was always refused.
-        //    The engine now swaps such a link for a short alias (see
-        //    shorten_for_installer), which is why `shortened` matters below.
-        const res = await runDpiInstall(host, trimmed);
-        if (res.ok) {
-          // The console downloads this itself, so no byte of it passes through here and
-          // there is no rate to show. Record it anyway, so the install is in the task list
-          // with an honest note instead of leaving no trace at all.
-          let name = "package";
-          try {
-            name = basenameOf(parsed.pathname) || "package";
-          } catch {
-            /* keep the generic name */
-          }
-          const directTask = useTaskStore.getState().registerTask({
-            kind: "pkg-dpi-install",
-            origin: "pkg.url-direct",
-            label: `PS5 downloading ${name}`,
-            consoleId: host,
-            payload: { remote: true, direct: true },
-            status: "running",
-          });
-          useTaskStore.getState().finishTask(directTask, "done", {
-            detail:
-              "Handed to the PS5, which downloads and installs it on its own. " +
-              "Its progress and speed show on the PS5 under Downloads, not here.",
-          });
-          return {
-            ok: true,
-            message: res.shortened
-              ? "Sent to the PS5 — it downloads the package from the link itself. " +
-                "The link is longer than the PS5 accepts, so it goes through a short " +
-                "address on this computer: keep ps5upload running until the PS5 finishes."
-              : "Sent to the PS5. It downloads and installs on its own from here — " +
-                "watch progress on the console. You can close ps5upload.",
-          };
+        // Hand the URL straight to the console's own installer via the unified
+        // endpoint (source: {url}). The engine brings up the daemon, swaps a
+        // link over the installer's 127-byte limit for a short alias (see
+        // shorten_for_installer — `shortened` in the terminal status), and
+        // reports the daemon's verdict. For a bare URL there is no deep verify,
+        // so the poll reaches a terminal state as soon as Sony accepts it.
+        let name = "package";
+        try {
+          name = basenameOf(parsed.pathname) || "package";
+        } catch {
+          /* keep the generic name */
         }
-        // Name the reason and carry on. Streaming needs neither the DPI
-        // daemon nor a console-reachable link, so a refusal here is not the
-        // end of the install — but silently switching would leave someone
-        // wondering why their computer is suddenly busy.
-        log.info(
-          "install",
-          `the PS5 could not fetch that link itself (${res.errMessage}); downloading through this computer instead`,
-        );
+        const directTask = useTaskStore.getState().registerTask({
+          kind: "pkg-dpi-install",
+          origin: "pkg.url-direct",
+          label: `PS5 downloading ${name}`,
+          consoleId: host,
+          payload: { remote: true, direct: true },
+          status: "running",
+        });
+        try {
+          const terminal = await driveUnifiedInstall(host, { url: trimmed }, {
+            contentId: "",
+            options: {},
+          });
+          const outcome = statusToOutcome(terminal);
+          if (outcome.installed) {
+            useTaskStore.getState().finishTask(directTask, "done", {
+              detail:
+                "Handed to the PS5, which downloads and installs it on its own. " +
+                "Its progress and speed show on the PS5 under Downloads, not here.",
+            });
+            return {
+              ok: true,
+              message: terminal.shortened
+                ? "Sent to the PS5 — it downloads the package from the link itself. " +
+                  "The link is longer than the PS5 accepts, so it goes through a short " +
+                  "address on this computer: keep ps5upload running until the PS5 finishes."
+                : "Sent to the PS5. It downloads and installs on its own from here — " +
+                  "watch progress on the console. You can close ps5upload.",
+            };
+          }
+          // The PS5 declined to fetch the link itself. Fall through to streaming
+          // through this computer, which needs neither a console-reachable link
+          // nor the daemon URL install.
+          useTaskStore.getState().finishTask(directTask, "failed", {
+            detail: outcome.errMessage,
+            lastError: {
+              code: "INSTALL_FAILED",
+              message: outcome.errMessage,
+              recoverable: true,
+            },
+          });
+          log.info(
+            "install",
+            `the PS5 could not fetch that link itself (${outcome.errMessage}); downloading through this computer instead`,
+          );
+        } catch (e) {
+          // Never let a failed direct attempt strand the row: mark it and let
+          // the stream path below try instead.
+          useTaskStore.getState().finishTask(directTask, "failed", {
+            detail: pkgError(e),
+          });
+          log.info(
+            "install",
+            `direct link install could not start (${pkgError(e)}); downloading through this computer instead`,
+          );
+        }
       }
       return get().installStream({ remoteUrl: trimmed }, host);
     },
@@ -3911,13 +3141,6 @@ const makePkgLibraryStore = () =>
       set({ installing: true, busyNotice: null, installPending: false });
       const clearBusy = () =>
         set({ installing: false, busyNotice: null, installPending: false });
-      let servingSession: string | null = null;
-      // Whether the serving session may be torn down at the end. Defaults to
-      // yes: every early return from the hand-off (daemon never came up, Sony
-      // refused) leaves nothing that could still be reading. It is cleared only
-      // where the install MIGHT be running — the ambiguous-acknowledgement path,
-      // and a verify that stopped watching before the engine said it was done.
-      let releaseServingSession = true;
       try {
         // Wait behind any active transfer — the DPI payload swap would kill
         // the transfer port mid-upload, same as install()/installExternal().
@@ -4033,21 +3256,14 @@ const makePkgLibraryStore = () =>
             : `Stream-installing ${label} (beta) — the PS5 pulls the pkg directly over HTTP, no staging upload…`,
         });
 
-        // 2. Register the session with the engine. Passing `localPs5Path:
-        //    null` + a PC `path` makes the engine create a pkg-host serving
-        //    session WITHOUT expecting a staged file on the PS5. The URL
-        //    the engine builds is what the DPI daemon will fetch.
         const onStatus = (msg: string) => {
           set({ busyNotice: msg });
           useTaskStore.getState().updateTask(taskId, { detail: msg });
         };
 
-        // Ask the console what it already has, before moving a byte. This is the
-        // engine's own verdict, so it is the one that agrees with the completion
-        // check at the end — and it is the only way to know for a PS5 debug
-        // package, whose console-side artifact is the inner image and therefore
-        // never matches our fingerprint. Informational only: a re-install is a
-        // legitimate repair, so a hit is reported, not refused.
+        // Ask the console what it already has, before moving a byte — the
+        // engine's own verdict. Informational only: a re-install is a legitimate
+        // repair, so a hit is reported, not refused.
         const pre = contentId
           ? await pkgInstallPreflight(host, contentId, {
               packageType: resolvedPackageType,
@@ -4062,238 +3278,107 @@ const makePkgLibraryStore = () =>
         } else if (pre?.state === "different_version_installed") {
           onStatus(`${label}: ${pre.detail} — installing this build over it…`);
         }
-        const startResp = (await invoke("pkg_install_start", {
-          ps5Addr: mgmtAddr(host),
-          path: localPcPath,
-          splitRoot: null,
-          // With remoteUrl the engine fetches the package from the origin in
-          // parallel and serves it from the same pkg-host session a local file
-          // would use; a remote:// path is read off the saved server the same
-          // way. Nothing is copied or staged for either.
-          remoteUrl,
-          packageTypeOverride: resolvedPackageType,
-          localPs5Path: null,
-          contentId: contentId || null,
-          // For a server the size is left to the engine, which opened the file
-          // and knows it exactly.
-          expectedSize: serverPath ? null : totalBytes || null,
-          packageFingerprint: head.fingerprint ?? null,
-          // No staging file is created, so deleteStaging is moot — pass
-          // false so the engine doesn't record a staging_path to clean up.
-          deleteStaging: false,
-          // Per-host "skip the certificate check". This governs only what
-          // THIS COMPUTER accepts while fetching from the origin; the
-          // console's own handshake in direct mode is not ours to relax.
-          insecureTls: useLinkInstallPrefs
-            .getState()
-            .insecureFor(host),
-          // Serve-only: create the /pkg-host/ session but DON'T run the
-          // in-process InstallByPackage. The standalone DPI process owns Sony's
-          // HTTP installer state and returns its real proxy/network error without
-          // tying up the main payload RPC thread. It performs the install in step
-          // 3 (runDpiDirectInstall).
-          serveOnly: true,
-        })) as {
-          err_code?: number;
-          session_id?: string;
-          url?: string;
-          err_message?: string;
-          may_not_launch?: boolean;
-        };
 
-        const rc = (startResp.err_code ?? 0) >>> 0;
-        const sessionId = startResp.session_id;
-        const servedFrom = originOf(startResp.url);
-        // The engine creates a pkg-host session even when BGFT register
-        // rejects (rc != 0) — but without a session_id there's nothing for
-        // the daemon to fetch, so this is a hard fail.
-        if (!sessionId) {
-          return finishStreamTask({
-            ok: false,
-            message:
-              startResp.err_message ||
-              `The engine wouldn't start a serving session (0x${rc.toString(16).padStart(8, "0")}).`,
-          });
-        }
-        servingSession = sessionId;
-        useTaskStore.getState().updateTask(taskId, {
-          engineJobId: sessionId,
-          detail: "The PS5 is fetching the package from this computer…",
-        });
+        // 2. One call to the unified install endpoint. The engine creates the
+        //    pkg-host serving session, hands the URL to the daemon, and verifies
+        //    the result — the client only chooses the source and polls status.
+        //    Nothing is staged on the PS5 for any of these sources.
+        const installSource: InstallSource = remoteUrl
+          ? { url: remoteUrl }
+          : serverPath
+            ? (() => {
+                const rest = serverPath.slice("remote://".length);
+                const slash = rest.indexOf("/");
+                return {
+                  remote: {
+                    connection: slash < 0 ? rest : rest.slice(0, slash),
+                    // Still percent-encoded: the engine re-parses a remote://
+                    // string and decodes it once, matching parseRemotePath.
+                    path: slash < 0 ? "" : rest.slice(slash + 1),
+                  },
+                };
+              })()
+            : { host_file: localPcPath as string };
 
-        // 3. Hand the session's pkg-host URL to the DPI daemon. The daemon
-        //    pulls the pkg over HTTP; no staging copy lands on the PS5.
-        const dpi = await runDpiDirectInstall(host, sessionId, onStatus);
-        if (dpi.daemonFailed) {
-          const loaderUnavailable =
-            dpi.daemonReason === "loader_unreachable" ||
-            dpi.daemonReason === "loader_send_failed";
-          return finishStreamTask({
-            ok: false,
-            message: loaderUnavailable
-              ? `${dpi.errMessage}. Reload the payload loader on the PS5, then retry Stream install — or run etaHEN or elf-arsenal, whose installer bridge ps5upload will use instead, leaving your loaded payloads untouched. Uploading the package to staging cannot repair a closed loader and may only repeat the same failure.`
-              : `${dpi.errMessage}. Upload & install can still try the PS5-local staged path instead.`,
-            // A closed :9021 is a prerequisite failure, not an HTTP-path
-            // failure. Offering staging here caused a reporter to upload a
-            // multi-GB package only to hit the same DPI hand-off again.
-            stagedFallbackRecommended: !loaderUnavailable,
-            rc: dpi.rc,
-            requestsServed: dpi.requestsServed,
-          });
-        }
-        if (dpi.ambiguous) {
-          useTaskStore.getState().updateTask(taskId, {
-            detail:
-              "The installer acknowledgement was lost; verifying the exact package on the PS5…",
-          });
-          const exactInstalled = await verifyDpiInstalledArtifact(
-            host,
-            contentId || null,
-            resolvedPackageType ||
-              (head.platform === "ps5" ? "PS5GD" : "PS4GD"),
-            {
-              size: totalBytes || undefined,
-              fingerprint: head.fingerprint || undefined,
-            },
-          );
-          if (exactInstalled) {
-            pushNotification("success", `Installed ${label}`, {
-              body: "The installer acknowledgement was lost, but the exact package was verified on the PS5.",
-            });
-            return finishStreamTask({ ok: true, mayNotLaunch: false });
-          }
-          // The acknowledgement was lost and the artifact isn't on disk, so the
-          // install could still be running and pulling from this session.
-          releaseServingSession = false;
-          return finishStreamTask({
-            ok: false,
-            acceptedUnverified: true,
-            stagedFallbackRecommended: true,
-            rc: dpi.rc,
-            requestsServed: dpi.requestsServed,
-            message:
-              "The PS5 fetched the package, but its installer connection ended before acknowledgement and ps5upload could not verify the exact installed artifact. Upload & install can retry from PS5-local staging.",
-          });
-        }
-        if (!dpi.ok) {
-          const rcHex = `0x${dpi.rc.toString(16).padStart(8, "0")}`;
-          const blockedBeforeFetch = dpi.requestsServed === 0;
-          const proxyRejected = dpi.rc === DPI_HTTP_PROXY_RC;
-          const detail = proxyRejected
-            ? `The PS5's proxy setting blocked the stream (${rcHex}, SCE_HTTP_ERROR_PROXY). In the PS5 network's Advanced Settings, set Proxy Server to “Do Not Use”, or use Upload & install, which reads the package from PS5-local storage.`
-            : blockedBeforeFetch
-              ? streamUnreachableMessage(rcHex, servedFrom)
-              : `${dpi.errMessage} (${rcHex}) after ${dpi.requestsServed} package request${dpi.requestsServed === 1 ? "" : "s"} reached this computer. Upload & install uses the more reliable PS5-local staged path.`;
-          return finishStreamTask({
-            ok: false,
-            message: detail,
-            stagedFallbackRecommended: true,
-            rc: dpi.rc,
-            requestsServed: dpi.requestsServed,
-          });
-        }
-
-        // 4. Track the install to a real terminal state (DPI's `ok` alone
-        //    isn't proof — the daemon reports InstallByPackage's rc, not the
-        //    async install result). The session is still alive for this, then
-        //    the engine GCs it.
-        //
-        //    This is also the only place the transfer is observable: the
-        //    hand-off in step 3 returns as soon as Sony *queues* the install,
-        //    and the console then pulls the package for however long that
-        //    takes. Polling the session's own counters is what turns that
-        //    window into a live bar and a rate instead of one frozen sentence.
         const rateSamples: RateSample[] = [{ ts: Date.now(), bytes: 0 }];
         let lastDetail = "";
-        const verdict0 = await verifyInstallCompleted(sessionId, (sample) => {
-          const now = Date.now();
-          // Feed the SAME counter the progress line reads. Sampling
-          // transferBytes alone made the rate go dead the moment the transfer
-          // finished and the console started writing: installedBytes is what
-          // moves during the install phase, so "at X/s" sat at 0 for the
-          // longest part of a big install.
-          pushRateSample(
-            rateSamples,
-            now,
-            Math.max(sample.transferBytes, sample.installedBytes),
+        let terminal: InstallStatus;
+        try {
+          terminal = await driveUnifiedInstall(
+            host,
+            installSource,
+            {
+              contentId: contentId || "",
+              titleId: titleIdFromContentId(contentId ?? "") ?? null,
+              // The probe's package_type/category; ends in gd/gp/ac like a
+              // PARAM.SFO category, which is all the engine's guard inspects.
+              category: resolvedPackageType ?? null,
+              // The user explicitly chose this install and the preflight above
+              // already surfaced any "already installed" state, so let the
+              // engine's guard proceed (a re-install was never blocked before).
+              options: { allow_destructive_reinstall: true },
+            },
+            (sample) => {
+              const now = Date.now();
+              // Feed the SAME counter the progress line reads, so the rate keeps
+              // moving across the download → install handover.
+              pushRateSample(
+                rateSamples,
+                now,
+                Math.max(sample.transferBytes, sample.installedBytes),
+              );
+              const bytesPerSec = computeRate(rateSamples, now);
+              const { detail, current } = describeInstallSample(
+                sample,
+                bytesPerSec,
+              );
+              if (detail && detail !== lastDetail) {
+                lastDetail = detail;
+                set({ busyNotice: detail });
+              }
+              useTaskStore.getState().updateTask(taskId, {
+                detail,
+                ...(sample.total > 0
+                  ? {
+                      progress: {
+                        current,
+                        total: sample.total,
+                        unit: "bytes" as const,
+                      },
+                    }
+                  : {}),
+                ...(bytesPerSec > 0 ? { rate: { bytesPerSec } } : {}),
+                ...(bytesPerSec > 0 && sample.total > current
+                  ? { eta: (sample.total - current) / bytesPerSec }
+                  : {}),
+              });
+            },
+            onStatus,
           );
-          const bytesPerSec = computeRate(rateSamples, now);
-          const { detail, current } = describeInstallSample(
-            sample,
-            bytesPerSec,
-          );
-          if (detail !== lastDetail) {
-            lastDetail = detail;
-            set({ busyNotice: detail });
-          }
-          useTaskStore.getState().updateTask(taskId, {
-            detail,
-            ...(sample.total > 0
-              ? {
-                  progress: {
-                    current,
-                    total: sample.total,
-                    unit: "bytes" as const,
-                  },
-                }
-              : {}),
-            ...(bytesPerSec > 0 ? { rate: { bytesPerSec } } : {}),
-            ...(bytesPerSec > 0 && sample.total > current
-              ? { eta: (sample.total - current) / bytesPerSec }
-              : {}),
-          });
-        });
-        const verdict = verdict0;
-        releaseServingSession = verdict.trackedToTerminal;
-        if (verdict.completed) {
-          const viaBridge =
-            dpi.bridge === "dpiv2"
-              ? " Installed through the console's existing DPI bridge, so your loaded payloads were left running."
-              : "";
-          pushNotification("success", `Installed ${label}`, {
-            body:
-              (remoteUrl
-                ? "Link install complete. The package was downloaded from the link and fed straight to the console — nothing was staged on this computer or the PS5."
-                : "Stream-install complete. The pkg was fetched over HTTP — nothing was staged on the PS5.") +
-              viaBridge,
-          });
-          return finishStreamTask({ ok: true, mayNotLaunch: false });
+        } catch (e) {
+          return finishStreamTask({ ok: false, message: pkgError(e) });
         }
-        // Stall / async failure. Nothing was staged on the PS5 so there's
-        // no pkg to keep — the pkg-host session is engine-side only.
+
+        const outcome = statusToOutcome(terminal);
+        if (outcome.installed) {
+          pushNotification("success", `Installed ${label}`, {
+            body: remoteUrl
+              ? "Link install complete. The package was downloaded from the link and fed straight to the console — nothing was staged."
+              : "Stream-install complete. The pkg was fetched over HTTP — nothing was staged on the PS5.",
+          });
+          return finishStreamTask({
+            ok: true,
+            mayNotLaunch: outcome.mayNotLaunch,
+          });
+        }
         return finishStreamTask({
           ok: false,
-          acceptedUnverified: verdict.acceptedUnverified,
           stagedFallbackRecommended: true,
-          rc: dpi.rc,
-          requestsServed: dpi.requestsServed,
-          message: verdict.acceptedUnverified
-            ? "The PS5 accepted the stream-install request, but ps5upload couldn’t verify completion. Check the PS5 home screen and Notifications / Downloads; the original package on your computer is unchanged."
-            : verdict.message || "The install didn't complete.",
+          message: outcome.errMessage || "The install didn't complete.",
         });
       } catch (e) {
-        // An unexpected failure leaves the console's state unknown — a call that
-        // threw (a client timeout mid-hand-off) can still have queued a real
-        // install. Hold the session rather than hang up on it; the engine age-GCs
-        // it either way.
-        releaseServingSession = false;
         return finishStreamTask({ ok: false, message: pkgError(e) });
       } finally {
-        // Cancel the serving session ONLY when it reached a real terminal state.
-        // `pkg_install_cancel` sets the session `cancelled`, and serve_handler
-        // then answers every subsequent fetch with 410 Gone — so cancelling a
-        // session whose install is still running hangs up on the console
-        // mid-transfer and turns a live install into a failed one. That is
-        // reachable any time `verifyInstallCompleted` gives up early (its
-        // safety cap, or five consecutive poll errors), and it was the default
-        // path for every stream install before this guard.
-        if (servingSession && releaseServingSession) {
-          try {
-            await invoke("pkg_install_cancel", { session: servingSession });
-          } catch {
-            /* best-effort; the engine also age-GCs sessions */
-          }
-        }
         if (!taskFinished) {
           finishStreamTask({
             ok: false,
@@ -4427,7 +3512,10 @@ const makePkgLibraryStore = () =>
           // package_type is unknown here. The engine reads the category straight
           // from the staged pkg to detect a patch and arm the data-loss guard.
           null,
-          true, // the internal copy is transient — always clean it
+          // deleteStaging=false: installExternal owns the internal copy's
+          // cleanup itself (below, only on a CONFIRMED install), so it must not
+          // ALSO ask runPkgInstall to delete the same path.
+          false,
           onProgress,
           undefined,
           // The USB scan knows the pkg's size; without it the background
