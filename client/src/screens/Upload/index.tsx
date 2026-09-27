@@ -17,6 +17,7 @@ import clsx from "clsx";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { isAndroid } from "../../lib/platform";
+import { pkgKindLabel } from "./pkgKind";
 import { pickLocalPath } from "../../state/localPicker";
 import { isTauriEnv, safeUnlisten } from "../../lib/tauriEnv";
 import { isInstallPackagePath } from "../../lib/pkgDropDedupe";
@@ -143,7 +144,7 @@ function detectedLabel(
     case "pkg":
       return {
         icon: Package,
-        label: tr("upload_kind_pkg", "PS5 package (.pkg)"),
+        label: pkgKindLabel(source.pkgInfo?.platform, (k, f) => tr(k, f)),
       };
   }
 }

@@ -1411,6 +1411,8 @@ upload_kind_folder: "Folder",
 upload_kind_game_folder: "Folder gry",
 upload_kind_archive: "Skompresowane archiwum ({ext})",
 upload_kind_pkg: "Pakiet PS5 (.pkg)",
+"upload_kind_pkg_ps4": "Pakiet PS4 (.pkg)",
+"upload_kind_pkg_unknown": "Pakiet (.pkg)",
 upload_archive_word: "archiwum",
 // Pkg-as-queue-item (the upload/install/delete merge).
 upload_pkg_card_title: "Instalacja pakietu",

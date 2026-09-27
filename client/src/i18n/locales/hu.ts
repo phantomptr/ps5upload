@@ -1651,6 +1651,8 @@ upload_kind_folder: "Mappa",
 upload_kind_game_folder: "Játékmappa",
 upload_kind_archive: "Tömörített archívum ({ext})",
 upload_kind_pkg: "PS5 csomag (.pkg)",
+"upload_kind_pkg_ps4": "PS4 csomag (.pkg)",
+"upload_kind_pkg_unknown": "Csomag (.pkg)",
 upload_archive_word: "archívum",
 // Pkg mint várólista-elem (feltöltés/telepítés/törlés egyesítve).
 upload_pkg_card_title: "Csomag telepítése",

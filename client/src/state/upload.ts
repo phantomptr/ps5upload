@@ -17,6 +17,7 @@ import { isInstallPackagePath } from "../lib/pkgDropDedupe";
 import { remoteApi } from "../api/remote";
 import { materializeRemote } from "../lib/materialize";
 import { isRemotePath } from "../lib/remotePath";
+import { platformFromTitleId, titleIdFromContentId } from "./pkgLibrary";
 
 /**
  * Detected source kind. Drives which options the Upload screen shows.
@@ -51,6 +52,8 @@ export interface PkgSourceInfo {
   title: string | null;
   category: string | null;
   totalBytes: number;
+  /** "ps4" | "ps5" from the header (or the title id), "" when neither says. */
+  platform?: string;
 }
 
 export interface PickedSource {
@@ -306,7 +309,12 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       });
       try {
         const meta = (await invoke("pkg_metadata_split", { path })) as {
-          head?: { content_id?: string; title?: string; category?: string };
+          head?: {
+            content_id?: string;
+            title?: string;
+            category?: string;
+            platform?: string;
+          };
           parts?: unknown[];
           total_size?: number;
         };
@@ -331,6 +339,11 @@ export const useUploadStore = create<UploadState>((set, get) => ({
               title: meta.head?.title ?? null,
               category: meta.head?.category ?? null,
               totalBytes: meta.total_size ?? 0,
+              platform:
+                meta.head?.platform ||
+                platformFromTitleId(
+                  titleIdFromContentId(meta.head?.content_id ?? ""),
+                ),
             },
           },
           detecting: false,
