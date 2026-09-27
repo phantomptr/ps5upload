@@ -22,6 +22,9 @@ const INSTALL_TIMEOUT: Duration = Duration::from_secs(900);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 const ENSURE_WAIT_TOTAL: Duration = Duration::from_secs(45);
 const ENSURE_POLL: Duration = Duration::from_millis(500);
+/// How long a port that is open but answers no hello may stay that way (a
+/// daemon still exiting) before it is reported as not coming up.
+const MUTE_WAIT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct Hello {
@@ -204,6 +207,16 @@ fn needs_upgrade(current: &str, running: &str) -> bool {
 }
 
 fn ensure_at(ip: &str, port: u16, elf: Option<&[u8]>, protect_running: bool) -> Ensure {
+    ensure_with(ip, port, elf, protect_running, MUTE_WAIT)
+}
+
+fn ensure_with(
+    ip: &str,
+    port: u16,
+    elf: Option<&[u8]>,
+    protect_running: bool,
+    mute_wait: Duration,
+) -> Ensure {
     let addr = join_host_port(ip, port);
     // 1) probe
     if port_is_open(&addr, PROBE_TIMEOUT) {
@@ -231,13 +244,37 @@ fn ensure_at(ip: &str, port: u16, elf: Option<&[u8]>, protect_running: bool) -> 
                 };
             }
         } else {
-            return Ensure {
-                listening: true,
-                sent: false,
-                state: None,
-                reason: None,
-                error: None,
-            };
+            // Open but no hello: most likely a daemon still exiting. Wait for
+            // it to answer (it was only busy) or to close (then send a fresh
+            // copy below). Never call a mute port a running daemon.
+            let deadline = Instant::now() + mute_wait;
+            loop {
+                if !port_is_open(&addr, PROBE_TIMEOUT) {
+                    break;
+                }
+                if let Ok(h) = hello_at(&addr) {
+                    return Ensure {
+                        listening: true,
+                        sent: false,
+                        state: Some(h.state),
+                        reason: None,
+                        error: None,
+                    };
+                }
+                if Instant::now() >= deadline {
+                    return Ensure {
+                        listening: false,
+                        sent: false,
+                        state: None,
+                        reason: Some("daemon_mute"),
+                        error: Some(
+                            "the installer port is open but nothing on it answers; restart the console's payload loader"
+                                .into(),
+                        ),
+                    };
+                }
+                std::thread::sleep(ENSURE_POLL);
+            }
         }
     }
     // 2) send the bundled ELF as a companion image
@@ -404,6 +441,32 @@ mod tests {
             }
         });
         (sa.ip().to_string(), sa.port(), reqs, stop)
+    }
+
+    #[test]
+    fn a_port_that_answers_without_hello_is_not_a_running_daemon() {
+        // A daemon mid-exit (or anything else on :9115) keeps the port open
+        // but never says hello. Treating that as "listening" skipped sending
+        // a fresh daemon and the install then hit a refused connect.
+        let (ip, port, _reqs, stop) = fake_multi("not json");
+        let e = ensure_with(&ip, port, None, false, Duration::from_millis(600));
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(!e.listening, "{e:?}");
+        assert_eq!(e.reason, Some("daemon_mute"));
+    }
+
+    #[test]
+    fn a_mute_daemon_that_exits_is_replaced() {
+        // The port closes during the wait: fall through to sending a fresh
+        // copy (here there is no image, which proves the send path ran).
+        let (ip, port, _reqs, stop) = fake_multi("not json");
+        let s2 = stop.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            s2.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+        let e = ensure_with(&ip, port, None, false, Duration::from_secs(5));
+        assert_eq!(e.reason, Some("no_image"), "{e:?}");
     }
 
     #[test]
