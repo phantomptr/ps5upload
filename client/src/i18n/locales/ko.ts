@@ -2141,7 +2141,7 @@ payloads_search_no_match: "“{query}”와 일치하는 페이로드가 없습�
 "pkglib.external.title": "USB / 외장 드라이브에서 설치",
 "pkglib.installAll": "모두 설치",
 "pkglib.installAll.hint": "준비된 모든 패키지를 설치합니다. 본편 게임을 업데이트와 DLC보다 먼저 설치합니다",
-"pkglib.installnote.body": "ps5upload가 PS5에 패키지를 대신 설치합니다. 설치를 실행하기 위해 잠시 페이로드를 넘겨받고(필요하면 DPI 로더로 대체) 끝나면 되돌리므로 연결이 몇 초 끊길 수 있습니다. FW 12+ 에서는 화면이 잠시 검게 될 수 있는데 정상입니다. 게임 pkg가 가장 잘 동작하며, 일부 시스템(NPXS) pkg는 PS5의 설정 → 패키지 설치 프로그램이 필요할 수 있습니다.",
+"pkglib.installnote.body": "ps5upload는 패키지를 PS5의 자체 설치 프로그램에 넘기고, 본체가 패키지 전체를 읽은 뒤에야 설치 완료로 표시합니다. 패치는 게임 버전이 올라가야 완료로 인정합니다. 설치에 실패하면 패키지가 남아 있어 다시 시도할 수 있습니다. FW 12+ 및 시스템 패키지는 여전히 PS5의 설정 → 시스템 → 디버그 설정 → 게임 → Package Installer가 필요할 수 있습니다.",
 "pkglib.installnote.title": "설치 방식",
 "pkglib.menu.copyDetails": "세부 정보 복사",
 "pkglib.menu.openFolder": "폴더 열기",

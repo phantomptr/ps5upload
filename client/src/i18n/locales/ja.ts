@@ -2145,7 +2145,7 @@ payloads_search_no_match: "「{query}」に一致するペイロードはあり�
 "pkglib.external.title": "USB／外付けドライブからインストール",
 "pkglib.installAll": "すべてインストール",
 "pkglib.installAll.hint": "配置済みのパッケージをすべてインストールします。本体ゲームをアップデートやDLCより先に実行します",
-"pkglib.installnote.body": "ps5uploadがPS5へのパッケージのインストールを代行します。インストール実行のため一時的にペイロードを引き継ぎ（必要ならDPIローダーにフォールバック）、完了後に元へ戻すため、接続が数秒途切れることがあります。FW 12+では画面が一瞬暗くなることがありますが正常です。ゲームのpkgが最も安定します。一部のシステム（NPXS）pkgはPS5本体の 設定 → パッケージインストーラーが必要な場合があります。",
+"pkglib.installnote.body": "ps5upload はパッケージを PS5 上の専用インストーラーに渡し、本体がパッケージ全体を読み終えてから初めてインストール完了と表示します。パッチの場合はさらにゲームのバージョンが上がったことも確認します。インストールに失敗した場合、パッケージは残るので再試行できます。FW 12+ やシステムパッケージでは、引き続き PS5 の「設定 → システム → デバッグ設定 → ゲーム → Package Installer」が必要な場合があります。",
 "pkglib.installnote.title": "インストールの仕組み",
 "pkglib.menu.copyDetails": "詳細をコピー",
 "pkglib.menu.openFolder": "フォルダーを開く",

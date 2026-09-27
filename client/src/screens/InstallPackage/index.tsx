@@ -1453,7 +1453,7 @@ export default function InstallPackageScreen() {
             {" — "}
             {tr(
               "pkglib.installnote.body",
-              "ps5upload installs the package on the PS5 for you. It briefly takes over the payload to run the install (falling back to the DPI loader if needed) and restores it when done, so the connection may blip for a few seconds. On FW 12+ the screen can go black for a moment — that's normal. Game pkgs work best; some system (NPXS) pkgs may still need the PS5's own Settings → Package Installer.",
+              "ps5upload hands the package to its own installer on the PS5 and only reports it installed once the console has read the whole package; a patch must also raise the game's version. If an install fails, the package is kept so you can retry. FW 12+ and system packages may still require the PS5's own Settings → System → Debug Settings → Game → Package Installer.",
             )}
           </div>
         </div>
