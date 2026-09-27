@@ -52,9 +52,10 @@ protocol (FTX2) over your LAN.
   (optionally) cleans up the staged copy. On the Upload tab a `.pkg`
   is a first-class queue item, so it rides the same queue as your
   folders, images, and archives — add it and it ends up playable.
-  Three-tier pipeline routes Sony's installer through ShellUI's authid
-  via ptrace RPC; verified end-to-end on FW 9.60. Game pkgs (CUSA /
-  PPSA / PCSA / EP / UP) install cleanly.
+  Or **Stream install** it straight from your PC with no copy on the
+  PS5. Installs go through ps5upload's own on-console installer;
+  verified with PS4 base games, updates and DLC and PS5 fake packages
+  on FW 5.10.
 - **Register + launch** in the XMB — Library row's Play button
   always registers first (idempotent), retries with a DRM-type
   patch on rejection, then launches. Unmount unregisters every
@@ -717,15 +718,15 @@ that operates on the PS5 itself — browse, transfer, install from a
 PS5-connected USB drive, hardware monitor, saves list, profile — works the
 same as the desktop app.
 
-**Q: What is "Stream (beta)" on the Install Package screen? (3.3.25)**
-It installs a `.pkg` **straight from your PC over HTTP** — the PS5 pulls the
-bytes directly instead of the file being uploaded and staged on the console
-first. That saves disk space (no "pkg + installed game both taking room") and a
-whole transfer step, so you can install even when the console is tight on
-space. It's **beta**: your PC has to stay connected for the whole install, and
-reliability varies by firmware — if it doesn't take, the normal
-upload-then-install path is always there as the reliable fallback. The
-data-loss guard for updates/DLC stays fully in place either way.
+**Q: What is "Stream install" on the Install Package screen?**
+It installs a `.pkg` **straight from your PC** — the PS5 pulls the bytes over
+your network instead of the file being uploaded to the console first. That
+saves disk space (no "package + installed game both taking room") and a whole
+transfer step. Keep the computer on and connected until the install finishes.
+The PS5 has to be able to reach your computer: if a stream install fails
+before anything downloads, see *"Stream install fails before the PS5
+downloads anything"* below, or use **Upload & install**, which copies the
+package to the PS5 first and needs no connection back to your computer.
 
 **Q: Opening the Hardware screen drops the connection ("Couldn't read
 hardware info — connection refused").**
@@ -1201,13 +1202,36 @@ signed.) It uploads once to
 `/user/data/ps5upload/pkg_library/` on the PS5 and stays there. The
 screen lists every uploaded package with cover art and size, and each
 row has **Install**, **Reinstall**, and **Delete** — so you can install
-again any time without re-uploading. Installs run through the **DPI
-daemon** on `:9040`, which calls Sony's `sceAppInstUtilAppInstallPkg`
-from a clean loader process (the path that isn't gated on current
-firmware). Installing briefly swaps the ps5upload payload for the DPI
-loader and restores it when done, so the connection may blip for a few
-seconds. Hardware-validated on FW 9.60 with regular game pkgs (UP / EP /
-JP / HP / CUSA / PPSA / PCSA / etc.).
+again any time without re-uploading. You can also skip the upload:
+**Stream install** installs a package straight from your PC (see the
+Stream install question above).
+
+Every install runs through ps5upload's own on-console installer (port
+`:9115`). The app sends it to the console when it isn't already running;
+it runs alongside the ps5upload helper, so the connection doesn't drop
+while you install. An install is only reported as done once the console
+has pulled the whole package and the result checks out. Hardware-validated
+on FW 5.10 with PS4 base games, updates and DLC and with PS5 fake packages,
+through both Stream install and Upload & install.
+
+**Q: Stream install fails before the PS5 downloads anything?**
+The PS5 pulls the package from your computer, so it has to be able to reach
+it. Allow ps5upload through your computer's firewall (on Windows, for both
+Private and Public networks), keep the computer and the PS5 on the same
+network with any VPN off, and set the PS5's Proxy Server to "Do Not Use"
+(Settings → Network → Settings → Set Up Internet Connection → your
+connection → Advanced Settings). The app names the cause when it can tell.
+**Upload & install** works without this connection.
+
+**Q: How do I turn a game folder into an installable package? (Convert to FPKG, beta)**
+Turn on **Settings → Beta features**, then open **Convert to FPKG**. Pick a
+decrypted game folder, or an `.exfat` / `.ffpkg` image; the app checks it has
+everything a launchable package needs and builds a fake package on your
+computer (not on the console), compressed the way Sony's own packages are.
+When it's done, choose **Stream install** or **Upload & install** — or keep
+the package and install it later. The console needs fake-package support
+loaded first (kstuff, `a53_ppr_install_fast.elf`, `shadowmountplus.elf`).
+It's beta: keep the game files you converted from.
 
 **Q: Can I install a package that's already on a USB / external drive? (3.2.0+)**
 Yes. Plug the drive into the PS5, open **Install Package**, and any `.pkg` or
@@ -1235,7 +1259,7 @@ so the app leaves it unknown rather than guessing from `.pkg` or a filename.
 
 The A53/PPR patches are a separate mount-time PFS-key path; they do not disable
 Sony's package-registration policy. Package installation still relies on
-kstuff's ShellCore installer patches and the AppInst/BGFT/DPI paths.
+kstuff's ShellCore installer patches and Sony's AppInst installer.
 
 **Q: I have a base game and an update — does the order matter? (3.2.0+)**
 Yes — install the **base game first**, then the update. A base game and its
@@ -1263,18 +1287,13 @@ fine all along — just launch it.
 
 **Q: I'm installing a game update (patch) — is my installed game safe? (3.3.7)**
 Yes. A game's update carries the *same ID* as the game, so an older build could end
-up re-installing that ID and wiping the game instead of patching it. An update only
-installs via the safe path that applies it *on top* of your game; if that path can't
-apply it on your firmware, the update **fails harmlessly and your installed game is
-left completely intact** — never overwritten or deleted. (3.3.6 added this but only
-recognised updates labelled a certain way, so some **PS4** patches still slipped
-through and wiped the base — hardware-confirmed. **3.3.7** reads the real
-"update vs. full game" flag straight from the package on the console, so an update
-is recognised no matter how it reached the PS5 — uploaded, copied from USB, or
-picked in the File System tab — while a normal full-game *re-install* still works.)
-If an update won't go through the app, install it from the PS5's own **Package
-Installer** (Settings → Debug Settings → Game → Package Installer) — your base game
-is safe either way. Always install the **base game first**, then the update.
+up re-installing that ID and wiping the game instead of patching it. The app reads
+the real "update vs. full game" flag straight from the package — however it reached
+the PS5 — and applies an update *on top* of your game. After an update installs, the
+app checks that the game's version actually went up, and tells you if it didn't
+rather than calling it a success. If an update won't go through the app, install it
+from the PS5's own **Package Installer** (Settings → Debug Settings → Game → Package
+Installer). Always install the **base game first**, then the update.
 
 **Q: "Port 9021 is not open on <ip>" — but I loaded an ELF loader.**
 Port 9021 belongs to the **ELF loader**, which is a separate jailbreak
@@ -1306,11 +1325,9 @@ problem. If discovery finds nothing either, it is the network.
 
 **Q: A PS4 `.pkg` update won't install.**
 PS4 packages are recognised (the installer handles the `PS4GD` /
-`PS4AC` / `PS4DP` types). On firmware 10 and newer, Sony's in-app
-installer turns patches away, so ps5upload applies updates through a
-separate on-console **DPI install daemon** (the same path the desktop
-Package Install screen uses). A rejection after that hand-off is Sony's
-verdict, and the usual reasons are:
+`PS4AC` / `PS4DP` types), and updates install through ps5upload's own
+on-console installer like everything else. If the console rejects one,
+that is Sony's verdict, and the usual reasons are:
 
 - **The base game isn't installed.** An update patches something; with no
   matching PS4 base title on the console there is nothing to patch.
@@ -1324,11 +1341,11 @@ verdict, and the usual reasons are:
   report that rather than claiming a false success.
 
 **Self-hosted / web UI:** a browser cannot talk to the console's loader
-port or carry the daemon ELF itself, so the **engine** must. Use a
+port or carry the installer ELF itself, so the **engine** must. Use a
 released `ps5upload-engine` / `…-engine-webui` build (or Docker image) —
-those embed the helper images. A plain source build without the PS5
-payload SDK has none; point `PS5UPLOAD_PAYLOAD_DIR` at a directory that
-holds `ps5upload.elf` and `ps5upload-installer.elf`, or the update install will
+those embed the installer. An engine built from a full checkout has it
+too (`ps5upload-installer.elf` is in the repository); otherwise point
+`PS5UPLOAD_PAYLOAD_DIR` at a directory that holds it, or installs will
 stop before the console ever sees the package.
 
 If the app reports an install failed but the game plays fine, that is a
@@ -1365,7 +1382,7 @@ show up.
 
 **Q: A system (NPXS) pkg won't install. What do I do?**
 System app pkgs (NPXS-prefix content_id — Store updates, Settings
-patches, built-in apps) aren't what the DPI installer is built for and
+patches, built-in apps) aren't what ps5upload's installer is built for and
 often won't complete. Install those from the console itself: **on-PS5
 Settings → Debug Settings → Game → Package Installer** — a privileged
 code path ps5upload can't replicate.
@@ -1379,17 +1396,18 @@ and registered as a fallback — which surfaced misleading "not
 registered" errors before registration kicked in.
 
 **Q: Can I install a split pkg (`*.0`, `*.1`, …)?**
-Not through Install Package — the DPI installer takes a single staged
+Not through Install Package — the installer takes a single package
 file, so split sets are rejected with a note when you add them. Pick
 the single lead `.pkg` only.
 
 **Q: Where do uploaded packages live, and are they cleaned up?**
 They live at `/user/data/ps5upload/pkg_library/<ContentID>.pkg` and
-**persist** — nothing auto-deletes them, so you can reinstall any time
-without re-uploading. Remove one with the **Delete** button on its row
-(or from the File System tab); that frees the PS5 disk space. (This is a
-change from older builds, where the staged file was deleted right after
-each install.)
+**persist** by default, so you can reinstall any time without
+re-uploading. Remove one with the **Delete** button on its row (or from the
+File System tab); that frees the PS5 disk space. If you'd rather not keep
+them, turn on **Auto-delete each package from the PS5 after it installs**
+on the Install Package screen. A **Stream install** never puts a copy on
+the PS5 at all.
 
 ---
 

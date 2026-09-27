@@ -102,21 +102,22 @@
   that too. **Payload playlists** run a scripted boot sequence, and a
   playlist step can pull straight from a repo at run time so you don't
   keep a pile of `.elf` files on your PC.
-- **Install packages (package library)** — add a PS4 `.pkg` or PS5 `.fpkg`
-  install package and it uploads to your PS5 once and stays there.
-  **Install Package** lists every
-  uploaded package with cover art and size; **Install**, **Reinstall**,
-  or **Delete** any of them in a click — no re-uploading to install
-  again. **Install all** does a whole set in one tap, in base → update →
-  DLC order. Installs use Sony's game-package service and are only marked
-  complete after console-side verification; a clean rejection can fall back
-  to the standalone DPI daemon. Verified end-to-end on FW 9.60. FW 11.60+
-  has reported `0x80B2116F` AppInst/PlayGo incompatibilities, so ps5upload
-  keeps the staged package and directs users to the on-PS5 Settings → System →
-  Debug Settings → Game → Package Installer instead of claiming success.
-  **Stream (beta)** installs a
-  package straight from your PC over HTTP with no staging upload — handy
-  when console storage is tight.
+- **Install packages** — install a PS4 `.pkg` or PS5 fake package two ways:
+  **Stream install** sends it straight from your PC (nothing is copied to
+  the PS5 first — handy when console storage is tight), and **Upload &
+  install** copies it to the PS5's package library first, where it stays so
+  you can **Install**, **Reinstall** or **Delete** it later without
+  re-uploading. **Install all** does a whole set in base → update → DLC order.
+  Packages on a NAS/SMB share or behind an HTTP(S) link install the same way.
+  Everything goes through ps5upload's own on-console installer, and an
+  install is only marked done once the console has pulled the whole package
+  and the result checks out — an update that didn't raise the game's version
+  is reported, not called a success. Base, update and DLC installs verified
+  on FW 5.10.
+- **Convert to FPKG (beta)** — turn a decrypted game folder or an `.exfat` /
+  `.ffpkg` image into an installable fake package on your computer, with the
+  same compression Sony's packages use, then install it with Stream install
+  or Upload & install. Enable it under Settings → Beta features.
 - **Web browser access** — run the engine (or the official Docker image)
   and manage your PS5 from any browser on the LAN, the full app served
   over HTTP. No desktop install needed on that machine. Unauthenticated —
@@ -130,10 +131,10 @@
   title inside the image first so the dashboard stays clean —
   no ghost tiles after unmount.
 - **Speaks your language** — the whole UI, including error messages
-  and troubleshooting hints, is translated into 18 languages: English,
+  and troubleshooting hints, is available in 20 languages: English,
   Simplified & Traditional Chinese, Spanish, Hindi, Arabic, Bengali,
   Brazilian Portuguese, Russian, Japanese, German, French, Korean,
-  Turkish, Vietnamese, Indonesian, Italian, and Thai.
+  Turkish, Vietnamese, Indonesian, Italian, Thai, Polish, and Hungarian.
 
 ## What it doesn't do
 
@@ -548,19 +549,14 @@ port 9021 — a third-party component, not part of ps5upload.
   monitor, saves list, …) works the same as the desktop app. The upload
   queue also doesn't persist across a full page reload in browser mode
   (queue persistence is desktop-only).
-* Installing a **game update or DLC** from the browser needs an engine that
-  carries the two PS5 helper images. Those installs go through a separate
-  on-console install daemon, and the engine has to send it to the console
-  and put the ps5upload helper back afterwards — the desktop app does this
-  from its own copies, which a browser tab cannot reach. The released
-  engine binaries and the official Docker images include them, and a
-  Docker image you build yourself does too — `ps5upload-installer.elf` is in the
-  repository, and that is the one the update install needs. A plain
-  `cargo build` picks it up only if you build from a full checkout; the
-  ps5upload helper itself is built by `make payload` (it needs the PS5
-  payload SDK). Either way you can point the engine at your own copies
-  with `-e PS5UPLOAD_PAYLOAD_DIR=/path/to/elves`. Base games install
-  regardless.
+* Installing packages from the browser needs an engine that carries
+  ps5upload's on-console installer (`ps5upload-installer.elf`): every
+  install goes through it, and the engine sends it to the console when it
+  isn't already running there (it runs alongside the ps5upload helper and
+  never replaces it). The released engine binaries and the official Docker
+  images include it, and so does an engine built from a full checkout — the
+  ELF is in the repository. You can also point the engine at your own copies
+  with `-e PS5UPLOAD_PAYLOAD_DIR=/path/to/elves`.
 
 ## Contributing
 
