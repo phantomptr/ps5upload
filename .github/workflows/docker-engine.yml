@@ -250,7 +250,7 @@ jobs:
           set -euo pipefail
           mkdir -p engine/crates/ps5upload-engine/payload
           cp -v /tmp/payload-elves/ps5upload.elf \
-                /tmp/payload-elves/dpi/ps5upload-installer.elf \
+                /tmp/payload-elves/installer/ps5upload-installer.elf \
                 engine/crates/ps5upload-engine/payload/
           ls -la engine/crates/ps5upload-engine/payload/
 
@@ -338,7 +338,7 @@ jobs:
           set -euo pipefail
           mkdir -p engine/crates/ps5upload-engine/payload
           cp -v /tmp/payload-elves/ps5upload.elf \
-                /tmp/payload-elves/dpi/ps5upload-installer.elf \
+                /tmp/payload-elves/installer/ps5upload-installer.elf \
                 engine/crates/ps5upload-engine/payload/
           ls -la engine/crates/ps5upload-engine/payload/
 
