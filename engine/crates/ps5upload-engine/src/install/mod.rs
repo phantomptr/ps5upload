@@ -176,6 +176,37 @@ pub fn verdict_no_identity(accepted: bool) -> Verdict {
     }
 }
 
+/// How long delivery may make no progress before the install is judged
+/// stalled. Generous: a healthy console pulls continuously, and a large title
+/// must never be written off for a pause.
+pub const DELIVERY_STALL_MS: u64 = 5 * 60 * 1000;
+
+/// Where the console is in pulling the package after Sony accepted it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeliveryProgress {
+    /// Still pulling (or no total to compare against yet).
+    Pending,
+    /// Every byte has been pulled; the source is no longer needed.
+    Complete,
+    /// No progress for the whole stall window.
+    Stalled,
+}
+
+/// Pure: decide delivery progress from bytes served so far, the package
+/// total, and how long since the byte count last moved. Sony *accepting* an
+/// install is not completion — PS5 installs pull asynchronously — so the
+/// orchestrator waits on this before it reports a verdict or lets a caller
+/// delete the source.
+pub fn delivery_progress(served: u64, total: u64, idle_ms: u64, stall_ms: u64) -> DeliveryProgress {
+    if total > 0 && served >= total {
+        DeliveryProgress::Complete
+    } else if idle_ms >= stall_ms {
+        DeliveryProgress::Stalled
+    } else {
+        DeliveryProgress::Pending
+    }
+}
+
 use crate::install::deliver::{decide_delivery, needs_short_alias, Delivery, Source};
 use crate::install::history::HistoryEntry;
 use crate::install::status::Route;
@@ -511,6 +542,90 @@ async fn run_install(state: PkgInstallStateHandle, job: String, req: InstallRequ
         return;
     }
 
+    // wait for delivery. Sony ACCEPTING an install is not completion: PS5
+    // installs pull the package asynchronously (measured: an 820 MB stream
+    // install was accepted at 13 MB). Track what the console has pulled until
+    // the whole package is read — only then is the source safe to delete and a
+    // verdict honest. Live metrics are published while waiting so the client's
+    // progress bar moves. A bare URL is fetched by the console itself, so there
+    // is nothing to observe and it proceeds straight to verify.
+    let observable = session_id.is_some()
+        || (install_job_id.is_some() && matches!(req.source, Source::ConsolePath(_)));
+    let mut last_served: u64 = 0;
+    let mut last_move = std::time::Instant::now();
+    let delivery = if !observable {
+        DeliveryProgress::Complete
+    } else {
+        loop {
+            // (served, total, daemon job phase)
+            let obs: Option<(u64, u64, Option<String>)> = if let Some(sid) = &session_id {
+                let s = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+                s.get(sid).map(|x| (x.bytes_served, x.total_size, None))
+            } else if let Some(jid) = &install_job_id {
+                let (i, j) = (ip.clone(), jid.clone());
+                tokio::task::spawn_blocking(move || ic::job(&i, &j))
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok())
+                    .map(|j| (j.bytes_served, j.total, Some(j.phase)))
+            } else {
+                None
+            };
+            // An unreadable observation counts as "no movement": it can only
+            // run the stall clock, never declare success.
+            let (served, total, dphase) = obs.unwrap_or((last_served, 0, None));
+            if served > last_served {
+                last_served = served;
+                last_move = std::time::Instant::now();
+            }
+            state.jobs.update(&job, |s| {
+                s.metrics.served_bytes = served;
+                if total > 0 {
+                    s.metrics.total_bytes = total;
+                }
+            });
+            let p = if dphase.as_deref() == Some("done") {
+                DeliveryProgress::Complete
+            } else {
+                delivery_progress(
+                    served,
+                    total,
+                    last_move.elapsed().as_millis() as u64,
+                    DELIVERY_STALL_MS,
+                )
+            };
+            if p != DeliveryProgress::Pending {
+                break p;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    };
+    // The console has finished with the stream source (pulled it all, or
+    // stalled): release the pkg-host session so the same package can be
+    // installed again. Its counters stay readable for the metrics below.
+    if let Some(sid) = &session_id {
+        crate::pkg_install::release_serve_session(&state.sessions, sid);
+    }
+    let deliver_ms = deliver_started.elapsed().as_millis() as u64;
+    if delivery == DeliveryProgress::Stalled {
+        crate::log_warn!(
+            "{tag}: delivery stalled at {last_served} bytes — source kept, reporting failed"
+        );
+        state.jobs.update(&job, |s| {
+            s.phase = Phase::Failed;
+            s.verdict = Some(Verdict::Failed);
+            s.reason = Some(FailReason::Stalled);
+            s.hint = Some(
+                "the console stopped fetching the package before it finished; the package was kept so you can retry"
+                    .into(),
+            );
+            s.shortened = shortened;
+            s.metrics.phase_ms.insert("deliver".into(), deliver_ms);
+        });
+        finalize(&state, &job, &req, started);
+        return;
+    }
+
     // verify.
     state.jobs.update(&job, |s| s.phase = Phase::Verify);
     let verify_started = std::time::Instant::now();
@@ -658,6 +773,52 @@ fn finalize(
 mod tests {
     use super::*;
     use crate::install::deliver::{decide_delivery, Delivery, Source};
+
+    // ── delivery wait: "Sony accepted" is not "installed" ──
+    // Measured on the Phat (FW 5.10): a stream install of an 820 MB package
+    // was reported done at 13 MB served; the console pulled the rest over the
+    // next minute. Loopback + Auto-Delete would have deleted the pkg mid-read.
+
+    #[test]
+    fn delivery_is_pending_until_every_byte_is_pulled() {
+        assert_eq!(
+            delivery_progress(13_108_926, 819_791_550, 0, DELIVERY_STALL_MS),
+            DeliveryProgress::Pending
+        );
+    }
+
+    #[test]
+    fn delivery_completes_when_served_reaches_total() {
+        assert_eq!(
+            delivery_progress(819_791_550, 819_791_550, 0, DELIVERY_STALL_MS),
+            DeliveryProgress::Complete
+        );
+        // pkg-host counts a few header re-reads, so served can pass total.
+        assert_eq!(
+            delivery_progress(820_100_000, 819_791_550, 0, DELIVERY_STALL_MS),
+            DeliveryProgress::Complete
+        );
+    }
+
+    #[test]
+    fn delivery_stalls_only_after_the_idle_window() {
+        let t = DELIVERY_STALL_MS;
+        assert_eq!(
+            delivery_progress(1, 10, t - 1, t),
+            DeliveryProgress::Pending
+        );
+        assert_eq!(delivery_progress(1, 10, t, t), DeliveryProgress::Stalled);
+    }
+
+    #[test]
+    fn unknown_total_cannot_complete_by_bytes() {
+        // Without a total there is nothing to compare against; only the stall
+        // window can end the wait (and the caller then checks registration).
+        assert_eq!(
+            delivery_progress(5, 0, 0, DELIVERY_STALL_MS),
+            DeliveryProgress::Pending
+        );
+    }
 
     #[test]
     fn concurrent_install_for_same_console_is_refused_with_active_job() {

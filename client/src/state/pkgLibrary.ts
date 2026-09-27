@@ -176,6 +176,8 @@ function reasonGuidance(reason: string | null): string {
       return "The installer rejected the request.";
     case "sony_refused":
       return "The PS5 declined the install.";
+    case "stalled":
+      return "The PS5 stopped fetching the package before it finished. The package was kept — try again.";
     default:
       return "";
   }

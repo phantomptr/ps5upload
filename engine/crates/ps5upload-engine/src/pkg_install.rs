@@ -608,6 +608,25 @@ fn json_response(code: StatusCode, body: serde_json::Value) -> Response<Body> {
         .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 
+/// Release a serve-only pkg-host session its install no longer needs: mark it
+/// cancelled, so the duplicate-session guard lets the same package install
+/// again and the session is not persisted across a restart. Only call once the
+/// console has finished pulling (or stalled) — a cancelled session answers 410,
+/// which makes PlayGo discard a partial download. Returns whether it existed.
+pub(crate) fn release_serve_session(
+    sessions: &Mutex<HashMap<String, InstallSession>>,
+    sid: &str,
+) -> bool {
+    let mut map = sessions.lock().unwrap_or_else(|e| e.into_inner());
+    match map.get_mut(sid) {
+        Some(s) => {
+            s.cancelled = true;
+            true
+        }
+        None => false,
+    }
+}
+
 /// `POST /api/pkg/payload-restore` — (re)send the bundled MAIN ps5upload
 /// payload to the console's loader (:9021). The desktop app does this itself
 /// (it holds the ELF and can open the socket); the self-hosted web UI cannot,
@@ -3788,6 +3807,32 @@ mod persist_tests {
         map.get_mut("a").unwrap().cancelled = false;
         persist::save_to(&file, &map);
         std::fs::write(&pkg, vec![7u8; 100]).unwrap();
+        assert!(persist::load_from(&file).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The unified orchestrator releases a stream session once the console has
+    /// pulled the package. Before this, a finished session stayed "live" (and
+    /// survived restarts), so re-installing the same package was refused as
+    /// "already running" — measured on the Phat, 0 of 820 MB "in flight".
+    #[test]
+    fn a_released_session_stops_blocking_and_is_not_restored() {
+        let dir = std::env::temp_dir().join(format!("ps5u-release-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pkg = dir.join("game.pkg");
+        std::fs::write(&pkg, vec![7u8; 4096]).unwrap();
+        // Distinct id: `session()` stages under ps5u-persist-{id}, shared with
+        // the other persistence test, so reusing "a" races on one file.
+        let s = session("released", pkg, 4096);
+        let map = std::sync::Mutex::new(HashMap::from([(s.id.clone(), s)]));
+
+        assert!(super::release_serve_session(&map, "released"));
+        assert!(map.lock().unwrap()["released"].cancelled);
+        // Releasing an unknown session is a harmless no-op.
+        assert!(!super::release_serve_session(&map, "missing"));
+
+        let file = dir.join("sessions.json");
+        persist::save_to(&file, &map.lock().unwrap());
         assert!(persist::load_from(&file).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }

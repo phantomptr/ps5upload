@@ -64,6 +64,9 @@ pub enum FailReason {
     SonyRefused,
     DestructiveGuard,
     BadRequest,
+    /// Sony accepted the install but the console stopped pulling the package
+    /// before it finished. The source is kept for a retry.
+    Stalled,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
