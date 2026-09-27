@@ -176,6 +176,16 @@ pub fn verdict_no_identity(accepted: bool) -> Verdict {
     }
 }
 
+/// Whether a failed start should recycle the installer daemon: a stream
+/// install whose URL the console never fetched, refused with a network-class
+/// Sony code (0x8043xxxx — the same class the daemon itself treats as
+/// "network"). Measured on FW 5.10: after one such failure every later URL
+/// install fails instantly (0x80431064) until the daemon process restarts;
+/// Sony's install library keeps the bad state for the life of the process.
+pub fn should_recycle_daemon(stream: bool, never_fetched: bool, code: u32) -> bool {
+    stream && never_fetched && (code & 0xFFFF_0000) == 0x8043_0000
+}
+
 /// Sony's HTTP-proxy rejection of the install URL.
 const SCE_HTTP_ERROR_PROXY: u32 = 0x8043_1084;
 
@@ -589,6 +599,27 @@ async fn run_install(state: PkgInstallStateHandle, job: String, req: InstallRequ
         if let Some(sid) = &session_id {
             crate::pkg_install::release_serve_session(&state.sessions, sid);
         }
+        if should_recycle_daemon(route == Route::Stream, never_fetched, code) {
+            crate::log_warn!(
+                "{tag}: network-class refusal 0x{code:08X} before any fetch — recycling the installer daemon so the next install starts clean"
+            );
+            let ip_s = ip.clone();
+            // Stop, then wait (bounded) until :9115 has actually closed. A
+            // daemon still answering while it exits makes the next install's
+            // ensure skip sending a fresh one and then hit a refused connect.
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = ic::stop(&ip_s);
+                use ps5upload_core::payload_lifecycle as pl;
+                let addr = pl::join_host_port(&ip_s, pl::INSTALLER_PORT);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while std::time::Instant::now() < deadline
+                    && pl::port_is_open(&addr, std::time::Duration::from_millis(500))
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+            })
+            .await;
+        }
         state.jobs.update(&job, |s| {
             s.phase = Phase::Failed;
             s.verdict = Some(Verdict::Failed);
@@ -834,6 +865,25 @@ fn finalize(
 mod tests {
     use super::*;
     use crate::install::deliver::{decide_delivery, Delivery, Source};
+
+    // ── recycle a daemon wedged by a failed network install ──
+
+    #[test]
+    fn a_never_fetched_network_failure_recycles_the_daemon() {
+        // Measured: after this failure every later URL install failed
+        // instantly until the daemon process restarted.
+        assert!(should_recycle_daemon(true, true, 0x8043_1064));
+        assert!(should_recycle_daemon(true, true, 0x8043_1068));
+    }
+
+    #[test]
+    fn other_failures_leave_the_daemon_alone() {
+        // Not a stream (loopback), bytes already flowed, or not network-class.
+        assert!(!should_recycle_daemon(false, true, 0x8043_1064));
+        assert!(!should_recycle_daemon(true, false, 0x8043_1064));
+        assert!(!should_recycle_daemon(true, true, 0x80B2_116F));
+        assert!(!should_recycle_daemon(true, true, 0));
+    }
 
     // ── a stream the console never fetched from: say why, not "declined" ──
 

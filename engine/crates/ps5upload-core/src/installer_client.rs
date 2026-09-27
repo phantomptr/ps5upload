@@ -179,6 +179,17 @@ fn job_at(addr: &str, id: &str) -> Result<Job, String> {
     parse_job(&line)
 }
 
+fn stop_at(addr: &str) -> Result<(), String> {
+    let line = talk(addr, SHORT_TIMEOUT, "{\"op\":\"stop\"}")?;
+    let v: serde_json::Value =
+        serde_json::from_str(line.trim()).map_err(|e| format!("stop reply: {e}"))?;
+    if v.get("ok").and_then(|b| b.as_bool()) == Some(true) {
+        Ok(())
+    } else {
+        Err(format!("stop refused: {}", line.trim()))
+    }
+}
+
 /// running < current, comparing dotted numeric versions.
 fn needs_upgrade(current: &str, running: &str) -> bool {
     fn triple(s: &str) -> (u64, u64, u64) {
@@ -305,6 +316,15 @@ pub fn install_path(ip: &str, path: &str, name_hint: &str) -> Result<InstallRepl
         esc(name_hint)
     );
     install_at(&join_host_port(ip, INSTALLER_PORT), &req)
+}
+
+/// Ask the installer daemon to exit; the next `ensure` sends a fresh one.
+/// Recycles a daemon whose Sony install state a failed network install has
+/// wedged — measured on FW 5.10: after one stream the console could not
+/// fetch, every later URL install failed instantly (0x80431064) until the
+/// daemon process restarted.
+pub fn stop(ip: &str) -> Result<(), String> {
+    stop_at(&join_host_port(ip, INSTALLER_PORT))
 }
 
 pub fn job(ip: &str, id: &str) -> Result<Job, String> {
@@ -468,6 +488,20 @@ mod tests {
         assert!(needs_upgrade("1.0.0", "0.9.9")); // running older -> upgrade
         assert!(!needs_upgrade("1.0.0", "1.0.0")); // same -> no
         assert!(!needs_upgrade("1.0.0", "1.1.0")); // running newer -> no
+    }
+
+    #[test]
+    fn stop_sends_the_stop_op_and_reads_ok() {
+        use std::sync::atomic::Ordering;
+        let (ip, port, reqs, halt) = fake_multi("{\"ok\":true}");
+        let r = stop_at(&format!("{ip}:{port}"));
+        halt.store(true, Ordering::Relaxed);
+        assert!(r.is_ok(), "{r:?}");
+        assert!(reqs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|q| q == "{\"op\":\"stop\"}"));
     }
 
     #[test]
