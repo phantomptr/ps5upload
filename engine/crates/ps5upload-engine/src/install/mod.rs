@@ -176,6 +176,36 @@ pub fn verdict_no_identity(accepted: bool) -> Verdict {
     }
 }
 
+/// Fill identity fields the caller left empty from the package header.
+/// Anything the caller sent wins; an empty header field fills nothing.
+pub fn fill_from_header(
+    req: &mut InstallRequest,
+    content_id: &str,
+    title_id: &str,
+    category: &str,
+    app_ver: &str,
+) {
+    let some = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
+    if req.content_id.trim().is_empty() {
+        if let Some(c) = some(content_id) {
+            req.content_id = c;
+        }
+    }
+    if req.title_id.as_deref().is_none_or(|t| t.trim().is_empty()) {
+        req.title_id = some(title_id).or(req.title_id.take());
+    }
+    if req.category.as_deref().is_none_or(|c| c.trim().is_empty()) {
+        req.category = some(category).or(req.category.take());
+    }
+    if req
+        .package_app_ver
+        .as_deref()
+        .is_none_or(|v| v.trim().is_empty())
+    {
+        req.package_app_ver = some(app_ver).or(req.package_app_ver.take());
+    }
+}
+
 /// Whether a failed start should recycle the installer daemon: a stream
 /// install whose URL the console never fetched, refused with a network-class
 /// Sony code (0x8043xxxx — the same class the daemon itself treats as
@@ -378,16 +408,43 @@ pub async fn install_history_handler(Query(q): Query<AddrQuery>) -> Response {
 
 /// The async state machine: resolve → deliver → install → verify → done/failed.
 /// Always clears the active-job guard and records history at the end.
-async fn run_install(state: PkgInstallStateHandle, job: String, req: InstallRequest) {
+async fn run_install(state: PkgInstallStateHandle, job: String, mut req: InstallRequest) {
     let started = std::time::Instant::now();
     let tag = correlation_tag(&job);
     let ip = console_id(&req.ps5_addr);
-    crate::log_info!(
-        "{tag}: install start ps5={ip} source={} content_id={}",
-        req.source.kind(),
-        req.content_id
-    );
     let mgmt = crate::pkg_install::normalize_mgmt_addr(&req.ps5_addr);
+    // A console-side package (upload queue, USB, File System) often arrives
+    // without its category/version: read them off the package's own header
+    // so the destructive-reinstall guard and the patch version check work.
+    if let Source::ConsolePath(path) = &req.source {
+        if req.category.is_none() || req.package_app_ver.is_none() || req.title_id.is_none() {
+            let (m, p) = (mgmt.clone(), path.clone());
+            let meta = tokio::task::spawn_blocking(move || {
+                ps5upload_pkg::metadata_from_reader(|off, len| {
+                    ps5upload_core::fs_ops::fs_read(&m, &p, off, len).ok()
+                })
+            })
+            .await
+            .ok()
+            .flatten();
+            if let Some(h) = meta {
+                fill_from_header(
+                    &mut req,
+                    &h.content_id,
+                    &h.title_id,
+                    &h.category,
+                    &h.app_ver,
+                );
+            }
+        }
+    }
+    crate::log_info!(
+        "{tag}: install start ps5={ip} source={} content_id={} category={} app_ver={}",
+        req.source.kind(),
+        req.content_id,
+        req.category.as_deref().unwrap_or("?"),
+        req.package_app_ver.as_deref().unwrap_or("?")
+    );
     let category = req.category.clone().unwrap_or_default();
     let patch_ver = patch_check_version(&category, req.package_app_ver.as_deref());
     let title_id = req.title_id.clone().filter(|t| !t.trim().is_empty());
@@ -865,6 +922,66 @@ fn finalize(
 mod tests {
     use super::*;
     use crate::install::deliver::{decide_delivery, Delivery, Source};
+
+    // ── console-path installs learn their identity from the package header ──
+
+    fn bare_req(source: Source) -> InstallRequest {
+        InstallRequest {
+            ps5_addr: "192.168.86.99:9114".into(),
+            source,
+            content_id: String::new(),
+            title_id: None,
+            package_app_ver: None,
+            category: None,
+            options: InstallOptions::default(),
+        }
+    }
+
+    #[test]
+    fn an_upload_queue_patch_gets_its_category_and_version_from_the_header() {
+        // Measured on the Phat: the Upload screen sends no category/app_ver, so
+        // a Star Wars 1.02 patch installed with no version check at all.
+        let mut r = bare_req(Source::ConsolePath(
+            "/user/data/ps5upload/pkg_library/updates/x.pkg".into(),
+        ));
+        fill_from_header(
+            &mut r,
+            "UP1082-CUSA03474_00-SLUS202680000001",
+            "CUSA03474",
+            "gp",
+            "01.02",
+        );
+        assert_eq!(r.category.as_deref(), Some("gp"));
+        assert_eq!(r.package_app_ver.as_deref(), Some("01.02"));
+        assert_eq!(r.title_id.as_deref(), Some("CUSA03474"));
+        assert_eq!(r.content_id, "UP1082-CUSA03474_00-SLUS202680000001");
+        assert_eq!(
+            patch_check_version(r.category.as_deref().unwrap(), r.package_app_ver.as_deref()),
+            Some("01.02".to_string())
+        );
+    }
+
+    #[test]
+    fn values_the_caller_sent_always_win_over_the_header() {
+        let mut r = bare_req(Source::ConsolePath("/x.pkg".into()));
+        r.category = Some("PS4DP".into());
+        r.package_app_ver = Some("01.09".into());
+        r.title_id = Some("CUSA00900".into());
+        r.content_id = "UP9000-CUSA00900_00-BLOODBORNE000000".into();
+        fill_from_header(&mut r, "OTHER", "CUSA99999", "gd", "01.00");
+        assert_eq!(r.category.as_deref(), Some("PS4DP"));
+        assert_eq!(r.package_app_ver.as_deref(), Some("01.09"));
+        assert_eq!(r.title_id.as_deref(), Some("CUSA00900"));
+        assert_eq!(r.content_id, "UP9000-CUSA00900_00-BLOODBORNE000000");
+    }
+
+    #[test]
+    fn empty_header_fields_fill_nothing() {
+        let mut r = bare_req(Source::ConsolePath("/x.pkg".into()));
+        fill_from_header(&mut r, "", "", "", "");
+        assert!(r.category.is_none() && r.package_app_ver.is_none() && r.title_id.is_none());
+        assert!(r.content_id.is_empty());
+    }
 
     // ── recycle a daemon wedged by a failed network install ──
 
