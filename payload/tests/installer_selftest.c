@@ -203,12 +203,16 @@ static void test_boot_wait(void) {
 }
 
 static void test_admission(void) {
-    /* Only a SERVING loopback job blocks a new install. */
-    CHECK(inst_admit_install(INST_JOB_SERVING) == 0);
-    CHECK(inst_admit_install(INST_JOB_ACCEPTED) == 1); /* url job never blocks */
-    CHECK(inst_admit_install(INST_JOB_NONE) == 1);
-    CHECK(inst_admit_install(INST_JOB_DONE) == 1);
-    CHECK(inst_admit_install(INST_JOB_FAILED) == 1);
+    /* Only a SERVING loopback job that Sony has NOT finished reading blocks a
+     * new install. A fully-read one used to block for its whole 10-minute idle
+     * retire window, so on hardware a patch right after its base (and even an
+     * unrelated stream install) was refused as busy. */
+    CHECK(inst_admit_install(INST_JOB_SERVING, 0) == 0);
+    CHECK(inst_admit_install(INST_JOB_SERVING, 1) == 1);
+    CHECK(inst_admit_install(INST_JOB_ACCEPTED, 0) == 1); /* url job never blocks */
+    CHECK(inst_admit_install(INST_JOB_NONE, 0) == 1);
+    CHECK(inst_admit_install(INST_JOB_DONE, 0) == 1);
+    CHECK(inst_admit_install(INST_JOB_FAILED, 0) == 1);
     CHECK(strcmp(inst_job_phase_str(INST_JOB_SERVING), "serving") == 0);
     CHECK(strcmp(inst_job_phase_str(INST_JOB_ACCEPTED), "accepted") == 0);
     CHECK(strcmp(inst_job_phase_str(INST_JOB_DONE), "done") == 0);

@@ -528,6 +528,12 @@ async fn run_install(state: PkgInstallStateHandle, job: String, req: InstallRequ
     }
 
     if !accepted {
+        // Sony (or the daemon) refused the start, so the console never pulled
+        // from the serving session: release it, or a retry of the same package
+        // is refused as "already running".
+        if let Some(sid) = &session_id {
+            crate::pkg_install::release_serve_session(&state.sessions, sid);
+        }
         state.jobs.update(&job, |s| {
             s.phase = Phase::Failed;
             s.verdict = Some(Verdict::Failed);

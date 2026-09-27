@@ -17,10 +17,12 @@ typedef enum {
 /* "serving" | "accepted" | "done" | "failed" | "none". */
 const char *inst_job_phase_str(inst_job_phase_t phase);
 
-/* Admission for a new install given the active job's phase. Returns 1 to
- * admit, 0 to reject as busy. Only a SERVING loopback job blocks; an
- * ACCEPTED url job never does (its bytes are the engine pkg-host's). */
-int inst_admit_install(inst_job_phase_t active_phase);
+/* Admission for a new install given the active job's phase and whether its
+ * loopback file has been fully served. Returns 1 to admit, 0 to reject as
+ * busy. Only a SERVING loopback job that Sony has not finished reading
+ * blocks; an ACCEPTED url job never does (its bytes are the engine
+ * pkg-host's). A fully-read serving job is retired by the caller. */
+int inst_admit_install(inst_job_phase_t active_phase, int active_complete);
 
 #define INST_COVERAGE_MAX 256
 

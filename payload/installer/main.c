@@ -135,11 +135,28 @@ static int do_install(const inst_request_t *req, char *out, size_t cap) {
     inst_job_phase_t active = g_d.active_phase;
     char busy_id[INST_JOBID_MAX];
     snprintf(busy_id, sizeof(busy_id), "%s", g_d.active_id);
-    pthread_mutex_unlock(&g_d.state_lock);
-    if (!inst_admit_install(active)) {
+    int active_complete = 0;
+    if (g_d.active_lb && active == INST_JOB_SERVING) {
+        uint64_t tot = inst_loopback_total(g_d.active_lb);
+        active_complete = (tot == 0) || (inst_loopback_bytes_served(g_d.active_lb) >= tot);
+    }
+    if (!inst_admit_install(active, active_complete)) {
+        pthread_mutex_unlock(&g_d.state_lock);
         pthread_mutex_unlock(&g_d.sony_lock);
         return inst_reply_err_busy(out, cap, busy_id);
     }
+    /* Sony has read every byte of the previous loopback job: retire it now
+     * (instead of after its idle window) so this install can start its own. */
+    inst_loopback_t *retire = NULL;
+    if (active == INST_JOB_SERVING && active_complete) {
+        uint64_t tot = inst_loopback_total(g_d.active_lb);
+        inst_ring_put(&g_d.ring, g_d.active_id, INST_JOB_DONE, 0, tot, tot);
+        retire = g_d.active_lb;
+        g_d.active_lb = NULL;
+        g_d.active_phase = INST_JOB_DONE;
+    }
+    pthread_mutex_unlock(&g_d.state_lock);
+    if (retire) inst_loopback_stop(retire);   /* join outside state_lock */
 
     char job_id[INST_JOBID_MAX];
     make_job_id(job_id, sizeof(job_id));

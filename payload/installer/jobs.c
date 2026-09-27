@@ -15,8 +15,11 @@ const char *inst_job_phase_str(inst_job_phase_t phase) {
     }
 }
 
-int inst_admit_install(inst_job_phase_t active_phase) {
-    return active_phase == INST_JOB_SERVING ? 0 : 1;
+int inst_admit_install(inst_job_phase_t active_phase, int active_complete) {
+    /* A serving job blocks only while Sony may still need its file. Once every
+     * byte has been served the caller retires it and admits the new install;
+     * otherwise a fully-read job blocked for its whole idle-retire window. */
+    return (active_phase == INST_JOB_SERVING && !active_complete) ? 0 : 1;
 }
 
 void inst_coverage_reset(inst_coverage_t *c) {
