@@ -124,7 +124,7 @@ export function ConnectionFormView(p: ConnectionFormProps) {
         <Input
           label={tr("conn_name", undefined, "Name")}
           value={v.name}
-          placeholder="NAS"
+          placeholder={tr("conn_name_placeholder", undefined, "NAS")}
           onChange={(e) => set({ name: e.target.value })}
         />
         <div className="grid grid-cols-[1fr_6rem] gap-2">
@@ -150,7 +150,7 @@ export function ConnectionFormView(p: ConnectionFormProps) {
               label={tr("conn_share", undefined, "Share")}
               value={v.share}
               list="conn-shares"
-              placeholder="games"
+              placeholder={tr("conn_share_placeholder", undefined, "games")}
               onChange={(e) => set({ share: e.target.value })}
               rightSlot={
                 <button
