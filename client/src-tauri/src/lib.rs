@@ -310,7 +310,6 @@ pub fn run() {
             commands::pkg_remote_download_status,
             commands::pkg_remote_download_cancel,
             commands::pkg_remote_probe,
-            commands::pkg_install_status,
             commands::pkg_install,
             commands::pkg_install_status_v2,
             commands::pkg_install_history,

@@ -134,7 +134,7 @@ LIBS := -lSceSystemService -lSceUserService -lSceIpmi -lSceAppInstUtil \
 
 SRCS := src/main.c src/runtime.c src/shell_builtin.c src/takeover.c src/register.c src/hw_info.c \
         src/drive_sensors.c \
-        src/proc_list.c src/ptrace_remote.c src/shellui_rpc.c src/bgft.c \
+        src/proc_list.c src/ptrace_remote.c src/shellui_rpc.c \
         src/sony_api_lock.c src/kernel_rw_lock.c src/sys_time.c \
         src/sys_registry.c src/smp_meta.c src/profile.c \
         src/backup.c src/remoteplay.c src/fan_curve.c src/notif.c \

@@ -2594,17 +2594,6 @@ pub async fn pkg_remote_probe(url: String) -> Result<JsonValue, String> {
     let endpoint = format!("{}/api/pkg/remote/probe", engine::url());
     post_json(&endpoint, &serde_json::json!({ "url": url })).await
 }
-/// Poll an in-flight install for status. Cheap; called every 1-2s.
-#[tauri::command]
-pub async fn pkg_install_status(session: String) -> Result<JsonValue, String> {
-    let url = format!(
-        "{}/api/pkg/install/status?session={}",
-        engine::url(),
-        urlencoding(&session)
-    );
-    get_json(&url).await
-}
-
 /// Unified install (spec 2): start an install through the one engine
 /// endpoint. `req` is the full InstallRequest object (ps5_addr, source,
 /// content_id, title_id, package_app_ver, category, options).

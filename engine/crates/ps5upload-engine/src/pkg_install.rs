@@ -1536,25 +1536,15 @@ pub struct InstallStartResponse {
     pub register_path: String,
     pub intdebug_avail: bool,
     pub kernel_rw: bool,
-    /// Per-tier err codes — null when tier wasn't attempted, 0 when
-    /// it completed cleanly, otherwise the tier's err_code. Lets the
-    /// host UI distinguish "Tier 1 silently bailed out" from "Tier 1
-    /// reached Sony, who returned X". See `PkgInstallResponse`.
+    /// Legacy per-tier err codes from the retired in-process cascade. The
+    /// serve-only start never sets them; kept for response-shape stability.
     pub shellui_err: Option<u32>,
     pub appinst_err: Option<u32>,
-    /// Which install tier accepted this task — derived from the task_id
-    /// bits set by the payload's bgft.c. Surfaced to the desktop's
-    /// "Why?" diagnostic disclosure so the user (and us, during
-    /// bug reports) sees whether the in-process appinst path took it,
-    /// the SceShellUI RPC fallback did, or the legacy direct-BGFT
-    /// path. See `ps5upload_core::pkg_install::via_tier`.
+    /// Always "serve-only": the unified orchestrator hands the session URL
+    /// to the installer daemon.
     pub via: String,
-    /// True when the install was accepted via the unlaunchable last-resort
-    /// path (`register_path == "appinst-local"`). The title installs but may
-    /// fail to start ("can't start the game or app") on some firmwares —
-    /// notably FW 12.xx. The UI shows a warning and points the user at the
-    /// PS5's Settings → Package Installer to re-install if it won't boot.
-    /// See `ps5upload_core::pkg_install::install_may_not_launch`.
+    /// Always false for a serve-only start; the launch caution now comes
+    /// from the unified install status's `may_not_launch` verdict.
     pub may_not_launch: bool,
     /// The package_type the install actually ran with, AFTER the engine's
     /// staged-pkg category parse (so a "…DP" here means "this was treated as a

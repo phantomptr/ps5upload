@@ -799,11 +799,6 @@ export async function browserInvoke<T>(
           `&package_fingerprint=${uenc((args["packageFingerprint"] as string) ?? "")}`,
       );
 
-    case "pkg_install_status":
-      return getJson<T>(
-        `/api/pkg/install/status?session=${uenc(args["session"] as string)}`,
-      );
-
     // Unified install (spec 2): one endpoint, per-job status, per-console history.
     case "pkg_install":
       return postJson<T>("/api/pkg/install", args["req"]);
