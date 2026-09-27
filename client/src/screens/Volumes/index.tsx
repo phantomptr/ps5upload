@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { HardDrive, FileArchive, Unplug, RefreshCw } from "lucide-react";
+import { HardDrive, FileArchive, Unplug, RefreshCw, PackageCheck } from "lucide-react";
 
 import { useConnectionStore } from "../../state/connection";
 import { fetchVolumes, fsUnmount, type Volume } from "../../api/ps5";
@@ -16,8 +16,9 @@ import { useConfirm } from "../../components/ConfirmDialog";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { useTr } from "../../state/lang";
 import { formatStorageBytes } from "../../lib/format";
-import { transferAddr } from "../../lib/addr";
+import { hostOf, transferAddr } from "../../lib/addr";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
+import { isInternalVolume, usePkgStorageStore } from "../../lib/pkgStorage";
 
 /** Path prefix for volumes our FS_MOUNT creates. Showing an Unmount
  *  button only for these keeps us from accidentally offering to
@@ -38,6 +39,9 @@ export default function VolumesScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unmountingPath, setUnmountingPath] = useState<string | null>(null);
+  // This console's default drive for install packages (null = internal).
+  const packageDrive = usePkgStorageStore((s) => (host ? s.defaults[hostOf(host)] ?? null : null));
+  const setPackageDrive = usePkgStorageStore((s) => s.setDefault);
   // Native window.confirm() is a no-op in Tauri's webview; use the
   // in-tree modal instead (see ConfirmDialog.tsx).
   const { confirm: confirmDialog, dialog: confirmDialogNode } = useConfirm();
@@ -237,9 +241,23 @@ export default function VolumesScreen() {
             </header>
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               {storageDrives.map((v) => (
-                <StorageCard key={v.path} volume={v} />
+                <StorageCard
+                  key={v.path}
+                  volume={v}
+                  packageDrive={packageDrive}
+                  onUseForPackages={() =>
+                    host && setPackageDrive(host, isInternalVolume(v.path) ? null : v.path)
+                  }
+                />
               ))}
             </div>
+            <p className="mt-3 text-xs text-[var(--color-muted)]">
+              {tr(
+                "volumes_packages_hint",
+                undefined,
+                "Uploaded install packages are kept on the drive marked “Packages go here”. If that drive isn't connected, they go to internal storage.",
+              )}
+            </p>
           </section>
         )}
       </ConnectionGate>
@@ -350,9 +368,23 @@ function MountedImageCard({
 }
 
 /** Permanent storage drive. No unmount action — these are
- *  internal/USB drives the user shouldn't be unmounting from here. */
-function StorageCard({ volume: v }: { volume: Volume }) {
+ *  internal/USB drives the user shouldn't be unmounting from here. The one
+ *  install packages are uploaded to is marked, and any other writable drive
+ *  can be made that drive. */
+export function StorageCard({
+  volume: v,
+  packageDrive,
+  onUseForPackages,
+}: {
+  volume: Volume;
+  /** This console's chosen package drive; null = internal storage. */
+  packageDrive: string | null;
+  onUseForPackages: () => void;
+}) {
   const tr = useTr();
+  const isPackageDrive = isInternalVolume(v.path)
+    ? isInternalVolume(packageDrive)
+    : packageDrive === v.path.replace(/\/+$/, "");
   const uploadSafeBytes = v.allocatable_bytes;
   const pct =
     v.total_bytes > 0
@@ -373,6 +405,12 @@ function StorageCard({ volume: v }: { volume: Volume }) {
         {!v.writable && (
           <Badge tone="neutral" variant="soft" size="md">
             {tr("volumes_read_only", undefined, "read-only")}
+          </Badge>
+        )}
+        {v.writable && isPackageDrive && (
+          <Badge tone="accent" variant="soft" size="md">
+            <PackageCheck size={12} className="mr-1 inline" aria-hidden />
+            {tr("volumes_packages_here", undefined, "Packages go here")}
           </Badge>
         )}
       </div>
@@ -415,6 +453,13 @@ function StorageCard({ volume: v }: { volume: Volume }) {
               style={{ width: `${pct}%` }}
             />
           </div>
+        </div>
+      )}
+      {v.writable && !v.is_placeholder && !isPackageDrive && (
+        <div>
+          <Button variant="secondary" size="sm" onClick={onUseForPackages}>
+            {tr("volumes_use_for_packages", undefined, "Use for packages")}
+          </Button>
         </div>
       )}
     </article>

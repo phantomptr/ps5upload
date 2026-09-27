@@ -80,7 +80,8 @@ import { BrowseButton } from "../../components/BrowseButton";
 import { isRemotePath } from "../../lib/remotePath";
 import { useUploadSettingsStore } from "../../state/uploadSettings";
 import { useUploadQueueStore } from "../../state/uploadQueue";
-import { usePkgLibrary, PKG_LIBRARY_DIR } from "../../state/pkgLibrary";
+import { usePkgLibrary } from "../../state/pkgLibrary";
+import { pkgStorageFor } from "../../lib/pkgStorage";
 import {
   stagingBasename,
   stagingSubdirForCategory,
@@ -328,6 +329,13 @@ export default function UploadScreen() {
       ? excludes.filter((rule) => rule.enabled).map((rule) => rule.pattern)
       : [];
 
+  // Live list of writable PS5 volumes for the destination dropdown.
+  // Refreshed when the host changes; previously the dropdown was a
+  // hardcoded `/data /mnt/ext0 /mnt/usb0` list which hid every other
+  // mount point (e.g. `/mnt/ext1`, `/mnt/usbN` for N>0, and any
+  // ps5upload-mounted images).
+  const [availableVolumes, setAvailableVolumes] = useState<Volume[]>([]);
+
   /** Snapshot the current source + destination + options into a queue
    *  item. Captured at click time, so subsequent edits to the form
    *  don't bleed into the queued item. */
@@ -347,9 +355,28 @@ export default function UploadScreen() {
         Date.now(),
       );
       const subdir = stagingSubdirForCategory(pkgInfo?.category ?? null);
+      // The console's default package drive (Volumes screen), or internal
+      // storage when that drive is not connected.
+      const storage = pkgStorageFor(
+        host,
+        availableVolumes.length > 0 ? availableVolumes : null,
+      );
+      if (storage.fellBack) {
+        pushNotification(
+          "info",
+          tr("pkg_storage_fallback_title", undefined, "Using internal storage"),
+          {
+            body: tr(
+              "pkg_storage_fallback_body",
+              { drive: storage.chosen ?? "" },
+              "The default package drive ({drive}) isn't available, so this package goes to internal storage.",
+            ),
+          },
+        );
+      }
       const dest = subdir
-        ? `${PKG_LIBRARY_DIR}/${subdir}/${basename}`
-        : `${PKG_LIBRARY_DIR}/${basename}`;
+        ? `${storage.dir}/${subdir}/${basename}`
+        : `${storage.dir}/${basename}`;
       const settings = useInstallSettingsStore.getState();
       const displayName =
         pkgInfo?.title?.trim() ||
@@ -467,12 +494,6 @@ export default function UploadScreen() {
   // around after the user picks a fresh source — misleading.
   const [preflightError, setPreflightError] = useState<string | null>(null);
 
-  // Live list of writable PS5 volumes for the destination dropdown.
-  // Refreshed when the host changes; previously the dropdown was a
-  // hardcoded `/data /mnt/ext0 /mnt/usb0` list which hid every other
-  // mount point (e.g. `/mnt/ext1`, `/mnt/usbN` for N>0, and any
-  // ps5upload-mounted images).
-  const [availableVolumes, setAvailableVolumes] = useState<Volume[]>([]);
   // Clear preflight error whenever the source changes (new file/folder
   // pick, or source cleared). The error is tied to the OLD source's
   // destination probe and would otherwise stick around as a misleading

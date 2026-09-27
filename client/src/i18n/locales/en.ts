@@ -3246,6 +3246,12 @@ upload_split_unsupported_title: "This is a split archive ({count} volumes) that 
 upload_split_unsupported_body: "Uploading it sends the raw volume to your PS5, which can't use it. Join the volumes back into one archive first — open the first volume with 7-Zip or WinRAR and extract, then upload the extracted folder or a single archive of it.",
 upload_split_unsupported_target: "Joins into: {name}",
 volumes_upload_safe_capacity: "{safe} safe for new uploads · {reserve} kept as system/filesystem headroom",
+"volumes_use_for_packages": "Use for packages",
+"volumes_packages_here": "Packages go here",
+"volumes_packages_hint": "Uploaded install packages are kept on the drive marked “Packages go here”. If that drive isn't connected, they go to internal storage.",
+"pkg_storage_fallback_title": "Using internal storage",
+"pkg_storage_fallback_body": "The default package drive ({drive}) isn't available, so this package goes to internal storage.",
+"pkglib.meta.drive": "on {drive}",
 
 library_mount_modal_rw_title: "Read-write — you can edit this image",
 library_mount_modal_rw_body: "Mounted this way you can replace files, add DLC, or apply a backport patch — use the File Browser to edit the mount. Changes are written straight into the image file: a bad edit can leave the game unbootable and there is no undo, so copy the image first if it matters. The PS5 may also write save data into a mounted image on its own.",

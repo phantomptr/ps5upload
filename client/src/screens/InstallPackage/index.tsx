@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { volumeOfPkgPath } from "../../lib/pkgStorage";
 import { useLocation, useNavigate } from "react-router";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -255,6 +256,16 @@ function PkgRow({
               {entry.contentId || entry.name}
               <span className="px-1 opacity-60">·</span>
               <span className="tabular-nums">{formatBytes(entry.size)}</span>
+              {volumeOfPkgPath(entry.path) && (
+                <>
+                  <span className="px-1 opacity-60">·</span>
+                  {tr(
+                    "pkglib.meta.drive",
+                    { drive: volumeOfPkgPath(entry.path) ?? "" },
+                    "on {drive}",
+                  )}
+                </>
+              )}
             </div>
             {/* Upload provenance. Computer-side details remain in this app's
                 local cache; older/other-computer rows still show the PS5 path

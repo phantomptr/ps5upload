@@ -34,13 +34,18 @@ vi.mock("../api/ps5", () => ({
   // terminal phase. Individual install tests set these per-case.
   pkgInstall: vi.fn(async () => ({ ok: true, job: "job1" })),
   pkgInstallStatus: vi.fn(async () => ({ phase: "done", verdict: "installed" })),
+  // Package drives; tests that care set the list.
+  listVolumes: vi.fn(async () => []),
 }));
 // No active transfer in tests → installs proceed immediately.
 vi.mock("../lib/ps5Transfers", () => ({ transferScreenBusy: () => false }));
 
 import { invoke } from "@tauri-apps/api/core";
 import { useInstallSettingsStore } from "./installSettings";
+import { usePkgStorageStore } from "../lib/pkgStorage";
 import {
+  listVolumes,
+  fsMkdir,
   fsDelete,
   fsListDir,
   fsCopy,
@@ -1893,5 +1898,78 @@ describe("uploadInstall (Convert's Upload & install)", () => {
       .uploadInstall(localPath, host);
     expect(r).toMatchObject({ ok: false });
     expect(r.message).toMatch(/bad magic/);
+  });
+});
+
+
+describe("package storage drive", () => {
+  const host = "192.168.55.7";
+  const drive = (path: string) => ({
+    path,
+    fs_type: "exfatfs",
+    total_bytes: 500e9,
+    free_bytes: 400e9,
+    writable: true,
+  });
+  const head = {
+    parts: ["/tmp/UP0000-CUSA33334_00-TEST000000000000.pkg"],
+    total_size: 8_192,
+    head: { content_id: "UP0000-CUSA33334_00-TEST000000000000", title: "Test", category: "gd" },
+  };
+
+  afterEach(() => {
+    vi.mocked(invoke).mockReset();
+    vi.mocked(listVolumes).mockReset().mockResolvedValue([]);
+    vi.mocked(fsListDir).mockReset().mockResolvedValue([]);
+    vi.mocked(fsMkdir).mockClear();
+    usePkgStorageStore.setState({ defaults: {} });
+    evictPkgLibraryStore(host);
+  });
+
+  it("lists packages staged on a USB drive alongside internal ones", async () => {
+    vi.mocked(listVolumes).mockResolvedValue([drive("/data"), drive("/mnt/usb0")] as never);
+    vi.mocked(fsListDir).mockImplementation(async (_addr: string, dir: string) =>
+      (dir === "/mnt/usb0/ps5upload/pkg_library"
+        ? [{ name: "UP0000-CUSA33334_00-TEST000000000000.pkg", kind: "file", size: 100 }]
+        : []) as never,
+    );
+    await pkgLibraryStore(host).getState().refresh(host);
+    expect(pkgLibraryStore(host).getState().entries.map((e) => e.path)).toEqual([
+      "/mnt/usb0/ps5upload/pkg_library/UP0000-CUSA33334_00-TEST000000000000.pkg",
+    ]);
+  });
+
+  it("uploads to the console's default package drive", async () => {
+    usePkgStorageStore.getState().setDefault(host, "/mnt/usb0");
+    vi.mocked(listVolumes).mockResolvedValue([drive("/data"), drive("/mnt/usb0")] as never);
+    let dest = "";
+    vi.mocked(invoke).mockImplementation(async (command: unknown, args?: unknown) => {
+      if (command === "pkg_metadata_split") return head;
+      if (command === "transfer_file") {
+        dest = (args as { req: { dest: string } }).req.dest;
+        throw new Error("stop here");
+      }
+      return {};
+    });
+    await pkgLibraryStore(host).getState().addAndUpload(head.parts[0], host);
+    expect(dest.startsWith("/mnt/usb0/ps5upload/pkg_library/")).toBe(true);
+    expect(vi.mocked(fsMkdir).mock.calls.map((c) => c[1])).toContain("/mnt/usb0/ps5upload");
+  });
+
+  it("falls back to internal storage when the default drive is not there", async () => {
+    usePkgStorageStore.getState().setDefault(host, "/mnt/usb0");
+    vi.mocked(listVolumes).mockResolvedValue([drive("/data")] as never);
+    let dest = "";
+    vi.mocked(invoke).mockImplementation(async (command: unknown, args?: unknown) => {
+      if (command === "pkg_metadata_split") return head;
+      if (command === "transfer_file") {
+        dest = (args as { req: { dest: string } }).req.dest;
+        throw new Error("stop here");
+      }
+      return {};
+    });
+    await pkgLibraryStore(host).getState().addAndUpload(head.parts[0], host);
+    expect(dest.startsWith("/user/data/ps5upload/pkg_library/")).toBe(true);
+    expect(pkgLibraryStore(host).getState().busyNotice ?? "").toMatch(/internal storage/);
   });
 });

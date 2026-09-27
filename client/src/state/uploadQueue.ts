@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+import { pkgMkdirChain } from "../lib/pkgStorage";
+
 import {
   fsMount,
   fsDelete,
@@ -456,10 +458,12 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
     // finisher. Make sure the staging dir exists first — the single-file
     // transfer's open() fails ENOENT on a missing parent. EEXIST-tolerant.
     if (item.sourceKind === "pkg") {
+      // mkdir is one level at a time; a package on another drive or in an
+      // update/DLC sub-folder needs every level from <drive>/ps5upload down.
       const parent = item.resolvedDest.replace(/\/[^/]*$/, "");
-      if (parent) {
+      for (const dir of parent ? pkgMkdirChain(parent) : []) {
         try {
-          await fsMkdir(item.addr, parent);
+          await fsMkdir(item.addr, dir);
         } catch {
           /* dir already exists (or will fail loudly at open) */
         }

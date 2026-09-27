@@ -3186,6 +3186,12 @@ upload_split_unsupported_title: "Ez egy darabolt archívum ({count} kötet), ame
 upload_split_unsupported_body: "A feltöltés a nyers kötetet küldi el a PS5-ödnek, amelyet az nem tud használni. Egyesítsd előbb a köteteket egyetlen archívummá — nyisd meg az első kötetet 7-Zip-pel vagy WinRAR-ral és bontsd ki, majd töltsd fel a kibontott mappát vagy annak egyetlen archívumát.",
 upload_split_unsupported_target: "Egyesítve ebbe: {name}",
 volumes_upload_safe_capacity: "{safe} biztonságosan használható új feltöltésekhez · {reserve} rendszer/fájlrendszer tartalékként megtartva",
+"volumes_use_for_packages": "Használat csomagokhoz",
+"volumes_packages_here": "Ide kerülnek a csomagok",
+"volumes_packages_hint": "A feltöltött telepítőcsomagok az „Ide kerülnek a csomagok” jelölésű meghajtóra kerülnek. Ha az nincs csatlakoztatva, a belső tárhelyre.",
+"pkg_storage_fallback_title": "Belső tárhely használata",
+"pkg_storage_fallback_body": "Az alapértelmezett csomagmeghajtó ({drive}) nem érhető el, ezért ez a csomag a belső tárhelyre kerül.",
+"pkglib.meta.drive": "itt: {drive}",
 
 library_mount_modal_rw_title: "Írható-olvasható — szerkesztheted ezt a képet",
 library_mount_modal_rw_body: "Ilyen csatolással lecserélhetsz fájlokat, hozzáadhatsz DLC-t, vagy alkalmazhatsz backport patch-et — használd a Fájlböngészőt a csatolás szerkesztéséhez. A módosítások közvetlenül a képfájlba íródnak: egy rossz szerkesztés indíthatatlanná teheti a játékot, és nincs visszavonás, ezért másold előbb a képet, ha számít. A PS5 magától is írhat mentési adatot egy csatolt képbe.",

@@ -848,6 +848,36 @@ describe("upload runner — a rejected PKG install must not re-upload", () => {
     vi.useRealTimers();
   });
 
+  it("creates every folder down to a package staged on a USB drive", async () => {
+    const { fsMkdir } = await import("../api/ps5");
+    vi.mocked(fsMkdir).mockClear();
+    useUploadQueueStore.getState().add({
+      sourceKind: "pkg",
+      sourcePath: "/src/Update.pkg",
+      displayName: "Update.pkg",
+      resolvedDest: "/mnt/usb0/ps5upload/pkg_library/updates/abc/Update.pkg",
+      addr: ADDR,
+      strategy: "overwrite",
+      reconcileMode: "fast",
+      excludes: [],
+      mountAfterUpload: false,
+      mountReadOnly: false,
+      registerAfterUpload: false,
+      installAfterUpload: false,
+      deletePkgAfterInstall: false,
+      contentId: "UP0000-CUSA00001_00-GAME000000000000",
+    });
+    const run = useUploadQueueStore.getState().start();
+    await vi.advanceTimersByTimeAsync(120_000);
+    await run;
+    expect(vi.mocked(fsMkdir).mock.calls.map((c) => c[1])).toEqual([
+      "/mnt/usb0/ps5upload",
+      "/mnt/usb0/ps5upload/pkg_library",
+      "/mnt/usb0/ps5upload/pkg_library/updates",
+      "/mnt/usb0/ps5upload/pkg_library/updates/abc",
+    ]);
+  });
+
   it("fails the row once, with exactly one transfer", async () => {
     useUploadQueueStore.getState().add({
       sourceKind: "pkg",

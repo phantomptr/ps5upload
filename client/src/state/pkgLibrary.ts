@@ -24,7 +24,12 @@ import {
   type InstallSource,
   type InstallStatus,
 } from "../api/ps5";
-import { processList, type ExternalPkg } from "../api/ps5";
+import {
+  listVolumes,
+  processList,
+  type ExternalPkg,
+  type Volume,
+} from "../api/ps5";
 import { formatBytes } from "../lib/format";
 import {
   computeRate,
@@ -42,6 +47,13 @@ import {
   isAddonCategory,
 } from "../lib/pkgStagingPath";
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
+import {
+  INTERNAL_PKG_DIR,
+  libraryDirs,
+  pkgMkdirChain,
+  resolvePkgStorage,
+  usePkgStorageStore,
+} from "../lib/pkgStorage";
 import { transferScreenBusy } from "../lib/ps5Transfers";
 import { useInstallSettingsStore } from "./installSettings";
 import { useConnectionStore } from "./connection";
@@ -79,7 +91,18 @@ import { parsePS5Firmware } from "../lib/ps5Firmware";
  * sweeps that on boot (`runtime_sweep_stale_pkg_temp`), which would wipe the
  * user's library. `pkg_library/` is left untouched.
  */
-export const PKG_LIBRARY_DIR = "/user/data/ps5upload/pkg_library";
+/** Internal-storage package library. Packages can live on another drive
+ *  instead (see lib/pkgStorage); this stays the default and the fallback. */
+export const PKG_LIBRARY_DIR = INTERNAL_PKG_DIR;
+
+/** The console's drives, or null when they cannot be read. */
+async function readVolumes(host: string): Promise<Volume[] | null> {
+  try {
+    return await listVolumes(transferAddr(host));
+  } catch {
+    return null;
+  }
+}
 
 /** Transient staging dir for install-from-USB: we copy a USB pkg here, install
  *  it, then delete the copy. The payload sweeps this on boot, so a leftover
@@ -2191,30 +2214,34 @@ const makePkgLibraryStore = () =>
         // is idempotent on the payload (EEXIST → success), so this is a no-op
         // once the library has been used.
         await fsMkdir(transferAddr(host), PKG_LIBRARY_DIR).catch(() => {});
-        // Base/unknown pkgs live at the library root; updates + DLC each get a
-        // sub-dir (see lib/pkgStagingPath). List the root once (strict — proves
-        // the console is reachable), then descend into `updates`/`dlc` ONLY when
-        // the root listing shows they exist (no speculative ENOENT probes).
-        const rootList = await listOne(PKG_LIBRARY_DIR, true);
-        addFrom(rootList, "", PKG_LIBRARY_DIR);
-        const presentDirs = new Set(
-          rootList.filter((e) => e.kind === "dir").map((e) => e.name),
-        );
-        for (const subdir of ["updates", "dlc"]) {
-          if (!presentDirs.has(subdir)) continue;
-          const dir = `${PKG_LIBRARY_DIR}/${subdir}`;
-          const categoryList = await listOne(dir, false);
-          // Legacy rows live directly in updates/ or dlc/. New rows keep the
-          // canonical `<ContentID>.pkg` basename one level deeper, under their
-          // exact package fingerprint, so same-version variants coexist.
-          addFrom(categoryList, subdir, dir);
-          for (const instance of categoryList.filter((e) => e.kind === "dir")) {
-            const instanceDir = `${dir}/${instance.name}`;
-            addFrom(
-              await listOne(instanceDir, false),
-              `${subdir}/${instance.name}`,
-              instanceDir,
-            );
+        // Internal storage plus the package folder on every other drive, so
+        // packages stay listed after the default drive changes. Base/unknown
+        // pkgs live at a library root; updates + DLC each get a sub-dir (see
+        // lib/pkgStagingPath). The internal root is listed strictly (it proves
+        // the console is reachable); a drive without a library is just empty.
+        const bases = libraryDirs(await readVolumes(host));
+        for (const [i, base] of bases.entries()) {
+          const rootList = await listOne(base, i === 0);
+          addFrom(rootList, "", base);
+          const presentDirs = new Set(
+            rootList.filter((e) => e.kind === "dir").map((e) => e.name),
+          );
+          for (const subdir of ["updates", "dlc"]) {
+            if (!presentDirs.has(subdir)) continue;
+            const dir = `${base}/${subdir}`;
+            const categoryList = await listOne(dir, false);
+            // Legacy rows live directly in updates/ or dlc/. New rows keep the
+            // canonical `<ContentID>.pkg` basename one level deeper, under their
+            // exact package fingerprint, so same-version variants coexist.
+            addFrom(categoryList, subdir, dir);
+            for (const instance of categoryList.filter((e) => e.kind === "dir")) {
+              const instanceDir = `${dir}/${instance.name}`;
+              addFrom(
+                await listOne(instanceDir, false),
+                `${subdir}/${instance.name}`,
+                instanceDir,
+              );
+            }
           }
         }
         set({ entries: mergeListing(get().entries, entries), loading: false });
@@ -2292,9 +2319,22 @@ const makePkgLibraryStore = () =>
           Date.now(),
         );
         const stagingDir = stagingDirectoryForPackage(category, fingerprint);
+        // The console's default package drive, or internal storage when it
+        // is not there right now.
+        const chosenDrive = usePkgStorageStore.getState().defaultFor(host);
+        const storage = resolvePkgStorage(chosenDrive, await readVolumes(host));
+        if (storage.fellBack) {
+          set({
+            busyNotice: trStatic(
+              "pkg_storage_fallback_body",
+              "The default package drive ({drive}) isn't available, so this package goes to internal storage.",
+            ).replace("{drive}", chosenDrive ?? ""),
+          });
+        }
+        const libraryDir = storage.dir;
         const destPath = stagingDir
-          ? `${PKG_LIBRARY_DIR}/${stagingDir}/${basename}`
-          : `${PKG_LIBRARY_DIR}/${basename}`;
+          ? `${libraryDir}/${stagingDir}/${basename}`
+          : `${libraryDir}/${basename}`;
         options?.onDest?.(destPath);
         // Remember the filename + version for this staged path so the row can show
         // them (survives refresh-from-disk and app restarts via localStorage).
@@ -2397,15 +2437,14 @@ const makePkgLibraryStore = () =>
           // Updates/DLC stage into a sub-dir; create it first (mkdir -p,
           // EEXIST-tolerant) so the single-file transfer's open() doesn't fail
           // with ENOENT on a parent that doesn't exist yet.
-          if (stagingDir) {
+          // mkdir is one level at a time: create every folder from the
+          // drive's ps5upload/ folder down to this package's folder (the
+          // category and fingerprint sub-dirs for an update or DLC).
+          const packageDir = destPath.replace(/\/[^/]*$/, "");
+          if (storage.volume || stagingDir) {
             try {
-              // mkdir is one-level only. Create the category parent first, then
-              // the fingerprint child used by the new multi-variant layout.
-              const parts = stagingDir.split("/");
-              let current = PKG_LIBRARY_DIR;
-              for (const part of parts) {
-                current = `${current}/${part}`;
-                await fsMkdir(transferAddr(host), current);
+              for (const dir of pkgMkdirChain(packageDir)) {
+                await fsMkdir(transferAddr(host), dir);
               }
             } catch (e) {
               patch({
@@ -2413,7 +2452,7 @@ const makePkgLibraryStore = () =>
                 bytes: undefined,
                 lastResult: {
                   ok: false,
-                  message: `Couldn't create the ${stagingDir} folder on the PS5: ${pkgError(e)}`,
+                  message: `Couldn't create the package folder on the PS5: ${pkgError(e)}`,
                 },
               });
               return;

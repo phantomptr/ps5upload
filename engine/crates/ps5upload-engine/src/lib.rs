@@ -4096,6 +4096,13 @@ fn external_pkg_header(head: &[u8]) -> (String, String, String) {
 /// directories visited, and packages returned so a multi-thousand-file game
 /// drive can't wedge the scan. Errors on individual dirs/files are skipped
 /// (best-effort) rather than failing the whole scan.
+/// A drive's top-level `ps5upload/` folder holds the package library staged
+/// there by the app; those packages are already in the library, so the
+/// external scan leaves them out instead of listing them twice.
+fn skip_in_external_scan(depth: u32, name: &str) -> bool {
+    depth == 0 && name.eq_ignore_ascii_case("ps5upload")
+}
+
 pub fn scan_external_pkgs(addr: &str) -> anyhow::Result<Vec<ExternalPkg>> {
     use ps5upload_core::fs_ops::{fs_read, list_dir, ListDirOptions};
     const MAX_DEPTH: u32 = 5;
@@ -4129,6 +4136,9 @@ pub fn scan_external_pkgs(addr: &str) -> anyhow::Result<Vec<ExternalPkg>> {
                 let lower = e.name.to_ascii_lowercase();
                 let is_package = lower.ends_with(".pkg") || lower.ends_with(".fpkg");
                 if e.kind == "dir" {
+                    if skip_in_external_scan(depth, &e.name) {
+                        continue;
+                    }
                     if depth + 1 < MAX_DEPTH {
                         stack.push((join(&dir, &e.name), depth + 1));
                     }
@@ -9353,6 +9363,22 @@ pub async fn serve_in_process(bind: &str, ps5_addr: String) -> anyhow::Result<()
         allow_ips: Vec::new(),
     })
     .await
+}
+
+#[cfg(test)]
+mod external_scan_tests {
+    use super::skip_in_external_scan;
+
+    #[test]
+    fn the_scan_skips_our_own_package_library_on_a_drive() {
+        // Packages staged on a USB/M.2 drive live in <drive>/ps5upload/; they
+        // are already in the library and must not show again as "external".
+        assert!(skip_in_external_scan(0, "ps5upload"));
+        assert!(skip_in_external_scan(0, "PS5Upload"));
+        // Only at the drive's top level: a user folder deeper down is scanned.
+        assert!(!skip_in_external_scan(1, "ps5upload"));
+        assert!(!skip_in_external_scan(0, "games"));
+    }
 }
 
 #[cfg(test)]
