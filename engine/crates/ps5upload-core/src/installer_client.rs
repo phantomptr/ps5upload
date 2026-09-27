@@ -14,7 +14,7 @@ use crate::payload_lifecycle::{
 };
 
 /// Must match the daemon's INST_VERSION in payload/installer/main.c.
-pub const INSTALLER_VERSION: &str = "1.0.0";
+pub const INSTALLER_VERSION: &str = "1.1.0";
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const SHORT_TIMEOUT: Duration = Duration::from_secs(5); // hello / job / stop
@@ -570,7 +570,14 @@ mod tests {
     #[test]
     fn ensure_already_listening_same_version_does_not_send() {
         use std::sync::atomic::Ordering;
-        let (ip, port, reqs, stop) = fake_multi("{\"ok\":true,\"version\":\"1.0.0\",\"fw\":\"9\",\"state\":\"ready\",\"init_rc\":0,\"escalated\":true}");
+        // The daemon answers with exactly the version this engine bundles.
+        let hello: &'static str = Box::leak(
+            format!(
+                "{{\"ok\":true,\"version\":\"{INSTALLER_VERSION}\",\"fw\":\"9\",\"state\":\"ready\",\"init_rc\":0,\"escalated\":true}}"
+            )
+            .into_boxed_str(),
+        );
+        let (ip, port, reqs, stop) = fake_multi(hello);
         let e = ensure_at(&ip, port, None, false);
         stop.store(true, Ordering::Relaxed);
         assert!(e.listening);
