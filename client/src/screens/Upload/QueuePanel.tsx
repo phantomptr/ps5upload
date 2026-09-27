@@ -466,8 +466,9 @@ function QueueRow({
   // the speed/eta render below. Gate on totalBytes > 0 so a row whose
   // stat is still pending (totalBytes === 0 on the first tick) doesn't
   // false-positive as finalized.
-  const isFinalizing =
-    isActive && item.totalBytes > 0 && item.bytesSent >= item.totalBytes;
+  const phase = rowPhase(item);
+  const isFinalizing = phase === "finalizing";
+  const isInstalling = phase === "installing";
   // Show ETA only when we have a real total + a real rate; otherwise
   // the readout would print "ETA Infinity" or "ETA 0s" right at the
   // start of a transfer where the smoother hasn't seen two samples yet.
@@ -687,6 +688,17 @@ function QueueRow({
                   )}
                 </>
               )}
+              {isInstalling && (
+                <>
+                  {" · "}
+                  <span className="rounded-full bg-[var(--color-accent)]/15 px-1.5 py-0.5 text-xs font-medium text-[var(--color-accent)]">
+                    {tr("pkglib.installing", "Installing…")}
+                    {typeof item.installPct === "number" && item.installPct > 0
+                      ? ` ${item.installPct}%`
+                      : ""}
+                  </span>
+                </>
+              )}
               {isFinalizing && (
                 <>
                   {" · "}
@@ -763,6 +775,22 @@ function QueueRow({
  *  power-user debugging. Falls back to plain raw-error rendering when
  *  no structured fields are present (engine-internal failures, older
  *  payloads). */
+/** What a live queue row is doing once its bytes are all sent: committing
+ *  the upload ("finalizing") or — for a pkg — installing it. Without the
+ *  install phase the row kept showing the upload's "committing the file
+ *  index… don't close the app" for the whole install. */
+export function rowPhase(item: {
+  status: string;
+  totalBytes: number;
+  bytesSent: number;
+  installPhase?: string | null;
+}): "installing" | "finalizing" | null {
+  if (item.status !== "running") return null;
+  if (item.installPhase === "installing") return "installing";
+  if (item.totalBytes > 0 && item.bytesSent >= item.totalBytes) return "finalizing";
+  return null;
+}
+
 /** A queue row's display name. For a pkg, the resolved/online title wins,
  *  then the finisher's installed title, then the file name. The finisher can
  *  store a raw content id as `installedTitle`, so preferring it made a row

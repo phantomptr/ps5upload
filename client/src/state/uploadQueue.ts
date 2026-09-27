@@ -160,6 +160,8 @@ export interface QueueItem {
   /** Pkg-only runtime state: the install phase after the upload commits.
    *  null until the finisher runs (or for non-pkg items). */
   installPhase?: "installing" | "done" | "warn" | "unverified" | "error" | null;
+  /** Pkg-only: live install progress (0-99) while installPhase is "installing". */
+  installPct?: number | null;
   /** Pkg-only: the installed title (or content id) the finisher resolved,
    *  shown on the done row. Null otherwise. */
   installedTitle?: string | null;
@@ -736,6 +738,10 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
           // payload) can't race them. Cleared in finally.
           const pkgStore = pkgLibraryStore(item.addr);
           pkgStore.setState({ installing: true });
+          // Tell the row it is installing now (not still committing the upload).
+          set((s) => ({
+            items: patchItem(s.items, item.id, { installPhase: "installing", installPct: 0 }),
+          }));
           try {
             // delete_staging = the per-item Auto Delete preference (captured
             // from the setting at queue-add time). When off, the engine keeps
@@ -760,6 +766,9 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
                   pkgStore.setState({
                     busyNotice: `Installing "${item.displayName}" on the PS5… ${pct}%`,
                   });
+                  set((s) => ({
+                    items: patchItem(s.items, item.id, { installPct: pct }),
+                  }));
                 }
               },
               // Readiness-gate status (pre-install wait / DPI transient retry).
