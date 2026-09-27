@@ -26,11 +26,26 @@ pub struct HistoryEntry {
     pub metrics: Metrics,
 }
 
-/// `<dir>/<sanitized-console-id>.jsonl`; the id is `ps5_addr` with every char
-/// outside `[A-Za-z0-9._-]` replaced by `_`.
-pub fn console_file(dir: &Path, ps5_addr: &str) -> PathBuf {
-    let id: String = ps5_addr
-        .chars()
+/// The console's identity for history: its host, without a port. Installs
+/// arrive as `ip:9114` but readers (the bug bundle, the UI) pass the bare
+/// host, so keying by the full address made every bare-host read empty.
+fn host_key(ps5_addr: &str) -> &str {
+    let a = ps5_addr.trim();
+    if let Some(rest) = a.strip_prefix('[') {
+        // [v6]:port or [v6]
+        return rest.split(']').next().unwrap_or(rest);
+    }
+    match a.rsplit_once(':') {
+        // exactly one colon and a numeric tail → host:port
+        Some((host, port)) if !host.contains(':') && port.chars().all(|c| c.is_ascii_digit()) => {
+            host
+        }
+        _ => a,
+    }
+}
+
+fn sanitize(id: &str) -> String {
+    id.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
                 c
@@ -38,8 +53,26 @@ pub fn console_file(dir: &Path, ps5_addr: &str) -> PathBuf {
                 '_'
             }
         })
+        .collect()
+}
+
+/// `<dir>/<sanitized-host>.jsonl` — every char outside `[A-Za-z0-9._-]`
+/// becomes `_`.
+pub fn console_file(dir: &Path, ps5_addr: &str) -> PathBuf {
+    dir.join(format!("{}.jsonl", sanitize(host_key(ps5_addr))))
+}
+
+fn parse_lines(path: &Path) -> Vec<HistoryEntry> {
+    let Ok(content) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut out: Vec<HistoryEntry> = content
+        .lines()
+        .filter(|l| !l.is_empty())
+        .filter_map(|l| serde_json::from_str::<HistoryEntry>(l).ok())
         .collect();
-    dir.join(format!("{id}.jsonl"))
+    out.reverse(); // newest first within a file
+    out
 }
 
 /// Append one entry as a JSON line, then truncate the file to the newest
@@ -76,18 +109,28 @@ pub fn append(dir: &Path, ps5_addr: &str, entry: &HistoryEntry, cap: usize) -> s
 }
 
 /// Newest first, up to `limit`. A missing file or a corrupt line yields no
-/// entry rather than an error; a corrupt line is skipped, never fatal.
+/// entry rather than an error; a corrupt line is skipped, never fatal. Also
+/// merges legacy `<host>_<port>.jsonl` files written before history was keyed
+/// by host alone.
 pub fn read_recent(dir: &Path, ps5_addr: &str, limit: usize) -> Vec<HistoryEntry> {
-    let path = console_file(dir, ps5_addr);
-    let Ok(content) = fs::read_to_string(&path) else {
-        return Vec::new();
-    };
-    let mut out: Vec<HistoryEntry> = content
-        .lines()
-        .filter(|l| !l.is_empty())
-        .filter_map(|l| serde_json::from_str::<HistoryEntry>(l).ok())
-        .collect();
-    out.reverse(); // newest first
+    let host = sanitize(host_key(ps5_addr));
+    let mut out = parse_lines(&dir.join(format!("{host}.jsonl")));
+    if let Ok(rd) = fs::read_dir(dir) {
+        let prefix = format!("{host}_");
+        for e in rd.flatten() {
+            let name = e.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let legacy = name
+                .strip_prefix(&prefix)
+                .and_then(|r| r.strip_suffix(".jsonl"))
+                .is_some_and(|port| !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()));
+            if legacy {
+                out.extend(parse_lines(&e.path()));
+            }
+        }
+    }
+    // Stable: equal timestamps keep newest-first file order.
+    out.sort_by_key(|e| std::cmp::Reverse(e.at));
     out.truncate(limit);
     out
 }
@@ -135,12 +178,49 @@ mod tests {
     }
 
     #[test]
-    fn console_id_is_filesystem_safe() {
+    fn console_file_is_keyed_by_host_and_filesystem_safe() {
         let dir = std::path::Path::new("/tmp");
-        let p = console_file(dir, "192.168.0.100:9114");
+        // The port is not part of the console's identity: installs arrive as
+        // "ip:9114" while readers (bug bundle, UI) pass the bare host.
+        for addr in ["192.168.0.100:9114", "192.168.0.100", "192.168.0.100:9113"] {
+            let p = console_file(dir, addr);
+            assert_eq!(
+                p.file_name().unwrap().to_str().unwrap(),
+                "192.168.0.100.jsonl"
+            );
+        }
+    }
+
+    #[test]
+    fn written_with_a_port_is_read_by_bare_host() {
+        // Measured on the Phat: history was written under ..._9114.jsonl and
+        // the bare-host read (the bug bundle's) always came back empty.
+        let d = TmpDir::new();
+        append(d.path(), "192.168.86.99:9114", &entry("a"), HISTORY_CAP).unwrap();
+        let got = read_recent(d.path(), "192.168.86.99", 10);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].job, "a");
+    }
+
+    #[test]
+    fn a_legacy_host_port_file_is_still_read() {
+        // Files already on disk from before the fix keep showing up, merged
+        // newest-first with the new host-keyed file.
+        let d = TmpDir::new();
+        let mut old = entry("old");
+        old.at = 1_790_000_000;
+        std::fs::write(
+            d.path().join("192.168.86.99_9114.jsonl"),
+            format!("{}\n", serde_json::to_string(&old).unwrap()),
+        )
+        .unwrap();
+        let mut new = entry("new");
+        new.at = 1_790_000_100;
+        append(d.path(), "192.168.86.99:9114", &new, HISTORY_CAP).unwrap();
+        let got = read_recent(d.path(), "192.168.86.99", 10);
         assert_eq!(
-            p.file_name().unwrap().to_str().unwrap(),
-            "192.168.0.100_9114.jsonl"
+            got.iter().map(|e| e.job.as_str()).collect::<Vec<_>>(),
+            ["new", "old"]
         );
     }
 

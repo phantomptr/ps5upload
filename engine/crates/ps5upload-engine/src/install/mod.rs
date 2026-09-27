@@ -176,6 +176,33 @@ pub fn verdict_no_identity(accepted: bool) -> Verdict {
     }
 }
 
+/// Sony's HTTP-proxy rejection of the install URL.
+const SCE_HTTP_ERROR_PROXY: u32 = 0x8043_1084;
+
+/// Guidance for a stream install the console never fetched a byte of. With
+/// no proxy error this is the console failing to reach this computer at all
+/// (usually a firewall), so saying "the PS5 declined the install" sends the
+/// user looking in the wrong place.
+pub fn stream_unreachable_hint(served_from: Option<&str>, code: u32) -> String {
+    let rc = format!("0x{code:08x}");
+    if code == SCE_HTTP_ERROR_PROXY {
+        return format!(
+            "The PS5's proxy setting blocked the stream ({rc}). In the PS5's network Advanced Settings set Proxy Server to \u{201c}Do Not Use\u{201d}, or use Upload & install, which reads the package from PS5-local storage."
+        );
+    }
+    let at = served_from.map(|o| format!(" at {o}")).unwrap_or_default();
+    format!(
+        "The PS5 never reached this computer{at} to fetch the package ({rc}). Allow ps5upload through this computer's firewall (on Windows, for both Private and Public networks), keep the computer and the PS5 on the same network with any VPN off, and set the PS5's Proxy Server to \u{201c}Do Not Use\u{201d}. Upload & install works without this connection."
+    )
+}
+
+/// `http://host:port` of a URL, for naming where the console was sent.
+fn origin_of(url: &str) -> Option<String> {
+    let rest = url.split_once("://")?;
+    let host = rest.1.split('/').next()?;
+    (!host.is_empty()).then(|| format!("{}://{host}", rest.0))
+}
+
 /// The version to check after install, or `None` when the "did the installed
 /// APP_VER rise?" check does not apply. Only a patch (`…DP` / `gp`) bumps an
 /// installed title's version; a base game or DLC carries its own `APP_VER`,
@@ -442,6 +469,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, req: InstallRequ
     // build the install call per source.
     let hint_name = name_hint(title_id.as_deref());
     state.jobs.update(&job, |s| s.phase = Phase::Install);
+    let mut served_from: Option<String> = None;
     let (reply, session_id, shortened): (Result<ic::InstallReply, String>, Option<String>, bool) =
         match &req.source {
             Source::ConsolePath(path) => {
@@ -477,6 +505,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, req: InstallRequ
             Source::HostFile(_) | Source::Remote { .. } => {
                 match create_serve_session(&state, &req).await {
                     Ok((sid, url)) => {
+                        served_from = origin_of(&url);
                         let (i, u, h) = (ip.clone(), url, hint_name.clone());
                         let r = tokio::task::spawn_blocking(move || ic::install_url(&i, &u, &h))
                             .await
@@ -546,6 +575,17 @@ async fn run_install(state: PkgInstallStateHandle, job: String, req: InstallRequ
         // Sony (or the daemon) refused the start, so the console never pulled
         // from the serving session: release it, or a retry of the same package
         // is refused as "already running".
+        // A Sony error on a stream the console never fetched from means it
+        // could not reach this computer (or its proxy blocked it) — say so.
+        let never_fetched = session_id.as_ref().is_some_and(|sid| {
+            let s = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            s.get(sid).is_some_and(|x| x.bytes_served == 0)
+        });
+        let hint = if never_fetched && code != 0 {
+            Some(stream_unreachable_hint(served_from.as_deref(), code))
+        } else {
+            hint
+        };
         if let Some(sid) = &session_id {
             crate::pkg_install::release_serve_session(&state.sessions, sid);
         }
@@ -794,6 +834,29 @@ fn finalize(
 mod tests {
     use super::*;
     use crate::install::deliver::{decide_delivery, Delivery, Source};
+
+    // ── a stream the console never fetched from: say why, not "declined" ──
+
+    #[test]
+    fn unreachable_stream_names_the_address_and_the_firewall() {
+        // Measured on the Phat: a firewall-blocked engine gave 0x80431064 with
+        // 0 bytes served, and the UI said only "The PS5 declined the install."
+        let h = stream_unreachable_hint(Some("http://192.168.86.199:19200"), 0x80431064);
+        assert!(
+            h.contains("never reached this computer at http://192.168.86.199:19200"),
+            "{h}"
+        );
+        assert!(h.contains("0x80431064"), "{h}");
+        assert!(h.contains("firewall"), "{h}");
+        assert!(h.contains("Upload & install"), "{h}");
+    }
+
+    #[test]
+    fn a_proxy_reject_gets_the_proxy_guidance() {
+        let h = stream_unreachable_hint(None, 0x80431084);
+        assert!(h.contains("proxy"), "{h}");
+        assert!(h.contains("Do Not Use"), "{h}");
+    }
 
     // ── the "did the version rise?" check is for patches only ──
 
