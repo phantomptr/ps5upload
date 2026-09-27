@@ -843,6 +843,9 @@ export interface PkgUploadOptions {
   /** Treat this exact variant as an explicit choice even when an alternative
    * with the same title/version is already staged. */
   selectVariant?: boolean;
+  /** Told the on-console path as soon as it is known, before the upload
+   * starts, so a caller can follow that row's progress. */
+  onDest?: (destPath: string) => void;
 }
 
 function pkgError(e: unknown): string {
@@ -890,6 +893,15 @@ interface PkgLibraryState {
     options?: PkgUploadOptions,
   ) => Promise<void>;
   install: (path: string, host: string) => Promise<void>;
+  /** Upload a local .pkg to PS5 staging, then install that copy, and say how
+   * it went. Convert's "Upload & install": the route that never asks the
+   * console to reach this computer over HTTP. `onDest` names the staged row
+   * (its `bytes`/`status` are the progress). */
+  uploadInstall: (
+    localPath: string,
+    host: string,
+    opts?: { onDest?: (destPath: string) => void },
+  ) => Promise<{ ok: boolean; message?: string }>;
   /** Stream-install (beta, #81) a local PC-side `.pkg` WITHOUT uploading it
    *  to PS5 staging first. The engine serves the file over HTTP at
    *  `/pkg-host/{session}/` and the DPI daemon pulls it directly. Saves the
@@ -2052,7 +2064,7 @@ const pkgAddsInFlight = new Set<string>();
  * `host` (it matches this instance's console) and uses it for addresses.
  */
 const makePkgLibraryStore = () =>
-  createStore<PkgLibraryState>((set, get) => ({
+  createStore<PkgLibraryState>((set, get, api) => ({
     entries: [],
     loading: false,
     error: null,
@@ -2237,6 +2249,7 @@ const makePkgLibraryStore = () =>
         const destPath = stagingDir
           ? `${PKG_LIBRARY_DIR}/${stagingDir}/${basename}`
           : `${PKG_LIBRARY_DIR}/${basename}`;
+        options?.onDest?.(destPath);
         // Remember the filename + version for this staged path so the row can show
         // them (survives refresh-from-disk and app restarts via localStorage).
         cachePathMeta(host, destPath, {
@@ -2489,6 +2502,57 @@ const makePkgLibraryStore = () =>
       } finally {
         pkgAddsInFlight.delete(addKey);
       }
+    },
+
+    async uploadInstall(localPath, host, opts) {
+      if (get().installing) {
+        return { ok: false, message: "Another install is running." };
+      }
+      let dest: string | null = null;
+      set({ error: null });
+      await get().addAndUpload(localPath, host, {
+        // Installed below, so the result can be read back from the row.
+        installAfterUpload: false,
+        onDest: (d) => {
+          dest = d;
+          opts?.onDest?.(d);
+        },
+      });
+      const failed = (fallback: string) => ({
+        ok: false,
+        message: get().error ?? fallback,
+      });
+      const row = () =>
+        dest ? get().entries.find((e) => e.path === dest) : undefined;
+      const staged = row();
+      if (!dest || !staged) return failed("The upload did not finish.");
+      if (staged.status !== "idle") return failed("The upload did not finish.");
+      if (staged.lastResult && !staged.lastResult.ok) {
+        return { ok: false, message: staged.lastResult.message };
+      }
+      if (get().installing) {
+        return { ok: false, message: "Another install is running." };
+      }
+      // A successful install with auto-remove on drops the row, so catch the
+      // result as it is written rather than reading the row afterwards.
+      let result: PkgEntry["lastResult"];
+      const unsubscribe = api.subscribe((s) => {
+        const e = s.entries.find((x) => x.path === dest);
+        if (e?.lastResult) result = e.lastResult;
+      });
+      try {
+        await get().install(dest, host);
+      } finally {
+        unsubscribe();
+      }
+      if (result?.ok) return { ok: true };
+      return {
+        ok: false,
+        message:
+          result?.message ??
+          get().error ??
+          "The install did not finish.",
+      };
     },
 
     async install(path, host) {

@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { CheckCircle2, Circle, Loader2, XCircle } from "lucide-react";
 
 import { Button, Card, ProgressBar } from "../../components";
-import type { Pipeline, PipelineStage } from "../../state/fpkgConversion";
+import type { InstallMethod, Pipeline, PipelineStage } from "../../state/fpkgConversion";
 import { useTr } from "../../state/lang";
 import type { Task } from "../../state/tasks";
 import { overallProgress, stageRows, type StageRow } from "./stages";
@@ -67,10 +67,10 @@ export interface RunCardProps {
   onConvertInstall: () => void;
   onCompress: () => void;
   onCancel: () => void;
-  onRetryInstall: () => void;
+  /** Install the kept package: streamed from this computer, or uploaded to the PS5 first. */
+  onInstall: (method: InstallMethod) => void;
   onLaunch: () => void;
   onShowFolder: () => void;
-  onInstallAgain: () => void;
   onDelete: () => void;
   onAnother: () => void;
 }
@@ -112,9 +112,9 @@ export function RunCard(props: RunCardProps) {
     const remaining = (r.total ?? 0) - (r.done ?? 0);
     let rate = 0;
     let eta = 0;
-    if (r.stage === "send") {
-      rate = installTask?.rate?.bytesPerSec ?? 0;
-      eta = (installTask?.eta ?? 0) * 1000;
+    if (r.stage === "send" && installTask) {
+      rate = installTask.rate?.bytesPerSec ?? 0;
+      eta = (installTask.eta ?? 0) * 1000;
     } else if (p.phase === "running") {
       rate = rateOf(r.done ?? 0, now - p.stageStartedMs);
       eta = rate > 0 ? (remaining / rate) * 1000 : 0;
@@ -193,6 +193,31 @@ export function RunCard(props: RunCardProps) {
     </ol>
   );
 
+  /** The two ways to install the kept package, with what sets them apart. */
+  const installChoice = (primary: boolean) => (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant={primary ? "primary" : undefined}
+          onClick={() => props.onInstall("stream")}
+          disabled={!props.canInstall}
+        >
+          {tr("fpkg.streamInstall", undefined, "Stream install")}
+        </Button>
+        <Button onClick={() => props.onInstall("upload")} disabled={!props.canInstall}>
+          {tr("fpkg.uploadInstall", undefined, "Upload & install")}
+        </Button>
+      </div>
+      <div className="text-xs text-[var(--color-muted)]">
+        {tr(
+          "fpkg.installRoutes",
+          undefined,
+          "Stream install sends the package straight from this computer. Upload & install copies it to the PS5 first — use it when a stream install can't reach this computer.",
+        )}
+      </div>
+    </div>
+  );
+
   if (p.phase === "running") {
     const building = !["send", "install"].includes(p.stage);
     return (
@@ -240,12 +265,8 @@ export function RunCard(props: RunCardProps) {
               {tr("fpkg.kept", { path: p.packagePath }, "The package was built and kept: {path}")}
             </div>
           )}
+          {p.packagePath && installChoice(true)}
           <div className="flex flex-wrap gap-2">
-            {p.packagePath && (
-              <Button variant="primary" onClick={props.onRetryInstall} disabled={!props.canInstall}>
-                {tr("fpkg.retryInstall", undefined, "Retry install")}
-              </Button>
-            )}
             <Button onClick={props.onAnother}>
               {tr("fpkg.another", undefined, "＋ Convert another game")}
             </Button>
@@ -301,6 +322,7 @@ export function RunCard(props: RunCardProps) {
         <div className="break-all text-sm text-[var(--color-text)]">
           {p.deleted ? tr("fpkg.deleted", undefined, "Package deleted") : p.packagePath}
         </div>
+        {!p.deleted && p.mode !== "ffpfsc" && installChoice(!installed)}
         <div className="flex flex-wrap gap-2">
           {installed && !p.deleted && p.host && (
             <Button variant="primary" onClick={props.onLaunch}>
@@ -309,11 +331,6 @@ export function RunCard(props: RunCardProps) {
           )}
           {!p.deleted && (
             <Button onClick={props.onShowFolder}>{tr("fpkg.showFolder", undefined, "Show in folder")}</Button>
-          )}
-          {!p.deleted && p.mode !== "ffpfsc" && (
-            <Button onClick={props.onInstallAgain} disabled={!props.canInstall}>
-              {tr("fpkg.installAgain", undefined, "Install again")}
-            </Button>
           )}
           {!p.deleted && p.mode !== "ffpfsc" && (
             <Button variant="danger" onClick={props.onDelete}>

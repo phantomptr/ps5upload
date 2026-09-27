@@ -60,7 +60,9 @@ export function stageRows(p: Pipeline, installTask: Task | null): StageRow[] {
     const at = stages.indexOf(p.stage);
     return stages.map((s, i) => withMs(s, i < at ? "done" : i === at ? "failed" : "pending"));
   }
-  const current = INSTALL.includes(p.stage) ? installStage(installTask) : p.stage;
+  // A stream install is followed through its task; an upload install moves the pipeline's own
+  // stage (there is no stream task).
+  const current = INSTALL.includes(p.stage) && installTask ? installStage(installTask) : p.stage;
   const at = stages.indexOf(current);
   return stages.map((s, i) => {
     if (i < at) return withMs(s, "done");
@@ -68,7 +70,7 @@ export function stageRows(p: Pipeline, installTask: Task | null): StageRow[] {
     if (s === "send" && installTask?.progress) {
       return { stage: s, state: "active", done: installTask.progress.current, total: installTask.progress.total };
     }
-    if ((BUILD.includes(s) || s === "copy") && p.stageTotal > 0) {
+    if (p.stageTotal > 0) {
       return { stage: s, state: "active", done: p.stageDone, total: p.stageTotal };
     }
     return { stage: s, state: "active" };

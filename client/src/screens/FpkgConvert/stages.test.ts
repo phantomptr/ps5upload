@@ -21,6 +21,22 @@ const task = (current: number, total: number) =>
   ({ progress: { current, total, unit: "bytes" } }) as unknown as Task;
 
 describe("stageRows", () => {
+  it("follows the pipeline's own stage and bytes for an upload install (no stream task)", () => {
+    const sending = stageRows(
+      { phase: "running", ...base, mode: "install", stage: "send", stageDone: 40, stageTotal: 100, stageMs: {} },
+      null,
+    );
+    expect(sending[0]).toMatchObject({ stage: "send", state: "active", done: 40, total: 100 });
+    const installing = stageRows(
+      { phase: "running", ...base, mode: "install", stage: "install", stageDone: 0, stageTotal: 0, stageMs: { send: 9 } },
+      null,
+    );
+    expect(installing.map((r) => [r.stage, r.state])).toEqual([
+      ["send", "done"],
+      ["install", "active"],
+    ]);
+  });
+
   it("marks earlier stages done and the current one active", () => {
     const rows = stageRows(
       { phase: "running", ...base, stage: "write", stageDone: 5, stageTotal: 10, stageMs: { check: 1, plan: 2, compress: 3 } },

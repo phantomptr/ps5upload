@@ -21,6 +21,12 @@ const build = vi.fn();
 const deletePackage = vi.fn(async () => ({ ok: true }));
 const jobStatus = vi.fn();
 const installStream = vi.fn();
+const uploadInstall = vi.fn();
+// The staged row an upload install reports through; the test drives it.
+type Listener = (s: { entries: { path: string; status: string; bytes?: number; totalBytes?: number }[] }) => void;
+const listeners = new Set<Listener>();
+const emitRow = (row: { path: string; status: string; bytes?: number; totalBytes?: number }) =>
+  listeners.forEach((l) => l({ entries: [row] }));
 
 vi.mock("../api/fpkg", () => ({
   fpkg: {
@@ -35,7 +41,14 @@ vi.mock("../api/ps5", () => ({
 }));
 vi.mock("./pkgLibrary", () => ({
   pkgLibraryStore: () => ({
-    getState: () => ({ installStream: (...a: unknown[]) => installStream(...a) }),
+    getState: () => ({
+      installStream: (...a: unknown[]) => installStream(...a),
+      uploadInstall: (...a: unknown[]) => uploadInstall(...a),
+    }),
+    subscribe: (l: Listener) => {
+      listeners.add(l);
+      return () => listeners.delete(l);
+    },
   }),
 }));
 vi.mock("./notifications", () => ({ pushNotification: vi.fn() }));
@@ -66,6 +79,8 @@ describe("fpkg pipeline", () => {
     build.mockReset().mockResolvedValue({ job_id: "j1" });
     jobStatus.mockReset();
     installStream.mockReset();
+    uploadInstall.mockReset();
+    listeners.clear();
     remoteFetch.mockReset().mockResolvedValue({ job_id: "c1" });
     cleanupFetched.mockClear();
     deletePackage.mockClear();
@@ -133,6 +148,46 @@ describe("fpkg pipeline", () => {
     expect(installStream).toHaveBeenLastCalledWith("/out/a.pkg", "10.0.0.3", expect.anything());
     expect(build).toHaveBeenCalledTimes(1);
     expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "done", host: "10.0.0.3" });
+  });
+
+  it("uploads then installs a converted package, with the upload's bytes on Send", async () => {
+    jobStatus.mockResolvedValue({ status: "done", dest: "/out/a.pkg", bytes_sent: 1 });
+    let seen: unknown;
+    uploadInstall.mockImplementation(
+      async (_p: string, _h: string, opts?: { onDest?: (d: string) => void }) => {
+        opts?.onDest?.("/data/pkg/A.pkg");
+        emitRow({ path: "/data/pkg/A.pkg", status: "uploading", bytes: 30, totalBytes: 100 });
+        seen = useFpkgConversion.getState().pipeline;
+        emitRow({ path: "/data/pkg/A.pkg", status: "installing" });
+        return { ok: true };
+      },
+    );
+    await useFpkgConversion.getState().start(req, { install: false, host: null });
+    await tick();
+    await useFpkgConversion.getState().retryInstall("10.0.0.2", "upload");
+    expect(uploadInstall).toHaveBeenCalledWith("/out/a.pkg", "10.0.0.2", expect.anything());
+    expect(installStream).not.toHaveBeenCalled();
+    expect(seen).toMatchObject({ stage: "send", stageDone: 30, stageTotal: 100 });
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "done",
+      mode: "install",
+      packagePath: "/out/a.pkg",
+    });
+    expect(listeners.size).toBe(0);
+  });
+
+  it("keeps the package when an upload install fails", async () => {
+    jobStatus.mockResolvedValue({ status: "done", dest: "/out/a.pkg", bytes_sent: 1 });
+    uploadInstall.mockResolvedValue({ ok: false, message: "Upload failed: disk full" });
+    await useFpkgConversion.getState().start(req, { install: true, host: "10.0.0.2", method: "upload" });
+    await tick();
+    await tick();
+    expect(uploadInstall).toHaveBeenCalledTimes(1);
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "failed",
+      message: "Upload failed: disk full",
+      packagePath: "/out/a.pkg",
+    });
   });
 
   it("installs again from a finished result, but not after the package is deleted", async () => {

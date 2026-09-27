@@ -21,10 +21,9 @@ const actions = {
   onConvertInstall: noop,
   onCompress: noop,
   onCancel: noop,
-  onRetryInstall: noop,
+  onInstall: noop,
   onLaunch: noop,
   onShowFolder: noop,
-  onInstallAgain: noop,
   onDelete: noop,
   onAnother: noop,
 };
@@ -112,7 +111,7 @@ describe("RunCard", () => {
     expect(button(out, "Convert only")).toBeNull();
   });
 
-  it("names the kept package and offers Retry install after an install failure", () => {
+  it("names the kept package and offers both install routes after an install failure", () => {
     const out = html({
       phase: "failed",
       mode: "convert-install",
@@ -126,7 +125,8 @@ describe("RunCard", () => {
     });
     expect(out).toContain("built and kept");
     expect(out).toContain("unreachable");
-    expect(button(out, "Retry install")).not.toBeNull();
+    expect(button(out, "Stream install")).not.toBeNull();
+    expect(button(out, "Upload & install")).not.toBeNull();
   });
 
   it("offers no retry when the build itself failed", () => {
@@ -141,22 +141,34 @@ describe("RunCard", () => {
       stageMs: {},
       titleId: null,
     });
-    expect(button(out, "Retry install")).toBeNull();
+    expect(button(out, "Stream install")).toBeNull();
+    expect(button(out, "Upload & install")).toBeNull();
     expect(out).not.toContain("built and kept");
   });
 
   it("shows the result actions after an install, and no Launch for Convert only", () => {
     const installed = html({ ...done, mode: "convert-install" });
-    for (const name of ["Launch on PS5", "Install again", "Delete package", "Convert another game"]) {
+    for (const name of ["Launch on PS5", "Stream install", "Upload & install", "Delete package", "Convert another game"]) {
       expect(button(installed, name)).not.toBeNull();
     }
     expect(button(html({ ...done, mode: "convert" }), "Launch on PS5")).toBeNull();
   });
 
+  it("follows Convert only with a choice of stream or upload install, each needing a console", () => {
+    const converted = html({ ...done, mode: "convert" });
+    expect(button(converted, "Stream install")).toMatchObject({ disabled: false });
+    expect(button(converted, "Upload & install")).toMatchObject({ disabled: false });
+    expect(converted).toContain("copies it to the PS5 first");
+    const offline = html({ ...done, mode: "convert" }, { canInstall: false });
+    expect(button(offline, "Stream install")).toMatchObject({ disabled: true });
+    expect(button(offline, "Upload & install")).toMatchObject({ disabled: true });
+    expect(button(html({ ...done, mode: "ffpfsc" }), "Upload & install")).toBeNull();
+  });
+
   it("drops the package actions once the package is deleted", () => {
     const out = html({ ...done, mode: "convert-install", deleted: true });
     expect(out).toContain("Package deleted");
-    for (const name of ["Install again", "Delete package", "Launch on PS5"]) {
+    for (const name of ["Stream install", "Upload & install", "Delete package", "Launch on PS5"]) {
       expect(button(out, name)).toBeNull();
     }
     expect(button(out, "Convert another game")).not.toBeNull();

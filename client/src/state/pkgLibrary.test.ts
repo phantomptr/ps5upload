@@ -39,6 +39,7 @@ vi.mock("../api/ps5", () => ({
 vi.mock("../lib/ps5Transfers", () => ({ transferScreenBusy: () => false }));
 
 import { invoke } from "@tauri-apps/api/core";
+import { useInstallSettingsStore } from "./installSettings";
 import {
   fsDelete,
   fsListDir,
@@ -1778,5 +1779,119 @@ describe("installAll as one activity row", () => {
       status: "failed",
       lastError: { message: "1 of 2 failed" },
     });
+  });
+});
+
+describe("uploadInstall (Convert's Upload & install)", () => {
+  const host = "192.168.55.6";
+  const localPath = "/out/UP0000-CUSA33334_00-TEST000000000000.pkg";
+  const head = {
+    parts: [localPath],
+    total_size: 8_192,
+    head: {
+      content_id: "UP0000-CUSA33334_00-TEST000000000000",
+      title: "Test",
+      category: "gd",
+      app_ver: "01.00",
+    },
+  };
+
+  afterEach(() => {
+    vi.mocked(invoke).mockReset();
+    evictPkgLibraryStore(host);
+  });
+
+  it("reports the upload failure instead of claiming an install", async () => {
+    vi.mocked(invoke).mockImplementation(async (command: unknown) => {
+      if (command === "pkg_metadata_split") return head;
+      if (command === "transfer_file") throw new Error("connection refused");
+      return {};
+    });
+    const dests: string[] = [];
+    const r = await pkgLibraryStore(host)
+      .getState()
+      .uploadInstall(localPath, host, { onDest: (d) => dests.push(d) });
+    expect(r.ok).toBe(false);
+    expect(r.message).toMatch(/connection refused/);
+    expect(dests).toHaveLength(1);
+    expect(vi.mocked(pkgInstall)).not.toHaveBeenCalled();
+  });
+
+  it("reports the install as done even when auto-remove drops the row", async () => {
+    useInstallSettingsStore.setState({ autoRemoveAfterInstall: true });
+    vi.mocked(pkgInstallStatus).mockResolvedValue({
+      job: "job1",
+      ps5_addr: host,
+      content_id: head.head.content_id,
+      title_id: "CUSA33334",
+      phase: "done",
+      route: "loopback",
+      verdict: "installed",
+      code: 0,
+      hint: null,
+      reason: null,
+      metrics: {
+        total_bytes: 8_192,
+        served_bytes: 8_192,
+        throughput_mbps: 0,
+        phase_ms: {},
+        retries: 0,
+        sony_rc: 0,
+      },
+      app_ver_before: null,
+      app_ver_after: null,
+      patch_verdict: null,
+      shortened: false,
+      started_at: 0,
+      updated_at: 0,
+    } as InstallStatus);
+    vi.mocked(fsListDir).mockImplementation(async () => [
+      {
+        name: "UP0000-CUSA33334_00-TEST000000000000.pkg",
+        kind: "file",
+        size: 8_192,
+      },
+    ] as never);
+    vi.mocked(invoke).mockImplementation(async (command: unknown) => {
+      if (command === "pkg_metadata_split") return head;
+      if (command === "transfer_file") return { job_id: "t1" };
+      if (command === "job_status")
+        return { status: "done", bytes_sent: 8_192, total_bytes: 8_192 };
+      return {};
+    });
+    let dest = "";
+    const r = await pkgLibraryStore(host)
+      .getState()
+      .uploadInstall(localPath, host, { onDest: (d) => (dest = d) });
+    expect(r).toEqual({ ok: true });
+    expect(vi.mocked(pkgInstall)).toHaveBeenCalled();
+    expect(
+      pkgLibraryStore(host)
+        .getState()
+        .entries.some((e) => e.path === dest),
+    ).toBe(false);
+  }, 15_000);
+
+  it("refuses while another install holds the lock, without uploading", async () => {
+    pkgLibraryStore(host).setState({ installing: true });
+    const r = await pkgLibraryStore(host)
+      .getState()
+      .uploadInstall(localPath, host);
+    expect(r.ok).toBe(false);
+    expect(
+      vi.mocked(invoke).mock.calls.filter(([c]) => c === "transfer_file"),
+    ).toHaveLength(0);
+  });
+
+  it("reports a header it cannot read", async () => {
+    vi.mocked(invoke).mockImplementation(async (command: unknown) => {
+      if (command === "pkg_metadata_split") throw new Error("bad magic");
+      return {};
+    });
+    const r = await pkgLibraryStore(host)
+      .getState()
+      .uploadInstall(localPath, host);
+    expect(r).toMatchObject({ ok: false });
+    expect(r.message).toMatch(/bad magic/);
   });
 });

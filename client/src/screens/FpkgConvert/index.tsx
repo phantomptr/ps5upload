@@ -293,12 +293,11 @@ export default function FpkgConvertScreen() {
         onConvertInstall={() => run(true)}
         onCompress={() => void compress(source.trim(), outputDir.trim() || undefined)}
         onCancel={() => void cancel()}
-        onRetryInstall={() => void retryInstall(host)}
+        onInstall={(method) => void retryInstall(host, method)}
         onLaunch={onLaunch}
         onShowFolder={() => {
           if (pipeline.phase === "done") void openLocalPath(dirOf(pipeline.packagePath));
         }}
-        onInstallAgain={() => void retryInstall(host)}
         onDelete={onDelete}
         onAnother={onAnother}
       />

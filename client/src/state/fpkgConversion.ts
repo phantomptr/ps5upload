@@ -1,5 +1,5 @@
-// Convert to FPKG as one pipeline: an engine build job, then (for Convert & install) the stream
-// install of the package it wrote. The screen renders `pipeline`; every action here checks the
+// Convert to FPKG as one pipeline: an engine build job, then (for Convert & install) the install
+// of the package it wrote — streamed from this computer, or uploaded to the PS5 first. The screen renders `pipeline`; every action here checks the
 // phase it is allowed from, so a stray click cannot act on the wrong package or reset a run.
 
 import { create } from "zustand";
@@ -8,7 +8,7 @@ import { fpkg, type FpkgBuildRequest } from "../api/fpkg";
 import { jobCancel, jobStatus } from "../api/ps5";
 import { useConnectionStore } from "./connection";
 import { pushNotification } from "./notifications";
-import { pkgLibraryStore } from "./pkgLibrary";
+import { pkgLibraryStore, type PkgLibraryStore } from "./pkgLibrary";
 import { useTaskStore } from "./tasks";
 import { remoteApi } from "../api/remote";
 import { fetchRemote } from "../lib/materialize";
@@ -27,6 +27,11 @@ export type PipelineStage =
 /** What a run does: a package, a package then its install, an install of a kept package, or
  *  a compressed .ffpfsc image. */
 export type PipelineMode = "convert" | "convert-install" | "install" | "ffpfsc";
+
+/** How a built package reaches the console: streamed from this computer over HTTP (nothing
+ *  staged), or uploaded to PS5 staging and installed from there (never needs the console to
+ *  reach this computer). */
+export type InstallMethod = "stream" | "upload";
 
 type StageMs = Partial<Record<PipelineStage, number>>;
 
@@ -81,11 +86,14 @@ export type Pipeline =
 
 export interface ConversionState {
   pipeline: Pipeline;
-  start: (req: FpkgBuildRequest, opts: { install: boolean; host: string | null }) => Promise<void>;
+  start: (
+    req: FpkgBuildRequest,
+    opts: { install: boolean; host: string | null; method?: InstallMethod },
+  ) => Promise<void>;
   /** Compress an .exfat / .ffpkg image into a .ffpfsc. */
   compress: (source: string, outputDir?: string) => Promise<void>;
   /** Install the kept package again: after a failed install, or Install again on a result. */
-  retryInstall: (host: string) => Promise<void>;
+  retryInstall: (host: string, method?: InstallMethod) => Promise<void>;
   cancel: () => Promise<void>;
   /** A new source: clears a finished result; ignored while running. */
   reset: () => void;
@@ -210,7 +218,22 @@ function finish(packagePath: string, packageBytes: number, convertMs: number) {
   });
 }
 
-async function runInstall(packagePath: string, host: string | null) {
+/** Upload to staging, then install; the staged row's bytes and status drive Send and Install. */
+async function uploadThenInstall(store: PkgLibraryStore, packagePath: string, host: string) {
+  let dest: string | null = null;
+  const unsubscribe = store.subscribe((s) => {
+    const row = dest ? s.entries.find((e) => e.path === dest) : undefined;
+    if (row?.status === "uploading") enterStage("send", row.bytes ?? 0, row.totalBytes ?? 0);
+    else if (row?.status === "installing") enterStage("install");
+  });
+  try {
+    return await store.getState().uploadInstall(packagePath, host, { onDest: (d) => (dest = d) });
+  } finally {
+    unsubscribe();
+  }
+}
+
+async function runInstall(packagePath: string, host: string | null, method: InstallMethod) {
   const p = running();
   if (!p) return;
   if (!host) {
@@ -219,9 +242,13 @@ async function runInstall(packagePath: string, host: string | null) {
   }
   enterStage("send");
   const startedMs = Date.now();
-  const r = await pkgLibraryStore(host)
-    .getState()
-    .installStream(packagePath, host, { onTask: (id) => update({ installTaskId: id }) });
+  const store = pkgLibraryStore(host);
+  const r =
+    method === "upload"
+      ? await uploadThenInstall(store, packagePath, host)
+      : await store
+          .getState()
+          .installStream(packagePath, host, { onTask: (id) => update({ installTaskId: id }) });
   if (!running()) return;
   if (r.ok) {
     const cur = running()!;
@@ -262,7 +289,8 @@ function packageBytesOf(p: Running): number {
   return (p.packagePath && packageSizes.get(p.packagePath)) || 0;
 }
 
-function poll(jobId: string, install: boolean, failures = 0) {
+/** `install`: how to install the package once it is built, or null to stop at the package. */
+function poll(jobId: string, install: InstallMethod | null, failures = 0) {
   setTimeout(async () => {
     const p = running();
     if (!p || p.jobId !== jobId) return;
@@ -300,7 +328,7 @@ function poll(jobId: string, install: boolean, failures = 0) {
         // hour-long build.
         const host = currentHost();
         update({ host });
-        await runInstall(path, host);
+        await runInstall(path, host, install);
       } else {
         finish(path, bytes, Date.now() - cur.startedMs);
         pushNotification(
@@ -357,7 +385,7 @@ async function copyThenStart(
   source: string,
   outputDir: string | undefined,
   startJob: (local: string) => Promise<{ job_id: string }>,
-  install: boolean,
+  install: InstallMethod | null,
 ) {
   let local: string;
   try {
@@ -410,18 +438,19 @@ function currentHost(): string | null {
 export const useFpkgConversion = create<ConversionState>((set, get) => ({
   pipeline: { phase: "idle" },
 
-  start: async (req, { install, host }) => {
+  start: async (req, { install, host, method = "stream" }) => {
+    const then = install ? method : null;
     if (get().pipeline.phase === "running") return;
     if (isRemotePath(req.source)) {
       beginRun(install ? "convert-install" : "convert", req.source, host, "copy");
-      void copyThenStart(req.source, req.outputDir, (local) => fpkg.build({ ...req, source: local }), install);
+      void copyThenStart(req.source, req.outputDir, (local) => fpkg.build({ ...req, source: local }), then);
       return;
     }
     beginRun(install ? "convert-install" : "convert", req.source, host, "check");
     try {
       const { job_id } = await fpkg.build(req);
       update({ jobId: job_id });
-      poll(job_id, install);
+      poll(job_id, then);
     } catch (error) {
       fail("check", error instanceof Error ? error.message : String(error), null);
     }
@@ -431,20 +460,20 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
     if (get().pipeline.phase === "running") return;
     if (isRemotePath(source)) {
       beginRun("ffpfsc", source, null, "copy");
-      void copyThenStart(source, outputDir, (local) => fpkg.compress(local, outputDir), false);
+      void copyThenStart(source, outputDir, (local) => fpkg.compress(local, outputDir), null);
       return;
     }
     beginRun("ffpfsc", source, null, "compress");
     try {
       const { job_id } = await fpkg.compress(source, outputDir);
       update({ jobId: job_id });
-      poll(job_id, false);
+      poll(job_id, null);
     } catch (error) {
       fail("compress", error instanceof Error ? error.message : String(error), null);
     }
   },
 
-  retryInstall: async (host) => {
+  retryInstall: async (host, method = "stream") => {
     const p = get().pipeline;
     const path =
       p.phase === "failed" ? p.packagePath : p.phase === "done" && !p.deleted ? p.packagePath : null;
@@ -452,7 +481,7 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
     if (p.phase === "done" && p.mode === "ffpfsc") return;
     beginRun("install", p.source, host, "send");
     update({ packagePath: path, titleId: p.titleId });
-    await runInstall(path, host);
+    await runInstall(path, host, method);
   },
 
   cancel: async () => {
