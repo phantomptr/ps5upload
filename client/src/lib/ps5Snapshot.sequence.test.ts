@@ -23,6 +23,8 @@ function fakeHelper(opts: { killOn?: string; benign?: string } = {}) {
     }
     if (cmd === opts.benign) throw new Error("unknown frame type 0x42");
     if (cmd === "fs_read_preview") return { base64: "" };
+    // Every log directory holds a stderr.log, so the log read happens.
+    if (cmd === "ps5_list_dir") return { entries: [{ name: "stderr.log", kind: "file" }] };
     return {};
   });
   return calls;

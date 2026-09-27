@@ -246,8 +246,28 @@ async function fetchPayloadLogs(host: string): Promise<{
     errors["payload_logs_listdir"] = e instanceof Error ? e.message : String(e);
   }
 
+  // Read only the files that exist. Most are absent on a healthy console, and
+  // each miss was a failed request in the console log. One listing per
+  // directory; a directory that cannot be listed falls back to trying the read.
+  const present = new Map<string, Set<string> | null>();
+  for (const [path] of fixed) {
+    const dir = path.slice(0, path.lastIndexOf("/"));
+    if (present.has(dir)) continue;
+    try {
+      const entries = await fsListDir(transferAddr(host), dir);
+      present.set(dir, new Set(entries.map((e) => e.name)));
+    } catch {
+      present.set(dir, null);
+    }
+  }
+  const exists = (path: string) => {
+    const slash = path.lastIndexOf("/");
+    const names = present.get(path.slice(0, slash));
+    return names === null || names === undefined || names.has(path.slice(slash + 1));
+  };
+
   // Bound total work/size: up to 14 files, 256 KB each.
-  for (const [path, name] of fixed.slice(0, 14)) {
+  for (const [path, name] of fixed.filter(([p]) => exists(p)).slice(0, 14)) {
     try {
       const r = await fsReadPreview(maddr, path);
       const text = decodeB64Utf8(r.base64);
