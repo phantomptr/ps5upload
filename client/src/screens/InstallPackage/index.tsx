@@ -746,7 +746,9 @@ export default function InstallPackageScreen() {
     const r = await installStream(sourcePath, host);
     setStreamResult({
       ok: !!r.ok,
-      warn: !r.ok && !!r.acceptedUnverified,
+      // The engine resolves a stream install to done|failed synchronously, so
+      // there is no "accepted but unverified" amber state here any more.
+      warn: false,
       name: streamName,
       message: r.ok
         ? tr(
@@ -1843,7 +1845,6 @@ function ExternalPackages({ host }: { host: string }) {
         ok: boolean;
         message?: string;
         mayNotLaunch?: boolean;
-        acceptedUnverified?: boolean;
       }
     >
   >({});
@@ -2054,8 +2055,8 @@ function ExternalPackages({ host }: { host: string }) {
                     <span className="px-1 opacity-60">·</span>
                     <span className="tabular-nums">{formatBytes(p.size)}</span>
                   </div>
-                  {/* Install result on its own line with an icon, including
-                      accepted-but-unverified outcomes. Mirrors library rows. */}
+                  {/* Install result on its own line with an icon: success,
+                      a may-not-launch caution, or a failure. */}
                   {r && (
                     <div
                       className="mt-1 flex items-center gap-1.5 text-xs font-medium"
@@ -2064,9 +2065,7 @@ function ExternalPackages({ host }: { host: string }) {
                           ? r.mayNotLaunch
                             ? "var(--color-warn)"
                             : "var(--color-good)"
-                          : r.acceptedUnverified
-                            ? "var(--color-warn)"
-                            : "var(--color-bad)",
+                          : "var(--color-bad)",
                       }}
                     >
                       {r.ok ? (
@@ -2075,8 +2074,6 @@ function ExternalPackages({ host }: { host: string }) {
                         ) : (
                           <CheckCircle2 size={13} className="shrink-0" />
                         )
-                      ) : r.acceptedUnverified ? (
-                        <AlertTriangle size={13} className="shrink-0" />
                       ) : (
                         <XCircle size={13} className="shrink-0" />
                       )}

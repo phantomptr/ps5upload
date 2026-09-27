@@ -816,29 +816,16 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
               // console a moment to come back before runOne returns to the drain
               // loop. Gated to FW >= 12 where the blip is observed.
               await fw12InstallSettle(hostOf(item.addr));
-            } else if (r.acceptedUnverified) {
-              // The upload is committed, but Sony's acknowledgement did not
-              // prove the asynchronous install finished. End the queue item as
-              // a visible warning and KEEP staging; retrying the upload would
-              // waste bandwidth and deleting it could race the live install.
-              installPhase = "unverified";
-              mountWarnings.push(r.errMessage);
-              log.info(
-                "install",
-                `pkg "${item.displayName}" accepted but completion unverified — staged pkg KEPT: ${finalDest}`,
-              );
             } else {
-              // The bytes landed but the install — the point of a pkg — did
-              // not COMPLETE. The staged pkg was KEPT on the PS5 (never deleted
-              // on a non-confirmed install), so the user can retry. Fail the row
-              // so they notice; the message (stall vs reject) routes through the
-              // queue's humanizer.
+              // The bytes landed but the install — the point of a pkg — did not
+              // COMPLETE (the engine's verdict was `failed`). The staged pkg was
+              // KEPT on the PS5 (never deleted on a non-confirmed install), so
+              // the user can retry. Fail the row so they notice; the message
+              // routes through the queue's humanizer.
               installPhase = "error";
               log.info(
                 "install",
-                r.stalled
-                  ? `pkg "${item.displayName}" install stalled — staged pkg KEPT for retry: ${finalDest}`
-                  : `pkg "${item.displayName}" install not confirmed — staged pkg KEPT: ${finalDest}`,
+                `pkg "${item.displayName}" install not confirmed — staged pkg KEPT: ${finalDest}`,
               );
               // PostUploadStepError, not Error: the bytes are committed, so
               // the auto-recovery loop must not re-run this item — that would

@@ -109,12 +109,6 @@ describe("statusToOutcome — maps the unified verdict to the UI outcome", () =>
     );
     expect(o.errMessage).toBe("0x80b2116f");
   });
-
-  it("never reports the transient states the engine no longer exposes", () => {
-    const o = statusToOutcome(status({ verdict: "installed" }));
-    expect(o.stalled).toBe(false);
-    expect(o.acceptedUnverified).toBe(false);
-  });
 });
 
 describe("sampleFromStatus — drives the live progress bar from metrics", () => {

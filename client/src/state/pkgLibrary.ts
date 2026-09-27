@@ -145,24 +145,6 @@ export function pkgInstallMayNotLaunch(r: {
   return r.may_not_launch ?? r.register_path === "appinst-local";
 }
 
-/** Which of the four install outcomes a result represents.
- *
- *  Pure so the mapping is testable without a console. The distinction that
- *  matters is `unverified` vs `failed`: the PS5 accepted the install and is
- *  very likely still working on it, so it must not be rendered as an error.
- *  See docs/superpowers/specs/2026-09-20-install-status-without-polling-design.md
- */
-export function installOutcomeKind(r: {
-  installed: boolean;
-  acceptedUnverified?: boolean;
-  stalled?: boolean;
-}): "done" | "unverified" | "stalled" | "failed" {
-  if (r.installed) return "done";
-  if (r.acceptedUnverified) return "unverified";
-  if (r.stalled) return "stalled";
-  return "failed";
-}
-
 /** The lastResult for a SUCCESSFUL primary install — amber warn when the title
  *  may not launch, plain green success otherwise. */
 export function installedLastResult(mayNotLaunch: boolean): {
@@ -230,8 +212,6 @@ export function statusToOutcome(st: InstallStatus): PkgInstallOutcome {
     installed,
     mayNotLaunch,
     errMessage,
-    stalled: false,
-    acceptedUnverified: false,
   };
 }
 
@@ -925,14 +905,9 @@ interface PkgLibraryState {
     ok: boolean;
     message?: string;
     mayNotLaunch?: boolean;
-    acceptedUnverified?: boolean;
     /** True when the same package should be retried through staged/file mode,
      * which bypasses Sony's HTTP/proxy path. */
     stagedFallbackRecommended?: boolean;
-    /** Sony/AppInstUtil return code from the DPI daemon, when available. */
-    rc?: number;
-    /** Number of HTTP requests that reached ps5upload's pkg-host listener. */
-    requestsServed?: number;
   }>;
   /** Install a package straight from an HTTP(S) link. The engine fetches it
    * from the origin over several connections at once and re-serves it to the
@@ -986,7 +961,6 @@ interface PkgLibraryState {
     ok: boolean;
     message?: string;
     mayNotLaunch?: boolean;
-    acceptedUnverified?: boolean;
   }>;
   /** Install a `.pkg` the user found while browsing the File System, at an
    *  arbitrary on-console path. Removable mounts (`/mnt/usb*`, `/mnt/ext*`)
@@ -1001,7 +975,6 @@ interface PkgLibraryState {
     ok: boolean;
     message?: string;
     mayNotLaunch?: boolean;
-    acceptedUnverified?: boolean;
   }>;
   /** Delete (from the PS5) every staged package that has already been
    *  installed successfully — clears the spent-package clutter without
@@ -1066,24 +1039,16 @@ async function fsDeleteWithRetry(addr: string, path: string): Promise<void> {
 }
 
 export interface PkgInstallOutcome {
-  /** The install COMPLETED — Sony's installer accepted it AND the engine's
-   *  progress tracker confirmed the title actually landed. This is
-   *  the ONLY state in which the staged pkg may be deleted. A stall or an async
-   *  failure leaves this false so the pkg is KEPT. */
+  /** The install COMPLETED — the engine's unified verdict was `installed` (or
+   *  `may_not_launch`, which still means the artifact is on disk). This is the
+   *  ONLY state in which the staged pkg may be deleted. A failed verdict leaves
+   *  this false so the pkg is KEPT. */
   installed: boolean;
   /** Installed only via the unlaunchable last-resort path (may not start on
    *  some firmware, notably FW 12.xx). Surface a caution, not a clean OK. */
   mayNotLaunch: boolean;
   /** First error seen (empty when installed cleanly). */
   errMessage: string;
-  /** The install STALLED — accepted, but disk progress flatlined before the
-   *  title registered (e.g. a wedged large install). The staged pkg is KEPT so
-   *  the user can retry; the UI shows a "stalled — package kept" message rather
-   *  than a generic failure. `installed` is false. */
-  stalled?: boolean;
-  /** Sony accepted the request, but completion could not be proven. This is a
-   *  terminal warning, never success, and the staged package must be kept. */
-  acceptedUnverified?: boolean;
   /** The package_type the engine actually resolved the install to, from the
    *  staged pkg's own PARAM.SFO when the caller sent none. Authoritative over
    *  the caller's own `packageType` argument, which is frequently null (e.g.
@@ -2627,8 +2592,6 @@ const makePkgLibraryStore = () =>
           installed,
           mayNotLaunch,
           errMessage: mainErr,
-          stalled,
-          acceptedUnverified,
         } = await runPkgInstall(
           host,
           path,
@@ -2659,14 +2622,7 @@ const makePkgLibraryStore = () =>
         );
         useActivityHistoryStore
           .getState()
-          .finish(
-            actId,
-            installed
-              ? "done"
-              : acceptedUnverified || stalled
-                ? "stopped"
-                : "failed",
-          );
+          .finish(actId, installed ? "done" : "failed");
 
         if (installed) {
           await finalizePkgInstallSuccess({
@@ -2677,36 +2633,24 @@ const makePkgLibraryStore = () =>
             autoRemove,
           });
         } else {
-          // Not completed → the pkg was KEPT on the PS5 (never deleted on a
-          // non-confirmed install). A stall gets the retry-oriented copy; a hard
-          // failure gets the reject copy. Either way the staged pkg is still
-          // there, so re-running the install is the natural next step.
-          log.info(
-            "install",
-            stalled
-              ? `install stalled — staged pkg KEPT for retry: ${path}`
-              : `install not confirmed — staged pkg KEPT: ${path}`,
-          );
+          // Failed verdict → the pkg was KEPT on the PS5 (never deleted on a
+          // non-confirmed install), so re-running the install is the natural
+          // next step. The engine resolves the install synchronously, so there
+          // is no "accepted but still working" middle state to surface.
+          log.info("install", `install not confirmed — staged pkg KEPT: ${path}`);
           patch({
             status: "idle",
             lastResult: {
               ok: false,
-              warn: acceptedUnverified,
               message: mainErr || "Install was rejected.",
             },
           });
           // Surface failures in the bell too (success already notifies above).
           // Without this a failed item — an update or DLC especially — was silent
           // if the user navigated away from the Library tab mid-install.
-          pushNotification(
-            stalled || acceptedUnverified ? "warning" : "error",
-            acceptedUnverified
-              ? `${label} install accepted; verify on PS5`
-              : `${label} install ${stalled ? "didn’t finish" : "failed"}`,
-            {
-              body: mainErr || "The PS5 didn’t confirm the install. Try again.",
-            },
-          );
+          pushNotification("error", `${label} install failed`, {
+            body: mainErr || "The PS5 didn’t confirm the install. Try again.",
+          });
         }
       } catch (e) {
         const message = pkgError(e);
@@ -3536,7 +3480,6 @@ const makePkgLibraryStore = () =>
           ? { ok: true, mayNotLaunch: viaCopy.mayNotLaunch }
           : {
               ok: false,
-              acceptedUnverified: viaCopy.acceptedUnverified,
               message:
                 (viaCopy.errMessage || "Install was rejected.") +
                 ` Internal staging was kept at ${internalPath}.`,
@@ -3602,11 +3545,10 @@ const makePkgLibraryStore = () =>
         // In-place install of a pkg the user pointed at on the console's disk
         // (e.g. from the File System browser). It's THEIR file at THEIR path, not
         // a staging copy we made — never delete it. deleteStaging: false.
-        const { installed, mayNotLaunch, errMessage, acceptedUnverified } =
-          await runPkgInstall(
-            host,
-            path,
-            null,
+        const { installed, mayNotLaunch, errMessage } = await runPkgInstall(
+          host,
+          path,
+          null,
             // In-place install of a user-pointed path: we never parsed this pkg, so
             // the package_type is unknown. The engine reads the category from the
             // staged pkg itself to detect a patch and arm the data-loss guard.
@@ -3617,7 +3559,6 @@ const makePkgLibraryStore = () =>
           ? { ok: true, mayNotLaunch }
           : {
               ok: false,
-              acceptedUnverified,
               message: errMessage || "Install was rejected.",
             };
       } catch (e) {
