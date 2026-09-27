@@ -1832,8 +1832,8 @@ export async function loaderProcessSeen(host: string): Promise<boolean> {
 
 /** Post to the ONE install endpoint and poll its status to a terminal phase,
  *  feeding live samples to the caller. The engine owns everything in between —
- *  the destructive-reinstall guard, daemon bring-up + restore, stream/loopback
- *  delivery, the DPI hand-off, and post-install verify — so the client only
+ *  the destructive-reinstall guard, installer-daemon bring-up, stream/loopback
+ *  delivery, and post-install verify — so the client only
  *  starts the job and interprets the result. Returns the terminal
  *  `InstallStatus` (phase "done" or "failed"). Throws only when the endpoint is
  *  unreachable or refuses to start a job. */

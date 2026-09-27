@@ -4,7 +4,28 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 5.35.0
+
+**One install path for everything, and Convert can install either way.**
+
+- **Every install now goes through one engine route and PS5Upload's own
+  installer.** Stream installs, upload & install, links and server sources
+  all report the same progress and the same result, and an install is only
+  called finished once the console has actually pulled the whole package.
+- **Convert to FPKG, then choose how to install.** After a conversion you get
+  **Stream install** (straight from this computer) or **Upload & install**
+  (copied to the PS5 first, for when the console can't reach this computer).
+  A failed install offers both.
+- **Clearer failures.** When the PS5 can't reach this computer, or its proxy
+  setting blocks the stream, the app says so and suggests Upload & install —
+  in your language.
+- **More reliable installs.** A failed stream no longer blocks the next one, a
+  reinstall of the same package works straight away, an installer that is
+  shutting down gets replaced instead of trusted, and installing no longer
+  restarts the helper.
+- **Fully translated.** Every screen, including Convert, Backport and
+  Connections, is now translated in all 19 languages.
+- A PS4 package is now labelled as a PS4 package on the Upload screen.
 
 **Our own package installer.**
 
