@@ -610,6 +610,63 @@ fn json_response(code: StatusCode, body: serde_json::Value) -> Response<Body> {
         .unwrap_or_else(|_| Response::new(Body::empty()))
 }
 
+/// `POST /api/pkg/payload-restore` — (re)send the bundled MAIN ps5upload
+/// payload to the console's loader (:9021). The desktop app does this itself
+/// (it holds the ELF and can open the socket); the self-hosted web UI cannot,
+/// so it asks the engine — which is what `ensurePayloadCurrent` /
+/// `restoreMainPayload` call in the browser build to redeploy a stale or dead
+/// helper. Install-time restore is handled inside the unified install state
+/// machine; this route is for the general payload-freshness path only.
+///
+/// Never an HTTP error on a failed send: the browser caller runs it
+/// best-effort and a failed restore is information to log, not a reason to
+/// surface a red error over whatever prompted the refresh.
+#[derive(serde::Deserialize)]
+struct PayloadRestoreRequest {
+    ps5_addr: String,
+}
+
+async fn payload_restore_handler(Json(req): Json<PayloadRestoreRequest>) -> Response<Body> {
+    let ps5_ip = strip_host_port(req.ps5_addr.trim()).trim().to_string();
+    if ps5_ip.is_empty() {
+        return json_response(
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({"ok": false, "error": "ps5_addr is required"}),
+        );
+    }
+    let res = tokio::task::spawn_blocking(move || {
+        use ps5upload_core::payload_lifecycle as pl;
+        let bytes = crate::bundled_payload::image_bytes(crate::bundled_payload::Image::Payload)?;
+        pl::send_elf_to_loader(
+            &ps5_ip,
+            pl::PS5_LOADER_PORT,
+            &bytes,
+            pl::LoaderImage::Ps5Upload,
+        )
+    })
+    .await;
+    match res {
+        Ok(Ok(bytes)) => {
+            crate::log_info!("payload-restore: sent {bytes} bytes");
+            json_response(
+                StatusCode::OK,
+                serde_json::json!({"ok": true, "bytes": bytes}),
+            )
+        }
+        Ok(Err(e)) => {
+            crate::log_warn!("payload-restore: {e}");
+            json_response(
+                StatusCode::OK,
+                serde_json::json!({"ok": false, "bytes": 0, "error": e}),
+            )
+        }
+        Err(e) => json_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({"ok": false, "error": format!("payload-restore task failed: {e}")}),
+        ),
+    }
+}
+
 pub fn router(state: PkgInstallStateHandle) -> Router {
     Router::new()
         // Packages routinely exceed the app-wide 64 MiB JSON/form limit.
@@ -651,6 +708,7 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         // install tracker uses, so the UI and the completion check can't
         // disagree. Read-only; safe to poll from the package list.
         .route("/api/pkg/install/preflight", get(install_preflight_handler))
+        .route("/api/pkg/payload-restore", post(payload_restore_handler))
         // The session UUID is the lookup key. We allow ANY {filename} so the
         // URL can carry the pkg's canonical `<ContentID>.pkg` name that
         // Sony's installer cross-checks against the pkg header. Without
@@ -3958,6 +4016,29 @@ mod persist_tests {
 
 #[cfg(test)]
 mod tests {
+    // ── payload-restore (web UI helper redeploy) ──
+
+    /// The browser build's `restoreMainPayload` posts here. An empty address
+    /// must be refused before anything is sent to a loader.
+    #[tokio::test]
+    async fn payload_restore_rejects_an_empty_address() {
+        let resp = super::payload_restore_handler(axum::Json(super::PayloadRestoreRequest {
+            ps5_addr: "  ".into(),
+        }))
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    /// The route is wired: the web UI's `payload_restore` command 404'd after
+    /// the unified-install cleanup removed it.
+    #[test]
+    fn payload_restore_route_is_registered() {
+        let src = include_str!("pkg_install.rs");
+        assert!(
+            src.contains(r#".route("/api/pkg/payload-restore", post(payload_restore_handler))"#)
+        );
+    }
+
     // ── short aliases for over-long install links ──
 
     const LONG: &str = "http://192.168.86.199:20080/3A5CA02AFD084A3B8445AC51D3EAE212/\

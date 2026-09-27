@@ -1,4 +1,6 @@
 import { getEngineUrl } from "../state/engine";
+import { hostOf } from "./addr";
+import { redactHost } from "./diagnosticBundle";
 
 /**
  * Host-side (engine) state for the bug-report bundle.
@@ -16,6 +18,11 @@ import { getEngineUrl } from "../state/engine";
  *  - `sessions` — what the console said about an install. `install/status`
  *                 requires a session id, so once the user navigated away the
  *                 err_code and phase were unrecoverable.
+ *  - `install_history` — the unified install endpoint's persisted per-console
+ *                 history (verdict, Sony code, route, metrics). Engine-side
+ *                 disk, so a failure from before this session still rides
+ *                 along. An array, not a host-keyed map: redaction turns every
+ *                 IPv4 into the same `<IPv4>`, which would collapse consoles.
  */
 
 /** Per-request budget. The engine is loopback and answers from memory; a
@@ -42,11 +49,16 @@ export interface EngineDiagnostics {
   jobs: unknown[] | null;
   /** Live pkg-install sessions. */
   install_sessions: unknown[] | null;
+  /** Recent unified installs per known console, newest first. `entries` is
+   *  null when that console's history could not be read. */
+  install_history: { console: string; entries: unknown[] | null }[];
   /** Per-probe failures, so "not collected" is never read as "nothing there". */
   errors: Record<string, string>;
 }
 
-export async function collectEngineDiagnostics(): Promise<EngineDiagnostics> {
+export async function collectEngineDiagnostics(
+  opts: { consoles?: string[]; redact?: boolean } = {},
+): Promise<EngineDiagnostics> {
   const errors: Record<string, string> = {};
   async function probe<T>(name: string, path: string): Promise<T | null> {
     try {
@@ -60,5 +72,20 @@ export async function collectEngineDiagnostics(): Promise<EngineDiagnostics> {
     probe<unknown[]>("jobs", "/api/jobs"),
     probe<unknown[]>("install_sessions", "/api/pkg/install/sessions"),
   ]);
-  return { jobs, install_sessions: sessions, errors };
+  // One probe per distinct console (host:port and bare-host forms are the
+  // same console to the engine's history store).
+  const hosts = [
+    ...new Set((opts.consoles ?? []).map((c) => hostOf(c).trim()).filter(Boolean)),
+  ];
+  const install_history = await Promise.all(
+    hosts.map(async (host) => {
+      const label = redactHost(host, opts.redact ?? true);
+      const entries = await probe<unknown[]>(
+        `install_history:${label}`,
+        `/api/pkg/install/history?ps5_addr=${encodeURIComponent(host)}`,
+      );
+      return { console: label, entries };
+    }),
+  );
+  return { jobs, install_sessions: sessions, install_history, errors };
 }

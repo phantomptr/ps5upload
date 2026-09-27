@@ -26,6 +26,7 @@ import {
 import { useTr } from "../../state/lang";
 import { useDiagSettingsStore, LOG_LEVELS } from "../../state/diagSettings";
 import { useConnectionStore } from "../../state/connection";
+import { useRosterStore } from "../../state/roster";
 import {
   buildDiagnosticBundle,
   redactDiagnosticText,
@@ -256,7 +257,15 @@ export default function BugReportScreen() {
 
       // Engine-side state (loopback, in-memory): why transfers ended and what
       // the console said about installs. Collected even when the PS5 is off.
-      const engineDiag = await collectEngineDiagnostics();
+      // Includes each known console's unified install history (spec §6), so a
+      // past install failure's verdict, Sony code and metrics ride along.
+      const engineDiag = await collectEngineDiagnostics({
+        consoles: [
+          ...(host ? [host] : []),
+          ...useRosterStore.getState().profiles.map((p) => p.host),
+        ],
+        redact,
+      });
 
       const manifest = {
         schema: 1,
