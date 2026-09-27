@@ -319,7 +319,7 @@ export default function FpkgConvertScreen() {
                 {tr(
                   "fpkg.aboutWhere",
                   undefined,
-                  "The conversion runs on the machine hosting the engine — this computer, a Docker host or an Android device — not on the console. Nothing reaches the console until you press Install, and the install streams the package across rather than staging a copy of it first.",
+                  "The conversion runs on the machine hosting the engine — this computer, a Docker host or an Android device — not on the console. Nothing reaches the console until you install the package — streamed from this computer, or uploaded to the PS5 first.",
                 )}
               </p>
               <p>

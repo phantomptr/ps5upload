@@ -67,6 +67,11 @@ pub enum FailReason {
     /// Sony accepted the install but the console stopped pulling the package
     /// before it finished. The source is kept for a retry.
     Stalled,
+    /// Sony refused a stream the console never fetched from: it could not
+    /// reach this computer (firewall, VPN, another network).
+    StreamUnreachable,
+    /// As above, but Sony named the PS5's proxy setting as the cause.
+    StreamProxy,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

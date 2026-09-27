@@ -223,6 +223,16 @@ const SCE_HTTP_ERROR_PROXY: u32 = 0x8043_1084;
 /// no proxy error this is the console failing to reach this computer at all
 /// (usually a firewall), so saying "the PS5 declined the install" sends the
 /// user looking in the wrong place.
+/// Why Sony refused an install: a stream the console never fetched from gets
+/// its own reason, so the UI can explain it in the user's language.
+pub fn refusal_reason(never_fetched: bool, code: u32) -> FailReason {
+    match (never_fetched && code != 0, code) {
+        (true, SCE_HTTP_ERROR_PROXY) => FailReason::StreamProxy,
+        (true, _) => FailReason::StreamUnreachable,
+        _ => FailReason::SonyRefused,
+    }
+}
+
 pub fn stream_unreachable_hint(served_from: Option<&str>, code: u32) -> String {
     let rc = format!("0x{code:08x}");
     if code == SCE_HTTP_ERROR_PROXY {
@@ -680,7 +690,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         state.jobs.update(&job, |s| {
             s.phase = Phase::Failed;
             s.verdict = Some(Verdict::Failed);
-            s.reason = Some(FailReason::SonyRefused);
+            s.reason = Some(refusal_reason(never_fetched, code));
             s.code = code;
             s.hint = hint.clone();
             s.shortened = shortened;
@@ -1016,6 +1026,18 @@ mod tests {
         assert!(h.contains("0x80431064"), "{h}");
         assert!(h.contains("firewall"), "{h}");
         assert!(h.contains("Upload & install"), "{h}");
+    }
+
+    #[test]
+    fn a_refusal_names_why_so_the_ui_can_explain_it_in_its_language() {
+        assert_eq!(
+            refusal_reason(true, 0x80431064),
+            FailReason::StreamUnreachable
+        );
+        assert_eq!(refusal_reason(true, 0x80431084), FailReason::StreamProxy);
+        // Fetched, or no Sony code: an ordinary refusal.
+        assert_eq!(refusal_reason(false, 0x80431064), FailReason::SonyRefused);
+        assert_eq!(refusal_reason(true, 0), FailReason::SonyRefused);
     }
 
     #[test]

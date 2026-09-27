@@ -84,6 +84,37 @@ describe("statusToOutcome — maps the unified verdict to the UI outcome", () =>
     expect(o.errMessage).toBe("Sony refused it");
   });
 
+  it("a stream the PS5 never reached gets the app's guidance and the code, not the engine's English", () => {
+    const o = statusToOutcome(
+      status({
+        phase: "failed",
+        verdict: "failed",
+        reason: "stream_unreachable",
+        code: 0x80431064,
+        hint: "The PS5 never reached this computer at http://x (0x80431064)…",
+      }),
+    );
+    expect(o.errMessage).toContain("firewall");
+    expect(o.errMessage).toContain("Upload & install");
+    expect(o.errMessage).toContain("0x80431064");
+    expect(o.errMessage).not.toContain("http://x");
+  });
+
+  it("a proxy refusal says to turn the PS5's proxy off", () => {
+    const o = statusToOutcome(
+      status({ phase: "failed", verdict: "failed", reason: "stream_proxy", code: 0x80431084 }),
+    );
+    expect(o.errMessage).toMatch(/Proxy Server/);
+    expect(o.errMessage).toContain("0x80431084");
+  });
+
+  it("a stalled delivery uses the app's own words", () => {
+    const o = statusToOutcome(
+      status({ phase: "failed", verdict: "failed", reason: "stalled", hint: "the console stopped fetching" }),
+    );
+    expect(o.errMessage).toMatch(/^The PS5 stopped fetching/);
+  });
+
   it("a regressed patch gets the update-specific copy, not a raw error", () => {
     const o = statusToOutcome(
       status({ phase: "failed", verdict: "failed", patch_verdict: "regressed" }),

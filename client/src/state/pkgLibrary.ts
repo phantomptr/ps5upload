@@ -160,27 +160,70 @@ export function installedLastResult(mayNotLaunch: boolean): {
 /** Human guidance for a unified-status `reason` (the machine-readable failure
  *  class the engine reports when there is no better `hint`). Kept small: the
  *  engine's `hint` is preferred whenever present. */
+/** What each engine failure reason means, as [i18n key, English, preferred].
+ *  A `preferred` entry says everything the engine's (English) hint would, so
+ *  it is shown in the user's language instead of that hint; the others only
+ *  fill in when the engine gave no detail. */
+const REASON_GUIDANCE: Record<string, [string, string, boolean]> = {
+  loader_unreachable: [
+    "pkg.reason.loader_unreachable",
+    "The PS5's payload loader wasn't reachable — reload it and retry.",
+    false,
+  ],
+  no_bringup: [
+    "pkg.reason.no_bringup",
+    "The install daemon couldn't be brought up on the PS5.",
+    false,
+  ],
+  no_image: [
+    "pkg.reason.no_image",
+    "This build has no bundled installer daemon image.",
+    true,
+  ],
+  source_gone: [
+    "pkg.reason.source_gone",
+    "The package source was no longer available when the install ran.",
+    false,
+  ],
+  destructive_guard: [
+    "pkg.reason.destructive_guard",
+    "This would erase the installed game first; re-run allowing a destructive re-install.",
+    true,
+  ],
+  bad_request: [
+    "pkg.reason.bad_request",
+    "The installer rejected the request.",
+    false,
+  ],
+  sony_refused: [
+    "pkg.reason.sony_refused",
+    "The PS5 declined the install.",
+    false,
+  ],
+  stalled: [
+    "pkg.reason.stalled",
+    "The PS5 stopped fetching the package before it finished. The package was kept — try again.",
+    true,
+  ],
+  stream_unreachable: [
+    "pkg.reason.stream_unreachable",
+    "The PS5 never reached this computer to fetch the package. Allow ps5upload through this computer's firewall (on Windows, for both Private and Public networks), keep the computer and the PS5 on the same network with any VPN off, and set the PS5's Proxy Server to “Do Not Use”. Upload & install works without this connection.",
+    true,
+  ],
+  stream_proxy: [
+    "pkg.reason.stream_proxy",
+    "The PS5's proxy setting blocked the stream. In the PS5's network Advanced Settings set Proxy Server to “Do Not Use”, or use Upload & install, which reads the package from PS5-local storage.",
+    true,
+  ],
+};
+
 function reasonGuidance(reason: string | null): string {
-  switch (reason) {
-    case "loader_unreachable":
-      return "The PS5's payload loader wasn't reachable — reload it and retry.";
-    case "no_bringup":
-      return "The install daemon couldn't be brought up on the PS5.";
-    case "no_image":
-      return "This build has no bundled installer daemon image.";
-    case "source_gone":
-      return "The package source was no longer available when the install ran.";
-    case "destructive_guard":
-      return "This would erase the installed game first; re-run allowing a destructive re-install.";
-    case "bad_request":
-      return "The installer rejected the request.";
-    case "sony_refused":
-      return "The PS5 declined the install.";
-    case "stalled":
-      return "The PS5 stopped fetching the package before it finished. The package was kept — try again.";
-    default:
-      return "";
-  }
+  const g = reason ? REASON_GUIDANCE[reason] : undefined;
+  return g ? trStatic(g[0], g[1]) : "";
+}
+
+function hexCode(code: number): string {
+  return `0x${(code >>> 0).toString(16).padStart(8, "0")}`;
 }
 
 /** Map the engine's unified terminal `InstallStatus` onto the outcome the UI
@@ -204,10 +247,13 @@ export function statusToOutcome(st: InstallStatus): PkgInstallOutcome {
         PKG_PATCH_DID_NOT_APPLY_HINT,
       );
     } else {
-      errMessage =
-        (st.hint && st.hint.trim()) ||
-        reasonGuidance(st.reason) ||
-        `0x${(st.code >>> 0).toString(16).padStart(8, "0")}`;
+      const preferred = st.reason ? REASON_GUIDANCE[st.reason]?.[2] : false;
+      const guidance = reasonGuidance(st.reason);
+      errMessage = preferred
+        ? st.code
+          ? `${guidance} (${hexCode(st.code)})`
+          : guidance
+        : (st.hint && st.hint.trim()) || guidance || hexCode(st.code);
     }
   }
   return {
