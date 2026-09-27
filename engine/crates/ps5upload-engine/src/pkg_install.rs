@@ -618,6 +618,18 @@ pub(crate) fn release_serve_session(
     sid: &str,
 ) -> bool {
     let mut map = sessions.lock().unwrap_or_else(|e| e.into_inner());
+    let found = mark_released(&mut map, sid);
+    // Persist now. Sessions used to be written only when a NEW one was
+    // created, so a released session stayed "live" on disk and came back on
+    // the next engine restart — blocking a re-install of that package.
+    if found {
+        persist::save(&map);
+    }
+    found
+}
+
+/// Pure half of `release_serve_session`: mark the session cancelled.
+fn mark_released(map: &mut HashMap<String, InstallSession>, sid: &str) -> bool {
     match map.get_mut(sid) {
         Some(s) => {
             s.cancelled = true;
@@ -2311,6 +2323,9 @@ async fn install_cancel_handler(
                 s.cancelled = true;
                 let path = s.staging_path.take();
                 let addr = s.ps5_mgmt_addr.clone();
+                // Persist, or the cancelled session is restored as live on the
+                // next engine restart.
+                persist::save(&sessions);
                 (true, path, addr)
             }
             None => {
@@ -3814,15 +3829,17 @@ mod persist_tests {
         // Distinct id: `session()` stages under ps5u-persist-{id}, shared with
         // the other persistence test, so reusing "a" races on one file.
         let s = session("released", pkg, 4096);
-        let map = std::sync::Mutex::new(HashMap::from([(s.id.clone(), s)]));
+        let mut map = HashMap::from([(s.id.clone(), s)]);
 
-        assert!(super::release_serve_session(&map, "released"));
-        assert!(map.lock().unwrap()["released"].cancelled);
+        // The pure half (release_serve_session adds persist::save, which would
+        // write the real data dir, so the test drives save_to itself).
+        assert!(super::mark_released(&mut map, "released"));
+        assert!(map["released"].cancelled);
         // Releasing an unknown session is a harmless no-op.
-        assert!(!super::release_serve_session(&map, "missing"));
+        assert!(!super::mark_released(&mut map, "missing"));
 
         let file = dir.join("sessions.json");
-        persist::save_to(&file, &map.lock().unwrap());
+        persist::save_to(&file, &map);
         assert!(persist::load_from(&file).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
