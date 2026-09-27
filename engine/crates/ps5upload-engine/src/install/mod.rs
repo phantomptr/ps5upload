@@ -216,6 +216,34 @@ pub fn should_recycle_daemon(stream: bool, never_fetched: bool, code: u32) -> bo
     stream && never_fetched && (code & 0xFFFF_0000) == 0x8043_0000
 }
 
+/// Whether a stalled delivery should recycle the installer daemon: only when
+/// the daemon served it (a console-path install). The daemon keeps a loopback
+/// job "serving" until Sony has read every byte, which a stalled install never
+/// does, so without a restart every later install is refused as busy.
+pub fn should_recycle_after_stall(daemon_served: bool) -> bool {
+    daemon_served
+}
+
+/// Stop the installer daemon and wait (bounded) until :9115 has actually
+/// closed, so the next install's ensure sends a fresh one. A daemon still
+/// answering while it exits makes that ensure skip sending a new one and then
+/// hit a refused connect.
+async fn recycle_daemon(ip: &str) {
+    let ip_s = ip.to_string();
+    let _ = tokio::task::spawn_blocking(move || {
+        let _ = ic::stop(&ip_s);
+        use ps5upload_core::payload_lifecycle as pl;
+        let addr = pl::join_host_port(&ip_s, pl::INSTALLER_PORT);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline
+            && pl::port_is_open(&addr, std::time::Duration::from_millis(500))
+        {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+    })
+    .await;
+}
+
 /// Sony's HTTP-proxy rejection of the install URL.
 const SCE_HTTP_ERROR_PROXY: u32 = 0x8043_1084;
 
@@ -659,22 +687,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             crate::log_warn!(
                 "{tag}: network-class refusal 0x{code:08X} before any fetch — recycling the installer daemon so the next install starts clean"
             );
-            let ip_s = ip.clone();
-            // Stop, then wait (bounded) until :9115 has actually closed. A
-            // daemon still answering while it exits makes the next install's
-            // ensure skip sending a fresh one and then hit a refused connect.
-            let _ = tokio::task::spawn_blocking(move || {
-                let _ = ic::stop(&ip_s);
-                use ps5upload_core::payload_lifecycle as pl;
-                let addr = pl::join_host_port(&ip_s, pl::INSTALLER_PORT);
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-                while std::time::Instant::now() < deadline
-                    && pl::port_is_open(&addr, std::time::Duration::from_millis(500))
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(250));
-                }
-            })
-            .await;
+            recycle_daemon(&ip).await;
         }
         state.jobs.update(&job, |s| {
             s.phase = Phase::Failed;
@@ -759,6 +772,12 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         crate::log_warn!(
             "{tag}: delivery stalled at {last_served} bytes — source kept, reporting failed"
         );
+        if should_recycle_after_stall(session_id.is_none() && install_job_id.is_some()) {
+            crate::log_warn!(
+                "{tag}: recycling the installer daemon so a retry is not refused as busy"
+            );
+            recycle_daemon(&ip).await;
+        }
         state.jobs.update(&job, |s| {
             s.phase = Phase::Failed;
             s.verdict = Some(Verdict::Failed);
@@ -999,6 +1018,16 @@ mod tests {
         assert!(!should_recycle_daemon(true, false, 0x8043_1064));
         assert!(!should_recycle_daemon(true, true, 0x80B2_116F));
         assert!(!should_recycle_daemon(true, true, 0));
+    }
+
+    #[test]
+    fn a_stalled_daemon_served_install_recycles_the_daemon() {
+        // Measured on FW 5.10: the daemon keeps a stalled loopback job as
+        // "serving" until Sony reads every byte, which never happens, so every
+        // later install was refused as busy until the daemon restarted.
+        assert!(should_recycle_after_stall(true));
+        // A stream stall is served by this engine; the daemon holds nothing.
+        assert!(!should_recycle_after_stall(false));
     }
 
     // ── a stream the console never fetched from: say why, not "declined" ──
