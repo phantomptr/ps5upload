@@ -450,11 +450,7 @@ function QueueRow({
   const platform = platformForTitleId(titleId);
   const hasGameArt =
     item.sourceKind === "pkg" || item.sourceKind === "game-folder";
-  // Prefer the resolved/online title over the raw basename for pkgs.
-  const rowName =
-    (item.sourceKind === "pkg" &&
-      (item.installedTitle || titleInfo?.title)) ||
-    item.displayName;
+  const rowName = queueRowName(item, titleInfo?.title);
   const pct =
     item.totalBytes > 0
       ? Math.max(0, Math.min(100, (item.bytesSent / item.totalBytes) * 100))
@@ -746,18 +742,8 @@ function QueueRow({
         </div>
       )}
 
-      {item.status === "done" && item.bytesPerSec > 0 && (
-        <div className="mt-2 text-xs text-[var(--color-muted)]">
-          {formatBytes(item.bytesSent)}
-          {" · "}
-          <span className="tabular-nums">
-            {tr(
-              "queue_avg_speed",
-              { speed: `${formatBytes(item.bytesPerSec)}/s` },
-              "{speed}/s avg",
-            )}
-          </span>
-        </div>
+      {item.status === "done" && (
+        <DoneStats bytesSent={item.bytesSent} bytesPerSec={item.bytesPerSec} />
       )}
 
       {item.status === "failed" && item.error && (
@@ -777,6 +763,46 @@ function QueueRow({
  *  power-user debugging. Falls back to plain raw-error rendering when
  *  no structured fields are present (engine-internal failures, older
  *  payloads). */
+/** A queue row's display name. For a pkg, the resolved/online title wins,
+ *  then the finisher's installed title, then the file name. The finisher can
+ *  store a raw content id as `installedTitle`, so preferring it made a row
+ *  flip from "Star Wars…" to "UP1082-…" the moment its install finished. */
+export function queueRowName(
+  item: { sourceKind: string; installedTitle?: string | null; displayName: string },
+  onlineTitle: string | undefined,
+): string {
+  if (item.sourceKind === "pkg") {
+    return onlineTitle || item.installedTitle || item.displayName;
+  }
+  return item.displayName;
+}
+
+/** Size + average speed on a finished queue row. `speed` is the bare size:
+ *  every locale's `queue_avg_speed` template supplies the "/s" itself. */
+export function DoneStats({
+  bytesSent,
+  bytesPerSec,
+}: {
+  bytesSent: number;
+  bytesPerSec: number;
+}) {
+  const tr = useTr();
+  if (!(bytesPerSec > 0)) return null;
+  return (
+    <div className="mt-2 text-xs text-[var(--color-muted)]">
+      {formatBytes(bytesSent)}
+      {" · "}
+      <span className="tabular-nums">
+        {tr(
+          "queue_avg_speed",
+          { speed: formatBytes(bytesPerSec) },
+          "{speed}/s avg",
+        )}
+      </span>
+    </div>
+  );
+}
+
 function FailedRowErrorCard({
   rawError,
   reason,
