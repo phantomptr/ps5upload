@@ -4,9 +4,12 @@
 #
 # Subcommands: create | start | ensure | stop | status | test
 #
-#   ensure  boots an emulator ONLY if no device is attached, and prints
-#           "booted" or "preexisting" so a caller knows whether it owns the
-#           emulator and should shut it down (see run-android in the Makefile).
+#   ensure  reuses a running (or still-booting) emulator or attached device,
+#           and boots one only when there is none. With PS5UPLOAD_EMU_WINDOW=1
+#           it brings the emulator's window to the front, restarting a headless
+#           one with its window. Prints "booted" or "preexisting" so a caller
+#           knows whether it owns the emulator and should shut it down (see
+#           run-android in the Makefile).
 #
 # `test` leaves the emulator running so re-runs skip the ~25s cold boot; set
 # PS5UPLOAD_EMU_TEARDOWN=1 (CI) to shut down one that this run booted.
@@ -14,6 +17,11 @@
 # The emulator boots headless by default. PS5UPLOAD_EMU_WINDOW=1 boots it with
 # its window, so the app can be seen and used (make run-android does this;
 # make run-android-background and make emu-test stay headless).
+#
+# Performance: a windowed emulator renders on the host GPU (-gpu host; override
+# with PS5UPLOAD_EMU_GPU), headless uses software rendering. Both get 4 GB RAM
+# (PS5UPLOAD_EMU_MEMORY_MB) and half the host's cores up to 6
+# (PS5UPLOAD_EMU_CORES) — the AVD's own 2 GB / 4 cores made Android 16 crawl.
 #
 # ARTIFACTS LIVE OUTSIDE THE REPO, at ~/.ps5upload/android-test/<stamp>/.
 # That is deliberate and not a style choice: this repo has already leaked
@@ -61,6 +69,15 @@ pick_image() {
   return 1
 }
 
+# Half the host's cores, capped at 6: the AVD default of 4 left Android 16 and
+# the app's WebView fighting for CPU on a machine with plenty to spare.
+emu_cores() {
+  local n
+  n="$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)"
+  n=$((n / 2)); [ "$n" -lt 2 ] && n=2; [ "$n" -gt 6 ] && n=6
+  printf '%s' "${PS5UPLOAD_EMU_CORES:-$n}"
+}
+
 emu_serial() {
   "$ADB" devices 2>/dev/null | awk 'NR>1 && $1 ~ /^emulator-/ && $2=="device"{print $1; exit}'
 }
@@ -70,6 +87,57 @@ emu_serial() {
 # second target behind the developer's back.
 any_device() {
   "$ADB" devices 2>/dev/null | awk 'NR>1 && $2=="device"{print $1; exit}'
+}
+
+# The emulator process for our AVD, if one is running at all — including one
+# still booting, which adb does not list as "device" yet. Checking only adb
+# let a second run start another emulator while the first was booting.
+emu_running() {
+  pgrep -f "(/emulator/emulator|qemu-system[^ ]*) -avd $AVD_NAME( |$)" >/dev/null 2>&1
+}
+
+emu_headless() {
+  pgrep -f "(/emulator/emulator|qemu-system[^ ]*) -avd $AVD_NAME .*-no-window" >/dev/null 2>&1
+}
+
+# Stop our emulator and wait until its process has really exited — a clean
+# shutdown can take well over 30s, and a start that runs while the old one is
+# still exiting mistakes it for one that is booting. Force-kill if it lingers.
+stop_and_wait() {
+  cmd_stop
+  local waited=0
+  while emu_running && [ "$waited" -lt 60 ]; do sleep 1; waited=$((waited + 1)); done
+  if emu_running; then
+    say "Emulator still exiting after 60s — forcing it to stop"
+    pkill -9 -f "(/emulator/emulator|qemu-system[^ ]*) -avd $AVD_NAME( |$)" 2>/dev/null
+    sleep 2
+  fi
+}
+
+# Wait (bounded) for an emulator that is already starting to finish booting.
+wait_booted() {
+  local waited=0 serial booted
+  while [ "$waited" -lt "$BOOT_TIMEOUT_SEC" ]; do
+    serial="$(emu_serial)"
+    if [ -n "$serial" ]; then
+      booted="$("$ADB" -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r\n')"
+      [ "$booted" = "1" ] && return 0
+    fi
+    emu_running || return 2   # it exited instead of booting
+    sleep 5; waited=$((waited + 5))
+  done
+  return 1
+}
+
+# Raise the emulator's window. Best effort: macOS via AppleScript, Linux via
+# wmctrl when it is installed; elsewhere the window simply stays where it is.
+bring_to_front() {
+  case "$(uname -s)" in
+    Darwin)
+      osascript -e 'tell application "System Events" to set frontmost of (first process whose unix id is '"$(pgrep -f "qemu-system.*-avd $AVD_NAME" | head -1)"') to true' >/dev/null 2>&1 || true ;;
+    Linux)
+      command -v wmctrl >/dev/null 2>&1 && wmctrl -a "Android Emulator" >/dev/null 2>&1 || true ;;
+  esac
 }
 
 cmd_create() {
@@ -96,11 +164,23 @@ cmd_start() {
     say "✓ Emulator already running ($existing)"
     return 0
   fi
+  if emu_running; then
+    say "Emulator '$AVD_NAME' is already starting — waiting for it instead of booting another ..."
+    local rc=0; wait_booted || rc=$?
+    if [ "$rc" = 0 ]; then
+      say "✓ Emulator booted ($(emu_serial))"
+      return 0
+    fi
+    [ "$rc" = 2 ] || die "the running emulator did not finish booting within ${BOOT_TIMEOUT_SEC}s"
+    say "It exited instead — booting a fresh one ..."
+  fi
   "$EMULATOR" -list-avds 2>/dev/null | grep -qx "$AVD_NAME" || cmd_create
 
-  local window_flags=(-no-window)
+  # Headless: software rendering, which works without a display. Windowed:
+  # the Mac's own GPU — software rendering there made the UI crawl.
+  local window_flags=(-no-window -gpu swiftshader_indirect)
   if [ "${PS5UPLOAD_EMU_WINDOW:-0}" = "1" ]; then
-    window_flags=()
+    window_flags=(-gpu "${PS5UPLOAD_EMU_GPU:-host}")
     say "Booting '$AVD_NAME' with its window (up to ${BOOT_TIMEOUT_SEC}s) ..."
   else
     say "Booting '$AVD_NAME' headless (up to ${BOOT_TIMEOUT_SEC}s) ..."
@@ -117,7 +197,7 @@ cmd_start() {
   set -m
   nohup "$EMULATOR" -avd "$AVD_NAME" \
     ${window_flags[@]+"${window_flags[@]}"} -no-audio -no-boot-anim -no-snapshot-save \
-    -gpu swiftshader_indirect \
+    -memory "${PS5UPLOAD_EMU_MEMORY_MB:-4096}" -cores "$(emu_cores)" \
     >"$HOME/.ps5upload/android-emu.log" 2>&1 &
   set +m
   local emu_pid=$!
@@ -153,16 +233,44 @@ cmd_start() {
 # All human-readable progress goes to stderr, because the caller reads stdout.
 cmd_ensure() {
   need_tools
-  if [ -n "$(any_device)" ]; then
-    say "✓ Using the already-attached device ($(any_device))" >&2
-    # A headless emulator from an earlier background run cannot grow a window.
-    if [ "${PS5UPLOAD_EMU_WINDOW:-0}" = "1" ] && pgrep -f "emulator.*-avd $AVD_NAME.*-no-window" >/dev/null 2>&1; then
-      say "  It is running headless — 'make emu-stop' first to see it in a window." >&2
+  local want_window="${PS5UPLOAD_EMU_WINDOW:-0}"
+  # Our emulator is running (or still booting): reuse it, never boot a second.
+  if emu_running; then
+    if [ "$want_window" = "1" ] && emu_headless; then
+      # A headless emulator cannot grow a window, so restart this one with
+      # its window. Its data is kept (no wipe), and it stays up afterwards
+      # like any emulator this run did not create.
+      say "Emulator is running headless — restarting it with its window ..." >&2
+      stop_and_wait >&2
+      cmd_start >&2 || die "could not restart the emulator with its window"
+      bring_to_front
+    else
+      if [ -z "$(emu_serial)" ]; then
+        say "Emulator is still starting — waiting for it ..." >&2
+        local rc=0; wait_booted || rc=$?
+        if [ "$rc" = 2 ]; then
+          say "It exited instead — booting a fresh one ..." >&2
+          cmd_start >&2 || die "could not boot an emulator"
+          [ "$want_window" = "1" ] && bring_to_front
+          printf 'booted\n'
+          return 0
+        fi
+        [ "$rc" = 0 ] || die "the running emulator did not finish booting within ${BOOT_TIMEOUT_SEC}s"
+      fi
+      say "✓ Using the running emulator ($(emu_serial))" >&2
+      [ "$want_window" = "1" ] && bring_to_front
     fi
     printf 'preexisting\n'
     return 0
   fi
+  # A phone plugged in by hand (or another emulator) still wins.
+  if [ -n "$(any_device)" ]; then
+    say "✓ Using the already-attached device ($(any_device))" >&2
+    printf 'preexisting\n'
+    return 0
+  fi
   cmd_start >&2 || die "could not boot an emulator"
+  [ "$want_window" = "1" ] && bring_to_front
   printf 'booted\n'
 }
 

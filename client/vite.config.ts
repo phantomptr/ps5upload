@@ -4,20 +4,24 @@ import tailwindcss from "@tailwindcss/vite";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
+// Dev server port (live reload uses the next one up). Desktop dev uses 1420;
+// `make run-android` picks its own so both can run at once.
+// @ts-expect-error process is a nodejs global
+const port = Number(process.env.PS5UPLOAD_VITE_PORT) || 1420;
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   clearScreen: false,
   base: "./",
   server: {
-    port: 1420,
+    port,
     strictPort: true,
     host: host || false,
     hmr: host
       ? {
           protocol: "ws",
           host,
-          port: 1421,
+          port: port + 1,
         }
       : undefined,
   },

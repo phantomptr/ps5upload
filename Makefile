@@ -171,8 +171,10 @@ help:
 	@echo "  make dist-linux|dist-linux-arm"
 	@echo ""
 	@echo "Android (Tauri mobile — needs Android SDK + JDK 17 + NDK + rustup):"
-	@echo "  make run-android      - Build + run with live reload; boots the emulator WITH its window"
-	@echo "  make run-android-background - Same, but the emulator boots headless (no window)"
+	@echo "  make run-android      - Build + run with live reload; emulator in the FOREGROUND (window)"
+	@echo "  make run-android-background - Same, but the emulator runs headless (no window)"
+	@echo "      Both reuse a running emulator instead of booting another; run-android"
+	@echo "      brings its window to the front (and reopens a headless one with a window)."
 	@echo "  make android-deploy   - Build APK + install/update it on connected device(s)"
 	@echo "  make android-build    - Build a debug APK (no device needed)"
 	@echo "  make android-init     - One-time: scaffold src-tauri/gen/android"
@@ -180,7 +182,6 @@ help:
 	@echo "  make emu-test         - Build + run the app on a headless emulator, with a screenshot"
 	@echo "  make emu-start        - Boot the test emulator (headless); emu-stop to shut it down"
 	@echo "  make emu-status       - Show AVDs, whether one is running, and where artifacts go"
-	@echo "  make run-android      - Boots the emulator (windowed) only if nothing is attached"
 	@echo "      emu-test leaves the emulator up for fast re-runs; PS5UPLOAD_EMU_TEARDOWN=1 stops it"
 	@echo ""
 	@echo "Auto-launch (engine starts at OS login):"
@@ -620,6 +621,11 @@ android-build: android-deps payload setup-client
 # run-android: the emulator boots WITH its window (foreground) so the app can be
 # seen and used. run-android-background: it boots headless, as emu-test does.
 # Either way the dev server stays attached here for live reload.
+# Android dev's Vite ports (live reload on the next one up), separate from
+# desktop dev's 1420/1421 so `make run-client` and `make run-android` can run
+# at the same time.
+ANDROID_VITE_PORT ?= 1430
+
 run-android: EMU_WINDOW := 1
 run-android-background: EMU_WINDOW := 0
 run-android run-android-background: android-deps payload setup-client
@@ -631,7 +637,8 @@ run-android run-android-background: android-deps payload setup-client
 		echo "  (leaving the existing device/emulator running)"; \
 	fi; \
 	echo "Launching on the attached Android device/emulator (tauri android dev)..."; \
-	cd $(CLIENT_DIR) && $(ANDROID_ENV) npx tauri android dev
+	cd $(CLIENT_DIR) && PS5UPLOAD_VITE_PORT=$(ANDROID_VITE_PORT) $(ANDROID_ENV) npx tauri android dev \
+		--config '{"build":{"devUrl":"http://localhost:$(ANDROID_VITE_PORT)"}}'
 
 #──────────────────────────────────────────────────────────────────────────────
 # Docker — self-hosted engine image. Mirrors what .github/workflows/
