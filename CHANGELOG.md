@@ -4,6 +4,26 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.36.0
+
+**Choose which drive install packages are kept on.**
+
+- **Keep packages off the internal drive.** In **Volumes**, press **Use for
+  packages** on a drive and uploaded install packages are kept there (in
+  `ps5upload/pkg_library` on that drive) instead of filling internal storage.
+  The choice is remembered for each console.
+- **Always a safe fallback.** If the chosen drive isn't connected, packages go
+  to internal storage, and the app tells you.
+- **One list for every drive.** Install Package lists packages from all your
+  drives and shows which drive each one is on, and External Packages no longer
+  lists them a second time.
+- **A stalled install no longer blocks the next one.** If the console stopped
+  fetching a package partway, every retry used to fail with "an install is
+  already in progress" until the helper restarted. Retrying now works straight
+  away.
+
+---
+
 ## 5.35.0
 
 **One install path for everything, and Convert can install either way.**
