@@ -18,8 +18,8 @@
 # its window, so the app can be seen and used (make run-android does this;
 # make run-android-background and make emu-test stay headless).
 #
-# Performance: a windowed emulator renders on the host GPU (-gpu host; override
-# with PS5UPLOAD_EMU_GPU), headless uses software rendering. Both get 4 GB RAM
+# Performance: software rendering (PS5UPLOAD_EMU_GPU=host opts into the Mac's
+# GPU, which is faster but froze Android 16 in testing). 4 GB RAM
 # (PS5UPLOAD_EMU_MEMORY_MB) and half the host's cores up to 6
 # (PS5UPLOAD_EMU_CORES) — the AVD's own 2 GB / 4 cores made Android 16 crawl.
 #
@@ -176,11 +176,14 @@ cmd_start() {
   fi
   "$EMULATOR" -list-avds 2>/dev/null | grep -qx "$AVD_NAME" || cmd_create
 
-  # Headless: software rendering, which works without a display. Windowed:
-  # the Mac's own GPU — software rendering there made the UI crawl.
-  local window_flags=(-no-window -gpu swiftshader_indirect)
+  # Software rendering by default, windowed or not. The host GPU (-gpu host)
+  # is faster but froze the Android 16 image within minutes on an M1 Max —
+  # the emulator itself warns its guest GL layer is unstable above API 35 —
+  # so it is opt-in: PS5UPLOAD_EMU_GPU=host.
+  local gpu="${PS5UPLOAD_EMU_GPU:-swiftshader_indirect}"
+  local window_flags=(-no-window -gpu "$gpu")
   if [ "${PS5UPLOAD_EMU_WINDOW:-0}" = "1" ]; then
-    window_flags=(-gpu "${PS5UPLOAD_EMU_GPU:-host}")
+    window_flags=(-gpu "$gpu")
     say "Booting '$AVD_NAME' with its window (up to ${BOOT_TIMEOUT_SEC}s) ..."
   else
     say "Booting '$AVD_NAME' headless (up to ${BOOT_TIMEOUT_SEC}s) ..."
