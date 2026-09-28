@@ -136,7 +136,9 @@ jobs:
     name: build-client-${{ matrix.platform }}-${{ matrix.arch }}
     needs: build-payload
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # The Intel macOS runner took ~33 min for v5.35/5.36 and ran past 45 on
+    # v5.37.0, cancelling the whole release (create-release needs every build).
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
