@@ -32,6 +32,9 @@ client/node_modules/
 # Docs, tests, scripts (not needed at runtime)
 docs/
 *.md
+# …except the two the web UI bundles (its FAQ and Changelog screens).
+!FAQ.md
+!CHANGELOG.md
 LICENSE*
 # ...but keep the vendored crate whole: its licences must travel with the
 # source we build from, and excluding them here would quietly drop the

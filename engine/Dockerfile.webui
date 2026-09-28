@@ -35,13 +35,16 @@
 # ── Stage 1: build the React frontend ────────────────────────────────────────
 FROM node:26-alpine AS frontend
 
-WORKDIR /src
+# The client at its repo-relative place: the FAQ and Changelog screens bundle
+# ../FAQ.md and ../CHANGELOG.md from the repo root.
+WORKDIR /repo/client
 # Copy only the client package files first so npm ci is cached
 COPY client/package.json client/package-lock.json ./
 RUN npm ci --silent
 
 # Now copy the rest of the client source and build
 COPY client/ .
+COPY FAQ.md CHANGELOG.md ../
 RUN npm run build:vite
 
 # ── Stage 2: build the Rust engine with embedded web UI ──────────────────────
@@ -64,7 +67,7 @@ WORKDIR /build/engine
 
 # Populate the webui/ embed directory from the frontend build output.
 # rust-embed will bake every file in this directory into the binary.
-COPY --from=frontend /src/dist/ ./crates/ps5upload-engine/webui/
+COPY --from=frontend /repo/client/dist/ ./crates/ps5upload-engine/webui/
 
 RUN cargo build --release -p ps5upload-engine --features webui
 
