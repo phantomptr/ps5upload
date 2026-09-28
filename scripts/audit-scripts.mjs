@@ -59,9 +59,12 @@ const haystackFiles = gitLsFiles(["."]).filter((file) =>
   && !file.startsWith("client/dist/")
 );
 const executableLike = files.filter((f) => /\.(mjs|js|py|sh|ps1)$/i.test(f));
+// A `*.test.mjs` beside a script is run by check-scripts.mjs (`node --test` over
+// every such file), so it is used without being named anywhere.
+const runByCheckScripts = (file) => /\.test\.mjs$/.test(file);
 const rows = executableLike.map((file) => ({
   file,
-  refs: countRefs(file, haystackFiles),
+  refs: runByCheckScripts(file) ? 1 : countRefs(file, haystackFiles),
   manual: manualEntrypoints.has(file),
 }));
 const suspicious = rows.filter((r) => r.refs === 0 && !r.manual);
