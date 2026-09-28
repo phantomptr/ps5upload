@@ -410,6 +410,16 @@ installer: setup-payload
 	@$(MAKE) -C $(INSTALLER_DIR) -j$(JOBS)
 	@echo "✓ Built $(INSTALLER_ELF)"
 
+# The patched elfldr the engine sends to replace a console's stock one (see
+# third_party/elfldr/README.md). Its ELF is checked in, so a build without the
+# SDK still embeds it; rebuild after changing the vendored sources.
+.PHONY: elfldr
+elfldr: setup-payload
+	@echo "Building the patched elfldr..."
+	@$(MAKE) -C third_party/elfldr
+	@rm -f third_party/elfldr/*.o
+	@echo "✓ Built third_party/elfldr/elfldr-ps5.elf"
+
 send-payload: payload
 	@echo "Sending payload to $(PS5_HOST):$(PS5_LOADER_PORT) ..."
 	@if ! command -v python3 >/dev/null 2>&1; then \

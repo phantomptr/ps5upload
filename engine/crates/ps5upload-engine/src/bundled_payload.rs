@@ -37,6 +37,12 @@ const EMBEDDED_INSTALLER: Option<&[u8]> =
 #[cfg(not(have_bundled_installer))]
 const EMBEDDED_INSTALLER: Option<&[u8]> = None;
 
+#[cfg(have_bundled_elfldr)]
+const EMBEDDED_ELFLDR: Option<&[u8]> =
+    Some(include_bytes!(env!("PS5UPLOAD_BUNDLED_ELFLDR_ELF")) as &[u8]);
+#[cfg(not(have_bundled_elfldr))]
+const EMBEDDED_ELFLDR: Option<&[u8]> = None;
+
 /// Which ELF image a caller wants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Image {
@@ -45,6 +51,9 @@ pub enum Image {
     Payload,
     /// The PS5Upload installer daemon (`payload/installer/`).
     Installer,
+    /// The patched elfldr (`third_party/elfldr/`), sent to replace a console's
+    /// stock one so its loader port cannot get stuck.
+    Elfldr,
 }
 
 impl Image {
@@ -57,6 +66,7 @@ impl Image {
         match self {
             Image::Payload => "ps5upload.elf",
             Image::Installer => "ps5upload-installer.elf",
+            Image::Elfldr => "elfldr-ps5.elf",
         }
     }
 
@@ -64,6 +74,7 @@ impl Image {
         match self {
             Image::Payload => EMBEDDED_PAYLOAD,
             Image::Installer => EMBEDDED_INSTALLER,
+            Image::Elfldr => EMBEDDED_ELFLDR,
         }
     }
 
@@ -73,6 +84,7 @@ impl Image {
         match self {
             Image::Payload => "ps5upload payload",
             Image::Installer => "PS5Upload installer",
+            Image::Elfldr => "patched elfldr",
         }
     }
 }
@@ -141,6 +153,15 @@ fn missing_image_message(image: Image) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_build_carries_the_patched_elfldr() {
+        // Checked in under third_party/, so no SDK is needed to have it.
+        std::env::remove_var("PS5UPLOAD_PAYLOAD_DIR");
+        let bytes = image_bytes(Image::Elfldr).expect("elfldr embedded");
+        assert_eq!(&bytes[..4], b"\x7fELF");
+        assert_eq!(Image::Elfldr.file_name(), "elfldr-ps5.elf");
+    }
 
     #[test]
     fn installer_is_found_in_a_flat_dir_or_a_make_payload_tree() {

@@ -257,3 +257,8 @@ fakelibs/
 
 # ─── Local-only docs (specs, plans, research — kept off GitHub) ──────────
 docs/
+
+# Intermediate objects of the vendored elfldr build (its ELF is tracked).
+third_party/elfldr/*.o
+third_party/elfldr/socksrv.elf
+third_party/elfldr/bootstrap.elf

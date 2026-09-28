@@ -1,0 +1,45 @@
+diff --git a/socksrv.c b/socksrv.c
+index b0f28b2..3d8d5e3 100644
+--- a/socksrv.c
++++ b/socksrv.c
+@@ -35,6 +35,12 @@ along with this program; see the file COPYING. If not, see
+ #include "uri.h"
+ 
+ 
++/**
++ * How long a connection may stay silent before it is dropped.
++ **/
++#define CONN_READ_TIMEOUT_SEC 15
++
++
+ /**
+  * Magic number that socket input starts with (little endian).
+  **/
+@@ -242,6 +248,16 @@ on_connection(int fd) {
+     return;
+   }
+ 
++  // Connections are served one at a time, so a client that connects and then
++  // goes silent without closing (a dropped link, or a computer or console that
++  // went to sleep mid-send) used to block every later connection for good.
++  // Give each read a deadline instead.
++  struct timeval deadline = { .tv_sec = CONN_READ_TIMEOUT_SEC, .tv_usec = 0 };
++  if(setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &deadline, sizeof(deadline)) < 0) {
++    LOG_PERROR("setsockopt");
++    return;
++  }
++
+   if(recv(fd, &magic, sizeof(magic), MSG_PEEK | MSG_WAITALL) != sizeof(magic)) {
+     LOG_PERROR("recv");
+     write(fd, "[elfldr.elf] Unknown payload format\n\r\0", 38);
+@@ -286,6 +302,10 @@ on_connection(int fd) {
+       pipe = strdup("1");
+     }
+ 
++    // The payload inherits the connection as its stdio: no deadline there.
++    struct timeval none = { .tv_sec = 0, .tv_usec = 0 };
++    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &none, sizeof(none));
++
+     if(!strcmp(pipe, "0") ||
+        !strcasecmp(pipe, "false") ||
+        !strcasecmp(pipe, "no")) {

@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(have_bundled_payload)");
     println!("cargo::rustc-check-cfg=cfg(have_bundled_installer)");
+    println!("cargo::rustc-check-cfg=cfg(have_bundled_elfldr)");
 
     let manifest_dir =
         PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
@@ -56,6 +57,16 @@ fn main() {
                 .join("installer")
                 .join("ps5upload-installer.elf"),
         ],
+    );
+    // The patched elfldr, checked in under third_party/ (see its README), so
+    // every build embeds it with or without the payload SDK.
+    embed(
+        "PS5UPLOAD_BUNDLED_ELFLDR_ELF",
+        "have_bundled_elfldr",
+        &[repo_root
+            .join("third_party")
+            .join("elfldr")
+            .join("elfldr-ps5.elf")],
     );
 }
 
