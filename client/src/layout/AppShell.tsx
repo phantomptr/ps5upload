@@ -70,6 +70,7 @@ import { useUploadQueueStore } from "../state/uploadQueue";
 import { useTransferStore } from "../state/transfer";
 import { useUploadSettingsStore } from "../state/uploadSettings";
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
+import { guardElfldr } from "../lib/elfldrGuard";
 import { installPlayTimeAccumulator } from "../state/playTime";
 import { installRunningWatch } from "../state/runningWatch";
 import { useTr } from "../state/lang";
@@ -376,6 +377,19 @@ function useStatusPolling() {
             if (now?.payloadStatus !== "up") return;
             if (transferScreenBusy(captureHost)) return;
             void capturePayloadBlackBox(captureHost);
+          }, BLACK_BOX_SETTLE_MS);
+        }
+        // Keep the patched elfldr in place (lib/elfldrGuard.ts) each time the helper is seen
+        // arriving — including a helper already up when the app starts, which never goes
+        // through ensurePayloadCurrent. Settled first, like the capture above, and never while
+        // a transfer runs; guardElfldr itself asks at most every 10 minutes per console.
+        if (newStatus === "up" && prev.payloadStatus !== "up") {
+          const guardHost = probedHost;
+          window.setTimeout(() => {
+            const now = useConnectionStore.getState().runtimeByHost[key];
+            if (now?.payloadStatus !== "up") return;
+            if (transferScreenBusy(guardHost)) return;
+            void guardElfldr(hostOf(guardHost) || guardHost, false);
           }, BLACK_BOX_SETTLE_MS);
         }
         // Log only on an up<->down TRANSITION (not every poll).
