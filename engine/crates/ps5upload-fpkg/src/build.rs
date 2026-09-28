@@ -915,22 +915,22 @@ pub fn package_digest(path: &Path) -> Result<[u8; 32]> {
 #[cfg(test)]
 mod tests {
 
-    /// A real Battlefield 6 build (Windows, Balanced): 234 GiB read and compressed in 50 min 47 s
-    /// while the source drive gave ~82 MB/s, then 113 GiB written in 12 min and verified in 8½.
+    /// A real Battlefield 6 build (Windows, Balanced): compress 50 min 47 s, write 12 min 11 s,
+    /// verify 8 min 31 s — 71 min in all, for 234 GiB into 113.33 GiB. One thread both reads the
+    /// source and writes the compressed blocks, so the compress stage costs both in turn (~108 MB/s
+    /// of reading plus the package at ~166 MB/s); the encoder, far faster, was never the limit.
     /// The old estimate said 17 min: compression alone, from memory, on every thread at once.
     #[test]
-    fn a_build_takes_its_slowest_input_and_every_stage() {
+    fn a_build_pays_for_reading_writing_and_every_stage() {
         let gib = |g: f64| (g * 1024.0 * 1024.0 * 1024.0) as u64;
-        let secs = build_seconds(gib(234.0), gib(113.33), 234e6, 82e6, 166e6);
+        let secs = build_seconds(gib(234.0), gib(113.33), 234e6, 108e6, 166e6);
         let minutes = secs as f64 / 60.0;
-        // Reading bounds compression (51 min), then the write and a read-back of the package.
         assert!((68.0..=80.0).contains(&minutes), "{minutes} min");
-        // A fast source leaves the CPU as the limit.
-        let cpu_bound = build_seconds(gib(10.0), gib(5.0), 100e6, 1e9, 1e9);
-        assert_eq!(
-            cpu_bound,
-            (gib(10.0) as f64 / 100e6 + 2.0 * gib(5.0) as f64 / 1e9).ceil() as u64
-        );
+        // A slow encoder on fast drives: compression is the limit, then the write and verify.
+        let (total, package) = (gib(10.0), gib(5.0));
+        let cpu_bound = build_seconds(total, package, 20e6, 1e9, 1e9);
+        let expect = total as f64 / 20e6 + 2.0 * package as f64 / 1e9;
+        assert_eq!(cpu_bound, expect.ceil() as u64);
         // Nothing to do still takes a moment.
         assert_eq!(build_seconds(0, 0, 1.0, 1.0, 1.0), 1);
     }
@@ -1071,6 +1071,19 @@ pub struct Estimates {
     pub fast: Estimate,
     pub balanced: Estimate,
     pub smallest: Estimate,
+    /// What the times were worked out from, for a bug report when one is far off.
+    pub rates: Rates,
+}
+
+/// The measured speeds behind an estimate, bytes per second (`read`: the source; `write`: the
+/// output drive; the rest: the encoder on every thread at each level).
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+pub struct Rates {
+    pub read: f64,
+    pub write: f64,
+    pub fast: f64,
+    pub balanced: f64,
+    pub smallest: f64,
 }
 
 /// Blocks sampled for an estimate (at least; more on a machine with many threads).
@@ -1080,10 +1093,11 @@ const READ_PROBE: u64 = 128 * 1024 * 1024;
 /// How much is written to the output folder to time its drive.
 const WRITE_PROBE: usize = 64 * 1024 * 1024;
 
-/// Whole seconds for a build of `total` source bytes into a `package` of that size: compression
-/// runs as fast as the slower of the encoder and the source's reads allow, then the package is
-/// written and read back to verify (the read-back is timed at the write speed too: the same
-/// drive, and it errs long rather than short). Rates are bytes per second.
+/// Whole seconds for a build of `total` source bytes into a `package` of that size. The compress
+/// stage runs the encoder on a pool while ONE thread reads the source and writes each compressed
+/// block (`kraken_image::compress`), so it takes the longer of the encoder's time and that
+/// thread's reading plus writing. The write and verify stages then each pass over the package
+/// (timed at the output drive's write speed: the same drive, erring long). Rates in bytes/s.
 fn build_seconds(
     total: u64,
     package: u64,
@@ -1091,9 +1105,12 @@ fn build_seconds(
     read_rate: f64,
     write_rate: f64,
 ) -> u64 {
-    let compress = total as f64 / compress_rate.min(read_rate).max(1.0);
-    let write_and_verify = 2.0 * package as f64 / write_rate.max(1.0);
-    ((compress + write_and_verify).ceil() as u64).max(1)
+    let (total, package) = (total as f64, package as f64);
+    let write = write_rate.max(1.0);
+    let encode = total / compress_rate.max(1.0);
+    let feed = total / read_rate.max(1.0) + package / write;
+    let passes = 2.0 * package / write;
+    ((encode.max(feed) + passes).ceil() as u64).max(1)
 }
 
 /// The source's sequential read speed: one run of up to [`READ_PROBE`] from the middle of its
@@ -1208,22 +1225,31 @@ pub fn estimate(source_path: &Path, output_dir: Option<&Path>) -> Result<Estimat
     let measure = |level: Level| {
         let (stored, rate) = encode_all(level);
         let bytes = (total as f64 * stored as f64 / raw.max(1) as f64) as u64;
-        Estimate {
+        let e = Estimate {
             bytes,
             seconds: build_seconds(total, bytes, rate, read_rate, write_rate),
-        }
+        };
+        (e, rate)
     };
-    let fast = measure(Level::Fast);
-    let mut balanced = measure(Level::Balanced);
-    let mut smallest = measure(Level::Smallest);
+    let (fast, fast_rate) = measure(Level::Fast);
+    let (mut balanced, balanced_rate) = measure(Level::Balanced);
+    let (mut smallest, smallest_rate) = measure(Level::Smallest);
     balanced.bytes = balanced.bytes.min(fast.bytes);
     balanced.seconds = balanced.seconds.max(fast.seconds);
     smallest.bytes = smallest.bytes.min(balanced.bytes);
     smallest.seconds = smallest.seconds.max(balanced.seconds);
+    let finite = |r: f64| if r.is_finite() { r } else { 0.0 };
     Ok(Estimates {
         fast,
         balanced,
         smallest,
+        rates: Rates {
+            read: finite(read_rate),
+            write: finite(write_rate),
+            fast: fast_rate,
+            balanced: balanced_rate,
+            smallest: smallest_rate,
+        },
     })
 }
 
