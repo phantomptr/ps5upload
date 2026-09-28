@@ -50,7 +50,9 @@ jobs:
   verify:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # A full engine (and, for the web UI, client) build: ~7-10 min on a good
+    # runner, so 10 cancelled ordinary runs (PR #338).
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
 
@@ -79,7 +81,9 @@ jobs:
   verify-webui:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # A full engine (and, for the web UI, client) build: ~7-10 min on a good
+    # runner, so 10 cancelled ordinary runs (PR #338).
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
 
