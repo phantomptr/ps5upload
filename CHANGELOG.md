@@ -4,6 +4,17 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.37.2
+
+- **No crash screen after an update.** A web UI tab left open while the app
+  was updated could crash when you opened a screen (for example Files) —
+  "Importing a module script failed". The page now reloads once and opens the
+  screen from the new version.
+- **FAQ and What's New** load again when running the app from source.
+- Building from source (`make run-client`, `make run-android`, …) no longer
+  reinstalls the client's packages every time, which broke a dev app already
+  running.
+
 ## 5.37.1
 
 (5.37.0 was tagged but never published; everything it had is here.)
