@@ -1,12 +1,39 @@
-import { defineConfig } from "vite";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+
+/**
+ * The FAQ and What's New screens show the repo-root FAQ.md and CHANGELOG.md (lib/bundledDoc.ts).
+ * Imported as `../../../FAQ.md?raw`, the dev server served them as raw markdown instead of
+ * modules (they sit outside the client folder), so both screens failed there. As virtual modules
+ * they go through the normal pipeline in dev and in builds alike.
+ */
+function bundledDocs(): Plugin {
+  const files: Record<string, string> = {
+    "virtual:doc/faq": "../FAQ.md",
+    "virtual:doc/changelog": "../CHANGELOG.md",
+  };
+  return {
+    name: "ps5upload-bundled-docs",
+    resolveId(id) {
+      return id in files ? `\0${id}` : undefined;
+    },
+    load(id) {
+      if (!id.startsWith("\0virtual:doc/")) return undefined;
+      const file = fileURLToPath(new URL(files[id.slice(1)], import.meta.url));
+      this.addWatchFile(file);
+      return `export default ${JSON.stringify(readFileSync(file, "utf8"))};`;
+    },
+  };
+}
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), bundledDocs()],
   clearScreen: false,
   base: "./",
   server: {
