@@ -145,11 +145,20 @@ mod tests {
     struct TmpDir(PathBuf);
     impl TmpDir {
         fn new() -> Self {
+            // A counter as well as the clock: macOS time ticks in microseconds, so two tests
+            // starting together got the same directory and one deleted it under the other.
+            static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let n = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let p = std::env::temp_dir().join(format!("ps5u-hist-{}-{}", std::process::id(), n));
+            let p = std::env::temp_dir().join(format!(
+                "ps5u-hist-{}-{}-{}",
+                std::process::id(),
+                n,
+                seq
+            ));
             fs::create_dir_all(&p).unwrap();
             TmpDir(p)
         }

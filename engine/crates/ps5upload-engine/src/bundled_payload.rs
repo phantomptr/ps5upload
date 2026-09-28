@@ -157,8 +157,7 @@ mod tests {
     #[test]
     fn every_build_carries_the_patched_elfldr() {
         // Checked in under third_party/, so no SDK is needed to have it.
-        std::env::remove_var("PS5UPLOAD_PAYLOAD_DIR");
-        let bytes = image_bytes(Image::Elfldr).expect("elfldr embedded");
+        let bytes = Image::Elfldr.embedded().expect("elfldr embedded");
         assert_eq!(&bytes[..4], b"\x7fELF");
         assert_eq!(Image::Elfldr.file_name(), "elfldr-ps5.elf");
     }
