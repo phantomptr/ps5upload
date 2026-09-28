@@ -300,9 +300,17 @@ setup-client:
 	@command -v node >/dev/null 2>&1 || { echo "ERROR: Node.js is not installed."; exit 1; }
 	@command -v npm >/dev/null 2>&1 || { echo "ERROR: npm is not installed."; exit 1; }
 	@echo "✓ Node.js toolchain found: node $$(node --version), npm $$(npm --version)"
-	@echo "Installing client dependencies..."
-	@cd $(CLIENT_DIR) && $(NPM_INSTALL)
-	@echo "✓ Client dependencies installed"
+	@# Reinstall only when the lockfile (or Node) changed since the last install. npm ci
+	@# deletes node_modules first — including Vite's dependency cache — so running it on
+	@# every make broke any dev server already running (make run-client beside
+	@# run-android or emu-test): its screens failed with "Importing a module script failed".
+	@cd $(CLIENT_DIR) && want="$$(node -e "const c=require('crypto'),f=require('fs');process.stdout.write(c.createHash('sha256').update(f.readFileSync('package-lock.json')).update(process.version).digest('hex'))")"; \
+	if [ -f node_modules/.ps5upload-installed ] && [ "$$(cat node_modules/.ps5upload-installed)" = "$$want" ]; then \
+		echo "✓ Client dependencies already match package-lock.json"; \
+	else \
+		echo "Installing client dependencies..." && $(NPM_INSTALL) && printf '%s' "$$want" > node_modules/.ps5upload-installed && \
+		echo "✓ Client dependencies installed"; \
+	fi
 
 #──────────────────────────────────────────────────────────────────────────────
 # Build
