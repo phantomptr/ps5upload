@@ -4,7 +4,20 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## 5.37.0
+## 5.37.1
+
+(5.37.0 was tagged but never published; everything it had is here.)
+
+**No more loading elfldr again.**
+
+- The stock elfldr on port 9021 could get stuck for good when a connection
+  dropped mid-send — Wi-Fi hiccups, a computer going to sleep, or the PS5
+  entering rest mode — and then ignored everything until you loaded it
+  again. ps5upload now carries an elfldr that recovers by itself, and
+  swaps it in whenever the console's helper comes up. (Only the standard
+  elfldr is replaced; any other loader on port 9021 is left alone.)
+- The app no longer sends into a stuck loader: it waits for one that is
+  recovering, and says plainly when elfldr needs loading again.
 
 **Add several games at once.** (#335)
 
@@ -96,6 +109,8 @@ What's new in ps5upload, written for humans.
   phones wrap long titles and button rows.
 - Section headers, tabs and small buttons show at their intended size; they
   were all drawn at body-text size.
+- The web UI Docker image builds again (its FAQ and Changelog screens were
+  missing from the build).
 - In the browser build, the FAQ and changelog load, and options a web page
   can't provide are hidden.
 
