@@ -34,6 +34,7 @@
 //!   GET  /api/ps5/list-dir?path=...   → list immediate children of a directory on PS5
 
 mod bundled_payload;
+mod elfldr_guard;
 mod engine_log;
 mod fakelibs_api;
 mod fpkg_api;
@@ -2639,6 +2640,40 @@ async fn ps5_process_list(
     match r {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct HostQuery {
+    host: String,
+}
+
+/// GET /api/ps5/elfldr/health?host= — whether the loader on :9021 answers (`healthy`), took
+/// the connection and never answered (`stuck`), or isn't there (`absent`).
+async fn ps5_elfldr_health(Query(q): Query<HostQuery>) -> impl IntoResponse {
+    let health = tokio::task::spawn_blocking(move || {
+        elfldr_guard::probe(
+            q.host.trim(),
+            9021,
+            std::time::Duration::from_secs(3),
+            std::time::Duration::from_secs(5),
+        )
+    })
+    .await;
+    match health {
+        Ok(h) => (StatusCode::OK, Json(serde_json::json!({ "health": h }))).into_response(),
+        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+    }
+}
+
+/// POST /api/ps5/elfldr/ensure {host} — swap the console's stock elfldr for the patched one
+/// (see `elfldr_guard`). Needs the helper up.
+async fn ps5_elfldr_ensure(Json(q): Json<HostQuery>) -> impl IntoResponse {
+    let r = tokio::task::spawn_blocking(move || elfldr_guard::ensure(q.host.trim())).await;
+    match r {
+        Ok(Ok(outcome)) => (StatusCode::OK, Json(outcome)).into_response(),
+        Ok(Err(e)) => json_err(StatusCode::BAD_GATEWAY, e).into_response(),
+        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
     }
 }
 
@@ -8948,6 +8983,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/focus", get(ps5_focus))
         .route("/api/ps5/fs/read-preview", post(ps5_fs_read_preview))
         .route("/api/ps5/process/list", get(ps5_process_list))
+        .route("/api/ps5/elfldr/health", get(ps5_elfldr_health))
+        .route("/api/ps5/elfldr/ensure", post(ps5_elfldr_ensure))
         .route("/api/ps5/process/kill", post(ps5_process_kill))
         .route("/api/ps5/power/control", post(ps5_power_control))
         .route("/api/ps5/power/telemetry", get(ps5_power_telemetry))
