@@ -50,9 +50,11 @@ What's new in ps5upload, written for humans.
 - **Game language.** For a game that stays in English on a console set to
   another language, Convert can declare one language in the package. Most
   games follow the console's language and aren't affected.
-- **Honest build times.** The time on each compression level now covers the
-  whole build — compress, write and verify — at the speed your drives
-  actually read and write, instead of the compression step alone.
+- **Closer build times.** The time on each compression level now covers the
+  whole build — compress, write and verify — using measured drive speeds,
+  instead of the compression step alone (which read 17 minutes for a 71-minute
+  build). It can still read short for a game the computer read very recently,
+  while that game is in the system's file cache.
 
 **Stream & install first.**
 
