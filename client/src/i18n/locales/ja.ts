@@ -1343,6 +1343,8 @@ connection_enter_ip_first: "先に PS5 の IP アドレスを入力してくだ�
 connection_checking: "{target}:{port} を確認中…",
 connection_locating_elf: "同梱のペイロード ELF を探しています…",
 connection_sending_elf: "{elf} を {host}:{port} に送信中…",
+"connection_checking_loader": "PS5 の elfldr を確認しています…",
+"connection_elfldr_stuck": "PS5 の elfldr（ポート 9021）が停止しています。接続は受け付けますが応答しません。送信中に接続が切れると、元の elfldr はこの状態になります。elfldr を読み込み直す（または本体を再起動する）と、ps5upload が自動で回復する版に置き換えます。",
 connection_waiting_boot: "ペイロードの起動を待っています…",
 connection_payload_timeout: "ペイロードが20秒以内に起動しませんでした。{tail} よくある原因: kstuff がまだ読み込まれていない（First Run を実行するか、Send payload で先に kstuff を送信してください）、ELF が起動時にクラッシュした、または PS5 に接続できません。もう一度送信してみてください。",
 upload_zip_zipped: "圧縮時",

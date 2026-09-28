@@ -2417,6 +2417,25 @@ pub async fn fpkg_build(
     .await
 }
 
+/// Whether the console's loader on :9021 answers. GET /api/ps5/elfldr/health.
+#[tauri::command]
+pub async fn ps5_elfldr_health(host: String) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!(
+        "{base}/api/ps5/elfldr/health?host={}",
+        urlencoding(host.trim())
+    );
+    get_json(&url).await
+}
+
+/// Swap the console's stock elfldr for the patched build. POST /api/ps5/elfldr/ensure.
+#[tauri::command]
+pub async fn ps5_elfldr_ensure(host: String) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/elfldr/ensure");
+    post_json(&url, &serde_json::json!({ "host": host })).await
+}
+
 /// Package size and time at each compression level for a game. POST /api/fpkg/estimate.
 #[tauri::command]
 pub async fn fpkg_estimate(

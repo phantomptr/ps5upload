@@ -1342,6 +1342,8 @@ connection_enter_ip_first: "กรุณาป้อนที่อยู่ IP 
 connection_checking: "กำลังตรวจสอบ {target}:{port}…",
 connection_locating_elf: "กำลังค้นหาไฟล์ payload ELF ที่มาพร้อมกัน…",
 connection_sending_elf: "กำลังส่ง {elf} ไปยัง {host}:{port}…",
+"connection_checking_loader": "กำลังตรวจสอบ elfldr ของ PS5…",
+"connection_elfldr_stuck": "elfldr ของ PS5 (พอร์ต 9021) ค้าง: รับการเชื่อมต่อแต่ไม่ตอบกลับ ซึ่ง elfldr ดั้งเดิมจะเป็นแบบนี้เมื่อการเชื่อมต่อหลุดระหว่างส่ง โหลด elfldr ใหม่ (หรือรีสตาร์ตเครื่อง) จากนั้น ps5upload จะแทนที่ด้วยรุ่นที่กู้คืนได้เอง",
 connection_waiting_boot: "กำลังรอให้ payload บูต…",
 connection_payload_timeout: "payload ไม่เริ่มทำงานภายใน 20 วินาที{tail} สาเหตุที่พบบ่อย: ยังไม่ได้โหลด kstuff (เรียกใช้ First Run หรือส่ง kstuff ก่อนผ่าน Send payload), ELF ขัดข้องขณะบูต หรือเข้าถึง PS5 ไม่ได้ ลองส่งอีกครั้ง",
 upload_zip_zipped: "บีบอัด",

@@ -26,6 +26,7 @@ import { AlertTriangle, CheckCircle2, CircleDashed, XCircle, Send, ArrowRight, R
 import { PageHeader, Button, Spinner, ErrorCard } from "../../components";
 import { useRosterStore } from "../../state/roster";
 import { hostOf } from "../../lib/addr";
+import { STUCK_LOADER_MESSAGE, waitForLoader } from "../../lib/elfldrGuard";
 import { useTr } from "../../state/lang";
 import PowerControl from "./PowerControl";
 import { BringUpPanel } from "./BringUpPanel";
@@ -473,6 +474,19 @@ export default function ConnectionScreen() {
         "Locating bundled payload ELF…",
       ),
     );
+    // A stuck elfldr would take the send and never answer (see lib/elfldrGuard.ts).
+    flashStep2(
+      "busy",
+      tr("connection_checking_loader", undefined, "Checking the PS5's elfldr…"),
+    );
+    if ((await waitForLoader(target)) === "stuck") {
+      setStatus({ payloadProbing: false });
+      settleStep2(
+        "fail",
+        tr("connection_elfldr_stuck", undefined, STUCK_LOADER_MESSAGE),
+      );
+      return;
+    }
     try {
       const elf = await bundledPayloadPath();
       setSendPhase("sending");

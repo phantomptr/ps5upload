@@ -83,6 +83,8 @@ connection_enter_ip_first: "Najpierw wpisz IP twojego PS5.",
 connection_checking: "Sprawdzanie {target}:{port}…",
 connection_locating_elf: "Lokalizowanie pakietu payload ELF…",
 connection_sending_elf: "Wysyłanie {elf} do {host}:{port}…",
+"connection_checking_loader": "Sprawdzanie elfldr na PS5…",
+"connection_elfldr_stuck": "elfldr na PS5 (port 9021) zawiesił się: przyjmuje połączenia, ale nigdy nie odpowiada – tak zachowuje się oryginalny elfldr, gdy połączenie zerwie się w trakcie wysyłania. Załaduj elfldr ponownie (lub uruchom ponownie konsolę); ps5upload zastąpi go wersją, która sama się odzyskuje.",
 connection_waiting_boot: "Czekam na uruchomienie payloada…",
 connection_payload_timeout:
   "Payload nie wstał w ciągu 20s.{tail} Wyślij go ponownie — swieży wysył teraz wymusi eksmisję jakiejkolwiek poprzedniej instancji samemu, więc nie musisz restartować PS5. Jeśli problem nie ustąpia: kstuff może nie być załadowany jeszcze (uruchom Pierwsze uruchomienie, lub wyslij kstuff), ELF zcrashował się przy uruchomieniu, lub PS5 nie jest dosiągalne.",

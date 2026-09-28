@@ -83,6 +83,8 @@ connection_enter_ip_first: "Add meg először a PS5 IP-címét.",
 connection_checking: "Ellenőrzés: {target}:{port}…",
 connection_locating_elf: "A csomagolt payload ELF keresése…",
 connection_sending_elf: "Küldés: {elf} ide: {host}:{port}…",
+"connection_checking_loader": "A PS5 elfldr ellenőrzése…",
+"connection_elfldr_stuck": "A PS5 elfldr-je (9021-es port) beragadt: fogadja a kapcsolatokat, de sosem válaszol – ezt teszi az eredeti elfldr, ha egy kapcsolat küldés közben megszakad. Töltsd be újra az elfldr-t (vagy indítsd újra a konzolt); a ps5upload ezután lecseréli egy magától helyreálló változatra.",
 connection_waiting_boot: "Várakozás a payload indulására…",
 connection_payload_timeout:
   "A payload nem indult el 20 másodpercen belül.{tail} Csak küldd el újra — egy friss küldés most magától lekényszeríti bármelyik beragadt korábbi példányt, így általában nem kell újraindítanod a PS5-öt. Ha továbbra sem sikerül: lehet, hogy a kstuff még nincs betöltve (futtasd az Első futtatást, vagy küldd el először a kstuffot), az ELF elszállt indításkor, vagy a PS5 nem elérhető.",

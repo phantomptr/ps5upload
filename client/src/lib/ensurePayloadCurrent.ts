@@ -2,6 +2,7 @@ import { bundledPayloadPath, payloadCheck, sendPayload } from "../api/ps5";
 import { getAppVersion } from "./appVersion";
 import { isTauriEnv } from "./tauriEnv";
 import { restoreMainPayload } from "./restoreMainPayload";
+import { guardElfldr, STUCK_LOADER_MESSAGE, waitForLoader } from "./elfldrGuard";
 import { compareVersions } from "./semver";
 import { log } from "../state/logs";
 
@@ -117,7 +118,9 @@ async function ensurePayloadCurrentOnce(
   if (!force && running && compareVersions(running, appVersion) === 0) {
     // The helper is current. The install daemon is no longer pre-armed here —
     // the engine brings it up per-install during `POST /api/pkg/install` — so
-    // a healthy connect does no extra work.
+    // a healthy connect does no extra work — beyond keeping the patched elfldr in place, in the
+    // background (see lib/elfldrGuard.ts).
+    void guardElfldr(host, false);
     return "current";
   }
   // Need to push — unless we already did, moments ago, and that helper is
@@ -129,6 +132,12 @@ async function ensurePayloadCurrentOnce(
       "payload",
       `not re-sending the helper to ${host}: one was sent ${Math.round(sentAgo / 1000)}s ago and may still be starting`,
     );
+    return "no-push";
+  }
+  // A stuck elfldr takes the connection and never answers: sending would only add one more
+  // it ignores. A patched one clears within 15 s; a stock one stays stuck until reloaded.
+  if ((await waitForLoader(host)) === "stuck") {
+    log.error("payload", `not sending the helper to ${host}: ${STUCK_LOADER_MESSAGE}`);
     return "no-push";
   }
   // Locate the bundled ELF + send it.
@@ -172,6 +181,8 @@ async function ensurePayloadCurrentOnce(
         probe.payloadVersion &&
         compareVersions(probe.payloadVersion, appVersion) === 0
       ) {
+        // A fresh helper usually means a reboot or a wake, which brings the stock elfldr back.
+        void guardElfldr(host, true);
         return "pushed";
       }
     } catch {

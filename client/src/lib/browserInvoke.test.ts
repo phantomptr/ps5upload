@@ -196,6 +196,15 @@ describe("engine-backed commands the web UI depends on (#300)", () => {
     expect(calls[0].url).toBe(`${B}/api/ps5/cheats/list`);
   });
 
+  it("asks the engine about the console's elfldr", async () => {
+    const calls = captureFetch({ health: "healthy" });
+    await browserInvoke("ps5_elfldr_health", { host: "10.0.0.2" });
+    expect(calls[0].url).toBe(`${B}/api/ps5/elfldr/health?host=10.0.0.2`);
+    await browserInvoke("ps5_elfldr_ensure", { host: "10.0.0.2" });
+    expect(calls[1].url).toBe(`${B}/api/ps5/elfldr/ensure`);
+    expect(JSON.parse(String(calls[1].init.body))).toEqual({ host: "10.0.0.2" });
+  });
+
   it("tells the estimate where the package would go", async () => {
     const calls = captureFetch({});
     await browserInvoke("fpkg_estimate", { source: "/g", outputDir: "/out" });

@@ -1343,6 +1343,8 @@ connection_enter_ip_first: "पहले अपने PS5 का IP पता �
 connection_checking: "{target}:{port} जाँच रहे हैं…",
 connection_locating_elf: "बंडल किया गया payload ELF ढूँढ रहे हैं…",
 connection_sending_elf: "{elf} को {host}:{port} पर भेज रहे हैं…",
+"connection_checking_loader": "PS5 का elfldr जाँचा जा रहा है…",
+"connection_elfldr_stuck": "PS5 का elfldr (पोर्ट 9021) अटक गया है: यह कनेक्शन स्वीकार करता है पर कभी जवाब नहीं देता — भेजते समय कनेक्शन टूटने पर मूल elfldr ऐसा ही करता है। elfldr दोबारा लोड करें (या कंसोल रीस्टार्ट करें); फिर ps5upload इसे ऐसे संस्करण से बदल देगा जो खुद ठीक हो जाता है।",
 connection_waiting_boot: "payload के बूट होने की प्रतीक्षा है…",
 connection_payload_timeout: "payload 20 सेकंड में शुरू नहीं हुआ।{tail} सामान्य कारण: kstuff अभी लोड नहीं हुआ (First Run चलाएँ, या Send payload से पहले kstuff भेजें), ELF बूट के समय क्रैश हो गया, या PS5 तक नहीं पहुँचा जा सकता। फिर से भेजकर देखें।",
 upload_zip_zipped: "ज़िप किया हुआ",

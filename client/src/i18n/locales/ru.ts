@@ -1342,6 +1342,8 @@ connection_enter_ip_first: "Сначала введите IP-адрес ваше
 connection_checking: "Проверка {target}:{port}…",
 connection_locating_elf: "Поиск встроенного ELF полезной нагрузки…",
 connection_sending_elf: "Отправка {elf} на {host}:{port}…",
+"connection_checking_loader": "Проверка elfldr на PS5…",
+"connection_elfldr_stuck": "elfldr на PS5 (порт 9021) завис: он принимает подключения, но не отвечает — так ведёт себя исходный elfldr, если соединение оборвалось во время отправки. Загрузите elfldr заново (или перезапустите консоль); затем ps5upload заменит его версией, которая восстанавливается сама.",
 connection_waiting_boot: "Ожидание запуска полезной нагрузки…",
 connection_payload_timeout: "Полезная нагрузка не запустилась за 20 с.{tail} Частые причины: kstuff ещё не загружен (запустите First Run или сначала отправьте kstuff через Send payload), ELF аварийно завершился при запуске, или PS5 недоступна. Попробуйте отправить снова.",
 upload_zip_zipped: "сжато",

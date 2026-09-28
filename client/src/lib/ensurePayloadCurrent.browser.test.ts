@@ -16,6 +16,12 @@ vi.mock("../api/ps5", () => ({
   bundledPayloadPath: (...a: unknown[]) => bundledPathMock(...a),
   sendPayload: (...a: unknown[]) => sendPayloadMock(...a),
 }));
+// The loader answers and the elfldr needs nothing (see ensurePayloadCurrent.elfldr.test.ts).
+vi.mock("./elfldrGuard", () => ({
+  waitForLoader: async () => "healthy",
+  guardElfldr: async () => {},
+  STUCK_LOADER_MESSAGE: "",
+}));
 vi.mock("./restoreMainPayload", () => ({
   restoreMainPayload: (...a: unknown[]) => restoreMock(...a),
 }));

@@ -733,6 +733,12 @@ export async function browserInvoke<T>(
         language: args["language"],
       });
     }
+    case "ps5_elfldr_health": {
+      return getJson<T>(`/api/ps5/elfldr/health?host=${encodeURIComponent(String(args["host"] ?? ""))}`);
+    }
+    case "ps5_elfldr_ensure": {
+      return postJson<T>("/api/ps5/elfldr/ensure", { host: args["host"] });
+    }
     case "fpkg_estimate": {
       return postJson<T>("/api/fpkg/estimate", {
         source: args["source"],

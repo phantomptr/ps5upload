@@ -1342,6 +1342,8 @@ connection_enter_ip_first: "প্রথমে আপনার PS5-এর IP ঠ
 connection_checking: "{target}:{port} পরীক্ষা করা হচ্ছে…",
 connection_locating_elf: "বান্ডিল করা payload ELF খোঁজা হচ্ছে…",
 connection_sending_elf: "{elf} {host}:{port}-এ পাঠানো হচ্ছে…",
+"connection_checking_loader": "PS5-এর elfldr পরীক্ষা করা হচ্ছে…",
+"connection_elfldr_stuck": "PS5-এর elfldr (পোর্ট 9021) আটকে গেছে: সংযোগ গ্রহণ করে কিন্তু কখনো উত্তর দেয় না — পাঠানোর মাঝে সংযোগ কেটে গেলে মূল elfldr এমনই করে। elfldr আবার লোড করুন (বা কনসোল রিস্টার্ট করুন); এরপর ps5upload এটিকে এমন একটি সংস্করণ দিয়ে বদলে দেবে যা নিজে থেকেই ঠিক হয়ে যায়।",
 connection_waiting_boot: "payload চালু হওয়ার অপেক্ষা করা হচ্ছে…",
 connection_payload_timeout: "payload ২০ সেকেন্ডের মধ্যে চালু হয়নি।{tail} সাধারণ কারণ: kstuff এখনও লোড হয়নি (First Run চালান, অথবা Send payload দিয়ে আগে kstuff পাঠান), ELF বুট করার সময় ক্র্যাশ করেছে, অথবা PS5-এ পৌঁছানো যাচ্ছে না। আবার পাঠিয়ে দেখুন।",
 upload_zip_zipped: "জিপ করা",

@@ -84,6 +84,8 @@ connection_enter_ip_first: "Enter your PS5's IP address first.",
 connection_checking: "Checking {target}:{port}…",
 connection_locating_elf: "Locating bundled payload ELF…",
 connection_sending_elf: "Sending {elf} to {host}:{port}…",
+"connection_checking_loader": "Checking the PS5's elfldr…",
+"connection_elfldr_stuck": "The PS5's elfldr (port 9021) is stuck: it accepts connections but never answers, which the stock elfldr does after a connection drops mid-send. Load elfldr again (or restart the console); ps5upload then replaces it with a build that recovers by itself.",
 connection_waiting_boot: "Waiting for payload to boot…",
 connection_payload_timeout:
   "Payload didn't come up within 20s.{tail} Just send it again — a fresh send now force-evicts any stuck previous instance on its own, so you usually don't need to restart the PS5. If it still fails: kstuff may not be loaded yet (run First Run, or send kstuff first), the ELF crashed on boot, or the PS5 is unreachable.",

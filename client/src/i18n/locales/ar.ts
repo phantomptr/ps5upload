@@ -1342,6 +1342,8 @@ connection_enter_ip_first: "أدخل أولاً عنوان IP الخاص بجه�
 connection_checking: "جارٍ التحقق من {target}:{port}…",
 connection_locating_elf: "جارٍ تحديد موقع ملف ELF الخاص بالحمولة المضمّنة…",
 connection_sending_elf: "جارٍ إرسال {elf} إلى {host}:{port}…",
+"connection_checking_loader": "جارٍ فحص elfldr على PS5…",
+"connection_elfldr_stuck": "elfldr على PS5 (المنفذ 9021) عالق: يقبل الاتصالات لكنه لا يرد أبدًا، وهذا ما يفعله elfldr الأصلي بعد انقطاع اتصال أثناء الإرسال. حمّل elfldr مجددًا (أو أعد تشغيل الجهاز)؛ ثم يستبدله ps5upload بإصدار يتعافى من تلقاء نفسه.",
 connection_waiting_boot: "في انتظار إقلاع الحمولة…",
 connection_payload_timeout: "لم تبدأ الحمولة خلال 20 ثانية.{tail} الأسباب الشائعة: لم يتم تحميل kstuff بعد (شغّل First Run أو أرسل kstuff أولاً عبر Send payload)، أو تعطّل ملف ELF أثناء الإقلاع، أو يتعذّر الوصول إلى PS5. حاول الإرسال مرة أخرى.",
 upload_zip_zipped: "مضغوط",

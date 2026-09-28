@@ -293,6 +293,8 @@ pub fn run() {
             commands::fpkg_build,
             commands::fpkg_delete,
             commands::fpkg_estimate,
+            commands::ps5_elfldr_health,
+            commands::ps5_elfldr_ensure,
             commands::ffpfsc_compress,
             commands::fpkg_extract,
             commands::fpkg_extract_cleanup,

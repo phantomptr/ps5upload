@@ -4455,6 +4455,23 @@ export async function updateDownload(
   return invoke<UpdateDownload>("update_download", { url, filename });
 }
 
+/** Whether the console's loader on :9021 answers (`healthy`), took the connection and never
+ *  answered (`stuck`), or isn't there (`absent`). See lib/elfldrGuard.ts. */
+export async function elfldrHealth(host: string): Promise<"healthy" | "stuck" | "absent"> {
+  const r = await invoke<{ health: "healthy" | "stuck" | "absent" }>("ps5_elfldr_health", { host });
+  return r.health;
+}
+
+/** Have the engine swap the console's stock elfldr for its patched build (needs the helper up). */
+export function elfldrEnsure(host: string): Promise<{
+  action: "upgraded" | "current" | "skipped";
+  health: "healthy" | "stuck" | "absent";
+  reason: string | null;
+  pid: number | null;
+}> {
+  return invoke("ps5_elfldr_ensure", { host });
+}
+
 export async function payloadCheck(ip: string): Promise<{
   reachable: boolean;
   loaded: boolean;

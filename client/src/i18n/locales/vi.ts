@@ -1344,6 +1344,8 @@ connection_enter_ip_first: "Hãy nhập địa chỉ IP của PS5 của bạn tr
 connection_checking: "Đang kiểm tra {target}:{port}…",
 connection_locating_elf: "Đang tìm ELF payload đi kèm…",
 connection_sending_elf: "Đang gửi {elf} tới {host}:{port}…",
+"connection_checking_loader": "Đang kiểm tra elfldr của PS5…",
+"connection_elfldr_stuck": "elfldr của PS5 (cổng 9021) bị treo: nhận kết nối nhưng không bao giờ trả lời — elfldr gốc sẽ như vậy khi kết nối bị ngắt giữa lúc gửi. Hãy nạp lại elfldr (hoặc khởi động lại máy); sau đó ps5upload sẽ thay bằng bản tự phục hồi.",
 connection_waiting_boot: "Đang chờ payload khởi động…",
 connection_payload_timeout: "payload không khởi động trong 20 giây.{tail} Nguyên nhân thường gặp: kstuff chưa được nạp (chạy First Run, hoặc gửi kstuff trước qua Send payload), ELF gặp sự cố khi khởi động, hoặc không kết nối được PS5. Hãy thử gửi lại.",
 upload_zip_zipped: "đã nén",
