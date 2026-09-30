@@ -937,6 +937,9 @@ mod probe_error_tests {
         // macOS and Linux refuse a closed port at once; Windows retries the
         // connect, so the 500 ms probe times out first.
         let lower = err.to_lowercase();
-        assert!(lower.contains("refused") || lower.contains("timed out"), "{err}");
+        assert!(
+            lower.contains("refused") || lower.contains("timed out"),
+            "{err}"
+        );
     }
 }
