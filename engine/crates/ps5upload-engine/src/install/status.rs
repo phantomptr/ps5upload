@@ -72,6 +72,11 @@ pub enum FailReason {
     StreamUnreachable,
     /// As above, but Sony named the PS5's proxy setting as the cause.
     StreamProxy,
+    /// Sony refused a package installed from the console's own storage (the
+    /// staged / Loopback route) with a code measured on that route alone:
+    /// 0x80B2116F (FW 9.60, 13.60) or 0x80B2150F (FW 5.10). The same package
+    /// streamed from a computer installs, so the fix is the route, not the file.
+    StagedRefused,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

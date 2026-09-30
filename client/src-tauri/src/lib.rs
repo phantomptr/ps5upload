@@ -34,6 +34,9 @@ mod engine;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 #[path = "engine_mobile.rs"]
 mod engine;
+// HTTP client for talking to either engine. `pub` only so
+// tests/engine_http_proxy.rs can drive it with proxy variables set.
+pub mod engine_http;
 
 /// Build and run the Tauri application. The desktop `main.rs` calls this
 /// directly; on mobile the `tauri::mobile_entry_point` macro generates

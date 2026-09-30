@@ -81,6 +81,11 @@
  *      NULL from dlsym — same graceful path as "not supported"
  */
 typedef int (*app_install_title_dir_fn_t)(const char *, const char *, void *);
+/* Registers every app staged under /user/app/ that the app database doesn't
+ * know yet. FW 13.x no longer exports sceAppInstUtilAppInstallTitleDir, and
+ * this is what itsPLK's WebKit Autoloader falls back to there (its
+ * src/app_installer.c) to put its launcher on the home screen. */
+typedef int (*app_install_all_fn_t)(void *);
 /* Sony's uninstall export is spelled "UnInstall" (capital I), not
  * "Uninstall". Earlier code called the non-existent
  * "sceAppInstUtilAppUnInstallTitle" — that typo silently returned
@@ -112,6 +117,7 @@ typedef struct {
     int   firmware_major;   /* e.g. 9 for 9.60; 0 if unknown */
     /* AppInstUtil -- registration */
     app_install_title_dir_fn_t    app_install_title_dir;
+    app_install_all_fn_t          app_install_all;  /* FW 13.x fallback; may be NULL */
     app_uninstall_fn_t            app_uninstall;   /* may be NULL */
     app_inst_util_initialize_fn_t app_inst_util_initialize;  /* may be NULL */
     /* Lnc + SystemService -- launch (triple-strategy) */
@@ -271,6 +277,14 @@ static void register_module_init_impl(void) {
     }
     g_reg.app_inst_util_initialize = (app_inst_util_initialize_fn_t)
         reg_dlsym_default("sceAppInstUtilInitialize");
+    {
+        static const char *const install_all_names[] = {
+            "sceAppInstUtilAppInstallAll",
+            NULL,
+        };
+        g_reg.app_install_all = (app_install_all_fn_t)
+            reg_dlsym_first(install_all_names, "app-install-all");
+    }
 
     /* Lnc / SystemService / UserService: the SDK's kernel_web auto-
      * link brings these into RTLD_DEFAULT's scope without us having
@@ -934,6 +948,25 @@ static int read_title_metadata(const char *src_path,
  * the kernel copies `iov_len` bytes including the NUL. */
 #define IOV_STR(s) { .iov_base = (void *)(s), .iov_len = strlen(s) + 1 }
 
+/* Flip an already-mounted filesystem to read-write in place (nmount
+ * MNT_UPDATE with its own fstype + device, the way the `mtrw` shell verb
+ * does). FW 13.x mounts /system_ex read-only, so creating the title's
+ * mountpoint under /system_ex/app failed with EROFS and every folder-game
+ * register on 13.60 stopped at register_mkdir_target_failed (#344).
+ * ShadowMount2 remounts /system_ex before its mkdir for the same reason.
+ * Measured on a 13.60 Pro: after this remount the register completed. */
+static int remount_rw(const char *mnt) {
+    struct statfs sfs;
+    if (statfs(mnt, &sfs) != 0) return -1;
+    if (strcmp(sfs.f_mntonname, mnt) != 0) return -1; /* not a mount root */
+    struct iovec iov[] = {
+        IOV_STR("fstype"), IOV_STR(sfs.f_fstypename),
+        IOV_STR("fspath"), IOV_STR(mnt),
+        IOV_STR("from"),   IOV_STR(sfs.f_mntfromname),
+    };
+    return nmount(iov, sizeof(iov) / sizeof(iov[0]), MNT_UPDATE);
+}
+
 /* Bind-mount `src_path` at `/system_ex/app/<title_id>/` via nullfs.
  * If something is already mounted at the target, we force-unmount it
  * first ("reset the stack" behaviour) so the new bind sees a
@@ -966,7 +999,18 @@ static int mount_title_nullfs(const char *title_id, const char *src_path,
         if (err_out) *err_out = "register_mkdir_system_ex_failed";
         return -1;
     }
-    if (mkdir(dst, 0755) != 0 && errno != EEXIST) {
+    int mk = mkdir(dst, 0755);
+    if (mk != 0 && errno == EROFS) {
+        if (remount_rw("/system_ex") == 0) {
+            fprintf(stderr, "[register] /system_ex was read-only; remounted rw\n");
+        } else {
+            fprintf(stderr, "[register] /system_ex is read-only and remount failed: %s\n",
+                    strerror(errno));
+        }
+        mk = mkdir(dst, 0755);
+    }
+    if (mk != 0 && errno != EEXIST) {
+        fprintf(stderr, "[register] mkdir %s: %s\n", dst, strerror(errno));
         if (err_out) *err_out = "register_mkdir_target_failed";
         return -1;
     }
@@ -1350,8 +1394,11 @@ int register_title_from_path(const char *src_path,
         (void)write_link_file(lnk_img, src_norm);
     }
 
-    /* 6 -- Sony installer API */
-    if (!g_reg.app_install_title_dir) {
+    /* 6 -- Sony installer API. The per-title call where it exists; on FW 13.x,
+     * where Sony dropped that export, the install-everything-staged call
+     * registers the /user/app/<id> we just staged (plus anything else left
+     * staged there, which is what a user would want registered anyway). */
+    if (!g_reg.app_install_title_dir && !g_reg.app_install_all) {
         if (err_reason_out) *err_reason_out = "register_install_api_unavailable";
         /* We leave the nullfs in place so the nominal tile works if
          * the user later loads it into the XMB by other means. Do
@@ -1373,7 +1420,12 @@ int register_title_from_path(const char *src_path,
     if (g_reg.app_inst_util_initialize) {
         (void)g_reg.app_inst_util_initialize();
     }
-    int res = g_reg.app_install_title_dir(title_id, REG_APP_BASE "/", 0);
+    int res = g_reg.app_install_title_dir
+        ? g_reg.app_install_title_dir(title_id, REG_APP_BASE "/", 0)
+        : g_reg.app_install_all(NULL);
+    fprintf(stderr, "[register] %s %s rc=0x%08x\n",
+            g_reg.app_install_title_dir ? "AppInstallTitleDir" : "AppInstallAll",
+            title_id, (unsigned)res);
     usleep(SONY_API_POST_SLEEP_US);
     pthread_mutex_unlock(&sony_api_lock);
     /* 0 = new install, 0x80990002 = restored (idempotent), both are success. */
@@ -1518,6 +1570,18 @@ int unregister_title(const char *title_id, const char **err_reason_out,
         }
         int unrc = g_reg.app_uninstall(title_id, NULL, NULL);
         uninstall_rc = unrc;
+        /* FW 13.x: a register through sceAppInstUtilAppInstallAll leaves two
+         * install records (measured on a 13.60 Pro: install times 2.2 s
+         * apart), and one uninstall removes one of them — the title leaves
+         * the list but its app.db rows stay behind. Repeat while Sony still
+         * reports removing something; the extra call on a gone title just
+         * fails. Only where AppInstallAll is the register path. */
+        if (unrc == 0 && !g_reg.app_install_title_dir) {
+            for (int again = 0; again < 2; again++) {
+                usleep(SONY_API_POST_SLEEP_US);
+                if (g_reg.app_uninstall(title_id, NULL, NULL) != 0) break;
+            }
+        }
         /* Restore the prior authid with retry-and-verify (3 attempts),
          * matching authid.h's ps5_authid_release(). A single unverified
          * set could silently fail and leave this pid holding the ShellCore

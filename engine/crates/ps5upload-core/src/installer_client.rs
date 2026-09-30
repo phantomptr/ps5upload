@@ -13,8 +13,11 @@ use crate::payload_lifecycle::{
     join_host_port, port_is_open, send_elf_to_loader, LoaderImage, INSTALLER_PORT, PS5_LOADER_PORT,
 };
 
+/// The name the installer is stored under when Payload Manager launches it.
+const INSTALLER_ELF_NAME: &str = "ps5upload-installer.elf";
+
 /// Must match the daemon's INST_VERSION in payload/installer/main.c.
-pub const INSTALLER_VERSION: &str = "1.1.0";
+pub const INSTALLER_VERSION: &str = "1.2.0";
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const SHORT_TIMEOUT: Duration = Duration::from_secs(5); // hello / job / stop
@@ -287,30 +290,51 @@ fn ensure_with(
             error: Some("this engine build carries no installer daemon".into()),
         };
     };
+    // The console's ELF loader first; Payload Manager (:8084) when the loader
+    // is gone or refuses the send. On setups with Payload Manager and the
+    // WebKit Autoloader, :9021 is often dead while Payload Manager is up, and
+    // every install used to stop here (#344, #345).
     let loader = join_host_port(ip, PS5_LOADER_PORT);
-    if !port_is_open(&loader, PROBE_TIMEOUT) {
-        return Ensure {
-            listening: false,
-            sent: false,
-            state: None,
-            reason: Some("loader_unreachable"),
-            error: Some("nothing answered on the ELF loader port :9021".into()),
-        };
-    }
-    if let Err(e) = send_elf_to_loader(ip, PS5_LOADER_PORT, bytes, LoaderImage::Companion) {
-        return Ensure {
-            listening: false,
-            sent: true,
-            state: None,
-            reason: Some("loader_send_failed"),
-            error: Some(e),
-        };
+    let loader_open = port_is_open(&loader, PROBE_TIMEOUT);
+    let loader_result = if loader_open {
+        send_elf_to_loader(ip, PS5_LOADER_PORT, bytes, LoaderImage::Companion)
+    } else {
+        Err("nothing answered on the ELF loader port :9021".to_string())
+    };
+    let mut via_payload_manager = false;
+    if let Err(loader_err) = loader_result {
+        match crate::payload_manager::launch_elf(ip, INSTALLER_ELF_NAME, bytes) {
+            Ok(()) => via_payload_manager = true,
+            Err(pm_err) => {
+                return Ensure {
+                    listening: false,
+                    sent: loader_open,
+                    state: None,
+                    reason: Some(if loader_open {
+                        "loader_send_failed"
+                    } else {
+                        "loader_unreachable"
+                    }),
+                    error: Some(format!(
+                        "{loader_err}, and {pm_err} to launch it instead. Load elfldr (or Payload Manager) on the PS5 and retry"
+                    )),
+                };
+            }
+        }
     }
     // 3) wait up to 45s for hello to answer (covers the boot wait)
     let deadline = Instant::now() + ENSURE_WAIT_TOTAL;
+    let forget_stored_copy = || {
+        if via_payload_manager {
+            // The running daemon doesn't need it; don't leave it in the
+            // user's Payload Manager list.
+            crate::payload_manager::forget(ip, INSTALLER_ELF_NAME);
+        }
+    };
     while Instant::now() < deadline {
         if port_is_open(&addr, PROBE_TIMEOUT) {
             if let Ok(h) = hello_at(&addr) {
+                forget_stored_copy();
                 return Ensure {
                     listening: true,
                     sent: true,
@@ -322,6 +346,7 @@ fn ensure_with(
         }
         std::thread::sleep(ENSURE_POLL);
     }
+    forget_stored_copy();
     Ensure {
         listening: false,
         sent: true,

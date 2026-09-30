@@ -18,7 +18,6 @@ import {
   Play,
   Download,
   ShieldCheck,
-  Info,
   Square,
   CircleDot,
   Clock,
@@ -77,7 +76,6 @@ import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import { useTr } from "../../state/lang";
 import { transferAddr, mgmtAddr, hostOf } from "../../lib/addr";
-import { fpkgUnsupportedFirmware, LAST_FPKG_FIRMWARE } from "../../lib/ps5Firmware";
 import { useImageRetry } from "../../lib/useImageRetry";
 import { transferScreenBusy } from "../../lib/ps5Transfers";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
@@ -624,11 +622,6 @@ export default function InstalledAppsScreen({
   // installs/launches of fpkg titles fail. null = unknown (old payload / no
   // probe yet) — we only warn on a definite `false`.
   const ucredElevated = useConnectionStore((s) => s.ucredElevated);
-  // Kernel access alone doesn't mean fake packages work: above FW 11.60 the
-  // helper is elevated but no kstuff with FPKG support exists yet.
-  const noFpkgFirmware = useConnectionStore((s) =>
-    fpkgUnsupportedFirmware(host ? s.runtimeByHost[hostOf(host)]?.ps5Kernel : null),
-  );
   const guard = useStaleHostGuard();
   const [titles, setTitles] = useState<InstalledTitle[] | null>(null);
   const [sdkState, setSdkState] = useState<SdkScanResponse>({ titles: [] });
@@ -848,25 +841,14 @@ export default function InstalledAppsScreen({
       } catch (e) {
         if (probe.isStale()) return;
         const raw = e instanceof Error ? e.message : String(e);
-        // Above FW 11.60 the usual cause is the firmware itself: an app or
-        // game installed as a fake package can't start without fake-package
-        // support, and "re-register it" would send the user the wrong way.
-        const fwHint =
-          noFpkgFirmware && /launch_sony_error_0x/i.test(raw)
-            ? ` ${tr(
-                "installed_launch_fw_hint",
-                { fw: noFpkgFirmware, last: LAST_FPKG_FIRMWARE },
-                `On FW ${noFpkgFirmware}, apps and games installed as fake packages can't start yet — fake-package support only exists up to FW ${LAST_FPKG_FIRMWARE}.`,
-              )}`
-            : "";
         pushNotification("error", withConsolePrefix(probe.host, t.titleName), {
-          body: humanizePs5Error(raw) + fwHint,
+          body: humanizePs5Error(raw),
         });
       } finally {
         setLaunchingId(null);
       }
     },
-    [host, guard, tr, noFpkgFirmware],
+    [host, guard, tr],
   );
 
   /* Bring an already-running title to the screen.
@@ -1232,15 +1214,6 @@ export default function InstalledAppsScreen({
               "The payload doesn't have kernel read/write, which means a jailbreak/kstuff entry point isn't loaded. Launching (and installing) fpkg games will fail until you load the console through kstuff and reconnect.",
             )}
           />
-        ) : ucredElevated === true && noFpkgFirmware ? (
-          <div className="flex items-start gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-xs text-[var(--color-muted)]">
-            <Info size={14} className="mt-px shrink-0" />
-            {tr(
-              "installed_fpkg_unsupported_fw",
-              { fw: noFpkgFirmware, last: LAST_FPKG_FIRMWARE },
-              `Kernel access is active, so installed apps launch. Fake-package games can't be installed or launched on FW ${noFpkgFirmware} yet — fake-package support only exists up to FW ${LAST_FPKG_FIRMWARE} so far.`,
-            )}
-          </div>
         ) : ucredElevated === true ? (
           <div className="flex items-center gap-2 rounded-lg border border-[var(--color-good)]/40 bg-[var(--color-good)]/5 px-3 py-2 text-xs text-[var(--color-good)]">
             <ShieldCheck size={14} className="shrink-0" />

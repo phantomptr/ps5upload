@@ -34,6 +34,7 @@ import {
 } from "../state/roster";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { isTauriEnv, safeUnlisten } from "../lib/tauriEnv";
+import { engineIsOnThisDevice } from "../state/engine";
 import { trStatic } from "../lib/trStatic";
 import { useDocumentVisible } from "../lib/visibility";
 import { useScheduleRunner } from "../state/schedules";
@@ -928,6 +929,8 @@ function usePkgAutoRoute() {
   useEffect(() => {
     if (!isTauriEnv()) return; // browser-only dev/test contexts skip Tauri APIs
     if (isAndroid()) return; // no drag-and-drop on Android — skip the bridge round-trip
+    // A dropped file is a path on this device; a remote engine can't open it.
+    if (!engineIsOnThisDevice()) return;
     let unlisten: (() => void) | null = null;
     let cancelled = false;
     const p = getCurrentWebview().onDragDropEvent((e) => {

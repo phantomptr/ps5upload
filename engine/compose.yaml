@@ -1,0 +1,44 @@
+# ps5upload engine + web UI on a Linux server (homelab, NAS, mini PC).
+#
+#   docker compose -f engine/compose.yaml up -d
+#   then open http://<this server's LAN IP>:19113 from a browser on your LAN,
+#   or point the desktop app at it: Settings → Engine URL.
+#
+# Edit the three values marked EDIT first.
+
+services:
+  ps5upload:
+    image: ghcr.io/phantomptr/ps5upload-engine-webui:latest
+    # Engine only, no web UI (for the desktop app):
+    # image: ghcr.io/phantomptr/ps5upload-engine:latest
+    container_name: ps5upload
+    restart: unless-stopped
+
+    # Host networking, so the PS5 can reach the engine. A stream install makes
+    # the PS5 download the package FROM the engine; with Docker's default
+    # bridge network the engine would give the PS5 its internal 172.17.x.x
+    # address, which the PS5 cannot reach, and every stream install fails.
+    # (Docker Desktop on macOS/Windows can't do host networking: publish the
+    # port instead and set PS5UPLOAD_PKG_HOST_IP to that computer's LAN IP.)
+    network_mode: host
+
+    environment:
+      # EDIT: your PS5's IP address.
+      PS5_ADDR: "192.168.1.50:9113"
+      # EDIT: who may use the engine. It has NO password — anyone allowed here
+      # can install, delete and read files on your PS5. Your LAN's range is the
+      # usual choice; keep it to networks you trust. Never expose the engine
+      # to the internet.
+      PS5UPLOAD_ALLOW_IP: "192.168.1.0/24"
+      # Only needed without host networking: this server's LAN IP.
+      # PS5UPLOAD_PKG_HOST_IP: "192.168.1.10"
+
+    volumes:
+      # The engine's own state: saved servers, install history, artwork cache.
+      - ps5upload-data:/data
+      # EDIT: where your packages and game folders are. They show up in the
+      # web UI's file browser under /pkgs; read-only is enough to install.
+      - /srv/ps5/pkgs:/pkgs:ro
+
+volumes:
+  ps5upload-data:

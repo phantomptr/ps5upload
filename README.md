@@ -546,7 +546,13 @@ port 9021 — a third-party component, not part of ps5upload.
   **Settings → Engine URL**. An official multi-arch image is published at
   `ghcr.io/phantomptr/ps5upload-engine` (`:latest` or `:<version>`); you can
   also build from `engine/Dockerfile`. To let a remote box reach it, set
-  `PS5UPLOAD_ALLOW_IP` to that box's IP. **Security:** the engine's API is
+  `PS5UPLOAD_ALLOW_IP` to that box's IP or your LAN's range
+  (`192.168.1.0/24`). On a Linux server, start from
+  [`engine/compose.yaml`](engine/compose.yaml): it uses host networking, which
+  stream installs need (on Docker's default bridge network the PS5 can't reach
+  the engine to download the package), and keeps the engine's state on a
+  `/data` volume. With a remote engine, the desktop app's file pickers browse
+  the engine's disk. **Security:** the engine's API is
   unauthenticated (it can read/write/delete PS5 files), so only do this on a
   trusted LAN — never expose the engine to the internet.
 
@@ -565,13 +571,13 @@ port 9021 — a third-party component, not part of ps5upload.
   above: **unauthenticated**, LAN-only, never expose it to the internet.
   **Upload works in the browser** too, operating on files already
   present on the **engine's own machine** — e.g. mount a folder into the
-  container with `-v /host/games:/data/games`, then browse to `/data/games`
+  container with `-v /host/games:/pkgs:ro`, then browse to `/pkgs`
   in the in-app file picker. That picker browses the *engine's* filesystem,
   not the browser's own machine — a browser tab has no way to reach a
   remote engine's disk except through what the engine itself can already
   read. A few things are still desktop-only and hidden in the browser UI:
   archive uploads (`.zip`/`.7z`/`.rar`), Payloads (sending a `.elf`/etc. from
-  disk), installing a `.pkg` you pick from your PC, and saving a save-data
+  disk) and saving a save-data
   backup to your computer — everything else that operates on the PS5 itself
   (browse, transfer, install from a PS5-connected USB drive, hardware
   monitor, saves list, …) works the same as the desktop app. The upload

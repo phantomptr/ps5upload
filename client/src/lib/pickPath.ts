@@ -10,7 +10,7 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import { isAndroid } from "./platform";
-import { isTauriEnv } from "./tauriEnv";
+import { engineIsOnThisDevice } from "../state/engine";
 import { pickLocalPath, pickLocalPaths } from "../state/localPicker";
 
 export interface PickPathOptions {
@@ -26,10 +26,10 @@ export interface PickPathOptions {
 
 /** Pick a single real path, or null if cancelled. */
 export async function pickPath(opts: PickPathOptions): Promise<string | null> {
-  // A server, Android, and the web build all browse in-app: the web build has no system
-  // dialog, and the one it could show would browse the wrong machine (the browser's, not the
-  // engine's).
-  if (opts.source || opts.mode === "any" || isAndroid() || !isTauriEnv()) {
+  // A server, Android, the web build and a remote engine all browse in-app: the web build has
+  // no system dialog, and the system dialog would browse the wrong machine (this one, not the
+  // engine's) whenever the engine runs elsewhere.
+  if (opts.source || opts.mode === "any" || isAndroid() || !engineIsOnThisDevice()) {
     return pickLocalPath({
       mode: opts.mode,
       title: opts.title,
@@ -57,7 +57,7 @@ export async function pickPath(opts: PickPathOptions): Promise<string | null> {
 export async function pickPaths(
   opts: Omit<PickPathOptions, "mode"> = {},
 ): Promise<string[]> {
-  if (opts.source || isAndroid() || !isTauriEnv()) {
+  if (opts.source || isAndroid() || !engineIsOnThisDevice()) {
     return pickLocalPaths({ mode: "file", title: opts.title, filters: opts.filters, source: opts.source });
   }
   const sel = await openDialog({

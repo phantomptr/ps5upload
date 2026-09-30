@@ -33,10 +33,10 @@ import {
 import { isAndroid } from "../../lib/platform";
 import { pickPath } from "../../lib/pickPath";
 import { isTauriEnv, safeUnlisten } from "../../lib/tauriEnv";
+import { engineIsOnThisDevice } from "../../state/engine";
 import {
   PageHeader,
   Button,
-  Callout,
   EmptyState,
   WarningCard,
   ConnectionGate,
@@ -82,7 +82,6 @@ import {
   type InstalledPkgArtifact,
 } from "../../api/ps5";
 import { transferAddr, hostOf } from "../../lib/addr";
-import { fpkgUnsupportedFirmware, LAST_FPKG_FIRMWARE } from "../../lib/ps5Firmware";
 import { formatBytes, formatDuration } from "../../lib/format";
 import { remainingSeconds } from "../../lib/rollingRate";
 import { acceptPkgDrop, isInstallPackagePath } from "../../lib/pkgDropDedupe";
@@ -523,12 +522,6 @@ export default function InstallPackageScreen() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
-  // Firmware newer than any with fake-package support (null when supported
-  // or unknown): the FPKG checklist below would send people after payloads
-  // that don't exist for their console.
-  const noFpkgFirmware = useConnectionStore((s) =>
-    fpkgUnsupportedFirmware(host ? s.runtimeByHost[hostOf(host)]?.ps5Kernel : null),
-  );
   // Per-console store: every selector is scoped to THIS console's host, so the
   // Install Package view is fully isolated per PS5 (parallel installs).
   const entries = usePkgLibrary(host, (s) => s.entries);
@@ -729,7 +722,8 @@ export default function InstallPackageScreen() {
   // (.ffpkg/.ffpfs) in the File System flow.
   useEffect(() => {
     if (!host) return;
-    if (!isTauriEnv()) return;
+    // A dropped file is a path on this device; a remote engine can't open it.
+    if (!engineIsOnThisDevice()) return;
     let unlisten: (() => void) | null = null;
     let cancelled = false;
     const p = getCurrentWebview().onDragDropEvent((e) => {
@@ -870,9 +864,10 @@ export default function InstallPackageScreen() {
       );
       return;
     }
-    if (!isTauriEnv()) {
-      // The web UI runs against a server (often a NAS or Docker host) that
-      // already holds the library. Browse that disk, exactly like Upload
+    if (!engineIsOnThisDevice()) {
+      // The web UI — or the desktop app pointed at a remote engine — runs
+      // against a server (often a NAS or Docker host) that already holds the
+      // library. Browse that disk, exactly like Upload
       // does, so a 50 GB package is served in place instead of being
       // uploaded from the viewer's device first. "From this device" keeps
       // the old upload path.
@@ -1341,7 +1336,7 @@ export default function InstallPackageScreen() {
               </Button>
             )}
 
-            {!isTauriEnv() && (
+            {!engineIsOnThisDevice() && (
               <input
                 ref={browserPkgInputRef}
                 type="file"
@@ -1355,7 +1350,7 @@ export default function InstallPackageScreen() {
                 }}
               />
             )}
-            {!isTauriEnv() && (
+            {!engineIsOnThisDevice() && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -1460,23 +1455,6 @@ export default function InstallPackageScreen() {
             <Spinner size={14} tone="accent" className="mt-0.5 shrink-0" />
             <span>{downloadNotice}</span>
           </div>
-        )}
-        {noFpkgFirmware && (
-          <Callout
-            tone="warn"
-            className="mb-4"
-            title={tr(
-              "pkglib.fpkg_unsupported_fw.title",
-              { fw: noFpkgFirmware },
-              `Fake packages can't be installed on FW ${noFpkgFirmware} yet`,
-            )}
-          >
-            {tr(
-              "pkglib.fpkg_unsupported_fw.body",
-              { fw: noFpkgFirmware, last: LAST_FPKG_FIRMWARE },
-              `Fake-package (FPKG) support — kstuff's FPKG build and a53_ppr_install_fast.elf — only exists up to FW ${LAST_FPKG_FIRMWARE} so far, so a fake package sent to this PS5 will be refused or fail to mount. Retail and debug packages are not affected.`,
-            )}
-          </Callout>
         )}
 
         <div className="mb-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
@@ -1596,8 +1574,6 @@ export default function InstallPackageScreen() {
             a retail one — every field that looked like a candidate is present on
             genuine Sony packages too. So the note names the requirement and lets
             the reader decide whether it applies to them. */}
-        {!noFpkgFirmware && (
-          <>
         {/* A disclosure, not a standing callout: it matters only to someone
             installing a fake package, and they recognise the question. */}
         <details className="group mb-4 rounded-md border border-[var(--color-warn)]/40 bg-[var(--color-warn)]/5 text-[12px] text-[var(--color-muted)]">
@@ -1658,8 +1634,6 @@ export default function InstallPackageScreen() {
             </div>
           </div>
         </details>
-          </>
-        )}
 
         {alternativeGroups.length > 0 && (
           <div className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-3 text-sm leading-relaxed text-[var(--color-muted)]">

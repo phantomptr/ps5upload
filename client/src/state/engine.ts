@@ -74,3 +74,30 @@ export function setLiveEngineUrl(url: string): void {
 export function getEngineUrl(): string {
   return liveEngineUrl ?? useEngineStore.getState().engineUrl;
 }
+
+/** True for a URL whose host is this device's loopback. */
+export function isLoopbackUrl(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  host = host.replace(/^\[|\]$/g, "");
+  return host === "localhost" || host === "::1" || /^127\./.test(host);
+}
+
+/**
+ * True when the engine runs on this device, so a path picked or dropped here
+ * is one the engine can open.
+ *
+ * False in the browser build (the engine is the server the page came from)
+ * and when the desktop app points at a remote engine — a homelab Docker
+ * container, say. The desktop app used to hand such an engine its own local
+ * paths (`C:\Games\x.pkg`), which the engine could never open; every file
+ * pick against a remote engine failed. Callers browse the engine's disk
+ * instead, the way the web UI does.
+ */
+export function engineIsOnThisDevice(): boolean {
+  return isTauriEnv() && isLoopbackUrl(getEngineUrl());
+}

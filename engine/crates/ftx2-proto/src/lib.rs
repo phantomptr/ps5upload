@@ -351,6 +351,10 @@ pub enum FrameType {
     /// LAN or the PS5's disk?").
     NetSpeedTest = 122,
     NetSpeedTestAck = 123,
+    /// The console opens a TCP connection to a host:port and reports
+    /// whether it got through — the stream-install reach-back check.
+    NetReach = 148,
+    NetReachAck = 149,
     /// Direct .pkg mount via sceFsMountGamePkg, bypassing BGFT.
     /// Body: `{"pkg_path":"/abs/...","mount_point":"/mnt/ps5upload/foo"}`.
     /// ACK body: `{"ok":bool,"code":N,"err":"..."}`. Faster than full
@@ -847,6 +851,8 @@ impl FrameType {
             121 => Ok(Self::AppDbQueryAck),
             122 => Ok(Self::NetSpeedTest),
             123 => Ok(Self::NetSpeedTestAck),
+            148 => Ok(Self::NetReach),
+            149 => Ok(Self::NetReachAck),
             124 => Ok(Self::PkgDirectMount),
             125 => Ok(Self::PkgDirectMountAck),
             126 => Ok(Self::UfsFsck),
@@ -1431,6 +1437,8 @@ mod tests {
             FrameType::AppInfoSetAck,
             FrameType::NetSpeedTest,
             FrameType::NetSpeedTestAck,
+            FrameType::NetReach,
+            FrameType::NetReachAck,
             FrameType::PkgDirectMount,
             FrameType::PkgDirectMountAck,
             FrameType::UfsFsck,

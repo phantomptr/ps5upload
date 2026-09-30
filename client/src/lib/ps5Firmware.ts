@@ -58,21 +58,3 @@ export function firmwareMajor(kernel: string | null | undefined): number | null 
   const major = Number(fw.split(".")[0]);
   return Number.isFinite(major) ? major : null;
 }
-
-/** The newest firmware with working fake-package (FPKG) support: kstuff's
- *  FPKG build and a53_ppr_install_fast.elf stop here. Measured by the
- *  maintainer on real hardware (2026-09-29): 11.60 installs, 13.60 does not. */
-export const LAST_FPKG_FIRMWARE = "11.60";
-
-/** The console's firmware ("13.60") when it is newer than any with fake-
- *  package support, else null (supported, or unknown — an unparseable
- *  kernel string must never produce a warning). */
-export function fpkgUnsupportedFirmware(kernel: string | null | undefined): string | null {
-  const fw = parsePS5Firmware(kernel);
-  if (!fw) return null;
-  const toNum = (v: string) => {
-    const [maj, min] = v.split(".");
-    return Number(maj) * 100 + Number(min);
-  };
-  return toNum(fw) > toNum(LAST_FPKG_FIRMWARE) ? fw : null;
-}

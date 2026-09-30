@@ -426,7 +426,7 @@ fn extract_payload_error(err: &anyhow::Error) -> (Option<String>, Option<String>
 /// port is a stable constant (see `PS5UPLOAD2_MGMT_PORT`).
 const PS5_MGMT_PORT: u16 = 9114;
 
-fn mgmt_addr_for(transfer_addr: &str) -> String {
+pub(crate) fn mgmt_addr_for(transfer_addr: &str) -> String {
     match transfer_addr.rsplit_once(':') {
         Some((host, _)) => format!("{host}:{PS5_MGMT_PORT}"),
         None => format!("{transfer_addr}:{PS5_MGMT_PORT}"),
@@ -553,29 +553,104 @@ async fn log_requests(req: Request, next: Next) -> axum::response::Response {
     resp
 }
 
-/// Config for `loopback_guard`: extra IPs allowed besides loopback.
+/// Config for `loopback_guard`: extra peers allowed besides loopback.
 /// `Arc<[..]>` so the per-request middleware-state clone is a refcount bump,
 /// not a Vec copy.
 #[derive(Clone)]
 struct LoopbackGuardConfig {
-    allowed_ips: std::sync::Arc<[std::net::IpAddr]>,
+    allowed_ips: std::sync::Arc<[AllowRule]>,
+}
+
+/// One `PS5UPLOAD_ALLOW_IP` entry: a single address (`192.168.1.20`) or a
+/// CIDR range (`192.168.1.0/24`). Ranges exist for self-hosters: a homelab
+/// engine is driven from phones and laptops whose DHCP addresses change, and
+/// an exact-IP list meant a fresh `403` every time a lease renewed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AllowRule {
+    addr: std::net::IpAddr,
+    prefix: u8,
+}
+
+impl AllowRule {
+    fn parse(raw: &str) -> Option<Self> {
+        let raw = raw.trim();
+        let (addr, prefix) = match raw.split_once('/') {
+            Some((a, p)) => (
+                a.trim().parse::<std::net::IpAddr>().ok()?,
+                Some(p.trim().parse::<u8>().ok()?),
+            ),
+            None => (raw.parse::<std::net::IpAddr>().ok()?, None),
+        };
+        let max = if addr.is_ipv4() { 32 } else { 128 };
+        let prefix = prefix.unwrap_or(max);
+        (prefix <= max).then_some(Self { addr, prefix })
+    }
+
+    fn contains(&self, ip: std::net::IpAddr) -> bool {
+        use std::net::IpAddr;
+        // A v4 peer reaching a dual-stack socket shows up as ::ffff:a.b.c.d.
+        let ip = match ip {
+            IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(ip),
+            v4 => v4,
+        };
+        match (self.addr, ip) {
+            (IpAddr::V4(net), IpAddr::V4(ip)) => {
+                let mask = u32::MAX
+                    .checked_shl(32 - u32::from(self.prefix))
+                    .unwrap_or(0);
+                u32::from(net) & mask == u32::from(ip) & mask
+            }
+            (IpAddr::V6(net), IpAddr::V6(ip)) => {
+                let mask = u128::MAX
+                    .checked_shl(128 - u32::from(self.prefix))
+                    .unwrap_or(0);
+                u128::from(net) & mask == u128::from(ip) & mask
+            }
+            _ => false,
+        }
+    }
+}
+
+impl std::fmt::Display for AllowRule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let max = if self.addr.is_ipv4() { 32 } else { 128 };
+        if self.prefix == max {
+            write!(f, "{}", self.addr)
+        } else {
+            write!(f, "{}/{}", self.addr, self.prefix)
+        }
+    }
+}
+
+/// True when `peer` matches any `PS5UPLOAD_ALLOW_IP` rule.
+pub(crate) fn allow_rules_contain(rules: &[AllowRule], peer: std::net::IpAddr) -> bool {
+    rules.iter().any(|r| r.contains(peer))
 }
 
 /// Pure allow/deny decision so it can be unit-tested without a live server.
 /// Allow when the path is the PS5-facing `/pkg-host/*`, the peer is on
-/// loopback, or the peer is one of the configured `allowed_ips`.
+/// loopback, or the peer matches one of the configured rules.
 fn loopback_allows(cfg: &LoopbackGuardConfig, peer: std::net::IpAddr, path: &str) -> bool {
     const OFF_LOOPBACK_ALLOWED: &[&str] = &["/pkg-host/"];
     OFF_LOOPBACK_ALLOWED.iter().any(|p| path.starts_with(p))
         || peer.is_loopback()
-        || cfg.allowed_ips.contains(&peer)
+        || allow_rules_contain(&cfg.allowed_ips, peer)
 }
 
-/// Parse a comma-separated `PS5UPLOAD_ALLOW_IP` value into IPs, trimming
-/// whitespace and silently dropping blank/unparseable entries.
-fn parse_allow_ips(raw: &str) -> Vec<std::net::IpAddr> {
+/// Parse a comma-separated `PS5UPLOAD_ALLOW_IP` value into rules, trimming
+/// whitespace and dropping blank/unparseable entries.
+fn parse_allow_ips(raw: &str) -> Vec<AllowRule> {
+    raw.split(',').filter_map(AllowRule::parse).collect()
+}
+
+/// The `PS5UPLOAD_ALLOW_IP` entries that are not blank and do not parse. They
+/// used to vanish silently, so a typo looked exactly like "the allowlist is
+/// ignored".
+fn invalid_allow_ip_entries(raw: &str) -> Vec<String> {
     raw.split(',')
-        .filter_map(|s| s.trim().parse().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && AllowRule::parse(s).is_none())
+        .map(str::to_string)
         .collect()
 }
 
@@ -589,8 +664,25 @@ async fn loopback_guard(
     if loopback_allows(&cfg, peer.ip(), path) {
         return next.run(req).await.into_response();
     }
-    eprintln!("[ps5upload-engine] refusing off-loopback request to {path} from {peer}");
-    (StatusCode::FORBIDDEN, "loopback only").into_response()
+    eprintln!(
+        "[ps5upload-engine] refusing request to {path} from {peer}: not loopback and not in \
+         PS5UPLOAD_ALLOW_IP — to allow it, set PS5UPLOAD_ALLOW_IP={} (or its subnet, e.g. \
+         192.168.1.0/24)",
+        peer.ip()
+    );
+    // Say who was refused and what to set. The bare "loopback only" gave a
+    // self-hoster nothing to act on, and behind Docker the address the engine
+    // sees is often not the one they would guess.
+    (
+        StatusCode::FORBIDDEN,
+        format!(
+            "loopback only: this engine refused {ip}. To allow it, restart the engine with \
+             PS5UPLOAD_ALLOW_IP={ip} (or a range such as 192.168.1.0/24). Only do this on a \
+             trusted LAN — the API has no password.",
+            ip = peer.ip()
+        ),
+    )
+        .into_response()
 }
 
 /// Reject browser-initiated cross-site access even when the peer itself is
@@ -8966,10 +9058,10 @@ pub struct EngineConfig {
     /// (desktop sidecar) instead of returning `Err` (mobile, where
     /// exiting would kill the whole app).
     pub exit_on_error: bool,
-    /// Extra IPs allowed past the loopback guard (besides loopback), set
-    /// from `PS5UPLOAD_ALLOW_IP` (comma-separated). Lets remote desktop
-    /// clients reach the `/api/*` surface when self-hosting the engine.
-    pub allow_ips: Vec<std::net::IpAddr>,
+    /// Extra peers allowed past the loopback guard (besides loopback), set
+    /// from `PS5UPLOAD_ALLOW_IP` (comma-separated IPs or CIDR ranges). Lets
+    /// remote desktop clients reach the `/api/*` surface when self-hosting.
+    pub allow_ips: Vec<AllowRule>,
 }
 
 /// Core server entry. Builds the router, binds, and serves until
@@ -9370,12 +9462,6 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // because the PS5 couldn't reach the same listener it had to
     // download from.
     let bind = cfg.bind.clone();
-    // Mirror to stdout (terminal users) AND the engine.log ring
-    // (post-mortem diagnosis from the desktop shell once the
-    // terminal is closed). Pre-this-fix, the startup line was
-    // println!-only and missing from `engine.log`.
-    println!("[ps5upload-engine] listening on http://{bind}  (ps5={ps5_addr})");
-    crate::log_info!("listening on http://{bind}  (ps5={ps5_addr})");
     let listener = match tokio::net::TcpListener::bind(&bind).await {
         Ok(l) => l,
         Err(e) => {
@@ -9425,6 +9511,13 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             std::process::exit(2);
         }
     };
+    // Mirror to stdout (terminal users) AND the engine.log ring
+    // (post-mortem diagnosis from the desktop shell once the
+    // terminal is closed). Printed only once the bind has succeeded:
+    // it used to come first, so a log showing it proved nothing about
+    // whether the engine was actually listening.
+    println!("[ps5upload-engine] listening on http://{bind}  (ps5={ps5_addr})");
+    crate::log_info!("listening on http://{bind}  (ps5={ps5_addr})");
     // Graceful shutdown: when the parent-watcher fires (stdin EOF), the
     // SHUTDOWN Notify wakes this future, axum stops
     // accepting new connections, drains in-flight ones, then returns.
@@ -9482,6 +9575,42 @@ fn install_panic_logger() {
     }));
 }
 
+/// `ps5upload-engine --healthcheck`: exit 0 when this host's engine answers
+/// `GET /api/jobs` with 200, 1 otherwise. The container images are `FROM
+/// scratch` — no shell, no curl, no wget — so without this Docker and Compose
+/// had nothing to run as a HEALTHCHECK. Plain std TCP, no async runtime, so it
+/// works from the same binary in a fresh process.
+pub fn healthcheck() -> i32 {
+    use std::io::{Read, Write};
+    let port: u16 = std::env::var("PS5UPLOAD_ENGINE_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(19113);
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let timeout = std::time::Duration::from_secs(3);
+    let ok = (|| -> std::io::Result<bool> {
+        let mut stream = std::net::TcpStream::connect_timeout(&addr, timeout)?;
+        stream.set_read_timeout(Some(timeout))?;
+        stream.set_write_timeout(Some(timeout))?;
+        stream.write_all(
+            format!(
+                "GET /api/jobs HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+            )
+            .as_bytes(),
+        )?;
+        let mut head = [0u8; 16];
+        let n = stream.read(&mut head)?;
+        Ok(head[..n].starts_with(b"HTTP/1.1 200"))
+    })()
+    .unwrap_or(false);
+    if ok {
+        0
+    } else {
+        eprintln!("[ps5upload-engine] healthcheck: engine on {addr} did not answer 200");
+        1
+    }
+}
+
 pub async fn run_cli() {
     install_panic_logger();
     // `PS5UPLOAD_ENGINE_PORT` matches the name the desktop client sets
@@ -9495,7 +9624,27 @@ pub async fn run_cli() {
     // Extra IPs allowed past the loopback guard (e.g. remote desktop
     // clients reaching a self-hosted engine). Comma-separated; unparseable
     // entries are dropped, unset → empty.
-    let allow_ips = parse_allow_ips(&std::env::var("PS5UPLOAD_ALLOW_IP").unwrap_or_default());
+    // A bridged container gives the PS5 an address it cannot reach, so every
+    // stream install fails. Say so at startup, where a self-hoster reads the
+    // log, rather than only after the first failed install.
+    if pkg_install::bridged_container_without_pkg_host_ip() {
+        eprintln!(
+            "[ps5upload-engine] WARNING: running in a container with bridge networking and no \
+             PS5UPLOAD_PKG_HOST_IP. Stream installs will fail: the PS5 would be told to fetch \
+             from the container's internal address. Use host networking (--network host), or \
+             set PS5UPLOAD_PKG_HOST_IP to this host's LAN IP."
+        );
+    }
+    let allow_raw = std::env::var("PS5UPLOAD_ALLOW_IP").unwrap_or_default();
+    let allow_ips = parse_allow_ips(&allow_raw);
+    let invalid = invalid_allow_ip_entries(&allow_raw);
+    if !invalid.is_empty() {
+        eprintln!(
+            "[ps5upload-engine] WARNING: ignoring PS5UPLOAD_ALLOW_IP entries that are not an IP \
+             or CIDR range: {}",
+            invalid.join(", ")
+        );
+    }
     if !allow_ips.is_empty() {
         // The `/api/*` surface has NO authentication — it can install/uninstall
         // titles and read/write/delete files on the PS5. The loopback guard is
@@ -9511,7 +9660,7 @@ pub async fn run_cli() {
             allow_ips.len(),
             allow_ips
                 .iter()
-                .map(|ip| ip.to_string())
+                .map(|rule| rule.to_string())
                 .collect::<Vec<_>>()
                 .join(", ")
         );
@@ -9597,7 +9746,7 @@ mod loopback_guard_tests {
 
     fn cfg(ips: &[&str]) -> LoopbackGuardConfig {
         LoopbackGuardConfig {
-            allowed_ips: ips.iter().map(|s| ip(s)).collect(),
+            allowed_ips: ips.iter().map(|s| AllowRule::parse(s).unwrap()).collect(),
         }
     }
 
@@ -9630,11 +9779,45 @@ mod loopback_guard_tests {
 
     #[test]
     fn parse_allow_ips_handles_list_blanks_and_junk() {
-        assert_eq!(parse_allow_ips(""), Vec::<IpAddr>::new());
+        assert!(parse_allow_ips("").is_empty());
+        let rules = parse_allow_ips(" 192.168.1.50 , ::1 ,, not-an-ip , 10.0.0.9");
+        let shown: Vec<String> = rules.iter().map(|r| r.to_string()).collect();
+        assert_eq!(shown, ["192.168.1.50", "::1", "10.0.0.9"]);
         assert_eq!(
-            parse_allow_ips(" 192.168.1.50 , ::1 ,, not-an-ip , 10.0.0.9"),
-            vec![ip("192.168.1.50"), ip("::1"), ip("10.0.0.9")]
+            invalid_allow_ip_entries(" 192.168.1.50 , ::1 ,, not-an-ip , 10.0.0.0/33"),
+            ["not-an-ip", "10.0.0.0/33"]
         );
+    }
+
+    #[test]
+    fn a_cidr_range_admits_its_whole_subnet() {
+        // A homelab engine is driven from phones and laptops whose DHCP
+        // leases change; an exact-IP list meant a new 403 per renewal.
+        let c = cfg(&["192.168.1.0/24"]);
+        assert!(loopback_allows(&c, ip("192.168.1.7"), "/api/jobs"));
+        assert!(loopback_allows(&c, ip("192.168.1.254"), "/api/jobs"));
+        assert!(!loopback_allows(&c, ip("192.168.2.7"), "/api/jobs"));
+        // A v4 client on a dual-stack socket arrives as ::ffff:a.b.c.d.
+        assert!(loopback_allows(&c, ip("::ffff:192.168.1.7"), "/api/jobs"));
+        // /0 is everything; a bare IP is /32.
+        assert!(loopback_allows(
+            &cfg(&["0.0.0.0/0"]),
+            ip("8.8.8.8"),
+            "/api/jobs"
+        ));
+        assert_eq!(
+            AllowRule::parse("10.0.0.9").unwrap().to_string(),
+            "10.0.0.9"
+        );
+        assert_eq!(
+            AllowRule::parse("fd00::/8").unwrap().to_string(),
+            "fd00::/8"
+        );
+        assert!(loopback_allows(
+            &cfg(&["fd00::/8"]),
+            ip("fd12::1"),
+            "/api/jobs"
+        ));
     }
 
     #[test]

@@ -21,10 +21,16 @@ use crate::DEFAULT_ENGINE_URL;
 /// that don't — same contract as the desktop sidecar's `PS5_ADDR`.
 const DEFAULT_PS5_ADDR: &str = "192.168.137.2:9113";
 
-/// Bind for the in-process server. Loopback only — there is no PS5
-/// pkg-host fetch story on mobile yet, so we don't need the desktop's
-/// `0.0.0.0` bind.
-const BIND: &str = "127.0.0.1:19113";
+/// Bind for the in-process server: every interface, like the desktop
+/// sidecar, so the PS5 can download a package from the phone (Stream &
+/// install). Loopback-only meant a phone could only stage packages on the
+/// console first, and that route is refused (0x80B2116F) on FW 9.60 and
+/// 13.60 — a user's every install from a phone failed while the same package
+/// streamed from a PC installed. The engine's loopback guard still answers
+/// only `/pkg-host/*` to anything off this device; `/api/*` stays local.
+/// UNVERIFIED on a physical phone: the emulator is NATed, so the PS5 can't
+/// reach it to prove the fetch end to end.
+const BIND: &str = "0.0.0.0:19113";
 
 /// Start the engine on a background task. Returns immediately with the
 /// loopback URL; the server finishes binding within a few milliseconds.

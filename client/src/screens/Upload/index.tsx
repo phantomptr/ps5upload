@@ -22,6 +22,7 @@ import { isAndroid } from "../../lib/platform";
 import { pkgKindLabel } from "./pkgKind";
 import { pickLocalPath, pickLocalPaths } from "../../state/localPicker";
 import { isTauriEnv, safeUnlisten } from "../../lib/tauriEnv";
+import { engineIsOnThisDevice } from "../../state/engine";
 import { localFileSrc } from "../../lib/fileSrc";
 import { useShallow } from "zustand/react/shallow";
 
@@ -239,6 +240,8 @@ export default function UploadScreen() {
   useEffect(() => {
     if (!isTauriEnv()) return; // browser dev/test contexts skip Tauri-only APIs
     if (isAndroid()) return; // no drag-and-drop on Android; pickers below cover it
+    // A dropped folder is a path on this device; a remote engine can't read it.
+    if (!engineIsOnThisDevice()) return;
     let unlisten: (() => void) | null = null;
     let cancelled = false;
     const p = getCurrentWebview().onDragDropEvent(async (e) => {

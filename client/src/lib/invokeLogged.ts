@@ -7,7 +7,17 @@ import {
 import { log } from "../state/logs";
 import { isTauriEnv } from "./tauriEnv";
 import { browserInvoke } from "./browserInvoke";
+import { engineIsOnThisDevice } from "../state/engine";
 import { observeInvokeOutcome } from "./invokeLogDedup";
+
+/** The in-app file browser's commands. Against a remote engine they must list
+ *  that engine's filesystem — the paths are handed to it — not this device's. */
+const ENGINE_HOST_FS_COMMANDS = new Set([
+  "local_list_dir",
+  "local_storage_roots",
+  "storage_access_granted",
+  "request_storage_access",
+]);
 
 /**
  * Drop-in replacement for Tauri's `invoke` that leaves a log breadcrumb for
@@ -38,8 +48,10 @@ export async function invoke<T>(
 ): Promise<T> {
   try {
     let result: T;
-    if (!isTauriEnv()) {
-      // Browser path — translate IPC → HTTP fetch.
+    if (!isTauriEnv() || (ENGINE_HOST_FS_COMMANDS.has(cmd) && !engineIsOnThisDevice())) {
+      // Browser path — translate IPC → HTTP fetch. Also taken by the desktop
+      // app for the in-app file browser when its engine is remote: the paths
+      // it picks are for the engine to open, so list the ENGINE's disk.
       // `options` (Tauri Channel / transferable) has no browser equivalent;
       // commands that use it are native-only and already gated by isTauriEnv()
       // at their call sites, so they will reach BrowserUnsupportedError before

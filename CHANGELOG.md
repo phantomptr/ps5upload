@@ -4,6 +4,76 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.41.0
+
+**Installs that the PS5 used to decline now go through.** On FW 13.60 the
+console refuses a package it serves to itself — every "Upload & install",
+every install from a USB drive, every install from the phone app — with
+"The PS5 declined the install" (0x80B2116F), especially when the app was
+already installed. ps5upload now notices that refusal and serves the same
+package to the console itself, which the console accepts. Nothing to set;
+it happens inside the same install. Tested on a 13.60 PS5 Pro with stream,
+Upload & install (fresh and over an installed app) and USB.
+
+- **Fake packages do work above FW 11.60.** 5.40.0 said they didn't; that
+  was wrong — PS4 and PS5 fake packages install and start on 13.60. The
+  warnings are gone from Install Package, Games and Convert.
+- **Folder games register on FW 13.60.** Sony removed the call we used; we
+  now use the one that's still there, and uninstalling a folder game no
+  longer leaves hidden entries behind.
+- **Payload Manager as a backup loader.** When the console's ELF loader on
+  port 9021 stops answering (the stock elfldr wedges easily), ps5upload
+  starts its installer — and puts its helper back after a disconnect —
+  through itsPLK's Payload Manager, and replaces the stuck elfldr with its
+  own fixed one. Your Payload Manager list is never touched.
+- **Firewall problems are named in seconds.** Before a stream install the
+  console checks it can reach this computer; if it can't, you're told why
+  (a firewall dropping the connection, or a network that keeps devices
+  apart) instead of waiting 30 seconds for "The PS5 declined the install".
+- **The phone app can stream installs.** It now serves the package to the
+  PS5 directly, the same way the desktop app does.
+- **A clearer "installing from the PS5's storage was refused" message**,
+  pointing at Stream & install, instead of "The PS5 declined the install".
+- **Setup won't load kstuff twice.** The setup wizard skips payloads that
+  are already running and has a **Send only ps5upload** button for consoles
+  that load kstuff themselves.
+- **A remote engine reads the engine's files.** With the desktop app pointed
+  at another machine (a homelab, say), file pickers browse that machine's
+  disk, and **From this device** uploads a package to it first.
+- **The app reaches its engine even behind a proxy.** A proxy set in the
+  environment (common with VPN tools) no longer swallows the app's
+  connection to its own engine; errors now say what actually failed.
+
+**The Docker images work out of the box.** The 5.40 images built fine but
+had never been run in CI, and it showed:
+
+- **Uploads work.** The image had no writable `/tmp`, so uploading a package
+  through the web UI failed with "Permission denied" (#346). It now has one.
+- **The engine can save its state.** Saved servers, install history and the
+  artwork cache now live in `/data` (the engine's home). Put a volume on it
+  so they survive upgrades: `-v ps5upload-data:/data`. This also works when
+  you run the container as another user (`user: "1000:1000"`).
+  `PS5UPLOAD_DATA_DIR` is not needed.
+- **A clear "not allowed" message.** A request from a computer that isn't
+  allowed used to get a bare `403 loopback only`. It now names the address it
+  refused and the setting to change. `PS5UPLOAD_ALLOW_IP` also takes a whole
+  network now, e.g. `192.168.1.0/24`, so phones and laptops that change
+  address keep working.
+- **Stream installs on a server.** The ready-made
+  [`engine/compose.yaml`](engine/compose.yaml) uses host networking, which
+  stream installs need: on Docker's default network the PS5 can't reach the
+  engine to download the package. The engine now warns about this when it
+  starts, instead of letting every install fail.
+- **A built-in health check,** so Docker and Compose can tell when the engine
+  is up.
+- **Every release is now started and tested in CI** before the images are
+  published.
+
+Coming from 5.40? The `TMPDIR` / `HOME` workaround from the FAQ can be
+removed after updating.
+
+---
+
 ## 5.40.0
 
 **Refreshed for FW 13.60.** Tested on two consoles running 13.60 (a launch

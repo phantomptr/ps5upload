@@ -27,7 +27,7 @@ on:
   push:
     tags: ['v*']
   pull_request:
-    paths: ['engine/**', 'client/**', '.github/workflows/docker-engine.yml']
+    paths: ['engine/**', 'client/**', 'payload/**', 'scripts/docker-smoke.sh', '.github/workflows/docker-engine.yml']
   workflow_dispatch:
     inputs:
       tag:
@@ -74,8 +74,17 @@ jobs:
           file: engine/Dockerfile
           platforms: linux/amd64
           push: false
+          # Load it so the smoke test below can run it.
+          load: true
+          tags: ps5upload-engine:smoke
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Building proved nothing about whether the image works: 5.40.0 built
+      # fine and refused every request, had no /tmp for uploads and no
+      # writable home. Run it and check those.
+      - name: Smoke-test the image
+        run: scripts/docker-smoke.sh ps5upload-engine:smoke
 
   # ── PR gate for the webui image: same idea, root context + Dockerfile.webui ─
   verify-webui:
@@ -105,8 +114,13 @@ jobs:
           file: engine/Dockerfile.webui
           platforms: linux/amd64
           push: false
+          load: true
+          tags: ps5upload-engine-webui:smoke
           cache-from: type=gha,scope=webui
           cache-to: type=gha,mode=max,scope=webui
+
+      - name: Smoke-test the image
+        run: scripts/docker-smoke.sh ps5upload-engine-webui:smoke --webui
 
   # ── Resolve + validate the tag ONCE, hand the trusted values to build/merge ─
   # Centralizing this means the tag is regex-validated before it ever reaches a
@@ -271,6 +285,21 @@ jobs:
         with:
           images: ${{ env.IMAGE }}
 
+      # Same build, loaded locally and run before anything is pushed: a
+      # release tag can't be moved, so a broken image would need a new release.
+      - name: Build for the smoke test
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: engine/Dockerfile
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: ps5upload-smoke:local
+          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
+
+      - name: Smoke-test the image
+        run: scripts/docker-smoke.sh ps5upload-smoke:local
+
       - name: Build and push by digest
         id: push
         uses: docker/build-push-action@v7
@@ -358,6 +387,21 @@ jobs:
         id: meta
         with:
           images: ${{ env.IMAGE }}
+
+      # Same build, loaded locally and run before anything is pushed: a
+      # release tag can't be moved, so a broken image would need a new release.
+      - name: Build for the smoke test
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: engine/Dockerfile.webui
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: ps5upload-smoke:local
+          cache-from: type=gha,scope=webui-${{ env.PLATFORM_PAIR }}
+
+      - name: Smoke-test the image
+        run: scripts/docker-smoke.sh ps5upload-smoke:local --webui
 
       - name: Build and push by digest
         id: push

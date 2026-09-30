@@ -253,16 +253,47 @@ const SCE_HTTP_ERROR_PROXY: u32 = 0x8043_1084;
 /// user looking in the wrong place.
 /// Why Sony refused an install: a stream the console never fetched from gets
 /// its own reason, so the UI can explain it in the user's language.
-pub fn refusal_reason(never_fetched: bool, code: u32) -> FailReason {
+pub fn refusal_reason(never_fetched: bool, code: u32, route: Route) -> FailReason {
     match (never_fetched && code != 0, code) {
         (true, SCE_HTTP_ERROR_PROXY) => FailReason::StreamProxy,
         (true, _) => FailReason::StreamUnreachable,
+        _ if route == Route::Loopback && STAGED_ROUTE_REFUSALS.contains(&code) => {
+            FailReason::StagedRefused
+        }
         _ => FailReason::SonyRefused,
     }
 }
 
+/// Sony codes measured refusing the staged (Loopback) route while the same
+/// package streamed from a computer installed: 0x80B2116F on FW 9.60 and
+/// 13.60 (the latter from a user whose every install came from a phone, which
+/// can only stage), 0x80B2150F on FW 5.10.
+const STAGED_ROUTE_REFUSALS: &[u32] = &[0x80B2_116F, 0x80B2_150F];
+
 pub fn stream_unreachable_hint(served_from: Option<&str>, code: u32) -> String {
+    stream_unreachable_hint_for(
+        served_from,
+        code,
+        crate::pkg_install::bridged_container_without_pkg_host_ip(),
+    )
+}
+
+/// `stream_unreachable_hint` with the container check passed in, so both
+/// wordings are testable. In a bridged container the firewall advice is
+/// wrong: the engine told the PS5 to fetch from the container's internal
+/// address, which nothing outside the Docker host can reach.
+fn stream_unreachable_hint_for(
+    served_from: Option<&str>,
+    code: u32,
+    bridged_container: bool,
+) -> String {
     let rc = format!("0x{code:08x}");
+    if bridged_container {
+        let at = served_from.map(|o| format!(" at {o}")).unwrap_or_default();
+        return format!(
+            "The PS5 never reached the engine{at} to fetch the package ({rc}). The engine is running in a container, so that is the container's internal address, which the PS5 cannot reach. Run the container with host networking (`--network host`, or `network_mode: host` in Compose), or set PS5UPLOAD_PKG_HOST_IP to the Docker host's LAN IP and publish port 19113."
+        );
+    }
     if code == SCE_HTTP_ERROR_PROXY {
         return format!(
             "The PS5's proxy setting blocked the stream ({rc}). In the PS5's network Advanced Settings set Proxy Server to \u{201c}Do Not Use\u{201d}, or use Upload & install, which reads the package from PS5-local storage."
@@ -271,6 +302,45 @@ pub fn stream_unreachable_hint(served_from: Option<&str>, code: u32) -> String {
     let at = served_from.map(|o| format!(" at {o}")).unwrap_or_default();
     format!(
         "The PS5 never reached this computer{at} to fetch the package ({rc}). Allow ps5upload through this computer's firewall (on Windows, for both Private and Public networks), keep the computer and the PS5 on the same network with any VPN off, and set the PS5's Proxy Server to \u{201c}Do Not Use\u{201d}. Upload & install works without this connection."
+    )
+}
+
+/// Ask the helper whether the console can open a connection to the engine's
+/// pkg-host origin in `url`. `Some(message)` only when it definitely cannot;
+/// `None` when it can, or when the check could not run (an older helper, an
+/// unparseable URL) — that must never block an install that might work.
+async fn reach_block(ip: &str, url: &str) -> Option<String> {
+    let origin = origin_of(url)?;
+    let authority = origin.split_once("://")?.1.to_string();
+    let (host, port) = authority.rsplit_once(':')?;
+    let port: u16 = port.parse().ok()?;
+    let (mgmt, h) = (
+        crate::mgmt_addr_for(ip),
+        host.trim_matches(|c| c == '[' || c == ']').to_string(),
+    );
+    let r = tokio::task::spawn_blocking(move || {
+        ps5upload_core::diagnostics::net_reach(&mgmt, &h, port, 4000)
+    })
+    .await
+    .ok()?
+    .ok()?;
+    (!r.ok).then(|| reach_block_message(&origin, &r))
+}
+
+/// The user-facing reason a reach check failed. A timeout means packets are
+/// being dropped (a firewall on this computer, or client isolation on the
+/// network); a refusal means nothing accepted the connection on that port.
+fn reach_block_message(origin: &str, r: &ps5upload_core::diagnostics::NetReach) -> String {
+    let cause = if r.timed_out {
+        "the connection timed out, which usually means a firewall on this computer is silently dropping it (on Windows, allow ps5upload for both Private and Public networks; a PS5 connected through Internet Connection Sharing sits on a Public network), or the Wi-Fi isolates devices from each other"
+    } else if r.errno == 61 || r.errno == 111 || r.err.to_ascii_lowercase().contains("refused") {
+        "the connection was refused, so nothing is accepting connections on that port for the PS5 — a firewall rule that rejects it, or the engine listening on another address"
+    } else {
+        "the network would not let it through"
+    };
+    format!(
+        "The PS5 cannot connect to this computer at {origin} ({}), so a stream install cannot start: {cause}. Upload & install copies the package to the PS5 instead and does not need this connection.",
+        if r.err.is_empty() { format!("after {} ms", r.ms) } else { format!("{} after {} ms", r.err, r.ms) }
     )
 }
 
@@ -493,7 +563,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     let category = req.category.clone().unwrap_or_default();
     let patch_ver = patch_check_version(&category, req.package_app_ver.as_deref());
     let title_id = req.title_id.clone().filter(|t| !t.trim().is_empty());
-    let route = match decide_delivery(&req.source) {
+    let mut route = match decide_delivery(&req.source) {
         Delivery::Loopback => Route::Loopback,
         Delivery::Stream => Route::Stream,
     };
@@ -589,7 +659,48 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                 let r = tokio::task::spawn_blocking(move || ic::install_path(&i, &p, &h))
                     .await
                     .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
-                (r, None, false)
+                // The console refused the copy it serves itself (0x80B2116F on
+                // FW 9.60/13.60, 0x80B2150F on 5.10: Sony's overwrite/patch
+                // check). The same bytes served from this engine install, so
+                // do that — read back through the helper, one job, one result.
+                match &r {
+                    Ok(ic::InstallReply::Sony { code, .. })
+                        if STAGED_ROUTE_REFUSALS.contains(code) =>
+                    {
+                        crate::log_info!(
+                            "{tag}: the console refused its own copy (0x{code:08X}); serving it from this engine instead"
+                        );
+                        let console_url = format!("ps5://{ip}{path}");
+                        match create_serve_session_for(&state, &req, &console_url).await {
+                            Ok((sid, url)) => {
+                                served_from = origin_of(&url);
+                                if let Some(block) = reach_block(&ip, &url).await {
+                                    crate::pkg_install::release_serve_session(
+                                        &state.sessions,
+                                        &sid,
+                                    );
+                                    crate::log_warn!("{tag}: {block}");
+                                    (r, None, false)
+                                } else {
+                                    route = Route::Stream;
+                                    state.jobs.update(&job, |s| s.route = Some(Route::Stream));
+                                    let (i, u, h) = (ip.clone(), url, hint_name.clone());
+                                    let r2 = tokio::task::spawn_blocking(move || {
+                                        ic::install_url(&i, &u, &h)
+                                    })
+                                    .await
+                                    .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
+                                    (r2, Some(sid), false)
+                                }
+                            }
+                            Err(e) => {
+                                crate::log_warn!("{tag}: could not serve the console's copy: {e}");
+                                (r, None, false)
+                            }
+                        }
+                    }
+                    _ => (r, None, false),
+                }
             }
             Source::Url(url) => {
                 // The daemon installs the URL directly; alias it if too long.
@@ -612,12 +723,68 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                 let r = tokio::task::spawn_blocking(move || ic::install_url(&i, &final_url, &h))
                     .await
                     .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
-                (r, None, was_short)
+                // The console refused the link as served by its own server. On
+                // FW 13.60 that is what a server without a usable
+                // Last-Modified gets (0x80B2116F; the same link with one
+                // installs — measured back to back). This engine's link proxy
+                // always sends one, so serve the link through it instead.
+                match &r {
+                    Ok(ic::InstallReply::Sony { code, .. })
+                        if STAGED_ROUTE_REFUSALS.contains(code) =>
+                    {
+                        crate::log_info!(
+                            "{tag}: the console refused the link (0x{code:08X}); proxying it through this engine instead"
+                        );
+                        match create_serve_session_for(&state, &req, url).await {
+                            Ok((sid, purl)) => {
+                                served_from = origin_of(&purl);
+                                if let Some(block) = reach_block(&ip, &purl).await {
+                                    crate::pkg_install::release_serve_session(
+                                        &state.sessions,
+                                        &sid,
+                                    );
+                                    crate::log_warn!("{tag}: {block}");
+                                    (r, None, was_short)
+                                } else {
+                                    route = Route::Stream;
+                                    state.jobs.update(&job, |s| s.route = Some(Route::Stream));
+                                    let (i, u, h) = (ip.clone(), purl, hint_name.clone());
+                                    let r2 = tokio::task::spawn_blocking(move || {
+                                        ic::install_url(&i, &u, &h)
+                                    })
+                                    .await
+                                    .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
+                                    (r2, Some(sid), false)
+                                }
+                            }
+                            Err(e) => {
+                                crate::log_warn!("{tag}: could not proxy the link: {e}");
+                                (r, None, was_short)
+                            }
+                        }
+                    }
+                    _ => (r, None, was_short),
+                }
             }
             Source::HostFile(_) | Source::Remote { .. } => {
                 match create_serve_session(&state, &req).await {
                     Ok((sid, url)) => {
                         served_from = origin_of(&url);
+                        // Can the console reach us at all? A firewall that
+                        // drops the connection otherwise shows up only as
+                        // Sony's 0x80431068 after a 30 s wait (#342).
+                        if let Some(block) = reach_block(&ip, &url).await {
+                            crate::pkg_install::release_serve_session(&state.sessions, &sid);
+                            crate::log_warn!("{tag}: {block}");
+                            state.jobs.update(&job, |s| {
+                                s.phase = Phase::Failed;
+                                s.verdict = Some(Verdict::Failed);
+                                s.reason = Some(FailReason::StreamUnreachable);
+                                s.hint = Some(block.clone());
+                            });
+                            finalize(&state, &job, &req, started);
+                            return;
+                        }
                         let (i, u, h) = (ip.clone(), url, hint_name.clone());
                         let r = tokio::task::spawn_blocking(move || ic::install_url(&i, &u, &h))
                             .await
@@ -692,7 +859,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         state.jobs.update(&job, |s| {
             s.phase = Phase::Failed;
             s.verdict = Some(Verdict::Failed);
-            s.reason = Some(refusal_reason(never_fetched, code));
+            s.reason = Some(refusal_reason(never_fetched, code, route));
             s.code = code;
             s.hint = hint.clone();
             s.shortened = shortened;
@@ -868,12 +1035,34 @@ async fn create_serve_session(
         Source::Remote { connection, path } => format!("remote://{connection}/{path}"),
         _ => return Err("create_serve_session called for a non-stream source".into()),
     };
-    let start_req = serde_json::json!({
-        "ps5_addr": req.ps5_addr,
-        "serve_only": true,
-        "path": path,
-        "content_id": req.content_id,
-    });
+    create_serve_session_for(state, req, &path).await
+}
+
+/// A serve session for an explicit source path — a local file, `remote://…`
+/// on a saved server, or `ps5://<console>/<path>` read back through the helper.
+async fn create_serve_session_for(
+    state: &PkgInstallStateHandle,
+    req: &InstallRequest,
+    path: &str,
+) -> Result<(String, String), String> {
+    // A link is proxied (its origin read over many connections); anything
+    // else is a path the engine reads — local, remote:// or ps5://.
+    let is_link = path.starts_with("http://") || path.starts_with("https://");
+    let start_req = if is_link {
+        serde_json::json!({
+            "ps5_addr": req.ps5_addr,
+            "serve_only": true,
+            "remote_url": path,
+            "content_id": req.content_id,
+        })
+    } else {
+        serde_json::json!({
+            "ps5_addr": req.ps5_addr,
+            "serve_only": true,
+            "path": path,
+            "content_id": req.content_id,
+        })
+    };
     let start_req: crate::pkg_install::InstallStartRequest =
         serde_json::from_value(start_req).map_err(|e| format!("build start request: {e}"))?;
     let resp =
@@ -1047,15 +1236,80 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_reach_check_names_the_likely_cause() {
+        use ps5upload_core::diagnostics::NetReach;
+        // #342: a PS5 on Windows Internet Connection Sharing could never
+        // reach the PC; the dropped connection timed out.
+        let dropped = NetReach {
+            ok: false,
+            timed_out: true,
+            errno: 0,
+            err: "timed out".into(),
+            ms: 4000,
+        };
+        let m = reach_block_message("http://192.168.137.1:19113", &dropped);
+        assert!(m.contains("192.168.137.1:19113"), "{m}");
+        assert!(m.contains("firewall"), "{m}");
+        assert!(m.contains("Public"), "{m}");
+        assert!(m.contains("Upload & install"), "{m}");
+        let refused = NetReach {
+            ok: false,
+            timed_out: false,
+            errno: 61,
+            err: "Connection refused".into(),
+            ms: 3,
+        };
+        assert!(reach_block_message("http://x:1", &refused).contains("refused"));
+    }
+
+    #[test]
+    fn a_bridged_container_is_told_about_host_networking_not_firewalls() {
+        // A homelab engine in Docker with default bridge networking hands the
+        // PS5 its 172.17.x address; "allow it through the Windows firewall"
+        // sent people chasing the wrong thing.
+        let h = stream_unreachable_hint_for(Some("http://172.17.0.2:19113"), 0x80431064, true);
+        assert!(h.contains("container"), "{h}");
+        assert!(h.contains("--network host"), "{h}");
+        assert!(h.contains("PS5UPLOAD_PKG_HOST_IP"), "{h}");
+        assert!(!h.contains("firewall"), "{h}");
+        let plain = stream_unreachable_hint_for(None, 0x80431064, false);
+        assert!(plain.contains("firewall"), "{plain}");
+    }
+
+    #[test]
     fn a_refusal_names_why_so_the_ui_can_explain_it_in_its_language() {
         assert_eq!(
-            refusal_reason(true, 0x80431064),
+            refusal_reason(true, 0x80431064, Route::Stream),
             FailReason::StreamUnreachable
         );
-        assert_eq!(refusal_reason(true, 0x80431084), FailReason::StreamProxy);
+        assert_eq!(
+            refusal_reason(true, 0x80431084, Route::Stream),
+            FailReason::StreamProxy
+        );
         // Fetched, or no Sony code: an ordinary refusal.
-        assert_eq!(refusal_reason(false, 0x80431064), FailReason::SonyRefused);
-        assert_eq!(refusal_reason(true, 0), FailReason::SonyRefused);
+        assert_eq!(
+            refusal_reason(false, 0x80431064, Route::Stream),
+            FailReason::SonyRefused
+        );
+        assert_eq!(
+            refusal_reason(true, 0, Route::Stream),
+            FailReason::SonyRefused
+        );
+        // The staged route's measured refusals get their own reason, so the
+        // UI can send the user to Stream instead of "the PS5 declined".
+        assert_eq!(
+            refusal_reason(false, 0x80B2116F, Route::Loopback),
+            FailReason::StagedRefused
+        );
+        assert_eq!(
+            refusal_reason(false, 0x80B2150F, Route::Loopback),
+            FailReason::StagedRefused
+        );
+        // Same code on a stream is not the staged limitation.
+        assert_eq!(
+            refusal_reason(false, 0x80B2116F, Route::Stream),
+            FailReason::SonyRefused
+        );
     }
 
     #[test]

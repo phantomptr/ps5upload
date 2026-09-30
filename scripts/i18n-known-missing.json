@@ -1,6 +1,14 @@
 {
   "ar": {
-    "missing": [],
+    "missing": [
+      "pkg.reason.staged_refused",
+      "first_run_step_skipped_own",
+      "first_run_step_already_running",
+      "first_run_helper_only",
+      "first_run_helper_only_hint",
+      "notif_first_run_ready_body",
+      "pkglib.staged_install_note"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -10,7 +18,15 @@
     ]
   },
   "bn": {
-    "missing": [],
+    "missing": [
+      "pkg.reason.staged_refused",
+      "first_run_step_skipped_own",
+      "first_run_step_already_running",
+      "first_run_helper_only",
+      "first_run_helper_only_hint",
+      "notif_first_run_ready_body",
+      "pkglib.staged_install_note"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -21,7 +37,15 @@
     ]
   },
   "de": {
-    "missing": [],
+    "missing": [
+      "pkg.reason.staged_refused",
+      "first_run_step_skipped_own",
+      "first_run_step_already_running",
+      "first_run_helper_only",
+      "first_run_helper_only_hint",
+      "notif_first_run_ready_body",
+      "pkglib.staged_install_note"
+    ],
     "stale": [],
     "untranslated": [
       "console_tab_name",
@@ -39,7 +63,15 @@
     ]
   },
   "es": {
-    "missing": [],
+    "missing": [
+      "pkg.reason.staged_refused",
+      "first_run_step_skipped_own",
+      "first_run_step_already_running",
+      "first_run_helper_only",
+      "first_run_helper_only_hint",
+      "notif_first_run_ready_body",
+      "pkglib.staged_install_note"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -53,7 +85,15 @@
     ]
   },
   "fr": {
-    "missing": [],
+    "missing": [
+      "pkg.reason.staged_refused",
+      "first_run_step_skipped_own",
+      "first_run_step_already_running",
+      "first_run_helper_only",
+      "first_run_helper_only_hint",
+      "notif_first_run_ready_body",
+      "pkglib.staged_install_note"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -69,7 +109,15 @@
     ]
   },
   "hi": {
-    "missing": [],
+    "missing": [
+      "pkg.reason.staged_refused",
+      "first_run_step_skipped_own",
+      "first_run_step_already_running",
+      "first_run_helper_only",
+      "first_run_helper_only_hint",
+      "notif_first_run_ready_body",
+      "pkglib.staged_install_note"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -80,7 +128,15 @@
     ]
   },
   "hu": {
-    "missing": [],
+    "missing": [
+      "pkg.reason.staged_refused",
+      "first_run_step_skipped_own",
+      "first_run_step_already_running",
+      "first_run_helper_only",
+      "first_run_helper_only_hint",
+      "notif_first_run_ready_body",
+      "pkglib.staged_install_note"
+    ],
     "stale": [],
     "untranslated": [
       "engine_url_label",
@@ -102,7 +158,15 @@
     ]
   },
   "id": {
-    "missing": [],
+    "missing": [
+      "pkg.reason.staged_refused",
+      "first_run_step_skipped_own",
+      "first_run_step_already_running",
+      "first_run_helper_only",
+      "first_run_helper_only_hint",
+      "notif_first_run_ready_body",
+      "pkglib.staged_install_note"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -118,7 +182,15 @@
     ]
   },
   "it": {
-    "missing": [],
+    "missing": [
+      "pkg.reason.staged_refused",
+      "first_run_step_skipped_own",
+      "first_run_step_already_running",
+      "first_run_helper_only",
+      "first_run_helper_only_hint",
+      "notif_first_run_ready_body",
+      "pkglib.staged_install_note"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -133,7 +205,15 @@
     ]
   },
   "ja": {
-    "missing": [],
+    "missing": [
+      "pkg.reason.staged_refused",
+      "first_run_step_skipped_own",
+      "first_run_step_already_running",
+      "first_run_helper_only",
+      "first_run_helper_only_hint",
+      "notif_first_run_ready_body",
+      "pkglib.staged_install_note"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -146,7 +226,15 @@
     ]
   },
   "ko": {
-    "missing": [],
+    "missing": [
+      "pkg.reason.staged_refused",
+      "first_run_step_skipped_own",
+      "first_run_step_already_running",
+      "first_run_helper_only",
+      "first_run_helper_only_hint",
+      "notif_first_run_ready_body",
+      "pkglib.staged_install_note"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -157,7 +245,15 @@
     ]
   },
   "pl": {
-    "missing": [],
+    "missing": [
+      "pkg.reason.staged_refused",
+      "first_run_step_skipped_own",
+      "first_run_step_already_running",
+      "first_run_helper_only",
+      "first_run_helper_only_hint",
+      "notif_first_run_ready_body",
+      "pkglib.staged_install_note"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -169,7 +265,15 @@
     ]
   },
   "pt-BR": {
-    "missing": [],
+    "missing": [
+      "pkg.reason.staged_refused",
+      "first_run_step_skipped_own",
+      "first_run_step_already_running",
+      "first_run_helper_only",
+      "first_run_helper_only_hint",
+      "notif_first_run_ready_body",
+      "pkglib.staged_install_note"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -186,7 +290,15 @@
     ]
   },
   "ru": {
-    "missing": [],
+    "missing": [
+      "pkg.reason.staged_refused",
+      "first_run_step_skipped_own",
+      "first_run_step_already_running",
+      "first_run_helper_only",
+      "first_run_helper_only_hint",
+      "notif_first_run_ready_body",
+      "pkglib.staged_install_note"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -198,7 +310,15 @@
     ]
   },
   "th": {
-    "missing": [],
+    "missing": [
+      "pkg.reason.staged_refused",
+      "first_run_step_skipped_own",
+      "first_run_step_already_running",
+      "first_run_helper_only",
+      "first_run_helper_only_hint",
+      "notif_first_run_ready_body",
+      "pkglib.staged_install_note"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -209,7 +329,15 @@
     ]
   },
   "tr": {
-    "missing": [],
+    "missing": [
+      "pkg.reason.staged_refused",
+      "first_run_step_skipped_own",
+      "first_run_step_already_running",
+      "first_run_helper_only",
+      "first_run_helper_only_hint",
+      "notif_first_run_ready_body",
+      "pkglib.staged_install_note"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -222,7 +350,15 @@
     ]
   },
   "vi": {
-    "missing": [],
+    "missing": [
+      "pkg.reason.staged_refused",
+      "first_run_step_skipped_own",
+      "first_run_step_already_running",
+      "first_run_helper_only",
+      "first_run_helper_only_hint",
+      "notif_first_run_ready_body",
+      "pkglib.staged_install_note"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -236,7 +372,15 @@
     ]
   },
   "zh-CN": {
-    "missing": [],
+    "missing": [
+      "pkg.reason.staged_refused",
+      "first_run_step_skipped_own",
+      "first_run_step_already_running",
+      "first_run_helper_only",
+      "first_run_helper_only_hint",
+      "notif_first_run_ready_body",
+      "pkglib.staged_install_note"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -247,7 +391,15 @@
     ]
   },
   "zh-TW": {
-    "missing": [],
+    "missing": [
+      "pkg.reason.staged_refused",
+      "first_run_step_skipped_own",
+      "first_run_step_already_running",
+      "first_run_helper_only",
+      "first_run_helper_only_hint",
+      "notif_first_run_ready_body",
+      "pkglib.staged_install_note"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",

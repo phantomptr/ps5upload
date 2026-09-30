@@ -108,3 +108,23 @@ describe("pickPath beyond the desktop dialog", () => {
     expect(mockOpenDialog).not.toHaveBeenCalled();
   });
 });
+
+describe("pickPath with a remote engine", () => {
+  beforeEach(() => mockIsAndroid.mockReturnValue(false));
+
+  it("browses the engine's disk instead of this computer's", async () => {
+    // A desktop app driving a homelab engine used to open the native dialog
+    // and hand the engine `C:\...` paths it could never open.
+    const { useEngineStore } = await import("../state/engine");
+    useEngineStore.getState().setEngineUrl("http://192.168.1.10:19113");
+    try {
+      mockPickLocal.mockResolvedValue("/pkgs/game.pkg");
+      const p = await pickPath({ mode: "file", title: "Pick" });
+      expect(p).toBe("/pkgs/game.pkg");
+      expect(mockPickLocal).toHaveBeenCalled();
+      expect(mockOpenDialog).not.toHaveBeenCalled();
+    } finally {
+      useEngineStore.getState().setEngineUrl("http://127.0.0.1:19113");
+    }
+  });
+});

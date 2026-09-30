@@ -20,12 +20,13 @@
 #include "pathsafe.h"
 #include "jobs.h"
 #include "loopback.h"
+#include <sys/stat.h>
 #include "sony.h"
 #include "escalate.h"
 #include "authid.h"          /* ps5_detect_firmware_major */
 
 #define INST_PORT     9115
-#define INST_VERSION  "1.1.0"
+#define INST_VERSION  "1.2.0"
 #define BOOT_STEP_MS  500
 #define BOOT_STEPS    50     /* 50 * 500ms = 25s */
 
@@ -263,6 +264,13 @@ static void *monitor(void *arg) {
 }
 
 int main(void) {
+    /* Keep stderr somewhere readable: launched by a loader, it otherwise
+     * goes to a socket that is already closed, and an install refusal left
+     * no trace a bug report could collect. Line-buffered, appended. */
+    mkdir("/data/ps5upload", 0777);
+    if (freopen("/data/ps5upload/installer.log", "a", stderr) != NULL)
+        setvbuf(stderr, NULL, _IOLBF, 0);
+    fprintf(stderr, "=== ps5upload installer %s start ===\n", INST_VERSION);
     memset(&g_d, 0, sizeof(g_d));
     pthread_mutex_init(&g_d.sony_lock, NULL);
     pthread_mutex_init(&g_d.state_lock, NULL);

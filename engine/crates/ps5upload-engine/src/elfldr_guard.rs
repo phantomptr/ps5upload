@@ -65,6 +65,10 @@ pub fn probe(ip: &str, port: u16, connect_timeout: Duration, reply_timeout: Dura
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
     Upgrade,
+    /// elfldr is running but not answering, so it can't take the send that
+    /// would replace it. Launch the patched build some other way (Payload
+    /// Manager), which kills the wedged one by name and takes :9021.
+    Recover(&'static str),
     Skip(&'static str),
 }
 
@@ -80,8 +84,8 @@ pub fn decide(elfldr_pids: &[i32], installed: Option<i32>, health: Health) -> De
     }
     match health {
         Health::Healthy => Decision::Upgrade,
-        Health::Stuck => Decision::Skip("stuck"),
-        Health::Absent => Decision::Skip("not listening"),
+        Health::Stuck => Decision::Recover("stuck"),
+        Health::Absent => Decision::Recover("not listening"),
     }
 }
 
@@ -112,7 +116,7 @@ fn elfldr_pids(mgmt: &str) -> Result<Vec<i32>, String> {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Outcome {
-    /// `upgraded`, `current` or `skipped`.
+    /// `upgraded`, `recovered`, `current` or `skipped`.
     pub action: &'static str,
     pub health: Health,
     /// Why it was skipped.
@@ -147,6 +151,52 @@ pub fn ensure(host: &str) -> Result<Outcome, String> {
             reason: Some(reason),
             pid: before.first().copied(),
         }),
+        Decision::Recover(reason) => {
+            // A wedged elfldr (#344: the stock v0.26 that itsPLK's Payload
+            // Manager carries) left :9021 dead, and with it every helper
+            // redeploy — the user could not reconnect. Payload Manager
+            // (:8084) can launch our patched elfldr instead. Without it, report
+            // the skip as before.
+            let bytes = image_bytes(Image::Elfldr)?;
+            if let Err(e) =
+                ps5upload_core::payload_manager::launch_elf(host, "ps5upload-elfldr.elf", &bytes)
+            {
+                crate::log_info!("elfldr on {host} is {reason}; no recovery route: {e}");
+                return Ok(Outcome {
+                    action: "skipped",
+                    health,
+                    reason: Some(reason),
+                    pid: before.first().copied(),
+                });
+            }
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(500));
+                let now = elfldr_pids(&mgmt).unwrap_or_default();
+                let answering = probe(
+                    host,
+                    LOADER_PORT,
+                    Duration::from_secs(2),
+                    Duration::from_secs(3),
+                );
+                if let Some(pid) = took_over(&before, &now, answering) {
+                    ps5upload_core::payload_manager::forget(host, "ps5upload-elfldr.elf");
+                    installed()
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(host.to_string(), pid);
+                    crate::log_info!("elfldr on {host} was {reason}; recovered through Payload Manager (pid {pid})");
+                    return Ok(Outcome {
+                        action: "recovered",
+                        health: answering,
+                        reason: None,
+                        pid: Some(pid),
+                    });
+                }
+            }
+            ps5upload_core::payload_manager::forget(host, "ps5upload-elfldr.elf");
+            Err("launched the patched elfldr through Payload Manager, but it was not answering on :9021 within 20 s".into())
+        }
         Decision::Upgrade => {
             let bytes = image_bytes(Image::Elfldr)?;
             pl::send_elf_to_loader(host, LOADER_PORT, &bytes, LoaderImage::Companion)?;
@@ -247,7 +297,12 @@ mod tests {
         // No elfldr.elf at all: the loader on :9021 is someone else's (etaHEN, …).
         assert_eq!(decide(&[], None, Health::Healthy), Skip("no elfldr"));
         // Stuck or gone: nothing can be sent through it.
-        assert_eq!(decide(&[84], None, Health::Stuck), Skip("stuck"));
-        assert_eq!(decide(&[84], None, Health::Absent), Skip("not listening"));
+        // #344: elfldr listed but :9021 dead. It can't be replaced through
+        // itself, so it is recovered another way.
+        assert_eq!(decide(&[84], None, Health::Stuck), Recover("stuck"));
+        assert_eq!(
+            decide(&[84], None, Health::Absent),
+            Recover("not listening")
+        );
     }
 }

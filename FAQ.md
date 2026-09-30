@@ -680,6 +680,50 @@ write, and delete files on your PS5); and (2) the engine still needs a network
 route to the PS5 (`PS5_ADDR`). Leave Engine URL blank/loopback for the normal
 all-in-one mode.
 
+`PS5UPLOAD_ALLOW_IP` takes single IPs or ranges, comma-separated
+(`192.168.1.0/24`), so phones and laptops that change address keep working.
+If it's wrong, the engine answers `403` and names the address it refused.
+
+With a remote engine, file pickers in the desktop app browse the **engine's**
+disk, because that is the machine that reads the file. **Install Package →
+From this device** uploads a package from your computer to the engine first.
+
+**Linux server (homelab, NAS, mini PC):** use the ready-made
+[`engine/compose.yaml`](engine/compose.yaml) — set your PS5's IP, your LAN's
+range and your package folder, then `docker compose -f engine/compose.yaml up -d`.
+It uses **host networking**, and that matters: a stream install has the PS5
+download the package *from the engine*, and on Docker's default bridge network
+the engine can only offer its internal `172.17.x.x` address, which the PS5
+can't reach. (The engine warns about this at startup.) On Docker Desktop
+(macOS/Windows), which has no host networking, publish port 19113 and set
+`PS5UPLOAD_PKG_HOST_IP` to that computer's LAN IP instead. Keep a volume on
+`/data`: saved servers, install history and the artwork cache live there.
+
+**Q: Docker says "Permission denied (os error 13)" when I upload. Do I need to
+set `PS5UPLOAD_DATA_DIR`?**
+No. `PS5UPLOAD_DATA_DIR` only moves saved servers and install history; it
+doesn't fix this, and you don't need it.
+
+- **Current images:** nothing to set. Uploads are staged in the image's own
+  `/tmp`, and the engine keeps its state in `/data`, including when you run the
+  container as another user (`user: "1000:1000"`). Mount a volume on `/data`
+  so that state survives upgrades.
+- **The 5.40 image** had no writable `/tmp` or home folder, which is what
+  caused the error (#346). If you're still on it, point both at a folder
+  you've mounted:
+
+  ```yaml
+      environment:
+        - TMPDIR=/mnt/ps5/.ps5upload/tmp
+        - HOME=/mnt/ps5/.ps5upload/home
+      volumes:
+        - /mnt/ps5:/mnt/ps5
+  ```
+
+  The folders are created for you. Keep `TMPDIR` on a real disk rather than a
+  tmpfs: a package is staged there in full while it uploads, and a tmpfs
+  would hold a 50 GB package in RAM. Remove both lines after updating.
+
 **Q: Can I use ps5upload from a web browser (no desktop app)? (3.3.25)**
 Yes. A `webui` build of the engine serves the **full app over HTTP**, so you
 can manage your PS5 from any browser on your LAN — useful on a NAS or headless
@@ -699,7 +743,9 @@ own filesystem**, not the browser machine's. There's no way for a browser
 tab to read files off a *different* computer's disk (the one running the
 engine), so the in-app file/folder picker instead browses whatever the
 engine process can see — e.g. mount a folder into the Docker container
-with `-v /host/games:/data/games` and browse to `/data/games`. Plain files
+with `-v /host/games:/pkgs:ro` and browse to `/pkgs`. **Install Package →
+From this device** is the exception: it uploads a package from the browser's
+machine to the engine, then installs it. Plain files
 and folders upload the same as desktop; **archive uploads (`.zip`/`.7z`/
 `.rar`) are still desktop-only** for now (the archive-inspect step streams
 progress in a way the browser shim doesn't support yet — picking one shows

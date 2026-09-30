@@ -12,8 +12,7 @@ import { PackagePlus } from "lucide-react";
 import { fpkg, type FpkgEstimates, type FpkgInspection } from "../../api/fpkg";
 import { appLaunch } from "../../api/ps5";
 import { Callout, Card, PageHeader } from "../../components";
-import { hostOf, transferAddr } from "../../lib/addr";
-import { fpkgUnsupportedFirmware, LAST_FPKG_FIRMWARE } from "../../lib/ps5Firmware";
+import { transferAddr } from "../../lib/addr";
 import { createLatest } from "../../lib/latest";
 import { openLocalPath } from "../../lib/openLocalPath";
 import { pickPath, pickPaths } from "../../lib/pickPath";
@@ -50,9 +49,6 @@ export default function FpkgConvertScreen() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host) ?? "";
   const payloadUp = useConnectionStore((s) => s.payloadStatus === "up");
-  const noFpkgFirmware = useConnectionStore((s) =>
-    fpkgUnsupportedFirmware(host ? s.runtimeByHost[hostOf(host)]?.ps5Kernel : null),
-  );
   const canInstall = payloadUp && host.trim() !== "";
 
   const outputDir = useConvertPrefs((s) => s.outputDir);
@@ -293,26 +289,6 @@ export default function FpkgConvertScreen() {
           "Turn a game folder or mount image into an installable package. The work runs on this machine, not the console.",
         )}
       />
-
-      {/* Building still works (it runs on this computer), but the result
-          can't be installed on the connected console — say so before the
-          user spends an hour converting. */}
-      {noFpkgFirmware && (
-        <Callout
-          tone="warn"
-          title={tr(
-            "fpkg.unsupported_fw.title",
-            { fw: noFpkgFirmware },
-            `This PS5 (FW ${noFpkgFirmware}) can't install fake packages yet`,
-          )}
-        >
-          {tr(
-            "fpkg.unsupported_fw.body",
-            { last: LAST_FPKG_FIRMWARE },
-            `You can still build a package here, but fake-package support only exists up to FW ${LAST_FPKG_FIRMWARE} so far. Install it on a console on ${LAST_FPKG_FIRMWARE} or lower.`,
-          )}
-        </Callout>
-      )}
 
       {/* Wide windows: the game and its options on the left, building and the queue on
           the right, so neither column is a long empty strip. */}

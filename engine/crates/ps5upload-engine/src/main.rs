@@ -18,5 +18,10 @@
 
 #[tokio::main]
 async fn main() {
+    // `--healthcheck` probes a running engine and exits; the container images
+    // have no shell or HTTP client to do it with (see `healthcheck`).
+    if std::env::args().nth(1).as_deref() == Some("--healthcheck") {
+        std::process::exit(ps5upload_engine::healthcheck());
+    }
     ps5upload_engine::run_cli().await;
 }

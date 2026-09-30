@@ -126,7 +126,7 @@ pub async fn payload_check(ip: String) -> serde_json::Value {
     // round-trip targets the wrong address.
     let addr = crate::commands::ps5_engine::urlencoding(&format!("{ip}:{PS5_MGMT_PORT}"));
     let url = format!("{engine_url}/api/ps5/status?addr={addr}");
-    let client = match reqwest::Client::builder()
+    let client = match crate::engine_http::engine_client_builder()
         .timeout(Duration::from_secs(5))
         .build()
     {
@@ -181,7 +181,7 @@ pub async fn payload_check(ip: String) -> serde_json::Value {
             "ok": false,
             "reachable": false,
             "engine": false,
-            "error": e.to_string(),
+            "error": crate::engine_http::error_chain(&e),
         }),
     }
 }
@@ -350,8 +350,49 @@ pub async fn payload_send(ip: String, path: String, port: Option<u16>) -> serde_
             "status": format!("sent {n} bytes to {ip}:{target_port}"),
             "bytes": n
         }),
+        // Nothing answered on the loader at all (not a send that broke
+        // mid-way, which may already be running): launch it through the
+        // console's Payload Manager instead. A wedged elfldr leaves :9021 dead
+        // while Payload Manager stays up, and the helper could not be put back
+        // until the user reloaded elfldr by hand (#344).
+        Err(e) if target_port == PS5_LOADER_PORT && e.starts_with("connect ") => {
+            match payload_send_via_payload_manager(&ip, &path).await {
+                Ok(n) => serde_json::json!({
+                    "ok": true,
+                    "status": format!("{e}; launched {n} bytes through Payload Manager on {ip}:8084 instead"),
+                    "bytes": n
+                }),
+                Err(pm) => serde_json::json!({
+                    "ok": false,
+                    "status": format!("{e} (and no fallback: {pm})")
+                }),
+            }
+        }
         Err(e) => serde_json::json!({ "ok": false, "status": e }),
     }
+}
+
+/// Launch the ELF at `path` through Payload Manager (:8084). The stored copy
+/// is removed once it has been launched; the payload keeps running.
+async fn payload_send_via_payload_manager(ip: &str, path: &str) -> Result<u64, String> {
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|e| format!("read {path}: {e}"))?;
+    // Our own name, never the file's: Payload Manager files uploads under a
+    // folder derived from the name and its cleanup clears that folder, so a
+    // user's own "ps5upload" entry must not be the one we land in.
+    let name = "ps5upload-helper.elf".to_string();
+    let (host, n) = (ip.to_string(), bytes.len() as u64);
+    tokio::task::spawn_blocking(move || {
+        ps5upload_core::payload_manager::launch_elf(&host, &name, &bytes)?;
+        // Give it a moment to start before the stored copy goes.
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        ps5upload_core::payload_manager::forget(&host, &name);
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| format!("launch task failed: {e}"))??;
+    Ok(n)
 }
 
 /// PS5 payload embedded at compile time via `include_bytes!`. The

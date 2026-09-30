@@ -2,9 +2,15 @@
 # (the build COPYs payload/ and third_party/), NOT engine/.
 # Official multi-arch image: docker pull ghcr.io/phantomptr/ps5upload-engine:latest
 #   docker build -f engine/Dockerfile -t ps5upload-engine .
-#   docker run --rm -p 19113:19113 -e PS5_ADDR=192.168.1.50:9113 ps5upload-engine
+# On a Linux server, use engine/compose.yaml, or the equivalent:
+#   docker run -d --network host -v ps5upload-data:/data \
+#     -e PS5_ADDR=192.168.1.50:9113 -e PS5UPLOAD_ALLOW_IP=192.168.1.0/24 \
+#     ghcr.io/phantomptr/ps5upload-engine
+# Without PS5UPLOAD_ALLOW_IP every request from another machine gets a 403
+# that names the address it refused.
 # Env: PS5UPLOAD_ENGINE_PORT (19113), PS5_ADDR (192.168.137.2:9113),
-#      PS5UPLOAD_ALLOW_IP (comma-separated IPs allowed past the loopback guard),
+#      PS5UPLOAD_ALLOW_IP (comma-separated IPs or CIDR ranges allowed past the
+#      loopback guard),
 #      PS5UPLOAD_PKG_HOST_IP (host LAN IP the PS5 fetches pkg bytes from during a
 #      stream install — REQUIRED on Docker Desktop macOS/Windows, where the
 #      container's own routing guess is a NAT address the PS5 can't reach back),
@@ -62,16 +68,37 @@ COPY payload payload
 WORKDIR /build/engine
 RUN cargo build --release -p ps5upload-engine
 
+# The runtime image is `scratch`, which has no /tmp and no home: the engine
+# could not stage an uploaded package ("could not create upload dir:
+# Permission denied"), cache artwork, or remember saved servers and install
+# history. Make both here (scratch has no mkdir) and copy them across below.
+# /data is world-writable too (sticky, like /tmp) so a `user:` override in
+# Compose — common on NAS boxes, e.g. `user: "1000:1000"` (#346) — can still
+# write its state there; its owner is the default runtime user.
+RUN mkdir -p /rootfs/tmp /rootfs-data/data && chmod 1777 /rootfs/tmp /rootfs-data/data
+
 FROM scratch
 COPY --from=builder /build/engine/target/release/ps5upload-engine /ps5upload-engine
+# /tmp: staging for uploaded packages, archive extraction and the like. It
+# is copied as a child of /rootfs because copying a directory applies only
+# its contents: `COPY /rootfs/tmp /tmp` left a 0755 root-owned /tmp and the
+# upload still failed. /data: the engine's home (HOME=/data puts its state in
+# /data/.ps5upload), owned by the runtime user so it is writable.
+COPY --from=builder /rootfs/ /
+COPY --from=builder --chown=65532:65532 /rootfs-data/ /
+ENV HOME=/data TMPDIR=/tmp
+# Saved servers (with their encrypted credentials), install history, the
+# artwork cache and the backport library live here. Mount a volume on it so
+# they survive a container upgrade: `-v ps5upload-data:/data`.
+VOLUME ["/data"]
 EXPOSE 19113
 # Run as an unprivileged user (65532 = nobody in distroless convention).
 # scratch has no /etc/passwd, so we use a raw numeric UID — the kernel
 # doesn't need a passwd entry to run a process. Port 19113 > 1024 so
 # no CAP_NET_BIND_SERVICE needed.
 USER 65532:65532
-# Health: GET /api/jobs returns 200 once the HTTP server is live (no PS5
-# contact needed). scratch has no shell/wget, so no in-image HEALTHCHECK;
-# use an external probe (Docker Compose healthcheck with wget sidecar,
-# Kubernetes liveness/readiness probe hitting /api/jobs).
+# scratch has no shell or HTTP client, so the engine probes itself:
+# `--healthcheck` exits 0 when GET /api/jobs answers 200 (no PS5 needed).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD ["/ps5upload-engine", "--healthcheck"]
 ENTRYPOINT ["/ps5upload-engine"]

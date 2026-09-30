@@ -24,6 +24,7 @@ int inst_sony_init(inst_sony_state_t *st) {
  * When `swap_shellcore` is set, swap to ShellCore authid around the call. */
 static uint32_t call_install(const char *uri, const char *name_hint,
                              int swap_shellcore) {
+    fprintf(stderr, "[installer] InstallByPackage uri=%s swap=%d\n", uri, swap_shellcore);
     MetaInfo meta;
     SceAppInstallPkgInfo pkg_info;
     PlayGoInfo playgo;
@@ -43,6 +44,7 @@ static uint32_t call_install(const char *uri, const char *name_hint,
     int rc = sceAppInstUtilInstallByPackage(&meta, &pkg_info, &playgo);
     if (swap_shellcore)
         ps5_authid_release(saved, "installer");
+    fprintf(stderr, "[installer]   -> rc=0x%08x\n", (unsigned)rc);
     return (uint32_t)rc;
 }
 

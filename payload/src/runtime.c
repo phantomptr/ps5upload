@@ -8,6 +8,7 @@
 #include <dlfcn.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <sys/stat.h>
 #include <sys/param.h>
 #include <sys/mount.h>
@@ -278,6 +279,12 @@ extern int posix_fallocate(int fd, off_t offset, off_t len);
 /* Network round-trip + throughput test. */
 #define FTX2_FRAME_NET_SPEED_TEST           122u
 #define FTX2_FRAME_NET_SPEED_TEST_ACK       123u
+/* Can the console open a TCP connection to host:port? A stream install has
+ * the PS5 download the package from the engine; when a firewall on that
+ * computer drops the connection, Sony only says so after a 30 s timeout
+ * (0x80431068, #342). This answers in seconds and names the errno. */
+#define FTX2_FRAME_NET_REACH                148u
+#define FTX2_FRAME_NET_REACH_ACK            149u
 /* Direct .pkg mount via sceFsMountGamePkg. */
 #define FTX2_FRAME_PKG_DIRECT_MOUNT         124u
 #define FTX2_FRAME_PKG_DIRECT_MOUNT_ACK     125u
@@ -13488,6 +13495,83 @@ static int handle_fs_write_bytes(runtime_state_t *state, int client_fd,
                       trace_id, resp, (uint64_t)n);
 }
 
+/* ── Reach-back probe ─────────────────────────────────────────────────── */
+
+/* Body: {"host":"a.b.c.d","port":"19113","timeout_ms":"3000"} (numbers as
+ * strings, so the one string-field parser covers them). Opens a TCP
+ * connection from the console and closes it at once; nothing is sent. The
+ * engine points it at its own pkg-host listener before a stream install. */
+static int handle_net_reach(runtime_state_t *state, int client_fd,
+                            uint64_t trace_id, const char *body,
+                            uint64_t body_len) {
+    if (!state) return -1;
+    char host[64] = {0}, port_s[16] = {0}, timeout_s[16] = {0};
+    if (parse_json_string_field_local(body, body_len, "host", host, sizeof(host)) != 0 ||
+        parse_json_string_field_local(body, body_len, "port", port_s, sizeof(port_s)) != 0) {
+        const char *err = "{\"ok\":false,\"err\":\"bad_request\"}";
+        return send_frame(client_fd, FTX2_FRAME_NET_REACH_ACK, 0, trace_id, err, strlen(err));
+    }
+    (void)parse_json_string_field_local(body, body_len, "timeout_ms", timeout_s, sizeof(timeout_s));
+    long port = strtol(port_s, NULL, 10);
+    long timeout_ms = timeout_s[0] ? strtol(timeout_s, NULL, 10) : 3000;
+    if (timeout_ms < 100) timeout_ms = 100;
+    if (timeout_ms > 15000) timeout_ms = 15000;
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons((uint16_t)port);
+    if (port <= 0 || port > 65535 || inet_pton(AF_INET, host, &sa.sin_addr) != 1) {
+        const char *err = "{\"ok\":false,\"err\":\"bad_address\"}";
+        return send_frame(client_fd, FTX2_FRAME_NET_REACH_ACK, 0, trace_id, err, strlen(err));
+    }
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    int err_no = 0, timed_out = 0;
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        err_no = errno;
+    } else {
+        int fl = fcntl(fd, F_GETFL, 0);
+        (void)fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+        if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
+            if (errno == EINPROGRESS) {
+                struct pollfd pfd = { .fd = fd, .events = POLLOUT, .revents = 0 };
+                int pr = poll(&pfd, 1, (int)timeout_ms);
+                if (pr == 0) {
+                    timed_out = 1;
+                } else if (pr < 0) {
+                    err_no = errno;
+                } else {
+                    int soerr = 0;
+                    socklen_t sl = sizeof(soerr);
+                    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &sl) != 0) soerr = errno;
+                    err_no = soerr;
+                }
+            } else {
+                err_no = errno;
+            }
+        }
+        close(fd);
+    }
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    long ms = (long)((t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000);
+    char resp[256];
+    int n;
+    if (!timed_out && err_no == 0) {
+        n = snprintf(resp, sizeof(resp), "{\"ok\":true,\"ms\":%ld}", ms);
+    } else {
+        n = snprintf(resp, sizeof(resp),
+                     "{\"ok\":false,\"timed_out\":%s,\"errno\":%d,\"err\":\"%s\",\"ms\":%ld}",
+                     timed_out ? "true" : "false", err_no,
+                     timed_out ? "timed out" : strerror(err_no), ms);
+    }
+    return send_frame(client_fd, FTX2_FRAME_NET_REACH_ACK, 0, trace_id, resp, (uint64_t)n);
+}
+
 /* ── Network round-trip ack ──────────────────────────────────────────── */
 
 /* The "speed test" is observed entirely on the client side. The
@@ -16331,6 +16415,10 @@ static int handle_binary_frame_impl(runtime_state_t *state, int client_fd,
     if (hdr.frame_type == FTX2_FRAME_NET_SPEED_TEST) {
         return handle_net_speed_test(state, client_fd, hdr.trace_id,
                                       request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_NET_REACH) {
+        return handle_net_reach(state, client_fd, hdr.trace_id,
+                                request_body, hdr.body_len);
     }
     if (hdr.frame_type == FTX2_FRAME_PKG_DIRECT_MOUNT) {
         return handle_pkg_direct_mount(state, client_fd, hdr.trace_id,

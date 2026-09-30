@@ -100,12 +100,34 @@ describe("statusToOutcome — maps the unified verdict to the UI outcome", () =>
     expect(o.errMessage).not.toContain("http://x");
   });
 
+  it("the engine's own reach-check finding is shown as is", () => {
+    // #342: the console could not connect back to the PC. No Sony code — the
+    // engine's reach check found it and names the likely cause.
+    const hint =
+      "The PS5 cannot connect to this computer at http://192.168.137.1:19113 (timed out after 4000 ms)…";
+    const o = statusToOutcome(
+      status({ phase: "failed", verdict: "failed", reason: "stream_unreachable", code: 0, hint }),
+    );
+    expect(o.errMessage).toBe(hint);
+  });
+
   it("a proxy refusal says to turn the PS5's proxy off", () => {
     const o = statusToOutcome(
       status({ phase: "failed", verdict: "failed", reason: "stream_proxy", code: 0x80431084 }),
     );
     expect(o.errMessage).toMatch(/Proxy Server/);
     expect(o.errMessage).toContain("0x80431084");
+  });
+
+  it("a staged refusal sends the user to Stream, not \"the PS5 declined\"", () => {
+    // A phone can only stage; every install a user made from one failed with
+    // this code while the same package streamed from a PC installed.
+    const o = statusToOutcome(
+      status({ phase: "failed", verdict: "failed", reason: "staged_refused", code: 0x80b2116f }),
+    );
+    expect(o.errMessage).toContain("Stream & install");
+    expect(o.errMessage).toContain("0x80b2116f");
+    expect(o.errMessage).not.toContain("declined");
   });
 
   it("a stalled delivery uses the app's own words", () => {

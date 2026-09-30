@@ -19,6 +19,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::OnceCell;
 use tokio::time::{sleep, Instant};
 
+use crate::engine_http::{engine_client_builder, error_chain};
 use crate::DEFAULT_ENGINE_URL;
 
 const READINESS_PROBE: &str = "/api/jobs";
@@ -284,14 +285,31 @@ fn port_of(url: &str) -> u16 {
 
 /// Probe the readiness endpoint. Returns true if the engine answers 200.
 async fn probe(url: &str, client: &reqwest::Client) -> bool {
+    probe_detail(url, client).await.is_ok()
+}
+
+/// Like `probe`, but says why it failed, so a readiness timeout can report
+/// "connection refused" vs "timed out" vs a proxy error instead of nothing.
+async fn probe_detail(url: &str, client: &reqwest::Client) -> Result<(), String> {
     let u = format!("{url}{READINESS_PROBE}");
-    client
+    match client
         .get(&u)
         .timeout(Duration::from_millis(500))
         .send()
         .await
-        .map(|r| r.status().is_success())
-        .unwrap_or(false)
+    {
+        Ok(r) if r.status().is_success() => Ok(()),
+        Ok(r) => Err(format!("HTTP {}", r.status())),
+        Err(e) => Err(error_chain(&e)),
+    }
+}
+
+/// The client the sidecar's own probes use. Panics only where
+/// `reqwest::Client::new()` (which this replaces) would have panicked too.
+fn engine_probe_client() -> reqwest::Client {
+    engine_client_builder()
+        .build()
+        .expect("failed to build engine probe HTTP client")
 }
 
 /// Check that the engine answering the port reports the same version
@@ -397,7 +415,7 @@ pub async fn start(app: &AppHandle) -> Result<String> {
     // remote API for readiness and hand back its URL.
     if !is_loopback_url(&configured) {
         eprintln!("[engine] remote engine configured ({configured}); skipping local sidecar");
-        let client = reqwest::Client::new();
+        let client = engine_probe_client();
         let deadline = Instant::now() + READINESS_TIMEOUT;
         while Instant::now() < deadline {
             if probe(&configured, &client).await {
@@ -431,7 +449,7 @@ pub async fn start(app: &AppHandle) -> Result<String> {
     // until we either succeed or fail, then re-checks the slot.
     {
         let mut guard = child_lock().await.lock().await;
-        let client = reqwest::Client::new();
+        let client = engine_probe_client();
         let port_responds = probe(&preferred_url, &client).await;
 
         if guard.is_some() && port_responds {
@@ -624,10 +642,12 @@ pub async fn start(app: &AppHandle) -> Result<String> {
 
     // Probe HTTP until ready or deadline.
     let deadline = Instant::now() + READINESS_TIMEOUT;
-    let client = reqwest::Client::new();
+    let client = engine_probe_client();
+    let mut last_probe_error = String::from("no probe completed");
     while Instant::now() < deadline {
-        if probe(&engine_url, &client).await {
-            return Ok(engine_url.clone());
+        match probe_detail(&engine_url, &client).await {
+            Ok(()) => return Ok(engine_url.clone()),
+            Err(e) => last_probe_error = e,
         }
         // Detect early exit so we surface crashes rather than waiting out
         // the full 30s deadline.
@@ -660,11 +680,21 @@ pub async fn start(app: &AppHandle) -> Result<String> {
         LOCAL_CHILD_RUNNING.store(false, Ordering::SeqCst);
     }
     Err(anyhow!(
-        "engine did not become ready at {engine_url}{READINESS_PROBE} within {:?}.\n  log: {}\n  Common causes on Windows: SmartScreen / antivirus blocked the freshly-extracted .exe; a loopback firewall rule; or no loopback port was bindable at all.",
+        "engine did not become ready at {engine_url}{READINESS_PROBE} within {:?}.\n  last probe error: {last_probe_error}\n  log: {}\n  {}",
         READINESS_TIMEOUT,
-        log_path.display()
+        log_path.display(),
+        READINESS_HINT
     ))
 }
+
+/// Likely causes of a readiness timeout on this platform. The Windows list
+/// used to be shown everywhere, which told a Mac user about SmartScreen.
+#[cfg(target_os = "windows")]
+const READINESS_HINT: &str = "Common causes on Windows: SmartScreen / antivirus blocked the freshly-extracted .exe; a loopback firewall rule; or no loopback port was bindable at all.";
+#[cfg(target_os = "macos")]
+const READINESS_HINT: &str = "Common causes on macOS: security or firewall software (Little Snitch, LuLu, an antivirus with web protection) blocking ps5upload-engine; allow it and restart the app.";
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+const READINESS_HINT: &str = "Common causes: a firewall or security tool blocking loopback connections to ps5upload-engine, or no loopback port was bindable at all.";
 
 /// Best-effort wall-clock stamp for the log header. Avoids pulling in
 /// the `chrono` crate just for one timestamp — a SystemTime epoch
@@ -880,5 +910,29 @@ mod log_tag_tests {
         ] {
             assert!(!line_is_pre_tagged(line), "must be tagged: {line}");
         }
+    }
+}
+
+#[cfg(test)]
+mod probe_error_tests {
+    use super::{engine_probe_client, probe_detail};
+
+    #[tokio::test]
+    async fn a_failed_probe_says_why_not_just_that_it_failed() {
+        // From a user report: every engine request failed with only
+        // "error sending request for url (…)", which cannot tell a refused
+        // connection from a timeout or a proxy failure. The cause must
+        // survive into the message.
+        let port = std::net::TcpListener::bind(("127.0.0.1", 0))
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        // The listener is dropped, so nothing answers on this port.
+        let err = probe_detail(&format!("http://127.0.0.1:{port}"), &engine_probe_client())
+            .await
+            .unwrap_err();
+        assert!(err.contains("error sending request"), "{err}");
+        assert!(err.to_lowercase().contains("refused"), "{err}");
     }
 }

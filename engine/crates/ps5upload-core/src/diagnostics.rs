@@ -599,6 +599,42 @@ pub fn net_speed_test(addr: &str, round_trips: u32) -> Result<NetSpeedTestResult
     })
 }
 
+/// Whether the console could open a TCP connection to `host:port`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct NetReach {
+    pub ok: bool,
+    #[serde(default)]
+    pub timed_out: bool,
+    #[serde(default)]
+    pub errno: i32,
+    #[serde(default)]
+    pub err: String,
+    #[serde(default)]
+    pub ms: u64,
+}
+
+/// Ask the console (mgmt `addr`) to connect to `host:port`. A stream install
+/// needs the PS5 to reach this engine; this finds out in seconds instead of
+/// waiting out Sony's 30 s download timeout. An `Err` means the helper could
+/// not be asked (an older helper answers an unknown frame with an error), not
+/// that the host is unreachable.
+pub fn net_reach(addr: &str, host: &str, port: u16, timeout_ms: u32) -> Result<NetReach> {
+    let body = serde_json::json!({
+        "host": host,
+        "port": port.to_string(),
+        "timeout_ms": timeout_ms.to_string(),
+    })
+    .to_string();
+    let mut c = Connection::connect(addr)?;
+    c.send_frame(FrameType::NetReach, body.as_bytes())?;
+    let (hdr, resp) = c.recv_frame()?;
+    let ft = hdr.frame_type().unwrap_or(FrameType::Error);
+    if ft != FrameType::NetReachAck {
+        bail!("expected NET_REACH_ACK, got {ft:?}");
+    }
+    Ok(serde_json::from_slice(&resp)?)
+}
+
 pub fn proc_modules(addr: &str, pid: i32) -> Result<ModuleList> {
     let body = serde_json::json!({ "pid": pid });
     let body = serde_json::to_vec(&body)?;
@@ -678,5 +714,21 @@ mod tests {
             serde_json::from_str(r#"{"ok":false,"err":"PPSA01650 is running"}"#).unwrap();
         assert!(!r.ok);
         assert!(r.err.unwrap().contains("running"));
+    }
+}
+
+#[cfg(test)]
+mod net_reach_live {
+    /// Hardware check: `PS5UPLOAD_LIVE_REACH=<console mgmt addr>,<host>,<port>
+    /// cargo test -p ps5upload-core net_reach_live -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn live_reach() {
+        let Ok(spec) = std::env::var("PS5UPLOAD_LIVE_REACH") else {
+            return;
+        };
+        let parts: Vec<&str> = spec.split(',').collect();
+        let r = super::net_reach(parts[0], parts[1], parts[2].parse().unwrap(), 3000).unwrap();
+        println!("REACH {}:{} -> {r:?}", parts[1], parts[2]);
     }
 }

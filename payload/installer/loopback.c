@@ -35,7 +35,7 @@ struct inst_loopback {
     char            dir[512];      /* directory of pkg_path, for .crc sidecars */
     char            attempt[64];
     char            basename[256];
-    time_t          fixed_lm;      /* job start time */
+    time_t          fixed_lm;      /* Last-Modified: fixed, in the past */
     inst_coverage_t coverage;      /* body bytes actually sent */
     double          last_req_mono; /* CLOCK_MONOTONIC of the last request */
     volatile int    workers;
@@ -237,7 +237,13 @@ int inst_loopback_start(inst_loopback_t **out, const char *pkg_path,
     pthread_mutex_init(&lb->mutex, NULL);
     inst_coverage_reset(&lb->coverage);
     lb->total = (uint64_t)st.st_size;
-    lb->fixed_lm = time(NULL);
+    /* A fixed date well in the past, the same one the engine's pkg-host
+     * sends. With Last-Modified = the job's start (≈ the response Date) the
+     * response is not cacheable, and on FW 13.60 Sony's installer then takes
+     * its patch path (DbgGetPatchInfo → DbgCancelPatch 0x80B21401) and
+     * refuses with 0x80B2116F — every "Upload & install". Measured on a 13.60
+     * Pro: the same link without it refused, with it installed, back to back. */
+    lb->fixed_lm = (time_t)1735689600;  /* Wed, 01 Jan 2025 00:00:00 GMT */
     lb->last_req_mono = mono_now();
     snprintf(lb->attempt, sizeof(lb->attempt), "%s", attempt);
     snprintf(lb->basename, sizeof(lb->basename), "%s", base);

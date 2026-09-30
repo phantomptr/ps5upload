@@ -50,21 +50,32 @@ use uuid::Uuid;
 /// type is uninhabited: `Option<Arc<RemotePkg>>` can only ever be `None`, so
 /// the remote paths are statically unreachable rather than conditionally
 /// compiled out of every call site.
-#[cfg(not(target_os = "android"))]
 #[derive(Debug)]
 pub enum RemotePkg {
     /// An HTTP(S) link, fetched over many connections.
+    #[cfg(not(target_os = "android"))]
     Http(Arc<crate::remote_pkg::RemoteSource>),
     /// A file on a saved server (SMB, FTP, FTPS or SFTP), read in positioned pieces.
+    #[cfg(not(target_os = "android"))]
     Remote(crate::remote::range::RemoteRangeSource),
+    /// A package already on the console, read back through the helper and
+    /// served to the console from this engine. Sony's installer refuses a
+    /// package the console serves itself (127.0.0.1, or its own address) in
+    /// the overwrite case — 0x80B2116F via DbgGetPatchInfo/DbgCancelPatch,
+    /// which is every "Upload & install" of an app that is already installed
+    /// — and accepts the same bytes from another host (measured on a 13.60
+    /// Pro, 2026-09-30). On every platform: the phone app needs it most.
+    Console(ConsoleFile),
 }
 
-#[cfg(not(target_os = "android"))]
 impl RemotePkg {
     pub fn read_range(&self, start: u64, end: u64) -> std::io::Result<Vec<u8>> {
         match self {
+            #[cfg(not(target_os = "android"))]
             RemotePkg::Http(r) => r.read_range(start, end),
+            #[cfg(not(target_os = "android"))]
             RemotePkg::Remote(r) => r.read_range(start, end),
+            RemotePkg::Console(c) => c.read_range(start, end),
         }
     }
 
@@ -72,26 +83,63 @@ impl RemotePkg {
     /// cache is what lets the origin run ahead of the console. An SMB read on
     /// a LAN share answers well inside the console's own pacing.
     pub fn prefetch_after(this: &Arc<Self>, offset: u64) {
+        #[cfg(not(target_os = "android"))]
         if let RemotePkg::Http(r) = &**this {
             crate::remote_pkg::RemoteSource::prefetch_after(r, offset);
         }
+        #[cfg(target_os = "android")]
+        let _ = (this, offset);
     }
 }
 
-#[cfg(target_os = "android")]
+/// A file on the console, read through the helper's FS_READ (at most
+/// `FS_READ_MAX_BYTES`, 2 MiB, per call).
 #[derive(Debug)]
-pub enum RemotePkg {}
+pub struct ConsoleFile {
+    pub mgmt: String,
+    pub path: String,
+    pub size: u64,
+}
 
-#[cfg(target_os = "android")]
-impl RemotePkg {
-    pub fn read_range(&self, _start: u64, _end: u64) -> std::io::Result<Vec<u8>> {
-        match *self {}
+impl ConsoleFile {
+    const CHUNK: u64 = 2 * 1024 * 1024;
+
+    pub fn read_range(&self, start: u64, end: u64) -> std::io::Result<Vec<u8>> {
+        if end < start || end >= self.size {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("range {start}..={end} outside a {}-byte file", self.size),
+            ));
+        }
+        let want = usize::try_from(end - start + 1).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "range too large")
+        })?;
+        let mut out = Vec::with_capacity(want);
+        let mut at = start;
+        while at <= end {
+            let len = (end - at + 1).min(Self::CHUNK);
+            let chunk =
+                ps5upload_core::fs_ops::fs_read(&self.mgmt, &self.path, at, len).map_err(|e| {
+                    std::io::Error::other(format!("read {} on the console: {e:#}", self.path))
+                })?;
+            if chunk.is_empty() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    format!("{} ended at {at}", self.path),
+                ));
+            }
+            at += chunk.len() as u64;
+            out.extend_from_slice(&chunk);
+        }
+        Ok(out)
     }
+}
 
-    /// Readahead stub for the uninhabited Android type. No value of `RemotePkg`
-    /// can exist here, so this is never called; it exists so the serve path's
-    /// call site needs no `cfg`, matching `read_range` above.
-    pub fn prefetch_after(_this: &std::sync::Arc<Self>, _offset: u64) {}
+/// `ps5://<host>/<absolute console path>` → (host, path).
+pub(crate) fn console_path_url(url: &str) -> Option<(String, String)> {
+    let rest = url.strip_prefix("ps5://")?;
+    let (host, path) = rest.split_once('/')?;
+    (!host.is_empty() && !path.is_empty()).then(|| (host.to_string(), format!("/{path}")))
 }
 
 /// How often the pkg-host serve-rate line may be emitted, in seconds.
@@ -2584,7 +2632,8 @@ async fn serve_handler(
     // control API to that same gateway with PS5UPLOAD_ALLOW_IP; honouring it
     // here too keeps the two consistent. On a Linux `--network host` box the
     // real console IP is visible and no allowlist entry is needed.
-    let peer_trusted = peer.ip().is_loopback() || parse_allow_ips_env().contains(&peer.ip());
+    let peer_trusted =
+        peer.ip().is_loopback() || crate::allow_rules_contain(parse_allow_ips_env(), peer.ip());
     if !peer_trusted && !expected_ip.is_empty() && peer_ip != expected_ip {
         crate::log_warn!(
             "pkg-host fetch REJECTED: peer={} expected={} session={} \
@@ -2855,8 +2904,8 @@ async fn resolve_remote_source(
 
 /// Metadata for a package that is streamed rather than read off local disk —
 /// a link or an SMB file. One copy, because it carries the patch data-loss
-/// guard below and two copies would drift.
-#[cfg(not(target_os = "android"))]
+/// guard below and two copies would drift. Not Android-gated: the console
+/// source (ps5://) serves on every platform.
 fn streamed_metadata(
     req: &InstallStartRequest,
     head: ps5upload_pkg::ReaderMetadata,
@@ -2876,7 +2925,7 @@ fn streamed_metadata(
 /// Metadata for a package read through ranges rather than from a local file.
 // Both callers are desktop-only, so on Android this was dead code (and a
 // warning in every `make android-deploy`).
-#[cfg(not(target_os = "android"))]
+// Also used by the console (ps5://) source, which serves on Android too.
 fn stream_metadata(
     head: ps5upload_pkg::ReaderMetadata,
     fingerprint: String,
@@ -3032,6 +3081,46 @@ async fn resolve_remote_fs_source(
     Err("installing from a server is not available in the Android build".into())
 }
 
+/// A package already on the console, to be served back to it from here.
+async fn resolve_console_source(
+    url: &str,
+    req: &InstallStartRequest,
+) -> Result<ResolvedSource, String> {
+    let (host, path) = console_path_url(url)
+        .ok_or_else(|| format!("{url} is not a ps5://<console>/<path> location"))?;
+    let mgmt = crate::mgmt_addr_for(&host);
+    let (m, p) = (mgmt.clone(), path.clone());
+    let size = tokio::task::spawn_blocking(move || remote_pkg_size(&m, &p))
+        .await
+        .map_err(|e| format!("size task failed: {e}"))?
+        .ok_or_else(|| format!("{path} is not on the console"))?;
+    let source = Arc::new(RemotePkg::Console(ConsoleFile {
+        mgmt,
+        path: path.clone(),
+        size,
+    }));
+    let probe = Arc::clone(&source);
+    let (head, fingerprint) = tokio::task::spawn_blocking(move || {
+        let read_at = |offset: u64, len: u64| -> Option<Vec<u8>> {
+            if len == 0 {
+                return Some(Vec::new());
+            }
+            probe.read_range(offset, offset + len - 1).ok()
+        };
+        let head = ps5upload_pkg::metadata_from_reader(read_at).ok_or_else(|| {
+            "that file does not look like a PS4/PS5 package (no readable PKG header)".to_string()
+        })?;
+        let fingerprint =
+            ps5upload_pkg::package_fingerprint_from_reader(size, &read_at).unwrap_or_default();
+        Ok::<_, String>((head, fingerprint))
+    })
+    .await
+    .map_err(|e| format!("console package probe task failed: {e}"))??;
+    let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+    let metadata = streamed_metadata(req, head, fingerprint, size, &name);
+    Ok((vec![], vec![], size, metadata, Some(source)))
+}
+
 // ─── /api/pkg/remote/probe ───────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -3138,6 +3227,9 @@ async fn resolve_parts_and_meta(req: &InstallStartRequest) -> Result<ResolvedSou
         .filter(|p| crate::remote::path::is_remote(p))
     {
         return resolve_remote_fs_source(p, req).await;
+    }
+    if let Some(p) = req.path.as_deref().filter(|p| p.starts_with("ps5://")) {
+        return resolve_console_source(p, req).await;
     }
     // The two `parse_*` calls open and read .pkg / split-part headers (and stat
     // each split part) from disk. On a cold or network-hosted pkg that's
@@ -3410,8 +3502,8 @@ fn read_split_range(s: &InstallSession, start: u64, end: u64) -> std::io::Result
 /// by hundreds of Range requests per install, so cache rather than re-parse the
 /// env on each. The value is fixed at process start (set by the container/host
 /// launcher), so a OnceLock snapshot is correct.
-fn parse_allow_ips_env() -> &'static [IpAddr] {
-    static ALLOW: std::sync::OnceLock<Vec<IpAddr>> = std::sync::OnceLock::new();
+fn parse_allow_ips_env() -> &'static [crate::AllowRule] {
+    static ALLOW: std::sync::OnceLock<Vec<crate::AllowRule>> = std::sync::OnceLock::new();
     ALLOW.get_or_init(|| {
         crate::parse_allow_ips(&std::env::var("PS5UPLOAD_ALLOW_IP").unwrap_or_default())
     })
@@ -3424,6 +3516,38 @@ pub fn lan_ip_for_ps5(ps5_host: &str) -> std::io::Result<IpAddr> {
     // the OS would use. Port number is arbitrary.
     sock.connect(format!("{ps5_host}:1"))?;
     Ok(sock.local_addr()?.ip())
+}
+
+/// True when this engine runs in a container (Docker or Podman).
+pub(crate) fn in_container() -> bool {
+    std::path::Path::new("/.dockerenv").exists()
+        || std::path::Path::new("/run/.containerenv").exists()
+}
+
+/// True in a container that will hand the PS5 an address it cannot reach: no
+/// `PS5UPLOAD_PKG_HOST_IP` pin, and the routing guess lands on a container
+/// bridge address (Docker's 172.16.0.0/12, Podman's 10.88.0.0/16) rather than
+/// the host's LAN IP. With `--network host` the guess is the real LAN IP and
+/// this is false.
+pub(crate) fn bridged_container_without_pkg_host_ip() -> bool {
+    if !in_container() {
+        return false;
+    }
+    if std::env::var("PS5UPLOAD_PKG_HOST_IP").is_ok_and(|v| !v.trim().is_empty()) {
+        return false;
+    }
+    // UDP connect sends nothing; any private LAN address works as a target.
+    lan_ip_for_ps5("192.168.0.1").is_ok_and(is_container_bridge_ip)
+}
+
+fn is_container_bridge_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            (o[0] == 172 && (16..=31).contains(&o[1])) || (o[0] == 10 && o[1] == 88)
+        }
+        IpAddr::V6(_) => false,
+    }
 }
 
 /// Build the engine's `/pkg-host/{session}/{filename}` URL as the PS5
@@ -4918,6 +5042,28 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
                 total,
                 c.words.len()
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod container_ip_tests {
+    use super::is_container_bridge_ip;
+
+    #[test]
+    fn container_bridge_addresses_are_recognised_and_lan_ones_are_not() {
+        for ip in ["172.17.0.2", "172.18.5.9", "172.31.255.1", "10.88.0.4"] {
+            assert!(is_container_bridge_ip(ip.parse().unwrap()), "{ip}");
+        }
+        // Real LAN addresses a homelab uses must not trip the warning.
+        for ip in [
+            "192.168.1.10",
+            "10.0.0.168",
+            "172.15.0.1",
+            "172.32.0.1",
+            "10.1.2.3",
+        ] {
+            assert!(!is_container_bridge_ip(ip.parse().unwrap()), "{ip}");
         }
     }
 }

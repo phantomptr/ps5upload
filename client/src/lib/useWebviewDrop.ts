@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { isAndroid } from "./platform";
 import { isTauriEnv } from "./tauriEnv";
+import { engineIsOnThisDevice } from "../state/engine";
 
 /** A .pkg is a package to install; AppShell's app-wide drop listener routes those. */
 const isPackage = (path: string) => /\.pkg$/i.test(path);
@@ -24,7 +25,8 @@ export function useWebviewDrop(onDrop: (path: string) => void, enabled: boolean)
   });
 
   useEffect(() => {
-    if (!isTauriEnv() || isAndroid()) return;
+    // A dropped path is on this device; a remote engine can't open it.
+    if (!isTauriEnv() || isAndroid() || !engineIsOnThisDevice()) return;
     let unlisten: (() => void) | null = null;
     let cancelled = false;
     const p = getCurrentWebview().onDragDropEvent((e) => {

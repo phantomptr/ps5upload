@@ -239,6 +239,11 @@ const REASON_GUIDANCE: Record<string, [string, string, boolean]> = {
     "The PS5 never reached this computer to fetch the package. Allow ps5upload through this computer's firewall (on Windows, for both Private and Public networks), keep the computer and the PS5 on the same network with any VPN off, and set the PS5's Proxy Server to “Do Not Use”. Upload & install works without this connection.",
     true,
   ],
+  staged_refused: [
+    "pkg.reason.staged_refused",
+    "The PS5 refused this package from its own storage. That is a limit of this install route on these firmwares, not a problem with the file. Install it with Stream & install from a computer instead: the desktop app, or the web UI on a home server. Installing from a phone can only use this route.",
+    true,
+  ],
   stream_proxy: [
     "pkg.reason.stream_proxy",
     "The PS5's proxy setting blocked the stream. In the PS5's network Advanced Settings set Proxy Server to “Do Not Use”, or use Upload & install, which reads the package from PS5-local storage.",
@@ -276,7 +281,14 @@ export function statusToOutcome(st: InstallStatus): PkgInstallOutcome {
         PKG_PATCH_DID_NOT_APPLY_HINT,
       );
     } else {
-      const preferred = st.reason ? REASON_GUIDANCE[st.reason]?.[2] : false;
+      // A reason's own (translated) wording replaces the engine's hint when it
+      // says the same thing. The exception: an unreachable stream with no Sony
+      // code was found by the engine's reach check, whose hint names the
+      // likely cause (a firewall dropping the connection, say) — keep it.
+      const reachCheck =
+        st.reason === "stream_unreachable" && st.code === 0 && !!st.hint?.trim();
+      const preferred =
+        !reachCheck && (st.reason ? REASON_GUIDANCE[st.reason]?.[2] : false);
       const guidance = reasonGuidance(st.reason);
       errMessage = preferred
         ? st.code
@@ -2643,21 +2655,20 @@ const makePkgLibraryStore = () =>
         // `installing` flag — otherwise a wedged flag would lock the screen.
         patch({ status: "installing", lastResult: undefined });
 
-        // High-firmware heads-up. AppInst can reject this path with
-        // 0x80B2116F even when connectivity, kstuff, and initialization all
-        // look healthy. We still attempt the verified path, but never call an
-        // rc=0/zero-byte fallback or label a black screen as normal.
+        // This installs a package already staged on the console — the route
+        // measured refusing with 0x80B2116F (FW 9.60, 13.60) / 0x80B2150F
+        // (5.10) while the same package streamed from a computer installed.
+        // Say so up front; the refusal itself carries the same advice.
         {
           const rt =
             useConnectionStore.getState().runtimeByHost[hostOf(host)] ?? null;
           const fw = parsePS5Firmware(rt?.ps5Kernel ?? null);
-          const major = fw ? parseFloat(fw) : 0;
-          if (major >= 12) {
-            const note =
-              "Installing on FW 12.x… ps5upload will only report success after console-side verification. If PlayGo rejects the install, the package stays staged for the PS5's Debug Settings Package Installer.";
-            set({ busyNotice: note });
-            hooks?.onStatus(note);
-          }
+          const note = trStatic(
+            "pkglib.staged_install_note",
+            "Installing from the PS5's own storage (FW {fw})… Some firmwares refuse packages from this route. If it's refused, the package stays on the console; install it with Stream & install from a computer instead.",
+          ).replace("{fw}", fw ?? "?");
+          set({ busyNotice: note });
+          hooks?.onStatus(note);
         }
 
         // The library entry carries the content id parsed at upload time —

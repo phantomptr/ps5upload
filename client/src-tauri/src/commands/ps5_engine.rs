@@ -35,7 +35,7 @@ type JsonValue = serde_json::Value;
 fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
+        crate::engine_http::engine_client_builder()
             .connect_timeout(Duration::from_secs(2))
             .timeout(Duration::from_secs(60))
             .build()
@@ -60,7 +60,7 @@ fn http_client() -> &'static reqwest::Client {
 fn http_client_long() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
+        crate::engine_http::engine_client_builder()
             .connect_timeout(Duration::from_secs(2))
             .timeout(Duration::from_secs(60 * 60))
             .build()
@@ -69,11 +69,12 @@ fn http_client_long() -> &'static reqwest::Client {
 }
 
 async fn get_json(url: &str) -> Result<JsonValue, String> {
-    let resp = http_client()
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("engine request failed: {e}"))?;
+    let resp = http_client().get(url).send().await.map_err(|e| {
+        format!(
+            "engine request failed: {}",
+            crate::engine_http::error_chain(&e)
+        )
+    })?;
     let status = resp.status();
     // Read the body first so error responses can include the engine's
     // own diagnostic (e.g., "payload rejected FS_LIST_VOLUMES: ...").
@@ -106,12 +107,12 @@ async fn post_json_with_client(
     url: &str,
     body: &JsonValue,
 ) -> Result<JsonValue, String> {
-    let resp = client
-        .post(url)
-        .json(body)
-        .send()
-        .await
-        .map_err(|e| format!("engine request failed: {e}"))?;
+    let resp = client.post(url).json(body).send().await.map_err(|e| {
+        format!(
+            "engine request failed: {}",
+            crate::engine_http::error_chain(&e)
+        )
+    })?;
     let status = resp.status();
     // Read the body first so error responses can include the engine's
     // own diagnostic, and so a 4xx/5xx with an empty or non-JSON body
@@ -1417,7 +1418,12 @@ async fn post_sse_inspect_with_watchdog(
         .json(body)
         .send()
         .await
-        .map_err(|e| format!("engine request failed: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "engine request failed: {}",
+                crate::engine_http::error_chain(&e)
+            )
+        })?;
 
     let status = resp.status();
     if !status.is_success() {
@@ -2025,11 +2031,12 @@ pub async fn ps5_focus(addr: Option<String>) -> Result<JsonValue, String> {
 /// the default: the direct URL is cheaper (no base64 inflation, browser
 /// caching) and is still tried first.
 async fn engine_icon_data_url(url: String) -> Result<String, String> {
-    let resp = http_client()
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("engine request failed: {e}"))?;
+    let resp = http_client().get(&url).send().await.map_err(|e| {
+        format!(
+            "engine request failed: {}",
+            crate::engine_http::error_chain(&e)
+        )
+    })?;
     let status = resp.status();
     if !status.is_success() {
         return Err(format!("engine HTTP {status}"));
@@ -2086,7 +2093,12 @@ pub async fn cache_artwork_clear() -> Result<JsonValue, String> {
         .delete(format!("{}/api/cache/artwork", engine::url()))
         .send()
         .await
-        .map_err(|e| format!("engine request failed: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "engine request failed: {}",
+                crate::engine_http::error_chain(&e)
+            )
+        })?;
     let status = resp.status();
     let body = resp
         .text()

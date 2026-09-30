@@ -19,8 +19,11 @@ import {
   sendPayload,
   payloadCheck,
   portCheck,
+  processList,
   type PayloadReleaseInfo,
 } from "../../api/ps5";
+import { mgmtAddr } from "../../lib/addr";
+import { runningChainPayloads, type ChainPayload } from "../../lib/runningChain";
 import { useConnectionStore, PS5_LOADER_PORT } from "../../state/connection";
 import { PageHeader, Button, Spinner } from "../../components";
 import { useTr } from "../../state/lang";
@@ -157,8 +160,26 @@ export default function FirstRunScreen() {
   // SDK's NID table, so the same binary covers FW 1.00 → 12.x. No
   // FW-based variant pick is needed.
 
-  async function handleInstall() {
+  /** Chain payloads already running on the console. Only knowable when our
+   *  helper is up (the process list comes through it); on a cold console
+   *  this is empty and everything is sent, as before. Best effort. */
+  async function detectRunningChain(): Promise<Set<ChainPayload>> {
+    try {
+      const status = await payloadCheck(host);
+      if (!status.reachable) return new Set();
+      const { processes } = await processList(mgmtAddr(host));
+      return runningChainPayloads(processes);
+    } catch {
+      return new Set();
+    }
+  }
+
+  /** `helperOnly`: the console loads kstuff (and ShadowMount+) itself — an
+   *  autoloader, etaHEN, elf-arsenal — so send only ps5upload. Sending kstuff
+   *  on top stacks a second copy. */
+  async function handleInstall(opts?: { helperOnly?: boolean }) {
     if (step1 !== "ok") return;
+    const helperOnly = opts?.helperOnly === true;
     cancelled.current = false;
     setStep3("busy");
     setStep3Detail([]);
@@ -179,9 +200,28 @@ export default function FirstRunScreen() {
     };
 
     try {
+      const running = helperOnly ? new Set<ChainPayload>() : await detectRunningChain();
       // ── kstuff + SMP: download from catalogue, then send ──────
       for (const id of [kstuffId, SMP_ID]) {
         if (cancelled.current) return;
+        if (helperOnly) {
+          updateStep(id, {
+            state: "ok",
+            note: tr("first_run_step_skipped_own", undefined, "skipped — your console loads it"),
+          });
+          continue;
+        }
+        if (running.has(id === kstuffId ? "kstuff" : "shadowmount")) {
+          updateStep(id, {
+            state: "ok",
+            note: tr(
+              "first_run_step_already_running",
+              undefined,
+              "already running — not sent again",
+            ),
+          });
+          continue;
+        }
         updateStep(id, { state: "busy", note: "fetching latest release…" });
         let release: PayloadReleaseInfo;
         try {
@@ -304,9 +344,9 @@ export default function FirstRunScreen() {
         ),
         {
           body: tr(
-            "notif_first_run_done_body",
+            "notif_first_run_ready_body",
             { host },
-            `Loaded kstuff + ShadowMount+ + ps5upload onto ${host}.`,
+            `ps5upload is running on ${host}.`,
           ),
           link: "/library",
         },
@@ -423,6 +463,23 @@ export default function FirstRunScreen() {
                       "Download + send (kstuff → SMP → ps5upload)",
                     )}
             </Button>
+            {step3 !== "busy" && (
+              <Button
+                variant="secondary"
+                size="md"
+                className="ml-2"
+                onClick={() => void handleInstall({ helperOnly: true })}
+              >
+                {tr("first_run_helper_only", undefined, "Send only ps5upload")}
+              </Button>
+            )}
+            <p className="mt-2 text-xs text-[var(--color-muted)]">
+              {tr(
+                "first_run_helper_only_hint",
+                undefined,
+                "Already load kstuff yourself (an autoloader, etaHEN, elf-arsenal)? Send only ps5upload — loading kstuff a second time stacks another copy. Payloads already running are skipped either way.",
+              )}
+            </p>
             {/* Cancel: the install is a multi-step chain with sleeps + several
                 round trips. The cancel flag was only ever set on unmount, so
                 a user with no button had no way to abort. Sets the flag the
