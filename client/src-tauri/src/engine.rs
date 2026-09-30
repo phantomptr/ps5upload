@@ -933,6 +933,10 @@ mod probe_error_tests {
             .await
             .unwrap_err();
         assert!(err.contains("error sending request"), "{err}");
-        assert!(err.to_lowercase().contains("refused"), "{err}");
+        // The underlying cause must be there. Which one depends on the OS:
+        // macOS and Linux refuse a closed port at once; Windows retries the
+        // connect, so the 500 ms probe times out first.
+        let lower = err.to_lowercase();
+        assert!(lower.contains("refused") || lower.contains("timed out"), "{err}");
     }
 }
