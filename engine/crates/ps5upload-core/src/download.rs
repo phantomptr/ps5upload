@@ -200,6 +200,20 @@ fn download_file_range(
     Ok(())
 }
 
+/// Read `[*offset, end)` of a console file into `sink` over `conn`, with the same
+/// pipelined FS_READ loop downloads use. `*offset` advances only past bytes written,
+/// so after a dropped connection the caller reconnects and calls again to resume.
+pub fn read_range_into(
+    conn: &mut Connection,
+    path: &str,
+    end: u64,
+    sink: &mut impl std::io::Write,
+    offset: &mut u64,
+) -> Result<()> {
+    let mut written = 0;
+    download_file_range(conn, path, end, sink, offset, &mut written, None, false)
+}
+
 /// One file the host needs to pull. `rel_path` is relative to the
 /// download root (the source path the user picked). Built by
 /// `enumerate_download_set` and consumed by the per-file copier.
@@ -315,7 +329,7 @@ const REMOTE_LIST_PAGE: u64 = 256;
 /// `fs_ops::list_remote_scoped`: stop on an empty page or a *short*
 /// (< page) page that wasn't buffer-truncated, so an exact multiple of
 /// 256 still triggers one more (empty) request rather than stopping early.
-fn list_dir_all(addr: &str, dir: &str) -> Result<Vec<DirEntry>> {
+pub fn list_dir_all(addr: &str, dir: &str) -> Result<Vec<DirEntry>> {
     paginate_entries(|offset| {
         let listing = list_dir(
             addr,

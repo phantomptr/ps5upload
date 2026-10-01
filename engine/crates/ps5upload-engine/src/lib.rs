@@ -424,7 +424,7 @@ fn extract_payload_error(err: &anyhow::Error) -> (Option<String>, Option<String>
 /// upload goes), but the pre-flight FS_LIST_DIR / FS_HASH frames have
 /// to hit the payload's management listener. The payload's management
 /// port is a stable constant (see `PS5UPLOAD2_MGMT_PORT`).
-const PS5_MGMT_PORT: u16 = 9114;
+pub(crate) const PS5_MGMT_PORT: u16 = 9114;
 
 pub(crate) fn mgmt_addr_for(transfer_addr: &str) -> String {
     match transfer_addr.rsplit_once(':') {
