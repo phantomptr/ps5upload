@@ -3806,6 +3806,7 @@ err_replace_cooldown: "The helper on this console was replaced a moment ago. Wai
 "joberr.helper_starting": "The PS5 helper is still starting. Wait a few seconds, then retry.",
 "joberr.ava1_failed": "The PS5 helper started but its transfer server did not. Restart the console, then retry.",
 "joberr.helper_not_running": "No helper is running on the PS5. Send the helper first (Connection screen on the desktop app, or your payload loader), then retry.",
+install_hint_setup_exe: "The installer has opened: follow it, and it updates PS5Upload in place.",
 };
 
 export default en;
