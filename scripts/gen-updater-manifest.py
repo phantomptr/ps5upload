@@ -54,6 +54,11 @@ PLATFORM_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # in commands/updates.rs asks the package database which package owns
     # the running executable and looks these up first, falling back to the
     # plain key when a release predates them.
+    # The Windows installer build. Same idea as the Linux packages below: an
+    # installed copy must be offered the installer, not the portable zip,
+    # which leaves a second unmanaged copy (a user report).
+    ("windows-x86_64-setup",  re.compile(r".*-win-x64-setup\.exe$")),
+    ("windows-aarch64-setup", re.compile(r".*-win-arm64-setup\.exe$")),
     ("linux-x86_64-deb",  re.compile(r".*-linux-x64\.deb$")),
     ("linux-aarch64-deb", re.compile(r".*-linux-arm64\.deb$")),
     ("linux-x86_64-rpm",  re.compile(r".*-linux-x64\.rpm$")),

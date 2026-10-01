@@ -2064,6 +2064,13 @@ function pickInstallHint(
       "Double-click the .dmg, drag PS5Upload into Applications, replace when asked.",
     );
   }
+  if (lower.endsWith("-setup.exe")) {
+    return tr(
+      "install_hint_setup_exe",
+      undefined,
+      "The installer has opened: follow it, and it updates PS5Upload in place.",
+    );
+  }
   if (lower.endsWith(".zip")) {
     return tr(
       "install_hint_zip",

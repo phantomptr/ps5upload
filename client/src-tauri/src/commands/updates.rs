@@ -201,6 +201,18 @@ fn linux_package_kind() -> Option<&'static str> {
     None
 }
 
+/// Whether this Windows copy came from the setup installer. Tauri's NSIS
+/// installer puts `uninstall.exe` beside the app; the portable zip has none.
+/// An installed copy was being offered the portable zip, so "updating" left a
+/// second, unmanaged copy in Downloads (a user report).
+#[cfg(target_os = "windows")]
+fn windows_installed() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|d| d.join("uninstall.exe")))
+        .is_some_and(|u| u.is_file())
+}
+
 /// Manifest keys to try, most specific first.
 ///
 /// On Linux a packaged install prefers its own format (`linux-x86_64-rpm`)
@@ -213,6 +225,14 @@ fn preferred_asset_keys() -> Vec<String> {
     {
         if let Some(kind) = linux_package_kind() {
             return vec![format!("{base}-{kind}"), base.to_string()];
+        }
+    }
+    // An installed Windows copy wants the installer; a release that predates
+    // the `-setup` entries still offers the zip rather than nothing.
+    #[cfg(target_os = "windows")]
+    {
+        if windows_installed() {
+            return vec![format!("{base}-setup"), base.to_string()];
         }
     }
     vec![base.to_string()]
@@ -706,6 +726,15 @@ async fn reveal(_app: &AppHandle, path: &std::path::Path) -> Result<(), String> 
     // Prefer opening the parent directory — works on all three OSes
     // and avoids auto-launching a .dmg, which we want the user to
     // decide to do.
+    // The Windows installer updates PS5Upload in place, so start it rather
+    // than leave the user to find it. (It asks to close the running app.)
+    if path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.to_ascii_lowercase().ends_with("-setup.exe"))
+    {
+        return open::that_detached(path).map_err(|e| format!("start installer: {e}"));
+    }
     let parent = path
         .parent()
         .ok_or_else(|| "downloaded path has no parent dir".to_string())?;

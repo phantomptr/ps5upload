@@ -3730,6 +3730,7 @@ first_run_helper_only: "Send only ps5upload",
 first_run_helper_only_hint: "Already load kstuff yourself (an autoloader, etaHEN, elf-arsenal)? Send only ps5upload \u2014 loading kstuff a second time stacks another copy. Payloads already running are skipped either way.",
 notif_first_run_ready_body: "ps5upload is running on {host}.",
 "pkglib.staged_install_note": "Installing from the PS5's own storage (FW {fw})\u2026 Some firmwares refuse packages from this route. If it's refused, the package stays on the console; install it with Stream & install from a computer instead.",
+install_hint_setup_exe: "The installer has opened: follow it, and it updates PS5Upload in place.",
 };
 
 export default en;
