@@ -344,6 +344,28 @@ fn reach_block_message(origin: &str, r: &ps5upload_core::diagnostics::NetReach) 
     )
 }
 
+/// True when `path` is a game's own installed file on the console —
+/// `…/user/app/<id>/…`, `…/user/patch/<id>/…`, `…/user/addcont/<id>/…`, on
+/// internal storage or extended storage (`/mnt/ext*/user/…`). Installing one
+/// reinstalls the game from itself, and an update reinstall removes the old
+/// update before applying the new one — the very file being read.
+pub fn is_installed_content_path(path: &str) -> bool {
+    let p = path.trim_end_matches('/');
+    let rest = if let Some(r) = p.strip_prefix("/user/") {
+        r
+    } else if let Some(r) = p.strip_prefix("/mnt/ext") {
+        match r.split_once("/user/") {
+            Some((n, r)) if !n.contains('/') => r,
+            _ => return false,
+        }
+    } else {
+        return false;
+    };
+    ["app/", "patch/", "addcont/"]
+        .iter()
+        .any(|d| rest.starts_with(d))
+}
+
 /// `http://host:port` of a URL, for naming where the console was sent.
 fn origin_of(url: &str) -> Option<String> {
     let rest = url.split_once("://")?;
@@ -476,6 +498,18 @@ pub async fn install_handler(
             Json(serde_json::json!({"ok":false,"error":"ps5_addr is required"})),
         )
             .into_response();
+    }
+    if let Source::ConsolePath(path) = &req.source {
+        if is_installed_content_path(path) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"ok":false,"error":format!(
+                    "{path} is the console's own copy of an installed game, update or \
+                     add-on, not a package to install. Install from the original .pkg instead."
+                )})),
+            )
+                .into_response();
+        }
     }
     let job = match state.jobs.begin(&req.ps5_addr) {
         Ok(j) => j,
@@ -1260,6 +1294,26 @@ mod tests {
             ms: 3,
         };
         assert!(reach_block_message("http://x:1", &refused).contains("refused"));
+    }
+
+    #[test]
+    fn a_games_own_installed_files_are_never_an_install_source() {
+        for p in [
+            "/mnt/ext0/user/patch/CUSA02092/patch.pkg",
+            "/mnt/ext1/user/app/PPSA01234/app.pkg",
+            "/user/app/CUSA00001/app.pkg",
+            "/user/addcont/CUSA00001/X/ac.pkg",
+        ] {
+            assert!(is_installed_content_path(p), "{p}");
+        }
+        for p in [
+            "/user/data/ps5upload/pkg_library/X.pkg",
+            "/mnt/usb0/user/patch/X/patch.pkg",
+            "/mnt/ext0/games/patch.pkg",
+            "/data/pkgs/app.pkg",
+        ] {
+            assert!(!is_installed_content_path(p), "{p}");
+        }
     }
 
     #[test]
