@@ -818,6 +818,11 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/commit_apply_selftest.c
 	@/tmp/ps5upload-commit-apply-selftest
 	@echo "✓ a repeat COMMIT never unlinks a destination it cannot replace"
+	@echo "Running resume-manifest self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-resume-manifest-selftest \
+		$(PAYLOAD_DIR)/tests/resume_manifest_selftest.c
+	@/tmp/ps5upload-resume-manifest-selftest
+	@echo "✓ a resume with a reduced manifest never reuses the old shard cursor"
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-activity-selftest \
 		$(PAYLOAD_DIR)/tests/activity_launch_selftest.c
 	@/tmp/ps5upload-activity-selftest

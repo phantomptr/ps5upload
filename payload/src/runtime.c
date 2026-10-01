@@ -33,6 +33,7 @@
 #include "direct_open.h"
 #include "config.h"
 #include "commit_apply.h"
+#include "resume_manifest.h"
 #include "runtime.h"
 #include "sandbox_unmount.h"
 #include "instance_verdict.h"
@@ -14529,6 +14530,9 @@ static int handle_begin_tx_frame(runtime_state_t *state, int client_fd,
      * re-parsing the kind=2 manifest index. Both must be skipped on
      * resume — they'd destroy the very state we're trying to adopt. */
     int is_resume = 0;
+    /* Resumed an entry whose connection teardown already ran (state was
+     * "interrupted"), so no handler thread still reads its manifest. */
+    int resumed_interrupted = 0;
     int want_resume = (bmeta.flags & FTX2_TX_FLAG_RESUME) != 0;
     /* New in P3: client opts in to APPLY_PROGRESS frames during the
      * multi-file commit apply loop. The flag is captured into the
@@ -14557,6 +14561,7 @@ static int handle_begin_tx_frame(runtime_state_t *state, int client_fd,
             }
             entry = existing;
             is_resume = 1;
+            resumed_interrupted = was_interrupted;
         } else if (existing && !want_resume) {
             /* Explicit restart with same tx_id — common when the user
              * cancels an upload and re-clicks Override. Drop partial
@@ -14676,7 +14681,9 @@ static int handle_begin_tx_frame(runtime_state_t *state, int client_fd,
     if (is_resume) {
         /* In-memory resume (TCP drop, payload still running): the entry
          * already carries manifest_index + direct_mode, so the restore
-         * blocks below are no-ops and we go straight to reconcile.
+         * blocks below are no-ops and we go straight to reconcile. That
+         * holds only while this BeginTx carries the SAME manifest; a
+         * reduced one replaces it first (see the stale check below).
          *
          * Resume AFTER a payload restart (power loss / takeover): the
          * startup load restored only scalar fields — manifest_index is
@@ -14687,6 +14694,58 @@ static int handle_begin_tx_frame(runtime_state_t *state, int client_fd,
          * Rebuild the direct-mode state from the ON-DISK manifest (the
          * same builder the fresh path uses) so the resumed transfer
          * continues on the verified direct path. */
+        /* A payload that stayed up through the drop still holds the
+         * ORIGINAL manifest, so the restart-only adoption below never
+         * fires for it and the cursor stays a count against the old
+         * numbering (see resume_manifest.h). When this BeginTx carries a
+         * different manifest, adopt it the way the restart path does:
+         * index it, persist it, take its totals, and resend from shard 1.
+         * The new index is built (and every path validated) BEFORE the
+         * held one is released, so a manifest that fails to index leaves
+         * the entry exactly as it was. Only for an entry that was
+         * "interrupted": its teardown ran under the slot mutex, so no SHARD
+         * handler still reads the index. An "active" entry (the drop raced
+         * this reconnect) keeps its manifest as before. */
+        if (entry->multi_file && resumed_interrupted &&
+            resume_manifest_is_stale(entry->manifest_blob,
+                                     (uint64_t)entry->manifest_blob_len,
+                                     bextra, bextra_len)) {
+            uint64_t fc = extract_json_uint64_field(bextra, "file_count");
+            char *nbuf = (char *)malloc((size_t)bextra_len + 1);
+            manifest_index_entry_t *nidx = NULL;
+            uint64_t ncount = 0;
+            if (nbuf) {
+                memcpy(nbuf, bextra, (size_t)bextra_len);
+                nbuf[bextra_len] = '\0';
+            }
+            if (nbuf && build_manifest_index(nbuf, (size_t)bextra_len, fc,
+                                             &nidx, &ncount) == 0) {
+                fprintf(stderr,
+                        "[payload2] resume tx %s: manifest changed (%llu -> %llu "
+                        "bytes); adopting it and resending from shard 1\n",
+                        entry->tx_id_hex,
+                        (unsigned long long)entry->manifest_blob_len,
+                        (unsigned long long)bextra_len);
+                free(entry->manifest_index);
+                free(entry->manifest_blob);
+                entry->manifest_blob        = nbuf;
+                entry->manifest_blob_len    = (size_t)bextra_len;
+                entry->manifest_index       = nidx;
+                entry->manifest_index_count = ncount;
+                entry->file_count   = fc;
+                entry->total_shards = extract_json_uint64_field(bextra, "total_shards");
+                entry->total_bytes  = extract_json_uint64_field(bextra, "total_bytes");
+                (void)runtime_write_manifest(entry, nbuf, (size_t)bextra_len);
+                entry->shards_received = 0;
+                entry->bytes_received  = 0;
+            } else {
+                free(nbuf);
+                fprintf(stderr,
+                        "[payload2] resume tx %s: manifest changed but could not "
+                        "be indexed; keeping the original\n",
+                        entry->tx_id_hex);
+            }
+        }
         if (entry->multi_file && !entry->manifest_index) {
             char *mbuf = NULL;
             size_t mlen = 0;
