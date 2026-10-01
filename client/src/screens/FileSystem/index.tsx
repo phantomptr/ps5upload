@@ -32,7 +32,13 @@ import { pickPath, pickPaths } from "../../lib/pickPath";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { isInstallPackagePath } from "../../lib/pkgDropDedupe";
-import { PageHeader, Button, ConnectionGate, Spinner, ErrorCard } from "../../components";
+import {
+  PageHeader,
+  Button,
+  ConnectionGate,
+  Spinner,
+  ErrorCard,
+} from "../../components";
 import { BrowseButton } from "../../components/BrowseButton";
 import EditSessionBanner from "../../components/EditSessionBanner";
 // Direct import to avoid the barrel's circular-dep warning at build.
@@ -299,6 +305,16 @@ export default function FileSystemScreen() {
   const [busyEntry, setBusyEntry] = useState<{
     name: string;
     op: "rename" | "mkdir" | "upload";
+  } | null>(null);
+  // Byte progress for "Add files" uploads, from the engine's transfer job.
+  // `index`/`count` place the current file within a multi-file pick.
+  const [uploadProgress, setUploadProgress] = useState<{
+    sent: number;
+    total: number;
+    index: number;
+    count: number;
+    startedAtMs: number;
+    atMs: number;
   } | null>(null);
   // Lifted into Zustand so the in-flight bulk op survives navigation.
   // The async runner writes to the store; the screen reads from it.
@@ -733,7 +749,12 @@ export default function FileSystemScreen() {
     try {
       // The activity bar reads the task store; a big folder can take minutes to delete.
       await trackTask(
-        { kind: "fs-delete", origin: "files.delete", label: `Delete ${name}`, consoleId: host },
+        {
+          kind: "fs-delete",
+          origin: "files.delete",
+          label: `Delete ${name}`,
+          consoleId: host,
+        },
         () => fsDelete(`${host}:${PS5_PAYLOAD_PORT}`, itemPath),
       );
       await refresh();
@@ -1039,17 +1060,24 @@ export default function FileSystemScreen() {
    *
    *  Sequential on purpose: these land inside one mounted image, and the
    *  payload writes a packed shard's records serially anyway. */
-  const runUpload = async (
-    srcPaths: string[],
-    replaceRemoteName?: string,
-  ) => {
+  const runUpload = async (srcPaths: string[], replaceRemoteName?: string) => {
     if (srcPaths.length === 0) return;
     const addr = `${host}:${PS5_PAYLOAD_PORT}`;
     setError(null);
-    for (const src of srcPaths) {
+    for (let i = 0; i < srcPaths.length; i++) {
+      const src = srcPaths[i];
       const localName = src.split(/[\\/]/).pop() || "file";
       const remoteName = replaceRemoteName ?? localName;
       setBusyEntry({ name: remoteName, op: "upload" });
+      const startedAtMs = Date.now();
+      setUploadProgress({
+        sent: 0,
+        total: 0,
+        index: i,
+        count: srcPaths.length,
+        startedAtMs,
+        atMs: startedAtMs,
+      });
       try {
         const jobId = await startTransferFile(
           src,
@@ -1065,6 +1093,14 @@ export default function FileSystemScreen() {
           if (snap.status === "failed") {
             throw new Error(snap.error ?? "upload failed");
           }
+          setUploadProgress({
+            sent: snap.bytes_sent ?? 0,
+            total: snap.total_bytes ?? 0,
+            index: i,
+            count: srcPaths.length,
+            startedAtMs,
+            atMs: Date.now(),
+          });
           await new Promise((r) => setTimeout(r, 500));
         }
       } catch (e) {
@@ -1080,11 +1116,13 @@ export default function FileSystemScreen() {
           { body: human },
         );
         setBusyEntry(null);
+        setUploadProgress(null);
         await refresh();
         return;
       }
     }
     setBusyEntry(null);
+    setUploadProgress(null);
     await refresh();
   };
 
@@ -1248,9 +1286,10 @@ export default function FileSystemScreen() {
                   fsBulk.setCurrentBytesCopied(snap.bytes_copied);
                 }
               } catch {
-                // 404 from the engine = op finished. Other errors
-                // (transient mgmt-port stall) silently retry next tick.
-                break;
+                // A 404 ("not in flight") arrives both before the payload
+                // has registered the op and after it finished, and a
+                // mgmt-port blip throws too. None of them may end the
+                // poller: it stops when the delete call returns.
               }
               await new Promise((r) => setTimeout(r, 500));
             }
@@ -1446,11 +1485,11 @@ export default function FileSystemScreen() {
                 fsBulk.setCurrentBytesCopied(snap.bytes_copied);
               }
             } catch {
-              // 404 from the engine means the op finished — break
-              // out so we don't keep polling. Other errors (network
-              // blip, transient mgmt-port stall) silently retry on
-              // the next tick.
-              break;
+              // Breaking here used to kill progress for the whole copy:
+              // a 404 arrives before the payload registers the op (the
+              // first poll can beat the FS_COPY frame) as well as after
+              // it ends, and a mgmt-port blip throws too. Keep polling;
+              // the poller stops when the copy call returns.
             }
             await new Promise((r) => setTimeout(r, 500));
           }
@@ -1741,7 +1780,8 @@ export default function FileSystemScreen() {
       if (!destZip || typeof destZip !== "string") return;
       dest = destZip;
       rootName = destZip.split(/[\\/]/).pop() || `${entry.name}.zip`;
-      start = () => startTransferDownloadZip(remote, destZip, addr, kind, systemFileRead);
+      start = () =>
+        startTransferDownloadZip(remote, destZip, addr, kind, systemFileRead);
     } else {
       const picked = await pickPath({
         mode: "folder",
@@ -1754,7 +1794,8 @@ export default function FileSystemScreen() {
       if (typeof picked !== "string") return;
       dest = picked;
       rootName = entry.name;
-      start = () => startTransferDownload(remote, picked, addr, kind, systemFileRead);
+      start = () =>
+        startTransferDownload(remote, picked, addr, kind, systemFileRead);
     }
     setError(null);
     let jobId: string;
@@ -1901,7 +1942,11 @@ export default function FileSystemScreen() {
               remote
               icon={<Upload size={12} />}
               label={tr("fs_add_files", "Add files")}
-              title={tr("fs_add_files_dialog_title", undefined, "Pick files to copy onto the PS5")}
+              title={tr(
+                "fs_add_files_dialog_title",
+                undefined,
+                "Pick files to copy onto the PS5",
+              )}
               disabled={loading || !host?.trim() || busyEntry !== null}
               onMainClick={() => void addFilesHere()}
               onPick={(p) => void addPicked([p])}
@@ -1988,7 +2033,11 @@ export default function FileSystemScreen() {
                       distinction survives, without implying selection. */}
                   <Icon
                     size={12}
-                    className={external ? "text-[var(--color-ps4)]" : "text-[var(--color-muted)]"}
+                    className={
+                      external
+                        ? "text-[var(--color-ps4)]"
+                        : "text-[var(--color-muted)]"
+                    }
                   />
                   {v.path}
                   <span className="opacity-60">
@@ -2237,7 +2286,7 @@ export default function FileSystemScreen() {
         )}
 
         {busyEntry && bulkOp.op === null && (
-          <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-xs">
+          <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-xs">
             <Spinner size={12} tone="accent" />
             <span className="font-medium">
               {busyEntry.op === "rename"
@@ -2249,6 +2298,9 @@ export default function FileSystemScreen() {
             <span className="text-[var(--color-muted)]">
               {busyEntry.name} · {formatDuration(elapsedMs / 1000)}
             </span>
+            {busyEntry.op === "upload" && uploadProgress && (
+              <UploadProgressDetail progress={uploadProgress} />
+            )}
           </div>
         )}
 
@@ -2598,12 +2650,8 @@ export default function FileSystemScreen() {
  *
  * Shows the per-file size + source/destination paths so users know
  * what's actually moving and where it's going. The progress bar is
- * "determinate by file count" but the per-file copy is still an
- * opaque payload-side fs_copy — for a single 10 GiB file the bar
- * sits at 0% for the whole copy. We layer an indeterminate animated
- * stripe on top so the bar still LOOKS alive during long single-
- * file copies. Real byte-level progress would need payload-side
- * incremental fs_copy events; future work.
+ * finished items plus the current item's byte fraction, polled from
+ * the payload's FS_OP_STATUS, so a single 10 GiB copy fills smoothly.
  */
 /** Compact "recent paths" dropdown that lives next to the breadcrumb
  *  trail. Hidden when the recents list is empty (no point showing an
@@ -2688,6 +2736,47 @@ function RecentPathsDropdown({
   );
 }
 
+/** Bytes, percent, speed and a bar for an "Add files" upload. Renders
+ *  nothing byte-wise until the engine reports a total. */
+function UploadProgressDetail({
+  progress,
+}: {
+  progress: {
+    sent: number;
+    total: number;
+    index: number;
+    count: number;
+    startedAtMs: number;
+    atMs: number;
+  };
+}) {
+  const tr = useTr();
+  const { sent, total, index, count, startedAtMs, atMs } = progress;
+  const pct = total > 0 ? Math.min(100, (sent / total) * 100) : null;
+  const secs = (atMs - startedAtMs) / 1000;
+  const speed = secs > 0 && sent > 0 ? sent / secs : 0;
+  return (
+    <div className="mt-1 basis-full">
+      <div className="mb-1 font-mono text-[var(--color-muted)]">
+        {count > 1 &&
+          `${tr("fs_bulk_progress", { done: index + 1, total: count }, "{done} of {total}")} · `}
+        {pct !== null
+          ? `${formatBytes(sent)} / ${formatBytes(total)} (${pct.toFixed(0)}%)`
+          : formatBytes(sent)}
+        {speed > 0 && ` · ${formatBytes(speed)}/s`}
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
+        <div
+          className={`h-full bg-[var(--color-accent)] transition-[width] duration-300 ${
+            pct === null ? "animate-pulse" : ""
+          }`}
+          style={{ width: `${Math.max(pct ?? 0, 4)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function BulkOpBanner({
   host,
   op,
@@ -2746,6 +2835,10 @@ function BulkOpBanner({
   // started_at as the item's start, which is fine for a single-item
   // paste (the user's PPSA09519.exfat case) and gives a low-side
   // number for multi-item pastes (sums prior items into the elapsed).
+  const pctOverall =
+    total > 0
+      ? Math.min(100, ((done + (itemPct ?? 0) / 100) / total) * 100)
+      : pctByFiles;
   const itemSpeed =
     elapsedSec > 0 && currentBytesCopied > 0
       ? currentBytesCopied / elapsedSec
@@ -2809,7 +2902,8 @@ function BulkOpBanner({
       {/* Per-item progress bar. Only renders when we have both bytes
           and a total — avoids a misleading 0% bar while the first
           FS_OP_STATUS reply is in flight. */}
-      {currentBytesCopied > 0 &&
+      {total > 1 &&
+        currentBytesCopied > 0 &&
         currentSize !== null &&
         currentSize > 0 &&
         itemPct !== null && (
@@ -2849,17 +2943,15 @@ function BulkOpBanner({
         </div>
       )}
 
-      {/* Determinate-by-file-count bar with a subtle pulse so single-
-          file copies (where the bar sits at 0% the whole copy) still
-          LOOK alive. The spinner icon at top is the secondary
-          motion signal. Real byte-level progress would need
-          payload-side incremental fs_copy events; future work. */}
+      {/* Overall bar: finished items plus the current item's byte
+          fraction, so one big file fills smoothly instead of sitting
+          at 0% until it's done. Pulses while no byte count is in yet. */}
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
         <div
           className={`h-full bg-[var(--color-accent)] transition-[width] duration-300 ${
-            done < total ? "animate-pulse" : ""
+            done < total && itemPct === null ? "animate-pulse" : ""
           }`}
-          style={{ width: `${Math.max(pctByFiles, 4)}%` }}
+          style={{ width: `${Math.max(pctOverall, 4)}%` }}
         />
       </div>
     </div>
