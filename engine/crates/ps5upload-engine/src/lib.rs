@@ -4354,8 +4354,16 @@ fn external_pkg_header(head: &[u8]) -> (String, String, String) {
 /// A drive's top-level `ps5upload/` folder holds the package library staged
 /// there by the app; those packages are already in the library, so the
 /// external scan leaves them out instead of listing them twice.
-fn skip_in_external_scan(depth: u32, name: &str) -> bool {
-    depth == 0 && name.eq_ignore_ascii_case("ps5upload")
+///
+/// An extended-storage drive (`/mnt/ext*`) also keeps the console's installed
+/// games under its top-level `user/` (app/patch/addcont) — `app.pkg` and
+/// `patch.pkg` there are installed content, not packages to install. Listing
+/// them offered to "install" a game's own update over itself (a user report:
+/// DOOM's /mnt/ext0/user/patch/CUSA02092/patch.pkg).
+fn skip_in_external_scan(drive: &str, depth: u32, name: &str) -> bool {
+    depth == 0
+        && (name.eq_ignore_ascii_case("ps5upload")
+            || (drive.starts_with("/mnt/ext") && name.eq_ignore_ascii_case("user")))
 }
 
 pub fn scan_external_pkgs(addr: &str) -> anyhow::Result<Vec<ExternalPkg>> {
@@ -4391,7 +4399,7 @@ pub fn scan_external_pkgs(addr: &str) -> anyhow::Result<Vec<ExternalPkg>> {
                 let lower = e.name.to_ascii_lowercase();
                 let is_package = lower.ends_with(".pkg") || lower.ends_with(".fpkg");
                 if e.kind == "dir" {
-                    if skip_in_external_scan(depth, &e.name) {
+                    if skip_in_external_scan(&v.path, depth, &e.name) {
                         continue;
                     }
                     if depth + 1 < MAX_DEPTH {
@@ -9727,11 +9735,23 @@ mod external_scan_tests {
     fn the_scan_skips_our_own_package_library_on_a_drive() {
         // Packages staged on a USB/M.2 drive live in <drive>/ps5upload/; they
         // are already in the library and must not show again as "external".
-        assert!(skip_in_external_scan(0, "ps5upload"));
-        assert!(skip_in_external_scan(0, "PS5Upload"));
+        assert!(skip_in_external_scan("/mnt/usb0", 0, "ps5upload"));
+        assert!(skip_in_external_scan("/mnt/usb0", 0, "PS5Upload"));
         // Only at the drive's top level: a user folder deeper down is scanned.
-        assert!(!skip_in_external_scan(1, "ps5upload"));
-        assert!(!skip_in_external_scan(0, "games"));
+        assert!(!skip_in_external_scan("/mnt/usb0", 1, "ps5upload"));
+        assert!(!skip_in_external_scan("/mnt/usb0", 0, "games"));
+    }
+
+    #[test]
+    fn the_scan_skips_installed_games_on_extended_storage() {
+        // A user was offered DOOM's installed update,
+        // /mnt/ext0/user/patch/CUSA02092/patch.pkg, as a package to install.
+        assert!(skip_in_external_scan("/mnt/ext0", 0, "user"));
+        assert!(skip_in_external_scan("/mnt/ext1", 0, "user"));
+        // A USB stick's own "user" folder is the user's, not the console's.
+        assert!(!skip_in_external_scan("/mnt/usb0", 0, "user"));
+        // Deeper down it's just a folder name.
+        assert!(!skip_in_external_scan("/mnt/ext0", 1, "user"));
     }
 }
 
