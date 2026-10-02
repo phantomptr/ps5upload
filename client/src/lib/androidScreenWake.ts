@@ -3,7 +3,7 @@ import { isAndroid } from "./platform";
 // Android screen keep-awake, via the W3C Screen Wake Lock API.
 //
 // The Rust inhibitor in `keep_awake.rs` (caffeinate / systemd-inhibit /
-// SetThreadExecutionState) has NO Android implementation — its
+// a Windows power request) has NO Android implementation — its
 // `acquire_inhibitor()` falls through to `Ok(None)` on Android, so the
 // keep-awake commands are silent no-ops there. The Android-native
 // equivalent is `navigator.wakeLock.request("screen")`, which holds the

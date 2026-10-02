@@ -1037,7 +1037,7 @@ things go to sleep:
 1. **Your computer.** ps5upload now keeps the computer awake
    **automatically** while any upload, download, or install is running
    (macOS `caffeinate`, Linux `systemd-inhibit`, Windows
-   `SetThreadExecutionState`) and releases it when the queue goes idle.
+   power request) and releases it when the queue goes idle.
    You don't have to do anything. If you want the machine to also stay
    awake while the app is open but *idle*, turn on **Settings → Keep
    Awake**. (On non-systemd Linux that toggle is greyed out — the OS has
