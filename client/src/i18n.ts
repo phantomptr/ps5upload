@@ -40,7 +40,8 @@ export type LanguageCode =
   | "fr"
   | "es"
   | "ar"
-  | "hu";
+  | "hu"
+  | "fa";
 
 /** Cache of loaded locale dictionaries. English is pre-populated; the
  *  other 19 land here once their dynamic import resolves. */
@@ -109,6 +110,8 @@ function importLocale(code: LanguageCode): Promise<{ default: Translations }> {
       return import("./i18n/locales/es");
     case "ar":
       return import("./i18n/locales/ar");
+    case "fa":
+      return import("./i18n/locales/fa");
   }
 }
 

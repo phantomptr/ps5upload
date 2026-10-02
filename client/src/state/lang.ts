@@ -35,10 +35,11 @@ export const LANGUAGES: { code: LanguageCode; label: string }[] = [
   { code: "id", label: "Bahasa Indonesia" },
   { code: "it", label: "Italiano" },
   { code: "th", label: "ไทย" },
-  { code: "hu", label: "Magyar" },
+    { code: "hu", label: "Magyar" },
+  { code: "fa", label: "فارسی" },
 ];
 
-const RTL_LANGS: Set<LanguageCode> = new Set(["ar"]);
+const RTL_LANGS: Set<LanguageCode> = new Set(["ar", "fa"]);
 
 function initialLang(): LanguageCode {
   if (typeof window === "undefined") return "en";
