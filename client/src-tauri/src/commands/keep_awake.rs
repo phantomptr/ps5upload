@@ -13,17 +13,20 @@
 //!   macOS:   `caffeinate -disu` subprocess (kill to release)
 //!   Linux:   `systemd-inhibit --what=idle:sleep … sleep infinity`
 //!            subprocess (kill to release)
-//!   Windows: `SetThreadExecutionState` with ES_CONTINUOUS |
-//!            ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED (call again
-//!            with just ES_CONTINUOUS to release)
+//!   Windows: a power request object (`PowerCreateRequest`) set to
+//!            SystemRequired + DisplayRequired (close its handle to
+//!            release)
 //!
 //! The Windows path is in-process, not a subprocess, so the holder
-//! distinguishes between "process" and "exec-state" variants. On
+//! distinguishes between "process" and "power request" variants. On
 //! unsupported platforms (BSDs, etc.) we return `supported: false`
 //! and let the UI disable the toggle.
 
 use std::collections::HashSet;
 use std::sync::OnceLock;
+
+#[cfg(target_os = "windows")]
+use std::ffi::c_void;
 
 use tokio::sync::Mutex;
 
@@ -35,8 +38,10 @@ const MANUAL_REASON: &str = "manual";
 enum Handle {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     Process(tokio::process::Child),
+    /// The power request's HANDLE, kept as an integer so `Handle`
+    /// stays `Send` for the static holder.
     #[cfg(target_os = "windows")]
-    WinExecState,
+    WinPowerRequest(isize),
 }
 
 /// Process-wide inhibitor with reference-counted reasons. The OS handle
@@ -115,7 +120,7 @@ async fn release_reason(reason: &str) {
 /// True when this platform has a working keep-awake primitive
 /// *and* any required runtime component is present. macOS and
 /// Windows always support it (caffeinate ships with macOS,
-/// SetThreadExecutionState is a Win32 API). Linux needs
+/// power requests are a Win32 API). Linux needs
 /// systemd-inhibit — absent on non-systemd distros, where we
 /// report `supported: false` so the UI greys the toggle instead
 /// of letting it bounce on every click.
@@ -203,8 +208,8 @@ pub async fn keep_awake_release(reason: String) -> serde_json::Value {
 /// enabled `caffeinate` / `systemd-inhibit` child outlives the app and
 /// the machine can't idle-sleep until the user reboots or kills it by
 /// hand. Call from the `RunEvent::Exit` handler, alongside `engine::stop()`.
-/// (Windows is a no-op: its exec-state flags clear automatically when the
-/// process exits.)
+/// (On Windows this only tidies up: the power request handle closes with
+/// the process anyway.)
 pub async fn keep_awake_release_on_exit() {
     let to_release = {
         let mut g = holder().lock().await;
@@ -224,15 +229,16 @@ async fn release_inhibitor(handle: Handle) {
             let _ = child.wait().await;
         }
         #[cfg(target_os = "windows")]
-        Handle::WinExecState => {
-            // ES_CONTINUOUS alone clears all previously-set inhibitor
-            // flags while preserving the continuous-application mode
-            // semantics. `SetThreadExecutionState` is a cheap syscall;
-            // we don't check the return value because the only non-
-            // zero return is "success" and any other value means the
-            // system lost the previous state (already cleared), which
-            // is also fine.
-            unsafe { SetThreadExecutionState(ES_CONTINUOUS) };
+        Handle::WinPowerRequest(request) => {
+            // Return values are ignored: a request that fails to clear
+            // is still dropped when its handle closes, and there is
+            // nothing more to do about a handle that fails to close.
+            let request = request as *mut c_void;
+            unsafe {
+                PowerClearRequest(request, POWER_REQUEST_DISPLAY_REQUIRED);
+                PowerClearRequest(request, POWER_REQUEST_SYSTEM_REQUIRED);
+                CloseHandle(request);
+            }
         }
     }
 }
@@ -287,50 +293,95 @@ fn acquire_inhibitor() -> Result<Option<Handle>, String> {
     Ok(Some(Handle::Process(child)))
 }
 
-// ─── Windows: SetThreadExecutionState ──────────────────────────────
+// ─── Windows: power request ────────────────────────────────────────
 //
 // Inline FFI declarations instead of pulling in the `windows` or
-// `winapi` crates — this is a single syscall with three small flag
-// constants, and `extern "system"` with a raw function prototype
-// keeps the desktop crate's dep graph lean (the windows crate family
-// averages 20+ transitive deps for a meaningful build).
+// `winapi` crates: four kernel32 calls and a few constants, and
+// `extern "system"` with raw function prototypes keeps the desktop
+// crate's dep graph lean (the windows crate family averages 20+
+// transitive deps for a meaningful build).
 //
-// Despite its name, SetThreadExecutionState is effectively process-
-// wide on modern Windows: the flags stay asserted until a subsequent
-// call to the same API clears them, regardless of which thread made
-// the original call. MSDN still documents the per-thread semantics
-// as a legacy API quirk.
+// A power request is a kernel object owned by its handle, so the hold
+// can be released from any thread. That matters here: these commands
+// run on tokio worker threads, and the acquire and release of one hold
+// usually land on different workers. `SetThreadExecutionState`, used
+// before, is per thread: the ES_CONTINUOUS reset ran on another worker
+// and cleared nothing, so every transfer left the display and the
+// system held until the app quit (`powercfg /requests` listed one
+// DISPLAY and one SYSTEM entry per stuck worker).
 #[cfg(target_os = "windows")]
 #[allow(non_snake_case)]
 extern "system" {
-    fn SetThreadExecutionState(flags: u32) -> u32;
+    fn PowerCreateRequest(context: *const ReasonContext) -> *mut c_void;
+    fn PowerSetRequest(request: *mut c_void, request_type: i32) -> i32;
+    fn PowerClearRequest(request: *mut c_void, request_type: i32) -> i32;
+    fn CloseHandle(handle: *mut c_void) -> i32;
+}
+
+/// `REASON_CONTEXT`. Its C `Reason` field is a union; with
+/// `POWER_REQUEST_CONTEXT_SIMPLE_STRING` only the leading
+/// `SimpleReasonString` pointer is read, and the unused fields after it
+/// give the struct the size of the union's larger `Detailed` arm.
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct ReasonContext {
+    version: u32,
+    flags: u32,
+    simple_reason_string: *const u16,
+    _localized_reason_id: u32,
+    _reason_string_count: u32,
+    _reason_strings: *const c_void,
 }
 
 #[cfg(target_os = "windows")]
-const ES_CONTINUOUS: u32 = 0x8000_0000;
+const POWER_REQUEST_CONTEXT_VERSION: u32 = 0;
 #[cfg(target_os = "windows")]
-const ES_SYSTEM_REQUIRED: u32 = 0x0000_0001;
+const POWER_REQUEST_CONTEXT_SIMPLE_STRING: u32 = 0x1;
 #[cfg(target_os = "windows")]
-const ES_DISPLAY_REQUIRED: u32 = 0x0000_0002;
+const POWER_REQUEST_DISPLAY_REQUIRED: i32 = 0;
+#[cfg(target_os = "windows")]
+const POWER_REQUEST_SYSTEM_REQUIRED: i32 = 1;
+#[cfg(target_os = "windows")]
+const INVALID_HANDLE_VALUE: *mut c_void = -1isize as *mut c_void;
 
 #[cfg(target_os = "windows")]
 fn acquire_inhibitor() -> Result<Option<Handle>, String> {
-    // ES_CONTINUOUS makes the remaining flags persist across this
-    // API call (without it, the flags would revert on the next call
-    // from any thread in the process). SYSTEM_REQUIRED prevents
-    // automatic sleep; DISPLAY_REQUIRED prevents screen blanking —
-    // matches macOS `caffeinate -d -i -s` semantics.
-    let prev = unsafe {
-        SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)
+    // Shown next to the process in `powercfg /requests`.
+    let reason: Vec<u16> = "PS5 Upload: keeping the computer awake"
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+    let context = ReasonContext {
+        version: POWER_REQUEST_CONTEXT_VERSION,
+        flags: POWER_REQUEST_CONTEXT_SIMPLE_STRING,
+        simple_reason_string: reason.as_ptr(),
+        _localized_reason_id: 0,
+        _reason_string_count: 0,
+        _reason_strings: std::ptr::null(),
     };
-    if prev == 0 {
-        // MSDN: a zero return means SetThreadExecutionState failed.
-        // Rare — the usual cause is restrictive Group Policy blocking
-        // the API. Surface as a UI-visible error so users know why
-        // the toggle bounced back off.
-        return Err("SetThreadExecutionState failed (GPO restriction?)".to_string());
+    let request = unsafe { PowerCreateRequest(&context) };
+    if request == INVALID_HANDLE_VALUE {
+        return Err(format!(
+            "PowerCreateRequest failed: {}",
+            std::io::Error::last_os_error()
+        ));
     }
-    Ok(Some(Handle::WinExecState))
+    // SystemRequired prevents automatic sleep; DisplayRequired prevents
+    // screen blanking. Matches macOS `caffeinate -d -i -s` semantics.
+    for request_type in [
+        POWER_REQUEST_SYSTEM_REQUIRED,
+        POWER_REQUEST_DISPLAY_REQUIRED,
+    ] {
+        if unsafe { PowerSetRequest(request, request_type) } == 0 {
+            // Rare; restrictive Group Policy is the usual cause. Surface
+            // it as a UI-visible error so users know why the toggle
+            // bounced back off.
+            let err = std::io::Error::last_os_error();
+            unsafe { CloseHandle(request) };
+            return Err(format!("PowerSetRequest failed: {err}"));
+        }
+    }
+    Ok(Some(Handle::WinPowerRequest(request as isize)))
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
