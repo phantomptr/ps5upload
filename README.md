@@ -191,7 +191,70 @@ Pre-built downloads land on the
 | Linux — Debian / Ubuntu (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.deb` | `sudo apt install ./PS5Upload-<ver>-linux-<arch>.deb` — installs a normal app with a menu entry; pulls in the WebKitGTK deps automatically. |
 | Linux — Fedora / RHEL / Bazzite (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.rpm` | `sudo dnf install ./PS5Upload-<ver>-linux-<arch>.rpm` (Bazzite/Silverblue: `rpm-ostree install`) — menu entry + auto deps. |
 | Linux — any distro (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.zip` | Universal fallback (no install). Unzip, then `chmod +x PS5Upload.sh PS5Upload.AppImage` and run **`./PS5Upload.sh`** (the wrapper — handles the FUSE-less and WebKit white-screen cases for you). Running `./PS5Upload.AppImage` directly also works if your system has libfuse2 and a happy WebKitGTK. |
+| Linux — NixOS (x64 / ARM64) | no release artifact | Packaged in [NUR](https://github.com/GriefNorth/nur-packages) as `ps5upload` — see **NixOS** below. |
 | Android | `PS5Upload-<ver>-android.apk` | Enable "install unknown apps" for your browser/file manager, then open the `.apk`. Same interface, mobile-friendly; connects to and manages your PS5 over Wi-Fi. |
+
+### NixOS
+
+No NixOS artifact is published on the Releases page, but ps5upload is
+packaged in [GriefNorth's NUR](https://github.com/GriefNorth/nur-packages) as
+`ps5upload` (x64 and ARM64) — it wraps the same `.AppImage` and needs no
+FUSE. With flakes:
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nur.url = "github:GriefNorth/nur-packages";
+  };
+
+  outputs = { nixpkgs, nur, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ({ pkgs, ... }: {
+          environment.systemPackages = [
+            nur.packages.${pkgs.system}.ps5upload
+          ];
+        })
+      ];
+    };
+  };
+}
+```
+
+Then `nixos-rebuild switch --flake .#myhost` and launch **ps5upload** from
+your app menu. Without flakes, call the package straight out of the repo —
+and note that ps5upload bundles UnRAR for `.rar` support, so nixpkgs needs
+`config.allowUnfree = true`:
+
+```nix
+{ pkgs, fetchTarball, ... }:
+{
+  nixpkgs.config.allowUnfree = true;
+
+  environment.systemPackages = [
+    (pkgs.callPackage
+      ((fetchTarball
+        "https://github.com/GriefNorth/nur-packages/archive/refs/heads/main.tar.gz")
+        + "/pkgs/ps5upload")
+      { })
+  ];
+}
+```
+
+Or try it without installing anything:
+
+```bash
+nix run github:GriefNorth/nur-packages#ps5upload
+```
+
+The Nix expression pins one release version, so bump it there when a new
+ps5upload comes out. Prefer to run the AppImage yourself? Prefer the
+`./PS5Upload.sh` wrapper from the zip above — on NixOS the bare
+`.AppImage` usually renders an empty window, because its bundled
+`libwayland-client` shadows the host one and WebKitGTK then fails to create
+an EGL display. The Nix package works around that for you.
 
 ### First-launch warnings (and why they're there)
 
