@@ -308,6 +308,7 @@ name = "ava1"
 version = "5.41.0"
 dependencies = [
  "blake2 0.10.6",
+ "blake3",
  "getrandom 0.4.3",
  "ring",
  "snow",
@@ -4128,6 +4129,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ps5upload-ava1"
+version = "5.41.0"
+dependencies = [
+ "anyhow",
+ "ava1",
+ "base64 0.23.1",
+ "blake3",
+ "crc32fast",
+ "flate2",
+ "ps5upload-core",
+ "serde_json",
+ "sevenz-rust2",
+ "thiserror 2.0.20",
+ "tokio",
+ "zip",
+]
+
+[[package]]
 name = "ps5upload-core"
 version = "5.41.0"
 dependencies = [
@@ -4196,8 +4215,8 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "blake3",
- "ftx2-proto",
  "getrandom 0.4.3",
+ "ps5upload-ava1",
  "ps5upload-core",
  "ps5upload-fpkg",
  "ps5upload-pkg",
