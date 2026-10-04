@@ -633,6 +633,10 @@ pub fn upload_with_seq_in(
     let persist = pool.ava_dir().join("send").join(hex(&job_id));
     let _live = pool.live_job(&job_id); // the journal sweep leaves a running job alone
     let dest = opts.root.clone();
+    // What this job promised the drive is released however it ends (design 015/02).
+    let _promise = crate::space::Reservation::new(job_id);
+    let space_gate =
+        crate::space::gate(pool.room_probe(), console.to_string(), dest.clone(), job_id);
     crate::block_on(async {
         SessionGate::identity(pool)?;
         let _bridge = Bridge::start(progress.clone(), cfg);
@@ -685,6 +689,7 @@ pub fn upload_with_seq_in(
                 seq: seq.clone().or_else(|| opts.seq.clone()),
                 settle_max: None,
                 open_ack_timeout: pool.open_ack_timeout(),
+                space_gate: Some(space_gate.clone()),
             };
             match send_job(&mut link, manifest.clone(), source.clone(), o).await {
                 Ok(r) if r.status == gen::STATUS_OK => {
@@ -765,6 +770,15 @@ pub fn upload_with_seq_in(
                     return Err(refusal(status, message).into());
                 }
                 Err(SendError::Cancelled) => return Err(anyhow!("transfer_cancelled")),
+                // The rest of the job does not fit the drive: said once, up front, with the
+                // numbers. The console keeps what it has, so freeing room and retrying resumes.
+                Err(SendError::NoRoom(detail)) => {
+                    return Err(UploadFailure {
+                        reason: "preflight_insufficient_space".into(),
+                        detail,
+                    }
+                    .into());
+                }
                 Err(e) => return Err(anyhow!(e)),
             }
         }
