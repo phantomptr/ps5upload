@@ -49,6 +49,7 @@ static void t_count(void) { __atomic_add_fetch(&g_counted, 1, __ATOMIC_SEQ_CST);
 
 /* With fake_dev set both lookups are injected; otherwise p.dev_of/src_dev_of are NULL (the real stat/lstat). */
 static int t_dev_of(const char *path, unsigned long long *out) {
+    if (g_fake_dev == 3) return -1; /* every device lookup fails (the guard's unknown case) */
     if (g_fake_dev == 2) { /* a link named "lnk" points INTO the other device: stat() (follows it) says 2 */
         *out = (strstr(path, "/mnt2") || strstr(path, "/lnk")) ? 2u : 1u;
         return 0;

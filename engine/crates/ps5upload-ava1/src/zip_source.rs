@@ -206,6 +206,8 @@ pub struct ZipEntryReader {
     /// while `tracking` (the reader has seen every byte since the last restart).
     crc: flate2::Crc,
     tracking: bool,
+    /// A stored entry's CRC-32 has been checked over all of it.
+    verified: bool,
 }
 
 impl ZipEntryReader {
@@ -246,24 +248,36 @@ impl ZipEntryReader {
             return Ok(0);
         }
         if self.at.stored {
-            self.file.seek(SeekFrom::Start(self.at.data_start + off))?;
+            // A stored entry's bytes are exactly its size, and no read passes them.
             let want = (buf.len() as u64).min(self.size - off) as usize;
-            let got = self.file.read(&mut buf[..want])?;
-            // Verify when the reads walk the entry front to back; a random-access
-            // pattern simply isn't verified until a pass from offset 0 reaches the end.
-            if off == 0 {
-                self.crc = flate2::Crc::new();
-                self.pos = 0;
-                self.tracking = true;
+            if !self.verified {
+                if off == 0 {
+                    self.crc = flate2::Crc::new();
+                    self.pos = 0;
+                    self.tracking = true;
+                }
+                if !(self.tracking && off == self.pos) {
+                    // A read that is not the next piece of a front-to-back pass (a resume
+                    // sends only the groups the console lacks): the running CRC cannot vouch
+                    // for this entry, so check all of it once before any byte of it is sent.
+                    self.verify_whole_stored()?;
+                }
             }
-            if self.tracking && off == self.pos {
-                self.crc.update(&buf[..got]);
-                self.pos += got as u64;
+            self.file.seek(SeekFrom::Start(self.at.data_start + off))?;
+            self.file
+                .read_exact(&mut buf[..want])
+                .map_err(|e| match e.kind() {
+                    io::ErrorKind::UnexpectedEof => {
+                        corrupt("zip entry ends before its declared size".into())
+                    }
+                    _ => e,
+                })?;
+            if !self.verified {
+                self.crc.update(&buf[..want]);
+                self.pos += want as u64;
                 self.verify_at_end()?;
-            } else {
-                self.tracking = false;
             }
-            return Ok(got);
+            return Ok(want);
         }
         if self.inflater.is_none() || off < self.pos {
             self.start()?;
@@ -307,7 +321,37 @@ impl ZipEntryReader {
                     self.at.crc
                 )));
             }
+            self.verified = true;
         }
+        Ok(())
+    }
+
+    /// Reads a stored entry once, front to back, and checks its CRC-32 against the directory's.
+    /// Leaves the entry marked verified, so it happens once however the reads then come.
+    fn verify_whole_stored(&mut self) -> io::Result<()> {
+        let mut f = self.file.get_ref().try_clone()?;
+        f.seek(SeekFrom::Start(self.at.data_start))?;
+        let mut f = f.take(self.size);
+        let mut crc = flate2::Crc::new();
+        let mut chunk = vec![0u8; 256 << 10];
+        let mut left = self.size;
+        while left > 0 {
+            let n = f.read(&mut chunk)?;
+            if n == 0 {
+                return Err(corrupt("zip entry ends before its declared size".into()));
+            }
+            crc.update(&chunk[..n]);
+            left -= n as u64;
+        }
+        if crc.sum() != self.at.crc {
+            return Err(corrupt(format!(
+                "zip entry CRC-32 mismatch (stored {:08x}, computed {:08x})",
+                self.at.crc,
+                crc.sum()
+            )));
+        }
+        self.verified = true;
+        self.tracking = false;
         Ok(())
     }
 }
@@ -319,6 +363,12 @@ impl ZipSource {
             .files
             .get(rel)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, rel.to_owned()))?;
+        if at.stored && at.compressed != meta.size {
+            return Err(corrupt(format!(
+                "{rel}: a stored entry of {} bytes is {} bytes in the archive",
+                meta.size, at.compressed
+            )));
+        }
         Ok(ZipEntryReader {
             file: BufReader::with_capacity(256 << 10, std::fs::File::open(&self.path)?),
             at: *at,
@@ -328,6 +378,7 @@ impl ZipSource {
             restarts: 0,
             crc: flate2::Crc::new(),
             tracking: true,
+            verified: false,
         })
     }
 }
@@ -383,5 +434,73 @@ impl Source for ZipSource {
             });
         }
         Err(io::Error::new(io::ErrorKind::NotFound, rel.to_owned()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn body(n: usize, k: u8) -> Vec<u8> {
+        (0..n)
+            .map(|i| (i as u8).wrapping_mul(7).wrapping_add(k))
+            .collect()
+    }
+
+    /// A stored archive of `a` then `b`; returns its path and where `a`'s data starts.
+    fn stored_zip(tag: &str, a: &[u8], b: &[u8]) -> (PathBuf, u64) {
+        let p = std::env::temp_dir().join(format!("p5a-zs-{tag}-{}.zip", std::process::id()));
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&p).unwrap());
+        let o = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        z.start_file("a.bin", o).unwrap();
+        z.write_all(a).unwrap();
+        z.start_file("b.bin", o).unwrap();
+        z.write_all(b).unwrap();
+        z.finish().unwrap();
+        let (_, s) = ZipSource::open(&p, &[]).unwrap();
+        let start = s.files["a.bin"].0.data_start;
+        (p, start)
+    }
+
+    #[test]
+    fn a_corrupt_stored_entry_is_caught_by_a_resume_that_reads_only_its_tail() {
+        let (a, b) = (body(300_000, 1), body(1000, 2));
+        let (p, start) = stored_zip("tail", &a, &b);
+        let mut bytes = std::fs::read(&p).unwrap();
+        bytes[(start + 5) as usize] ^= 0xff; // bit rot far from the part that gets read
+        std::fs::write(&p, &bytes).unwrap();
+        let (_, s) = ZipSource::open(&p, &[]).unwrap();
+        let mut r = s.open_entry("a.bin").unwrap();
+        let mut buf = vec![0u8; 100_000];
+        // The resume sends only the last group: nothing before it is ever read.
+        let e = r.read_at(200_000, &mut buf).unwrap_err();
+        assert!(is_zip_corrupt(&e), "{e}");
+        // A clean entry passes the same resume.
+        let (p2, _) = stored_zip("tail-ok", &a, &b);
+        let (_, s2) = ZipSource::open(&p2, &[]).unwrap();
+        let mut r2 = s2.open_entry("a.bin").unwrap();
+        assert_eq!(r2.read_at(200_000, &mut buf).unwrap(), 100_000);
+        assert_eq!(&buf[..], &a[200_000..]);
+        let _ = std::fs::remove_file(p);
+        let _ = std::fs::remove_file(p2);
+    }
+
+    #[test]
+    fn a_stored_read_never_crosses_into_the_next_entry_and_sizes_must_agree() {
+        let (a, b) = (body(5000, 1), body(5000, 2));
+        let (p, _) = stored_zip("bound", &a, &b);
+        let (_, s) = ZipSource::open(&p, &[]).unwrap();
+        let mut r = s.open_entry("a.bin").unwrap();
+        let mut buf = vec![0u8; 8000];
+        assert_eq!(r.read_at(4000, &mut buf).unwrap(), 1000);
+        assert_eq!(&buf[..1000], &a[4000..]);
+        // An entry whose uncompressed size disagrees with its stored length is corrupt.
+        let mut s2 = ZipSource::open(&p, &[]).unwrap().1;
+        s2.files.get_mut("a.bin").unwrap().1.size = 6000;
+        let e = s2.open_entry("a.bin").err().expect("must refuse");
+        assert!(is_zip_corrupt(&e), "{e}");
+        let _ = std::fs::remove_file(p);
     }
 }

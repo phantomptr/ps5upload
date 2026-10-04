@@ -98,6 +98,13 @@ key, and the shared plaintext is unchanged.
   zero when the connection is `ava1_conn_init`ed, and the keys are installed once, in
   `ava1_server.c:880-882` (control) and `:1002-1004` (lane join), before the connection is
   used. A send that fails after the counter was spent marks the connection `broken`.
+* **C nonce byte layout (review 007 #3, stated):** the 12-byte AEAD nonce is bytes 0-3 = `00 00 00 00` and bytes
+  4-11 = the frame counter as a little-endian `uint64_t` (`nonce12()` in `ava1_noise.c`); the Rust side builds the
+  same bytes in `keys.rs` `nonce()`. Both counters are 64-bit (`send_ctr`/`recv_ctr`, `u64`), so there is no width
+  mismatch. It is pinned by `ava1-ctest` `aead.rs::the_c_nonce_is_four_zero_bytes_then_the_counter_little_endian` (the Rust
+  side sealed with the nonce bytes spelled out, the C `ava1_seal` byte-identical at counters 0, 1, 0x0102030405060708,
+  2^32 and the ceiling), and, through the connection, by `ava1_test_conn_open_frame` (a Rust-sealed frame opens in the
+  C connection).
 * The C `ava1_aead` counter wrap note (32-bit ChaCha block counter) is inside one frame
   (<= 16 MiB, far below 256 GiB) and is unrelated to the frame counter.
 

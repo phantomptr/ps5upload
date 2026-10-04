@@ -2,6 +2,7 @@
 #define PS5UPLOAD2_PROC_LIST_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 /* Layout offsets inside FreeBSD's kinfo_proc as exposed via
  * sysctl(KERN_PROC_PROC). Same offsets shellui_rpc.c uses. */
@@ -62,6 +63,13 @@ int proc_kill(int pid);
  * (guards against a recycled pid now owned by an unrelated process).
  */
 int proc_name_by_pid(int pid, char *out, size_t cap);
+
+/* ki_start of kinfo_proc (a struct timeval, FreeBSD amd64 offset 336): when the process started, in
+ * the clock domain of kern.boottime. 0 and *sec set when read; -1 when the process is gone or the
+ * record is too short. The value is only evidence once it passes instance_proc_start_plausible(): the
+ * offset is the FreeBSD one and has not been measured on every firmware. */
+#define KINFO_START_OFFSET   336
+int proc_start_by_pid(int pid, uint64_t *sec);
 
 /*
  * Find the first process whose thread-name matches `name` via

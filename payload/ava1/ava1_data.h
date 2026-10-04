@@ -56,7 +56,13 @@ typedef struct {
 #define AVA1_UNSWEPT_TOTAL (512ull << 20)
 #define AVA1_SWEEP_AGE_MS 3000u
 /* 1 when small files go through the pack log (the data layer's effective setting). */
-int ava1_data_log_small(void);
+/* Runtime off-switch (review 007 #5): when this file exists the console takes the per-file fsync path
+ * for every job OPENED from then on (a job decides once, at open, and never switches mid-job).
+ * Recovery of already-logged jobs ignores it. Same directory as the timing flag. */
+#define AVA1_LOG_SMALL_OFF_FLAG "/data/ps5upload/debug/ava1-log-small-off"
+extern const char *ava1_log_small_flag_path; /* AVA1_LOG_SMALL_OFF_FLAG; a test points it elsewhere */
+int ava1_data_log_small(void);               /* the answer a job opened now would take: 1 logged, 0 per-file */
+int ava1_data_log_small_flagged(void);       /* 1 when the debug flag file is present */
 /* Crash recovery of durable-by-log (SPEC.md §15.7): one pass over the jobs directory takes up to `max`
  * job directories that hold a pack log and nobody has open, re-makes their unswept files from the log and
  * sweeps them. Run at start and then by housekeeping, so a job that was reaped or crashed is finished
@@ -79,6 +85,10 @@ void ava1_budget_give(uint64_t n);
  * when unreadable). The apply engine's pending small-file descriptors, all jobs together,
  * stay within ava1_pend_share() (half of it); disk.calibrate holds at most that many. */
 uint32_t ava1_fd_budget(void);
+/* Reads and raises RLIMIT_NOFILE and probes the real descriptor ceiling (it opens descriptors until the
+ * kernel refuses, for a moment). Call it before any listener thread exists; the data layer's start then
+ * reuses the answer instead of starving the other threads of descriptors at boot. Idempotent. */
+void ava1_fd_limits_probe(void);
 uint32_t ava1_pend_share(void);
 /* Waits until a pending-fd slot is free, then takes it (before the open). Gives up (0) when
  * `stop` is set; `idle` runs between polls (the apply engine runs queued sync work there).
@@ -89,6 +99,19 @@ int ava1_pend_full(void);  /* the global pending-fd count has reached its share 
 /* Tests only: 0 = derive from the limit; else forces the budget. Peaks are high-water marks
  * since the last reset. */
 extern uint32_t ava1_data_test_fd_budget;
+/* Large-file descriptors (a part file, and an outboard from two groups up, per open file): all jobs
+ * share a quarter of the budget, one job half of that. try_reserve takes `n` or returns 0. */
+uint32_t ava1_lf_share(void);
+uint32_t ava1_lf_job_share(void);
+int ava1_lf_try_reserve(uint32_t n);
+void ava1_lf_release(uint32_t n);
+void ava1_lf_force_reserve(uint32_t n);
+uint32_t ava1_lf_peak(void);
+void ava1_lf_peak_reset(void);
+/* fsync of every job's journal and pack segments, for the exit watchdog (see ava1_exit_flush). Takes no
+ * job lock it cannot get at once. */
+void ava1_data_flush_for_exit(void);
+uint32_t ava1_pend_in_use(void);
 uint32_t ava1_pend_peak(void);
 void ava1_pend_peak_reset(void);
 extern uint32_t ava1_data_test_cal_peak; /* most fds disk.calibrate held at once */

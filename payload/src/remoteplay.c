@@ -470,7 +470,15 @@ static int g_rp_state = RP_STATE_IDLE;
 static char g_rp_err[128] = "";
 static char g_rp_pin[16] = "";
 static char g_rp_account_id[32] = "";
-static time_t g_rp_deadline = 0;
+/* CLOCK_MONOTONIC seconds (never 0 once armed): the date can be set under us (time.set, the app's clock
+ * sync), and a wall-clock deadline would then expire or never come (final review: console). */
+static int64_t g_rp_deadline = 0;
+
+static int64_t rp_mono_s(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec + 1; /* +1: a deadline is never 0, which means "none" */
+}
 
 /* Clear stale Remote Play pairing state.
  *
@@ -637,7 +645,7 @@ static int rp_request_locked(const char *manual_account_id) {
     pthread_mutex_lock(&g_rp_mtx);
     snprintf(g_rp_pin, sizeof(g_rp_pin), "%s", pin);
     g_rp_state = RP_STATE_WAITING;
-    g_rp_deadline = time(NULL) + RP_WAIT_SECONDS;
+    g_rp_deadline = rp_mono_s() + RP_WAIT_SECONDS;
     g_rp_err[0] = 0;
     pthread_mutex_unlock(&g_rp_mtx);
 
@@ -697,7 +705,7 @@ static int rp_get_status_locked(char *buf, size_t cap) {
             }
         }
         if (s == RP_STATE_WAITING && g_rp_deadline != 0) {
-            if (time(NULL) >= g_rp_deadline) {
+            if (rp_mono_s() >= g_rp_deadline) {
                 g_rp_state = RP_STATE_TIMEOUT;
                 s = RP_STATE_TIMEOUT;
                 if (g_notify_pin_err) (void)g_notify_pin_err(1);
@@ -709,7 +717,7 @@ static int rp_get_status_locked(char *buf, size_t cap) {
 
     int seconds_left = 0;
     if (s == RP_STATE_WAITING && g_rp_deadline != 0) {
-        time_t now = time(NULL);
+        int64_t now = rp_mono_s();
         if (now < g_rp_deadline) {
             seconds_left = (int)(g_rp_deadline - now);
         }

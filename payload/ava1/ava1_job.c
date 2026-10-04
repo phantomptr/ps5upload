@@ -77,6 +77,7 @@ static ava1_job_t *create(const uint8_t id[16], const uint8_t owner[32], const u
     memcpy(j->owner, owner, 32);
     j->refs = 2; /* the table's and the caller's */
     j->jnl.fd = -1;
+    j->log_small = ava1_data_log_small(); /* once: a job is consistently logged or consistently per-file */
     if (sid) {
         memcpy(j->sid, sid, 16);
         j->attached = 1;
@@ -232,6 +233,7 @@ static void job_destroy(ava1_job_t *j) {
             if (j->lf[i]) {
                 if (j->lf[i]->fd >= 0) close(j->lf[i]->fd);
                 if (j->lf[i]->ob_fd >= 0) close(j->lf[i]->ob_fd);
+                if (j->lf[i]->held) ava1_lf_release(j->lf[i]->held); /* its slots in the large-file budget */
                 ava1_rset_clear(&j->lf[i]->written);
                 ava1_rset_clear(&j->lf[i]->durable);
                 free(j->lf[i]);
@@ -239,6 +241,7 @@ static void job_destroy(ava1_job_t *j) {
         free(j->lf);
     }
     free(j->lfl);
+    free(j->lfo);
     ava1_jnl_close(&j->jnl);
     ava1_bits_free(&j->done);
     ava1_mstore_free(&j->m);

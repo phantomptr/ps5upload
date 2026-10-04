@@ -394,6 +394,8 @@ pub mod ffi {
         pub fn ava1_test_house_ticks() -> u32;
         pub fn ava1_test_unswept_total() -> u64;
         pub fn ava1_test_unswept_global_add(d: i64);
+        pub fn ava1_test_gc_boot(id: u64);
+        pub fn ava1_test_exit_flush_create_fails(fail: c_int) -> c_int;
         pub fn ava1_test_jobs_gc(jobs: *const c_char, age_s: i64, max_age_s: i64) -> c_int;
         pub fn ava1_test_recv_restart_noopen() -> c_int;
         pub fn ava1_test_data_stop_only();
@@ -401,6 +403,7 @@ pub mod ffi {
         pub fn ava1_test_apply_unswept() -> u32;
         pub fn ava1_test_apply_segments() -> u32;
         pub fn ava1_test_apply_hold_commit(on: c_int);
+        pub fn ava1_test_set_log_small_flag(path: *const c_char);
         pub fn ava1_test_apply_fault_prealloc(id: u32);
         pub fn ava1_test_apply_compact() -> c_int;
         pub fn ava1_test_apply_commits_inflight() -> u32;
@@ -1325,6 +1328,17 @@ pub fn c_data_clamp(start: u8, min: u8, max: u8) -> ([i32; 3], i32, i32) {
 }
 
 thread_local! {
+    /// The durable-by-log off-switch file the next job begun or opened on this thread checks.
+    static LOG_FLAG: std::cell::RefCell<Option<CString>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Points the console's runtime durable-by-log off-switch (review 007 #5) at `path` for jobs this
+/// thread begins or opens; the file's existence is what turns the logging off. None: the real path.
+pub fn c_set_log_small_flag(path: Option<&Path>) {
+    LOG_FLAG.with(|f| *f.borrow_mut() = path.map(|p| CString::new(p.to_str().unwrap()).unwrap()));
+}
+
+thread_local! {
     /// The same_device answer the next `CApplyJob::begin` on this thread installs.
     static SAME_DEVICE: std::cell::Cell<i32> = const { std::cell::Cell::new(1) };
 }
@@ -1517,8 +1531,17 @@ impl LogOpts {
         ..LogOpts::ON
     };
 
-    /// Hands the options to the C shim (the next job begun or opened takes them).
+    /// Hands the options to the C shim (the next job begun or opened takes them). The console's
+    /// durable-by-log off-switch file is this thread's `c_set_log_small_flag` (default: the real path).
     pub fn apply(&self) {
+        LOG_FLAG.with(|f| {
+            let f = f.borrow();
+            unsafe {
+                ffi::ava1_test_set_log_small_flag(
+                    f.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+                )
+            }
+        });
         let v = [
             self.mode as u64,
             self.pack_segment as u64,
@@ -2192,6 +2215,16 @@ pub fn house_ticks() -> u32 {
 /// receiver that cannot make its files durable.
 pub fn sweep_failures(n: i32) {
     unsafe { ffi::ava1_test_sweep_fail(n) }
+}
+
+/// Sets the boot identity the GC strikes use (0 = the real one).
+pub fn gc_boot(id: u64) {
+    unsafe { ffi::ava1_test_gc_boot(id) }
+}
+
+/// ava1_exit_flush with its thread creation failing (or not): its result.
+pub fn exit_flush_create_fails(fail: bool) -> i32 {
+    unsafe { ffi::ava1_test_exit_flush_create_fails(fail as i32) }
 }
 
 /// `ava1_jobs_gc` over `jobs` as if `age_s` seconds had passed and the limit were `max_age_s`: how

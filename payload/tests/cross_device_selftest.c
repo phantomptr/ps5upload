@@ -128,6 +128,25 @@ int main(void) {
     CHECK(XDEV_CROSSES != XDEV_UNKNOWN);
     CHECK(XDEV_SAME != XDEV_CROSSES);
 
+    /* A destination longer than any fixed buffer is UNKNOWN, never a truncated (wrong) parent. */
+    {
+        char longp[5000];
+        memset(longp, 'x', sizeof longp);
+        memcpy(longp, "/data/", 6);
+        longp[sizeof longp - 3] = '/';
+        longp[sizeof longp - 2] = 'y';
+        longp[sizeof longp - 1] = '\0';
+        CHECK(xdev_rename_crosses("/mnt/usb0/a.pkg", longp, fake_dev) == XDEV_UNKNOWN);
+        /* but a long parent that fits is still judged whole */
+        longp[900] = '\0';
+        CHECK(xdev_rename_crosses("/data/a.pkg", longp, fake_dev) == XDEV_SAME);
+    }
+
+    /* Fail closed (review 007 #4): only SAME is safe to rename; UNKNOWN is refused. */
+    CHECK(xdev_rename_is_safe(XDEV_SAME));
+    CHECK(!xdev_rename_is_safe(XDEV_CROSSES));
+    CHECK(!xdev_rename_is_safe(XDEV_UNKNOWN));
+
     printf("cross_device_selftest: %s\n", failures == 0 ? "ALL PASS" : "FAILED");
     return failures == 0 ? 0 : 1;
 }

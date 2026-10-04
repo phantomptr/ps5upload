@@ -404,3 +404,165 @@ fn a_compacted_journal_still_names_the_unswept_files_so_a_restart_recovers_them(
     assert_eq!(ids_done(&ev).len(), n, "{ev}");
     all_there(&t, n);
 }
+
+// ---- review 007 #5: the runtime off-switch (/data/ps5upload/debug/ava1-log-small-off) ----
+
+/// A job begun with the flag file present (and the engine ON) takes the per-file path: every file is
+/// fsynced, nothing waits for a sweep and no pack segment exists.
+fn flagged_job(t: &std::path::Path, tag: &str, n: usize) -> CApplyJob {
+    let root = t.join(tag);
+    std::fs::create_dir_all(&root).unwrap();
+    let job = CApplyJob::begin_opts(
+        &t.join(format!("jobs-{tag}")),
+        &root,
+        0,
+        &small(n, true),
+        0,
+        0,
+        slow_sweep(),
+    );
+    job.hold_batches(true);
+    for i in 0..n {
+        send(&job, i);
+    }
+    job.wait_pending(n as u32, 10_000);
+    job
+}
+
+#[test]
+fn the_flag_file_turns_durable_by_log_off_for_a_job_opened_while_it_exists() {
+    let t = tmp("flag-on");
+    let flag = t.join("ava1-log-small-off");
+    c_set_log_small_flag(Some(&flag));
+    let n = 50;
+    // flag absent: logged (two fsyncs per batch, every file unswept until the sweep)
+    {
+        let job = flagged_job(&t, "a", n);
+        let c0 = job.fsync_calls();
+        job.hold_batches(false);
+        job.wait_event("durable", 10_000);
+        assert_eq!(job.fsync_calls() - c0, 2, "logged batch");
+        assert_eq!(job.unswept() as usize, n);
+    }
+    // flag present: the per-file path, no log
+    std::fs::write(&flag, b"").unwrap();
+    {
+        let job = flagged_job(&t, "b", n);
+        let c0 = job.fsync_calls();
+        job.hold_batches(false);
+        job.wait_event("durable", 10_000);
+        assert!(job.fsync_calls() - c0 >= n as u32, "per-file fsyncs");
+        assert_eq!(job.unswept(), 0, "nothing waits for a sweep");
+        assert_eq!(job.segments(), 0, "no pack segment was created");
+        for i in 0..n {
+            assert_eq!(std::fs::read(t.join(format!("b/d/{i}"))).unwrap(), body(i));
+        }
+    }
+    // flag removed again: the next job is logged (toggled between jobs, no restart)
+    std::fs::remove_file(&flag).unwrap();
+    {
+        let job = flagged_job(&t, "c", n);
+        job.hold_batches(false);
+        job.wait_event("durable", 10_000);
+        assert_eq!(job.unswept() as usize, n, "logged again");
+    }
+    c_set_log_small_flag(None);
+}
+
+#[test]
+fn a_job_never_switches_paths_when_the_flag_appears_mid_job() {
+    let t = tmp("flag-mid");
+    let flag = t.join("ava1-log-small-off");
+    c_set_log_small_flag(Some(&flag));
+    let n = 40;
+    let job = flagged_job(&t, "a", n); // opened without the flag: logged
+    std::fs::write(&flag, b"").unwrap(); // an operator flips it while the job runs
+    let c0 = job.fsync_calls();
+    job.hold_batches(false);
+    job.wait_event("durable", 10_000);
+    assert_eq!(job.fsync_calls() - c0, 2, "the job stayed logged");
+    assert_eq!(job.unswept() as usize, n);
+    drop(job);
+    c_set_log_small_flag(None);
+}
+
+#[test]
+fn recovery_runs_for_a_logged_job_even_when_the_flag_is_set() {
+    // The flag only decides how NEW jobs write. A crashed logged job's journal names pack records that
+    // must still be recovered (files lost with the page cache come back from the log).
+    let t = tmp("flag-recover");
+    let flag = t.join("ava1-log-small-off");
+    c_set_log_small_flag(Some(&flag));
+    let n = 40;
+    std::fs::create_dir_all(t.join("dest")).unwrap();
+    let m = small(n, false);
+    let r = CRecv::open_opts(
+        &t.join("jobs"),
+        &t.join("dest"),
+        0,
+        gen::POLICY_REPLACE,
+        2,
+        LogOpts::ON,
+    );
+    r.manifest(&m);
+    r.wait_event("map status=0", 5000);
+    r.hold_batches(true);
+    for i in 0..n {
+        send(&r, i);
+    }
+    r.wait_pending(n as u32, 5000);
+    r.hold_batches(false);
+    r.wait_stopped(10_000);
+    for i in 0..20 {
+        std::fs::remove_file(t.join(format!("dest/d/{i}"))).unwrap();
+    }
+    std::fs::write(&flag, b"").unwrap(); // the operator turns the log off, then the helper restarts
+    let r = r.restart(0);
+    r.manifest(&m);
+    let ev = r.wait_event("map status=0", 5000);
+    assert_eq!(ids_done(&ev).len(), n, "{ev}");
+    assert_eq!(r.wait(15_000), 0, "{}", r.events());
+    all_there(&t, n);
+    drop(r);
+    c_set_log_small_flag(None);
+}
+
+/// Review 007 #8: the sweep's first pass checks content, not only size. A file whose size is right
+/// but whose bytes are not (zero-filled blocks after a power cut, a damaged page) is re-made from
+/// its log record before it is fsynced and its record released.
+#[test]
+fn the_sweep_remakes_a_file_with_the_right_size_and_the_wrong_bytes() {
+    let t = tmp("sweep-content");
+    let root = t.join("dest");
+    std::fs::create_dir_all(&root).unwrap();
+    let n = 10;
+    let job = CApplyJob::begin_opts(
+        &t.join("jobs"),
+        &root,
+        0,
+        &small(n, false),
+        0,
+        0,
+        slow_sweep(), // nothing sweeps until the job ends
+    );
+    job.hold_batches(true);
+    for i in 0..n {
+        send(&job, i);
+    }
+    job.wait_pending(n as u32, 10_000);
+    job.hold_batches(false);
+    job.wait_event("durable", 10_000);
+    assert_eq!(job.unswept() as usize, n);
+    std::fs::write(root.join("d/3"), b"zzzz").unwrap(); // same size (4), wrong content
+    std::fs::remove_file(root.join("d/7")).unwrap(); // and a lost one: the live sweep re-makes it from its own record
+    std::fs::write(root.join("d/9"), b"zz").unwrap(); // and a short one
+    assert_eq!(job.wait(15_000), 0, "{}", job.events());
+    settled(&job);
+    for i in 0..n {
+        assert_eq!(
+            std::fs::read(root.join(format!("d/{i}"))).unwrap(),
+            body(i),
+            "file {i}"
+        );
+    }
+}

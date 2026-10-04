@@ -170,8 +170,11 @@ kept.
       download fix `b1be8059`), and the Phat never ran part 2. Re-run the whole table on both, on all
       three drives each (Pro: `/data`, `/mnt/usb0`, `/mnt/ext1`; Phat: `/data`, `/mnt/usb0`,
       `/mnt/ext0`).
-- [ ] **The engine's `auto` mode must not ship before that pass is green.** Until then the default
-      stays FTX2 for any release that goes to users.
+- [ ] **No release from this branch until the §3 gates are green; the last FTX2 release remains the
+      shipped version until then** (review 007 #2, option a). AVA1 is the only transport in this branch
+      (there is no in-branch fallback or kill-switch), so the hardware pass below is a hard gate, not a
+      default to flip: users stay on the last FTX2 release, and nothing is published from here until every
+      box in this section is checked on one commit.
 - [ ] **The Pro outage of 2026-10-03 is investigated.** At about 09:10 the Pro stopped answering ping and
       every port shortly after an instrumented helper (extra stderr timing lines only) was sent;
       the last keep-awake acknowledgement was 09:10:50. Cause unknown: the console may have gone to
@@ -189,7 +192,9 @@ kept.
       diff.
 - [ ] Code items the SPEC states and the code does not yet do (see the Task 29 report): the console
       receiver's `ERR_CREDIT` handling ends the lane, not the session (`ava1_data.c:1288`);
-      `Resume` does not re-send credit and the engine's host ignores `Resume`;
+      (`Resume` credit: done, see review 007 #7 in `EVAL-007.md`: both receivers re-send the grant as a
+      `Credit`, `SPEC.md` §11.5, pinned by `wire_upload::a_resume_after_a_dropped_session_sends_credit_and_the_job_completes`
+      and `data_rust` `resume`);
       the engine's `LocalSink` re-hashes more than the console does on resume (allowed, see §13.4).
 - [ ] The workspace gate is green on the release commit: `cargo fmt --check`, `cargo clippy --workspace
       --all-targets -- -D warnings`, `cargo test --workspace`, `cargo test -p ava1-ctest -- --test-threads=1`,
@@ -409,6 +414,20 @@ Deferred (recorded here, not done):
 - The slow-drive switch is one-way for the life of the job and never reverts; a drive that recovers
   (a USB hub contention that ends) keeps paying one small flush per chunk.
 
+### 4.2.1 Hardware run notes: debug flag files (review 007)
+
+Both are plain files under `/data/ps5upload/debug/`, read by the helper; create or delete them over FTP or the file manager.
+
+| file | effect | read |
+|------|--------|------|
+| `ava1-timing` | the periodic per-batch stage line and the sender's stage timers | on every job |
+| `ava1-log-small-off` | durable-by-log off for jobs opened while it exists (§4.3); recovery still runs | at every JobOpen |
+
+Capture with the timing flag on for every row of §4: the end-of-job line (`dirs` near 0 is the durable-by-log signature),
+`preallocate took N ms`, any `slow drive: ... fsync per chunk from now on`, and the `recovered N logged files, M lost (resent)`
+line after a crash test. If a console incident follows a run, repeat it with `ava1-log-small-off` present: if the incident
+disappears the log path is implicated, and no reflash was needed to find out.
+
 ### 4.3 Durable-by-log small files (review 003 §3.2; not yet measured on hardware)
 
 The receiver (console and engine) appends each small file to a pack log (`<job dir>/pack.<n>`), fsyncs the log
@@ -424,8 +443,13 @@ tiny-file and game-corpus row of §4 must be re-run on the consoles.
 
 How to read a run: the console's end-of-job line (`finished in N ms ... data fsync ... dirs ...`) should show
 `dirs` near 0 during the transfer; `recovered N logged files, M lost (resent)` appears at helper start or JobOpen
-after a crash. Knobs (`ava1_data_cfg`): `log_small` (default on; `AVA1_LOG_SMALL_OFF` restores the per-file path for
-this release), `pack_segment` (64 MiB), `unswept_max` (256 MiB), `sweep_age_ms` (3000).
+after a crash. **Runtime off-switch (review 007 #5):** create the file `/data/ps5upload/debug/ava1-log-small-off` on the
+console (any content) and every upload job *opened from then on* takes the per-file fsync path, with no helper rebuild and no
+restart; delete the file to turn the log back on. A job decides once, at open, and never switches mid-job. The helper prints
+`[ava1] job XXXXXXXX: durable-by-log OFF (debug flag)` to `/data/ps5upload/stderr.log` at the start of such a job, so a run's
+stderr says which path produced its numbers. Recovery ignores the switch: a crashed logged job's pack files are still
+replayed at helper start or JobOpen. Knobs (`ava1_data_cfg`): `log_small` (default on; `AVA1_LOG_SMALL_OFF` is the compile-time
+equivalent, kept for this release), `pack_segment` (64 MiB), `unswept_max` (256 MiB), `sweep_age_ms` (3000).
 
 Engine (`LocalSink`, downloads): on by default except on macOS, where it measured slower on loopback (2,270 vs
 2,870 files/s for 2,000 tiny files; a plain fsync never reaches the drive there). `PS5UPLOAD_AVA1_LOG_SMALL=1/0`
@@ -437,6 +461,14 @@ Failure paths (review dbl): a failed sweep is retried with a backoff and, after 
 stops waiting (30 s, or a cancel). Housekeeping recovers parked, reaped and crashed job directories that hold a log;
 the console's job GC never touches one. The engine's own job GC (`journal::gc`) does not special-case pack files:
 an engine download settles everything before it ends, so a directory it left behind promised nothing to anyone.
+
+Sweep content check (review 007 #8, done): the sweep's first pass compares the file's BLAKE3 with its log record's before it
+fsyncs and releases the record, so a file with the right size and wrong bytes (zero-filled blocks after a power cut) is re-made
+from the log instead of being made durable as is. The reasoning held: the file was just written and is in the page cache, the
+record is a sequential read, files are bounded by `PACK_REC_MAX`, and the check never fails a sound file (an unreadable record
+skips it). Writing the test found a real bug the check exposed: the sync batch sorted its file ids but not their record
+locations, so the sweep queue and the per-segment journal ranges paired ids with other files' records, and a live re-make
+failed with `EIO`. Both arrays are now sorted together.
 
 Deferred:
 

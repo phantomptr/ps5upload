@@ -396,9 +396,25 @@ fn gc_never_removes_a_job_directory_that_holds_a_log_until_a_long_ceiling() {
         job_dir(&jobs, &[7; 16]).exists(),
         "gc removed a job that still holds its log"
     );
-    // a log that recovery could not settle in a week beyond the normal age is given up on, and says so
-    let removed = jobs_gc(&jobs, 20 * 86_400, 86_400);
-    assert_eq!(removed, 1, "the ceiling never came");
+    // a log that recovery could not settle in a week beyond the normal age is given up on, and says so, but
+    // not on one boot's wall clock (a clock moved forward would age every log at once): it takes three
+    // boots that each saw it past the ceiling (final review: console)
+    for strike in 1..=2u64 {
+        gc_boot(100 + strike);
+        assert_eq!(
+            jobs_gc(&jobs, (20 + strike as i64) * 86_400, 86_400),
+            0,
+            "strike {strike}: the clock alone must not take a log"
+        );
+        assert!(job_dir(&jobs, &[7; 16]).exists());
+    }
+    gc_boot(103);
+    let removed = jobs_gc(&jobs, 23 * 86_400, 86_400);
+    gc_boot(0);
+    assert_eq!(
+        removed, 1,
+        "three boots, a day apart, saw it past the ceiling"
+    );
     assert!(!job_dir(&jobs, &[7; 16]).exists());
 }
 
@@ -415,11 +431,108 @@ fn a_directory_recovery_cannot_open_is_kept_for_a_while_and_then_given_up() {
         0,
         "kept: it holds a log"
     );
+    gc_boot(201);
+    assert_eq!(jobs_gc(&jobs, 20 * 86_400, 86_400), 0, "strike 1");
+    gc_boot(202);
+    assert_eq!(jobs_gc(&jobs, 21 * 86_400, 86_400), 0, "strike 2");
+    gc_boot(203);
     assert_eq!(
-        jobs_gc(&jobs, 20 * 86_400, 86_400),
+        jobs_gc(&jobs, 22 * 86_400, 86_400),
         1,
-        "given up after the ceiling"
+        "given up after the ceiling, three boots a day apart"
     );
+    gc_boot(0);
+}
+
+/// Final review (console), re-review: strikes count boots, not starts. Any number of re-sends within one boot,
+/// or boots less than a day apart (a clock set wrong), add one strike at most.
+#[test]
+fn gc_strikes_do_not_accumulate_within_a_boot_or_within_a_day() {
+    let t = tmp("gc-strikes");
+    let jobs = t.join("jobs");
+    let d = jobs.join("babababababababababababababababa");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("journal"), b"x").unwrap();
+    std::fs::write(d.join("pack.0"), b"AVA1PCK1").unwrap();
+    gc_boot(301);
+    for _ in 0..10 {
+        assert_eq!(
+            jobs_gc(&jobs, 20 * 86_400, 86_400),
+            0,
+            "re-sends in one boot"
+        );
+    }
+    // new boots, but only hours apart
+    for (i, b) in (302..306u64).enumerate() {
+        gc_boot(b);
+        assert_eq!(
+            jobs_gc(&jobs, 20 * 86_400 + (i as i64 + 1) * 3600, 86_400),
+            0,
+            "boot {b} an hour later"
+        );
+    }
+    assert!(d.exists(), "a log was collected without three real boots");
+    gc_boot(0);
+}
+
+/// A directory stamped in the future is skipped alone; the others are still collected.
+#[test]
+fn a_future_stamped_directory_does_not_stop_the_gc_of_the_others() {
+    let t = tmp("gc-future");
+    let jobs = t.join("jobs");
+    let old = jobs.join("1111aaaa1111aaaa1111aaaa1111aaaa");
+    let fut = jobs.join("2222bbbb2222bbbb2222bbbb2222bbbb");
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::create_dir_all(&fut).unwrap();
+    let day = std::time::Duration::from_secs(86_400);
+    let now = std::time::SystemTime::now();
+    std::fs::File::open(&old)
+        .unwrap()
+        .set_modified(now - day * 30)
+        .unwrap();
+    std::fs::File::open(&fut)
+        .unwrap()
+        .set_modified(now + day * 10)
+        .unwrap();
+    assert_eq!(jobs_gc(&jobs, 0, 86_400), 1);
+    assert!(!old.exists() && fut.exists());
+}
+
+/// Final review (console): `time(NULL)` is the wall clock, and the console's clock is set by the user and
+/// by the app. A clock that is wrong must not delete resumable job directories.
+#[test]
+fn gc_does_nothing_when_the_clock_is_implausible_or_behind_a_jobs_own_stamp() {
+    let t = tmp("gc-clock");
+    let jobs = t.join("jobs");
+    let old = jobs.join("cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd");
+    std::fs::create_dir_all(&old).unwrap();
+    // Thirty days old: an ordinary collection.
+    let thirty = std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 86_400);
+    std::fs::File::open(&old)
+        .unwrap()
+        .set_modified(thirty)
+        .unwrap();
+    // Before 2024 (the console's clock reset to its epoch): the age of everything is nonsense.
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    assert_eq!(jobs_gc(&jobs, 1_000_000 - now_unix, 86_400), 0);
+    assert!(old.exists(), "an implausible clock took a job directory");
+    // A clock moved back two days: the fresh directory is stamped in the future and is skipped; the old one
+    // (30 days, still 28 days old) is collected, since one future stamp must not stop the rest.
+    let fresh = jobs.join("efefefefefefefefefefefefefefefef");
+    std::fs::create_dir_all(&fresh).unwrap();
+    assert_eq!(jobs_gc(&jobs, -2 * 86_400, 86_400), 1);
+    assert!(fresh.exists(), "a future-stamped directory was collected");
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::File::open(&old)
+        .unwrap()
+        .set_modified(thirty)
+        .unwrap();
+    // A sane clock collects the old directory as before.
+    assert_eq!(jobs_gc(&jobs, 0, 86_400), 1);
+    assert!(!old.exists() && fresh.exists());
 }
 
 #[test]
@@ -509,7 +622,15 @@ fn start_recovery_takes_a_few_job_directories_and_housekeeping_the_rest() {
         ..slow()
     };
     let r = CRecv::open_opts(&jobs, &t.join("dest9"), 0, gen::POLICY_REPLACE, 0, opts);
-    let left = [1u8, 2, 3].iter().filter(|b| packs(&jobs, **b) > 0).count();
+    // The start's pass runs on the recovery thread: wait for it to take its one directory.
+    let t1 = std::time::Instant::now();
+    let left = loop {
+        let left = [1u8, 2, 3].iter().filter(|b| packs(&jobs, **b) > 0).count();
+        if left < 3 || t1.elapsed().as_secs() > 10 {
+            break left;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
     assert_eq!(left, 2, "start recovery is capped at recover_max");
     let t0 = std::time::Instant::now();
     while [1u8, 2, 3].iter().any(|b| packs(&jobs, *b) > 0) {
@@ -573,6 +694,15 @@ fn start_time_recovery_alone_restores_lost_files_without_any_jobopen() {
         }
     });
     let r = r.restart_without_open();
+    // The start's recovery pass runs on the recovery thread now (the listeners no longer wait for it).
+    let t0 = std::time::Instant::now();
+    while packs(&t.join("jobs"), 7) > 0 {
+        assert!(
+            t0.elapsed().as_secs() < 20,
+            "the start-time pass never recovered the log"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     all_there(&t, 30);
     let jobs = t.join("jobs");
     assert!(replay(&jobs, 7).0.unswept.is_empty());
@@ -900,5 +1030,26 @@ fn stopping_the_data_layer_during_a_slow_recovery_pass_returns_promptly() {
         took < std::time::Duration::from_millis(450),
         "the stop waited {took:?} behind the recovery pass"
     );
+    drop(r);
+}
+
+/// Final review (console): the start-time pass runs on the recovery thread, so ava1_data_start returns
+/// at once; until the pass ends a JobOpen for a job that holds a log is answered BUSY, never served from
+/// state recovery has not yet restored.
+#[test]
+fn a_jobopen_before_the_start_pass_has_run_for_a_job_with_a_log_is_told_to_retry() {
+    let (r, t, m) = crash_then("early-open", 2, false, 20, |_| {});
+    let _ = (&t, &m);
+    drop(r);
+    // (the BUSY-then-resumes behaviour of an open racing a pass is covered by
+    // a_jobopen_during_a_recovery_pass_is_told_to_retry_and_then_resumes; this one only pins that
+    // the start returned and the pass completed on its own thread)
+    let jobs = t.join("jobs");
+    let r = CRecv::open_opts(&jobs, &t.join("dest"), 0, gen::POLICY_REPLACE, 0, slow());
+    let t0 = std::time::Instant::now();
+    while packs(&jobs, 7) > 0 {
+        assert!(t0.elapsed().as_secs() < 20, "the start-time pass never ran");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     drop(r);
 }

@@ -733,6 +733,8 @@ struct Fake {
     copies: u32,
     /// Release the job once this many copies have been issued (0 = never).
     release_at: u32,
+    /// Hold every `job.status` reply for this long (a console that has wedged).
+    hang_status: Duration,
 }
 
 fn fake_rpc(f: Arc<Mutex<Fake>>) -> RpcHandler {
@@ -740,6 +742,10 @@ fn fake_rpc(f: Arc<Mutex<Fake>>) -> RpcHandler {
     Box::new(move |method, body| {
         if method == gen::METHOD_NODE_INFO {
             return base(method, body);
+        }
+        let hang = f.lock().unwrap().hang_status;
+        if method == gen::METHOD_JOB_STATUS && !hang.is_zero() {
+            std::thread::sleep(hang);
         }
         let mut f = f.lock().unwrap();
         f.calls.push(method);
@@ -918,6 +924,32 @@ async fn a_console_copy_cancel_signals_the_job() {
     );
     assert!(fake.lock().unwrap().calls.contains(&gen::METHOD_JOB_CANCEL));
     assert!(op_snapshot(7003).is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_does_not_wait_on_a_status_call_the_console_never_answers() {
+    let d = temp("copy-hang");
+    let fake = Arc::new(Mutex::new(Fake {
+        end_state: 1,
+        ..Default::default()
+    }));
+    let pool = fake_pool(&d, fake.clone()).await;
+    let job = tokio::spawn(run_copy(pool, 7010, false, false));
+    wait_until("the copy is running", || {
+        op_snapshot(7010).is_some_and(|s| s.bytes_copied == 1000)
+    })
+    .await;
+    fake.lock().unwrap().hang_status = Duration::from_secs(6);
+    tokio::time::sleep(Duration::from_millis(600)).await; // the next poll is now hanging
+    let t = std::time::Instant::now();
+    assert!(op_cancel(7010));
+    let e = job.await.unwrap().unwrap_err();
+    assert_eq!(e.to_string(), "cancelled");
+    assert!(
+        t.elapsed() < Duration::from_secs(4),
+        "the cancel waited {:?} on a hung call",
+        t.elapsed()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

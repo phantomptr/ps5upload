@@ -189,6 +189,65 @@ fn c_commit_refuses_cross_device_rename() {
 }
 
 #[test]
+fn c_commit_refuses_an_unknown_device_and_never_renames() {
+    // review 007 #4 (HW-1): "could not tell" must fail closed like "another drive".
+    let t = tmp("xdev-unknown");
+    let root = t.join("dest");
+    std::fs::create_dir_all(&root).unwrap();
+    let d = data(2 * GROUP as usize + 1, 3);
+    let m = Manifest {
+        entries: vec![file("big", d.len() as u64)],
+    };
+    c_set_same_device(-1); // the device query itself failed
+    let job = CApplyJob::begin(&t.join("jobs"), &root, 0, &m, 0);
+    send_large(&job, 0, &d, false);
+    assert_eq!(job.wait(10_000), ava1::gen::ERR_IO as i32);
+    c_set_same_device(1);
+    assert!(root.join("big.ava-part").exists());
+    assert!(!root.join("big").exists());
+}
+
+#[test]
+fn c_commit_with_no_device_hook_refuses_and_never_renames() {
+    // final review fs #1: a missing same_device hook is not "no guard needed".
+    let t = tmp("xdev-nohook");
+    let root = t.join("dest");
+    std::fs::create_dir_all(&root).unwrap();
+    let d = data(2 * GROUP as usize + 1, 3);
+    let m = Manifest {
+        entries: vec![file("big", d.len() as u64)],
+    };
+    c_set_same_device(-2); // the shim installs no hook at all
+    let job = CApplyJob::begin(&t.join("jobs"), &root, 0, &m, 0);
+    send_large(&job, 0, &d, false);
+    assert_eq!(job.wait(10_000), ava1::gen::ERR_IO as i32);
+    c_set_same_device(1);
+    assert!(root.join("big.ava-part").exists());
+    assert!(!root.join("big").exists());
+}
+
+#[test]
+fn a_staged_tree_is_not_moved_when_the_device_is_unknown_or_another() {
+    for (v, code) in [(-1, ava1::gen::ERR_IO), (0, ava1::gen::ERR_CROSS_DEVICE)] {
+        let t = tmp(&format!("tree-xdev{v}"));
+        let root = t.join("dest");
+        let m = Manifest {
+            entries: vec![file("a", 1), file("b", 1)],
+        };
+        c_set_same_device(v);
+        let job = CApplyJob::begin(&t.join("jobs"), &root, 0, &m, 0);
+        job.record(0, b"1", *blake3::hash(b"1").as_bytes());
+        job.record(1, b"2", *blake3::hash(b"2").as_bytes());
+        assert_eq!(job.wait(10_000), code as i32, "same_device={v}");
+        c_set_same_device(1);
+        assert!(!root.exists(), "the tree was renamed into place (v={v})");
+        assert!(Path::new(&format!("{}.ava-part", root.display()))
+            .join("a")
+            .exists());
+    }
+}
+
+#[test]
 fn a_staged_tree_is_not_moved_over_a_root_that_appeared() {
     let t = tmp("exists");
     let root = t.join("dest");
@@ -662,5 +721,40 @@ fn a_retried_fsync_on_a_large_file_is_reread_against_the_outboard() {
         ava1::gen::ERR_IO as i32,
         "{}",
         job.events()
+    );
+}
+
+extern "C" {
+    fn ava1_test_apply_fail_batch_alloc(on: i32);
+    fn ava1_pend_in_use() -> u32;
+}
+
+/// Final review (console): a sync batch that ran out of memory before its lists existed went
+/// `goto out` with the descriptor count still 0, so ava1_pend_release(0) left every reservation of the
+/// pending small files taken for good, and the pending-fd budget shrank with each failed batch.
+#[test]
+fn a_sync_batch_that_runs_out_of_memory_gives_its_pending_slots_back() {
+    let t = tmp("batch-oom");
+    let root = t.join("dest");
+    let n = 40usize;
+    let mut entries = vec![dir("a")];
+    for i in 0..n {
+        entries.push(file(&format!("a/f{i:03}"), 5));
+    }
+    let m = Manifest { entries };
+    let before = unsafe { ava1_pend_in_use() };
+    {
+        let job = CApplyJob::begin(&t.join("jobs"), &root, 0, &m, 0);
+        unsafe { ava1_test_apply_fail_batch_alloc(1) };
+        for i in 0..n {
+            job.record(i as u32 + 1, b"hello", *blake3::hash(b"hello").as_bytes());
+        }
+        assert_eq!(job.wait(15_000), ava1::gen::ERR_IO as i32);
+    }
+    unsafe { ava1_test_apply_fail_batch_alloc(0) };
+    assert_eq!(
+        unsafe { ava1_pend_in_use() },
+        before,
+        "the failed batch leaked its pending-fd reservations"
     );
 }

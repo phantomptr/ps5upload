@@ -48,7 +48,8 @@ static int may_read(const char *p, int unsafe_read) {
     return is_path_allowed(p) || (unsafe_read && is_safe_unsafe_read_path(p));
 }
 
-/* 1 same device, 0 crosses (refuse: a cross-device rename panics this kernel), -1 unknown. */
+/* 1 same device, 0 crosses (refuse: a cross-device rename panics this kernel), -1 unknown.
+ * Callers treat anything but 1 as a refusal: unknown is never "same" (review 007 #4). */
 static int same_device(const char *from, const char *to_dir) {
     unsigned long long a, b;
     if (xdev_lstat_dev(from, &a) != 0 || xdev_stat_dev(to_dir, &b) != 0) return -1;
@@ -175,6 +176,8 @@ static volatile int g_ava1_state;
 const char *ava1_payload_state(void) {
     return g_ava1_state == 1 ? "up" : g_ava1_state == 2 ? "failed" : "starting";
 }
+
+void ava1_payload_refused(void) { g_ava1_state = 2; }
 
 static int ava1_payload_start_inner(void);
 

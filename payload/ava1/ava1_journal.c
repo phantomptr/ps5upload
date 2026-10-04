@@ -7,6 +7,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/time.h>
+#if defined(__APPLE__) || defined(__FreeBSD__)
+#include <sys/sysctl.h>
+#endif
 #include <time.h>
 #include <unistd.h>
 
@@ -383,12 +387,98 @@ int ava1_dir_has_pack(const char *dir) {
 }
 
 #define AVA1_PACK_GC_GRACE_S (7 * 86400)
+/* A clock before this is a clock that was reset, not the time (the payload did not exist before 2024). */
+#define AVA1_GC_MIN_CLOCK 1704067200
+/* How many starts must each see a log past its ceiling before it is given up on. */
+#define AVA1_GC_STRIKES 3
 
+uint64_t ava1_gc_test_boot_id; /* tests: nonzero replaces the real boot identity */
+
+/* Identifies this boot: kern.boottime seconds (the PS5 kernel moves it with a clock set, so it is only half the
+ * guard; the 24 h spacing below is the other half). */
+static uint64_t gc_boot_id(void) {
+    uint64_t t = __atomic_load_n(&ava1_gc_test_boot_id, __ATOMIC_SEQ_CST);
+    if (t) return t;
+#if defined(__APPLE__) || defined(__FreeBSD__)
+    {
+        struct timeval bt;
+        size_t len = sizeof bt;
+        int mib[2] = {CTL_KERN, KERN_BOOTTIME};
+        if (sysctl(mib, 2, &bt, &len, NULL, 0) == 0 && bt.tv_sec > 0) return (uint64_t)bt.tv_sec;
+    }
+#else
+    {
+        FILE *f = fopen("/proc/sys/kernel/random/boot_id", "r");
+        char b[64];
+        uint64_t h = 1469598103934665603ull;
+        size_t i, n = 0;
+        if (f) {
+            n = fread(b, 1, sizeof b, f);
+            fclose(f);
+        }
+        for (i = 0; i < n; i++) h = (h ^ (uint8_t)b[i]) * 1099511628211ull;
+        if (n) return h | 1;
+    }
+#endif
+    return 0;
+}
+
+#define AVA1_GC_STRIKE_SPACING_S 86400
+
+/* A start has seen `dir` (a job directory with a log) past its ceiling. A strike counts only when it is from
+ * another boot than the previous strike AND at least 24 h after it (by the wall stamp stored with it), so a
+ * helper re-sent three times in a row, or a clock set wrong, cannot add up to a deletion. <dir>/gc.strikes
+ * holds "count boot stamp". Returns the count (0 when it cannot count: never give up). The directory's mtime is
+ * put back, since it is the age being counted. */
+static int gc_strike(const char *dir, const struct stat *st, int64_t now_unix) {
+    char fp[760], buf[96];
+    int fd, n = 0;
+    unsigned long long pboot = 0;
+    long long pstamp = 0;
+    uint64_t boot = gc_boot_id();
+    ssize_t k;
+    if (!boot) return 0;
+    snprintf(fp, sizeof fp, "%s/gc.strikes", dir);
+    fd = open(fp, O_RDWR | O_CREAT, 0600);
+    if (fd < 0) return 0;
+    k = read(fd, buf, sizeof buf - 1);
+    if (k > 0) {
+        buf[k] = '\0';
+        if (sscanf(buf, "%d %llu %lld", &n, &pboot, &pstamp) != 3 || n < 0 || n > 1000) n = 0, pboot = 0, pstamp = 0;
+    }
+    if (n == 0 || (pboot != boot && now_unix - pstamp >= AVA1_GC_STRIKE_SPACING_S)) {
+        n++;
+        k = snprintf(buf, sizeof buf, "%d %llu %lld", n, (unsigned long long)boot, (long long)now_unix);
+        if (lseek(fd, 0, SEEK_SET) == 0 && ftruncate(fd, 0) == 0) (void)write(fd, buf, (size_t)k);
+    }
+    close(fd);
+    {
+        struct timeval tv[2];
+        tv[0].tv_sec = tv[1].tv_sec = st->st_mtime;
+        tv[0].tv_usec = tv[1].tv_usec = 0;
+        (void)utimes(dir, tv);
+    }
+    return n;
+}
+
+/* Collects job directories idle for more than max_age_s by `now_unix`, a WALL clock (file mtimes are wall
+ * time). The wall clock is the user's to set, so (final review: console):
+ *   - before 2024 it is a reset clock: nothing is collected;
+ *   - a job stamped in the future (clock moved back) is skipped, and only it;
+ *   - a directory with a pack log (the only copy of files not yet durable in place) is never collected on
+ *     that clock alone: a clock moved forward would age every log at once. It is given up on only when
+ *     AVA1_GC_STRIKES strikes, each from a different boot and 24 h after the last (re-sends within a boot add
+ *     none), and it says so. */
 int ava1_jobs_gc(const char *jobs_dir, int64_t now_unix, int64_t max_age_s) {
     DIR *d = opendir(jobs_dir);
     struct dirent *e;
     int n = 0;
     if (!d) return errno == ENOENT ? 0 : -errno;
+    if (now_unix < AVA1_GC_MIN_CLOCK) {
+        fprintf(stderr, "[ava1] gc: the clock reads before 2024; collecting nothing\n");
+        closedir(d);
+        return 0;
+    }
     while ((e = readdir(d)) != NULL) {
         char p[700], jp[720];
         struct stat st, js;
@@ -399,14 +489,18 @@ int ava1_jobs_gc(const char *jobs_dir, int64_t now_unix, int64_t max_age_s) {
         last = (int64_t)st.st_mtime;
         snprintf(jp, sizeof jp, "%s/journal", p);
         if (stat(jp, &js) == 0 && (int64_t)js.st_mtime > last) last = (int64_t)js.st_mtime;
-        /* A directory with a pack log holds the only copy of files not yet durable in place: never collected,
-         * however old (recovery finishes it, and its journal's Done then lets the pack go). */
+        if (last > now_unix + 60) { /* the clock was moved back past this one: skip it, only it */
+            fprintf(stderr, "[ava1] gc: %s is stamped in the future; leaving it\n", e->d_name);
+            continue;
+        }
         if (now_unix - last > max_age_s) {
             int packed = ava1_dir_has_pack(p);
-            /* ... and a week past the normal age even a log is given up on: recovery has had every pass since
-             * (a directory it cannot open, or that keeps failing, must not hold its segments forever) */
-            if (packed && now_unix - last <= max_age_s + AVA1_PACK_GC_GRACE_S) continue;
-            if (packed) fprintf(stderr, "[ava1] gc: giving up on %s: its log was never recovered\n", e->d_name);
+            if (packed) {
+                /* a week past the normal age, and only after several starts agreed */
+                if (now_unix - last <= max_age_s + AVA1_PACK_GC_GRACE_S) continue;
+                if (gc_strike(p, &st, now_unix) < AVA1_GC_STRIKES) continue;
+                fprintf(stderr, "[ava1] gc: giving up on %s: its log was never recovered\n", e->d_name);
+            }
             if (rm_tree(p) == 0) n++;
         }
     }

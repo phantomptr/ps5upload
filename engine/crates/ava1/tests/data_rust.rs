@@ -1416,3 +1416,57 @@ async fn a_done_only_resume_outlives_the_fresh_deadline() {
         .expect("it completed, was not cut during the silence");
     assert_eq!(files, 3);
 }
+
+/// Final review engine #3: zero-byte files in an ordered download verify as the empty file
+/// without a read-back, so no sink loops on `FileRetry`.
+async fn ordered_with_empty_files(tag: &str, job: u8, preexisting_root: bool) {
+    let d = common::temp_dir(tag);
+    let root = d.join("share/out");
+    for i in 0..30usize {
+        let p = root.join(format!("a{}/f{i}", i % 3));
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let n = if i % 3 == 0 { 0 } else { i * 40 };
+        std::fs::write(p, (0..n).map(|k| (k + i) as u8).collect::<Vec<_>>()).unwrap();
+    }
+    std::fs::write(root.join("big.bin"), vec![7u8; (2 << 20) + 5]).unwrap();
+    std::fs::write(root.join("empty.bin"), b"").unwrap();
+    let host = Arc::new(FolderHost {
+        root: d.join("share"),
+        jobs_dir: d.join("hjobs"),
+    });
+    let (addr, _ctx, id, peers) = common::paired_ctx(|c| c.with_jobs(host)).await;
+    let s = connect(&addr.to_string(), id, peers, "client", common::fast())
+        .await
+        .unwrap();
+    let mut link = s.job([job; 16]);
+    if preexisting_root {
+        std::fs::create_dir_all(d.join("got")).unwrap(); // not staged: files land in place
+    }
+    let sink = Arc::new(LocalSink::new(d.join("got"), false));
+    let r = tokio::time::timeout(
+        Duration::from_secs(30),
+        download_job(
+            &mut link,
+            "out",
+            gen::JF_ORDERED,
+            sink,
+            opts(&d.join("jobs"), true),
+        ),
+    )
+    .await
+    .expect("an ordered download with empty files must not loop on FileRetry")
+    .unwrap();
+    assert_eq!(r.files, 32);
+    same(&d.join("share/out"), &d.join("got"));
+    assert!(d.join("got/empty.bin").exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_ordered_download_with_empty_files_finishes_staged() {
+    ordered_with_empty_files("rr-empty-staged", 11, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_ordered_download_with_empty_files_finishes_in_place() {
+    ordered_with_empty_files("rr-empty-inplace", 12, true).await;
+}

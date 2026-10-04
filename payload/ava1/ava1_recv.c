@@ -272,10 +272,9 @@ static int alloc_state(ava1_job_t *j) {
     return (j->lf && ava1_bits_init(&j->done, j->m.n) == 0) ? 0 : -1;
 }
 
-static void free_lf(ava1_lfile_t *lf) {
+static void free_lf(ava1_job_t *j, uint32_t id, ava1_lfile_t *lf) {
     if (!lf) return;
-    if (lf->fd >= 0) close(lf->fd);
-    if (lf->ob_fd >= 0) close(lf->ob_fd);
+    ava1_lf_close_fds(j, id, lf); /* the descriptors and their slots in the large-file budget */
     ava1_rset_clear(&lf->written);
     ava1_rset_clear(&lf->durable);
     free(lf);
@@ -286,7 +285,7 @@ static void drop_state(ava1_job_t *j) {
     uint32_t i;
     ava1_jnl_close(&j->jnl);
     if (j->lf)
-        for (i = 0; i < j->m.n; i++) free_lf(j->lf[i]);
+        for (i = 0; i < j->m.n; i++) free_lf(j, i, j->lf[i]);
     free(j->lf);
     j->lf = NULL;
     ava1_lflist_reset(j, 0);
@@ -598,6 +597,9 @@ ava1_job_t *ava1_recv_open(const ava1_recv_spec_t *s, ava1_job_open_ack_t *ack, 
     }
     j = ava1_job_create_attached(s->id, s->owner, s->sid);
     if (!j) return refuse(ack, AVA1_ERR_BUSY, msg, cap, "too many jobs, or this job is still closing; try again");
+    if (!j->log_small && s->kind == AVA1_JOB_UPLOAD)
+        fprintf(stderr, "[ava1] job %02x%02x%02x%02x: durable-by-log OFF (%s)\n", s->id[0], s->id[1], s->id[2], s->id[3],
+                ava1_data_log_small_flagged() ? "debug flag" : "config");
     j->kind = s->kind;
     j->policy = s->policy;
     j->flags = s->flags;
@@ -749,7 +751,7 @@ static int remap(ava1_job_t *j, ava1_mstore_t *in, ava1_bits_t *changed) {
                 }
             } else if (oe->kind == AVA1_ENTRY_FILE && (j->lf[o - 1] || ava1_bits_get(&j->done, o - 1))) {
                 /* Never splice old and new bytes: the old part file goes now. */
-                free_lf(j->lf[o - 1]);
+                free_lf(j, o - 1, j->lf[o - 1]);
                 j->lf[o - 1] = NULL;
                 ava1_apply_path(j, o - 1, 1, p, sizeof p);
                 drop_path(p, 0, d, &nd);
@@ -781,7 +783,7 @@ static int remap(ava1_job_t *j, ava1_mstore_t *in, ava1_bits_t *changed) {
     for (i = 0; i < j->m.n; i++) {
         snprintf(a, sizeof a, "%s/%u.ob", j->dir, i);
         (void)unlink(a);
-        free_lf(j->lf[i]);
+        free_lf(j, i, j->lf[i]);
     }
     for (i = 0; i < in->n; i++)
         if (nlf[i]) {
@@ -896,8 +898,9 @@ static void drop_part(ava1_job_t *j, uint32_t id) {
     pthread_mutex_lock(&j->mu);
     lf = j->lf[id];
     j->lf[id] = NULL;
+    if (lf) ava1_lf_close_fds(j, id, lf);
     pthread_mutex_unlock(&j->mu);
-    free_lf(lf);
+    free_lf(j, id, lf);
 }
 
 static int file_matches(ava1_job_t *j, uint32_t id) {

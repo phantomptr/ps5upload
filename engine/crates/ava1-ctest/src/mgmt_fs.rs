@@ -39,6 +39,11 @@ pub fn set_link_devices() {
     unsafe { ava1_test_mgmtfs_set(2, 0, 0) }
 }
 
+/// Every device lookup fails (the rename guard cannot tell): the move must be refused.
+pub fn set_unreadable_devices() {
+    unsafe { ava1_test_mgmtfs_set(3, 0, 0) }
+}
+
 /// (commands counted by fs methods, node.shutdown handler calls, reads that asked for FSR_UNSAFE).
 pub fn stats() -> (u32, u32, u32) {
     let (mut a, mut b, mut c) = (0, 0, 0);

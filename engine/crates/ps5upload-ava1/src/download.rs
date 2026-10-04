@@ -14,9 +14,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use ava1::gen;
-use ava1::journal;
+use ava1::journal::{self, State};
 use ava1::manifest::{self, Manifest};
-use ava1::recv::{download_job, LocalSink, RecvOptions, Sink};
+use ava1::packlog::LoggedGroup;
+use ava1::recv::{download_job, is_fd_exhausted, LocalSink, RecvOptions, Sink};
 use ava1::send::{Progress, SendError};
 use ps5upload_core::download::DownloadKind;
 use zip::write::SimpleFileOptions;
@@ -212,8 +213,41 @@ impl Sink for CheckedSink {
     fn write_whole(&self, id: u32, data: &[u8]) -> io::Result<()> {
         self.inner.write_whole(id, data)
     }
+    fn write_whole_root(&self, id: u32, root: &[u8; 32], data: &[u8]) -> io::Result<()> {
+        self.inner.write_whole_root(id, root, data)
+    }
     fn sync(&self, ids: &[u32]) -> io::Result<()> {
         self.inner.sync(ids)
+    }
+    // The durable-by-log hooks go to the `LocalSink` too (the log is its decision: on by
+    // default off macOS, `PS5UPLOAD_AVA1_LOG_SMALL` to override), or a download would never
+    // take that path while the receiver believed it could.
+    fn enable_log(&self, dir: &Path) {
+        self.inner.enable_log(dir)
+    }
+    fn sync_batch(&self, small: &[u32], large: &[u32]) -> io::Result<Vec<LoggedGroup>> {
+        self.inner.sync_batch(small, large)
+    }
+    fn batch_journaled(&self, groups: &[LoggedGroup]) {
+        self.inner.batch_journaled(groups)
+    }
+    fn unswept(&self) -> usize {
+        self.inner.unswept()
+    }
+    fn log_pressure(&self) -> bool {
+        self.inner.log_pressure()
+    }
+    fn sweep(&self, force: bool) -> io::Result<Vec<u32>> {
+        self.inner.sweep(force)
+    }
+    fn sweep_journaled(&self, ids: &[u32]) {
+        self.inner.sweep_journaled(ids)
+    }
+    fn recover_log(&self, st: &State) -> io::Result<Vec<u32>> {
+        self.inner.recover_log(st)
+    }
+    fn log_cleanup(&self) {
+        self.inner.log_cleanup()
     }
     fn read_at(&self, id: u32, off: u64, buf: &mut [u8]) -> io::Result<usize> {
         self.inner.read_at(id, off, buf)
@@ -305,6 +339,8 @@ pub fn is_zip_restart(e: &io::Error) -> bool {
 
 /// A file that keeps failing verification must end the job, not restart forever.
 const MAX_RETRY_RESTARTS: u32 = 3;
+/// Waits for descriptors to free up before a download gives up on them.
+const MAX_FD_WAITS: u32 = 12;
 
 pub(crate) fn invalid(why: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, why.into())
@@ -595,6 +631,7 @@ fn run(
         let mut attempt = 0u32;
         let mut retry_restarts = 0u32;
         let mut busy = 0u32;
+        let mut fd_waits = 0u32;
         let (mut last_at, mut last_work) = (Instant::now(), 0u64);
         let mut progress = Arc::new(Progress::default());
         loop {
@@ -648,6 +685,16 @@ fn run(
                     }
                     wait(&mut backoff, &format!("the console is busy: {message}")).await;
                     continue;
+                }
+                // The computer is out of file descriptors (other programs hold them): wait and
+                // resume the same attempt; what is durable stays durable. Bounded, and the stall
+                // limit ends it too.
+                Err(SendError::Source(e)) if is_fd_exhausted(&e) && fd_waits < MAX_FD_WAITS => {
+                    fd_waits += 1;
+                    (
+                        format!("this computer is out of file descriptors: {e}"),
+                        true,
+                    )
                 }
                 Err(SendError::Source(e))
                     if is_zip_restart(&e) && retry_restarts < MAX_RETRY_RESTARTS =>
@@ -735,14 +782,25 @@ pub fn to_local_in(
         counters,
         cancel,
     );
-    if r.is_err() {
-        // `run` only returns a terminal error (a cancel, a refusal, a local write
-        // failure, the stall limit): nothing will resume this job, so neither the
-        // journal nor the staged bytes may outlive it.
-        let _ = std::fs::remove_dir_all(&job_dir);
-        remove_path(&part);
+    if let Err(e) = &r {
+        cleanup_after_failure(e, &job_dir, &part);
     }
     r
+}
+
+/// What a failed download leaves behind. A cancel, a refusal or a bad manifest is final:
+/// nothing will resume the job, so neither the journal nor the staged bytes may outlive it.
+/// A local I/O failure (a full disk, a descriptor shortage that outlasted the waits) is
+/// recoverable once the cause is gone, and the next run of the same job resumes from the
+/// journal and the staged tree, so both stay.
+fn cleanup_after_failure(e: &anyhow::Error, job_dir: &Path, part: &Path) {
+    let recoverable = e
+        .downcast_ref::<UploadFailure>()
+        .is_some_and(|f| f.reason == "ava1_local_io");
+    if !recoverable {
+        let _ = std::fs::remove_dir_all(job_dir);
+        remove_path(part);
+    }
 }
 
 fn journal_is_empty(dir: &Path) -> bool {
@@ -1077,6 +1135,99 @@ mod tests {
         fn finish(&self) -> io::Result<()> {
             self.inner.finish()
         }
+    }
+
+    /// `LocalSink` whose first write fails as the OS does when the process is out of
+    /// descriptors.
+    struct EmfileOnce {
+        inner: LocalSink,
+        failed: AtomicBool,
+    }
+
+    impl EmfileOnce {
+        fn fail(&self) -> io::Result<()> {
+            if !self.failed.swap(true, Ordering::Relaxed) {
+                return Err(io::Error::from_raw_os_error(24));
+            }
+            Ok(())
+        }
+    }
+
+    impl Sink for EmfileOnce {
+        fn prepare(&self, m: &Manifest) -> io::Result<()> {
+            self.inner.prepare(m)
+        }
+        fn write_at(&self, id: u32, off: u64, data: &[u8]) -> io::Result<()> {
+            self.fail()?;
+            self.inner.write_at(id, off, data)
+        }
+        fn write_whole(&self, id: u32, data: &[u8]) -> io::Result<()> {
+            self.fail()?;
+            self.inner.write_whole(id, data)
+        }
+        fn sync(&self, ids: &[u32]) -> io::Result<()> {
+            self.inner.sync(ids)
+        }
+        fn read_at(&self, id: u32, off: u64, buf: &mut [u8]) -> io::Result<usize> {
+            self.inner.read_at(id, off, buf)
+        }
+        fn commit(&self, id: u32) -> io::Result<()> {
+            self.inner.commit(id)
+        }
+        fn finish(&self) -> io::Result<()> {
+            self.inner.finish()
+        }
+        fn resume_key(&self) -> Option<(String, bool)> {
+            self.inner.resume_key()
+        }
+    }
+
+    #[test]
+    fn a_descriptor_shortage_is_waited_out_not_terminal() {
+        let d = std::env::temp_dir().join(format!("p5a-emfile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("share/G")).unwrap();
+        for i in 0..3u8 {
+            std::fs::write(d.join(format!("share/G/f{i}")), vec![i + 1; 5000]).unwrap();
+        }
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let ava = d.join("ava");
+        let key = ava1::keys::Identity::load_or_create(&ava.join("identity"))
+            .unwrap()
+            .public();
+        let addr = rt.block_on(folder_host(&d, key));
+        let pool = Pool::new(ava).with_addr(addr);
+        let out = d.join("out/G");
+        let out2 = out.clone();
+        let make = move || -> Arc<dyn Sink> {
+            Arc::new(EmfileOnce {
+                inner: LocalSink::new(out2.clone(), false),
+                failed: AtomicBool::new(false),
+            })
+        };
+        let bytes = run(
+            &pool,
+            "c",
+            "G",
+            0,
+            [8; 16],
+            false,
+            &make,
+            &Counters::default(),
+            None,
+        )
+        .expect("EMFILE is retried, not terminal");
+        assert_eq!(bytes, 15000);
+        for i in 0..3u8 {
+            assert_eq!(
+                std::fs::read(out.join(format!("f{i}"))).unwrap(),
+                vec![i + 1; 5000]
+            );
+        }
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     async fn folder_host(dir: &Path, engine_key: [u8; 32]) -> String {
@@ -1535,6 +1686,35 @@ mod tests {
         let gap = s.write_at(1, 30, &[2; 10]).unwrap_err();
         assert!(!is_zip_restart(&gap));
         assert_eq!(gap.kind(), io::ErrorKind::InvalidData);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_recoverable_local_failure_keeps_its_journal_and_staging() {
+        let d = std::env::temp_dir().join(format!("p5a-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let (job, part) = (d.join("job"), d.join("Game.ava-part"));
+        let fill = || {
+            std::fs::create_dir_all(&job).unwrap();
+            std::fs::write(job.join("journal"), b"x").unwrap();
+            std::fs::create_dir_all(&part).unwrap();
+        };
+        let local_io = terminal(SendError::Source(io::Error::other("disk full")));
+        fill();
+        cleanup_after_failure(&local_io, &job, &part);
+        assert!(job.exists() && part.exists(), "resume lost its work");
+        for e in [
+            anyhow!("transfer_cancelled"),
+            terminal(SendError::Source(invalid("bad name"))),
+            terminal(SendError::Refused {
+                status: gen::ERR_PATH,
+                message: "no".into(),
+            }),
+        ] {
+            fill();
+            cleanup_after_failure(&e, &job, &part);
+            assert!(!job.exists() && !part.exists(), "a final failure left work");
+        }
         let _ = std::fs::remove_dir_all(&d);
     }
 

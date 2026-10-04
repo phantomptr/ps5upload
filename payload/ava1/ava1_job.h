@@ -51,6 +51,8 @@ typedef struct {        /* one large file being assembled */
     int in_list;           /* its id is in the job's lfl list (the batch scans' index) */
     int opening;           /* a worker is opening/preallocating it with j->mu released */
     int committing;        /* its commit is queued or running on a worker (review 003 §3.3) */
+    int writers;           /* write_chunk calls that took their own dups and have not yet recorded the range */
+    uint8_t held;          /* descriptors counted against the large-file budget (0, 1 or 2) */
 } ava1_lfile_t;
 
 /* Durable-by-log (SPEC.md §15.7). A small file's bytes go to `pack.<n>` in the job directory and
@@ -110,6 +112,12 @@ struct ava1_job {
     ava1_jnl_t jnl;
     ava1_bits_t done;               /* committed (small: synced; large: renamed) */
     ava1_lfile_t **lf;              /* per file_id; NULL for small files and directories */
+    /* Large files with open descriptors (final review: console), under j->mu. At most
+     * ava1_lf_job_share() descriptors; an idle one is closed (and reopened on demand) to make room. */
+    uint32_t *lfo, lfo_n, lfo_cap;
+    uint32_t lf_fds;                /* descriptors held by this job's large files */
+    int lf_wait;                    /* workers waiting for a descriptor slot: the job thread syncs early */
+    int syncing;                    /* a batch is fsyncing the descriptors it took from lf (no eviction) */
     /* The ids that may hold large-file work (a non-NULL lf that is not idle): the batch,
      * commit and compaction scans walk this list, never the whole manifest, so their cost
      * follows the large files in flight, not the file count. May hold stale or duplicate
@@ -184,6 +192,7 @@ struct ava1_job {
     uint64_t prog_sig, prog_at_ms;
     uint32_t prog_limit_ms;
     int prog_armed;
+    int log_small;                  /* durable-by-log or per-file, decided once when the job is created (review 007 #5) */
     int resumed;                    /* decided at open (journal replay) or at an attach that finds durable work; never per re-arm */
     uint64_t prog_gen;              /* the attach generation `resumed` was last decided under */
     uint32_t tune_ticks, tune_busy; /* queue occupancy since the last tuning step */

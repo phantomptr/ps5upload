@@ -30,6 +30,9 @@ ava1_lfile_t *ava1_lfile_get(ava1_job_t *j, uint32_t id);
 void ava1_lflist_rebuild(ava1_job_t *j);
 /* Forgets the index (the job's state is dropped or freed). */
 void ava1_lflist_reset(ava1_job_t *j, int release);
+/* Closes a large file's descriptors and gives their slots in the large-file budget back (a file with
+ * none open: nothing). Caller holds j->mu or owns the job alone. `lf` is j->lf[id]. */
+void ava1_lf_close_fds(ava1_job_t *j, uint32_t id, ava1_lfile_t *lf);
 /* A directory that gained an entry; `id` names a file in it (for the test hook). */
 typedef struct {
     char *dir; /* malloc'd; ava1_sync_dirset frees it */
