@@ -244,6 +244,10 @@ static void normalize_path(const char *src, char *out, size_t cap) {
     free(stack);
 }
 
+/* What abs_path returns for a path it refuses. A process that CAN write to / (root, as in the host
+ * selftest) would otherwise create it, so mutating handlers test for it explicitly. */
+#define FTP_DENIED_PATH "/.ps5upload-denied"
+
 static void abs_path(struct ftp_session *s, const char *arg, char *out, size_t cap) {
     char virtual[1024];
     if (!arg || !arg[0]) {
@@ -267,19 +271,19 @@ static void abs_path(struct ftp_session *s, const char *arg, char *out, size_t c
     /* A path that does not fit is never used cut short (a policy check on the prefix could disagree
      * with the path): it becomes a name that cannot exist, like a denied one. */
     if (wn < 0 || (size_t)wn >= cap) {
-        snprintf(out, cap, "%s", "/.ps5upload-denied");
+        snprintf(out, cap, "%s", FTP_DENIED_PATH);
         return;
     }
     /* The AVA1 trust store (identity, paired peers) is not served over FTP, whatever the root is and
      * however the path is spelled or linked: a path in or above it becomes a name that cannot exist. */
-    if (path_in_protected(out)) snprintf(out, cap, "%s", "/.ps5upload-denied");
+    if (path_in_protected(out)) snprintf(out, cap, "%s", FTP_DENIED_PATH);
 }
 
 /* Rename, delete and rmdir of the AVA1 trust store's directory OR OF AN ANCESTOR of it (moving or
  * replacing /data/ps5upload moves or replaces ava/{identity,peers}) are refused. abs_path already
  * turns paths inside the store into a name that cannot exist. */
 static int ftp_touches_trust_store(const char *path) {
-    return path_contains_protected(path) || path_in_protected(path);
+    return strcmp(path, FTP_DENIED_PATH) == 0 || path_contains_protected(path) || path_in_protected(path);
 }
 
 static void handle_user(struct ftp_session *s, const char *arg) {
@@ -548,6 +552,10 @@ static void handle_stor(struct ftp_session *s, const char *arg) {
     }
     char path[512];
     abs_path(s, arg, path, sizeof(path));
+    if (ftp_touches_trust_store(path)) {
+        send_resp(s->ctrl_fd, 550, "Not permitted");
+        return;
+    }
     atomic_store(&s->abort_requested, 0);
     open_data_connection(s);
     if (s->data_fd < 0) {
@@ -922,6 +930,10 @@ static void handle_mkd(struct ftp_session *s, const char *arg) {
     }
     char path[512];
     abs_path(s, arg, path, sizeof(path));
+    if (ftp_touches_trust_store(path)) {
+        send_resp(s->ctrl_fd, 550, "Not permitted");
+        return;
+    }
     if (mkdir(path, 0755) != 0) {
         send_resp(s->ctrl_fd, 550, "Failed to create directory");
         return;
