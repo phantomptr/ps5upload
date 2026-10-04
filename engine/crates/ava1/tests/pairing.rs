@@ -155,25 +155,170 @@ async fn one_address_holds_at_most_twelve_connections() {
         .unwrap();
 }
 
+/// A server whose notifications are recorded, as (name, code): the console's screen.
+async fn screen_server(
+    limits: Limits,
+) -> (
+    std::net::SocketAddr,
+    Arc<ServerCtx>,
+    Arc<Mutex<Vec<(String, u32)>>>,
+) {
+    let screen = Arc::new(Mutex::new(Vec::new()));
+    let s2 = screen.clone();
+    let ctx = ServerCtx::new(
+        Identity::generate().unwrap(),
+        "console",
+        PeerStore::in_memory(),
+        node_info_rpc("console"),
+    )
+    .with_timing(fast())
+    .with_limits(limits)
+    .with_notify(Box::new(move |r| {
+        s2.lock().unwrap().push((r.peer_name.clone(), r.code));
+    }));
+    assert!(ctx.open_pairing_if_unpaired(Duration::from_secs(60)));
+    let (addr, ctx) = start(ctx).await;
+    (addr, ctx, screen)
+}
+
 #[tokio::test]
-async fn pairing_notifications_are_rate_limited() {
-    let (addr, _ctx, shown) = open_server(Limits::default()).await;
-    let _a = stranger(addr).await.unwrap();
-    let _b = stranger(addr).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(shown.load(Ordering::SeqCst), 1, "one notification per 10 s");
+async fn every_session_shows_its_own_code_even_right_after_a_strangers() {
+    // A stranger knocked a moment ago from the same address: the user's own attempt must
+    // still show its code (a rate limit that hid it would leave them typing a stale one).
+    let (addr, ctx, screen) = screen_server(Limits::default()).await;
+    let (_stranger, stranger_code) = knocker(addr, &ctx).await;
+    let (mut mine, my_code) = knocker(addr, &ctx).await;
+    wait_for(Duration::from_secs(5), || screen.lock().unwrap().len() == 2)
+        .await
+        .expect("both sessions were shown");
+    let shown: Vec<u32> = screen.lock().unwrap().iter().map(|(_, c)| *c).collect();
+    assert!(
+        shown.contains(&stranger_code) && shown.contains(&my_code),
+        "{shown:?}"
+    );
+    mine.confirm_pairing(my_code).await.unwrap();
+}
+
+#[tokio::test]
+async fn an_identical_request_is_shown_once_and_a_later_one_again() {
+    let (addr, _ctx, screen) = screen_server(Limits::default()).await;
+    // The same device (same key, same address) knocking in a loop: shown once.
+    let me = Arc::new(Identity::generate().unwrap());
+    for _ in 0..3 {
+        let _ = connect(
+            &addr.to_string(),
+            me.clone(),
+            Arc::new(Mutex::new(PeerStore::in_memory())),
+            "phone",
+            fast(),
+        )
+        .await
+        .unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        screen.lock().unwrap().len(),
+        1,
+        "an identical repeat is not shown again"
+    );
 
     let limits = Limits {
         notify_every: Duration::from_millis(100),
         ..Limits::default()
     };
-    let (addr, _ctx, shown) = open_server(limits).await;
-    let _a = stranger(addr).await.unwrap();
+    let (addr, _ctx, screen) = screen_server(limits).await;
+    let _ = connect(
+        &addr.to_string(),
+        me.clone(),
+        Arc::new(Mutex::new(PeerStore::in_memory())),
+        "phone",
+        fast(),
+    )
+    .await
+    .unwrap();
     tokio::time::sleep(Duration::from_millis(250)).await;
-    let _b = stranger(addr).await.unwrap();
-    wait_for(Duration::from_secs(5), || shown.load(Ordering::SeqCst) == 2)
+    let _ = connect(
+        &addr.to_string(),
+        me,
+        Arc::new(Mutex::new(PeerStore::in_memory())),
+        "phone",
+        fast(),
+    )
+    .await
+    .unwrap();
+    wait_for(Duration::from_secs(5), || screen.lock().unwrap().len() == 2)
         .await
         .expect("a later request is shown again");
+}
+
+#[tokio::test]
+async fn junk_sessions_that_never_run_the_pake_never_close_the_window() {
+    // Three throwaway sessions per round send a confirm with nothing behind it. They guess
+    // nothing, so they cost no budget however many there are.
+    let limits = Limits {
+        welcomes_per_ip: 1000,
+        ..Limits::default()
+    };
+    let (addr, ctx, _) = open_server(limits).await;
+    for _ in 0..30 {
+        let mut g = rogue(addr).await;
+        g.w.send_msg(1, &PairConfirm { mac: [7; 32] })
+            .await
+            .unwrap();
+        assert!(g.next(PairResult::TYPE).await.is_none_or(|f| f
+            .decode::<PairResult>()
+            .unwrap()
+            .accepted
+            == 0));
+        drop(g);
+        wait_for(Duration::from_secs(5), || ctx.sessions() == 0)
+            .await
+            .unwrap();
+    }
+    // Malformed and degenerate PAKE openings are free too.
+    for body in [
+        vec![0u8; 3],
+        PairPakeClient { y: [0; 32] }.to_bytes().unwrap(),
+    ] {
+        let mut g = rogue(addr).await;
+        g.w.send(PairPakeClient::TYPE, 1, &body).await.unwrap();
+        drop(g);
+        wait_for(Duration::from_secs(5), || ctx.sessions() == 0)
+            .await
+            .unwrap();
+    }
+    assert_eq!(ctx.pair_failures(), 0);
+    assert!(ctx.pairing_open());
+    let mut g = rogue(addr).await;
+    let code = console_code(&ctx, &g.key).await;
+    assert!(g.pake(code).await.1, "the real user still pairs");
+}
+
+#[tokio::test]
+async fn one_address_cannot_start_more_than_its_share_of_pairing_sessions() {
+    let (addr, ctx, _) = open_server(Limits::default()).await;
+    let mut ok = 0;
+    for _ in 0..8 {
+        match stranger(addr).await {
+            Ok(s) => {
+                ok += 1;
+                s.close().await;
+                wait_for(Duration::from_secs(5), || ctx.sessions() == 0)
+                    .await
+                    .unwrap();
+            }
+            Err(e) => assert!(
+                matches!(&e, Ava1Error::Refused { code, .. } if *code == gen::ERR_BUSY),
+                "{e:?}"
+            ),
+        }
+    }
+    assert_eq!(
+        ok,
+        ava1::server::WELCOMES_PER_IP,
+        "the rest were refused as busy"
+    );
+    assert!(ctx.pairing_open() && ctx.pair_failures() == 0);
 }
 
 #[tokio::test]
@@ -288,7 +433,7 @@ async fn two_devices_confirming_at_the_same_moment_get_one_pairing() {
 use ava1::conn::{FrameReader, FrameWriter};
 use ava1::cpace;
 use ava1::gen::{PairConfirm, PairPakeClient, PairPakeServer, PairResult};
-use ava1::wire::FrameMessage;
+use ava1::wire::{FrameMessage, Message};
 use common::{RawReader, RawWriter};
 
 struct Rogue {
@@ -439,23 +584,65 @@ async fn the_session_api_pairs_with_the_right_code_and_not_a_wrong_one() {
 }
 
 #[tokio::test]
-async fn five_wrong_codes_close_the_window() {
-    let (addr, ctx, _) = open_server(Limits::default()).await;
-    for i in 0..ava1::server::MAX_PAIR_FAILURES {
-        assert!(ctx.pairing_open(), "still open before failure {i}");
+async fn one_addresses_five_wrong_guesses_spend_its_budget_and_nothing_else() {
+    let limits = Limits {
+        welcomes_per_ip: 100,
+        ..Limits::default()
+    };
+    let (addr, ctx, _) = open_server(limits).await;
+    for i in 0..ava1::server::MAX_PAIR_FAILURES_PER_IP {
         let mut g = rogue(addr).await;
         let code = console_code(&ctx, &g.key).await;
-        let (_, accepted) = g.pake((code + 1) % 1_000_000).await;
-        assert!(!accepted);
+        assert!(!g.pake((code + 1) % 1_000_000).await.1, "guess {i}");
         drop(g);
         wait_for(Duration::from_secs(5), || ctx.sessions() == 0)
             .await
             .expect("the refused session is gone");
     }
+    assert_eq!(ctx.pair_failures(), ava1::server::MAX_PAIR_FAILURES_PER_IP);
+    assert!(
+        ctx.pairing_open(),
+        "five guesses from one address do not close the window"
+    );
+    // That address is out of guesses: even the right code is refused from it ...
+    let mut g = rogue(addr).await;
+    let code = console_code(&ctx, &g.key).await;
+    assert!(!g.pake(code).await.1);
+    assert_eq!(
+        ctx.pair_failures(),
+        ava1::server::MAX_PAIR_FAILURES_PER_IP,
+        "and it is free"
+    );
+    // ... until a paired device (or a restart) reopens the window.
+    ctx.open_pairing(Duration::from_secs(60));
+    let mut g = rogue(addr).await;
+    let code = console_code(&ctx, &g.key).await;
+    assert!(g.pake(code).await.1, "reopened: pairs");
+}
+
+#[tokio::test]
+async fn the_global_cap_on_guesses_closes_the_window() {
+    // Per-address budget out of the way: only the global cap acts (its end-to-end check).
+    let limits = Limits {
+        pair_fails_per_ip: 100,
+        pair_fails_total: 5,
+        welcomes_per_ip: 100,
+        ..Limits::default()
+    };
+    let (addr, ctx, _) = open_server(limits).await;
+    for i in 0..5 {
+        assert!(ctx.pairing_open(), "still open before guess {i}");
+        let mut g = rogue(addr).await;
+        let code = console_code(&ctx, &g.key).await;
+        assert!(!g.pake((code + 1) % 1_000_000).await.1);
+        drop(g);
+        wait_for(Duration::from_secs(5), || ctx.sessions() == 0)
+            .await
+            .unwrap();
+    }
     assert!(!ctx.pairing_open(), "the window closed");
     let r = stranger(addr).await;
     assert!(is_pairing_closed(&r), "{r:?}");
-    // Reopened (by a paired device or a restart), it pairs again.
     ctx.open_pairing(Duration::from_secs(60));
     let mut g = rogue(addr).await;
     let code = console_code(&ctx, &g.key).await;

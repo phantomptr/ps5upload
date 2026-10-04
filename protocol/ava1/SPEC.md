@@ -102,16 +102,38 @@ thousands of inputs.
 Threat model. The code is a secret that exists only on the console's screen. A host on the LAN
 can complete Noise with a throwaway key and be welcomed (it sees h, both nonces, every frame),
 but none of that depends on the code, so it cannot compute `G`, hence not `K`, hence not a
-valid `MAC_client`: each attempt is one online guess at one in 10^6, costs the attacker its
-session (one attempt per session) and counts toward the window's five-failure limit (§5.5),
-and there is nothing on the wire to test a guess against offline (`Y = x·G` hides G behind a
-discrete logarithm). A man in the middle holds two handshakes with different h, and the code
-is shown by the console, not by the app; what the app sends is bound to the first leg's h and
-the console's code, so it verifies on neither leg without the code. A fake console that does
-not know the code cannot return a valid `MAC_server`, so the app stores nothing. What this does
-not defend against: someone who can see the console's screen (or the user's typing), and a
-user who types the code into a pairing they did not start. The `pair_commit`, `nonce_c` and
-`nonce_s` fields of §5 are retained for wire stability; no code is derived from them any more.
+valid `MAC_client`: each attempt is one online guess at one in 10^6, and there is nothing on the
+wire to test a guess against offline (`Y = x·G` hides G behind a discrete logarithm). A man in
+the middle holds two handshakes with different h, and the code is shown by the console, not by
+the app; what the app sends is bound to the first leg's h and the console's code, so it
+verifies on neither leg without the code.
+
+Remaining limits, stated plainly:
+
+* A fake console (an impostor at the console's address) gets one guess per client attempt: the
+  app's `MAC_client` is checked against the impostor's own key, which the impostor can test
+  offline for a guess at the code. A correct guess (probability 10^-6 per attempt) reveals the
+  code, and the impostor can then answer with a valid `MAC_server`. The real console never
+  sees these attempts, so it cannot count them; the client is the only place they could be
+  limited, and a person retyping codes is not a fast guesser.
+* Someone who can see the console's screen, or the user's typing, knows the code. Out of scope.
+* A user who types the code of a pairing they did not start has paired the other party.
+* Denial of service on a LAN, and what bounds it. Only a real guess (the PAKE was exchanged and
+  the proof was wrong) counts as a failure: a throwaway session that never completes the
+  PAKE, sends a `PairConfirm` with nothing behind it, or opens with a malformed or low-order
+  value reveals nothing and costs no budget. Each source address has 5 wrong guesses per
+  window, and all addresses together 20 (about 2·10^-5 of the space); the 20th closes the
+  window until a paired device reopens it or the node restarts, so closing it takes guesses
+  from at least four addresses. Sessions that guess nothing are bounded by `MAX_UNPAIRED`
+  (2) and by 6 new pairing sessions per address per 10 s (`ERR_BUSY` beyond that). The
+  console shows every welcomed session's own code on its screen (an identical request, same
+  address and same key within 10 s, is not shown twice): a stranger cannot hide the user's
+  code, only crowd the two unconfirmed places for up to 60 s each. A host that spoofs
+  addresses on the LAN, or many hosts, can exhaust the budgets; recovery is a paired device's
+  `pairing.open` or a restart.
+
+The `pair_commit`, `nonce_c` and `nonce_s` fields of §5 are retained for wire stability; no code
+is derived from them any more.
 
 ## 5. Handshake and pairing
 1. Client → `Hs1{noise}` (unsealed): Noise message 1, payload `HelloInfo`
@@ -150,11 +172,16 @@ user who types the code into a pairing they did not start. The `pair_commit`, `n
    server's key only if `accepted` is set and the server's `mac` verifies. Otherwise
    `accepted = 0` with a zero `mac`, and the session ends: one attempt per session. A
    `PairConfirm` before the PAKE, one that does not decode (the old empty body), or a
-   malformed or low-order `PairPakeClient` is a failed attempt like a wrong code. Each failed
-   attempt is logged and counted; after 5 since the window was last opened (by
-   `pairing.open` or at start) the window closes and stays shut until a paired device
-   reopens it or the node restarts, and a failure makes the next welcome show a new
-   notification at once. The client cannot tell a wrong code from a typo, only that the console
+   malformed or low-order `PairPakeClient` is refused and ends the session, but guessed nothing
+   and so is not counted. A wrong `mac` after the PAKE ran is a guess: it is logged per source
+   address and counted against that address's budget (5 per window) and the global one (20
+   per window); the 20th closes the window until a paired device reopens it or the node
+   restarts, and an address that spent its budget is refused at `PairPakeClient` until then.
+   A failure makes that address's next welcome show a new notification at once. New pairing
+   sessions are also rated: at most 6 per address per 10 s (`ERR_BUSY` beyond that), and
+   `MAX_UNPAIRED` (2) at a time. Every welcomed session shows its own code on the
+   console; only an identical repeat (same address and key) within 10 s is not shown again.
+   The client cannot tell a wrong code from a typo, only that the console
    refused; its next try is a new handshake with a new code on the screen. A client that cannot
    be told apart from a paired one (a trusted reconnect, §5.1, or a launch proof, §5.2) never
    sends these messages and needs no code. Until accepted, RPCs answer
@@ -169,8 +196,9 @@ user who types the code into a pairing they did not start. The `pair_commit`, `n
    been accepted ends — sealed `Error(ERR_PAIRING_CLOSED)`, close — when the
    window closes or 60 s after its Welcome, whichever is first. At most 2 such
    sessions exist at a time; a third unknown client gets `Error(ERR_BUSY)` in
-   place of Welcome. A node shows at most one pairing request per 10 s, and only
-   for a client it has sent Welcome to: a client gone before its Welcome uses none.
+   place of Welcome. A node shows each welcomed session's own code (an identical
+   request, same address and key, not twice within 10 s), and only for a client it has sent
+   Welcome to: a client gone before its Welcome uses none.
 7. Peer stores: `<64 hex key> <unix seconds> <name>` per line, ≤ 32 peers (oldest
    dropped), written atomically (a temp file no other writer shares + rename in the same
    directory). The reference side shares the file, the identity and the launch tokens between processes:

@@ -48,8 +48,15 @@ typedef struct ava1_server_cfg {
     uint32_t max_unpaired;
     /* Such a session ends when the window closes or after this long; 0 = 60 000 ms. */
     uint32_t pair_confirm_ms;
-    /* At most one on_pair_request per this long; 0 = 10 000 ms. */
+    /* An identical pairing request (same address, same key) is shown at most once per this
+     * long; every other session shows its own code. 0 = 10 000 ms. */
     uint32_t notify_every_ms;
+    /* Wrong guesses at the code one source address may make per pairing window; 0 = 5. */
+    uint32_t max_pair_fails_per_ip;
+    /* ... and everyone together, after which the window closes; 0 = 20. */
+    uint32_t max_pair_fails_total;
+    /* New pairing sessions one address may start per 10 s; 0 = 6. */
+    uint32_t max_welcomes_per_ip;
     /* The trust slot carried a launch token (SPEC.md §5.2): a known client whose key is
      * launch_key gets ava1_launch_proof(launch_token, h) in its Welcome. No other does. */
     int has_launch;
@@ -73,6 +80,7 @@ int ava1_server_start(const ava1_server_cfg_t *cfg);
 uint16_t ava1_server_port(void);
 void ava1_server_open_pairing(uint32_t seconds);
 int ava1_server_pairing_open(void);
+uint32_t ava1_server_pair_guesses(void);
 int ava1_server_conns(void);
 /* Stops accepting; open connections notice within one ping interval. */
 void ava1_server_stop(void);

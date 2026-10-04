@@ -206,6 +206,9 @@ pub mod ffi {
         pub max_unpaired: u32,
         pub pair_confirm_ms: u32,
         pub notify_every_ms: u32,
+        pub max_pair_fails_per_ip: u32,
+        pub max_pair_fails_total: u32,
+        pub max_welcomes_per_ip: u32,
         /// 1: the trust slot's key is `launch_key` and, with 2, its token `launch_token`
         /// (what ava1_glue.c passes the server from the slot).
         pub launch: u32,
@@ -232,6 +235,13 @@ pub mod ffi {
         /// bound refuses with AVA1_E_BUSY and breaks the connection. 0 = ok.
         pub fn ava1_test_post_queue(key: *const u8) -> c_int;
         pub fn ava1_test_sizeof_opts() -> usize;
+        pub fn ava1_test_sizeof_pairlimit() -> usize;
+        pub fn ava1_server_pair_guesses() -> u32;
+        pub fn ava1_pl_init(p: *mut u8, per_ip: u32, total: u32, welcome: u32, win_ms: u64);
+        pub fn ava1_pl_reset(p: *mut u8);
+        pub fn ava1_pl_guess_allowed(p: *mut u8, ip: u32, now_ms: u64) -> c_int;
+        pub fn ava1_pl_guess_failed(p: *mut u8, ip: u32, now_ms: u64, ip_fails: *mut u32) -> c_int;
+        pub fn ava1_pl_welcome_allowed(p: *mut u8, ip: u32, now_ms: u64) -> c_int;
         pub fn ava1_test_pair_requests() -> u32;
         pub fn ava1_test_last_pair_code() -> u32;
         pub fn ava1_test_logs() -> u32;
@@ -982,6 +992,11 @@ impl CServer {
 
     pub fn pairing_open(&self) -> bool {
         unsafe { ffi::ava1_server_pairing_open() != 0 }
+    }
+
+    /// Wrong guesses at the code since the window was last opened.
+    pub fn pair_guesses(&self) -> u32 {
+        unsafe { ffi::ava1_server_pair_guesses() }
     }
 
     pub fn pair_requests(&self) -> (u32, u32) {

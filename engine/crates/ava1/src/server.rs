@@ -1,7 +1,7 @@
 //! The server side: accept loop, control connections, pairing, RPC (SPEC.md §6–§8).
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
@@ -35,16 +35,22 @@ pub const RPC_WORKERS: usize = 8;
 pub use crate::frame::{RPC_REPLY_MAX, RPC_REQUEST_MAX};
 /// The longest window `pairing.open` may ask for.
 pub const MAX_PAIRING_WINDOW_S: u16 = 600;
-/// Wrong pairing codes (SPEC.md §5.5) after which the window closes: it must be reopened
-/// from a paired device (or by restarting the node).
-pub const MAX_PAIR_FAILURES: u32 = 5;
+/// Wrong guesses at the pairing code (SPEC.md §4.6) one source address may make per window.
+pub const MAX_PAIR_FAILURES_PER_IP: u32 = 5;
+/// Wrong guesses from everyone together, after which the window closes: it must be reopened
+/// from a paired device (or by restarting the node). 20 guesses is about 2e-5 of the space.
+pub const MAX_PAIR_FAILURES: u32 = 20;
+/// New pairing sessions one source address may start per `WELCOME_WINDOW`.
+pub const WELCOMES_PER_IP: u32 = 6;
+pub const WELCOME_WINDOW: Duration = Duration::from_secs(10);
 /// Connections one source address may hold (a session is 1 control + up to 8 lanes).
 pub const MAX_CONNS_PER_IP: usize = 12;
 /// Sessions that were welcomed during a pairing window but have not confirmed yet.
 pub const MAX_UNPAIRED: usize = 2;
 /// How long such a session may wait for its PairConfirm.
 pub const PAIR_CONFIRM_DEADLINE: Duration = Duration::from_secs(60);
-/// At most one pairing notification per this long, however many devices knock.
+/// An identical pairing request (same address, same key) is shown at most once per this long;
+/// every other session shows its own code.
 pub const NOTIFY_EVERY: Duration = Duration::from_secs(10);
 
 /// The server's admission limits (SPEC.md §8). Tests lower or raise them.
@@ -54,6 +60,9 @@ pub struct Limits {
     pub unpaired: usize,
     pub pair_confirm: Duration,
     pub notify_every: Duration,
+    pub pair_fails_per_ip: u32,
+    pub pair_fails_total: u32,
+    pub welcomes_per_ip: u32,
 }
 
 impl Default for Limits {
@@ -63,11 +72,64 @@ impl Default for Limits {
             unpaired: MAX_UNPAIRED,
             pair_confirm: PAIR_CONFIRM_DEADLINE,
             notify_every: NOTIFY_EVERY,
+            pair_fails_per_ip: MAX_PAIR_FAILURES_PER_IP,
+            pair_fails_total: MAX_PAIR_FAILURES,
+            welcomes_per_ip: WELCOMES_PER_IP,
         }
     }
 }
 
+/// What limits pairing attempts (SPEC.md §4.6): real guesses (the PAKE ran and the proof was
+/// wrong) per source address and in all, and the rate of new pairing sessions per address.
+/// A session that never completes the PAKE guessed nothing and is bounded only by the rate and
+/// by `Limits::unpaired`.
+#[derive(Debug, Default)]
+struct PairBudget {
+    total: u32,
+    per_ip: HashMap<IpAddr, u32>,
+    welcomes: HashMap<IpAddr, (Instant, u32)>,
+}
+
+impl PairBudget {
+    fn reset(&mut self) {
+        self.total = 0;
+        self.per_ip.clear();
+    }
+
+    /// May `ip` still guess?
+    fn guess_allowed(&self, ip: IpAddr, l: &Limits) -> bool {
+        self.total < l.pair_fails_total
+            && self.per_ip.get(&ip).copied().unwrap_or(0) < l.pair_fails_per_ip
+    }
+
+    /// A wrong guess from `ip`: (its count, whether the window must now close).
+    fn guess_failed(&mut self, ip: IpAddr, l: &Limits) -> (u32, bool) {
+        self.total += 1;
+        let n = self.per_ip.entry(ip).or_insert(0);
+        *n += 1;
+        (*n, self.total >= l.pair_fails_total)
+    }
+
+    /// A new pairing session from `ip`: false when it already had its share this window.
+    fn welcome_allowed(&mut self, ip: IpAddr, now: Instant, l: &Limits) -> bool {
+        if self.welcomes.len() > 256 {
+            self.welcomes
+                .retain(|_, (t, _)| now.duration_since(*t) < WELCOME_WINDOW);
+        }
+        let e = self.welcomes.entry(ip).or_insert((now, 0));
+        if now.duration_since(e.0) >= WELCOME_WINDOW {
+            *e = (now, 0);
+        }
+        if e.1 >= l.welcomes_per_ip {
+            return false;
+        }
+        e.1 += 1;
+        true
+    }
+}
+
 pub struct PairRequest {
+    pub ip: IpAddr,
     pub peer_key: [u8; 32],
     pub peer_name: String,
     pub code: u32,
@@ -85,7 +147,7 @@ pub(crate) struct SessionEntry {
     /// The six-digit code this session's console shows (random, never sent anywhere).
     code: u32,
     /// The PAKE key once the client's public value arrived (SPEC.md §5.5), taken by the confirm.
-    pake: Mutex<Option<[u8; 32]>>,
+    pake: Mutex<Option<zeroize::Zeroizing<[u8; 32]>>>,
     pake_started: AtomicBool,
     pub(crate) router: Arc<Router>,
     /// Per lane id, how many connections have taken it over. A lane connection ends when
@@ -143,11 +205,12 @@ pub struct ServerCtx {
     peers: Mutex<PeerStore>,
     pairing_until: Mutex<Option<Instant>>,
     notify: NotifyHook,
-    last_notify: Mutex<Option<Instant>>,
+    /// Pairing requests shown lately, by (address, key): an identical repeat is not shown again.
+    shown: Mutex<HashMap<(IpAddr, [u8; 32]), Instant>>,
     log: LogHook,
     /// An extra veto on top of the code check (never a substitute for it).
     approve: Option<PairHook>,
-    pair_failures: AtomicU32,
+    pair_budget: Mutex<PairBudget>,
     rpc: RpcHandler,
     /// Hosts data-plane jobs (SPEC.md §11); its presence advertises CAP_DATA_PLANE.
     jobs: Option<Arc<dyn JobHost>>,
@@ -172,10 +235,10 @@ impl ServerCtx {
             peers: Mutex::new(peers),
             pairing_until: Mutex::new(None),
             notify: Box::new(|_| {}),
-            last_notify: Mutex::new(None),
+            shown: Mutex::default(),
             log: Box::new(|_| {}),
             approve: None,
-            pair_failures: AtomicU32::new(0),
+            pair_budget: Mutex::default(),
             rpc,
             jobs: None,
             mgmt: false,
@@ -254,7 +317,7 @@ impl ServerCtx {
     }
 
     pub fn open_pairing(&self, d: Duration) {
-        self.pair_failures.store(0, Ordering::SeqCst);
+        self.pair_budget.lock().unwrap().reset();
         *self.pairing_until.lock().unwrap() = Some(Instant::now() + d);
     }
 
@@ -289,9 +352,9 @@ impl ServerCtx {
             .is_some_and(|t| Instant::now() < t)
     }
 
-    /// Wrong codes seen since the window was last opened.
+    /// Wrong guesses at the code since the window was last opened.
     pub fn pair_failures(&self) -> u32 {
-        self.pair_failures.load(Ordering::SeqCst)
+        self.pair_budget.lock().unwrap().total
     }
 
     /// The code the console shows for the session of `peer` (tests: the console's screen).
@@ -338,35 +401,49 @@ impl ServerCtx {
         }
     }
 
-    /// Counts a failed pairing attempt (a wrong code, a missing or malformed proof): logged,
-    /// and at `MAX_PAIR_FAILURES` the window closes until a paired device (or a restart)
-    /// reopens it. The next knock shows a fresh code, so the notification limit is lifted.
-    fn pair_failed(&self, req: &PairRequest, why: &str) {
-        let n = self.pair_failures.fetch_add(1, Ordering::SeqCst) + 1;
+    /// A wrong guess at the code: the PAKE ran and the client's proof did not verify. Logged
+    /// per source address; its budget shrinks, and when everyone's guesses together reach the
+    /// cap the window closes until a paired device (or a restart) reopens it. That address's
+    /// next knock shows a new code at once.
+    fn guess_failed(&self, req: &PairRequest) {
+        let (n, close, total) = {
+            let mut b = self.pair_budget.lock().unwrap();
+            let (n, close) = b.guess_failed(req.ip, &self.limits);
+            (n, close, b.total)
+        };
         (self.log)(&format!(
-            "ava1: pairing refused: {why} from {} ({n} of {MAX_PAIR_FAILURES})",
-            req.peer_name
+            "ava1: pairing refused: wrong code from {} at {} ({n} of {} from this address, {total} of {} in all)",
+            req.peer_name, req.ip, self.limits.pair_fails_per_ip, self.limits.pair_fails_total
         ));
-        *self.last_notify.lock().unwrap() = None;
-        if n >= MAX_PAIR_FAILURES {
+        self.shown
+            .lock()
+            .unwrap()
+            .retain(|(ip, _), _| *ip != req.ip);
+        if close {
             self.close_pairing();
-            (self.log)("ava1: too many failed pairing attempts: the window is closed");
+            (self.log)("ava1: too many wrong pairing codes: the window is closed");
         }
     }
 
-    /// Decides a PairConfirm (SPEC.md §5.5): `proof_ok` is whether the client's key
-    /// confirmation verified, i.e. it knew the code the console shows. A failure is counted
-    /// (`pair_failed`). One window, one pairing: the window check, the store and the closing
-    /// of the window happen under one lock, so two devices confirming at the same moment
-    /// cannot both get in. An owner hook (which may wait on a person) is asked outside the
-    /// lock, and the window checked again after it.
-    fn accept_pairing(&self, req: &PairRequest, proof_ok: bool) -> bool {
+    /// Decides a PairConfirm (SPEC.md §5.5). `proof` is `Some(ok)` when the PAKE ran and the
+    /// client's confirmation was checked (`ok`: it verified, i.e. it knew the code the console
+    /// shows), `None` when there was nothing to check (no PAKE before it, or it did not
+    /// decode): refused, but not a guess, so not counted. A wrong proof is a counted guess.
+    /// One window, one pairing: the window check, the store and the closing of the window
+    /// happen under one lock, so two devices confirming at the same moment cannot both get
+    /// in. An owner hook (which may wait on a person) is asked outside the lock, and the
+    /// window checked again after it.
+    fn accept_pairing(&self, req: &PairRequest, proof: Option<bool>) -> bool {
         if !self.pairing_open() {
             return false;
         }
-        if !proof_ok {
-            self.pair_failed(req, "wrong or missing code");
-            return false;
+        match proof {
+            Some(true) => {}
+            Some(false) => {
+                self.guess_failed(req);
+                return false;
+            }
+            None => return false,
         }
         if self.approve.as_ref().is_some_and(|a| !a(req)) {
             return false;
@@ -389,15 +466,25 @@ impl ServerCtx {
         }
     }
 
-    /// Shows a pairing request to the user, at most once per `notify_every`: a stranger
-    /// reconnecting in a loop must not flood the screen.
-    fn notify_limited(&self, req: &PairRequest) {
+    /// Shows a pairing request: every session shows its own code (the user must always see the
+    /// code of their attempt), except an identical repeat (same address and key) within
+    /// `notify_every`. A flood is bounded by `Limits::unpaired` and the per-address rate of
+    /// new pairing sessions, not by hiding codes.
+    fn notify_session(&self, req: &PairRequest) {
         {
-            let mut last = self.last_notify.lock().unwrap();
-            if last.is_some_and(|t| t.elapsed() < self.limits.notify_every) {
+            let mut shown = self.shown.lock().unwrap();
+            let now = Instant::now();
+            if shown.len() > 64 {
+                shown.retain(|_, t| now.duration_since(*t) < self.limits.notify_every);
+            }
+            let key = (req.ip, req.peer_key);
+            if shown
+                .get(&key)
+                .is_some_and(|t| now.duration_since(*t) < self.limits.notify_every)
+            {
                 return;
             }
-            *last = Some(Instant::now());
+            shown.insert(key, now);
         }
         (self.notify)(req);
     }
@@ -564,6 +651,7 @@ async fn control(
             message: "too many sessions".into(),
         });
     };
+    let slot_ip = slot.ip;
     // Held while the session is welcomed but unconfirmed; dropped when it pairs or ends.
     let mut unpaired_slot: Option<UnpairedSlot> = None;
     let est = tokio::time::timeout_at(
@@ -591,8 +679,19 @@ async fn control(
                     ctx.supersede(k);
                     match UnpairedSlot::take(ctx) {
                         Some(slot) => {
-                            unpaired_slot = Some(slot);
-                            Admission::Pairing
+                            if ctx.pair_budget.lock().unwrap().welcome_allowed(
+                                slot_ip,
+                                Instant::now(),
+                                &ctx.limits,
+                            ) {
+                                unpaired_slot = Some(slot);
+                                Admission::Pairing
+                            } else {
+                                Admission::Refuse(
+                                    gen::ERR_BUSY,
+                                    "too many pairing attempts from this address",
+                                )
+                            }
                         }
                         None => Admission::Refuse(gen::ERR_BUSY, "too many devices are pairing"),
                     }
@@ -609,6 +708,7 @@ async fn control(
     .map_err(|_| Ava1Error::Timeout)??;
     let welcomed = Instant::now();
     let req = PairRequest {
+        ip: slot_ip,
         peer_key: est.peer_key,
         peer_name: est.peer_name.clone(),
         // A random code for this session, from the CSPRNG; shown on the console's screen
@@ -640,7 +740,7 @@ async fn control(
         .unwrap()
         .insert(est.session_id, entry.clone());
     if est.pairing.is_some() {
-        ctx.notify_limited(&req);
+        ctx.notify_session(&req);
     }
     let (tx, mut rx) = mpsc::channel(DELIVER_DEPTH);
     let (link, outbox) = drive(r, w, ctx.timing, tx);
@@ -752,7 +852,8 @@ async fn control(
             }
             PairPakeClient::TYPE => {
                 // The first half of the pairing (SPEC.md §5.5): our public value, computed
-                // from the code only this console's screen shows. Once per session.
+                // from the code only this console's screen shows. Once per session. Nothing
+                // here reveals anything about the code, so nothing here counts as a guess.
                 let h = &entry.keys.hash;
                 if entry.paired.load(Ordering::SeqCst)
                     || entry.pake_started.swap(true, Ordering::SeqCst)
@@ -763,20 +864,39 @@ async fn control(
                     refuse_on(&outbox, gen::ERR_PAIRING_CLOSED, "pairing is closed").await;
                     break;
                 }
+                if !ctx
+                    .pair_budget
+                    .lock()
+                    .unwrap()
+                    .guess_allowed(req.ip, &ctx.limits)
+                {
+                    (ctx.log)(&format!(
+                        "ava1: pairing refused: {} has used its wrong-code budget",
+                        req.ip
+                    ));
+                    refuse_on(
+                        &outbox,
+                        gen::ERR_PAIRING_CLOSED,
+                        "too many wrong codes from this address",
+                    )
+                    .await;
+                    break;
+                }
                 let Ok(m) = f.decode::<PairPakeClient>() else {
-                    ctx.pair_failed(&req, "malformed pairing message");
                     outbox.flush(FAREWELL).await;
                     break;
                 };
-                let (Ok(mut x), g) = (keys::random_bytes::<32>(), cpace::generator(h, req.code))
-                else {
+                let (Ok(x), g) = (
+                    keys::random_bytes::<32>().map(zeroize::Zeroizing::new),
+                    cpace::generator(h, req.code),
+                ) else {
                     break;
                 };
-                let k = cpace::public(&x, &g)
-                    .and_then(|yb| cpace::key(h, &x, &m.y, &m.y, &yb).map(|k| (yb, k)));
-                zeroize::Zeroize::zeroize(&mut x);
+                let k = cpace::public(&x, &g).and_then(|yb| {
+                    cpace::key(h, &x, &m.y, &m.y, &yb).map(|k| (yb, zeroize::Zeroizing::new(k)))
+                });
+                drop(x);
                 let Some((yb, k)) = k else {
-                    ctx.pair_failed(&req, "degenerate pairing value");
                     outbox.flush(FAREWELL).await;
                     break;
                 };
@@ -791,26 +911,29 @@ async fn control(
             PairConfirm::TYPE => {
                 let already = entry.paired.load(Ordering::SeqCst);
                 let h = &entry.keys.hash;
-                // One attempt per session: whatever the outcome, a refusal ends it below.
+                // One attempt per session: whatever the outcome, a refusal ends it below. The
+                // key is taken out of the entry (and wiped when dropped, on every path).
                 let k = if already {
                     None
                 } else {
                     entry.pake.lock().unwrap().take()
                 };
-                let proof_ok = match (k, f.decode::<PairConfirm>()) {
-                    (Some(k), Ok(c)) => cpace::ct_eq32(&c.mac, &cpace::mac(&k, b"client", h)),
-                    _ => false,
+                // Some(ok): the PAKE ran, so this is a real guess. None: nothing was guessed.
+                let proof = match (&k, f.decode::<PairConfirm>()) {
+                    (Some(k), Ok(c)) => Some(cpace::ct_eq32(&c.mac, &cpace::mac(k, b"client", h))),
+                    _ => None,
                 };
-                let accepted = already || ctx.accept_pairing(&req, proof_ok);
+                let accepted = already || ctx.accept_pairing(&req, proof);
                 entry.paired.store(accepted, Ordering::SeqCst);
                 if accepted && !already {
                     entry.unpaired.lock().unwrap().take();
                 }
                 // The console proves it knew the code too: the client stores nothing without it.
-                let mac = match (accepted && !already, k) {
-                    (true, Some(k)) => cpace::mac(&k, b"server", h),
+                let mac = match (accepted && !already, &k) {
+                    (true, Some(k)) => cpace::mac(k, b"server", h),
                     _ => [0; 32],
                 };
+                drop(k);
                 let result = PairResult {
                     accepted: u8::from(accepted),
                     mac,
@@ -1061,4 +1184,73 @@ async fn lane(
     entry.router.lane_down(j.lane_id, lane_gen);
     drop(link);
     Ok(())
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    fn ip(n: u8) -> IpAddr {
+        IpAddr::from([10, 0, 0, n])
+    }
+
+    #[test]
+    fn one_addresses_guesses_do_not_lock_out_another() {
+        let l = Limits::default();
+        let mut b = PairBudget::default();
+        for _ in 0..l.pair_fails_per_ip {
+            assert!(b.guess_allowed(ip(1), &l));
+            let (_, close) = b.guess_failed(ip(1), &l);
+            assert!(!close);
+        }
+        assert!(!b.guess_allowed(ip(1), &l), "its own budget is spent");
+        assert!(b.guess_allowed(ip(2), &l), "another address is untouched");
+        b.reset();
+        assert!(b.guess_allowed(ip(1), &l), "a new window starts over");
+    }
+
+    #[test]
+    fn the_global_cap_holds_across_addresses() {
+        let l = Limits::default();
+        let mut b = PairBudget::default();
+        let mut closed_at = None;
+        'all: for n in 1..=250u8 {
+            for _ in 0..l.pair_fails_per_ip {
+                assert!(closed_at.is_none());
+                if !b.guess_allowed(ip(n), &l) {
+                    break;
+                }
+                let (_, close) = b.guess_failed(ip(n), &l);
+                if close {
+                    closed_at = Some(b.total);
+                    break 'all;
+                }
+            }
+        }
+        assert_eq!(
+            closed_at,
+            Some(l.pair_fails_total),
+            "20 guesses in all, from 4 addresses"
+        );
+        assert!(!b.guess_allowed(ip(99), &l), "nobody guesses after the cap");
+    }
+
+    #[test]
+    fn new_pairing_sessions_are_rated_per_address() {
+        let l = Limits::default();
+        let mut b = PairBudget::default();
+        let t0 = Instant::now();
+        for _ in 0..l.welcomes_per_ip {
+            assert!(b.welcome_allowed(ip(1), t0, &l));
+        }
+        assert!(!b.welcome_allowed(ip(1), t0, &l));
+        assert!(
+            b.welcome_allowed(ip(2), t0, &l),
+            "another address has its own share"
+        );
+        assert!(
+            b.welcome_allowed(ip(1), t0 + WELCOME_WINDOW, &l),
+            "and it refills"
+        );
+    }
 }

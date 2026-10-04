@@ -797,7 +797,11 @@ async fn the_c_server_caps_unconfirmed_sessions_and_connections_per_address() {
     let _b = stranger(&srv).await.unwrap();
     let c = stranger(&srv).await;
     assert!(is_busy(&c), "a third unconfirmed device: {:?}", c.err());
-    assert_eq!(srv.pair_requests().0, 1, "one notification per 10 s");
+    assert_eq!(
+        srv.pair_requests().0,
+        2,
+        "every welcomed session shows its own code"
+    );
     a.close().await;
     wait_conns(&srv, 1).await;
     stranger(&srv).await.unwrap();
@@ -1325,6 +1329,7 @@ async fn shown_code(srv: &CServer, n: u32) -> u32 {
 
 use ava1::conn::Frame;
 use ava1::cpace;
+use ava1::wire::Message;
 
 struct Rogue {
     r: RawR,
@@ -1464,26 +1469,214 @@ async fn the_c_server_pairs_the_right_code() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn five_wrong_codes_close_the_c_servers_window() {
-    let d = dir("pk-five");
-    let srv = CServer::start(SECRET, &d.join("peers"), 60, 100, 500, 500);
+async fn one_addresses_five_wrong_guesses_spend_its_budget_on_the_c_server() {
+    let d = dir("pk-budget");
+    let srv = CServer::start_with(
+        SECRET,
+        &d.join("peers"),
+        ffi::TestOpts {
+            max_welcomes_per_ip: 100,
+            ..opts(60)
+        },
+    );
     for i in 0..5u32 {
-        assert!(srv.pairing_open(), "still open before failure {i}");
+        let mut g = rogue(&srv.addr()).await;
+        let code = shown_code(&srv, i + 1).await;
+        assert!(!g.pake(wrong(code)).await.1, "guess {i}");
+        drop(g);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    assert_eq!(srv.pair_guesses(), 5);
+    assert!(
+        srv.pairing_open(),
+        "five guesses from one address do not close the window"
+    );
+    // Out of guesses, even the right code is refused, and refusing it is free.
+    let mut g = rogue(&srv.addr()).await;
+    let code = shown_code(&srv, 6).await;
+    assert!(!g.pake(code).await.1);
+    assert_eq!(srv.pair_guesses(), 5);
+    // Reopened (a paired device's pairing.open), the budget starts again.
+    srv.open_pairing(60);
+    let mut g = rogue(&srv.addr()).await;
+    let code = shown_code(&srv, 7).await;
+    assert!(g.pake(code).await.1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_global_cap_on_guesses_closes_the_c_servers_window() {
+    let d = dir("pk-global");
+    let srv = CServer::start_with(
+        SECRET,
+        &d.join("peers"),
+        ffi::TestOpts {
+            max_pair_fails_per_ip: 100,
+            max_pair_fails_total: 5,
+            max_welcomes_per_ip: 100,
+            ..opts(60)
+        },
+    );
+    for i in 0..5u32 {
+        assert!(srv.pairing_open(), "still open before guess {i}");
         let mut g = rogue(&srv.addr()).await;
         let code = shown_code(&srv, i + 1).await;
         assert!(!g.pake(wrong(code)).await.1);
         drop(g);
-        // The refused session's place is given back before the next knock.
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
     assert!(!srv.pairing_open(), "the window closed");
     let r = stranger(&srv).await;
     assert!(is_pairing_closed(&r), "{:?}", r.err());
-    // Reopened (a paired device's pairing.open), the counter starts again.
     srv.open_pairing(60);
     let mut g = rogue(&srv.addr()).await;
     let code = shown_code(&srv, 6).await;
     assert!(g.pake(code).await.1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn junk_sessions_never_close_the_c_servers_window() {
+    let d = dir("pk-junk");
+    let srv = CServer::start_with(
+        SECRET,
+        &d.join("peers"),
+        ffi::TestOpts {
+            max_welcomes_per_ip: 1000,
+            ..opts(60)
+        },
+    );
+    for _ in 0..30 {
+        let mut g = rogue(&srv.addr()).await;
+        g.w.send_msg(1, &gen::PairConfirm { mac: [7; 32] })
+            .await
+            .unwrap();
+        assert!(g.refused().await);
+        drop(g);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+    }
+    for body in [
+        vec![0u8; 3],
+        gen::PairPakeClient { y: [0; 32] }.to_bytes().unwrap(),
+    ] {
+        let mut g = rogue(&srv.addr()).await;
+        g.w.send(0x0d, 1, &body).await.unwrap();
+        drop(g);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+    }
+    assert_eq!(srv.pair_guesses(), 0);
+    assert!(srv.pairing_open());
+    let mut g = rogue(&srv.addr()).await;
+    let n = srv.pair_requests().0;
+    let code = shown_code(&srv, n).await;
+    assert!(g.pake(code).await.1, "the real user still pairs");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_address_cannot_start_more_than_its_share_of_pairing_sessions_on_the_c_server() {
+    let d = dir("pk-rate");
+    let srv = CServer::start_with(SECRET, &d.join("peers"), opts(60));
+    let mut ok = 0;
+    for _ in 0..8 {
+        match stranger(&srv).await {
+            Ok(s) => {
+                ok += 1;
+                s.close().await;
+                tokio::time::sleep(Duration::from_millis(150)).await;
+            }
+            Err(e) => assert!(
+                matches!(&e, Ava1Error::Refused { code, .. } if *code == gen::ERR_BUSY),
+                "{e:?}"
+            ),
+        }
+    }
+    assert_eq!(ok, 6);
+    assert!(srv.pairing_open() && srv.pair_guesses() == 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_c_console_shows_the_users_code_right_after_a_strangers() {
+    let d = dir("pk-shown");
+    let srv = CServer::start_with(SECRET, &d.join("peers"), opts(60));
+    let _stranger = rogue(&srv.addr()).await;
+    let first = shown_code(&srv, 1).await;
+    // The user's own attempt, moments later from the same address: its code is shown too.
+    let mut mine = rogue(&srv.addr()).await;
+    let second = shown_code(&srv, 2).await;
+    assert_ne!(first, second, "a new session, a new code");
+    assert!(mine.pake(second).await.1);
+    // An identical repeat (same address, same key) is not shown again.
+    let d2 = dir("pk-shown2");
+    drop(srv);
+    let srv = CServer::start_with(SECRET, &d2.join("peers"), opts(60));
+    let me = Arc::new(Identity::generate().unwrap());
+    for _ in 0..3 {
+        let _ = connect(
+            &srv.addr(),
+            me.clone(),
+            Arc::new(Mutex::new(PeerStore::in_memory())),
+            "phone",
+            fast(),
+        )
+        .await
+        .unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(srv.pair_requests().0, 1);
+}
+
+/// The pairing budgets with several addresses at once (the loopback tests only have one).
+#[test]
+fn the_c_pairing_budget_is_per_address_under_a_global_cap() {
+    let mut buf = vec![0u8; unsafe { ffi::ava1_test_sizeof_pairlimit() }];
+    let p = buf.as_mut_ptr();
+    unsafe {
+        ffi::ava1_pl_init(p, 0, 0, 0, 0); // the defaults: 5, 20, 6 per 10 s
+        let mut n = 0u32;
+        for _ in 0..5 {
+            assert_eq!(ffi::ava1_pl_guess_allowed(p, 1, 0), 1);
+            assert_eq!(ffi::ava1_pl_guess_failed(p, 1, 0, &mut n), 0);
+        }
+        assert_eq!(n, 5);
+        assert_eq!(
+            ffi::ava1_pl_guess_allowed(p, 1, 0),
+            0,
+            "its own budget is spent"
+        );
+        assert_eq!(
+            ffi::ava1_pl_guess_allowed(p, 2, 0),
+            1,
+            "another address is untouched"
+        );
+        // The global cap: 20 in all, so three more addresses (15) and one more (5).
+        let mut closed = 0;
+        for ip in 2..=4u32 {
+            for _ in 0..5 {
+                closed = ffi::ava1_pl_guess_failed(p, ip, 0, &mut n);
+            }
+        }
+        assert_eq!(closed, 1, "20 guesses from 4 addresses spend the cap");
+        assert_eq!(
+            ffi::ava1_pl_guess_allowed(p, 99, 0),
+            0,
+            "nobody guesses after the cap"
+        );
+        ffi::ava1_pl_reset(p);
+        assert_eq!(
+            ffi::ava1_pl_guess_allowed(p, 1, 0),
+            1,
+            "a new window starts over"
+        );
+        // New sessions: 6 per address per 10 s.
+        for _ in 0..6 {
+            assert_eq!(ffi::ava1_pl_welcome_allowed(p, 7, 1000), 1);
+        }
+        assert_eq!(ffi::ava1_pl_welcome_allowed(p, 7, 1000), 0);
+        assert_eq!(ffi::ava1_pl_welcome_allowed(p, 8, 1000), 1, "its own share");
+        assert_eq!(
+            ffi::ava1_pl_welcome_allowed(p, 7, 11_000),
+            1,
+            "and it refills"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

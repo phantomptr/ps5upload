@@ -317,6 +317,23 @@ fn c_cpace_reproduces_the_vectors() {
 /// every code).
 #[test]
 fn the_rust_elligator_map_equals_monocypher_on_many_inputs() {
+    // The special inputs first: r = 0 and r = 1 (where the map's formulas are least generic),
+    // r = 2^254 - 1 (the largest 254-bit value) and one with the two ignored top bits set.
+    let mut special = vec![[0u8; 32], [0xffu8; 32]];
+    let mut one = [0u8; 32];
+    one[0] = 1;
+    special.push(one);
+    let mut top = [0u8; 32];
+    top[31] = 0xc0; // only the ignored bits: the same r as zero
+    special.push(top);
+    let mut max = [0xffu8; 32];
+    max[31] = 0x3f;
+    special.push(max);
+    for (i, hidden) in special.iter().enumerate() {
+        let mut c = [0u8; 32];
+        unsafe { ffi::crypto_elligator_map(c.as_mut_ptr(), hidden.as_ptr()) };
+        assert_eq!(c, ava1::cpace::elligator_map(hidden), "special {i}");
+    }
     let mut seed = 0x9e37_79b9_7f4a_7c15u64;
     for i in 0..3000u32 {
         let mut hidden = [0u8; 32];

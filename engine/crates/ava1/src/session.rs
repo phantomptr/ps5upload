@@ -373,12 +373,14 @@ impl Session {
             }
             let h = self.est.keys.hash;
             let g = cpace::generator(&h, typed);
-            let mut x = keys::random_bytes::<32>()?;
+            // Wiped on every path out, including a failed request.
+            let x = zeroize::Zeroizing::new(keys::random_bytes::<32>()?);
             let ya = cpace::public(&x, &g).ok_or_else(|| wrong("degenerate pairing value"))?;
             let yb: PairPakeServer = self.request(PairPakeClient { y: ya }).await?.decode()?;
-            let k = cpace::key(&h, &x, &yb.y, &ya, &yb.y);
-            zeroize::Zeroize::zeroize(&mut x);
-            let k = k.ok_or_else(|| wrong("degenerate pairing value"))?;
+            let k = cpace::key(&h, &x, &yb.y, &ya, &yb.y)
+                .map(zeroize::Zeroizing::new)
+                .ok_or_else(|| wrong("degenerate pairing value"))?;
+            drop(x);
             let mac = cpace::mac(&k, b"client", &h);
             let r: PairResult = self.request(PairConfirm { mac }).await?.decode()?;
             if r.accepted == 0 {

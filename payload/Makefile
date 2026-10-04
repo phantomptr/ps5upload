@@ -52,7 +52,7 @@ SQLITE_OBJ := sqlite3.o
 MONO_DIR := third_party/monocypher
 MONO_OBJ := monocypher.o
 AVA1_SRCS := ava1/ava1_wire.c ava1/ava1_frame.c ava1/ava1_keys.c ava1/ava1_noise.c ava1/ava1_conn.c \
-             ava1/ava1_store.c ava1/ava1_server.c ava1/ava1_trust.c ava1/platform_ps5.c \
+             ava1/ava1_store.c ava1/ava1_pairlimit.c ava1/ava1_server.c ava1/ava1_trust.c ava1/platform_ps5.c \
              ava1/ava1_aead.c ava1/ava1_chacha_avx2.c ava1/ava1_b3.c ava1/ava1_ranges.c \
              ava1/ava1_journal.c ava1/ava1_tune.c ava1/ava1_thread.c ava1/ava1_manifest.c \
              ava1/ava1_job.c ava1/ava1_data.c ava1/ava1_apply.c ava1/ava1_recv.c ava1/ava1_send.c \

@@ -76,6 +76,7 @@ fn main() {
             ava1.join("ava1_aead.c"),
             ava1.join("ava1_conn.c"),
             ava1.join("ava1_store.c"),
+            ava1.join("ava1_pairlimit.c"),
             ava1.join("ava1_server.c"),
             ava1.join("ava1_trust.c"),
             ava1.join("ava1_ranges.c"),
