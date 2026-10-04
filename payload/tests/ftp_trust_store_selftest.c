@@ -49,7 +49,7 @@ static int has(const char *path, const char *text) {
 }
 
 int main(void) {
-    char base[256], prot[300], p[400], q[400];
+    char base[PATH_MAX], prot[PATH_MAX + 32], p[2 * PATH_MAX + 64], q[2 * PATH_MAX + 64];
     struct ftp_session s;
     snprintf(base, sizeof base, "/tmp/ps5-ftp-s2-%d", (int)getpid());
     snprintf(p, sizeof p, "rm -rf %s", base);

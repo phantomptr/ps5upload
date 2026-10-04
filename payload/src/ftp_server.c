@@ -116,7 +116,7 @@ struct ftp_session {
     _Atomic int data_listen_fd;
     struct sockaddr_in data_addr;
     int data_offset;
-    char cwd[512];
+    char cwd[1024]; /* as long as abs_path's result buffer: a longer cwd was silently cut short */
     char root[512];
     int readonly;
     int authenticated;
@@ -258,10 +258,17 @@ static void abs_path(struct ftp_session *s, const char *arg, char *out, size_t c
     char normalized[1024];
     normalize_path(virtual, normalized, sizeof(normalized));
     size_t root_len = strlen(s->root);
+    int wn;
     if (root_len <= 1) {
-        snprintf(out, cap, "%s", normalized);
+        wn = snprintf(out, cap, "%s", normalized);
     } else {
-        snprintf(out, cap, "%s%s", s->root, normalized);
+        wn = snprintf(out, cap, "%s%s", s->root, normalized);
+    }
+    /* A path that does not fit is never used cut short (a policy check on the prefix could disagree
+     * with the path): it becomes a name that cannot exist, like a denied one. */
+    if (wn < 0 || (size_t)wn >= cap) {
+        snprintf(out, cap, "%s", "/.ps5upload-denied");
+        return;
     }
     /* The AVA1 trust store (identity, paired peers) is not served over FTP, whatever the root is and
      * however the path is spelled or linked: a path in or above it becomes a name that cannot exist. */
@@ -325,7 +332,13 @@ static void handle_cwd(struct ftp_session *s, const char *arg) {
         send_resp(s->ctrl_fd, 550, "Failed to change directory");
         return;
     }
-    snprintf(s->cwd, sizeof(s->cwd), "%s", path);
+    int cn = snprintf(s->cwd, sizeof(s->cwd), "%s", path);
+    if (cn < 0 || (size_t)cn >= sizeof(s->cwd)) {
+        /* never keep a truncated working directory */
+        snprintf(s->cwd, sizeof(s->cwd), "%s", s->root);
+        send_resp(s->ctrl_fd, 550, "Failed to change directory");
+        return;
+    }
     send_resp(s->ctrl_fd, 250, "Directory successfully changed");
 }
 
@@ -337,7 +350,13 @@ static void handle_cdup(struct ftp_session *s) {
         send_resp(s->ctrl_fd, 550, "Failed to change directory");
         return;
     }
-    snprintf(s->cwd, sizeof(s->cwd), "%s", path);
+    int cn = snprintf(s->cwd, sizeof(s->cwd), "%s", path);
+    if (cn < 0 || (size_t)cn >= sizeof(s->cwd)) {
+        /* never keep a truncated working directory */
+        snprintf(s->cwd, sizeof(s->cwd), "%s", s->root);
+        send_resp(s->ctrl_fd, 550, "Failed to change directory");
+        return;
+    }
     send_resp(s->ctrl_fd, 250, "Directory successfully changed");
 }
 
@@ -438,8 +457,8 @@ static void send_listing(struct ftp_session *s, int names_only) {
             continue;
         }
 
-        char fullpath[512];
-        snprintf(fullpath, sizeof(fullpath), "%s/%s", s->cwd, ent->d_name);
+        char fullpath[1024 + 300];
+        if (snprintf(fullpath, sizeof(fullpath), "%s/%s", s->cwd, ent->d_name) >= (int)sizeof(fullpath)) continue;
         struct stat st;
         if (stat(fullpath, &st) != 0) continue;
         char timestr[64];
@@ -617,8 +636,8 @@ static void handle_mlsd(struct ftp_session *s) {
     struct dirent *ent;
     char linebuf[1024];
     while ((ent = readdir(d)) != NULL) {
-        char fullpath[600];
-        snprintf(fullpath, sizeof(fullpath), "%s/%s", s->cwd, ent->d_name);
+        char fullpath[1024 + 300];
+        if (snprintf(fullpath, sizeof(fullpath), "%s/%s", s->cwd, ent->d_name) >= (int)sizeof(fullpath)) continue;
         struct stat st;
         if (stat(fullpath, &st) != 0) continue;
         char timestr[32];
