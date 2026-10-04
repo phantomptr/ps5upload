@@ -5,7 +5,7 @@ DONE = landed with the commit cited; OPEN = not done, with the reason.
 
 | # | item | status | commit / note |
 |---|---|---|---|
-| 1 | Pro outage triage (02 §2) | OPEN | Needs the console (`/data/ps5upload/stderr.log`, the crash notice). The levers it asks for first, #4 and #5, are in. |
+| 1 | Pro outage triage (02 §2) | TRIAGED (b41c735e) | `protocol/ava1/OUTAGE-2026-10-03.md`: the console's stderr.log shows two helpers running AVA1 at once after a reap refused an unverifiable prior record; hardened in the final-review console fixes (no AVA1 while :9120 is held; kernel-verified reap). Confirmed only by the restart stress test on hardware. |
 | 2 | Reconcile CUTOVER §3 with AVA1-only code | DONE | 6b44532e: option (a), no release from this branch until the §3 gates are green; the last FTX2 release stays shipped. |
 | 3 | Nonce audit remaining steps | DONE | Ceiling guard, comment, lockstep test were in 282fa0b3 (`AUDIT-nonce.md` §8). The C layout note was stated but not pinned: 6ae8633e states it explicitly and adds `aead.rs::the_c_nonce_is_four_zero_bytes_then_the_counter_little_endian`. |
 | 4 | `same_device` fails closed (HW-1) | DONE | 886cbae7: `commit_large` and `finish` refuse on -1 with `ERR_IO`; `fs.rename`, `FS_MOVE` and FTP RNTO refuse `XDEV_UNKNOWN` (`xdev_rename_is_safe`); shell `mv` and the delete walker already refused. Tests: `apply.rs` (-1 and 0, file and tree, nothing renamed), `mgmt_fs.rs` (unreadable devices move nothing, plus a lint), `cross_device_selftest.c`. SPEC §7.3/§11.6 say unknown is refused. |
