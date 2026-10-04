@@ -698,11 +698,16 @@ static void handle_rnto(struct ftp_session *s, const char *arg) {
      * let the kernel take the machine down. 553 tells the client the
      * name was disallowed; copy-then-delete is the safe alternative and
      * every client can do it. */
-    if (xdev_rename_crosses_l(s->rename_path, path, xdev_lstat_dev, xdev_stat_dev)
-        == XDEV_CROSSES) {
+    xdev_result_t xr = xdev_rename_crosses_l(s->rename_path, path, xdev_lstat_dev, xdev_stat_dev);
+    if (xr == XDEV_CROSSES) {
         s->rename_path[0] = '\0';
         send_resp(s->ctrl_fd, 553,
                   "Cannot rename across devices - copy then delete instead");
+        return;
+    }
+    if (!xdev_rename_is_safe(xr)) { /* unknown is refused: fail closed (review 007 #4) */
+        s->rename_path[0] = '\0';
+        send_resp(s->ctrl_fd, 550, "Cannot verify the destination drive");
         return;
     }
     if (rename(s->rename_path, path) != 0) {

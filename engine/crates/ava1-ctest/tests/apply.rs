@@ -189,6 +189,65 @@ fn c_commit_refuses_cross_device_rename() {
 }
 
 #[test]
+fn c_commit_refuses_an_unknown_device_and_never_renames() {
+    // review 007 #4 (HW-1): "could not tell" must fail closed like "another drive".
+    let t = tmp("xdev-unknown");
+    let root = t.join("dest");
+    std::fs::create_dir_all(&root).unwrap();
+    let d = data(2 * GROUP as usize + 1, 3);
+    let m = Manifest {
+        entries: vec![file("big", d.len() as u64)],
+    };
+    c_set_same_device(-1); // the device query itself failed
+    let job = CApplyJob::begin(&t.join("jobs"), &root, 0, &m, 0);
+    send_large(&job, 0, &d, false);
+    assert_eq!(job.wait(10_000), ava1::gen::ERR_IO as i32);
+    c_set_same_device(1);
+    assert!(root.join("big.ava-part").exists());
+    assert!(!root.join("big").exists());
+}
+
+#[test]
+fn c_commit_with_no_device_hook_refuses_and_never_renames() {
+    // final review fs #1: a missing same_device hook is not "no guard needed".
+    let t = tmp("xdev-nohook");
+    let root = t.join("dest");
+    std::fs::create_dir_all(&root).unwrap();
+    let d = data(2 * GROUP as usize + 1, 3);
+    let m = Manifest {
+        entries: vec![file("big", d.len() as u64)],
+    };
+    c_set_same_device(-2); // the shim installs no hook at all
+    let job = CApplyJob::begin(&t.join("jobs"), &root, 0, &m, 0);
+    send_large(&job, 0, &d, false);
+    assert_eq!(job.wait(10_000), ava1::gen::ERR_IO as i32);
+    c_set_same_device(1);
+    assert!(root.join("big.ava-part").exists());
+    assert!(!root.join("big").exists());
+}
+
+#[test]
+fn a_staged_tree_is_not_moved_when_the_device_is_unknown_or_another() {
+    for (v, code) in [(-1, ava1::gen::ERR_IO), (0, ava1::gen::ERR_CROSS_DEVICE)] {
+        let t = tmp(&format!("tree-xdev{v}"));
+        let root = t.join("dest");
+        let m = Manifest {
+            entries: vec![file("a", 1), file("b", 1)],
+        };
+        c_set_same_device(v);
+        let job = CApplyJob::begin(&t.join("jobs"), &root, 0, &m, 0);
+        job.record(0, b"1", *blake3::hash(b"1").as_bytes());
+        job.record(1, b"2", *blake3::hash(b"2").as_bytes());
+        assert_eq!(job.wait(10_000), code as i32, "same_device={v}");
+        c_set_same_device(1);
+        assert!(!root.exists(), "the tree was renamed into place (v={v})");
+        assert!(Path::new(&format!("{}.ava-part", root.display()))
+            .join("a")
+            .exists());
+    }
+}
+
+#[test]
 fn a_staged_tree_is_not_moved_over_a_root_that_appeared() {
     let t = tmp("exists");
     let root = t.join("dest");

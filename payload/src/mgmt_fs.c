@@ -272,9 +272,11 @@ int mgmt_run_fs_rename(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
     if (path_tree_op_refused(from) || path_tree_op_refused(to)) return mgmt_reply_error(cx, AVA1_ERR_PATH, "fs_move_path_not_allowed");
     /* NEVER rename(2) across devices: on this kernel it does not fail with EXDEV, it panics the
      * console. Compare the source's OWN device (lstat: a link is judged by where it lives, not by
-     * its target) with the destination's parent before any rename; a
-     * path whose device cannot be read (missing source or directory) fails below with a plain errno. */
-    if (xdev_rename_crosses_l(from, to, src_dev, dev) == XDEV_CROSSES) return mgmt_reply_error(cx, AVA1_ERR_CROSS_DEVICE, "fs_move_cross_mount");
+     * its target) with the destination's parent before any rename. A device that cannot be read
+     * (missing source or directory) is refused too: only a definite SAME reaches rename(). */
+    xdev_result_t xr = xdev_rename_crosses_l(from, to, src_dev, dev);
+    if (xr == XDEV_CROSSES) return mgmt_reply_error(cx, AVA1_ERR_CROSS_DEVICE, "fs_move_cross_mount");
+    if (!xdev_rename_is_safe(xr)) return mgmt_reply_error(cx, AVA1_ERR_IO, "fs_move_device_unknown"); /* fail closed (review 007 #4) */
     if (!q.overwrite && lstat(to, &st) == 0) return mgmt_reply_error(cx, AVA1_ERR_EXISTS, "fs_move_exists");
     if (rename(from, to) != 0) {
         if (errno == EXDEV) return mgmt_reply_error(cx, AVA1_ERR_CROSS_DEVICE, "fs_move_cross_mount");

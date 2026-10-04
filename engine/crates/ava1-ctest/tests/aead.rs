@@ -112,3 +112,20 @@ fn c_and_rust_seal_identically_on_every_path() {
     }
     unsafe { ffi::ava1_aead_allow_simd(1) };
 }
+
+/// Review 007 #3: the C nonce layout, stated and pinned. The 12-byte nonce is four zero bytes then
+/// the counter as a little-endian u64. The Rust side is sealed with those bytes spelled out by hand
+/// (not through `keys::seal`), so a changed layout in either stack breaks this.
+#[test]
+fn the_c_nonce_is_four_zero_bytes_then_the_counter_little_endian() {
+    let key = [0x5au8; 32];
+    for n in [0u64, 1, 0x0102_0304_0506_0708, 1 << 32, u64::MAX - 1] {
+        let mut nonce = [0u8; 12];
+        nonce[4..].copy_from_slice(&n.to_le_bytes());
+        let mut want = b"nonce layout".to_vec();
+        keys::seal_nonce(&key, &nonce, b"ad", &mut want);
+        let mut got = b"nonce layout".to_vec();
+        c_seal(&key, n, b"ad", &mut got);
+        assert_eq!(got, want, "counter {n:#x}");
+    }
+}

@@ -7413,12 +7413,18 @@ static int handle_fs_move(runtime_state_t *state, int client_fd,
     }
     /* Cross-device guard — see the header comment. The SOURCE is judged by its own device (lstat:
      * a symlink is what rename() moves, and stat() would judge it by its target, so a link on one
-     * device pointing at another could pass), the destination by its parent directory. If a device
-     * cannot be read (missing source or directory) rename() fails with a plain errno, not the
-     * cross-device panic. */
-    if (xdev_rename_crosses_l(from, to, xdev_lstat_dev, xdev_stat_dev) == XDEV_CROSSES) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_move_cross_mount", 19);
+     * device pointing at another could pass), the destination by its parent directory. A device
+     * that cannot be read is refused too: only a definite SAME reaches rename() (review 007 #4). */
+    {
+        xdev_result_t xr = xdev_rename_crosses_l(from, to, xdev_lstat_dev, xdev_stat_dev);
+        if (xr == XDEV_CROSSES) {
+            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                              "fs_move_cross_mount", 19);
+        }
+        if (!xdev_rename_is_safe(xr)) {
+            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                              "fs_move_device_unknown", 22);
+        }
     }
     if (rename(from, to) != 0) {
         if (errno == EXDEV) {

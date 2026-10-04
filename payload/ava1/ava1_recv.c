@@ -598,6 +598,9 @@ ava1_job_t *ava1_recv_open(const ava1_recv_spec_t *s, ava1_job_open_ack_t *ack, 
     }
     j = ava1_job_create_attached(s->id, s->owner, s->sid);
     if (!j) return refuse(ack, AVA1_ERR_BUSY, msg, cap, "too many jobs, or this job is still closing; try again");
+    if (!j->log_small && s->kind == AVA1_JOB_UPLOAD)
+        fprintf(stderr, "[ava1] job %02x%02x%02x%02x: durable-by-log OFF (%s)\n", s->id[0], s->id[1], s->id[2], s->id[3],
+                ava1_data_log_small_flagged() ? "debug flag" : "config");
     j->kind = s->kind;
     j->policy = s->policy;
     j->flags = s->flags;

@@ -1446,6 +1446,16 @@ static void apply_opts(ava1_data_cfg_t *cfg) {
     cfg->recover_every_ms = g_opt_every;
     cfg->recover_max = g_opt_rmax;
 }
+/* review 007 #5: point the console's durable-by-log off-switch at a test file (NULL: the real path). */
+static char g_log_flag_buf[1024];
+void ava1_test_set_log_small_flag(const char *path) {
+    if (!path) {
+        ava1_log_small_flag_path = AVA1_LOG_SMALL_OFF_FLAG;
+        return;
+    }
+    snprintf(g_log_flag_buf, sizeof g_log_flag_buf, "%s", path);
+    ava1_log_small_flag_path = g_log_flag_buf;
+}
 static int g_hold_commit;                           /* commits wait at COMMIT_VERIFIED while set */
 static uint32_t g_prealloc_fault = UINT32_MAX - 1;  /* a file whose preallocation answers ENOSPC */
 static void t_hook(ava1_job_t *j, int point, uint32_t id) {
@@ -1648,6 +1658,7 @@ int ava1_test_apply_dup_on_commit(uint32_t id, uint64_t off, const uint8_t *d, s
 void ava1_test_set_same_device(int v) { __atomic_store_n(&g_same_device, v, __ATOMIC_SEQ_CST); }
 static int t_same_device(const char *a, const char *b) {
     int v = __atomic_load_n(&g_same_device, __ATOMIC_SEQ_CST);
+    if (v == -2) return -1; /* (not reached with a NULL hook) */
     if (v == 2) { /* "a mount": the path is on another device than any different folder */
         char ra[1024], rb[1024];
         if (!realpath(a, ra) || !realpath(b, rb)) return -1;
@@ -1775,7 +1786,7 @@ int ava1_test_apply_begin(const char *jobs_dir, const char *root, uint32_t flags
     cfg.may_write = t_allow;
     cfg.may_read = t_allow_read;
     cfg.refuse_link = t_refuse_link;
-    cfg.same_device = t_same_device;
+    cfg.same_device = g_same_device == -2 ? NULL : t_same_device; /* -2: no hook at all */
     cfg.fsync_delay_us = fsync_delay_us;
     cfg.crash_at = crash_at;
     apply_opts(&cfg);
