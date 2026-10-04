@@ -198,7 +198,8 @@ kept.
       the engine's `LocalSink` re-hashes more than the console does on resume (allowed, see §13.4).
 - [ ] The workspace gate is green on the release commit: `cargo fmt --check`, `cargo clippy --workspace
       --all-targets -- -D warnings`, `cargo test --workspace`, `cargo test -p ava1-ctest -- --test-threads=1`,
-      `cargo check --locked`, the client lint and vitest, `make ava1-fuzz-c`.
+      `make test-ava1-sanitize` (the ctest suite under ASan + UBSan, review 009 #2), `cargo check --locked`,
+      the client lint and vitest, `make ava1-fuzz-c`.
       Two Docker-specific engine wording tests are excluded on Linux today.
 
 ## 4. Measured results (Task 28, 2026-10-03)

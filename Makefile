@@ -109,7 +109,7 @@ ADB ?= $(ANDROID_HOME)/platform-tools/adb
 .PHONY: quality quality-full quality-hardware ci ci-full
 .PHONY: clean clean-payload clean-engine clean-client
 .PHONY: verify info install-hooks
-.PHONY: test-ava1 ava1-fuzz-c check-no-ftx2
+.PHONY: test-ava1 test-ava1-sanitize ava1-fuzz-c ava1-soak check-no-ftx2
 .PHONY: run-engine run-client dev start _check-tauri-system-deps
 .PHONY: install-engine uninstall-engine
 .PHONY: dist dist-win dist-win-arm dist-mac dist-mac-x64 dist-linux dist-linux-arm
@@ -1321,6 +1321,22 @@ test-ava1:
 	# The C server and the data layer are process-wide singletons
 	# (one CServer at a time, one ava1_data_start): serial, not two shells.
 	cd engine && cargo test -p ava1-ctest -- --test-threads=1
+
+# The whole ctest suite with ASan + UBSan on every C unit (review 009 #2a), LSan included on Linux.
+# Run it on Linux (CI, or `docker run rust:latest` with clang + libclang-rt-dev installed): the Rust link
+# of the sanitized C did not link with Homebrew's clang on macOS when tried (not investigated further).
+# engine/crates/ava1-ctest/lsan.supp lists the intentional leaks (test-side Box::leak), each with its reason.
+CLANG ?= clang
+test-ava1-sanitize:
+	cd engine && CC=$(CLANG) AVA1_CTEST_SANITIZE=1 RUSTFLAGS="-Clinker=$(CLANG) $$RUSTFLAGS" \
+		ASAN_OPTIONS=$${ASAN_OPTIONS:-detect_leaks=$$([ "$$(uname)" = Linux ] && echo 1 || echo 0)} \
+		LSAN_OPTIONS=suppressions=$(CURDIR)/engine/crates/ava1-ctest/lsan.supp \
+		cargo test -p ava1-ctest -- --test-threads=1
+
+# The host soak (review 009 #2c): AVA1_SOAK_MINUTES=60 make ava1-soak. Add AVA1_CTEST_SANITIZE=1 (and
+# CC/RUSTFLAGS as above) to run it under ASan.
+ava1-soak:
+	cd engine && AVA1_SOAK_MINUTES=$${AVA1_SOAK_MINUTES:-5} cargo test -p ava1-ctest --test soak -- --ignored --test-threads=1 --nocapture
 
 ava1-fuzz-c:
 	$${CC:-clang} -g -O1 -fsanitize=fuzzer,address,undefined -DAVA1_AEAD_PORTABLE -I$(AVA1_C) -I$(AVA1_C)/gen -Ipayload/third_party/monocypher \

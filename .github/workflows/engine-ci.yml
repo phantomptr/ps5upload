@@ -157,6 +157,47 @@ jobs:
           cargo +nightly fuzz run frame_header -- -max_total_time=30
 
   # ─────────────────────────────────────────────────────────────────────
+  # AVA1 sanitizers (review 009 #2a): the whole ctest suite, i.e. every console C path the host can run,
+  # with ASan + UBSan (+ LSan on Linux) on every C unit. A leak, use-after-free, overflow or UB in the
+  # payload C fails here instead of on a console with no debugger. Slow on purpose.
+  # engine/crates/ava1-ctest/lsan.supp lists the tests that exit on purpose, each with its reason.
+  # ─────────────────────────────────────────────────────────────────────
+  ava1-ctest-sanitize:
+    name: ava1-ctest (ASan + UBSan)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install clang + sanitizer runtimes
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-rt-18-dev
+
+      - name: Cache cargo registry + sanitized target
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: ${{ runner.os }}-cargo-ava1-san-${{ hashFiles('engine/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-ava1-san-
+
+      - name: cargo test -p ava1-ctest (sanitized, serial)
+        working-directory: engine
+        env:
+          CC: clang
+          AVA1_CTEST_SANITIZE: '1'
+          RUSTFLAGS: -Clinker=clang
+          ASAN_OPTIONS: detect_leaks=1:fast_unwind_on_malloc=0
+          LSAN_OPTIONS: suppressions=${{ github.workspace }}/engine/crates/ava1-ctest/lsan.supp:print_suppressions=0
+          RUST_BACKTRACE: 1
+        run: cargo test -p ava1-ctest -- --test-threads=1
+
+  # ─────────────────────────────────────────────────────────────────────
   # Engine/core target portability. This is intentionally separate from
   # the full release matrix: PRs get a fast compile-only signal that the
   # host-side engine code still type-checks for the OS/arch combinations
@@ -711,6 +752,7 @@ jobs:
       - version-sync
       - rust-engine
       - ava1
+      - ava1-ctest-sanitize
       - rust-engine-targets
       - rust-desktop
       - client-frontend

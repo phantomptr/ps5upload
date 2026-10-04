@@ -1,0 +1,10 @@
+# LeakSanitizer suppressions for `AVA1_CTEST_SANITIZE=1 cargo test -p ava1-ctest` (review 009 #2a).
+#
+# Everything here is a TEST-SIDE intentional leak, found by running the suite under ASan. Not one
+# C leak from the payload is suppressed: a leak whose stack runs through payload/ or csrc/ fails the job.
+#
+# Each of these two test helpers does `Box::leak(Box::new(Pool::new(..)))` to get the `&'static Pool`
+# the engine's `AvaTransport::with_pool` takes; the pool (its tokio runtime, session and peer store,
+# all reachable only from the leaked box) lives to the end of the test process by design.
+leak:diag::transport
+leak:mgmt_fs::transport::rig

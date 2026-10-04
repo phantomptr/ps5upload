@@ -342,7 +342,8 @@ int ava1_mstore_walk_deny(ava1_mstore_t *m, const char *root, unsigned flags, in
         if (d) closedir(d);
         free(rel);
     }
-    if (rc == 0) qsort(found, found_n, sizeof *found, path_cmp);
+    /* qsort's base must not be NULL even for zero elements (an empty folder leaves it NULL: UB). */
+    if (rc == 0 && found_n > 1) qsort(found, found_n, sizeof *found, path_cmp);
     for (i = 0; rc == 0 && i < found_n; i++) {
         ava1_manifest_entry_t w;
         memset(&w, 0, sizeof w);

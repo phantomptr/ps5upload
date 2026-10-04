@@ -328,7 +328,14 @@ async fn c_mgmt_workers_use_512k_stacks_and_elevate() {
     let r = s.rpc(19, &[]).await.unwrap();
     assert_eq!(r.status, OK);
     let small: usize = String::from_utf8(r.body).unwrap().parse().unwrap();
-    assert!(small <= 256 * 1024 + 64 * 1024, "method 19 stack {small}");
+    // ASan gives every thread at least 512 KiB (it pads stacks for its redzones), so under
+    // AVA1_CTEST_SANITIZE the data-plane worker reads as 512 KiB too: the size is not ours to measure there.
+    let cap = if cfg!(ava1_ctest_sanitize) {
+        512 * 1024 + 64 * 1024
+    } else {
+        256 * 1024 + 64 * 1024
+    };
+    assert!(small <= cap, "method 19 stack {small}");
     // errors leave the environment too
     let _ = s.rpc(MKDIR, &mkdir("/denied")).await.unwrap();
     let (e2, l2, _, _) = mgmt::stats();
