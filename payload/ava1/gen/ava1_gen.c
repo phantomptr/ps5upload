@@ -3182,10 +3182,16 @@ int ava1_job_map_encode(const ava1_job_map_t *m, ava1_w_t *w) {
     ava1_w_bytes(w, m->done, m->done_len);
     ava1_w_bytes(w, m->partial, m->partial_len);
     if (m->has_message) ext_n++;
+    if (m->has_held) ext_n++;
     ava1_w_u16(w, ext_n);
     if (m->has_message) {
         size_t at = ava1_w_ext_begin(w, 1);
         ava1_w_str(w, m->message, m->message_len);
+        ava1_w_ext_end(w, at);
+    }
+    if (m->has_held) {
+        size_t at = ava1_w_ext_begin(w, 2);
+        ava1_w_u64(w, m->held);
         ava1_w_ext_end(w, at);
     }
     return w->err;
@@ -3223,6 +3229,11 @@ int ava1_job_map_decode(const uint8_t *buf, size_t len, ava1_job_map_t *m) {
             if (m->has_message) return AVA1_E_DUP_EXT;
             m->has_message = 1;
             m->message = ava1_r_str(&vr, &m->message_len);
+            break;
+        case 2:
+            if (m->has_held) return AVA1_E_DUP_EXT;
+            m->has_held = 1;
+            m->held = ava1_r_u64(&vr);
             break;
         default:
             continue;

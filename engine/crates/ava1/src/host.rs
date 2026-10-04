@@ -181,6 +181,7 @@ async fn answer_resume(
                 done: vec![],
                 partial: vec![],
                 message: None,
+                held: None,
             })
             .await;
         return;

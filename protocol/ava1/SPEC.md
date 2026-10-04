@@ -691,6 +691,12 @@ Engines reopen with `JobOpen` after any interruption; `Resume` is optional for s
 keep their manifest and credit state. A receiver answers `Resume` with the `JobMap` of a parked job
 of the same peer key whose stored manifest has that hash, else `JobMap{status = ERR_UNKNOWN_JOB}` —
 never silence.
+The final `JobMap` page may carry the extension `held`: the bytes the receiver's drive already
+holds for the job's unfinished large files (the allocated blocks of their part files, at most
+each file's size; a part file is preallocated whole, so its undurable tail is on the drive
+already). It is advisory and only ever a credit: a sender that checks free space before
+sending subtracts it, with the files in place and the durable ranges, from what the job still
+needs. Absent means none is claimed, and a sender never credits more than the receiver said.
 Credit restarts after any interruption and nothing outstanding carries across a reconnect: the
 grant in a `JobOpenAck` is an absolute number that sets the sender's window (a `Credit` that
 arrives later adds to it), and a `Resume` restarts the window the same way — the receiver resets

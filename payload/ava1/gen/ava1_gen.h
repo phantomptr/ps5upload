@@ -1017,6 +1017,8 @@ typedef struct {
     int has_message;
     const uint8_t *message;
     uint16_t message_len;
+    int has_held;
+    uint64_t held;
 } ava1_job_map_t;
 
 int ava1_job_map_encode(const ava1_job_map_t *m, ava1_w_t *w);

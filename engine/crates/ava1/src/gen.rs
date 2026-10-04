@@ -987,6 +987,7 @@ pub struct JobMap {
     pub done: Vec<FileRun>,
     pub partial: Vec<FileRange>,
     pub message: Option<String>,
+    pub held: Option<u64>,
 }
 
 impl Message for JobMap {
@@ -1000,8 +1001,10 @@ impl Message for JobMap {
         w.records(&self.partial)?;
         let mut ext_n: u16 = 0;
         if self.message.is_some() { ext_n += 1; }
+        if self.held.is_some() { ext_n += 1; }
         w.u16(ext_n);
         if let Some(v) = &self.message { w.ext(1, |w| { w.str(v) })?; }
+        if let Some(v) = &self.held { w.ext(2, |w| { w.u64(*v); Ok(()) })?; }
         Ok(())
     }
 
@@ -1023,6 +1026,12 @@ impl Message for JobMap {
                     if m.message.is_some() { return Err(DecodeError::DupExt(1)); }
                     let mut vr = Reader::new(v);
                     m.message = Some(vr.str()?);
+                    vr.finish()?;
+                }
+                2 => {
+                    if m.held.is_some() { return Err(DecodeError::DupExt(2)); }
+                    let mut vr = Reader::new(v);
+                    m.held = Some(vr.u64()?);
                     vr.finish()?;
                 }
                 _ => {}
@@ -3201,7 +3210,7 @@ pub fn sample(name: &str, rng: &mut SplitMix) -> Option<Vec<u8>> {
         "JobOpenAck" => JobOpenAck { job_id: { let mut a = [0u8; 16]; rng.fill(&mut a); a }, status: rng.next_u64() as u16, credit: rng.next_u64(), staged: rng.next_u64() as u8, workers: rng.next_u64() as u8, message: if rng.below(2) == 1 { Some(rng.ascii(20)) } else { None }, }.to_bytes().ok(),
         "ManifestPage" => ManifestPage { job_id: { let mut a = [0u8; 16]; rng.fill(&mut a); a }, entries: vec![ManifestEntry::default(); rng.below(3) as usize], }.to_bytes().ok(),
         "ManifestEnd" => ManifestEnd { job_id: { let mut a = [0u8; 16]; rng.fill(&mut a); a }, files: rng.next_u64() as u32, bytes: rng.next_u64(), manifest_hash: { let mut a = [0u8; 32]; rng.fill(&mut a); a }, }.to_bytes().ok(),
-        "JobMap" => JobMap { job_id: { let mut a = [0u8; 16]; rng.fill(&mut a); a }, status: rng.next_u64() as u16, last: rng.next_u64() as u8, done: vec![FileRun::default(); rng.below(3) as usize], partial: vec![FileRange::default(); rng.below(3) as usize], message: if rng.below(2) == 1 { Some(rng.ascii(20)) } else { None }, }.to_bytes().ok(),
+        "JobMap" => JobMap { job_id: { let mut a = [0u8; 16]; rng.fill(&mut a); a }, status: rng.next_u64() as u16, last: rng.next_u64() as u8, done: vec![FileRun::default(); rng.below(3) as usize], partial: vec![FileRange::default(); rng.below(3) as usize], message: if rng.below(2) == 1 { Some(rng.ascii(20)) } else { None }, held: if rng.below(2) == 1 { Some(rng.next_u64()) } else { None }, }.to_bytes().ok(),
         "Resume" => Resume { job_id: { let mut a = [0u8; 16]; rng.fill(&mut a); a }, manifest_hash: { let mut a = [0u8; 32]; rng.fill(&mut a); a }, }.to_bytes().ok(),
         "Chunk" => Chunk { job_id: { let mut a = [0u8; 16]; rng.fill(&mut a); a }, file_id: rng.next_u64() as u32, offset: rng.next_u64(), data: { let n = rng.below(41) as usize; let mut v = vec![0u8; n]; rng.fill(&mut v); v }, }.to_bytes().ok(),
         "Bundle" => Bundle { job_id: { let mut a = [0u8; 16]; rng.fill(&mut a); a }, records: vec![BundleRecord::default(); rng.below(3) as usize], }.to_bytes().ok(),

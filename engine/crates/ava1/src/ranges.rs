@@ -98,6 +98,10 @@ pub fn from_runs(runs: &[FileRun]) -> BTreeSet<u32> {
 pub struct Need {
     pub done: BTreeSet<u32>,
     pub partial: BTreeMap<u32, RangeSet>,
+    /// Bytes the receiver's drive already holds for the job's unfinished large files (the
+    /// allocated blocks of their part files; the JobMap `held` extension on its last page).
+    /// 0 when the receiver does not say: nothing is credited that was not reported.
+    pub held: u64,
 }
 
 /// Items per map page. An item is `u32le(len) ‖ fields` (SPEC §3): 12 bytes for a run,
@@ -132,6 +136,7 @@ impl Need {
             gi += partial.len();
             let last = ri == all_runs.len() && gi == all_ranges.len();
             pages.push(gen::JobMap {
+                held: (last && self.held > 0).then_some(self.held),
                 job_id,
                 status,
                 last: u8::from(last),
@@ -146,6 +151,9 @@ impl Need {
     }
 
     pub fn add_page(&mut self, m: &gen::JobMap) {
+        if let Some(h) = m.held {
+            self.held = self.held.max(h);
+        }
         self.done.extend(from_runs(&m.done));
         for r in &m.partial {
             self.partial
@@ -185,6 +193,30 @@ mod tests {
         }
         assert_eq!(pages[0].last, 0);
         assert_eq!(pages[1].last, 1);
+    }
+
+    #[test]
+    fn held_rides_the_last_page_only_and_a_map_without_it_credits_nothing() {
+        let mut need = Need::default();
+        for i in 0..MAP_PAGE_ITEMS as u32 + 1 {
+            need.done.insert(i * 2); // runs of one: enough items for a second page
+        }
+        need.held = 7 << 30;
+        let pages = need.to_pages([0; 16], 0);
+        assert!(pages.len() >= 2);
+        assert!(pages[..pages.len() - 1].iter().all(|p| p.held.is_none()));
+        assert_eq!(pages.last().unwrap().held, Some(7 << 30));
+        let mut got = Need::default();
+        for p in &pages {
+            got.add_page(p);
+        }
+        assert_eq!(got.held, 7 << 30);
+        // A receiver that never says: 0, and a zero is not sent.
+        let none = Need::default().to_pages([0; 16], 0);
+        assert_eq!(none[0].held, None);
+        let mut absent = Need::default();
+        absent.add_page(&none[0]);
+        assert_eq!(absent.held, 0);
     }
 
     #[test]

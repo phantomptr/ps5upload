@@ -1413,6 +1413,7 @@ async fn run_loop(
                 .filter(|(id, _)| !st.done.contains(id))
                 .map(|(id, rs)| (*id, rs.clone()))
                 .collect(),
+            held: 0,
         },
     };
     // An ordered job's cursor must step over what is already durable: the relay's hint,

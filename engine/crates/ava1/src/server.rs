@@ -1109,6 +1109,7 @@ async fn control(
                                         done: vec![],
                                         partial: vec![],
                                         message: Some("too many jobs are open".into()),
+                                        held: None,
                                     },
                                 )
                             };

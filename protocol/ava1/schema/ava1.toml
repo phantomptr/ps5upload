@@ -489,7 +489,10 @@ fields = [
   { name = "done", ty = "records", of = "FileRun" },
   { name = "partial", ty = "records", of = "FileRange" },   # durable ranges of unfinished files
 ]
-ext = [{ tag = 1, name = "message", ty = "str" }]
+# `held` (final page): bytes the drive already holds for this job's unfinished large files (the
+# allocated blocks of their part files, at most each file's size). A sender that checks free
+# space credits it: those bytes are on the drive already, durable or not (design 015/02).
+ext = [{ tag = 1, name = "message", ty = "str" }, { tag = 2, name = "held", ty = "u64" }]
 
 [[message]]
 name = "Resume"             # fast path: same manifest as before
