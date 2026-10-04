@@ -4223,6 +4223,13 @@ export function humanizeJobErrorReason(
       "The PS5 couldn't write to the destination mid-transfer — most often the drive filled up or an external drive disconnected. Check free space / reconnect the drive, then click Retry (the upload resumes from where it stopped).",
     );
   }
+  const refused = /^ava1_refused_(\d+)$/.exec(reason);
+  if (refused) {
+    return trStatic(
+      "joberr.ava1_refused",
+      "The PS5 refused this request (code {code}). Retry; if it repeats, update the helper and this app to the same version and include the code in a bug report.",
+    ).replace("{code}", refused[1]);
+  }
   switch (reason) {
     case "preflight_insufficient_space":
       return trStatic(
@@ -4300,6 +4307,151 @@ export function humanizeJobErrorReason(
       return trStatic(
         "joberr.rar_unsupported",
         "This .rar has duplicate or unsafe file paths, or a feature the uploader can't stream. Extract it on your computer and upload the folder instead.",
+      );
+    // AVA1-era reasons (engine ps5upload-ava1 upload/download/copy/console, mgmt seam).
+    case "ava1_busy":
+    case "ava1_open_timeout":
+      return trStatic(
+        "joberr.ava1_busy",
+        "The PS5 helper is busy and did not accept this transfer in time. Wait for its other work to finish, then click Retry.",
+      );
+    case "ava1_unreachable":
+      return trStatic(
+        "joberr.ava1_unreachable",
+        "The PS5 could not be reached. Check that it is on and on the same network, and that the helper is running, then click Retry.",
+      );
+    case "ava1_no_space":
+      return trStatic(
+        "joberr.fs_write_failed_no_space",
+        "The destination drive ran out of space (or the file is too big for that filesystem). Free space on the PS5 / external drive — or pick a different destination — then click Retry.",
+      );
+    case "ava1_not_allowed":
+      return trStatic(
+        "joberr.fs_delete_path_not_allowed",
+        "PS5 refused access to that path. Use /data/, /user/, or a mounted /mnt/ext*, /mnt/usb* path.",
+      );
+    case "ava1_exists":
+      return trStatic(
+        "joberr.ava1_exists",
+        "The destination already exists on the PS5. Choose Override to replace it, or pick a different destination.",
+      );
+    case "ava1_commit_exists":
+      return trStatic(
+        "joberr.ava1_commit_exists",
+        "The file was uploaded but could not be published because the destination already exists. Choose Override to replace it, or pick a different destination.",
+      );
+    case "ava1_cross_device":
+    case "ava1_commit_cross_device":
+      return trStatic(
+        "joberr.ava1_cross_device",
+        "The destination is on a different drive than the staging area, so the PS5 could not move the file into place. Pick a destination on the same drive, or upload to the internal drive first.",
+      );
+    case "ava1_wrong_console":
+      return trStatic(
+        "joberr.ava1_wrong_console",
+        "The device at this address is not the PS5 this app paired with. Check the address, or pair with this console again.",
+      );
+    case "ava1_no_identity":
+      return trStatic(
+        "joberr.ava1_no_identity",
+        "This app has no pairing identity yet. Pair it with the PS5 from the Connection screen, then retry.",
+      );
+    case "zip_read_error":
+      return trStatic(
+        "joberr.zip_read_error",
+        "The .zip could not be read (the file or its drive may have gone away mid-read). Check the source is still connected, then click Retry.",
+      );
+    case "ava1_zip_corrupt":
+      return trStatic(
+        "joberr.ava1_zip_corrupt",
+        "This .zip could not be read: it is damaged or incomplete. Download it again or re-create it, then retry.",
+      );
+    case "ava1_7z_corrupt":
+      return trStatic(
+        "joberr.ava1_7z_corrupt",
+        "This .7z could not be read: it is damaged or incomplete. Download it again or re-create it, then retry.",
+      );
+    case "ava1_7z_encrypted":
+      return trStatic(
+        "joberr.ava1_7z_encrypted",
+        "This .7z is encrypted, which the uploader cannot stream. Extract it on your computer and upload the folder instead.",
+      );
+    case "ava1_7z_unsafe_path":
+      return trStatic(
+        "joberr.ava1_7z_unsafe_path",
+        "This .7z contains a file path that is unsafe (it leaves its own folder). Extract it on your computer and upload the folder instead.",
+      );
+    case "rar_password_required":
+    case "rar_password_wrong":
+    case "ava1_rar_password_required":
+    case "ava1_rar_password_wrong":
+      return trStatic(
+        "joberr.rar_password",
+        "This .rar needs a password, or the password given was wrong. Enter the correct password and retry.",
+      );
+    case "ava1_rar_corrupt":
+    case "ava1_rar_missing_volume":
+    case "ava1_rar_reordered":
+    case "ava1_rar_failed":
+      return trStatic(
+        "joberr.rar_corrupt",
+        "This .rar is damaged, or some of its parts are missing or out of order. Make sure every part is present, then retry.",
+      );
+    case "ava1_copy_lost":
+      return trStatic(
+        "joberr.ava1_copy_lost",
+        "The PS5 lost track of this copy (the helper restarted or the connection dropped). Click Retry to start it again.",
+      );
+    case "ava1_copy_failed":
+      return trStatic(
+        "joberr.ava1_copy_failed",
+        "The PS5 could not finish copying. Check free space and that the source and destination are still available, then retry.",
+      );
+    case "ava1_local_io":
+      return trStatic(
+        "joberr.ava1_local_io",
+        "This computer could not write the downloaded file. Check the destination folder's permissions and free space, then retry.",
+      );
+    case "ava1_bad_manifest":
+      return trStatic(
+        "joberr.ava1_bad_manifest",
+        "The PS5 sent a file list this app could not understand. Update the helper and this app to the same version, then retry.",
+      );
+    case "helper_not_ava1":
+      return isTauriEnv()
+        ? trStatic(
+            "joberr.helper_not_ava1",
+            "The PS5 helper is not running. Send it from the Connection screen (or use Update helper if the banner offers it), then retry.",
+          )
+        : trStatic(
+            "joberr.helper_not_ava1_web",
+            "The PS5 helper is not running. This web UI cannot send it: start the ps5upload payload on the console with your usual payload loader (or use Update helper if the banner offers it), then retry.",
+          );
+    case "helper_old":
+      return trStatic(
+        "joberr.helper_old",
+        "The PS5 is running an older helper. Click Update helper in the banner at the top, then retry.",
+      );
+    case "ava1_not_paired":
+    case "not_paired":
+      return trStatic(
+        "joberr.not_paired",
+        "This PS5 has not accepted this app yet. Pair them (the Pair… button), then retry.",
+      );
+    case "helper_starting":
+      return trStatic(
+        "joberr.helper_starting",
+        "The PS5 helper is still starting. Wait a few seconds, then retry.",
+      );
+    case "ava1_failed":
+      return trStatic(
+        "joberr.ava1_failed",
+        "The PS5 helper started but its transfer server did not. Restart the console, then retry.",
+      );
+    case "helper_not_running":
+      return trStatic(
+        "joberr.helper_not_running",
+        "No helper is running on the PS5. Send the helper first (Connection screen on the desktop app, or your payload loader), then retry.",
       );
     case "tx_table_full":
       return trStatic(

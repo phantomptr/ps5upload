@@ -192,7 +192,7 @@ impl std::error::Error for MgmtError {}
 /// `error_reason` / error token for a console with no AVA1 listener or an older helper.
 pub const HELPER_NOT_AVA1: &str = "helper_not_ava1";
 /// The text that goes with [`HELPER_NOT_AVA1`].
-pub const HELPER_NOT_AVA1_MESSAGE: &str = "The PS5 helper is not running or is an old version. Send the helper again from the Connection screen.";
+pub const HELPER_NOT_AVA1_MESSAGE: &str = "The PS5 helper is not running or is an old version. Desktop app: send it from the Connection screen, or click Update helper. Web UI: start the ps5upload payload on the console with your payload loader, or click Update helper.";
 /// `error_reason` / error token for a console that has not accepted this app.
 pub const NOT_PAIRED: &str = "not_paired";
 /// The text that goes with [`NOT_PAIRED`].
@@ -692,7 +692,7 @@ mod tests {
         let e = call("127.0.0.1:1", m::HW_INFO, b"").unwrap_err();
         assert_eq!(
             e.to_string(),
-            "payload rejected HW_INFO: helper_not_ava1: The PS5 helper is not running or is an old version. Send the helper again from the Connection screen."
+            "payload rejected HW_INFO: helper_not_ava1: The PS5 helper is not running or is an old version. Desktop app: send it from the Connection screen, or click Update helper. Web UI: start the ps5upload payload on the console with your payload loader, or click Update helper."
         );
         assert!(e.downcast_ref::<MgmtError>().is_some());
 

@@ -7,7 +7,9 @@ import { useConnectionStore } from "../state/connection";
 import { useTr } from "../state/lang";
 import { usePairingStore } from "../state/pairing";
 import { hostOf } from "../lib/addr";
-import { isLegacyHelperWedged, type SessionState } from "../lib/consoleSession";
+import { classifyReplaceError, type SessionState } from "../lib/consoleSession";
+import { isTauriEnv } from "../lib/tauriEnv";
+import { humanizeJobErrorReason } from "../api/ps5";
 import { replaceHelper } from "../api/ava1";
 
 export interface SessionBannerViewProps {
@@ -15,6 +17,8 @@ export interface SessionBannerViewProps {
   /** The old helper would not exit: only a console restart clears it. */
   wedged: boolean;
   busy: boolean;
+  /** Why the last Update helper did not run (already translated), or null. */
+  error: string | null;
   onPair: () => void;
   onUpdate: () => void;
 }
@@ -25,6 +29,7 @@ export function SessionBannerView({
   session,
   wedged,
   busy,
+  error,
   onPair,
   onUpdate,
 }: SessionBannerViewProps) {
@@ -64,6 +69,11 @@ export function SessionBannerView({
                   "This PS5 is running an older helper. Update it.",
                 )}
               </p>
+              {error && (
+                <p className="text-xs text-[var(--color-muted)]" role="alert">
+                  {error}
+                </p>
+              )}
               {wedged && (
                 <p className="text-xs text-[var(--color-muted)]">
                   {tr(
@@ -96,7 +106,9 @@ export default function SessionBanner() {
     (s) => s.runtimeByHost[hostOf(host) || "_"],
   );
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const openPairing = usePairingStore((s) => s.openFor);
+  const tr = useTr();
   if (!host.trim() || !rt) return null;
   return (
     <SessionBannerView
@@ -104,18 +116,55 @@ export default function SessionBanner() {
       wedged={rt.helperWedged}
       busy={busy}
       onPair={() => void openPairing(host)}
+      error={error}
       onUpdate={() => {
         setBusy(true);
+        setError(null);
         // The engine's replace flow: old helper's shutdown, stamped helper, wait for the port.
+        // Each failure needs its own reaction; only "no helper at all" may send one (and only
+        // where this build can: the browser build has no payload_send).
         void replaceHelper(host)
           .catch((e: unknown) => {
-            if (isLegacyHelperWedged(e)) {
-              useConnectionStore.getState().setHostStatus(host, { helperWedged: true });
-              return;
+            const kind = classifyReplaceError(e);
+            switch (kind) {
+              case "wedged":
+                useConnectionStore.getState().setHostStatus(host, { helperWedged: true });
+                return;
+              case "in_progress":
+                setError(
+                  tr(
+                    "err_replace_in_progress",
+                    undefined,
+                    "This console's helper is already being replaced. Wait for it to finish, then try again.",
+                  ),
+                );
+                return;
+              case "cooldown":
+                setError(
+                  tr(
+                    "err_replace_cooldown",
+                    undefined,
+                    "The helper on this console was replaced a moment ago. Wait a minute before replacing it again.",
+                  ),
+                );
+                return;
+              case "starting":
+                setError(humanizeJobErrorReason("helper_starting"));
+                return;
+              case "ava1_failed":
+                setError(humanizeJobErrorReason("ava1_failed"));
+                return;
+              case "no_helper":
+                if (!isTauriEnv()) {
+                  setError(humanizeJobErrorReason("helper_not_running"));
+                  return;
+                }
+                return ensurePayloadCurrent(host, undefined, true).then(() => {});
+              default:
+                setError(e instanceof Error ? e.message : String(e));
             }
-            // No helper running at all: the ordinary send flow.
-            return ensurePayloadCurrent(host, undefined, true).then(() => {});
           })
+          .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
           .finally(() => setBusy(false));
       }}
     />
