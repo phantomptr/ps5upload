@@ -117,6 +117,9 @@ void ava1_unswept_add(int64_t delta) {
 }
 uint64_t ava1_unswept_total(void) { return __atomic_load_n(&g_unswept_total, __ATOMIC_RELAXED); }
 
+/* 1 once the start-time recovery pass (recover_main) has run; a JobOpen for a job with a log is BUSY before. */
+int ava1_data_boot_recovered(void) { return __atomic_load_n(&D.boot_recovered, __ATOMIC_SEQ_CST); }
+
 int ava1_data_running(void) { return __atomic_load_n(&D.running, __ATOMIC_RELAXED); }
 
 unsigned ava1_house_ticks;
