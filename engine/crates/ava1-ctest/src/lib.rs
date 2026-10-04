@@ -343,6 +343,7 @@ pub mod ffi {
             blocks: c_int,
         ) -> c_int;
         pub fn ava1_test_reap_far();
+        pub fn ava1_test_job_count() -> u32;
         pub fn ava1_test_mgmt_install() -> c_int;
         pub fn ava1_test_mgmt_install_duplicate() -> c_int;
         pub fn ava1_test_mgmt_uninstall();
@@ -1360,6 +1361,16 @@ pub fn c_copy_atomic(src: &std::path::Path, dst: &std::path::Path, blocks: i32) 
 
 /// Runs the payload's reaper as if an hour had passed: finished jobs are collected, running
 /// ones stay.
+/// Jobs in the C job table now.
+pub fn c_job_count() -> u32 {
+    unsafe { ffi::ava1_test_job_count() }
+}
+
+/// Bytes of done-but-unswept small files across all jobs (the cross-job counter).
+pub fn c_unswept_global() -> u64 {
+    unsafe { ffi::ava1_test_unswept_total() }
+}
+
 pub fn c_reap_far() {
     unsafe { ffi::ava1_test_reap_far() }
 }

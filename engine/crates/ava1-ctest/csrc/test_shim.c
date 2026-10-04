@@ -919,7 +919,7 @@ size_t ava1_test_rset_after(const uint64_t *ops, size_t nops, uint64_t *out, siz
     memset(&r, 0, sizeof r);
     for (i = 0; i < nops; i++) (void)ava1_rset_add(&r, ops[2 * i], ops[2 * i + 1]);
     n = r.n < cap_pairs ? r.n : cap_pairs;
-    memcpy(out, r.v, n * 2 * sizeof *out);
+    if (n) memcpy(out, r.v, n * 2 * sizeof *out); /* r.v is NULL for an empty set: memcpy(.., NULL, 0) is UB */
     ava1_rset_clear(&r);
     return n;
 }
@@ -1579,6 +1579,7 @@ void ava1_test_apply_probe_prep(uint64_t out[3]) {
 void ava1_test_apply_hook_sleep(uint32_t ms) { __atomic_store_n(&g_hook_sleep_ms, ms, __ATOMIC_SEQ_CST); }
 
 unsigned ava1_test_house_ticks(void) { return __atomic_load_n(&ava1_house_ticks, __ATOMIC_RELAXED); }
+unsigned ava1_test_job_count(void) { return ava1_job_count(); }
 uint64_t ava1_test_unswept_total(void) { return ava1_unswept_total(); }
 void ava1_test_unswept_global_add(int64_t d) { ava1_unswept_add(d); }
 uint64_t ava1_test_apply_unswept_bytes(void) {
