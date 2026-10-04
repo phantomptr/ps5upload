@@ -58,13 +58,13 @@ async fn no_ava1_listener_surfaces_helper_not_running() {
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
     let (error, reason, detail) = wait_failed(&jobs).await;
     assert_eq!(reason.as_deref(), Some("helper_not_ava1"), "{error}");
-    let msg = "The PS5 helper is not running or is an old version. Send the helper again from the Connection screen.";
+    let msg = "The PS5 helper is not running or is an old version. Desktop app: send it from the Connection screen, or click Update helper. Web UI: start the ps5upload payload on the console with your payload loader, or click Update helper.";
     assert_eq!(detail.as_deref(), Some(msg));
     assert_eq!(error, msg);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-const NOT_RUNNING: &str = "The PS5 helper is not running or is an old version. Send the helper again from the Connection screen.";
+const NOT_RUNNING: &str = "The PS5 helper is not running or is an old version. Desktop app: send it from the Connection screen, or click Update helper. Web UI: start the ps5upload payload on the console with your payload loader, or click Update helper.";
 
 async fn assert_helper_not_ava1(jobs: &Arc<Mutex<HashMap<Uuid, JobState>>>) {
     let (error, reason, _) = wait_failed(jobs).await;

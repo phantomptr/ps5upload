@@ -99,8 +99,12 @@ import {
   isAutoRecoverable,
   MAX_AUTO_RECOVER_ATTEMPTS,
   PostUploadStepError,
+  refineHelperReason,
   shouldAutoRecover,
 } from "../lib/uploadRecovery";
+import { helperState } from "../api/ava1";
+import { isTauriEnv } from "../lib/tauriEnv";
+import { useConnectionStore } from "./connection";
 
 /** The engine job id currently uploading on each console (bare host key).
  *  runOne records it so stopHost/stop can ask the engine to TRULY cancel the
@@ -1362,8 +1366,24 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
           // — without the structured fields the user just sees the
           // raw chain (which often ends in {"error":"…","detail":"…"}
           // JSON that's hard to read in a queue row).
-          const reason =
+          let reason =
             e instanceof UploadJobError ? (e.reason ?? null) : null;
+          // "No AVA1 listener" says nothing about WHY. Ask the engine what the console runs:
+          // an older helper is not fixed by re-sending (and the browser build cannot send at
+          // all), so surface it as `helper_old` and let the banner's Update helper handle it,
+          // instead of three blind retries.
+          if (reason === "helper_not_ava1") {
+            const refined = refineHelperReason(
+              reason,
+              await helperState(hostOf(next.addr)),
+            );
+            if (refined === "helper_old") {
+              useConnectionStore
+                .getState()
+                .setHostStatus(hostOf(next.addr), { session: "helper_old" });
+            }
+            reason = refined;
+          }
           const detail =
             e instanceof UploadJobError ? (e.detail ?? null) : null;
 
@@ -1375,7 +1395,9 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
             !isInstall &&
             autoResume &&
             recoverAttempt < MAX_AUTO_RECOVER_ATTEMPTS &&
-            shouldAutoRecover(e, reason, message);
+            shouldAutoRecover(e, reason, message, {
+              canSendHelper: isTauriEnv(),
+            });
 
           if (!canRecover) {
             set((s) => ({
@@ -1896,7 +1918,9 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
           // Never re-run an install by itself (a repeated patch install can
           // wipe the base game): only uploads resume on reconnect.
           it.sourceKind !== "install" &&
-          isAutoRecoverable(it.errorReason, it.error),
+          isAutoRecoverable(it.errorReason, it.error, {
+            canSendHelper: isTauriEnv(),
+          }),
       );
       let resumed = 0;
       for (const it of candidates) {

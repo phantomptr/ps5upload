@@ -108,7 +108,7 @@ mod tests {
         assert_eq!(f.reason, "helper_not_ava1");
         assert_eq!(
             f.detail,
-            "The PS5 helper is not running or is an old version. Send the helper again from the Connection screen."
+            "The PS5 helper is not running or is an old version. Desktop app: send it from the Connection screen, or click Update helper. Web UI: start the ps5upload payload on the console with your payload loader, or click Update helper."
         );
         let _ = std::fs::remove_dir_all(&d);
     }

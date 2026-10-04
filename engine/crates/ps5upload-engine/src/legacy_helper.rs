@@ -166,6 +166,27 @@ pub fn state(host: &str, ports: Ports) -> &'static str {
     }
 }
 
+/// Folds the helper state into a failed status probe. The probe (`node.status` over AVA1) reports a
+/// console with no AVA1 listener as `helper_not_ava1`, which cannot tell "nothing running" from "an
+/// older helper that only speaks the old protocol". When the failure is that one, ask [`state`] and
+/// lead the error with the precise token (`helper_old`, `helper_starting`, `ava1_failed`) so the
+/// client can offer Update. Any other failure, or a console where nothing answers, is returned as is.
+pub fn fold_status_error(error: String, host: &str, ports: Ports) -> String {
+    if !error.contains("helper_not_ava1") {
+        return error;
+    }
+    match state(host, ports) {
+        HELPER_OLD => {
+            format!("{HELPER_OLD}: the console runs an older helper; update it ({error})")
+        }
+        STARTING => format!("helper_starting: the helper is still starting ({error})"),
+        AVA1_FAILED => {
+            format!("{AVA1_FAILED}: the helper's transfer server did not start ({error})")
+        }
+        _ => error,
+    }
+}
+
 /// Sends the old `Shutdown` frame. `true` when the helper acknowledged it.
 pub fn shutdown(host: &str, ports: Ports) -> bool {
     ask(host, ports.mgmt, SHUTDOWN).map(|r| r.0) == Some(SHUTDOWN_ACK)

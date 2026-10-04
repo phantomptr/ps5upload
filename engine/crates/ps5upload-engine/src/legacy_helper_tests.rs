@@ -247,3 +247,39 @@ fn a_new_helper_that_is_slow_to_listen_is_not_an_error() {
     );
     assert_eq!(r, Ok(Replaced { ava1_up: false }));
 }
+
+/// The status probe's failure carries the helper state, so an older helper reads `helper_old`
+/// (the banner's Update) instead of the generic `helper_not_ava1` ("down").
+#[test]
+fn a_status_failure_names_an_older_helper() {
+    let err = "payload rejected NODE_STATUS: helper_not_ava1: not running".to_string();
+    let old = fake_helper(false);
+    let out = fold_status_error(err.clone(), "127.0.0.1", old.ports);
+    assert!(out.starts_with("helper_old:"), "{out}");
+    let booting = fake_helper_with(false, NEW_STARTING);
+    let out = fold_status_error(err.clone(), "127.0.0.1", booting.ports);
+    assert!(out.starts_with("helper_starting:"), "{out}");
+    let failed = fake_helper_with(false, NEW_FAILED);
+    let out = fold_status_error(err.clone(), "127.0.0.1", failed.ports);
+    assert!(out.starts_with("ava1_failed:"), "{out}");
+    // nothing answers: the original error, untouched
+    let none = Ports {
+        mgmt: free_port(),
+        transfer: free_port(),
+        ava1: free_port(),
+    };
+    assert_eq!(fold_status_error(err.clone(), "127.0.0.1", none), err);
+}
+
+#[test]
+fn other_status_failures_are_not_probed() {
+    // Any other failure (not paired, a timeout) is returned as is, without touching the console.
+    let none = Ports {
+        mgmt: free_port(),
+        transfer: free_port(),
+        ava1: free_port(),
+    };
+    for e in ["not_paired: pair first", "timed out"] {
+        assert_eq!(fold_status_error(e.into(), "127.0.0.1", none), e);
+    }
+}

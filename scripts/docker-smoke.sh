@@ -34,6 +34,11 @@ done
 curl -fsS -m 5 "$base/api/jobs" >/dev/null || fail "engine never answered GET /api/jobs"
 echo "ok: engine answers through the published port"
 
+# DNS rebinding: a Host the engine was not told about is refused even from an allowed peer.
+rcode="$(curl -sS -m 5 -o /dev/null -w '%{http_code}' -H 'Host: rebind.example' "$base/api/jobs")"
+[ "$rcode" = 403 ] || fail "a foreign Host header returned HTTP $rcode, not 403"
+echo "ok: a rebinding Host header is refused"
+
 tmp="$(mktemp -d)"
 head -c 65536 /dev/urandom > "$tmp/smoke.pkg"
 code="$(curl -sS -m 30 -o "$tmp/upload.json" -w '%{http_code}' -F "pkg=@$tmp/smoke.pkg" "$base/api/pkg/upload")"

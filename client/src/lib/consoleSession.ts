@@ -44,6 +44,29 @@ export function isLegacyHelperWedged(e: unknown): boolean {
   return text(e).includes("legacy_helper_wedged");
 }
 
+export type ReplaceFailure =
+  | "wedged"
+  | "no_helper"
+  | "in_progress"
+  | "cooldown"
+  | "starting"
+  | "ava1_failed"
+  | "failed";
+
+/** What a failed `POST /api/ps5/helper/replace` means, from the token the engine puts at the
+ *  start of its error. Each one needs a different reaction: only `no_helper` falls back to
+ *  sending the helper; `in_progress` / `cooldown` must NOT (a send would race the replace). */
+export function classifyReplaceError(e: unknown): ReplaceFailure {
+  const t = text(e);
+  if (t.includes("legacy_helper_wedged")) return "wedged";
+  if (t.includes("helper_not_running")) return "no_helper";
+  if (t.includes("replace_in_progress")) return "in_progress";
+  if (t.includes("replace_cooldown")) return "cooldown";
+  if (t.includes("helper_starting")) return "starting";
+  if (t.includes("ava1_failed")) return "ava1_failed";
+  return "failed";
+}
+
 /** The probe verdict from one payload_check reply. */
 export function classifySession(r: {
   reachable: boolean;

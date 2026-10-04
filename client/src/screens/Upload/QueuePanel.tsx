@@ -1251,6 +1251,14 @@ function FailedRowErrorCard({
         detail={
           humanized ? (
             <>
+              {reason && (
+                <div
+                  className="mt-0.5 font-mono text-[10px] text-[var(--color-muted)]"
+                  data-testid="error-reason-code"
+                >
+                  {reason}
+                </div>
+              )}
               {detail && (
                 <div className="mt-1 text-xs text-[var(--color-muted)]">
                   {detail}

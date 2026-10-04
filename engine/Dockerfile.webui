@@ -14,6 +14,10 @@
 # Then open http://192.168.1.<host>:19113 in a browser on the machine whose
 # IP you set in PS5UPLOAD_ALLOW_IP.
 #
+# Open it by IP address, or by a hostname you list in PS5UPLOAD_ALLOWED_HOSTS
+# (comma-separated, e.g. -e PS5UPLOAD_ALLOWED_HOSTS=nas.local): the engine
+# answers 403 to any other Host header, which stops DNS-rebinding pages.
+#
 # DOCKER DESKTOP (macOS/Windows): the engine's loopback guard rejects
 # connections from Docker's NAT bridge. You MUST set PS5UPLOAD_ALLOW_IP to
 # the bridge gateway (usually 172.17.0.1) for port-forwarded connections to

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  classifyReplaceError,
   classifySession,
   hostFromArgs,
   isNotPairedError,
@@ -94,5 +95,45 @@ describe("which console a failure names", () => {
     expect(hostFromArgs({ from: "/data/a", to: "/mnt/usb0/b" })).toBeUndefined();
     expect(hostFromArgs({ jobId: "j" })).toBeUndefined();
     expect(hostFromArgs(undefined)).toBeUndefined();
+  });
+});
+
+describe("the engine's folded status error", () => {
+  it("reads an older helper out of the status failure (the banner then offers Update)", () => {
+    expect(
+      classifySession({
+        reachable: false,
+        error:
+          "helper_old: the console runs an older helper; update it (payload rejected NODE_STATUS: helper_not_ava1: ...)",
+      }),
+    ).toBe("helper_old");
+  });
+
+  it("keeps a plain helper_not_ava1 as down", () => {
+    expect(
+      classifySession({ reachable: false, error: "payload rejected NODE_STATUS: helper_not_ava1: x" }),
+    ).toBe("down");
+  });
+});
+
+describe("classifyReplaceError", () => {
+  it.each([
+    ["legacy_helper_wedged: the older helper did not exit", "wedged"],
+    ["helper_not_running: nothing answers on the console", "no_helper"],
+    ["replace_in_progress: a helper replace for this console is running", "in_progress"],
+    ["replace_cooldown: a helper replace was just done (60 s apart)", "cooldown"],
+    ["helper_starting: the new helper is still starting", "starting"],
+    ["ava1_failed: the helper is new but its AVA1 server did not start", "ava1_failed"],
+    ["connect to 10.0.0.2:9021 refused", "failed"],
+  ])("%s -> %s", (msg, kind) => {
+    expect(classifyReplaceError(new Error(msg))).toBe(kind);
+  });
+
+  it("only a missing helper may fall through to sending one", () => {
+    // A cooldown or an in-progress replace must never trigger a send: that would race the
+    // replace that is already running.
+    for (const k of ["in_progress", "cooldown", "starting", "wedged", "ava1_failed", "failed"]) {
+      expect(k).not.toBe("no_helper");
+    }
   });
 });
