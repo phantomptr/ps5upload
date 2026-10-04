@@ -1137,6 +1137,99 @@ mod tests {
         }
     }
 
+    /// `LocalSink` whose first write fails as the OS does when the process is out of
+    /// descriptors.
+    struct EmfileOnce {
+        inner: LocalSink,
+        failed: AtomicBool,
+    }
+
+    impl EmfileOnce {
+        fn fail(&self) -> io::Result<()> {
+            if !self.failed.swap(true, Ordering::Relaxed) {
+                return Err(io::Error::from_raw_os_error(24));
+            }
+            Ok(())
+        }
+    }
+
+    impl Sink for EmfileOnce {
+        fn prepare(&self, m: &Manifest) -> io::Result<()> {
+            self.inner.prepare(m)
+        }
+        fn write_at(&self, id: u32, off: u64, data: &[u8]) -> io::Result<()> {
+            self.fail()?;
+            self.inner.write_at(id, off, data)
+        }
+        fn write_whole(&self, id: u32, data: &[u8]) -> io::Result<()> {
+            self.fail()?;
+            self.inner.write_whole(id, data)
+        }
+        fn sync(&self, ids: &[u32]) -> io::Result<()> {
+            self.inner.sync(ids)
+        }
+        fn read_at(&self, id: u32, off: u64, buf: &mut [u8]) -> io::Result<usize> {
+            self.inner.read_at(id, off, buf)
+        }
+        fn commit(&self, id: u32) -> io::Result<()> {
+            self.inner.commit(id)
+        }
+        fn finish(&self) -> io::Result<()> {
+            self.inner.finish()
+        }
+        fn resume_key(&self) -> Option<(String, bool)> {
+            self.inner.resume_key()
+        }
+    }
+
+    #[test]
+    fn a_descriptor_shortage_is_waited_out_not_terminal() {
+        let d = std::env::temp_dir().join(format!("p5a-emfile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("share/G")).unwrap();
+        for i in 0..3u8 {
+            std::fs::write(d.join(format!("share/G/f{i}")), vec![i + 1; 5000]).unwrap();
+        }
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let ava = d.join("ava");
+        let key = ava1::keys::Identity::load_or_create(&ava.join("identity"))
+            .unwrap()
+            .public();
+        let addr = rt.block_on(folder_host(&d, key));
+        let pool = Pool::new(ava).with_addr(addr);
+        let out = d.join("out/G");
+        let out2 = out.clone();
+        let make = move || -> Arc<dyn Sink> {
+            Arc::new(EmfileOnce {
+                inner: LocalSink::new(out2.clone(), false),
+                failed: AtomicBool::new(false),
+            })
+        };
+        let bytes = run(
+            &pool,
+            "c",
+            "G",
+            0,
+            [8; 16],
+            false,
+            &make,
+            &Counters::default(),
+            None,
+        )
+        .expect("EMFILE is retried, not terminal");
+        assert_eq!(bytes, 15000);
+        for i in 0..3u8 {
+            assert_eq!(
+                std::fs::read(out.join(format!("f{i}"))).unwrap(),
+                vec![i + 1; 5000]
+            );
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     async fn folder_host(dir: &Path, engine_key: [u8; 32]) -> String {
         use ava1::host::FolderHost;
         use ava1::peers::PeerStore;

@@ -934,26 +934,45 @@ struct Large {
     single: Option<[u8; 32]>,
 }
 
-fn new_large(dir: &std::path::Path, m: &Manifest, id: u32) -> Large {
+/// The outboard for a file of `groups` groups. Running out of descriptors is an error to
+/// retry (it must not look like a missing outboard, which fails the commit for good); any other
+/// failure leaves the file without one, as before.
+fn open_outboard(path: &std::path::Path, groups: u64) -> Result<Option<Outboard>, SendError> {
+    match Outboard::open(path, groups) {
+        Ok(ob) => Ok(Some(ob)),
+        Err(e) if is_fd_exhausted(&e) => Err(SendError::Source(e)),
+        Err(_) => Ok(None),
+    }
+}
+
+fn new_large(dir: &std::path::Path, m: &Manifest, id: u32) -> Result<Large, SendError> {
     let size = m
         .entry(id)
         .expect("an id the receiver validated against the manifest")
         .size;
-    Large {
-        hasher_cvs: (verify::groups(size) >= 2)
-            .then(|| Outboard::open(&dir.join(format!("{id}.ob")), verify::groups(size)).ok())
-            .flatten()
-            .map(|ob| Arc::new(Mutex::new(ob))),
+    let hasher_cvs = if verify::groups(size) >= 2 {
+        open_outboard(&dir.join(format!("{id}.ob")), verify::groups(size))?
+            .map(|ob| Arc::new(Mutex::new(ob)))
+    } else {
+        None
+    };
+    Ok(Large {
+        hasher_cvs,
         written: RangeSet::new(),
         durable: RangeSet::new(),
         root: None,
         single: None,
-    }
+    })
 }
 
 /// A chunk of `len` bytes at `off` of a file of `size` must be group-aligned, inside the
 /// file, and whole groups unless it ends the file.
 fn check_chunk_range(size: u64, off: u64, len: u64) -> Result<(), SendError> {
+    // An empty chunk carries nothing and describes nothing (an empty file has no chunks):
+    // refused, or a peer could buffer one per aligned offset for free.
+    if len == 0 && size > 0 {
+        return Err(SendError::Protocol("an empty chunk".into()));
+    }
     if !off.is_multiple_of(GROUP)
         || off > size
         || len > size - off
@@ -977,6 +996,12 @@ enum Admit {
 /// ahead of a frame it never sends would otherwise grow it without end (the credit is returned
 /// on receipt).
 const REORDER_WINDOWS: u64 = 4;
+
+/// What one buffered entry costs against the cap: its bytes plus a fixed overhead for the map
+/// node, so entries cannot be free whatever their size.
+fn held_cost(len: u64) -> u64 {
+    len.saturating_add(64)
+}
 
 /// Validates the key of a data frame before it is buffered (final review: engine #4): the file
 /// must be a file of the manifest, the range inside it, the key at or past the cursor and not
@@ -1011,7 +1036,7 @@ fn admit_ordered(
     if (file_id, off) < cursor || held.contains_key(&(file_id, off)) {
         return Ok(Admit::Drop);
     }
-    if held_bytes.saturating_add(len) > credit.saturating_mul(REORDER_WINDOWS) {
+    if held_bytes.saturating_add(held_cost(len)) > credit.saturating_mul(REORDER_WINDOWS) {
         return Err(SendError::Protocol(
             "the ordered sender ran too far ahead of a frame it has not sent".into(),
         ));
@@ -1044,7 +1069,10 @@ async fn apply_chunk(
     let size = e.size;
     let len = data.len() as u64;
     check_chunk_range(size, off, len)?;
-    let l = large.entry(id).or_insert_with(|| new_large(dir, m, id));
+    if !large.contains_key(&id) {
+        large.insert(id, new_large(dir, m, id)?);
+    }
+    let l = large.get_mut(&id).expect("inserted above");
     let s2 = sink.clone();
     let data = Arc::new(data);
     let d2 = data.clone();
@@ -1239,7 +1267,7 @@ async fn run_loop(
             )));
         };
         let size = e.size;
-        let mut ob = Outboard::open(&dir.join(format!("{id}.ob")), verify::groups(size)).ok();
+        let mut ob = open_outboard(&dir.join(format!("{id}.ob")), verify::groups(size))?;
         let mut good = RangeSet::new();
         for (s, e) in r.iter() {
             if sink.transient_relay() {
@@ -1263,7 +1291,7 @@ async fn run_loop(
             let rec = Record::Reset(id);
             st.apply(&rec);
             jnl.append(&rec)?;
-            ob = Outboard::open(&dir.join(format!("{id}.ob")), verify::groups(size)).ok();
+            ob = open_outboard(&dir.join(format!("{id}.ob")), verify::groups(size))?;
             good = RangeSet::new();
         }
         st.ranges.insert(id, good.clone());
@@ -1535,7 +1563,7 @@ async fn run_loop(
                                 false,
                             )? == Admit::Keep
                             {
-                                reorder_bytes += c.data.len() as u64;
+                                reorder_bytes += held_cost(c.data.len() as u64);
                                 reorder.insert((c.file_id, c.offset), (false, c.data));
                             }
                         } else {
@@ -1601,7 +1629,7 @@ async fn run_loop(
                                     true,
                                 )? == Admit::Keep
                                 {
-                                    reorder_bytes += r.data.len() as u64;
+                                    reorder_bytes += held_cost(r.data.len() as u64);
                                     reorder.insert((r.file_id, 0), (true, r.data));
                                 }
                             } else {
@@ -1668,7 +1696,7 @@ async fn run_loop(
                         let Some((whole, data)) = reorder.remove(&cursor) else {
                             break;
                         };
-                        reorder_bytes -= data.len() as u64;
+                        reorder_bytes -= held_cost(data.len() as u64);
                         let (fid, off, n) = (cursor.0, cursor.1, data.len() as u64);
                         if whole {
                             // A bundle record: its root was checked when it arrived, so the
@@ -1698,7 +1726,7 @@ async fn run_loop(
                             break;
                         }
                         if let Some((_, (_, d))) = reorder.pop_first() {
-                            reorder_bytes -= d.len() as u64;
+                            reorder_bytes -= held_cost(d.len() as u64);
                         }
                     }
                 }
@@ -1729,10 +1757,10 @@ async fn run_loop(
                             )));
                         }
                     } else {
-                        large
-                            .entry(r.file_id)
-                            .or_insert_with(|| new_large(&dir, &m, r.file_id))
-                            .root = Some(r.root);
+                        if !large.contains_key(&r.file_id) {
+                            large.insert(r.file_id, new_large(&dir, &m, r.file_id)?);
+                        }
+                        large.get_mut(&r.file_id).expect("inserted above").root = Some(r.root);
                     }
                 }
                 JobCancel::TYPE => {
@@ -2622,6 +2650,7 @@ mod tests {
         };
         let held: BTreeMap<(u32, u64), (bool, Vec<u8>)> =
             BTreeMap::from([((0, GROUP), (false, vec![]))]);
+        let cap_of = |credit: u64| credit * REORDER_WINDOWS;
         let g = |cursor, held_bytes, credit, id, off, len, whole| {
             admit_ordered(&m, cursor, &held, held_bytes, credit, id, off, len, whole)
         };
@@ -2644,10 +2673,13 @@ mod tests {
             g((0, 0), 0, GROUP, 0, GROUP, GROUP, false).unwrap(),
             Admit::Drop
         );
+        // Empty chunks are refused, and every entry costs something against the cap.
+        assert!(g((0, 0), 0, GROUP, 0, 2 * GROUP, 0, false).is_err());
+        assert!(g((0, 0), cap_of(GROUP) - 10, GROUP, 0, 2 * GROUP, 1, false).is_err());
         // The buffer is capped at REORDER_WINDOWS windows of credit.
         let cap = GROUP * REORDER_WINDOWS;
-        assert!(g((0, 0), cap - GROUP, GROUP, 0, 2 * GROUP, GROUP, false).is_ok());
-        assert!(g((0, 0), cap - GROUP + 1, GROUP, 0, 2 * GROUP, GROUP, false).is_err());
+        assert!(g((0, 0), cap - GROUP - 64, GROUP, 0, 2 * GROUP, GROUP, false).is_ok());
+        assert!(g((0, 0), cap - GROUP - 63, GROUP, 0, 2 * GROUP, GROUP, false).is_err());
     }
 
     #[test]
@@ -2671,6 +2703,57 @@ mod tests {
         let h = *blake3::hash(one).as_bytes();
         assert_eq!(relay_root(1, None, Some(h), lie), h);
         assert_eq!(relay_root(1, None, None, lie), lie);
+    }
+
+    #[test]
+    fn many_large_files_written_interleaved_stay_within_the_descriptor_cap() {
+        let d = std::env::temp_dir().join(format!("p5a-fdcap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let n = MAX_OPEN as u32 * 2 + 20;
+        let size = 3 * GROUP;
+        let m = Manifest {
+            entries: (0..n)
+                .map(|i| Entry {
+                    kind: gen::ENTRY_FILE,
+                    mode: 0o644,
+                    size,
+                    mtime: 0,
+                    path: format!("f{i}"),
+                    root: None,
+                })
+                .collect(),
+        };
+        let body = |i: u32, g: u64| vec![(i as u8).wrapping_add(g as u8 * 40); GROUP as usize];
+        // Non-staged (an existing root) and staged (a new one) both.
+        for staged in [false, true] {
+            let root = d.join(if staged { "new" } else { "old" });
+            if !staged {
+                std::fs::create_dir_all(&root).unwrap();
+            }
+            let sink = LocalSink::new(root.clone(), false).with_log(false, PackOpts::default());
+            sink.prepare(&m).unwrap();
+            // Interleaved: group 0 of every file, then group 1 of every file, ... so every file is
+            // evicted from the cache and reopened between its own writes.
+            for g in 0..3u64 {
+                for i in 0..n {
+                    sink.write_at(i, g * GROUP, &body(i, g)).unwrap();
+                    assert!(sink.st.lock().unwrap().open.len() <= MAX_OPEN);
+                }
+                let ids: Vec<u32> = (0..n).collect();
+                sink.sync(&ids).unwrap();
+            }
+            for i in 0..n {
+                sink.commit(i).unwrap();
+            }
+            sink.finish().unwrap();
+            for i in 0..n {
+                let got = std::fs::read(root.join(format!("f{i}"))).unwrap();
+                let want: Vec<u8> = (0..3).flat_map(|g| body(i, g)).collect();
+                assert!(got == want, "file {i} (staged: {staged})");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
@@ -3127,7 +3210,7 @@ mod tests {
         // One large file with a freshly written range: the batch syncs, journals the range
         // and — now past COMPACT_AT — compacts.
         let mut large = HashMap::new();
-        large.insert(0u32, new_large(&dir, &m, 0));
+        large.insert(0u32, new_large(&dir, &m, 0).unwrap());
         large.get_mut(&0).unwrap().written.insert(0, GROUP);
         let (link, _keep_link) = test_link(job);
         let sink: Arc<dyn Sink> = Arc::new(NoopSink);

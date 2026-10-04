@@ -57,9 +57,28 @@ fn count_fds() -> usize {
     .unwrap_or(0)
 }
 
+/// The rlimit and the environment are the process's: one scenario at a time.
+static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_folder_of_more_files_than_descriptors_downloads() {
-    let d = temp("many");
+    scenario("many", "1", false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_same_without_the_pack_log() {
+    scenario("many-nolog", "0", false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn running_out_of_descriptors_mid_download_is_waited_out() {
+    scenario("many-hog", "0", true).await;
+}
+
+async fn scenario(tag: &str, log_small: &str, hog: bool) {
+    let _one = ONE_AT_A_TIME.lock().await;
+    std::env::set_var("PS5UPLOAD_AVA1_LOG_SMALL", log_small);
+    let d = temp(tag);
     let n = 700usize;
     for i in 0..n {
         let p = d.join(format!("share/Game/d{}/f{i}", i % 9));
@@ -103,6 +122,25 @@ async fn a_folder_of_more_files_than_descriptors_downloads() {
         bytes_finalized: Arc::default(),
         total: Some(Arc::default()),
     };
+    // A hog takes every free descriptor for a moment once bytes are arriving, then lets go: the
+    // sink's next open fails with EMFILE and the download must wait and finish.
+    let hog = hog.then(|| {
+        let bytes = c.bytes.clone();
+        std::thread::spawn(move || {
+            let t = std::time::Instant::now();
+            while bytes.load(std::sync::atomic::Ordering::Relaxed) == 0
+                && t.elapsed() < Duration::from_secs(20)
+            {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let mut held = Vec::new();
+            while let Ok(f) = std::fs::File::open("/dev/null") {
+                held.push(f);
+            }
+            std::thread::sleep(Duration::from_millis(1500));
+            drop(held);
+        })
+    });
     let (o2, c2) = (out.clone(), c.clone());
     let r = tokio::time::timeout(
         Duration::from_secs(90),
@@ -123,6 +161,9 @@ async fn a_folder_of_more_files_than_descriptors_downloads() {
     .await
     .expect("timed out")
     .unwrap();
+    if let Some(h) = hog {
+        h.join().unwrap();
+    }
     unsafe {
         libc::setrlimit(libc::RLIMIT_NOFILE, &old);
     }
