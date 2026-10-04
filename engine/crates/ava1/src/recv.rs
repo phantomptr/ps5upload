@@ -162,8 +162,11 @@ pub struct LocalSink {
     /// Test seam: runs inside `commit` after the state lock is released, where the fsync and the
     /// rename happen.
     #[cfg(test)]
-    commit_hook: Mutex<Option<Box<dyn Fn(u32) + Send + Sync>>>,
+    commit_hook: Mutex<Option<CommitHook>>,
 }
+
+#[cfg(test)]
+type CommitHook = Box<dyn Fn(u32) + Send + Sync>;
 
 #[derive(Default)]
 struct LocalState {
