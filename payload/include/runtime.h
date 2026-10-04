@@ -161,6 +161,10 @@ typedef struct {
     int prior_verdict;
     int takeover_requested;
     uint64_t started_at_unix;
+    /* The prior instance's ownership record as read at startup, before the takeover made it
+     * unlink the file. The reap backs a fresh (possibly lost) read with it (review 010). */
+    int prior_rec_pid;
+    uint64_t prior_rec_started;
     uint64_t command_count;
     uint64_t active_transactions;
     uint64_t last_tx_seq;

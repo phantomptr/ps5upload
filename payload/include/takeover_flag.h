@@ -60,6 +60,11 @@ int takeover_flag_request(const char *dir, uint64_t my_nonce, const int *ports, 
  * Pro on 2026-10-03 (final review: console, outage). */
 int takeover_wait_port_free(int port, int max_ms, int interval_ms);
 
+/* The single-instance gate in front of the AVA1 side (review 010 §1): waits for `port` to free, then
+ * calls start(ctx) and returns 1; when the port is still answered after max_ms it does NOT call
+ * start and returns 0 (the caller refuses to co-run). main.c runs its AVA1 start through this. */
+int takeover_gate_start(int port, int max_ms, int interval_ms, void (*start)(void *), void *ctx);
+
 int takeover_flag_poll_start(const char *dir, uint64_t my_nonce, int period_ms, void (*on_newer)(void));
 
 #endif

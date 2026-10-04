@@ -69,6 +69,7 @@
 #include "cross_device.h"
 #include "ava1_stop.h"
 #include "ava1_glue.h"
+#include "ownership_record.h"
 
 /* PS5 SDK's `<fcntl.h>` hides `posix_fadvise` and its POSIX_FADV_* constants
  * behind `__POSIX_VISIBLE >= 200112`, but defining `_POSIX_C_SOURCE` to unlock
@@ -1801,6 +1802,8 @@ static void mount_tracker_remove(const char *mount_point) {
     (void)unlink(tracker);
 }
 
+static uint64_t runtime_system_boottime_unix(void);
+
 int runtime_init(runtime_state_t *state) {
     if (!state) return -1;
     memset(state, 0, sizeof(*state));
@@ -1823,10 +1826,13 @@ int runtime_init(runtime_state_t *state) {
      *                resolution distinct between rapid restarts. */
     {
         struct timespec rts;
-        if (clock_gettime(CLOCK_REALTIME, &rts) != 0) {
+        if (clock_gettime(CLOCK_REALTIME, &rts) != 0 || rts.tv_sec <= 0) {
             rts.tv_sec = time(NULL);
             rts.tv_nsec = 0;
         }
+        /* started_at_unix == 0 reads as "unverifiable" to the next instance's reap. A clock that
+         * cannot be read still has a true lower bound: this boot's start. */
+        if (rts.tv_sec <= 0) rts.tv_sec = (time_t)runtime_system_boottime_unix();
         uint64_t hi = ((uint64_t)rts.tv_sec & 0xFFFFFFFFu) << 32;
         uint64_t lo = ((uint64_t)getpid() << 16) ^ ((uint64_t)rts.tv_nsec & 0xFFFFu);
         state->instance_id = hi | (lo & 0xFFFFFFFFu);
@@ -1901,18 +1907,26 @@ int runtime_write_ownership(const runtime_state_t *state) {
                 state->ownership_path);
         return -1;
     }
+    /* Never publish a record with started_at_unix == 0 (the 2026-10-03 outage's unverifiable prior):
+     * stamp it now if init could not. */
+    uint64_t started = state->started_at_unix;
+    if (started == 0) {
+        time_t t = time(NULL);
+        started = t > 0 ? (uint64_t)t : runtime_system_boottime_unix();
+    }
+    char rec[256];
+    int rec_len = ownership_record_format(rec, sizeof rec, state->instance_id, state->runtime_port,
+                                          state->startup_reason, started, (int)getpid());
+    if (rec_len < 0) {
+        fprintf(stderr, "[payload2] refusing to write an ownership record without a start time\n");
+        return -1;
+    }
     fp = fopen(tmp_path, "w");
     if (!fp) {
         fprintf(stderr, "[payload2] failed to open ownership tmp %s\n", tmp_path);
         return -1;
     }
-    fprintf(fp,
-            "instance_id=%llu\nruntime_port=%d\nstartup_reason=%d\nstarted_at_unix=%llu\npid=%d\n",
-            (unsigned long long)state->instance_id,
-            state->runtime_port,
-            state->startup_reason,
-            (unsigned long long)state->started_at_unix,
-            (int)getpid());
+    fwrite(rec, 1, (size_t)rec_len, fp);
     /* Flush + fsync before rename so the bytes are durable. Without
      * fsync the rename can promote stale (or zero) content into the
      * destination if a crash hits before writeback. */
@@ -1950,35 +1964,6 @@ int runtime_clear_ownership(const runtime_state_t *state) {
     return -1;
 }
 
-/* Read the `pid=` line out of the PREVIOUS ownership record (before we
- * overwrite it). Returns the pid, or -1 if absent/unreadable. */
-static int runtime_read_prior_pid(const char *ownership_path) {
-    FILE *fp = fopen(ownership_path, "r");
-    if (!fp) return -1;
-    int pid = -1;
-    char line[128];
-    while (fgets(line, sizeof(line), fp)) {
-        if (sscanf(line, "pid=%d", &pid) == 1) break;
-    }
-    fclose(fp);
-    return pid;
-}
-
-/* Read the `started_at_unix` line from the prior ownership record. Returns
- * the recorded wall-clock start time (CLOCK_REALTIME seconds), or 0 if the
- * field is absent (older-format record) or unreadable. */
-static uint64_t runtime_read_prior_started_at(const char *ownership_path) {
-    FILE *fp = fopen(ownership_path, "r");
-    if (!fp) return 0;
-    unsigned long long started = 0;
-    char line[128];
-    while (fgets(line, sizeof(line), fp)) {
-        if (sscanf(line, "started_at_unix=%llu", &started) == 1) break;
-    }
-    fclose(fp);
-    return (uint64_t)started;
-}
-
 /* System boot wall-clock time (CLOCK_REALTIME seconds) via sysctl
  * kern.boottime. Same clock domain as `started_at_unix`, so the two are
  * directly comparable to tell whether an ownership record was written in
@@ -2002,8 +1987,14 @@ void runtime_classify_prior_instance(runtime_state_t *state) {
     int prior_alive = 0;
 
     if (record_present) {
-        prior_started = runtime_read_prior_started_at(state->ownership_path);
-        int prior_pid = runtime_read_prior_pid(state->ownership_path);
+        /* One read of the whole record (retried once), kept on the state: by the time the reap
+         * runs, the handing-over predecessor may have unlinked the file (review 010). */
+        ownership_rec_t rec;
+        (void)ownership_record_read(state->ownership_path, &rec, 20);
+        state->prior_rec_pid = rec.pid;
+        state->prior_rec_started = rec.started;
+        prior_started = rec.started;
+        int prior_pid = rec.pid;
         if (prior_pid > 0 && prior_pid != (int)getpid()) {
             prior_alive = (kill((pid_t)prior_pid, 0) == 0) ? 1 : 0;
         }
@@ -2051,7 +2042,16 @@ void runtime_classify_prior_instance(runtime_state_t *state) {
 
 void runtime_reap_prior_instance(runtime_state_t *state) {
     if (!state) return;
-    int prior = runtime_read_prior_pid(state->ownership_path);
+    /* Read the whole record once, retried once, and fill what a lost read dropped from the snapshot
+     * taken before the takeover. The predecessor unlinks the record as it hands over; reading pid
+     * and start time in two separate opens let it vanish between them and read as started=0. */
+    ownership_rec_t rec;
+    (void)ownership_record_read(state->ownership_path, &rec, 20);
+    {
+        ownership_rec_t snap = {state->prior_rec_pid, state->prior_rec_started, 0};
+        ownership_record_merge(&rec, &snap);
+    }
+    int prior = rec.pid > 0 ? rec.pid : -1;
     int me = (int)getpid();
     /* Diagnostic (also exercises proc_name_by_pid on every startup so the
      * kinfo offsets are validated on this firmware even when there's nothing
@@ -2078,7 +2078,7 @@ void runtime_reap_prior_instance(runtime_state_t *state) {
         return; /* prior pid vanished between the checks — nothing to do */
     }
     {
-        uint64_t prior_started = runtime_read_prior_started_at(state->ownership_path);
+        uint64_t prior_started = rec.started;
         uint64_t boottime = runtime_system_boottime_unix();
         uint64_t kstart = 0;
         int kstart_known = proc_start_by_pid(prior, &kstart) == 0;

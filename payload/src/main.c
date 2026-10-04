@@ -434,6 +434,13 @@ static void redirect_stdio_to_file(void) {
             PS5UPLOAD2_VERSION, (long long)ts.tv_sec);
 }
 
+/* Starts the AVA1 side; only ever reached through takeover_gate_start (no other helper holds the port). */
+static void start_ava1_cb(void *ctx) {
+    (void)ctx;
+    int ava1_rc = ava1_payload_start();
+    if (ava1_rc != 0) fprintf(stderr, "ava1: server did not start (%d); FTX2 continues\n", ava1_rc);
+}
+
 int main(void) {
     /* Name ourselves BEFORE anything else can observe us.
      *
@@ -741,7 +748,7 @@ int main(void) {
          * The takeover has asked the prior instance to leave; give it a bounded time to release
          * :9120, and if something still answers there start neither the server nor the data layer.
          * FTX2 keeps running so the app can still replace this instance. */
-        if (takeover_wait_port_free((int)AVA1_DEFAULT_PORT, 15000, 100) != 0) {
+        if (!takeover_gate_start((int)AVA1_DEFAULT_PORT, 15000, 100, start_ava1_cb, NULL)) {
             fprintf(stderr,
                     "ava1: REFUSING TO START: port %d is still answered by another process 15 s after the takeover; "
                     "not starting the server or the data layer beside it. FTX2 continues; replace this helper "
@@ -749,9 +756,6 @@ int main(void) {
                     (int)AVA1_DEFAULT_PORT);
             ava1_payload_refused();
             pop_notification("PS5Upload: another helper still holds the transfer port - AVA1 is off. Send the payload again or restart the PS5");
-        } else {
-            int ava1_rc = ava1_payload_start();
-            if (ava1_rc != 0) fprintf(stderr, "ava1: server did not start (%d); FTX2 continues\n", ava1_rc);
         }
     }
     startup_trace("MGMT_THREAD_SPAWNED");

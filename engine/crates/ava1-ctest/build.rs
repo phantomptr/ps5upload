@@ -104,6 +104,8 @@ fn main() {
             p.join("src/net_probe.c"),
             p.join("src/legacy_takeover.c"),
             p.join("src/takeover_flag.c"),
+            p.join("src/ownership_record.c"),
+            here.join("csrc/ownership_shim.c"),
             p.join("src/ava1_stop.c"),
             here.join("csrc/sizes.c"),
             here.join("csrc/test_shim.c"),

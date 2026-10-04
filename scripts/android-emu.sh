@@ -14,6 +14,10 @@
 # `test` leaves the emulator running so re-runs skip the ~25s cold boot; set
 # PS5UPLOAD_EMU_TEARDOWN=1 (CI) to shut down one that this run booted.
 #
+# Android smoke checklist note (review 010): the RAR worker (vendored unrar C++) must stay OUT of
+# the Android build. `cd engine && cargo check -p ps5upload-engine --target aarch64-linux-android`
+# (what `make test-engine` runs) catches it if a #[cfg(not(target_os = "android"))] is dropped.
+#
 # The emulator boots headless by default. PS5UPLOAD_EMU_WINDOW=1 boots it with
 # its window, so the app can be seen and used (make run-android does this;
 # make run-android-background and make emu-test stay headless).

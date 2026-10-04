@@ -145,6 +145,12 @@ int takeover_wait_port_free(int port, int max_ms, int interval_ms) {
     }
 }
 
+int takeover_gate_start(int port, int max_ms, int interval_ms, void (*start)(void *), void *ctx) {
+    if (takeover_wait_port_free(port, max_ms, interval_ms) != 0) return 0;
+    start(ctx);
+    return 1;
+}
+
 int takeover_flag_request(const char *dir, uint64_t my_nonce, const int *ports, int nports,
                           int attempts, int interval_us) {
     if (takeover_flag_write(dir, my_nonce) != 0) return -1;
