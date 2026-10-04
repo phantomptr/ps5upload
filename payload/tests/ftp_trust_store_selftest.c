@@ -87,7 +87,7 @@ static void overflow_and_sentinel_tests(const char *base) {
         CHECK(strcmp(out, FTP_DENIED_PATH) == 0);
     }
     /* A short relative name under a root whose join overflows. */
-    snprintf(s.root, sizeof s.root, "%s", base);
+    snprintf(s.root, sizeof s.root, "%.500s", base);
     long_path(lp, 1020);
     abs_path(&s, lp, out, sizeof out);
     CHECK(strcmp(out, FTP_DENIED_PATH) == 0);
@@ -96,7 +96,7 @@ static void overflow_and_sentinel_tests(const char *base) {
     /* CWD / STOR / MKD / RNTO / CDUP with 1023-, 1024- and 1025-byte paths: refused, cwd reset to the root. */
     for (int i = 0; i < 3; i++) {
         long_path(lp, lens[i]);
-        snprintf(s.cwd, sizeof s.cwd, "%s", base);
+        snprintf(s.cwd, sizeof s.cwd, "%.500s", base);
         handle_cwd(&s, lp);
         CHECK(reply() == 550);
         CHECK(strcmp(s.cwd, "/") == 0 || strcmp(s.cwd, base) == 0); /* never a truncated path */
@@ -110,14 +110,14 @@ static void overflow_and_sentinel_tests(const char *base) {
         CHECK(reply() == 350);
         handle_rnto(&s, lp);
         CHECK(reply() == 550);
-        snprintf(s.cwd, sizeof s.cwd, "%s", lp); /* a session already sitting in a long directory */
+        snprintf(s.cwd, sizeof s.cwd, "%.1023s", lp); /* a session already sitting in a long directory */
         handle_cdup(&s);
         CHECK(reply() == 550);
         CHECK(strlen(s.cwd) < sizeof s.cwd);
     }
     /* The root of a cwd that cannot be extended: CWD that overflows the cwd buffer resets to the root. */
-    snprintf(s.root, sizeof s.root, "%s", base);
-    snprintf(s.cwd, sizeof s.cwd, "%s", base);
+    snprintf(s.root, sizeof s.root, "%.500s", base);
+    snprintf(s.cwd, sizeof s.cwd, "%.500s", base);
     long_path(lp, 1010 - strlen(base));
     handle_cwd(&s, lp);
     CHECK(reply() == 550);

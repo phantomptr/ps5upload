@@ -123,7 +123,7 @@ struct ftp_session {
     char user[64];
     char pass[64];
     int use_pasv;
-    char rename_path[512];
+    char rename_path[1024];
     char pending_user[64];
     char transfer_type;
     char line_buf[1024];
