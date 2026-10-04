@@ -16,10 +16,14 @@ import { useLangStore } from "../state/lang";
  * key. Never throws: a translation lookup must not turn an error message into
  * an exception.
  */
-export function trStatic(key: string, fallback: string): string {
+export function trStatic(
+  key: string,
+  fallback: string,
+  vars?: Record<string, string | number>,
+): string {
   try {
     const lang = useLangStore.getState().lang;
-    const out = t(lang, key);
+    const out = t(lang, key, vars);
     return out === key ? fallback : out;
   } catch {
     return fallback;

@@ -90,6 +90,8 @@ import {
 } from "./consoleQueueBridge";
 import { PS5_PAYLOAD_PORT } from "./connection";
 import { trStatic } from "../lib/trStatic";
+import { formatBytes } from "../lib/format";
+import { checkQueueSpace } from "../lib/queueSpace";
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import { effectiveUploadStreams } from "../lib/uploadStreams";
 import {
@@ -230,6 +232,13 @@ export interface QueueItem {
   /** Total bytes the engine pre-stat'd for this source. 0 until first
    *  Running tick lands. */
   totalBytes: number;
+  /** Bytes the source is expected to take on the PS5, captured at add time
+   *  from the Upload screen's inspection (pkg header, folder walk or archive
+   *  central directory — for archives the UNCOMPRESSED total). 0 when the
+   *  inspection had no size (plain files, multi-part sets, queued installs);
+   *  the queue-space check (lib/queueSpace) then falls back to `totalBytes`,
+   *  which only lands once the item starts running. */
+  estimatedBytes?: number;
   /** Smoothed bytes/sec while running (trailing 2 s window via
    *  `lib/rollingRate`); set to the wall-clock average bytes/sec on
    *  done; 0 when pending or failed. Persisted with the queue so the
@@ -300,6 +309,7 @@ export type AddQueueItem = Pick<
   | "registerAfterUpload"
   | "contentId"
   | "category"
+  | "estimatedBytes"
   | "installAfterUpload"
   | "deletePkgAfterInstall"
   | "install"
@@ -1677,6 +1687,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
         status: "pending",
         bytesSent: 0,
         totalBytes: 0,
+        estimatedBytes: input.estimatedBytes ?? 0,
         bytesPerSec: 0,
         filesFinalized: 0,
         filesFinalizingTotal: 0,
@@ -1692,6 +1703,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
       };
       set((s) => ({ items: s.items.concat(item) }));
       scheduleSave();
+      void warnQueueOverSpace(hostOf(item.addr));
     },
 
     remove(id) {
@@ -2006,6 +2018,77 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
 
 // pkgLibrary queues installs through the bridge (it can't import this module).
 registerInstallEnqueuer((input) => useUploadQueueStore.getState().enqueueInstall(input));
+
+/**
+ * Add-time queue-vs-storage warning. Every `add` runs a best-effort check of
+ * that console's whole pending queue against its destination drives
+ * (lib/queueSpace) and pushes a notification when the queue can no longer
+ * fit — so queueing a fifth 90 GiB game onto a 100 GiB drive tells the user
+ * up front, instead of four uploads succeeding and the fifth dying partway
+ * with a no-space error.
+ *
+ * Debounced per console (CHECK_DELAY_MS collapses a batch add into one
+ * check; WARN_COOLDOWN_MS stops repeated adds from repeating the toast).
+ * The Queue panel banner carries the live state; this is only the nudge.
+ * Silently does nothing when volumes can't be read (payload down) — a check
+ * that can't run must never gate a queue that might fit.
+ */
+const QUEUE_SPACE_CHECK_DELAY_MS = 400;
+const QUEUE_SPACE_WARN_COOLDOWN_MS = 10_000;
+const queueSpaceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const lastQueueSpaceWarnAt = new Map<string, number>();
+
+function warnQueueOverSpace(host: string): void {
+  const prev = queueSpaceTimers.get(host);
+  if (prev) clearTimeout(prev);
+  queueSpaceTimers.set(
+    host,
+    setTimeout(() => {
+      queueSpaceTimers.delete(host);
+      void runQueueSpaceCheck(host);
+    }, QUEUE_SPACE_CHECK_DELAY_MS),
+  );
+}
+
+async function runQueueSpaceCheck(host: string): Promise<void> {
+  const live = useUploadQueueStore
+    .getState()
+    .items.filter(
+      (it) =>
+        hostOf(it.addr) === host &&
+        (it.status === "pending" || it.status === "running"),
+    );
+  if (live.length === 0) return;
+  const findings = await checkQueueSpace(live[0].addr, live);
+  if (findings.length === 0) {
+    // Back under capacity — reset the cooldown so a later over-capacity
+    // add warns again right away.
+    lastQueueSpaceWarnAt.delete(host);
+    return;
+  }
+  const now = Date.now();
+  if (now - (lastQueueSpaceWarnAt.get(host) ?? 0) < QUEUE_SPACE_WARN_COOLDOWN_MS)
+    return;
+  lastQueueSpaceWarnAt.set(host, now);
+  // Worst offender first — one toast naming the drive the queue will hit
+  // first, not one toast per drive.
+  const f = findings.reduce((a, b) => (b.overBy > a.overBy ? b : a));
+  pushNotification(
+    "warning",
+    trStatic("queue_space_over_title", "Queue is bigger than console storage"),
+    {
+      body: trStatic(
+        "queue_space_over_body",
+        "The queue needs {queue} but {volume} has only {free} free — uploads past that point will fail. Remove some items or free up space.",
+        {
+          queue: formatBytes(f.requiredBytes),
+          volume: f.volumePath,
+          free: formatBytes(f.allocatableBytes),
+        },
+      ),
+    },
+  );
+}
 registerPkgQueueApi({
   add(item) {
     const q = useUploadQueueStore.getState();

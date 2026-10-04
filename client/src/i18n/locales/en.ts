@@ -692,6 +692,10 @@ queue_move_up: "Move up",
 queue_move_down: "Move down",
 queue_remove: "Remove from queue",
 queue_cancel_item: "Cancel this upload (keeps the rest of the queue going)",
+queue_size_chip: "{size} to upload",
+queue_space_over_title: "Queue is bigger than console storage",
+queue_space_over_body:
+  "The queue needs {queue} but {volume} has only {free} free — uploads past that point will fail. Remove some items or free up space.",
   
 activity_clear_running: "Clear running",
 fs_download_stop: "Stop watching",
