@@ -1447,88 +1447,6 @@ pub(crate) fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Fast host-side capacity gate for a fresh transaction. The payload repeats
-/// the check authoritatively at BEGIN_TX (including resumes), but doing it here
-/// lets the desktop job fail with a useful message before opening the transfer
-/// socket. A telemetry failure is deliberately non-fatal: an older payload or
-/// a temporarily busy management port must not make every upload impossible.
-fn preflight_capacity_failure(
-    addr: &str,
-    dest: &str,
-    required_bytes: u64,
-) -> Option<(String, String)> {
-    let mgmt = console_addr(addr);
-    let volumes = match list_volumes(&mgmt) {
-        Ok(v) => v,
-        Err(e) => {
-            crate::log_warn!("capacity preflight unavailable: addr={addr} dest={dest} error={e:#}");
-            return None;
-        }
-    };
-    let Some(volume) = volumes.find_for_path(dest) else {
-        crate::log_warn!(
-            "capacity preflight found no volume: addr={addr} dest={dest}; payload will verify"
-        );
-        return None;
-    };
-    let allocatable = volume.allocatable_bytes();
-    if required_bytes <= allocatable {
-        return None;
-    }
-    let short = required_bytes.saturating_sub(allocatable);
-    let reserve = volume.safety_reserve_bytes();
-    Some((
-        format!(
-            "Destination volume `{}` does not have enough safely allocatable space: need {} bytes, have {} bytes ({} bytes short).",
-            volume.path, required_bytes, allocatable, short
-        ),
-        format!(
-            "{} reports {} bytes free; {} bytes are reserved for PS5/system and filesystem safety, leaving {} allocatable. Need {} more bytes.",
-            volume.path, volume.free_bytes, reserve, allocatable, short
-        ),
-    ))
-}
-
-// These are the exact pieces required to publish a terminal async job state;
-// wrapping them in a one-use context struct would only move the surface area.
-#[allow(clippy::too_many_arguments)]
-fn fail_job_if_capacity_insufficient(
-    jobs: &Arc<Mutex<HashMap<Uuid, JobState>>>,
-    events_tx: &broadcast::Sender<String>,
-    job_id: Uuid,
-    started_at_ms: u64,
-    addr: &str,
-    dest: &str,
-    required_bytes: u64,
-    is_resume: bool,
-) -> bool {
-    // On resume the host cannot distinguish sparse logical length from real
-    // allocated blocks. The payload has the transaction journal and performs
-    // the accurate remaining-allocation check at BEGIN_TX.
-    if is_resume {
-        return false;
-    }
-    let Some((error, detail)) = preflight_capacity_failure(addr, dest, required_bytes) else {
-        return false;
-    };
-    let completed_at_ms = now_ms();
-    set_job(
-        jobs,
-        events_tx,
-        job_id,
-        JobState::Failed {
-            started_at_ms,
-            completed_at_ms,
-            elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-            error,
-            error_reason: Some("preflight_insufficient_space".to_string()),
-            error_detail: Some(detail),
-            error_console: None,
-        },
-    );
-    true
-}
-
 /// The synchronous form of [`fail_job_unless_console_ready`] for the routes that answer with
 /// an error text instead of a job: the same token and message, `helper_not_ava1: <message>` or
 /// `not_paired: <message>`, which the client matches on. Blocking.
@@ -5378,19 +5296,6 @@ async fn transfer_file_handler(
             fail_guard.mark_succeeded();
             return;
         }
-        if fail_job_if_capacity_insufficient(
-            &jobs,
-            &events_tx,
-            job_id,
-            started_at_ms,
-            &addr,
-            &req.dest,
-            total_bytes,
-            caller_supplied_tx_id,
-        ) {
-            fail_guard.mark_succeeded();
-            return;
-        }
 
         // Resume-on-drop for single-file uploads: 1 fresh attempt +
         // DEFAULT_RESUME_RETRIES resumes. WiFi-only PS5s see multi-hour
@@ -5633,19 +5538,6 @@ async fn transfer_dir_handler(
             total_bytes
         );
         if fail_job_unless_console_ready(&jobs, &events_tx, job_id, started_at_ms, &addr) {
-            fail_guard.mark_succeeded();
-            return;
-        }
-        if fail_job_if_capacity_insufficient(
-            &jobs,
-            &events_tx,
-            job_id,
-            started_at_ms,
-            &addr,
-            &req.dest_root,
-            total_bytes,
-            caller_supplied_tx_id,
-        ) {
             fail_guard.mark_succeeded();
             return;
         }
@@ -6209,19 +6101,6 @@ async fn transfer_zip_handler(
         let mut fail_guard =
             JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
         if fail_job_unless_console_ready(&jobs, &events_tx, job_id, started_at_ms, &addr) {
-            fail_guard.mark_succeeded();
-            return;
-        }
-        if fail_job_if_capacity_insufficient(
-            &jobs,
-            &events_tx,
-            job_id,
-            started_at_ms,
-            &addr,
-            &req.dest_root,
-            total_bytes,
-            caller_supplied_tx_id,
-        ) {
             fail_guard.mark_succeeded();
             return;
         }
@@ -7705,19 +7584,6 @@ async fn transfer_7z_handler(
             fail_guard.mark_succeeded();
             return;
         }
-        if fail_job_if_capacity_insufficient(
-            &jobs,
-            &events_tx,
-            job_id,
-            started_at_ms,
-            &addr,
-            &req.dest_root,
-            total_bytes,
-            caller_supplied_tx_id,
-        ) {
-            fail_guard.mark_succeeded();
-            return;
-        }
         // Resume is by job_id (the sender reopens with JobOpen); retries live in the
         // adapter's loop. An archive AVA1 cannot read (encryption, a feature the decoder lacks)
         // is a failure with its own reason: there is no other transport to hand it to.
@@ -7925,19 +7791,6 @@ async fn transfer_rar_handler(
             fail_guard.mark_succeeded();
             return;
         }
-        if fail_job_if_capacity_insufficient(
-            &jobs,
-            &events_tx,
-            job_id,
-            started_at_ms,
-            &addr,
-            &req.dest_root,
-            total_bytes,
-            caller_supplied_tx_id,
-        ) {
-            fail_guard.mark_succeeded();
-            return;
-        }
         let mut cfg = make_transfer_config(&addr);
         // Make this transfer cancellable: register a flag the core checks at
         // every shard boundary, flipped by POST /api/jobs/{id}/cancel.
@@ -8033,7 +7886,6 @@ async fn transfer_file_list_handler(
         return json_err(StatusCode::BAD_REQUEST, "files list is empty").into_response();
     }
     let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
-    let caller_supplied_tx_id = req.tx_id.is_some();
     let tx_id = match parse_or_random_tx_id(req.tx_id.as_deref()) {
         Ok(id) => id,
         Err(e) => return json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response(),
@@ -8173,19 +8025,6 @@ async fn transfer_file_list_handler(
         let mut fail_guard =
             JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
         if fail_job_unless_console_ready(&jobs, &events_tx, job_id, started_at_ms, &addr) {
-            fail_guard.mark_succeeded();
-            return;
-        }
-        if fail_job_if_capacity_insufficient(
-            &jobs,
-            &events_tx,
-            job_id,
-            started_at_ms,
-            &addr,
-            &req.dest_root,
-            total_bytes,
-            caller_supplied_tx_id,
-        ) {
             fail_guard.mark_succeeded();
             return;
         }

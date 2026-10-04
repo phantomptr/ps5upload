@@ -21,6 +21,7 @@ pub mod rar_source;
 pub mod relay;
 pub mod seq;
 pub mod source;
+pub mod space;
 pub mod upload;
 pub mod zip_source;
 mod zip_stored;

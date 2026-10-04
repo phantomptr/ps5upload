@@ -489,7 +489,10 @@ fields = [
   { name = "done", ty = "records", of = "FileRun" },
   { name = "partial", ty = "records", of = "FileRange" },   # durable ranges of unfinished files
 ]
-ext = [{ tag = 1, name = "message", ty = "str" }]
+# `held` (final page): bytes the drive already holds for this job's unfinished large files (the
+# allocated blocks of their part files, at most each file's size). A sender that checks free
+# space credits it: those bytes are on the drive already, durable or not (design 015/02).
+ext = [{ tag = 1, name = "message", ty = "str" }, { tag = 2, name = "held", ty = "u64" }]
 
 [[message]]
 name = "Resume"             # fast path: same manifest as before
@@ -704,6 +707,10 @@ value = 42
 name = "METHOD_FS_MOUNT_LWFS"
 ty = "u16"
 value = 43
+[[const]]
+name = "METHOD_FS_FREESPACE"
+ty = "u16"
+value = 44
 [[const]]
 name = "METHOD_APP_REGISTER"
 ty = "u16"
@@ -1156,6 +1163,21 @@ fields = [
   { name = "size", ty = "u64" },
   { name = "mtime", ty = "u64" },
   { name = "mode", ty = "u32" },
+  { name = "dev", ty = "u64" },
+]
+
+# fs.freespace: FsPath -> FsFreeSpace. What an upload may still fill on the drive holding `path`
+# (the nearest existing ancestor is asked): `usable` is the free space the payload offers to a
+# write, that is free less its small working margin `reserve` (the number its own capacity gate
+# uses; never the hidden allocator pool, never the memory admit budget). `dev` names the
+# volume so callers can tell drives apart.
+[[struct]]
+name = "FsFreeSpace"
+fields = [
+  { name = "usable", ty = "u64" },
+  { name = "free", ty = "u64" },
+  { name = "total", ty = "u64" },
+  { name = "reserve", ty = "u64" },
   { name = "dev", ty = "u64" },
 ]
 

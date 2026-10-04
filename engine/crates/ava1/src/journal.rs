@@ -397,6 +397,7 @@ impl State {
         Need {
             done: self.done.clone(),
             partial: self.ranges.clone().into_iter().collect(),
+            held: 0,
         }
     }
 }

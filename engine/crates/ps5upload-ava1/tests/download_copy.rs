@@ -566,9 +566,12 @@ async fn a_deflate_zip_download_restarts_a_fresh_archive_after_a_drop() {
         "the archive holds exactly one run's bytes"
     );
     assert!(pool.attempts() >= 2);
-    assert!(
-        c.bytes.load(Ordering::Relaxed) > total,
-        "work done includes the discarded attempt (monotonic, may exceed the archive)"
+    // Review 019 F3: the work of the discarded attempt is counted, but what is shown never
+    // passes the whole archive.
+    assert_eq!(
+        c.bytes.load(Ordering::Relaxed),
+        total,
+        "the counter is capped at the archive's own size"
     );
     assert!(!out.join("g.zip.ava-part").exists());
 }

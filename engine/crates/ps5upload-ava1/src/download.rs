@@ -47,8 +47,8 @@ pub struct Counters {
 /// drop. Mapping (the upload bridge's rule): AVA1 only knows a file is done when it is
 /// durable, so `bytes` and `bytes_finalized` ← `bytes_durable`, `files` and
 /// `files_finalized` ← `files_durable`. `base_*` carry the work of earlier attempts
-/// (zip only): the counter is monotonic "work done" and, by design, may end above the
-/// archive's final byte count after a restart.
+/// (zip only): the counter is monotonic "work done", capped at the archive's own size
+/// so a restart never shows more than 100%.
 struct Ticker {
     handle: tokio::task::AbortHandle,
     state: Arc<TickState>,
@@ -63,8 +63,21 @@ struct TickState {
 
 impl TickState {
     fn store(&self) {
-        let bytes = self.base_bytes + self.p.bytes_durable.load(Ordering::Relaxed);
-        let files = self.base_files + self.p.files_durable.load(Ordering::Relaxed);
+        let mut bytes = self.base_bytes + self.p.bytes_durable.load(Ordering::Relaxed);
+        let mut files = self.base_files + self.p.files_durable.load(Ordering::Relaxed);
+        // What is shown never passes the whole (review 019 F3): after a zip restart the work
+        // of the earlier attempts is added on top, and "work done" may exceed the archive.
+        // Capped here, the bar stops at 100% and the ETA at zero instead of going past it.
+        let (total_bytes, total_files) = (
+            self.p.bytes_total.load(Ordering::Relaxed),
+            self.p.files_total.load(Ordering::Relaxed),
+        );
+        if total_bytes > 0 {
+            bytes = bytes.min(total_bytes);
+        }
+        if total_files > 0 {
+            files = files.min(total_files);
+        }
         self.c.bytes.fetch_max(bytes, Ordering::Relaxed);
         self.c.bytes_finalized.fetch_max(bytes, Ordering::Relaxed);
         self.c.files.fetch_max(files, Ordering::Relaxed);
@@ -1017,6 +1030,41 @@ pub fn to_zip_with(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_restarted_zip_never_shows_more_than_the_whole_archive() {
+        // Review 019 F3: base_* carries the work of earlier attempts, so base + durable can
+        // pass the archive's own size after a restart. What the UI is shown is capped at it.
+        let p = Arc::new(Progress::default());
+        p.bytes_total.store(1000, Ordering::Relaxed);
+        p.files_total.store(10, Ordering::Relaxed);
+        p.bytes_durable.store(400, Ordering::Relaxed);
+        p.files_durable.store(4, Ordering::Relaxed);
+        let c = Counters::default();
+        let st = TickState {
+            p,
+            c: c.clone(),
+            base_bytes: 800, // an earlier attempt already spent 800 of them
+            base_files: 8,
+        };
+        st.store();
+        assert_eq!(c.bytes.load(Ordering::Relaxed), 1000);
+        assert_eq!(c.bytes_finalized.load(Ordering::Relaxed), 1000);
+        assert_eq!(c.files.load(Ordering::Relaxed), 10);
+        assert_eq!(c.files_finalized.load(Ordering::Relaxed), 10);
+        // Below the total the counter is the plain work done, and an unknown total caps nothing.
+        let c2 = Counters::default();
+        let p2 = Arc::new(Progress::default());
+        p2.bytes_durable.store(5000, Ordering::Relaxed);
+        TickState {
+            p: p2,
+            c: c2.clone(),
+            base_bytes: 0,
+            base_files: 0,
+        }
+        .store();
+        assert_eq!(c2.bytes.load(Ordering::Relaxed), 5000);
+    }
+
     use super::*;
 
     #[test]

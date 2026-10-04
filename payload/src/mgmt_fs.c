@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -208,6 +209,58 @@ int mgmt_run_fs_stat(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
     s.dev = (uint64_t)st.st_dev;
     ava1_w_init(&out, cx->out, cx->cap);
     if (ava1_fs_stat_encode(&s, &out) != 0) return mgmt_reply_error(cx, AVA1_ERR_INTERNAL, MGMT_ERR_TRUNCATED);
+    cx->out_len = out.len;
+    return AVA1_STATUS_OK;
+}
+
+/* ---- fs.freespace ---- */
+
+/* The working margin kept back from a write on a drive: 1/64th of it, at most 1 GiB. The same rule as
+ * runtime.c's capacity_reserve_for_mount (the console's own capacity gate) and the engine's
+ * Volume::safety_reserve_bytes: small enough never to block an upload that fits, and nothing speculative
+ * (the console's hidden allocator pool is not modelled; the memory admit budget is not disk). */
+#define FS_RESERVE_CAP (1024ull * 1024ull * 1024ull)
+
+uint64_t mgmt_fs_reserve_for(uint64_t total_bytes) {
+    uint64_t scaled = total_bytes / 64u;
+    return scaled < FS_RESERVE_CAP ? scaled : FS_RESERVE_CAP;
+}
+
+int mgmt_run_fs_freespace(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
+    ava1_fs_path_t q;
+    ava1_fs_free_space_t r;
+    ava1_w_t out;
+    struct statvfs vfs;
+    struct stat st;
+    char path[FS_PATH_MAX];
+    uint64_t bs, free_bytes;
+    int rc;
+    if (ava1_fs_path_decode(req, n, &q) != 0) return mgmt_reply_error(cx, AVA1_ERR_PROTOCOL, "bad FsPath request");
+    if ((rc = take_path(cx, q.path, q.path_len, path, "fs_freespace_bad_path")) != AVA1_STATUS_OK) return rc;
+    if (path[0] != '/') return mgmt_reply_error(cx, AVA1_ERR_PATH, "fs_freespace_bad_path");
+    if (has_dotdot_component(path)) return mgmt_reply_error(cx, AVA1_ERR_PATH, "fs_freespace_path_denied");
+    /* A destination usually does not exist yet: ask the nearest ancestor that does, never leaving "/". */
+    for (;;) {
+        char *slash;
+        if (statvfs(path, &vfs) == 0 && stat(path, &st) == 0) break;
+        slash = strrchr(path, '/');
+        if (!slash || slash == path) {
+            if (path[1] == '\0') return errno_error(cx, "fs_freespace_failed", errno);
+            path[1] = '\0';
+            continue;
+        }
+        *slash = '\0';
+    }
+    bs = (uint64_t)(vfs.f_frsize ? vfs.f_frsize : vfs.f_bsize);
+    free_bytes = (uint64_t)vfs.f_bavail * bs; /* what an unprivileged writer can take */
+    memset(&r, 0, sizeof r);
+    r.total = (uint64_t)vfs.f_blocks * bs;
+    r.free = free_bytes;
+    r.reserve = mgmt_fs_reserve_for(r.total);
+    r.usable = free_bytes > r.reserve ? free_bytes - r.reserve : 0;
+    r.dev = (uint64_t)st.st_dev;
+    ava1_w_init(&out, cx->out, cx->cap);
+    if (ava1_fs_free_space_encode(&r, &out) != 0) return mgmt_reply_error(cx, AVA1_ERR_INTERNAL, MGMT_ERR_TRUNCATED);
     cx->out_len = out.len;
     return AVA1_STATUS_OK;
 }

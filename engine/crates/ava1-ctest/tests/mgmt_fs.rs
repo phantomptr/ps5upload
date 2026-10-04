@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use ava1::gen::{
-    self, FsEntry, FsList, FsListResult, FsPath, FsRead, FsReadResult, FsStat, FsWrite, MgmtText,
+    self, FsEntry, FsFreeSpace, FsList, FsListResult, FsPath, FsRead, FsReadResult, FsStat,
+    FsWrite, MgmtText,
 };
 use ava1::keys::Identity;
 use ava1::peers::PeerStore;
@@ -238,6 +239,46 @@ async fn list_refuses_what_the_ftx2_handler_refused() {
     std::fs::create_dir_all(r.path("..cache/x..bak")).unwrap();
     assert_eq!(r.list(&r.p("..cache"), 0, 10).await.entries.len(), 1);
     let (st, _) = r.raw(gen::METHOD_FS_LIST, &[1, 2]).await;
+    assert_eq!(st, gen::ERR_PROTOCOL);
+}
+
+// ---- fs.freespace ----
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fs_freespace_is_the_post_reserve_figure_of_the_drive_holding_the_path() {
+    let r = rig("freespace").await;
+    std::fs::create_dir_all(r.path("d")).unwrap();
+    let ask = |rel: &str| FsPath { path: r.p(rel) };
+    let (st, b) = r.rpc(gen::METHOD_FS_FREESPACE, &ask("d")).await;
+    assert_eq!(st, OK);
+    let f = FsFreeSpace::decode(&b).unwrap();
+    assert!(f.total > 0 && f.free > 0, "{f:?}");
+    // The reserve rule: 1/64th of the drive, at most 1 GiB; usable is free less that, never raw free.
+    assert_eq!(f.reserve, (f.total / 64).min(1 << 30));
+    assert_eq!(f.usable, f.free.saturating_sub(f.reserve));
+    assert!(f.usable < f.free);
+    assert_eq!(f.dev, std::fs::metadata(r.path("d")).unwrap().dev());
+    // A destination that does not exist yet is answered for its nearest existing ancestor.
+    let (st, b) = r
+        .rpc(gen::METHOD_FS_FREESPACE, &ask("d/new/deeper/file"))
+        .await;
+    assert_eq!(st, OK);
+    assert_eq!(FsFreeSpace::decode(&b).unwrap().dev, f.dev);
+    // Relative and climbing paths are refused like fs.stat's.
+    let (st, _) = r
+        .rpc(gen::METHOD_FS_FREESPACE, &FsPath { path: "rel".into() })
+        .await;
+    assert_eq!(st, gen::ERR_PATH);
+    let (st, _) = r
+        .rpc(
+            gen::METHOD_FS_FREESPACE,
+            &FsPath {
+                path: "/a/../b".into(),
+            },
+        )
+        .await;
+    assert_eq!(st, gen::ERR_PATH);
+    let (st, _) = r.raw(gen::METHOD_FS_FREESPACE, &[1, 2]).await;
     assert_eq!(st, gen::ERR_PROTOCOL);
 }
 

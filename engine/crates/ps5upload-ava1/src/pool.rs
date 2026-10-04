@@ -81,6 +81,9 @@ pub struct Pool {
     busy_tries: u32,
     /// Overrides the JobOpenAck timeout (tests).
     open_ack_timeout: Option<Duration>,
+    /// Overrides how an upload learns the destination's free space (tests); `None` asks the
+    /// console (`fs.volumes`).
+    room_probe: Option<crate::space::RoomProbe>,
 }
 
 /// A remembered session failure: when it happened and the reason/detail to repeat.
@@ -252,7 +255,20 @@ impl Pool {
             not_paired_ttl: NOT_PAIRED_TTL,
             busy_tries: DEFAULT_BUSY_TRIES,
             open_ack_timeout: None,
+            room_probe: None,
         }
+    }
+
+    /// Test seam: where an upload's free-space check gets the destination's room.
+    pub fn with_room_probe(mut self, probe: crate::space::RoomProbe) -> Pool {
+        self.room_probe = Some(probe);
+        self
+    }
+
+    pub(crate) fn room_probe(&self) -> crate::space::RoomProbe {
+        self.room_probe
+            .clone()
+            .unwrap_or_else(crate::space::volumes_probe)
     }
 
     /// Overrides how many times a BUSY `JobOpen` is retried (tests; the default suits a console that is
@@ -305,6 +321,7 @@ impl Pool {
             not_paired_ttl: NOT_PAIRED_TTL,
             busy_tries: DEFAULT_BUSY_TRIES,
             open_ack_timeout: None,
+            room_probe: None,
         }
     }
 

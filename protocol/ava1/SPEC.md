@@ -379,7 +379,7 @@ block; the tracked list, one row per FTX2 frame with its payload handler and eng
 |---------|-------|--------|
 | 4–11 | node and diagnostics: `node.status`, `node.shutdown`, `node.cleanup`, `log.klog`, `log.syslog`, `net.interfaces`, `net.reach`, `net.speedtest` | `node.status` replies `NodeStatus`; the rest `MgmtText` |
 | 20–21 | `job.run`, `job.list` | `JobRun{job_id, op, args}` → `Status` (ext `state`, `result`, `code`); `job.list` → `JobListResult` |
-| 32–43 | filesystem: `fs.volumes`, `fs.list`, `fs.stat`, `fs.mkdir`, `fs.rename`, `fs.chmod`, `fs.read`, `fs.write`, `fs.mount`, `fs.unmount`, `fs.mount_pkg`, `fs.mount_lwfs` | `fs.list`, `fs.stat`, `fs.mkdir`, `fs.rename`, `fs.chmod`, `fs.read`, `fs.write` are typed (`FsList` → `FsListResult`, `FsPath` → `FsStat`, `FsMkdir`, `FsRename`, `FsChmod`, `FsRead` → `FsReadResult`, `FsWrite`); the others `MgmtText` |
+| 32–44 | filesystem: `fs.volumes`, `fs.list`, `fs.stat`, `fs.mkdir`, `fs.rename`, `fs.chmod`, `fs.read`, `fs.write`, `fs.mount`, `fs.unmount`, `fs.mount_pkg`, `fs.mount_lwfs`, `fs.freespace` (44) | `fs.list`, `fs.stat`, `fs.freespace` (`FsPath` → `FsFreeSpace`: usable bytes = free less the working margin, 1/64th of the drive at most 1 GiB; the nearest existing ancestor of the path is asked), `fs.mkdir`, `fs.rename`, `fs.chmod`, `fs.read`, `fs.write` are typed (`FsList` → `FsListResult`, `FsPath` → `FsStat`, `FsMkdir`, `FsRename`, `FsChmod`, `FsRead` → `FsReadResult`, `FsWrite`); the others `MgmtText` |
 | 48–61 | apps, launch, install queries, processes | `MgmtText`; `app.list` pages with `offset`/`limit` and `more` (§7.4, the only text method that does not fit one reply) |
 | 64–70 | saves, screenshots, videos, search index | `MgmtText` |
 | 72–87 | hardware, power, time, peripherals, `shell.exec` | `MgmtText` |
@@ -691,6 +691,12 @@ Engines reopen with `JobOpen` after any interruption; `Resume` is optional for s
 keep their manifest and credit state. A receiver answers `Resume` with the `JobMap` of a parked job
 of the same peer key whose stored manifest has that hash, else `JobMap{status = ERR_UNKNOWN_JOB}` —
 never silence.
+The final `JobMap` page may carry the extension `held`: the bytes the receiver's drive already
+holds for the job's unfinished large files (the allocated blocks of their part files, at most
+each file's size; a part file is preallocated whole, so its undurable tail is on the drive
+already). It is advisory and only ever a credit: a sender that checks free space before
+sending subtracts it, with the files in place and the durable ranges, from what the job still
+needs. Absent means none is claimed, and a sender never credits more than the receiver said.
 Credit restarts after any interruption and nothing outstanding carries across a reconnect: the
 grant in a `JobOpenAck` is an absolute number that sets the sender's window (a `Credit` that
 arrives later adds to it), and a `Resume` restarts the window the same way — the receiver resets

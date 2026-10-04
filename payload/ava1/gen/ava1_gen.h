@@ -86,6 +86,7 @@
 #define AVA1_METHOD_FS_UNMOUNT 41ULL
 #define AVA1_METHOD_FS_MOUNT_PKG 42ULL
 #define AVA1_METHOD_FS_MOUNT_LWFS 43ULL
+#define AVA1_METHOD_FS_FREESPACE 44ULL
 #define AVA1_METHOD_APP_REGISTER 48ULL
 #define AVA1_METHOD_APP_UNREGISTER 49ULL
 #define AVA1_METHOD_APP_LAUNCH 50ULL
@@ -573,6 +574,21 @@ int ava1_fs_stat_next(ava1_r_t *it, ava1_fs_stat_t *out);
 int ava1_fs_stat_count(const uint8_t *p, uint32_t len, uint32_t *count);
 
 typedef struct {
+    uint64_t usable;
+    uint64_t free;
+    uint64_t total;
+    uint64_t reserve;
+    uint64_t dev;
+} ava1_fs_free_space_t;
+
+int ava1_fs_free_space_encode(const ava1_fs_free_space_t *m, ava1_w_t *w);
+int ava1_fs_free_space_decode(const uint8_t *buf, size_t len, ava1_fs_free_space_t *m);
+
+int ava1_fs_free_space_append(ava1_w_t *blob, const ava1_fs_free_space_t *m);
+int ava1_fs_free_space_next(ava1_r_t *it, ava1_fs_free_space_t *out);
+int ava1_fs_free_space_count(const uint8_t *p, uint32_t len, uint32_t *count);
+
+typedef struct {
     const uint8_t *path;
     uint16_t path_len;
     uint32_t mode;
@@ -1017,6 +1033,8 @@ typedef struct {
     int has_message;
     const uint8_t *message;
     uint16_t message_len;
+    int has_held;
+    uint64_t held;
 } ava1_job_map_t;
 
 int ava1_job_map_encode(const ava1_job_map_t *m, ava1_w_t *w);

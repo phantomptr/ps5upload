@@ -66,6 +66,7 @@ fn is_read_only(method: u16) -> bool {
             | gen::METHOD_FS_VOLUMES
             | gen::METHOD_FS_LIST
             | gen::METHOD_FS_STAT
+            | gen::METHOD_FS_FREESPACE
             | gen::METHOD_FS_READ
             | gen::METHOD_LOG_KLOG
             | gen::METHOD_LOG_SYSLOG
@@ -450,6 +451,13 @@ impl AvaTransport {
                     .rpc(console, id, label, &req.to_bytes()?, timeout)
                     .await?;
                 json(conv::fs_stat_reply(&gen::FsStat::decode(&r)?))
+            }
+            gen::METHOD_FS_FREESPACE => {
+                let req = conv::fs_path_request(body, label)?;
+                let r = self
+                    .rpc(console, id, label, &req.to_bytes()?, timeout)
+                    .await?;
+                json(conv::fs_freespace_reply(&gen::FsFreeSpace::decode(&r)?))
             }
             gen::METHOD_NODE_SHUTDOWN => {
                 // An empty reply; the legacy ack was `{}`.

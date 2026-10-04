@@ -27,6 +27,67 @@ use crate::source::{read_full_at, Source};
 use crate::verify::{self, FileHasher, Outboard, GROUP};
 use crate::wire::{FrameMessage, Message};
 
+/// What an upload still has to put on the receiver's drive, from the manifest and the
+/// receiver's JobMap (design 015/02). Only bytes the receiver reported are credited: files it
+/// has in place, ranges it has made durable, and the blocks its part files already hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SpaceFigures {
+    /// Every file byte in the manifest.
+    pub job_bytes: u64,
+    /// Bytes the receiver proved durable: whole files in place plus durable ranges.
+    pub durable_bytes: u64,
+    /// Bytes the drive already holds for unfinished large files (JobMap `held`), clamped to
+    /// what those files can hold; 0 when the receiver reports none.
+    pub held_bytes: u64,
+    /// The sizes of the files that are not in place yet.
+    pub unfinished_bytes: u64,
+    pub files_total: u64,
+    pub files_done: u64,
+}
+
+impl SpaceFigures {
+    /// `cutoff` is the small/large split: only a large file has a part file to be held.
+    pub fn of(m: &Manifest, need: &Need, cutoff: u64) -> Result<Self, SendError> {
+        let mut f = SpaceFigures::default();
+        let mut large_unfinished = 0u64;
+        let mut partial_durable = 0u64;
+        for (i, e) in m.entries.iter().enumerate() {
+            if e.kind != gen::ENTRY_FILE {
+                continue;
+            }
+            f.files_total += 1;
+            f.job_bytes = f.job_bytes.saturating_add(e.size);
+            if need.done.contains(&(i as u32)) {
+                f.files_done += 1;
+                f.durable_bytes = f.durable_bytes.saturating_add(e.size);
+                continue;
+            }
+            f.unfinished_bytes = f.unfinished_bytes.saturating_add(e.size);
+            if e.size >= cutoff {
+                large_unfinished = large_unfinished.saturating_add(e.size);
+                if let Some(d) = need.partial.get(&(i as u32)) {
+                    large_remaining(e.size, d)?;
+                    partial_durable = partial_durable.saturating_add(d.covered());
+                }
+            }
+        }
+        f.durable_bytes = f.durable_bytes.saturating_add(partial_durable);
+        // Durable bytes are on the drive; so is whatever else the part files hold.
+        f.held_bytes = need.held.min(large_unfinished).max(partial_durable);
+        Ok(f)
+    }
+
+    /// What the drive must still find room for: the unfinished files less what it holds.
+    pub fn to_allocate(&self) -> u64 {
+        self.unfinished_bytes.saturating_sub(self.held_bytes)
+    }
+}
+
+/// The free-space check an upload runs once the receiver has said what it already has
+/// (before any byte is sent). `Err` carries the text the user reads; the job ends with a
+/// `JobCancel` (the journal stays: freeing room and retrying resumes it).
+pub type SpaceGate = Arc<dyn Fn(&SpaceFigures) -> Result<(), String> + Send + Sync>;
+
 pub struct SendOptions {
     pub kind: u8,
     pub policy: u8,
@@ -53,6 +114,8 @@ pub struct SendOptions {
     pub settle_max: Option<Duration>,
     /// How long `open_upload` waits for the JobOpenAck; `None` = `OPEN_ACK_TIMEOUT`. Tests shorten it.
     pub open_ack_timeout: Option<Duration>,
+    /// The up-front free-space check (see [`SpaceGate`]); `None` = no check.
+    pub space_gate: Option<SpaceGate>,
 }
 
 impl SendOptions {
@@ -71,6 +134,7 @@ impl SendOptions {
             seq: None,
             settle_max: None,
             open_ack_timeout: None,
+            space_gate: None,
         }
     }
 }
@@ -134,6 +198,9 @@ pub enum SendError {
     Source(#[from] std::io::Error),
     #[error("protocol: {0}")]
     Protocol(String),
+    /// The up-front free-space check said the rest of the job does not fit (design 015/02).
+    #[error("not enough free space: {0}")]
+    NoRoom(String),
 }
 
 impl From<crate::Ava1Error> for SendError {
@@ -1151,6 +1218,24 @@ pub async fn run_upload(
             .partial
             .values()
             .fold(0u64, |a, r| a.saturating_add(r.covered()));
+    // The up-front free-space check, before any byte is sent: what the receiver reported it
+    // already has is credited (design 015/02), the rest must fit.
+    if let Some(gate) = opts.space_gate.clone() {
+        let figures = SpaceFigures::of(&manifest, &need, opts.cutoff)?;
+        let verdict = tokio::task::spawn_blocking(move || gate(&figures))
+            .await
+            .map_err(|e| SendError::Protocol(format!("the space check failed: {e}")))?;
+        if let Err(why) = verdict {
+            let _ = link
+                .control
+                .send(&gen::JobCancel {
+                    job_id,
+                    reason: gen::ERR_NO_SPACE,
+                })
+                .await;
+            return Err(SendError::NoRoom(why));
+        }
+    }
     if !pg.skip_recorded.swap(true, Ordering::Relaxed) {
         let done_files = need
             .done
@@ -1826,6 +1911,75 @@ mod tests {
     use crate::wire::SplitMix;
     use std::io;
     use tokio::io::{duplex, split};
+
+    fn mf(sizes: &[u64]) -> Manifest {
+        let mut m = Manifest::default();
+        for (i, s) in sizes.iter().enumerate() {
+            m.entries.push(crate::manifest::Entry {
+                path: format!("f{i}"),
+                size: *s,
+                kind: gen::ENTRY_FILE,
+                mode: 0o644,
+                mtime: 1,
+                root: None,
+            });
+        }
+        m
+    }
+
+    #[test]
+    fn a_fresh_job_needs_every_byte_and_a_resumed_one_only_the_rest() {
+        let cutoff = 1 << 20;
+        let m = mf(&[100, 5 << 20, 8 << 20]);
+        let total = 100 + (13 << 20);
+        let f = SpaceFigures::of(&m, &Need::default(), cutoff).unwrap();
+        assert_eq!((f.job_bytes, f.durable_bytes, f.held_bytes), (total, 0, 0));
+        assert_eq!(f.to_allocate(), total);
+
+        // File 0 done; file 1 has 2 MiB durable; file 2 untouched. Nothing else held.
+        let mut need = Need::default();
+        need.done.insert(0);
+        need.partial.entry(1).or_default().insert(0, 2 << 20);
+        let f = SpaceFigures::of(&m, &need, cutoff).unwrap();
+        assert_eq!(f.durable_bytes, 100 + (2 << 20));
+        assert_eq!(f.to_allocate(), (3 << 20) + (8 << 20));
+    }
+
+    #[test]
+    fn a_preallocated_part_is_credited_by_what_the_console_reports_held() {
+        // The part file of file 1 was preallocated at its full 5 MiB: only 2 MiB is durable
+        // but the drive already holds all of it, so only file 2 still needs room.
+        let cutoff = 1 << 20;
+        let m = mf(&[5 << 20, 8 << 20]);
+        let mut need = Need::default();
+        need.partial.entry(0).or_default().insert(0, 2 << 20);
+        need.held = 5 << 20;
+        let f = SpaceFigures::of(&m, &need, cutoff).unwrap();
+        assert_eq!(f.to_allocate(), 8 << 20);
+        // `held` below the durable bytes never credits less than what is durable.
+        need.held = 1 << 20;
+        assert_eq!(
+            SpaceFigures::of(&m, &need, cutoff).unwrap().to_allocate(),
+            (3 << 20) + (8 << 20)
+        );
+    }
+
+    #[test]
+    fn a_held_figure_larger_than_the_unfinished_large_files_is_clamped_not_believed() {
+        let cutoff = 1 << 20;
+        let m = mf(&[100, 5 << 20]);
+        let need = Need {
+            held: u64::MAX,
+            ..Need::default()
+        };
+        let f = SpaceFigures::of(&m, &need, cutoff).unwrap();
+        // The small file is never "held" (it is written whole); the large one is fully held.
+        assert_eq!(f.to_allocate(), 100);
+        // Durable ranges beyond a file are the protocol error `large_remaining` names.
+        let mut bad = Need::default();
+        bad.partial.entry(1).or_default().insert(0, 9 << 20);
+        assert!(SpaceFigures::of(&m, &bad, cutoff).is_err());
+    }
 
     #[test]
     fn durable_ranges_beyond_a_file_are_a_protocol_error_not_an_underflow() {
@@ -2716,6 +2870,7 @@ mod tests {
                                 done: vec![],
                                 partial: vec![],
                                 message: None,
+                                held: None,
                             }).await.unwrap();
                         }
                         Ok(_) => {}
@@ -2948,6 +3103,7 @@ mod tests {
                                 done: vec![],
                                 partial: vec![],
                                 message: None,
+                                held: None,
                             }).await.unwrap();
                             if let Some(p) = rcv.pause_control {
                                 control_hold.as_mut().reset(tokio::time::Instant::now() + p);
@@ -3502,6 +3658,7 @@ mod tests {
                                 done: vec![],
                                 partial: vec![],
                                 message: None,
+                                held: None,
                             }).await.unwrap();
                         }
                         Ok(_) => {}

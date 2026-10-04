@@ -285,10 +285,45 @@ async fn mkdir_chmod_and_stat_send_typed_bodies() {
                 .to_bytes()
                 .unwrap())
             }
+            gen::METHOD_FS_FREESPACE => {
+                let q = gen::FsPath::decode(body).unwrap();
+                s2.lock().unwrap().push(format!("freespace {}", q.path));
+                ok(gen::FsFreeSpace {
+                    usable: 900,
+                    free: 1000,
+                    total: 5000,
+                    reserve: 100,
+                    dev: 9,
+                }
+                .to_bytes()
+                .unwrap())
+            }
             _ => err(gen::ERR_UNKNOWN_METHOD, ""),
         }),
     )
     .await;
+    let r = call(
+        &t,
+        &c,
+        m::FS_FREESPACE,
+        "FS_FREESPACE",
+        br#"{"path":"/data/x"}"#,
+        T,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&r).unwrap();
+    assert_eq!(
+        (
+            v["usable_bytes"].as_u64(),
+            v["free_bytes"].as_u64(),
+            v["total_bytes"].as_u64(),
+            v["reserve_bytes"].as_u64(),
+            v["dev"].as_u64()
+        ),
+        (Some(900), Some(1000), Some(5000), Some(100), Some(9))
+    );
     call(&t, &c, m::FS_MKDIR, "FS_MKDIR", br#"{"path":"/a/b"}"#, T)
         .await
         .unwrap();
@@ -313,7 +348,12 @@ async fn mkdir_chmod_and_stat_send_typed_bodies() {
     );
     assert_eq!(
         *seen.lock().unwrap(),
-        vec!["mkdir /a/b 777 1", "chmod /a 755", "stat /a"]
+        vec![
+            "freespace /data/x",
+            "mkdir /a/b 777 1",
+            "chmod /a 755",
+            "stat /a"
+        ]
     );
 }
 

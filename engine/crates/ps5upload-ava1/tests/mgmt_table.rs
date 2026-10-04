@@ -80,6 +80,7 @@ fn the_ids_the_gate_and_the_converters_key_on_are_the_schema_numbers() {
     assert_eq!(m::NODE_STATUS.id, gen::METHOD_NODE_STATUS);
     assert_eq!(m::FS_LIST.id, gen::METHOD_FS_LIST);
     assert_eq!(m::FS_STAT.id, gen::METHOD_FS_STAT);
+    assert_eq!(m::FS_FREESPACE.id, gen::METHOD_FS_FREESPACE);
     assert_eq!(m::FS_MKDIR.id, gen::METHOD_FS_MKDIR);
     assert_eq!(m::FS_RENAME.id, gen::METHOD_FS_RENAME);
     assert_eq!(m::FS_CHMOD.id, gen::METHOD_FS_CHMOD);

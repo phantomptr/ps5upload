@@ -104,6 +104,7 @@ import { BottleneckLine, JobLiveNotes, UnsettledLine } from "./Bottleneck";
 import { Ps5ToPs5Card } from "./Ps5ToPs5";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { formatBytes } from "../../lib/format";
+import { resumeSummary } from "../../lib/resumeSummary";
 import { useTr, type Translator } from "../../state/lang";
 
 // formatBytes moved to lib/format.ts.
@@ -1902,7 +1903,14 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
       files,
       filesCompleted,
       skippedFiles,
+      skippedBytes,
     } = phase;
+    const resuming = resumeSummary(
+      skippedFiles,
+      files.length,
+      skippedBytes,
+      totalBytes,
+    );
     // Reconcile Phase 1 interstitial: the engine set Running before the
     // walk completed, so we have nothing to show yet. "Uploading 0 B"
     // would be misleading — describe what's actually happening.
@@ -1962,6 +1970,20 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
     const isFinalizing = totalBytes > 0 && bytesSent >= totalBytes;
     return (
       <div className="mb-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-sm">
+        {resuming && (
+          <div className="mb-2 text-xs text-[var(--color-muted)]">
+            {tr(
+              "upload_status_resuming",
+              {
+                done: resuming.done.toLocaleString(),
+                total: resuming.total.toLocaleString(),
+                have: formatBytes(resuming.haveBytes),
+                send: formatBytes(resuming.sendBytes),
+              },
+              "Resuming: {done} of {total} files already present ({have}); {send} to send.",
+            )}
+          </div>
+        )}
         <div className="mb-2 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Spinner size={14} tone="accent" />

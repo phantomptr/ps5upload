@@ -424,13 +424,42 @@ uint32_t ava1_recv_recover_pass(const char *jobs_dir, uint32_t max) {
 
 /* ---- messages ---------------------------------------------------------------------- */
 
+/* Bytes the drive already holds for this job's unfinished large files (the JobMap `held`
+ * extension, design 015/02): the allocated blocks of the part file of every file the receiver
+ * tracks, at most that file's size. A sender checking free space credits them: a part file is
+ * preallocated whole, so its undurable tail is on the drive already. Only what the file system
+ * reports is counted, and only for files this job tracks (a stray file of that name is not
+ * ours to credit). The stats run outside j->mu. */
+static uint64_t held_bytes(ava1_job_t *j) {
+    uint32_t *ids, n = 0, i;
+    uint64_t sum = 0;
+    if (!(ids = malloc(sizeof *ids * (j->m.n ? j->m.n : 1u)))) return 0;
+    pthread_mutex_lock(&j->mu);
+    for (i = 0; i < j->m.n; i++)
+        if (j->lf[i] && j->m.e[i].kind == AVA1_ENTRY_FILE && !ava1_bits_get(&j->done, i)) ids[n++] = i;
+    pthread_mutex_unlock(&j->mu);
+    for (i = 0; i < n; i++) {
+        char p[AVA1_PATH_CAP];
+        struct stat st;
+        uint64_t held, size = j->m.e[ids[i]].size;
+        ava1_apply_path(j, ids[i], 1, p, sizeof p);
+        if (!p[0] || lstat(p, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+        held = (uint64_t)st.st_blocks * 512u;
+        sum += held < size ? held : size;
+    }
+    free(ids);
+    return sum;
+}
+
 /* JobMap pages: done runs, then the durable ranges of the other files, MAP_ITEMS a page;
  * `last` on the final one. A failed map is one page. */
 static void emit_map(ava1_job_t *j, uint16_t status, const char *msg) {
     uint8_t *fb = malloc(16u * MAP_ITEMS), *rb = malloc(32u * MAP_ITEMS), *out = malloc(64u * 1024u);
     uint32_t i = 0, gi = 0;
     size_t gk = 0;
+    uint64_t held = 0;
     if (!fb || !rb || !out) goto done;
+    if (status == AVA1_STATUS_OK) held = held_bytes(j);
     for (;;) {
         ava1_w_t fw, rw, w;
         ava1_job_map_t m;
@@ -480,6 +509,10 @@ static void emit_map(ava1_job_t *j, uint16_t status, const char *msg) {
         m.done_len = (uint32_t)fw.len;
         m.partial = rb;
         m.partial_len = (uint32_t)rw.len;
+        if (m.last && held > 0) {
+            m.has_held = 1;
+            m.held = held;
+        }
         if (msg && *msg) {
             m.has_message = 1;
             m.message = (const uint8_t *)msg;

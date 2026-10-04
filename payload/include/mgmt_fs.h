@@ -1,4 +1,4 @@
-/* AVA1 filesystem management methods (P3 Task 4): fs.list, fs.stat, fs.mkdir, fs.rename,
+/* AVA1 filesystem management methods (P3 Task 4): fs.list, fs.stat, fs.freespace, fs.mkdir, fs.rename,
  * fs.chmod, fs.read and fs.write.
  *
  * These are native (not the FTX2 handlers behind the capture sink): their bodies are typed
@@ -38,6 +38,9 @@ void mgmt_fs_set_policy(const mgmt_fs_policy_t *p);
 
 int mgmt_run_fs_list(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx);   /* FsList -> FsListResult */
 int mgmt_run_fs_stat(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx);   /* FsPath -> FsStat */
+int mgmt_run_fs_freespace(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx); /* FsPath -> FsFreeSpace */
+/* The working margin kept back from writes on a drive of `total_bytes` (1/64th, at most 1 GiB). */
+uint64_t mgmt_fs_reserve_for(uint64_t total_bytes);
 int mgmt_run_fs_mkdir(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx);  /* FsMkdir -> empty */
 int mgmt_run_fs_rename(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx); /* FsRename -> empty */
 int mgmt_run_fs_chmod(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx);  /* FsChmod -> empty */

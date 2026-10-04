@@ -182,6 +182,7 @@ static const mgmt_entry_t k_table[] = {
     {AVA1_METHOD_FS_MOUNT_PKG, 124, 125, 0, run_h_pkg},
     {AVA1_METHOD_FS_LIST, 36, 37, 0, mgmt_run_fs_list},
     {AVA1_METHOD_FS_STAT, 36, 37, 0, mgmt_run_fs_stat},
+    {AVA1_METHOD_FS_FREESPACE, 34, 35, 0, mgmt_run_fs_freespace},
     {AVA1_METHOD_FS_MKDIR, 46, 47, 0, mgmt_run_fs_mkdir},
     {AVA1_METHOD_FS_RENAME, 42, 43, 0, mgmt_run_fs_rename},
     {AVA1_METHOD_FS_CHMOD, 44, 45, 0, mgmt_run_fs_chmod},
