@@ -55,6 +55,11 @@ typedef struct ava1_server_cfg {
     uint32_t max_pair_fails_per_ip;
     /* ... and everyone together, after which the window closes; 0 = 20. */
     uint32_t max_pair_fails_total;
+    /* Pairing notifications, all addresses together: a burst of this many (0 = 3) ... */
+    uint32_t notice_burst;
+    /* ... then one per this long (0 = 1000 ms). When it is spent the newest session's code waits
+     * and older waiting ones are dropped. */
+    uint32_t notice_refill_ms;
     /* New pairing sessions one address may start per 10 s; 0 = 6. */
     uint32_t max_welcomes_per_ip;
     /* The trust slot carried a launch token (SPEC.md §5.2): a known client whose key is

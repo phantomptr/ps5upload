@@ -30,11 +30,19 @@ void ava1_pl_init(ava1_pairlimit_t *p, uint32_t per_ip_max, uint32_t total_max, 
                   uint64_t welcome_win_ms);
 /* The window was (re)opened: every guess budget starts over. */
 void ava1_pl_reset(ava1_pairlimit_t *p);
-/* Whether `ip` may still guess (its budget and the global cap are not spent). */
+/* Whether `ip` may still guess (its budget and the global cap are not spent, and an unseen
+ * address still finds a slot: a slot holding guesses in this window is never evicted). */
 int ava1_pl_guess_allowed(ava1_pairlimit_t *p, uint32_t ip, uint64_t now_ms);
-/* A wrong guess from `ip`. Returns 1 when the global cap is now spent: close the window. */
-int ava1_pl_guess_failed(ava1_pairlimit_t *p, uint32_t ip, uint64_t now_ms, uint32_t *ip_fails);
-/* A new pairing session from `ip`: 0 when it already had its share in this window. */
+/* Atomically (the caller holds its lock) takes one guess from `ip`'s budget and the global
+ * one, before the proof is evaluated: 0 when either is spent, and then nothing is evaluated.
+ * Two sessions confirming at once cannot both spend the last guess. */
+int ava1_pl_reserve(ava1_pairlimit_t *p, uint32_t ip, uint64_t now_ms, uint32_t *ip_fails);
+/* Gives a reserved guess back: the proof was right (or there was nothing to evaluate). */
+void ava1_pl_release(ava1_pairlimit_t *p, uint32_t ip);
+/* The global cap is spent: close the window. */
+int ava1_pl_spent(const ava1_pairlimit_t *p);
+/* A new pairing session from `ip`: 0 when it already had its share in this window, or when
+ * every slot holds a spent budget and `ip` is unseen. */
 int ava1_pl_welcome_allowed(ava1_pairlimit_t *p, uint32_t ip, uint64_t now_ms);
 
 #endif

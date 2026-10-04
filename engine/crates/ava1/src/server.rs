@@ -43,6 +43,9 @@ pub const MAX_PAIR_FAILURES: u32 = 20;
 /// New pairing sessions one source address may start per `WELCOME_WINDOW`.
 pub const WELCOMES_PER_IP: u32 = 6;
 pub const WELCOME_WINDOW: Duration = Duration::from_secs(10);
+/// Pairing notifications over all addresses: a burst of 3, then one per second.
+pub const NOTICE_BURST: u32 = 3;
+pub const NOTICE_REFILL: Duration = Duration::from_secs(1);
 /// Connections one source address may hold (a session is 1 control + up to 8 lanes).
 pub const MAX_CONNS_PER_IP: usize = 12;
 /// Sessions that were welcomed during a pairing window but have not confirmed yet.
@@ -63,6 +66,11 @@ pub struct Limits {
     pub pair_fails_per_ip: u32,
     pub pair_fails_total: u32,
     pub welcomes_per_ip: u32,
+    /// Pairing notifications, all addresses together: a burst of this many ...
+    pub notice_burst: u32,
+    /// ... then one per this long. When spent, the newest session's code waits for credit and
+    /// older waiting ones are dropped.
+    pub notice_refill: Duration,
 }
 
 impl Default for Limits {
@@ -75,6 +83,8 @@ impl Default for Limits {
             pair_fails_per_ip: MAX_PAIR_FAILURES_PER_IP,
             pair_fails_total: MAX_PAIR_FAILURES,
             welcomes_per_ip: WELCOMES_PER_IP,
+            notice_burst: NOTICE_BURST,
+            notice_refill: NOTICE_REFILL,
         }
     }
 }
@@ -83,6 +93,15 @@ impl Default for Limits {
 /// wrong) per source address and in all, and the rate of new pairing sessions per address.
 /// A session that never completes the PAKE guessed nothing and is bounded only by the rate and
 /// by `Limits::unpaired`.
+/// Credit for pairing notifications over every address: milliseconds, a notification costs
+/// `notice_refill`. See `ServerCtx::notify_session`.
+#[derive(Debug)]
+struct Notice {
+    credit_ms: u64,
+    last: Instant,
+    seq: u64,
+}
+
 #[derive(Debug, Default)]
 struct PairBudget {
     total: u32,
@@ -102,12 +121,28 @@ impl PairBudget {
             && self.per_ip.get(&ip).copied().unwrap_or(0) < l.pair_fails_per_ip
     }
 
-    /// A wrong guess from `ip`: (its count, whether the window must now close).
-    fn guess_failed(&mut self, ip: IpAddr, l: &Limits) -> (u32, bool) {
+    /// Takes one guess from `ip`'s budget and the global one, before the proof is looked at:
+    /// false when either is spent (and then nothing is evaluated). The caller holds the lock
+    /// across the check and the take, so two sessions at the last guess cannot both pass.
+    fn reserve(&mut self, ip: IpAddr, l: &Limits) -> bool {
+        if !self.guess_allowed(ip, l) {
+            return false;
+        }
         self.total += 1;
-        let n = self.per_ip.entry(ip).or_insert(0);
-        *n += 1;
-        (*n, self.total >= l.pair_fails_total)
+        *self.per_ip.entry(ip).or_insert(0) += 1;
+        true
+    }
+
+    /// Gives a reserved guess back (the proof was right, or there was nothing to evaluate).
+    fn release(&mut self, ip: IpAddr) {
+        self.total = self.total.saturating_sub(1);
+        if let Some(n) = self.per_ip.get_mut(&ip) {
+            *n = n.saturating_sub(1);
+        }
+    }
+
+    fn spent(&self, l: &Limits) -> bool {
+        self.total >= l.pair_fails_total
     }
 
     /// A new pairing session from `ip`: false when it already had its share this window.
@@ -128,6 +163,7 @@ impl PairBudget {
     }
 }
 
+#[derive(Clone)]
 pub struct PairRequest {
     pub ip: IpAddr,
     pub peer_key: [u8; 32],
@@ -211,6 +247,7 @@ pub struct ServerCtx {
     /// An extra veto on top of the code check (never a substitute for it).
     approve: Option<PairHook>,
     pair_budget: Mutex<PairBudget>,
+    notice: Mutex<Notice>,
     rpc: RpcHandler,
     /// Hosts data-plane jobs (SPEC.md §11); its presence advertises CAP_DATA_PLANE.
     jobs: Option<Arc<dyn JobHost>>,
@@ -239,6 +276,11 @@ impl ServerCtx {
             log: Box::new(|_| {}),
             approve: None,
             pair_budget: Mutex::default(),
+            notice: Mutex::new(Notice {
+                credit_ms: u64::from(NOTICE_BURST) * NOTICE_REFILL.as_millis() as u64,
+                last: Instant::now(),
+                seq: 0,
+            }),
             rpc,
             jobs: None,
             mgmt: false,
@@ -276,6 +318,7 @@ impl ServerCtx {
 
     pub fn with_limits(mut self, l: Limits) -> Self {
         self.limits = l;
+        self.notice.lock().unwrap().credit_ms = self.notice_cap_ms();
         self
     }
 
@@ -401,19 +444,18 @@ impl ServerCtx {
         }
     }
 
-    /// A wrong guess at the code: the PAKE ran and the client's proof did not verify. Logged
-    /// per source address; its budget shrinks, and when everyone's guesses together reach the
-    /// cap the window closes until a paired device (or a restart) reopens it. That address's
-    /// next knock shows a new code at once.
+    /// A wrong guess at the code (reserved before the proof was evaluated, so already counted):
+    /// logged per source address, and when everyone's guesses together reach the cap the window
+    /// closes until a paired device (or a restart) reopens it. That address's next knock shows
+    /// a new code at once.
     fn guess_failed(&self, req: &PairRequest) {
-        let (n, close, total) = {
-            let mut b = self.pair_budget.lock().unwrap();
-            let (n, close) = b.guess_failed(req.ip, &self.limits);
-            (n, close, b.total)
+        let (close, total) = {
+            let b = self.pair_budget.lock().unwrap();
+            (b.spent(&self.limits), b.total)
         };
         (self.log)(&format!(
-            "ava1: pairing refused: wrong code from {} at {} ({n} of {} from this address, {total} of {} in all)",
-            req.peer_name, req.ip, self.limits.pair_fails_per_ip, self.limits.pair_fails_total
+            "ava1: pairing refused: wrong code from {} at {} ({total} of {} in all)",
+            req.peer_name, req.ip, self.limits.pair_fails_total
         ));
         self.shown
             .lock()
@@ -425,16 +467,32 @@ impl ServerCtx {
         }
     }
 
-    /// Decides a PairConfirm (SPEC.md §5.5). `proof` is `Some(ok)` when the PAKE ran and the
-    /// client's confirmation was checked (`ok`: it verified, i.e. it knew the code the console
-    /// shows), `None` when there was nothing to check (no PAKE before it, or it did not
-    /// decode): refused, but not a guess, so not counted. A wrong proof is a counted guess.
-    /// One window, one pairing: the window check, the store and the closing of the window
-    /// happen under one lock, so two devices confirming at the same moment cannot both get
-    /// in. An owner hook (which may wait on a person) is asked outside the lock, and the
-    /// window checked again after it.
-    fn accept_pairing(&self, req: &PairRequest, proof: Option<bool>) -> bool {
+    /// Takes a guess from `ip`'s budget and the global one (see `PairBudget::reserve`).
+    fn reserve_guess(&self, ip: IpAddr) -> bool {
+        self.pair_budget.lock().unwrap().reserve(ip, &self.limits)
+    }
+
+    fn release_guess(&self, ip: IpAddr) {
+        self.pair_budget.lock().unwrap().release(ip);
+    }
+
+    /// Decides a PairConfirm (SPEC.md §5.5). `proof` is `Some(ok)` when a guess was reserved and
+    /// the client's confirmation was checked (`ok`: it verified, i.e. it knew the code the
+    /// console shows), `None` when nothing was checked (no PAKE before it, it did not decode,
+    /// or the budget was spent): refused, and not counted. `reserved` says a guess is held: a
+    /// wrong proof keeps it (that is the count), anything else gives it back. One window, one
+    /// pairing: the window check, the store and the closing of the window happen under one
+    /// lock, so two devices confirming at the same moment cannot both get in. An owner hook
+    /// (which may wait on a person) is asked outside the lock, and the window checked again
+    /// after it.
+    fn accept_pairing(&self, req: &PairRequest, proof: Option<bool>, reserved: bool) -> bool {
+        if reserved && proof != Some(false) {
+            self.release_guess(req.ip);
+        }
         if !self.pairing_open() {
+            if reserved && proof == Some(false) {
+                self.release_guess(req.ip);
+            }
             return false;
         }
         match proof {
@@ -466,11 +524,32 @@ impl ServerCtx {
         }
     }
 
+    fn notice_cap_ms(&self) -> u64 {
+        u64::from(self.limits.notice_burst) * self.limits.notice_refill.as_millis() as u64
+    }
+
+    /// Takes a notification token: `Ok` when there was one, else `Err(ms until one)`.
+    fn notice_take(&self) -> Result<(), u64> {
+        let refill = self.limits.notice_refill.as_millis() as u64;
+        let mut n = self.notice.lock().unwrap();
+        let now = Instant::now();
+        n.credit_ms =
+            (n.credit_ms + now.duration_since(n.last).as_millis() as u64).min(self.notice_cap_ms());
+        n.last = now;
+        if n.credit_ms < refill {
+            return Err(refill - n.credit_ms);
+        }
+        n.credit_ms -= refill;
+        Ok(())
+    }
+
     /// Shows a pairing request: every session shows its own code (the user must always see the
     /// code of their attempt), except an identical repeat (same address and key) within
-    /// `notify_every`. A flood is bounded by `Limits::unpaired` and the per-address rate of
-    /// new pairing sessions, not by hiding codes.
-    fn notify_session(&self, req: &PairRequest) {
+    /// `notify_every`. A flood is bounded by `Limits::unpaired`, the per-address rate of new
+    /// pairing sessions, and a global notification rate (a burst, then one per `notice_refill`):
+    /// past that the newest session's code waits for credit and any older waiting one is
+    /// dropped, so the latest attempt is always the one on the screen.
+    fn notify_session(self: &Arc<Self>, req: &PairRequest) {
         {
             let mut shown = self.shown.lock().unwrap();
             let now = Instant::now();
@@ -486,8 +565,34 @@ impl ServerCtx {
             }
             shown.insert(key, now);
         }
-        (self.notify)(req);
+        let seq = {
+            let mut n = self.notice.lock().unwrap();
+            n.seq += 1;
+            n.seq
+        };
+        match self.notice_take() {
+            Ok(()) => (self.notify)(req),
+            Err(wait_ms) => {
+                let (ctx, req) = (self.clone(), req.clone());
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+                    let newest = ctx.notice.lock().unwrap().seq == seq;
+                    if newest {
+                        let _ = ctx.notice_take();
+                        ctx.notice.lock().unwrap().credit_ms = 0;
+                        (ctx.notify)(&req);
+                    }
+                });
+            }
+        }
     }
+}
+
+/// The address a connection is counted and budgeted under: an IPv4-mapped IPv6 address
+/// (`::ffff:a.b.c.d`, what a dual-stack listener reports for an IPv4 peer) is the same host as
+/// `a.b.c.d`, and must not get a second budget.
+pub(crate) fn conn_ip(ip: IpAddr) -> IpAddr {
+    ip.to_canonical()
 }
 
 /// One connection's place in the global and per-address counts.
@@ -577,7 +682,7 @@ pub async fn serve(listener: TcpListener, ctx: Arc<ServerCtx>) {
                 continue;
             }
         };
-        let slot = match ConnSlot::take(&ctx, from.ip()) {
+        let slot = match ConnSlot::take(&ctx, conn_ip(from.ip())) {
             Ok(slot) => slot,
             Err(why) => {
                 tokio::spawn(async move {
@@ -918,12 +1023,21 @@ async fn control(
                 } else {
                     entry.pake.lock().unwrap().take()
                 };
-                // Some(ok): the PAKE ran, so this is a real guess. None: nothing was guessed.
-                let proof = match (&k, f.decode::<PairConfirm>()) {
-                    (Some(k), Ok(c)) => Some(cpace::ct_eq32(&c.mac, &cpace::mac(k, b"client", h))),
-                    _ => None,
+                // The guess is reserved first (atomically with the budget check), and only then is
+                // the proof looked at: a spent budget refuses without evaluating anything.
+                // Some(ok): a real guess was evaluated. None: nothing was.
+                let reserved = k.is_some() && ctx.pairing_open() && ctx.reserve_guess(req.ip);
+                let proof = if reserved {
+                    match (&k, f.decode::<PairConfirm>()) {
+                        (Some(k), Ok(c)) => {
+                            Some(cpace::ct_eq32(&c.mac, &cpace::mac(k, b"client", h)))
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
                 };
-                let accepted = already || ctx.accept_pairing(&req, proof);
+                let accepted = already || ctx.accept_pairing(&req, proof, reserved);
                 entry.paired.store(accepted, Ordering::SeqCst);
                 if accepted && !already {
                     entry.unpaired.lock().unwrap().take();
@@ -1195,13 +1309,47 @@ mod budget_tests {
     }
 
     #[test]
+    fn an_ipv4_mapped_address_is_the_same_host_as_its_ipv4_form() {
+        let v4: IpAddr = "10.0.0.7".parse().unwrap();
+        let mapped: IpAddr = "::ffff:10.0.0.7".parse().unwrap();
+        assert_ne!(v4, mapped, "as parsed they are different keys");
+        assert_eq!(conn_ip(mapped), conn_ip(v4));
+        let l = Limits::default();
+        let mut b = PairBudget::default();
+        for _ in 0..l.pair_fails_per_ip {
+            assert!(b.reserve(conn_ip(v4), &l));
+        }
+        assert!(
+            !b.guess_allowed(conn_ip(mapped), &l),
+            "no second budget through the mapped form"
+        );
+        let v6: IpAddr = "2001:db8::1".parse().unwrap();
+        assert_eq!(conn_ip(v6), v6, "a real IPv6 address is left alone");
+    }
+
+    #[test]
+    fn a_reserved_guess_is_taken_atomically_and_given_back_when_right() {
+        let l = Limits::default();
+        let mut b = PairBudget::default();
+        for _ in 0..l.pair_fails_per_ip - 1 {
+            assert!(b.reserve(ip(1), &l));
+        }
+        // One guess left: two sessions at it, only one gets to evaluate.
+        assert!(b.reserve(ip(1), &l));
+        assert!(!b.reserve(ip(1), &l));
+        assert_eq!(b.total, l.pair_fails_per_ip);
+        b.release(ip(1));
+        assert!(b.reserve(ip(1), &l), "a right proof gave its guess back");
+    }
+
+    #[test]
     fn one_addresses_guesses_do_not_lock_out_another() {
         let l = Limits::default();
         let mut b = PairBudget::default();
         for _ in 0..l.pair_fails_per_ip {
             assert!(b.guess_allowed(ip(1), &l));
-            let (_, close) = b.guess_failed(ip(1), &l);
-            assert!(!close);
+            assert!(b.reserve(ip(1), &l));
+            assert!(!b.spent(&l));
         }
         assert!(!b.guess_allowed(ip(1), &l), "its own budget is spent");
         assert!(b.guess_allowed(ip(2), &l), "another address is untouched");
@@ -1217,11 +1365,10 @@ mod budget_tests {
         'all: for n in 1..=250u8 {
             for _ in 0..l.pair_fails_per_ip {
                 assert!(closed_at.is_none());
-                if !b.guess_allowed(ip(n), &l) {
+                if !b.reserve(ip(n), &l) {
                     break;
                 }
-                let (_, close) = b.guess_failed(ip(n), &l);
-                if close {
+                if b.spent(&l) {
                     closed_at = Some(b.total);
                     break 'all;
                 }

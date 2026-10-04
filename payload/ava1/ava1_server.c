@@ -37,6 +37,8 @@
 #define MAX_UNPAIRED 2u
 #define PAIR_CONFIRM_MS 60000u
 #define NOTIFY_EVERY_MS 10000u
+#define NOTICE_BURST 3u        /* pairing notifications, all addresses together: a burst of 3 ... */
+#define NOTICE_REFILL_MS 1000u /* ... then one per second */
 #define THREAD_STACK (256u * 1024u)
 #define MGMT_STACK (512u * 1024u) /* = AVA1_MGMT_STACK; the thread test pins both */
 
@@ -100,6 +102,10 @@ static struct {
     /* Pairing limits (SPEC.md 5 item 5): real guesses per source address and in all, and the
      * per-address rate of new pairing sessions. */
     ava1_pairlimit_t pl;
+    /* A token bucket over every pairing notification, whatever the address (milliseconds of
+     * credit; one notification costs notice_refill_ms). When it is empty the newest session's
+     * notification waits for credit and any older waiting one is dropped. */
+    uint64_t notice_credit_ms, notice_last_ms, notice_seq;
     /* The notifications shown lately, so an identical request (same address, same key) is
      * not shown twice in a row; every other session shows its own code. */
     struct {
@@ -513,20 +519,38 @@ static int send_status(ava1_conn_t *c, uint32_t ch, uint16_t status, const uint8
     return rc;
 }
 
-/* A wrong guess at the code: the PAKE was exchanged and the client's confirmation did not
- * verify. Logged per source address; the address's budget shrinks, and when the global cap on
- * guesses is spent the window closes until a paired device (or a restart) reopens it. The
- * address's next knock shows a new code at once. Caller holds mu. */
+/* The notice bucket (SPEC.md 4.6). Caller holds mu. Takes a token when there is one: 0, else
+ * the credit stays and 1 is returned (then notice_wait_locked says how long until one). */
+static uint64_t notice_cap_ms(void) {
+    return (uint64_t)cfg_or(S.cfg.notice_burst, NOTICE_BURST) * cfg_or(S.cfg.notice_refill_ms, NOTICE_REFILL_MS);
+}
+
+static int notice_take_locked(uint64_t t) {
+    uint64_t refill = cfg_or(S.cfg.notice_refill_ms, NOTICE_REFILL_MS), cap = notice_cap_ms();
+    S.notice_credit_ms += t - S.notice_last_ms;
+    S.notice_last_ms = t;
+    if (S.notice_credit_ms > cap) S.notice_credit_ms = cap;
+    if (S.notice_credit_ms < refill) return 1;
+    S.notice_credit_ms -= refill;
+    return 0;
+}
+
+static uint64_t notice_wait_locked(void) {
+    uint64_t refill = cfg_or(S.cfg.notice_refill_ms, NOTICE_REFILL_MS);
+    return S.notice_credit_ms >= refill ? 0 : refill - S.notice_credit_ms;
+}
+
+/* A wrong guess at the code (the guess was reserved before the proof was evaluated, so it is
+ * already counted). Logged per source address; when the global cap on guesses is spent the
+ * window closes until a paired device (or a restart) reopens it. The address's next knock shows
+ * a new code at once. Caller holds mu. */
 static void guess_failed_locked(const sess_t *s, uint32_t ip) {
-    uint32_t n = 0;
     unsigned i;
-    int close_window = ava1_pl_guess_failed(&S.pl, ip, now_ms(), &n);
-    slog("ava1: pairing refused: wrong code from %s at %u.%u.%u.%u (%u of %u from this address, %u of %u in all)",
-         s->peer_name, ip & 0xffu, (ip >> 8) & 0xffu, (ip >> 16) & 0xffu, (ip >> 24) & 0xffu, n, S.pl.per_ip_max,
-         S.pl.total, S.pl.total_max);
+    slog("ava1: pairing refused: wrong code from %s at %u.%u.%u.%u (%u of %u in all)", s->peer_name, ip & 0xffu,
+         (ip >> 8) & 0xffu, (ip >> 16) & 0xffu, (ip >> 24) & 0xffu, S.pl.total, S.pl.total_max);
     for (i = 0; i < 8; i++)
         if (S.shown[i].used && S.shown[i].ip == ip) S.shown[i].used = 0;
-    if (close_window) {
+    if (ava1_pl_spent(&S.pl)) {
         S.pairing_until_ms = 0;
         slog("ava1: too many wrong pairing codes: the window is closed");
     }
@@ -612,12 +636,20 @@ static int pair_confirm(ava1_conn_t *c, int idx, uint32_t ip, uint32_t ch, const
             s->pake_state = 3;
             if (next && S.peers_ok && now_ms() < S.pairing_until_ms) {
                 int proof_ok = 0;
-                if (have_k && ava1_pair_confirm_decode(body, len, &m) == 0) {
-                    ava1_cpace_mac(k, 0, h, want);
-                    proof_ok = ava1_ct_eq32(want, m.mac);
-                    /* The PAKE ran and the proof is wrong: a real guess. A confirm with no PAKE
-                     * before it, or one that does not decode, guessed nothing: refused, free. */
-                    if (!proof_ok) guess_failed_locked(s, ip);
+                /* The budget is spent here, under the lock and before the proof is looked at:
+                 * two sessions at the last guess cannot both be evaluated. Spent: refused, and
+                 * the proof is not even compared. */
+                if (have_k && ava1_pl_reserve(&S.pl, ip, now_ms(), NULL)) {
+                    int decoded = ava1_pair_confirm_decode(body, len, &m) == 0;
+                    if (decoded) {
+                        ava1_cpace_mac(k, 0, h, want);
+                        proof_ok = ava1_ct_eq32(want, m.mac);
+                    }
+                    /* The PAKE ran and the proof is wrong: a real guess, already counted. A right
+                     * proof, or a body that does not decode (nothing was guessed), gives the
+                     * guess back. A confirm with no PAKE before it never reserves: free. */
+                    if (!decoded || proof_ok) ava1_pl_release(&S.pl, ip);
+                    else guess_failed_locked(s, ip);
                 }
                 if (proof_ok) {
                     *next = S.peers;
@@ -1048,6 +1080,7 @@ static void run_control(conn_t *k, uint8_t *buf, size_t len) {
         uint64_t t = now_ms();
         unsigned i, slot = 0;
         int dup = 0;
+        uint64_t wait_ms = 0, seq = 0;
         pthread_mutex_lock(&mu);
         for (i = 0; i < 8; i++) {
             if (S.shown[i].used && S.shown[i].ip == k->ip && memcmp(S.shown[i].key, ns.rs, 32) == 0 &&
@@ -1061,9 +1094,23 @@ static void run_control(conn_t *k, uint8_t *buf, size_t len) {
             S.shown[slot].ip = k->ip;
             memcpy(S.shown[slot].key, ns.rs, 32);
             S.shown[slot].at_ms = t;
-            notify = 1; /* every session shows its own code; only an identical repeat is hidden */
+            /* every session shows its own code; only an identical repeat is hidden ... */
+            if (notice_take_locked(t) == 0) notify = 1;
+            else wait_ms = notice_wait_locked(), seq = ++S.notice_seq; /* ... and a flood waits */
         }
         pthread_mutex_unlock(&mu);
+        if (!dup && !notify) {
+            /* The global notice rate is spent: this (newest) session's code waits for credit.
+             * A newer session overtaking it drops this one: only the latest is ever shown. */
+            ava1_platform_sleep_ms((unsigned)wait_ms);
+            pthread_mutex_lock(&mu);
+            if (seq == S.notice_seq) {
+                (void)notice_take_locked(now_ms());
+                S.notice_credit_ms = 0;
+                notify = 1;
+            }
+            pthread_mutex_unlock(&mu);
+        }
     }
     if (notify && S.cfg.on_pair_request) S.cfg.on_pair_request(peer_name, pair_code);
     conn_publish(idx, sid, 0, k);
@@ -1293,6 +1340,9 @@ int ava1_server_start(const ava1_server_cfg_t *cfg) {
     S.stopping = 0;
     memset(S.ips, 0, sizeof S.ips);
     memset(S.shown, 0, sizeof S.shown);
+    S.notice_last_ms = now_ms();
+    S.notice_seq = 0;
+    S.notice_credit_ms = notice_cap_ms();
     ava1_pl_init(&S.pl, cfg->max_pair_fails_per_ip, cfg->max_pair_fails_total, cfg->max_welcomes_per_ip, 0);
     S.peers_ok = ava1_peers_load(&S.peers, cfg->peers_path) == 0;
     if (!S.peers_ok) {

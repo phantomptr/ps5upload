@@ -475,6 +475,8 @@ typedef struct {
     uint32_t max_pair_fails_per_ip;
     uint32_t max_pair_fails_total;
     uint32_t max_welcomes_per_ip;
+    uint32_t notice_burst;
+    uint32_t notice_refill_ms;
     uint32_t launch; /* 1: launch_key only; 2: launch_key and launch_token */
     uint8_t launch_key[32];
     uint8_t launch_token[16];
@@ -504,6 +506,8 @@ int ava1_test_server_start(const uint8_t secret[32], const char *peers_path, con
     cfg.max_pair_fails_per_ip = o->max_pair_fails_per_ip;
     cfg.max_pair_fails_total = o->max_pair_fails_total;
     cfg.max_welcomes_per_ip = o->max_welcomes_per_ip;
+    cfg.notice_burst = o->notice_burst;
+    cfg.notice_refill_ms = o->notice_refill_ms;
     if (o->launch == 2) {
         cfg.has_launch = 1;
         memcpy(cfg.launch_key, o->launch_key, 32);

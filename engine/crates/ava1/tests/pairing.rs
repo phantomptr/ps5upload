@@ -480,6 +480,25 @@ impl Rogue {
         .unwrap_or(None)
     }
 
+    /// The first half only: the PAKE opening with `guess`; the key, when the console answered.
+    async fn begin(&mut self, guess: u32) -> Option<[u8; 32]> {
+        let g = cpace::generator(&self.h, guess);
+        let x = [0x5au8; 32];
+        let ya = cpace::public(&x, &g).unwrap();
+        self.w.send_msg(1, &PairPakeClient { y: ya }).await.unwrap();
+        let f = self.next(PairPakeServer::TYPE).await?;
+        let yb: PairPakeServer = f.decode().unwrap();
+        cpace::key(&self.h, &x, &yb.y, &ya, &yb.y)
+    }
+
+    /// The second half: confirm with `mac`; whether the console accepted.
+    async fn finish(&mut self, mac: [u8; 32]) -> bool {
+        self.w.send_msg(2, &PairConfirm { mac }).await.unwrap();
+        self.next(PairResult::TYPE)
+            .await
+            .is_some_and(|f| f.decode::<PairResult>().unwrap().accepted != 0)
+    }
+
     /// The whole exchange with `guess` as the code; Some(y_client, mac_client) of what it sent
     /// and whether the console accepted.
     async fn pake(&mut self, guess: u32) -> (Option<([u8; 32], [u8; 32])>, bool) {
@@ -754,4 +773,82 @@ async fn a_fake_console_cannot_pass_the_clients_check() {
         "{r:?}"
     );
     assert!(!peers.lock().unwrap().contains(&fake_key), "never stored");
+}
+
+#[tokio::test]
+async fn two_sessions_at_the_last_guess_cannot_both_be_evaluated() {
+    // 4 of 5 guesses used from this address. Two sessions then run the PAKE (both pass the
+    // budget check at its start) and confirm at the same moment: only one guess is left, so
+    // only one may be evaluated and counted. The other is refused without looking at its proof.
+    let limits = Limits {
+        welcomes_per_ip: 100,
+        unpaired: 10,
+        ..Limits::default()
+    };
+    let (addr, ctx, _) = open_server(limits).await;
+    for _ in 0..4 {
+        let mut g = rogue(addr).await;
+        let code = console_code(&ctx, &g.key).await;
+        assert!(!g.pake((code + 1) % 1_000_000).await.1);
+        drop(g);
+        wait_for(Duration::from_secs(5), || ctx.sessions() == 0)
+            .await
+            .unwrap();
+    }
+    assert_eq!(ctx.pair_failures(), 4);
+    let (mut a, mut b) = (rogue(addr).await, rogue(addr).await);
+    let (ca, cb) = (
+        console_code(&ctx, &a.key).await,
+        console_code(&ctx, &b.key).await,
+    );
+    let (ka, kb) = (
+        a.begin((ca + 1) % 1_000_000).await.unwrap(),
+        b.begin((cb + 1) % 1_000_000).await.unwrap(),
+    );
+    let (ma, mb) = (
+        cpace::mac(&ka, b"client", &a.h),
+        cpace::mac(&kb, b"client", &b.h),
+    );
+    let (ra, rb) = tokio::join!(a.finish(ma), b.finish(mb));
+    assert!(!ra && !rb);
+    assert_eq!(
+        ctx.pair_failures(),
+        5,
+        "one guess evaluated, not two (and not 6 of 5)"
+    );
+    assert!(
+        ctx.pairing_open(),
+        "five guesses from one address do not close the window"
+    );
+}
+
+#[tokio::test]
+async fn a_flood_of_sessions_shows_the_newest_code_and_drops_the_older_ones() {
+    // Burst of 3, then one per 400 ms, over all addresses. Six sessions at once: three show at
+    // once; the 4th and 5th wait and are dropped when the 6th overtakes them, which shows
+    // its own code as soon as there is credit. The user's (latest) attempt is on the screen.
+    let limits = Limits {
+        notice_burst: 3,
+        notice_refill: Duration::from_millis(400),
+        welcomes_per_ip: 100,
+        unpaired: 10,
+        ..Limits::default()
+    };
+    let (addr, ctx, screen) = screen_server(limits).await;
+    let mut rogues = Vec::new();
+    for _ in 0..6 {
+        rogues.push(rogue(addr).await);
+    }
+    let last_code = console_code(&ctx, &rogues[5].key).await;
+    wait_for(Duration::from_secs(5), || screen.lock().unwrap().len() >= 3)
+        .await
+        .expect("the burst shows");
+    assert_eq!(screen.lock().unwrap().len(), 3, "only the burst, at once");
+    wait_for(Duration::from_secs(5), || screen.lock().unwrap().len() >= 4)
+        .await
+        .expect("the newest waits for credit and is shown");
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    let shown = screen.lock().unwrap().clone();
+    assert_eq!(shown.len(), 4, "the 4th and 5th were dropped: {shown:?}");
+    assert_eq!(shown[3].1, last_code, "the newest session's own code");
 }

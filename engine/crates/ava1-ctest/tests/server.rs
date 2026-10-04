@@ -42,6 +42,8 @@ fn opts(pairing_s: u32) -> ffi::TestOpts {
         ping_ms: 100,
         dead_ms: 500,
         handshake_ms: 500,
+        // The notification rate has its own tests; here many quick sessions must not wait.
+        notice_burst: 1000,
         ..Default::default()
     }
 }
@@ -1399,6 +1401,28 @@ impl Rogue {
         )
     }
 
+    /// The first half only: the PAKE opening with `guess`; the key, when the console answered.
+    async fn begin(&mut self, guess: u32) -> Option<[u8; 32]> {
+        let g = cpace::generator(&self.h, guess);
+        let x = [0x5au8; 32];
+        let ya = cpace::public(&x, &g).unwrap();
+        self.w
+            .send_msg(1, &gen::PairPakeClient { y: ya })
+            .await
+            .unwrap();
+        let f = self.next(gen::PairPakeServer::TYPE).await?;
+        let yb: gen::PairPakeServer = f.decode().unwrap();
+        cpace::key(&self.h, &x, &yb.y, &ya, &yb.y)
+    }
+
+    /// The second half: confirm with `mac`; whether the console accepted.
+    async fn finish(&mut self, mac: [u8; 32]) -> bool {
+        self.w.send_msg(2, &gen::PairConfirm { mac }).await.unwrap();
+        self.next(gen::PairResult::TYPE)
+            .await
+            .is_some_and(|f| f.decode::<gen::PairResult>().unwrap().accepted != 0)
+    }
+
     async fn refused(&mut self) -> bool {
         self.next(gen::PairResult::TYPE)
             .await
@@ -1632,12 +1656,11 @@ fn the_c_pairing_budget_is_per_address_under_a_global_cap() {
         ffi::ava1_pl_init(p, 0, 0, 0, 0); // the defaults: 5, 20, 6 per 10 s
         let mut n = 0u32;
         for _ in 0..5 {
-            assert_eq!(ffi::ava1_pl_guess_allowed(p, 1, 0), 1);
-            assert_eq!(ffi::ava1_pl_guess_failed(p, 1, 0, &mut n), 0);
+            assert_eq!(ffi::ava1_pl_reserve(p, 1, 0, &mut n), 1);
         }
         assert_eq!(n, 5);
         assert_eq!(
-            ffi::ava1_pl_guess_allowed(p, 1, 0),
+            ffi::ava1_pl_reserve(p, 1, 0, &mut n),
             0,
             "its own budget is spent"
         );
@@ -1647,15 +1670,18 @@ fn the_c_pairing_budget_is_per_address_under_a_global_cap() {
             "another address is untouched"
         );
         // The global cap: 20 in all, so three more addresses (15) and one more (5).
-        let mut closed = 0;
         for ip in 2..=4u32 {
             for _ in 0..5 {
-                closed = ffi::ava1_pl_guess_failed(p, ip, 0, &mut n);
+                assert_eq!(ffi::ava1_pl_reserve(p, ip, 0, &mut n), 1);
             }
         }
-        assert_eq!(closed, 1, "20 guesses from 4 addresses spend the cap");
         assert_eq!(
-            ffi::ava1_pl_guess_allowed(p, 99, 0),
+            ffi::ava1_pl_spent(p),
+            1,
+            "20 guesses from 4 addresses spend the cap"
+        );
+        assert_eq!(
+            ffi::ava1_pl_reserve(p, 99, 0, &mut n),
             0,
             "nobody guesses after the cap"
         );
@@ -1665,6 +1691,12 @@ fn the_c_pairing_budget_is_per_address_under_a_global_cap() {
             1,
             "a new window starts over"
         );
+        // A reserved guess given back (the proof was right) is free.
+        assert_eq!(ffi::ava1_pl_reserve(p, 5, 0, &mut n), 1);
+        ffi::ava1_pl_release(p, 5);
+        for _ in 0..5 {
+            assert_eq!(ffi::ava1_pl_reserve(p, 5, 0, &mut n), 1);
+        }
         // New sessions: 6 per address per 10 s.
         for _ in 0..6 {
             assert_eq!(ffi::ava1_pl_welcome_allowed(p, 7, 1000), 1);
@@ -1676,6 +1708,61 @@ fn the_c_pairing_budget_is_per_address_under_a_global_cap() {
             1,
             "and it refills"
         );
+    }
+}
+
+/// Cycling through many source addresses must not evict a spent budget: the attacker would get
+/// a fresh one (and a fresh welcome rate) for every lap.
+#[test]
+fn the_c_pairing_table_never_evicts_a_spent_budget() {
+    let mut buf = vec![0u8; unsafe { ffi::ava1_test_sizeof_pairlimit() }];
+    let p = buf.as_mut_ptr();
+    unsafe {
+        ffi::ava1_pl_init(p, 0, 1000, 1000, 0);
+        let mut n = 0u32;
+        for _ in 0..5 {
+            assert_eq!(ffi::ava1_pl_reserve(p, 1, 0, &mut n), 1);
+        }
+        assert_eq!(ffi::ava1_pl_guess_allowed(p, 1, 0), 0);
+        // Far more addresses than the table has slots, none of which has guessed.
+        for ip in 100..400u32 {
+            assert_eq!(ffi::ava1_pl_welcome_allowed(p, ip, ip as u64), 1);
+        }
+        assert_eq!(
+            ffi::ava1_pl_guess_allowed(p, 1, 1000),
+            0,
+            "address 1 is still out of guesses"
+        );
+        // Fill every slot with an address that has guessed once: the table is full of spent
+        // budgets, so an unseen address gets no pairing session and no guess.
+        ffi::ava1_pl_reset(p);
+        for ip in 1..=32u32 {
+            assert_eq!(
+                ffi::ava1_pl_reserve(p, ip, 2000 + ip as u64, &mut n),
+                1,
+                "{ip}"
+            );
+        }
+        assert_eq!(
+            ffi::ava1_pl_welcome_allowed(p, 500, 3000),
+            0,
+            "BUSY for an unseen address"
+        );
+        assert_eq!(ffi::ava1_pl_guess_allowed(p, 500, 3000), 0);
+        // The addresses already in the table are untouched, and their budgets still count.
+        assert_eq!(ffi::ava1_pl_guess_allowed(p, 7, 3000), 1);
+        for _ in 0..4 {
+            assert_eq!(ffi::ava1_pl_reserve(p, 7, 3000, &mut n), 1);
+        }
+        assert_eq!(n, 5);
+        assert_eq!(
+            ffi::ava1_pl_guess_allowed(p, 7, 3000),
+            0,
+            "still remembered"
+        );
+        // A new window frees the table.
+        ffi::ava1_pl_reset(p);
+        assert_eq!(ffi::ava1_pl_welcome_allowed(p, 500, 4000), 1);
     }
 }
 
@@ -1730,4 +1817,83 @@ async fn the_session_api_pairs_with_the_c_server_only_with_the_shown_code() {
     let code = shown_code(&srv, 2).await;
     s.confirm_pairing(code).await.unwrap();
     s.node_info().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn two_sessions_at_the_last_guess_cannot_both_be_evaluated_by_the_c_server() {
+    let d = dir("pk-last");
+    let srv = CServer::start_with(
+        SECRET,
+        &d.join("peers"),
+        ffi::TestOpts {
+            max_welcomes_per_ip: 100,
+            max_unpaired: 10,
+            ..opts(60)
+        },
+    );
+    for i in 0..4u32 {
+        let mut g = rogue(&srv.addr()).await;
+        let code = shown_code(&srv, i + 1).await;
+        assert!(!g.pake(wrong(code)).await.1);
+        drop(g);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+    assert_eq!(srv.pair_guesses(), 4);
+    let (mut a, mut b) = (rogue(&srv.addr()).await, rogue(&srv.addr()).await);
+    let (ca, cb) = (shown_code(&srv, 5).await, shown_code(&srv, 6).await);
+    let (ka, kb) = (
+        a.begin(wrong(ca)).await.unwrap(),
+        b.begin(wrong(cb)).await.unwrap(),
+    );
+    let (ma, mb) = (
+        cpace::mac(&ka, b"client", &a.h),
+        cpace::mac(&kb, b"client", &b.h),
+    );
+    let (ra, rb) = tokio::join!(a.finish(ma), b.finish(mb));
+    assert!(!ra && !rb);
+    assert_eq!(
+        srv.pair_guesses(),
+        5,
+        "one guess evaluated, not two (and not 6 of 5)"
+    );
+    assert!(srv.pairing_open());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_flood_of_sessions_shows_the_newest_code_and_drops_the_older_ones_on_the_c_server() {
+    let d = dir("pk-flood");
+    let srv = CServer::start_with(
+        SECRET,
+        &d.join("peers"),
+        ffi::TestOpts {
+            notice_burst: 3,
+            notice_refill_ms: 400,
+            max_welcomes_per_ip: 100,
+            max_unpaired: 10,
+            dead_ms: 5000, // the sessions sit idle while the 4th..6th notifications wait
+            ..opts(60)
+        },
+    );
+    let mut rogues = Vec::new();
+    for _ in 0..6 {
+        rogues.push(rogue(&srv.addr()).await);
+    }
+    let t = Instant::now();
+    while srv.pair_requests().0 < 3 && t.elapsed() < Duration::from_secs(3) {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(srv.pair_requests().0, 3, "only the burst, at once");
+    let t = Instant::now();
+    while srv.pair_requests().0 < 4 && t.elapsed() < Duration::from_secs(5) {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    assert_eq!(srv.pair_requests().0, 4, "the 4th and 5th were dropped");
+    // The code on the screen is the newest session's: it pairs the sixth.
+    let shown = srv.pair_requests().1;
+    let mut last = rogues.pop().unwrap();
+    assert!(
+        last.pake(shown).await.1,
+        "the screen shows the newest session's code"
+    );
 }

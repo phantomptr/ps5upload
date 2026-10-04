@@ -127,10 +127,25 @@ Remaining limits, stated plainly:
   from at least four addresses. Sessions that guess nothing are bounded by `MAX_UNPAIRED`
   (2) and by 6 new pairing sessions per address per 10 s (`ERR_BUSY` beyond that). The
   console shows every welcomed session's own code on its screen (an identical request, same
-  address and same key within 10 s, is not shown twice): a stranger cannot hide the user's
-  code, only crowd the two unconfirmed places for up to 60 s each. A host that spoofs
-  addresses on the LAN, or many hosts, can exhaust the budgets; recovery is a paired device's
-  `pairing.open` or a restart.
+  address and same key within 10 s, is not shown twice; the global notice rate below): a stranger cannot hide the user's
+  code, only crowd the two unconfirmed places for up to 60 s each. The guess is taken from
+  the budgets under one lock before the proof is looked at, so two sessions confirming at once
+  cannot spend the last guess twice, and a session whose address has no guess left is refused
+  without its proof being compared. A budget is never evicted from a full table: a node
+  tracking many addresses refuses new pairing sessions (`ERR_BUSY`) from unseen addresses
+  while every slot holds guesses made in this window (C: 32 slots), instead of handing a
+  cycling attacker a fresh budget; IPv4-mapped IPv6 addresses count as their IPv4 form.
+* Residuals of the per-address budget. An IPv6 host with privacy (temporary) addresses, or a
+  host with several aliased addresses, appears as several addresses and so has several
+  per-address budgets; the global cap of 20 guesses per window still bounds everything
+  together, and the 20th closes the window. Spoofed or many hosts can likewise spend the global
+  cap (a denial of service, recovered by a paired device's `pairing.open` or a restart), but
+  cannot raise the number of guesses beyond it.
+* Notification bounds. Besides the per-session code and the identical-repeat rule, all
+  addresses together may show a burst of 3 pairing notifications and then one per second.
+  Past that, the newest session's code waits for credit (at most about a second) and any
+  older session still waiting is dropped, so the code on the screen is always the latest
+  attempt's, and the screen cannot be flooded faster than one notification per second.
 
 The `pair_commit`, `nonce_c` and `nonce_s` fields of §5 are retained for wire stability; no code
 is derived from them any more.

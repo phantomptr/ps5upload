@@ -209,6 +209,8 @@ pub mod ffi {
         pub max_pair_fails_per_ip: u32,
         pub max_pair_fails_total: u32,
         pub max_welcomes_per_ip: u32,
+        pub notice_burst: u32,
+        pub notice_refill_ms: u32,
         /// 1: the trust slot's key is `launch_key` and, with 2, its token `launch_token`
         /// (what ava1_glue.c passes the server from the slot).
         pub launch: u32,
@@ -240,7 +242,9 @@ pub mod ffi {
         pub fn ava1_pl_init(p: *mut u8, per_ip: u32, total: u32, welcome: u32, win_ms: u64);
         pub fn ava1_pl_reset(p: *mut u8);
         pub fn ava1_pl_guess_allowed(p: *mut u8, ip: u32, now_ms: u64) -> c_int;
-        pub fn ava1_pl_guess_failed(p: *mut u8, ip: u32, now_ms: u64, ip_fails: *mut u32) -> c_int;
+        pub fn ava1_pl_reserve(p: *mut u8, ip: u32, now_ms: u64, ip_fails: *mut u32) -> c_int;
+        pub fn ava1_pl_release(p: *mut u8, ip: u32);
+        pub fn ava1_pl_spent(p: *const u8) -> c_int;
         pub fn ava1_pl_welcome_allowed(p: *mut u8, ip: u32, now_ms: u64) -> c_int;
         pub fn ava1_test_pair_requests() -> u32;
         pub fn ava1_test_last_pair_code() -> u32;
