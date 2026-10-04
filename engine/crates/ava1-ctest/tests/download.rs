@@ -729,3 +729,48 @@ const FLOOR_FILES_PER_S: f64 = if cfg!(debug_assertions) {
 } else {
     3500.0
 };
+
+/// Large-file commit bench (review 009 #5): many multi-group files downloaded from the C sender, so
+/// every file takes the large path and pays its own `set_len`/fsync/rename commit. Prints the time
+/// and rate; the assertion is correctness only (a wall-clock floor would be machine-dependent).
+#[tokio::test(flavor = "multi_thread")]
+async fn many_large_files_download_bench() {
+    ava1_ctest::c_set_read_allowed(true);
+    let d = dir("dl-large-many");
+    let src = d.join("console/big");
+    let n = 64usize;
+    write_tree(&src, n, |i| (3 << 20) + i);
+    let (me, mine) = paired_client(&d.join("peers"));
+    let srv = CServer::start_data(
+        SECRET,
+        &d.join("peers"),
+        &d.join("jobs"),
+        200,
+        2000,
+        2000,
+        0,
+    );
+    let s = connect(&srv.addr(), me, mine, "rust", calm())
+        .await
+        .unwrap();
+    let mut link = s.job([0x64; 16]);
+    let sink = Arc::new(LocalSink::new(d.join("got"), false));
+    let t = std::time::Instant::now();
+    let r = download(
+        &mut link,
+        src.to_str().unwrap(),
+        0,
+        sink,
+        ro(&d.join("ejobs"), false),
+    )
+    .await
+    .unwrap();
+    let secs = t.elapsed().as_secs_f64();
+    eprintln!(
+        "large download: {} files x ~3 MiB in {secs:.2}s = {:.0} files/s",
+        r.files,
+        r.files as f64 / secs
+    );
+    assert_eq!(r.files as usize, n);
+    assert!(same_tree(&src, &d.join("got")));
+}

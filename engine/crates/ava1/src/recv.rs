@@ -86,6 +86,12 @@ pub trait Sink: Send + Sync {
     }
     /// A complete file: part → final, same directory.
     fn commit(&self, id: u32) -> io::Result<()>;
+    /// Every file of `ids` has been committed (renamed into place): makes the new names durable
+    /// (their directories fsynced) before the journal record that calls them done (review 009 #5).
+    /// A sink with no directories ignores it.
+    fn sync_committed(&self, _ids: &[u32]) -> io::Result<()> {
+        Ok(())
+    }
     /// The whole job: staging → final.
     fn finish(&self) -> io::Result<()>;
     /// What the journal's Open records (SPEC.md §14): (destination root, staged). `None`
@@ -153,12 +159,36 @@ pub struct LocalSink {
     log: bool,
     pack_opts: PackOpts,
     pack: Mutex<Option<PackLog>>,
+    /// Test seam: runs inside `commit` after the state lock is released, where the fsync and the
+    /// rename happen.
+    #[cfg(test)]
+    commit_hook: Mutex<Option<Box<dyn Fn(u32) + Send + Sync>>>,
 }
 
 #[derive(Default)]
 struct LocalState {
     m: Option<Arc<Manifest>>,
     open: HashMap<u32, std::fs::File>,
+    /// Final paths whose commit (fsync + rename) is running with the lock released: a second
+    /// commit of the same path is refused instead of racing the first.
+    committing: BTreeSet<PathBuf>,
+}
+
+/// Frees a path of `LocalState::committing` when its commit ends, however it ends.
+struct CommitGuard<'a> {
+    sink: &'a LocalSink,
+    fin: PathBuf,
+}
+
+impl Drop for CommitGuard<'_> {
+    fn drop(&mut self) {
+        self.sink
+            .st
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .committing
+            .remove(&self.fin);
+    }
 }
 
 impl LocalSink {
@@ -172,6 +202,8 @@ impl LocalSink {
             log: log_small_default(),
             pack_opts: PackOpts::default(),
             pack: Mutex::new(None),
+            #[cfg(test)]
+            commit_hook: Mutex::new(None),
         }
     }
 
@@ -652,16 +684,37 @@ impl Sink for LocalSink {
     }
 
     fn commit(&self, id: u32) -> io::Result<()> {
-        let mut st = self.st.lock().unwrap();
-        let size =
-            st.m.as_ref()
-                .expect("prepare runs before any data")
-                .entry(id)
-                .expect("an id the receiver validated against the manifest")
-                .size;
-        let (part, fin) = (self.path(&st, id, true), self.path(&st, id, false));
+        // The state lock is held only to take the descriptor and name the paths: the fsync and the
+        // rename of one large file must not stall every other sink call (writes of other files,
+        // `sync`, reads). Nothing reads `st.open[id]` once the file is removed from it; a second
+        // commit of the same path is refused while this one runs (`committing`).
+        let (size, part, fin, cached, _guard) = {
+            let mut st = self.st.lock().unwrap();
+            let size =
+                st.m.as_ref()
+                    .expect("prepare runs before any data")
+                    .entry(id)
+                    .expect("an id the receiver validated against the manifest")
+                    .size;
+            let (part, fin) = (self.path(&st, id, true), self.path(&st, id, false));
+            if !st.committing.insert(fin.clone()) {
+                return Err(io::Error::other(format!(
+                    "a commit of {} is already in flight",
+                    fin.display()
+                )));
+            }
+            let guard = CommitGuard {
+                sink: self,
+                fin: fin.clone(),
+            };
+            (size, part, fin, st.open.remove(&id), guard)
+        };
+        #[cfg(test)]
+        if let Some(h) = self.commit_hook.lock().unwrap().as_ref() {
+            h(id);
+        }
         // The cached descriptor, or (the cache having been trimmed) the part file reopened.
-        let f = match st.open.remove(&id) {
+        let f = match cached {
             Some(f) => Some(f),
             None => match std::fs::OpenOptions::new().write(true).open(&part) {
                 Ok(f) => Some(f),
@@ -679,6 +732,16 @@ impl Sink for LocalSink {
             std::fs::rename(&part, &fin)?; // same directory by construction (ruling Q3)
         }
         Ok(())
+    }
+
+    fn sync_committed(&self, ids: &[u32]) -> io::Result<()> {
+        let dirs: BTreeSet<PathBuf> = {
+            let st = self.st.lock().unwrap();
+            ids.iter()
+                .filter_map(|&id| self.path(&st, id, false).parent().map(Path::to_path_buf))
+                .collect()
+        };
+        sync_dirs(&dirs)
     }
 
     fn finish(&self) -> io::Result<()> {
@@ -1950,6 +2013,9 @@ pub const RESUME_PROGRESS_DEADLINE: Duration = Duration::from_secs(900);
 /// adds contention.
 const WRITE_PAR: usize = 4;
 
+/// The most large-file commits (fsync + rename) in flight at once, as the console's commit workers.
+const COMMIT_PAR: usize = 4;
+
 /// What one bundle's write task hands back to the loop.
 struct BundleWritten {
     /// Written (and root-checked) files, awaiting the next sync batch.
@@ -2319,6 +2385,7 @@ async fn batch_task(job: BatchJob) -> Result<BatchDone, SendError> {
     // (from the snapshot) plus this batch's ranges — the same view the old inline batch
     // had after applying the record.
     let mut committed = Vec::new();
+    let mut verified: Vec<u32> = Vec::new();
     let mut reset = Vec::new();
     for l in &large {
         let Some(root) = l.root else {
@@ -2379,13 +2446,22 @@ async fn batch_task(job: BatchJob) -> Result<BatchDone, SendError> {
             reset.push(l.id);
             continue;
         }
-        let s2 = sink.clone();
-        let id = l.id;
-        tokio::task::spawn_blocking(move || s2.commit(id))
+        verified.push(l.id);
+    }
+    // Commit the verified files, up to COMMIT_PAR at once (each is an fsync + rename the sink runs
+    // with no lock held), then make the new names durable, and only then journal them: a file is
+    // called done after its data fsync (this batch's sync), its rename, its directory's fsync.
+    // Parallelism is between files, never between a file's commit and its own record. A commit
+    // that fails ends the job, but only after the others have returned, and the ones that went
+    // through are still journaled (their renames are in place; resending them would cost the file).
+    let (ok, failed) = commit_verified(&sink, &verified).await;
+    if !ok.is_empty() {
+        let (s2, ids) = (sink.clone(), ok.clone());
+        tokio::task::spawn_blocking(move || s2.sync_committed(&ids))
             .await
             .map_err(proto)??;
-        committed.push(id);
     }
+    committed.extend(ok);
     // ONE journal record, one drive flush and one Durable for every file this batch
     // committed (T28): per-file records meant a full-drive flush per file, so an ordered
     // download (every file goes through the large path) crawled and, under load, looked hung.
@@ -2421,6 +2497,9 @@ async fn batch_task(job: BatchJob) -> Result<BatchDone, SendError> {
                 .map_err(|e| SendError::Disconnected(e.to_string()))?;
         }
     }
+    if let Some(e) = failed {
+        return Err(e.into());
+    }
     // Logged files that have aged become durable in place now (all of them when the log is full).
     if sink.unswept() > 0 {
         let force = sink.log_pressure();
@@ -2447,6 +2526,50 @@ async fn batch_task(job: BatchJob) -> Result<BatchDone, SendError> {
         reset,
         ranges,
     })
+}
+
+/// Commits `ids` on the blocking pool, at most `COMMIT_PAR` at a time. Returns the ids that were
+/// committed, in `ids` order, and the first error. Never returns while a commit is still running:
+/// a failure lets the others finish (a rename cannot be recalled) and reports what went through.
+async fn commit_verified(sink: &Arc<dyn Sink>, ids: &[u32]) -> (Vec<u32>, Option<io::Error>) {
+    let gate = Arc::new(tokio::sync::Semaphore::new(COMMIT_PAR));
+    let mut set = tokio::task::JoinSet::new();
+    for (k, &id) in ids.iter().enumerate() {
+        let (s2, gate) = (sink.clone(), gate.clone());
+        set.spawn(async move {
+            let _permit = gate
+                .acquire_owned()
+                .await
+                .expect("the gate is never closed");
+            let r = tokio::task::spawn_blocking(move || s2.commit(id))
+                .await
+                .unwrap_or_else(|e| Err(io::Error::other(format!("commit task died: {e}"))));
+            (k, r)
+        });
+    }
+    let mut done: Vec<(usize, u32)> = Vec::new();
+    let mut first_err: Option<(usize, io::Error)> = None;
+    while let Some(j) = set.join_next().await {
+        match j {
+            Ok((k, Ok(()))) => done.push((k, ids[k])),
+            Ok((k, Err(e))) => {
+                if first_err.as_ref().is_none_or(|(fk, _)| k < *fk) {
+                    first_err = Some((k, e));
+                }
+            }
+            Err(e) => {
+                first_err.get_or_insert((
+                    usize::MAX,
+                    io::Error::other(format!("commit task died: {e}")),
+                ));
+            }
+        }
+    }
+    done.sort_unstable();
+    (
+        done.into_iter().map(|(_, id)| id).collect(),
+        first_err.map(|(_, e)| e),
+    )
 }
 
 /// Makes the logged files that are due (every one when `force`) durable in place and journals the
@@ -3329,5 +3452,315 @@ mod tests {
         assert_eq!(out.retry, vec![(2, gen::RETRY_VERIFY)]);
         assert_eq!(out.credit, 777);
         assert_eq!(*sink.0.lock().unwrap(), vec![1, 3]); // the bad one was never written
+    }
+
+    // ---- commit off the sink lock, bounded parallel (review 009 #5) ----
+
+    fn large_manifest(n: u32, size: u64) -> Manifest {
+        Manifest {
+            entries: (0..n)
+                .map(|i| Entry {
+                    kind: gen::ENTRY_FILE,
+                    mode: 0o644,
+                    size,
+                    mtime: 0,
+                    path: format!("f{i}"),
+                    root: None,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_commit_holds_no_sink_lock_while_it_fsyncs_and_renames() {
+        let d = std::env::temp_dir().join(format!("p5a-commitlock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let m = large_manifest(2, 3 * GROUP);
+        let sink =
+            Arc::new(LocalSink::new(d.join("new"), false).with_log(false, PackOpts::default()));
+        sink.prepare(&m).unwrap();
+        for id in 0..2 {
+            sink.write_at(id, 0, &vec![id as u8 + 1; GROUP as usize])
+                .unwrap();
+        }
+        // The commit of file 0 parks right after it has taken its descriptor, where the fsync and
+        // the rename would run.
+        let (parked_tx, parked_rx) = std::sync::mpsc::channel::<()>();
+        let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+        let go_rx = Mutex::new(go_rx);
+        let parked_tx = Mutex::new(parked_tx);
+        *sink.commit_hook.lock().unwrap() = Some(Box::new(move |_id| {
+            parked_tx.lock().unwrap().send(()).unwrap();
+            let _ = go_rx.lock().unwrap().recv_timeout(Duration::from_secs(20));
+        }));
+        let s2 = sink.clone();
+        let t = std::thread::spawn(move || s2.commit(0));
+        parked_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+        // Other sink calls proceed while that commit is parked: a write, a sync, a read.
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let s3 = sink.clone();
+        std::thread::spawn(move || {
+            s3.write_at(1, GROUP, &vec![9; GROUP as usize]).unwrap();
+            s3.sync(&[1]).unwrap();
+            let mut b = [0u8; 4];
+            s3.read_at(1, 0, &mut b).unwrap();
+            done_tx.send(()).unwrap();
+        });
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("a sink call waited behind a parked commit: the lock is held");
+        go_tx.send(()).unwrap();
+        t.join().unwrap().unwrap();
+        assert!(d.join("new.ava-part/f0").exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn two_commits_of_one_path_never_overlap() {
+        let d = std::env::temp_dir().join(format!("p5a-commitrace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let m = large_manifest(1, 2 * GROUP);
+        let sink =
+            Arc::new(LocalSink::new(d.join("new"), false).with_log(false, PackOpts::default()));
+        sink.prepare(&m).unwrap();
+        sink.write_at(0, 0, &vec![1; GROUP as usize]).unwrap();
+        let (parked_tx, parked_rx) = std::sync::mpsc::channel::<()>();
+        let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+        let go_rx = Mutex::new(go_rx);
+        let parked_tx = Mutex::new(parked_tx);
+        *sink.commit_hook.lock().unwrap() = Some(Box::new(move |_id| {
+            parked_tx.lock().unwrap().send(()).unwrap();
+            let _ = go_rx.lock().unwrap().recv_timeout(Duration::from_secs(20));
+        }));
+        let s2 = sink.clone();
+        let t = std::thread::spawn(move || s2.commit(0));
+        parked_rx.recv_timeout(Duration::from_secs(20)).unwrap();
+        // A second commit of the same file while the first is in flight is refused, not raced.
+        let e = sink.commit(0).unwrap_err();
+        assert!(e.to_string().contains("already"), "{e}");
+        go_tx.send(()).unwrap();
+        t.join().unwrap().unwrap();
+        // Done: the path is free again (a re-run after a reset commits normally).
+        *sink.commit_hook.lock().unwrap() = None;
+        sink.write_at(0, 0, &vec![2; 2 * GROUP as usize]).unwrap();
+        sink.commit(0).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_crash_between_the_commit_and_its_journal_record_resumes() {
+        // The rename is in place but no record names the file done. Staged (a new folder): the
+        // bytes sit in the staging folder, the resume check re-reads them and the commit is a
+        // no-op. Into an existing folder: the part file is gone, so the resume check's read fails
+        // (the file is reset and resent) and a second run commits over the first run's file.
+        for staged in [true, false] {
+            let d = std::env::temp_dir()
+                .join(format!("p5a-commitcrash-{staged}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&d);
+            std::fs::create_dir_all(&d).unwrap();
+            let root = d.join("new");
+            if !staged {
+                std::fs::create_dir_all(&root).unwrap();
+            }
+            let m = large_manifest(1, 2 * GROUP);
+            let first = LocalSink::new(root.clone(), false).with_log(false, PackOpts::default());
+            first.prepare(&m).unwrap();
+            first.write_at(0, 0, &vec![1; 2 * GROUP as usize]).unwrap();
+            first.sync(&[0]).unwrap();
+            first.commit(0).unwrap();
+            drop(first); // the crash: nothing journaled
+            let second = LocalSink::new(root.clone(), false).with_log(false, PackOpts::default());
+            second.prepare(&m).unwrap();
+            let mut b = vec![0u8; GROUP as usize];
+            let intact = second.read_at(0, 0, &mut b).is_ok();
+            assert_eq!(
+                intact, staged,
+                "staged bytes verify; a lost part file is reset"
+            );
+            let fill = if intact { 1 } else { 7 };
+            if !intact {
+                second
+                    .write_at(0, 0, &vec![fill; 2 * GROUP as usize])
+                    .unwrap();
+                second.sync(&[0]).unwrap();
+            }
+            second.commit(0).unwrap();
+            second.sync_committed(&[0]).unwrap();
+            second.finish().unwrap();
+            let got = std::fs::read(root.join("f0")).unwrap();
+            assert!(got.len() == 2 * GROUP as usize && got.iter().all(|&x| x == fill));
+            assert!(!root.join("f0.ava-part").exists());
+            let _ = std::fs::remove_dir_all(&d);
+        }
+    }
+
+    /// A sink whose commit sleeps, counting how many run at once and what the journal held when
+    /// the committed names were synced.
+    struct SlowCommit {
+        delay: Duration,
+        now: std::sync::atomic::AtomicUsize,
+        peak: std::sync::atomic::AtomicUsize,
+        finished: std::sync::atomic::AtomicUsize,
+        jd: PathBuf,
+        at_sync: Mutex<Option<(usize, usize)>>,
+        fail: Option<u32>,
+    }
+
+    impl Sink for SlowCommit {
+        fn prepare(&self, _: &Manifest) -> io::Result<()> {
+            Ok(())
+        }
+        fn write_at(&self, _: u32, _: u64, _: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+        fn write_whole(&self, _: u32, _: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+        fn sync(&self, _: &[u32]) -> io::Result<()> {
+            Ok(())
+        }
+        fn read_at(&self, _: u32, _: u64, _: &mut [u8]) -> io::Result<usize> {
+            Ok(0)
+        }
+        fn commit(&self, id: u32) -> io::Result<()> {
+            let n = self.now.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(n, Ordering::SeqCst);
+            std::thread::sleep(self.delay);
+            self.now.fetch_sub(1, Ordering::SeqCst);
+            if self.fail == Some(id) {
+                return Err(io::Error::other("rename failed"));
+            }
+            self.finished.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn sync_committed(&self, ids: &[u32]) -> io::Result<()> {
+            // every commit has returned, and the journal does not yet call any of them done
+            let (j, recs) = Journal::open(&self.jd).unwrap();
+            drop(j);
+            let mut st = State::default();
+            for r in &recs {
+                st.apply(r);
+            }
+            let named = ids.iter().filter(|i| st.done.contains(i)).count();
+            *self.at_sync.lock().unwrap() = Some((self.finished.load(Ordering::SeqCst), named));
+            Ok(())
+        }
+        fn finish(&self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    async fn run_commit_batch(
+        tag: &str,
+        n: u32,
+        sink: Arc<SlowCommit>,
+        dir: &Path,
+    ) -> (Result<BatchDone, SendError>, Duration) {
+        let job = [0x55; 16];
+        let m = Arc::new(large_manifest(n, 16));
+        let open = JnlOpen {
+            job_id: job,
+            manifest_hash: m.hash(),
+            kind: gen::JOB_DOWNLOAD,
+            flags: 0,
+            staged: 0,
+            root: format!("/{tag}"),
+        };
+        let jnl = Journal::create(dir, &open).unwrap();
+        let mut st = State::default();
+        st.apply(&Record::Open(open.clone()));
+        let zero_root = *blake3::hash(&[0u8; 16]).as_bytes();
+        let mut large = HashMap::new();
+        for id in 0..n {
+            let mut l = new_large(dir, &m, id).unwrap();
+            l.written.insert(0, 16);
+            l.root = Some(zero_root);
+            large.insert(id, l);
+        }
+        let (link, _keep) = test_link(job);
+        let s: Arc<dyn Sink> = sink;
+        let pg = Arc::default();
+        let snap = snapshot_batch(
+            job,
+            link.control.clone(),
+            &s,
+            &m,
+            jnl,
+            &open,
+            st,
+            &pg,
+            &mut Vec::new(),
+            &mut large,
+        )
+        .unwrap();
+        let t = Instant::now();
+        let r = batch_task(snap).await;
+        (r, t.elapsed())
+    }
+
+    fn slow(dir: &Path, fail: Option<u32>) -> Arc<SlowCommit> {
+        Arc::new(SlowCommit {
+            delay: Duration::from_millis(200),
+            now: Default::default(),
+            peak: Default::default(),
+            finished: Default::default(),
+            jd: dir.to_path_buf(),
+            at_sync: Mutex::new(None),
+            fail,
+        })
+    }
+
+    #[tokio::test]
+    async fn eight_large_commits_overlap_and_the_names_sync_before_the_record() {
+        let dir = std::env::temp_dir().join(format!("p5a-commitpar-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sink = slow(&dir, None);
+        let (r, took) = run_commit_batch("par", 8, sink.clone(), &dir).await;
+        let out = r.unwrap();
+        assert_eq!(out.committed.len(), 8);
+        // 8 files x 200 ms: serial is 1.6 s, COMMIT_PAR = 4 is ~0.4 s. A generous bound.
+        assert!(
+            took < Duration::from_millis(1100),
+            "commits ran serially: {took:?}"
+        );
+        let peak = sink.peak.load(Ordering::SeqCst);
+        assert!((2..=COMMIT_PAR).contains(&peak), "peak in flight {peak}");
+        // names synced after every commit returned and before the journal named any file done
+        assert_eq!(*sink.at_sync.lock().unwrap(), Some((8, 0)));
+        // and the journal then names all eight
+        assert_eq!(out.st.done.len(), 8);
+        let (_, recs) = Journal::open(&dir).unwrap();
+        let mut st = State::default();
+        for r in &recs {
+            st.apply(r);
+        }
+        assert_eq!(st.done.len(), 8);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_failed_commit_ends_the_batch_after_the_others_have_returned_and_journals_the_rest() {
+        let dir = std::env::temp_dir().join(format!("p5a-commitfail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let sink = slow(&dir, Some(3));
+        let (r, _) = run_commit_batch("fail", 8, sink.clone(), &dir).await;
+        assert!(r.is_err());
+        // no commit is still running when the error comes back, and no file was called done
+        assert_eq!(sink.now.load(Ordering::SeqCst), 0);
+        assert_eq!(sink.finished.load(Ordering::SeqCst), 7);
+        // the seven that went through are synced and journaled; the failed one is not
+        assert_eq!(*sink.at_sync.lock().unwrap(), Some((7, 0)));
+        let (_, recs) = Journal::open(&dir).unwrap();
+        let mut st = State::default();
+        for r in &recs {
+            st.apply(r);
+        }
+        assert_eq!(st.done.len(), 7);
+        assert!(!st.done.contains(&3));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
