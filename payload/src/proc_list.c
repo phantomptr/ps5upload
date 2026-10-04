@@ -357,6 +357,24 @@ int proc_name_by_pid(int pid, char *out, size_t cap) {
     return 0;
 }
 
+int proc_start_by_pid(int pid, uint64_t *sec) {
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
+    uint8_t kbuf[2048];
+    size_t got = sizeof(kbuf);
+    int64_t tv_sec;
+    int ki_structsize;
+    if (!sec || pid <= 0) return -1;
+    *sec = 0;
+    if (sysctl(mib, 4, kbuf, &got, NULL, 0) != 0) return -1;
+    if (got < (size_t)(KINFO_START_OFFSET + 16)) return -1;
+    ki_structsize = *(int *)kbuf;
+    if (ki_structsize < KINFO_START_OFFSET + 16 || (size_t)ki_structsize > got) return -1;
+    memcpy(&tv_sec, &kbuf[KINFO_START_OFFSET], sizeof tv_sec);
+    if (tv_sec <= 0) return -1;
+    *sec = (uint64_t)tv_sec;
+    return 0;
+}
+
 void proc_log_homebrew_neighbours(void) {
     int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC, 0};
     size_t buf_size = 0;

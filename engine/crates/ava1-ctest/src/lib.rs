@@ -369,6 +369,8 @@ pub mod ffi {
         pub fn ava1_test_house_ticks() -> u32;
         pub fn ava1_test_unswept_total() -> u64;
         pub fn ava1_test_unswept_global_add(d: i64);
+        pub fn ava1_test_gc_boot(id: u64);
+        pub fn ava1_test_exit_flush_create_fails(fail: c_int) -> c_int;
         pub fn ava1_test_jobs_gc(jobs: *const c_char, age_s: i64, max_age_s: i64) -> c_int;
         pub fn ava1_test_recv_restart_noopen() -> c_int;
         pub fn ava1_test_data_stop_only();
@@ -2183,6 +2185,16 @@ pub fn house_ticks() -> u32 {
 /// receiver that cannot make its files durable.
 pub fn sweep_failures(n: i32) {
     unsafe { ffi::ava1_test_sweep_fail(n) }
+}
+
+/// Sets the boot identity the GC strikes use (0 = the real one).
+pub fn gc_boot(id: u64) {
+    unsafe { ffi::ava1_test_gc_boot(id) }
+}
+
+/// ava1_exit_flush with its thread creation failing (or not): its result.
+pub fn exit_flush_create_fails(fail: bool) -> i32 {
+    unsafe { ffi::ava1_test_exit_flush_create_fails(fail as i32) }
 }
 
 /// `ava1_jobs_gc` over `jobs` as if `age_s` seconds had passed and the limit were `max_age_s`: how

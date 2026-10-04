@@ -1,4 +1,5 @@
 #include "notif.h"
+#include "sony_api_lock.h"
 
 #include <fcntl.h>
 #include <pthread.h>
@@ -249,6 +250,13 @@ int notif_send(const char *msg, int level) {
 
     sceNotificationSend((int32_t)level, msg);
     return 0;
+}
+
+int notif_send_serialised(const char *msg, int level) {
+    pthread_mutex_lock(&sony_api_lock);
+    int rc = notif_send(msg, level);
+    pthread_mutex_unlock(&sony_api_lock);
+    return rc;
 }
 
 static size_t append_str(char *buf, size_t cap, size_t off,

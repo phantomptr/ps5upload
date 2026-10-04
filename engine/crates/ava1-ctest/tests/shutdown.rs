@@ -174,3 +174,64 @@ async fn the_stop_does_not_return_while_a_sony_call_is_running() {
     assert_eq!(srv.payload_stop(500, 500), 0);
     assert!(t1.elapsed() < Duration::from_secs(2));
 }
+
+// ---- the exit watchdog and the Sony wait (final review: console) ----
+
+extern "C" {
+    fn ava1_exit_decide(elapsed_ms: i64, sony_busy: i32, base_ms: i64, ceiling_ms: i64) -> i32;
+    fn ava1_exit_flush(max_ms: i32) -> i32;
+    fn ava1_server_rpc_inflight() -> i32;
+}
+const WAIT: i32 = 0;
+const EXIT_OK: i32 = 1;
+const EXIT_FORCED: i32 = 2;
+
+#[test]
+fn the_watchdog_never_exits_before_its_base_time() {
+    for busy in [0, 1] {
+        assert_eq!(unsafe { ava1_exit_decide(0, busy, 8000, 60000) }, WAIT);
+        assert_eq!(unsafe { ava1_exit_decide(7999, busy, 8000, 60000) }, WAIT);
+    }
+}
+
+#[test]
+fn the_watchdog_exits_at_the_base_time_when_no_sony_call_runs() {
+    assert_eq!(unsafe { ava1_exit_decide(8000, 0, 8000, 60000) }, EXIT_OK);
+    assert_eq!(unsafe { ava1_exit_decide(30000, 0, 8000, 60000) }, EXIT_OK);
+}
+
+#[test]
+fn the_watchdog_waits_while_a_sony_call_runs_up_to_the_ceiling() {
+    assert_eq!(unsafe { ava1_exit_decide(8000, 1, 8000, 60000) }, WAIT);
+    assert_eq!(unsafe { ava1_exit_decide(59999, 1, 8000, 60000) }, WAIT);
+    // The hard ceiling: after it the process goes, and the caller logs loudly that it was forced.
+    assert_eq!(
+        unsafe { ava1_exit_decide(60000, 1, 8000, 60000) },
+        EXIT_FORCED
+    );
+    assert_eq!(
+        unsafe { ava1_exit_decide(90000, 1, 8000, 60000) },
+        EXIT_FORCED
+    );
+}
+
+#[test]
+fn the_exit_flush_with_no_data_layer_returns_at_once() {
+    let t = Instant::now();
+    assert_eq!(unsafe { ava1_exit_flush(2000) }, 0);
+    assert!(t.elapsed() < Duration::from_millis(1500));
+}
+
+#[test]
+fn an_idle_server_has_no_rpc_in_flight() {
+    assert_eq!(unsafe { ava1_server_rpc_inflight() }, 0);
+}
+
+#[test]
+fn the_exit_flush_is_skipped_when_its_thread_cannot_be_created() {
+    // The watchdog runs it before _exit: with no thread it must give up (-1) instead of flushing inline.
+    let t = Instant::now();
+    assert_eq!(ava1_ctest::exit_flush_create_fails(true), -1);
+    assert!(t.elapsed() < Duration::from_millis(400));
+    assert_eq!(ava1_ctest::exit_flush_create_fails(false), 0);
+}

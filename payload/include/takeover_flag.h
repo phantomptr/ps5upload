@@ -54,6 +54,12 @@ int takeover_flag_request(const char *dir, uint64_t my_nonce, const int *ports, 
 /* Unlinks any flag left from before this instance (recording its identity as stale first), then
  * starts a detached thread that checks the flag every `period_ms` and calls `on_newer` once when a
  * different instance asked this one to exit, then ends. 0 on success. */
+/* Waits (CLOCK_MONOTONIC) for `port` to stop answering on loopback: polls every `interval_ms`, up
+ * to `max_ms`. 0 = free (checked at least once), -1 = still answered after max_ms. A new instance
+ * calls it before it starts its AVA1 side: two helpers with AVA1 running at once is what hung the
+ * Pro on 2026-10-03 (final review: console, outage). */
+int takeover_wait_port_free(int port, int max_ms, int interval_ms);
+
 int takeover_flag_poll_start(const char *dir, uint64_t my_nonce, int period_ms, void (*on_newer)(void));
 
 #endif

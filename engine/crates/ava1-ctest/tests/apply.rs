@@ -723,3 +723,38 @@ fn a_retried_fsync_on_a_large_file_is_reread_against_the_outboard() {
         job.events()
     );
 }
+
+extern "C" {
+    fn ava1_test_apply_fail_batch_alloc(on: i32);
+    fn ava1_pend_in_use() -> u32;
+}
+
+/// Final review (console): a sync batch that ran out of memory before its lists existed went
+/// `goto out` with the descriptor count still 0, so ava1_pend_release(0) left every reservation of the
+/// pending small files taken for good, and the pending-fd budget shrank with each failed batch.
+#[test]
+fn a_sync_batch_that_runs_out_of_memory_gives_its_pending_slots_back() {
+    let t = tmp("batch-oom");
+    let root = t.join("dest");
+    let n = 40usize;
+    let mut entries = vec![dir("a")];
+    for i in 0..n {
+        entries.push(file(&format!("a/f{i:03}"), 5));
+    }
+    let m = Manifest { entries };
+    let before = unsafe { ava1_pend_in_use() };
+    {
+        let job = CApplyJob::begin(&t.join("jobs"), &root, 0, &m, 0);
+        unsafe { ava1_test_apply_fail_batch_alloc(1) };
+        for i in 0..n {
+            job.record(i as u32 + 1, b"hello", *blake3::hash(b"hello").as_bytes());
+        }
+        assert_eq!(job.wait(15_000), ava1::gen::ERR_IO as i32);
+    }
+    unsafe { ava1_test_apply_fail_batch_alloc(0) };
+    assert_eq!(
+        unsafe { ava1_pend_in_use() },
+        before,
+        "the failed batch leaked its pending-fd reservations"
+    );
+}

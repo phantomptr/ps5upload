@@ -159,6 +159,29 @@ void ava1_lflist_rebuild(ava1_job_t *j) {
     uint32_t i;
     j->lfl_n = 0;
     j->lfl_all = 0;
+    /* the open-descriptor list follows the files to their new ids */
+    j->lfo_n = 0;
+    j->lf_fds = 0;
+    for (i = 0; j->lf && i < j->m.n; i++) {
+        ava1_lfile_t *lf = j->lf[i];
+        if (!lf || lf->fd < 0) continue;
+        if (j->lfo_n == j->lfo_cap) {
+            uint32_t c = j->lfo_cap ? j->lfo_cap * 2 : 16;
+            uint32_t *q = realloc(j->lfo, (size_t)c * sizeof *q);
+            if (!q) { /* cannot track it: close it, it reopens on demand */
+                if (lf->fd >= 0) close(lf->fd);
+                if (lf->ob_fd >= 0) close(lf->ob_fd);
+                lf->fd = lf->ob_fd = -1;
+                if (lf->held) ava1_lf_release(lf->held);
+                lf->held = 0;
+                continue;
+            }
+            j->lfo = q;
+            j->lfo_cap = c;
+        }
+        j->lfo[j->lfo_n++] = i;
+        j->lf_fds += lf->held;
+    }
     for (i = 0; j->lf && i < j->m.n; i++) {
         if (!j->lf[i]) continue;
         j->lf[i]->in_list = 1;
@@ -182,6 +205,7 @@ void ava1_lflist_reset(ava1_job_t *j, int release) {
 static int u32cmp(const void *a, const void *b);
 static int stopping_cb(void *a);
 static void run_commit(ava1_job_t *j, uint32_t id);
+static void run_work(ava1_job_t *j, ava1_work_t *w);
 
 /* A lf with nothing left for a batch, a commit or a snapshot to do. */
 static int lf_idle(const ava1_job_t *j, uint32_t id, const ava1_lfile_t *lf) {
@@ -732,12 +756,105 @@ static int lfile_open_fds(ava1_job_t *j, uint32_t id, int create, int *fdp, int 
     return 0;
 }
 
+void ava1_lf_close_fds(ava1_job_t *j, uint32_t id, ava1_lfile_t *lf) {
+    uint32_t k;
+    if (lf->fd >= 0) close(lf->fd);
+    if (lf->ob_fd >= 0) close(lf->ob_fd);
+    lf->fd = lf->ob_fd = -1;
+    if (lf->held) {
+        ava1_lf_release(lf->held);
+        if (j->lf_fds >= lf->held) j->lf_fds -= lf->held;
+        else j->lf_fds = 0;
+        lf->held = 0;
+    }
+    for (k = 0; k < j->lfo_n; k++)
+        if (j->lfo[k] == id) {
+            j->lfo[k] = j->lfo[--j->lfo_n];
+            break;
+        }
+}
+
+/* Closes one large file that has nothing a batch, a commit or a writer needs its descriptors for:
+ * no bytes written and not yet synced, no write in flight, no commit, no batch fsyncing the
+ * descriptors it took (it uses them without j->mu). Reopened by lfile_open when a chunk or the
+ * commit comes. Caller holds j->mu. 1 = one closed. */
+static int lf_evict_one(ava1_job_t *j) {
+    uint32_t k;
+    if (j->syncing) return 0;
+    for (k = 0; k < j->lfo_n; k++) {
+        uint32_t id = j->lfo[k];
+        ava1_lfile_t *lf = j->lf[id];
+        if (!lf || lf->fd < 0 || lf->opening || lf->committing || lf->committed || lf->writers || lf->written.n) continue;
+        if (lf->has_root) continue; /* every byte is in: its commit is about to run and needs them open */
+        ava1_lf_close_fds(j, id, lf);
+        return 1;
+    }
+    return 0;
+}
+
+/* Takes `need` descriptor slots for a large file about to open: this job's share and the global one.
+ * Closes idle files of this job to make room; with none to close, waits (running queued sync stripes,
+ * as the small-file gate does: the batch that makes files idle needs workers) and asks the job thread
+ * for an early batch. Caller holds j->mu. 0, or EINTR when the job is stopping. */
+static int lf_slots(ava1_job_t *j, uint32_t need, int force) {
+    int waited = 0;
+    if (force) { /* a commit's reopen (a resumed job): it is what gives slots back, so it never waits for one */
+        ava1_lf_force_reserve(need);
+        j->lf_fds += need;
+        return 0;
+    }
+    for (;;) {
+        ava1_work_t *w, **pp, *prev = NULL;
+        if (j->stopping) {
+            if (waited) j->lf_wait--;
+            return EINTR;
+        }
+        if (j->lf_fds + need <= ava1_lf_job_share()) {
+            if (ava1_lf_try_reserve(need)) break;
+        }
+        if (lf_evict_one(j)) continue;
+        if (!waited) {
+            waited = 1;
+            j->lf_wait++;
+        }
+        /* Run queued sync stripes and commits ourselves, wherever they sit in the queue: they are what
+         * frees slots, and if every worker waited here behind chunk items nobody would run them. */
+        for (pp = &j->q_head; (w = *pp) != NULL; prev = w, pp = &w->next)
+            if (w->kind == AVA1_W_CALL || w->kind == AVA1_W_COMMIT) break;
+        if (w) {
+            *pp = w->next;
+            if (j->q_tail == w) j->q_tail = prev;
+            j->q_len--;
+            j->busy++;
+            pthread_mutex_unlock(&j->mu);
+            if (w->kind == AVA1_W_CALL) {
+                w->fn(j, w->arg, w->i);
+                pthread_mutex_lock(&j->mu);
+                if (--j->calls_left == 0) pthread_cond_broadcast(&j->cv);
+            } else {
+                run_work(j, w);
+                pthread_mutex_lock(&j->mu);
+            }
+            j->busy--;
+            free(w);
+        } else {
+            pthread_mutex_unlock(&j->mu);
+            ava1_platform_sleep_ms(2);
+            pthread_mutex_lock(&j->mu);
+        }
+    }
+    if (waited) j->lf_wait--;
+    j->lf_fds += need;
+    return 0;
+}
+
 /* The large file's state with open descriptors. Caller holds j->mu, which is released while
  * the files are opened and preallocated (another worker wanting the same file waits on
  * `opening`) and held again on return. NULL + *err on failure. */
 static ava1_lfile_t *lfile_open(ava1_job_t *j, uint32_t id, int *err, int create) {
     ava1_lfile_t *lf = ava1_lfile_get(j, id);
     int fd, ob, rc;
+    uint32_t need;
     *err = 0;
     if (!lf) {
         *err = ENOMEM;
@@ -750,17 +867,41 @@ static ava1_lfile_t *lfile_open(ava1_job_t *j, uint32_t id, int *err, int create
         return NULL;
     }
     lf->opening = 1;
+    need = ava1_groups_of(j->m.e[id].size) >= 2 ? 2u : 1u;
+    rc = lf_slots(j, need, !create); /* may release j->mu while it waits; this lf stays `opening` */
+    if (rc) {
+        lf->opening = 0;
+        pthread_cond_broadcast(&j->cv);
+        *err = rc;
+        return NULL;
+    }
     pthread_mutex_unlock(&j->mu);
     rc = lfile_open_fds(j, id, create, &fd, &ob);
     pthread_mutex_lock(&j->mu);
     lf->opening = 0;
     pthread_cond_broadcast(&j->cv);
+    if (rc == 0 && j->lfo_n == j->lfo_cap) {
+        uint32_t c = j->lfo_cap ? j->lfo_cap * 2 : 16;
+        uint32_t *q = realloc(j->lfo, (size_t)c * sizeof *q);
+        if (q) {
+            j->lfo = q;
+            j->lfo_cap = c;
+        } else {
+            close(fd);
+            if (ob >= 0) close(ob);
+            rc = ENOMEM;
+        }
+    }
     if (rc) {
+        ava1_lf_release(need); /* the slots lf_slots took */
+        j->lf_fds -= need;
         *err = rc;
         return NULL;
     }
     lf->fd = fd;
     lf->ob_fd = ob;
+    lf->held = (uint8_t)need;
+    j->lfo[j->lfo_n++] = id;
     return lf;
 }
 
@@ -808,6 +949,7 @@ static int write_chunk(ava1_job_t *j, uint32_t id, uint64_t off, const uint8_t *
     fd = lf ? dup(lf->fd) : -1;
     ob = lf && lf->ob_fd >= 0 ? dup(lf->ob_fd) : -1;
     if (lf && (fd < 0 || (lf->ob_fd >= 0 && ob < 0))) err = errno;
+    else if (lf) lf->writers++; /* until the range is recorded: lf_evict_one keeps its descriptors open */
     pthread_mutex_unlock(&j->mu);
     if (!lf || err) {
         if (fd >= 0) close(fd);
@@ -828,8 +970,14 @@ static int write_chunk(ava1_job_t *j, uint32_t id, uint64_t off, const uint8_t *
     if (err == 0 && __atomic_load_n(&j->perchunk, __ATOMIC_RELAXED)) err = chunk_sync(j, fd, d, len, off);
     close(fd);
     if (ob >= 0) close(ob);
-    if (err) return err;
+    if (err) {
+        pthread_mutex_lock(&j->mu);
+        lf->writers--;
+        pthread_mutex_unlock(&j->mu);
+        return err;
+    }
     pthread_mutex_lock(&j->mu);
+    lf->writers--;
     if (!lf->committed) (void)ava1_rset_add(&lf->written, off, off + len); /* else: a late duplicate */
     j->unsynced_bytes += len;
     j->bytes_received += len;
@@ -2090,7 +2238,7 @@ static void sync_batch(ava1_job_t *j) {
     fdlist_t l;
     uint64_t t0 = ava1_mono_ms(), new_bytes = 0, bytes_in = 0;
     ava1_ploc_t *ploc = NULL;       /* durable-by-log: where each pending small file's record is */
-    uint32_t *fids = NULL, nfd = 0, npk = 0, pk_first = 0, ndirty;
+    uint32_t *fids = NULL, nfd = 0, npk = 0, pk_first = 0, ndirty, held;
     uint8_t (*froots)[32] = NULL;   /* the pending files that hold a descriptor (the per-file fsync path) */
     int logmode = 0;
     lent_t *lg = NULL;
@@ -2106,6 +2254,7 @@ static void sync_batch(ava1_job_t *j) {
     j->pend_root = NULL;
     j->pend_loc = NULL;
     j->pend_n = j->pend_cap = 0;
+    held = j->pend_n_fd; /* every pending fd holds a reservation; `nfd` is only set once the lists exist */
     j->pend_n_fd = 0;
     logmode = n_small && ploc && ploc[0].len;
     for (ndirty = 0, k = 0; k < j->npsegs; k++)
@@ -2137,7 +2286,8 @@ static void sync_batch(ava1_job_t *j) {
     newlf = malloc(((size_t)nlf + 1u) * sizeof *newlf);
     retried = calloc((size_t)n_small + 2u * nlf + ndirty + 1u, 1);
     chk = malloc(((size_t)nlf + 1u) * sizeof *chk);
-    if (!l.fds || !rg || !roots || !runs || !newlf || !retried || !chk || !fids || !froots || !lg) {
+    if (!l.fds || !rg || !roots || !runs || !newlf || !retried || !chk || !fids || !froots || !lg ||
+        (ava1_apply_fault && ava1_apply_fault(j, AVA1_HOOK_BATCH_ALLOC, 0))) {
         pthread_mutex_unlock(&j->mu);
         ava1_apply_fail(j, AVA1_ERR_IO, "out of memory in a sync batch", ENOMEM, 0);
         goto out;
@@ -2191,6 +2341,7 @@ static void sync_batch(ava1_job_t *j) {
     j->roots_new = 0;
     j->unsynced_bytes = 0;
     lfl_prune(j, snap, nsnap);
+    j->syncing = 1; /* the descriptors in `l` and `chk` are used without j->mu until the sync is done */
     u1 = mono_us();
     pthread_cond_broadcast(&j->cv); /* workers waiting for pend space */
     pthread_mutex_unlock(&j->mu);
@@ -2214,6 +2365,10 @@ static void sync_batch(ava1_job_t *j) {
         ava1_apply_fail(j, AVA1_ERR_IO, "fsync failed", l.err, 0);
         goto out;
     }
+    pthread_mutex_lock(&j->mu);
+    j->syncing = 0; /* the descriptors are not needed any more: idle files may be closed again */
+    pthread_cond_broadcast(&j->cv);
+    pthread_mutex_unlock(&j->mu);
     HOOK(j, AVA1_HOOK_BATCH_SYNCED, UINT32_MAX);
     u2 = mono_us();
     slow_drive_check(j, bytes_in > j->rate_bytes0 ? bytes_in - j->rate_bytes0 : 0, t0 - j->last_batch_end_ms, (u2 - u1) / 1000u);
@@ -2379,7 +2534,8 @@ static void sync_batch(ava1_job_t *j) {
     pthread_mutex_unlock(&j->mu);
     for (i = 0; i < n_small; i++)
         if (sfds[i] >= 0) close(sfds[i]);
-    ava1_pend_release(nfd);
+    ava1_pend_release(held);
+    held = 0;
     nfd = 0;
     n_small = 0;
     if (nr || ng) emit_durable(j, runs, nr, rg, ng);
@@ -2423,9 +2579,12 @@ static void sync_batch(ava1_job_t *j) {
         else if (dt < 500 && j->batch_max < AVA1_PEND_MAX) j->batch_max *= 2;
     }
 out:
+    pthread_mutex_lock(&j->mu);
+    j->syncing = 0;
+    pthread_mutex_unlock(&j->mu);
     for (i = 0; i < n_small; i++)
         if (sfds[i] >= 0) close(sfds[i]);
-    ava1_pend_release(nfd);
+    ava1_pend_release(held); /* an early `goto out` leaves nfd at 0 with the reservations still taken */
     free(ploc);
     free(fids);
     free(froots);
@@ -2716,10 +2875,10 @@ static void commit_large(ava1_job_t *j, uint32_t id) {
         commit_fail(j, AVA1_ERR_IO, "final sync failed", err, 0);
         return;
     }
-    close(lf->fd);
-    lf->fd = -1;
-    if (lf->ob_fd >= 0) close(lf->ob_fd);
-    lf->ob_fd = -1;
+    pthread_mutex_lock(&j->mu);
+    ava1_lf_close_fds(j, id, lf); /* closes both and gives the slots back */
+    pthread_cond_broadcast(&j->cv);
+    pthread_mutex_unlock(&j->mu);
     if (strcmp(part, fin) != 0) {
         parent_of(fin, parent, sizeof parent);
         /* Same directory by construction; checked anyway (SPEC.md §12.6, the kernel panic). */
@@ -3106,6 +3265,7 @@ static void *job_main(void *arg) {
         }
         batch = j->prepared && !j->finished && !failed && !__atomic_load_n(&ava1_apply_hold_batches, __ATOMIC_SEQ_CST) &&
                 ((j->pend_n && (j->pend_n >= j->batch_max || ava1_pend_full())) || j->unsynced_bytes >= BATCH_BYTES ||
+                 (j->lf_wait && (j->unsynced_bytes || j->roots_new)) || /* workers wait for a descriptor slot */
                  ((j->pend_n || j->unsynced_bytes || j->roots_new) && now - j->last_batch_ms >= BATCH_MS));
         pthread_mutex_unlock(&j->mu);
         if (failed) ava1_apply_fail(j, fail_status, fail_msg, 0, fail_journal);

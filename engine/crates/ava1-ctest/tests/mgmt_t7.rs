@@ -193,6 +193,11 @@ const EXPECTED: &[&str] = &[
 /// Methods whose handlers reach sceUserService / sceRegMgr / Remote Play / notifications / a Sony
 /// system call: they carry MGMT_SONY (the audit also derives this from the call graph).
 const SONY: &[&str] = &[
+    // time.get/set (sceSystemServiceGet/SetCurrentDateTime) and shell.exec (its notify builtin toasts) take
+    // sony_api_lock now (final review: console)
+    "time.get",
+    "time.set",
+    "shell.exec",
     "power.control",
     "time.state_get",
     "time.state_set",

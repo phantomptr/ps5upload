@@ -85,6 +85,10 @@ void ava1_budget_give(uint64_t n);
  * when unreadable). The apply engine's pending small-file descriptors, all jobs together,
  * stay within ava1_pend_share() (half of it); disk.calibrate holds at most that many. */
 uint32_t ava1_fd_budget(void);
+/* Reads and raises RLIMIT_NOFILE and probes the real descriptor ceiling (it opens descriptors until the
+ * kernel refuses, for a moment). Call it before any listener thread exists; the data layer's start then
+ * reuses the answer instead of starving the other threads of descriptors at boot. Idempotent. */
+void ava1_fd_limits_probe(void);
 uint32_t ava1_pend_share(void);
 /* Waits until a pending-fd slot is free, then takes it (before the open). Gives up (0) when
  * `stop` is set; `idle` runs between polls (the apply engine runs queued sync work there).
@@ -95,6 +99,19 @@ int ava1_pend_full(void);  /* the global pending-fd count has reached its share 
 /* Tests only: 0 = derive from the limit; else forces the budget. Peaks are high-water marks
  * since the last reset. */
 extern uint32_t ava1_data_test_fd_budget;
+/* Large-file descriptors (a part file, and an outboard from two groups up, per open file): all jobs
+ * share a quarter of the budget, one job half of that. try_reserve takes `n` or returns 0. */
+uint32_t ava1_lf_share(void);
+uint32_t ava1_lf_job_share(void);
+int ava1_lf_try_reserve(uint32_t n);
+void ava1_lf_release(uint32_t n);
+void ava1_lf_force_reserve(uint32_t n);
+uint32_t ava1_lf_peak(void);
+void ava1_lf_peak_reset(void);
+/* fsync of every job's journal and pack segments, for the exit watchdog (see ava1_exit_flush). Takes no
+ * job lock it cannot get at once. */
+void ava1_data_flush_for_exit(void);
+uint32_t ava1_pend_in_use(void);
 uint32_t ava1_pend_peak(void);
 void ava1_pend_peak_reset(void);
 extern uint32_t ava1_data_test_cal_peak; /* most fds disk.calibrate held at once */

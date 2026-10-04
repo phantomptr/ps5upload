@@ -152,7 +152,10 @@ const INDEX_STATUS: u16 = gen::METHOD_INDEX_STATUS;
 const INDEX_SEARCH: u16 = gen::METHOD_INDEX_SEARCH;
 const INDEX_CANCEL: u16 = gen::METHOD_INDEX_CANCEL;
 
-const SONY_METHODS: [u16; 6] = [REGISTER, UNREGISTER, LAUNCH, APP_LIST, BROWSER, LIFECYCLE];
+// INFO_SET toasts through pop_notification, which takes sony_api_lock now (final review: console)
+const SONY_METHODS: [u16; 7] = [
+    REGISTER, UNREGISTER, LAUNCH, APP_LIST, BROWSER, LIFECYCLE, INFO_SET,
+];
 
 // ---- the real table and the static audits ----
 

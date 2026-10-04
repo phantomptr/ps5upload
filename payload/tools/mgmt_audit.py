@@ -13,6 +13,10 @@
   mgmt_audit.py sonylock every entry whose handler reaches sceUserService / sceRegMgr / sys_registry_* code
                          also reaches a function that takes sony_api_lock (CE-108262-9: those APIs must be
                          called one at a time; AVA1 runs up to 8 management calls at once)
+  mgmt_audit.py sonyleaf every function that makes a Sony call (a p_sce*/sceSystemService*/sceNotification*/
+                         sceUserService*/sceRegMgr* call, or pop_notification / sys_time_get / sys_time_set /
+                         notif_send, whose Sony call hides behind a pointer) takes sony_api_lock itself or is
+                         only reached from functions that do (final review: console)
   mgmt_audit.py stack    no stack array of 16 KiB or more is reachable from a table handler
                          (AVA1 workers have 512 KiB, the rule is the SPEC.md section 7.3 one)
   mgmt_audit.py report   every array of 2 KiB or more reachable from each handler in
@@ -371,6 +375,87 @@ def check_sonylock():
     return bad
 
 
+# Wrappers whose Sony call is hidden behind a dlsym'd/resolved pointer, so the call text does not show it.
+# They are caller-locked: every caller must hold it. pop_notification is checked separately: it takes the lock itself.
+SONY_WRAPPERS = {"sys_time_get", "sys_time_set", "notif_send"}
+SONYLEAF_RE = re.compile(r"\b(p_sce(?:Application|LncUtil|AppInstUtil)\w*|sceSystemService\w+|sceNotification\w+|sceUserService\w+|sceRegMgr\w+|sceKernelSendNotificationRequest)\s*\(")
+# Functions that make a Sony call with no lock and no locking caller, and why that is safe.
+SONYLEAF_ALLOW = {}
+
+
+def sonyleaf_findings(funcs, wrappers=SONY_WRAPPERS, allow=SONYLEAF_ALLOW):
+    """funcs: name -> (body text, file). One finding per function that touches a Sony API (directly, or through
+    a wrapper) without taking sony_api_lock when some caller does not hold it either."""
+    stripped = {n: strip(b) for n, (b, _) in funcs.items()}
+    callers = {n: set() for n in funcs}
+    for n, body in stripped.items():
+        names = set(re.findall(r"\b(\w+)\s*\(", body)) | {w for w in re.findall(r"\b\w+\b", body) if w in funcs}
+        for c in names:
+            if c in callers and c != n:
+                callers[c].add(n)
+
+    def touches(n):
+        body = stripped[n]
+        if n in wrappers or SONYLEAF_RE.search(body):
+            return True
+        return any(re.search(r"\b%s\b" % re.escape(w), body) for w in wrappers)
+
+    def ordering(n):
+        """A Sony call written before the function's first lock, or after its last unlock, is unlocked."""
+        body = stripped[n]
+        locks = [m.start() for m in LOCK_RE.finditer(body)]
+        if not locks:
+            return None
+        unlocks = [m.start() for m in re.finditer(r"pthread_mutex_unlock\s*\(\s*&\s*sony_api_lock\s*\)", body)]
+        pat = re.compile(SONYLEAF_RE.pattern + "|" + r"\b(?:%s)\s*\(" % "|".join(map(re.escape, sorted(wrappers))))
+        for m in pat.finditer(body):
+            if m.start() < locks[0]:
+                return "%s() before the lock" % m.group(0).rstrip("( ")
+            if unlocks and m.start() > unlocks[-1] and m.start() > locks[-1]:
+                return "%s() after the unlock" % m.group(0).rstrip("( ")
+        return None
+
+    def holds(n):
+        return bool(LOCK_RE.search(stripped[n]))
+
+    bad = []
+    for n in sorted(funcs):
+        o = ordering(n) if n not in allow else None
+        if o:
+            bad.append("%s (%s): %s" % (n, funcs[n][1], o))
+    for n in sorted(funcs):
+        if n == "pop_notification" and n not in allow and not holds(n):
+            bad.append("pop_notification (%s) toasts without taking sony_api_lock" % funcs[n][1])
+            continue
+        if not touches(n) or n in allow:
+            continue
+        if n == "pop_notification" and not holds(n):
+            bad.append("pop_notification (%s) toasts without taking sony_api_lock" % funcs[n][1])
+            continue
+        if holds(n) or n == "pop_notification":
+            continue
+        # caller-locked: walk up until every path hits a function that takes the lock
+        seen, todo, open_ends = set(), [n], []
+        while todo:
+            f = todo.pop()
+            if f in seen:
+                continue
+            seen.add(f)
+            if f != n and holds(f):
+                continue
+            ups = callers.get(f, set())
+            if not ups:
+                open_ends.append(f)
+            todo.extend(u for u in ups if not holds(u))
+        if open_ends:
+            bad.append("%s (%s) makes a Sony call without sony_api_lock, and %s reaches it with no lock taken" % (n, funcs[n][1], ", ".join(sorted(open_ends)[:4])))
+    return bad
+
+
+def check_sonyleaf():
+    return sonyleaf_findings(FUNCS)
+
+
 def findings(handler, floor):
     out = []
     for fn in sorted(reach(handler)):
@@ -414,6 +499,30 @@ def selftest():
     hit = [f[0] for f in findings("selftest_outer", LIMIT)]
     if "selftest_getter" not in hit:
         bad.append("a function passed as an argument was not followed")
+    # sonyleaf: the lock check on synthetic C (final review: console)
+    synth = {
+        "unlocked power": ({"handler": ("int handler(void) { sceSystemServiceRequestReboot(); }\n}\n", "src/x.c")}, 1),
+        "locked handler": ({"handler": ("int handler(void) { pthread_mutex_lock(&sony_api_lock); sceSystemServiceRequestReboot(); pthread_mutex_unlock(&sony_api_lock); }\n}\n", "src/x.c")}, 0),
+        "wrapper unlocked caller": ({"handler": ("int handler(void) { return sys_time_get(&d, &e); }\n}\n", "src/x.c"),
+                                      "sys_time_get": ("int sys_time_get(void) { return g_get(); }\n}\n", "src/y.c")}, 2),
+        "wrapper locked caller": ({"handler": ("int handler(void) { pthread_mutex_lock(&sony_api_lock); sys_time_get(&d, &e); pthread_mutex_unlock(&sony_api_lock); }\n}\n", "src/x.c"),
+                                    "sys_time_get": ("int sys_time_get(void) { return g_get(); }\n}\n", "src/y.c")}, 0),
+        "notif via locked chain": ({"top": ("int top(void) { pthread_mutex_lock(&sony_api_lock); mid(); pthread_mutex_unlock(&sony_api_lock); }\n}\n", "src/x.c"),
+                                     "mid": ("int mid(void) { notif_send(m, 0); }\n}\n", "src/x.c"),
+                                     "notif_send": ("int notif_send(void) { return 0; }\n}\n", "src/y.c")}, 0),
+        "notif via unlocked chain": ({"top": ("int top(void) { mid(); }\n}\n", "src/x.c"),
+                                       "mid": ("int mid(void) { notif_send(m, 0); }\n}\n", "src/x.c"),
+                                       "notif_send": ("int notif_send(void) { return 0; }\n}\n", "src/y.c")}, 2),
+        "call before the lock": ({"handler": ("int handler(void) { sceUserServiceInitialize(0); pthread_mutex_lock(&sony_api_lock); a(); pthread_mutex_unlock(&sony_api_lock); }\n}\n", "src/x.c")}, 1),
+        "call after the unlock": ({"handler": ("int handler(void) { pthread_mutex_lock(&sony_api_lock); a(); pthread_mutex_unlock(&sony_api_lock); sys_time_get(&d, &e); }\n}\n", "src/x.c"),
+                                    "sys_time_get": ("int sys_time_get(void) { return g_get(); }\n}\n", "src/y.c")}, 1),
+        "pop_notification must lock": ({"pop_notification": ("void pop_notification(const char *m) { p_send(0, &r); }\n}\n", "src/main.c")}, 1),
+        "pop_notification locks": ({"pop_notification": ("void pop_notification(const char *m) { pthread_mutex_lock(&sony_api_lock); p_send(0, &r); pthread_mutex_unlock(&sony_api_lock); }\n}\n", "src/main.c")}, 0),
+    }
+    for label, (fs, want) in synth.items():
+        got = sonyleaf_findings(fs, allow={})
+        if len(got) < want or (want == 0 and got):
+            bad.append("sonyleaf %s: expected %d finding(s), got %s" % (label, want, got))
     return bad
 
 
@@ -430,8 +539,8 @@ def report():
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "all"
-    checks = dict(table=check_table, recv=check_recv, sony=check_sony, lock=check_lock, sonylock=check_sonylock, stack=check_stack, report=report, selftest=selftest)
-    todo = ["table", "recv", "sony", "lock", "sonylock", "stack"] if cmd == "all" else [cmd]
+    checks = dict(table=check_table, recv=check_recv, sony=check_sony, lock=check_lock, sonylock=check_sonylock, sonyleaf=check_sonyleaf, stack=check_stack, report=report, selftest=selftest)
+    todo = ["table", "recv", "sony", "lock", "sonylock", "sonyleaf", "stack"] if cmd == "all" else [cmd]
     failed = 0
     for c in todo:
         for line in checks[c]():

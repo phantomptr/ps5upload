@@ -69,6 +69,38 @@ instance_verdict_after_takeover(ps5upload2_prior_verdict_t at_startup,
     return at_startup;
 }
 
+/*
+ * May the prior pid be killed? (final review: console, outage 2026-10-03)
+ *
+ * The ownership record's started_at_unix used to be the only proof that the pid belongs to this
+ * boot, so a record that read 0 (an instrumented build) left a live helper running beside the new
+ * instance. The kernel's own process start time (kinfo_proc ki_start, the same clock domain as
+ * kern.boottime) is evidence that needs no record: a live process that started at or after the
+ * boot is of this boot, and with the "ps5upload" name it is a helper of ours. The record only
+ * backs it up when the kernel time cannot be read or reads implausibly (an offset that does not
+ * hold on some firmware must not be trusted).
+ */
+typedef enum {
+    PS5UPLOAD2_REAP_YES = 0,
+    PS5UPLOAD2_REAP_NOT_OURS = 1,      /* the process name is not a helper's */
+    PS5UPLOAD2_REAP_UNVERIFIABLE = 2,  /* cannot show the pid is of this boot: leave it */
+} ps5upload2_reap_t;
+
+/* A start time inside [boottime, now + 60 s]: the sysctl layout offset held and the value is sane. */
+static inline int instance_proc_start_plausible(uint64_t start, uint64_t boottime, uint64_t now) {
+    return boottime != 0 && start != 0 && start >= boottime && start <= now + 60u;
+}
+
+static inline ps5upload2_reap_t instance_reap_decision(int name_is_ours, uint64_t record_started,
+                                                       uint64_t boottime, uint64_t proc_start,
+                                                       int proc_start_known, uint64_t now) {
+    if (!name_is_ours) return PS5UPLOAD2_REAP_NOT_OURS;
+    if (boottime == 0) return PS5UPLOAD2_REAP_UNVERIFIABLE;
+    if (proc_start_known && instance_proc_start_plausible(proc_start, boottime, now)) return PS5UPLOAD2_REAP_YES;
+    if (record_started != 0 && record_started >= boottime) return PS5UPLOAD2_REAP_YES;
+    return PS5UPLOAD2_REAP_UNVERIFIABLE;
+}
+
 /* Wire name. snake_case: this value crosses the STATUS_ACK JSON boundary
  * into serde on the engine side. */
 static inline const char *

@@ -131,3 +131,51 @@ async fn a_calibrate_on_a_missing_dir_carries_its_cause_to_the_session() {
         e => panic!("{e:?}"),
     }
 }
+
+/// Final review (console): a peer whose first group covers thousands of large files used to
+/// leave two descriptors open per file until its commit, so about 600 of them used the
+/// helper's whole table and every accept() and open() failed. Large-file descriptors are
+/// capped against the budget now (a quarter of it, half of that per job): idle files are
+/// closed and reopened on demand, and a worker with nothing to close waits for the batch.
+#[tokio::test(flavor = "multi_thread")]
+async fn two_thousand_large_files_stay_within_the_fd_budget() {
+    let d = dir("fd-large");
+    let src = d.join("src");
+    // 256 KiB is the large-file cutoff: each file travels as chunks and holds its own descriptors.
+    write_tree(&src, 2000, |_| 256 * 1024);
+    let peers = d.join("peers");
+    let (me, mine) = paired_client(&peers);
+    let srv = CServer::start_data_opts(
+        SECRET,
+        &peers,
+        &d.join("jobs"),
+        200,
+        4000,
+        4000,
+        0,
+        0,
+        LogOpts::OFF,
+    );
+    srv.knob("fd_budget", 64);
+    srv.knob("fd_peak_reset", 0);
+    let root = d.join("dest");
+    let (r, _) = upload(
+        &srv.addr(),
+        me,
+        mine,
+        &src,
+        root.to_str().unwrap(),
+        [8; 16],
+        |_| {},
+    )
+    .await;
+    assert_eq!(r.status, 0);
+    assert!(same_tree(&src, &root));
+    let peak = srv.fd_peak(2);
+    assert!(
+        peak > 0 && peak <= 16,
+        "large files held {peak} descriptors at once (budget 64, cap 16)"
+    );
+    // 2 x 500 MiB of scratch: do not leave it behind
+    let _ = std::fs::remove_dir_all(&d);
+}
