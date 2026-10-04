@@ -26,6 +26,14 @@ use ps5upload_core::transfer::TransferConfig;
 
 const TOTAL: usize = 6 << 20;
 
+/// How long the resumed upload may take (it finishes the rest behind the 256 KiB/s throttle: 20-24 s on a
+/// healthy host, so 30 s is tight under the sanitizers, where the C runs several times slower).
+const RESUME_BOUND: Duration = if cfg!(ava1_ctest_sanitize) {
+    Duration::from_secs(120)
+} else {
+    Duration::from_secs(30)
+};
+
 fn cfg() -> TransferConfig {
     let mut c = TransferConfig::new("127.0.0.1:9113");
     c.progress_bytes = Some(Arc::new(AtomicU64::new(0)));
@@ -148,10 +156,10 @@ async fn scenario(tag: &str, c_receiver: bool) {
     let flag2 = c2.cancel.clone().unwrap();
     let (p, s, d) = (pool.clone(), src.clone(), dest.clone());
     let second = tokio::task::spawn_blocking(move || upload_dir_in(&p, &c2, id, &d, &s));
-    let r = tokio::time::timeout(Duration::from_secs(30), second).await;
+    let r = tokio::time::timeout(RESUME_BOUND, second).await;
     let Ok(r) = r else {
         flag2.store(true, Ordering::Relaxed); // let the blocked thread end so the runtime can drop
-        panic!("the resume was not answered in 30 s (JobOpen hung)");
+        panic!("the resume was not answered in {RESUME_BOUND:?} (JobOpen hung)");
     };
     let r = r
         .unwrap()

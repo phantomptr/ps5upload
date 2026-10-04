@@ -192,7 +192,7 @@ jobs:
           CC: clang
           AVA1_CTEST_SANITIZE: '1'
           RUSTFLAGS: -Clinker=clang
-          ASAN_OPTIONS: detect_leaks=1:fast_unwind_on_malloc=0
+          ASAN_OPTIONS: detect_leaks=1
           LSAN_OPTIONS: suppressions=${{ github.workspace }}/engine/crates/ava1-ctest/lsan.supp:print_suppressions=0
           RUST_BACKTRACE: 1
         run: cargo test -p ava1-ctest -- --test-threads=1
