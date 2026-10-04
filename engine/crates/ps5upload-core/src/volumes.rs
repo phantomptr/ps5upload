@@ -200,6 +200,33 @@ impl VolumeList {
     }
 }
 
+/// What `fs.freespace` says about the drive holding a path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct FreeSpace {
+    /// Free space less the working margin: what a write may still fill.
+    pub usable_bytes: u64,
+    pub free_bytes: u64,
+    pub total_bytes: u64,
+    pub reserve_bytes: u64,
+    /// The drive's device id: two paths with the same one share the room.
+    pub dev: u64,
+}
+
+/// `fs.freespace`: the usable room on the drive holding `path` (which need not exist yet: the
+/// nearest existing ancestor is asked). Fails on a console whose payload lacks the method; the
+/// caller may fall back to [`list_volumes`].
+pub fn free_space(addr: &str, path: &str) -> Result<FreeSpace> {
+    let body = serde_json::to_vec(&serde_json::json!({ "path": path }))
+        .context("serialize fs_freespace body")?;
+    let resp = mgmt::call_as(
+        addr,
+        m::FS_FREESPACE,
+        &format!("FS_FREESPACE({path})"),
+        &body,
+    )?;
+    serde_json::from_slice(&resp).context("decode FS_FREESPACE reply as JSON")
+}
+
 /// Ask the payload for its storage volumes (`fs.volumes`) and parse the list.
 ///
 /// Returns an error if the payload refuses the call or the JSON body fails to parse.

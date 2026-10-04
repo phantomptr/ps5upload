@@ -82,6 +82,7 @@ pub const METHOD_FS_MOUNT: u16 = 40;
 pub const METHOD_FS_UNMOUNT: u16 = 41;
 pub const METHOD_FS_MOUNT_PKG: u16 = 42;
 pub const METHOD_FS_MOUNT_LWFS: u16 = 43;
+pub const METHOD_FS_FREESPACE: u16 = 44;
 pub const METHOD_APP_REGISTER: u16 = 48;
 pub const METHOD_APP_UNREGISTER: u16 = 49;
 pub const METHOD_APP_LAUNCH: u16 = 50;
@@ -2543,6 +2544,48 @@ impl Message for FsStat {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FsFreeSpace {
+    pub usable: u64,
+    pub free: u64,
+    pub total: u64,
+    pub reserve: u64,
+    pub dev: u64,
+}
+
+impl Message for FsFreeSpace {
+    const NAME: &'static str = "FsFreeSpace";
+
+    fn encode_into(&self, w: &mut Writer) -> Result<(), EncodeError> {
+        w.u64(self.usable);
+        w.u64(self.free);
+        w.u64(self.total);
+        w.u64(self.reserve);
+        w.u64(self.dev);
+        w.u16(0);
+        Ok(())
+    }
+
+    fn decode(b: &[u8]) -> Result<Self, DecodeError> {
+        let mut r = Reader::new(b);
+        let mut m = Self::default();
+        m.usable = r.u64()?;
+        m.free = r.u64()?;
+        m.total = r.u64()?;
+        m.reserve = r.u64()?;
+        m.dev = r.u64()?;
+        let ext_n = r.u16()?;
+        for _ in 0..ext_n {
+            let tag = r.u16()?;
+            let len = r.u32()? as usize;
+            let v = r.take(len)?;
+            let _ = (tag, v);
+        }
+        r.finish()?;
+        Ok(m)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FsMkdir {
     pub path: String,
     pub mode: u32,
@@ -3185,7 +3228,7 @@ impl Message for JnlDone {
 }
 
 /// Every message and struct, by name (conformance tests).
-pub const ALL: &[&str] = &["Hs1", "Hs2", "Hs3", "Welcome", "PairPakeClient", "PairPakeServer", "PairConfirm", "PairResult", "Join", "JoinAck", "Ping", "Pong", "Error", "Bye", "RpcRequest", "RpcResponse", "JobOpen", "JobOpenAck", "ManifestPage", "ManifestEnd", "JobMap", "Resume", "Chunk", "Bundle", "Received", "Credit", "Durable", "FileRoot", "FileRetry", "Status", "JobDone", "JobCancel", "NodeInfo", "HelloInfo", "ServerInfo", "ClientInfo", "PairingOpen", "CryptoBench", "CryptoBenchResult", "ManifestEntry", "FileRun", "FileRange", "BundleRecord", "RootItem", "JobCopy", "JobRef", "DiskCalibrate", "CalPoint", "DiskCalibrateResult", "MgmtText", "NodeStatus", "FsList", "FsEntry", "FsListResult", "FsPath", "FsStat", "FsMkdir", "FsRename", "FsChmod", "FsRead", "FsReadResult", "FsWrite", "JobRun", "JobEntry", "JobListResult", "JnlOpen", "JnlBatch", "PackRef", "JnlSweep", "JnlReset", "JnlSnapshot", "JnlDone", ];
+pub const ALL: &[&str] = &["Hs1", "Hs2", "Hs3", "Welcome", "PairPakeClient", "PairPakeServer", "PairConfirm", "PairResult", "Join", "JoinAck", "Ping", "Pong", "Error", "Bye", "RpcRequest", "RpcResponse", "JobOpen", "JobOpenAck", "ManifestPage", "ManifestEnd", "JobMap", "Resume", "Chunk", "Bundle", "Received", "Credit", "Durable", "FileRoot", "FileRetry", "Status", "JobDone", "JobCancel", "NodeInfo", "HelloInfo", "ServerInfo", "ClientInfo", "PairingOpen", "CryptoBench", "CryptoBenchResult", "ManifestEntry", "FileRun", "FileRange", "BundleRecord", "RootItem", "JobCopy", "JobRef", "DiskCalibrate", "CalPoint", "DiskCalibrateResult", "MgmtText", "NodeStatus", "FsList", "FsEntry", "FsListResult", "FsPath", "FsStat", "FsFreeSpace", "FsMkdir", "FsRename", "FsChmod", "FsRead", "FsReadResult", "FsWrite", "JobRun", "JobEntry", "JobListResult", "JnlOpen", "JnlBatch", "PackRef", "JnlSweep", "JnlReset", "JnlSnapshot", "JnlDone", ];
 
 #[doc(hidden)]
 pub fn sample(name: &str, rng: &mut SplitMix) -> Option<Vec<u8>> {
@@ -3246,6 +3289,7 @@ pub fn sample(name: &str, rng: &mut SplitMix) -> Option<Vec<u8>> {
         "FsListResult" => FsListResult { entries: vec![FsEntry::default(); rng.below(3) as usize], total_scanned: rng.next_u64() as u32, more: rng.next_u64() as u8, }.to_bytes().ok(),
         "FsPath" => FsPath { path: rng.ascii(20), }.to_bytes().ok(),
         "FsStat" => FsStat { kind: rng.next_u64() as u8, size: rng.next_u64(), mtime: rng.next_u64(), mode: rng.next_u64() as u32, dev: rng.next_u64(), }.to_bytes().ok(),
+        "FsFreeSpace" => FsFreeSpace { usable: rng.next_u64(), free: rng.next_u64(), total: rng.next_u64(), reserve: rng.next_u64(), dev: rng.next_u64(), }.to_bytes().ok(),
         "FsMkdir" => FsMkdir { path: rng.ascii(20), mode: rng.next_u64() as u32, parents: rng.next_u64() as u8, }.to_bytes().ok(),
         "FsRename" => FsRename { from: rng.ascii(20), to: rng.ascii(20), overwrite: rng.next_u64() as u8, }.to_bytes().ok(),
         "FsChmod" => FsChmod { path: rng.ascii(20), mode: rng.next_u64() as u32, }.to_bytes().ok(),
@@ -3328,6 +3372,7 @@ pub fn roundtrip(name: &str, bytes: &[u8]) -> Option<Result<Vec<u8>, String>> {
         "FsListResult" => rt::<FsListResult>(bytes),
         "FsPath" => rt::<FsPath>(bytes),
         "FsStat" => rt::<FsStat>(bytes),
+        "FsFreeSpace" => rt::<FsFreeSpace>(bytes),
         "FsMkdir" => rt::<FsMkdir>(bytes),
         "FsRename" => rt::<FsRename>(bytes),
         "FsChmod" => rt::<FsChmod>(bytes),

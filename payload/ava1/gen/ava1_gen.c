@@ -1566,6 +1566,67 @@ int ava1_fs_stat_count(const uint8_t *p, uint32_t len, uint32_t *count) {
     return rc;
 }
 
+int ava1_fs_free_space_encode(const ava1_fs_free_space_t *m, ava1_w_t *w) {
+    ava1_w_u64(w, m->usable);
+    ava1_w_u64(w, m->free);
+    ava1_w_u64(w, m->total);
+    ava1_w_u64(w, m->reserve);
+    ava1_w_u64(w, m->dev);
+    ava1_w_u16(w, 0);
+    return w->err;
+}
+
+int ava1_fs_free_space_decode(const uint8_t *buf, size_t len, ava1_fs_free_space_t *m) {
+    ava1_r_t r;
+    uint16_t ext_n, i;
+    memset(m, 0, sizeof(*m));
+    ava1_r_init(&r, buf, len);
+    m->usable = ava1_r_u64(&r);
+    m->free = ava1_r_u64(&r);
+    m->total = ava1_r_u64(&r);
+    m->reserve = ava1_r_u64(&r);
+    m->dev = ava1_r_u64(&r);
+    ext_n = ava1_r_u16(&r);
+    for (i = 0; i < ext_n && !r.err; i++) {
+        uint32_t vlen;
+        (void)ava1_r_u16(&r);
+        vlen = ava1_r_u32(&r);
+        (void)ava1_r_take(&r, vlen);
+    }
+    return ava1_r_finish(&r);
+}
+
+int ava1_fs_free_space_append(ava1_w_t *blob, const ava1_fs_free_space_t *m) {
+    size_t at = ava1_w_len_begin(blob);
+    int rc = ava1_fs_free_space_encode(m, blob);
+    if (rc != 0) return rc;
+    ava1_w_len_end(blob, at);
+    return blob->err;
+}
+
+int ava1_fs_free_space_next(ava1_r_t *it, ava1_fs_free_space_t *out) {
+    uint32_t n;
+    const uint8_t *p;
+    int rc;
+    if (it->err) return it->err;
+    if (it->pos == it->len) return 0;
+    n = ava1_r_u32(it);
+    p = ava1_r_take(it, n);
+    if (it->err) return it->err;
+    rc = ava1_fs_free_space_decode(p, n, out);
+    return rc != 0 ? rc : 1;
+}
+
+int ava1_fs_free_space_count(const uint8_t *p, uint32_t len, uint32_t *count) {
+    ava1_r_t it;
+    ava1_fs_free_space_t tmp;
+    int rc;
+    *count = 0;
+    ava1_r_init(&it, p, len);
+    while ((rc = ava1_fs_free_space_next(&it, &tmp)) == 1) (*count)++;
+    return rc;
+}
+
 int ava1_fs_mkdir_encode(const ava1_fs_mkdir_t *m, ava1_w_t *w) {
     ava1_w_str(w, m->path, m->path_len);
     ava1_w_u32(w, m->mode);
@@ -3674,6 +3735,7 @@ const char *const ava1_message_names[] = {
     "FsListResult",
     "FsPath",
     "FsStat",
+    "FsFreeSpace",
     "FsMkdir",
     "FsRename",
     "FsChmod",
@@ -3723,7 +3785,7 @@ const char *const ava1_message_names[] = {
     "JobDone",
     "JobCancel",
 };
-const size_t ava1_message_count = 72;
+const size_t ava1_message_count = 73;
 
 int ava1_roundtrip(const char *name, const uint8_t *in, size_t in_len, uint8_t *out, size_t cap,
                    size_t *out_len) {
@@ -3850,6 +3912,11 @@ int ava1_roundtrip(const char *name, const uint8_t *in, size_t in_len, uint8_t *
         ava1_fs_stat_t m;
         rc = ava1_fs_stat_decode(in, in_len, &m);
         if (rc == 0) rc = ava1_fs_stat_encode(&m, &w);
+    }
+    else if (strcmp(name, "FsFreeSpace") == 0) {
+        ava1_fs_free_space_t m;
+        rc = ava1_fs_free_space_decode(in, in_len, &m);
+        if (rc == 0) rc = ava1_fs_free_space_encode(&m, &w);
     }
     else if (strcmp(name, "FsMkdir") == 0) {
         ava1_fs_mkdir_t m;

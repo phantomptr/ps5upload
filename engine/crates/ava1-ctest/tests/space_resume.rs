@@ -78,6 +78,7 @@ fn pool_with_room(ava: PathBuf, addr: String, volume: &str, room: Arc<AtomicU64>
             let r = room.load(Ordering::SeqCst);
             Some(Room {
                 volume: volume.clone(),
+                dev: None,
                 free_bytes: r,
                 reserve_bytes: 0,
                 allocatable_bytes: r,

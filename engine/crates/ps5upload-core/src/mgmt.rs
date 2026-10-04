@@ -64,8 +64,15 @@ macro_rules! methods {
                 label: "FS_STAT",
                 ftx2: None,
             };
+            /// `fs.freespace`: new with AVA1. Request `{"path"}`, reply
+            /// `{"usable_bytes","free_bytes","total_bytes","reserve_bytes","dev"}`.
+            pub const FS_FREESPACE: Method = Method {
+                id: 44,
+                label: "FS_FREESPACE",
+                ftx2: None,
+            };
             /// All of them, for drift tests.
-            pub const ALL: &[Method] = &[$($name,)* FS_STAT];
+            pub const ALL: &[Method] = &[$($name,)* FS_STAT, FS_FREESPACE];
         }
     };
 }

@@ -5,7 +5,7 @@
 //! functions are the whole mapping, so they are tested without a network.
 
 use anyhow::Result;
-use ava1::gen::{self, FsEntry, FsListResult, FsStat, NodeStatus};
+use ava1::gen::{self, FsEntry, FsFreeSpace, FsListResult, FsStat, NodeStatus};
 use serde_json::{json, Value};
 
 /// A refusal that is the caller's own fault (a body the legacy handler would have
@@ -99,6 +99,17 @@ pub fn fs_stat_reply(s: &FsStat) -> Value {
         "mtime": s.mtime,
         "mode": s.mode,
         "dev": s.dev,
+    })
+}
+
+/// `FsFreeSpace` -> `{"usable_bytes","free_bytes","total_bytes","reserve_bytes","dev"}`.
+pub fn fs_freespace_reply(f: &FsFreeSpace) -> Value {
+    json!({
+        "usable_bytes": f.usable,
+        "free_bytes": f.free,
+        "total_bytes": f.total,
+        "reserve_bytes": f.reserve,
+        "dev": f.dev,
     })
 }
 

@@ -20,8 +20,12 @@ use crate::pool::host_of;
 /// What the destination's volume offers right now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Room {
-    /// The volume's mount path (`/data`, `/mnt/ext0`).
+    /// What the message calls the drive: its mount path (`/data`, `/mnt/ext0`) or the
+    /// destination asked about.
     pub volume: String,
+    /// The drive's device id when the console said it: uploads to different folders of one drive
+    /// then share a ledger entry. Without it the volume name is the key.
+    pub dev: Option<u64>,
     pub free_bytes: u64,
     pub reserve_bytes: u64,
     /// Free space less the reserve: what an upload may fill.
@@ -31,10 +35,27 @@ pub struct Room {
 /// Asks the console for the room under `dest`. `None` = unknown (never a refusal).
 pub type RoomProbe = Arc<dyn Fn(&str, &str) -> Option<Room> + Send + Sync>;
 
-/// The real probe: `fs.volumes` over the management channel, the longest mount prefix of `dest`.
+/// The real probe: `fs.freespace` (usable room on the drive holding `dest`, the console's own
+/// post-reserve figure); a payload without it is asked `fs.volumes` instead and the same margin is
+/// applied here. Either answer is "free space less a small working margin": nothing is guessed.
 pub fn volumes_probe() -> RoomProbe {
     Arc::new(|console, dest| {
-        let list = match ps5upload_core::volumes::list_volumes(&host_of(console)) {
+        let host = host_of(console);
+        match ps5upload_core::volumes::free_space(&host, dest) {
+            Ok(f) => {
+                return Some(Room {
+                    volume: dest.to_string(),
+                    dev: Some(f.dev),
+                    free_bytes: f.free_bytes,
+                    reserve_bytes: f.reserve_bytes,
+                    allocatable_bytes: f.usable_bytes,
+                })
+            }
+            Err(e) => {
+                eprintln!("ava1: fs.freespace unavailable on {console}: {e:#}; trying fs.volumes")
+            }
+        }
+        let list = match ps5upload_core::volumes::list_volumes(&host) {
             Ok(l) => l,
             Err(e) => {
                 eprintln!("ava1: space check unavailable for {console}: {e:#}");
@@ -47,6 +68,7 @@ pub fn volumes_probe() -> RoomProbe {
         };
         Some(Room {
             volume: v.path.clone(),
+            dev: None,
             free_bytes: v.free_bytes,
             reserve_bytes: v.safety_reserve_bytes(),
             allocatable_bytes: v.allocatable_bytes(),
@@ -154,7 +176,11 @@ pub(crate) fn gate(probe: RoomProbe, console: String, dest: String, job: [u8; 16
         let Some(room) = probe(&console, &dest) else {
             return Ok(());
         };
-        let key = (host_of(&console), room.volume.clone());
+        let key = (
+            host_of(&console),
+            room.dev
+                .map_or_else(|| room.volume.clone(), |d| format!("dev:{d}")),
+        );
         let mut l = ledger().lock().unwrap_or_else(|e| e.into_inner());
         let elsewhere: u64 = l
             .iter()
@@ -190,6 +216,7 @@ mod tests {
     fn room(free: u64) -> Room {
         Room {
             volume: "/data".into(),
+            dev: None,
             free_bytes: free,
             reserve_bytes: GB,
             allocatable_bytes: free.saturating_sub(GB),
