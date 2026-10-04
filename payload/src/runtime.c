@@ -1833,6 +1833,12 @@ int runtime_init(runtime_state_t *state) {
         /* started_at_unix == 0 reads as "unverifiable" to the next instance's reap. A clock that
          * cannot be read still has a true lower bound: this boot's start. */
         if (rts.tv_sec <= 0) rts.tv_sec = (time_t)runtime_system_boottime_unix();
+        if (rts.tv_sec <= 0) {
+            fprintf(stderr, "[payload2] runtime_init: CLOCK_REALTIME, time() and kern.boottime all failed; "
+                            "cannot stamp started_at_unix, so the ownership record could not identify this instance. "
+                            "Refusing to start.\n");
+            return -1;
+        }
         uint64_t hi = ((uint64_t)rts.tv_sec & 0xFFFFFFFFu) << 32;
         uint64_t lo = ((uint64_t)getpid() << 16) ^ ((uint64_t)rts.tv_nsec & 0xFFFFu);
         state->instance_id = hi | (lo & 0xFFFFFFFFu);

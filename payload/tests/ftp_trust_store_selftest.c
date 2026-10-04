@@ -48,6 +48,102 @@ static int has(const char *path, const char *text) {
     return strcmp(b, text) == 0;
 }
 
+
+/* ---- Review 010 follow-up: over-long paths and the denied-path sentinel. ---- */
+
+/* An absolute path of exactly n bytes made of components of at most 200 characters. */
+static void long_path(char *out, size_t n) {
+    size_t o = 0;
+    while (o < n) {
+        size_t comp = n - o - 1 > 200 ? 200 : n - o - 1;
+        if (comp == 0) comp = 1;
+        out[o++] = '/';
+        for (size_t i = 0; i < comp && o < n; i++) out[o++] = 'a';
+    }
+    out[n] = '\0';
+}
+
+static void overflow_and_sentinel_tests(const char *base) {
+    static char lp[2100], out[1024];
+    struct ftp_session s;
+    char p[PATH_MAX + 64];
+    const size_t lens[3] = {1023, 1024, 1025};
+    memset(&s, 0, sizeof s);
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) { failures++; return; }
+    s.ctrl_fd = sv[0];
+    s.authenticated = 1;
+    snprintf(s.root, sizeof s.root, "/");
+    snprintf(s.cwd, sizeof s.cwd, "/");
+    snprintf(p, sizeof p, "%s/evil/x", base);
+    put(p, "x"); /* a rename source that exists */
+
+    /* abs_path: a path that fits comes back unchanged; one that does not becomes the sentinel, never a prefix. */
+    long_path(lp, 900);
+    abs_path(&s, lp, out, sizeof out);
+    CHECK(strcmp(out, lp) == 0);
+    for (int i = 0; i < 3; i++) {
+        long_path(lp, lens[i]);
+        abs_path(&s, lp, out, sizeof out);
+        CHECK(strcmp(out, FTP_DENIED_PATH) == 0);
+    }
+    /* A short relative name under a root whose join overflows. */
+    snprintf(s.root, sizeof s.root, "%s", base);
+    long_path(lp, 1020);
+    abs_path(&s, lp, out, sizeof out);
+    CHECK(strcmp(out, FTP_DENIED_PATH) == 0);
+    snprintf(s.root, sizeof s.root, "/");
+
+    /* CWD / STOR / MKD / RNTO / CDUP with 1023-, 1024- and 1025-byte paths: refused, cwd reset to the root. */
+    for (int i = 0; i < 3; i++) {
+        long_path(lp, lens[i]);
+        snprintf(s.cwd, sizeof s.cwd, "%s", base);
+        handle_cwd(&s, lp);
+        CHECK(reply() == 550);
+        CHECK(strcmp(s.cwd, "/") == 0 || strcmp(s.cwd, base) == 0); /* never a truncated path */
+        CHECK(strlen(s.cwd) < 600);
+        handle_stor(&s, lp);
+        CHECK(reply() == 550);
+        handle_mkd(&s, lp);
+        CHECK(reply() == 550);
+        snprintf(p, sizeof p, "%s/evil/x", base);
+        handle_rnfr(&s, p);
+        CHECK(reply() == 350);
+        handle_rnto(&s, lp);
+        CHECK(reply() == 550);
+        snprintf(s.cwd, sizeof s.cwd, "%s", lp); /* a session already sitting in a long directory */
+        handle_cdup(&s);
+        CHECK(reply() == 550);
+        CHECK(strlen(s.cwd) < sizeof s.cwd);
+    }
+    /* The root of a cwd that cannot be extended: CWD that overflows the cwd buffer resets to the root. */
+    snprintf(s.root, sizeof s.root, "%s", base);
+    snprintf(s.cwd, sizeof s.cwd, "%s", base);
+    long_path(lp, 1010 - strlen(base));
+    handle_cwd(&s, lp);
+    CHECK(reply() == 550);
+    CHECK(strcmp(s.cwd, base) == 0);
+    snprintf(s.root, sizeof s.root, "/");
+    snprintf(s.cwd, sizeof s.cwd, "/");
+
+    /* RNTO, STOR and MKD onto the sentinel are refused outright (a root process could create it). */
+    (void)unlink(FTP_DENIED_PATH);
+    snprintf(p, sizeof p, "%s/evil/x", base);
+    handle_rnfr(&s, p);
+    CHECK(reply() == 350);
+    handle_rnto(&s, FTP_DENIED_PATH);
+    CHECK(reply() == 550);
+    handle_stor(&s, FTP_DENIED_PATH);
+    CHECK(reply() == 550);
+    handle_mkd(&s, FTP_DENIED_PATH);
+    CHECK(reply() == 550);
+    CHECK(access(FTP_DENIED_PATH, F_OK) != 0);
+    CHECK(access(p, F_OK) == 0);
+    (void)unlink(FTP_DENIED_PATH);
+    (void)rmdir(FTP_DENIED_PATH);
+    close(sv[0]);
+    close(sv[1]);
+}
+
 int main(void) {
     char base[PATH_MAX], prot[PATH_MAX + 32], p[2 * PATH_MAX + 64], q[2 * PATH_MAX + 64];
     struct ftp_session s;
@@ -130,6 +226,8 @@ int main(void) {
     CHECK(reply() == 250);
     handle_dele(&s, q);
     CHECK(reply() == 250);
+
+    overflow_and_sentinel_tests(base);
 
     snprintf(p, sizeof p, "rm -rf %s", base);
     (void)system(p);

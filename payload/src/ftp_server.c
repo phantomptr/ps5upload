@@ -198,9 +198,12 @@ static void ftp_kick_all_sessions(void) {
 /* Resolves "." and ".." in a path. The 64 x 256 component stack (16 KiB) lives on the heap: the AVA1
  * management workers run it next to Sony calls (mgmt_audit.py stack rejects 16 KiB+ stack arrays). On
  * an allocation failure the answer is "/" (the FTP root), never the unresolved input. */
-static void normalize_path(const char *src, char *out, size_t cap) {
+/* Returns 0, or -1 when a component or the result did not fit and was dropped (the caller must then
+ * refuse the path rather than use a different one). */
+static int normalize_path(const char *src, char *out, size_t cap) {
     char (*stack)[256] = malloc(64 * sizeof *stack);
     int sp = 0;
+    int dropped = 0;
     if (!stack) {
         if (cap > 1) {
             out[0] = '/';
@@ -208,7 +211,7 @@ static void normalize_path(const char *src, char *out, size_t cap) {
         } else if (cap) {
             out[0] = '\0';
         }
-        return;
+        return -1;
     }
     const char *p = src;
     while (*p) {
@@ -226,6 +229,8 @@ static void normalize_path(const char *src, char *out, size_t cap) {
             memcpy(stack[sp], start, len);
             stack[sp][len] = '\0';
             sp++;
+        } else {
+            dropped = 1;
         }
     }
     size_t pos = 0;
@@ -236,12 +241,15 @@ static void normalize_path(const char *src, char *out, size_t cap) {
             if (pos > 1) out[pos++] = '/';
             memcpy(out + pos, stack[i], slen);
             pos += slen;
+        } else {
+            dropped = 1;
         }
     }
     if (pos < cap) out[pos] = '\0';
     else out[cap - 1] = '\0';
     if (pos == 1 && cap > 1) out[1] = '\0';
     free(stack);
+    return dropped ? -1 : 0;
 }
 
 /* What abs_path returns for a path it refuses. A process that CAN write to / (root, as in the host
@@ -250,17 +258,23 @@ static void normalize_path(const char *src, char *out, size_t cap) {
 
 static void abs_path(struct ftp_session *s, const char *arg, char *out, size_t cap) {
     char virtual[1024];
+    int vn;
     if (!arg || !arg[0]) {
-        snprintf(virtual, sizeof(virtual), "%s", s->cwd);
+        vn = snprintf(virtual, sizeof(virtual), "%s", s->cwd);
     } else if (arg[0] == '/') {
-        snprintf(virtual, sizeof(virtual), "%s", arg);
+        vn = snprintf(virtual, sizeof(virtual), "%s", arg);
     } else {
         const char *cwd_rel = s->cwd + strlen(s->root);
         if (*cwd_rel == '\0') cwd_rel = "/";
-        snprintf(virtual, sizeof(virtual), "%s/%s", cwd_rel, arg);
+        vn = snprintf(virtual, sizeof(virtual), "%s/%s", cwd_rel, arg);
     }
     char normalized[1024];
-    normalize_path(virtual, normalized, sizeof(normalized));
+    /* An argument that does not fit, or a component normalize_path had to drop, is judged as a whole:
+     * refused, never used cut short. */
+    if (vn < 0 || (size_t)vn >= sizeof(virtual) || normalize_path(virtual, normalized, sizeof(normalized)) != 0) {
+        snprintf(out, cap, "%s", FTP_DENIED_PATH);
+        return;
+    }
     size_t root_len = strlen(s->root);
     int wn;
     if (root_len <= 1) {
@@ -323,7 +337,7 @@ static void handle_syst(struct ftp_session *s) {
 static void handle_pwd(struct ftp_session *s) {
     const char *p = s->cwd + strlen(s->root);
     if (*p == '\0') p = "/";
-    char msg[600];
+    char msg[1100];
     snprintf(msg, sizeof(msg), "\"%s\" is the current directory", p);
     send_resp(s->ctrl_fd, 257, msg);
 }
@@ -492,7 +506,7 @@ static void handle_retr(struct ftp_session *s, const char *arg) {
         send_resp(s->ctrl_fd, 501, "Filename required");
         return;
     }
-    char path[512];
+    char path[1024];
     abs_path(s, arg, path, sizeof(path));
     atomic_store(&s->abort_requested, 0);
     open_data_connection(s);
@@ -550,7 +564,7 @@ static void handle_stor(struct ftp_session *s, const char *arg) {
         send_resp(s->ctrl_fd, 501, "Filename required");
         return;
     }
-    char path[512];
+    char path[1024];
     abs_path(s, arg, path, sizeof(path));
     if (ftp_touches_trust_store(path)) {
         send_resp(s->ctrl_fd, 550, "Not permitted");
@@ -684,7 +698,7 @@ static void handle_rnfr(struct ftp_session *s, const char *arg) {
         send_resp(s->ctrl_fd, 501, "Filename required");
         return;
     }
-    char path[512];
+    char path[1024];
     abs_path(s, arg, path, sizeof(path));
     if (ftp_touches_trust_store(path)) {
         send_resp(s->ctrl_fd, 550, "Not permitted");
@@ -713,7 +727,7 @@ static void handle_rnto(struct ftp_session *s, const char *arg) {
         send_resp(s->ctrl_fd, 501, "Filename required");
         return;
     }
-    char path[512];
+    char path[1024];
     abs_path(s, arg, path, sizeof(path));
     if (ftp_touches_trust_store(path)) {
         send_resp(s->ctrl_fd, 550, "Not permitted");
@@ -881,7 +895,7 @@ static void handle_size(struct ftp_session *s, const char *arg) {
         send_resp(s->ctrl_fd, 501, "Filename required");
         return;
     }
-    char path[512];
+    char path[1024];
     abs_path(s, arg, path, sizeof(path));
     struct stat st;
     if (stat(path, &st) != 0) {
@@ -899,7 +913,7 @@ static void handle_mdtm(struct ftp_session *s, const char *arg) {
         send_resp(s->ctrl_fd, 501, "Filename required");
         return;
     }
-    char path[512];
+    char path[1024];
     abs_path(s, arg, path, sizeof(path));
     struct stat st;
     if (stat(path, &st) != 0) {
@@ -928,7 +942,7 @@ static void handle_mkd(struct ftp_session *s, const char *arg) {
         send_resp(s->ctrl_fd, 501, "Directory name required");
         return;
     }
-    char path[512];
+    char path[1024];
     abs_path(s, arg, path, sizeof(path));
     if (ftp_touches_trust_store(path)) {
         send_resp(s->ctrl_fd, 550, "Not permitted");
@@ -951,7 +965,7 @@ static void handle_dele(struct ftp_session *s, const char *arg) {
         send_resp(s->ctrl_fd, 501, "Filename required");
         return;
     }
-    char path[512];
+    char path[1024];
     abs_path(s, arg, path, sizeof(path));
     if (ftp_touches_trust_store(path)) {
         send_resp(s->ctrl_fd, 550, "Not permitted");
@@ -974,7 +988,7 @@ static void handle_rmd(struct ftp_session *s, const char *arg) {
         send_resp(s->ctrl_fd, 501, "Directory name required");
         return;
     }
-    char path[512];
+    char path[1024];
     abs_path(s, arg, path, sizeof(path));
     if (ftp_touches_trust_store(path)) {
         send_resp(s->ctrl_fd, 550, "Not permitted");
