@@ -698,11 +698,6 @@ all-in-one mode.
 (`192.168.1.0/24`), so phones and laptops that change address keep working.
 If it's wrong, the engine answers `403` and names the address it refused.
 
-The engine also checks the `Host` header, so a malicious web page cannot reach it
-through DNS rebinding. Loopback names and IP addresses always pass. If you reach the
-engine by a hostname (`http://nas.local:19113`), list it in `PS5UPLOAD_ALLOWED_HOSTS`
-(comma-separated, e.g. `nas.local,nas.home.arpa`); any other `Host` gets a `403`.
-
 With a remote engine, file pickers in the desktop app browse the **engine's**
 disk, because that is the machine that reads the file. **Install Package →
 From this device** uploads a package from your computer to the engine first.

@@ -30,10 +30,6 @@ services:
       # usual choice; keep it to networks you trust. Never expose the engine
       # to the internet.
       PS5UPLOAD_ALLOW_IP: "192.168.1.0/24"
-      # Reaching the web UI by a HOSTNAME (http://nas.local:19113)? The engine
-      # refuses unknown Host headers (DNS-rebinding defence); list the names.
-      # Opening it by IP address needs nothing.
-      # PS5UPLOAD_ALLOWED_HOSTS: "nas.local,nas.home.arpa"
       # Only needed without host networking: this server's LAN IP.
       # PS5UPLOAD_PKG_HOST_IP: "192.168.1.10"
 
