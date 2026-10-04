@@ -575,4 +575,99 @@ mod tests {
         assert_eq!(q.unswept(), 1);
         let _ = a;
     }
+
+    /// A one-segment pack of five records of different sizes: the file bytes, each record's
+    /// `(id, start, end)` and the journal state that names the whole range (review 009 #2b).
+    fn sweep_fixture(tag: &str) -> (Vec<u8>, Vec<(u32, u64, u64)>, State) {
+        let d = tmp(tag);
+        let mut p = PackLog::new(&d, PackOpts::default());
+        let mut locs = vec![];
+        for (i, n) in [5usize, 1, 40, 0, 17].into_iter().enumerate() {
+            locs.push(p.append(&rec(i as u32 + 1, &vec![i as u8 + 1; n])).unwrap());
+        }
+        let ids: Vec<u32> = locs.iter().map(|l| l.id).collect();
+        let (_, groups) = p.take_batch(&ids).unwrap();
+        assert_eq!(groups.len(), 1);
+        let g = &groups[0];
+        let st = State {
+            unswept: ids.iter().copied().collect(),
+            packs: vec![crate::gen::PackRef {
+                segment: g.segment,
+                offset: g.offset,
+                len: g.len,
+                first_file: 1,
+                count: ids.len() as u32,
+            }],
+            ..State::default()
+        };
+        drop(p);
+        let bytes = std::fs::read(pack_name(&d, 0)).unwrap();
+        let spans = locs
+            .iter()
+            .map(|l| (l.id, l.off, l.off + l.len as u64))
+            .collect();
+        (bytes, spans, st)
+    }
+
+    /// Recovers `bytes` as segment 0 in a fresh dir: which files were re-made, which were lost,
+    /// and what the queue then holds.
+    fn recover_bytes(tag: &str, bytes: &[u8], st: &State) -> (Vec<u32>, Vec<u32>, usize) {
+        let d = tmp(tag);
+        std::fs::write(pack_name(&d, 0), bytes).unwrap();
+        let mut q = PackLog::new(&d, PackOpts::default());
+        let mut remade = vec![];
+        let lost = q
+            .recover(st, |r| {
+                assert_eq!(*blake3::hash(&r.data).as_bytes(), r.root, "a remade record");
+                remade.push(r.file_id);
+                Ok(true)
+            })
+            .unwrap_or_else(|e| panic!("recovery errored: {e}"));
+        (remade, lost, q.unswept())
+    }
+
+    #[test]
+    fn recovery_survives_a_truncation_at_every_byte_length() {
+        let (bytes, spans, st) = sweep_fixture("sweep-cut-src");
+        for l in 0..=bytes.len() {
+            let (remade, lost, queued) = recover_bytes("sweep-cut", &bytes[..l], &st);
+            let whole: Vec<u32> = spans
+                .iter()
+                .filter(|(_, _, e)| *e <= l as u64)
+                .map(|(i, _, _)| *i)
+                .collect();
+            assert_eq!(remade, whole, "cut at {l}: only whole records are re-made");
+            let gone: Vec<u32> = st
+                .unswept
+                .iter()
+                .copied()
+                .filter(|i| !whole.contains(i))
+                .collect();
+            assert_eq!(lost, gone, "cut at {l}: the rest are reported lost");
+            assert_eq!(
+                queued,
+                whole.len(),
+                "cut at {l}: found files join the sweep queue"
+            );
+        }
+    }
+
+    #[test]
+    fn a_flipped_byte_in_the_last_pack_record_loses_that_file_only() {
+        let (bytes, spans, st) = sweep_fixture("sweep-flip-src");
+        let (last, start, end) = *spans.last().unwrap();
+        for at in start..end {
+            for mask in [0x01u8, 0x80, 0xff] {
+                let mut b = bytes.clone();
+                b[at as usize] ^= mask;
+                let (remade, lost, _) = recover_bytes("sweep-flip", &b, &st);
+                let want: Vec<u32> = spans[..spans.len() - 1].iter().map(|s| s.0).collect();
+                assert_eq!(
+                    remade, want,
+                    "flip {mask:#x} at {at}: the damaged record is not re-made"
+                );
+                assert_eq!(lost, vec![last], "flip at {at}");
+            }
+        }
+    }
 }

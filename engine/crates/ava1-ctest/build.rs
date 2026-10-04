@@ -1,7 +1,32 @@
 //! Compiles the payload's AVA1 C on the host so `cargo test` can check it against Rust.
 use std::path::PathBuf;
 
+/// `AVA1_CTEST_SANITIZE=1` (review 009 #2a): every C unit this crate builds gets ASan + UBSan, so
+/// the whole host-runnable console C runs instrumented under `cargo test`.
+fn sanitize() -> bool {
+    std::env::var("AVA1_CTEST_SANITIZE").as_deref() == Ok("1")
+}
+
+/// A `cc::Build` with the sanitizer flags when asked for.
+fn build() -> cc::Build {
+    let mut b = cc::Build::new();
+    if sanitize() {
+        b.flag("-fsanitize=address,undefined")
+            .flag("-fno-sanitize-recover=undefined")
+            .flag("-fno-omit-frame-pointer")
+            .debug(true);
+    }
+    b
+}
+
 fn main() {
+    println!("cargo:rerun-if-env-changed=AVA1_CTEST_SANITIZE");
+    println!("cargo:rustc-check-cfg=cfg(ava1_ctest_sanitize)");
+    if sanitize() {
+        println!("cargo:rustc-link-arg=-fsanitize=address,undefined");
+        // tests that measure the C's own thread stacks need to know ASan resizes them
+        println!("cargo:rustc-cfg=ava1_ctest_sanitize");
+    }
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         return; // POSIX C; the tests are #![cfg(unix)].
     }
@@ -9,7 +34,7 @@ fn main() {
     let p = here.join("../../../payload");
     let ava1 = p.join("ava1");
     let mono = p.join("third_party/monocypher");
-    cc::Build::new()
+    build()
         .file(mono.join("monocypher.c"))
         .include(&mono)
         .warnings(false)
@@ -17,7 +42,7 @@ fn main() {
     let b3 = p.join("third_party/blake3");
     // Portable only on the host: the x86 assembly and NEON paths are the payload's concern;
     // the test pins the algorithm, and blake3_hash_many dispatches to the portable code.
-    cc::Build::new()
+    build()
         .files([
             b3.join("blake3.c"),
             b3.join("blake3_dispatch.c"),
@@ -67,7 +92,7 @@ fn main() {
         "cargo:rerun-if-changed={}",
         p.join("src/mgmt_table.def").display()
     );
-    cc::Build::new()
+    build()
         .files([
             ava1.join("ava1_wire.c"),
             ava1.join("ava1_frame.c"),
@@ -155,7 +180,7 @@ fn main() {
     }
     assert!(!block.is_empty(), "no `P3 Task 6` block in mgmt_table.def");
     std::fs::write(out.join("mgmt_t6.def"), block).unwrap();
-    cc::Build::new()
+    build()
         .files([
             here.join("csrc/mgmt_t6_shim.c"),
             p.join("src/sony_api_lock.c"),
@@ -178,7 +203,7 @@ fn main() {
     );
     // The AVX2 ChaCha20 is its own unit, built with -mavx2 only on x86-64 (where the
     // run-time CPUID check picks it); elsewhere it compiles to nothing.
-    let mut avx2 = cc::Build::new();
+    let mut avx2 = build();
     avx2.file(ava1.join("ava1_chacha_avx2.c"))
         .include(&ava1)
         .warnings(true)

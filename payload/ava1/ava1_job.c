@@ -369,6 +369,15 @@ void ava1_job_reap(uint64_t now_ms) {
     for (i = 0; i < n; i++) ava1_job_put(gone[i]); /* the table's reference */
 }
 
+unsigned ava1_job_count(void) {
+    unsigned i, n = 0;
+    pthread_mutex_lock(&T.mu);
+    for (i = 0; i < AVA1_MAX_JOBS; i++)
+        if (T.jobs[i]) n++;
+    pthread_mutex_unlock(&T.mu);
+    return n;
+}
+
 void ava1_job_free_all(void) {
     ava1_job_t *gone[AVA1_MAX_JOBS];
     int i, n = 0;

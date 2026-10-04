@@ -1,0 +1,48 @@
+name: ava1-soak
+
+# Weekly host soak (review 009 #2c): whole jobs (mixed small and large uploads with cancel and resume,
+# zip downloads, parked jobs reaped) against the real console C, built with ASan + UBSan + LSan, for
+# an hour. After every round the data layer's counters must be back at baseline: job table empty,
+# nothing unswept, no pack segments on disk, the open-descriptor count unchanged, memory bounded.
+# Not part of the PR gate.
+
+on:
+  schedule:
+    - cron: '17 3 * * 0'
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: 'Minutes to soak'
+        default: '60'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  soak:
+    name: soak (ASan + UBSan)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install clang + sanitizer runtimes
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-rt-18-dev
+
+      - name: Soak
+        working-directory: engine
+        env:
+          CC: clang
+          AVA1_CTEST_SANITIZE: '1'
+          RUSTFLAGS: -Clinker=clang
+          ASAN_OPTIONS: detect_leaks=1
+          LSAN_OPTIONS: suppressions=${{ github.workspace }}/engine/crates/ava1-ctest/lsan.supp
+          AVA1_SOAK_MINUTES: ${{ github.event.inputs.minutes || '60' }}
+          AVA1_SOAK_RSS_MB: '512'
+        run: cargo test -p ava1-ctest --test soak -- --ignored --test-threads=1 --nocapture

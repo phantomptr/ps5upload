@@ -276,6 +276,7 @@ void ava1_job_park(ava1_job_t *j);
 /* Frees parked jobs older than the park age (data cfg park_ms; finished ones after 10 s). */
 void ava1_job_reap(uint64_t now_ms);
 void ava1_job_free_all(void);
+unsigned ava1_job_count(void);                     /* jobs in the table now (diagnostics, the soak test) */
 void ava1_job_free_one(const uint8_t id[16]);      /* unlists it and drops the table's reference */
 /* Takes the caller's reference. When only the table and the caller hold the job, unlists
  * it and frees it now (its threads joined, its files closed) and returns 0; otherwise drops

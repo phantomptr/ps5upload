@@ -724,7 +724,11 @@ async fn two_thousand_tiny_files_download_fast() {
 /// floors sit at ~70% of healthy, above everything the earlier pipeline reached. Raised from 700 to 1,000
 /// (debug) with the pack log work (review 003 §3.2): 2,000 files measured 2,270-2,930 files/s on loopback, with
 /// the log on or off, while this test ran alone; the whole binary's other tests run beside it.
-const FLOOR_FILES_PER_S: f64 = if cfg!(debug_assertions) {
+/// Under the sanitizers (AVA1_CTEST_SANITIZE, review 009 #2a) the C runs 5-7x slower (measured 195
+/// files/s): the floor there only catches a stall, not a regression of the pipeline.
+const FLOOR_FILES_PER_S: f64 = if cfg!(ava1_ctest_sanitize) {
+    50.0
+} else if cfg!(debug_assertions) {
     1000.0
 } else {
     3500.0

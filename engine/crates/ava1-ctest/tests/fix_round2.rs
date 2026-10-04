@@ -75,19 +75,11 @@ async fn open(link: &mut JobLink, job: [u8; 16], root: &Path) -> JobOpenAck {
     next_of(link, JobOpenAck::TYPE).await.decode().unwrap()
 }
 
-async fn send_manifest(link: &JobLink, job: [u8; 16], m: &Manifest) {
-    for p in m.pages(job) {
-        link.control.send(&p).await.unwrap();
+async fn send_manifest(link: &JobLink, pages: Vec<ava1::gen::ManifestPage>, end: ManifestEnd) {
+    for p in &pages {
+        link.control.send(p).await.unwrap();
     }
-    link.control
-        .send(&ManifestEnd {
-            job_id: job,
-            files: m.files(),
-            bytes: m.bytes(),
-            manifest_hash: m.hash(),
-        })
-        .await
-        .unwrap();
+    link.control.send(&end).await.unwrap();
 }
 
 type Ids = (
@@ -119,16 +111,25 @@ async fn a_cap_refusal_landing_mid_open_refuses_the_open_busy() {
         unsafe { ava1_test_set_open_work_delay_ms(1500) };
         let s = session(&srv, &ids).await;
         let job = [0x72u8; 16];
+        // Build every frame BEFORE the open: under the sanitizers the debug-build manifest pages and
+        // hash took over a second, which let the open's work finish before the pages left.
+        let m = Manifest {
+            entries: (0..5000).map(|i| file(&format!("f{i}"), 1)).collect(),
+        };
+        let pages = m.pages(job);
+        let end = ManifestEnd {
+            job_id: job,
+            files: m.files(),
+            bytes: m.bytes(),
+            manifest_hash: m.hash(),
+        };
         let mut link = s.job(job);
         link.control
             .send(&open_msg(job, &d.join("dest")))
             .await
             .unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await; /* the open is mid-work now */
-        let m = Manifest {
-            entries: (0..5000).map(|i| file(&format!("f{i}"), 1)).collect(),
-        };
-        send_manifest(&link, job, &m).await; /* past the cap, while the work runs */
+        send_manifest(&link, pages, end).await; /* past the cap, while the work runs */
         let ack: JobOpenAck = next_of(&mut link, JobOpenAck::TYPE).await.decode().unwrap();
         assert_eq!(ack.status, gen::ERR_BUSY);
         assert!(!s.is_closed());
