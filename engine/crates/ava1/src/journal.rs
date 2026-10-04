@@ -792,4 +792,109 @@ mod tests {
         assert_eq!(gc(&d, now + 8 * 86_400, 7 * 86_400).unwrap(), 1); // the 7-day path
         assert!(!new.exists());
     }
+
+    /// A journal of every record kind, as the whole file bytes plus each record's `(start, end)`
+    /// (review 009 #2b).
+    fn sweep_fixture(tag: &str) -> (Vec<u8>, Vec<Record>, Vec<(usize, usize)>) {
+        let d = tmp(tag);
+        let mut j = Journal::create(&d, &open_rec()).unwrap();
+        let mut recs = vec![Record::Open(open_rec())];
+        let mut st = State::default();
+        st.apply(&recs[0]);
+        let mut more = vec![
+            batch(1, 0),
+            batch(2, 1 << 20),
+            Record::Batch(JnlBatch {
+                files: vec![FileRun { first: 5, count: 3 }],
+                ranges: vec![],
+                roots: vec![],
+                pack_segment: Some(0),
+                pack_offset: Some(8),
+                pack_len: Some(300),
+            }),
+            Record::Reset(2),
+            Record::Sweep(vec![FileRun { first: 5, count: 3 }]),
+        ];
+        for r in &more {
+            st.apply(r);
+        }
+        more.push(Record::Snapshot(st.snapshot()));
+        more.push(Record::Done(0));
+        for r in &more {
+            j.append(r).unwrap();
+        }
+        recs.extend(more);
+        drop(j);
+        let bytes = std::fs::read(d.join("journal")).unwrap();
+        // record boundaries from the encoder itself, not from the reader under test
+        let mut bounds = vec![];
+        let mut at = MAGIC.len();
+        for r in &recs {
+            let (k, b) = r.encode().unwrap();
+            let end = at + frame(k, &b).len();
+            bounds.push((at, end));
+            at = end;
+        }
+        assert_eq!(at, bytes.len(), "the fixture's boundaries match the file");
+        (bytes, recs, bounds)
+    }
+
+    #[test]
+    fn replay_survives_a_truncation_at_every_byte_length() {
+        let (bytes, recs, bounds) = sweep_fixture("sweep-src-a");
+        let d = tmp("sweep-cut");
+        for l in 0..=bytes.len() {
+            std::fs::write(d.join("journal"), &bytes[..l]).unwrap();
+            let r = Journal::open(&d);
+            if l < MAGIC.len() {
+                assert!(r.is_err(), "cut at {l}: a headerless file is not a journal");
+                continue;
+            }
+            let (mut j, got) = r.unwrap_or_else(|e| panic!("cut at {l}: replay errored: {e}"));
+            let whole = bounds.iter().filter(|(_, e)| *e <= l).count();
+            assert_eq!(got, recs[..whole], "cut at {l}: only whole records replay");
+            let boundary = if whole == 0 {
+                MAGIC.len()
+            } else {
+                bounds[whole - 1].1
+            };
+            assert_eq!(j.len() as usize, boundary, "cut at {l}: len");
+            assert_eq!(
+                std::fs::metadata(d.join("journal")).unwrap().len() as usize,
+                boundary,
+                "cut at {l}: the file is left at a record boundary"
+            );
+            // appends continue cleanly after the cut
+            j.append(&Record::Reset(77)).unwrap();
+            drop(j);
+            let (_, again) = Journal::open(&d).unwrap();
+            assert_eq!(again.len(), whole + 1, "cut at {l}: append after recovery");
+            assert_eq!(again.last(), Some(&Record::Reset(77)));
+        }
+    }
+
+    #[test]
+    fn a_flipped_byte_anywhere_in_the_last_record_loses_exactly_that_record() {
+        let (bytes, recs, bounds) = sweep_fixture("sweep-src-b");
+        let (start, end) = *bounds.last().unwrap();
+        let d = tmp("sweep-flip");
+        for at in start..end {
+            for mask in [0x01u8, 0x80, 0xff] {
+                let mut b = bytes.clone();
+                b[at] ^= mask;
+                std::fs::write(d.join("journal"), &b).unwrap();
+                let (_, got) = Journal::open(&d).unwrap();
+                assert_eq!(
+                    got,
+                    recs[..recs.len() - 1],
+                    "flip {mask:#x} at {at}: the damaged record must be lost, never accepted"
+                );
+                assert_eq!(
+                    std::fs::metadata(d.join("journal")).unwrap().len() as usize,
+                    start,
+                    "flip at {at}: truncated to the last good boundary"
+                );
+            }
+        }
+    }
 }
