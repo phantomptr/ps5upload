@@ -2215,6 +2215,7 @@ dependencies = [
  "crc32fast",
  "flate2",
  "ftx2-proto",
+ "libc",
  "ps5upload-core",
  "serde_json",
  "sevenz-rust2",

@@ -110,6 +110,19 @@ pub trait Sink: Send + Sync {
     }
 }
 
+/// The root of a file of at most one group, as the sink now holds it. A zero-length file is the
+/// empty root with nothing to read back: no sink is asked to read a file that has no bytes (a
+/// zip sink cannot, and a local one would look for a part file that never existed).
+fn one_group_root(sink: &dyn Sink, id: u32, size: u64) -> Option<[u8; 32]> {
+    if size == 0 {
+        return Some(*blake3::hash(&[]).as_bytes());
+    }
+    let mut buf = vec![0u8; size as usize];
+    sink.read_at(id, 0, &mut buf)
+        .ok()
+        .map(|_| *blake3::hash(&buf).as_bytes())
+}
+
 /// Whether a `LocalSink` takes the durable-by-log path unless told otherwise. The environment decides
 /// (`PS5UPLOAD_AVA1_LOG_SMALL=1` / `0`); with no setting it is on everywhere but macOS, where a plain
 /// fsync never reaches the drive (one `F_FULLFSYNC` per batch already covers the files) so the log
@@ -296,14 +309,76 @@ impl LocalSink {
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let f = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .read(true)
-            .truncate(truncate)
-            .open(&p)?;
+        let open = || {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .read(true)
+                .truncate(truncate)
+                .open(&p)
+        };
+        // Descriptors are bounded: past the cap the cache drops its other entries (their data is
+        // fsynced later through a reopen, see `sync`), and the process running out anyway is
+        // answered the same way once before the error is reported.
+        if st.open.len() >= MAX_OPEN {
+            st.open.clear();
+        }
+        let f = match open() {
+            Err(e) if is_fd_exhausted(&e) => {
+                st.open.clear();
+                open()?
+            }
+            r => r?,
+        };
         st.open.insert(id, f.try_clone()?);
         Ok(f)
+    }
+
+    /// A descriptor for `id` to fsync: the cached one, or the file reopened by path (its part
+    /// file, else its final place) when it was written whole or evicted from the cache.
+    fn reopen(&self, id: u32) -> io::Result<(std::fs::File, PathBuf)> {
+        let (fin, part) = {
+            let st = self.st.lock().unwrap();
+            if let Some(f) = st.open.get(&id) {
+                let p = self.path(&st, id, true);
+                return Ok((f.try_clone()?, p));
+            }
+            (self.path(&st, id, false), self.path(&st, id, true))
+        };
+        let open = |p: &Path| std::fs::OpenOptions::new().write(true).open(p);
+        // The part file first: a large file mid-write lives there, while a small file written
+        // whole has no part file and is at its final path.
+        match open(&part) {
+            Ok(f) => Ok((f, part)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound && part != fin => {
+                open(&fin).map(|f| (f, fin))
+            }
+            Err(e) => Err(e),
+        }
+    }
+}
+
+/// The most files a `LocalSink` keeps open at once (large files being written; a small file's
+/// descriptor is closed as soon as its bytes are written).
+const MAX_OPEN: usize = 64;
+
+/// Whether `e` is the process or the system running out of file descriptors. That is a
+/// condition to wait out and retry, not a verdict on the download.
+pub fn is_fd_exhausted(e: &io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        // EMFILE, ENFILE
+        matches!(e.raw_os_error(), Some(24) | Some(23))
+    }
+    #[cfg(windows)]
+    {
+        // ERROR_TOO_MANY_OPEN_FILES
+        matches!(e.raw_os_error(), Some(4))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = e;
+        false
     }
 }
 
@@ -424,33 +499,30 @@ impl Sink for LocalSink {
         if self.log && self.pack.lock().unwrap().is_some() {
             return self.write_logged(id, *blake3::hash(data).as_bytes(), data);
         }
-        let f = self.file(id, false, true)?;
-        verify::write_all_at(&f, data, 0)?;
-        f.set_len(data.len() as u64)
+        // Not cached: a folder of tens of thousands of small files must not hold a descriptor
+        // each. `sync` reopens the file to fsync it.
+        self.st.lock().unwrap().open.remove(&id);
+        self.make_file(id, data)
     }
 
     fn sync(&self, ids: &[u32]) -> io::Result<()> {
-        let (files, dirs): (Vec<std::fs::File>, BTreeSet<PathBuf>) = {
-            let st = self.st.lock().unwrap();
-            let files = ids
-                .iter()
-                .filter_map(|i| st.open.get(i).and_then(|f| f.try_clone().ok()))
-                .collect();
-            let dirs = ids
-                .iter()
-                .filter(|i| st.open.contains_key(i))
-                .filter_map(|i| self.path(&st, *i, true).parent().map(|p| p.to_path_buf()))
-                .collect();
-            (files, dirs)
-        };
         // One sync per batch, not one drive flush per file (T28): every file gets the
         // cheap fsync, then ONE drive-cache flush covers them all, then the directories
         // (so the new names are durable too). std's `sync_data` is F_FULLFSYNC on macOS —
-        // ~15 ms a file, which capped a 2,000-file download at 56 files/s.
-        for f in &files {
-            sys_fsync(f)?;
+        // ~15 ms a file, which capped a 2,000-file download at 56 files/s. Each file is
+        // reopened (or its cached descriptor used) and dropped before the next, so a batch of
+        // any size holds one descriptor of its own.
+        let mut dirs: BTreeSet<PathBuf> = BTreeSet::new();
+        let mut last: Option<std::fs::File> = None;
+        for &id in ids {
+            let (f, p) = self.reopen(id)?;
+            sys_fsync(&f)?;
+            if let Some(parent) = p.parent() {
+                dirs.insert(parent.to_path_buf());
+            }
+            last = Some(f);
         }
-        if let Some(f) = files.last() {
+        if let Some(f) = &last {
             flush_drive_cache(f)?;
         }
         sync_dirs(&dirs)
@@ -587,13 +659,22 @@ impl Sink for LocalSink {
                 .entry(id)
                 .expect("an id the receiver validated against the manifest")
                 .size;
-        if let Some(f) = st.open.remove(&id) {
+        let (part, fin) = (self.path(&st, id, true), self.path(&st, id, false));
+        // The cached descriptor, or (the cache having been trimmed) the part file reopened.
+        let f = match st.open.remove(&id) {
+            Some(f) => Some(f),
+            None => match std::fs::OpenOptions::new().write(true).open(&part) {
+                Ok(f) => Some(f),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+                Err(e) => return Err(e),
+            },
+        };
+        if let Some(f) = f {
             f.set_len(size)?;
             // Cheap fsync only: the batch's journal append (sync_all) flushes the drive cache
             // once for every file this batch committed.
             sys_fsync(&f)?;
         }
-        let (part, fin) = (self.path(&st, id, true), self.path(&st, id, false));
         if part != fin {
             std::fs::rename(&part, &fin)?; // same directory by construction (ruling Q3)
         }
@@ -656,7 +737,7 @@ fn proto(e: impl std::fmt::Display) -> SendError {
 /// (`ERR_PATH`). Used for manifest validation on the receiver path.
 fn wire_path(e: manifest::PathError) -> SendError {
     let status = match e {
-        manifest::PathError::Gap(_) => gen::ERR_PROTOCOL,
+        manifest::PathError::Gap(_) | manifest::PathError::SizeOverflow => gen::ERR_PROTOCOL,
         _ => gen::ERR_PATH,
     };
     SendError::Refused {
@@ -848,22 +929,119 @@ struct Large {
     written: RangeSet,
     durable: RangeSet,
     root: Option<[u8; 32]>,
+    /// A relay's root of a one-group file, hashed from the chunk as it passed through (nothing
+    /// is kept to read back).
+    single: Option<[u8; 32]>,
 }
 
-fn new_large(dir: &std::path::Path, m: &Manifest, id: u32) -> Large {
+/// The outboard for a file of `groups` groups. Running out of descriptors is an error to
+/// retry (it must not look like a missing outboard, which fails the commit for good); any other
+/// failure leaves the file without one, as before.
+fn open_outboard(path: &std::path::Path, groups: u64) -> Result<Option<Outboard>, SendError> {
+    match Outboard::open(path, groups) {
+        Ok(ob) => Ok(Some(ob)),
+        Err(e) if is_fd_exhausted(&e) => Err(SendError::Source(e)),
+        Err(_) => Ok(None),
+    }
+}
+
+fn new_large(dir: &std::path::Path, m: &Manifest, id: u32) -> Result<Large, SendError> {
     let size = m
         .entry(id)
         .expect("an id the receiver validated against the manifest")
         .size;
-    Large {
-        hasher_cvs: (verify::groups(size) >= 2)
-            .then(|| Outboard::open(&dir.join(format!("{id}.ob")), verify::groups(size)).ok())
-            .flatten()
-            .map(|ob| Arc::new(Mutex::new(ob))),
+    let hasher_cvs = if verify::groups(size) >= 2 {
+        open_outboard(&dir.join(format!("{id}.ob")), verify::groups(size))?
+            .map(|ob| Arc::new(Mutex::new(ob)))
+    } else {
+        None
+    };
+    Ok(Large {
+        hasher_cvs,
         written: RangeSet::new(),
         durable: RangeSet::new(),
         root: None,
+        single: None,
+    })
+}
+
+/// A chunk of `len` bytes at `off` of a file of `size` must be group-aligned, inside the
+/// file, and whole groups unless it ends the file.
+fn check_chunk_range(size: u64, off: u64, len: u64) -> Result<(), SendError> {
+    // An empty chunk carries nothing and describes nothing (an empty file has no chunks):
+    // refused, or a peer could buffer one per aligned offset for free.
+    if len == 0 && size > 0 {
+        return Err(SendError::Protocol("an empty chunk".into()));
     }
+    if !off.is_multiple_of(GROUP)
+        || off > size
+        || len > size - off
+        || (!len.is_multiple_of(GROUP) && off + len != size)
+    {
+        return Err(SendError::Protocol("a chunk outside its file".into()));
+    }
+    Ok(())
+}
+
+/// What the ordered receiver does with a data frame about to enter its reorder buffer.
+#[derive(Debug, PartialEq, Eq)]
+enum Admit {
+    Keep,
+    /// Behind the cursor or already buffered: the bytes are of no use (credit still returns).
+    Drop,
+}
+
+/// The most the ordered reorder buffer may hold, in credit windows. The sender writes in order,
+/// so what waits here is what arrived ahead of a slower lane's frame; a peer that keeps sending
+/// ahead of a frame it never sends would otherwise grow it without end (the credit is returned
+/// on receipt).
+const REORDER_WINDOWS: u64 = 4;
+
+/// What one buffered entry costs against the cap: its bytes plus a fixed overhead for the map
+/// node, so entries cannot be free whatever their size.
+fn held_cost(len: u64) -> u64 {
+    len.saturating_add(64)
+}
+
+/// Validates the key of a data frame before it is buffered (final review: engine #4): the file
+/// must be a file of the manifest, the range inside it, the key at or past the cursor and not
+/// already held, and the buffer within `REORDER_WINDOWS` of credit.
+#[allow(clippy::too_many_arguments)]
+fn admit_ordered(
+    m: &Manifest,
+    cursor: (u32, u64),
+    held: &BTreeMap<(u32, u64), (bool, Vec<u8>)>,
+    held_bytes: u64,
+    credit: u64,
+    file_id: u32,
+    off: u64,
+    len: u64,
+    whole: bool,
+) -> Result<Admit, SendError> {
+    let e = m
+        .entry(file_id)
+        .filter(|e| e.kind == gen::ENTRY_FILE)
+        .ok_or_else(|| {
+            SendError::Protocol(format!("a frame names {file_id}, which is not a file here"))
+        })?;
+    if whole {
+        if off != 0 || len != e.size {
+            return Err(SendError::Protocol(
+                "a bundled file of the wrong size".into(),
+            ));
+        }
+    } else {
+        check_chunk_range(e.size, off, len)?;
+    }
+    if (file_id, off) < cursor || held.contains_key(&(file_id, off)) {
+        return Ok(Admit::Drop);
+    }
+    if held_bytes.saturating_add(held_cost(len)) > credit.saturating_mul(REORDER_WINDOWS) {
+        return Err(SendError::Protocol(
+            "the ordered sender ran too far ahead of a frame it has not sent".into(),
+        ));
+    }
+    Ok(Admit::Keep)
 }
 
 /// A chunk (SPEC.md §12.2, the C receiver's ava1_apply_chunk): inside the file, group
@@ -890,14 +1068,11 @@ async fn apply_chunk(
     }
     let size = e.size;
     let len = data.len() as u64;
-    if !off.is_multiple_of(GROUP)
-        || off > size
-        || len > size - off
-        || (!len.is_multiple_of(GROUP) && off + len != size)
-    {
-        return Err(SendError::Protocol("a chunk outside its file".into()));
+    check_chunk_range(size, off, len)?;
+    if let std::collections::hash_map::Entry::Vacant(v) = large.entry(id) {
+        v.insert(new_large(dir, m, id)?);
     }
-    let l = large.entry(id).or_insert_with(|| new_large(dir, m, id));
+    let l = large.get_mut(&id).expect("inserted above");
     let s2 = sink.clone();
     let data = Arc::new(data);
     let d2 = data.clone();
@@ -917,8 +1092,29 @@ async fn apply_chunk(
             ob.put(gi, &cv)?;
         }
     }
+    if sink.transient_relay() && verify::groups(size) < 2 && off == 0 && len == size {
+        l.single = Some(*blake3::hash(&data).as_bytes());
+    }
     l.written.insert(off, off + len);
     Ok(())
+}
+
+/// What a relay holds as the root of a finished file, to compare with the root the source
+/// announced: the root of the chunks that passed through it (the CVs of a file of several
+/// groups, the hash of a one-group file) or, when part of the file never passed through here
+/// (the destination already had it), the announced root itself, which the destination checks
+/// over the complete file.
+fn relay_root(
+    groups: u64,
+    cvs: Option<Vec<[u8; 32]>>,
+    single: Option<[u8; 32]>,
+    announced: [u8; 32],
+) -> [u8; 32] {
+    if groups >= 2 {
+        cvs.map_or(announced, |c| verify::root_from_cvs(&c))
+    } else {
+        single.unwrap_or(announced)
+    }
 }
 
 /// From here on both sides are identical: journal, map, apply, sync, commit, finish
@@ -1071,7 +1267,7 @@ async fn run_loop(
             )));
         };
         let size = e.size;
-        let mut ob = Outboard::open(&dir.join(format!("{id}.ob")), verify::groups(size)).ok();
+        let mut ob = open_outboard(&dir.join(format!("{id}.ob")), verify::groups(size))?;
         let mut good = RangeSet::new();
         for (s, e) in r.iter() {
             if sink.transient_relay() {
@@ -1095,7 +1291,7 @@ async fn run_loop(
             let rec = Record::Reset(id);
             st.apply(&rec);
             jnl.append(&rec)?;
-            ob = Outboard::open(&dir.join(format!("{id}.ob")), verify::groups(size)).ok();
+            ob = open_outboard(&dir.join(format!("{id}.ob")), verify::groups(size))?;
             good = RangeSet::new();
         }
         st.ranges.insert(id, good.clone());
@@ -1106,6 +1302,7 @@ async fn run_loop(
                 written: RangeSet::new(),
                 durable: good,
                 root: st.roots.get(&id).copied(),
+                single: None,
             },
         );
     }
@@ -1232,11 +1429,13 @@ async fn run_loop(
     );
     // Whether the batch in flight had anything to sync (an empty one runs every SYNC_EVERY).
     let mut batch_worked = false;
-    // Out-of-order frames are bounded by the credit granted in JobOpen: the sender cannot
-    // have more than one window in flight (SPEC.md §12.4). `whole` says the entry is a
+    // Out-of-order frames wait here. The credit returns on receipt, so the window does not bound
+    // them: `admit_ordered` refuses keys outside the manifest and the cursor, and caps the buffer
+    // at `REORDER_WINDOWS` windows of the granted credit. `whole` says the entry is a
     // root-checked bundle record rather than a chunk.
     let mut reorder: BTreeMap<(u32, u64), (bool, Vec<u8>)> = BTreeMap::new();
     let mut cursor: (u32, u64) = (0, 0);
+    let mut reorder_bytes = 0u64;
     let mut tick = tokio::time::interval(Duration::from_millis(50));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // The journal and the applied state move into each sync batch and come back with it;
@@ -1352,7 +1551,21 @@ async fn run_loop(
                             continue;
                         }
                         if o.ordered {
-                            reorder.insert((c.file_id, c.offset), (false, c.data));
+                            if admit_ordered(
+                                &m,
+                                cursor,
+                                &reorder,
+                                reorder_bytes,
+                                granted,
+                                c.file_id,
+                                c.offset,
+                                c.data.len() as u64,
+                                false,
+                            )? == Admit::Keep
+                            {
+                                reorder_bytes += held_cost(c.data.len() as u64);
+                                reorder.insert((c.file_id, c.offset), (false, c.data));
+                            }
                         } else {
                             apply_chunk(&sink, &m, &dir, &mut large, c.file_id, c.offset, c.data)
                                 .await?;
@@ -1404,7 +1617,21 @@ async fn run_loop(
                                         .map_err(|e| SendError::Disconnected(e.to_string()))?;
                                     continue;
                                 }
-                                reorder.insert((r.file_id, 0), (true, r.data));
+                                if admit_ordered(
+                                    &m,
+                                    cursor,
+                                    &reorder,
+                                    reorder_bytes,
+                                    granted,
+                                    r.file_id,
+                                    0,
+                                    r.data.len() as u64,
+                                    true,
+                                )? == Admit::Keep
+                                {
+                                    reorder_bytes += held_cost(r.data.len() as u64);
+                                    reorder.insert((r.file_id, 0), (true, r.data));
+                                }
                             } else {
                                 jobs.push((r.file_id, r.root, r.data));
                             }
@@ -1469,6 +1696,7 @@ async fn run_loop(
                         let Some((whole, data)) = reorder.remove(&cursor) else {
                             break;
                         };
+                        reorder_bytes -= held_cost(data.len() as u64);
                         let (fid, off, n) = (cursor.0, cursor.1, data.len() as u64);
                         if whole {
                             // A bundle record: its root was checked when it arrived, so the
@@ -1491,6 +1719,16 @@ async fn run_loop(
                             (fid, off + n)
                         };
                     }
+                    // What the cursor has passed without feeding (a skipped partial range) is no
+                    // longer wanted: it must not sit in the buffer for the rest of the job.
+                    while let Some((&k, _)) = reorder.first_key_value() {
+                        if k >= cursor {
+                            break;
+                        }
+                        if let Some((_, (_, d))) = reorder.pop_first() {
+                            reorder_bytes -= held_cost(d.len() as u64);
+                        }
+                    }
                 }
             }
             Some(Inbound::Control(f)) => match f.ty {
@@ -1509,10 +1747,22 @@ async fn run_loop(
                         )));
                     }
                     last_progress = Instant::now();
-                    large
-                        .entry(r.file_id)
-                        .or_insert_with(|| new_large(&dir, &m, r.file_id))
-                        .root = Some(r.root);
+                    if e.size == 0 {
+                        // A zero-length file is complete when created (up front, above); its root
+                        // is the empty root and there is nothing to read back or commit.
+                        if r.root != *blake3::hash(&[]).as_bytes() {
+                            return Err(SendError::Protocol(format!(
+                                "file {} is empty but its root is not the empty root",
+                                r.file_id
+                            )));
+                        }
+                    } else {
+                        if let std::collections::hash_map::Entry::Vacant(v) = large.entry(r.file_id)
+                        {
+                            v.insert(new_large(&dir, &m, r.file_id)?);
+                        }
+                        large.get_mut(&r.file_id).expect("inserted above").root = Some(r.root);
+                    }
                 }
                 JobCancel::TYPE => {
                     return Err(SendError::Refused {
@@ -1846,6 +2096,7 @@ struct BatchLarge {
     prior_durable: RangeSet,
     root: Option<[u8; 32]>,
     ob: Option<Arc<Mutex<Outboard>>>,
+    single: Option<[u8; 32]>,
 }
 
 /// What the batch hands back to the loop, which folds it into the live state.
@@ -1919,6 +2170,7 @@ fn snapshot_batch(
             prior_durable: l.durable.clone(),
             root: l.root,
             ob: l.hasher_cvs.clone(),
+            single: l.single,
         });
     }
     Ok(BatchJob {
@@ -2081,8 +2333,13 @@ async fn batch_task(job: BatchJob) -> Result<BatchDone, SendError> {
         }
         let actual = if sink.transient_relay() {
             // B owns durability and checks the complete root. A's skipped bytes
-            // exist only on B, so its transient sink cannot reread them here.
-            Some(root)
+            // exist only on B, so its transient sink cannot reread them here. What did pass
+            // through here is checked against the root the source announced (engine #5).
+            let cvs: Option<Vec<[u8; 32]>> = l.ob.as_ref().and_then(|ob| {
+                let ob = ob.lock().unwrap();
+                (0..verify::groups(l.size)).map(|g| ob.get(g)).collect()
+            });
+            Some(relay_root(verify::groups(l.size), cvs, l.single, root))
         } else if verify::groups(l.size) >= 2 {
             let ob = l
                 .ob
@@ -2094,16 +2351,11 @@ async fn batch_task(job: BatchJob) -> Result<BatchDone, SendError> {
             };
             cvs.map(|c| verify::root_from_cvs(&c))
         } else {
-            let mut buf = vec![0u8; l.size as usize];
             let s2 = sink.clone();
-            let id = l.id;
-            let (buf, n) = tokio::task::spawn_blocking(move || {
-                let n = s2.read_at(id, 0, &mut buf);
-                (buf, n)
-            })
-            .await
-            .map_err(proto)?;
-            n.ok().map(|_| *blake3::hash(&buf).as_bytes())
+            let (id, size) = (l.id, l.size);
+            tokio::task::spawn_blocking(move || one_group_root(s2.as_ref(), id, size))
+                .await
+                .map_err(proto)?
         };
         if actual != Some(root) {
             let rec = Record::Reset(l.id);
@@ -2378,6 +2630,164 @@ mod tests {
             }));
         }
         (sink, groups, st)
+    }
+
+    #[test]
+    fn the_ordered_reorder_buffer_refuses_keys_outside_the_range_and_is_bounded() {
+        let file = |size| Entry {
+            kind: gen::ENTRY_FILE,
+            mode: 0o644,
+            size,
+            mtime: 0,
+            path: String::new(),
+            root: None,
+        };
+        let mut a = file(3 * GROUP);
+        a.path = "a".into();
+        let mut b = file(10);
+        b.path = "b".into();
+        let m = Manifest {
+            entries: vec![a, b],
+        };
+        let held: BTreeMap<(u32, u64), (bool, Vec<u8>)> =
+            BTreeMap::from([((0, GROUP), (false, vec![]))]);
+        let cap_of = |credit: u64| credit * REORDER_WINDOWS;
+        let g = |cursor, held_bytes, credit, id, off, len, whole| {
+            admit_ordered(&m, cursor, &held, held_bytes, credit, id, off, len, whole)
+        };
+        assert_eq!(
+            g((0, 0), 0, GROUP, 0, 0, GROUP, false).unwrap(),
+            Admit::Keep
+        );
+        // Outside the manifest, past the file, misaligned, overrunning: protocol errors.
+        assert!(g((0, 0), 0, GROUP, 7, 0, 1, false).is_err());
+        assert!(g((0, 0), 0, GROUP, 0, 4 * GROUP, GROUP, false).is_err());
+        assert!(g((0, 0), 0, GROUP, 0, 5, GROUP, false).is_err());
+        assert!(g((0, 0), 0, GROUP, 0, 2 * GROUP, 2 * GROUP, false).is_err());
+        assert!(g((0, 0), 0, GROUP, 1, 0, 11, true).is_err());
+        // Behind the cursor, or already held: dropped, not an error.
+        assert_eq!(
+            g((1, 0), 0, GROUP, 0, 0, GROUP, false).unwrap(),
+            Admit::Drop
+        );
+        assert_eq!(
+            g((0, 0), 0, GROUP, 0, GROUP, GROUP, false).unwrap(),
+            Admit::Drop
+        );
+        // Empty chunks are refused, and every entry costs something against the cap.
+        assert!(g((0, 0), 0, GROUP, 0, 2 * GROUP, 0, false).is_err());
+        assert!(g((0, 0), cap_of(GROUP) - 10, GROUP, 0, 2 * GROUP, 1, false).is_err());
+        // The buffer is capped at REORDER_WINDOWS windows of credit.
+        let cap = GROUP * REORDER_WINDOWS;
+        assert!(g((0, 0), cap - GROUP - 64, GROUP, 0, 2 * GROUP, GROUP, false).is_ok());
+        assert!(g((0, 0), cap - GROUP - 63, GROUP, 0, 2 * GROUP, GROUP, false).is_err());
+    }
+
+    #[test]
+    fn a_relay_compares_the_announced_root_with_the_relayed_bytes() {
+        let data: Vec<u8> = (0..(3 * GROUP as usize)).map(|i| (i * 13) as u8).collect();
+        let cvs: Vec<[u8; 32]> = data
+            .chunks(GROUP as usize)
+            .enumerate()
+            .map(|(i, g)| verify::group_cv(g, i as u64))
+            .collect();
+        let real = *blake3::hash(&data).as_bytes();
+        assert_eq!(real, verify::root_from_cvs(&cvs));
+        let lie = [9u8; 32];
+        // Everything passed through: the computed root decides, so a lying announcement differs.
+        assert_eq!(relay_root(3, Some(cvs.clone()), None, real), real);
+        assert_ne!(relay_root(3, Some(cvs), None, lie), lie);
+        // A part never passed through (the destination had it): the announcement stands.
+        assert_eq!(relay_root(3, None, None, lie), lie);
+        // One group: the hash of the chunk that passed through.
+        let one = b"one group of bytes";
+        let h = *blake3::hash(one).as_bytes();
+        assert_eq!(relay_root(1, None, Some(h), lie), h);
+        assert_eq!(relay_root(1, None, None, lie), lie);
+    }
+
+    #[test]
+    fn many_large_files_written_interleaved_stay_within_the_descriptor_cap() {
+        let d = std::env::temp_dir().join(format!("p5a-fdcap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let n = MAX_OPEN as u32 * 2 + 20;
+        let size = 3 * GROUP;
+        let m = Manifest {
+            entries: (0..n)
+                .map(|i| Entry {
+                    kind: gen::ENTRY_FILE,
+                    mode: 0o644,
+                    size,
+                    mtime: 0,
+                    path: format!("f{i}"),
+                    root: None,
+                })
+                .collect(),
+        };
+        let body = |i: u32, g: u64| vec![(i as u8).wrapping_add(g as u8 * 40); GROUP as usize];
+        // Non-staged (an existing root) and staged (a new one) both.
+        for staged in [false, true] {
+            let root = d.join(if staged { "new" } else { "old" });
+            if !staged {
+                std::fs::create_dir_all(&root).unwrap();
+            }
+            let sink = LocalSink::new(root.clone(), false).with_log(false, PackOpts::default());
+            sink.prepare(&m).unwrap();
+            // Interleaved: group 0 of every file, then group 1 of every file, ... so every file is
+            // evicted from the cache and reopened between its own writes.
+            for g in 0..3u64 {
+                for i in 0..n {
+                    sink.write_at(i, g * GROUP, &body(i, g)).unwrap();
+                    assert!(sink.st.lock().unwrap().open.len() <= MAX_OPEN);
+                }
+                let ids: Vec<u32> = (0..n).collect();
+                sink.sync(&ids).unwrap();
+            }
+            for i in 0..n {
+                sink.commit(i).unwrap();
+            }
+            sink.finish().unwrap();
+            for i in 0..n {
+                let got = std::fs::read(root.join(format!("f{i}"))).unwrap();
+                let want: Vec<u8> = (0..3).flat_map(|g| body(i, g)).collect();
+                assert!(got == want, "file {i} (staged: {staged})");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn an_empty_file_verifies_as_the_empty_root_without_a_read_back() {
+        struct NoRead;
+        impl Sink for NoRead {
+            fn prepare(&self, _: &Manifest) -> io::Result<()> {
+                Ok(())
+            }
+            fn write_at(&self, _: u32, _: u64, _: &[u8]) -> io::Result<()> {
+                Ok(())
+            }
+            fn write_whole(&self, _: u32, _: &[u8]) -> io::Result<()> {
+                Ok(())
+            }
+            fn sync(&self, _: &[u32]) -> io::Result<()> {
+                Ok(())
+            }
+            fn read_at(&self, _: u32, _: u64, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::from(io::ErrorKind::Unsupported))
+            }
+            fn commit(&self, _: u32) -> io::Result<()> {
+                Ok(())
+            }
+            fn finish(&self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        assert_eq!(
+            one_group_root(&NoRead, 3, 0),
+            Some(*blake3::hash(&[]).as_bytes())
+        );
+        assert_eq!(one_group_root(&NoRead, 3, 10), None);
     }
 
     #[test]
@@ -2801,7 +3211,7 @@ mod tests {
         // One large file with a freshly written range: the batch syncs, journals the range
         // and — now past COMPACT_AT — compacts.
         let mut large = HashMap::new();
-        large.insert(0u32, new_large(&dir, &m, 0));
+        large.insert(0u32, new_large(&dir, &m, 0).unwrap());
         large.get_mut(&0).unwrap().written.insert(0, GROUP);
         let (link, _keep_link) = test_link(job);
         let sink: Arc<dyn Sink> = Arc::new(NoopSink);

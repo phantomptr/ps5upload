@@ -173,6 +173,44 @@ async fn nap(d: Duration, cancel: &AtomicBool) -> bool {
     cancel.load(Ordering::Relaxed)
 }
 
+/// The longest one copy RPC waits for the console's answer.
+const COPY_RPC_TIMEOUT: Duration = Duration::from_secs(30);
+
+enum RpcStop {
+    Cancelled,
+    Failed(ava1::Ava1Error),
+}
+
+/// One RPC that ends on the user's cancel (polled) or after `COPY_RPC_TIMEOUT` instead of
+/// waiting on a console that holds the reply for ever.
+async fn rpc_cancellable(
+    session: &ava1::session::Session,
+    method: u16,
+    body: &[u8],
+    cancel: &AtomicBool,
+) -> Result<ava1::session::RpcReply, RpcStop> {
+    rpc_cancellable_within(session, method, body, cancel, COPY_RPC_TIMEOUT).await
+}
+
+async fn rpc_cancellable_within(
+    session: &ava1::session::Session,
+    method: u16,
+    body: &[u8],
+    cancel: &AtomicBool,
+    within: Duration,
+) -> Result<ava1::session::RpcReply, RpcStop> {
+    let call = session.rpc_within(method, body, within);
+    let stop = async {
+        while !cancel.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    };
+    tokio::select! {
+        r = call => r.map_err(RpcStop::Failed),
+        _ = stop => Err(RpcStop::Cancelled),
+    }
+}
+
 pub fn console_copy_in(
     pool: &Pool,
     console: &str,
@@ -236,9 +274,11 @@ pub fn console_copy_in(
             } else {
                 (gen::METHOD_JOB_COPY, &issue)
             };
-            let reply = match session.rpc(method, body).await {
+            let reply = match rpc_cancellable(&session, method, body, &cancel).await {
+                // The user's stop while a call hangs: the top of the loop cancels the job.
+                Err(RpcStop::Cancelled) => continue,
                 Ok(r) => r,
-                Err(e) => {
+                Err(RpcStop::Failed(e)) => {
                     pool.forget(console).await;
                     issued = false;
                     wait(&mut backoff, &e.to_string()).await;

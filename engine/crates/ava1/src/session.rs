@@ -19,6 +19,9 @@ use crate::router::{is_data_type, BoxFut, ConnTx, JobId, JobLink, LaneOpener, Ro
 use crate::wire::{FrameMessage, Message};
 use crate::Ava1Error;
 
+/// The longest an RPC waits for its reply when the caller names no bound.
+pub const RPC_TIMEOUT: Duration = Duration::from_secs(60);
+
 #[derive(Debug, Clone, Copy)]
 pub struct Timing {
     pub ping_every: Duration,
@@ -279,12 +282,38 @@ impl Session {
     }
 
     async fn rpc_unchecked(&self, method: u16, body: &[u8]) -> Result<RpcReply, Ava1Error> {
-        let f = self
-            .request(RpcRequest {
+        self.rpc_unchecked_within(method, body, RPC_TIMEOUT).await
+    }
+
+    /// `rpc` that gives up after `within` (`Ava1Error::Timeout`): a live link whose peer never
+    /// answers must not park the caller for ever. The request is withdrawn on the way out.
+    pub async fn rpc_within(
+        &self,
+        method: u16,
+        body: &[u8],
+        within: Duration,
+    ) -> Result<RpcReply, Ava1Error> {
+        if self.est.pairing.is_some() {
+            return Err(Ava1Error::NotPaired);
+        }
+        self.rpc_unchecked_within(method, body, within).await
+    }
+
+    async fn rpc_unchecked_within(
+        &self,
+        method: u16,
+        body: &[u8],
+        within: Duration,
+    ) -> Result<RpcReply, Ava1Error> {
+        let f = tokio::time::timeout(
+            within,
+            self.request(RpcRequest {
                 method,
                 body: body.to_vec(),
-            })
-            .await?;
+            }),
+        )
+        .await
+        .map_err(|_| Ava1Error::Timeout)??;
         let r: RpcResponse = f.decode()?;
         Ok(RpcReply {
             status: r.status,

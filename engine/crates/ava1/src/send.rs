@@ -1096,6 +1096,18 @@ async fn lane_death(sh: Arc<Shared>, id: u16, tx: ConnTx) {
     }
 }
 
+/// The bytes of a file of `size` still to send when the receiver says `have` is durable. A
+/// range reaching past the end of the file (or more bytes than the file has) is the receiver
+/// talking nonsense, not something to subtract: a protocol error.
+fn large_remaining(size: u64, have: &RangeSet) -> Result<u64, SendError> {
+    if have.iter().any(|(_, end)| end > size) || have.covered() > size {
+        return Err(SendError::Protocol(
+            "the receiver reports durable ranges beyond the end of a file".into(),
+        ));
+    }
+    Ok(size - have.covered())
+}
+
 /// The data phase of an upload: what `open_upload` returned (credit, need) in, a report
 /// (or the error that ended the job) out. Every lane task is cancelled and joined before
 /// this returns, on every exit (correction 5).
@@ -1127,7 +1139,7 @@ pub async fn run_upload(
             small_left += e.size;
         } else {
             let d = need.partial.get(&id).cloned().unwrap_or_default();
-            large_left += e.size - d.covered();
+            large_left = large_left.saturating_add(large_remaining(e.size, &d)?);
             large.push_back((id, d));
         }
     }
@@ -1135,7 +1147,10 @@ pub async fn run_upload(
         .iter()
         .map(|i| manifest.entry(*i).map_or(0, |e| e.size))
         .sum::<u64>()
-        + need.partial.values().map(|r| r.covered()).sum::<u64>();
+        + need
+            .partial
+            .values()
+            .fold(0u64, |a, r| a.saturating_add(r.covered()));
     if !pg.skip_recorded.swap(true, Ordering::Relaxed) {
         let done_files = need
             .done
@@ -1811,6 +1826,26 @@ mod tests {
     use crate::wire::SplitMix;
     use std::io;
     use tokio::io::{duplex, split};
+
+    #[test]
+    fn durable_ranges_beyond_a_file_are_a_protocol_error_not_an_underflow() {
+        let mut have = RangeSet::new();
+        have.insert(0, 100);
+        assert_eq!(large_remaining(300, &have).unwrap(), 200);
+        assert!(matches!(
+            large_remaining(50, &have),
+            Err(SendError::Protocol(_))
+        ));
+        let mut far = RangeSet::new();
+        far.insert(1000, 1010);
+        assert!(matches!(
+            large_remaining(500, &far),
+            Err(SendError::Protocol(_))
+        ));
+        let mut all = RangeSet::new();
+        all.insert(0, u64::MAX);
+        assert!(large_remaining(10, &all).is_err());
+    }
 
     #[test]
     fn a_stall_with_bytes_outstanding_is_a_slow_receiver_not_a_dead_one() {

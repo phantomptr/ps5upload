@@ -182,6 +182,9 @@ pub fn inflight_cap(chunk: u32, lane_rate: f64) -> u64 {
     ((lane_rate * 2.0) as u64).max(chunk as u64)
 }
 
+/// The most bytes/s a tick may report (1 TB/s): above it the sample is the peer's claim.
+const MAX_PLAUSIBLE_RATE: f64 = 1e12;
+
 /// Per-tick decay of the best rate seen.
 const BEST_DECAY: f64 = 0.99;
 
@@ -237,10 +240,12 @@ impl Governor {
     }
 
     pub fn tick(&mut self, s: &Sample) -> Decision {
-        if s.secs <= 0.0 {
+        if s.secs.is_nan() || s.secs <= 0.0 || s.secs.is_infinite() {
             return self.decision(BN_NETWORK, s);
         }
-        let rate = s.bytes_acked as f64 / s.secs;
+        // What the peer acknowledged is its claim: a rate no link carries (1 TB/s) must not
+        // become the best rate seen, which would hold the lane bar down for the rest of the job.
+        let rate = (s.bytes_acked as f64 / s.secs).min(MAX_PLAUSIBLE_RATE);
         let lanes_now = s.lanes.max(1);
         let lane_rate = rate / lanes_now as f64;
         let bottleneck = if s.source_starved {
@@ -465,6 +470,41 @@ mod tests {
             });
         }
         d
+    }
+
+    #[test]
+    fn hostile_samples_cannot_panic_or_pin_the_governor() {
+        let mut g = Governor::new();
+        let hostile = [
+            (u64::MAX, 1e-300),
+            (u64::MAX, f64::MIN_POSITIVE),
+            (u64::MAX, 1.0),
+            (1, f64::INFINITY),
+            (1, f64::NAN),
+            (0, -1.0),
+        ];
+        for (acked, secs) in hostile {
+            for stalls in [0, 3] {
+                let d = g.tick(&Sample {
+                    secs,
+                    bytes_acked: acked,
+                    stalls,
+                    lanes: 0,
+                    small_left: u64::MAX,
+                    large_left: u64::MAX,
+                    small_durable: u64::MAX,
+                    large_durable: u64::MAX,
+                    receiver_bottleneck: 200,
+                    ..Sample::default()
+                });
+                assert!((1..=MAX_LANES).contains(&d.lanes));
+                assert!((MIN_CHUNK..=MAX_CHUNK).contains(&d.chunk), "{}", d.chunk);
+                assert!((MIN_BUNDLE..=MAX_BUNDLE).contains(&d.bundle));
+            }
+        }
+        assert!(g.best_rate.is_finite() && g.best_rate <= MAX_PLAUSIBLE_RATE);
+        assert_eq!(inflight_cap(4 << 20, f64::INFINITY), u64::MAX);
+        assert_eq!(inflight_cap(4 << 20, f64::NAN), 4 << 20);
     }
 
     #[test]

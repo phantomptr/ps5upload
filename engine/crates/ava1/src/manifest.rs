@@ -25,6 +25,9 @@ pub enum PathError {
     /// wire; this one maps to `ERR_PROTOCOL`.
     #[error("file ids are not consecutive at {0}")]
     Gap(u32),
+    /// The files' sizes add up to more than 64 bits can hold.
+    #[error("the files' sizes overflow")]
+    SizeOverflow,
 }
 
 pub fn check_path(p: &str) -> Result<(), PathError> {
@@ -91,12 +94,19 @@ impl Manifest {
         self.entries.iter().filter(|e| e.kind == ENTRY_FILE).count() as u32
     }
 
-    pub fn bytes(&self) -> u64 {
+    /// The files' total size; `None` when it does not fit in 64 bits (a manifest a peer
+    /// invented: `from_pages` refuses it).
+    pub fn checked_bytes(&self) -> Option<u64> {
         self.entries
             .iter()
             .filter(|e| e.kind == ENTRY_FILE)
-            .map(|e| e.size)
-            .sum()
+            .try_fold(0u64, |a, e| a.checked_add(e.size))
+    }
+
+    /// The files' total size, saturating (a total this large is refused at `from_pages`, so
+    /// only a hand-built manifest can reach the clamp).
+    pub fn bytes(&self) -> u64 {
+        self.checked_bytes().unwrap_or(u64::MAX)
     }
 
     /// BLAKE3 over `u32le(len) ‖ entry` for every entry, without ext (SPEC.md §11.3).
@@ -160,7 +170,9 @@ impl Manifest {
                 });
             }
         }
-        Ok(Self { entries })
+        let m = Self { entries };
+        m.checked_bytes().ok_or(PathError::SizeOverflow)?;
+        Ok(m)
     }
 }
 
@@ -234,6 +246,53 @@ mod tests {
             path: path.into(),
             root: None,
         }
+    }
+
+    #[test]
+    fn a_manifest_whose_sizes_overflow_is_refused() {
+        let page = |sizes: &[u64]| ManifestPage {
+            job_id: [0; 16],
+            entries: sizes
+                .iter()
+                .enumerate()
+                .map(|(i, &size)| crate::gen::ManifestEntry {
+                    file_id: i as u32,
+                    kind: ENTRY_FILE,
+                    mode: 0o644,
+                    size,
+                    mtime: 0,
+                    path: format!("f{i}"),
+                    root: None,
+                })
+                .collect(),
+        };
+        let ok = Manifest::from_pages([page(&[u64::MAX - 1, 1])]).unwrap();
+        assert_eq!(ok.bytes(), u64::MAX);
+        let e = Manifest::from_pages([page(&[u64::MAX, 1])]).unwrap_err();
+        assert_eq!(e, PathError::SizeOverflow);
+        // Hand-built, the total saturates instead of wrapping or panicking.
+        let big = Manifest {
+            entries: vec![
+                Entry {
+                    kind: ENTRY_FILE,
+                    mode: 0,
+                    size: u64::MAX,
+                    mtime: 0,
+                    path: "a".into(),
+                    root: None,
+                },
+                Entry {
+                    kind: ENTRY_FILE,
+                    mode: 0,
+                    size: 5,
+                    mtime: 0,
+                    path: "b".into(),
+                    root: None,
+                },
+            ],
+        };
+        assert_eq!(big.checked_bytes(), None);
+        assert_eq!(big.bytes(), u64::MAX);
     }
 
     #[test]

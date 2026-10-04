@@ -114,6 +114,10 @@ impl FileHasher {
     }
 }
 
+/// The most groups one outboard holds (4 TiB of file, 128 MiB of CVs). A larger declared size
+/// is refused rather than allocated.
+pub const MAX_OUTBOARD_GROUPS: u64 = 1 << 22;
+
 /// Group CVs on disk: slot i at byte i*32; an all-zero slot is "not yet known".
 ///
 /// Writes are crash-safe: `put` stages a 32-byte slot into a shadow file and `sync`
@@ -138,6 +142,14 @@ pub struct Outboard {
 
 impl Outboard {
     pub fn open(path: &Path, groups: u64) -> io::Result<Self> {
+        // The group count comes from a size a peer declared: refuse an absurd one before
+        // allocating `groups * 32` bytes for it.
+        if groups > MAX_OUTBOARD_GROUPS {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{groups} groups is more than an outboard holds"),
+            ));
+        }
         let f = OpenOptions::new()
             .read(true)
             .write(true)
@@ -274,6 +286,20 @@ pub(crate) fn write_all_at(f: &File, buf: &[u8], off: u64) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_absurd_declared_size_is_refused_before_it_allocates() {
+        let d = std::env::temp_dir().join(format!("p5a-ob-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        for groups in [MAX_OUTBOARD_GROUPS + 1, u64::MAX / 32 + 1, u64::MAX] {
+            let e = Outboard::open(&d.join("x.ob"), groups)
+                .err()
+                .expect("refused");
+            assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
+        }
+        assert!(Outboard::open(&d.join("y.ob"), 1000).is_ok());
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     fn data(n: usize) -> Vec<u8> {
         (0..n).map(|i| (i * 31 + 7) as u8).collect()
