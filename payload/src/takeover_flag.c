@@ -11,7 +11,9 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/sysctl.h>
+#if defined(__APPLE__) || defined(__FreeBSD__)
+#include <sys/sysctl.h> /* KERN_ARND; glibc >= 2.32 has no such header and the use below is #ifdef KERN_ARND (review 007: Linux host build) */
+#endif
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
