@@ -575,7 +575,10 @@ port 9021 — a third-party component, not part of ps5upload.
   in the in-app file picker. That picker browses the *engine's* filesystem,
   not the browser's own machine — a browser tab has no way to reach a
   remote engine's disk except through what the engine itself can already
-  read. A few things are still desktop-only and hidden in the browser UI:
+  read. The picker starts at the engine's home directory (`/data` in the
+  image) unless you point it elsewhere with `PS5UPLOAD_BROWSE_ROOTS=/pkgs`;
+  the value is comma-separated, so it can offer more than one root.
+  A few things are still desktop-only and hidden in the browser UI:
   archive uploads (`.zip`/`.7z`/`.rar`), Payloads (sending a `.elf`/etc. from
   disk) and saving a save-data
   backup to your computer — everything else that operates on the PS5 itself

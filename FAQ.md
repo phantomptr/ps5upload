@@ -743,7 +743,11 @@ own filesystem**, not the browser machine's. There's no way for a browser
 tab to read files off a *different* computer's disk (the one running the
 engine), so the in-app file/folder picker instead browses whatever the
 engine process can see — e.g. mount a folder into the Docker container
-with `-v /host/games:/pkgs:ro` and browse to `/pkgs`. **Install Package →
+with `-v /host/games:/pkgs:ro` and browse to `/pkgs`. The picker starts at
+the engine's home directory (`/data` in the image), so set
+`PS5UPLOAD_BROWSE_ROOTS=/pkgs` to have it open on your mount instead; the
+value is comma-separated, so it can offer more than one root.
+**Install Package →
 From this device** is the exception: it uploads a package from the browser's
 machine to the engine, then installs it. Plain files
 and folders upload the same as desktop; **archive uploads (`.zip`/`.7z`/

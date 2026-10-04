@@ -60,10 +60,62 @@ pub fn list_dir(path: &str) -> Result<Vec<LocalEntry>> {
     Ok(out)
 }
 
-/// Root to seed the in-app browser with — the engine's own home dir (falls
-/// back to "/"). Mirrors the desktop branch of the Tauri command exactly;
-/// there's no Android-style removable-volume enumeration to do here.
+/// Entries of a comma-separated `PS5UPLOAD_BROWSE_ROOTS` that are usable as a
+/// browse root: trimmed, blanks dropped, and a directory the engine can see.
+fn parse_browse_roots(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && std::path::Path::new(s).is_dir())
+        .map(str::to_string)
+        .collect()
+}
+
+/// The `PS5UPLOAD_BROWSE_ROOTS` entries that are not blank and are not a
+/// directory the engine can see. Dropping them silently would make a typo, or
+/// a volume that was never actually mounted, look exactly like "the setting is
+/// ignored", which is the trap `invalid_allow_ip_entries` already exists to
+/// avoid.
+fn invalid_browse_root_entries(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !std::path::Path::new(s).is_dir())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Roots to seed the in-app browser with: `PS5UPLOAD_BROWSE_ROOTS` when it
+/// names at least one directory, else the engine's own home dir (falling back
+/// to "/"), which is what this always used to return. Mirrors the desktop
+/// branch of the Tauri command; there's no Android-style removable-volume
+/// enumeration to do here.
+///
+/// Home alone is the wrong default in a container: the image sets `HOME=/data`
+/// for the engine's own state while the operator mounts packages elsewhere
+/// (`engine/compose.yaml` says `/pkgs`), so the picker opened on the state
+/// volume every time with no way to change it. Moving `HOME` is not the
+/// answer, because `fpkg_api::default_output_dir` writes conversions under
+/// `$HOME/Downloads/fpkgs` and a package mount is typically read-only. So the
+/// browse root gets its own variable, like the other directory overrides.
 pub fn storage_roots() -> Vec<String> {
+    let raw = std::env::var("PS5UPLOAD_BROWSE_ROOTS").unwrap_or_default();
+    if !raw.trim().is_empty() {
+        let invalid = invalid_browse_root_entries(&raw);
+        if !invalid.is_empty() {
+            eprintln!(
+                "[ps5upload-engine] WARNING: ignoring PS5UPLOAD_BROWSE_ROOTS entries that are \
+                 not a directory the engine can see: {}",
+                invalid.join(", ")
+            );
+        }
+        let roots = parse_browse_roots(&raw);
+        if !roots.is_empty() {
+            return roots;
+        }
+        eprintln!(
+            "[ps5upload-engine] WARNING: PS5UPLOAD_BROWSE_ROOTS named no usable directory; the \
+             file browser will open at the home directory instead."
+        );
+    }
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| "/".to_string());
@@ -106,5 +158,68 @@ mod tests {
     fn storage_roots_returns_at_least_one_entry() {
         let roots = storage_roots();
         assert!(!roots.is_empty(), "expected at least the home dir / \"/\"");
+    }
+
+    // `storage_roots` reads a process-global env var, so tests that set it
+    // must not run concurrently or one leaks into another.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn home_default() -> Vec<String> {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_else(|_| "/".to_string());
+        vec![home]
+    }
+
+    fn tmp_dir(tag: &str) -> String {
+        let p = std::env::temp_dir().join(format!("ps5_browse_{}_{tag}", std::process::id()));
+        std::fs::create_dir_all(&p).unwrap();
+        p.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn browse_roots_env_replaces_the_home_default() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tmp_dir("one");
+        std::env::set_var("PS5UPLOAD_BROWSE_ROOTS", &dir);
+        let roots = storage_roots();
+        std::env::remove_var("PS5UPLOAD_BROWSE_ROOTS");
+        assert_eq!(roots, vec![dir]);
+    }
+
+    #[test]
+    fn browse_roots_unset_falls_back_to_home() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("PS5UPLOAD_BROWSE_ROOTS");
+        assert_eq!(storage_roots(), home_default());
+    }
+
+    #[test]
+    fn browse_roots_blank_falls_back_to_home() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("PS5UPLOAD_BROWSE_ROOTS", "   ");
+        let roots = storage_roots();
+        std::env::remove_var("PS5UPLOAD_BROWSE_ROOTS");
+        assert_eq!(roots, home_default());
+    }
+
+    #[test]
+    fn browse_roots_takes_several_comma_separated_directories() {
+        let a = tmp_dir("multi_a");
+        let b = tmp_dir("multi_b");
+        assert_eq!(parse_browse_roots(&format!(" {a} , {b} ")), vec![a, b]);
+    }
+
+    #[test]
+    fn browse_roots_reports_entries_that_are_not_directories() {
+        let good = tmp_dir("reported");
+        let raw = format!("{good},,/no/such/ps5upload-browse-root");
+        // A typo, or an unmounted volume, must not look like "the setting was
+        // ignored". A blank entry is neither, so it stays unreported.
+        assert_eq!(
+            invalid_browse_root_entries(&raw),
+            vec!["/no/such/ps5upload-browse-root".to_string()]
+        );
+        assert_eq!(parse_browse_roots(&raw), vec![good]);
     }
 }
