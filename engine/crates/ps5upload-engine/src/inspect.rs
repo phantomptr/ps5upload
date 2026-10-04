@@ -1191,7 +1191,7 @@ mod tests {
             .unwrap()
             .conn
             .id;
-        crate::fpkg_remote::register();
+        crate::convert_source::register();
         let (p1, p2) = (
             format!("remote://{id}/viewer/a.pkg"),
             format!("remote://{id}/viewer/game"),

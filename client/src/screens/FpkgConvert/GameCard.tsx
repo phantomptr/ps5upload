@@ -177,7 +177,7 @@ export function GameCard(props: GameCardProps) {
               {tr(
                 "fpkg.consoleSource",
                 undefined,
-                "on the PS5. It is read from there through the console's FTP server (ftpsrv) while it converts; nothing is copied first.",
+                "on the PS5. It is read from there through the ps5upload helper while it converts; nothing is copied first.",
               )}
             </span>
           </div>
