@@ -1069,8 +1069,8 @@ async fn apply_chunk(
     let size = e.size;
     let len = data.len() as u64;
     check_chunk_range(size, off, len)?;
-    if !large.contains_key(&id) {
-        large.insert(id, new_large(dir, m, id)?);
+    if let std::collections::hash_map::Entry::Vacant(v) = large.entry(id) {
+        v.insert(new_large(dir, m, id)?);
     }
     let l = large.get_mut(&id).expect("inserted above");
     let s2 = sink.clone();
@@ -1757,8 +1757,9 @@ async fn run_loop(
                             )));
                         }
                     } else {
-                        if !large.contains_key(&r.file_id) {
-                            large.insert(r.file_id, new_large(&dir, &m, r.file_id)?);
+                        if let std::collections::hash_map::Entry::Vacant(v) = large.entry(r.file_id)
+                        {
+                            v.insert(new_large(&dir, &m, r.file_id)?);
                         }
                         large.get_mut(&r.file_id).expect("inserted above").root = Some(r.root);
                     }
