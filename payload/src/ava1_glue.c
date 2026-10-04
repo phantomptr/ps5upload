@@ -48,7 +48,8 @@ static int may_read(const char *p, int unsafe_read) {
     return is_path_allowed(p) || (unsafe_read && is_safe_unsafe_read_path(p));
 }
 
-/* 1 same device, 0 crosses (refuse: a cross-device rename panics this kernel), -1 unknown. */
+/* 1 same device, 0 crosses (refuse: a cross-device rename panics this kernel), -1 unknown.
+ * Callers treat anything but 1 as a refusal: unknown is never "same" (review 007 #4). */
 static int same_device(const char *from, const char *to_dir) {
     unsigned long long a, b;
     if (xdev_lstat_dev(from, &a) != 0 || xdev_stat_dev(to_dir, &b) != 0) return -1;

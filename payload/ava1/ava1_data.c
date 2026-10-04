@@ -285,7 +285,9 @@ int ava1_rpc_text(uint8_t *out, size_t cap, size_t *out_len, const char *fmt, ..
     return AVA1_STATUS_OK;
 }
 
-int ava1_data_log_small(void) { return D.cfg.log_small != AVA1_LOG_SMALL_OFF; }
+const char *ava1_log_small_flag_path = AVA1_LOG_SMALL_OFF_FLAG;
+int ava1_data_log_small_flagged(void) { return access(ava1_log_small_flag_path, F_OK) == 0; }
+int ava1_data_log_small(void) { return D.cfg.log_small != AVA1_LOG_SMALL_OFF && !ava1_data_log_small_flagged(); }
 
 int ava1_data_start(const ava1_data_cfg_t *cfg) {
     if (D.running) return -EBUSY; /* one housekeeping thread; a second start changes nothing */

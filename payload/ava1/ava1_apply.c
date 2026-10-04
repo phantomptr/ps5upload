@@ -1187,7 +1187,7 @@ static int apply_record(ava1_job_t *j, const ava1_bundle_record_t *r) {
     for (fd = 0; !rc && (uint32_t)fd < j->pend_n; fd++) rc = j->pend_small[fd] == r->file_id;
     pthread_mutex_unlock(&j->mu);
     if (rc) return 0;
-    if (ava1_data_log_small()) return apply_record_logged(j, r, e, path, root);
+    if (j->log_small) return apply_record_logged(j, r, e, path, root);
     if (!ava1_pend_reserve(pend_gate_stopping, pend_gate_idle, j)) return 0; /* stopping */
     fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
     if (fd < 0 && errno == ENOENT && mkparents(path) == 0) fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
@@ -1412,6 +1412,14 @@ static int reread_ranges(const chk_t *c, const ava1_file_range_t *rg, uint64_t s
     return rc;
 }
 
+typedef struct {
+    uint32_t id;
+    ava1_ploc_t loc;
+} idloc_t;
+static int idloc_cmp(const void *a, const void *b) {
+    uint32_t x = ((const idloc_t *)a)->id, y = ((const idloc_t *)b)->id;
+    return x < y ? -1 : x > y;
+}
 static int u32cmp(const void *a, const void *b) {
     uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
     return x < y ? -1 : x > y;
@@ -1587,8 +1595,21 @@ static int sweep_one(ava1_job_t *j, const ava1_usw_t *u) {
     if (!path[0]) return ENAMETOOLONG;
     if (ava1_apply_fault && (rc = ava1_apply_fault(j, AVA1_HOOK_SWEEP_FILE, u->id)) != 0) return rc; /* tests */
     for (again = 0; again < 2; again++) {
+        int bad;
         fd = open(path, O_RDONLY | O_NOFOLLOW);
-        if (fd < 0 || fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || (uint64_t)st.st_size != e->size || again) {
+        bad = fd < 0 || fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || (uint64_t)st.st_size != e->size || again;
+        if (!bad) {
+            /* Right size is not right content (zero-filled blocks after a power cut, a damaged page): check the
+             * bytes against the record's BLAKE3 root before the file is fsynced and its record released
+             * (review 007 #8). A record that cannot be read here skips the check; it never fails a sound file. */
+            ava1_bundle_record_t cr;
+            uint8_t *cbuf = NULL;
+            if (pack_read(j, u->seg, u->off, u->len, &cbuf, &cr) == 0) {
+                bad = cr.file_id != u->id || !small_matches(path, e->size, cr.root);
+                free(cbuf);
+            }
+        }
+        if (bad) {
             ava1_bundle_record_t r;
             uint8_t *buf = NULL;
             if (fd >= 0) close(fd);
@@ -2216,7 +2237,29 @@ static void sync_batch(ava1_job_t *j) {
     }
 
     /* 2. journal */
-    if (n_small) qsort(ids, n_small, sizeof *ids, u32cmp);
+    if (n_small) {
+        /* Sorted ids, with each logged file's record location kept beside its id: sorting `ids` alone left
+         * `ploc` in arrival order, so the sweep queue and the per-segment journal ranges paired ids with other
+         * files' records (review 007 #8 found it: the sweep's re-make read the wrong record and failed). */
+        idloc_t *pr = ploc && logmode ? malloc((size_t)n_small * sizeof *pr) : NULL;
+        if (pr) {
+            for (i = 0; i < n_small; i++) {
+                pr[i].id = ids[i];
+                pr[i].loc = ploc[i];
+            }
+            qsort(pr, n_small, sizeof *pr, idloc_cmp);
+            for (i = 0; i < n_small; i++) {
+                ids[i] = pr[i].id;
+                ploc[i] = pr[i].loc;
+            }
+            free(pr);
+        } else if (ploc && logmode) {
+            ava1_apply_fail(j, AVA1_ERR_IO, "out of memory in a sync batch", ENOMEM, 0);
+            goto out;
+        } else {
+            qsort(ids, n_small, sizeof *ids, u32cmp);
+        }
+    }
     for (i = 0; i < n_small; i++) {
         if (nr && runs[nr - 1].first + runs[nr - 1].count == ids[i]) runs[nr - 1].count++;
         else if (!nr || runs[nr - 1].first + runs[nr - 1].count < ids[i]) {
@@ -2680,9 +2723,18 @@ static void commit_large(ava1_job_t *j, uint32_t id) {
     if (strcmp(part, fin) != 0) {
         parent_of(fin, parent, sizeof parent);
         /* Same directory by construction; checked anyway (SPEC.md §12.6, the kernel panic). */
-        if (cfg->same_device && cfg->same_device(part, parent) == 0) {
-            commit_fail(j, AVA1_ERR_CROSS_DEVICE, "the destination is on another drive", 0, 1);
-            return;
+        {
+            /* Fail closed: only a definite 1 may reach rename(). -1 (a stat failed) is not "same";
+             * a false refusal costs a retry, a false allow costs a kernel panic (review 007 #4). */
+            int sd = cfg->same_device ? cfg->same_device(part, parent) : -1; /* no hook = unknown */
+            if (sd == 0) {
+                commit_fail(j, AVA1_ERR_CROSS_DEVICE, "the destination is on another drive", 0, 1);
+                return;
+            }
+            if (sd != 1) {
+                commit_fail(j, AVA1_ERR_IO, "could not verify the destination drive", errno, 1);
+                return;
+            }
         }
         if (rename(part, fin) != 0) {
             int e = errno;
@@ -2806,9 +2858,16 @@ static void finish(ava1_job_t *j) {
             ava1_apply_fail(j, AVA1_ERR_EXISTS, "the destination appeared during the upload; the files are in .ava-part", 0, 1);
             return;
         }
-        if (cfg->same_device && cfg->same_device(j->base, parent) == 0) {
-            ava1_apply_fail(j, AVA1_ERR_CROSS_DEVICE, "the destination is on another drive", 0, 1);
-            return;
+        {
+            int sd = cfg->same_device ? cfg->same_device(j->base, parent) : -1; /* no hook = unknown */ /* only a definite 1 may rename (review 007 #4) */
+            if (sd == 0) {
+                ava1_apply_fail(j, AVA1_ERR_CROSS_DEVICE, "the destination is on another drive", 0, 1);
+                return;
+            }
+            if (sd != 1) {
+                ava1_apply_fail(j, AVA1_ERR_IO, "could not verify the destination drive", errno, 1);
+                return;
+            }
         }
         if (rename(j->base, j->root) != 0) {
             e = errno;

@@ -376,6 +376,7 @@ pub mod ffi {
         pub fn ava1_test_apply_unswept() -> u32;
         pub fn ava1_test_apply_segments() -> u32;
         pub fn ava1_test_apply_hold_commit(on: c_int);
+        pub fn ava1_test_set_log_small_flag(path: *const c_char);
         pub fn ava1_test_apply_fault_prealloc(id: u32);
         pub fn ava1_test_apply_compact() -> c_int;
         pub fn ava1_test_apply_commits_inflight() -> u32;
@@ -1295,6 +1296,17 @@ pub fn c_data_clamp(start: u8, min: u8, max: u8) -> ([i32; 3], i32, i32) {
 }
 
 thread_local! {
+    /// The durable-by-log off-switch file the next job begun or opened on this thread checks.
+    static LOG_FLAG: std::cell::RefCell<Option<CString>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Points the console's runtime durable-by-log off-switch (review 007 #5) at `path` for jobs this
+/// thread begins or opens; the file's existence is what turns the logging off. None: the real path.
+pub fn c_set_log_small_flag(path: Option<&Path>) {
+    LOG_FLAG.with(|f| *f.borrow_mut() = path.map(|p| CString::new(p.to_str().unwrap()).unwrap()));
+}
+
+thread_local! {
     /// The same_device answer the next `CApplyJob::begin` on this thread installs.
     static SAME_DEVICE: std::cell::Cell<i32> = const { std::cell::Cell::new(1) };
 }
@@ -1487,8 +1499,17 @@ impl LogOpts {
         ..LogOpts::ON
     };
 
-    /// Hands the options to the C shim (the next job begun or opened takes them).
+    /// Hands the options to the C shim (the next job begun or opened takes them). The console's
+    /// durable-by-log off-switch file is this thread's `c_set_log_small_flag` (default: the real path).
     pub fn apply(&self) {
+        LOG_FLAG.with(|f| {
+            let f = f.borrow();
+            unsafe {
+                ffi::ava1_test_set_log_small_flag(
+                    f.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+                )
+            }
+        });
         let v = [
             self.mode as u64,
             self.pack_segment as u64,

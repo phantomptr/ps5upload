@@ -56,7 +56,13 @@ typedef struct {
 #define AVA1_UNSWEPT_TOTAL (512ull << 20)
 #define AVA1_SWEEP_AGE_MS 3000u
 /* 1 when small files go through the pack log (the data layer's effective setting). */
-int ava1_data_log_small(void);
+/* Runtime off-switch (review 007 #5): when this file exists the console takes the per-file fsync path
+ * for every job OPENED from then on (a job decides once, at open, and never switches mid-job).
+ * Recovery of already-logged jobs ignores it. Same directory as the timing flag. */
+#define AVA1_LOG_SMALL_OFF_FLAG "/data/ps5upload/debug/ava1-log-small-off"
+extern const char *ava1_log_small_flag_path; /* AVA1_LOG_SMALL_OFF_FLAG; a test points it elsewhere */
+int ava1_data_log_small(void);               /* the answer a job opened now would take: 1 logged, 0 per-file */
+int ava1_data_log_small_flagged(void);       /* 1 when the debug flag file is present */
 /* Crash recovery of durable-by-log (SPEC.md §15.7): one pass over the jobs directory takes up to `max`
  * job directories that hold a pack log and nobody has open, re-makes their unswept files from the log and
  * sweeps them. Run at start and then by housekeeping, so a job that was reaped or crashed is finished

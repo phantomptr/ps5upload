@@ -327,7 +327,8 @@ handler's cause is its legacy token (`fs_move_cross_mount`, `cleanup_path_denied
 engine can build the same `payload rejected <LABEL>: <cause>` text FTX2 callers produced. No new
 error codes were added for management methods. `fs.rename` answers `ERR_CROSS_DEVICE` when the
 source and the destination's parent are on different devices (`st_dev`); it never calls `rename(2)`
-across devices.
+across devices. A device that cannot be read (unknown) is refused too, with `ERR_IO` (`fs_move_device_unknown`):
+only a definite "same" reaches `rename(2)`. Every `st_dev` guard (§11.6, §12.6, `fs.rename`, FTP, shell `mv`) fails closed.
 
 Legacy failure bodies. Many FTX2 handlers answered a failure as a *successful* frame with a
 `{"ok":false,"err":"..."}` body (`handle_fs_write_bytes`, `handle_net_reach`, `handle_toast_send`,
@@ -608,11 +609,13 @@ never silence.
 Credit restarts after any interruption and nothing outstanding carries across a reconnect: the
 grant in a `JobOpenAck` is an absolute number that sets the sender's window (a `Credit` that
 arrives later adds to it), and a `Resume` restarts the window the same way — the receiver resets
-the job's outstanding-credit count to its current grant and re-sends that grant as `Credit`.
+the job's outstanding-credit count to its current grant and re-sends that grant as `Credit`. (Conformance: the console receiver sends the grant minus what the job still holds, the engine host its full
+grant; the sender's window is exactly that number either way. Tests: `wire_upload.rs`
+`a_resume_after_a_dropped_session_sends_credit_and_the_job_completes`, `data_rust.rs` the Resume test.)
 
 11.6 Staging: when the job root does not exist, the receiver writes the whole tree under
 `<root>.ava-part/` and, after the last file, renames it to `<root>` (same parent, `st_dev`
-checked). When the root exists, files are written in place; large files through
+checked; a device that cannot be read is refused with `ERR_IO`, never taken as the same). When the root exists, files are written in place; large files through
 `<name>.ava-part` and a same-directory rename. `JF_SINGLE_FILE` writes `<root>.ava-part`. A staging
 receiver takes `<root>` with `mkdir` before it journals the job (an existing `<root>` then
 refuses it, `ERR_EXISTS`) and records that in `JnlOpen.staged` bit 1, so on resume the empty

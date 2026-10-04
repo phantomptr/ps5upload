@@ -184,6 +184,7 @@ struct ava1_job {
     uint64_t prog_sig, prog_at_ms;
     uint32_t prog_limit_ms;
     int prog_armed;
+    int log_small;                  /* durable-by-log or per-file, decided once when the job is created (review 007 #5) */
     int resumed;                    /* decided at open (journal replay) or at an attach that finds durable work; never per re-arm */
     uint64_t prog_gen;              /* the attach generation `resumed` was last decided under */
     uint32_t tune_ticks, tune_busy; /* queue occupancy since the last tuning step */
