@@ -2043,6 +2043,13 @@ static int recv_start(int crash_at) {
     if (ava1_data_start(&g_cfg) != 0) return -100;
     ava1_apply_hook = t_hook;
     ava1_apply_fault = t_fault;
+    /* The start's recovery pass runs on the recovery thread, and a JobOpen for a job it is recovering is BUSY
+     * (a sender retries). The tests that open right after a start mean "after recovery": wait for the pass, so
+     * their outcome does not depend on how fast it runs (the order-dependent flake of log_small_fail). */
+    {
+        int i;
+        for (i = 0; i < 2000 && !ava1_data_boot_recovered(); i++) ava1_platform_sleep_ms(5);
+    }
     return recv_open_now();
 }
 

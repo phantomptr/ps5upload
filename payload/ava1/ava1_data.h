@@ -84,6 +84,7 @@ void ava1_budget_give(uint64_t n);
 /* Open-file budget (derived from RLIMIT_NOFILE at ava1_data_start: soft limit - 128, 512
  * when unreadable). The apply engine's pending small-file descriptors, all jobs together,
  * stay within ava1_pend_share() (half of it); disk.calibrate holds at most that many. */
+int ava1_data_boot_recovered(void); /* the start-time recovery pass has run */
 uint32_t ava1_fd_budget(void);
 /* Reads and raises RLIMIT_NOFILE and probes the real descriptor ceiling (it opens descriptors until the
  * kernel refuses, for a moment). Call it before any listener thread exists; the data layer's start then
