@@ -12,9 +12,6 @@
 //! `/pkg-host/*` accepts off-loopback peers (so the PS5 can fetch fakepkg
 //! bytes during install). Everything else 403s any non-loopback source,
 //! except the IPs in PS5UPLOAD_ALLOW_IP (comma-separated, for remote clients).
-//! The browser guard also checks the `Host` header (DNS-rebinding defence): loopback names and any
-//! IP literal pass; another hostname must be listed in PS5UPLOAD_ALLOWED_HOSTS (comma-separated;
-//! hostname entries in PS5UPLOAD_ALLOW_IP count too), else the request gets a 403.
 //! PS5 address defaults to 192.168.137.2 (set PS5_ADDR to override).
 //!
 //! API
@@ -808,90 +805,7 @@ fn browser_origin_allows(origin: &str, host: &str) -> bool {
     tauri_renderer || (loopback_name(origin_authority) && loopback_name(host))
 }
 
-/// Hostnames (not IP literals) the engine answers to, beyond loopback names. A DNS-rebinding page
-/// (`evil.example` resolving to 127.0.0.1) arrives with `Host: evil.example` and an Origin that
-/// equals it, so the Origin check alone passes it; the Host allowlist is what refuses it. An IP
-/// literal Host is always allowed: a browser only sends one when the page itself was loaded from that
-/// address, which DNS cannot forge (and the peer-IP guard already limits who may connect).
-#[derive(Clone, Debug, Default)]
-pub struct HostPolicy {
-    names: std::sync::Arc<[String]>,
-}
-
-impl HostPolicy {
-    pub fn new<I, S>(names: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<str>,
-    {
-        let v: Vec<String> = names
-            .into_iter()
-            .map(|n| n.as_ref().trim().trim_end_matches('.').to_ascii_lowercase())
-            .filter(|n| !n.is_empty())
-            .collect();
-        Self { names: v.into() }
-    }
-
-    /// From the two operator settings: `PS5UPLOAD_ALLOWED_HOSTS` (comma-separated hostnames) and
-    /// the entries of `PS5UPLOAD_ALLOW_IP` that are names rather than IPs or CIDR ranges.
-    pub fn from_values(allowed_hosts: &str, allow_ip: &str) -> Self {
-        let from_ip = allow_ip
-            .split(',')
-            .map(str::trim)
-            .filter(|e| !e.is_empty() && AllowRule::parse(e).is_none() && !e.contains('/'));
-        Self::new(allowed_hosts.split(',').chain(from_ip))
-    }
-
-    pub fn from_env() -> Self {
-        Self::from_values(
-            &std::env::var("PS5UPLOAD_ALLOWED_HOSTS").unwrap_or_default(),
-            &std::env::var("PS5UPLOAD_ALLOW_IP").unwrap_or_default(),
-        )
-    }
-
-    fn allows_name(&self, name: &str) -> bool {
-        let name = name.trim_end_matches('.').to_ascii_lowercase();
-        name == "localhost"
-            || name.ends_with(".localhost")
-            || name.parse::<std::net::IpAddr>().is_ok()
-            || self.names.contains(&name)
-    }
-
-    /// True when the `Host` header value (with or without a port) names an allowed host.
-    fn allows_host_header(&self, host: &str) -> bool {
-        let name = if let Some(b) = host.strip_prefix('[') {
-            b.split(']').next().unwrap_or("")
-        } else {
-            host.split(':').next().unwrap_or("")
-        };
-        !name.is_empty() && self.allows_name(name)
-    }
-}
-
-/// GET routes that change state (they predate the rule that mutations are POST). A request to one
-/// with no browser headers is treated like a POST by [`browser_request_decision`].
-const STATE_CHANGING_GET_PATHS: &[&str] = &[
-    "/api/ps5/cheats/delete",
-    "/api/ps5/cheats/reload",
-    "/api/debug/crash",
-];
-
-#[cfg(test)]
 fn browser_request_allows(headers: &axum::http::HeaderMap, path: &str) -> bool {
-    browser_request_decision(
-        headers,
-        &axum::http::Method::GET,
-        path,
-        &HostPolicy::default(),
-    )
-}
-
-fn browser_request_decision(
-    headers: &axum::http::HeaderMap,
-    method: &axum::http::Method,
-    path: &str,
-    policy: &HostPolicy,
-) -> bool {
     if path.starts_with("/pkg-host/") {
         return true;
     }
@@ -902,10 +816,6 @@ fn browser_request_decision(
     let Some(host) = headers.get("host").and_then(|v| v.to_str().ok()) else {
         return false;
     };
-    // DNS rebinding: refuse a Host this engine was not told about, whatever the Origin says.
-    if !policy.allows_host_header(host) {
-        return false;
-    }
     let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) else {
         // Browser image subresources do not normally send Origin. Tauri's
         // renderer therefore reaches the loopback sidecar with
@@ -925,44 +835,22 @@ fn browser_request_decision(
                 .and_then(|v| v.to_str().ok())
                 .is_some_and(|referer| browser_origin_allows(referer, host));
         }
-        if cross_site {
-            return false;
-        }
-        // Neither Origin nor Fetch Metadata. A browser sends Origin on every POST, so a request
-        // that claims to be one (User-Agent: Mozilla/...) yet changes state with no browser
-        // headers is stripped or forged: refuse it. Native clients and curl send no browser
-        // headers by nature, and are not refused.
-        let changes_state = !matches!(
-            *method,
-            axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
-        ) || STATE_CHANGING_GET_PATHS.contains(&path);
-        let claims_browser = headers
-            .get("user-agent")
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|ua| ua.starts_with("Mozilla/"));
-        let has_fetch_metadata = headers.contains_key("sec-fetch-site");
-        return !(changes_state && claims_browser && !has_fetch_metadata);
+        // Other cross-site navigations and embedded GETs may also omit Origin
+        // but still carry Fetch Metadata. Native/CLI clients carry neither.
+        return !cross_site;
     };
     browser_origin_allows(origin, host)
 }
 
-async fn browser_origin_guard(
-    State(policy): State<HostPolicy>,
-    req: Request,
-    next: Next,
-) -> impl IntoResponse {
+async fn browser_origin_guard(req: Request, next: Next) -> impl IntoResponse {
     let path = req.uri().path();
-    if browser_request_decision(req.headers(), req.method(), path, &policy) {
+    if browser_request_allows(req.headers(), path) {
         return next.run(req).await.into_response();
     }
-    eprintln!(
-        "[ps5upload-engine] refusing browser request to {path} (cross-site, or a Host this engine \
-         does not serve: to allow another hostname set PS5UPLOAD_ALLOWED_HOSTS=name1,name2)"
-    );
+    eprintln!("[ps5upload-engine] refusing cross-site browser request to {path}");
     (
         StatusCode::FORBIDDEN,
-        "cross-site browser requests are not allowed (or the Host header is not one this engine serves; \
-         set PS5UPLOAD_ALLOWED_HOSTS to add a hostname)",
+        "cross-site browser requests are not allowed",
     )
         .into_response()
 }
@@ -9755,10 +9643,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         // Request trace — inside the loopback guard (so we don't log rejected
         // LAN probes), wrapping the handlers so it times the full request.
         .layer(middleware::from_fn(log_requests))
-        .layer(middleware::from_fn_with_state(
-            HostPolicy::from_env(),
-            browser_origin_guard,
-        ))
+        .layer(middleware::from_fn(browser_origin_guard))
         // Loopback-guard middleware MUST be applied last so it ends
         // up the OUTERMOST layer — axum wraps each `.layer()` around
         // the one below it. Pre-2.2.52 fix-round-2 the order was
@@ -10157,15 +10042,7 @@ mod loopback_guard_tests {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert("host", "nas.local:19113".parse().unwrap());
         headers.insert("origin", "http://nas.local:19113".parse().unwrap());
-        // A hostname is allowed only when the operator named it (PS5UPLOAD_ALLOWED_HOSTS).
-        assert!(!browser_request_allows(&headers, "/api/jobs"));
-        let policy = HostPolicy::new(["nas.local"]);
-        assert!(browser_request_decision(
-            &headers,
-            &axum::http::Method::GET,
-            "/api/jobs",
-            &policy
-        ));
+        assert!(browser_request_allows(&headers, "/api/jobs"));
 
         headers.insert("host", "127.0.0.1:19113".parse().unwrap());
         headers.insert("origin", "http://localhost:1420".parse().unwrap());
@@ -10213,157 +10090,6 @@ mod loopback_guard_tests {
         headers.insert("referer", "http://tauri.localhost/".parse().unwrap());
         headers.insert("sec-fetch-dest", "empty".parse().unwrap());
         assert!(!browser_request_allows(&headers, "/api/ps5/app-icon"));
-    }
-
-    fn get_headers(host: &str) -> axum::http::HeaderMap {
-        let mut h = axum::http::HeaderMap::new();
-        h.insert("host", host.parse().unwrap());
-        h
-    }
-
-    /// DNS rebinding: `evil.example` resolves to 127.0.0.1, so the page's Origin equals its Host
-    /// and the browser sends `Sec-Fetch-Site: same-origin`. Only the Host allowlist stops it.
-    #[test]
-    fn a_rebinding_host_is_refused_even_when_origin_matches() {
-        let policy = HostPolicy::default();
-        let mut h = get_headers("evil.example:19113");
-        h.insert("origin", "http://evil.example:19113".parse().unwrap());
-        h.insert("sec-fetch-site", "same-origin".parse().unwrap());
-        assert!(!browser_request_decision(
-            &h,
-            &axum::http::Method::GET,
-            "/api/jobs",
-            &policy
-        ));
-        // No Origin at all (a GET) is refused for the same reason.
-        let h = get_headers("evil.example:19113");
-        assert!(!browser_request_decision(
-            &h,
-            &axum::http::Method::GET,
-            "/api/jobs",
-            &policy
-        ));
-    }
-
-    #[test]
-    fn loopback_lan_ip_and_configured_hosts_are_allowed() {
-        let policy = HostPolicy::new(["nas.local", "Box.Example.com"]);
-        for host in [
-            "127.0.0.1:19113",
-            "localhost:19113",
-            "LOCALHOST",
-            "app.localhost:1",
-            "tauri.localhost",
-            "[::1]:19113",
-            "192.168.1.20:19113", // a LAN address (Docker, NAT): an IP literal cannot be rebound
-            "nas.local:19113",
-            "box.example.com",
-        ] {
-            let h = get_headers(host);
-            assert!(
-                browser_request_decision(&h, &axum::http::Method::GET, "/api/jobs", &policy),
-                "{host}"
-            );
-        }
-        for host in [
-            "evil.example",
-            "nas.local.evil.example:80",
-            "localhost.evil.example",
-            "",
-        ] {
-            let h = get_headers(host);
-            assert!(
-                !browser_request_decision(&h, &axum::http::Method::GET, "/api/jobs", &policy),
-                "{host}"
-            );
-        }
-    }
-
-    #[test]
-    fn the_pkg_host_path_ignores_the_host_list() {
-        let h = get_headers("whatever:80");
-        assert!(browser_request_decision(
-            &h,
-            &axum::http::Method::GET,
-            "/pkg-host/s/f.pkg",
-            &HostPolicy::default()
-        ));
-    }
-
-    #[test]
-    fn allowed_hosts_come_from_both_env_values() {
-        let p =
-            HostPolicy::from_values("a.example, B.example ", "10.0.0.0/24,c.example,192.168.1.2");
-        for n in ["a.example", "b.example", "c.example"] {
-            assert!(p.allows_name(n), "{n}");
-        }
-        assert!(!p.allows_name("d.example"));
-    }
-
-    /// A browser always sends Origin on a POST, so a state-changing request that carries neither
-    /// Origin nor Fetch Metadata but claims to be a browser (User-Agent: Mozilla/...) is a stripped
-    /// request (an old browser, a proxy rewriting headers): refused. A native client (no Mozilla UA)
-    /// carries no browser headers by nature and stays supported.
-    #[test]
-    fn a_headerless_browser_cannot_change_state() {
-        let policy = HostPolicy::default();
-        let mut h = get_headers("127.0.0.1:19113");
-        h.insert("user-agent", "Mozilla/5.0 (X11)".parse().unwrap());
-        let post = axum::http::Method::POST;
-        let get = axum::http::Method::GET;
-        assert!(!browser_request_decision(
-            &h,
-            &post,
-            "/api/pkg/install",
-            &policy
-        ));
-        // Pairing: the GET only reports state (old Safari sends it headerless), starting a
-        // handshake is a POST and is refused like any other state change.
-        assert!(browser_request_decision(
-            &h,
-            &get,
-            "/api/ava1/pairing",
-            &policy
-        ));
-        assert!(!browser_request_decision(
-            &h,
-            &post,
-            "/api/ava1/pairing/start",
-            &policy
-        ));
-        // GET routes that change state (cheats delete/reload) count as state-changing.
-        assert!(!browser_request_decision(
-            &h,
-            &get,
-            "/api/ps5/cheats/delete",
-            &policy
-        ));
-        // Plain reads from it are fine.
-        assert!(browser_request_decision(&h, &get, "/api/jobs", &policy));
-        // A native client / curl is not a browser.
-        let n = get_headers("127.0.0.1:19113");
-        assert!(browser_request_decision(
-            &n,
-            &post,
-            "/api/pkg/install",
-            &policy
-        ));
-        let mut c = get_headers("127.0.0.1:19113");
-        c.insert("user-agent", "curl/8.4.0".parse().unwrap());
-        assert!(browser_request_decision(
-            &c,
-            &get,
-            "/api/ava1/pairing",
-            &policy
-        ));
-        // With Sec-Fetch-Site or Origin present the ordinary checks decide.
-        h.insert("sec-fetch-site", "same-origin".parse().unwrap());
-        assert!(browser_request_decision(
-            &h,
-            &post,
-            "/api/pkg/install",
-            &policy
-        ));
     }
 
     #[test]
