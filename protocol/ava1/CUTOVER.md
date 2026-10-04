@@ -481,3 +481,74 @@ Deferred:
 - **The sweep on a worker**: a sweep's directory syncs are serial (a worker must not wait on other workers' stripes). If
   `dirs` shows in the end-of-job line, give the sweep its own helper thread.
 - **Engine macOS default**: revisit once an engine-side drive where fsync is expensive (a Windows or Linux host) has numbers.
+
+## 7. Fork reconciliation: fixes on `main` that the fork lacks (review 015 #07 §3)
+
+`ava1` forked at v5.41.0 (`a364f7a4`). `git log origin/main ^ava1` is **empty**: nothing has merged to `main`
+since the fork, so every item below is an open PR or issue. Classes: (a) moot on AVA1, (b) port as is
+(transport-independent), (c) re-implement on AVA1. Checked 2026-10-04 against `gh pr list --state open`.
+Design notes are in `docs-research/015-complete-design-set/` on `origin/ava1-design`.
+
+| Item | Class | Action | Link |
+|---|---|---|---|
+| #351 Convert reads console games through the helper | (c) | Re-implement over AVA1 reads. Owner: agent `p3-convert`. | design 01; PR #351 |
+| #365 free-space check double-counts a partial upload | (c) | Re-implement against AVA1 job state. Owner: `p3-space`. | design 02; issue #365 |
+| #353 folder resume after rest mode | (a) | Moot: the payload's FTX2 manifest adoption is gone. Add a resume-after-rest test only. Owner: `p3-space`. | design 02 §4; PR #353 |
+| #350 progress for copy/paste and Add files | (c) | Re-implement on AVA1 job status. Later, design 03. | design 03; PR #350 |
+| #349 installed games listed as installable packages | (b) | **Ported** (cherry-pick, clean): the external scan skips `/mnt/ext*/user`, `/api/pkg/install` refuses `…/user/{app,patch,addcont}/…`. Tests kept (`a_games_own_installed_files_are_never_an_install_source`, `the_scan_skips_installed_games_on_extended_storage`). The design said the guard lives in `pkg_install.rs`; it lives in `install/mod.rs::install_handler`, which is the handler `/api/pkg/install` uses. | design 04 §2; PR #349 |
+| #348 Windows installer updates with the installer | (b) | **Ported** (cherry-pick). One conflict in `en.ts` (both sides append keys), kept both. `install_hint_setup_exe` is in the i18n allowlist like the other new keys. Takes effect from the release after the one that ships it. | design 07 §3; PR #348 |
+| #360 keep-awake releases on Windows (external, lowbit) | (b) | **Ported** (cherry-pick, author kept) after review; see the review below. Not merged on GitHub. | design 07 §2; PR #360 |
+| #364 Windows fpkg output lands in AppData temp | (b) | Not a PR, an issue. Fix is client/engine `default_output_dir`; independent of transport. Pending. | design 05 §1; issue #364 |
+| #366 upload queue size chip and free-space warning (external) | (b) with (c) overlap | Review pending, do not port yet. See below. | design 02; PR #366 |
+| #367 `PS5UPLOAD_BROWSE_ROOTS` (external) | (b) | Recommend port after one fix. See below. | design 07 §2; PR #367 |
+| #355 Persian locale (external) | (b) | Recommend: not mergeable until the key gate passes. See below. | design 07 §2; PR #355 |
+| #362 NixOS install docs (external) | (b) docs | Recommend merge after rebase, with a note. See below. | design 07 §2; PR #362 |
+| #343 brace-expansion 5.0.9 to 5.0.12 (dependabot, client lockfile) | maintenance | Record only. CI is green; safe to merge on `main`. | design 07 §1; PR #343 |
+| #356 engine group, 7 updates (dependabot) | maintenance | Record only. CI fails to compile (8 errors). Redo after #357. | design 07 §1; PR #356 |
+| #357 num-bigint 0.4 to 0.5 (dependabot) | maintenance | Record only. Breaking: `rand` feature split. Own branch. | design 07 §1; PR #357 |
+| #358 frontend group, 10 updates (dependabot) | maintenance | Record only. Must move with #359 (the npm and Rust Tauri versions must match). | design 07 §1; PR #358 |
+| #359 tauri-shell group, 9 updates (dependabot) | maintenance | Record only. Together with #358, one branch. | design 07 §1; PR #359 |
+| #361 saved connections EACCES in Docker/NAS | (b) | Issue, not a PR. Designed. | design 04 §1; issue #361 |
+| #363 iOS port | n/a | Issue. Maintainer decision; needs a security read of its network and signing code first. | design 07 §2; issue #363 |
+| #352 app unstyled on macOS 11 | (b) | Issue, investigation. | design 05 §2; issue #352 |
+
+Counts: 20 rows; (a) moot 1, (b) port 9 (+#366 overlap), (c) re-implement 3 (+1 overlap), maintenance 5, issues or decisions 3.
+Ported on branch `p3-port`: #348, #349, #360.
+
+### 7.1 Reviews of the external PRs (recommendations; nothing was merged or commented on GitHub)
+
+**#360 keep-awake (ported).** `SetThreadExecutionState` is per thread, and the keep-awake commands run on tokio workers, so
+the release on another worker cleared nothing. The PR moves to a power request object that any thread can release. Reviewed
+the `unsafe` Win32 use against the documented ABI:
+- `PowerCreateRequest` returns `INVALID_HANDLE_VALUE` on failure, and the code tests for that (not NULL). Correct.
+- `REASON_CONTEXT`: `Version`(u32) `Flags`(u32) then the union. The union's `Detailed` arm is
+  `HMODULE, ULONG, ULONG, LPWSTR*` and `SimpleReasonString` shares its first pointer, so the Rust struct's trailing fields
+  give the struct the right size on 32 and 64 bit. Version 0, flag `SIMPLE_STRING` = 1: correct.
+- `POWER_REQUEST_TYPE`: DisplayRequired = 0, SystemRequired = 1: correct.
+- The UTF-16 reason buffer outlives `PowerCreateRequest` (it is a local that lives to the end of the function).
+- The handle is stored as `isize`, so `Handle` stays `Send`; it is closed exactly once, in `release_inhibitor`, after both
+  `PowerClearRequest` calls. On a failed `PowerSetRequest` the handle is closed before returning the error: no leak.
+- No new crate. The file was compiled for `x86_64-pc-windows-msvc` in a scratch crate (`cargo check`): clean. Not run
+  on Windows hardware, so confirm with `powercfg /requests` after a transfer in the Windows CI or a manual run.
+
+**#366 queue chip and free-space warning.** Client-only, 665 lines, with 219 lines of tests; pure helpers plus one
+`fetchVolumes` call that fails open. It is transport-independent, but it overlaps design 02 (the free-space precheck), and it
+does not handle the partly uploaded item (issue #365): a resumed item counts its full size, so it over-warns. Recommend: hold
+until `p3-space` lands design 02, then rebase and take only the chip. The notification and banner code should go through the
+existing notification path. Generated by a tool (Codebuff), so read the QueuePanel changes before merge. The i18n gate needs
+the new keys translated or allowlisted.
+
+**#367 browse roots.** Small, tested, defaults to the old behaviour. One issue: `storage_roots()` calls `eprintln!`, and the
+project rule is that engine paths must not `eprintln!` (it panics when the parent died); use the engine log helper. The env
+tests share a lock with each other only, not with the existing `storage_roots` test, which is benign. Recommend merge after that
+change. The README/FAQ hunks apply to `ava1`'s docs with small conflicts.
+
+**#355 Persian.** On `ava1` the PR fails the i18n coverage gate: `fa.ts` lacks about 66 keys that `ava1` added
+(`joberr.ava1_*`, `pairing_*` and so on), plus `install_hint_setup_exe`. Applying the diff to `p3-port` and running
+`node scripts/i18n-coverage.mjs` fails with "translate the keys above OR add them to scripts/i18n-known-missing.json".
+Recommend: ask the contributor to rebase, then allowlist or translate the missing keys; the language-list code in
+`lang.ts` already treats `fa` as RTL. Needs a native-speaker check of the strings.
+
+**#362 NixOS docs.** Docs only, 63 lines in the README, pointing at the contributor's own NUR repo. It will conflict with
+`ava1`'s README. Recommend merge after rebase, with the sentence that the package is community maintained and pins one
+release version. The `allowUnfree` note (UnRAR) is accurate.
