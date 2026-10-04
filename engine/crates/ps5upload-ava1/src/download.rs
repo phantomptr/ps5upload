@@ -766,6 +766,7 @@ pub fn to_local_in(
     if journal_is_empty(&job_dir) {
         remove_path(&part);
     }
+    let target_dir = target.clone();
     let sink: Arc<dyn Sink> = Arc::new(CheckedSink {
         inner: LocalSink::new(target.clone(), single),
         root: target,
@@ -783,7 +784,7 @@ pub fn to_local_in(
         cancel,
     );
     if let Err(e) = &r {
-        cleanup_after_failure(e, &job_dir, &part);
+        cleanup_after_failure(e, &job_dir, &part, &target_dir, single);
     }
     r
 }
@@ -793,13 +794,42 @@ pub fn to_local_in(
 /// A local I/O failure (a full disk, a descriptor shortage that outlasted the waits) is
 /// recoverable once the cause is gone, and the next run of the same job resumes from the
 /// journal and the staged tree, so both stay.
-fn cleanup_after_failure(e: &anyhow::Error, job_dir: &Path, part: &Path) {
+///
+/// A folder downloaded into a folder that already exists is not staged: each large file is written
+/// as `<name>.ava-part` beside its final place, inside that folder. Those part files belong to the
+/// job too; the journal's saved manifest names them (and only them: a `.ava-part` the job does not
+/// own is left alone), so they go with the journal (review 009 #5).
+fn cleanup_after_failure(
+    e: &anyhow::Error,
+    job_dir: &Path,
+    part: &Path,
+    target: &Path,
+    single: bool,
+) {
     let recoverable = e
         .downcast_ref::<UploadFailure>()
         .is_some_and(|f| f.reason == "ava1_local_io");
     if !recoverable {
+        if !single {
+            remove_part_files(job_dir, target);
+        }
         let _ = std::fs::remove_dir_all(job_dir);
         remove_path(part);
+    }
+}
+
+/// Removes the in-place `<file>.ava-part` of every file the job's saved manifest lists, under
+/// `target`. Nothing when the manifest is missing or unreadable (a job that never got that far
+/// wrote no part files).
+fn remove_part_files(job_dir: &Path, target: &Path) {
+    let Ok(m) = journal::read_manifest(job_dir) else {
+        return;
+    };
+    for e in m.entries.iter().filter(|e| e.kind == gen::ENTRY_FILE) {
+        let mut p = target.join(&e.path).into_os_string();
+        p.push(".ava-part");
+        // `remove_file` takes a symlink itself, never what it points at.
+        let _ = std::fs::remove_file(PathBuf::from(p));
     }
 }
 
@@ -1701,7 +1731,7 @@ mod tests {
         };
         let local_io = terminal(SendError::Source(io::Error::other("disk full")));
         fill();
-        cleanup_after_failure(&local_io, &job, &part);
+        cleanup_after_failure(&local_io, &job, &part, &d, false);
         assert!(job.exists() && part.exists(), "resume lost its work");
         for e in [
             anyhow!("transfer_cancelled"),
@@ -1712,7 +1742,7 @@ mod tests {
             }),
         ] {
             fill();
-            cleanup_after_failure(&e, &job, &part);
+            cleanup_after_failure(&e, &job, &part, &d, false);
             assert!(!job.exists() && !part.exists(), "a final failure left work");
         }
         let _ = std::fs::remove_dir_all(&d);
@@ -1766,6 +1796,48 @@ mod tests {
         std::fs::write(d.join("f.ava-part"), b"x").unwrap();
         remove_path(&d.join("f.ava-part"));
         assert!(!d.join("f.ava-part").exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_final_failure_into_an_existing_folder_removes_its_in_place_part_files_only() {
+        let d = std::env::temp_dir().join(format!("p5a-inplace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let (job, target) = (d.join("job"), d.join("Game"));
+        std::fs::create_dir_all(&job).unwrap();
+        std::fs::create_dir_all(target.join("sub")).unwrap();
+        let file = |path: &str| manifest::Entry {
+            kind: gen::ENTRY_FILE,
+            mode: 0o644,
+            size: 5 << 20,
+            mtime: 0,
+            path: path.into(),
+            root: None,
+        };
+        let m = Manifest {
+            entries: vec![file("big.bin"), file("sub/big2.bin")],
+        };
+        journal::write_manifest(&job, &m).unwrap();
+        std::fs::write(job.join("journal"), b"x").unwrap();
+        // what a failed run left: the job's part files, the final file it would replace, and a
+        // part file that is not the job's
+        std::fs::write(target.join("big.bin.ava-part"), b"p").unwrap();
+        std::fs::write(target.join("sub/big2.bin.ava-part"), b"p").unwrap();
+        std::fs::write(target.join("big.bin"), b"old").unwrap();
+        std::fs::write(target.join("other.ava-part"), b"mine").unwrap();
+        let part = d.join("Game.ava-part"); // staging: absent, the folder existed
+        let local_io = terminal(SendError::Source(io::Error::other("disk full")));
+        cleanup_after_failure(&local_io, &job, &part, &target, false);
+        assert!(
+            target.join("big.bin.ava-part").exists(),
+            "a recoverable failure keeps its work"
+        );
+        cleanup_after_failure(&anyhow!("transfer_cancelled"), &job, &part, &target, false);
+        assert!(!target.join("big.bin.ava-part").exists());
+        assert!(!target.join("sub/big2.bin.ava-part").exists());
+        assert!(!job.exists());
+        assert_eq!(std::fs::read(target.join("big.bin")).unwrap(), b"old");
+        assert!(target.join("other.ava-part").exists(), "not the job's");
         let _ = std::fs::remove_dir_all(&d);
     }
 }
