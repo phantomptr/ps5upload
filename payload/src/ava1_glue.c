@@ -176,6 +176,8 @@ const char *ava1_payload_state(void) {
     return g_ava1_state == 1 ? "up" : g_ava1_state == 2 ? "failed" : "starting";
 }
 
+void ava1_payload_refused(void) { g_ava1_state = 2; }
+
 static int ava1_payload_start_inner(void);
 
 int ava1_payload_start(void) {

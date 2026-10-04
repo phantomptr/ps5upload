@@ -1337,7 +1337,7 @@ static void *watcher_thread(void *arg) {
             snprintf(msg, sizeof(msg), "%d cheat%s applied to %s",
                      applied, applied == 1 ? "" : "s",
                      game_name[0] ? game_name : title);
-            notif_send(msg, NOTIF_LEVEL_INFO);
+            notif_send_serialised(msg, NOTIF_LEVEL_INFO);
         }
     }
     return NULL;
@@ -1676,7 +1676,7 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
         } else {
             snprintf(msg, sizeof(msg), "%s %s", label, turn_on ? "on" : "off");
         }
-        notif_send(msg, NOTIF_LEVEL_INFO);
+        notif_send_serialised(msg, NOTIF_LEVEL_INFO);
     }
 
     free(target_cf);
@@ -1744,7 +1744,7 @@ int cheats_reload(char *err, size_t err_cap) {
         snprintf(msg, sizeof(msg), "No cheats enabled for %s",
                  game_name[0] ? game_name : title);
     }
-    notif_send(msg, NOTIF_LEVEL_INFO);
+    notif_send_serialised(msg, NOTIF_LEVEL_INFO);
 
     return 0;
 }

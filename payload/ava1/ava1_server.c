@@ -554,6 +554,10 @@ typedef struct {
     uint32_t body_len;
 } rpc_job_t;
 
+/* Detached RPC workers running, whatever became of their session (a session's own rpc_inflight is
+ * dropped with the session while its worker still runs): what the exit waits for. */
+static int g_rpc_running;
+
 static void *rpc_worker(void *arg) {
     rpc_job_t *j = arg;
     uint8_t *out = malloc(RPC_OUT_MAX);
@@ -583,6 +587,7 @@ static void *rpc_worker(void *arg) {
     free(j->body);
     conn_put(j->k);
     free(j);
+    __atomic_sub_fetch(&g_rpc_running, 1, __ATOMIC_SEQ_CST);
     return NULL;
 }
 
@@ -646,7 +651,9 @@ static int do_rpc(conn_t *k, int idx, const uint8_t sid[16], uint32_t ch, const 
     j->ch = ch;
     j->method = q.method;
     conn_get(k);
+    __atomic_add_fetch(&g_rpc_running, 1, __ATOMIC_SEQ_CST);
     if (spawn_detached_stack(rpc_worker, j, rpc_stack(q.method)) != 0) {
+        __atomic_sub_fetch(&g_rpc_running, 1, __ATOMIC_SEQ_CST);
         conn_put(k);
         free(j->body);
         free(j);
@@ -1211,6 +1218,8 @@ int ava1_server_pairing_open(void) {
     pthread_mutex_unlock(&mu);
     return open;
 }
+
+int ava1_server_rpc_inflight(void) { return __atomic_load_n(&g_rpc_running, __ATOMIC_SEQ_CST); }
 
 int ava1_server_conns(void) {
     int n;

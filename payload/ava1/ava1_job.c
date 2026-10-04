@@ -233,6 +233,7 @@ static void job_destroy(ava1_job_t *j) {
             if (j->lf[i]) {
                 if (j->lf[i]->fd >= 0) close(j->lf[i]->fd);
                 if (j->lf[i]->ob_fd >= 0) close(j->lf[i]->ob_fd);
+                if (j->lf[i]->held) ava1_lf_release(j->lf[i]->held); /* its slots in the large-file budget */
                 ava1_rset_clear(&j->lf[i]->written);
                 ava1_rset_clear(&j->lf[i]->durable);
                 free(j->lf[i]);
@@ -240,6 +241,7 @@ static void job_destroy(ava1_job_t *j) {
         free(j->lf);
     }
     free(j->lfl);
+    free(j->lfo);
     ava1_jnl_close(&j->jnl);
     ava1_bits_free(&j->done);
     ava1_mstore_free(&j->m);

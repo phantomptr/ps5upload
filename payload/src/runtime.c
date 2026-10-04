@@ -2046,6 +2046,9 @@ void runtime_classify_prior_instance(runtime_state_t *state) {
  * Must be called AFTER runtime_try_takeover and BEFORE runtime_write_ownership
  * (which overwrites the prior record with our own pid).
  */
+/* How long the prior instance gets to exit by itself before it is killed. */
+#define REAP_GRACE_MS 15000
+
 void runtime_reap_prior_instance(runtime_state_t *state) {
     if (!state) return;
     int prior = runtime_read_prior_pid(state->ownership_path);
@@ -2061,54 +2064,58 @@ void runtime_reap_prior_instance(runtime_state_t *state) {
     }
     if (prior <= 0 || prior == me) return;
 
-    /* Boot-session guard (the critical safety gate). The ownership file lives
-     * on persistent /data and SURVIVES reboots. After a reboot the kernel's
-     * PID counter resets, so a stale `pid=` from a PRIOR boot is very likely
-     * now owned by UNRELATED homebrew the user autoloaded (a cheat loader,
-     * nanoDNS, ...). SIGKILLing it would take down their other tools — exactly
-     * the "my scripts died" reports. So only reap a record written during the
-     * CURRENT boot: the recorded start time must be >= this boot's wall-clock
-     * start. If either value is unknown (no sysctl, or an old-format record
-     * with no started_at), refuse to kill — the worst case is the pre-existing
-     * "restart the PS5" fallback, which is far better than killing a
-     * bystander. The name check below is kept as a second line of defense. */
-    {
-        uint64_t prior_started =
-            runtime_read_prior_started_at(state->ownership_path);
-        uint64_t boottime = runtime_system_boottime_unix();
-        if (boottime == 0 || prior_started == 0 || prior_started < boottime) {
-            fprintf(stderr,
-                    "[payload2] reap: prior record (started=%llu, boottime=%llu) "
-                    "is from a previous boot or unverifiable — pid %d may now be "
-                    "unrelated homebrew; NOT killing\n",
-                    (unsigned long long)prior_started,
-                    (unsigned long long)boottime, prior);
-            return;
-        }
-    }
-
+    /* Boot-session guard (the critical safety gate). The ownership file lives on persistent /data and
+     * SURVIVES reboots, and after a reboot the pid counter restarts, so a stale `pid=` may now be
+     * unrelated homebrew (a cheat loader, nanoDNS, ...). Two witnesses, either enough: the KERNEL's
+     * start time of that very process (ki_start, same clock as kern.boottime) is at or after this
+     * boot, or the record's started_at_unix is. The record alone used to be the only one, and a
+     * record that read started=0 left a live helper beside the new instance (the 2026-10-03 Pro
+     * outage). The name check (ours, not "payload.elf") stays the second line of defence. */
     if (kill((pid_t)prior, 0) != 0) return; /* already gone */
 
     char their_name[64] = {0};
     if (proc_name_by_pid(prior, their_name, sizeof(their_name)) != 0) {
         return; /* prior pid vanished between the checks — nothing to do */
     }
-    /* Second line of defence against pid recycling. NOT an exact compare
-     * against our own name: ours is read here, before any worker thread has
-     * started, so it is still "ps5upload.elf", while a predecessor that has
-     * been up for a while reports whichever worker the kernel picked as its
-     * representative thread — "ps5upload-wake" in issue #289's kernel log.
-     * The exact compare made this branch always take the skip path, so a
-     * wedged predecessor was never reaped and the new payload exited.
-     *
-     * The PRIMARY safety gate remains the boot-session check above; this
-     * only has to rule out a recycled pid now owned by unrelated homebrew,
-     * and no other homebrew carries the "ps5upload" prefix. */
-    if (!proc_name_is_ours(their_name)) {
+    {
+        uint64_t prior_started = runtime_read_prior_started_at(state->ownership_path);
+        uint64_t boottime = runtime_system_boottime_unix();
+        uint64_t kstart = 0;
+        int kstart_known = proc_start_by_pid(prior, &kstart) == 0;
+        ps5upload2_reap_t verdict = instance_reap_decision(proc_name_is_ours(their_name), prior_started, boottime,
+                                                           kstart, kstart_known, (uint64_t)time(NULL));
         fprintf(stderr,
-                "[payload2] reap: pid %d is '%s', not one of ours — recycled pid, skipping\n",
-                prior, their_name);
-        return;
+                "[payload2] reap: pid %d name=%s kernel_start=%llu%s record_started=%llu boottime=%llu -> %s\n",
+                prior, their_name, (unsigned long long)kstart, kstart_known ? "" : " (unreadable)",
+                (unsigned long long)prior_started, (unsigned long long)boottime,
+                verdict == PS5UPLOAD2_REAP_YES ? "ours, this boot"
+                : verdict == PS5UPLOAD2_REAP_NOT_OURS ? "not one of ours (recycled pid), skipping"
+                : "cannot show it is of this boot: NOT killing");
+        if (verdict != PS5UPLOAD2_REAP_YES) return;
+    }
+
+    /* Graceful first. The takeover request (frame or flag file) already asked it to exit, and a
+     * helper stopping cleanly finishes its Sony call and closes its journals; a SIGKILL while it is
+     * inside a Sony call is the thing that hangs a console. So wait, bounded, for it to go by itself
+     * and kill only what is still there after that. */
+    {
+        struct timespec t0, now;
+        int gone = 0;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (;;) {
+            if (kill((pid_t)prior, 0) != 0) {
+                gone = 1;
+                break;
+            }
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            if ((now.tv_sec - t0.tv_sec) * 1000 + (now.tv_nsec - t0.tv_nsec) / 1000000 >= REAP_GRACE_MS) break;
+            usleep(100000);
+        }
+        if (gone) {
+            fprintf(stderr, "[payload2] prior instance pid=%d exited by itself\n", prior);
+            return;
+        }
+        fprintf(stderr, "[payload2] prior instance pid=%d is still alive after %d ms of grace\n", prior, REAP_GRACE_MS);
     }
 
     fprintf(stderr, "[payload2] reaping crashed prior instance pid=%d (name=%s)\n",
@@ -2233,6 +2240,10 @@ int runtime_sweep_our_instances(void) {
 
 /* ── Shutdown watchdog ────────────────────────────────────────────────────── */
 
+/* The exit watchdog: it may exit from WATCHDOG_BASE_MS once no Sony call is in flight, and at all
+ * events from WATCHDOG_CEILING_MS. */
+#define WATCHDOG_BASE_MS 8000
+#define WATCHDOG_CEILING_MS 60000
 static int g_watchdog_exit_code = 0;
 /* Set once by runtime_arm_shutdown_watchdog, before the watchdog thread is
  * created — never mutated after, so the watchdog thread reads it race-free
@@ -2249,8 +2260,48 @@ static void *runtime_shutdown_watchdog(void *arg) {
      * process exits via main()'s return long before this fires and this thread
      * dies with it. If shutdown WEDGES (e.g. pthread_join on a mgmt thread
      * stuck in an uninterruptible Sony API never returns), force the process
-     * out so it can't linger as an orphan the next resend would duplicate. */
-    sleep(8);
+     * out so it can't linger as an orphan the next resend would duplicate.
+     *
+     * But never while a Sony call is in flight: a call cut by _exit can wedge the console, and
+     * ava1_payload_stop promises not to return (or exit) inside one. So after the base time the
+     * watchdog waits for sony_api_lock to be free (and HOLDS it from then on, so no new call starts
+     * while the process goes down), up to a hard ceiling that it logs loudly (final review: console). */
+    {
+        struct timespec t0, now;
+        int announced = 0, held = 0, d;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        for (;;) {
+            long long elapsed;
+            int busy;
+            usleep(100000);
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            elapsed = (long long)(now.tv_sec - t0.tv_sec) * 1000 + (now.tv_nsec - t0.tv_nsec) / 1000000;
+            if (elapsed < WATCHDOG_BASE_MS) continue;
+            busy = pthread_mutex_trylock(&sony_api_lock) != 0;
+            held = !busy;
+            d = ava1_exit_decide(elapsed, busy, WATCHDOG_BASE_MS, WATCHDOG_CEILING_MS);
+            if (d == AVA1_EXIT_OK) break;
+            if (d == AVA1_EXIT_FORCED) {
+                fprintf(stderr,
+                        "[payload2] SHUTDOWN WATCHDOG: a Sony call is STILL in flight after %lld ms; exiting anyway "
+                        "(hard ceiling %d ms). The console may need a restart.\n",
+                        elapsed, WATCHDOG_CEILING_MS);
+                break;
+            }
+            if (held) pthread_mutex_unlock(&sony_api_lock); /* not at the exit yet: do not block the others */
+            if (!announced) {
+                announced = 1;
+                fprintf(stderr,
+                        "[payload2] shutdown watchdog: %d ms passed but a Sony call is in flight; waiting for it "
+                        "(up to %d ms)\n",
+                        WATCHDOG_BASE_MS, WATCHDOG_CEILING_MS);
+            }
+        }
+        (void)held; /* when held, the lock stays taken: _exit below, nothing else runs a Sony call */
+    }
+    /* Journals are fsynced on every append; make the last ones certain, bounded (an fsync on a wedged
+     * drive must not stop the forced exit this thread exists to guarantee). */
+    if (ava1_exit_flush(2000) != 0) fprintf(stderr, "[payload2] shutdown watchdog: journal flush abandoned after 2 s\n");
     /* We are exiting deliberately — clear the ownership record BEFORE
      * _exit() so the next instance doesn't read a leftover record + dead
      * pid as `killed_externally`. runtime_clear_ownership is just unlink()
@@ -9307,7 +9358,10 @@ static int handle_time_get(runtime_state_t *state, int client_fd,
     sce_datetime_t dt;
     memset(&dt, 0, sizeof(dt));
     uint32_t ec = 0;
+    pthread_mutex_lock(&sony_api_lock); /* sceSystemServiceGetCurrentDateTime: one Sony call at a time */
     int rc = sys_time_get(&dt, &ec);
+    usleep(SONY_API_POST_SLEEP_US);
+    pthread_mutex_unlock(&sony_api_lock);
     char body[256];
     int n;
     if (rc == 0) {
@@ -9372,7 +9426,10 @@ static int handle_time_set(runtime_state_t *state, int client_fd,
     uint32_t ec = 0;
     int64_t prior_unix = -1, new_unix = -1;
     int used_fallback = 0;
+    pthread_mutex_lock(&sony_api_lock); /* sceSystemServiceGet/SetCurrentDateTime: one Sony call at a time */
     int rc = sys_time_set(&dt, &ec, &prior_unix, &new_unix, &used_fallback);
+    usleep(SONY_API_POST_SLEEP_US);
+    pthread_mutex_unlock(&sony_api_lock);
     char body[256];
     /* snake_case keys: the engine deserializes this with serde, which
      * silently zeroes any field whose name doesn't match. */
@@ -9485,8 +9542,8 @@ static int handle_time_state_get(runtime_state_t *state, int client_fd,
                                                 &tzdata_ver_err);
     int ntp_tick_rc    = sys_registry_get_ntp_tick_unix(&ntp_tick_unix,
                                                           &ntp_tick_err);
+    int wall_rc        = sys_time_get(&wall_dt, &wall_err); /* a Sony call: still under the lock */
     pthread_mutex_unlock(&sony_api_lock);
-    int wall_rc        = sys_time_get(&wall_dt, &wall_err);
 
     /* Build response. JSON grows up to ~1.2 KB with all fields
      * populated; sizing to 2 KB gives plenty of slack for the
@@ -10242,7 +10299,7 @@ static int handle_system_control(runtime_state_t *state, int client_fd,
         rc = send_frame(client_fd, FTX2_FRAME_SYSTEM_CONTROL_ACK, 0,
                         trace_id, ack, strlen(ack));
         if (mgmt_capture_active() && power_defer(SC_ACTION_REBOOT) == 0) return rc;
-        sceSystemServiceRequestReboot();
+        power_do_action(SC_ACTION_REBOOT); /* takes sony_api_lock (legacy path and power_defer failure) */
         return rc;
     }
     case SC_ACTION_SHUTDOWN: {
@@ -10263,13 +10320,7 @@ static int handle_system_control(runtime_state_t *state, int client_fd,
          * niladic the extra register is ignored; if it takes a mode/reason,
          * 0 is the safe "normal shutdown" default. Avoids passing a garbage
          * register the way a `(void)` cast would if the arity is non-zero. */
-        void *h = dlsym(RTLD_DEFAULT, "sceSystemStateMgrTurnOff");
-        if (h) {
-            int (*turn_off)(int) = (int (*)(int))h;
-            turn_off(0);
-        } else {
-            sceSystemServiceRequestPowerOff();
-        }
+        power_do_action(SC_ACTION_SHUTDOWN); /* sceSystemStateMgrTurnOff, else RequestPowerOff, under sony_api_lock */
         return rc;
     }
     case SC_ACTION_STANDBY: {
@@ -10281,12 +10332,11 @@ static int handle_system_control(runtime_state_t *state, int client_fd,
             return send_frame(client_fd, FTX2_FRAME_SYSTEM_CONTROL_ACK,
                               0, trace_id, err_str, strlen(err_str));
         }
-        int (*enter_standby)(void) = (int (*)(void))h;
         const char *ack = "{\"ok\":true,\"action\":\"standby\"}";
         rc = send_frame(client_fd, FTX2_FRAME_SYSTEM_CONTROL_ACK, 0,
                         trace_id, ack, strlen(ack));
         if (mgmt_capture_active() && power_defer(SC_ACTION_STANDBY) == 0) return rc;
-        enter_standby();
+        power_do_action(SC_ACTION_STANDBY);
         return rc;
     }
     case SC_ACTION_TICK:
@@ -10487,8 +10537,8 @@ static int handle_user_create(runtime_state_t *state, int client_fd,
     int new_uid = -1;
     const char *err_msg = "";
     if (name[0]) {
-        sceUserServiceInitialize(NULL);
         pthread_mutex_lock(&sony_api_lock);
+        sceUserServiceInitialize(NULL); /* a Sony call: inside the lock (final review: console) */
         int raw_uid = -1;
         int init_rc = sceUserServiceGetInitialUser(&raw_uid);
         if (init_rc == 0 && raw_uid >= 0) {
@@ -10540,8 +10590,8 @@ static int handle_user_delete(runtime_state_t *state, int client_fd,
                      "/user/home/%d/savedata_prospero", uid);
             remove_recursive_path(sd_path, NULL, NULL);
         }
-        sceUserServiceInitialize(NULL);
         pthread_mutex_lock(&sony_api_lock);
+        sceUserServiceInitialize(NULL); /* a Sony call: inside the lock (final review: console) */
         int del_rc = sceUserServiceDestroyUser(uid);
         usleep(SONY_API_POST_SLEEP_US);
         pthread_mutex_unlock(&sony_api_lock);
@@ -10885,7 +10935,7 @@ static int handle_notif_send(runtime_state_t *state, int client_fd,
                           err, strlen(err));
     }
     int level = (int)extract_json_uint64_field(body, "level");
-    int rc = notif_send(msg, level);
+    int rc = notif_send_serialised(msg, level); /* sceNotificationSend needs sony_api_lock */
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);

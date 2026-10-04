@@ -74,6 +74,8 @@ uint16_t ava1_server_port(void);
 void ava1_server_open_pairing(uint32_t seconds);
 int ava1_server_pairing_open(void);
 int ava1_server_conns(void);
+/* RPC workers running right now, all sessions (they are detached: this is the only count of them). */
+int ava1_server_rpc_inflight(void);
 /* Stops accepting; open connections notice within one ping interval. */
 void ava1_server_stop(void);
 /* Identity of the paired caller while an RPC callback runs on its worker thread. */

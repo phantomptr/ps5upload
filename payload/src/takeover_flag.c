@@ -129,6 +129,20 @@ int takeover_port_responding(int port) {
     return up;
 }
 
+int takeover_wait_port_free(int port, int max_ms, int interval_ms) {
+    struct timespec t0, now;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    if (interval_ms < 1) interval_ms = 1;
+    for (;;) {
+        long waited;
+        if (!takeover_port_responding(port)) return 0;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        waited = (long)(now.tv_sec - t0.tv_sec) * 1000 + (now.tv_nsec - t0.tv_nsec) / 1000000;
+        if (waited >= max_ms) return -1;
+        usleep((useconds_t)interval_ms * 1000u);
+    }
+}
+
 int takeover_flag_request(const char *dir, uint64_t my_nonce, const int *ports, int nports,
                           int attempts, int interval_us) {
     if (takeover_flag_write(dir, my_nonce) != 0) return -1;

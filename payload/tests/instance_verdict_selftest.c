@@ -88,6 +88,31 @@ int main(void) {
                   "unknown"),
           "out-of-range verdict has a name");
 
+    /* The reap decision (final review: console, outage 2026-10-03): the kernel's process start time
+     * decides, the ownership record's started_at_unix only backs it up. A record with started=0 (an
+     * instrumented build) used to leave a live helper running next to the new one. */
+    {
+        const uint64_t NOW = BOOT + 4000;
+        check(instance_reap_decision(1, 0, BOOT, AFTER_BOOT, 1, NOW) == PS5UPLOAD2_REAP_YES,
+              "started=0 record + a process that started this boot + our name: reap");
+        check(instance_reap_decision(1, AFTER_BOOT, BOOT, 0, 0, NOW) == PS5UPLOAD2_REAP_YES,
+              "no kernel start time but a record from this boot: reap (the old rule)");
+        check(instance_reap_decision(1, 0, BOOT, 0, 0, NOW) == PS5UPLOAD2_REAP_UNVERIFIABLE,
+              "started=0 and no kernel start time: refuse");
+        check(instance_reap_decision(1, 0, BOOT, BEFORE_BOOT, 1, NOW) == PS5UPLOAD2_REAP_UNVERIFIABLE,
+              "a kernel start before the boot is a misread, not proof: refuse without a record");
+        check(instance_reap_decision(1, 0, BOOT, NOW + 100000, 1, NOW) == PS5UPLOAD2_REAP_UNVERIFIABLE,
+              "a kernel start in the future is a misread: refuse without a record");
+        check(instance_reap_decision(0, AFTER_BOOT, BOOT, AFTER_BOOT, 1, NOW) == PS5UPLOAD2_REAP_NOT_OURS,
+              "a name that is not ours is never reaped, whatever the times say");
+        check(instance_reap_decision(1, BEFORE_BOOT, BOOT, 0, 0, NOW) == PS5UPLOAD2_REAP_UNVERIFIABLE,
+              "a record from a previous boot with no kernel start: refuse");
+        check(instance_reap_decision(1, AFTER_BOOT, 0, AFTER_BOOT, 1, NOW) == PS5UPLOAD2_REAP_UNVERIFIABLE,
+              "unknown boottime: refuse");
+        check(instance_proc_start_plausible(AFTER_BOOT, BOOT, NOW) == 1, "plausible start");
+        check(instance_proc_start_plausible(0, BOOT, NOW) == 0, "zero start is not plausible");
+    }
+
     printf("\ninstance_verdict_selftest: %s\n",
            failures == 0 ? "ALL PASS" : "FAILED");
     return failures == 0 ? 0 : 1;

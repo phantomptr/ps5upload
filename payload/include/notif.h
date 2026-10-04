@@ -22,6 +22,11 @@ int notif_list(uint64_t since_seq, char *buf, size_t cap,
 
 int notif_send(const char *msg, int level);
 
+/* notif_send plus the sony_api_lock it needs for sceNotificationSend. notif_send itself takes no lock
+ * (Remote Play calls it with the lock already held, and the mutex is not recursive); every other caller
+ * uses this one. Do not call it with sony_api_lock held. */
+int notif_send_serialised(const char *msg, int level);
+
 /* Empty the notification ring and its on-disk snapshot.
  * Returns how many entries were removed. */
 int notif_clear(void);

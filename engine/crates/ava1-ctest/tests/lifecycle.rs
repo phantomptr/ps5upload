@@ -36,6 +36,7 @@ extern "C" {
         attempts: c_int,
         interval_us: c_int,
     ) -> c_int;
+    fn takeover_wait_port_free(port: c_int, max_ms: c_int, interval_ms: c_int) -> c_int;
     fn takeover_flag_poll_start(
         dir: *const c_char,
         nonce: u64,
@@ -357,4 +358,55 @@ fn a_backward_clock_does_not_matter() {
         CLOCK_RAN.load(Ordering::SeqCst),
         "a flag with an old mtime still asks for the exit"
     );
+}
+
+/// Final review (console, outage 2026-10-03): a new instance starts its AVA1 side only once :9120 is
+/// free. A port that stays answered ends the wait after the bound, not before and not much after.
+#[test]
+fn waiting_for_a_held_port_gives_up_after_the_bound() {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let t = Instant::now();
+    let rc = unsafe { takeover_wait_port_free(port as c_int, 400, 20) };
+    let took = t.elapsed();
+    assert_eq!(rc, -1, "the port is answered: the wait must say so");
+    assert!(
+        took >= Duration::from_millis(400),
+        "gave up early: {took:?}"
+    );
+    assert!(
+        took < Duration::from_millis(1500),
+        "waited far past the bound: {took:?}"
+    );
+    drop(l);
+}
+
+#[test]
+fn waiting_for_a_port_returns_the_moment_it_frees() {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = l.local_addr().unwrap().port();
+    let h = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        drop(l); // the old helper let go
+    });
+    let t = Instant::now();
+    let rc = unsafe { takeover_wait_port_free(port as c_int, 5000, 20) };
+    h.join().unwrap();
+    assert_eq!(rc, 0);
+    assert!(
+        t.elapsed() < Duration::from_millis(2000),
+        "{:?}",
+        t.elapsed()
+    );
+}
+
+#[test]
+fn waiting_for_a_free_port_does_not_wait() {
+    let port = free_port();
+    let t = Instant::now();
+    assert_eq!(
+        unsafe { takeover_wait_port_free(port as c_int, 5000, 20) },
+        0
+    );
+    assert!(t.elapsed() < Duration::from_millis(500));
 }

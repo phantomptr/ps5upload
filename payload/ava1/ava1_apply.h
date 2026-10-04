@@ -98,6 +98,7 @@ void ava1_apply_finish_landed(ava1_job_t *j);
 #define AVA1_HOOK_PREP_DIR_SYNCED 10 /* one directory prepare synced (job thread's wait, workers' sync) */
 #define AVA1_HOOK_SWEEP_FILE 12     /* a sweep is about to sync file `id`: ava1_apply_fault may fail it (tests) */
 #define AVA1_HOOK_SWEPT 11          /* a JnlSweep was appended (the files are durable in place) */
+#define AVA1_HOOK_BATCH_ALLOC 13    /* a sync batch is about to allocate its work lists: a nonzero ava1_apply_fault is "out of memory" (tests) */
 #define AVA1_HOOK_PREALLOC 9        /* a part file is about to be preallocated (job mutex NOT held) */
 extern void (*ava1_apply_hook)(ava1_job_t *j, int point, uint32_t id);
 /* Tests only (NULL in the payload): an errno to inject at a point instead of doing the work.
