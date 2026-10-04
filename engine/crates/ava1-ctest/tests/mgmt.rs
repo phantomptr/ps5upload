@@ -328,7 +328,13 @@ async fn c_mgmt_workers_use_512k_stacks_and_elevate() {
     let r = s.rpc(19, &[]).await.unwrap();
     assert_eq!(r.status, OK);
     let small: usize = String::from_utf8(r.body).unwrap().parse().unwrap();
+    // glibc hands a detached thread a cached stack up to 4x the request, so on Linux the
+    // 512 KiB stack the FsMount worker just released comes back here; only macOS (and the
+    // console's libthr) report the size that was asked for.
+    #[cfg(not(target_os = "linux"))]
     assert!(small <= 256 * 1024 + 64 * 1024, "method 19 stack {small}");
+    #[cfg(target_os = "linux")]
+    assert!(small <= 512 * 1024 + 64 * 1024, "method 19 stack {small}");
     // errors leave the environment too
     let _ = s.rpc(MKDIR, &mkdir("/denied")).await.unwrap();
     let (e2, l2, _, _) = mgmt::stats();

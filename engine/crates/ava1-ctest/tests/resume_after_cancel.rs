@@ -148,10 +148,25 @@ async fn scenario(tag: &str, c_receiver: bool) {
     let flag2 = c2.cancel.clone().unwrap();
     let (p, s, d) = (pool.clone(), src.clone(), dest.clone());
     let second = tokio::task::spawn_blocking(move || upload_dir_in(&p, &c2, id, &d, &s));
-    let r = tokio::time::timeout(Duration::from_secs(30), second).await;
+    // The regression this pins is a JobOpen that never answers, so the resume must start
+    // moving bytes within 30 s; finishing the rest through the 256 KiB/s proxy takes 20 s+
+    // on its own, so it gets a separate, generous budget.
+    let start = std::time::Instant::now();
+    while sent2.load(Ordering::Relaxed) == 0 && !second.is_finished() {
+        if start.elapsed() > Duration::from_secs(30) {
+            flag2.store(true, Ordering::Relaxed); // let the blocked thread end so the runtime can drop
+            panic!("the resume was not answered in 30 s (JobOpen hung)");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let r = tokio::time::timeout(Duration::from_secs(120), second).await;
     let Ok(r) = r else {
-        flag2.store(true, Ordering::Relaxed); // let the blocked thread end so the runtime can drop
-        panic!("the resume was not answered in 30 s (JobOpen hung)");
+        flag2.store(true, Ordering::Relaxed);
+        panic!(
+            "the resume started but did not finish in 120 s: {} bytes sent ({} durable at cancel)",
+            sent2.load(Ordering::Relaxed),
+            durable_at_cancel
+        );
     };
     let r = r
         .unwrap()
