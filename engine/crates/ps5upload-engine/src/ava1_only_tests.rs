@@ -575,3 +575,30 @@ fn engine_has_no_routing_seam() {
         }
     }
 }
+
+/// Convert reads a console's files over AVA1 management calls: the console's FTP server
+/// (ftpsrv) is not part of the engine any more (review 015 #01, issue #351).
+#[test]
+fn engine_does_not_read_console_files_through_ftpsrv() {
+    let banned = [["ftp", "srv"].concat(), "CONSOLE_FTP_PORT".to_string()];
+    let mut stack = vec![engine_src_dir()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "rs")
+                && p.file_name().is_some_and(|n| n != "ava1_only_tests.rs")
+            {
+                let text = std::fs::read_to_string(&p).unwrap().to_lowercase();
+                for b in &banned {
+                    assert!(
+                        !text.contains(&b.to_lowercase()),
+                        "{} mentions {b}",
+                        p.display()
+                    );
+                }
+            }
+        }
+    }
+}

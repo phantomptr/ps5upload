@@ -31,7 +31,7 @@ pub use upload::{PostCommitError, PostCommitKind};
 
 /// Runs a future from blocking code (C15): a runtime handle's `block_on` when the
 /// current thread belongs to a runtime (the engine's `spawn_blocking` workers — the
-/// same pattern as `ps5upload_engine::fpkg_remote`), or a lazily-built private
+/// same pattern as `ps5upload_engine::convert_source`), or a lazily-built private
 /// multi-thread runtime for callers outside any runtime (the lab's CLI, a unit test).
 /// That fallback runtime is built once and lives for the process.
 ///

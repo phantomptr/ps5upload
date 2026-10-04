@@ -32,12 +32,13 @@
 
 mod ava1_api;
 mod bundled_payload;
+mod console_read;
+mod convert_source;
 mod elfldr_guard;
 mod engine_log;
 mod fakelibs_api;
 mod fpkg_api;
 mod fpkg_firmware;
-mod fpkg_remote;
 mod icon_cache;
 mod inspect;
 mod install;
@@ -9236,7 +9237,7 @@ pub struct EngineConfig {
 /// `EngineConfig` flags select desktop-sidecar vs. in-process behavior.
 async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // Convert (and the package viewer) read games on saved servers and the console in place.
-    fpkg_remote::register();
+    convert_source::register();
     // Every management call (hardware, filesystem, apps, ...) goes through one transport
     // seam in the core crate; this registers the AVA1 implementation over the shared pool.
     // A console it cannot serve is a `helper_not_ava1` error, never another protocol.
