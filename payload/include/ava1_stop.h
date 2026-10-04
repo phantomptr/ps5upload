@@ -34,8 +34,10 @@ int ava1_exit_decide(long long elapsed_ms, int sony_busy, long long base_ms, lon
 /* Right before a forced _exit: fsync every job's journal and pack segments, bounded by max_ms (the
  * fsync can itself stall on a wedged drive, so it runs on a helper thread and is abandoned at the
  * bound). Journals are fsynced on every append already; this only makes the last ones certain.
- * Returns 0 when it finished, -1 when it was abandoned. */
+ * Returns 0 when it finished, -1 when it was abandoned or no thread could be created (then nothing ran). */
 int ava1_exit_flush(int max_ms);
+/* Tests only (0 in the payload): makes ava1_exit_flush's thread creation fail. */
+extern int ava1_exit_test_fail_create;
 
 /*
  * Runs fire(arg) on a detached thread after delay_ms (CLOCK_MONOTONIC-independent: a plain sleep).

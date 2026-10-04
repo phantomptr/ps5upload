@@ -399,16 +399,22 @@ fn gc_never_removes_a_job_directory_that_holds_a_log_until_a_long_ceiling() {
     // a log that recovery could not settle in a week beyond the normal age is given up on, and says so, but
     // not on one boot's wall clock (a clock moved forward would age every log at once): it takes three
     // boots that each saw it past the ceiling (final review: console)
-    for strike in 1..=2 {
+    for strike in 1..=2u64 {
+        gc_boot(100 + strike);
         assert_eq!(
-            jobs_gc(&jobs, 20 * 86_400, 86_400),
+            jobs_gc(&jobs, (20 + strike as i64) * 86_400, 86_400),
             0,
             "strike {strike}: the clock alone must not take a log"
         );
         assert!(job_dir(&jobs, &[7; 16]).exists());
     }
-    let removed = jobs_gc(&jobs, 20 * 86_400, 86_400);
-    assert_eq!(removed, 1, "three boots saw it past the ceiling");
+    gc_boot(103);
+    let removed = jobs_gc(&jobs, 23 * 86_400, 86_400);
+    gc_boot(0);
+    assert_eq!(
+        removed, 1,
+        "three boots, a day apart, saw it past the ceiling"
+    );
     assert!(!job_dir(&jobs, &[7; 16]).exists());
 }
 
@@ -425,13 +431,71 @@ fn a_directory_recovery_cannot_open_is_kept_for_a_while_and_then_given_up() {
         0,
         "kept: it holds a log"
     );
+    gc_boot(201);
     assert_eq!(jobs_gc(&jobs, 20 * 86_400, 86_400), 0, "strike 1");
-    assert_eq!(jobs_gc(&jobs, 20 * 86_400, 86_400), 0, "strike 2");
+    gc_boot(202);
+    assert_eq!(jobs_gc(&jobs, 21 * 86_400, 86_400), 0, "strike 2");
+    gc_boot(203);
     assert_eq!(
-        jobs_gc(&jobs, 20 * 86_400, 86_400),
+        jobs_gc(&jobs, 22 * 86_400, 86_400),
         1,
-        "given up after the ceiling, three boots running"
+        "given up after the ceiling, three boots a day apart"
     );
+    gc_boot(0);
+}
+
+/// Final review (console), re-review: strikes count boots, not starts. Any number of re-sends within one boot,
+/// or boots less than a day apart (a clock set wrong), add one strike at most.
+#[test]
+fn gc_strikes_do_not_accumulate_within_a_boot_or_within_a_day() {
+    let t = tmp("gc-strikes");
+    let jobs = t.join("jobs");
+    let d = jobs.join("babababababababababababababababa");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("journal"), b"x").unwrap();
+    std::fs::write(d.join("pack.0"), b"AVA1PCK1").unwrap();
+    gc_boot(301);
+    for _ in 0..10 {
+        assert_eq!(
+            jobs_gc(&jobs, 20 * 86_400, 86_400),
+            0,
+            "re-sends in one boot"
+        );
+    }
+    // new boots, but only hours apart
+    for (i, b) in (302..306u64).enumerate() {
+        gc_boot(b);
+        assert_eq!(
+            jobs_gc(&jobs, 20 * 86_400 + (i as i64 + 1) * 3600, 86_400),
+            0,
+            "boot {b} an hour later"
+        );
+    }
+    assert!(d.exists(), "a log was collected without three real boots");
+    gc_boot(0);
+}
+
+/// A directory stamped in the future is skipped alone; the others are still collected.
+#[test]
+fn a_future_stamped_directory_does_not_stop_the_gc_of_the_others() {
+    let t = tmp("gc-future");
+    let jobs = t.join("jobs");
+    let old = jobs.join("1111aaaa1111aaaa1111aaaa1111aaaa");
+    let fut = jobs.join("2222bbbb2222bbbb2222bbbb2222bbbb");
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::create_dir_all(&fut).unwrap();
+    let day = std::time::Duration::from_secs(86_400);
+    let now = std::time::SystemTime::now();
+    std::fs::File::open(&old)
+        .unwrap()
+        .set_modified(now - day * 30)
+        .unwrap();
+    std::fs::File::open(&fut)
+        .unwrap()
+        .set_modified(now + day * 10)
+        .unwrap();
+    assert_eq!(jobs_gc(&jobs, 0, 86_400), 1);
+    assert!(!old.exists() && fut.exists());
 }
 
 /// Final review (console): `time(NULL)` is the wall clock, and the console's clock is set by the user and
@@ -455,14 +519,17 @@ fn gc_does_nothing_when_the_clock_is_implausible_or_behind_a_jobs_own_stamp() {
         .as_secs() as i64;
     assert_eq!(jobs_gc(&jobs, 1_000_000 - now_unix, 86_400), 0);
     assert!(old.exists(), "an implausible clock took a job directory");
-    // A stamp in the future (the clock was moved back): the same, for every directory.
+    // A clock moved back two days: the fresh directory is stamped in the future and is skipped; the old one
+    // (30 days, still 28 days old) is collected, since one future stamp must not stop the rest.
     let fresh = jobs.join("efefefefefefefefefefefefefefefef");
     std::fs::create_dir_all(&fresh).unwrap();
-    assert_eq!(jobs_gc(&jobs, -2 * 86_400, 86_400), 0);
-    assert!(
-        old.exists(),
-        "a clock behind a job's own stamp took a directory"
-    );
+    assert_eq!(jobs_gc(&jobs, -2 * 86_400, 86_400), 1);
+    assert!(fresh.exists(), "a future-stamped directory was collected");
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::File::open(&old)
+        .unwrap()
+        .set_modified(thirty)
+        .unwrap();
     // A sane clock collects the old directory as before.
     assert_eq!(jobs_gc(&jobs, 0, 86_400), 1);
     assert!(!old.exists() && fresh.exists());

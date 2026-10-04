@@ -226,3 +226,12 @@ fn the_exit_flush_with_no_data_layer_returns_at_once() {
 fn an_idle_server_has_no_rpc_in_flight() {
     assert_eq!(unsafe { ava1_server_rpc_inflight() }, 0);
 }
+
+#[test]
+fn the_exit_flush_is_skipped_when_its_thread_cannot_be_created() {
+    // The watchdog runs it before _exit: with no thread it must give up (-1) instead of flushing inline.
+    let t = Instant::now();
+    assert_eq!(ava1_ctest::exit_flush_create_fails(true), -1);
+    assert!(t.elapsed() < Duration::from_millis(400));
+    assert_eq!(ava1_ctest::exit_flush_create_fails(false), 0);
+}

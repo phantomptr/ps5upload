@@ -61,6 +61,8 @@ void ava1_jnl_close(ava1_jnl_t *j);
 int ava1_manifest_file_write(const char *dir, const uint8_t *blob, size_t len);
 int ava1_manifest_file_read(const char *dir, uint8_t **blob, size_t *len); /* malloc'd */
 int ava1_jobs_gc(const char *jobs_dir, int64_t now_unix, int64_t max_age_s);
+/* Tests only (0 in the payload): a nonzero value replaces the boot identity the GC strikes use. */
+extern uint64_t ava1_gc_test_boot_id;
 void ava1_job_dir(const char *jobs_dir, const uint8_t job_id[16], char *out, size_t cap);
 
 /* The journal's length, for the receiver's compaction check: compact once it passes

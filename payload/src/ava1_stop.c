@@ -23,6 +23,7 @@ int ava1_exit_decide(long long elapsed_ms, int sony_busy, long long base_ms, lon
     return elapsed_ms >= ceiling_ms ? AVA1_EXIT_FORCED : AVA1_EXIT_WAIT;
 }
 
+int ava1_exit_test_fail_create; /* tests: pthread_create "fails" */
 static volatile int g_flush_done;
 
 static void *flush_main(void *arg) {
@@ -39,10 +40,11 @@ int ava1_exit_flush(int max_ms) {
     __atomic_store_n(&g_flush_done, 0, __ATOMIC_SEQ_CST);
     pthread_attr_init(&attr);
     (void)pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    if (pthread_create(&t, &attr, flush_main, NULL) != 0) {
+    if (ava1_exit_test_fail_create || pthread_create(&t, &attr, flush_main, NULL) != 0) {
+        /* No thread: the flush would have to run here, unbounded, and thread creation fails in exactly the
+         * wedged states this exit exists for. Skip it; the journals were fsynced per append. */
         pthread_attr_destroy(&attr);
-        ava1_data_flush_for_exit(); /* no thread: do it here, unbounded */
-        return 0;
+        return -1;
     }
     pthread_attr_destroy(&attr);
     while (!__atomic_load_n(&g_flush_done, __ATOMIC_SEQ_CST)) {

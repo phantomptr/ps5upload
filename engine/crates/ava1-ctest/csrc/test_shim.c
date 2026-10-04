@@ -1567,6 +1567,14 @@ uint64_t ava1_test_apply_unswept_bytes(void) {
     return n;
 }
 /* ava1_jobs_gc over `jobs_dir` as if `age_s` seconds had passed and the limit were `max_age_s`. */
+void ava1_test_gc_boot(uint64_t id) { __atomic_store_n(&ava1_gc_test_boot_id, id, __ATOMIC_SEQ_CST); }
+int ava1_test_exit_flush_create_fails(int fail) {
+    int rc;
+    ava1_exit_test_fail_create = fail;
+    rc = ava1_exit_flush(500);
+    ava1_exit_test_fail_create = 0;
+    return rc;
+}
 int ava1_test_jobs_gc(const char *jobs_dir, int64_t age_s, int64_t max_age_s) {
     return ava1_jobs_gc(jobs_dir, (int64_t)time(NULL) + age_s, max_age_s);
 }
