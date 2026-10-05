@@ -579,7 +579,8 @@ pub fn ps5_to_ps5_between(
             let (mut la, mut lb) = (sa.job(job_id), sb.job(job_id));
             let m = match download_open(&mut la, src, gen::JF_ORDERED, RELAY_CAP as u64).await {
                 Ok(m) => m,
-                Err(SendError::Disconnected(_)) => {
+                Err(SendError::Disconnected(e)) => {
+                    let _ = writeln!(std::io::stderr(), "ava1 relay: source open dropped: {e}");
                     from_pool.forget_if(from, &sa).await;
                     tokio::time::sleep(backoff).await;
                     continue;
@@ -606,7 +607,11 @@ pub fn ps5_to_ps5_between(
             o.readers = 1;
             let opened = match open_upload(&mut lb, &m, &o).await {
                 Ok(opened) => opened,
-                Err(SendError::Disconnected(_)) => {
+                Err(SendError::Disconnected(e)) => {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "ava1 relay: destination open dropped: {e}"
+                    );
                     to_pool.forget_if(to, &sb).await;
                     tokio::time::sleep(backoff).await;
                     continue;
@@ -713,6 +718,10 @@ pub fn ps5_to_ps5_between(
                 }
                 Settle::Cancelled => return Err(anyhow!("transfer_cancelled")),
                 Settle::Retry => {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "ava1 relay: attempt ended, retrying: destination {b:?}, source {a_result:?}"
+                    );
                     from_pool.forget_if(from, &sa).await;
                     to_pool.forget_if(to, &sb).await;
                     rearm(
