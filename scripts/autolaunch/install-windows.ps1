@@ -4,7 +4,7 @@
 # Run in PowerShell (as normal user, no elevation needed for Task Scheduler
 # user tasks):
 #   .\scripts\autolaunch\install-windows.ps1
-#   .\scripts\autolaunch\install-windows.ps1 -Ps5Addr 192.168.1.50:9113
+#   .\scripts\autolaunch\install-windows.ps1 -Ps5Addr 192.168.1.50
 #
 # Requirements: cargo in PATH, PowerShell 5.1+
 
@@ -14,7 +14,7 @@ param(
     # advertises PS 5.1+ compatibility. On Windows 10/11 with stock
     # Windows PowerShell, the `??` form fails to parse before the
     # script even runs.
-    [string]$Ps5Addr    = $(if ($env:PS5_ADDR) { $env:PS5_ADDR } else { "192.168.137.2:9113" }),
+    [string]$Ps5Addr    = $(if ($env:PS5_ADDR) { $env:PS5_ADDR } else { "192.168.137.2" }),
     # Engine listens on 19113 by default; matches the desktop client's
     # hard-coded probe URL and the PS5UPLOAD_ENGINE_PORT env var the
     # engine reads at startup.

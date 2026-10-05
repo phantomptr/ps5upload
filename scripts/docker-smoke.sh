@@ -25,7 +25,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 # 0.0.0.0/0 because the runner reaches the container through Docker's NAT,
 # not loopback — exactly the case PS5UPLOAD_ALLOW_IP exists for.
 docker run -d --name "$name" -p "${port}:19113" \
-  -e PS5_ADDR=192.0.2.1:9113 -e PS5UPLOAD_ALLOW_IP=0.0.0.0/0 "$image" >/dev/null
+  -e PS5_ADDR=192.0.2.1 -e PS5UPLOAD_ALLOW_IP=0.0.0.0/0 "$image" >/dev/null
 
 for _ in $(seq 1 30); do
   curl -fsS -m 2 "$base/api/jobs" >/dev/null 2>&1 && break
@@ -73,7 +73,7 @@ echo "ok: the built-in health check reports healthy"
 # stage uploads and write the engine's state.
 docker rm -f "$name" >/dev/null 2>&1
 docker run -d --name "$name" --user 1000:1000 -p "${port}:19113" \
-  -e PS5_ADDR=192.0.2.1:9113 -e PS5UPLOAD_ALLOW_IP=0.0.0.0/0 "$image" >/dev/null
+  -e PS5_ADDR=192.0.2.1 -e PS5UPLOAD_ALLOW_IP=0.0.0.0/0 "$image" >/dev/null
 for _ in $(seq 1 30); do
   curl -fsS -m 2 "$base/api/jobs" >/dev/null 2>&1 && break
   sleep 1

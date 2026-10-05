@@ -1,6 +1,6 @@
-// Shared profile definitions for the FTX2 sweep.
+// Shared profile definitions for the upload sweep.
 //
-// Kept in one file so gen-fixtures and run-ftx2-sweep stay in lockstep.
+// Kept in one file so gen-fixtures and run-sweep stay in lockstep.
 // Add a profile by appending to PROFILES; give it a unique `name` and at most
 // one tag in the opt-in tag set below. `bytesTotal` is derived (not declared)
 // so sizes stay correct if the raw numbers change.

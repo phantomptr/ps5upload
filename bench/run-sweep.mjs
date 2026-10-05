@@ -1,23 +1,23 @@
 #!/usr/bin/env node
 /**
- * bench/run-ftx2-sweep.mjs
+ * bench/run-sweep.mjs
  *
- * Runs the FTX2 upload benchmark across every profile in bench/profiles.mjs,
+ * Runs the upload benchmark across every profile in bench/profiles.mjs,
  * with PS5-side cleanup before each profile and after the whole run. Writes
  * one timestamped JSON + one Markdown report under bench/reports/, and prints
  * a summary table to stdout.
  *
  * Prerequisites:
- *   - PS5 payload loaded and listening at PS5_ADDR (default 192.168.137.2:9113).
+ *   - PS5 payload loaded and listening at PS5_ADDR (default 192.168.137.2).
  *   - Fixture trees present under bench/fixtures/ (run scripts/gen-fixtures.mjs
  *     first, or pass --gen-fixtures).
  *   - Either engine already running, or pass --spawn-engine to launch it.
  *
  * Usage:
- *   node bench/run-ftx2-sweep.mjs --spawn-engine
- *   node bench/run-ftx2-sweep.mjs --xl --spawn-engine
- *   node bench/run-ftx2-sweep.mjs --only=large-file,medium-dir --spawn-engine
- *   node bench/run-ftx2-sweep.mjs --no-cleanup   # for debugging: leave PS5 state
+ *   node bench/run-sweep.mjs --spawn-engine
+ *   node bench/run-sweep.mjs --xl --spawn-engine
+ *   node bench/run-sweep.mjs --only=large-file,medium-dir --spawn-engine
+ *   node bench/run-sweep.mjs --no-cleanup   # for debugging: leave PS5 state
  */
 
 import fs from 'node:fs/promises';
@@ -34,7 +34,7 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 
 const DEFAULT_ENGINE_URL = 'http://127.0.0.1:19113';
-const DEFAULT_PS5_ADDR = '192.168.137.2:9113';
+const DEFAULT_PS5_ADDR = '192.168.137.2';
 // Unified test sandbox — see tests/smoke-hardware.mjs for the shape.
 // All sweep dest_root entries land under this root so `rm -rf
 // /data/ps5upload/tests` wipes every test artifact in one shot.
@@ -102,11 +102,11 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  process.stdout.write(`ftx2 sweep — run every bench profile against a live PS5
+  process.stdout.write(`sweep — run every bench profile against a live PS5
 
 Options:
   --engine-url=URL       engine HTTP base URL  (default: http://127.0.0.1:19113)
-  --ps5-addr=HOST:PORT   PS5 FTX2 address      (default: 192.168.137.2:9113)
+  --ps5-addr=HOST        PS5 address (a :port suffix is ignored) (default: 192.168.137.2)
   --dest-root=PATH       dest root on PS5      (default: /data/ps5upload-sweep)
   --fixtures-dir=PATH    fixture source root   (default: bench/fixtures)
   --reports-dir=PATH     where to write report (default: bench/reports)
@@ -143,10 +143,6 @@ async function postJson(url, body) {
 
 function tryParse(t) { try { return JSON.parse(t); } catch { return t; } }
 
-function mgmtAddrFor(transferAddr) {
-  const i = transferAddr.lastIndexOf(':');
-  return i < 0 ? `${transferAddr}:9114` : `${transferAddr.slice(0, i)}:9114`;
-}
 
 async function waitForHttpOk(url, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
@@ -267,7 +263,7 @@ async function runProfile(opts, profile) {
   }
 
   const bytesSent = Number(job.bytes_sent || 0);
-  const shardsSent = Number(job.shards_sent || 0);
+  const filesSent = Number(job.files_sent || 0);
   const elapsedMs = Number(job.elapsed_ms || wallMs);
   const mibPerSec = elapsedMs > 0 ? (bytesSent * 1000) / elapsedMs / (1024 * 1024) : 0;
 
@@ -278,7 +274,7 @@ async function runProfile(opts, profile) {
     file_count: profileFileCount(profile),
     bytes_total: profileBytesTotal(profile),
     bytes_sent: bytesSent,
-    shards_sent: shardsSent,
+    files_sent: filesSent,
     job_id: jobId,
     tx_id_hex: job.tx_id_hex,
     elapsed_ms: elapsedMs,
@@ -346,7 +342,7 @@ function renderMarkdown(report, previous) {
     for (const r of previous.results) if (r.status === 'ok') prevByName.set(r.profile, r);
   }
   const lines = [];
-  lines.push(`# FTX2 sweep report`);
+  lines.push(`# Upload sweep report`);
   lines.push('');
   lines.push(`- **Timestamp**: ${report.created_at}`);
   lines.push(`- **PS5 address**: ${report.ps5_addr}`);
@@ -354,14 +350,14 @@ function renderMarkdown(report, previous) {
   lines.push(`- **Host**: ${report.host.platform}/${report.host.arch} (node ${report.host.node})`);
   if (previous?.created_at) lines.push(`- **Previous report**: ${previous.created_at}`);
   lines.push('');
-  lines.push('| Profile | Kind | Files | Bytes | Time | Shards | Throughput | Δ vs prev |');
+  lines.push('| Profile | Kind | Files | Bytes | Time | Files sent | Throughput | Δ vs prev |');
   lines.push('| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |');
   for (const r of report.results) {
     if (r.status === 'ok') {
       const prev = prevByName.get(r.profile);
       const delta = prev ? fmtDelta(r.mib_per_sec, prev.mib_per_sec) : '';
       lines.push(
-        `| \`${r.profile}\` | ${r.kind} | ${r.file_count} | ${formatBytes(r.bytes_total)} | ${(r.elapsed_ms / 1000).toFixed(2)}s | ${r.shards_sent} | **${r.mib_per_sec.toFixed(2)} MiB/s** |${delta} |`
+        `| \`${r.profile}\` | ${r.kind} | ${r.file_count} | ${formatBytes(r.bytes_total)} | ${(r.elapsed_ms / 1000).toFixed(2)}s | ${r.files_sent} | **${r.mib_per_sec.toFixed(2)} MiB/s** |${delta} |`
       );
     } else {
       lines.push(`| \`${r.profile}\` | — | — | — | — | — | **${r.status.toUpperCase()}** | ${r.error ?? ''} |`);
@@ -419,7 +415,7 @@ async function main() {
 
   log(`engine:    ${opts.engineUrl}`);
   log(`ps5:       ${opts.ps5Addr}`);
-  opts.ps5MgmtAddr = mgmtAddrFor(opts.ps5Addr);
+  opts.ps5MgmtAddr = opts.ps5Addr;
   log(`ps5 fs:    ${opts.ps5MgmtAddr}`);
   log(`dest root: ${opts.destRoot}`);
   log(`profiles:  ${selected.map((p) => p.name).join(', ')}`);
@@ -462,7 +458,7 @@ async function main() {
       const r = await runProfile(opts, profile);
       results.push(r);
       if (r.status === 'ok') {
-        log(`  ${profile.name}: ${formatBytes(r.bytes_sent)} in ${(r.elapsed_ms / 1000).toFixed(2)}s = ${r.mib_per_sec.toFixed(2)} MiB/s (${r.shards_sent} shards)`);
+        log(`  ${profile.name}: ${formatBytes(r.bytes_sent)} in ${(r.elapsed_ms / 1000).toFixed(2)}s = ${r.mib_per_sec.toFixed(2)} MiB/s (${r.files_sent} files)`);
       } else {
         logErr(`  ${profile.name}: ${r.status.toUpperCase()} — ${r.error ?? ''}`);
       }

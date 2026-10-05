@@ -7,7 +7,7 @@
 #
 # Run (Linux server; engine/compose.yaml does the same):
 #   docker run -d --network host -v ps5upload-data:/data -v /srv/pkgs:/pkgs:ro \
-#     -e PS5_ADDR=192.168.1.50:9113 \
+#     -e PS5_ADDR=192.168.1.50 \
 #     -e PS5UPLOAD_ALLOW_IP=192.168.1.0/24 \
 #     ps5upload-engine-webui
 #

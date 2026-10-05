@@ -11,7 +11,7 @@ mkdir -p "$OUT_DIR"
 {
   echo "timestamp=$STAMP"
   echo "ps5_ip=${PS5_IP:-192.168.137.2}"
-  echo "runtime_port=${RUNTIME_PORT:-9113}"
+  echo "runtime_port=${RUNTIME_PORT:-9120}"
   echo "payload_loader_port=${PS5_PORT:-9021}"
 } > "$OUT_DIR/context.txt"
 
@@ -28,12 +28,6 @@ else
 fi
 
 if "$ROOT_DIR/lab/status-runtime.sh" > "$OUT_DIR/status.txt" 2>&1; then
-  :
-else
-  :
-fi
-
-if "$ROOT_DIR/lab/query-tx.sh" > "$OUT_DIR/query-tx.txt" 2>&1; then
   :
 else
   :

@@ -11,7 +11,7 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-PS5_ADDR="${PS5_ADDR:-192.168.137.2:9113}"
+PS5_ADDR="${PS5_ADDR:-192.168.137.2}"
 # Engine listens on 19113 by default; matches the hard-coded URL the
 # desktop client probes when it spawns the engine as a sidecar, and
 # the env var name the engine reads (`PS5UPLOAD_ENGINE_PORT`).
@@ -35,7 +35,7 @@ mkdir -p "${UNIT_DIR}"
 
 cat > "${UNIT_DIR}/${SERVICE_NAME}.service" <<EOF
 [Unit]
-Description=ps5upload FTX2 engine
+Description=ps5upload engine
 After=network.target
 
 [Service]

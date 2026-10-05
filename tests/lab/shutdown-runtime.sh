@@ -2,12 +2,6 @@
 set -euo pipefail
 
 PS5_IP="${PS5_IP:-192.168.137.2}"
-RUNTIME_PORT="${RUNTIME_PORT:-9114}"
-
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required" >&2
-  exit 1
-fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-python3 "$ROOT_DIR/lab/ftx2_control.py" shutdown "$PS5_IP" "$RUNTIME_PORT"
+cargo run -q --manifest-path "$ROOT_DIR/../engine/Cargo.toml" -p ps5upload-lab -- "$PS5_IP" shutdown

@@ -20,7 +20,7 @@ import { execFileSync } from "node:child_process";
 const ENGINE = process.env.ENGINE_URL || "http://127.0.0.1:19113";
 const HOST = process.argv[2];
 if (!HOST) { console.error("usage: edge-case-sweep.mjs <ps5-ip>"); process.exit(2); }
-const ADDR = HOST.includes(":") ? HOST : `${HOST}:9113`;
+const ADDR = HOST;
 const DEST = "/data/ps5upload/tests/edge";
 
 let pass = 0, fail = 0;

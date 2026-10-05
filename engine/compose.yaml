@@ -24,7 +24,7 @@ services:
 
     environment:
       # EDIT: your PS5's IP address.
-      PS5_ADDR: "192.168.1.50:9113"
+      PS5_ADDR: "192.168.1.50"
       # EDIT: who may use the engine. It has NO password — anyone allowed here
       # can install, delete and read files on your PS5. Your LAN's range is the
       # usual choice; keep it to networks you trust. Never expose the engine

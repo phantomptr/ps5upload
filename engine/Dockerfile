@@ -4,11 +4,11 @@
 #   docker build -f engine/Dockerfile -t ps5upload-engine .
 # On a Linux server, use engine/compose.yaml, or the equivalent:
 #   docker run -d --network host -v ps5upload-data:/data \
-#     -e PS5_ADDR=192.168.1.50:9113 -e PS5UPLOAD_ALLOW_IP=192.168.1.0/24 \
+#     -e PS5_ADDR=192.168.1.50 -e PS5UPLOAD_ALLOW_IP=192.168.1.0/24 \
 #     ghcr.io/phantomptr/ps5upload-engine
 # Without PS5UPLOAD_ALLOW_IP every request from another machine gets a 403
 # that names the address it refused.
-# Env: PS5UPLOAD_ENGINE_PORT (19113), PS5_ADDR (192.168.137.2:9113),
+# Env: PS5UPLOAD_ENGINE_PORT (19113), PS5_ADDR (192.168.137.2),
 #      PS5UPLOAD_ALLOW_IP (comma-separated IPs or CIDR ranges allowed past the
 #      loopback guard),
 #      PS5UPLOAD_PKG_HOST_IP (host LAN IP the PS5 fetches pkg bytes from during a
@@ -25,12 +25,12 @@
 # Two workarounds:
 #   1. Set PS5UPLOAD_ALLOW_IP to the Docker bridge gateway IP:
 #        docker run --rm -p 19113:19113 \
-#          -e PS5_ADDR=192.168.1.50:9113 \
+#          -e PS5_ADDR=192.168.1.50 \
 #          -e PS5UPLOAD_ALLOW_IP=172.17.0.1 \
 #          ps5upload-engine
 #   2. On Linux hosts, use --network host (connections are true loopback):
 #        docker run --rm --network host \
-#          -e PS5_ADDR=192.168.1.50:9113 \
+#          -e PS5_ADDR=192.168.1.50 \
 #          ps5upload-engine
 # Note: on macOS/Windows Docker Desktop, --network host does NOT work (the
 # daemon runs in a VM and can't bind to the host's LAN). Use option 1 and
