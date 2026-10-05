@@ -49,6 +49,7 @@ import {
 import { isRemotePath } from "../../lib/remotePath";
 import { useTransferStore } from "../../state/transfer";
 import { BottleneckLine, JobLiveNotes, UnsettledLine } from "./Bottleneck";
+import { WhySlowPanel } from "./WhySlow";
 import { RarPasswordPrompt } from "./RarPasswordPrompt";
 import { rarPasswordProblem } from "../../lib/rarPassword";
 
@@ -1020,6 +1021,9 @@ export function QueueRow({
         <BottleneckLine cause={item.live.bottleneck} />
       )}
       {item.status === "done" && !isInstall && <UnsettledLine live={item.live} />}
+      {(item.status === "done" || item.status === "failed") && !isInstall && (
+        <WhySlowPanel jobId={item.jobId} />
+      )}
 
       {item.status === "done" && item.installNote && (
         <div className="mt-1 text-xs text-[var(--color-muted)]">

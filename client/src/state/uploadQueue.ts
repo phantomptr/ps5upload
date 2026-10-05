@@ -252,6 +252,10 @@ export interface QueueItem {
    *  console") forwarded from the job snapshot while running; only set when
    *  the engine sent them. Not persisted meaningfully: stale on reload. */
   live?: JobLive;
+  /** The engine job that ran this item (set when it starts, kept after it ends): the key for
+   *  the finished job's "Why was this slow?" summary. Stale after a restart is harmless: the
+   *  summary is simply not found. */
+  jobId?: string;
   /** Mount path the runner produced when `mountAfterUpload` is true and
    *  the image upload + mount succeeded. Surfaced to the row so users
    *  see where the image landed without flipping to the Volumes tab. */
@@ -819,6 +823,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
     // engine to truly cancel the transfer (overwritten by the next item;
     // staleness is harmless — cancelling a finished job is a server no-op).
     runningJobByHost.set(hostOf(item.addr), jobId);
+    set((s) => ({ items: patchItem(s.items, item.id, { jobId }) }));
 
     // Trailing-window samples for the live bytes/sec readout. Closure-
     // scoped so a Stop + restart of the same item resets cleanly: the

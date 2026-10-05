@@ -60,3 +60,26 @@ describe("collectEngineDiagnostics — install history (spec §6)", () => {
     expect(Object.keys(d.errors)).toContain("install_history:10.0.0.5");
   });
 });
+
+describe("collectEngineDiagnostics — job summaries (review 009 #4)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("carries the newest 20 job summaries", async () => {
+    const rec = { job_id: "j", result: "failed", code: "ava1_stalled" };
+    const calls = stubFetch({
+      "/api/jobs": [],
+      "/api/pkg/install/sessions": [],
+      "/api/jobs/summaries?limit=20": { summaries: [rec] },
+    });
+    const d = await collectEngineDiagnostics({ redact: false });
+    expect(d.job_summaries).toEqual([rec]);
+    expect(calls).toContain("http://engine.test/api/jobs/summaries?limit=20");
+  });
+
+  it("records a failed summaries probe instead of dropping it silently", async () => {
+    stubFetch({ "/api/jobs": [], "/api/pkg/install/sessions": [] });
+    const d = await collectEngineDiagnostics({ redact: false });
+    expect(d.job_summaries).toBeNull();
+    expect(Object.keys(d.errors)).toContain("job_summaries");
+  });
+});

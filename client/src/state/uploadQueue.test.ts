@@ -395,6 +395,20 @@ describe("upload runner concurrency (per-console, parallel)", () => {
     expect(useUploadQueueStore.getState().running).toBe(false);
     expect(useUploadQueueStore.getState().runningHosts).toEqual({});
   });
+
+  it("keeps the engine job id on a finished item (the key for its job summary)", async () => {
+    addItem("192.168.1.10:9113", "A1");
+    mockedStartFile.mockResolvedValueOnce("job-for-summary");
+    mockedJobStatus.mockResolvedValue({
+      status: "done",
+      bytes_sent: 100,
+      elapsed_ms: 10,
+    } as Awaited<ReturnType<typeof jobStatus>>);
+    const p = useUploadQueueStore.getState().start();
+    await vi.advanceTimersByTimeAsync(5000);
+    await p;
+    expect(itemsByStatus("done")[0].jobId).toBe("job-for-summary");
+  });
 });
 
 // ── Rest mode after upload (#165) ────────────────────────────────────────────

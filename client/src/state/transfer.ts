@@ -136,7 +136,7 @@ export type TransferPhase =
        *  the user can still register manually from the Library. */
       registerWarning?: string;
     }
-  | { kind: "failed"; error: string };
+  | { kind: "failed"; error: string; /** The engine job that failed (when one was started). */ jobId?: string };
 
 interface StartArgs {
   sourceKind: SourceKind;
@@ -727,6 +727,7 @@ export const useTransferStore = create<TransferState>((set) => {
           setPhase(key, {
             kind: "failed",
             error: snap.error ?? "upload failed",
+            jobId,
           });
         } else {
           const now = Date.now();

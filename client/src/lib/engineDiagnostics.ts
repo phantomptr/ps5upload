@@ -18,6 +18,9 @@ import { redactHost } from "./diagnosticBundle";
  *  - `sessions` — what the console said about an install. `install/status`
  *                 requires a session id, so once the user navigated away the
  *                 err_code and phase were unrecoverable.
+ *  - `job_summaries` — the last 20 per-job telemetry records (where each transfer's
+ *                 time went, how it ended, the console's own end-of-job line). The
+ *                 engine writes them locally; they hold no address or path.
  *  - `install_history` — the unified install endpoint's persisted per-console
  *                 history (verdict, Sony code, route, metrics). Engine-side
  *                 disk, so a failure from before this session still rides
@@ -44,6 +47,9 @@ async function getJsonBounded<T>(path: string): Promise<T> {
   }
 }
 
+/** How many of the newest job summaries ride along in a bug report (review 009 #4). */
+export const BUNDLE_JOB_SUMMARIES = 20;
+
 export interface EngineDiagnostics {
   /** Transfer jobs the engine still holds, newest state included. */
   jobs: unknown[] | null;
@@ -52,6 +58,9 @@ export interface EngineDiagnostics {
   /** Recent unified installs per known console, newest first. `entries` is
    *  null when that console's history could not be read. */
   install_history: { console: string; entries: unknown[] | null }[];
+  /** The newest per-job telemetry records, newest first: where each job's time went and how it
+   *  ended. Local to the engine, holding no address or path (a hash names the console). */
+  job_summaries: unknown[] | null;
   /** Per-probe failures, so "not collected" is never read as "nothing there". */
   errors: Record<string, string>;
 }
@@ -68,9 +77,13 @@ export async function collectEngineDiagnostics(
       return null;
     }
   }
-  const [jobs, sessions] = await Promise.all([
+  const [jobs, sessions, summaries] = await Promise.all([
     probe<unknown[]>("jobs", "/api/jobs"),
     probe<unknown[]>("install_sessions", "/api/pkg/install/sessions"),
+    probe<{ summaries?: unknown[] }>(
+      "job_summaries",
+      `/api/jobs/summaries?limit=${BUNDLE_JOB_SUMMARIES}`,
+    ),
   ]);
   // One probe per distinct console (host:port and bare-host forms are the
   // same console to the engine's history store).
@@ -87,5 +100,11 @@ export async function collectEngineDiagnostics(
       return { console: label, entries };
     }),
   );
-  return { jobs, install_sessions: sessions, install_history, errors };
+  return {
+    jobs,
+    install_sessions: sessions,
+    install_history,
+    job_summaries: Array.isArray(summaries?.summaries) ? summaries.summaries : null,
+    errors,
+  };
 }
