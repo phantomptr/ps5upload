@@ -1425,6 +1425,11 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             let parsed = bench::BenchArgs::parse(tail)?;
+            // An AVA1 run uses the management path the engine installs at startup (the
+            // free-space check's fs.freespace among it); FTX2 runs keep their legacy path.
+            if parsed.proto == bench::Proto::Ava1 {
+                ps5upload_ava1::mgmt::install();
+            }
             let rt = tokio::runtime::Runtime::new()?;
             let rows = rt.block_on(bench::run_bench(&parsed))?;
             let failed = rows.iter().filter(|r| !r.ok).count();
