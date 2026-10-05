@@ -60,7 +60,7 @@ ELFs with valid gzip resources, then runs every host self-test with
 | `elf_param` | Finding SDK fields via program headers, not stray magic bytes |
 | `sdk_changer_file` | Patching only tracked sources; durable backups |
 
-The SDK version is pinned in `scripts/ps5-sdk.env` (currently **v0.42**)
+The SDK version is pinned in `scripts/ps5-sdk.env` (currently **v0.43**)
 and verified by checksum. Local installers and CI read the same file.
 
 **Adding payload logic?** If it can be separated from the console, put it

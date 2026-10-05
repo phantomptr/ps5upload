@@ -8,7 +8,7 @@
 #     libxdo, libssl, build-essential, file, curl, wget, unzip, pkg-config, python3)
 #   - Rust toolchain (rustup, stable, default profile)
 #   - Node.js 22 LTS via NodeSource (only if `node` is missing — keeps existing installs)
-#   - Repository-pinned PS5 Payload SDK (currently v0.42) → $PS5_PAYLOAD_SDK
+#   - Repository-pinned PS5 Payload SDK (currently v0.43) → $PS5_PAYLOAD_SDK
 #     (default $HOME/ps5-payload-sdk)
 #
 # After it finishes, the script prints the env exports you need to add to ~/.bashrc
