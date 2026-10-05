@@ -752,8 +752,8 @@ DOCKER_ENGINE_IMAGE ?= ps5upload-engine
 
 docker-engine:
 	@command -v $(DOCKER) >/dev/null 2>&1 || { echo "ERROR: docker not found on PATH."; exit 1; }
-	@echo "Building $(DOCKER_ENGINE_IMAGE) image (context: $(ENGINE_DIR)/)..."
-	@$(DOCKER) build -t $(DOCKER_ENGINE_IMAGE) $(ENGINE_DIR)
+	@echo "Building $(DOCKER_ENGINE_IMAGE) image (context: repo root, as in CI)..."
+	@$(DOCKER) build -t $(DOCKER_ENGINE_IMAGE) -f $(ENGINE_DIR)/Dockerfile .
 	@echo "✓ Built image $(DOCKER_ENGINE_IMAGE) — run with: make docker-engine-run"
 
 # Run the locally-built engine image. Binds the published port and points it at

@@ -808,6 +808,11 @@ fn spawn_readers(
         // stall to fail the job loudly instead of parking forever.
         let grant = sh.window.lock().unwrap().available();
         let chunk = (chunk.min(grant.saturating_sub(CHUNK_HDR)) / GROUP * GROUP).max(GROUP);
+        // A resumed file (some of it already durable) goes in one-group pieces: on a link
+        // that keeps dropping, a whole-chunk piece can be cut every attempt before it is
+        // durable, and the job then retries the same tail forever. Smaller pieces make each
+        // attempt land something.
+        let chunk = if durable.covered() == 0 { chunk } else { GROUP };
         let plan = pieces(e.size, &durable, &|g| hasher.cv(g).is_some(), chunk);
         let last_piece = plan.len().saturating_sub(1);
         let mut ob_synced = Instant::now();
