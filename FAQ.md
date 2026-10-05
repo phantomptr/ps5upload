@@ -39,7 +39,7 @@ encrypted transfer protocol (AVA1) over your LAN.
 
 **Q: What does it actually do?**
 - **Transfer** files and folders at near-wire speed, with BLAKE3
-  per-shard verification and resume on drop.
+  verification and resume on drop.
 - **Upload a compressed archive** — `.zip`, `.7z`, or `.rar` — of a
   game, decompressed on your PC and streamed in so it lands already
   extracted on the PS5 (no manual unpack, no temp copy of the whole
@@ -745,8 +745,8 @@ sessions at once (each laptop pairs once), so two laptops both running ps5upload
 against one PS5 is supported. Read-only operations (browse, hardware
 monitor) interleave cleanly. The thing to watch for is *destination
 races*: two simultaneous uploads writing to the same path will
-fight — the payload doesn't lock by destination, it commits the
-shards each transfer ACKs in arrival order. For routine use ("one
+fight — the payload doesn't lock by destination, it applies the
+writes each transfer sends in arrival order. For routine use ("one
 person uploading, another browsing"), no coordination is needed.
 
 **Q: What is the pairing code, and which ports does ps5upload use?**
@@ -974,7 +974,7 @@ pool that `statfs` does not report accurately; filesystem metadata and other
 console activity also need headroom. The Volumes screen therefore shows both
 raw free space and **safe for new uploads**. ps5upload checks the expanded size
 of files, folders, ZIP, 7z and RAR transfers before sending, and repeats the
-check on the PS5 for retries/resumes using the transaction's actual durable
+check on the PS5 for retries/resumes using the job's actual durable
 progress. If the payload reports `preflight_insufficient_space`, free the
 amount shown in the error or choose another destination. Partial upload files
 are credited on Resume, so already-allocated data is not charged twice.
@@ -1109,8 +1109,7 @@ something still looks off.
 Yes — the Upload screen has a queue panel below the single-shot
 controls. Each row shows live progress, current speed, and ETA
 while running; the wall-clock-average MiB/s after it completes.
-The runner processes one item at a time (the PS5 transfer port is
-single-client), and the queue persists across app restarts so a
+The runner processes one item at a time, and the queue persists across app restarts so a
 queued item interrupted by a crash picks up cleanly when you
 press Start again. Tick **Continue on failure** to keep going
 when one item fails instead of stopping the whole batch.
@@ -1698,21 +1697,6 @@ console warning ends up there with timestamps and expandable
 detail. Click **Copy** or **Download** to grab a plain-text dump
 for a bug report.
 
-**Q: An upload fails with "Upload failed — BeginTx rejected (Error):
-manifest_invalid".**
-The PS5 refused the list of files before any data was sent. Two
-common causes:
-1. **A file or folder name contains an unusual character — most often
-   a `}`.** Older payloads mis-read it and rejected the whole upload.
-   The 2.23.0 payload reads these names correctly, so **reload the
-   payload** (Connection → Send payload) and retry.
-2. **A single destination path is too long** (the PS5 caps paths at
-   512 bytes). From 2.23.0 the app catches this before the upload and
-   names the offending file so you can shorten or rename it.
-If you can't reload the payload right now, rename the offending file
-or folder (drop the `}`, or shorten a deeply-nested path) and try
-again.
-
 **Q: Deleting a huge game folder used to fail with a "502 Bad
 Gateway" error.**
 Fixed in 2.2.22. The recursive walk on a small-file-heavy folder
@@ -1723,44 +1707,6 @@ Now `fs_delete` uses the same 1-hour deadline `fs_copy` already
 does, **and** the operation reports live progress (bytes freed)
 to the bulk-delete banner with a Stop button that cleanly bails
 between directory entries.
-
-**Q: An upload of a small-file-heavy game failed with
-`pack_worker_io_error` partway through.**
-Fixed in 2.2.22. The payload's pack worker used to flip a sticky
-worker-error flag on the very first transient `open()` or
-`write()` failure, aborting a 75k-shard transaction outright. It
-now retries transient errnos (EIO/EMFILE/ENOMEM/EINTR/EAGAIN)
-up to 3 times with 20/50/100 ms backoff before giving up.
-Unrecoverable errors (ENOSPC/EROFS/EACCES/ENAMETOOLONG) still
-fail fast — there's no point retrying a full disk. The retry
-counts surface in `COMMIT_TX_ACK` so post-mortem logs show
-exactly how many transient hits were absorbed.
-
-**Q: Library Move shows "Live progress unavailable — your PS5
-payload is older than this app" but I'm on the latest payload.**
-Fixed in 2.2.24. Two coupled bugs produced the false positive:
-
-- The payload registered the in-flight FS_OP slot *after* the
-  recursive_size pre-walk. On small-file-heavy trees the walk
-  outran the client's 250 ms initial poll delay, so the first
-  `FS_OP_STATUS` poll landed on a not-yet-registered op — the
-  engine surfaced that as a transient parse error, which the
-  client mis-attributed to an old payload. The payload now
-  registers up front with `total_bytes=0` and patches the total
-  in via `fs_op_set_total` once the walk completes.
-- The client used brittle substring matching on error text
-  (`"unsupported_frame"` / `"decode FS_OP_STATUS_ACK body"`),
-  which can appear in transient errors even on a current
-  payload. It now consults the running payload's reported
-  version: known-old payloads latch a threshold-specific banner
-  (`predates 2.2.16` or `predates 2.2.7`); current payloads
-  tolerate up to 5 consecutive transient failures and stop
-  silently with no banner — never the misleading "older than
-  this app" string.
-
-If you saw this on 2.2.23 or earlier, click **Replace payload**
-on the Connection screen once you're on 2.2.24+ and the move
-runs cleanly thereafter.
 
 **Q: After clicking Replace payload, the version number on the
 Connection screen still shows the old one for a few seconds.**

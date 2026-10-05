@@ -425,7 +425,7 @@ Real-hardware smoke test (requires payload already loaded):
 npm run smoke:hardware
 ```
 
-See [`TESTING.md`](TESTING.md) for the complete mock-test, coverage,
+See [`TESTING.md`](TESTING.md) for the complete loopback-test, coverage,
 cross-platform, and live-PS5 validation workflow.
 
 ## Tech stack

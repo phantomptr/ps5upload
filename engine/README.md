@@ -99,24 +99,6 @@ the volume mount it describes.
 - `HOME` is deliberately left alone, because FPKG conversions write under `$HOME/Downloads/fpkgs`
   and a package mount is usually read-only.
 
-## Where the web UI's file browser opens (`PS5UPLOAD_BROWSE_ROOTS`)
-
-The browser-based UI picks local files and folders from the *engine's* filesystem. By default
-that picker opens at the engine's home directory, which in the Docker images is `/data`, the
-engine's own state volume, not the folder where you mounted your packages. Set
-`PS5UPLOAD_BROWSE_ROOTS` to a comma-separated list of directories (for example `/pkgs`, or
-`/pkgs,/games`) and the picker starts there instead. `compose.yaml` sets it to `/pkgs`, next to
-the volume mount it describes.
-
-- Unset or blank keeps the old behaviour (the home directory).
-- An entry that is not a directory the engine can see is skipped and named in the engine log
-  (a warning), so a typo or a volume that was never mounted is visible. If no entry is usable
-  the picker falls back to the home directory.
-- It only chooses where the picker opens. It is not a sandbox: the engine can still be asked
-  for any path it can read.
-- `HOME` is deliberately left alone, because FPKG conversions write under `$HOME/Downloads/fpkgs`
-  and a package mount is usually read-only.
-
 ## Synology and other NAS boxes (saved servers: "Permission denied")
 
 The Docker images keep their state (saved servers, install history, artwork cache) in `/data`
