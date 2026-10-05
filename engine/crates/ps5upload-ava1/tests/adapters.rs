@@ -928,3 +928,41 @@ async fn cancelling_ends_the_busy_wait() {
     assert!(e.to_string().contains("cancel"), "{e:#}");
     assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
 }
+
+/// Hardware run 2026-10-04 (drop60): a proxy killing every connection on a short period must
+/// not strand the job. Whatever happens to the link, the console coming back means the job
+/// continues from its durable state and ends byte-exact.
+#[tokio::test(flavor = "multi_thread")]
+async fn periodic_kills_never_strand_an_upload() {
+    let d = temp_dir("periodic-kill");
+    let src = d.join("src");
+    let total = tree(&src, 1, |_| 32 << 20);
+    let (addr, pool) = host(&d, true).await;
+    let proxy = ChaosProxy::start(
+        addr.parse().unwrap(),
+        ChaosConfig {
+            bytes_per_sec: Some(8 << 20),
+            kill_every: Some(Duration::from_millis(1500)),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let pool = Arc::new(pool.with_addr(proxy.addr.to_string()));
+    let c = cfg();
+    let finalized = c.progress_bytes_finalized.clone().unwrap();
+    let (pool2, src2) = (pool.clone(), src.clone());
+    within(
+        120,
+        tokio::task::spawn_blocking(move || {
+            upload::upload_dir_in(&pool2, &c, [9; 16], "in", &src2)
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    same_tree(&src, &d.join("share/in"));
+    assert_eq!(finalized.load(Ordering::Relaxed), total);
+    println!("periodic kills: attempts = {}", pool.attempts());
+    drop(proxy);
+}
