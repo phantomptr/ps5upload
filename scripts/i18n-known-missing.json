@@ -78,7 +78,17 @@
       "rarpkg.reading",
       "rarpkg.installing",
       "rarpkg.run",
-      "rarpkg.none"
+      "rarpkg.none",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -167,7 +177,17 @@
       "rarpkg.reading",
       "rarpkg.installing",
       "rarpkg.run",
-      "rarpkg.none"
+      "rarpkg.none",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -257,7 +277,17 @@
       "rarpkg.reading",
       "rarpkg.installing",
       "rarpkg.run",
-      "rarpkg.none"
+      "rarpkg.none",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -354,7 +384,17 @@
       "rarpkg.reading",
       "rarpkg.installing",
       "rarpkg.run",
-      "rarpkg.none"
+      "rarpkg.none",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -447,7 +487,17 @@
       "rarpkg.reading",
       "rarpkg.installing",
       "rarpkg.run",
-      "rarpkg.none"
+      "rarpkg.none",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -542,7 +592,17 @@
       "rarpkg.reading",
       "rarpkg.installing",
       "rarpkg.run",
-      "rarpkg.none"
+      "rarpkg.none",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -632,7 +692,17 @@
       "rarpkg.reading",
       "rarpkg.installing",
       "rarpkg.run",
-      "rarpkg.none"
+      "rarpkg.none",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -733,7 +803,17 @@
       "rarpkg.reading",
       "rarpkg.installing",
       "rarpkg.run",
-      "rarpkg.none"
+      "rarpkg.none",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -828,7 +908,17 @@
       "rarpkg.reading",
       "rarpkg.installing",
       "rarpkg.run",
-      "rarpkg.none"
+      "rarpkg.none",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -922,7 +1012,17 @@
       "rarpkg.reading",
       "rarpkg.installing",
       "rarpkg.run",
-      "rarpkg.none"
+      "rarpkg.none",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -1014,7 +1114,17 @@
       "rarpkg.reading",
       "rarpkg.installing",
       "rarpkg.run",
-      "rarpkg.none"
+      "rarpkg.none",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -1104,7 +1214,17 @@
       "rarpkg.reading",
       "rarpkg.installing",
       "rarpkg.run",
-      "rarpkg.none"
+      "rarpkg.none",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -1195,7 +1315,17 @@
       "rarpkg.reading",
       "rarpkg.installing",
       "rarpkg.run",
-      "rarpkg.none"
+      "rarpkg.none",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -1291,7 +1421,17 @@
       "rarpkg.reading",
       "rarpkg.installing",
       "rarpkg.run",
-      "rarpkg.none"
+      "rarpkg.none",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -1382,7 +1522,17 @@
       "rarpkg.reading",
       "rarpkg.installing",
       "rarpkg.run",
-      "rarpkg.none"
+      "rarpkg.none",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -1472,7 +1622,17 @@
       "rarpkg.reading",
       "rarpkg.installing",
       "rarpkg.run",
-      "rarpkg.none"
+      "rarpkg.none",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -1564,7 +1724,17 @@
       "rarpkg.reading",
       "rarpkg.installing",
       "rarpkg.run",
-      "rarpkg.none"
+      "rarpkg.none",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -1657,7 +1827,17 @@
       "rarpkg.reading",
       "rarpkg.installing",
       "rarpkg.run",
-      "rarpkg.none"
+      "rarpkg.none",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -1747,7 +1927,17 @@
       "rarpkg.reading",
       "rarpkg.installing",
       "rarpkg.run",
-      "rarpkg.none"
+      "rarpkg.none",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [

@@ -1360,6 +1360,12 @@ pub(crate) fn merge_live_notes(
     }
     if n.settling.load(Relaxed) {
         o.insert("settling".into(), true.into());
+        // How many files the console still has to make permanent, and the most it had: the
+        // client turns the fall of the first into "N of M" and a time left.
+        let left = n.unswept.load(Relaxed);
+        let peak = n.unswept_peak.load(Relaxed).max(left);
+        o.insert("settle_files_left".into(), left.into());
+        o.insert("settle_files_total".into(), peak.into());
     }
     v
 }
@@ -10657,8 +10663,19 @@ mod helpers_tests {
             v.get("settling").is_none(),
             "settling stays absent until the receiver says so"
         );
+        assert!(v.get("settle_files_left").is_none());
         n.settling.store(true, Relaxed);
-        assert_eq!(merge_live_notes(Some(&n), running)["settling"], true);
+        n.unswept.store(12, Relaxed);
+        n.unswept_peak.store(50, Relaxed);
+        let v = merge_live_notes(Some(&n), running);
+        assert_eq!(v["settling"], true);
+        assert_eq!(
+            (
+                v["settle_files_left"].as_u64(),
+                v["settle_files_total"].as_u64()
+            ),
+            (Some(12), Some(50))
+        );
         let done = serde_json::json!({"status": "done"});
         assert_eq!(merge_live_notes(Some(&n), done.clone()), done);
     }

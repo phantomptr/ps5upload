@@ -50,6 +50,20 @@ describe("skipping_phase_renders", () => {
 });
 
 describe("finishing on the console", () => {
+  it("says how many files are left when the engine sends the counts", () => {
+    const html = renderToStaticMarkup(
+      <JobLiveNotes live={live({ settling: true, settleLeft: 1200, settleTotal: 5000 })} />,
+    );
+    expect(html).toContain("Finishing on the console…");
+    expect(html).toContain('data-testid="settling-count"');
+    expect(html).toMatch(/1,?200 of 5,?000 files left/);
+  });
+
+  it("shows no count without them (an engine that does not send them)", () => {
+    const html = renderToStaticMarkup(<JobLiveNotes live={live({ settling: true })} />);
+    expect(html).not.toContain("settling-count");
+  });
+
   it("shows only when settling is set", () => {
     expect(renderToStaticMarkup(<JobLiveNotes live={live({ settling: true })} />)).toContain(
       "Finishing on the console…",

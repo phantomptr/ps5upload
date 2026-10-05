@@ -17,6 +17,7 @@ import {
   Badge,
 } from "../../components";
 import { TaskList } from "../../components/TaskList";
+import { RunningEngineJobs } from "../../components/RunningEngineJobs";
 import { TelemetryDashboard } from "../../components/TelemetryDashboard";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useTr } from "../../state/lang";
@@ -170,6 +171,7 @@ export default function ActivityScreen() {
       {/* The unified task projection and legacy operation history are separate
           views. Stacking both produced duplicate rows for the same upload and
           made it unclear which controls were authoritative. */}
+      {view === "tasks" && <RunningEngineJobs />}
       {view === "tasks" && <TaskList />}
       {view === "tasks" && taskCount === 0 && (
         <EmptyState

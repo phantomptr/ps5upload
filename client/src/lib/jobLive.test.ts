@@ -49,6 +49,17 @@ describe("job live notes", () => {
     expect(jobLiveFromSnapshot({ settling: undefined })).toBeUndefined();
   });
 
+  it("carries the settle counts only while settling, never below zero or above the total", () => {
+    expect(
+      jobLiveFromSnapshot({ settling: true, settle_files_left: 30, settle_files_total: 100 }),
+    ).toMatchObject({ settling: true, settleLeft: 30, settleTotal: 100 });
+    expect(
+      jobLiveFromSnapshot({ settling: true, settle_files_left: 30, settle_files_total: 10 }),
+    ).toMatchObject({ settleLeft: 30, settleTotal: 30 });
+    expect(jobLiveFromSnapshot({ settling: true })).not.toHaveProperty("settleLeft");
+    expect(jobLiveFromSnapshot({ settle_files_left: 3 })).toBeUndefined();
+  });
+
   it("carries the console's settle warning from a finished job's commit_ack, and only then", () => {
     const warned = jobLiveFromSnapshot({
       commit_ack: { warning: "files are still being made durable on the console" },

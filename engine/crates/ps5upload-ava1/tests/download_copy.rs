@@ -19,7 +19,7 @@ use ava1::server::{self, RpcHandler, ServerCtx};
 use ava1::session::RpcReply;
 use ava1::wire::{FrameMessage, Message};
 use ava1_chaos::{ChaosConfig, ChaosProxy};
-use ps5upload_ava1::copy::{console_copy_in, op_cancel, op_snapshot, record_status};
+use ps5upload_ava1::copy::{console_copy_with, op_cancel, op_snapshot, record_status};
 use ps5upload_ava1::download::{self, Counters, ZipCompression, ZipSink};
 use ps5upload_ava1::upload::UploadFailure;
 use ps5upload_ava1::Pool;
@@ -833,11 +833,33 @@ async fn fake_pool(d: &Path, fake: Arc<Mutex<Fake>>) -> Arc<Pool> {
     Arc::new(engine_pool(d, &addr).0)
 }
 
+/// No console to reach in these tests: the cleanup the engine would run is recorded instead.
+struct NoCleanup;
+impl ps5upload_ava1::copy::CancelCleanup for NoCleanup {
+    fn dest_absent(&self, _: &str, _: &str) -> bool {
+        true
+    }
+    fn clean(&self, _: &str, _: &str, _: bool) {}
+}
+
+#[derive(Default)]
+struct Recorder(Mutex<Vec<(String, bool)>>);
+impl ps5upload_ava1::copy::CancelCleanup for Recorder {
+    fn dest_absent(&self, _: &str, _: &str) -> bool {
+        true
+    }
+    fn clean(&self, _: &str, to: &str, absent: bool) {
+        self.0.lock().unwrap().push((to.to_string(), absent));
+    }
+}
+
 async fn run_copy(pool: Arc<Pool>, op: u64, mv: bool, overwrite: bool) -> anyhow::Result<()> {
     within(
         60,
         tokio::task::spawn_blocking(move || {
-            console_copy_in(&pool, "c", "/data/a", "/data/b", op, mv, overwrite)
+            console_copy_with(
+                &pool, &NoCleanup, "c", "/data/a", "/data/b", op, mv, overwrite,
+            )
         }),
     )
     .await
@@ -932,6 +954,46 @@ async fn a_console_copy_cancel_signals_the_job() {
     );
     assert!(fake.lock().unwrap().calls.contains(&gen::METHOD_JOB_CANCEL));
     assert!(op_snapshot(7003).is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancelled_copy_clears_its_leftovers_and_a_finished_one_does_not() {
+    let d = temp("copy-cancel-clean");
+    let fake = Arc::new(Mutex::new(Fake {
+        end_state: 1,
+        ..Default::default()
+    }));
+    let pool = fake_pool(&d, fake.clone()).await;
+    let rec = Arc::new(Recorder::default());
+    let (p, r) = (pool.clone(), rec.clone());
+    let job = tokio::task::spawn_blocking(move || {
+        console_copy_with(&p, &*r, "c", "/data/a", "/data/b", 7020, false, true)
+    });
+    wait_until("the copy is running", || {
+        op_snapshot(7020).is_some_and(|s| s.bytes_copied == 1000)
+    })
+    .await;
+    assert!(op_cancel(7020));
+    assert_eq!(job.await.unwrap().unwrap_err().to_string(), "cancelled");
+    // The job was told to stop, then the destination's own leftovers were cleared, once.
+    assert!(fake.lock().unwrap().calls.contains(&gen::METHOD_JOB_CANCEL));
+    assert_eq!(*rec.0.lock().unwrap(), [("/data/b".to_string(), true)]);
+
+    // A copy that finishes (or fails) clears nothing.
+    let fake = Arc::new(Mutex::new(Fake {
+        end_state: 1,
+        release: true,
+        ..Default::default()
+    }));
+    let pool = fake_pool(&d, fake).await;
+    let (p, r) = (pool.clone(), rec.clone());
+    tokio::task::spawn_blocking(move || {
+        console_copy_with(&p, &*r, "c", "/data/a", "/data/c", 7021, false, true)
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(rec.0.lock().unwrap().len(), 1, "no cleanup after success");
 }
 
 #[tokio::test(flavor = "multi_thread")]

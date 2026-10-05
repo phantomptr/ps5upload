@@ -100,6 +100,7 @@ import { useUploadBatch, type BatchEntry, type BatchRow } from "../../state/uplo
 import { BatchReview } from "./BatchReview";
 import { resolveUploadDest } from "../../lib/uploadDest";
 import { QueuePanel } from "./QueuePanel";
+import { RunningEngineJobs } from "../../components/RunningEngineJobs";
 import { BottleneckLine, JobLiveNotes, UnsettledLine } from "./Bottleneck";
 import { WhySlowPanel } from "./WhySlow";
 import { Ps5ToPs5Card } from "./Ps5ToPs5";
@@ -854,6 +855,7 @@ export default function UploadScreen() {
         />
       )}
 
+      <RunningEngineJobs />
       <QueuePanel />
     </div>
   );
