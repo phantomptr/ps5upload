@@ -4,7 +4,9 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## 6.0.0: one encrypted connection for everything (AVA1)
+## 6.0.0
+
+**One encrypted connection for everything (AVA1).**
 
 **Update the app and the helper together.** 6.0 uses a new protocol, AVA1, on one port: **9120**.
 Ports 9113 and 9114 are gone, so allow only **9120** and **9021** (your ELF loader) in a
