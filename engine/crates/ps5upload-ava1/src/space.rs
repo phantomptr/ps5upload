@@ -11,6 +11,7 @@
 //! only what the console reported. A console that cannot be asked (an old payload, a busy
 //! management port) is not a refusal: the transfer's own ENOSPC still ends it.
 use std::collections::HashMap;
+use std::io::Write;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ava1::send::{SpaceFigures, SpaceGate};
@@ -58,18 +59,27 @@ pub fn volumes_probe() -> RoomProbe {
                 })
             }
             Err(e) => {
-                eprintln!("ava1: fs.freespace unavailable on {console}: {e:#}; trying fs.volumes")
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "ava1: fs.freespace unavailable on {console}: {e:#}; trying fs.volumes"
+                );
             }
         }
         let list = match ps5upload_core::volumes::list_volumes(&host) {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("ava1: space check unavailable for {console}: {e:#}");
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "ava1: space check unavailable for {console}: {e:#}"
+                );
                 return None;
             }
         };
         let Some(v) = list.find_for_path(dest) else {
-            eprintln!("ava1: space check found no volume for {dest} on {console}");
+            let _ = writeln!(
+                std::io::stderr(),
+                "ava1: space check found no volume for {dest} on {console}"
+            );
             return None;
         };
         Some(Room {
