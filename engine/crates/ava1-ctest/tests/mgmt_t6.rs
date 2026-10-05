@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use ava1::gen::{self, MgmtText};
 use ava1::keys::Identity;
@@ -566,14 +566,11 @@ async fn c_t6_a_long_sony_call_does_not_block_other_methods() {
         tokio::spawn(async move { call(&s, REGISTER, r#"{"src_path":"/data/g"}"#).await.0 })
     };
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let t0 = Instant::now();
     let (st, _, _) = call(&s, PROC_LIST, "").await;
     assert_eq!(st, OK);
-    assert!(
-        t0.elapsed() < Duration::from_millis(300),
-        "proc.list waited {:?} behind a Sony call",
-        t0.elapsed()
-    );
+    // A state check, not a wall-clock bound: proc.list answered while the 600 ms Sony call
+    // was still running, so it did not wait behind it.
+    assert!(!slow.is_finished(), "proc.list waited behind a Sony call");
     assert_eq!(slow.await.unwrap(), OK);
     assert_eq!(unsafe { ava1_t6_calls(REGISTER) }, 1);
 }

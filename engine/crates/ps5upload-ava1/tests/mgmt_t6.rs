@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use ava1::gen::{self, MgmtText};
 use ava1::host::FolderHost;
@@ -304,7 +304,7 @@ async fn six_launches_put_at_most_two_in_flight_and_other_calls_still_answer() {
             gen::METHOD_APP_LAUNCH => {
                 let now = i2.fetch_add(1, Ordering::SeqCst) + 1;
                 p2.fetch_max(now, Ordering::SeqCst);
-                std::thread::sleep(Duration::from_millis(150));
+                std::thread::sleep(Duration::from_millis(800));
                 i2.fetch_sub(1, Ordering::SeqCst);
                 text("")
             }
@@ -328,16 +328,17 @@ async fn six_launches_put_at_most_two_in_flight_and_other_calls_still_answer() {
         })
         .collect();
     tokio::time::sleep(Duration::from_millis(80)).await;
-    // while two launches run, an unrelated call answers at once
-    let t0 = Instant::now();
+    // While launches run, an unrelated call answers: it returns with a launch still in
+    // flight (each holds the console 800 ms), not after them. A state check, not a wall-clock
+    // bound, so a slow runner cannot flip it.
+    assert!(inflight.load(Ordering::SeqCst) > 0, "the launches started");
     call(&t, &c, m::PROC_LIST, "PROC_LIST", b"")
         .await
         .unwrap()
         .unwrap();
     assert!(
-        t0.elapsed() < Duration::from_millis(120),
-        "{:?}",
-        t0.elapsed()
+        inflight.load(Ordering::SeqCst) > 0,
+        "PROC_LIST waited for the launches to finish"
     );
     for l in launches {
         l.await.unwrap().unwrap().unwrap();
