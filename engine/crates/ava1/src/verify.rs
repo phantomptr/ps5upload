@@ -251,6 +251,7 @@ pub(crate) fn read_exact_at(f: &File, buf: &mut [u8], off: u64) -> io::Result<()
     #[cfg(windows)]
     {
         use std::os::windows::fs::FileExt;
+        let mut buf = buf;
         let mut read = 0u64;
         while !buf.is_empty() {
             let n = f.seek_read(buf, off + read)?;
@@ -273,6 +274,7 @@ pub(crate) fn write_all_at(f: &File, buf: &[u8], off: u64) -> io::Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::FileExt;
+        let mut buf = buf;
         let mut written = 0u64;
         while !buf.is_empty() {
             let n = f.seek_write(buf, off + written)?;

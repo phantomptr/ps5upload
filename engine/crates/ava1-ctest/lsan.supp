@@ -8,3 +8,8 @@
 # all reachable only from the leaked box) lives to the end of the test process by design.
 leak:diag::transport
 leak:mgmt_fs::transport::rig
+#
+# The leaked pool's sessions are allocated on the pool's own tokio threads, so their stacks never
+# show the test helper above; they show only `Pool::session`. Same intentional leak, different
+# frames (seen in CI on PR #374). Engine-side Rust only: a stack through payload/ or csrc/ still fails.
+leak:ps5upload_ava1::pool::Pool>::session

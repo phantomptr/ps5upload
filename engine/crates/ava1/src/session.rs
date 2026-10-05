@@ -742,9 +742,11 @@ mod sockbuf_tests {
     async fn a_lane_socket_gets_big_buffers_and_still_connects() {
         let sock = tokio::net::TcpSocket::new_v4().unwrap();
         let (rcv, snd) = tune_lane_socket(&sock);
-        // The kernel may cap or double the request; either way it is far above a default.
-        assert!(rcv.unwrap() >= 1 << 20, "rcv {rcv:?}");
-        assert!(snd.unwrap() >= 1 << 20, "snd {snd:?}");
+        // The kernel may cap or double the request (Linux CI caps the send side at
+        // wmem_max = 208 KiB, reported doubled; the PS5 gives 512 KiB), so assert only that
+        // tuning lifted both well above a stock default (16-87 KiB), not the full 4 MiB ask.
+        assert!(rcv.unwrap() >= 128 << 10, "rcv {rcv:?}");
+        assert!(snd.unwrap() >= 128 << 10, "snd {snd:?}");
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let s = connect_lane_socket(l.local_addr().unwrap()).await.unwrap();
         assert!(s.peer_addr().is_ok());
