@@ -23,7 +23,7 @@ use ps5upload_core::download::DownloadKind;
 use zip::write::SimpleFileOptions;
 
 use crate::pool::{pool, Pool};
-use crate::upload::{refusal, wait, SessionGate, UploadFailure, STALL_LIMIT};
+use crate::upload::{rearm, refusal, wait, SessionGate, UploadFailure, STALL_LIMIT};
 use crate::zip_stored::StoredZipSink;
 
 /// The grant a download extends to the console (SPEC.md §12.4).
@@ -684,6 +684,10 @@ fn run(
                 cancel: cancel.clone(),
                 progress_deadline: None,
             };
+            let (started, work_before) = (
+                Instant::now(),
+                progress.bytes_durable.load(Ordering::Relaxed),
+            );
             let (why, dropped) = match download_job(&mut link, src, flags, sink.clone(), o).await {
                 Ok(r) => {
                     let _ = std::fs::remove_dir_all(journal::job_dir(&jobs_dir, &id));
@@ -720,6 +724,7 @@ fn run(
             let durable = progress.bytes_durable.load(Ordering::Relaxed);
             if dropped {
                 pool.forget(console).await;
+                rearm(&mut backoff, started, work_before, durable);
             }
             if fresh_per_attempt || !dropped {
                 let _ = std::fs::remove_dir_all(journal::job_dir(&jobs_dir, &id));

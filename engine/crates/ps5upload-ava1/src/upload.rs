@@ -699,6 +699,10 @@ pub fn upload_with_seq_in(
                 open_ack_timeout: pool.open_ack_timeout(),
                 space_gate: Some(space_gate.clone()),
             };
+            let (started, durable_before) = (
+                Instant::now(),
+                progress.bytes_durable.load(Ordering::Relaxed),
+            );
             match send_job(&mut link, manifest.clone(), source.clone(), o).await {
                 Ok(r) if r.status == gen::STATUS_OK => {
                     let _ = std::fs::remove_dir_all(&persist);
@@ -741,7 +745,11 @@ pub fn upload_with_seq_in(
                 Ok(r) => return Err(refusal(r.status, r.message.unwrap_or_default()).into()),
                 Err(SendError::Disconnected(why)) => {
                     let durable = progress.bytes_durable.load(Ordering::Relaxed);
+                    // Whatever ended the session (a dead control link, a lane refused because the
+                    // console already dropped the session, a replayed join), a fresh handshake is
+                    // the answer; the job and its journal stay, so the resume continues.
                     pool.forget(console).await;
+                    rearm(&mut backoff, started, durable_before, durable);
                     wait(&mut backoff, &format!("{why} ({durable} bytes durable)")).await;
                 }
                 // BUSY on the JobOpen is the console saying "not now" (it is finishing this job's files, or
@@ -793,12 +801,32 @@ pub fn upload_with_seq_in(
     })
 }
 
+/// The first wait after a connection that was doing real work.
+pub(crate) const BACKOFF_FLOOR: Duration = Duration::from_millis(250);
+
+/// A connection that stayed up this long was a working one, not a flapping one.
+const WORKED_FOR: Duration = Duration::from_secs(1);
+
+/// Re-arms the backoff after an attempt that ran: it lasted [`WORKED_FOR`] or made bytes durable.
+/// The ladder exists for a console that is down. A link that was up and then dropped (a random
+/// disconnect, a Wi-Fi roam, a periodic kill) is a console that is back: the next attempt
+/// follows at once. Without this the ladder only ever grew, and a drop period near its 5 s cap
+/// kept every attempt short of the first durable byte (hardware run 2026-10-04: drop60).
+pub(crate) fn rearm(backoff: &mut Duration, started: Instant, durable_before: u64, durable: u64) {
+    if durable > durable_before || started.elapsed() >= WORKED_FOR {
+        *backoff = BACKOFF_FLOOR;
+    }
+}
+
 /// Jittered doubling backoff, 250 ms → 5 s. Logs without ever panicking on a closed
-/// stderr (an engine under a dead parent).
+/// stderr (an engine under a dead parent). The jitter is drawn from the clock, so two
+/// retry loops (or a retry loop and a periodic drop) cannot stay in lock step.
 pub(crate) async fn wait(backoff: &mut Duration, why: &str) {
-    let jitter = Duration::from_millis(
-        u64::from(std::process::id() % 97) * backoff.as_millis() as u64 / 400,
-    );
+    let spread = (backoff.as_millis() as u64 / 4).max(1);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let jitter = Duration::from_millis((u64::from(nanos) ^ u64::from(std::process::id())) % spread);
     let sleep = *backoff + jitter;
     let _ = writeln!(std::io::stderr(), "ava1: reconnecting in {sleep:?}: {why}");
     tokio::time::sleep(sleep).await;
@@ -1502,6 +1530,22 @@ mod tests {
     }
     fn other() -> Ava1Error {
         Ava1Error::Io(std::io::Error::other("handshake reset"))
+    }
+
+    #[test]
+    fn a_connection_that_worked_rearms_the_backoff_and_a_flapping_one_does_not() {
+        let long_ago = Instant::now() - Duration::from_secs(3);
+        let mut b = Duration::from_secs(5);
+        rearm(&mut b, Instant::now(), 10, 10);
+        assert_eq!(b, Duration::from_secs(5), "short, no bytes: keep climbing");
+        rearm(&mut b, Instant::now(), 10, 11);
+        assert_eq!(
+            b, BACKOFF_FLOOR,
+            "durable bytes landed: the console is back"
+        );
+        b = Duration::from_secs(5);
+        rearm(&mut b, long_ago, 10, 10);
+        assert_eq!(b, BACKOFF_FLOOR, "it stayed up: a random drop, not a flap");
     }
 
     #[test]
