@@ -24,6 +24,9 @@ const NOT_PAIRED = [
   "not_paired",
   "devices are not paired",
   "ava1_wrong_console",
+  // The same refusal as its human sentence: management probes (the Connection screen's
+  // helper check) carry the engine's message, not the token.
+  "a different device answered",
 ];
 const HELPER_OLD = ["helper_old", "legacy_helper_wedged"];
 

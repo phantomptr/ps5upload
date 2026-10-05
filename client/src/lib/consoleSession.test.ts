@@ -137,3 +137,17 @@ describe("classifyReplaceError", () => {
     }
   });
 });
+
+describe("a console whose key changed", () => {
+  it("is a pairing problem whether the engine sent the token or its sentence", () => {
+    expect(isNotPairedError("ava1_wrong_console")).toBe(true);
+    // The Connection screen's helper probe carries the engine's message, not the token.
+    expect(
+      isNotPairedError(
+        "management call STATUS failed: could not open an AVA1 session with the console: " +
+          "a different device answered at this address (its key is not the expected one)",
+      ),
+    ).toBe(true);
+    expect(isNotPairedError("connection refused")).toBe(false);
+  });
+});

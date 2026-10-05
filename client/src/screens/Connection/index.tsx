@@ -19,6 +19,7 @@ import {
   type DiscoveredHost,
 } from "../../api/ps5";
 import { pollUntilReady, type PollHandle } from "../../lib/pollUntilReady";
+import { isNotPairedError, reportIfNotPaired } from "../../lib/consoleSession";
 import { parsePS5Firmware } from "../../lib/ps5Firmware";
 import { compareVersions } from "../../lib/semver";
 import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
@@ -556,6 +557,21 @@ export default function ConnectionScreen() {
           // Reachable=false: the engine returned 502 or similar.
           // Stash the engine's diagnostic for the timeout banner.
           if (status.error) lastProbeError = status.error;
+          // The helper answered but this app may not use it yet (not paired, or a different
+          // key than the one remembered for this address). Re-sending cannot fix that: stop
+          // polling and open the pairing dialog, which explains it and offers the fix.
+          if (status.error && isNotPairedError(status.error)) {
+            pollHandle.current?.cancel();
+            pollHandle.current = null;
+            setStatus({ payloadProbing: false });
+            reportIfNotPaired(status.error, target);
+            settleStep2(
+              "fail",
+              status.error.toLowerCase().includes("different device")
+                ? tr("pairing_wrong_console_title", undefined, "A different PS5 answered at this address")
+                : tr("pairing_title", undefined, "Pair with your PS5"),
+            );
+          }
           return "fail";
         } catch (e) {
           lastProbeError = e instanceof Error ? e.message : String(e);
