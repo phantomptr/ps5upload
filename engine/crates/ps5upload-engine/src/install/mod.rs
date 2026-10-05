@@ -1316,6 +1316,23 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn the_install_route_refuses_a_games_own_installed_pkg_before_touching_the_console() {
+        // The handler must say no from the path alone: no console is contacted, no job begins.
+        let state = std::sync::Arc::new(crate::pkg_install::PkgInstallState::default());
+        let req: InstallRequest = serde_json::from_value(serde_json::json!({
+            "ps5_addr": "192.0.2.1:9113",
+            "source": {"console_path": "/mnt/ext0/user/patch/CUSA02092/patch.pkg"},
+        }))
+        .unwrap();
+        let resp = install_handler(State(state.clone()), Json(req)).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            state.jobs.begin("192.0.2.1:9113").is_ok(),
+            "no job may have been started"
+        );
+    }
+
     #[test]
     fn a_bridged_container_is_told_about_host_networking_not_firewalls() {
         // A homelab engine in Docker with default bridge networking hands the
