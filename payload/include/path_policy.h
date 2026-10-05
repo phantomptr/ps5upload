@@ -19,7 +19,7 @@ int path_resolve_allowed(const char *p, int (*lexical_ok)(const char *));
 /* The trust store. `/data/ps5upload/ava` holds this console's AVA1 identity and its list of paired peers;
  * a paired peer that could overwrite, delete or read them could hijack the console's trust. So the
  * directory and everything under it is denied to EVERY path policy that goes through this file
- * (runtime.c's is_path_allowed, so the FTX2 handlers and AVA1's fs.* / job ops, and the FTP server).
+ * (runtime.c's is_path_allowed, so the management handlers and AVA1's fs.* / job ops, and the FTP server).
  *
  * path_in_protected: `p` is the directory or below it, judged on three forms of the path: as written,
  * lexically normalised (`//`, `.`, `..` collapsed), and canonical (symlinks resolved, with the deepest

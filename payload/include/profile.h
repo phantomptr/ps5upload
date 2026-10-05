@@ -14,7 +14,7 @@
  * Elf Arsenal project. ps5upload is itself GPL-3.0, so this reuse is
  * license-compatible; the attribution is preserved. The original ships an
  * SDL2 fullscreen UI; we keep only the sceRegMgr side-effects and drive
- * them from the desktop UI over the FTX2 protocol.
+ * them from the desktop UI over the old protocol.
  *
  * Avatar apply is host-driven: the desktop decodes/resizes/DXT5-encodes
  * the image and stages the finished DDS + online.json files under

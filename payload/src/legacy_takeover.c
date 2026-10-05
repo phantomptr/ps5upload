@@ -78,3 +78,7 @@ int legacy_takeover(int mgmt_port, int xfer_port, int ack_timeout_s, int attempt
     }
     return LEGACY_TAKEOVER_STUCK;
 }
+
+int legacy_takeover_old_ports(int ack_timeout_s, int attempts, int interval_us) {
+    return legacy_takeover(9114, 9113, ack_timeout_s, attempts, interval_us);
+}

@@ -81,7 +81,7 @@ fn main() {
         let runtime = std::fs::read_to_string(p.join("src/runtime.c")).unwrap();
         let mut frames = String::new();
         for line in runtime.lines() {
-            if line.starts_with("#define FTX2_FRAME_") && line.contains('u') {
+            if line.starts_with("#define MGMT_FRAME_") && line.contains('u') {
                 frames.push_str(line);
                 frames.push('\n');
             }
@@ -128,6 +128,7 @@ fn main() {
             p.join("src/fs_jobs.c"),
             p.join("src/net_probe.c"),
             p.join("src/legacy_takeover.c"),
+            p.join("src/state_migrate.c"),
             p.join("src/takeover_flag.c"),
             p.join("src/ownership_record.c"),
             here.join("csrc/ownership_shim.c"),
@@ -231,6 +232,7 @@ fn main() {
     println!("cargo:rerun-if-changed={}", ava1.display());
     for f in [
         "src/legacy_takeover.c",
+        "src/state_migrate.c",
         "src/takeover_flag.c",
         "src/ava1_stop.c",
     ] {

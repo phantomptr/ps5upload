@@ -4,7 +4,7 @@
  * Enumerates /dev/daN block devices, reads temperature via SCSI LOG
  * SENSE (CAM pass-through, page 0x0D), and collects capacity, ident,
  * and filesystem usage. Ported from elf-arsenal's drive_sensors.c,
- * adapted to emit FTX2-compatible JSON instead of an HTTP response.
+ * adapted to emit legacy-compatible JSON instead of an HTTP response.
  */
 
 #include <stdint.h>

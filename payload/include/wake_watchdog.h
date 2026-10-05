@@ -32,7 +32,7 @@
  * MEASURED 2026-08-31, and it bounds what this thread can ever be worth:
  * on FW 5.10 and FW 9.60 the payload does NOT survive rest mode at all. A
  * real standby/wake cycle leaves the ELF loader (9021) listening and the
- * helper's own ports (9113/9114) closed — the process is gone, so no
+ * helper's own port (the AVA1 one) closed — the process is gone, so no
  * re-escalation can run and the desktop's auto-loader re-sends the payload
  * instead. On those firmwares every branch this thread can reach is
  * therefore a FALSE positive. That asymmetry — unproven upside, proven

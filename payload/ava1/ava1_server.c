@@ -166,7 +166,7 @@ static int spawn_detached_stack(void *(*fn)(void *), void *arg, size_t stack) {
 static int spawn_detached(void *(*fn)(void *), void *arg) { return spawn_detached_stack(fn, arg, THREAD_STACK); }
 
 /* Management methods (4 and up, except the data plane's 16-19) call handlers written for the
- * FTX2 management thread, which had 512 KiB; everything else keeps the 256 KiB rule. */
+ * old management thread, which had 512 KiB; everything else keeps the 256 KiB rule. */
 static size_t rpc_stack(uint16_t method) {
     return (method >= 4 && !(method >= 16 && method <= 19)) ? MGMT_STACK : THREAD_STACK;
 }

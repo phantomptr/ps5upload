@@ -8,7 +8,7 @@
 
 #define AVA1_THREAD_STACK (256u * 1024u)
 
-/* The management workers' stack (the FTX2 management thread had 512 KiB). */
+/* The management workers' stack (the old management thread had 512 KiB). */
 #define AVA1_MGMT_STACK (512u * 1024u)
 
 /* Starts fn(arg) on a 256 KiB stack. out == NULL: detached. 0 or -1. */

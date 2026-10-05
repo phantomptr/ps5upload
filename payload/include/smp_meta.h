@@ -25,7 +25,7 @@
 #include <stdint.h>
 
 /* Stat snapshot returned by `smp_meta_get_stats`. Matches the JSON
- * shape the engine wraps into the FTX2 STATS_ACK frame. */
+ * shape the engine wraps into the old stats reply. */
 typedef struct {
     int      running;            /* 1 once the watcher thread is alive */
     int      poll_seconds;       /* tick interval (min 5, max 600) */

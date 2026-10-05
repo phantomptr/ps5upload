@@ -20,7 +20,7 @@
 /*
  * Takes this instance's place over whatever instance is already on the console.
  *
- *   1. An instance from before the cutover (old binary protocol on 9113/9114): legacy_takeover.c
+ *   1. An instance from before the cutover (the old binary protocol, on two ports of its own): legacy_takeover.c
  *      sends its takeover request. That file is the migration shim and goes in the release after
  *      the cutover.
  *   2. An AVA1-era instance (it listens on the AVA1 port): the flag file. We write
@@ -42,15 +42,13 @@ int runtime_try_takeover(runtime_state_t *state) {
     } else {
         printf("[payload2] no previous ownership record found\n");
     }
-    printf("[payload2] takeover probe: legacy ports %d/%d, ava1 port %d, instance=%llu\n",
-           state->mgmt_port, state->runtime_port, (int)AVA1_DEFAULT_PORT,
+    printf("[payload2] takeover probe: ava1 port %d, instance=%llu\n", (int)AVA1_DEFAULT_PORT,
            (unsigned long long)state->instance_id);
 
-    rc = legacy_takeover(state->mgmt_port, state->runtime_port, TAKEOVER_ACK_TIMEOUT_SEC,
-                         TAKEOVER_PORT_RELEASE_ATTEMPTS, TAKEOVER_PORT_RELEASE_INTERVAL_US);
+    rc = legacy_takeover_old_ports(TAKEOVER_ACK_TIMEOUT_SEC, TAKEOVER_PORT_RELEASE_ATTEMPTS,
+                                   TAKEOVER_PORT_RELEASE_INTERVAL_US);
     if (rc == LEGACY_TAKEOVER_STUCK) {
-        fprintf(stderr, "[payload2] takeover timed out: ports %d/%d still occupied\n",
-                state->runtime_port, state->mgmt_port);
+        fprintf(stderr, "[payload2] takeover timed out: the old helper's ports are still occupied\n");
         return -1;
     }
     if (rc == LEGACY_TAKEOVER_FREED) state->startup_reason = PS5UPLOAD2_STARTUP_TAKEOVER;
@@ -61,8 +59,8 @@ int runtime_try_takeover(runtime_state_t *state) {
     if (takeover_port_responding((int)AVA1_DEFAULT_PORT)) {
         /* The old instance is still serving AVA1 (an AVA1-era instance, or a transitional one
          * whose legacy ports were just freed but whose AVA1 server is still closing). */
-        int ports[3] = {(int)AVA1_DEFAULT_PORT, state->mgmt_port, state->runtime_port};
-        if (takeover_flag_request(PS5UPLOAD2_RUNTIME_DIR, state->takeover_nonce, ports, 3,
+        int ports[1] = {(int)AVA1_DEFAULT_PORT};
+        if (takeover_flag_request(PS5UPLOAD2_RUNTIME_DIR, state->takeover_nonce, ports, 1,
                                   TAKEOVER_PORT_RELEASE_ATTEMPTS,
                                   TAKEOVER_PORT_RELEASE_INTERVAL_US) != 0) {
             fprintf(stderr, "[payload2] takeover timed out: ava1 port %d still occupied\n",

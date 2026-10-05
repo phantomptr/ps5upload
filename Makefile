@@ -521,12 +521,12 @@ _wait-payload-ready:
 # check-no-ftx2: FTX2 and its ports (9113 transfer, 9114 management) must not
 # reappear in the guides, the client or the AVA1 engine crates.
 #
-# SCOPE IS TEMPORARY. FTX2 still lives in core, payload, lab, bench,
-# ftx2-proto and the old tests until it is deleted after the hardware pass, so
-# only the documentation, client/src and ps5upload-engine are checked now
-# (ps5upload-ava1 is exempt for now, see below). The scope widens to the whole repo at the FTX2 deletion
-# (P3 Task 18 Step 3 / Task 19), and the exceptions below shrink to
-# CHANGELOG.md alone.
+# SCOPE IS TEMPORARY. FTX2 still lives in core, lab, bench, ftx2-proto and the
+# old tests until Task 18 deletes it, so only the documentation, client/src,
+# ps5upload-engine and the payload (Task 19: its servers, transaction table and
+# ports are gone) are checked now (ps5upload-ava1 is exempt for now, see below).
+# The scope widens to the whole repo at the FTX2 deletion (P3 Task 18 Step 3),
+# and the exceptions below shrink to CHANGELOG.md alone.
 #
 # The pattern is case-insensitive "ftx2" or a bare port 9113/9114. Digits on
 # either side are excluded so the engine's own 19113 is not a match.
@@ -555,7 +555,7 @@ _wait-payload-ready:
 CHECK_NO_FTX2_PATTERN := ftx2|(^|[^0-9])911[34]([^0-9]|$$)
 CHECK_NO_FTX2_SCOPE := README.md CONTRIBUTING.md TESTING.md FAQ.md \
 	engine/README.md tests/README.md tests/lab/README.md \
-	client/src engine/crates/ps5upload-engine
+	client/src engine/crates/ps5upload-engine payload
 CHECK_NO_FTX2_EXCEPT := \
 	':!CHANGELOG.md' \
 	':!payload/src/legacy_takeover.c' \
@@ -873,16 +873,6 @@ test-payload: payload
 	done
 	@echo "✓ Main payload and PS5Upload installer are PS5 ELFs with gzip resources"
 	@echo "Running play-time launch/resume self-test (host build)..."
-	@echo "Running accept-recovery self-test (host build)..."
-	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-accept-recovery-selftest \
-		$(PAYLOAD_DIR)/tests/accept_recovery_selftest.c
-	@/tmp/ps5upload-accept-recovery-selftest
-	@echo "✓ accept() failures keep the helper serving until its network is gone"
-	@echo "Running direct-commit apply self-test (host build)..."
-	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-commit-apply-selftest \
-		$(PAYLOAD_DIR)/tests/commit_apply_selftest.c
-	@/tmp/ps5upload-commit-apply-selftest
-	@echo "✓ a repeat COMMIT never unlinks a destination it cannot replace"
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-activity-selftest \
 		$(PAYLOAD_DIR)/tests/activity_launch_selftest.c
 	@/tmp/ps5upload-activity-selftest
@@ -1073,11 +1063,6 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/cross_device_selftest.c
 	@/tmp/ps5upload-cross-device-selftest
 	@echo "✓ cross-mount renames are refused before they can panic the kernel"
-	@echo "Running single-file resume open self-test (host build)..."
-	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-direct-open-selftest \
-		$(PAYLOAD_DIR)/tests/direct_open_selftest.c
-	@/tmp/ps5upload-direct-open-selftest
-	@echo "✓ a resumed single-file upload writes where the acknowledged bytes end"
 	@echo "Running Remote Play registry-key self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-rp-keys-selftest \
 		$(PAYLOAD_DIR)/tests/rp_keys_selftest.c

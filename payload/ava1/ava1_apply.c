@@ -718,7 +718,7 @@ static int lfile_open_fds(ava1_job_t *j, uint32_t id, int create, int *fdp, int 
     if (fd < 0 && create && errno == ENOENT && mkparents(path) == 0) fd = open(path, O_RDWR | O_CREAT | O_NOFOLLOW, 0600);
     if (fd < 0) return errno;
     if (fstat(fd, &st) == 0 && st.st_size == 0 && e->size > 0) {
-        /* FTX2 preallocates for the same reason (runtime.c, "a sparse file on PS5 UFS collapses
+        /* the old protocol preallocated for the same reason (runtime.c, "a sparse file on PS5 UFS collapses
          * from 60 to 2-3 MiB/s under dirty-buffer throttling"): keep it, and keep ENOSPC first. */
         uint64_t t0, dt;
         int rc;

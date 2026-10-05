@@ -1,14 +1,14 @@
 /* AVA1 filesystem management methods (P3 Task 4): fs.list, fs.stat, fs.freespace, fs.mkdir, fs.rename,
  * fs.chmod, fs.read and fs.write.
  *
- * These are native (not the FTX2 handlers behind the capture sink): their bodies are typed
+ * These are native (not the management handlers behind the capture sink): their bodies are typed
  * (SPEC.md section 7.5), and keeping them in one file that includes no runtime.c types lets the
  * host harness (ava1-ctest) run the very code the console runs. The path policy and the command
  * counter are the only things that stay in runtime.c; it hands them over through
  * mgmt_fs_set_policy() (runtime_mgmt_install()).
  *
  * Each runner has the mgmt_run_fn shape and is a `MGMT_N` line in mgmt_table.def. The error
- * causes are the FTX2 handlers' tokens (fs_list_dir_path_denied, fs_move_cross_mount, ...) so a
+ * causes are the the handlers' tokens (fs_list_dir_path_denied, fs_move_cross_mount, ...) so a
  * caller that matches on them keeps working.
  */
 #ifndef PS5UPLOAD_MGMT_FS_H

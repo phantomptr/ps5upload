@@ -2,7 +2,7 @@
  *
  * The reader is the only way to read app.db on real hardware: the
  * console ships no libSceSqlite.sprx, so the sqlite path never resolves.
- * Both the FTX2 APPDB_QUERY handler and Game Activity's "Recently
+ * Both the appdb.query handler and Game Activity's "Recently
  * Played" depend on it.
  *
  * The fixture builds genuine SQLite leaf pages rather than a convenient

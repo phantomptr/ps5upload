@@ -794,7 +794,7 @@ static void crc_init(void) {
     }
 }
 
-/* CRC32 {"path"}: result {"crc32":N,"size":N}. The buffer is on the heap: the FTX2 handler's
+/* CRC32 {"path"}: result {"crc32":N,"size":N}. The buffer is on the heap: the handler's
  * 64 KiB stack array is what the stack audit exists to keep out of a management thread. */
 static int op_crc32(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size_t n) {
     char path[1024], resp[64];

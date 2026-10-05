@@ -9,15 +9,14 @@ It listens on one port, **9120**, for AVA1 (`protocol/ava1/SPEC.md`):
 transfers, status, filesystem, mount, app, hardware, package and shell
 calls all travel over one encrypted session with up to 8 data lanes.
 
-A frame sent to the wrong port is answered with `wrong_port` rather than
-half-working.
-
 ## Layout
 
 `src/main.c` handles startup: credential elevation, runtime ownership,
-the management thread, the transfer loop, and cleanup. `src/runtime.c` is
-the runtime — the transaction journal, resume, direct and spooled writes,
-and most command handlers. `ava1/` is the AVA1 protocol in C (frames,
+the takeover, the one-time removal of the retired transfer folders
+(`src/state_migrate.c`), starting the AVA1 server, and cleanup. It binds no
+socket of its own. `src/runtime.c` holds the management handlers the AVA1
+table (`src/mgmt_table.def`, dispatched by `src/mgmt_rpc.c`) calls, and the
+instance lifecycle (ownership record, reap, shutdown). `ava1/` is the AVA1 protocol in C (frames,
 generated codecs in `ava1/gen/`, Noise handshake, server); never edit
 `ava1/gen/` by hand. `src/takeover.c`
 asks an older resident payload to stand down before binding.

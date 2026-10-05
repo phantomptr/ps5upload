@@ -30,13 +30,10 @@
 #include <fts.h>
 #include <fnmatch.h>
 #include <regex.h>
-#include "direct_open.h"
 #include "config.h"
-#include "commit_apply.h"
 #include "runtime.h"
 #include "sandbox_unmount.h"
 #include "instance_verdict.h"
-#include "accept_recovery.h"
 
 #include "content_db.h"
 #include "register.h"
@@ -71,29 +68,6 @@
 #include "ava1_glue.h"
 #include "ownership_record.h"
 
-/* PS5 SDK's `<fcntl.h>` hides `posix_fadvise` and its POSIX_FADV_* constants
- * behind `__POSIX_VISIBLE >= 200112`, but defining `_POSIX_C_SOURCE` to unlock
- * them also strips BSD-only types (`struct timeval`, `u_int`, etc.) that the
- * rest of this translation unit needs. Work around that by declaring the
- * prototype + constants ourselves — the underlying syscalls are wired up in
- * libc either way, so this is a visibility fix, not an ABI change. */
-#ifndef POSIX_FADV_SEQUENTIAL
-#define POSIX_FADV_NORMAL     0
-#define POSIX_FADV_RANDOM     1
-#define POSIX_FADV_SEQUENTIAL 2
-#define POSIX_FADV_WILLNEED   3
-#define POSIX_FADV_DONTNEED   4
-#define POSIX_FADV_NOREUSE    5
-extern int posix_fadvise(int fd, off_t offset, off_t len, int advice);
-#endif
-
-/* `posix_fallocate` is hidden behind the same __POSIX_VISIBLE gate as
- * posix_fadvise above. The libc symbol is present (FreeBSD 11+); we
- * just need a visible prototype. Used by cp_rf to reserve contiguous
- * dst extents up-front, which prevents block-allocation interleaving
- * with the data-write loop on multi-GiB copies. */
-extern int posix_fallocate(int fd, off_t offset, off_t len);
-
 /* Capacity policy mirrored by ps5upload-core::volumes. Keep a small working
  * margin -- 1 GiB, scaled down for small volumes -- out of every filesystem
  * for metadata and concurrent activity. The PS5 user-storage allocator can
@@ -103,389 +77,206 @@ extern int posix_fallocate(int fd, off_t offset, off_t len);
 #define PS5UPLOAD2_GIB ((uint64_t)1024u * 1024u * 1024u)
 #define PS5UPLOAD2_EXTERNAL_SPACE_RESERVE (1u * PS5UPLOAD2_GIB)
 
-#define FTX2_MAGIC 0x32585446u
-#define FTX2_VERSION 1u
-/* NOTE: These frame numbers, MAGIC, VERSION, and the two TX_FLAG_*
- * values below are duplicated in Rust (engine/crates/ftx2-proto/src/lib.rs)
- * and exercised by the payload_c_wire_constants_match test. Keep them
- * in sync or the host and payload will not understand each other. */
-#define FTX2_FRAME_HELLO 1u
-#define FTX2_FRAME_HELLO_ACK 2u
-#define FTX2_FRAME_ERROR 3u
-#define FTX2_FRAME_BEGIN_TX 10u
-#define FTX2_FRAME_BEGIN_TX_ACK 11u
-/* BeginTx TxMeta flag bits (mirror of ftx2-proto's lib.rs FrameType
- * doc comments — the standalone specs/ tree was retired). Bit 0 = RESUME:
- * host asks the payload to reuse an already-interrupted tx_id instead of
- * allocating a fresh slot. Unknown / non-resumable tx_ids fall through to
- * fresh-BeginTx semantics (flag becomes a no-op). */
-#define FTX2_TX_FLAG_RESUME 0x1u
-/* BeginTx opt-in: client wants APPLY_PROGRESS frames during the
- * multi-file COMMIT_TX apply loop. New in protocol version paired with
- * ftx2_proto::TX_FLAG_APPLY_PROGRESS_REQUESTED. When set, we emit a
- * lightweight JSON progress frame every ~1 sec or 1024 files committed
- * so the desktop client can render a live "Finalized N of M" counter
- * instead of an indeterminate "Finalizing on PS5…" black box. Old
- * clients don't set the flag and we behave as before (silent apply,
- * single CommitTxAck).
- * (See also the cross-language parity test in ftx2-proto.) */
-#define FTX2_TX_FLAG_APPLY_PROGRESS_REQUESTED 0x4u
-/* (See payload_c_wire_constants_match test in Rust ftx2-proto for the
- * required matching values on the host side.) */
-#define FTX2_FRAME_QUERY_TX 12u
-#define FTX2_FRAME_QUERY_TX_ACK 13u
-#define FTX2_FRAME_COMMIT_TX 14u
-#define FTX2_FRAME_COMMIT_TX_ACK 15u
-#define FTX2_FRAME_ABORT_TX 16u
-#define FTX2_FRAME_ABORT_TX_ACK 17u
-#define FTX2_FRAME_TAKEOVER_REQUEST 18u
-#define FTX2_FRAME_TAKEOVER_ACK 19u
-#define FTX2_FRAME_STATUS 20u
-#define FTX2_FRAME_STATUS_ACK 21u
-#define FTX2_FRAME_SHUTDOWN 22u
-#define FTX2_FRAME_SHUTDOWN_ACK 23u
-#define FTX2_FRAME_STREAM_SHARD 30u
-#define FTX2_FRAME_SHARD_ACK 31u
-#define FTX2_FRAME_CLEANUP 32u
-#define FTX2_FRAME_CLEANUP_ACK 33u
-#define FTX2_FRAME_FS_LIST_VOLUMES 34u
-#define FTX2_FRAME_FS_LIST_VOLUMES_ACK 35u
-#define FTX2_FRAME_FS_LIST_DIR 36u
-#define FTX2_FRAME_FS_LIST_DIR_ACK 37u
-#define FTX2_FRAME_FS_HASH 38u
-#define FTX2_FRAME_FS_HASH_ACK 39u
-#define FTX2_FRAME_FS_DELETE 40u
-#define FTX2_FRAME_FS_DELETE_ACK 41u
-#define FTX2_FRAME_FS_MOVE 42u
-#define FTX2_FRAME_FS_MOVE_ACK 43u
-#define FTX2_FRAME_FS_CHMOD 44u
-#define FTX2_FRAME_FS_CHMOD_ACK 45u
-#define FTX2_FRAME_FS_MKDIR 46u
-#define FTX2_FRAME_FS_MKDIR_ACK 47u
-#define FTX2_FRAME_FS_READ 48u
-#define FTX2_FRAME_FS_READ_ACK 49u
-#define FTX2_FRAME_FS_COPY 50u
-#define FTX2_FRAME_FS_COPY_ACK 51u
-#define FTX2_FRAME_FS_MOUNT 52u
-#define FTX2_FRAME_FS_MOUNT_ACK 53u
-#define FTX2_FRAME_FS_UNMOUNT 54u
-#define FTX2_FRAME_FS_UNMOUNT_ACK 55u
-/* App lifecycle frames — registration + launch. See register.h for
- * the pipeline. Body is JSON:
- *   APP_REGISTER:       {"src_path":"/abs/..."}
- *   APP_UNREGISTER:     {"title_id":"PPSA00xxx"}
- *   APP_LAUNCH:         {"title_id":"PPSA00xxx"}
- *   APP_LIST_REGISTERED: {} (empty)
- * ACK bodies:
- *   APP_REGISTER_ACK:    {"title_id":"...","title_name":"...","used_nullfs":true}
- *   APP_UNREGISTER_ACK:  {} (empty)
- *   APP_LAUNCH_ACK:      {} (empty)
- *   APP_LIST_REGISTERED_ACK: {"apps":[{"title_id":"...","title_name":"...",
- *                                      "src":"/...","image_backed":bool}, ...]}
- */
-#define FTX2_FRAME_APP_REGISTER         56u
-#define FTX2_FRAME_APP_REGISTER_ACK     57u
-#define FTX2_FRAME_APP_UNREGISTER       58u
-#define FTX2_FRAME_APP_UNREGISTER_ACK   59u
-#define FTX2_FRAME_APP_LAUNCH           60u
-#define FTX2_FRAME_APP_LAUNCH_ACK       61u
-#define FTX2_FRAME_APP_LIST_REGISTERED     62u
-#define FTX2_FRAME_APP_LIST_REGISTERED_ACK 63u
-/* Hardware monitoring frames. Bodies are newline-separated "key=value"
- * text (not JSON) — keeps the payload parser trivial. */
-#define FTX2_FRAME_HW_INFO          64u
-#define FTX2_FRAME_HW_INFO_ACK      65u
-#define FTX2_FRAME_HW_TEMPS         66u
-#define FTX2_FRAME_HW_TEMPS_ACK     67u
-#define FTX2_FRAME_HW_POWER         68u
-#define FTX2_FRAME_HW_POWER_ACK     69u
-/* Open the PS5 web browser (useful for self-hosted payload-loader
- * pages). Fire-and-forget: the ACK is just a success signal. */
-#define FTX2_FRAME_APP_LAUNCH_BROWSER     70u
-#define FTX2_FRAME_APP_LAUNCH_BROWSER_ACK 71u
-/* Set fan turbo-threshold °C via /dev/icc_fan. Request body is
- * ASCII decimal digits (e.g. "65"); ACK body is empty. The payload
- * clamps to the safe range defined in hw_info.h regardless of input. */
-#define FTX2_FRAME_HW_SET_FAN_THRESHOLD     72u
-#define FTX2_FRAME_HW_SET_FAN_THRESHOLD_ACK 73u
-#define FTX2_FRAME_HW_STORAGE               80u
-#define FTX2_FRAME_HW_STORAGE_ACK           81u
-/* Walk kernel allproc and return {"ok":bool,"procs":[{"pid":N,"name":"..."},...]}.
- * Body is JSON (unlike the hw_* text bodies above) because the UI wants
- * to render a table of entries, which is nicer with structured parsing
- * than a line-based format. */
-#define FTX2_FRAME_PROC_LIST      74u
-#define FTX2_FRAME_PROC_LIST_ACK  75u
-/* Long-running fs op progress + cancel. The engine sends FS_OP_STATUS
- * (or FS_OP_CANCEL) with a body of `{"op_id":<u64>}` where op_id is
- * the trace_id of the originating FS_COPY/FS_MOVE frame. The payload
- * looks up the matching in-flight op in g_fs_ops[] and replies with
- * its current bytes_copied/total_bytes (status) or sets the cancel
- * flag (cancel). Both work over the same mgmt-port socket pool as
- * other FS_* frames; the engine opens a separate connection so the
- * status poll runs concurrently with the FS_COPY's own connection
- * waiting for FS_COPY_ACK. */
-#define FTX2_FRAME_FS_OP_STATUS       76u
-#define FTX2_FRAME_FS_OP_STATUS_ACK   77u
-#define FTX2_FRAME_FS_OP_CANCEL       78u
-#define FTX2_FRAME_FS_OP_CANCEL_ACK   79u
-/* Frames 82-85 (PKG_INSTALL*) are retired — see "PKG_INSTALL (retired)"
- * below. Numbers kept out of reuse; no handler. */
-/* Power control: reboot/shutdown/standby/tick. Body is a tiny JSON
- * `{"action":"..."}`. Sony API calls inside the payload — no kernel
- * R/W needed. ACK body is `{"ok":true}` or `{"ok":false,"err":"..."}`. */
-#define FTX2_FRAME_SYSTEM_CONTROL           86u
-#define FTX2_FRAME_SYSTEM_CONTROL_ACK       87u
-/* Extended power telemetry — operating seconds, boot count, thermal
- * alert flags. Read-only, ICC-based; safe even without kernel R/W. */
-#define FTX2_FRAME_POWER_TELEMETRY          88u
-#define FTX2_FRAME_POWER_TELEMETRY_ACK      89u
-/* User account enumeration. */
-#define FTX2_FRAME_USER_LIST                90u
-#define FTX2_FRAME_USER_LIST_ACK            91u
-/* Save data listing per-user. */
-#define FTX2_FRAME_LIST_SAVES               92u
-#define FTX2_FRAME_LIST_SAVES_ACK           93u
-/* Screenshot listing. */
-#define FTX2_FRAME_LIST_SCREENSHOTS         94u
-#define FTX2_FRAME_LIST_SCREENSHOTS_ACK     95u
-/* Filesystem index build/query/search. */
-#define FTX2_FRAME_INDEX_START              96u
-#define FTX2_FRAME_INDEX_START_ACK          97u
-#define FTX2_FRAME_INDEX_STATUS             98u
-#define FTX2_FRAME_INDEX_STATUS_ACK         99u
-#define FTX2_FRAME_SEARCH_INDEX             100u
-#define FTX2_FRAME_SEARCH_INDEX_ACK         101u
-#define FTX2_FRAME_INDEX_CANCEL             102u
-#define FTX2_FRAME_INDEX_CANCEL_ACK         103u
-/* App lifecycle (suspend/resume/kill/list). */
-#define FTX2_FRAME_APP_LIFECYCLE            104u
-#define FTX2_FRAME_APP_LIFECYCLE_ACK        105u
-/* Rich JSON toast (sceNotificationSend). */
-#define FTX2_FRAME_TOAST_SEND               106u
-#define FTX2_FRAME_TOAST_SEND_ACK           107u
-/* Kernel log streaming. */
-#define FTX2_FRAME_KLOG_READ                108u
-#define FTX2_FRAME_KLOG_READ_ACK            109u
-/* Network interface enumeration. */
-#define FTX2_FRAME_NET_INTERFACES           110u
-#define FTX2_FRAME_NET_INTERFACES_ACK       111u
-/* Peripheral (BD/USB) control. */
-#define FTX2_FRAME_PERIPHERAL_CONTROL       112u
-#define FTX2_FRAME_PERIPHERAL_CONTROL_ACK   113u
-/* Process module list (loaded sprx). */
-#define FTX2_FRAME_PROC_MODULES             114u
-#define FTX2_FRAME_PROC_MODULES_ACK         115u
-/* Shell command execution. */
-#define FTX2_FRAME_SHELL_EXEC               116u
-#define FTX2_FRAME_SHELL_EXEC_ACK           117u
-/* CRC32 file checksum. */
-#define FTX2_FRAME_CRC32_FILE               118u
-#define FTX2_FRAME_CRC32_FILE_ACK           119u
-/* sqlite query of app.db. */
-#define FTX2_FRAME_APPDB_QUERY              120u
-#define FTX2_FRAME_APPDB_QUERY_ACK          121u
-/* Network round-trip + throughput test. */
-#define FTX2_FRAME_NET_SPEED_TEST           122u
-#define FTX2_FRAME_NET_SPEED_TEST_ACK       123u
-/* Can the console open a TCP connection to host:port? A stream install has
- * the PS5 download the package from the engine; when a firewall on that
- * computer drops the connection, Sony only says so after a 30 s timeout
- * (0x80431068, #342). This answers in seconds and names the errno. */
-#define FTX2_FRAME_NET_REACH                148u
-#define FTX2_FRAME_NET_REACH_ACK            149u
-/* Direct .pkg mount via sceFsMountGamePkg. */
-#define FTX2_FRAME_PKG_DIRECT_MOUNT         124u
-#define FTX2_FRAME_PKG_DIRECT_MOUNT_ACK     125u
-/* UFS fsck. */
-#define FTX2_FRAME_UFS_FSCK                 126u
-#define FTX2_FRAME_UFS_FSCK_ACK             127u
-/* LWFS patch overlay mount. */
-#define FTX2_FRAME_LWFS_MOUNT               128u
-#define FTX2_FRAME_LWFS_MOUNT_ACK           129u
-/* Atomic small-file write (≤256 KB). */
-#define FTX2_FRAME_FS_WRITE_BYTES           130u
-#define FTX2_FRAME_FS_WRITE_BYTES_ACK       131u
-/* System clock get/set via sceSystemServiceGet/SetCurrentDateTime
- * (see payload/src/sys_time.c). Bodies are JSON.
- *   TIME_GET request:  {} (empty)
- *   TIME_GET_ACK:      {"ok":bool,"err_code":N,"year":Y,"month":M,
- *                       "day":D,"hour":h,"min":m,"sec":s}
- *   TIME_SET request:  {"year":Y,"month":M,"day":D,"hour":h,"min":m,
- *                       "sec":s}  (UTC; microsecond is unused)
- *   TIME_SET_ACK:      {"ok":bool,"err_code":N,"prior_unix":N,
- *                       "new_unix":N}
- *      prior_unix / new_unix are -1 if get failed; the desktop uses
- *      them to detect "rc=0 but the clock didn't actually move" SDK-
- *      stub no-ops on firmwares where libSceSystemService exports the
- *      symbol but the runtime SPRX doesn't implement it. Requires
- *      ucred-elevated loader (kstuff or similar) since the underlying
- *      SceShellCore IPC checks the caller's system-service capability;
- *      a non-elevated payload sees a Sony privilege-rejected err_code
- *      and surfaces it to the user. */
-#define FTX2_FRAME_TIME_GET                 132u
-#define FTX2_FRAME_TIME_GET_ACK             133u
-#define FTX2_FRAME_TIME_SET                 134u
-#define FTX2_FRAME_TIME_SET_ACK             135u
-#define FTX2_FRAME_TIME_STATE_GET           136u
-#define FTX2_FRAME_TIME_STATE_GET_ACK       137u
-#define FTX2_FRAME_TIME_STATE_SET           138u
-#define FTX2_FRAME_TIME_STATE_SET_ACK       139u
-#define FTX2_FRAME_SMP_META_CONTROL         140u
-#define FTX2_FRAME_SMP_META_CONTROL_ACK     141u
-#define FTX2_FRAME_SMP_META_STATS           142u
-#define FTX2_FRAME_SMP_META_STATS_ACK       143u
-/* Recent PS5 kernel log (dmesg equivalent). Body: empty. Ack body:
- * raw text from sysctl kern.msgbuf — the kernel circular buffer of
- * recent printf/printk output. Helps diagnose "payload didn't load /
- * something silently failed" cases from the desktop. */
-#define FTX2_FRAME_SYSLOG_TAIL              144u
-#define FTX2_FRAME_SYSLOG_TAIL_ACK          145u
-/* One-way payload → client during the multi-file COMMIT_TX apply loop
- * when the client opted in via FTX2_TX_FLAG_APPLY_PROGRESS_REQUESTED.
- * Body is a small JSON object (~80 bytes):
- *   {"files_applied":N,"total_files":M,"bytes_applied":B}
- * No ack — fire-and-forget. The client's CommitTxAck wait loop reads
- * and forwards these to the engine's progress sink while it waits for
- * the eventual CommitTxAck. */
-#define FTX2_FRAME_APPLY_PROGRESS           146u
-/* Profile: avatar image + offline-account (username) operations.
- *   PROFILE_INFO         req {} → ack {"ok":bool,"uid":N,"uid_hex":"0x..",
- *                        "username":"..","slots":[{"slot":N,"name":"..",
- *                        "type":"..","flags":N,"id":"0x..","activated":bool}]}
- *   PROFILE_SET_USERNAME req {"slot":N,"name":".."} → ack {"ok":bool,...}
- *   PROFILE_ACTIVATE     req {"slot":N,"id"?:".."}  → ack {"ok":bool,...}
- *   PROFILE_APPLY_AVATAR req {"uid":N}              → ack {"ok":bool,
- *                        "copied":N} — copies the host-staged DDS/json
- *                        files from /data/ps5upload/profile/0x<UID>/ into
- *                        the live profile cache dir (privileged).
- *   PROFILE_CLEAR_SLOT   req {"slot":N}             → ack {"ok":bool,...}
- * Registry + /system_data writes need ucred elevation (same envelope as
- * the time/registry frames). */
-#define FTX2_FRAME_PROFILE_INFO             150u
-#define FTX2_FRAME_PROFILE_INFO_ACK         151u
-#define FTX2_FRAME_PROFILE_SET_USERNAME     152u
-#define FTX2_FRAME_PROFILE_SET_USERNAME_ACK 153u
-#define FTX2_FRAME_PROFILE_ACTIVATE         154u
-#define FTX2_FRAME_PROFILE_ACTIVATE_ACK     155u
-#define FTX2_FRAME_PROFILE_APPLY_AVATAR     156u
-#define FTX2_FRAME_PROFILE_APPLY_AVATAR_ACK 157u
-#define FTX2_FRAME_PROFILE_CLEAR_SLOT       158u
-#define FTX2_FRAME_PROFILE_CLEAR_SLOT_ACK   159u
-/* Rename a local console user (the active profile's display name) via
- * sceUserServiceSetUserName. req {"uid":N,"name":".."} → ack {"ok":bool,...}.
- * Distinct from PROFILE_SET_USERNAME, which renames an offline-account slot. */
-#define FTX2_FRAME_PROFILE_SET_LOCAL_USERNAME     160u
-#define FTX2_FRAME_PROFILE_SET_LOCAL_USERNAME_ACK 161u
-/* In-app process manager. PROCESS_LIST is the DETAILED enumerate
- * (proc_list_get_json_ex: pid/name/comm/title_id/app_id/memory/threads/kind)
- * — distinct from the older PROC_LIST (74) which feeds the `ps` diagnostic
- * with just pid+name. PROCESS_KILL SIGKILLs a pid: req {"pid":N} → ack
- * {"ok":bool,...}. Restart is the client composing KILL + APP_LAUNCH. */
-#define FTX2_FRAME_PROCESS_LIST      162u
-#define FTX2_FRAME_PROCESS_LIST_ACK  163u
-#define FTX2_FRAME_PROCESS_KILL      164u
-#define FTX2_FRAME_PROCESS_KILL_ACK  165u
-/* Video-clip listing (parallels screenshot listing at 94/95). */
-#define FTX2_FRAME_LIST_VIDEOS       166u
-#define FTX2_FRAME_LIST_VIDEOS_ACK   167u
-/* Drive SMART / temperature sensors via SCSI LOG SENSE (CAM pass-through
- * on /dev/daN). Request body empty. ACK body: JSON with per-drive info
- * (device, sizeBytes, ident, tempC, tempErr, fs*) and a fixed-storage
- * array (internal SSD + M.2 summaries). Read-only, no elevation needed. */
-#define FTX2_FRAME_HW_DRIVE_SENSORS      168u
-#define FTX2_FRAME_HW_DRIVE_SENSORS_ACK  169u
-#define FTX2_FRAME_USER_CREATE           170u
-#define FTX2_FRAME_USER_CREATE_ACK       171u
-#define FTX2_FRAME_USER_DELETE           172u
-#define FTX2_FRAME_USER_DELETE_ACK       173u
-/* v4.0: Tag-based backup snapshots */
-#define FTX2_FRAME_BACKUP_SNAPSHOT       176u
-#define FTX2_FRAME_BACKUP_SNAPSHOT_ACK   177u
-#define FTX2_FRAME_BACKUP_LIST           178u
-#define FTX2_FRAME_BACKUP_LIST_ACK       179u
-#define FTX2_FRAME_BACKUP_RESTORE        180u
-#define FTX2_FRAME_BACKUP_RESTORE_ACK    181u
-#define FTX2_FRAME_BACKUP_DELETE         182u
-#define FTX2_FRAME_BACKUP_DELETE_ACK     183u
-/* v4.1: Remote Play PIN */
-#define FTX2_FRAME_REMOTEPLAY_REQUEST    188u
-#define FTX2_FRAME_REMOTEPLAY_STATUS     189u
-#define FTX2_FRAME_REMOTEPLAY_CANCEL     190u
-#define FTX2_FRAME_REMOTEPLAY_CANCEL_ACK 191u
-/* Read-only readiness snapshot — every precondition Remote Play needs. */
-#define FTX2_FRAME_REMOTEPLAY_READINESS  248u
-#define FTX2_FRAME_REMOTEPLAY_ENABLE     249u
-#define FTX2_FRAME_REMOTEPLAY_DEVICES    250u
-/* v4.1: Fan curve editor (set + get) */
-#define FTX2_FRAME_HW_FAN_CURVE_SET      196u
-#define FTX2_FRAME_HW_FAN_CURVE_SET_ACK  197u
-#define FTX2_FRAME_HW_FAN_CURVE_GET      246u
-#define FTX2_FRAME_HW_FAN_CURVE_GET_ACK  247u
-/* v4.1: Persistent notifications (list + send) */
-#define FTX2_FRAME_NOTIF_LIST            198u
-#define FTX2_FRAME_NOTIF_LIST_ACK        199u
-#define FTX2_FRAME_NOTIF_SEND            240u
-#define FTX2_FRAME_NOTIF_SEND_ACK        241u
-#define FTX2_FRAME_NOTIF_CLEAR           251u
-#define FTX2_FRAME_NOTIF_CLEAR_ACK       252u
-/* v4.2: Cheat engine */
-#define FTX2_FRAME_CHEATS_LIST           200u
-#define FTX2_FRAME_CHEATS_LIST_ACK       201u
-#define FTX2_FRAME_CHEATS_GET            202u
-#define FTX2_FRAME_CHEATS_GET_ACK        203u
-#define FTX2_FRAME_CHEATS_TOGGLE         204u
-#define FTX2_FRAME_CHEATS_TOGGLE_ACK     205u
-#define FTX2_FRAME_CHEATS_DELETE         206u
-#define FTX2_FRAME_CHEATS_DELETE_ACK     207u
-#define FTX2_FRAME_CHEATS_RELOAD         208u
-#define FTX2_FRAME_CHEATS_RELOAD_ACK     209u
-#define FTX2_FRAME_CHEATS_STATUS         210u
-#define FTX2_FRAME_CHEATS_STATUS_ACK     211u
-#define FTX2_FRAME_CHEATS_ENGINE_SET     212u
-#define FTX2_FRAME_CHEATS_ENGINE_SET_ACK 213u
-/* v4.3: Activity tracker */
-#define FTX2_FRAME_ACTIVITY_GET          192u
-#define FTX2_FRAME_ACTIVITY_GET_ACK      193u
-#define FTX2_FRAME_ACTIVITY_DB_QUERY     194u
-#define FTX2_FRAME_ACTIVITY_DB_QUERY_ACK 195u
-#define FTX2_FRAME_ACTIVITY_RESET        253u
-#define FTX2_FRAME_ACTIVITY_RESET_ACK    254u
-/* v4.3: SDK version changer */
-#define FTX2_FRAME_SDK_SCAN              214u
-#define FTX2_FRAME_SDK_SCAN_ACK          215u
-#define FTX2_FRAME_SDK_PATCH             216u
-#define FTX2_FRAME_SDK_PATCH_ACK         217u
-#define FTX2_FRAME_SDK_RESTORE           218u
-#define FTX2_FRAME_SDK_RESTORE_ACK       219u
-/* v4.3: TMDB / PlayStation Store metadata */
-#define FTX2_FRAME_TMDB_FETCH            222u
-#define FTX2_FRAME_TMDB_FETCH_ACK        223u
-#define FTX2_FRAME_TMDB_STORE            228u
-#define FTX2_FRAME_TMDB_STORE_ACK        229u
-/* v4.3: FTP server */
-#define FTX2_FRAME_FTP_START             224u
-#define FTX2_FRAME_FTP_START_ACK         225u
-#define FTX2_FRAME_FTP_STATUS            226u
-#define FTX2_FRAME_FTP_STATUS_ACK        227u
-/* v4.3: Firmware spoof detection */
-#define FTX2_FRAME_FWSPOOF_STATUS        232u
-#define FTX2_FRAME_FWSPOOF_STATUS_ACK    233u
-/* v5.10: appinfo.db, the database behind Settings -> Storage. Read is
- * unguarded; the write is the only path in this payload that edits a live
- * system database, and content_db.c holds the preconditions. */
-#define FTX2_FRAME_APPINFO_QUERY         234u
-#define FTX2_FRAME_APPINFO_QUERY_ACK     235u
-#define FTX2_FRAME_APPINFO_SET           236u
-#define FTX2_FRAME_APPINFO_SET_ACK       237u
-/* FOCUS_PROBE: which app currently owns the screen. Read-only, dlsym-only,
- * never ptrace — see focus_probe.h. Added to diagnose a foregrounded game
- * dropping back to the dashboard, which ShellUI's own event flags do not
- * record. */
-#define FTX2_FRAME_FOCUS_PROBE           174u
-#define FTX2_FRAME_FOCUS_PROBE_ACK       175u
-/* Frame numbers 184-187 and 242-245 remain unallocated (removed v4
- * scaffolding). 228-231 reserved for future SMB/Network features. */
+/* The frame numbers the management table (mgmt_table.def) carries per method. They are not on any wire now:
+ * the number a handler runs under is written to g_inflight_frame_type, so the fatal-signal breadcrumb in
+ * main.c ("while serving frame N") still names the operation, and the ACK/ERROR numbers name what a handler
+ * answers with through mgmt_reply (mgmt_rpc.c turns any non-ERROR frame into an OK reply). Keep the values:
+ * old stderr.log files and bug reports name an operation by its number. */
+#define MGMT_FRAME_STATUS 20u
+#define MGMT_FRAME_STATUS_ACK 21u
+#define MGMT_FRAME_SHUTDOWN 22u
+#define MGMT_FRAME_SHUTDOWN_ACK 23u
+#define MGMT_FRAME_CLEANUP 32u
+#define MGMT_FRAME_CLEANUP_ACK 33u
+#define MGMT_FRAME_FS_LIST_VOLUMES 34u
+#define MGMT_FRAME_FS_LIST_VOLUMES_ACK 35u
+#define MGMT_FRAME_FS_LIST_DIR 36u
+#define MGMT_FRAME_FS_LIST_DIR_ACK 37u
+#define MGMT_FRAME_FS_MOVE 42u
+#define MGMT_FRAME_FS_MOVE_ACK 43u
+#define MGMT_FRAME_FS_CHMOD 44u
+#define MGMT_FRAME_FS_CHMOD_ACK 45u
+#define MGMT_FRAME_FS_MKDIR 46u
+#define MGMT_FRAME_FS_MKDIR_ACK 47u
+#define MGMT_FRAME_FS_READ 48u
+#define MGMT_FRAME_FS_READ_ACK 49u
+#define MGMT_FRAME_FS_MOUNT 52u
+#define MGMT_FRAME_FS_MOUNT_ACK 53u
+#define MGMT_FRAME_FS_UNMOUNT 54u
+#define MGMT_FRAME_FS_UNMOUNT_ACK 55u
+#define MGMT_FRAME_APP_REGISTER 56u
+#define MGMT_FRAME_APP_REGISTER_ACK 57u
+#define MGMT_FRAME_APP_UNREGISTER 58u
+#define MGMT_FRAME_APP_UNREGISTER_ACK 59u
+#define MGMT_FRAME_APP_LAUNCH 60u
+#define MGMT_FRAME_APP_LAUNCH_ACK 61u
+#define MGMT_FRAME_APP_LIST_REGISTERED 62u
+#define MGMT_FRAME_APP_LIST_REGISTERED_ACK 63u
+#define MGMT_FRAME_HW_INFO 64u
+#define MGMT_FRAME_HW_INFO_ACK 65u
+#define MGMT_FRAME_HW_TEMPS 66u
+#define MGMT_FRAME_HW_TEMPS_ACK 67u
+#define MGMT_FRAME_HW_POWER 68u
+#define MGMT_FRAME_HW_POWER_ACK 69u
+#define MGMT_FRAME_APP_LAUNCH_BROWSER 70u
+#define MGMT_FRAME_APP_LAUNCH_BROWSER_ACK 71u
+#define MGMT_FRAME_HW_SET_FAN_THRESHOLD 72u
+#define MGMT_FRAME_HW_SET_FAN_THRESHOLD_ACK 73u
+#define MGMT_FRAME_HW_STORAGE 80u
+#define MGMT_FRAME_HW_STORAGE_ACK 81u
+#define MGMT_FRAME_PROC_LIST 74u
+#define MGMT_FRAME_PROC_LIST_ACK 75u
+#define MGMT_FRAME_SYSTEM_CONTROL 86u
+#define MGMT_FRAME_SYSTEM_CONTROL_ACK 87u
+#define MGMT_FRAME_POWER_TELEMETRY 88u
+#define MGMT_FRAME_POWER_TELEMETRY_ACK 89u
+#define MGMT_FRAME_USER_LIST 90u
+#define MGMT_FRAME_USER_LIST_ACK 91u
+#define MGMT_FRAME_LIST_SAVES 92u
+#define MGMT_FRAME_LIST_SAVES_ACK 93u
+#define MGMT_FRAME_LIST_SCREENSHOTS 94u
+#define MGMT_FRAME_LIST_SCREENSHOTS_ACK 95u
+#define MGMT_FRAME_INDEX_START 96u
+#define MGMT_FRAME_INDEX_START_ACK 97u
+#define MGMT_FRAME_INDEX_STATUS 98u
+#define MGMT_FRAME_INDEX_STATUS_ACK 99u
+#define MGMT_FRAME_SEARCH_INDEX 100u
+#define MGMT_FRAME_SEARCH_INDEX_ACK 101u
+#define MGMT_FRAME_INDEX_CANCEL 102u
+#define MGMT_FRAME_INDEX_CANCEL_ACK 103u
+#define MGMT_FRAME_APP_LIFECYCLE 104u
+#define MGMT_FRAME_APP_LIFECYCLE_ACK 105u
+#define MGMT_FRAME_TOAST_SEND 106u
+#define MGMT_FRAME_TOAST_SEND_ACK 107u
+#define MGMT_FRAME_KLOG_READ 108u
+#define MGMT_FRAME_KLOG_READ_ACK 109u
+#define MGMT_FRAME_NET_INTERFACES 110u
+#define MGMT_FRAME_NET_INTERFACES_ACK 111u
+#define MGMT_FRAME_PERIPHERAL_CONTROL 112u
+#define MGMT_FRAME_PERIPHERAL_CONTROL_ACK 113u
+#define MGMT_FRAME_PROC_MODULES 114u
+#define MGMT_FRAME_PROC_MODULES_ACK 115u
+#define MGMT_FRAME_SHELL_EXEC 116u
+#define MGMT_FRAME_SHELL_EXEC_ACK 117u
+#define MGMT_FRAME_APPDB_QUERY 120u
+#define MGMT_FRAME_APPDB_QUERY_ACK 121u
+#define MGMT_FRAME_NET_SPEED_TEST 122u
+#define MGMT_FRAME_NET_SPEED_TEST_ACK 123u
+#define MGMT_FRAME_NET_REACH 148u
+#define MGMT_FRAME_NET_REACH_ACK 149u
+#define MGMT_FRAME_PKG_DIRECT_MOUNT 124u
+#define MGMT_FRAME_PKG_DIRECT_MOUNT_ACK 125u
+#define MGMT_FRAME_UFS_FSCK 126u
+#define MGMT_FRAME_UFS_FSCK_ACK 127u
+#define MGMT_FRAME_LWFS_MOUNT 128u
+#define MGMT_FRAME_LWFS_MOUNT_ACK 129u
+#define MGMT_FRAME_FS_WRITE_BYTES 130u
+#define MGMT_FRAME_FS_WRITE_BYTES_ACK 131u
+#define MGMT_FRAME_TIME_GET 132u
+#define MGMT_FRAME_TIME_GET_ACK 133u
+#define MGMT_FRAME_TIME_SET 134u
+#define MGMT_FRAME_TIME_SET_ACK 135u
+#define MGMT_FRAME_TIME_STATE_GET 136u
+#define MGMT_FRAME_TIME_STATE_GET_ACK 137u
+#define MGMT_FRAME_TIME_STATE_SET 138u
+#define MGMT_FRAME_TIME_STATE_SET_ACK 139u
+#define MGMT_FRAME_SMP_META_CONTROL 140u
+#define MGMT_FRAME_SMP_META_CONTROL_ACK 141u
+#define MGMT_FRAME_SMP_META_STATS 142u
+#define MGMT_FRAME_SMP_META_STATS_ACK 143u
+#define MGMT_FRAME_SYSLOG_TAIL 144u
+#define MGMT_FRAME_SYSLOG_TAIL_ACK 145u
+#define MGMT_FRAME_PROFILE_INFO 150u
+#define MGMT_FRAME_PROFILE_INFO_ACK 151u
+#define MGMT_FRAME_PROFILE_SET_USERNAME 152u
+#define MGMT_FRAME_PROFILE_SET_USERNAME_ACK 153u
+#define MGMT_FRAME_PROFILE_ACTIVATE 154u
+#define MGMT_FRAME_PROFILE_ACTIVATE_ACK 155u
+#define MGMT_FRAME_PROFILE_APPLY_AVATAR 156u
+#define MGMT_FRAME_PROFILE_APPLY_AVATAR_ACK 157u
+#define MGMT_FRAME_PROFILE_CLEAR_SLOT 158u
+#define MGMT_FRAME_PROFILE_CLEAR_SLOT_ACK 159u
+#define MGMT_FRAME_PROFILE_SET_LOCAL_USERNAME 160u
+#define MGMT_FRAME_PROFILE_SET_LOCAL_USERNAME_ACK 161u
+#define MGMT_FRAME_PROCESS_LIST 162u
+#define MGMT_FRAME_PROCESS_LIST_ACK 163u
+#define MGMT_FRAME_PROCESS_KILL 164u
+#define MGMT_FRAME_PROCESS_KILL_ACK 165u
+#define MGMT_FRAME_LIST_VIDEOS 166u
+#define MGMT_FRAME_LIST_VIDEOS_ACK 167u
+#define MGMT_FRAME_HW_DRIVE_SENSORS 168u
+#define MGMT_FRAME_HW_DRIVE_SENSORS_ACK 169u
+#define MGMT_FRAME_USER_CREATE 170u
+#define MGMT_FRAME_USER_CREATE_ACK 171u
+#define MGMT_FRAME_USER_DELETE 172u
+#define MGMT_FRAME_USER_DELETE_ACK 173u
+#define MGMT_FRAME_BACKUP_SNAPSHOT 176u
+#define MGMT_FRAME_BACKUP_SNAPSHOT_ACK 177u
+#define MGMT_FRAME_BACKUP_LIST 178u
+#define MGMT_FRAME_BACKUP_LIST_ACK 179u
+#define MGMT_FRAME_BACKUP_RESTORE 180u
+#define MGMT_FRAME_BACKUP_RESTORE_ACK 181u
+#define MGMT_FRAME_BACKUP_DELETE 182u
+#define MGMT_FRAME_BACKUP_DELETE_ACK 183u
+#define MGMT_FRAME_REMOTEPLAY_REQUEST 188u
+#define MGMT_FRAME_REMOTEPLAY_STATUS 189u
+#define MGMT_FRAME_REMOTEPLAY_CANCEL 190u
+#define MGMT_FRAME_REMOTEPLAY_CANCEL_ACK 191u
+#define MGMT_FRAME_REMOTEPLAY_READINESS 248u
+#define MGMT_FRAME_REMOTEPLAY_ENABLE 249u
+#define MGMT_FRAME_REMOTEPLAY_DEVICES 250u
+#define MGMT_FRAME_HW_FAN_CURVE_SET 196u
+#define MGMT_FRAME_HW_FAN_CURVE_SET_ACK 197u
+#define MGMT_FRAME_HW_FAN_CURVE_GET 246u
+#define MGMT_FRAME_HW_FAN_CURVE_GET_ACK 247u
+#define MGMT_FRAME_NOTIF_LIST 198u
+#define MGMT_FRAME_NOTIF_LIST_ACK 199u
+#define MGMT_FRAME_NOTIF_SEND 240u
+#define MGMT_FRAME_NOTIF_SEND_ACK 241u
+#define MGMT_FRAME_NOTIF_CLEAR 251u
+#define MGMT_FRAME_NOTIF_CLEAR_ACK 252u
+#define MGMT_FRAME_CHEATS_LIST 200u
+#define MGMT_FRAME_CHEATS_LIST_ACK 201u
+#define MGMT_FRAME_CHEATS_GET 202u
+#define MGMT_FRAME_CHEATS_GET_ACK 203u
+#define MGMT_FRAME_CHEATS_TOGGLE 204u
+#define MGMT_FRAME_CHEATS_TOGGLE_ACK 205u
+#define MGMT_FRAME_CHEATS_DELETE 206u
+#define MGMT_FRAME_CHEATS_DELETE_ACK 207u
+#define MGMT_FRAME_CHEATS_RELOAD 208u
+#define MGMT_FRAME_CHEATS_RELOAD_ACK 209u
+#define MGMT_FRAME_CHEATS_STATUS 210u
+#define MGMT_FRAME_CHEATS_STATUS_ACK 211u
+#define MGMT_FRAME_CHEATS_ENGINE_SET 212u
+#define MGMT_FRAME_CHEATS_ENGINE_SET_ACK 213u
+#define MGMT_FRAME_ACTIVITY_GET 192u
+#define MGMT_FRAME_ACTIVITY_GET_ACK 193u
+#define MGMT_FRAME_ACTIVITY_DB_QUERY 194u
+#define MGMT_FRAME_ACTIVITY_DB_QUERY_ACK 195u
+#define MGMT_FRAME_ACTIVITY_RESET 253u
+#define MGMT_FRAME_ACTIVITY_RESET_ACK 254u
+#define MGMT_FRAME_SDK_SCAN 214u
+#define MGMT_FRAME_SDK_SCAN_ACK 215u
+#define MGMT_FRAME_SDK_PATCH 216u
+#define MGMT_FRAME_SDK_PATCH_ACK 217u
+#define MGMT_FRAME_SDK_RESTORE 218u
+#define MGMT_FRAME_SDK_RESTORE_ACK 219u
+#define MGMT_FRAME_TMDB_FETCH 222u
+#define MGMT_FRAME_TMDB_FETCH_ACK 223u
+#define MGMT_FRAME_TMDB_STORE 228u
+#define MGMT_FRAME_TMDB_STORE_ACK 229u
+#define MGMT_FRAME_FTP_START 224u
+#define MGMT_FRAME_FTP_START_ACK 225u
+#define MGMT_FRAME_FTP_STATUS 226u
+#define MGMT_FRAME_FTP_STATUS_ACK 227u
+#define MGMT_FRAME_FWSPOOF_STATUS 232u
+#define MGMT_FRAME_FWSPOOF_STATUS_ACK 233u
+#define MGMT_FRAME_APPINFO_QUERY 234u
+#define MGMT_FRAME_APPINFO_QUERY_ACK 235u
+#define MGMT_FRAME_APPINFO_SET 236u
+#define MGMT_FRAME_APPINFO_SET_ACK 237u
+#define MGMT_FRAME_FOCUS_PROBE 174u
+#define MGMT_FRAME_FOCUS_PROBE_ACK 175u
 /* Where we place mount points. Scoped under /mnt/ps5upload/ so it
  * never collides with mount paths owned by other utilities. */
 #define FS_MOUNT_BASE "/mnt/ps5upload"
@@ -602,79 +393,54 @@ typedef struct {
     int32_t  device_id;        /* +0x04: unit to detach */
     uint8_t  reserved[0x20];   /* +0x08: kernel ABI padding */
 } fs_mount_lvd_detach_t;
-/* Hard cap on FS_READ response size. 2 MiB is comfortably above the
- * largest icon0.png we've observed (~700 KiB) while keeping a single
- * ACK well under the payload's malloc ceiling and the send buffer
- * size. Clients asking for more get truncated silently — metadata
- * fetches don't need recovery semantics. */
-#define FS_READ_MAX_BYTES (2u * 1024u * 1024u)
-#define FTX2_HEADER_LEN 28u
-#define FTX2_TX_META_LEN 24u
-#define FTX2_SHARD_HEADER_LEN 64u
-#define FTX2_SHARD_ACK_LEN 48u
-#define FTX2_ACK_STATE_SPOOLED 0u
-#define FTX2_ACK_STATE_APPLIED 1u
-#define FTX2_ACK_STATE_DUPLICATE_IGNORED 2u
-#define FTX2_SHARD_DRAIN_BUF 65536u
 
-/* ShardHeader.flags bit definitions. */
-#define FTX2_SHARD_FLAG_PACKED 0x1u
-#define FTX2_PACKED_RECORD_PREFIX_LEN 8u   /* u32 path_len + u32 data_len */
+/* Answers the management call running on this thread. The AVA1 dispatcher (mgmt_rpc.c) runs every handler
+ * behind a capture sink: the frame a handler "sends" is recorded there and becomes the RpcResponse (an
+ * ERROR frame, or a body that says {"ok":false,...}, becomes an AVA1 error status). Returns 0, or -1
+ * when the reply did not fit or no call is running. */
+static int mgmt_reply(uint16_t frame_type, const void *body, uint64_t body_len) {
+    return mgmt_capture_frame(frame_type, body, body_len);
+}
 
-typedef struct {
-    uint32_t magic;
-    uint16_t version;
-    uint16_t frame_type;
-    uint32_t flags;
-    uint64_t body_len;
-    uint64_t trace_id;
-} ftx2_header_t;
 
-typedef struct {
-    unsigned char tx_id[16];
-    uint32_t kind;
-    uint32_t flags;
-} ftx2_tx_meta_t;
+/* Loop until `len` bytes have been written (EINTR retried). 0 on success, -1 on a hard error. */
+static int write_full(int fd, const void *buf, size_t len) {
+    const unsigned char *p = (const unsigned char *)buf;
+    size_t written = 0;
+    while (written < len) {
+        ssize_t w = write(fd, p + written, len - written);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (w == 0) return -1;
+        written += (size_t)w;
+    }
+    return 0;
+}
 
-/* Shard header prefix (64 bytes, LE) — matches ftx2-proto::ShardHeader */
-typedef struct {
-    unsigned char tx_id[16];        /* offset  0 */
-    uint64_t shard_seq;             /* offset 16 */
-    unsigned char shard_digest[32]; /* offset 24 — BLAKE3-256 */
-    uint32_t record_count;          /* offset 56 */
-    uint32_t flags;                 /* offset 60 */
-} ftx2_shard_header_t;             /* 64 bytes */
+/* Creates a joinable worker thread with a bounded 512 KiB stack (the FreeBSD default is several MiB and the
+ * console's per-process memory budget is small). Falls back to the default stack if attribute setup fails. */
+static int create_worker_thread(pthread_t *tid, void *(*fn)(void *), void *arg) {
+    pthread_attr_t attr;
+    pthread_attr_t *attr_p = NULL;
+    if (pthread_attr_init(&attr) == 0) {
+        (void)pthread_attr_setstacksize(&attr, 512u * 1024u);
+        attr_p = &attr;
+    }
+    int rc = pthread_create(tid, attr_p, fn, arg);
+    if (attr_p) pthread_attr_destroy(attr_p);
+    return rc;
+}
 
-/* SHARD_ACK body (48 bytes, LE) — matches ftx2-proto::ShardAck */
-typedef struct {
-    unsigned char tx_id[16];    /* offset  0 */
-    uint64_t shard_seq;         /* offset 16 */
-    uint8_t ack_state;          /* offset 24 */
-    uint8_t pad[7];             /* offset 25 */
-    uint64_t bytes_committed;   /* offset 32 */
-    uint64_t files_committed;   /* offset 40 */
-} ftx2_shard_ack_t;            /* 48 bytes */
-
-/* Forward type declaration — full definition appears later in the file. */
-typedef struct manifest_file_entry manifest_file_entry_t;
-typedef struct manifest_index_entry manifest_index_entry_t;
-
-/* Forward declarations */
-static uint32_t read_le32(const unsigned char *p);
 /* Component-scoped `..`/`.` rejection used by both is_path_allowed and
  * cleanup_path_allowed. Defined further down near is_path_allowed. */
 static int path_has_dotdot_component(const char *p);
 /* Writable-roots allowlist. Used by every destructive FS handler and
- * the BEGIN_TX/STREAM_SHARD ingestion path so a hostile manifest can
- * not write outside the allowlisted roots. See is_path_allowed for
- * the exact set. Also used by backup.c's restore path so a crafted
- * manifest can't write outside the allowlist. Declared in runtime.h. */
+ * the AVA1 file operations. See is_path_allowed for the exact set. Also used by
+ * backup.c's restore path so a crafted manifest can't write outside the
+ * allowlist. Declared in runtime.h. */
 int is_path_allowed(const char *p);
-/* Unsafe-read opt-in: when the request body contains "unsafe":true,
- * FS_READ/FS_HASH bypass the writable-root allowlist for read-only
- * access to system partitions. Destructive ops never honor it.
- * Defined alongside handle_fs_read. */
-static int is_unsafe_read_request(const char *request_body);
 int is_safe_unsafe_read_path(const char *p);
 /* JSON-escape helper. Used by ACK builders that embed user-controlled
  * paths/strings into JSON bodies. Defined alongside FS_LIST_VOLUMES. */
@@ -682,11 +448,6 @@ static size_t json_escape_into(const char *src, char *dst, size_t dst_cap);
 static const char *json_string_end(const char *start, const char *limit);
 static int json_copy_unescaped_string(const char *start, const char *end,
                                       char *out, size_t out_len);
-/* Find the closing brace of the JSON object at `obj_start`, skipping any
- * brace that appears inside a quoted string value (e.g. a file path that
- * literally contains '}'). See the definition for why a plain strchr('}')
- * is wrong here. */
-static const char *json_object_end(const char *obj_start, const char *limit);
 static const char *find_bounded(const char *hay, size_t hay_len,
                                 const char *needle);
 /* Forward declarations — runtime_reconcile_mounts uses fs_mount and
@@ -698,42 +459,8 @@ static int  mount_tracker_read(const char *mount_point, char *out, size_t out_ca
 static void mount_tracker_write(const char *mount_point, const char *src_path);
 static void mount_tracker_remove(const char *mount_point);
 static int  mount_tracker_exists(const char *mount_point);
-static int handle_stream_shard(runtime_state_t *state, int client_fd,
-                                uint64_t trace_id, uint64_t body_len);
-static int runtime_write_manifest(const runtime_tx_entry_t *entry,
-                                   const char *manifest_json, size_t manifest_len);
-static int runtime_read_manifest_alloc(const runtime_tx_entry_t *entry,
-                                        char **out_buf, size_t *out_len);
-static int manifest_get_nth_file_path(const char *json, uint64_t n,
-                                       manifest_file_entry_t *out);
-static void runtime_release_tx_resources(runtime_tx_entry_t *entry);
-/* Variant that preserves the `.ps5up2-tmp` file(s) and manifest heap so a
- * resumed BEGIN_TX can pick up where the interrupted one left off. Used
- * whenever the tx is transitioning to "interrupted" (TCP drop, takeover,
- * shutdown) — NOT for terminal transitions (commit/abort), which use
- * the full-cleanup variant above. */
-static void runtime_release_tx_resources_ephemeral(runtime_tx_entry_t *entry);
-/* Wall-clock microseconds since the Unix epoch. Defined later in the
- * file; forward-declared here so the takeover/shutdown teardown
- * watchdog in runtime_mark_active_transactions can call it. */
-static uint64_t now_us(void);
 
-/* Per-connection tracking for the transfer port: records the tx_id of
- * the currently-open transaction on this connection so the accept loop
- * can mark it "interrupted" when the socket closes without COMMIT/ABORT.
- * Mgmt-port handlers pass NULL — they never open a tx. */
-typedef struct {
-    unsigned char tx_id[16];
-    int           has_tx;  /* 1 between BEGIN_TX_ACK and COMMIT/ABORT_ACK */
-} conn_tx_ctx_t;
 
-/* Mark a single tx entry "interrupted" iff it's currently "active". Preserves
- * tmp file(s) + manifest heap so a subsequent BEGIN_TX with TX_FLAG_RESUME
- * can adopt the entry and pick up from the last-acked shard. Safe to call
- * with a tx_id that no longer exists (e.g. the tx committed between the
- * frame returning and the connection closing) — becomes a no-op. */
-static void runtime_mark_tx_interrupted_by_id(runtime_state_t *state,
-                                                const unsigned char *tx_id);
 
 /* ── Directory helper ───────────────────────────────────────────────────────── */
 
@@ -742,88 +469,6 @@ static int ensure_dir(const char *path) {
     if (mkdir(path, 0777) == 0) return 0;
     if (errno == EEXIST) return 0;
     return -1;
-}
-
-/* ── TX summary state (active count + last seq) ─────────────────────────────── */
-
-static int runtime_load_tx_state(runtime_state_t *state) {
-    FILE *fp = NULL;
-    unsigned long long active = 0;
-    unsigned long long last_seq = 0;
-    if (!state) return -1;
-    fp = fopen(state->tx_state_path, "r");
-    if (!fp) {
-        if (errno == ENOENT) return 0;
-        return -1;
-    }
-    if (fscanf(fp, "active_transactions=%llu\nlast_tx_seq=%llu\n", &active, &last_seq) == 2) {
-        state->active_transactions = (uint64_t)active;
-        state->last_tx_seq = (uint64_t)last_seq;
-    }
-    fclose(fp);
-    return 0;
-}
-
-static int runtime_save_tx_state(const runtime_state_t *state) {
-    FILE *fp = NULL;
-    if (!state) return -1;
-    fp = fopen(state->tx_state_path, "w");
-    if (!fp) return -1;
-    fprintf(fp,
-            "active_transactions=%llu\nlast_tx_seq=%llu\n",
-            (unsigned long long)state->active_transactions,
-            (unsigned long long)state->last_tx_seq);
-    fclose(fp);
-    return 0;
-}
-
-/* ── TX event log ────────────────────────────────────────────────────────────── */
-
-static int runtime_append_tx_event(const runtime_state_t *state, const char *event_name) {
-    FILE *fp = NULL;
-    if (!state || !event_name) return -1;
-    fp = fopen(state->tx_journal_path, "a");
-    if (!fp) return -1;
-    fprintf(fp,
-            "ts=%llu event=%s active_transactions=%llu last_tx_seq=%llu\n",
-            (unsigned long long)time(NULL),
-            event_name,
-            (unsigned long long)state->active_transactions,
-            (unsigned long long)state->last_tx_seq);
-    fclose(fp);
-    return 0;
-}
-
-/* ── Per-TX shard log ────────────────────────────────────────────────────────── */
-
-/*
- * Per-shard log. Kept as an open FILE* on the tx entry so we pay one fopen()
- * per transaction, not one per shard (which cost ~1 ms × N shards on PS5).
- * Casting away const: the cache is a pure-lazy-init optimisation of an
- * otherwise stateless log append, not an observable state change.
- */
-static void runtime_append_shard_log(const runtime_tx_entry_t *entry,
-                                      uint64_t shard_seq, uint64_t data_len) {
-    runtime_tx_entry_t *mut;
-    FILE *fp;
-    if (!entry) return;
-    mut = (runtime_tx_entry_t *)entry;
-    fp = (FILE *)mut->shard_log_fp;
-    if (!fp) {
-        char path[512];
-        snprintf(path, sizeof(path), "%s/shards_%s.log",
-                 PS5UPLOAD2_TX_DIR, entry->tx_id_hex);
-        fp = fopen(path, "a");
-        if (!fp) return;
-        mut->shard_log_fp = (void *)fp;
-    }
-    fprintf(fp, "shard_seq=%llu bytes=%llu ts=%llu\n",
-            (unsigned long long)shard_seq,
-            (unsigned long long)data_len,
-            (unsigned long long)time(NULL));
-    /* No fflush here — one fflush on terminal transition (release_tx_resources)
-     * is enough. Losing the tail of the log on crash is fine; the log is for
-     * post-hoc diagnostics, not recovery. */
 }
 
 /* ── JSON helpers ─────────────────────────────────────────────────────────────── */
@@ -890,513 +535,6 @@ static int extract_json_bool_field(const char *json, const char *field,
     return -1;
 }
 
-/* ── TX ID helpers ───────────────────────────────────────────────────────────── */
-
-static void tx_id_bytes_to_hex(const unsigned char *tx_id, char *out, size_t out_len) {
-    static const char hex[] = "0123456789abcdef";
-    size_t i = 0;
-    if (!tx_id || !out || out_len < 33) return;
-    for (i = 0; i < 16; i++) {
-        out[i * 2]     = hex[(tx_id[i] >> 4) & 0x0f];
-        out[i * 2 + 1] = hex[tx_id[i] & 0x0f];
-    }
-    out[32] = '\0';
-}
-
-static int tx_id_bytes_equal(const unsigned char *a, const unsigned char *b) {
-    return memcmp(a, b, 16) == 0;
-}
-
-static int hex_char_value(char ch) {
-    if (ch >= '0' && ch <= '9') return ch - '0';
-    if (ch >= 'a' && ch <= 'f') return 10 + (ch - 'a');
-    if (ch >= 'A' && ch <= 'F') return 10 + (ch - 'A');
-    return -1;
-}
-
-static int tx_id_hex_to_bytes(const char *hex, unsigned char *out) {
-    int i = 0;
-    if (!hex || !out) return -1;
-    for (i = 0; i < 16; i++) {
-        int hi = hex_char_value(hex[i * 2]);
-        int lo = hex_char_value(hex[i * 2 + 1]);
-        if (hi < 0 || lo < 0) return -1;
-        out[i] = (unsigned char)((hi << 4) | lo);
-    }
-    return 0;
-}
-
-/* ── TX table helpers ─────────────────────────────────────────────────────────── */
-
-/* Per-slot mutex array, parallel to runtime_state_t::tx_entries[]. Held
- * by handlers (SHARD, COMMIT_TX, ABORT_TX) for the duration of any
- * mutation/dereference of the entry, so two handlers can never race on
- * the same slot — most importantly, COMMIT_TX cannot free
- * entry->manifest_index/direct_writer while a STREAM_SHARD on the
- * transfer thread is dereferencing them.
- *
- * Kept in a parallel array (not embedded in runtime_tx_entry_t) so
- * the memset(entry, 0, …) at slot eviction time doesn't clobber the
- * mutex memory. Indexed by `entry - state->tx_entries`. Initialized
- * once from runtime_init via runtime_init_entry_mutexes(); guarded
- * by the singleton init flag because there is only ever one
- * runtime_state_t per process. */
-static pthread_mutex_t g_entry_mtx[PS5UPLOAD2_MAX_TX];
-static int g_entry_mtx_initialized = 0;
-
-static int runtime_init_entry_mutexes(void) {
-    int i;
-    if (g_entry_mtx_initialized) return 0;
-    for (i = 0; i < PS5UPLOAD2_MAX_TX; i++) {
-        if (pthread_mutex_init(&g_entry_mtx[i], NULL) != 0) {
-            return -1;
-        }
-    }
-    g_entry_mtx_initialized = 1;
-    return 0;
-}
-
-static int entry_slot_index(const runtime_state_t *state,
-                            const runtime_tx_entry_t *entry) {
-    return (int)(entry - state->tx_entries);
-}
-
-/* Caller must hold state_mtx. Plain table walk — no synchronization
- * of its own. Use runtime_acquire_tx_entry from handler code instead
- * unless you specifically need the unlocked variant (e.g. inside an
- * already-locked critical section). */
-static runtime_tx_entry_t *runtime_find_tx_entry(runtime_state_t *state,
-                                                   const unsigned char *tx_id) {
-    int i = 0;
-    if (!state || !tx_id) return NULL;
-    for (i = 0; i < PS5UPLOAD2_MAX_TX; i++) {
-        if (state->tx_entries[i].in_use &&
-            tx_id_bytes_equal(state->tx_entries[i].tx_id, tx_id)) {
-            return &state->tx_entries[i];
-        }
-    }
-    return NULL;
-}
-
-/* Acquire a tx entry for exclusive access by the calling handler.
- *
- * Returns the entry pointer with the per-slot mutex held, or NULL if
- * no such tx exists (or if the slot was evicted before we could
- * acquire it). Caller must pair with runtime_release_tx_entry.
- *
- * Lock discipline: takes state_mtx briefly twice (lookup + revalidate)
- * but never holds state_mtx while waiting for the per-slot mutex —
- * that ordering avoids deadlock against handler code that takes
- * state_mtx for short critical sections (e.g. command_count++) while
- * holding the per-slot mutex.
- *
- * The revalidation step exists because between releasing state_mtx
- * after the initial find and acquiring the per-slot mutex, an
- * eviction running under state_mtx could have repurposed the slot for
- * a different tx_id. Re-finding under state_mtx confirms our pointer
- * still names the requested tx. */
-static runtime_tx_entry_t *runtime_acquire_tx_entry(runtime_state_t *state,
-                                                      const unsigned char *tx_id) {
-    runtime_tx_entry_t *entry = NULL;
-    int idx = -1;
-    if (!state || !tx_id) return NULL;
-
-    pthread_mutex_lock(&state->state_mtx);
-    entry = runtime_find_tx_entry(state, tx_id);
-    if (!entry) {
-        pthread_mutex_unlock(&state->state_mtx);
-        return NULL;
-    }
-    idx = entry_slot_index(state, entry);
-    pthread_mutex_unlock(&state->state_mtx);
-
-    pthread_mutex_lock(&g_entry_mtx[idx]);
-
-    /* Revalidate: another thread may have evicted this slot while we
-     * were blocked on the per-slot mutex. */
-    pthread_mutex_lock(&state->state_mtx);
-    {
-        runtime_tx_entry_t *re = runtime_find_tx_entry(state, tx_id);
-        if (re != entry) {
-            pthread_mutex_unlock(&state->state_mtx);
-            pthread_mutex_unlock(&g_entry_mtx[idx]);
-            return NULL;
-        }
-    }
-    pthread_mutex_unlock(&state->state_mtx);
-    return entry;
-}
-
-static void runtime_release_tx_entry(runtime_state_t *state,
-                                     runtime_tx_entry_t *entry) {
-    int idx;
-    if (!state || !entry) return;
-    idx = entry_slot_index(state, entry);
-    if (idx < 0 || idx >= PS5UPLOAD2_MAX_TX) return;
-    pthread_mutex_unlock(&g_entry_mtx[idx]);
-}
-
-/* True if `entry` is in a terminal state and its slot can be recycled. */
-static int runtime_tx_state_is_terminal(const runtime_tx_entry_t *entry) {
-    if (!entry || !entry->in_use) return 1;
-    return strcmp(entry->state, "committed")   == 0 ||
-           strcmp(entry->state, "aborted")     == 0 ||
-           strcmp(entry->state, "interrupted") == 0 ||
-           /* "apply_failed" is the new terminal state for COMMIT_TX
-            * apply failures (writer I/O error, rename failure,
-            * spool-apply failure). Without it here, a slot in
-            * apply_failed would never be evicted, and after enough
-            * such failures the tx table would saturate at
-            * MAX_TX entries and reject all future BEGIN_TX with
-            * "tx_table_full". */
-           strcmp(entry->state, "apply_failed") == 0;
-}
-
-/* Caller must hold state_mtx. Returns an entry slot for `tx_id`,
- * either the existing one (no mutation) or a freshly recycled slot
- * (terminal, no other thread currently using it). Eviction requires
- * pthread_mutex_trylock on the per-slot mutex to succeed — if a
- * handler thread still holds the slot for I/O on a finished tx
- * (e.g. building the COMMIT_TX_ACK body after release_tx_resources),
- * we must not evict it underneath that handler. */
-static runtime_tx_entry_t *runtime_alloc_tx_entry(runtime_state_t *state,
-                                                    const unsigned char *tx_id,
-                                                    uint64_t tx_seq) {
-    int i = 0;
-    int evict_idx = -1;
-    int candidate_idx = -1;
-    uint64_t oldest_seq = UINT64_MAX;
-    runtime_tx_entry_t *entry = NULL;
-    if (!state || !tx_id) return NULL;
-    entry = runtime_find_tx_entry(state, tx_id);
-    if (entry) return entry;
-    /* First pass: any free slot wins. Trylock to confirm the slot is
-     * not in the middle of being released by another handler — even
-     * with in_use==0 the per-slot mutex may still be held briefly. */
-    for (i = 0; i < PS5UPLOAD2_MAX_TX; i++) {
-        if (!state->tx_entries[i].in_use) {
-            if (pthread_mutex_trylock(&g_entry_mtx[i]) == 0) {
-                evict_idx = i;
-                break;
-            }
-        }
-    }
-    /* Second pass: evict the oldest terminal tx (committed/aborted/interrupted)
-     * whose per-slot mutex we can take. trylock failure means a handler is
-     * still using the slot (e.g. emitting an ACK from post-release fields);
-     * leave it alone and try a different one. */
-    if (evict_idx < 0) {
-        for (i = 0; i < PS5UPLOAD2_MAX_TX; i++) {
-            if (!runtime_tx_state_is_terminal(&state->tx_entries[i])) continue;
-            if (state->tx_entries[i].tx_seq >= oldest_seq) continue;
-            if (pthread_mutex_trylock(&g_entry_mtx[i]) != 0) continue;
-            if (candidate_idx >= 0) {
-                /* Found a strictly older candidate — release the previous
-                 * one so we don't leak the trylock. */
-                pthread_mutex_unlock(&g_entry_mtx[candidate_idx]);
-            }
-            oldest_seq = state->tx_entries[i].tx_seq;
-            candidate_idx = i;
-        }
-        evict_idx = candidate_idx;
-    }
-    if (evict_idx < 0) return NULL;
-    entry = &state->tx_entries[evict_idx];
-    /* If we're reusing a terminal slot, its heap state (manifest blob + index)
-     * must be freed before we memset — otherwise we leak both allocations. */
-    runtime_release_tx_resources(entry);
-    memset(entry, 0, sizeof(*entry));
-    entry->in_use = 1;
-    memcpy(entry->tx_id, tx_id, 16);
-    tx_id_bytes_to_hex(tx_id, entry->tx_id_hex, sizeof(entry->tx_id_hex));
-    entry->tx_seq = tx_seq;
-    snprintf(entry->state, sizeof(entry->state), "active");
-    /* Release the per-slot mutex now that the slot is initialized. The
-     * caller (BEGIN_TX) still holds state_mtx, so no other thread can
-     * find this slot until BEGIN_TX completes its setup and unlocks. */
-    pthread_mutex_unlock(&g_entry_mtx[evict_idx]);
-    return entry;
-}
-
-/* ── TX record persistence ────────────────────────────────────────────────────── */
-
-/*
- * Write (or overwrite) the JSON record for a transaction from in-memory state.
- * Called on BEGIN_TX, COMMIT_TX, ABORT_TX, and when marking interrupted.
- */
-static int runtime_flush_tx_record(const runtime_state_t *state,
-                                    const runtime_tx_entry_t *entry) {
-    char path[512];
-    char dest_root_esc[512];
-    FILE *fp = NULL;
-    if (!state || !entry) return -1;
-    snprintf(path, sizeof(path), "%s/tx_%s.json", PS5UPLOAD2_TX_DIR, entry->tx_id_hex);
-    fp = fopen(path, "w");
-    if (!fp) return -1;
-    json_escape_into(entry->dest_root, dest_root_esc, sizeof(dest_root_esc));
-    fprintf(fp,
-            "{\"tx_id\":\"%s\",\"tx_seq\":%llu,\"state\":\"%s\","
-            "\"shards_received\":%llu,\"bytes_received\":%llu,"
-            "\"total_shards\":%llu,\"total_bytes\":%llu,"
-            "\"file_count\":%llu,\"multi_file\":%d,\"dest_root\":\"%s\"}\n",
-            entry->tx_id_hex,
-            (unsigned long long)entry->tx_seq,
-            entry->state,
-            (unsigned long long)entry->shards_received,
-            (unsigned long long)entry->bytes_received,
-            (unsigned long long)entry->total_shards,
-            (unsigned long long)entry->total_bytes,
-            (unsigned long long)entry->file_count,
-            entry->multi_file ? 1 : 0,
-            dest_root_esc);
-    fclose(fp);
-    return 0;
-}
-
-/* Read the persisted JSON record for a transaction entry into buf. */
-static int runtime_read_tx_record(const runtime_tx_entry_t *entry,
-                                   char *buf, size_t buf_len) {
-    char path[512];
-    FILE *fp = NULL;
-    size_t got = 0;
-    if (!entry || !buf || buf_len == 0) return -1;
-    snprintf(path, sizeof(path), "%s/tx_%s.json", PS5UPLOAD2_TX_DIR, entry->tx_id_hex);
-    fp = fopen(path, "r");
-    if (!fp) return -1;
-    got = fread(buf, 1, buf_len - 1, fp);
-    buf[got] = '\0';
-    fclose(fp);
-    return 0;
-}
-
-/* ── TX table bulk operations ────────────────────────────────────────────────── */
-
-static int runtime_load_tx_entries(runtime_state_t *state) {
-    DIR *dir = NULL;
-    struct dirent *de = NULL;
-    if (!state) return -1;
-    dir = opendir(PS5UPLOAD2_TX_DIR);
-    if (!dir) {
-        if (errno == ENOENT) return 0;
-        return -1;
-    }
-    while ((de = readdir(dir)) != NULL) {
-        char tx_id_hex[33];
-        unsigned char tx_id[16];
-        char path[512];
-        char record[1024];
-        unsigned long long tx_seq = 0;
-        runtime_tx_entry_t *entry = NULL;
-        const char *name = de->d_name;
-        if (strncmp(name, "tx_", 3) != 0) continue;
-        if (strlen(name) < 3 + 32 + 5) continue;
-        memcpy(tx_id_hex, name + 3, 32);
-        tx_id_hex[32] = '\0';
-        if (strcmp(name + 35, ".json") != 0) continue;
-        if (tx_id_hex_to_bytes(tx_id_hex, tx_id) != 0) continue;
-        snprintf(path, sizeof(path), "%s/%s", PS5UPLOAD2_TX_DIR, name);
-        {
-            FILE *fp = fopen(path, "r");
-            size_t got = 0;
-            if (!fp) continue;
-            got = fread(record, 1, sizeof(record) - 1, fp);
-            record[got] = '\0';
-            fclose(fp);
-        }
-        tx_seq = extract_json_uint64_field(record, "tx_seq");
-        if (tx_seq == 0) continue;
-        entry = runtime_alloc_tx_entry(state, tx_id, tx_seq);
-        if (!entry) continue;
-        extract_json_string_field(record, "state", entry->state, sizeof(entry->state));
-        if (entry->state[0] == '\0') {
-            snprintf(entry->state, sizeof(entry->state), "active");
-        }
-        entry->shards_received = extract_json_uint64_field(record, "shards_received");
-        entry->bytes_received  = extract_json_uint64_field(record, "bytes_received");
-        entry->total_shards    = extract_json_uint64_field(record, "total_shards");
-        entry->total_bytes     = extract_json_uint64_field(record, "total_bytes");
-        entry->file_count      = extract_json_uint64_field(record, "file_count");
-        /* Restore the multi-file flag. Legacy journals (written before this
-         * field existed) report 0; fall back to the old `file_count > 1`
-         * proxy so a pre-upgrade in-flight tx still routes correctly. New
-         * journals carry the authoritative value (1 even for a kind==2 tx
-         * that happens to hold a single file). */
-        entry->multi_file      = (extract_json_uint64_field(record, "multi_file") != 0) ||
-                                 (entry->file_count > 1);
-        extract_json_string_field(record, "dest_root", entry->dest_root, sizeof(entry->dest_root));
-    }
-    closedir(dir);
-    return 0;
-}
-
-static void runtime_reconcile_tx_state(runtime_state_t *state) {
-    int i = 0;
-    uint64_t active = 0;
-    uint64_t last_seq = 0;
-    if (!state) return;
-    for (i = 0; i < PS5UPLOAD2_MAX_TX; i++) {
-        if (!state->tx_entries[i].in_use) continue;
-        if (strcmp(state->tx_entries[i].state, "active") == 0) active += 1;
-        if (state->tx_entries[i].tx_seq > last_seq) last_seq = state->tx_entries[i].tx_seq;
-    }
-    state->active_transactions = active;
-    if (last_seq > state->last_tx_seq) state->last_tx_seq = last_seq;
-}
-
-/* Tear down every active transaction. Called from TAKEOVER_REQUEST and
- * SHUTDOWN handlers when a fresh payload instance (or stop) wants to
- * leave the table in a clean state.
- *
- * Two-phase to keep the per-slot mutex acquisition deadlock-free:
- *   1. Snapshot which slot indices are active, under state_mtx.
- *   2. For each, lock the per-slot mutex, re-validate the slot still
- *      names an active tx, then mutate + flush. Acquiring per-slot
- *      mutexes outside state_mtx matches the discipline established
- *      by runtime_acquire_tx_entry (state_mtx → per-slot, never the
- *      reverse) so handler threads holding a per-slot mutex aren't
- *      blocked waiting for state_mtx that we don't hold during the
- *      release. */
-static void runtime_mark_active_transactions(runtime_state_t *state, const char *new_state) {
-    int active_idx[PS5UPLOAD2_MAX_TX];
-    int active_count = 0;
-    int i = 0;
-    int is_interrupt = 0;
-    if (!state || !new_state) return;
-    is_interrupt = (strcmp(new_state, "interrupted") == 0);
-
-    pthread_mutex_lock(&state->state_mtx);
-    for (i = 0; i < PS5UPLOAD2_MAX_TX; i++) {
-        if (!state->tx_entries[i].in_use) continue;
-        if (strcmp(state->tx_entries[i].state, "active") != 0) continue;
-        active_idx[active_count++] = i;
-    }
-    pthread_mutex_unlock(&state->state_mtx);
-
-    for (i = 0; i < active_count; i++) {
-        int slot = active_idx[i];
-        runtime_tx_entry_t *entry = &state->tx_entries[slot];
-        uint64_t teardown_start_us;
-        uint64_t teardown_elapsed_us;
-        /* Block until any in-flight SHARD/COMMIT/ABORT on this slot
-         * finishes — we cannot free direct_writer / manifest_index
-         * while another thread is dereferencing them. We also keep
-         * the mutex held across the eventual release_tx_resources*
-         * teardown below: dropping it before the teardown's
-         * pthread_join would re-open the SHARD/teardown race the
-         * per-slot mutex exists to prevent. The cost is that a stuck
-         * pack-worker (kernel write blocked on dead storage) stalls
-         * shutdown until the syscall returns; the watchdog log below
-         * surfaces that case so operators can see the stall instead
-         * of guessing why takeover hung. */
-        pthread_mutex_lock(&g_entry_mtx[slot]);
-        /* Revalidate: state may have flipped to non-active (e.g. a
-         * concurrent COMMIT_TX completed) between the snapshot and
-         * acquiring this mutex. Skip in that case. */
-        if (!entry->in_use || strcmp(entry->state, "active") != 0) {
-            pthread_mutex_unlock(&g_entry_mtx[slot]);
-            continue;
-        }
-        snprintf(entry->state, sizeof(entry->state), "%s", new_state);
-        (void)runtime_flush_tx_record(state, entry);
-        teardown_start_us = now_us();
-        /* "interrupted" is a pauseable state — the client may reconnect with
-         * TX_FLAG_RESUME and pick up from last_acked_shard. Preserve the
-         * tmp file(s) and manifest so that works. For any other transition
-         * (currently unused, but keep the behavior defensive), fall through
-         * to the full release which unlinks the tmp. */
-        if (is_interrupt) {
-            runtime_release_tx_resources_ephemeral(entry);
-        } else {
-            runtime_release_tx_resources(entry);
-        }
-        teardown_elapsed_us = now_us() - teardown_start_us;
-        /* 5-second watchdog: pthread_join inside pack_pool_teardown
-         * normally returns in microseconds (workers ack `shutdown=1`
-         * on the next queue pop). A multi-second teardown means a
-         * worker is stuck in a syscall — likely UFS write blocked on
-         * detached storage. Log the slot + elapsed time so the next
-         * operator triaging "shutdown took 30s" has the breadcrumb
-         * to tell them which tx wedged. */
-        if (teardown_elapsed_us > 5ULL * 1000ULL * 1000ULL) {
-            fprintf(stderr,
-                    "[payload2] WARN: mark_active_transactions teardown of tx %s "
-                    "took %llu ms (likely stuck pack-worker syscall)\n",
-                    entry->tx_id_hex,
-                    (unsigned long long)(teardown_elapsed_us / 1000ULL));
-        }
-        pthread_mutex_unlock(&g_entry_mtx[slot]);
-    }
-    pthread_mutex_lock(&state->state_mtx);
-    runtime_reconcile_tx_state(state);
-    pthread_mutex_unlock(&state->state_mtx);
-    (void)runtime_save_tx_state(state);
-}
-
-static void runtime_mark_tx_interrupted_by_id(runtime_state_t *state,
-                                                const unsigned char *tx_id) {
-    /* Three-phase teardown so a stuck pack-worker pthread_join inside
-     * `runtime_release_tx_resources_ephemeral` cannot stall the mgmt
-     * port:
-     *
-     *   1. Under state_mtx: find the entry, transition state to
-     *      "interrupted", decrement active_transactions, snapshot the
-     *      fields we need for the flush, and capture the slot index.
-     *      Don't touch heap/thread state under state_mtx — that would
-     *      hold the global lock across pthread_join.
-     *   2. Under g_entry_mtx[slot] only: drain + tear down the
-     *      thread-bound resources (writer thread, pack-worker pool).
-     *      Other handlers waiting on the same per-slot mutex (e.g. a
-     *      late SHARD on a resumed tx using the same id) will block,
-     *      which is the correct behavior — they shouldn't read
-     *      manifest_index while we're freeing it.
-     *   3. Lock-free: persist the snapshot to the on-disk tx record so
-     *      the next BEGIN_TX with TX_FLAG_RESUME finds "interrupted"
-     *      and adopts the partial data. */
-    runtime_tx_entry_t snapshot;
-    int should_flush = 0;
-    int slot = -1;
-    if (!state || !tx_id) return;
-
-    pthread_mutex_lock(&state->state_mtx);
-    {
-        runtime_tx_entry_t *entry = runtime_find_tx_entry(state, tx_id);
-        if (entry && strcmp(entry->state, "active") == 0) {
-            snprintf(entry->state, sizeof(entry->state), "interrupted");
-            /* `active_transactions` was bumped at BEGIN_TX and not
-             * decremented by commit/abort (which never ran here).
-             * Decrement now so the counter reflects reality; the entry
-             * survives for resume lookup. */
-            if (state->active_transactions > 0) state->active_transactions -= 1;
-            slot = entry_slot_index(state, entry);
-            snapshot = *entry;  /* copy fields used by the flush below */
-            should_flush = 1;
-        }
-    }
-    pthread_mutex_unlock(&state->state_mtx);
-
-    if (slot >= 0) {
-        pthread_mutex_lock(&g_entry_mtx[slot]);
-        /* Re-validate: between unlocking state_mtx and acquiring the
-         * per-slot mutex, runtime_alloc_tx_entry may have evicted this
-         * slot (we just transitioned to "interrupted" which is
-         * terminal — eligible for eviction). The eviction path already
-         * called runtime_release_tx_resources during reuse, so re-doing
-         * it here would be safe-but-wasted; tx_id mismatch tells us
-         * to skip. */
-        runtime_tx_entry_t *entry = &state->tx_entries[slot];
-        if (entry->in_use && tx_id_bytes_equal(entry->tx_id, tx_id)) {
-            runtime_release_tx_resources_ephemeral(entry);
-        }
-        pthread_mutex_unlock(&g_entry_mtx[slot]);
-    }
-
-    if (should_flush) {
-        (void)runtime_flush_tx_record(state, &snapshot);
-        (void)runtime_save_tx_state(state);
-        (void)runtime_append_tx_event(state, "conn_drop_interrupt");
-    }
-}
-
 /* ── Public lifecycle ─────────────────────────────────────────────────────────── */
 
 int runtime_ensure_directories(void) {
@@ -1405,8 +543,6 @@ int runtime_ensure_directories(void) {
      * truly can't function, so abort startup. */
     if (ensure_dir(PS5UPLOAD2_RUNTIME_ROOT) != 0) return -1;
     if (ensure_dir(PS5UPLOAD2_RUNTIME_DIR)  != 0) return -1;
-    if (ensure_dir(PS5UPLOAD2_TX_DIR)       != 0) return -1;
-    if (ensure_dir(PS5UPLOAD2_SPOOL_DIR)    != 0) return -1;
     if (ensure_dir(PS5UPLOAD2_DEBUG_DIR)    != 0) return -1;
     if (ensure_dir(PS5UPLOAD2_MOUNTS_DIR)   != 0) return -1;
     /* Optional dirs under /user — Sony-managed root with stricter
@@ -1414,7 +550,7 @@ int runtime_ensure_directories(void) {
      * these mkdirs fail with EACCES. They're only used by the pkg
      * install flow, so a failure here MUST NOT abort startup —
      * otherwise sending ps5upload before kstuff would prevent the
-     * mgmt port from ever opening, breaking the whole "load kstuff
+     * server from ever starting, breaking the whole "load kstuff
      * later" recovery path the rest of the codebase supports.
      *
      * The pkg-install handler re-tries the mkdirs at request time
@@ -1495,8 +631,8 @@ void runtime_sweep_stale_pkg_temp(void) {
  * At worst, one stale mount stays visible for one more session. */
 /* getmntinfo(3) is NOT thread-safe: it returns a pointer to a single
  * libc-owned static buffer that the next call in ANY thread overwrites (and
- * may realloc, invalidating an earlier caller's pointer). The mgmt port runs
- * up to PS5UPLOAD2_MAX_MGMT_THREADS concurrent client threads, several of
+ * may realloc, invalidating an earlier caller's pointer). AVA1 runs up to
+ * eight management calls at once, several of
  * which call getmntinfo (FS_LIST_VOLUMES, the FS_MOUNT reuse scan, FS_UNMOUNT,
  * and the shell `mount`/`df`/`mtrw` verbs) — so two racing callers can read a
  * half-replaced array or a dangling pointer. Serialize the call and hand back
@@ -1844,35 +980,14 @@ int runtime_init(runtime_state_t *state) {
         state->instance_id = hi | (lo & 0xFFFFFFFFu);
         state->started_at_unix = (uint64_t)rts.tv_sec;
     }
-    state->runtime_port     = PS5UPLOAD2_RUNTIME_PORT;
-    state->mgmt_port        = PS5UPLOAD2_MGMT_PORT;
-    state->listener_fd      = -1;
-    state->mgmt_listener_fd = -1;
     state->startup_reason   = PS5UPLOAD2_STARTUP_FRESH;
-    /* Mutex guards cross-thread reads/writes of tx counters + tx_entries.
-     * Single-threaded in the transfer path; only STATUS + QUERY_TX from
-     * the mgmt thread need synchronization. */
+    /* Guards the counters the management handlers and node.status read from different threads. */
     if (pthread_mutex_init(&state->state_mtx, NULL) != 0) {
         fprintf(stderr, "[payload2] pthread_mutex_init failed\n");
         return -1;
     }
-    /* Per-slot mutexes for the tx table — guard each entry against
-     * concurrent SHARD/COMMIT/ABORT racing on the same slot, and let
-     * eviction skip slots a handler is still touching. */
-    if (runtime_init_entry_mutexes() != 0) {
-        fprintf(stderr, "[payload2] entry-mutex pool init failed\n");
-        return -1;
-    }
     snprintf(state->ownership_path, sizeof(state->ownership_path),
              "%s/active_instance.txt", PS5UPLOAD2_RUNTIME_DIR);
-    snprintf(state->tx_state_path, sizeof(state->tx_state_path),
-             "%s/runtime_tx_state.txt", PS5UPLOAD2_TX_DIR);
-    snprintf(state->tx_journal_path, sizeof(state->tx_journal_path),
-             "%s/events.log", PS5UPLOAD2_TX_DIR);
-    if (runtime_load_tx_state(state) != 0) {
-        fprintf(stderr, "[payload2] failed to load tx state from %s\n", state->tx_state_path);
-        return -1;
-    }
     backup_init();
     remoteplay_init();
     notif_init();
@@ -1882,15 +997,6 @@ int runtime_init(runtime_state_t *state) {
     tmdb_init();
     fw_spoof_init();
     ftp_server_init();
-    if (runtime_load_tx_entries(state) != 0) {
-        fprintf(stderr, "[payload2] failed to load tx entries from %s\n", PS5UPLOAD2_TX_DIR);
-        return -1;
-    }
-    runtime_reconcile_tx_state(state);
-    state->recovered_transactions = state->active_transactions;
-    if (state->recovered_transactions > 0) {
-        (void)runtime_append_tx_event(state, "startup_replay");
-    }
     return 0;
 }
 
@@ -1921,7 +1027,7 @@ int runtime_write_ownership(const runtime_state_t *state) {
         started = t > 0 ? (uint64_t)t : runtime_system_boottime_unix();
     }
     char rec[256];
-    int rec_len = ownership_record_format(rec, sizeof rec, state->instance_id, state->runtime_port,
+    int rec_len = ownership_record_format(rec, sizeof rec, state->instance_id, 0 /* runtime_port: none now */,
                                           state->startup_reason, started, (int)getpid());
     if (rec_len < 0) {
         fprintf(stderr, "[payload2] refusing to write an ownership record without a start time\n");
@@ -1955,9 +1061,8 @@ int runtime_write_ownership(const runtime_state_t *state) {
         (void)unlink(tmp_path);
         return -1;
     }
-    printf("[payload2] ownership record instance=%llu port=%d path=%s\n",
+    printf("[payload2] ownership record instance=%llu path=%s\n",
            (unsigned long long)state->instance_id,
-           state->runtime_port,
            state->ownership_path);
     return 0;
 }
@@ -2264,7 +1369,7 @@ static void *runtime_shutdown_watchdog(void *arg) {
     (void)arg;
     /* Grace period for the normal close+join below. If shutdown is healthy the
      * process exits via main()'s return long before this fires and this thread
-     * dies with it. If shutdown WEDGES (e.g. pthread_join on a mgmt thread
+     * dies with it. If shutdown WEDGES (e.g. pthread_join on a management worker
      * stuck in an uninterruptible Sony API never returns), force the process
      * out so it can't linger as an orphan the next resend would duplicate.
      *
@@ -2331,3153 +1436,6 @@ void runtime_arm_shutdown_watchdog(const runtime_state_t *state, int exit_code) 
     }
 }
 
-/* ── Wire I/O ─────────────────────────────────────────────────────────────────── */
-
-static int recv_exact(int fd, void *buf, size_t len) {
-    unsigned char *p = (unsigned char *)buf;
-    size_t got = 0;
-    while (got < len) {
-        ssize_t n = recv(fd, p + got, len - got, 0);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            /* Log the actual cause so a stalled transfer produces a
-             * diagnostic in the engine/renderer log, not silence.
-             * EAGAIN / EWOULDBLOCK here means SO_RCVTIMEO fired — the
-             * client hasn't sent data within the idle window. Keep it
-             * distinguishable from other recv errors. */
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                fprintf(stderr,
-                        "[payload] recv_exact(fd=%d): timed out after %zu/%zu bytes "
-                        "(SO_RCVTIMEO expired, client stalled)\n",
-                        fd, got, len);
-            } else {
-                fprintf(stderr,
-                        "[payload] recv_exact(fd=%d): got %zu/%zu bytes, recv failed: %s (errno=%d)\n",
-                        fd, got, len, strerror(errno), errno);
-            }
-            return -1;
-        }
-        if (n == 0) {
-            /* Peer closed the connection mid-frame. A *truncated* frame is
-             * worth recording: it means a client died or was cancelled
-             * part-way, and the byte count says how far it got.
-             *
-             * `got == 0` is different — nothing arrived at all. That is a
-             * bare TCP connect-and-close: a port probe, a reachability
-             * check, a health poll. It happens constantly and says nothing.
-             * Logging it produced 8314 identical lines in one bug report,
-             * filling both 256 KB stderr logs and evicting every real
-             * diagnostic in them — the reap trace, the accept errors, the
-             * transfer timings. A log that reliably discards its own
-             * evidence is worse than no log, so stay silent for the empty
-             * case and keep the informative one. */
-            if (got > 0) {
-                fprintf(stderr,
-                        "[payload] recv_exact(fd=%d): peer closed after %zu/%zu bytes\n",
-                        fd, got, len);
-            }
-            return -1;
-        }
-        got += (size_t)n;
-    }
-    return 0;
-}
-
-/* Monotonic microseconds for per-phase timing. */
-static uint64_t now_us(void) {
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
-    return (uint64_t)ts.tv_sec * 1000000ull + (uint64_t)(ts.tv_nsec / 1000);
-}
-
-static uint16_t read_le16(const unsigned char *p) {
-    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
-}
-
-static uint32_t read_le32(const unsigned char *p) {
-    return (uint32_t)p[0]
-         | ((uint32_t)p[1] << 8)
-         | ((uint32_t)p[2] << 16)
-         | ((uint32_t)p[3] << 24);
-}
-
-static uint64_t read_le64(const unsigned char *p) {
-    uint64_t v = 0;
-    int i = 0;
-    for (i = 0; i < 8; i++) v |= ((uint64_t)p[i]) << (8 * i);
-    return v;
-}
-
-static void write_le16(unsigned char *p, uint16_t v) {
-    p[0] = (unsigned char)(v & 0xff);
-    p[1] = (unsigned char)((v >> 8) & 0xff);
-}
-
-static void write_le32(unsigned char *p, uint32_t v) {
-    p[0] = (unsigned char)(v & 0xff);
-    p[1] = (unsigned char)((v >> 8) & 0xff);
-    p[2] = (unsigned char)((v >> 16) & 0xff);
-    p[3] = (unsigned char)((v >> 24) & 0xff);
-}
-
-static void write_le64(unsigned char *p, uint64_t v) {
-    int i = 0;
-    for (i = 0; i < 8; i++) p[i] = (unsigned char)((v >> (8 * i)) & 0xff);
-}
-
-/* Loop until `len` bytes have been sent. Treats EINTR as retry; returns
- * 0 on full send, -1 on hard error or peer disconnect. Without this loop,
- * a single short write (common when SO_SNDBUF fills under load) leaves
- * the framing desynced and the next dispatcher iteration reads garbage
- * as a header — manifests to users as random "bad_magic" disconnects. */
-static int send_full(int fd, const void *buf, size_t len) {
-    const unsigned char *p = (const unsigned char *)buf;
-    size_t remaining = len;
-    while (remaining > 0) {
-        ssize_t n = send(fd, p, remaining, 0);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            return -1;
-        }
-        if (n == 0) return -1;
-        p += (size_t)n;
-        remaining -= (size_t)n;
-    }
-    return 0;
-}
-
-static int send_frame(int fd, uint16_t frame_type, uint32_t flags,
-                      uint64_t trace_id, const void *body, uint64_t body_len) {
-    unsigned char hdr[FTX2_HEADER_LEN];
-    /* An AVA1 management call runs this handler with no socket: the frame is
-     * captured and becomes the RpcResponse (mgmt_rpc.c). */
-    if (mgmt_capture_active()) return mgmt_capture_frame(frame_type, body, body_len);
-    write_le32(hdr + 0, FTX2_MAGIC);
-    write_le16(hdr + 4, FTX2_VERSION);
-    write_le16(hdr + 6, frame_type);
-    write_le32(hdr + 8, flags);
-    write_le64(hdr + 12, body_len);
-    write_le64(hdr + 20, trace_id);
-    if (send_full(fd, hdr, sizeof(hdr)) != 0) return -1;
-    if (body_len > 0 && body) {
-        if (send_full(fd, body, (size_t)body_len) != 0) return -1;
-    }
-    return 0;
-}
-
-/* ── TX meta parsing ──────────────────────────────────────────────────────────── */
-
-static int parse_tx_meta(const char *body, uint64_t body_len,
-                          ftx2_tx_meta_t *out,
-                          const char **extra, uint64_t *extra_len) {
-    if (!body || !out) return -1;
-    memset(out, 0, sizeof(*out));
-    if (body_len < FTX2_TX_META_LEN) return -1;
-    memcpy(out->tx_id, body, 16);
-    out->kind  = read_le32((const unsigned char *)body + 16);
-    out->flags = read_le32((const unsigned char *)body + 20);
-    if (extra)     *extra     = body + FTX2_TX_META_LEN;
-    if (extra_len) *extra_len = body_len - FTX2_TX_META_LEN;
-    return 0;
-}
-
-/* ── STREAM_SHARD handler ─────────────────────────────────────────────────────── */
-
-/* Drain exactly `remaining` bytes from `fd` in 64 KiB chunks. */
-static int drain_shard_data(int fd, uint64_t remaining) {
-    char buf[FTX2_SHARD_DRAIN_BUF];
-    while (remaining > 0) {
-        size_t take = remaining > sizeof(buf) ? sizeof(buf) : (size_t)remaining;
-        if (recv_exact(fd, buf, take) != 0) return -1;
-        remaining -= (uint64_t)take;
-    }
-    return 0;
-}
-
-/*
- * Write shard data from the socket into a spool file.
- * Falls back to drain if the spool directory cannot be created or the file
- * cannot be opened (so the connection is never left in a bad read state).
- *
- * Spool layout:  PS5UPLOAD2_SPOOL_DIR/spool_<tx_id_hex>/<shard_seq>
- */
-/*
- * Write `len` bytes from `buf` to `fd` with retry on short writes / EINTR.
- * Returns 0 on success, -1 on any permanent I/O error.
- */
-static int write_full(int fd, const void *buf, size_t len) {
-    const unsigned char *p = (const unsigned char *)buf;
-    size_t written = 0;
-    while (written < len) {
-        ssize_t w = write(fd, p + written, len - written);
-        if (w < 0) {
-            if (errno == EINTR) continue;
-            return -1;
-        }
-        if (w == 0) return -1;
-        written += (size_t)w;
-    }
-    return 0;
-}
-
-/* ── Double-buffered writer thread ────────────────────────────────────────────
- *
- * The shard receive loop is recv-then-write per chunk, serialised on the main
- * thread. For a 128 MiB transfer on PS5, recv takes ~2.3 s and write takes
- * ~4 s — overlapping them with a helper thread lets the two phases run in
- * parallel, bounded by `max(recv, write)` instead of the sum.
- *
- * Design: exactly two buffers. The producer (main thread) fills one while the
- * consumer (writer thread) drains the other, then they swap. One mutex, one
- * condvar per slot. Consumer exits on a sentinel `len < 0`.
- */
-
-typedef struct {
-    unsigned char *buf;
-    ssize_t        len;  /* 0 = empty (writer may refill), >0 = full (writer must drain), <0 = shutdown */
-} piped_slot_t;
-
-typedef struct {
-    piped_slot_t    slot[2];
-    pthread_mutex_t lock;
-    pthread_cond_t  cv_full[2];   /* signaled when slot[i] becomes full */
-    pthread_cond_t  cv_empty[2];  /* signaled when slot[i] becomes empty */
-    int             fd;
-    int             writer_error; /* set by writer on I/O failure */
-    int             writer_errno; /* errno captured on the writer thread */
-} piped_writer_t;
-
-/* Create a JOINABLE worker thread with a bounded stack. The pack workers,
- * piped writers, and async-copy writer run trivial recv→write/copy loops
- * (their only stack locals are a 1 KiB scratch path at most; all real buffers
- * are heap). The FreeBSD default thread stack is multiple MiB, and under 4
- * concurrent packed streams there can be 16+ of these threads at once — the
- * accumulated default-stack reservation needlessly tightens the small PS5
- * per-process memory budget (a plausible OOM contributor at 4 streams). 512
- * KiB matches the mgmt accept-loop thread (proven stable across firmwares) and
- * leaves a large margin over any worker call chain. Falls back to the default
- * stack if attr setup fails, so behavior never regresses. The detach state is
- * left at the default (joinable) — every caller joins these threads. */
-static int create_worker_thread(pthread_t *tid, void *(*fn)(void *), void *arg) {
-    pthread_attr_t attr;
-    pthread_attr_t *attr_p = NULL;
-    if (pthread_attr_init(&attr) == 0) {
-        (void)pthread_attr_setstacksize(&attr, 512u * 1024u);
-        attr_p = &attr;
-    }
-    int rc = pthread_create(tid, attr_p, fn, arg);
-    if (attr_p) pthread_attr_destroy(attr_p);
-    return rc;
-}
-
-/*
- * Persistent writer handle attached to runtime_tx_entry_t::direct_writer.
- *
- * Lifecycle (single-file direct mode, total_bytes >= threshold):
- *   BEGIN_TX       → nothing (lazy)
- *   first shard    → direct_writer_start() mallocs this struct + 2× io bufs,
- *                    pthread_creates the writer thread, stores the handle
- *   each shard     → producer reuses pw->slot[direct_slot] just like today's
- *                    inline writer path, but never sends the sentinel
- *   COMMIT_TX      → direct_writer_finish() sends sentinel + joins + returns
- *                    pw->writer_error
- *   any terminal   → direct_writer_discard() sends sentinel, joins, frees,
- *                    ignores writer_error (we're unlinking the tmp anyway)
- *
- * The writer thread itself is vanilla piped_writer_thread() — no change.
- * All state the thread touches lives in `pw` (heap), so tx_entry re-shuffling
- * or slot eviction during background writes is safe as long as we haven't
- * freed `pw` yet. direct_writer_discard() is the only legal free path. */
-typedef struct {
-    piped_writer_t pw;          /* first so &handle == &pw (mutex init unchanged) */
-    pthread_t      tid;
-    int            started;     /* 1 when tid is joinable */
-    unsigned char *bufs[2];     /* heap-owned double buffers (also in pw.slot[i].buf) */
-} direct_writer_handle_t;
-
-/* Forward declarations for the persistent direct-write helpers. */
-static int  direct_writer_start(runtime_tx_entry_t *entry, int fd);
-static int  direct_writer_finish(runtime_tx_entry_t *entry);
-static void direct_writer_discard(runtime_tx_entry_t *entry);
-
-static void *piped_writer_thread(void *arg) {
-    /* Name this thread: the process listing shows a representative
-     * thread that is not reliably main, so an unnamed worker makes the
-     * whole process read as "payload.elf". See proc_identity.h. */
-    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
-    piped_writer_t *pw = (piped_writer_t *)arg;
-    int i = 0;
-    /* Bytes written since the last periodic fsync. Bounds the kernel
-     * dirty-page backlog for huge single-file streams so the kernel's
-     * dirty-page write-throttle never engages and collapses throughput. See
-     * PS5UPLOAD2_WRITEBACK_FSYNC_BYTES. */
-    uint64_t since_fsync = 0;
-    for (;;) {
-        ssize_t len;
-        unsigned char *buf;
-        pthread_mutex_lock(&pw->lock);
-        while (pw->slot[i].len == 0) {
-            pthread_cond_wait(&pw->cv_full[i], &pw->lock);
-        }
-        len = pw->slot[i].len;
-        buf = pw->slot[i].buf;
-        pthread_mutex_unlock(&pw->lock);
-
-        if (len < 0) break; /* shutdown */
-        if (write_full(pw->fd, buf, (size_t)len) != 0) {
-            int saved = errno ? errno : EIO;
-            pthread_mutex_lock(&pw->lock);
-            pw->writer_error = 1;
-            pw->writer_errno = saved;
-            /* Mark BOTH slots empty so a producer waiting on the
-             * other slot's cv_empty wakes up too. The prior code
-             * only signaled cv_empty[i], which left a producer
-             * blocked on cv_empty[1-i] stuck until the recv timeout
-             * eventually broke the connection — observably as
-             * "transfer hangs forever" after a write_full failure. */
-            pw->slot[0].len = 0;
-            pw->slot[1].len = 0;
-            pthread_cond_broadcast(&pw->cv_empty[0]);
-            pthread_cond_broadcast(&pw->cv_empty[1]);
-            pthread_mutex_unlock(&pw->lock);
-            return NULL;
-        }
-        /* Periodically flush so the kernel's dirty-page backlog can't grow
-         * unbounded on a huge single-file stream and throttle write(2) to a
-         * crawl. fsync converts the dirty pages to clean (reclaimable) ones,
-         * so the dirty count stays bounded and throughput settles at the
-         * storage's sustained rate instead of collapsing late in the transfer.
-         * Done OUTSIDE the lock (between write and the empty-signal) so it adds
-         * natural backpressure — the producer blocks on a full slot during the
-         * flush, which is exactly the pacing we want. Disabled when the
-         * interval is 0. A flush failure is terminal: delayed-allocation
-         * filesystems commonly report ENOSPC only from fsync, so ignoring it
-         * turns a deterministic disk-full into a later socket reset. */
-#if PS5UPLOAD2_WRITEBACK_FSYNC_BYTES > 0
-        if (len > 0) {
-            since_fsync += (uint64_t)len;
-            if (since_fsync >= PS5UPLOAD2_WRITEBACK_FSYNC_BYTES) {
-                if (fsync(pw->fd) != 0) {
-                    int saved = errno ? errno : EIO;
-                    pthread_mutex_lock(&pw->lock);
-                    pw->writer_error = 1;
-                    pw->writer_errno = saved;
-                    pw->slot[0].len = 0;
-                    pw->slot[1].len = 0;
-                    pthread_cond_broadcast(&pw->cv_empty[0]);
-                    pthread_cond_broadcast(&pw->cv_empty[1]);
-                    pthread_mutex_unlock(&pw->lock);
-                    return NULL;
-                }
-                since_fsync = 0;
-            }
-        }
-#endif
-        pthread_mutex_lock(&pw->lock);
-        pw->slot[i].len = 0;
-        pthread_cond_signal(&pw->cv_empty[i]);
-        pthread_mutex_unlock(&pw->lock);
-        i = 1 - i;
-    }
-    return NULL;
-}
-
-/*
- * Spawn a persistent writer thread bound to `fd` and attach it to `entry`.
- * `fd` ownership transfers to the handle on success (closed by finish/discard).
- * On failure, `fd` is left open for the caller to deal with.
- * Returns 0 on success, -1 on allocation/pthread failure.
- */
-static int direct_writer_start(runtime_tx_entry_t *entry, int fd) {
-    direct_writer_handle_t *h = NULL;
-    if (!entry || entry->direct_writer || fd < 0) return -1;
-    h = (direct_writer_handle_t *)calloc(1, sizeof(*h));
-    if (!h) return -1;
-    h->bufs[0] = (unsigned char *)malloc(PS5UPLOAD2_SHARD_IO_BUF);
-    h->bufs[1] = (unsigned char *)malloc(PS5UPLOAD2_SHARD_IO_BUF);
-    if (!h->bufs[0] || !h->bufs[1]) {
-        free(h->bufs[0]);
-        free(h->bufs[1]);
-        free(h);
-        return -1;
-    }
-    h->pw.fd = fd;
-    h->pw.slot[0].buf = h->bufs[0];
-    h->pw.slot[1].buf = h->bufs[1];
-    pthread_mutex_init(&h->pw.lock, NULL);
-    pthread_cond_init(&h->pw.cv_full[0], NULL);
-    pthread_cond_init(&h->pw.cv_full[1], NULL);
-    pthread_cond_init(&h->pw.cv_empty[0], NULL);
-    pthread_cond_init(&h->pw.cv_empty[1], NULL);
-    if (create_worker_thread(&h->tid, piped_writer_thread, &h->pw) != 0) {
-        pthread_mutex_destroy(&h->pw.lock);
-        pthread_cond_destroy(&h->pw.cv_full[0]);
-        pthread_cond_destroy(&h->pw.cv_full[1]);
-        pthread_cond_destroy(&h->pw.cv_empty[0]);
-        pthread_cond_destroy(&h->pw.cv_empty[1]);
-        free(h->bufs[0]);
-        free(h->bufs[1]);
-        free(h);
-        return -1;
-    }
-    h->started = 1;
-    entry->direct_writer = h;
-    entry->direct_slot   = 0;
-    return 0;
-}
-
-/*
- * Drain the persistent writer cleanly on the success path: send the `len<0`
- * sentinel on the next producer slot, wait for it to be accepted, join the
- * thread, tear down sync primitives + buffers + fd, clear the handle.
- * Returns 0 if the writer reported no I/O error, -1 otherwise.
- *
- * `direct_fd_open` / `direct_fd` on the entry are cleared by this function
- * because the handle owns the fd once direct_writer_start succeeds.
- */
-static int direct_writer_finish(runtime_tx_entry_t *entry) {
-    direct_writer_handle_t *h = NULL;
-    int writer_error = 0;
-    int slot = 0;
-    if (!entry || !entry->direct_writer) return 0;
-    h = (direct_writer_handle_t *)entry->direct_writer;
-    slot = entry->direct_slot;
-    if (slot < 0 || slot > 1) slot = 0;
-    /* Wait for the sentinel slot to be free, then post the shutdown marker. */
-    pthread_mutex_lock(&h->pw.lock);
-    while (h->pw.slot[slot].len > 0 && !h->pw.writer_error) {
-        pthread_cond_wait(&h->pw.cv_empty[slot], &h->pw.lock);
-    }
-    h->pw.slot[slot].len = -1;
-    pthread_cond_signal(&h->pw.cv_full[slot]);
-    pthread_mutex_unlock(&h->pw.lock);
-    if (h->started) pthread_join(h->tid, NULL);
-    writer_error = h->pw.writer_error;
-    if (writer_error && entry->last_io_errno == 0) {
-        entry->last_io_errno = h->pw.writer_errno ? h->pw.writer_errno : EIO;
-    }
-    pthread_mutex_destroy(&h->pw.lock);
-    pthread_cond_destroy(&h->pw.cv_full[0]);
-    pthread_cond_destroy(&h->pw.cv_full[1]);
-    pthread_cond_destroy(&h->pw.cv_empty[0]);
-    pthread_cond_destroy(&h->pw.cv_empty[1]);
-    free(h->bufs[0]);
-    free(h->bufs[1]);
-    if (entry->direct_fd_open) {
-        close(entry->direct_fd);
-        entry->direct_fd_open = 0;
-        entry->direct_fd      = -1;
-    }
-    free(h);
-    entry->direct_writer = NULL;
-    entry->direct_slot   = 0;
-    return writer_error ? -1 : 0;
-}
-
-/*
- * Teardown variant for abort/takeover/shutdown/fatal paths. Sends the
- * sentinel + joins + frees exactly like finish(), but ignores writer_error
- * (the caller is about to unlink the tmp anyway). Idempotent and safe to
- * call when the writer was never started. Also closes direct_fd if it was
- * opened without spawning a writer (small-tx path below the threshold).
- */
-static void direct_writer_discard(runtime_tx_entry_t *entry) {
-    if (!entry) return;
-    if (entry->direct_writer) {
-        (void)direct_writer_finish(entry);
-    } else if (entry->direct_fd_open) {
-        close(entry->direct_fd);
-        entry->direct_fd_open = 0;
-        entry->direct_fd      = -1;
-    }
-}
-
-/* ── Packed-shard worker pool ─────────────────────────────────────────────────
- *
- * For many-small-file workloads, per-record `open + write + close` dominates.
- * Serialising it in the main thread caps throughput at the FS's per-file cost
- * (~23 ms/file on PS5 UFS), wasting the wire (NIC is ~100× faster than disk
- * metadata). A small pool of kernel threads lets metadata operations overlap
- * across files — the real gain is "files in different directories can be
- * created concurrently"; a secondary gain is "open/write/close of one file
- * overlap with open/write/close of another in the same dir".
- *
- * Lifecycle mirrors the single-file persistent writer (runtime_release_tx_resources
- * is the sole teardown site):
- *   first packed shard   → pack_pool_start() mallocs handle + spawns workers
- *   every record         → reader pushes (path, data); worker pops + writes
- *   end of each shard    → pack_pool_drain() waits for queue empty before ACK,
- *                          preserving the "SPOOLED == persisted" semantic the
- *                          protocol promises on StreamShard ACK
- *   terminal transition  → pack_pool_teardown() drains + shutdown + join,
- *                          sums per-worker timings into the tx entry so they
- *                          surface in COMMIT_TX_ACK, frees all memory
- *
- * Safety notes:
- *   - reader owns the fs-metadata cache (last_parent_dir); workers don't
- *     touch it, so no mutex needed for the mkdir-p cache
- *   - workers drain the queue even after worker_error is set, so the reader
- *     is never blocked on a permanently-stuck pool_drain
- *   - worker errors are sticky; no retry semantics inside the pool
- */
-
-typedef struct pack_work_item {
-    char          *path;      /* NUL-terminated, malloc'd by reader, freed by worker */
-    unsigned char *data;      /* may be NULL when data_len == 0 */
-    uint32_t       data_len;
-} pack_work_item_t;
-
-typedef struct pack_worker_pool {
-    pthread_t        tid[PS5UPLOAD2_PACK_WORKERS];
-    int              tid_started;      /* count of actually-created threads */
-    pack_work_item_t queue[PS5UPLOAD2_PACK_QUEUE_DEPTH];
-    int              q_head;           /* next slot to pop */
-    int              q_tail;           /* next slot to push */
-    int              q_count;
-    int              shutdown;         /* set on teardown; workers drain then exit */
-    int              worker_error;     /* sticky I/O failure flag */
-    pthread_mutex_t  lock;
-    pthread_cond_t   cv_not_full;      /* reader waits when queue full */
-    pthread_cond_t   cv_not_empty;     /* workers wait when queue empty */
-    pthread_cond_t   cv_drained;       /* reader waits during drain */
-    /* Accumulators — updated by workers under `lock` at end of each item.
-     * Contention is minimal (4 workers, each update is a few arithmetic ops
-     * and a conditional signal), so sharing one mutex keeps code simple. */
-    uint64_t         t_unlink_us;
-    uint64_t         t_open_us;
-    uint64_t         t_ftruncate_us;
-    uint64_t         t_write_us;
-    uint64_t         t_close_us;
-    uint64_t         records_processed;
-    uint64_t         open_retries;     /* transient open() retries absorbed */
-    uint64_t         write_retries;    /* transient write_full() retries absorbed */
-} pack_worker_pool_t;
-
-/* Errnos we treat as worth retrying on the pack-worker hot path. EIO covers
- * USB media hiccups; EMFILE/ENFILE cover fd-table pressure under sustained
- * many-small-file load; ENOMEM/EBUSY are transient resource hits; EAGAIN
- * shouldn't normally hit a blocking open/write but is cheap to allow. */
-static int pack_errno_is_transient(int e) {
-    switch (e) {
-        case EINTR:
-        case EAGAIN:
-#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
-        case EWOULDBLOCK:
-#endif
-        case EIO:
-        case EMFILE:
-        case ENFILE:
-        case ENOMEM:
-        case EBUSY:
-            return 1;
-        default:
-            return 0;
-    }
-}
-
-static void pack_retry_backoff(int retry_idx) {
-    static const useconds_t backoff_us[] = { 20000u, 50000u, 100000u };
-    int n = (int)(sizeof(backoff_us) / sizeof(backoff_us[0]));
-    if (retry_idx < 0) retry_idx = 0;
-    if (retry_idx >= n) retry_idx = n - 1;
-    usleep(backoff_us[retry_idx]);
-}
-
-static void *pack_worker_thread(void *arg) {
-    /* Name this thread: the process listing shows a representative
-     * thread that is not reliably main, so an unnamed worker makes the
-     * whole process read as "payload.elf". See proc_identity.h. */
-    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
-    pack_worker_pool_t *pool = (pack_worker_pool_t *)arg;
-    for (;;) {
-        pack_work_item_t item;
-        pthread_mutex_lock(&pool->lock);
-        while (pool->q_count == 0 && !pool->shutdown) {
-            pthread_cond_wait(&pool->cv_not_empty, &pool->lock);
-        }
-        if (pool->q_count == 0 && pool->shutdown) {
-            pthread_mutex_unlock(&pool->lock);
-            return NULL;
-        }
-        item = pool->queue[pool->q_head];
-        pool->q_head = (pool->q_head + 1) % PS5UPLOAD2_PACK_QUEUE_DEPTH;
-        pool->q_count -= 1;
-        pthread_cond_signal(&pool->cv_not_full);
-        if (pool->q_count == 0) pthread_cond_signal(&pool->cv_drained);
-        pthread_mutex_unlock(&pool->lock);
-
-        if (!pool->worker_error) {
-            /* Packed records write directly to their final path — no tmp +
-             * rename dance. The tmp pattern's only benefit is mid-transfer
-             * atomicity, but on PS5 UFS each `.ps5up2-tmp` unlink/open/rename
-             * costs ~40 ms of metadata work, and the COMMIT-side rename of
-             * 5000 files added another ~5 s of apply time. By writing
-             * directly we lose only the "partial-file-on-abort" guarantee,
-             * which is already an acceptable state: aborted multi-file
-             * transfers were never cleaned up field-by-field anyway, and the
-             * CLEANUP frame exists precisely to handle residual state. Huge
-             * single-file direct writes still use the tmp+rename pattern
-             * (`entry->tmp_path`) because there the rename is O(1) and the
-             * atomicity guarantee is more valuable. */
-            int fd = -1;
-            uint64_t t0, t_op = 0, t_tr = 0, t_wr = 0, t_cl = 0;
-            int attempt;
-            uint64_t local_open_retries = 0, local_write_retries = 0;
-            int terminal = 0;
-
-            /* Bounded-retry open. A single transient open failure on USB or
-             * UFS at file 11k of 75k used to abort the whole transaction;
-             * absorbing it here keeps the small-file-heavy regime alive. */
-            for (attempt = 0; attempt <= (int)PS5UPLOAD2_PACK_RETRY_MAX; attempt++) {
-                t0 = now_us();
-                fd = open(item.path, O_WRONLY | O_CREAT | O_TRUNC, 0777);
-                if (fd >= 0) (void)fchmod(fd, 0777);
-                t_op += now_us() - t0;
-                if (fd >= 0) break;
-                if (!pack_errno_is_transient(errno) ||
-                    attempt == (int)PS5UPLOAD2_PACK_RETRY_MAX) {
-                    fprintf(stderr,
-                            "[payload2] pack worker: open %s failed errno=%d after %d retries\n",
-                            item.path, errno, attempt);
-                    pool->worker_error = 1;
-                    terminal = 1;
-                    break;
-                }
-                fprintf(stderr,
-                        "[payload2] pack worker: open %s transient errno=%d, retry %d/%u\n",
-                        item.path, errno, attempt + 1,
-                        (unsigned)PS5UPLOAD2_PACK_RETRY_MAX);
-                local_open_retries += 1;
-                pack_retry_backoff(attempt);
-            }
-
-            if (!terminal && fd >= 0) {
-                /* Historical note: an earlier experiment called
-                 * `posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED)` here to try
-                 * to keep the page cache clean between transactions. On the
-                 * e1000 lab NIC it produced a measurable throughput regression
-                 * on the 1 GiB single-file path (88.65 -> 84.87 MiB/s), likely
-                 * because DONTNEED forces synchronous writeback of dirty pages
-                 * through the one-remaining-writer-thread bottleneck. The hint
-                 * turned out to have negative ROI on this hardware, so we
-                 * don't call it. Revisit when we have different NIC / workload
-                 * evidence that shows it actually helping. */
-                if (item.data_len > 0) {
-                    t0 = now_us();
-                    (void)ftruncate(fd, (off_t)item.data_len);
-                    t_tr = now_us() - t0;
-
-                    /* Bounded-retry write. write_full handles EINTR
-                     * internally, so any -1 here is a non-EINTR error.
-                     * On retry we close+reopen with O_TRUNC so the rewrite
-                     * starts from offset 0 and produces a valid file. */
-                    for (attempt = 0; attempt <= (int)PS5UPLOAD2_PACK_RETRY_MAX; attempt++) {
-                        t0 = now_us();
-                        if (write_full(fd, item.data, item.data_len) == 0) {
-                            t_wr += now_us() - t0;
-                            break;
-                        }
-                        t_wr += now_us() - t0;
-                        if (!pack_errno_is_transient(errno) ||
-                            attempt == (int)PS5UPLOAD2_PACK_RETRY_MAX) {
-                            fprintf(stderr,
-                                    "[payload2] pack worker: write %s failed errno=%d after %d retries\n",
-                                    item.path, errno, attempt);
-                            pool->worker_error = 1;
-                            break;
-                        }
-                        fprintf(stderr,
-                                "[payload2] pack worker: write %s transient errno=%d, retry %d/%u\n",
-                                item.path, errno, attempt + 1,
-                                (unsigned)PS5UPLOAD2_PACK_RETRY_MAX);
-                        local_write_retries += 1;
-                        pack_retry_backoff(attempt);
-
-                        /* Reset the file: close, reopen with O_TRUNC,
-                         * re-pre-allocate. If reopen itself fails, give up. */
-                        (void)close(fd);
-                        t0 = now_us();
-                        fd = open(item.path, O_WRONLY | O_CREAT | O_TRUNC, 0777);
-                        if (fd >= 0) (void)fchmod(fd, 0777);
-                        t_op += now_us() - t0;
-                        if (fd < 0) {
-                            fprintf(stderr,
-                                    "[payload2] pack worker: re-open %s for write retry failed errno=%d\n",
-                                    item.path, errno);
-                            pool->worker_error = 1;
-                            break;
-                        }
-                        (void)ftruncate(fd, (off_t)item.data_len);
-                    }
-                }
-                if (fd >= 0) {
-                    t0 = now_us();
-                    (void)close(fd);
-                    t_cl = now_us() - t0;
-                }
-            }
-
-            /* Pack records write directly to `<file>` and never produce a
-             * `.ps5up2-tmp`. But a *stale* tmp can still exist from a
-             * prior aborted run where this file was non-packed — and the
-             * 2.2.29 BEGIN_TX sweep skips the resume path. If a stale
-             * tmp survives to COMMIT, the rename loop promotes it over
-             * our just-written packed content (silent corruption with
-             * "FTP works fine" symptom). Unlinking here closes the gap
-             * regardless of is_resume. ENOENT is the common case and
-             * not an error. */
-            if (!terminal && pool->worker_error == 0 && item.path) {
-                char stale_tmp[1024];
-                int  n = snprintf(stale_tmp, sizeof(stale_tmp),
-                                  "%s.ps5up2-tmp", item.path);
-                if (n > 0 && (size_t)n < sizeof(stale_tmp)) {
-                    (void)unlink(stale_tmp);
-                }
-            }
-
-            /* Fold per-item timings into the shared accumulator. */
-            pthread_mutex_lock(&pool->lock);
-            pool->t_open_us       += t_op;
-            pool->t_ftruncate_us  += t_tr;
-            pool->t_write_us      += t_wr;
-            pool->t_close_us      += t_cl;
-            pool->records_processed += 1;
-            pool->open_retries    += local_open_retries;
-            pool->write_retries   += local_write_retries;
-            pthread_mutex_unlock(&pool->lock);
-        }
-
-        /* Free the reader-allocated buffers regardless of error state so the
-         * queue always drains cleanly — the reader relies on that invariant. */
-        free(item.path);
-        if (item.data) free(item.data);
-    }
-}
-
-/* Lazily start a pool attached to `entry`. Returns 0 on success, -1 on
- * pthread/allocation failure; on failure `entry->pack_pool` is left NULL so
- * the caller can fall back to the inline serial path. */
-static int pack_pool_start(runtime_tx_entry_t *entry) {
-    pack_worker_pool_t *pool;
-    int i;
-    if (!entry || entry->pack_pool) return 0;
-    pool = (pack_worker_pool_t *)calloc(1, sizeof(*pool));
-    if (!pool) return -1;
-    pthread_mutex_init(&pool->lock, NULL);
-    pthread_cond_init(&pool->cv_not_full, NULL);
-    pthread_cond_init(&pool->cv_not_empty, NULL);
-    pthread_cond_init(&pool->cv_drained, NULL);
-    for (i = 0; i < (int)PS5UPLOAD2_PACK_WORKERS; i++) {
-        if (create_worker_thread(&pool->tid[i], pack_worker_thread, pool) != 0) {
-            /* Could not spawn all workers. Tear down the ones we did spawn
-             * and fall back. Setting shutdown + broadcasting wakes the
-             * already-running workers; they exit because queue is empty. */
-            pool->shutdown = 1;
-            pthread_cond_broadcast(&pool->cv_not_empty);
-            {
-                int j;
-                for (j = 0; j < pool->tid_started; j++) {
-                    pthread_join(pool->tid[j], NULL);
-                }
-            }
-            pthread_mutex_destroy(&pool->lock);
-            pthread_cond_destroy(&pool->cv_not_full);
-            pthread_cond_destroy(&pool->cv_not_empty);
-            pthread_cond_destroy(&pool->cv_drained);
-            free(pool);
-            return -1;
-        }
-        pool->tid_started += 1;
-    }
-    entry->pack_pool = pool;
-    return 0;
-}
-
-/* Push one work item. Blocks if queue full. Returns 0 on success; returns
- * -1 only if the pool already has a sticky worker_error (in which case
- * ownership of path/data stays with the caller, which must free them). */
-static int pack_pool_push(pack_worker_pool_t *pool, char *path,
-                          unsigned char *data, uint32_t data_len) {
-    if (!pool || !path) return -1;
-    pthread_mutex_lock(&pool->lock);
-    while (pool->q_count >= (int)PS5UPLOAD2_PACK_QUEUE_DEPTH && !pool->worker_error) {
-        pthread_cond_wait(&pool->cv_not_full, &pool->lock);
-    }
-    if (pool->worker_error) {
-        pthread_mutex_unlock(&pool->lock);
-        return -1;
-    }
-    pool->queue[pool->q_tail].path     = path;
-    pool->queue[pool->q_tail].data     = data;
-    pool->queue[pool->q_tail].data_len = data_len;
-    pool->q_tail = (pool->q_tail + 1) % PS5UPLOAD2_PACK_QUEUE_DEPTH;
-    pool->q_count += 1;
-    pthread_cond_signal(&pool->cv_not_empty);
-    pthread_mutex_unlock(&pool->lock);
-    return 0;
-}
-
-/* Block until the queue is empty. Returns 0 if the pool is clean, -1 if a
- * worker has set the sticky error flag. The reader calls this at end-of-shard
- * so SHARD_ACK means "persisted", same contract as the serial code path. */
-static int pack_pool_drain(pack_worker_pool_t *pool) {
-    int err;
-    if (!pool) return 0;
-    pthread_mutex_lock(&pool->lock);
-    while (pool->q_count > 0) {
-        pthread_cond_wait(&pool->cv_drained, &pool->lock);
-    }
-    err = pool->worker_error;
-    pthread_mutex_unlock(&pool->lock);
-    return err ? -1 : 0;
-}
-
-/* Drain + shutdown + join + sum timings into entry + free. Called from
- * runtime_release_tx_resources only; idempotent against NULL. */
-static void pack_pool_teardown(runtime_tx_entry_t *entry) {
-    pack_worker_pool_t *pool;
-    int i;
-    if (!entry || !entry->pack_pool) return;
-    pool = (pack_worker_pool_t *)entry->pack_pool;
-
-    /* Wait for in-flight work to finish — workers are reliable drain-ers
-     * (they continue popping + freeing even after worker_error is set). */
-    pthread_mutex_lock(&pool->lock);
-    while (pool->q_count > 0) {
-        pthread_cond_wait(&pool->cv_drained, &pool->lock);
-    }
-    pool->shutdown = 1;
-    pthread_cond_broadcast(&pool->cv_not_empty);
-    pthread_mutex_unlock(&pool->lock);
-
-    for (i = 0; i < pool->tid_started; i++) {
-        pthread_join(pool->tid[i], NULL);
-    }
-
-    /* Fold pool timings into the entry so COMMIT_TX_ACK can report them. */
-    entry->pack_records       += pool->records_processed;
-    entry->pack_unlink_us     += pool->t_unlink_us;
-    entry->pack_open_us       += pool->t_open_us;
-    entry->pack_ftruncate_us  += pool->t_ftruncate_us;
-    entry->pack_write_us      += pool->t_write_us;
-    entry->pack_close_us      += pool->t_close_us;
-    entry->pack_open_retries  += pool->open_retries;
-    entry->pack_write_retries += pool->write_retries;
-
-    if (pool->open_retries || pool->write_retries) {
-        fprintf(stderr,
-                "[payload2] pack pool teardown: %llu records, "
-                "%llu open retries absorbed, %llu write retries absorbed\n",
-                (unsigned long long)pool->records_processed,
-                (unsigned long long)pool->open_retries,
-                (unsigned long long)pool->write_retries);
-    }
-
-    pthread_mutex_destroy(&pool->lock);
-    pthread_cond_destroy(&pool->cv_not_full);
-    pthread_cond_destroy(&pool->cv_not_empty);
-    pthread_cond_destroy(&pool->cv_drained);
-    free(pool);
-    entry->pack_pool = NULL;
-}
-
-/*
- * Read shard data from the socket, BLAKE3-hash it on the fly, and write it
- * to `path`. Uses raw POSIX `open(2)` + `write(2)` — bypassing stdio buffering
- * matches the legacy payload's high-throughput write pattern.
- *
- * `truncate`:
- *   - non-zero: open with O_WRONLY|O_CREAT|O_TRUNC — starts a fresh file
- *   - zero:     open with O_WRONLY|O_APPEND       — appends to existing file
- *
- * `preallocate_bytes`: if > 0 and the file is being truncated, `ftruncate(2)`
- * the file to that size before writing, so the kernel can lay out contiguous
- * blocks. Matches `payload/protocol.c` `handle_upload` large-file path.
- *
- * On success, if `out_digest` is non-NULL, it holds the BLAKE3-256 of the
- * shard contents — no re-read is needed for verification.
- *
- * Falls back to plain drain if `open` fails, so the socket is never left
- * in a bad read state.
- */
-/*
- * Multi-file direct shard write. Each call: open the file, write `data_len`
- * bytes at `write_offset`, close.
- *
- * Offset model (changed in 2.16.0): the FIRST shard for a file opens with
- * O_TRUNC + posix_fallocate(preallocate_bytes), and the caller passes the
- * file's full expected size as `preallocate_bytes`. Subsequent shards open
- * O_WRONLY and lseek(SEEK_SET, write_offset) before writing. The pre-2.16.0
- * model used O_APPEND, which couldn't be combined with prealloc (fallocate
- * extends file size → O_APPEND writes land past the fallocated region) and
- * therefore left multi-GB files sparse-growing on UFS — the same metadata-
- * churn → throughput-collapse failure mode the single-file persistent writer
- * was fixed against in 2.2.29.
- */
-static int runtime_write_shard_to_path(runtime_tx_entry_t *entry,
-                                        const char *path,
-                                        int truncate,
-                                        uint64_t preallocate_bytes,
-                                        uint64_t write_offset,
-                                        int client_fd,
-                                        uint64_t data_len,
-                                        unsigned char *out_digest /* BLAKE3_OUT_LEN */) {
-    unsigned char *bufs[2] = {NULL, NULL};
-    int owns_bufs = 0; /* 1 = locally malloc'd (free here); 0 = borrowed from entry */
-    int fd = -1;
-    int flags;
-    uint64_t remaining = data_len;
-    uint64_t t_recv = 0;
-    uint64_t t_write_wait = 0;
-    uint64_t t_hash = 0;
-    uint64_t t_func_start = now_us();
-    uint64_t t_open_start = 0;
-    uint64_t t_open_us = 0;
-    uint64_t t_join_us = 0;
-    uint64_t t_close_us = 0;
-    blake3_hasher hasher;
-    int hash_enabled = (out_digest != NULL);
-    piped_writer_t pw;
-    pthread_t writer_tid;
-    int slot = 0;
-    int rc_ret = 0;
-
-    if (out_digest) memset(out_digest, 0, BLAKE3_OUT_LEN);
-    if (hash_enabled) blake3_hasher_init(&hasher);
-
-    if (data_len == 0) {
-        if (hash_enabled) blake3_hasher_finalize(&hasher, out_digest, BLAKE3_OUT_LEN);
-        return 0;
-    }
-
-    /* Borrow the per-tx shared buffers (alloc-once, reuse across shards) when we
-     * have an entry; otherwise fall back to a local alloc. This removes the
-     * per-shard malloc/free that fragmented the heap on big multi-file folders
-     * and that 4-way multi-stream would multiply. The entry's slot mutex is held
-     * across this whole call, so a tx's two buffers have at most one user. */
-    if (entry) {
-        if (!entry->shard_io_buf[0])
-            entry->shard_io_buf[0] = malloc(PS5UPLOAD2_SHARD_IO_BUF);
-        if (!entry->shard_io_buf[1])
-            entry->shard_io_buf[1] = malloc(PS5UPLOAD2_SHARD_IO_BUF);
-        bufs[0] = (unsigned char *)entry->shard_io_buf[0];
-        bufs[1] = (unsigned char *)entry->shard_io_buf[1];
-    } else {
-        bufs[0] = (unsigned char *)malloc(PS5UPLOAD2_SHARD_IO_BUF);
-        bufs[1] = (unsigned char *)malloc(PS5UPLOAD2_SHARD_IO_BUF);
-        owns_bufs = 1;
-    }
-    if (!bufs[0] || !bufs[1]) {
-        if (owns_bufs) {
-            free(bufs[0]);
-            free(bufs[1]);
-        }
-        /* Borrowed buffers (if one allocated, one failed) stay on the entry and
-         * are freed at tx release — don't free them here. */
-        /* (2.9.0) Drain-then-FAIL — was return drain_shard_data(...) which
-         * returns 0 on successful drain. Dispatcher treats 0 as "shard
-         * persisted," ACKs the host, advances last_acked_shard, never
-         * retries — destination file ends up with missing bytes while
-         * the user sees "Upload complete." Silent corruption under PS5
-         * RAM pressure. Always return -1 here so the caller treats it
-         * as a hard write failure. */
-        fprintf(stderr,
-                "[payload2] shard buffer alloc failed (%zu B x2); draining + failing tx\n",
-                (size_t)PS5UPLOAD2_SHARD_IO_BUF);
-        if (entry) entry->last_io_errno = ENOMEM;
-        (void)drain_shard_data(client_fd, data_len);
-        return -1;
-    }
-
-    t_open_start = now_us();
-    /* Truncate on first shard; subsequent shards rely on lseek below to
-     * position into the (already preallocated) file. NEVER O_APPEND for the
-     * multi-file path — see the function header. */
-    flags = O_WRONLY | O_CREAT | (truncate ? O_TRUNC : 0);
-    fd = open(path, flags, 0777);
-    if (fd >= 0) (void)fchmod(fd, 0777);
-    if (fd < 0) {
-        if (entry) entry->last_io_errno = errno;
-        /* Only free LOCALLY-owned buffers. Borrowed (entry) buffers persist on
-         * the tx entry and are freed in runtime_release_tx_resources — freeing
-         * them here left entry->shard_io_buf[] dangling → use-after-free on the
-         * next shard + double-free at teardown (the huge-upload crash). */
-        if (owns_bufs) {
-            free(bufs[0]);
-            free(bufs[1]);
-        }
-        /* Same drain-then-FAIL contract: open() failing while we still
-         * try to drain the wire keeps framing recoverable but the tx
-         * must abort, not silently succeed. */
-        fprintf(stderr,
-                "[payload2] shard open %s failed errno=%d; draining + failing tx\n",
-                path, errno);
-        (void)drain_shard_data(client_fd, data_len);
-        return -1;
-    }
-    /* Position the fd at the correct write offset for this shard. For the
-     * first shard of a file truncate==1 and write_offset==0 (open already left
-     * fd at 0; lseek(0) is a harmless no-op). For subsequent shards we MUST
-     * seek explicitly — the file was preallocated to its full size on shard 1
-     * so SEEK_END would jump to that fallocated tail, not the actual data end.
-     * lseek failure here means we'd corrupt the file by writing at the wrong
-     * offset, so bail out (same drain-then-FAIL contract as open). */
-    if (lseek(fd, (off_t)write_offset, SEEK_SET) == (off_t)-1) {
-        int saved = errno;
-        if (entry) entry->last_io_errno = saved;
-        close(fd);
-        if (owns_bufs) { /* borrowed buffers freed at tx release — see open-fail note */
-            free(bufs[0]);
-            free(bufs[1]);
-        }
-        fprintf(stderr,
-                "[payload2] shard lseek %s to %llu failed errno=%d; draining + failing tx\n",
-                path, (unsigned long long)write_offset, saved);
-        (void)drain_shard_data(client_fd, data_len);
-        return -1;
-    }
-    if (truncate && preallocate_bytes > 0) {
-        /* Pre-allocate REAL blocks via posix_fallocate to avoid the
-         * sustained-write throughput collapse pattern (60 MiB/s → 2-3
-         * MiB/s a few minutes into a multi-GB upload) that plain
-         * ftruncate causes on PS5 UFS by leaving the file sparse and
-         * forcing per-write block-allocation + journal churn. Falls
-         * back to ftruncate on filesystems where fallocate isn't
-         * supported (exfat, fuse). Same migration as
-         * runtime_write_shard_persistent below.
-         *
-         * (2.9.0) Differentiate fallback-on-unsupported from abort-on-
-         * disk-full. ENOSPC means the destination volume CANNOT hold
-         * the file — ftruncate would silently make it sparse, the
-         * shard writes would proceed for the in-cache range, then
-         * fail piecewise much later with no context. Abort the tx
-         * front-loaded so the user sees "destination disk full" now,
-         * not "open <random path>: ENOSPC" 50 GB into a 60 GB upload.
-         * EINVAL / EOPNOTSUPP / ENOTSUP are the legitimate "filesystem
-         * lacks fallocate" codes — those keep the ftruncate fallback.
-         * Other returns (EBADF, EFBIG, EINTR, EIO) are unexpected;
-         * log them and fall back too rather than bail, since the
-         * sparse-file path is functionally correct for most of them. */
-        int prealloc_rc = posix_fallocate(fd, 0, (off_t)preallocate_bytes);
-        if (prealloc_rc == ENOSPC) {
-            fprintf(stderr,
-                    "[payload2] posix_fallocate %s: ENOSPC (need %lld B); aborting tx\n",
-                    path, (long long)preallocate_bytes);
-            if (entry) entry->last_io_errno = ENOSPC;
-            close(fd);
-            if (owns_bufs) { /* borrowed buffers freed at tx release — see open-fail note */
-                free(bufs[0]);
-                free(bufs[1]);
-            }
-            (void)drain_shard_data(client_fd, data_len);
-            return -1;
-        }
-        if (prealloc_rc != 0) {
-            fprintf(stderr,
-                    "[payload2] posix_fallocate %s rc=%d (%s); falling back to ftruncate\n",
-                    path, prealloc_rc, strerror(prealloc_rc));
-            if (ftruncate(fd, (off_t)preallocate_bytes) != 0) {
-                int saved = errno ? errno : EIO;
-                if (entry) entry->last_io_errno = saved;
-                close(fd);
-                if (owns_bufs) {
-                    free(bufs[0]);
-                    free(bufs[1]);
-                }
-                (void)drain_shard_data(client_fd, data_len);
-                return -1;
-            }
-        }
-    }
-    t_open_us = now_us() - t_open_start;
-
-    /* Decide whether to spawn the double-buffered writer thread at all.
-     * For small shards (typical PS5 game-dir file <64 KiB), the pthread
-     * create/join cost dominates — measured at ~4–6 ms per shard on FreeBSD 11,
-     * vs ~20 µs for the 4 KiB write itself. For large shards the overlap
-     * between recv and write is still worth the thread overhead. */
-    if (data_len < PS5UPLOAD2_PIPED_THREAD_MIN_BYTES) {
-        while (remaining > 0) {
-            size_t take = remaining > PS5UPLOAD2_SHARD_IO_BUF
-                            ? PS5UPLOAD2_SHARD_IO_BUF
-                            : (size_t)remaining;
-            uint64_t t0 = now_us();
-            if (recv_exact(client_fd, bufs[0], take) != 0) { rc_ret = -1; break; }
-            t_recv += (now_us() - t0);
-            if (hash_enabled) {
-                uint64_t th = now_us();
-                blake3_hasher_update(&hasher, bufs[0], take);
-                t_hash += (now_us() - th);
-            }
-            if (write_full(fd, bufs[0], take) != 0) {
-                if (entry) entry->last_io_errno = errno;
-                rc_ret = -1;
-                break;
-            }
-            remaining -= (uint64_t)take;
-        }
-        {
-            uint64_t t_close_start = now_us();
-            close(fd);
-            t_close_us = now_us() - t_close_start;
-        }
-        /* HOT PATH (sub-64KiB shard, the common case for folder uploads).
-         * Borrowed (entry) buffers MUST persist for the next shard — freeing
-         * them here is the root cause of the huge-upload crash (UAF next shard +
-         * double-free at tx release). Only free locally-owned buffers. */
-        if (owns_bufs) {
-            free(bufs[0]);
-            free(bufs[1]);
-        }
-        if (hash_enabled) blake3_hasher_finalize(&hasher, out_digest, BLAKE3_OUT_LEN);
-        if (entry && rc_ret == 0) {
-            entry->recv_us       += t_recv;
-            entry->open_us       += t_open_us;
-            entry->close_us      += t_close_us;
-            entry->hash_us       += t_hash;
-            entry->shard_func_us += (now_us() - t_func_start);
-        }
-        return rc_ret;
-    }
-
-    /* Set up double-buffered writer thread so recv and write overlap. */
-    memset(&pw, 0, sizeof(pw));
-    pw.fd = fd;
-    pw.slot[0].buf = bufs[0];
-    pw.slot[1].buf = bufs[1];
-    pthread_mutex_init(&pw.lock, NULL);
-    pthread_cond_init(&pw.cv_full[0], NULL);
-    pthread_cond_init(&pw.cv_full[1], NULL);
-    pthread_cond_init(&pw.cv_empty[0], NULL);
-    pthread_cond_init(&pw.cv_empty[1], NULL);
-    if (create_worker_thread(&writer_tid, piped_writer_thread, &pw) != 0) {
-        /* Fall back to single-buffered in-thread writes if thread create fails. */
-        pthread_mutex_destroy(&pw.lock);
-        pthread_cond_destroy(&pw.cv_full[0]);
-        pthread_cond_destroy(&pw.cv_full[1]);
-        pthread_cond_destroy(&pw.cv_empty[0]);
-        pthread_cond_destroy(&pw.cv_empty[1]);
-        while (remaining > 0) {
-            size_t take = remaining > PS5UPLOAD2_SHARD_IO_BUF
-                            ? PS5UPLOAD2_SHARD_IO_BUF
-                            : (size_t)remaining;
-            if (recv_exact(client_fd, bufs[0], take) != 0) { rc_ret = -1; break; }
-            if (hash_enabled) blake3_hasher_update(&hasher, bufs[0], take);
-            if (write_full(fd, bufs[0], take) != 0) {
-                if (entry) entry->last_io_errno = errno;
-                rc_ret = -1;
-                break;
-            }
-            remaining -= (uint64_t)take;
-        }
-        close(fd);
-        if (owns_bufs) {
-            free(bufs[0]);
-            free(bufs[1]);
-        }
-        if (hash_enabled) blake3_hasher_finalize(&hasher, out_digest, BLAKE3_OUT_LEN);
-        return rc_ret;
-    }
-
-    while (remaining > 0) {
-        uint64_t t0, t1, t2;
-        size_t take = remaining > PS5UPLOAD2_SHARD_IO_BUF
-                        ? PS5UPLOAD2_SHARD_IO_BUF
-                        : (size_t)remaining;
-        /* Wait for the target slot to be free (writer has finished draining it). */
-        t0 = now_us();
-        pthread_mutex_lock(&pw.lock);
-        while (pw.slot[slot].len > 0 && !pw.writer_error) {
-            pthread_cond_wait(&pw.cv_empty[slot], &pw.lock);
-        }
-        if (pw.writer_error) {
-            pthread_mutex_unlock(&pw.lock);
-            rc_ret = -1;
-            break;
-        }
-        pthread_mutex_unlock(&pw.lock);
-        t1 = now_us();
-        t_write_wait += (t1 - t0);
-
-        if (recv_exact(client_fd, pw.slot[slot].buf, take) != 0) {
-            rc_ret = -1;
-            break;
-        }
-        t2 = now_us();
-        t_recv += (t2 - t1);
-
-        if (hash_enabled) {
-            uint64_t t_hash_start = now_us();
-            blake3_hasher_update(&hasher, pw.slot[slot].buf, take);
-            t_hash += (now_us() - t_hash_start);
-        }
-
-        /* Hand slot to writer. */
-        pthread_mutex_lock(&pw.lock);
-        pw.slot[slot].len = (ssize_t)take;
-        pthread_cond_signal(&pw.cv_full[slot]);
-        pthread_mutex_unlock(&pw.lock);
-        slot = 1 - slot;
-        remaining -= (uint64_t)take;
-    }
-
-    /* Signal shutdown on the next slot the writer will pick up. */
-    pthread_mutex_lock(&pw.lock);
-    /* Wait for the sentinel slot to be free before writing it. */
-    while (pw.slot[slot].len > 0 && !pw.writer_error) {
-        pthread_cond_wait(&pw.cv_empty[slot], &pw.lock);
-    }
-    pw.slot[slot].len = -1;
-    pthread_cond_signal(&pw.cv_full[slot]);
-    pthread_mutex_unlock(&pw.lock);
-
-    {
-        uint64_t t_join_start = now_us();
-        pthread_join(writer_tid, NULL);
-        t_join_us = now_us() - t_join_start;
-    }
-    if (pw.writer_error) {
-        if (entry) entry->last_io_errno = pw.writer_errno ? pw.writer_errno : EIO;
-        rc_ret = -1;
-    }
-
-    {
-        uint64_t t_close_start = now_us();
-        close(fd);
-        t_close_us = now_us() - t_close_start;
-    }
-    pthread_mutex_destroy(&pw.lock);
-    pthread_cond_destroy(&pw.cv_full[0]);
-    pthread_cond_destroy(&pw.cv_full[1]);
-    pthread_cond_destroy(&pw.cv_empty[0]);
-    pthread_cond_destroy(&pw.cv_empty[1]);
-    if (owns_bufs) {
-        free(bufs[0]);
-        free(bufs[1]);
-    }
-    if (hash_enabled) blake3_hasher_finalize(&hasher, out_digest, BLAKE3_OUT_LEN);
-    if (entry && rc_ret == 0) {
-        entry->recv_us       += t_recv;
-        /* `write_us` now counts time the producer was blocked waiting on the
-         * writer — roughly the *excess* write time over recv time. A healthy
-         * pipeline has write_us small; if it's large, writes are the limit. */
-        entry->write_us      += t_write_wait;
-        entry->open_us       += t_open_us;
-        entry->join_us       += t_join_us;
-        entry->close_us      += t_close_us;
-        entry->hash_us       += t_hash;
-        entry->shard_func_us += (now_us() - t_func_start);
-    }
-    return rc_ret;
-}
-
-/*
- * Single-file direct-mode persistent-fd shard write path.
- *
- * The first shard opens `entry->tmp_path` with O_TRUNC + ftruncate
- * preallocation (if total_bytes is known), stashes the fd on `entry`, and
- * — if the expected total tx size is large enough to amortise pthread
- * overhead — spawns a long-lived writer thread via direct_writer_start().
- *
- * Every shard pumps recv→hash→slot exactly like the large-shard inner loop
- * of runtime_write_shard_to_path, but without spawning/joining/closing.
- *
- * On write-path I/O failure the caller receives -1; it must then call
- * runtime_abort_tx_fatal (which goes through runtime_release_tx_resources
- * and tears the writer down) — the persistent writer is not safe to reuse
- * after writer_error is set.
- *
- * Small single-file txs (total_bytes below the threshold) keep the fd
- * persistent but do sync writes inline — the writer-thread overhead isn't
- * worth it for a few shards' worth of bytes, and fd reuse still saves the
- * 4× open+close overhead per shard that the old per-shard path paid.
- */
-static int runtime_write_shard_persistent(runtime_tx_entry_t *entry,
-                                           int client_fd,
-                                           uint64_t data_len,
-                                           int is_first_shard,
-                                           uint64_t preallocate_bytes,
-                                           unsigned char *out_digest) {
-    uint64_t remaining = data_len;
-    uint64_t t_recv = 0;
-    uint64_t t_write_wait = 0;
-    uint64_t t_hash = 0;
-    uint64_t t_func_start = now_us();
-    uint64_t t_open_us = 0;
-    uint64_t t_close_us = 0;
-    blake3_hasher hasher;
-    int hash_enabled = (out_digest != NULL);
-    int rc_ret = 0;
-    direct_writer_handle_t *h = NULL;
-    int use_writer_thread = 0;
-    unsigned char *sync_buf = NULL;
-
-    if (!entry) return -1;
-    if (out_digest) memset(out_digest, 0, BLAKE3_OUT_LEN);
-    if (hash_enabled) blake3_hasher_init(&hasher);
-
-    /* Open the tmp file when not already open. Two cases:
-     *
-     *   1. Fresh first shard (is_first_shard=1, direct_fd_open=0):
-     *      open with O_TRUNC + ftruncate-to-total_bytes, optionally
-     *      spawn the writer thread.
-     *
-     *   2. Resume scenario (is_first_shard=0, direct_fd_open=0):
-     *      reopen WITHOUT truncating and seek to the acknowledged byte
-     *      count (entry->bytes_received, restored from the journal), so
-     *      the resumed shards land right after the bytes already on disk
-     *      (ephemeral release intentionally keeps the tmp file). This was
-     *      O_APPEND until the fix in direct_open.h: the fresh path
-     *      pre-sizes the tmp to the full transfer, so appending wrote past
-     *      its end and COMMIT refused the file with size_mismatch. We
-     *      do NOT spawn the writer thread on resume — the producer/
-     *      consumer pattern reuses an in-memory state machine that
-     *      doesn't survive ephemeral teardown, and a one-shot resume
-     *      is rarely throughput-critical anyway (sync fd write is
-     *      enough to drain a few MB of pending data). */
-    if (!entry->direct_fd_open) {
-        int is_resume_open = !is_first_shard;
-        direct_open_plan_t plan = direct_open_plan(is_first_shard, entry->bytes_received);
-        uint64_t t_open_start = now_us();
-        int fd = direct_open_for_shard(entry->tmp_path, plan);
-        if (fd >= 0) (void)fchmod(fd, 0777);
-        if (fd < 0) {
-            /* (2.9.0) Drain-then-FAIL — see runtime_write_shard_to_path
-             * for the silent-corruption-bug context. Was returning
-             * drain_shard_data() rc directly; on a 0 the caller thinks
-             * the shard persisted and ACKs the host. Always return -1
-             * so the tx aborts. */
-            fprintf(stderr, "[payload2] direct persistent: open %s failed errno=%d\n",
-                    entry->tmp_path, errno);
-            entry->last_io_errno = errno;
-            (void)drain_shard_data(client_fd, data_len);
-            return -1;
-        }
-        if (!is_resume_open && preallocate_bytes > 0) {
-            /* Pre-allocate the destination's blocks UP FRONT via
-             * posix_fallocate. The pre-2.2.29 path used ftruncate
-             * which on PS5 UFS creates a sparse file — every write
-             * to a previously-unallocated block has to bring in a
-             * fresh block, journal the bitmap update, and dirty an
-             * indirect block. For multi-GB uploads (game images,
-             * 30+ GB UFS .ffpkgs) the dirty-buffer pressure
-             * eventually trips the kernel's throttle and per-shard
-             * throughput collapses from ~60 MiB/s to ~2-3 MiB/s
-             * a few minutes into the transfer. posix_fallocate
-             * pre-allocates all blocks in one batch — subsequent
-             * shard writes only update content, no metadata churn.
-             *
-             * Falls back to ftruncate if fallocate isn't supported
-             * by the destination filesystem (exfat / fuse / NFS),
-             * matching the pattern cp_rf already uses. The fallback
-             * preserves the file-size semantic even on exfat where
-             * sparse-file cost is lower (FAT-family doesn't journal
-             * metadata block-by-block).
-             *
-             * (2.9.0) Differentiate ENOSPC from "unsupported." See
-             * runtime_write_shard_to_path for the same rationale —
-             * ENOSPC at the front of a 60 GB upload is information
-             * the user needs NOW, not 50 GB later via a misleading
-             * "open failed" message piecewise. */
-            int prealloc_rc = posix_fallocate(fd, 0, (off_t)preallocate_bytes);
-            if (prealloc_rc == ENOSPC) {
-                fprintf(stderr,
-                        "[payload2] direct persistent posix_fallocate %s: ENOSPC "
-                        "(need %lld B); aborting tx\n",
-                        entry->tmp_path, (long long)preallocate_bytes);
-                entry->last_io_errno = ENOSPC;
-                close(fd);
-                (void)drain_shard_data(client_fd, data_len);
-                return -1;
-            }
-            if (prealloc_rc != 0) {
-                fprintf(stderr,
-                        "[payload2] direct persistent posix_fallocate %s rc=%d (%s); "
-                        "falling back to ftruncate\n",
-                        entry->tmp_path, prealloc_rc, strerror(prealloc_rc));
-                if (ftruncate(fd, (off_t)preallocate_bytes) != 0) {
-                    entry->last_io_errno = errno ? errno : EIO;
-                    close(fd);
-                    (void)drain_shard_data(client_fd, data_len);
-                    return -1;
-                }
-            }
-        }
-        /* posix_fadvise(SEQUENTIAL) was experimented with here; measured
-         * neutral-to-slightly-negative on the e1000 lab NIC and produced no
-         * observable benefit on huge-file throughput (already NIC-bound).
-         * Removed to avoid any chance of unexpected kernel-scheduler
-         * interactions. See bench/reports/2026-04-18T01* for the A/B data. */
-        entry->direct_fd      = fd;
-        entry->direct_fd_open = 1;
-        t_open_us = now_us() - t_open_start;
-
-        /* Spawn the writer thread only on the fresh-first-shard path
-         * AND only if the tx is big enough to amortise pthread
-         * create/join cost. Resume-open uses sync writes (see comment
-         * above the open). */
-        if (!is_resume_open &&
-            entry->total_bytes >= PS5UPLOAD2_PIPED_THREAD_MIN_BYTES) {
-            if (direct_writer_start(entry, fd) != 0) {
-                /* Fall back to sync writes on a persistent fd — slower but
-                 * functionally correct. Don't close fd; entry owns it. */
-                fprintf(stderr, "[payload2] direct persistent: writer start failed, sync fallback\n");
-            }
-        }
-    }
-
-    if (entry->direct_writer) {
-        h = (direct_writer_handle_t *)entry->direct_writer;
-        use_writer_thread = 1;
-    }
-
-    if (data_len == 0) {
-        if (hash_enabled) blake3_hasher_finalize(&hasher, out_digest, BLAKE3_OUT_LEN);
-        if (entry) {
-            entry->open_us       += t_open_us;
-            entry->shard_func_us += (now_us() - t_func_start);
-        }
-        return 0;
-    }
-
-    if (!use_writer_thread) {
-        /* Sync write path — one reusable buffer, persistent fd. */
-        sync_buf = (unsigned char *)malloc(PS5UPLOAD2_SHARD_IO_BUF);
-        if (!sync_buf) {
-            /* (2.9.0) Drain-then-FAIL — see runtime_write_shard_to_path
-             * for context. The pre-2.9.0 code path returned 0 to the
-             * dispatcher on a successful drain, leading to silent
-             * shard-loss corruption under PS5 RAM pressure. */
-            fprintf(stderr,
-                    "[payload2] direct persistent: sync_buf alloc failed (%zu B); failing tx\n",
-                    (size_t)PS5UPLOAD2_SHARD_IO_BUF);
-            entry->last_io_errno = ENOMEM;
-            (void)drain_shard_data(client_fd, data_len);
-            return -1;
-        }
-        while (remaining > 0) {
-            size_t take = remaining > PS5UPLOAD2_SHARD_IO_BUF
-                            ? PS5UPLOAD2_SHARD_IO_BUF
-                            : (size_t)remaining;
-            uint64_t t0 = now_us();
-            if (recv_exact(client_fd, sync_buf, take) != 0) { rc_ret = -1; break; }
-            t_recv += (now_us() - t0);
-            if (hash_enabled) {
-                uint64_t th = now_us();
-                blake3_hasher_update(&hasher, sync_buf, take);
-                t_hash += (now_us() - th);
-            }
-            if (write_full(entry->direct_fd, sync_buf, take) != 0) {
-                entry->last_io_errno = errno;
-                rc_ret = -1; break;
-            }
-            remaining -= (uint64_t)take;
-        }
-        free(sync_buf);
-        if (hash_enabled) blake3_hasher_finalize(&hasher, out_digest, BLAKE3_OUT_LEN);
-        if (rc_ret == 0) {
-            entry->recv_us       += t_recv;
-            entry->open_us       += t_open_us;
-            entry->hash_us       += t_hash;
-            entry->shard_func_us += (now_us() - t_func_start);
-        }
-        return rc_ret;
-    }
-
-    /* Persistent writer-thread path — reuse pw.slot[direct_slot] across
-     * shards. The writer's internal slot counter and our direct_slot both
-     * advance 0→1→0 in lockstep, so as long as neither side re-initializes
-     * they stay aligned across shards. */
-    while (remaining > 0) {
-        int slot = entry->direct_slot;
-        uint64_t t0, t1, t2;
-        size_t take = remaining > PS5UPLOAD2_SHARD_IO_BUF
-                        ? PS5UPLOAD2_SHARD_IO_BUF
-                        : (size_t)remaining;
-        t0 = now_us();
-        pthread_mutex_lock(&h->pw.lock);
-        while (h->pw.slot[slot].len > 0 && !h->pw.writer_error) {
-            pthread_cond_wait(&h->pw.cv_empty[slot], &h->pw.lock);
-        }
-        if (h->pw.writer_error) {
-            entry->last_io_errno = h->pw.writer_errno ? h->pw.writer_errno : EIO;
-            pthread_mutex_unlock(&h->pw.lock);
-            rc_ret = -1;
-            break;
-        }
-        pthread_mutex_unlock(&h->pw.lock);
-        t1 = now_us();
-        t_write_wait += (t1 - t0);
-
-        if (recv_exact(client_fd, h->pw.slot[slot].buf, take) != 0) {
-            rc_ret = -1;
-            break;
-        }
-        t2 = now_us();
-        t_recv += (t2 - t1);
-
-        if (hash_enabled) {
-            uint64_t t_hash_start = now_us();
-            blake3_hasher_update(&hasher, h->pw.slot[slot].buf, take);
-            t_hash += (now_us() - t_hash_start);
-        }
-
-        pthread_mutex_lock(&h->pw.lock);
-        h->pw.slot[slot].len = (ssize_t)take;
-        pthread_cond_signal(&h->pw.cv_full[slot]);
-        pthread_mutex_unlock(&h->pw.lock);
-        entry->direct_slot = 1 - slot;
-        remaining -= (uint64_t)take;
-    }
-
-    if (hash_enabled) blake3_hasher_finalize(&hasher, out_digest, BLAKE3_OUT_LEN);
-    /* Note: close_us stays 0 for persistent path — fd only closes at COMMIT. */
-    (void)t_close_us;
-    if (rc_ret == 0) {
-        entry->recv_us       += t_recv;
-        entry->write_us      += t_write_wait;
-        entry->open_us       += t_open_us;
-        entry->hash_us       += t_hash;
-        entry->shard_func_us += (now_us() - t_func_start);
-    }
-    return rc_ret;
-}
-
-/* Spool-path wrapper (kept for fallback when direct mode is not engaged). */
-static int runtime_write_shard_data(runtime_tx_entry_t *entry,
-                                     uint64_t shard_seq,
-                                     int client_fd,
-                                     uint64_t data_len,
-                                     unsigned char *out_digest) {
-    char spool_dir[512];
-    char path[512];
-    if (!entry) return drain_shard_data(client_fd, data_len);
-    snprintf(spool_dir, sizeof(spool_dir), "%s/spool_%s",
-             PS5UPLOAD2_SPOOL_DIR, entry->tx_id_hex);
-    if (ensure_dir(spool_dir) != 0) {
-        return drain_shard_data(client_fd, data_len);
-    }
-    snprintf(path, sizeof(path), "%s/%llu",
-             spool_dir, (unsigned long long)shard_seq);
-    /* Spool shard file is always a fresh single-shard write — truncate +
-     * preallocate `data_len`, write at offset 0. */
-    return runtime_write_shard_to_path(entry, path, 1, data_len,
-                                        /*write_offset=*/0,
-                                        client_fd, data_len, out_digest);
-}
-
-/* ── Apply + cleanup ──────────────────────────────────────────────────────────── */
-
-/*
- * mkdir -p for all ancestor directories of `path`.
- * Does not create `path` itself (assumes it is a file, not a dir).
- */
-static int ensure_parent_dir(const char *path) {
-    char tmp[512];
-    char *p = NULL;
-    size_t len = 0;
-    if (!path || !*path) return -1;
-    len = strlen(path);
-    if (len >= sizeof(tmp)) return -1;
-    memcpy(tmp, path, len + 1);
-    /* Find the last slash to isolate the directory part. */
-    p = tmp + len - 1;
-    while (p > tmp && *p != '/') p--;
-    if (p == tmp) return 0; /* no parent directory */
-    *p = '\0'; /* truncate to parent path */
-    /* Walk forward and mkdir each component. */
-    for (p = tmp + 1; *p; p++) {
-        if (*p == '/') {
-            *p = '\0';
-            if (mkdir(tmp, 0777) != 0 && errno != EEXIST) return -1;
-            *p = '/';
-        }
-    }
-    if (mkdir(tmp, 0777) != 0 && errno != EEXIST) return -1;
-    return 0;
-}
-
-
-/*
- * ensure_parent_dir() but backed by a single-slot cache on the tx entry.
- * For N files in the same directory (common in game dirs — 10s of siblings
- * per dir), only the first pays the mkdir walk. Subsequent calls just
- * strncmp the cached dirname against the new path's dirname.
- */
-static int ensure_parent_dir_cached(runtime_tx_entry_t *entry,
-                                     const char *path) {
-    const char *slash;
-    size_t dir_len;
-    if (!path || !*path) return -1;
-    /* Locate the dirname boundary without building a temp buffer. */
-    slash = path + strlen(path);
-    while (slash > path && *(slash - 1) != '/') slash -= 1;
-    /* slash now points one past the last '/', so dir = [path, slash). */
-    if (slash == path) return 0; /* no parent */
-    dir_len = (size_t)((slash - 1) - path);
-    if (dir_len == 0) return 0; /* root */
-    if (entry && dir_len < sizeof(entry->last_parent_dir)) {
-        if (entry->last_parent_dir[0] &&
-            strlen(entry->last_parent_dir) == dir_len &&
-            memcmp(entry->last_parent_dir, path, dir_len) == 0) {
-            return 0; /* hit */
-        }
-    }
-    if (ensure_parent_dir(path) != 0) return -1;
-    if (entry && dir_len < sizeof(entry->last_parent_dir)) {
-        memcpy(entry->last_parent_dir, path, dir_len);
-        entry->last_parent_dir[dir_len] = '\0';
-    }
-    return 0;
-}
-
-/*
- * Manifest file entry parsed from the "files" JSON array.
- */
-struct manifest_file_entry {
-    char path[512];
-    uint64_t shard_start; /* 1-based, first shard for this file */
-    uint64_t shard_count; /* number of shards carrying this file */
-    uint64_t size;        /* expected file size in bytes (0 if absent) */
-};
-typedef struct manifest_file_entry manifest_file_entry_t;
-
-/*
- * Compact, parsed-once representation of a manifest file entry.
- * `path_offset` / `path_len` point into the owning entry's `manifest_blob`
- * heap buffer, so the full manifest JSON must outlive this index.
- * 32 bytes per entry — 223k files → 7.1 MiB of index on PS5 heap.
- */
-struct manifest_index_entry {
-    uint64_t shard_start;   /* 1-based, first shard carrying this file */
-    uint32_t shard_count;   /* >= 1 */
-    uint32_t path_offset;   /* offset into manifest_blob */
-    uint32_t path_len;      /* length of the path in bytes */
-    uint32_t _reserved;
-    uint64_t size;          /* file size in bytes (informational) */
-    /* IN-MEMORY ONLY (not journaled). Per-tx running offset for the next
-     * write into this file's `.ps5up2-tmp`. Lets the multi-file direct write
-     * path posix_fallocate(size) on the first shard + write each subsequent
-     * shard at the correct byte offset, instead of using O_APPEND. The old
-     * O_APPEND model couldn't preallocate (fallocate extends file size, but
-     * O_APPEND writes go to EOF) and caused UFS throughput collapse on multi-
-     * GB files mid-transfer — the same failure mode the single-file persistent
-     * writer was fixed for in 2.2.29. Reset to 0 on every fresh BEGIN_TX
-     * (calloc'd by build_manifest_index) and on resume-rebuild; the resume
-     * reconcile clamps the cursor to a file boundary so a re-sent file always
-     * starts at offset 0 anyway. */
-    uint64_t bytes_written;
-};
-
-/*
- * Parse "files":[ … ] once from `blob` into a heap-allocated index sorted by
- * shard_start. Writes `*out_index` / `*out_count` on success. On any failure
- * (no files array, bad JSON, entry count > limit, OOM) frees partial work
- * and returns -1.
- *
- * `blob` is consumed by offset (not copied) — the caller must keep it alive
- * as long as the returned index is used.
- */
-static int build_manifest_index(const char *blob, size_t blob_len,
-                                uint64_t expected_count,
-                                manifest_index_entry_t **out_index,
-                                uint64_t *out_count) {
-    const char *p = NULL;
-    const char *arr_start = NULL;
-    manifest_index_entry_t *idx = NULL;
-    uint64_t cap = 0;
-    uint64_t n = 0;
-
-    if (!blob || !out_index || !out_count) return -1;
-    *out_index = NULL;
-    *out_count = 0;
-    if (expected_count == 0 || expected_count > PS5UPLOAD2_MAX_MANIFEST_FILES) {
-        return -1;
-    }
-    /* `expected_count` (the client's `file_count`) sizes the calloc below.
-     * The smallest possible manifest entry is several bytes of JSON, so a
-     * blob of length `blob_len` cannot describe more than `blob_len`
-     * entries — a count larger than that is malformed (or a crafted
-     * "tiny body, huge count" request aimed at reserving 40 MB). Reject it
-     * so the allocation stays proportional to data actually transmitted. */
-    if (blob_len > 0 && expected_count > (uint64_t)blob_len) {
-        return -1;
-    }
-
-    p = strstr(blob, "\"files\":");
-    if (!p) return -1;
-    p = strchr(p, '[');
-    if (!p) return -1;
-    arr_start = p + 1;
-
-    /* Allocate to exact expected count so we never realloc mid-parse. If the
-     * JSON has fewer entries than expected, we shrink `n` at the end; more
-     * entries than expected is a malformed manifest. */
-    cap = expected_count;
-    idx = (manifest_index_entry_t *)calloc((size_t)cap, sizeof(*idx));
-    if (!idx) return -1;
-
-    p = arr_start;
-    while (n < cap) {
-        const char *obj_start;
-        const char *obj_end;
-        uint64_t s_start;
-        uint64_t s_count;
-        uint64_t s_size;
-        const char *path_key;
-        const char *path_value_start;
-        const char *path_value_end;
-        size_t plen;
-
-        obj_start = strchr(p, '{');
-        if (!obj_start) break;
-        /* Brace-aware object end: a file path containing a literal '}'
-         * (valid, and emitted unescaped by the engine's serializer) must
-         * not be mistaken for the object terminator. See json_object_end. */
-        obj_end = json_object_end(obj_start, blob_len ? blob + blob_len : NULL);
-        if (!obj_end) { free(idx); return -1; }
-
-        /* Extract shard_start / shard_count from within this object only.
-         * Per-object isolation matters: a malformed/crafted manifest where
-         * one object's `shard_start` is missing would otherwise cause
-         * extract_json_uint64_field's unbounded strstr to skip ahead and
-         * read the NEXT object's value, silently aliasing the two. We
-         * make a NUL-terminated stack copy of just the object slice so
-         * the helper's strstr can't escape past obj_end. */
-        {
-            char obj_buf[1024];
-            size_t obj_len = (size_t)(obj_end - obj_start) + 1; /* include '}' */
-            if (obj_len >= sizeof(obj_buf)) {
-                /* Object larger than our stack buffer — no real manifest
-                 * has 1KB+ per-file metadata (~150B typical, includes
-                 * up-to-512B path). Reject as malformed. */
-                free(idx); return -1;
-            }
-            memcpy(obj_buf, obj_start, obj_len);
-            obj_buf[obj_len] = '\0';
-            s_start = extract_json_uint64_field(obj_buf, "shard_start");
-            s_count = extract_json_uint64_field(obj_buf, "shard_count");
-            /* `size` MUST be read from the bounded object slice too. The
-             * unbounded variant (extract_json_uint64_field(obj_start, …))
-             * silently reads the NEXT object's `size` when this object
-             * lacks one — and `idx[].size` is the value the COMMIT-time
-             * integrity check trusts to detect a short/corrupt file, so a
-             * stale read there could validate a truncated file against the
-             * wrong size and let corruption pass as success. Same isolation
-             * rationale as shard_start/shard_count above. */
-            s_size  = extract_json_uint64_field(obj_buf, "size");
-            if (s_count == 0) s_count = 1;
-        }
-        if (s_start == 0) { free(idx); return -1; }
-        /* Reject ranges that would overflow at the lookup site
-         * (`shard_seq - s >= ec` is overflow-safe, but a sane manifest
-         * never has shard_start anywhere near UINT64_MAX so a high
-         * value indicates a malformed/malicious manifest — reject
-         * outright). The sender's own engine cap is well below 2^32. */
-        if (s_start > UINT64_MAX - s_count) { free(idx); return -1; }
-
-        /* Locate "path":"..." inside this object. We find the opening quote
-         * after the key, then the closing quote. The path must not contain
-         * escaped quotes — the writer never emits those. */
-        path_key = strstr(obj_start, "\"path\":\"");
-        if (!path_key || path_key >= obj_end) { free(idx); return -1; }
-        path_value_start = path_key + strlen("\"path\":\"");
-        path_value_end = path_value_start;
-        path_value_end = json_string_end(path_value_start, obj_end);
-        if (!path_value_end) { free(idx); return -1; }
-        plen = (size_t)(path_value_end - path_value_start);
-        if (plen == 0 || plen >= 512) { free(idx); return -1; }
-
-        /* Validate every manifest file path against the writable-roots
-         * allowlist (is_path_allowed also rejects ".." components and any
-         * absolute path outside the allowed roots, even for not-yet-created
-         * destinations). BEGIN_TX validates dest_root and handle_packed_shard
-         * validates packed per-record paths, but the multi-file DIRECT writer
-         * (handle_stream_shard) and the SPOOL apply (runtime_apply_spool)
-         * consume these `files[].path` entries straight from the manifest —
-         * without this, a crafted manifest with an absolute path like
-         * /system_ex/... would let any LAN client write outside the allowed
-         * roots through the elevated payload. Reject the whole tx on any bad
-         * path so a single poisoned entry can't be partially applied. */
-        {
-            char pbuf[512];
-            memcpy(pbuf, path_value_start, plen);
-            pbuf[plen] = '\0';
-            if (!is_path_allowed(pbuf)) {
-                free(idx);
-                return -1;
-            }
-        }
-
-        idx[n].shard_start = s_start;
-        idx[n].shard_count = (uint32_t)s_count;
-        idx[n].path_offset = (uint32_t)(path_value_start - blob);
-        idx[n].path_len    = (uint32_t)plen;
-        idx[n].size        = s_size;
-        n += 1;
-
-        /* Ordering tolerance: we require only non-decreasing shard_start.
-         * Packed shards deliberately share a shard_start across many file
-         * entries (all records live in the same STREAM_SHARD frame), so
-         * strict inequality would reject valid manifests. Non-packed shards
-         * whose ranges genuinely overlap would be a host bug — but packed
-         * shards bypass the index entirely in handle_stream_shard, so a
-         * misrouted lookup there is harmless. */
-        if (n > 1 && idx[n - 1].shard_start < idx[n - 2].shard_start) {
-            free(idx);
-            return -1;
-        }
-
-        p = obj_end + 1;
-        /* Allow blob_len to bound the scan (defence-in-depth vs. missing NUL). */
-        if (blob_len > 0 && (size_t)(p - blob) >= blob_len) break;
-    }
-
-    if (n == 0) { free(idx); return -1; }
-
-    *out_index = idx;
-    *out_count = n;
-    return 0;
-}
-
-/*
- * Binary-search the sorted index for the file entry that owns `shard_seq`.
- * Returns 0 and fills `out` (including copying the path out of `blob` into
- * `out->path`) on success; -1 if no entry covers the shard.
- *
- * Both arithmetic comparisons are written so they cannot overflow even
- * against a maliciously crafted manifest where shard_start is near
- * UINT64_MAX. `shard_seq - s` is only computed under `shard_seq >= s`,
- * and the matched range is bounded with a path-offset/length check
- * against `blob_len` to prevent an out-of-bounds memcpy.
- */
-static int lookup_manifest_index(const manifest_index_entry_t *idx,
-                                 uint64_t count,
-                                 const char *blob,
-                                 size_t blob_len,
-                                 uint64_t shard_seq,
-                                 manifest_file_entry_t *out) {
-    uint64_t lo = 0;
-    uint64_t hi;
-    if (!idx || count == 0 || !blob || !out) return -1;
-    hi = count;
-    while (lo < hi) {
-        uint64_t mid = lo + (hi - lo) / 2;
-        uint64_t s  = idx[mid].shard_start;
-        uint64_t ec = idx[mid].shard_count > 0 ? idx[mid].shard_count : 1;
-        if (shard_seq < s) {
-            hi = mid;
-        } else if (shard_seq - s >= ec) {
-            /* shard_seq >= s ensures the subtraction is safe; this
-             * replaces the old `shard_seq >= s + ec` which could wrap
-             * if a malicious manifest set shard_start near UINT64_MAX. */
-            lo = mid + 1;
-        } else {
-            size_t plen = idx[mid].path_len;
-            uint32_t poff = idx[mid].path_offset;
-            if (plen >= sizeof(out->path)) return -1;
-            /* Bounds-check path_offset + plen against the manifest
-             * blob length so a crafted index can't cause an
-             * out-of-bounds read. The build_manifest_index parser
-             * keeps these inside the blob in normal operation, but
-             * defence-in-depth guards against a future bug or an
-             * already-corrupted manifest_index allocation. */
-            if (blob_len > 0 &&
-                ((uint64_t)poff > blob_len ||
-                 (uint64_t)poff + (uint64_t)plen > blob_len)) {
-                return -1;
-            }
-            memset(out, 0, sizeof(*out));
-            if (json_copy_unescaped_string(blob + poff, blob + poff + plen,
-                                           out->path, sizeof(out->path)) != 0) {
-                return -1;
-            }
-            out->shard_start = s;
-            out->shard_count = ec;
-            out->size        = idx[mid].size;
-            return 0;
-        }
-    }
-    return -1;
-}
-
-/*
- * Free the heap-owned manifest state on a tx entry. Safe to call repeatedly
- * and on entries that never had a manifest (everything is NULL-checked).
- * Called on every terminal transition and on eviction of a terminal slot.
- */
-static void runtime_release_tx_resources(runtime_tx_entry_t *entry) {
-    if (!entry) return;
-    /* Persistent direct-write cleanup: discards any in-flight writer +
-     * closes the fd if still open. This is called from every terminal
-     * transition (COMMIT after rename, ABORT, takeover/shutdown fan-out,
-     * abort_tx_fatal). COMMIT's success path has already renamed the tmp
-     * to dest_root before we get here, so unlink below is a no-op there.
-     * For every other path, the tmp is stale and must be removed so
-     * `.ps5up2-tmp` files do not survive a terminal transition. */
-    direct_writer_discard(entry);
-    /* Packed-shard worker pool teardown: drain + shutdown + join; fold
-     * per-worker timings into the entry so the next COMMIT_TX_ACK can
-     * report them. Must happen BEFORE the tmp unlink below so in-flight
-     * worker writes cannot race with our cleanup. */
-    pack_pool_teardown(entry);
-    if (entry->direct_mode && entry->tmp_path[0]) {
-        (void)unlink(entry->tmp_path);
-    }
-    if (entry->manifest_index) {
-        free(entry->manifest_index);
-        entry->manifest_index = NULL;
-    }
-    entry->manifest_index_count = 0;
-    if (entry->manifest_blob) {
-        free(entry->manifest_blob);
-        entry->manifest_blob = NULL;
-    }
-    entry->manifest_blob_len = 0;
-    if (entry->shard_log_fp) {
-        fclose((FILE *)entry->shard_log_fp);
-        entry->shard_log_fp = NULL;
-    }
-    /* Free the per-tx shared multi-file shard buffers (see runtime.h). NULLed so
-     * a reused slot re-allocs lazily. free(NULL) is a no-op. */
-    free(entry->shard_io_buf[0]);
-    free(entry->shard_io_buf[1]);
-    entry->shard_io_buf[0] = NULL;
-    entry->shard_io_buf[1] = NULL;
-    entry->last_parent_dir[0] = '\0';
-}
-
-/*
- * Ephemeral-release: clear only thread-bound / heap state that the next
- * BEGIN_TX (resume) cannot rebuild from the journal. Specifically:
- *   - drain + destroy the persistent direct writer
- *   - drain + destroy the packed-shard worker pool (folds timings back in)
- *   - close the shard-log fd
- * Preserves:
- *   - entry->tmp_path on disk (holds partial shard data)
- *   - entry->manifest_blob / manifest_index (rebuilding on resume is
- *     wasted work at best and an OOM risk at worst on constrained heaps)
- *   - shards_received / bytes_received / dest_root (resume needs these)
- *
- * Used by the interrupt paths (connection drop, takeover, shutdown). Matches
- * the pattern used by `runtime_release_tx_resources` minus the tmp unlink
- * and heap free. */
-static void runtime_release_tx_resources_ephemeral(runtime_tx_entry_t *entry) {
-    if (!entry) return;
-    direct_writer_discard(entry);
-    pack_pool_teardown(entry);
-    if (entry->shard_log_fp) {
-        fclose((FILE *)entry->shard_log_fp);
-        entry->shard_log_fp = NULL;
-    }
-    /* Free the shared shard buffers on interrupt too — a resume re-allocs them
-     * lazily on its first non-packed shard. Reclaims 8 MiB/tx promptly. */
-    free(entry->shard_io_buf[0]);
-    free(entry->shard_io_buf[1]);
-    entry->shard_io_buf[0] = NULL;
-    entry->shard_io_buf[1] = NULL;
-    entry->last_parent_dir[0] = '\0';
-}
-
-/*
- * Mark a tx as fatally aborted from a mid-lifecycle error path.
- * Decrements active_transactions, sets state to "aborted", flushes the JSON
- * record, releases manifest heap state, saves summary. Balances the
- * `active_transactions += 1` that BEGIN_TX did up front so a run of broken
- * requests doesn't leak the active counter.
- *
- * Safe to call on an entry that may or may not already have manifest state.
- */
-static void runtime_abort_tx_fatal(runtime_state_t *state,
-                                    runtime_tx_entry_t *entry) {
-    if (!state || !entry) return;
-    pthread_mutex_lock(&state->state_mtx);
-    if (state->active_transactions > 0) state->active_transactions -= 1;
-    pthread_mutex_unlock(&state->state_mtx);
-    snprintf(entry->state, sizeof(entry->state), "aborted");
-    (void)runtime_flush_tx_record(state, entry);
-    runtime_release_tx_resources(entry);
-    (void)runtime_save_tx_state(state);
-}
-
-/* (manifest_find_file_for_shard removed — superseded by build_manifest_index +
- * lookup_manifest_index, which are O(log N) per shard instead of O(N).) */
-
-/*
- * Parse the Nth (0-based) file entry from a JSON "files" array.
- * Extracts "path", "shard_start", and "shard_count".
- * Returns 0 on success, -1 if the Nth entry is not found.
- */
-static int manifest_get_nth_file_path(const char *json, uint64_t n,
-                                       manifest_file_entry_t *out) {
-    const char *p = json;
-    uint64_t idx = 0;
-    /* Find "files":[ then scan for the Nth object. */
-    p = strstr(p, "\"files\":");
-    if (!p) return -1;
-    p = strchr(p, '[');
-    if (!p) return -1;
-    p++;
-    for (idx = 0; ; idx++) {
-        const char *obj_start = strchr(p, '{');
-        if (!obj_start) return -1;
-        p = obj_start + 1;
-        if (idx == n) {
-            memset(out, 0, sizeof(*out));
-            extract_json_string_field(obj_start, "path", out->path, sizeof(out->path));
-            out->shard_start = extract_json_uint64_field(obj_start, "shard_start");
-            out->shard_count = extract_json_uint64_field(obj_start, "shard_count");
-            out->size        = extract_json_uint64_field(obj_start, "size");
-            /* shard_count defaults to 1 if absent (old format compat). */
-            if (out->shard_count == 0) out->shard_count = 1;
-            if (!out->path[0]) return -1;
-            /* Same writable-roots/".." guard as build_manifest_index: the
-             * spool apply path (runtime_apply_spool) fopen()s out->path
-             * directly, so a manifest path outside the allowed roots would
-             * otherwise be an arbitrary file write. */
-            if (!is_path_allowed(out->path)) return -1;
-            return 0;
-        }
-        /* Skip past this object's closing brace. Brace-aware (not strchr)
-         * so a '}' inside an earlier entry's path can't mis-count which
-         * object we're on. Manifest is NUL-terminated → NULL limit is fine. */
-        {
-            const char *obj_end = json_object_end(obj_start, NULL);
-            if (!obj_end) return -1;
-            p = obj_end + 1;
-        }
-    }
-}
-
-/*
- * Read the persisted manifest JSON into a heap-allocated buffer sized to
- * the on-disk file. Caller owns the returned pointer and must `free()` it.
- *
- * Returns 0 on success with `*out_buf` and `*out_len` populated, -1 on
- * file-missing/unreadable/oversize/oom (in which case `*out_buf` is NULL).
- *
- * `PS5UPLOAD2_MAX_MANIFEST_BLOB` (128 MiB) caps the read — a manifest
- * past that size is presumed corrupt or hostile.
- *
- * Why this exists: the spool fallback used to use a `char[8192]` stack
- * buffer with `runtime_read_manifest`, which silently truncated any
- * manifest larger than ~60 file entries — exactly the same bug 2.1
- * fixed in the direct-mode path with a heap-allocated `manifest_blob`.
- * Spool wasn't migrated; this function closes that gap.
- */
-static int runtime_read_manifest_alloc(const runtime_tx_entry_t *entry,
-                                        char **out_buf, size_t *out_len) {
-    char path[512];
-    FILE *fp = NULL;
-    long fsize = 0;
-    char *buf = NULL;
-    size_t got = 0;
-    if (!entry || !out_buf || !out_len) return -1;
-    *out_buf = NULL;
-    *out_len = 0;
-    snprintf(path, sizeof(path), "%s/manifest_%s.json",
-             PS5UPLOAD2_TX_DIR, entry->tx_id_hex);
-    fp = fopen(path, "rb");
-    if (!fp) return -1;
-    if (fseek(fp, 0, SEEK_END) != 0) {
-        fclose(fp);
-        return -1;
-    }
-    fsize = ftell(fp);
-    if (fsize <= 0 || (uint64_t)fsize > PS5UPLOAD2_MAX_MANIFEST_BLOB) {
-        fprintf(stderr, "[payload2] manifest file size out of range: %ld bytes for tx %s\n",
-                fsize, entry->tx_id_hex);
-        fclose(fp);
-        return -1;
-    }
-    rewind(fp);
-    buf = (char *)malloc((size_t)fsize + 1);
-    if (!buf) {
-        fclose(fp);
-        return -1;
-    }
-    got = fread(buf, 1, (size_t)fsize, fp);
-    fclose(fp);
-    if (got != (size_t)fsize) {
-        free(buf);
-        return -1;
-    }
-    buf[fsize] = '\0';
-    *out_buf = buf;
-    *out_len = (size_t)fsize;
-    return 0;
-}
-
-/*
- * Persist the manifest JSON to disk during BEGIN_TX so apply can use it.
- */
-static int runtime_write_manifest(const runtime_tx_entry_t *entry,
-                                   const char *manifest_json,
-                                   size_t manifest_len) {
-    char path[512];
-    FILE *fp = NULL;
-    if (!entry || !manifest_json || manifest_len == 0) return -1;
-    snprintf(path, sizeof(path), "%s/manifest_%s.json",
-             PS5UPLOAD2_TX_DIR, entry->tx_id_hex);
-    fp = fopen(path, "w");
-    if (!fp) return -1;
-    fwrite(manifest_json, 1, manifest_len, fp);
-    fclose(fp);
-    return 0;
-}
-
-/*
- * After a successful COMMIT_TX: apply spooled shards to the filesystem.
- *
- * Single-file (kind==1, !multi_file):
- *   Concatenate shards 1..shards_received into dest_root.
- *
- * Multi-file (kind==2, multi_file — may carry a single file):
- *   Read the persisted manifest; shard K maps to files[K-1].path.
- *   Each shard is a complete file (one shard per file).
- *
- * Parent directories are created as needed.
- */
-/* Helper: throttled emission of an APPLY_PROGRESS frame.
- *
- * State (last_emit_us / last_emit_fi / bytes_running_total) is kept in
- * caller-owned variables so multiple invocations share rate-limiting.
- * Emits when:
- *   - last emit was >= 1 sec ago, OR
- *   - >= 1024 files have been applied since last emit, OR
- *   - `force` is set (used at the very start + end so the client sees
- *     motion immediately and a final "done" frame).
- *
- * On send failure (client disconnected mid-apply) we DO NOT propagate
- * the error — apply must continue regardless. The client's commit-wait
- * loop will see EOF on the connection and surface a real failure if
- * the disconnect was genuine, but we don't want a single missed
- * progress frame to abort an in-progress commit.
- *
- * Returns 0 if a frame was emitted (or skipped by throttling), -1 on
- * encoding error. Callers ignore the return value.
- */
-static int runtime_emit_apply_progress(int client_fd,
-                                       uint64_t trace_id,
-                                       uint64_t files_applied,
-                                       uint64_t total_files,
-                                       uint64_t bytes_applied,
-                                       uint64_t *last_emit_us,
-                                       uint64_t *last_emit_fi,
-                                       int force) {
-    if (client_fd < 0) return 0;
-    uint64_t now = now_us();
-    uint64_t since_us = (last_emit_us && *last_emit_us > 0)
-        ? (now - *last_emit_us) : (uint64_t)-1;
-    uint64_t since_fi = (last_emit_fi)
-        ? (files_applied - *last_emit_fi) : files_applied;
-    /* Throttle: at most one frame per second or per 1024 files,
-     * whichever first. Always emit on `force` (first and last). */
-    if (!force && since_us < 1000000ULL && since_fi < 1024ULL) {
-        return 0;
-    }
-    char body[160];
-    int n = snprintf(body, sizeof(body),
-        "{\"files_applied\":%llu,\"total_files\":%llu,\"bytes_applied\":%llu}",
-        (unsigned long long)files_applied,
-        (unsigned long long)total_files,
-        (unsigned long long)bytes_applied);
-    if (n <= 0 || (size_t)n >= sizeof(body)) return -1;
-    /* Best-effort send. Ignore the return — see fn-level comment. */
-    (void)send_frame(client_fd, FTX2_FRAME_APPLY_PROGRESS, 0, trace_id,
-                     body, (size_t)n);
-    if (last_emit_us) *last_emit_us = now;
-    if (last_emit_fi) *last_emit_fi = files_applied;
-    return 0;
-}
-
-static int runtime_apply_spool(const runtime_tx_entry_t *entry,
-                               int client_fd,
-                               uint64_t trace_id) {
-    char spool_dir[512];
-    char shard_path[512];
-    char buf[65536];
-    uint64_t seq = 0;
-    /* P3 progress tracking: only meaningful when the client opted in
-     * via FTX2_TX_FLAG_APPLY_PROGRESS_REQUESTED and we're in a multi-
-     * file tx. last_emit_us/fi are written by runtime_emit_apply_progress.
-     * bytes_running carries running totals for the body's bytes_applied
-     * field; we increment as each file's manifest size is committed. */
-    int progress_enabled = (entry && entry->apply_progress_enabled);
-    uint64_t last_emit_us = 0;
-    uint64_t last_emit_fi = 0;
-    uint64_t bytes_running = 0;
-
-    if (!entry || entry->dest_root[0] == '\0') return -1;
-
-    snprintf(spool_dir, sizeof(spool_dir), "%s/spool_%s",
-             PS5UPLOAD2_SPOOL_DIR, entry->tx_id_hex);
-
-    /* ── Multi-file path ── (kind==2; may carry a single file) */
-    if (entry->multi_file) {
-        /* Heap-allocate the manifest sized to the on-disk file. The
-         * direct-mode path was migrated to a heap blob in 2.1 to fix
-         * silent corruption on >60-file transfers; this spool path
-         * was missed. Fixed here: a single 8 KiB stack buffer would
-         * truncate any real-game manifest mid-object and produce
-         * "manifest missing entry N" errors at apply time, OR walk
-         * into garbage. Caller owns the buffer; freed before returning. */
-        char *manifest_buf = NULL;
-        size_t manifest_len = 0;
-        uint64_t fi = 0;
-        int rc_apply = 0;
-        if (runtime_read_manifest_alloc(entry, &manifest_buf, &manifest_len) != 0) {
-            fprintf(stderr, "[payload2] could not read manifest for tx %s\n",
-                    entry->tx_id_hex);
-            return -1;
-        }
-        /* P3 emit-start: send a single APPLY_PROGRESS frame with
-         * files_applied=0 so the client immediately sees motion (the
-         * counter ticks from undefined → "0 of N"). Throttle state
-         * threads through the loop. */
-        if (progress_enabled) {
-            runtime_emit_apply_progress(client_fd, trace_id,
-                0, entry->file_count, 0,
-                &last_emit_us, &last_emit_fi, 1 /* force */);
-        }
-        for (fi = 0; fi < entry->file_count; fi++) {
-            manifest_file_entry_t mf;
-            uint64_t s = 0;
-            FILE *out = NULL;
-            if (manifest_get_nth_file_path(manifest_buf, fi, &mf) != 0) {
-                fprintf(stderr, "[payload2] manifest missing entry %llu\n",
-                        (unsigned long long)fi);
-                rc_apply = -1;
-                break;
-            }
-            if (ensure_parent_dir(mf.path) != 0) {
-                fprintf(stderr, "[payload2] ensure_parent_dir failed: %s\n", mf.path);
-                rc_apply = -1;
-                break;
-            }
-            out = fopen(mf.path, "wb");
-            if (!out) {
-                fprintf(stderr, "[payload2] open dest failed: %s errno=%d\n",
-                        mf.path, errno);
-                rc_apply = -1;
-                break;
-            }
-            for (s = 0; s < mf.shard_count; s++) {
-                uint64_t this_seq = mf.shard_start + s;
-                char ibuf[65536];
-                FILE *in = NULL;
-                size_t got = 0;
-                snprintf(shard_path, sizeof(shard_path), "%s/%llu",
-                         spool_dir, (unsigned long long)this_seq);
-                in = fopen(shard_path, "rb");
-                if (!in) {
-                    fprintf(stderr, "[payload2] open shard failed: %s errno=%d\n",
-                            shard_path, errno);
-                    rc_apply = -1;
-                    break;
-                }
-                /* Stream this shard into `out`. On fwrite failure we
-                 * mark rc_apply and break the while; the unconditional
-                 * fclose(in) below closes `in` exactly once across
-                 * both success and fwrite-fail paths. The pre-self-
-                 * audit edit closed `in` inside the fwrite branch AND
-                 * after the while, which was a double-close UB. */
-                while ((got = fread(ibuf, 1, sizeof(ibuf), in)) > 0) {
-                    if (fwrite(ibuf, 1, got, out) != got) {
-                        rc_apply = -1;
-                        break;
-                    }
-                }
-                fclose(in);
-                if (rc_apply != 0) break;
-            }
-            /* Close `out` exactly once iff it was successfully opened.
-             * Three early-break paths above (manifest_get_nth_file_path
-             * failure, ensure_parent_dir failure, fopen-out failure)
-             * reach this point with `out == NULL` — `fclose(NULL)` is
-             * undefined behaviour in C and on PS5 libc typically
-             * crashes. The two break paths inside for(s) (open-shard
-             * failure, fwrite failure) reach here with `out` already
-             * opened, so the guarded close is correct.
-             *
-             * History: the previous edit pair (pre-self-audit + the
-             * post-self-audit "single fclose" rewrite) both had this
-             * gap — the rewrite traded a double-close on `in` for an
-             * fclose-NULL on `out`. Resolved here with the explicit
-             * non-null guard. */
-            if (out) fclose(out);
-            if (rc_apply != 0) break;
-            /* Commit-time integrity (spool analogue of the direct-path
-             * size checks in COMMIT_TX): the concatenated file must match
-             * the manifest size. A missing/short spool shard — e.g. a
-             * partial write left by a power-loss-interrupted run — would
-             * otherwise publish a short file that reports success. Fail
-             * loudly instead. (size 0 / absent: skip, nothing to verify.) */
-            if (mf.size > 0) {
-                struct stat st_sp;
-                int ok = (stat(mf.path, &st_sp) == 0);
-                if (!ok || (uint64_t)st_sp.st_size != mf.size) {
-                    fprintf(stderr,
-                            "[payload2] spool apply size mismatch %s: have %lld want %llu\n",
-                            mf.path, (long long)(ok ? (long long)st_sp.st_size : -1),
-                            (unsigned long long)mf.size);
-                    rc_apply = -1;
-                    break;
-                }
-            }
-            printf("[payload2] applied %llu shards -> %s\n",
-                   (unsigned long long)mf.shard_count, mf.path);
-            /* P3 emit-tick: update running totals and emit a throttled
-             * progress frame. The emit helper takes care of the rate
-             * limit (>=1 sec OR >=1024 files since last emit). */
-            if (progress_enabled) {
-                bytes_running += mf.size;
-                runtime_emit_apply_progress(client_fd, trace_id,
-                    fi + 1, entry->file_count, bytes_running,
-                    &last_emit_us, &last_emit_fi, 0 /* throttle */);
-            }
-        }
-        /* P3 emit-end: force a final progress frame at completion so
-         * the client's counter lands at total/total before the
-         * CommitTxAck arrives (rather than at total-1 or wherever the
-         * last throttled tick fell). Skipped on error path — the
-         * caller's apply_failed branch sends a structured Error frame
-         * which the client treats as terminal. */
-        if (progress_enabled && rc_apply == 0) {
-            runtime_emit_apply_progress(client_fd, trace_id,
-                entry->file_count, entry->file_count, bytes_running,
-                &last_emit_us, &last_emit_fi, 1 /* force */);
-        }
-        free(manifest_buf);
-        if (rc_apply == 0) {
-            printf("[payload2] multi-file apply done: %llu files\n",
-                   (unsigned long long)entry->file_count);
-        }
-        return rc_apply;
-    }
-
-    /* ── Single-file path: concatenate all shards to dest_root ── */
-    {
-        FILE *out = NULL;
-        if (ensure_parent_dir(entry->dest_root) != 0) {
-            fprintf(stderr, "[payload2] ensure_parent_dir failed: %s\n", entry->dest_root);
-            return -1;
-        }
-        out = fopen(entry->dest_root, "wb");
-        if (!out) {
-            fprintf(stderr, "[payload2] open dest_root failed: %s errno=%d\n",
-                    entry->dest_root, errno);
-            return -1;
-        }
-        for (seq = 1; seq <= entry->shards_received; seq++) {
-            FILE *in = NULL;
-            size_t got = 0;
-            snprintf(shard_path, sizeof(shard_path), "%s/%llu",
-                     spool_dir, (unsigned long long)seq);
-            in = fopen(shard_path, "rb");
-            if (!in) {
-                fprintf(stderr, "[payload2] open shard failed: %s errno=%d\n",
-                        shard_path, errno);
-                fclose(out);
-                return -1;
-            }
-            while ((got = fread(buf, 1, sizeof(buf), in)) > 0) {
-                if (fwrite(buf, 1, got, out) != got) {
-                    fclose(in);
-                    fclose(out);
-                    return -1;
-                }
-            }
-            fclose(in);
-        }
-        fclose(out);
-        /* Commit-time integrity: single-file spool result must match the
-         * manifest's total size before we declare success. */
-        if (entry->total_bytes > 0) {
-            struct stat st_sp;
-            int ok = (stat(entry->dest_root, &st_sp) == 0);
-            if (!ok || (uint64_t)st_sp.st_size != entry->total_bytes) {
-                fprintf(stderr,
-                        "[payload2] spool apply size mismatch %s: have %lld want %llu\n",
-                        entry->dest_root, (long long)(ok ? (long long)st_sp.st_size : -1),
-                        (unsigned long long)entry->total_bytes);
-                return -1;
-            }
-        }
-        printf("[payload2] apply done: %llu shards -> %s\n",
-               (unsigned long long)entry->shards_received, entry->dest_root);
-        return 0;
-    }
-}
-
-/*
- * Remove all shard files in the spool directory for a transaction and
- * then rmdir the directory itself. Called after a successful apply.
- */
-static int runtime_cleanup_spool(const runtime_tx_entry_t *entry) {
-    char spool_dir[512];
-    DIR *dir = NULL;
-    struct dirent *de = NULL;
-
-    if (!entry) return -1;
-    snprintf(spool_dir, sizeof(spool_dir), "%s/spool_%s",
-             PS5UPLOAD2_SPOOL_DIR, entry->tx_id_hex);
-
-    dir = opendir(spool_dir);
-    if (!dir) {
-        if (errno == ENOENT) return 0;
-        return -1;
-    }
-    while ((de = readdir(dir)) != NULL) {
-        char path[512];
-        if (de->d_name[0] == '.') continue;
-        snprintf(path, sizeof(path), "%s/%s", spool_dir, de->d_name);
-        (void)unlink(path);
-    }
-    closedir(dir);
-    (void)rmdir(spool_dir);
-    return 0;
-}
-
-/*
- * Resume integrity: recompute the durable cursor from what's actually on
- * disk instead of trusting the journaled shard COUNT.
- *
- * The journal can run AHEAD of the bytes that truly reached storage:
- * streaming shard writes and the journal flush aren't fsync'd, so a
- * power-loss / rest-mode kill can lose page-cache data (worst on
- * USB/exFAT). Trusting `shards_received` as the resume point would then
- * make the client SKIP shards whose data never landed → a file silently
- * missing interior bytes (the "ps5upload corrupts, FTP is fine" report).
- *
- * Reconcile at FILE granularity, which is the safe unit: each file's
- * first shard truncates its tmp, so re-sending a whole file rewrites it
- * cleanly — no partial-shard append-offset hazard. A file is "durable"
- * if EITHER its final path OR its `<path>.ps5up2-tmp` exists at exactly
- * the manifest size (packed small files land at the final path,
- * non-packed at the tmp). Clamp `shards_received` down to
- * (first non-durable file's shard_start - 1) so the client re-sends from
- * there. This only ever LOWERS the cursor; a too-low result merely
- * re-sends (idempotent), and the COMMIT_TX size check is the backstop.
- */
-static void reconcile_resume_cursor(runtime_tx_entry_t *entry) {
-    const manifest_index_entry_t *idx;
-    uint64_t i;
-    uint64_t min_bad_start = 0; /* 0 = no gap found */
-    if (!entry || !entry->manifest_index || entry->manifest_index_count == 0) {
-        return;
-    }
-    if (!entry->manifest_blob) return;
-    idx = (const manifest_index_entry_t *)entry->manifest_index;
-    for (i = 0; i < entry->manifest_index_count; i++) {
-        char path[512];
-        char tmp_path[512 + 16];
-        size_t plen = idx[i].path_len;
-        struct stat st;
-        int durable = 0;
-        if (idx[i].size == 0) continue; /* empty files: nothing to verify */
-        if (plen == 0 || plen >= sizeof(path)) continue;
-        if ((uint64_t)idx[i].path_offset + (uint64_t)plen > entry->manifest_blob_len) {
-            continue;
-        }
-        if (json_copy_unescaped_string(entry->manifest_blob + idx[i].path_offset,
-                                       entry->manifest_blob + idx[i].path_offset + plen,
-                                       path, sizeof(path)) != 0) {
-            continue;
-        }
-        if (stat(path, &st) == 0 && (uint64_t)st.st_size == idx[i].size) {
-            durable = 1;
-        } else {
-            snprintf(tmp_path, sizeof(tmp_path), "%s.ps5up2-tmp", path);
-            if (stat(tmp_path, &st) == 0 && (uint64_t)st.st_size == idx[i].size) {
-                durable = 1;
-            }
-        }
-        if (!durable &&
-            (min_bad_start == 0 || idx[i].shard_start < min_bad_start)) {
-            min_bad_start = idx[i].shard_start;
-        }
-    }
-    if (min_bad_start > 0) {
-        uint64_t reconciled = min_bad_start - 1;
-        if (reconciled < entry->shards_received) {
-            fprintf(stderr,
-                    "[payload2] resume reconcile tx %s: cursor %llu -> %llu "
-                    "(first non-durable file starts at shard %llu)\n",
-                    entry->tx_id_hex,
-                    (unsigned long long)entry->shards_received,
-                    (unsigned long long)reconciled,
-                    (unsigned long long)min_bad_start);
-            entry->shards_received = reconciled;
-        }
-    }
-}
-
-/* Encode a SHARD_ACK into a 48-byte buffer (no struct padding assumptions). */
-static void encode_shard_ack(unsigned char *out,
-                              const unsigned char *tx_id,
-                              uint64_t shard_seq,
-                              uint8_t ack_state,
-                              uint64_t bytes_committed,
-                              uint64_t files_committed) {
-    memset(out, 0, FTX2_SHARD_ACK_LEN);
-    memcpy(out, tx_id, 16);
-    write_le64(out + 16, shard_seq);
-    out[24] = ack_state;
-    /* out[25..31] = pad (zeroed) */
-    write_le64(out + 32, bytes_committed);
-    write_le64(out + 40, files_committed);
-}
-
-/*
- * Packed-shard handler.
- *
- * Body layout (set of `record_count` back-to-back records):
- *   [u32 path_len LE][u32 data_len LE][path bytes][data bytes]
- *
- * Each record is written straight to `<path>.ps5up2-tmp` so the COMMIT_TX
- * rename loop picks it up just like the single-file-per-shard path. No
- * manifest_index lookup is involved — packed shards are self-describing.
- *
- * BLAKE3 digest in ShardHeader covers the entire body (record prefixes +
- * paths + data in wire order). We stream-hash on every byte received.
- *
- * On any parse / write / digest error the transaction is aborted via
- * `runtime_abort_tx_fatal`. There is no per-record retry — packed writes
- * are append-atomic only within a record; a partial pack corrupts tmps.
- */
-static int handle_packed_shard(runtime_state_t *state, int client_fd,
-                                uint64_t trace_id,
-                                runtime_tx_entry_t *entry,
-                                const unsigned char *tx_id,
-                                uint64_t shard_seq,
-                                uint64_t body_len,
-                                uint32_t record_count,
-                                const unsigned char *expected_digest,
-                                int want_verify) {
-    blake3_hasher hasher;
-    uint64_t remaining = body_len;
-    uint32_t r;
-    unsigned char ack_bytes[FTX2_SHARD_ACK_LEN];
-    /* Lazily start the per-tx worker pool on first packed shard. If the
-     * start fails (OOM, kernel thread cap), fall back to serial inline
-     * processing — functionally identical to pre-pool behaviour. */
-    int pool_active = 0;
-    if (entry && !entry->pack_pool) {
-        if (pack_pool_start(entry) == 0) {
-            pool_active = 1;
-        } else {
-            fprintf(stderr,
-                    "[payload2] pack: worker pool start failed — serial fallback\n");
-        }
-    } else if (entry && entry->pack_pool) {
-        pool_active = 1;
-    }
-
-    if (want_verify) blake3_hasher_init(&hasher);
-
-    for (r = 0; r < record_count; r++) {
-        unsigned char prefix[FTX2_PACKED_RECORD_PREFIX_LEN];
-        uint32_t path_len;
-        uint32_t rec_data_len;
-        char path[512];
-
-        if (remaining < FTX2_PACKED_RECORD_PREFIX_LEN) {
-            if (remaining > 0) (void)drain_shard_data(client_fd, remaining);
-            runtime_abort_tx_fatal(state, entry);
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "packed_truncated", 16);
-        }
-        if (recv_exact(client_fd, prefix, FTX2_PACKED_RECORD_PREFIX_LEN) != 0) return -1;
-        if (want_verify) {
-            blake3_hasher_update(&hasher, prefix, FTX2_PACKED_RECORD_PREFIX_LEN);
-        }
-        remaining -= FTX2_PACKED_RECORD_PREFIX_LEN;
-
-        path_len     = read_le32(prefix);
-        rec_data_len = read_le32(prefix + 4);
-
-        if (path_len == 0 || path_len >= sizeof(path) ||
-            (uint64_t)path_len + (uint64_t)rec_data_len > remaining) {
-            if (remaining > 0) (void)drain_shard_data(client_fd, remaining);
-            runtime_abort_tx_fatal(state, entry);
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "packed_bad_record", 17);
-        }
-
-        if (recv_exact(client_fd, path, path_len) != 0) return -1;
-        if (want_verify) blake3_hasher_update(&hasher, (unsigned char *)path, path_len);
-        path[path_len] = '\0';
-        remaining -= path_len;
-
-        /* Defence in depth: every per-record `path` carried by a packed
-         * STREAM_SHARD must pass the same writable-roots allowlist used
-         * elsewhere. Without this, a hostile LAN client could include
-         * a record like "/system_data/priv/foo" + arbitrary bytes and
-         * the open(O_WRONLY|O_CREAT|O_TRUNC) below would write it.
-         * The BEGIN_TX dest_root check above is the first line of
-         * defence; this is the second, since per-record paths are
-         * sent independently and aren't constrained by the manifest
-         * dest_root in any structural way. */
-        if (!is_path_allowed(path)) {
-            if (remaining > 0) (void)drain_shard_data(client_fd, remaining);
-            runtime_abort_tx_fatal(state, entry);
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "packed_path_not_allowed", 23);
-        }
-
-        /* Parent-dir cache is reader-thread-only; this stays correct whether
-         * the pool is active or not. */
-        (void)ensure_parent_dir_cached(entry, path);
-
-        if (pool_active) {
-            /* Pool path: reader receives data into a heap buffer, pushes to
-             * workers, hashes as it reads. Workers do open+write+close.
-             *
-             * Allocation pattern:
-             *   path_buf  — malloc'd strdup, freed by worker
-             *   data_buf  — malloc'd, may be NULL for 0-byte records,
-             *               freed by worker
-             */
-            char          *path_buf = NULL;
-            unsigned char *data_buf = NULL;
-
-            path_buf = (char *)malloc((size_t)path_len + 1);
-            if (!path_buf) {
-                fprintf(stderr, "[payload2] pack: path alloc failed\n");
-                if (remaining > 0) (void)drain_shard_data(client_fd, remaining);
-                runtime_abort_tx_fatal(state, entry);
-                return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                                  "out_of_memory", 13);
-            }
-            memcpy(path_buf, path, (size_t)path_len + 1);
-
-            if (rec_data_len > 0) {
-                data_buf = (unsigned char *)malloc(rec_data_len);
-                if (!data_buf) {
-                    free(path_buf);
-                    fprintf(stderr, "[payload2] pack: data alloc %u failed\n", rec_data_len);
-                    if (remaining > 0) (void)drain_shard_data(client_fd, remaining);
-                    runtime_abort_tx_fatal(state, entry);
-                    return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                                      "out_of_memory", 13);
-                }
-                if (recv_exact(client_fd, data_buf, rec_data_len) != 0) {
-                    free(path_buf);
-                    free(data_buf);
-                    return -1;
-                }
-                if (want_verify) blake3_hasher_update(&hasher, data_buf, rec_data_len);
-            }
-
-            if (pack_pool_push((pack_worker_pool_t *)entry->pack_pool,
-                               path_buf, data_buf, rec_data_len) != 0) {
-                /* Sticky worker error — push returned -1 without taking
-                 * ownership, so we own the frees. Drain remaining bytes
-                 * and bail. */
-                free(path_buf);
-                if (data_buf) free(data_buf);
-                if (remaining > (uint64_t)rec_data_len) {
-                    (void)drain_shard_data(client_fd, remaining - (uint64_t)rec_data_len);
-                }
-                runtime_abort_tx_fatal(state, entry);
-                return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                                  "pack_worker_io_error", 20);
-            }
-            remaining -= rec_data_len;
-            if (entry) entry->bytes_received += rec_data_len;
-        } else {
-            /* Serial fallback path: unchanged semantics from pre-pool code. */
-            char tmp_path[512 + 16];
-            int fd;
-            snprintf(tmp_path, sizeof(tmp_path), "%s.ps5up2-tmp", path);
-            (void)unlink(tmp_path);
-
-            fd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC, 0777);
-            if (fd >= 0) (void)fchmod(fd, 0777);
-            if (fd < 0) {
-                (void)drain_shard_data(client_fd, (uint64_t)rec_data_len + remaining - (uint64_t)rec_data_len);
-                remaining = 0;
-                runtime_abort_tx_fatal(state, entry);
-                return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                                  "packed_open_failed", 18);
-            }
-            if (rec_data_len > 0) {
-                (void)ftruncate(fd, (off_t)rec_data_len);
-            }
-            {
-                uint64_t rem = rec_data_len;
-                unsigned char buf[FTX2_SHARD_DRAIN_BUF];
-                while (rem > 0) {
-                    size_t take = rem > sizeof(buf) ? sizeof(buf) : (size_t)rem;
-                    if (recv_exact(client_fd, buf, take) != 0) { close(fd); return -1; }
-                    if (want_verify) blake3_hasher_update(&hasher, buf, take);
-                    if (write_full(fd, buf, take) != 0) {
-                        /* Disk-full / I/O error writing a packed record. Like
-                         * the pool path above, abort + report instead of a
-                         * bare close (which the app shows as "PS5 crashed").
-                         * JSON body so the engine's extract_payload_error
-                         * lifts the errno into an actionable message. */
-                        int we_p = errno;
-                        char pwf[200];
-                        int pwn = snprintf(pwf, sizeof(pwf),
-                                           "{\"error\":\"fs_write_failed_errno_%d\","
-                                           "\"detail\":\"packed write to destination "
-                                           "failed: %s\"}",
-                                           we_p, strerror(we_p));
-                        close(fd);
-                        runtime_abort_tx_fatal(state, entry);
-                        if (pwn > 0) {
-                            if ((size_t)pwn >= sizeof(pwf)) pwn = (int)sizeof(pwf) - 1;
-                            return send_frame(client_fd, FTX2_FRAME_ERROR, 0,
-                                              trace_id, pwf, (uint64_t)pwn);
-                        }
-                        return -1;
-                    }
-                    rem -= take;
-                }
-            }
-            close(fd);
-            remaining -= rec_data_len;
-            if (entry) entry->bytes_received += rec_data_len;
-        }
-    }
-
-    if (remaining > 0) {
-        (void)drain_shard_data(client_fd, remaining);
-        if (pool_active) (void)pack_pool_drain((pack_worker_pool_t *)entry->pack_pool);
-        runtime_abort_tx_fatal(state, entry);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "packed_trailing_bytes", 21);
-    }
-
-    /* Drain the pool before ACK so SHARD_ACK means "persisted", preserving
-     * the contract the serial path always had. */
-    if (pool_active && pack_pool_drain((pack_worker_pool_t *)entry->pack_pool) != 0) {
-        runtime_abort_tx_fatal(state, entry);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "pack_worker_io_error", 20);
-    }
-
-    if (want_verify) {
-        unsigned char computed[BLAKE3_OUT_LEN];
-        blake3_hasher_finalize(&hasher, computed, BLAKE3_OUT_LEN);
-        if (memcmp(computed, expected_digest, BLAKE3_OUT_LEN) != 0) {
-            runtime_abort_tx_fatal(state, entry);
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "direct_tx_corrupt", 17);
-        }
-    }
-
-    if (entry) {
-        entry->shards_received += 1;
-        runtime_append_shard_log(entry, shard_seq, body_len);
-        /* Per-ACK journal flush enables shard-level resume (TX_FLAG_RESUME).
-         * Without this, shards_received only hits disk at commit/abort, so
-         * a network drop mid-transfer loses the counter and the reconnecting
-         * client has no way to know what the payload already received. Cost
-         * is one fopen+fprintf+fclose per shard ACK (~0.5 ms on PS5 UFS at
-         * 32 MB shard size = <0.2% of shard-send time). */
-        (void)runtime_flush_tx_record(state, entry);
-    }
-    pthread_mutex_lock(&state->state_mtx);
-    state->command_count += 1;
-    pthread_mutex_unlock(&state->state_mtx);
-
-    encode_shard_ack(ack_bytes, tx_id, shard_seq, FTX2_ACK_STATE_SPOOLED,
-                     entry ? entry->bytes_received : 0, 0);
-    return send_frame(client_fd, FTX2_FRAME_SHARD_ACK, 0, trace_id,
-                      ack_bytes, FTX2_SHARD_ACK_LEN);
-}
-
-/*
- * Handle a STREAM_SHARD frame.
- *
- * Called BEFORE the main body-read path because shard bodies can be
- * very large (up to 32 MiB). We read the 64-byte shard header directly,
- * then drain the payload in chunks.
- *
- * Stub behaviour:
- *   - parse shard header
- *   - look up the transaction in the in-memory table
- *   - update per-tx shard stats
- *   - append to per-tx shard log
- *   - drain shard data (not yet written to storage)
- *   - reply with binary SHARD_ACK (spooled state)
- */
-static int handle_stream_shard(runtime_state_t *state, int client_fd,
-                                uint64_t trace_id, uint64_t body_len) {
-    unsigned char shard_hdr_bytes[FTX2_SHARD_HEADER_LEN];
-    unsigned char ack_bytes[FTX2_SHARD_ACK_LEN];
-    uint64_t shard_seq = 0;
-    uint64_t data_len = 0;
-    unsigned char tx_id[16];
-    runtime_tx_entry_t *entry = NULL;
-    int rc = -1;
-
-    if (!state) return -1;
-    if (body_len < FTX2_SHARD_HEADER_LEN) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "shard_header_too_short", 22);
-    }
-    /* Wire-sanity cap, mirroring BEGIN_TX_BODY_MAX: the engine ships
-     * 64 MiB shards (DEFAULT_SHARD_SIZE) — 256 MiB is 4× headroom for
-     * any future bump while a malformed/hostile frame claiming a
-     * multi-GiB body can no longer drive near-4 GiB malloc attempts in
-     * the packed-record path or a multi-GiB socket drain. */
-    if (body_len > (uint64_t)256 * 1024 * 1024) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "shard_body_too_large", 20);
-    }
-    if (recv_exact(client_fd, shard_hdr_bytes, FTX2_SHARD_HEADER_LEN) != 0) return -1;
-
-    memcpy(tx_id, shard_hdr_bytes, 16);
-    shard_seq = read_le64(shard_hdr_bytes + 16);
-
-    /* Acquire the slot exclusively so a concurrent COMMIT/ABORT cannot
-     * release entry->manifest_index / entry->direct_writer underneath
-     * us mid-shard. NULL is fine — we still drain the body and emit a
-     * not-found-shaped ACK like before, just without dereferencing
-     * anything. Released via the `out:` cleanup. */
-    entry = runtime_acquire_tx_entry(state, tx_id);
-
-    /* shard_digest[24..56], record_count[56], flags[60] */
-    {
-        uint32_t record_count_hdr = read_le32(shard_hdr_bytes + 56);
-        uint32_t flags_hdr        = read_le32(shard_hdr_bytes + 60);
-        data_len = body_len - FTX2_SHARD_HEADER_LEN;
-
-        if (flags_hdr & FTX2_SHARD_FLAG_PACKED) {
-            int want_verify = 0;
-            int i;
-            for (i = 0; i < BLAKE3_OUT_LEN; i++) {
-                if (shard_hdr_bytes[24 + i] != 0) { want_verify = 1; break; }
-            }
-            if (!entry || !entry->direct_mode || !entry->multi_file ||
-                record_count_hdr == 0) {
-                /* Packed shards are only meaningful for an active multi-file
-                 * direct-mode tx (kind==2) with ≥1 records. Gate on
-                 * `multi_file`, NOT `file_count > 1`: a kind==2 folder upload
-                 * can legitimately carry a single (packed) small file — e.g.
-                 * a resume that narrowed to one remaining file — and gating
-                 * on the count rejected it as `packed_unsupported` (the
-                 * Astro-Bot "many tiny files" report). Reject cleanly only
-                 * when the tx genuinely isn't a multi-file direct receiver. */
-                (void)drain_shard_data(client_fd, data_len);
-                if (entry) runtime_abort_tx_fatal(state, entry);
-                rc = send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                                "packed_unsupported", 18);
-                goto out;
-            }
-            rc = handle_packed_shard(state, client_fd, trace_id,
-                                     entry, tx_id, shard_seq,
-                                     data_len, record_count_hdr,
-                                     shard_hdr_bytes + 24, want_verify);
-            goto out;
-        }
-    }
-    {
-        unsigned char computed[BLAKE3_OUT_LEN];
-        int want_verify = 0;
-        int i = 0;
-        /* Multi-file per-file durable promote (2.25.x). When this shard
-         * completes its owning file in a kind==2 folder upload, the write
-         * branch below records the file's tmp + final path here; the actual
-         * rename is deferred until AFTER the per-shard digest check passes
-         * (so a corrupt final shard never gets promoted). See the promote
-         * block past the verify gate. */
-        int mf_completed = 0;
-        char mf_done_tmp[sizeof(((manifest_file_entry_t *)0)->path) + 16];
-        char mf_done_final[sizeof(((manifest_file_entry_t *)0)->path)];
-        mf_done_tmp[0] = '\0';
-        mf_done_final[0] = '\0';
-        /* Only hash if the sender provided a non-zero expected digest. */
-        for (i = 0; i < BLAKE3_OUT_LEN; i++) {
-            if (shard_hdr_bytes[24 + i] != 0) { want_verify = 1; break; }
-        }
-        if (data_len > 0) {
-            int write_ok;
-            if (entry && entry->direct_mode && !entry->multi_file) {
-                /* Single-file direct (kind==1): stream into <dest>.ps5up2-tmp
-                 * via a persistent fd and (for large txs) a persistent writer
-                 * thread. First shard opens + ftruncates, COMMIT_TX closes +
-                 * renames, and any terminal transition (ABORT / takeover /
-                 * shutdown / fatal) unlinks the tmp through
-                 * runtime_release_tx_resources. */
-                int is_first = (shard_seq == 1);
-                uint64_t prealloc = (is_first && entry->total_bytes > 0)
-                                      ? entry->total_bytes : 0;
-                write_ok = runtime_write_shard_persistent(entry, client_fd,
-                                                          data_len,
-                                                          is_first, prealloc,
-                                                          want_verify ? computed : NULL);
-            } else if (entry && entry->direct_mode && entry->multi_file) {
-                /* Multi-file direct: route this shard to the owning file's
-                 * tmp via the in-memory manifest index built at BEGIN_TX.
-                 * If the index is missing (e.g. a recovered-after-takeover
-                 * tx whose client is gone), or routing fails, the shard
-                 * is unroutable — we must NOT fall through to digest
-                 * comparison with an uninitialised `computed` buffer. */
-                manifest_file_entry_t mf;
-                char tmp_path[sizeof(mf.path) + 16];
-                if (!entry->manifest_index ||
-                    lookup_manifest_index(
-                        (const manifest_index_entry_t *)entry->manifest_index,
-                        entry->manifest_index_count,
-                        entry->manifest_blob,
-                        entry->manifest_blob_len,
-                        shard_seq, &mf) != 0) {
-                    fprintf(stderr, "[payload2] direct multi: no manifest file owns shard %llu\n",
-                            (unsigned long long)shard_seq);
-                    (void)drain_shard_data(client_fd, data_len);
-                    runtime_abort_tx_fatal(state, entry);
-                    rc = send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                                    "manifest_shard_not_owned", 24);
-                    goto out;
-                }
-                snprintf(tmp_path, sizeof(tmp_path), "%s.ps5up2-tmp", mf.path);
-                if (shard_seq == mf.shard_start) {
-                    if (ensure_parent_dir_cached(entry, mf.path) != 0) {
-                        fprintf(stderr, "[payload2] direct multi: parent dir failed %s\n",
-                                mf.path);
-                    }
-                    (void)unlink(tmp_path);
-                }
-                /* Locate the MUTABLE index entry for this file so we can read +
-                 * advance its bytes_written cursor. Binary search by shard_start
-                 * (the value lookup_manifest_index just told us). Falls back to
-                 * NULL on the impossible case of a slot mismatch, in which case
-                 * we degrade gracefully to a no-prealloc, naive offset-from-0
-                 * write — correct for a single-shard file. */
-                manifest_index_entry_t *mut_idx_arr =
-                    (manifest_index_entry_t *)entry->manifest_index;
-                manifest_index_entry_t *idx_mut = NULL;
-                {
-                    uint64_t lo = 0, hi = entry->manifest_index_count;
-                    while (lo < hi) {
-                        uint64_t mid = lo + (hi - lo) / 2;
-                        uint64_t s = mut_idx_arr[mid].shard_start;
-                        if (s < mf.shard_start) lo = mid + 1;
-                        else if (s > mf.shard_start) hi = mid;
-                        else { idx_mut = &mut_idx_arr[mid]; break; }
-                    }
-                }
-                /* New (2.16.0) write model: on the FIRST shard of every multi-
-                 * file file — single-shard OR multi-shard — posix_fallocate the
-                 * full file size up front so subsequent shards land in already-
-                 * allocated blocks. The old code only preallocated single-shard
-                 * files; multi-GB files (game images inside a folder dump) grew
-                 * sparse-append, triggering UFS metadata churn → throughput
-                 * collapse mid-transfer → engine 30 s socket-write timeout →
-                 * connection drop while the serial accept loop is still busy =
-                 * the screenshot's reconnect-refused failures. Subsequent
-                 * shards lseek to the running `bytes_written` cursor instead
-                 * of O_APPEND, since fallocate extends the file size on
-                 * Prospero UFS and O_APPEND would land past the fallocated
-                 * region. */
-                {
-                    int is_first = (shard_seq == mf.shard_start);
-                    uint64_t prealloc = is_first ? mf.size : 0;
-                    uint64_t write_offset = 0;
-                    if (is_first) {
-                        if (idx_mut) idx_mut->bytes_written = 0;
-                    } else if (idx_mut) {
-                        write_offset = idx_mut->bytes_written;
-                    }
-                    write_ok = runtime_write_shard_to_path(entry, tmp_path,
-                                                           is_first, prealloc,
-                                                           write_offset,
-                                                           client_fd, data_len,
-                                                           want_verify ? computed : NULL);
-                    if (write_ok == 0 && idx_mut) {
-                        idx_mut->bytes_written += data_len;
-                        /* Did this shard finish the file? Gate on the genuine
-                         * LAST shard of the file (shard_start + shard_count - 1)
-                         * AND the full byte count — NOT bytes_written alone. A
-                         * duplicated/retried shard re-adds data_len (the write
-                         * itself is offset-correct + idempotent), so a byte-only
-                         * check could cross mf.size on a non-last shard of a
-                         * small file and promote a still-incomplete tmp. The
-                         * shard_seq gate makes the trigger exact; the rename
-                         * runs past the digest gate below (never promote a shard
-                         * that fails verification). size==0 files ride inside
-                         * packed shards, never here. */
-                        uint64_t mf_last_shard =
-                            mf.shard_start + mf.shard_count - 1;
-                        if (mf.size > 0 && mf.shard_count > 0 &&
-                            shard_seq == mf_last_shard &&
-                            idx_mut->bytes_written >= mf.size) {
-                            mf_completed = 1;
-                            snprintf(mf_done_tmp, sizeof(mf_done_tmp),
-                                     "%s.ps5up2-tmp", mf.path);
-                            snprintf(mf_done_final, sizeof(mf_done_final),
-                                     "%s", mf.path);
-                        }
-                    }
-                }
-            } else if (entry) {
-                write_ok = runtime_write_shard_data(entry, shard_seq, client_fd,
-                                                    data_len,
-                                                    want_verify ? computed : NULL);
-            } else {
-                write_ok = drain_shard_data(client_fd, data_len);
-            }
-            if (write_ok != 0) {
-                /* A direct-write helper failed (disk full / open / alloc /
-                 * RAM pressure) and stashed the cause in
-                 * entry->last_io_errno. Send a JSON ERROR frame — the shape
-                 * the engine's extract_payload_error parses — so the host
-                 * shows an actionable reason (ENOSPC -> "destination out of
-                 * space") instead of a bare EOF, which the desktop app
-                 * otherwise renders as the misleading "your PS5 stopped
-                 * responding / crashed". The tx stays active so a later
-                 * Retry can resume once space is freed. (No entry: nothing
-                 * to report — keep the old silent close.) */
-                if (entry) {
-                    char wfr[200];
-                    int we = entry->last_io_errno;
-                    int wn;
-                    if (we > 0) {
-                        wn = snprintf(wfr, sizeof(wfr),
-                                      "{\"error\":\"fs_write_failed_errno_%d\","
-                                      "\"detail\":\"shard %llu write to "
-                                      "destination failed: %s\"}",
-                                      we, (unsigned long long)shard_seq,
-                                      strerror(we));
-                    } else {
-                        wn = snprintf(wfr, sizeof(wfr),
-                                      "{\"error\":\"fs_write_failed\","
-                                      "\"detail\":\"shard %llu write to "
-                                      "destination failed\"}",
-                                      (unsigned long long)shard_seq);
-                    }
-                    if (wn > 0) {
-                        if ((size_t)wn >= sizeof(wfr)) wn = (int)sizeof(wfr) - 1;
-                        (void)send_frame(client_fd, FTX2_FRAME_ERROR, 0,
-                                         trace_id, wfr, (uint64_t)wn);
-                    }
-                }
-                rc = -1;
-                goto out;
-            }
-        } else {
-            /* Zero-length shard. */
-            if (want_verify) {
-                /* digest is BLAKE3 of empty input. */
-                blake3_hasher h;
-                blake3_hasher_init(&h);
-                blake3_hasher_finalize(&h, computed, BLAKE3_OUT_LEN);
-            }
-            /* A 0-byte single-file direct upload still needs its
-             * <dest>.ps5up2-tmp created so COMMIT_TX's temp->final rename
-             * succeeds. The write dispatch above is gated on data_len>0, so
-             * without this an empty single file fails commit with
-             * `direct_rename_failed` (confirmed on hardware). Calling the
-             * persistent writer with data_len=0 opens the tmp (O_CREAT|
-             * O_TRUNC) and writes nothing — leaving the empty file for
-             * COMMIT to close + rename, exactly like any 1-shard file.
-             * Multi-file empty files don't need this: they ride inside
-             * packed shards, which always have data_len>0. */
-            if (entry && entry->direct_mode && !entry->multi_file &&
-                shard_seq == 1 && !entry->direct_fd_open) {
-                if (runtime_write_shard_persistent(entry, client_fd, 0, 1, 0,
-                                                   NULL) != 0) {
-                    rc = -1;
-                    goto out;
-                }
-            }
-        }
-        /* Streaming verify — digest was computed while writing. */
-        if (entry && want_verify &&
-            memcmp(computed, shard_hdr_bytes + 24, BLAKE3_OUT_LEN) != 0) {
-            if (entry->direct_mode) {
-                /* Direct-write cannot surgically undo an already-appended
-                 * suffix in the tmp file, so a mid-transfer digest mismatch
-                 * is fatal for the whole transaction. Drop the tmp, mark the
-                 * entry aborted, and return a distinct error so the host
-                 * treats this as a hard failure (not a per-shard retry). */
-                (void)unlink(entry->tmp_path);
-                runtime_abort_tx_fatal(state, entry);
-                rc = send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                                "direct_tx_corrupt", 17);
-                goto out;
-            }
-            {
-                char bad_path[512];
-                snprintf(bad_path, sizeof(bad_path), "%s/spool_%s/%llu",
-                         PS5UPLOAD2_SPOOL_DIR, entry->tx_id_hex,
-                         (unsigned long long)shard_seq);
-                (void)unlink(bad_path);
-            }
-            rc = send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                            "shard_digest_mismatch", 21);
-            goto out;
-        }
-
-        /* Per-file durable promote (2.25.x). A multi-file folder upload is one
-         * BeginTx…CommitTx, and historically every file's `<path>.ps5up2-tmp`
-         * was renamed to its final path ONLY at COMMIT_TX. So a payload crash
-         * mid-folder (the 220 GB-game report: "payload no longer loaded" ~¼–½
-         * through) lost EVERY streamed-but-uncommitted file — the next reconcile
-         * scans only final dest paths, so it never saw the orphaned tmps and
-         * re-sent the whole game, pinning "already present" at the same count
-         * forever. Promote each file to its final path the instant its last
-         * shard is verified, so a crash leaves completed files durable and the
-         * next resume is naturally incremental (reconcile sees them, skips them).
-         *
-         * Reaching here means the digest gate above passed (or verify was off),
-         * so the file is whole and correct. COMMIT_TX stays the backstop: it
-         * finds the tmp gone + the file already at its final size and takes the
-         * ENOENT==success path (the same one packed files already use). This is
-         * a metadata-only rename — NO inline fsync: flushing a multi-GB file
-         * here would stall the socket read long enough to trip the engine's
-         * write timeout (the very drop we fight elsewhere), and process-crash
-         * recovery only needs the bytes in the kernel page cache, which a
-         * rename preserves. Power-loss durability is unchanged from the old
-         * commit-time rename (both rely on un-fsync'd data) and is covered by
-         * Safe-mode hashing. A rename failure is non-fatal: leave the tmp and
-         * let COMMIT_TX promote it the old way. */
-        if (entry && mf_completed) {
-            if (rename(mf_done_tmp, mf_done_final) != 0 && errno != ENOENT) {
-                fprintf(stderr,
-                        "[payload2] per-file promote %s -> %s errno=%d "
-                        "(deferring to commit)\n",
-                        mf_done_tmp, mf_done_final, errno);
-            }
-        }
-    }
-
-    /* Update per-tx stats. */
-    if (entry) {
-        entry->shards_received += 1;
-        entry->bytes_received  += data_len;
-        runtime_append_shard_log(entry, shard_seq, data_len);
-        /* Per-ACK journal flush enables shard-level resume — see the matching
-         * call in handle_packed_stream_shard for rationale. */
-        (void)runtime_flush_tx_record(state, entry);
-    }
-
-    /* Per-shard append to the tx event log removed: it costs ~0.5–1 ms/shard
-     * in open/write/close and offered little diagnostic value beyond the
-     * per-tx shard log (which is still written). begin/commit/abort/shutdown
-     * events remain in the event log. */
-    pthread_mutex_lock(&state->state_mtx);
-    state->command_count += 1;
-    pthread_mutex_unlock(&state->state_mtx);
-
-    encode_shard_ack(ack_bytes,
-                     tx_id,
-                     shard_seq,
-                     FTX2_ACK_STATE_SPOOLED,
-                     entry ? entry->bytes_received : 0,
-                     0);
-    rc = send_frame(client_fd, FTX2_FRAME_SHARD_ACK, 0, trace_id,
-                    ack_bytes, FTX2_SHARD_ACK_LEN);
-out:
-    if (entry) runtime_release_tx_entry(state, entry);
-    return rc;
-}
-
 /* ── CLEANUP handler ──────────────────────────────────────────────────────────
  *
  * Exposes a narrow `rm -rf <path>` primitive to the host so bench/smoke
@@ -5504,7 +1462,7 @@ out:
  *
  * Safety: the path is matched against the allowed shapes by the
  * `cleanup_path_allowed` helper below; literally everything else is
- * refused, so `/data/ps5upload/runtime`, `/data/ps5upload/tx`, and any
+ * refused, so `/data/ps5upload/runtime`, `/data/ps5upload/ava`, and any
  * non-tests area stay off-limits.
  */
 static int path_has_test_suffix(const char *p) {
@@ -5609,9 +1567,7 @@ static int remove_recursive_path(const char *path,
     return remove_recursive_path_inner(path, removed_files, removed_dirs, 0);
 }
 
-static int handle_cleanup(runtime_state_t *state, int client_fd,
-                           uint64_t trace_id,
-                           const char *request_body, uint64_t body_len) {
+static int handle_cleanup(runtime_state_t *state, const char *request_body, uint64_t body_len) {
     char path[512];
     char resp[256];
     uint64_t removed_files = 0;
@@ -5625,20 +1581,17 @@ static int handle_cleanup(runtime_state_t *state, int client_fd,
         extract_json_string_field(request_body, "path", path, sizeof(path));
     }
     if (!path[0]) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "cleanup_missing_path", 20);
+        return mgmt_reply(MGMT_FRAME_ERROR, "cleanup_missing_path", 20);
     }
     if (!cleanup_path_allowed(path)) {
         fprintf(stderr, "[payload2] cleanup: refusing disallowed path %s\n", path);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "cleanup_path_denied", 19);
+        return mgmt_reply(MGMT_FRAME_ERROR, "cleanup_path_denied", 19);
     }
     rc = remove_recursive_path(path, &removed_files, &removed_dirs);
     if (rc != 0) {
         fprintf(stderr, "[payload2] cleanup: remove_recursive_path(%s) failed errno=%d\n",
                 path, errno);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "cleanup_io_error", 16);
+        return mgmt_reply(MGMT_FRAME_ERROR, "cleanup_io_error", 16);
     }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
@@ -5653,8 +1606,7 @@ static int handle_cleanup(runtime_state_t *state, int client_fd,
                        (unsigned long long)removed_dirs);
     }
     if (len < 0) return -1;
-    return send_frame(client_fd, FTX2_FRAME_CLEANUP_ACK, 0, trace_id,
-                      resp, (uint64_t)len);
+    return mgmt_reply(MGMT_FRAME_CLEANUP_ACK, resp, (uint64_t)len);
 }
 
 /* ── FS_LIST_VOLUMES handler ─────────────────────────────────────────────────
@@ -5787,50 +1739,6 @@ static int json_copy_unescaped_string(const char *start, const char *end,
     return 0;
 }
 
-/*
- * Find the matching closing '}' of the JSON object beginning at `obj_start`
- * (which must point at the opening '{'), scanning past any '{' or '}' that
- * appears inside a quoted string value. Returns NULL if the object is
- * unterminated before `limit` (NULL `limit` scans to the NUL terminator).
- *
- * Why this exists: serde_json (the engine's serializer) emits '}' literally
- * inside string values, so a perfectly valid file path like
- * "/data/My}Game/eboot.bin" carries a brace that a naive strchr(obj_start,'}')
- * mistakes for the object terminator. That truncated the manifest entry
- * mid-parse and made BEGIN_TX reject the whole transfer with `manifest_invalid`
- * for any upload containing a '}' in a file or directory name. Tracking string
- * state (and backslash escapes, matching json_string_end) finds the real
- * object boundary regardless of what the path contains.
- */
-static const char *json_object_end(const char *obj_start, const char *limit) {
-    const char *p = obj_start;
-    int in_string = 0;
-    int depth = 0;
-    if (!p || *p != '{') return NULL;
-    while ((!limit || p < limit) && *p) {
-        char c = *p;
-        if (in_string) {
-            if (c == '\\') {
-                /* Skip the escaped char so an escaped quote (\") doesn't
-                 * prematurely close the string. Mirrors json_string_end. */
-                p++;
-                if ((limit && p >= limit) || !*p) return NULL;
-            } else if (c == '"') {
-                in_string = 0;
-            }
-        } else if (c == '"') {
-            in_string = 1;
-        } else if (c == '{') {
-            depth++;
-        } else if (c == '}') {
-            depth--;
-            if (depth == 0) return p;
-        }
-        p++;
-    }
-    return NULL;
-}
-
 static const char *find_bounded(const char *hay, size_t hay_len,
                                 const char *needle) {
     size_t needle_len = needle ? strlen(needle) : 0;
@@ -5910,65 +1818,7 @@ static uint64_t capacity_reserve_for_mount(const char *mnt_on,
                : PS5UPLOAD2_EXTERNAL_SPACE_RESERVE;
 }
 
-/* statfs requires an existing path, while a single-file destination normally
- * does not exist yet. Walk upward to the nearest existing parent without ever
- * leaving the absolute path's root. */
-static int statfs_existing_ancestor(const char *path, struct statfs *out) {
-    char probe[512];
-    char *slash;
-    if (!path || path[0] != '/' || !out) return -1;
-    if (snprintf(probe, sizeof(probe), "%s", path) >= (int)sizeof(probe)) return -1;
-    for (;;) {
-        if (statfs(probe, out) == 0) return 0;
-        slash = strrchr(probe, '/');
-        if (!slash) return -1;
-        if (slash == probe) {
-            probe[1] = '\0';
-        } else {
-            *slash = '\0';
-        }
-        if (strcmp(probe, "/") == 0) return statfs(probe, out);
-    }
-}
-
-static uint64_t stat_allocated_bytes(const char *path) {
-    struct stat st;
-    if (!path || !path[0] || stat(path, &st) != 0 || st.st_blocks <= 0) return 0;
-    return (uint64_t)st.st_blocks * 512u;
-}
-
-/* Count blocks already owned by this transaction. Logical st_size is not
- * usable here because ftruncate creates sparse full-length files; st_blocks
- * correctly distinguishes that from posix_fallocate's real reservation. */
-static uint64_t runtime_tx_allocated_bytes(const runtime_tx_entry_t *entry) {
-    uint64_t allocated = 0;
-    if (!entry) return 0;
-    if (!entry->multi_file) return stat_allocated_bytes(entry->tmp_path);
-    if (entry->manifest_index && entry->manifest_blob) {
-        const manifest_index_entry_t *idx =
-            (const manifest_index_entry_t *)entry->manifest_index;
-        for (uint64_t i = 0; i < entry->manifest_index_count; i++) {
-            char file_path[512];
-            char tmp_path[528];
-            size_t plen = idx[i].path_len;
-            if (plen == 0 || plen >= sizeof(file_path)) continue;
-            if (json_copy_unescaped_string(
-                    entry->manifest_blob + idx[i].path_offset,
-                    entry->manifest_blob + idx[i].path_offset + plen,
-                    file_path, sizeof(file_path)) != 0) continue;
-            snprintf(tmp_path, sizeof(tmp_path), "%s.ps5up2-tmp", file_path);
-            {
-                uint64_t blocks = stat_allocated_bytes(tmp_path);
-                allocated = UINT64_MAX - allocated < blocks
-                                ? UINT64_MAX : allocated + blocks;
-            }
-        }
-    }
-    return allocated;
-}
-
-static int handle_fs_list_volumes(runtime_state_t *state, int client_fd,
-                                   uint64_t trace_id) {
+static int handle_fs_list_volumes(runtime_state_t *state) {
     const size_t RESP_CAP = 64u * 1024u; /* heap; ~330 B per mount, was 16 KiB */
     char *resp = NULL;
     size_t off = 0;
@@ -5992,19 +1842,17 @@ static int handle_fs_list_volumes(runtime_state_t *state, int client_fd,
      * actual mount/unmount events so it's always reasonably current
      * for a listing query -- and if it's slightly stale, the Volumes
      * tab just shows one spurious entry that disappears on the next
-     * refresh, which is much better than a wedged mgmt thread. The
+     * refresh, which is much better than a wedged management worker. The
      * FS_UNMOUNT handler already uses MNT_NOWAIT for the same reason. */
     nmnts = mntinfo_snapshot(&mnts);
     if (nmnts < 0 || mnts == NULL) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_list_volumes_getmntinfo_failed", 33);
+        return mgmt_reply(MGMT_FRAME_ERROR, "fs_list_volumes_getmntinfo_failed", 33);
     }
 
     resp = (char *)malloc(RESP_CAP);
     if (!resp) {
         free(mnts);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_list_volumes_oom", 19);
+        return mgmt_reply(MGMT_FRAME_ERROR, "fs_list_volumes_oom", 19);
     }
 
     n = snprintf(resp + off, RESP_CAP - off, "{\"volumes\":[");
@@ -6134,8 +1982,7 @@ static int handle_fs_list_volumes(runtime_state_t *state, int client_fd,
                     i, nmnts);
             free(resp);
             free(mnts);
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "fs_list_volumes_reply_truncated", 31);
+            return mgmt_reply(MGMT_FRAME_ERROR, "fs_list_volumes_reply_truncated", 31);
         }
         off += (size_t)n;
         /* Defensive belt-and-braces clamp. The check above already
@@ -6162,338 +2009,8 @@ static int handle_fs_list_volumes(runtime_state_t *state, int client_fd,
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    rc = send_frame(client_fd, FTX2_FRAME_FS_LIST_VOLUMES_ACK, 0, trace_id,
-                    resp, (uint64_t)off);
+    rc = mgmt_reply(MGMT_FRAME_FS_LIST_VOLUMES_ACK, resp, (uint64_t)off);
     free(resp);
-    return rc;
-}
-
-/* ── FS_LIST_DIR handler ─────────────────────────────────────────────────────
- *
- * Enumerates immediate children of a directory. Bounded response:
- *   - max 256 entries per call; clients paginate with `offset`
- *   - each entry is {name, kind, size}; kind in {file, dir, link, other}
- *   - response body sized to fit a 32 KiB stack buffer (256 × ~120B/entry)
- *
- * Safety: path must be absolute (`/`-prefixed) and must not contain `..`.
- * The payload does not impose a prefix allowlist here — read access is
- * gated by the kernel's own permissions on the running payload process.
- *
- * Request JSON: `{path, offset?, limit?}`
- * Response JSON: `{path, entries:[{name,kind,size}], truncated:bool, total_scanned:N}`
- */
-static int handle_fs_list_dir(runtime_state_t *state, int client_fd,
-                               uint64_t trace_id,
-                               const char *request_body, uint64_t body_len) {
-    const size_t RESP_CAP = 32u * 1024u;
-    char path[512];
-    char *resp = NULL;
-    size_t off = 0;
-    int n;
-    int rc;
-    DIR *dir = NULL;
-    struct dirent *ent = NULL;
-    uint64_t offset_req = 0;
-    uint64_t limit_req = 256;
-    uint64_t idx = 0;      /* running index over all readdir results */
-    uint64_t emitted = 0;
-    int first_entry = 1;
-    int truncated = 0;
-
-    if (!state) return -1;
-    (void)body_len;
-    path[0] = '\0';
-    if (request_body) {
-        extract_json_string_field(request_body, "path", path, sizeof(path));
-        {
-            uint64_t v = extract_json_uint64_field(request_body, "offset");
-            if (v > 0) offset_req = v;
-        }
-        {
-            uint64_t v = extract_json_uint64_field(request_body, "limit");
-            if (v > 0 && v < 1024) limit_req = v;
-            /* Clamp to the buffer-safe ceiling. 256 ≈ 30 KiB response body. */
-            if (limit_req > 256) limit_req = 256;
-        }
-    }
-    /* 32 KiB on the stack is risky on PS5's bounded thread stacks; heap-alloc. */
-    resp = (char *)malloc(RESP_CAP);
-    if (!resp) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_list_dir_oom", 15);
-    }
-    if (!path[0] || path[0] != '/') {
-        free(resp);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_list_dir_bad_path", 20);
-    }
-    /* Component-scoped traversal check: rejects `..` only when it
-     * appears as a path component of its own. A bare `strstr("..")`
-     * here used to false-positive on legitimate filenames like
-     * `..some-cache` or `something..bak`, locking the user out of
-     * their own directories via the File-System tab. The
-     * destructive-op path already uses path_has_dotdot_component
-     * for the same reason; FS_LIST_DIR was the lone outlier. */
-    if (path_has_dotdot_component(path)) {
-        free(resp);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_list_dir_path_denied", 23);
-    }
-
-    dir = opendir(path);
-    if (!dir) {
-        char err[80];
-        int el = snprintf(err, sizeof(err), "fs_list_dir_opendir_errno_%d", errno);
-        if (el < 0) el = 0;
-        free(resp);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id, err, (uint64_t)el);
-    }
-
-    {
-        char path_esc[1024];
-        json_escape_into(path, path_esc, sizeof(path_esc));
-        n = snprintf(resp + off, RESP_CAP - off,
-                     "{\"path\":\"%s\",\"entries\":[", path_esc);
-    }
-    if (n < 0 || (size_t)n >= RESP_CAP - off) {
-        closedir(dir);
-        free(resp);
-        return -1;
-    }
-    off += (size_t)n;
-
-    while ((ent = readdir(dir)) != NULL) {
-        const char *name = ent->d_name;
-        char full[1024];
-        struct stat st;
-        const char *kind = "other";
-        uint64_t size = 0;
-        int stat_ok;
-
-        /* Skip "." and ".." — callers never care and they would otherwise
-         * inflate every response by two entries. */
-        if (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'))) {
-            continue;
-        }
-
-        if (idx < offset_req) {
-            idx += 1;
-            continue;
-        }
-        if (emitted >= limit_req) {
-            truncated = 1;
-            break;
-        }
-
-        if (snprintf(full, sizeof(full), "%s/%s", path, name) >= (int)sizeof(full)) {
-            /* Skip without incrementing `idx`: the client uses
-             * (entries.is_empty() || !truncated) to decide when
-             * to stop paginating. If a page is dominated by
-             * name-too-long entries, incrementing idx but emitting
-             * nothing produced a 0-entry, !truncated response that
-             * the client read as "directory exhausted" — making
-             * everything past that page invisible. Leaving idx
-             * untouched keeps the skipped entries invisible to
-             * pagination so the loop continues and emits the
-             * subsequent in-range entries on the next page. */
-            continue;
-        }
-        stat_ok = (lstat(full, &st) == 0);
-        if (stat_ok) {
-            if (S_ISDIR(st.st_mode)) kind = "dir";
-            else if (S_ISREG(st.st_mode)) { kind = "file"; size = (uint64_t)st.st_size; }
-            else if (S_ISLNK(st.st_mode)) kind = "link";
-        } else {
-            /* stat failure is common on cross-mount symlinks and special
-             * entries; skip silently rather than poisoning the whole list. */
-            kind = "unknown";
-        }
-
-        /* Escape name for JSON: only double-quote and backslash need escaping;
-         * control chars are rare in filenames and would require a bigger
-         * escape table. Conservative: replace them with '?'. */
-        {
-            char esc[256];
-            size_t ei = 0;
-            size_t ni = 0;
-            for (; name[ni] && ei + 2 < sizeof(esc); ni++) {
-                unsigned char c = (unsigned char)name[ni];
-                if (c == '"' || c == '\\') {
-                    esc[ei++] = '\\';
-                    esc[ei++] = (char)c;
-                } else if (c < 0x20) {
-                    esc[ei++] = '?';
-                } else {
-                    esc[ei++] = (char)c;
-                }
-            }
-            esc[ei] = '\0';
-
-            /* mtime in seconds since the Unix epoch, or 0 when stat
-             * failed (matches the "unknown" kind branch). The
-             * desktop's Library uses this to sort by recency
-             * ("Most recent first") so a freshly-uploaded game
-             * appears at the top without manual scrolling. */
-            long long mtime_sec = stat_ok ? (long long)st.st_mtime : 0;
-            n = snprintf(resp + off, RESP_CAP - off,
-                         "%s{\"name\":\"%s\",\"kind\":\"%s\",\"size\":%llu,\"mtime\":%lld}",
-                         first_entry ? "" : ",",
-                         esc, kind,
-                         (unsigned long long)size,
-                         mtime_sec);
-        }
-        if (n < 0 || (size_t)n >= RESP_CAP - off) {
-            truncated = 1;
-            break;
-        }
-        off += (size_t)n;
-        first_entry = 0;
-        emitted += 1;
-        idx += 1;
-    }
-    closedir(dir);
-
-    n = snprintf(resp + off, RESP_CAP - off,
-                 "],\"truncated\":%s,\"total_scanned\":%llu,\"returned\":%llu}",
-                 truncated ? "true" : "false",
-                 (unsigned long long)idx,
-                 (unsigned long long)emitted);
-    if (n < 0 || (size_t)n >= RESP_CAP - off) {
-        free(resp);
-        return -1;
-    }
-    off += (size_t)n;
-
-    pthread_mutex_lock(&state->state_mtx);
-    state->command_count += 1;
-    pthread_mutex_unlock(&state->state_mtx);
-    rc = send_frame(client_fd, FTX2_FRAME_FS_LIST_DIR_ACK, 0, trace_id,
-                    resp, (uint64_t)off);
-    free(resp);
-    return rc;
-}
-
-/* ── FS_HASH handler ─────────────────────────────────────────────────────────
- *
- * Computes the BLAKE3 hash of a single file on the PS5 and returns the
- * 32-byte digest as hex, plus the file's size for consistency checks.
- * Used by the desktop app's "Safe" resume mode to reconcile local-vs-
- * remote content when size equality alone isn't enough.
- *
- * Request JSON:  `{"path":"/abs/path/to/file"}`
- * Response JSON: `{"path":"...","size":N,"hash":"<64-hex-chars>"}`
- *
- * Safety: path must be absolute and must not contain `..`. Read access
- * is gated by the kernel's own permissions; no prefix allowlist.
- *
- * Performance: streams the file in 64 KiB chunks — doesn't buffer the
- * whole file in memory. A 1 GiB file hashes in ~2-3 s on PS5 UFS. For
- * large trees the client should be judicious about how often it calls
- * this (Safe mode only, and only after Fast already filtered by size).
- */
-static int handle_fs_hash(runtime_state_t *state, int client_fd,
-                           uint64_t trace_id,
-                           const char *request_body, uint64_t body_len) {
-    /* Per-function stack budget is tight on the PS5 mgmt thread — keep
-     * large buffers on the heap. An earlier version had `buf[65536]` on
-     * stack which crashed the payload when Safe-mode reconcile called
-     * FS_HASH in rapid succession. Local allocations here are all small
-     * (<1 KiB combined); the 64 KiB read buffer + the blake3_hasher
-     * live on the heap. */
-    enum { READ_BUF_SIZE = 65536 };
-    char path[512];
-    char resp[256];
-    char hex[BLAKE3_OUT_LEN * 2 + 1];
-    blake3_hasher *hasher = NULL;
-    unsigned char *buf = NULL;
-    uint8_t digest[BLAKE3_OUT_LEN];
-    struct stat st;
-    ssize_t r;
-    int fd = -1;
-    int n;
-    int rc;
-    static const char hexchars[] = "0123456789abcdef";
-    size_t i;
-
-    if (!state) return -1;
-    (void)body_len;
-    path[0] = '\0';
-    if (request_body) {
-        extract_json_string_field(request_body, "path", path, sizeof(path));
-    }
-    /* Use the component-aware dotdot check so legitimate filenames
-     * like "save..bak" (allowed) pass through; the bare strstr "..":
-     * substring rejected those by mistake. is_path_allowed already
-     * uses the same component check internally — wraps with the
-     * writable-roots allowlist for consistency with other handlers. */
-    int unsafe = is_unsafe_read_request(request_body);
-    if (!path[0] || (!is_path_allowed(path) &&
-                      !(unsafe && is_safe_unsafe_read_path(path)))) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_hash_bad_path", 16);
-    }
-    if (stat(path, &st) != 0) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_hash_stat_failed", 19);
-    }
-    if (!S_ISREG(st.st_mode)) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_hash_not_regular_file", 24);
-    }
-    buf = (unsigned char *)malloc(READ_BUF_SIZE);
-    hasher = (blake3_hasher *)malloc(sizeof(*hasher));
-    if (!buf || !hasher) {
-        free(buf);
-        free(hasher);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_hash_oom", 11);
-    }
-    fd = open(path, O_RDONLY);
-    if (fd < 0) {
-        free(buf);
-        free(hasher);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_hash_open_failed", 19);
-    }
-    blake3_hasher_init(hasher);
-    for (;;) {
-        r = read(fd, buf, READ_BUF_SIZE);
-        if (r < 0) {
-            if (errno == EINTR) continue;
-            close(fd);
-            free(buf);
-            free(hasher);
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "fs_hash_read_failed", 19);
-        }
-        if (r == 0) break;
-        blake3_hasher_update(hasher, buf, (size_t)r);
-    }
-    close(fd);
-    blake3_hasher_finalize(hasher, digest, BLAKE3_OUT_LEN);
-    free(buf);
-    free(hasher);
-
-    for (i = 0; i < BLAKE3_OUT_LEN; i++) {
-        hex[2 * i]     = hexchars[(digest[i] >> 4) & 0xf];
-        hex[2 * i + 1] = hexchars[digest[i] & 0xf];
-    }
-    hex[BLAKE3_OUT_LEN * 2] = '\0';
-
-    {
-        char path_esc[1024];
-        json_escape_into(path, path_esc, sizeof(path_esc));
-        n = snprintf(resp, sizeof(resp),
-                     "{\"path\":\"%s\",\"size\":%llu,\"hash\":\"%s\"}",
-                     path_esc, (unsigned long long)st.st_size, hex);
-    }
-    if (n < 0 || (size_t)n >= sizeof(resp)) return -1;
-
-    pthread_mutex_lock(&state->state_mtx);
-    state->command_count += 1;
-    pthread_mutex_unlock(&state->state_mtx);
-    rc = send_frame(client_fd, FTX2_FRAME_FS_HASH_ACK, 0, trace_id,
-                    resp, (uint64_t)n);
     return rc;
 }
 
@@ -6576,997 +2093,6 @@ int is_path_allowed(const char *p) {
     return path_resolve_allowed(p, is_path_lexically_allowed);
 }
 
-/* Recursively remove `path`. Descends directories, unlinks regular files
- * and symlinks, rmdir's empty directories. Depth cap prevents a
- * pathological symlink loop from exhausting the thread stack. */
-/* Forward declarations: rm_rf_op below uses fs_op_* helpers + the
- * recursive_size walker, all of which are defined further down the
- * file (next to the FS_OP_STATUS handler and cp_rf_op respectively).
- * Inserting prototypes here keeps the rm_rf cluster in its existing
- * spot rather than reshuffling 200 lines of unrelated code. */
-static int  fs_op_cancel_pending(int idx);
-static void fs_op_progress(int idx, uint64_t delta);
-
-/* Op-aware recursive remove. Mirrors rm_rf but, when `op_idx >= 0`,
- * checks the cancel flag periodically (between siblings) and reports
- * progress (bytes freed) to the in-flight ops table after each unlink.
- *
- * Returns:
- *   0  success
- *  -1  hard error (continues best-effort like rm_rf does)
- *  -2  cancelled mid-flight (only when op_idx >= 0 and the engine
- *      called FS_OP_CANCEL on this op_id)
- *
- * Cancel is checked between directory entries — same cadence as
- * cp_rf_op, which is fine because each unlink/rmdir on PS5 UFS is
- * sub-millisecond, so the user-visible cancel latency stays in the
- * "tens of ms" range even on small-file-heavy regimes (PPSA01342:
- * 223k files).
- *
- * Progress unit is bytes-freed: we have st.st_size from the lstat we
- * already did to decide regular-file vs directory, so adding it to
- * the op counter is free. Bytes match the unit fs_copy uses, so the
- * existing engine + UI plumbing renders delete progress without
- * changes (total_bytes from recursive_size, bytes_copied from this
- * accumulator). */
-/* The recursive remove, chmod and size walks live in fs_jobs.c (shared with the job.run
- * operations); these adapt the in-flight op table (progress + cancel by slot) to its hooks. */
-static int fsop_cancelled_cb(void *arg) { return fs_op_cancel_pending((int)(intptr_t)arg); }
-static void fsop_file_cb(void *arg, uint64_t bytes) { fs_op_progress((int)(intptr_t)arg, bytes); }
-
-static int rm_rf_op(const char *path, int depth, int op_idx) {
-    fsj_hooks_t h = { fsop_cancelled_cb, fsop_file_cb, (void *)(intptr_t)op_idx, NULL };
-    return fsj_rm_rf(path, depth, op_idx >= 0 ? &h : NULL);
-}
-
-static int rm_rf(const char *path, int depth) {
-    return rm_rf_op(path, depth, -1);
-}
-
-/* Recursive chmod on `path`. Descends dirs. Same depth cap as rm_rf. */
-static int chmod_rf(const char *path, mode_t mode, int depth) {
-    return fsj_chmod_rf(path, (unsigned)mode, depth, NULL);
-}
-
-/* Recursive copy from `src` to `dst`. Descends dirs, copies regular
- * files byte-for-byte with mode bits preserved. Refuses to overwrite
- * an existing `dst` — the caller (FS_COPY handler) pre-checks. Depth
- * cap matches rm_rf/chmod_rf to bound symlink-loop stack usage.
- *
- * Symlinks are recreated as symlinks (not dereferenced) — matches
- * `cp -R` semantics. Special files (devices, sockets, fifos) are
- * skipped with a log line; they don't belong in a user data tree.
- *
- * Throughput: 4 MiB IOs + posix_fadvise(SEQUENTIAL) hint + up-front
- * posix_fallocate so the FS reserves contiguous extents. The previous
- * 64 KiB buffer required ~540 thousand read/write syscall pairs for
- * a 33 GiB file — syscall overhead alone capped throughput at
- * ~22 MiB/s on PS5 NVMe, roughly 10× below the disk-limited rate.
- * 4 MiB buffer × kernel-readahead hint should bring us close to the
- * sequential-IO ceiling (~200 MiB/s observed on internal NVMe).
- *
- * The buffer is allocated once at the cp_rf entry that triggers the
- * S_ISREG branch — recursive descent re-allocates per file. Trading
- * peak RSS for throughput here is fine because cp_rf isn't run on
- * the FTX2 transfer port that needs its own 32 MiB shard buffer. */
-/* ── In-flight fs op tracking (progress + cancel) ─────────────────────────────
- *
- * Long-running fs ops (cp_rf and the copy fallback inside the EXDEV
- * move path) update bytes_copied as they go, and check cancel_requested
- * between buffer flushes. The engine polls FS_OP_STATUS on a separate
- * mgmt-port connection to surface progress to the user, and sends
- * FS_OP_CANCEL when the Stop button fires.
- *
- * Indexed by op_id, which is the trace_id of the originating FS_COPY
- * frame. Bounded at MAX_FS_OPS; allocation is strict first-fit and
- * fails (returns -1 → fs_copy_too_many_inflight) when all slots are
- * busy, rather than evicting an in-flight op. Eviction would silently
- * blind the client's progress poll on whichever op got displaced and
- * surface as a confusing "404 op_id not found" mid-copy, so we'd
- * rather refuse the new op and let the client retry once a slot frees.
- *
- * Single mutex protects the table; per-op fields are read/written
- * under the same lock. The lock is taken briefly inside cp_rf's
- * per-buffer loop (every 4 MiB write) — negligible overhead vs disk
- * I/O, and cleaner than a per-slot mutex for state this small. */
-#define MAX_FS_OPS 4
-
-typedef struct {
-    int in_use;
-    uint64_t op_id;
-    char kind[16];          /* "fs_copy", "fs_move", … */
-    char from[512];
-    char to[512];
-    uint64_t total_bytes;   /* 0 if unknown (caller failed to walk) */
-    uint64_t bytes_copied;
-    int cancel_requested;
-    uint64_t started_at_us;
-} fs_op_state_t;
-
-static fs_op_state_t g_fs_ops[MAX_FS_OPS];
-static pthread_mutex_t g_fs_ops_mtx = PTHREAD_MUTEX_INITIALIZER;
-
-/* Claim a slot for a new op. Returns the slot index on success or
- * -1 if all slots are full (caller should fail the FS_COPY frame
- * rather than block — a pathological 4-concurrent-fs_copy state
- * shouldn't happen in normal use; the cap prevents resource leaks
- * if it does). Caller must call fs_op_release when done.
- *
- * Stuck-op watchdog: if all slots are in_use AND any are older than
- * FS_OP_STUCK_THRESHOLD_US, reclaim the oldest-started one with a
- * log warning. This handles the "worker thread crashed without
- * calling fs_op_release" case which would otherwise permanently leak
- * the slot. The threshold is intentionally generous (24h) — a
- * legitimate copy of a 28 GiB folder over USB takes <30 minutes;
- * legitimate delete of a 200k-file game takes <10 minutes. Any op
- * still claiming a slot 24h after start is hung. */
-#define FS_OP_STUCK_THRESHOLD_US (24ULL * 60ULL * 60ULL * 1000000ULL)
-static int fs_op_register(uint64_t op_id, const char *kind,
-                          const char *from, const char *to,
-                          uint64_t total_bytes) {
-    int i;
-    int idx = -1;
-    uint64_t now = now_us();
-    pthread_mutex_lock(&g_fs_ops_mtx);
-    for (i = 0; i < MAX_FS_OPS; i++) {
-        if (!g_fs_ops[i].in_use) {
-            idx = i;
-            break;
-        }
-    }
-    if (idx < 0) {
-        /* No free slot — try the watchdog reclaim. Pick the
-         * oldest-started in_use slot; if it's past threshold,
-         * reclaim. Don't reclaim a recently-started slot even if
-         * we're at full capacity — that's normal load, not a leak. */
-        int oldest_idx = -1;
-        uint64_t oldest_start = UINT64_MAX;
-        for (i = 0; i < MAX_FS_OPS; i++) {
-            if (g_fs_ops[i].in_use && g_fs_ops[i].started_at_us < oldest_start) {
-                oldest_start = g_fs_ops[i].started_at_us;
-                oldest_idx = i;
-            }
-        }
-        if (oldest_idx >= 0 && now > oldest_start &&
-            (now - oldest_start) > FS_OP_STUCK_THRESHOLD_US) {
-            fprintf(stderr,
-                    "[payload2] fs_op watchdog: reclaiming stuck slot %d "
-                    "(op_id=%llu kind=%s, age=%llu s) — likely a worker "
-                    "crashed without releasing\n",
-                    oldest_idx,
-                    (unsigned long long)g_fs_ops[oldest_idx].op_id,
-                    g_fs_ops[oldest_idx].kind,
-                    (unsigned long long)((now - oldest_start) / 1000000ULL));
-            idx = oldest_idx;
-            /* Fall through to the normal init below. */
-        }
-    }
-    if (idx >= 0) {
-        memset(&g_fs_ops[idx], 0, sizeof(g_fs_ops[idx]));
-        g_fs_ops[idx].in_use = 1;
-        g_fs_ops[idx].op_id = op_id;
-        snprintf(g_fs_ops[idx].kind, sizeof(g_fs_ops[idx].kind), "%s", kind);
-        snprintf(g_fs_ops[idx].from, sizeof(g_fs_ops[idx].from), "%s", from ? from : "");
-        snprintf(g_fs_ops[idx].to,   sizeof(g_fs_ops[idx].to),   "%s", to   ? to   : "");
-        g_fs_ops[idx].total_bytes = total_bytes;
-        g_fs_ops[idx].started_at_us = now;
-    }
-    pthread_mutex_unlock(&g_fs_ops_mtx);
-    return idx;
-}
-
-static void fs_op_release(int idx) {
-    if (idx < 0 || idx >= MAX_FS_OPS) return;
-    pthread_mutex_lock(&g_fs_ops_mtx);
-    memset(&g_fs_ops[idx], 0, sizeof(g_fs_ops[idx]));
-    pthread_mutex_unlock(&g_fs_ops_mtx);
-}
-
-/* Bump the bytes counter by `delta`. Hot path — called once per
- * COPY_BUF (4 MiB) write inside cp_rf. */
-static void fs_op_progress(int idx, uint64_t delta) {
-    if (idx < 0 || idx >= MAX_FS_OPS) return;
-    pthread_mutex_lock(&g_fs_ops_mtx);
-    if (g_fs_ops[idx].in_use) {
-        g_fs_ops[idx].bytes_copied += delta;
-    }
-    pthread_mutex_unlock(&g_fs_ops_mtx);
-}
-
-/* Patch in the recursive_size pre-walk total once it completes. We
- * register the slot *before* walking now (so the engine's status
- * poller can find the op while the walk runs); this fills in the
- * total_bytes field afterward without re-acquiring the slot. The
- * client renders bytes_copied/total_bytes; total_bytes==0 means
- * "still scanning" and the UI suppresses the percentage until the
- * walk completes — far better than the old behavior where the
- * 250 ms poll-start delay routinely beat a slow recursive walk and
- * latched a "your payload is broken" banner on the very first poll. */
-static void fs_op_set_total(int idx, uint64_t total) {
-    if (idx < 0 || idx >= MAX_FS_OPS) return;
-    pthread_mutex_lock(&g_fs_ops_mtx);
-    if (g_fs_ops[idx].in_use) {
-        g_fs_ops[idx].total_bytes = total;
-    }
-    pthread_mutex_unlock(&g_fs_ops_mtx);
-}
-
-/* Atomic-ish read of the cancel flag. Called from cp_rf's inner loop
- * before each read() so an inflight 28 GiB copy notices the cancel
- * within one COPY_BUF (4 MiB) of progress. */
-static int fs_op_cancel_pending(int idx) {
-    int c;
-    if (idx < 0 || idx >= MAX_FS_OPS) return 0;
-    pthread_mutex_lock(&g_fs_ops_mtx);
-    c = g_fs_ops[idx].in_use ? g_fs_ops[idx].cancel_requested : 0;
-    pthread_mutex_unlock(&g_fs_ops_mtx);
-    return c;
-}
-
-/* Snapshot for FS_OP_STATUS. Returns 0 on found, -1 on no-such-op. */
-static int fs_op_snapshot(uint64_t op_id, fs_op_state_t *out) {
-    int i;
-    int found = -1;
-    pthread_mutex_lock(&g_fs_ops_mtx);
-    for (i = 0; i < MAX_FS_OPS; i++) {
-        if (g_fs_ops[i].in_use && g_fs_ops[i].op_id == op_id) {
-            *out = g_fs_ops[i];
-            found = 0;
-            break;
-        }
-    }
-    pthread_mutex_unlock(&g_fs_ops_mtx);
-    return found;
-}
-
-/* Set the cancel flag on the matching op. Returns 0 on found, -1 on
- * no-such-op. The op handler picks this up at its next loop check. */
-static int fs_op_set_cancel(uint64_t op_id) {
-    int i;
-    int found = -1;
-    pthread_mutex_lock(&g_fs_ops_mtx);
-    for (i = 0; i < MAX_FS_OPS; i++) {
-        if (g_fs_ops[i].in_use && g_fs_ops[i].op_id == op_id) {
-            g_fs_ops[i].cancel_requested = 1;
-            found = 0;
-            break;
-        }
-    }
-    pthread_mutex_unlock(&g_fs_ops_mtx);
-    return found;
-}
-
-/* Recursive byte-count of a path. Used by handle_fs_copy /
- * handle_fs_move's copy-fallback to populate total_bytes before
- * starting the work, so the engine's progress poll can show a
- * percentage. Cheap relative to the copy itself (one stat per file).
- * Returns 0 and writes total to *out on success; -1 on any stat
- * failure (path missing, permission, etc.). */
-/* Depth cap matching rm_rf_op / chmod_rf / remove_recursive_path. Bounds
- * stack usage against symlink loops or pathological nesting in the source
- * tree we're sizing. Without it, a large stat-walk could stack-overflow
- * the payload before producing a clean error.
- *
- * `op_idx` is the in-flight op slot (or -1 if untracked). When >= 0,
- * the walker checks the cancel flag periodically so a Stop click
- * during the pre-walk takes effect quickly, instead of waiting for
- * the much longer cp_rf phase to finish first. Returns -2 on cancel
- * (matches cp_rf_op's convention). */
-#define RECURSIVE_SIZE_MAX_DEPTH 64
-
-static int recursive_size_op(const char *path, uint64_t *out, int op_idx) {
-    fsj_hooks_t h = { fsop_cancelled_cb, NULL, (void *)(intptr_t)op_idx, NULL };
-    return fsj_tree_size(path, out, NULL, 0, op_idx >= 0 ? &h : NULL);
-}
-
-/* ── Async-write file copier (parallel read + write) ──────────────────────────
- *
- * The original cp_rf body did a sequential `read(sfd) → write(dfd)`
- * loop. For an internal copy from /data (NVMe ~800 MiB/s) to
- * /mnt/usb0 (USB exFAT ~30 MiB/s) the read-then-write per-buffer
- * latency adds: throughput is bounded by SUM of the two side rates,
- * not the slower one alone. Concretely a 4 MiB buffer with a 5 ms
- * read + 130 ms write spends ~96% of its time waiting for the write
- * — but the next read is also serialized behind it.
- *
- * This helper runs the write on a worker thread fed by a 2-slot
- * ring buffer. While the worker is writing buf[A] the reader fills
- * buf[B], and they swap. End-to-end throughput becomes
- * `max(read_rate, write_rate)` ≈ the slower side (USB), which is
- * the absolute ceiling — already up from 21 MiB/s observed on the
- * old serial path to whatever the destination's true sustained
- * write speed is.
- *
- * Buffer size bumped to 16 MiB (vs old 4 MiB): reduces per-iteration
- * overhead, gives exFAT/USB a bigger contiguous block to write,
- * and leaves the kernel more flexibility to coalesce. Two of these
- * + the read buffer === ~32 MiB peak per concurrent copy, well
- * under PS5 user-mode RAM budget.
- *
- * Returns: 0 success, -1 error, -2 cancel. */
-#define ASYNC_COPY_BUF_BYTES (16u * 1024u * 1024u)
-
-typedef struct {
-    pthread_mutex_t mtx;
-    pthread_cond_t  cv_filled;   /* reader → writer: slot has data */
-    pthread_cond_t  cv_emptied;  /* writer → reader: slot consumed */
-    int             dfd;
-    const char     *dst_path;    /* for error logging only */
-    unsigned char  *bufs[2];
-    size_t          slot_len[2]; /* 0 = empty, >0 = bytes to write */
-    int             eof[2];      /* 1 = no more data after this slot */
-    int             writer_errno; /* sticky; reader bails if non-zero */
-    int             shutdown;    /* set on cancel/error to wake the writer */
-    pthread_t       tid;
-    int             tid_started;
-} async_copy_t;
-
-static void *async_copy_writer_thread(void *arg) {
-    /* Name this thread: the process listing shows a representative
-     * thread that is not reliably main, so an unnamed worker makes the
-     * whole process read as "payload.elf". See proc_identity.h. */
-    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
-    async_copy_t *w = (async_copy_t *)arg;
-    int slot = 0;
-    /* Bytes written since the last periodic fsync. A cross-volume move
-     * (e.g. external SSD -> internal) is a local-to-local byte copy with
-     * NO network to pace the writer, so dirty pages pile up far faster
-     * than during an upload. Left unbounded, a multi-GB game copy grows
-     * the kernel dirty-page backlog into the GBs and the PS5 kernel
-     * panics under the writeback/VM pressure (observed: console shutdown,
-     * lost jailbreak, mid-copy of a ~50 GB title). fsync drains the dirty
-     * pages to clean ones on a fixed cadence so the backlog stays bounded
-     * -- the same fix piped_writer_thread() uses for huge uploads. See
-     * PS5UPLOAD2_WRITEBACK_FSYNC_BYTES. */
-    uint64_t since_fsync = 0;
-    for (;;) {
-        size_t len;
-        int eof;
-        pthread_mutex_lock(&w->mtx);
-        while (w->slot_len[slot] == 0 && !w->eof[slot] && !w->shutdown) {
-            pthread_cond_wait(&w->cv_filled, &w->mtx);
-        }
-        if (w->shutdown) {
-            pthread_mutex_unlock(&w->mtx);
-            return NULL;
-        }
-        len = w->slot_len[slot];
-        eof = w->eof[slot];
-        pthread_mutex_unlock(&w->mtx);
-
-        if (len > 0) {
-            ssize_t written = 0;
-            while ((size_t)written < len) {
-                ssize_t wr = write(w->dfd, w->bufs[slot] + written, len - (size_t)written);
-                if (wr < 0) {
-                    if (errno == EINTR) continue;
-                    pthread_mutex_lock(&w->mtx);
-                    w->writer_errno = errno;
-                    pthread_cond_broadcast(&w->cv_emptied);
-                    pthread_mutex_unlock(&w->mtx);
-                    fprintf(stderr,
-                            "[payload2] async_copy: write(%s) failed errno=%d\n",
-                            w->dst_path, errno);
-                    return NULL;
-                }
-                written += wr;
-            }
-            /* Bound the dirty-page backlog: flush on a fixed byte cadence
-             * so a huge cross-volume copy can't balloon the kernel's dirty
-             * count into the GBs and panic the console. Done before the
-             * empty-signal so the reader naturally blocks on a full slot
-             * during the flush -- that backpressure is exactly the pacing
-             * we want. A flush failure isn't fatal: a real I/O error still
-             * surfaces via the write() path above. */
-#if PS5UPLOAD2_WRITEBACK_FSYNC_BYTES > 0
-            since_fsync += (uint64_t)len;
-            if (since_fsync >= PS5UPLOAD2_WRITEBACK_FSYNC_BYTES) {
-                (void)fsync(w->dfd);
-                since_fsync = 0;
-            }
-#endif
-        }
-
-        pthread_mutex_lock(&w->mtx);
-        w->slot_len[slot] = 0;
-        pthread_cond_signal(&w->cv_emptied);
-        pthread_mutex_unlock(&w->mtx);
-
-        if (eof) return NULL;
-        slot = 1 - slot;
-    }
-}
-
-/* Run an async-write copy of all bytes from `sfd` to `dfd`. Updates
- * the op slot's bytes_copied counter on each completed read so the
- * engine's progress poll sees the value advance in real time. */
-static int async_copy_fd(int sfd, int dfd, const char *src_path,
-                         const char *dst_path, int op_idx) {
-    async_copy_t w;
-    memset(&w, 0, sizeof(w));
-    w.dfd = dfd;
-    w.dst_path = dst_path;
-    if (pthread_mutex_init(&w.mtx, NULL) != 0) return -1;
-    if (pthread_cond_init(&w.cv_filled, NULL) != 0) {
-        pthread_mutex_destroy(&w.mtx);
-        return -1;
-    }
-    if (pthread_cond_init(&w.cv_emptied, NULL) != 0) {
-        pthread_cond_destroy(&w.cv_filled);
-        pthread_mutex_destroy(&w.mtx);
-        return -1;
-    }
-    w.bufs[0] = (unsigned char *)malloc(ASYNC_COPY_BUF_BYTES);
-    w.bufs[1] = (unsigned char *)malloc(ASYNC_COPY_BUF_BYTES);
-    if (!w.bufs[0] || !w.bufs[1]) {
-        free(w.bufs[0]);
-        free(w.bufs[1]);
-        pthread_cond_destroy(&w.cv_emptied);
-        pthread_cond_destroy(&w.cv_filled);
-        pthread_mutex_destroy(&w.mtx);
-        return -1;
-    }
-    if (create_worker_thread(&w.tid, async_copy_writer_thread, &w) != 0) {
-        free(w.bufs[0]);
-        free(w.bufs[1]);
-        pthread_cond_destroy(&w.cv_emptied);
-        pthread_cond_destroy(&w.cv_filled);
-        pthread_mutex_destroy(&w.mtx);
-        return -1;
-    }
-    w.tid_started = 1;
-
-    int rc = 0;
-    int slot = 0;
-    off_t total_read = 0;
-    for (;;) {
-        /* Cancel check between each read — same granularity as
-         * before (one buffer = 16 MiB now). */
-        if (op_idx >= 0 && fs_op_cancel_pending(op_idx)) {
-            rc = -2;
-            break;
-        }
-        /* Wait for our slot to be empty. The writer signals
-         * cv_emptied when it finishes a slot; we also wake on a
-         * writer error so we don't deadlock against a dead writer. */
-        pthread_mutex_lock(&w.mtx);
-        while (w.slot_len[slot] != 0 && w.writer_errno == 0) {
-            pthread_cond_wait(&w.cv_emptied, &w.mtx);
-        }
-        if (w.writer_errno != 0) {
-            pthread_mutex_unlock(&w.mtx);
-            rc = -1;
-            break;
-        }
-        pthread_mutex_unlock(&w.mtx);
-
-        ssize_t r = read(sfd, w.bufs[slot], ASYNC_COPY_BUF_BYTES);
-        if (r < 0) {
-            if (errno == EINTR) continue;
-            fprintf(stderr,
-                    "[payload2] async_copy: read(%s) failed at offset %lld errno=%d\n",
-                    src_path, (long long)total_read, errno);
-            rc = -1;
-            break;
-        }
-        if (r == 0) {
-            /* Hand an EOF marker to the writer so it exits cleanly
-             * instead of waiting forever on the next slot. */
-            pthread_mutex_lock(&w.mtx);
-            w.eof[slot] = 1;
-            pthread_cond_signal(&w.cv_filled);
-            pthread_mutex_unlock(&w.mtx);
-            break;
-        }
-        total_read += r;
-        if (op_idx >= 0) fs_op_progress(op_idx, (uint64_t)r);
-
-        pthread_mutex_lock(&w.mtx);
-        w.slot_len[slot] = (size_t)r;
-        pthread_cond_signal(&w.cv_filled);
-        pthread_mutex_unlock(&w.mtx);
-
-        slot = 1 - slot;
-    }
-
-    if (rc != 0) {
-        /* Tell the writer to give up on whatever's queued. */
-        pthread_mutex_lock(&w.mtx);
-        w.shutdown = 1;
-        pthread_cond_broadcast(&w.cv_filled);
-        pthread_mutex_unlock(&w.mtx);
-    }
-    pthread_join(w.tid, NULL);
-    if (rc == 0 && w.writer_errno != 0) rc = -1;
-
-    free(w.bufs[0]);
-    free(w.bufs[1]);
-    pthread_cond_destroy(&w.cv_emptied);
-    pthread_cond_destroy(&w.cv_filled);
-    pthread_mutex_destroy(&w.mtx);
-    return rc;
-}
-
-/* Recursive copy with progress + cancel hooks. `op_idx` is a slot
- * into g_fs_ops (or -1 to disable the hooks for callers that don't
- * need cancellation/progress visibility). Returns:
- *   0   = success
- *  -1   = generic error (open, read, write, mkdir, etc.)
- *  -2   = cancel requested (distinguishable from -1 so the caller
- *         can return FS_OP_CANCEL_ACK instead of FS_COPY_ERROR). */
-/* Recursive copy. `overwrite` selects MERGE semantics:
- *
- *   0 — refuse to touch anything that already exists (the original
- *       behaviour; the caller pre-checks and the payload fails loudly).
- *   1 — merge into the destination: a colliding FILE is replaced, a
- *       colliding DIRECTORY is descended into, and anything in the
- *       destination that the source does not mention is left alone.
- *
- * The merge shape is deliberate. Users pasting or uploading a folder over an
- * existing one expect their few changed files to land without the rest of the
- * destination being wiped — replacing `eboot.bin` inside a game folder must
- * not delete the other 900 files next to it. */
-static int cp_rf_op(const char *src, const char *dst, int depth, int op_idx,
-                    int overwrite) {
-    struct stat st;
-    DIR *d;
-    struct dirent *e;
-    char sub_src[1024];
-    char sub_dst[1024];
-    int rc = 0;
-
-    if (depth > 64) return -1;
-    if (op_idx >= 0 && fs_op_cancel_pending(op_idx)) return -2;
-    if (lstat(src, &st) != 0) return -1;
-
-    if (S_ISLNK(st.st_mode)) {
-        char target[1024];
-        ssize_t len = readlink(src, target, sizeof(target) - 1);
-        if (len < 0) return -1;
-        target[len] = '\0';
-        if (overwrite) (void)unlink(dst);
-        if (symlink(target, dst) != 0) return -1;
-        return 0;
-    }
-
-    if (S_ISREG(st.st_mode)) {
-        int sfd = open(src, O_RDONLY | O_NOFOLLOW); /* lstat said regular: never read through a swapped-in link */
-        if (sfd < 0) return -1;
-        /* Open with 0777 (not source mode) so the destination is launch-
-         * ready regardless of what the source file's mode bits looked
-         * like. Sony's loader rejects game files lacking world-exec with
-         * CE-107750-0 ("can't start game or app"). Copying a folder that
-         * was previously uploaded with a pre-2.16.1 payload would inherit
-         * the 0644 source modes and reproduce that loader failure on the
-         * fresh copy — exactly the bug umask(0) + per-file fchmod(0777)
-         * was added to fix for the upload path. fchmod after open keeps
-         * the bits even if the dst FS's umask handling differs. */
-        /* O_EXCL is what turns a collision into an error. When merging we
-         * want the opposite: land on top of the existing file, truncating
-         * whatever was there. */
-        /* O_NOFOLLOW: a merge copy must not write THROUGH a link planted at dst (it would overwrite
-         * whatever the link points at, the AVA1 trust store included). */
-        int dfd = open(dst, O_WRONLY | O_CREAT | O_NOFOLLOW |
-                            (overwrite ? O_TRUNC : O_EXCL), 0777);
-        if (dfd < 0) { close(sfd); return -1; }
-        (void)fchmod(dfd, 0777);
-        /* Tell the kernel: we'll read this file front-to-back, prefetch
-         * aggressively. FreeBSD's readahead defaults to 64 KiB which is
-         * what was throttling us. With the SEQUENTIAL hint the kernel
-         * scales the readahead window up to handle large IOs. Failures
-         * are non-fatal — just lose the perf hint. */
-        (void)posix_fadvise(sfd, 0, 0, POSIX_FADV_SEQUENTIAL);
-        /* Reserve contiguous extents on the dst FS so the writer
-         * doesn't interleave block-allocation with data writes. UFS2
-         * (PS5 internal) honours this; exfatfs (USB exFAT) does too,
-         * via the fallocate emulation path.
-         *
-         * Most failures are non-fatal (FS doesn't support the hint —
-         * EINVAL/EOPNOTSUPP on tmpfs etc.) — fall through to the
-         * lazy-allocation path. But ENOSPC and EFBIG are early
-         * disk-full / file-too-big signals worth surfacing now
-         * instead of after we've written half the file: the kernel
-         * already proved it can't take the whole thing. Fail fast so
-         * the caller sees a specific "destination is full" error
-         * rather than a generic mid-copy write failure at some
-         * random offset. */
-        if (st.st_size > 0) {
-            int falloc_rc = posix_fallocate(dfd, 0, st.st_size);
-            if (falloc_rc == ENOSPC || falloc_rc == EFBIG) {
-                fprintf(stderr,
-                        "[payload2] fs_copy: posix_fallocate(%lld bytes) returned %d for %s — bailing early\n",
-                        (long long)st.st_size, falloc_rc, dst);
-                close(sfd);
-                close(dfd);
-                /* Best-effort cleanup of the empty/zero-extent dst
-                 * the open(O_CREAT) just produced — don't leave a
-                 * 0-byte ghost file. */
-                (void)unlink(dst);
-                return -1;
-            }
-            /* Other return values (0 success, EINVAL/EOPNOTSUPP,
-             * etc.) all fall through and let the read/write loop
-             * proceed with lazy allocation. */
-            /* If the preallocation succeeded for a large file, drain it
-             * now. On filesystems whose fallocate zero-fills through the
-             * buffer cache (rather than reserving bare extents), a
-             * multi-GB preallocation would otherwise hand the copy loop a
-             * huge dirty-page backlog before the first byte is even read
-             * -- the same writeback pressure that can panic the console.
-             * A pure extent-reserving fallocate leaves nothing dirty, so
-             * this is a cheap no-op there. Threshold mirrors the copy
-             * loop's flush cadence. */
-            if (falloc_rc == 0 &&
-                (uint64_t)st.st_size >= PS5UPLOAD2_WRITEBACK_FSYNC_BYTES) {
-                (void)fsync(dfd);
-            }
-        }
-        /* Hand the actual byte movement to the async-write helper:
-         * one writer thread + double-buffered 16 MiB slots so read
-         * and write run in parallel, capping throughput at the
-         * slower side instead of read+write summed. */
-        rc = async_copy_fd(sfd, dfd, src, dst, op_idx);
-        close(sfd);
-        close(dfd);
-        if (rc == -2) {
-            /* Cancelled mid-file — drop the partial dst so a retry
-             * doesn't get blocked by the dest-exists check. */
-            (void)unlink(dst);
-        } else if (rc != 0) {
-            /* Hard error — also drop the partial dst rather than
-             * leaving a 0-byte (or partially-written) ghost that
-             * would confuse the user. */
-            (void)unlink(dst);
-        }
-        return rc;
-    }
-
-    if (!S_ISDIR(st.st_mode)) {
-        /* Special file (device/socket/fifo) — skip. User data trees
-         * should never contain these, so silently dropping them is
-         * safer than failing the whole copy. */
-        fprintf(stderr, "[payload2] fs_copy: skipping non-regular %s\n", src);
-        return 0;
-    }
-
-    /* Directory: mkdir then descend. EEXIST on dst would indicate the
-     * pre-check missed something — treat as error so the caller sees
-     * partial-state.
-     *
-     * mkdir with 0777 (not source mode) for the same reason as the
-     * regular-file open above: Sony's loader needs world-executable
-     * directories for game-folder navigation. chmod after mkdir
-     * enforces the mode even if the dst FS's umask handling differs. */
-    if (mkdir(dst, 0777) != 0) {
-        /* Merging into a directory that already exists is the whole point of
-         * overwrite mode; any other mkdir failure is still fatal. */
-        struct stat dst_st;
-        if (!(overwrite && errno == EEXIST &&
-              lstat(dst, &dst_st) == 0 && S_ISDIR(dst_st.st_mode))) {
-            return -1;
-        }
-    }
-    (void)chmod(dst, 0777);
-    d = opendir(src);
-    if (!d) return -1;
-    while ((e = readdir(d)) != NULL) {
-        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
-        if (op_idx >= 0 && fs_op_cancel_pending(op_idx)) { rc = -2; break; }
-        int n1 = snprintf(sub_src, sizeof(sub_src), "%s/%s", src, e->d_name);
-        int n2 = snprintf(sub_dst, sizeof(sub_dst), "%s/%s", dst, e->d_name);
-        if (n1 < 0 || (size_t)n1 >= sizeof(sub_src) ||
-            n2 < 0 || (size_t)n2 >= sizeof(sub_dst)) { rc = -1; break; }
-        int sub_rc = cp_rf_op(sub_src, sub_dst, depth + 1, op_idx, overwrite);
-        if (sub_rc == -2) { rc = -2; break; }   /* propagate cancel */
-        if (sub_rc != 0) { rc = -1; /* per-file failure: keep going */ }
-    }
-    closedir(d);
-    return rc;
-}
-
-/* ── FS_OP_STATUS / FS_OP_CANCEL handlers ──────────────────────────────────
- *
- * Both take `{"op_id":<u64>}` in the body where op_id is the trace_id
- * of the originating FS_COPY frame. Status returns a JSON snapshot;
- * cancel flips the atomic flag the cp_rf loop checks every 4 MiB.
- *
- * These run on the mgmt-port worker pool (different connection from
- * the FS_COPY handler itself), so the engine can interleave them with
- * the FS_COPY handler's wait for FS_COPY_ACK without serialization. */
-static int handle_fs_op_status(int client_fd, uint64_t trace_id,
-                                const char *request_body) {
-    fs_op_state_t snap;
-    /* Buffer must hold the JSON skeleton plus two fully escaped path
-     * strings. Each escaped path is up to 1024 bytes (json_escape_into's
-     * dst_cap below), so 2*1024 + ~512 for the rest is safe. Previously
-     * this was 768 bytes and silently truncated whenever a cross-mount
-     * move's two paths summed to more than ~600 bytes — the engine then
-     * 502'd with "decode FS_OP_STATUS_ACK body" and the UI lost progress. */
-    char body[2560];
-    int len;
-    uint64_t op_id = request_body
-        ? extract_json_uint64_field(request_body, "op_id")
-        : 0;
-    if (op_id == 0) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_op_status_missing_op_id", 26);
-    }
-    if (fs_op_snapshot(op_id, &snap) != 0) {
-        /* No matching op — either it finished (engine should stop
-         * polling) or never existed. Distinct empty-body ACK with
-         * `found:false` lets the engine decide. */
-        len = snprintf(body, sizeof(body), "{\"found\":false}");
-        if (len < 0) return -1;
-        return send_frame(client_fd, FTX2_FRAME_FS_OP_STATUS_ACK, 0,
-                          trace_id, body, (uint64_t)len);
-    }
-    /* Path strings escaped so embedded backslashes/quotes don't
-     * corrupt the JSON. The shared json_escape_into helper used
-     * elsewhere in this file does the right thing. */
-    char from_esc[1024];
-    char to_esc[1024];
-    json_escape_into(snap.from, from_esc, sizeof(from_esc));
-    json_escape_into(snap.to,   to_esc,   sizeof(to_esc));
-    /* `cancel_requested` MUST be emitted as a JSON boolean — the
-     * engine's `OpStatus.cancel_requested` is declared `bool` and
-     * serde rejects integer-for-bool, breaking the entire decode.
-     * Same root-cause class as the FS_MOUNT_ACK / PKG_INSTALL_ACK
-     * fixes already shipped this round. */
-    const char *cancel_str = snap.cancel_requested ? "true" : "false";
-    len = snprintf(body, sizeof(body),
-                   "{\"found\":true,\"op_id\":%llu,\"kind\":\"%s\","
-                   "\"from\":\"%s\",\"to\":\"%s\","
-                   "\"total_bytes\":%llu,\"bytes_copied\":%llu,"
-                   "\"cancel_requested\":%s}",
-                   (unsigned long long)snap.op_id,
-                   snap.kind,
-                   from_esc, to_esc,
-                   (unsigned long long)snap.total_bytes,
-                   (unsigned long long)snap.bytes_copied,
-                   cancel_str);
-    if (len < 0) return -1;
-    /* Truncation here would emit malformed JSON (snprintf returns the
-     * would-have-been length, not the written length, when clipped).
-     * Fail loud with an error frame instead — the engine's bail() path
-     * for ERROR is much more informative than "decode … body". */
-    if ((size_t)len >= sizeof(body)) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_op_status_body_overflow", 26);
-    }
-    return send_frame(client_fd, FTX2_FRAME_FS_OP_STATUS_ACK, 0,
-                      trace_id, body, (uint64_t)len);
-}
-
-static int handle_fs_op_cancel(int client_fd, uint64_t trace_id,
-                                const char *request_body) {
-    char body[64];
-    int len;
-    uint64_t op_id = request_body
-        ? extract_json_uint64_field(request_body, "op_id")
-        : 0;
-    if (op_id == 0) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_op_cancel_missing_op_id", 26);
-    }
-    int rc = fs_op_set_cancel(op_id);
-    len = snprintf(body, sizeof(body),
-                   "{\"found\":%s}",
-                   rc == 0 ? "true" : "false");
-    if (len < 0) return -1;
-    return send_frame(client_fd, FTX2_FRAME_FS_OP_CANCEL_ACK, 0,
-                      trace_id, body, (uint64_t)len);
-}
-
-/* ── FS_DELETE handler ───────────────────────────────────────────────────
- *
- * For small-file-heavy game folders (PPSA01342: 223k files / 19k dirs)
- * the recursive walk takes minutes on PS5 UFS. To match fs_copy's UX,
- * we register the op in the in-flight table so the engine's
- * `/api/ps5/fs/op-status` poll can show "freeing X / Y" and the user's
- * Stop button can fire FS_OP_CANCEL to abort early.
- *
- * trace_id == 0 means "no progress/cancel tracking" (legacy callers,
- * single-file unlinks) — skip the registration and call the un-tracked
- * rm_rf so we don't burn a g_fs_ops slot on an instant operation. */
-static int handle_fs_delete(runtime_state_t *state, int client_fd,
-                             uint64_t trace_id, const char *request_body, uint64_t body_len) {
-    char path[512];
-    (void)body_len;
-    if (!state) return -1;
-    path[0] = '\0';
-    if (request_body) extract_json_string_field(request_body, "path", path, sizeof(path));
-    /* Deleting a directory that contains the AVA1 trust store deletes the store. */
-    if (!is_path_allowed(path) || path_tree_op_refused(path)) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_delete_path_not_allowed", 26);
-    }
-
-    /* Untracked fast path: caller doesn't need progress and the
-     * payload doesn't need to register a slot. Same behavior as
-     * pre-op-id callers. */
-    if (trace_id == 0) {
-        if (rm_rf(path, 0) != 0) {
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "fs_delete_failed", 16);
-        }
-        pthread_mutex_lock(&state->state_mtx);
-        state->command_count += 1;
-        pthread_mutex_unlock(&state->state_mtx);
-        return send_frame(client_fd, FTX2_FRAME_FS_DELETE_ACK, 0, trace_id, NULL, 0);
-    }
-
-    /* Tracked path. Register the slot *before* walking so the engine's
-     * status poller can find the op the moment it asks (same race fix
-     * applied to FS_COPY above — small-file-heavy trees walk slower
-     * than the poller's 250 ms initial delay, and the old order
-     * surfaced the race as a transient parse error that the client
-     * mis-attributed to an old payload). All MAX_FS_OPS slots in use
-     * → refuse rather than running un-tracked, since the client
-     * expects to be able to poll/cancel via the op_id it sent. */
-    int op_idx = fs_op_register(trace_id, "fs_delete", path, "", 0);
-    if (op_idx < 0) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_delete_too_many_inflight", 27);
-    }
-    /* Pre-walk to compute total bytes so the engine's progress poll
-     * can show a percentage; same one-stat-per-file cost pattern as
-     * fs_copy. `recursive_size_op` returns -1 on stat failure or -2
-     * on cancel — surface either now rather than letting rm_rf hit
-     * the same file mid-walk. Release the slot on walk failure so a
-     * recoverable error doesn't burn one of the MAX_FS_OPS=4 slots. */
-    uint64_t total_bytes = 0;
-    int walk_rc = recursive_size_op(path, &total_bytes, op_idx);
-    if (walk_rc == -2) {
-        fs_op_release(op_idx);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_delete_cancelled", 19);
-    }
-    if (walk_rc != 0) {
-        fs_op_release(op_idx);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_delete_walk_failed", 21);
-    }
-    fs_op_set_total(op_idx, total_bytes);
-    int rm_rc = rm_rf_op(path, 0, op_idx);
-    fs_op_release(op_idx);
-
-    if (rm_rc == -2) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_delete_cancelled", 19);
-    }
-    if (rm_rc != 0) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_delete_failed", 16);
-    }
-    pthread_mutex_lock(&state->state_mtx);
-    state->command_count += 1;
-    pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_FS_DELETE_ACK, 0, trace_id, NULL, 0);
-}
-
-/* ── FS_MOVE handler ────────────────────────────────────────────────────
- * rename(2) only works intra-volume on POSIX. Cross-volume moves are supposed
- * to fail with EXDEV — but on this kernel a cross-DEVICE rename (e.g. a USB
- * exFAT file → the internal SSD) does NOT return EXDEV: it KERNEL PANICS and
- * crashes the console (a reproducible hard crash, reported on USB→internal cut
- * & paste). So we must NEVER let rename() run across devices. We compare the
- * source's device id against the destination directory's up front and surface
- * `fs_move_cross_mount` instead — the client then completes the move safely as
- * copy-then-delete (FS_COPY reads/writes bytes, which is cross-volume safe). */
-static int handle_fs_move(runtime_state_t *state, int client_fd,
-                           uint64_t trace_id, const char *request_body, uint64_t body_len) {
-    char from[512], to[512];
-    (void)body_len;
-    if (!state) return -1;
-    from[0] = '\0'; to[0] = '\0';
-    if (request_body) {
-        extract_json_string_field(request_body, "from", from, sizeof(from));
-        extract_json_string_field(request_body, "to", to, sizeof(to));
-    }
-    if (!is_path_allowed(from) || !is_path_allowed(to) ||
-        path_tree_op_refused(from) || path_tree_op_refused(to)) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_move_path_not_allowed", 24);
-    }
-    /* Cross-device guard — see the header comment. The SOURCE is judged by its own device (lstat:
-     * a symlink is what rename() moves, and stat() would judge it by its target, so a link on one
-     * device pointing at another could pass), the destination by its parent directory. A device
-     * that cannot be read is refused too: only a definite SAME reaches rename() (review 007 #4). */
-    {
-        xdev_result_t xr = xdev_rename_crosses_l(from, to, xdev_lstat_dev, xdev_stat_dev);
-        if (xr == XDEV_CROSSES) {
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "fs_move_cross_mount", 19);
-        }
-        if (!xdev_rename_is_safe(xr)) {
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "fs_move_device_unknown", 22);
-        }
-    }
-    if (rename(from, to) != 0) {
-        if (errno == EXDEV) {
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "fs_move_cross_mount", 19);
-        }
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_move_failed", 14);
-    }
-    pthread_mutex_lock(&state->state_mtx);
-    state->command_count += 1;
-    pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_FS_MOVE_ACK, 0, trace_id, NULL, 0);
-}
-
-/* ── FS_CHMOD handler ──────────────────────────────────────────────────── */
-static int handle_fs_chmod(runtime_state_t *state, int client_fd,
-                            uint64_t trace_id, const char *request_body, uint64_t body_len) {
-    char path[512], mode_str[16];
-    uint64_t mode_int;
-    int recursive = 0;
-    (void)body_len;
-    if (!state) return -1;
-    path[0] = '\0'; mode_str[0] = '\0';
-    if (request_body) {
-        extract_json_string_field(request_body, "path", path, sizeof(path));
-        extract_json_string_field(request_body, "mode", mode_str, sizeof(mode_str));
-        /* recursive is an unsigned field: 1 = recurse, 0 = top only. */
-        recursive = extract_json_uint64_field(request_body, "recursive") != 0;
-    }
-    if (!is_path_allowed(path) || path_tree_op_refused(path)) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_chmod_path_not_allowed", 25);
-    }
-    if (!mode_str[0]) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_chmod_missing_mode", 21);
-    }
-    /* Parse mode as octal (e.g. "0777", "0644"). Clamp to 0..07777. */
-    mode_int = strtoull(mode_str, NULL, 8);
-    if (mode_int > 07777) mode_int = 07777;
-    int rc;
-    if (recursive) {
-        rc = chmod_rf(path, (mode_t)mode_int, 0);
-    } else {
-        rc = chmod(path, (mode_t)mode_int);
-    }
-    if (rc != 0) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_chmod_failed", 15);
-    }
-    pthread_mutex_lock(&state->state_mtx);
-    state->command_count += 1;
-    pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_FS_CHMOD_ACK, 0, trace_id, NULL, 0);
-}
-
-/* ── FS_MKDIR handler ──────────────────────────────────────────────────── */
-static int handle_fs_mkdir(runtime_state_t *state, int client_fd,
-                            uint64_t trace_id, const char *request_body, uint64_t body_len) {
-    char path[512];
-    (void)body_len;
-    if (!state) return -1;
-    path[0] = '\0';
-    if (request_body) extract_json_string_field(request_body, "path", path, sizeof(path));
-    if (!is_path_allowed(path)) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_mkdir_path_not_allowed", 25);
-    }
-    /* ensure_parent_dir walks and mkdir-p's every component. Matches the
-     * "create intermediate dirs" behavior callers expect. */
-    if (ensure_parent_dir(path) != 0) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_mkdir_parents_failed", 23);
-    }
-    if (mkdir(path, 0777) != 0 && errno != EEXIST) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_mkdir_failed", 15);
-    }
-    pthread_mutex_lock(&state->state_mtx);
-    state->command_count += 1;
-    pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_FS_MKDIR_ACK, 0, trace_id, NULL, 0);
-}
-
 /* READ-ONLY exception to the FS_READ allowlist: the per-user avatar image in
  * Sony's profile cache, so the UI can show the CURRENT avatar before a change.
  * The cache lives under /system_data (outside the writable-root allowlist), but
@@ -7582,33 +2108,6 @@ static int is_profile_avatar_read_path(const char *p) {
     size_t n = strlen(p);
     return (n >= 11 && strcmp(p + n - 11, "/avatar.png") == 0) ||
            (n >= 12 && strcmp(p + n - 12, "/picture.png") == 0);
-}
-
-/* Check whether a read request includes the `"unsafe":true` opt-in flag.
- * When set, FS_READ and FS_HASH bypass the writable-root allowlist so the
- * user can read system files (e.g. .sprx modules under /system/common/lib,
- * /system_data/priv, /system_ex). This is READ-ONLY — destructive ops
- * (delete, move, chmod, mkdir, copy, write, mount) ignore this flag
- * entirely and always enforce the full allowlist. The dotdot guard still
- * applies, so traversal attacks are still rejected even in unsafe mode.
- *
- * Tolerates whitespace between the key and value (serde_json emits no
- * space, but hand-crafted JSON or a future client might). We scan for
- * the "unsafe" key, skip optional spaces around the colon, and check
- * for `true`. Fails closed — any parse ambiguity yields 0 (safe mode). */
-static int is_unsafe_read_request(const char *request_body) {
-    if (!request_body) return 0;
-    const char *s = request_body;
-    while ((s = strstr(s, "\"unsafe\"")) != NULL) {
-        const char *q = s + 8; /* skip past "unsafe" */
-        while (*q == ' ' || *q == '\t') q++;
-        if (*q != ':') { s++; continue; }
-        q++;
-        while (*q == ' ' || *q == '\t') q++;
-        if (strncmp(q, "true", 4) == 0) return 1;
-        s++;
-    }
-    return 0;
 }
 
 /* Validate a path for unsafe read mode. This relaxes the writable-root
@@ -7652,249 +2151,6 @@ int is_safe_unsafe_read_path(const char *p) {
         return 0;
     }
     return 1;
-}
-
-/* ── FS_READ handler ─────────────────────────────────────────────────────
- *
- * Bounded file-read for metadata fetches (param.json, icon0.png). The
- * payload enforces the same writable-root allowlist destructive ops use
- * plus an absolute hard cap (FS_READ_MAX_BYTES) on how much any single
- * read can return. Requests exceeding the cap are silently truncated —
- * callers that care about exact sizes can check the ACK body length
- * against the file's real size via a prior FS_LIST_DIR entry.
- *
- * Request JSON: {"path":"/abs/...","offset":N,"limit":N}  (offset/limit optional)
- * ACK body:     raw file bytes (no framing, no JSON wrap)
- */
-static int handle_fs_read(runtime_state_t *state, int client_fd,
-                          uint64_t trace_id, const char *request_body, uint64_t body_len) {
-    char path[512];
-    struct stat st;
-    uint64_t offset = 0;
-    uint64_t limit = FS_READ_MAX_BYTES;
-    unsigned char *buf = NULL;
-    ssize_t r;
-    int fd = -1;
-    int rc;
-
-    (void)body_len;
-    if (!state) return -1;
-    path[0] = '\0';
-    if (request_body) {
-        extract_json_string_field(request_body, "path", path, sizeof(path));
-        uint64_t req_offset = extract_json_uint64_field(request_body, "offset");
-        uint64_t req_limit  = extract_json_uint64_field(request_body, "limit");
-        if (req_offset > 0) offset = req_offset;
-        if (req_limit > 0 && req_limit < limit) limit = req_limit;
-    }
-    /* Path policy: is_path_allowed covers the writable-root allowlist +
-     * symlink-escape guard. is_profile_avatar_read_path is a narrow
-     * read-only carve-out for avatar PNGs. is_unsafe_read_request
-     * (opt-in via "unsafe":true in the JSON body) opens reads to system
-     * paths — but is_safe_unsafe_read_path still rejects dotdot/relative
-     * paths so traversal attacks don't work even in unsafe mode. */
-    int unsafe = is_unsafe_read_request(request_body);
-    if (!is_path_allowed(path) && !is_profile_avatar_read_path(path) &&
-        !(unsafe && is_safe_unsafe_read_path(path))) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_read_path_not_allowed", 24);
-    }
-    if (stat(path, &st) != 0) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_read_stat_failed", 19);
-    }
-    if (!S_ISREG(st.st_mode)) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_read_not_regular_file", 24);
-    }
-    /* Clamp limit against actual file size so the ACK body matches what
-     * the client can meaningfully consume. Offset past EOF returns an
-     * empty ACK (no error) — simplifies paginated reads. */
-    uint64_t remaining = 0;
-    if ((uint64_t)st.st_size > offset) {
-        remaining = (uint64_t)st.st_size - offset;
-    }
-    if (limit > remaining) limit = remaining;
-    if (limit > FS_READ_MAX_BYTES) limit = FS_READ_MAX_BYTES;
-
-    if (limit == 0) {
-        /* Zero-length ACK is valid — client sees empty body. */
-        return send_frame(client_fd, FTX2_FRAME_FS_READ_ACK, 0, trace_id, NULL, 0);
-    }
-
-    buf = (unsigned char *)malloc((size_t)limit);
-    if (!buf) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_read_oom", 11);
-    }
-    fd = open(path, O_RDONLY);
-    if (fd < 0) {
-        free(buf);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_read_open_failed", 19);
-    }
-    if (offset > 0 && lseek(fd, (off_t)offset, SEEK_SET) < 0) {
-        close(fd);
-        free(buf);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_read_seek_failed", 19);
-    }
-    /* read() on FreeBSD can return less than requested even for regular
-     * files (e.g. when reaching a page-cache boundary mid-read). Loop
-     * until we've filled `limit` bytes or hit EOF. */
-    size_t got = 0;
-    while (got < (size_t)limit) {
-        r = read(fd, buf + got, (size_t)limit - got);
-        if (r < 0) {
-            if (errno == EINTR) continue;
-            close(fd);
-            free(buf);
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "fs_read_read_failed", 19);
-        }
-        if (r == 0) break;
-        got += (size_t)r;
-    }
-    close(fd);
-
-    pthread_mutex_lock(&state->state_mtx);
-    state->command_count += 1;
-    pthread_mutex_unlock(&state->state_mtx);
-    rc = send_frame(client_fd, FTX2_FRAME_FS_READ_ACK, 0, trace_id,
-                    (const char *)buf, (uint64_t)got);
-    free(buf);
-    return rc;
-}
-
-/* ── FS_COPY handler ─────────────────────────────────────────────────────
- *
- * Request JSON: {"from":"/abs/...","to":"/abs/..."}
- * ACK body:     empty (success); FTX2_FRAME_ERROR with a diagnostic tag
- *               on failure.
- *
- * Pre-checks: both paths pass is_path_allowed, `from` exists, `to` does
- * not. Cross-mount copies are fine (unlike FS_MOVE's rename()) because
- * cp_rf reads and writes bytes explicitly. That's the whole point of
- * having a separate FS_COPY frame — users need a way to move content
- * off the internal drive onto a USB or vice versa.
- */
-static int handle_fs_copy(runtime_state_t *state, int client_fd,
-                           uint64_t trace_id, const char *request_body, uint64_t body_len) {
-    char from[512], to[512];
-    struct stat st;
-    (void)body_len;
-    if (!state) return -1;
-    from[0] = '\0'; to[0] = '\0';
-    int overwrite = 0;
-    if (request_body) {
-        extract_json_string_field(request_body, "from", from, sizeof(from));
-        extract_json_string_field(request_body, "to", to, sizeof(to));
-        /* Absent or 0 keeps the historical refuse-to-clobber behaviour, so an
-         * older engine talking to this payload is unaffected. */
-        overwrite =
-            (extract_json_uint64_field(request_body, "overwrite") != 0) ? 1 : 0;
-    }
-    /* The AVA1 trust store: a copy FROM an ancestor (/data/ps5upload) carries identity+peers out, a copy ONTO
-     * one (overwrite) replaces them. cp_rf_op walks with no per-child check, so the roots are the gate. */
-    if (!is_path_allowed(from) || !is_path_allowed(to) ||
-        path_tree_op_refused(from) || path_tree_op_refused(to)) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_copy_path_not_allowed", 24);
-    }
-    if (stat(from, &st) != 0) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_copy_source_missing", 22);
-    }
-    /* Refuse to clobber unless the caller explicitly asked to merge. The
-     * engine pre-checks via FS_LIST_DIR; without `overwrite` a present dst
-     * means a race or a client bug, so fail loudly. With it, cp_rf_op lands
-     * on top of what is already there and leaves untouched anything the
-     * source doesn't mention.
-     *
-     * A file may not overwrite a directory (or vice versa) even when merging
-     * — that is a mistake, not an intent, and silently replacing a whole
-     * folder with a file would be unrecoverable. */
-    struct stat dst_st;
-    if (lstat(to, &dst_st) == 0) {
-        if (!overwrite) {
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "fs_copy_dest_exists", 19);
-        }
-        if (S_ISDIR(st.st_mode) != S_ISDIR(dst_st.st_mode)) {
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "fs_copy_dest_kind_mismatch", 26);
-        }
-    }
-    /* Register the in-flight op slot *before* walking so the engine's
-     * 500 ms-cadence FS_OP_STATUS poller has somewhere to land its
-     * first call. The walk is fast for few-large-file regimes
-     * (PPSA01576/PPSA03977) but on small-file-heavy trees (PPSA01342:
-     * 223k files / 19k dirs) it can outrun the poller's 250 ms initial
-     * delay — and the old "walk then register" order let that race
-     * surface as a parse error in the engine, which the client
-     * mistook for "old payload" and showed a misleading banner. By
-     * registering up front with total_bytes=0 and patching the total
-     * in via fs_op_set_total once the walk finishes, the poller sees
-     * a found:true op the moment it asks, with bytes_copied=0 and
-     * total_bytes=0 ("scanning…") until the walk completes. Slot is
-     * bounded (MAX_FS_OPS=4) — if all are full, fail this FS_COPY
-     * rather than losing the ability to track or cancel it. */
-    int op_idx = fs_op_register(trace_id, "fs_copy", from, to, 0);
-    if (op_idx < 0) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_copy_too_many_inflight", 25);
-    }
-    /* Pre-walk total bytes so the engine's progress poll can show a
-     * percentage. Cheap (one stat per file) relative to the copy
-     * itself, and a stat error means the copy will fail at the same
-     * file shortly anyway — surface the issue early. Release the slot
-     * on walk failure so a recoverable error doesn't burn one of the
-     * MAX_FS_OPS=4 slots until process exit.
-     *
-     * `recursive_size_op` checks the cancel flag at directory
-     * boundaries so a Stop click during the pre-walk takes effect
-     * promptly. On a 200k-file tree the pre-walk can take seconds;
-     * waiting for cp_rf to start before honoring cancel made the
-     * Stop button feel unresponsive. */
-    uint64_t total_bytes = 0;
-    int walk_rc = recursive_size_op(from, &total_bytes, op_idx);
-    if (walk_rc == -2) {
-        fs_op_release(op_idx);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_copy_cancelled", 17);
-    }
-    if (walk_rc != 0) {
-        fs_op_release(op_idx);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_copy_walk_failed", 19);
-    }
-    fs_op_set_total(op_idx, total_bytes);
-    int copy_rc = cp_rf_op(from, to, 0, op_idx, overwrite);
-    fs_op_release(op_idx);
-    if (copy_rc == -2) {
-        /* Cancelled mid-flight. Recursively wipe whatever was
-         * already copied so the next FS_COPY of the same source
-         * isn't blocked by `fs_copy_dest_exists`. cp_rf_op already
-         * unlinked the in-flight file; for the directory case we
-         * also need to remove the partial tree we mkdir'd. Failure
-         * here is non-fatal — the user can clean up manually if
-         * the rm_rf doesn't catch everything (e.g. permissions). */
-        (void)rm_rf(to, 0);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_copy_cancelled", 17);
-    }
-    if (copy_rc != 0) {
-        /* Hard error — same partial-state cleanup, same rationale.
-         * The user shouldn't have to manually rm a half-copied
-         * folder before retrying. */
-        (void)rm_rf(to, 0);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_copy_failed", 14);
-    }
-    pthread_mutex_lock(&state->state_mtx);
-    state->command_count += 1;
-    pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_FS_COPY_ACK, 0, trace_id, NULL, 0);
 }
 
 /* ── FS_MOUNT / FS_UNMOUNT helpers ───────────────────────────────────────
@@ -8434,8 +2690,7 @@ static int fs_mount_validate_post_mount(const char *mp,
  *  10. Reply with ACK carrying {mount_point, dev_node, fstype,
  *      source_image, read_only}.
  */
-static int handle_fs_mount(runtime_state_t *state, int client_fd,
-                            uint64_t trace_id, const char *request_body,
+static int handle_fs_mount(runtime_state_t *state, const char *request_body,
                             uint64_t body_len) {
     char image_path[512] = {0};
     char mount_name[128] = {0};
@@ -8470,16 +2725,13 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
         read_only = (extract_json_uint64_field(request_body, "read_only") != 0) ? 1 : 0;
     }
     if (!is_path_allowed(image_path)) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_mount_path_not_allowed", 25);
+        return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_path_not_allowed", 25);
     }
     if (stat(image_path, &st) != 0 || !S_ISREG(st.st_mode)) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_mount_image_not_a_file", 25);
+        return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_image_not_a_file", 25);
     }
     if (fs_mount_detect_fstype(image_path, fstype, sizeof(fstype)) != 0) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_mount_unsupported_format", 27);
+        return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_unsupported_format", 27);
     }
 
     /* Source-stability gate. mtime in the future or in a kernel that
@@ -8499,8 +2751,7 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
                               FS_MOUNT_STABILITY_SECONDS);
             if (el < 0) el = 0;
             if ((size_t)el >= sizeof(errbuf)) el = (int)sizeof(errbuf) - 1;
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              errbuf, (uint64_t)el);
+            return mgmt_reply(MGMT_FRAME_ERROR, errbuf, (uint64_t)el);
         }
     }
 
@@ -8560,8 +2811,7 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
                          "\"read_only\":%s,\"reused\":true}",
                          ex_esc, exdev_esc, fs_esc, img_esc, ro_str);
             if (n < 0 || (size_t)n >= sizeof(resp)) n = 0;
-            return send_frame(client_fd, FTX2_FRAME_FS_MOUNT_ACK, 0,
-                              trace_id, resp, (uint64_t)n);
+            return mgmt_reply(MGMT_FRAME_FS_MOUNT_ACK, resp, (uint64_t)n);
         }
     }
 
@@ -8575,17 +2825,14 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
      * stays well-defined. */
     if (mount_point[0] != '\0') {
         if (!is_path_allowed(mount_point)) {
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "fs_mount_path_not_allowed", 25);
+            return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_path_not_allowed", 25);
         }
         size_t mp_len = strlen(mount_point);
         if (mp_len > 1 && mount_point[mp_len - 1] == '/') {
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "fs_mount_bad_mount_point", 24);
+            return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_bad_mount_point", 24);
         }
         if (strcmp(mount_point, FS_MOUNT_BASE) == 0) {
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "fs_mount_bad_mount_point", 24);
+            return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_bad_mount_point", 24);
         }
     } else {
         /* No mount_point supplied — fall back to legacy
@@ -8607,14 +2854,12 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
         if (strchr(mount_name, '/') != NULL ||
             strstr(mount_name, "..") != NULL ||
             strcmp(mount_name, ".") == 0) {
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "fs_mount_bad_name", 17);
+            return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_bad_name", 17);
         }
         n = snprintf(mount_point, sizeof(mount_point), "%s/%s",
                      FS_MOUNT_BASE, mount_name);
         if (n < 0 || (size_t)n >= sizeof(mount_point)) {
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "fs_mount_name_too_long", 22);
+            return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_name_too_long", 22);
         }
     }
 
@@ -8644,8 +2889,7 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
                               strerror(lvd_errno), strerror(md_errno));
             if (el < 0) el = 0;
             if ((size_t)el >= sizeof(errbuf)) el = (int)sizeof(errbuf) - 1;
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              errbuf, (uint64_t)el);
+            return mgmt_reply(MGMT_FRAME_ERROR, errbuf, (uint64_t)el);
         }
         unit_id = md_unit;
         snprintf(devname, sizeof(devname), "/dev/md%d", unit_id);
@@ -8653,8 +2897,7 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
     if (fs_mount_wait_node(devname, 1) != 0) {
         if (used_lvd) fs_mount_detach_lvd(unit_id);
         else fs_mount_detach_md(unit_id);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_mount_dev_node_missing", 25);
+        return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_dev_node_missing", 25);
     }
 
     /* Ensure every directory along the mount_point exists. The
@@ -8666,8 +2909,7 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
     if (fs_mount_mkdir_p(mount_point) != 0) {
         if (used_lvd) fs_mount_detach_lvd(unit_id);
         else fs_mount_detach_md(unit_id);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_mount_mkdir_failed", 21);
+        return mgmt_reply(MGMT_FRAME_ERROR, "fs_mount_mkdir_failed", 21);
     }
 
     /* Build nmount iovec. Keys + ordering chosen to match what the
@@ -8741,8 +2983,7 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
         rmdir(mount_point);
         if (len < 0) len = 0;
         if ((size_t)len >= sizeof(errbuf)) len = (int)sizeof(errbuf) - 1;
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          errbuf, (uint64_t)len);
+        return mgmt_reply(MGMT_FRAME_ERROR, errbuf, (uint64_t)len);
     }
 
     /* Post-mount sanity check. nmount succeeding doesn't guarantee
@@ -8759,8 +3000,7 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
             else fs_mount_detach_md(unit_id);
             rmdir(mount_point);
             size_t el = strlen(post_err);
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              post_err, (uint64_t)el);
+            return mgmt_reply(MGMT_FRAME_ERROR, post_err, (uint64_t)el);
         }
     }
 
@@ -8878,8 +3118,7 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
                      kernel_ro_str);
     }
     if (n < 0 || (size_t)n >= sizeof(resp)) n = 0;
-    return send_frame(client_fd, FTX2_FRAME_FS_MOUNT_ACK, 0, trace_id,
-                      resp, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_FS_MOUNT_ACK, resp, (uint64_t)n);
 }
 
 /* ── FS_UNMOUNT handler ─────────────────────────────────────────────────
@@ -8890,8 +3129,7 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
  * via getmntinfo
  * and dispatches to the matching detach helper — skipping that would
  * leak the attachment per mount/unmount cycle. */
-static int handle_fs_unmount(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id, const char *request_body,
+static int handle_fs_unmount(runtime_state_t *state, const char *request_body,
                               uint64_t body_len) {
     char mount_point[256] = {0};
     (void)body_len;
@@ -8943,8 +3181,7 @@ static int handle_fs_unmount(runtime_state_t *state, int client_fd,
 
     if (path_has_dotdot_component(mount_point) ||
         (!legacy_match && !sandbox_overlay && !mount_tracker_exists(mount_point))) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_unmount_not_our_mount", 24);
+        return mgmt_reply(MGMT_FRAME_ERROR, "fs_unmount_not_our_mount", 24);
     }
 
     /* Backend detection: match the mount's f_mntfromname against
@@ -8986,8 +3223,7 @@ static int handle_fs_unmount(runtime_state_t *state, int client_fd,
             reason = "fs_unmount_permission";
             reason_len = 21;
         }
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          reason, reason_len);
+        return mgmt_reply(MGMT_FRAME_ERROR, reason, reason_len);
     }
     /* Best-effort detach. Worst case we leave the attachment; a fresh
      * mount of the same image gets a new unit. Never fail the user
@@ -9015,8 +3251,7 @@ static int handle_fs_unmount(runtime_state_t *state, int client_fd,
         pop_notification(toast);
     }
 
-    return send_frame(client_fd, FTX2_FRAME_FS_UNMOUNT_ACK, 0, trace_id,
-                      NULL, 0);
+    return mgmt_reply(MGMT_FRAME_FS_UNMOUNT_ACK, NULL, 0);
 }
 
 /* ── APP_* handlers (thin wrappers over register.c) ─────────────────────
@@ -9027,8 +3262,7 @@ static int handle_fs_unmount(runtime_state_t *state, int client_fd,
  * string into an ERROR frame. Each handler bumps command_count so
  * STATUS_ACK reflects management-port activity. */
 
-static int handle_app_register(runtime_state_t *state, int client_fd,
-                                uint64_t trace_id, const char *request_body,
+static int handle_app_register(runtime_state_t *state, const char *request_body,
                                 uint64_t body_len) {
     char src_path[512] = {0};
     char title_id[REGISTER_MAX_TITLE_ID] = {0};
@@ -9061,18 +3295,15 @@ static int handle_app_register(runtime_state_t *state, int client_fd,
             (extract_json_uint64_field(request_body, "patch_drm_type") != 0) ? 1 : 0;
     }
     if (src_path[0] == '\0') {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "register_src_path_missing", 25);
+        return mgmt_reply(MGMT_FRAME_ERROR, "register_src_path_missing", 25);
     }
     if (!is_path_allowed(src_path)) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "register_src_path_not_allowed", 29);
+        return mgmt_reply(MGMT_FRAME_ERROR, "register_src_path_not_allowed", 29);
     }
     if (register_title_from_path(src_path, patch_drm_type, title_id,
                                   title_name, &used_nullfs, &err) != 0) {
         const char *reason = err ? err : "register_failed";
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          reason, (uint64_t)strlen(reason));
+        return mgmt_reply(MGMT_FRAME_ERROR, reason, (uint64_t)strlen(reason));
     }
     json_escape_into(title_name, title_name_esc, sizeof(title_name_esc));
     /* title_id was vetted by register.c::is_safe_component which
@@ -9089,8 +3320,7 @@ static int handle_app_register(runtime_state_t *state, int client_fd,
                      title_id_esc, title_name_esc,
                      used_nullfs ? "true" : "false");
     if (n < 0 || (size_t)n >= sizeof(resp)) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "register_response_overflow", 26);
+        return mgmt_reply(MGMT_FRAME_ERROR, "register_response_overflow", 26);
     }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
@@ -9103,12 +3333,10 @@ static int handle_app_register(runtime_state_t *state, int client_fd,
         pop_notification(toast);
     }
 
-    return send_frame(client_fd, FTX2_FRAME_APP_REGISTER_ACK, 0, trace_id,
-                      resp, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_APP_REGISTER_ACK, resp, (uint64_t)n);
 }
 
-static int handle_app_unregister(runtime_state_t *state, int client_fd,
-                                  uint64_t trace_id, const char *request_body,
+static int handle_app_unregister(runtime_state_t *state, const char *request_body,
                                   uint64_t body_len) {
     char title_id[REGISTER_MAX_TITLE_ID] = {0};
     const char *err = NULL;
@@ -9125,14 +3353,12 @@ static int handle_app_unregister(runtime_state_t *state, int client_fd,
                                   title_id, sizeof(title_id));
     }
     if (title_id[0] == '\0') {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "unregister_title_id_missing", 27);
+        return mgmt_reply(MGMT_FRAME_ERROR, "unregister_title_id_missing", 27);
     }
     unsigned sony_rc = 0u;
     if (unregister_title(title_id, &err, &sony_rc) != 0) {
         const char *reason = err ? err : "unregister_failed";
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          reason, (uint64_t)strlen(reason));
+        return mgmt_reply(MGMT_FRAME_ERROR, reason, (uint64_t)strlen(reason));
     }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
@@ -9153,13 +3379,11 @@ static int handle_app_unregister(runtime_state_t *state, int client_fd,
         int alen = snprintf(ack, sizeof(ack),
                             "{\"sony_uninstall_rc\":%u}", sony_rc);
         if (alen < 0) alen = 0;
-        return send_frame(client_fd, FTX2_FRAME_APP_UNREGISTER_ACK, 0,
-                          trace_id, ack, (uint64_t)alen);
+        return mgmt_reply(MGMT_FRAME_APP_UNREGISTER_ACK, ack, (uint64_t)alen);
     }
 }
 
-static int handle_app_launch(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id, const char *request_body,
+static int handle_app_launch(runtime_state_t *state, const char *request_body,
                               uint64_t body_len) {
     char title_id[REGISTER_MAX_TITLE_ID] = {0};
     const char *err = NULL;
@@ -9179,18 +3403,16 @@ static int handle_app_launch(runtime_state_t *state, int client_fd,
                                   title_id, sizeof(title_id));
     }
     if (title_id[0] == '\0') {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "launch_title_id_missing", 23);
+        return mgmt_reply(MGMT_FRAME_ERROR, "launch_title_id_missing", 23);
     }
     /* Stack scratch for launch_title's formatted failure reasons —
-     * per-call storage so concurrent APP_LAUNCH mgmt threads can't
+     * per-call storage so concurrent APP_LAUNCH management workers can't
      * race each other's error strings (see register.h). */
     char launch_reason[128];
     if (launch_title(title_id, &err, launch_reason, sizeof(launch_reason)) !=
         0) {
         const char *reason = err ? err : "launch_failed";
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          reason, (uint64_t)strlen(reason));
+        return mgmt_reply(MGMT_FRAME_ERROR, reason, (uint64_t)strlen(reason));
     }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
@@ -9202,13 +3424,10 @@ static int handle_app_launch(runtime_state_t *state, int client_fd,
         pop_notification(toast);
     }
 
-    return send_frame(client_fd, FTX2_FRAME_APP_LAUNCH_ACK, 0,
-                      trace_id, NULL, 0);
+    return mgmt_reply(MGMT_FRAME_APP_LAUNCH_ACK, NULL, 0);
 }
 
-static int handle_app_list_registered(runtime_state_t *state, int client_fd,
-                                       uint64_t trace_id,
-                                       const char *request_body,
+static int handle_app_list_registered(runtime_state_t *state, const char *request_body,
                                        uint64_t body_len) {
     /* Buffer sized for a max-library PS5 with generous headroom. Each
      * entry is ~135 bytes after we dropped the title_name echo
@@ -9226,30 +3445,25 @@ static int handle_app_list_registered(runtime_state_t *state, int client_fd,
     if (!state) return -1;
     buf = (char *)malloc(cap);
     if (!buf) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "list_registered_oom", 19);
+        return mgmt_reply(MGMT_FRAME_ERROR, "list_registered_oom", 19);
     }
     if (list_registered_titles_json(buf, cap, &written, &err) != 0) {
         const char *reason = err ? err : "list_registered_failed";
-        rc = send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                        reason, (uint64_t)strlen(reason));
+        rc = mgmt_reply(MGMT_FRAME_ERROR, reason, (uint64_t)strlen(reason));
         free(buf);
         return rc;
     }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    rc = send_frame(client_fd, FTX2_FRAME_APP_LIST_REGISTERED_ACK, 0,
-                    trace_id, buf, (uint64_t)written);
+    rc = mgmt_reply(MGMT_FRAME_APP_LIST_REGISTERED_ACK, buf, (uint64_t)written);
     free(buf);
     return rc;
 }
 
 /* ── Hardware monitoring handlers (thin wrappers over hw_info.c) ──────── */
 
-static int handle_hw_text_op(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id,
-                              int (*getter)(char *, size_t, size_t *, const char **),
+static int handle_hw_text_op(runtime_state_t *state, int (*getter)(char *, size_t, size_t *, const char **),
                               uint16_t ack_type, const char *default_err) {
     char body[2048];
     size_t written = 0;
@@ -9257,18 +3471,17 @@ static int handle_hw_text_op(runtime_state_t *state, int client_fd,
     if (!state) return -1;
     if (getter(body, sizeof(body), &written, &err) != 0) {
         const char *reason = err ? err : default_err;
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          reason, (uint64_t)strlen(reason));
+        return mgmt_reply(MGMT_FRAME_ERROR, reason, (uint64_t)strlen(reason));
     }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, ack_type, 0, trace_id, body, (uint64_t)written);
+    return mgmt_reply(ack_type, body, (uint64_t)written);
 }
 
-static int handle_hw_info(runtime_state_t *state, int client_fd, uint64_t trace_id) {
-    return handle_hw_text_op(state, client_fd, trace_id, hw_info_get_text,
-                              FTX2_FRAME_HW_INFO_ACK, "hw_info_failed");
+static int handle_hw_info(runtime_state_t *state) {
+    return handle_hw_text_op(state, hw_info_get_text,
+                              MGMT_FRAME_HW_INFO_ACK, "hw_info_failed");
 }
 
 /* HW_TEMPS. A request body of "1" selects the EXTENDED read (SoC power /
@@ -9276,8 +3489,7 @@ static int handle_hw_info(runtime_state_t *state, int client_fd, uint64_t trace_
  * sensors" click; an empty body (the Dashboard's 5 s auto-poll) gets the
  * BASIC, always-safe read. Gating the risky getters on the body keeps
  * them off every auto-poll path — see hw_temps_get_text_ex. */
-static int handle_hw_temps(runtime_state_t *state, int client_fd, uint64_t trace_id,
-                           const char *request_body, uint64_t body_len) {
+static int handle_hw_temps(runtime_state_t *state, const char *request_body, uint64_t body_len) {
     /* Body selects the EXTENDED telemetry: "1" = all (back-compat with the
      * engine), or any subset of the chars p/u/f/s to read just those
      * getters — lets the desktop (or a probe) exclude a call that wedges a
@@ -9304,19 +3516,17 @@ static int handle_hw_temps(runtime_state_t *state, int client_fd, uint64_t trace
     if (!state) return -1;
     if (hw_temps_get_text_ex(flags, body, sizeof(body), &written, &err) != 0) {
         const char *reason = err ? err : "hw_temps_failed";
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          reason, (uint64_t)strlen(reason));
+        return mgmt_reply(MGMT_FRAME_ERROR, reason, (uint64_t)strlen(reason));
     }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_HW_TEMPS_ACK, 0, trace_id,
-                      body, (uint64_t)written);
+    return mgmt_reply(MGMT_FRAME_HW_TEMPS_ACK, body, (uint64_t)written);
 }
 
-static int handle_hw_power(runtime_state_t *state, int client_fd, uint64_t trace_id) {
-    return handle_hw_text_op(state, client_fd, trace_id, hw_power_get_text,
-                              FTX2_FRAME_HW_POWER_ACK, "hw_power_failed");
+static int handle_hw_power(runtime_state_t *state) {
+    return handle_hw_text_op(state, hw_power_get_text,
+                              MGMT_FRAME_HW_POWER_ACK, "hw_power_failed");
 }
 
 /* ── System clock get/set (sys_time.c wrappers) ────────────────────────── */
@@ -9358,8 +3568,7 @@ static int json_read_int_field(const char *body, size_t body_len,
     return 1;
 }
 
-static int handle_time_get(runtime_state_t *state, int client_fd,
-                            uint64_t trace_id) {
+static int handle_time_get(runtime_state_t *state) {
     if (!state) return -1;
     sce_datetime_t dt;
     memset(&dt, 0, sizeof(dt));
@@ -9384,24 +3593,19 @@ static int handle_time_get(runtime_state_t *state, int client_fd,
     }
     if (n < 0 || (size_t)n >= sizeof(body)) {
         const char *fb = "{\"ok\":false,\"err_code\":0}";
-        return send_frame(client_fd, FTX2_FRAME_TIME_GET_ACK, 0, trace_id,
-                          fb, (uint64_t)strlen(fb));
+        return mgmt_reply(MGMT_FRAME_TIME_GET_ACK, fb, (uint64_t)strlen(fb));
     }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_TIME_GET_ACK, 0, trace_id,
-                      body, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_TIME_GET_ACK, body, (uint64_t)n);
 }
 
-static int handle_time_set(runtime_state_t *state, int client_fd,
-                            uint64_t trace_id,
-                            const char *request_body, uint64_t body_len) {
+static int handle_time_set(runtime_state_t *state, const char *request_body, uint64_t body_len) {
     if (!state) return -1;
     if (!request_body || body_len == 0) {
         const char *err = "{\"ok\":false,\"err_code\":3758104577}"; /* SYS_TIME_ERR_NULL_ARG */
-        return send_frame(client_fd, FTX2_FRAME_TIME_SET_ACK, 0, trace_id,
-                          err, (uint64_t)strlen(err));
+        return mgmt_reply(MGMT_FRAME_TIME_SET_ACK, err, (uint64_t)strlen(err));
     }
     /* Pull each field. Missing fields default to zero, which the
      * sys_time_set range check will reject — caller mistake produces
@@ -9418,8 +3622,7 @@ static int handle_time_set(runtime_state_t *state, int client_fd,
         day < 1 || day > 31 || hour < 0 || hour > 23 ||
         minute < 0 || minute > 59 || second < 0 || second > 59) {
         const char *err = "{\"ok\":false,\"err_code\":3758104577}"; /* SYS_TIME_ERR_NULL_ARG */
-        return send_frame(client_fd, FTX2_FRAME_TIME_SET_ACK, 0, trace_id,
-                          err, (uint64_t)strlen(err));
+        return mgmt_reply(MGMT_FRAME_TIME_SET_ACK, err, (uint64_t)strlen(err));
     }
     sce_datetime_t dt;
     memset(&dt, 0, sizeof(dt));
@@ -9450,14 +3653,12 @@ static int handle_time_set(runtime_state_t *state, int client_fd,
                      used_fallback ? "true" : "false");
     if (n < 0 || (size_t)n >= sizeof(body)) {
         const char *fb = "{\"ok\":false,\"err_code\":0}";
-        return send_frame(client_fd, FTX2_FRAME_TIME_SET_ACK, 0, trace_id,
-                          fb, (uint64_t)strlen(fb));
+        return mgmt_reply(MGMT_FRAME_TIME_SET_ACK, fb, (uint64_t)strlen(fb));
     }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_TIME_SET_ACK, 0, trace_id,
-                      body, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_TIME_SET_ACK, body, (uint64_t)n);
 }
 
 /* ── PS5 Date & Time state (registry-backed) ─────────────────────────────
@@ -9500,8 +3701,7 @@ static int append_state_int_field(char *out, size_t cap,
                     name, name, name, (unsigned)err);
 }
 
-static int handle_time_state_get(runtime_state_t *state, int client_fd,
-                                   uint64_t trace_id) {
+static int handle_time_state_get(runtime_state_t *state) {
     if (!state) return -1;
 
     /* Read every key. None of these failing should abort the
@@ -9651,8 +3851,7 @@ static int handle_time_state_get(runtime_state_t *state, int client_fd,
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_TIME_STATE_GET_ACK, 0, trace_id,
-                      body, (uint64_t)(p - body));
+    return mgmt_reply(MGMT_FRAME_TIME_STATE_GET_ACK, body, (uint64_t)(p - body));
 
 truncated: {
     /* Last-resort fallback — any field above blew the buffer.
@@ -9660,20 +3859,16 @@ truncated: {
      * drop the connection) is worse for the user than a stub
      * response. */
     const char *fb = "{\"ok\":false,\"err_code\":0,\"truncated\":true}";
-    return send_frame(client_fd, FTX2_FRAME_TIME_STATE_GET_ACK, 0, trace_id,
-                      fb, (uint64_t)strlen(fb));
+    return mgmt_reply(MGMT_FRAME_TIME_STATE_GET_ACK, fb, (uint64_t)strlen(fb));
 }
 }
 
-static int handle_time_state_set(runtime_state_t *state, int client_fd,
-                                   uint64_t trace_id,
-                                   const char *request_body,
+static int handle_time_state_set(runtime_state_t *state, const char *request_body,
                                    uint64_t body_len) {
     if (!state) return -1;
     if (!request_body || body_len == 0) {
         const char *err = "{\"ok\":false,\"err_code\":3758108673}"; /* SYS_REGISTRY_ERR_NULL_ARG */
-        return send_frame(client_fd, FTX2_FRAME_TIME_STATE_SET_ACK, 0, trace_id,
-                          err, (uint64_t)strlen(err));
+        return mgmt_reply(MGMT_FRAME_TIME_STATE_SET_ACK, err, (uint64_t)strlen(err));
     }
 
     /* Optional fields. json_read_int_field returns 0 if the key
@@ -9741,14 +3936,12 @@ static int handle_time_state_set(runtime_state_t *state, int client_fd,
                       has_set_auto ? "true" : "false", has_set_auto ? rc_auto : 0, (unsigned)ec_auto);
     if (n < 0 || (size_t)n >= sizeof(body)) {
         const char *fb = "{\"ok\":false,\"err_code\":0,\"truncated\":true}";
-        return send_frame(client_fd, FTX2_FRAME_TIME_STATE_SET_ACK, 0, trace_id,
-                          fb, (uint64_t)strlen(fb));
+        return mgmt_reply(MGMT_FRAME_TIME_STATE_SET_ACK, fb, (uint64_t)strlen(fb));
     }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_TIME_STATE_SET_ACK, 0, trace_id,
-                      body, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_TIME_STATE_SET_ACK, body, (uint64_t)n);
 }
 
 /* ── SMP metadata self-healer ───────────────────────────────────────────
@@ -9765,9 +3958,7 @@ static int handle_time_state_set(runtime_state_t *state, int client_fd,
  * matters only if the caller sends multiple in one frame — we treat
  * that as a single highest-precedence operation rather than chaining. */
 
-static int handle_smp_meta_control(runtime_state_t *state, int client_fd,
-                                   uint64_t trace_id,
-                                   const char *request_body,
+static int handle_smp_meta_control(runtime_state_t *state, const char *request_body,
                                    uint64_t body_len) {
     if (!state) return -1;
 
@@ -9875,18 +4066,15 @@ static int handle_smp_meta_control(runtime_state_t *state, int client_fd,
     }
     if (n < 0 || (size_t)n >= sizeof(body)) {
         const char *fb = "{\"ok\":false,\"err\":\"truncated\"}";
-        return send_frame(client_fd, FTX2_FRAME_SMP_META_CONTROL_ACK, 0,
-                          trace_id, fb, (uint64_t)strlen(fb));
+        return mgmt_reply(MGMT_FRAME_SMP_META_CONTROL_ACK, fb, (uint64_t)strlen(fb));
     }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_SMP_META_CONTROL_ACK, 0, trace_id,
-                      body, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_SMP_META_CONTROL_ACK, body, (uint64_t)n);
 }
 
-static int handle_smp_meta_stats(runtime_state_t *state, int client_fd,
-                                  uint64_t trace_id) {
+static int handle_smp_meta_stats(runtime_state_t *state) {
     if (!state) return -1;
 
     smp_meta_stats_t s;
@@ -9918,14 +4106,12 @@ static int handle_smp_meta_stats(runtime_state_t *state, int client_fd,
         s.json_healed, s.still_missing, tid);
     if (n < 0 || (size_t)n >= sizeof(body)) {
         const char *fb = "{\"ok\":false,\"err\":\"truncated\"}";
-        return send_frame(client_fd, FTX2_FRAME_SMP_META_STATS_ACK, 0,
-                          trace_id, fb, (uint64_t)strlen(fb));
+        return mgmt_reply(MGMT_FRAME_SMP_META_STATS_ACK, fb, (uint64_t)strlen(fb));
     }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_SMP_META_STATS_ACK, 0, trace_id,
-                      body, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_SMP_META_STATS_ACK, body, (uint64_t)n);
 }
 
 /* ── System control (reboot / shutdown / standby / wake-tick) ─────────── */
@@ -10219,7 +4405,7 @@ static int parse_system_control_action(const char *body, uint64_t body_len,
 /* power.control over AVA1: the handler is called with its reply captured, and the reply only leaves
  * after the handler returns. A reboot/shutdown/standby that ran inside the handler would take the
  * network down before the ACK was sent, so under the capture sink the destructive call is deferred to
- * a short-lived thread that waits for the ACK to flush (the FTX2 contract: reply BEFORE the call). */
+ * a short-lived thread that waits for the ACK to flush (the old contract: reply BEFORE the call). */
 typedef struct {
     int action; /* system_control_action_t */
 } power_defer_t;
@@ -10271,15 +4457,13 @@ static int power_defer(int action) {
     return 0;
 }
 
-static int handle_system_control(runtime_state_t *state, int client_fd,
-                                  uint64_t trace_id, const char *body,
+static int handle_system_control(runtime_state_t *state, const char *body,
                                   uint64_t body_len) {
     if (!state) return -1;
     system_control_action_t action;
     if (parse_system_control_action(body, body_len, &action) != 0) {
         const char *err = "{\"ok\":false,\"err\":\"bad_action\"}";
-        return send_frame(client_fd, FTX2_FRAME_SYSTEM_CONTROL_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_SYSTEM_CONTROL_ACK, err, strlen(err));
     }
 
     /* Reply BEFORE invoking destructive APIs — reboot/shutdown will
@@ -10302,16 +4486,14 @@ static int handle_system_control(runtime_state_t *state, int client_fd,
     case SC_ACTION_REBOOT: {
         /* Send ACK first, then call API. */
         const char *ack = "{\"ok\":true,\"action\":\"reboot\"}";
-        rc = send_frame(client_fd, FTX2_FRAME_SYSTEM_CONTROL_ACK, 0,
-                        trace_id, ack, strlen(ack));
+        rc = mgmt_reply(MGMT_FRAME_SYSTEM_CONTROL_ACK, ack, strlen(ack));
         if (mgmt_capture_active() && power_defer(SC_ACTION_REBOOT) == 0) return rc;
         power_do_action(SC_ACTION_REBOOT); /* takes sony_api_lock (legacy path and power_defer failure) */
         return rc;
     }
     case SC_ACTION_SHUTDOWN: {
         const char *ack = "{\"ok\":true,\"action\":\"shutdown\"}";
-        rc = send_frame(client_fd, FTX2_FRAME_SYSTEM_CONTROL_ACK, 0,
-                        trace_id, ack, strlen(ack));
+        rc = mgmt_reply(MGMT_FRAME_SYSTEM_CONTROL_ACK, ack, strlen(ack));
         if (mgmt_capture_active() && power_defer(SC_ACTION_SHUTDOWN) == 0) return rc;
         /* sceSystemServiceRequestPowerOff() goes through the system's normal
          * power-button flow, which on PS5 RESPECTS the rest-mode setting — so
@@ -10335,12 +4517,10 @@ static int handle_system_control(runtime_state_t *state, int client_fd,
         void *h = dlsym(RTLD_DEFAULT, "sceSystemStateMgrEnterStandby");
         if (!h) {
             err_str = "{\"ok\":false,\"err\":\"standby_unavailable\"}";
-            return send_frame(client_fd, FTX2_FRAME_SYSTEM_CONTROL_ACK,
-                              0, trace_id, err_str, strlen(err_str));
+            return mgmt_reply(MGMT_FRAME_SYSTEM_CONTROL_ACK, err_str, strlen(err_str));
         }
         const char *ack = "{\"ok\":true,\"action\":\"standby\"}";
-        rc = send_frame(client_fd, FTX2_FRAME_SYSTEM_CONTROL_ACK, 0,
-                        trace_id, ack, strlen(ack));
+        rc = mgmt_reply(MGMT_FRAME_SYSTEM_CONTROL_ACK, ack, strlen(ack));
         if (mgmt_capture_active() && power_defer(SC_ACTION_STANDBY) == 0) return rc;
         power_do_action(SC_ACTION_STANDBY);
         return rc;
@@ -10352,16 +4532,14 @@ static int handle_system_control(runtime_state_t *state, int client_fd,
         pthread_mutex_unlock(&sony_api_lock);
         if (err_code == 0) {
             const char *ack = "{\"ok\":true,\"action\":\"tick\"}";
-            return send_frame(client_fd, FTX2_FRAME_SYSTEM_CONTROL_ACK,
-                              0, trace_id, ack, strlen(ack));
+            return mgmt_reply(MGMT_FRAME_SYSTEM_CONTROL_ACK, ack, strlen(ack));
         }
         {
             char buf[128];
             int n = snprintf(buf, sizeof(buf),
                              "{\"ok\":false,\"err\":\"power_tick_failed\","
                              "\"code\":%d}", err_code);
-            return send_frame(client_fd, FTX2_FRAME_SYSTEM_CONTROL_ACK,
-                              0, trace_id, buf, (size_t)n);
+            return mgmt_reply(MGMT_FRAME_SYSTEM_CONTROL_ACK, buf, (size_t)n);
         }
     }
     /* Unreachable, but quiet the compiler. */
@@ -10370,8 +4548,7 @@ static int handle_system_control(runtime_state_t *state, int client_fd,
 
 /* ── Power telemetry handler ─────────────────────────────────────────── */
 
-static int handle_power_telemetry(runtime_state_t *state, int client_fd,
-                                   uint64_t trace_id) {
+static int handle_power_telemetry(runtime_state_t *state) {
     if (!state) return -1;
     /* Each ICC call is independent — failures are non-fatal so the
      * caller still sees whatever did succeed. We emit `<key>=<value>`
@@ -10467,14 +4644,12 @@ static int handle_power_telemetry(runtime_state_t *state, int client_fd,
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_POWER_TELEMETRY_ACK, 0,
-                      trace_id, body, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_POWER_TELEMETRY_ACK, body, (uint64_t)n);
 }
 
 /* ── User account enumeration ────────────────────────────────────────── */
 
-static int handle_user_list(runtime_state_t *state, int client_fd,
-                            uint64_t trace_id) {
+static int handle_user_list(runtime_state_t *state) {
     if (!state) return -1;
     /* Init is idempotent — Sony's API is documented to no-op on a
      * second call. We don't track a "first call done" flag because
@@ -10524,8 +4699,7 @@ static int handle_user_list(runtime_state_t *state, int client_fd,
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_USER_LIST_ACK, 0, trace_id,
-                      body, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_USER_LIST_ACK, body, (uint64_t)n);
 }
 
 /* ── User create / delete ──────────────────────────────────────────────
@@ -10534,8 +4708,7 @@ static int handle_user_list(runtime_state_t *state, int client_fd,
  * creation. sceUserServiceDeleteUser removes the account; Sony cleans
  * up home dir content but we offer an optional pre-wipe of savedata. */
 
-static int handle_user_create(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id, const char *body) {
+static int handle_user_create(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     char name[64] = {0};
     extract_json_string_field(body, "name", name, sizeof(name));
@@ -10573,12 +4746,10 @@ static int handle_user_create(runtime_state_t *state, int client_fd,
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_USER_CREATE_ACK, 0, trace_id,
-                      resp, (uint64_t)len);
+    return mgmt_reply(MGMT_FRAME_USER_CREATE_ACK, resp, (uint64_t)len);
 }
 
-static int handle_user_delete(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id, const char *body) {
+static int handle_user_delete(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     int uid = (int)extract_json_uint64_field(body, "uid");
     int wipe_saves = (int)extract_json_uint64_field(body, "wipe_saves");
@@ -10618,14 +4789,12 @@ static int handle_user_delete(runtime_state_t *state, int client_fd,
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_USER_DELETE_ACK, 0, trace_id,
-                      resp, (uint64_t)len);
+    return mgmt_reply(MGMT_FRAME_USER_DELETE_ACK, resp, (uint64_t)len);
 }
 
 /* ── Backup & restore ────────────────────────────────────────────────── */
 
-static int handle_backup_snapshot(runtime_state_t *state, int client_fd,
-                                  uint64_t trace_id, const char *body) {
+static int handle_backup_snapshot(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     char tag[64] = {0};
     char path[512] = {0};
@@ -10639,7 +4808,7 @@ static int handle_backup_snapshot(runtime_state_t *state, int client_fd,
     if (tag[0] && path[0]) {
         rc = backup_snapshot(tag, path, &ts, &files, &bytes);
         if (rc == BACKUP_CANCELLED)
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id, "backup_cancelled", 16);
+            return mgmt_reply(MGMT_FRAME_ERROR, "backup_cancelled", 16);
         if (rc != 0) err = "snapshot failed (source not found or empty)";
     } else {
         err = "missing tag or path";
@@ -10653,34 +4822,29 @@ static int handle_backup_snapshot(runtime_state_t *state, int client_fd,
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_BACKUP_SNAPSHOT_ACK, 0, trace_id,
-                      resp, (uint64_t)len);
+    return mgmt_reply(MGMT_FRAME_BACKUP_SNAPSHOT_ACK, resp, (uint64_t)len);
 }
 
-static int handle_backup_list(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id, const char *body) {
+static int handle_backup_list(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     char tag[64] = {0};
     extract_json_string_field(body, "tag", tag, sizeof(tag));
     char *buf = malloc(32768);
     if (!buf) {
         const char *e = "{\"ok\":false,\"err\":\"oom\"}";
-        return send_frame(client_fd, FTX2_FRAME_BACKUP_LIST_ACK, 0, trace_id,
-                          e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_BACKUP_LIST_ACK, e, strlen(e));
     }
     size_t written = 0;
     backup_list(tag[0] ? tag : NULL, buf, 32768, &written);
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    int rc = send_frame(client_fd, FTX2_FRAME_BACKUP_LIST_ACK, 0, trace_id,
-                        buf, (uint64_t)written);
+    int rc = mgmt_reply(MGMT_FRAME_BACKUP_LIST_ACK, buf, (uint64_t)written);
     free(buf);
     return rc;
 }
 
-static int handle_backup_restore(runtime_state_t *state, int client_fd,
-                                 uint64_t trace_id, const char *body) {
+static int handle_backup_restore(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     char tag[64] = {0};
     extract_json_string_field(body, "tag", tag, sizeof(tag));
@@ -10691,7 +4855,7 @@ static int handle_backup_restore(runtime_state_t *state, int client_fd,
     if (tag[0] && ts > 0) {
         rc = backup_restore(tag, ts, &restored);
         if (rc == BACKUP_CANCELLED)
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id, "backup_cancelled", 16);
+            return mgmt_reply(MGMT_FRAME_ERROR, "backup_cancelled", 16);
         if (rc != 0) err = "snapshot not found or restore failed";
     } else {
         err = "missing tag or timestamp";
@@ -10703,12 +4867,10 @@ static int handle_backup_restore(runtime_state_t *state, int client_fd,
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_BACKUP_RESTORE_ACK, 0, trace_id,
-                      resp, (uint64_t)len);
+    return mgmt_reply(MGMT_FRAME_BACKUP_RESTORE_ACK, resp, (uint64_t)len);
 }
 
-static int handle_backup_delete(runtime_state_t *state, int client_fd,
-                                uint64_t trace_id, const char *body) {
+static int handle_backup_delete(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     char tag[64] = {0};
     extract_json_string_field(body, "tag", tag, sizeof(tag));
@@ -10728,13 +4890,11 @@ static int handle_backup_delete(runtime_state_t *state, int client_fd,
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_BACKUP_DELETE_ACK, 0, trace_id,
-                      resp, (uint64_t)len);
+    return mgmt_reply(MGMT_FRAME_BACKUP_DELETE_ACK, resp, (uint64_t)len);
 }
 
 /* ── Remote Play handlers ────────────────────────────────────────────── */
-static int handle_remoteplay_request(runtime_state_t *state, int client_fd,
-                                     uint64_t trace_id, const char *body) {
+static int handle_remoteplay_request(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     char acct[64] = {0};
     extract_json_string_field(body, "manual_account_id", acct, sizeof(acct));
@@ -10759,12 +4919,10 @@ static int handle_remoteplay_request(runtime_state_t *state, int client_fd,
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_REMOTEPLAY_STATUS, 0, trace_id,
-                      resp, (uint64_t)len);
+    return mgmt_reply(MGMT_FRAME_REMOTEPLAY_STATUS, resp, (uint64_t)len);
 }
 
-static int handle_remoteplay_status(runtime_state_t *state, int client_fd,
-                                    uint64_t trace_id) {
+static int handle_remoteplay_status(runtime_state_t *state) {
     if (!state) return -1;
     char buf[512];
     int rc = remoteplay_get_status(buf, sizeof(buf));
@@ -10773,81 +4931,65 @@ static int handle_remoteplay_status(runtime_state_t *state, int client_fd,
     pthread_mutex_unlock(&state->state_mtx);
     if (rc != 0) {
         const char *e = "{\"state\":\"failed\"}";
-        return send_frame(client_fd, FTX2_FRAME_REMOTEPLAY_STATUS, 0,
-                          trace_id, e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_REMOTEPLAY_STATUS, e, strlen(e));
     }
-    return send_frame(client_fd, FTX2_FRAME_REMOTEPLAY_STATUS, 0, trace_id,
-                      buf, strlen(buf));
+    return mgmt_reply(MGMT_FRAME_REMOTEPLAY_STATUS, buf, strlen(buf));
 }
 
-static int handle_remoteplay_cancel(runtime_state_t *state, int client_fd,
-                                    uint64_t trace_id) {
+static int handle_remoteplay_cancel(runtime_state_t *state) {
     if (!state) return -1;
     remoteplay_cancel();
     const char *resp = "{\"ok\":true}";
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_REMOTEPLAY_CANCEL_ACK, 0, trace_id,
-                      resp, strlen(resp));
+    return mgmt_reply(MGMT_FRAME_REMOTEPLAY_CANCEL_ACK, resp, strlen(resp));
 }
 
-/* Remote Play readiness / enable / devices. They were inline in the FTX2 dispatcher; they are
+/* Remote Play readiness / enable / devices. They were inline in the old dispatcher; they are
  * handlers now so the AVA1 management table (rp.readiness, rp.enable, rp.devices) can call them.
  * The bodies are unchanged. The remoteplay_* entry points take sony_api_lock for the whole call
  * (remoteplay.c "Sony-API serialization"), and the reply is sent after they return. */
-static int handle_remoteplay_readiness(runtime_state_t *state, int client_fd,
-                                       uint64_t trace_id) {
+static int handle_remoteplay_readiness(runtime_state_t *state) {
     (void)state;
     char body[640];
     int n = remoteplay_readiness_json(body, sizeof(body));
     if (n < 0 || (size_t)n >= sizeof(body)) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "readiness_overflow", 18);
+        return mgmt_reply(MGMT_FRAME_ERROR, "readiness_overflow", 18);
     }
-    return send_frame(client_fd, FTX2_FRAME_REMOTEPLAY_READINESS, 0,
-                      trace_id, body, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_REMOTEPLAY_READINESS, body, (uint64_t)n);
 }
 
-static int handle_remoteplay_enable(runtime_state_t *state, int client_fd,
-                                    uint64_t trace_id, const char *request_body) {
+static int handle_remoteplay_enable(runtime_state_t *state, const char *request_body) {
     (void)state;
     char scope[16] = "";
     extract_json_string_field(request_body, "scope", scope, sizeof(scope));
     char body[640];
     int n = remoteplay_enable(strcmp(scope, "user") == 0, body, sizeof(body));
     if (n == -2) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "rp_enable_unsupported_fw", 24);
+        return mgmt_reply(MGMT_FRAME_ERROR, "rp_enable_unsupported_fw", 24);
     }
     if (n == -3) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "rp_enable_no_user", 17);
+        return mgmt_reply(MGMT_FRAME_ERROR, "rp_enable_no_user", 17);
     }
     if (n < 0 || (size_t)n >= sizeof(body)) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "rp_enable_write_failed", 22);
+        return mgmt_reply(MGMT_FRAME_ERROR, "rp_enable_write_failed", 22);
     }
-    return send_frame(client_fd, FTX2_FRAME_REMOTEPLAY_ENABLE, 0,
-                      trace_id, body, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_REMOTEPLAY_ENABLE, body, (uint64_t)n);
 }
 
-static int handle_remoteplay_devices(runtime_state_t *state, int client_fd,
-                                     uint64_t trace_id) {
+static int handle_remoteplay_devices(runtime_state_t *state) {
     (void)state;
     char body[2048];
     int n = remoteplay_devices_json(body, sizeof(body));
     if (n < 0 || (size_t)n >= sizeof(body)) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "rp_devices_overflow", 19);
+        return mgmt_reply(MGMT_FRAME_ERROR, "rp_devices_overflow", 19);
     }
-    return send_frame(client_fd, FTX2_FRAME_REMOTEPLAY_DEVICES, 0,
-                      trace_id, body, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_REMOTEPLAY_DEVICES, body, (uint64_t)n);
 }
 
 /* ── Fan curve handler ───────────────────────────────────────────────── */
-static int handle_fan_curve_set(runtime_state_t *state, int client_fd,
-                                uint64_t trace_id, const char *body) {
+static int handle_fan_curve_set(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     char err[256] = {0};
     int rc = fan_curve_set(body, err, sizeof(err));
@@ -10858,35 +5000,30 @@ static int handle_fan_curve_set(runtime_state_t *state, int client_fd,
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_HW_FAN_CURVE_SET_ACK, 0, trace_id,
-                      resp, (uint64_t)len);
+    return mgmt_reply(MGMT_FRAME_HW_FAN_CURVE_SET_ACK, resp, (uint64_t)len);
 }
 
 /* ── Notifications handler ───────────────────────────────────────────── */
-static int handle_notif_list(runtime_state_t *state, int client_fd,
-                             uint64_t trace_id, const char *body) {
+static int handle_notif_list(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     uint64_t since = extract_json_uint64_field(body, "since_seq");
     char *buf = malloc(32768);
     if (!buf) {
         const char *e = "{\"notifications\":[]}";
-        return send_frame(client_fd, FTX2_FRAME_NOTIF_LIST_ACK, 0, trace_id,
-                          e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_NOTIF_LIST_ACK, e, strlen(e));
     }
     size_t written = 0;
     notif_list(since, buf, 32768, &written);
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    int rc = send_frame(client_fd, FTX2_FRAME_NOTIF_LIST_ACK, 0, trace_id,
-                        buf, (uint64_t)written);
+    int rc = mgmt_reply(MGMT_FRAME_NOTIF_LIST_ACK, buf, (uint64_t)written);
     free(buf);
     return rc;
 }
 
 /* ── Activity reset handler ─────────────────────────────────────────── */
-static int handle_activity_reset(runtime_state_t *state, int client_fd,
-                                 uint64_t trace_id) {
+static int handle_activity_reset(runtime_state_t *state) {
     if (!state) return -1;
     int removed = activity_reset();
     pthread_mutex_lock(&state->state_mtx);
@@ -10897,16 +5034,13 @@ static int handle_activity_reset(runtime_state_t *state, int client_fd,
                      "{\"ok\":true,\"removed\":%d}", removed);
     if (n < 0 || (size_t)n >= sizeof(body)) {
         const char *e = "{\"ok\":false,\"error\":\"format\"}";
-        return send_frame(client_fd, FTX2_FRAME_ACTIVITY_RESET_ACK, 0,
-                          trace_id, e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_ACTIVITY_RESET_ACK, e, strlen(e));
     }
-    return send_frame(client_fd, FTX2_FRAME_ACTIVITY_RESET_ACK, 0, trace_id,
-                      body, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_ACTIVITY_RESET_ACK, body, (uint64_t)n);
 }
 
 /* ── Notification clear handler ─────────────────────────────────────── */
-static int handle_notif_clear(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id) {
+static int handle_notif_clear(runtime_state_t *state) {
     if (!state) return -1;
     int removed = notif_clear();
     pthread_mutex_lock(&state->state_mtx);
@@ -10917,28 +5051,23 @@ static int handle_notif_clear(runtime_state_t *state, int client_fd,
                      "{\"ok\":true,\"removed\":%d}", removed);
     if (n < 0 || (size_t)n >= sizeof(body)) {
         const char *e = "{\"ok\":false,\"error\":\"format\"}";
-        return send_frame(client_fd, FTX2_FRAME_NOTIF_CLEAR_ACK, 0, trace_id,
-                          e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_NOTIF_CLEAR_ACK, e, strlen(e));
     }
-    return send_frame(client_fd, FTX2_FRAME_NOTIF_CLEAR_ACK, 0, trace_id,
-                      body, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_NOTIF_CLEAR_ACK, body, (uint64_t)n);
 }
 
 /* ── Notification send handler ──────────────────────────────────────── */
-static int handle_notif_send(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id, const char *body) {
+static int handle_notif_send(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     if (!body) {
         const char *err = "{\"ok\":false,\"err\":\"body_required\"}";
-        return send_frame(client_fd, FTX2_FRAME_NOTIF_SEND_ACK, 0, trace_id,
-                          err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_NOTIF_SEND_ACK, err, strlen(err));
     }
     char msg[512] = {0};
     extract_json_string_field(body, "msg", msg, sizeof(msg));
     if (msg[0] == '\0') {
         const char *err = "{\"ok\":false,\"err\":\"msg_required\"}";
-        return send_frame(client_fd, FTX2_FRAME_NOTIF_SEND_ACK, 0, trace_id,
-                          err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_NOTIF_SEND_ACK, err, strlen(err));
     }
     int level = (int)extract_json_uint64_field(body, "level");
     int rc = notif_send_serialised(msg, level); /* sceNotificationSend needs sony_api_lock */
@@ -10948,8 +5077,7 @@ static int handle_notif_send(runtime_state_t *state, int client_fd,
     const char *resp = (rc == 0)
         ? "{\"ok\":true}"
         : "{\"ok\":false,\"err\":\"send_failed\"}";
-    return send_frame(client_fd, FTX2_FRAME_NOTIF_SEND_ACK, 0, trace_id,
-                      resp, strlen(resp));
+    return mgmt_reply(MGMT_FRAME_NOTIF_SEND_ACK, resp, strlen(resp));
 }
 
 /* ── Cheat engine handlers ──────────────────────────────────────────── */
@@ -10963,26 +5091,22 @@ static void cheat_inc_cmd_count(runtime_state_t *state) {
     pthread_mutex_unlock(&state->state_mtx);
 }
 
-static int handle_cheats_list(runtime_state_t *state, int client_fd,
-                               uint64_t trace_id) {
+static int handle_cheats_list(runtime_state_t *state) {
     if (!state) return -1;
     char *buf = malloc(CHEATS_JSON_BUF_SZ);
     if (!buf) {
         const char *e = "{\"titles\":[]}";
-        return send_frame(client_fd, FTX2_FRAME_CHEATS_LIST_ACK, 0,
-                          trace_id, e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_CHEATS_LIST_ACK, e, strlen(e));
     }
     size_t written = 0;
     cheats_list_titles(buf, CHEATS_JSON_BUF_SZ, &written);
     cheat_inc_cmd_count(state);
-    int rc = send_frame(client_fd, FTX2_FRAME_CHEATS_LIST_ACK, 0, trace_id,
-                        buf, (uint64_t)written);
+    int rc = mgmt_reply(MGMT_FRAME_CHEATS_LIST_ACK, buf, (uint64_t)written);
     free(buf);
     return rc;
 }
 
-static int handle_cheats_get(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id, const char *body) {
+static int handle_cheats_get(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     char title_id[CHEATS_TITLE_ID_LEN] = {0};
     if (body) extract_json_string_field(body, "title_id",
@@ -10990,8 +5114,7 @@ static int handle_cheats_get(runtime_state_t *state, int client_fd,
     char *buf = malloc(CHEATS_JSON_BUF_SZ);
     if (!buf) {
         const char *e = "{\"mods\":[],\"error\":\"oom\"}";
-        return send_frame(client_fd, FTX2_FRAME_CHEATS_GET_ACK, 0,
-                          trace_id, e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_CHEATS_GET_ACK, e, strlen(e));
     }
     size_t written = 0;
     if (title_id[0]) {
@@ -10999,23 +5122,19 @@ static int handle_cheats_get(runtime_state_t *state, int client_fd,
     } else {
         const char *e = "{\"mods\":[],\"error\":\"title_id_required\"}";
         free(buf);
-        return send_frame(client_fd, FTX2_FRAME_CHEATS_GET_ACK, 0,
-                          trace_id, e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_CHEATS_GET_ACK, e, strlen(e));
     }
     cheat_inc_cmd_count(state);
-    int rc = send_frame(client_fd, FTX2_FRAME_CHEATS_GET_ACK, 0, trace_id,
-                        buf, (uint64_t)written);
+    int rc = mgmt_reply(MGMT_FRAME_CHEATS_GET_ACK, buf, (uint64_t)written);
     free(buf);
     return rc;
 }
 
-static int handle_cheats_toggle(runtime_state_t *state, int client_fd,
-                                 uint64_t trace_id, const char *body) {
+static int handle_cheats_toggle(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     if (!body) {
         const char *e = "{\"ok\":false,\"err\":\"body_required\"}";
-        return send_frame(client_fd, FTX2_FRAME_CHEATS_TOGGLE_ACK, 0,
-                          trace_id, e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_CHEATS_TOGGLE_ACK, e, strlen(e));
     }
     char title_id[CHEATS_TITLE_ID_LEN] = {0};
     extract_json_string_field(body, "title_id",
@@ -11052,12 +5171,10 @@ static int handle_cheats_toggle(runtime_state_t *state, int client_fd,
         len = snprintf(resp, sizeof(resp),
                        "{\"ok\":false,\"err\":\"%s\"}", err_esc);
     }
-    return send_frame(client_fd, FTX2_FRAME_CHEATS_TOGGLE_ACK, 0, trace_id,
-                      resp, (uint64_t)(len > 0 ? len : 0));
+    return mgmt_reply(MGMT_FRAME_CHEATS_TOGGLE_ACK, resp, (uint64_t)(len > 0 ? len : 0));
 }
 
-static int handle_cheats_delete(runtime_state_t *state, int client_fd,
-                                 uint64_t trace_id, const char *body) {
+static int handle_cheats_delete(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     char title_id[CHEATS_TITLE_ID_LEN] = {0};
     if (body) extract_json_string_field(body, "title_id",
@@ -11066,34 +5183,28 @@ static int handle_cheats_delete(runtime_state_t *state, int client_fd,
     int rc = cheats_delete(title_id, err, sizeof(err));
     cheat_inc_cmd_count(state);
     const char *resp = (rc == 0) ? "{\"ok\":true}" : "{\"ok\":false}";
-    return send_frame(client_fd, FTX2_FRAME_CHEATS_DELETE_ACK, 0, trace_id,
-                      resp, strlen(resp));
+    return mgmt_reply(MGMT_FRAME_CHEATS_DELETE_ACK, resp, strlen(resp));
 }
 
-static int handle_cheats_reload(runtime_state_t *state, int client_fd,
-                                 uint64_t trace_id) {
+static int handle_cheats_reload(runtime_state_t *state) {
     if (!state) return -1;
     char err[256] = {0};
     int rc = cheats_reload(err, sizeof(err));
     cheat_inc_cmd_count(state);
     const char *resp = (rc == 0) ? "{\"ok\":true}" : "{\"ok\":false}";
-    return send_frame(client_fd, FTX2_FRAME_CHEATS_RELOAD_ACK, 0, trace_id,
-                      resp, strlen(resp));
+    return mgmt_reply(MGMT_FRAME_CHEATS_RELOAD_ACK, resp, strlen(resp));
 }
 
-static int handle_cheats_status(runtime_state_t *state, int client_fd,
-                                 uint64_t trace_id) {
+static int handle_cheats_status(runtime_state_t *state) {
     if (!state) return -1;
     char buf[512];
     size_t written = 0;
     cheats_status_json(buf, sizeof(buf), &written);
     cheat_inc_cmd_count(state);
-    return send_frame(client_fd, FTX2_FRAME_CHEATS_STATUS_ACK, 0, trace_id,
-                      buf, (uint64_t)written);
+    return mgmt_reply(MGMT_FRAME_CHEATS_STATUS_ACK, buf, (uint64_t)written);
 }
 
-static int handle_cheats_engine_set(runtime_state_t *state, int client_fd,
-                                     uint64_t trace_id, const char *body) {
+static int handle_cheats_engine_set(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     int enabled = 0;
     if (body) {
@@ -11107,33 +5218,28 @@ static int handle_cheats_engine_set(runtime_state_t *state, int client_fd,
     const char *resp = enabled
         ? "{\"ok\":true,\"enabled\":true}"
         : "{\"ok\":true,\"enabled\":false}";
-    return send_frame(client_fd, FTX2_FRAME_CHEATS_ENGINE_SET_ACK, 0,
-                      trace_id, resp, strlen(resp));
+    return mgmt_reply(MGMT_FRAME_CHEATS_ENGINE_SET_ACK, resp, strlen(resp));
 }
 
 /* ── Activity tracker handlers ──────────────────────────────────────── */
 #define ACTIVITY_JSON_BUF_SZ  (128u * 1024u)
 
-static int handle_activity_get(runtime_state_t *state, int client_fd,
-                                uint64_t trace_id) {
+static int handle_activity_get(runtime_state_t *state) {
     if (!state) return -1;
     char *buf = malloc(ACTIVITY_JSON_BUF_SZ);
     if (!buf) {
         const char *e = "{\"titles\":[]}";
-        return send_frame(client_fd, FTX2_FRAME_ACTIVITY_GET_ACK, 0,
-                          trace_id, e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_ACTIVITY_GET_ACK, e, strlen(e));
     }
     size_t written = 0;
     activity_get_json(buf, ACTIVITY_JSON_BUF_SZ, &written);
     cheat_inc_cmd_count(state);
-    int rc = send_frame(client_fd, FTX2_FRAME_ACTIVITY_GET_ACK, 0,
-                        trace_id, buf, (uint64_t)written);
+    int rc = mgmt_reply(MGMT_FRAME_ACTIVITY_GET_ACK, buf, (uint64_t)written);
     free(buf);
     return rc;
 }
 
-static int handle_activity_db_query(runtime_state_t *state, int client_fd,
-                                     uint64_t trace_id, const char *body) {
+static int handle_activity_db_query(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     char query[64] = {0};
     if (body) {
@@ -11146,14 +5252,12 @@ static int handle_activity_db_query(runtime_state_t *state, int client_fd,
     char *buf = malloc(ACTIVITY_JSON_BUF_SZ);
     if (!buf) {
         const char *e = "{\"rows\":[],\"error\":\"oom\"}";
-        return send_frame(client_fd, FTX2_FRAME_ACTIVITY_DB_QUERY_ACK, 0,
-                          trace_id, e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_ACTIVITY_DB_QUERY_ACK, e, strlen(e));
     }
     size_t written = 0;
     activity_db_query_json(query, buf, ACTIVITY_JSON_BUF_SZ, &written);
     cheat_inc_cmd_count(state);
-    int rc = send_frame(client_fd, FTX2_FRAME_ACTIVITY_DB_QUERY_ACK, 0,
-                        trace_id, buf, (uint64_t)written);
+    int rc = mgmt_reply(MGMT_FRAME_ACTIVITY_DB_QUERY_ACK, buf, (uint64_t)written);
     free(buf);
     return rc;
 }
@@ -11161,31 +5265,26 @@ static int handle_activity_db_query(runtime_state_t *state, int client_fd,
 /* ── SDK Changer handlers ───────────────────────────────────────────── */
 #define SDK_JSON_BUF_SZ  (64u * 1024u)
 
-static int handle_sdk_scan(runtime_state_t *state, int client_fd,
-                            uint64_t trace_id) {
+static int handle_sdk_scan(runtime_state_t *state) {
     if (!state) return -1;
     char *buf = malloc(SDK_JSON_BUF_SZ);
     if (!buf) {
         const char *e = "{\"titles\":[]}";
-        return send_frame(client_fd, FTX2_FRAME_SDK_SCAN_ACK, 0,
-                          trace_id, e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_SDK_SCAN_ACK, e, strlen(e));
     }
     size_t written = 0;
     sdk_changer_scan(buf, SDK_JSON_BUF_SZ, &written);
     cheat_inc_cmd_count(state);
-    int rc = send_frame(client_fd, FTX2_FRAME_SDK_SCAN_ACK, 0,
-                        trace_id, buf, (uint64_t)written);
+    int rc = mgmt_reply(MGMT_FRAME_SDK_SCAN_ACK, buf, (uint64_t)written);
     free(buf);
     return rc;
 }
 
-static int handle_sdk_patch(runtime_state_t *state, int client_fd,
-                             uint64_t trace_id, const char *body) {
+static int handle_sdk_patch(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     if (!body) {
         const char *e = "{\"ok\":false,\"error\":\"body_required\"}";
-        return send_frame(client_fd, FTX2_FRAME_SDK_PATCH_ACK, 0,
-                          trace_id, e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_SDK_PATCH_ACK, e, strlen(e));
     }
     char title_id[32] = {0};
     char target_sdk[32] = {0};
@@ -11194,8 +5293,7 @@ static int handle_sdk_patch(runtime_state_t *state, int client_fd,
 
     if (!title_id[0] || !target_sdk[0]) {
         const char *e = "{\"ok\":false,\"error\":\"title_id_and_target_sdk_required\"}";
-        return send_frame(client_fd, FTX2_FRAME_SDK_PATCH_ACK, 0,
-                          trace_id, e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_SDK_PATCH_ACK, e, strlen(e));
     }
 
     char err[256] = {0};
@@ -11226,25 +5324,21 @@ static int handle_sdk_patch(runtime_state_t *state, int client_fd,
         snprintf(resp, sizeof(resp), "{\"ok\":false,\"error\":\"%s\"}",
                  err[0] ? err_esc : "patch_failed");
     }
-    return send_frame(client_fd, FTX2_FRAME_SDK_PATCH_ACK, 0,
-                      trace_id, resp, strlen(resp));
+    return mgmt_reply(MGMT_FRAME_SDK_PATCH_ACK, resp, strlen(resp));
 }
 
-static int handle_sdk_restore(runtime_state_t *state, int client_fd,
-                               uint64_t trace_id, const char *body) {
+static int handle_sdk_restore(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     if (!body) {
         const char *e = "{\"ok\":false,\"error\":\"body_required\"}";
-        return send_frame(client_fd, FTX2_FRAME_SDK_RESTORE_ACK, 0,
-                          trace_id, e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_SDK_RESTORE_ACK, e, strlen(e));
     }
     char title_id[32] = {0};
     extract_json_string_field(body, "title_id", title_id, sizeof(title_id));
 
     if (!title_id[0]) {
         const char *e = "{\"ok\":false,\"error\":\"title_id_required\"}";
-        return send_frame(client_fd, FTX2_FRAME_SDK_RESTORE_ACK, 0,
-                          trace_id, e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_SDK_RESTORE_ACK, e, strlen(e));
     }
 
     char err[256] = {0};
@@ -11267,15 +5361,13 @@ static int handle_sdk_restore(runtime_state_t *state, int client_fd,
         snprintf(resp, sizeof(resp), "{\"ok\":false,\"error\":\"%s\"}",
                  err[0] ? err_esc : "restore_failed");
     }
-    return send_frame(client_fd, FTX2_FRAME_SDK_RESTORE_ACK, 0,
-                      trace_id, resp, strlen(resp));
+    return mgmt_reply(MGMT_FRAME_SDK_RESTORE_ACK, resp, strlen(resp));
 }
 
 /* ── TMDB handlers ─────────────────────────────────────────────────── */
 #define TMDB_JSON_BUF_SZ  (64u * 1024u)
 
-static int handle_tmdb_fetch(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id, const char *body) {
+static int handle_tmdb_fetch(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     char title_id[32] = {0};
     int refresh = 0;
@@ -11285,33 +5377,28 @@ static int handle_tmdb_fetch(runtime_state_t *state, int client_fd,
     }
     if (!title_id[0]) {
         const char *e = "{\"ok\":false,\"error\":\"title_id_required\"}";
-        return send_frame(client_fd, FTX2_FRAME_TMDB_FETCH_ACK, 0,
-                          trace_id, e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_TMDB_FETCH_ACK, e, strlen(e));
     }
     char *buf = malloc(TMDB_JSON_BUF_SZ);
     if (!buf) {
         const char *e = "{\"ok\":false,\"error\":\"oom\"}";
-        return send_frame(client_fd, FTX2_FRAME_TMDB_FETCH_ACK, 0,
-                          trace_id, e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_TMDB_FETCH_ACK, e, strlen(e));
     }
     size_t written = 0;
     tmdb_fetch(title_id, refresh, buf, TMDB_JSON_BUF_SZ, &written);
     cheat_inc_cmd_count(state);
-    int rc = send_frame(client_fd, FTX2_FRAME_TMDB_FETCH_ACK, 0,
-                        trace_id, buf, (uint64_t)written);
+    int rc = mgmt_reply(MGMT_FRAME_TMDB_FETCH_ACK, buf, (uint64_t)written);
     free(buf);
     return rc;
 }
 
-static int handle_tmdb_store(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id, const char *body) {
+static int handle_tmdb_store(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     char title_id[32] = {0};
     char *json = malloc(TMDB_JSON_BUF_SZ);
     if (!json) {
         const char *e = "{\"ok\":false,\"error\":\"oom\"}";
-        return send_frame(client_fd, FTX2_FRAME_TMDB_STORE_ACK, 0,
-                          trace_id, e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_TMDB_STORE_ACK, e, strlen(e));
     }
     size_t json_len = 0;
     if (body) {
@@ -11322,32 +5409,27 @@ static int handle_tmdb_store(runtime_state_t *state, int client_fd,
     if (!title_id[0] || json_len == 0) {
         free(json);
         const char *e = "{\"ok\":false,\"error\":\"title_id_and_json_required\"}";
-        return send_frame(client_fd, FTX2_FRAME_TMDB_STORE_ACK, 0,
-                          trace_id, e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_TMDB_STORE_ACK, e, strlen(e));
     }
     int rc_store = tmdb_store(title_id, json, json_len);
     free(json);
     const char *resp = rc_store == 0
         ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"store_failed\"}";
-    return send_frame(client_fd, FTX2_FRAME_TMDB_STORE_ACK, 0,
-                      trace_id, resp, strlen(resp));
+    return mgmt_reply(MGMT_FRAME_TMDB_STORE_ACK, resp, strlen(resp));
 }
 
 /* ── FW Spoof status handler ───────────────────────────────────────── */
-static int handle_fw_spoof_status(runtime_state_t *state, int client_fd,
-                                   uint64_t trace_id) {
+static int handle_fw_spoof_status(runtime_state_t *state) {
     if (!state) return -1;
     char buf[1024];
     size_t written = 0;
     fw_spoof_status(buf, sizeof(buf), &written);
     cheat_inc_cmd_count(state);
-    return send_frame(client_fd, FTX2_FRAME_FWSPOOF_STATUS_ACK, 0,
-                      trace_id, buf, (uint64_t)written);
+    return mgmt_reply(MGMT_FRAME_FWSPOOF_STATUS_ACK, buf, (uint64_t)written);
 }
 
 /* ── FTP Server handlers ──────────────────────────────────────────── */
-static int handle_ftp_start(runtime_state_t *state, int client_fd,
-                             uint64_t trace_id, const char *body) {
+static int handle_ftp_start(runtime_state_t *state, const char *body) {
     if (!state) return -1;
     int port = 2122;
     char root[256] = "/";
@@ -11370,24 +5452,20 @@ static int handle_ftp_start(runtime_state_t *state, int client_fd,
     ftp_server_start(port, root, readonly, user[0] ? user : NULL,
                      pass[0] ? pass : NULL, resp, sizeof(resp), &written);
     cheat_inc_cmd_count(state);
-    return send_frame(client_fd, FTX2_FRAME_FTP_START_ACK, 0,
-                      trace_id, resp, (uint64_t)written);
+    return mgmt_reply(MGMT_FRAME_FTP_START_ACK, resp, (uint64_t)written);
 }
 
-static int handle_ftp_status(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id) {
+static int handle_ftp_status(runtime_state_t *state) {
     if (!state) return -1;
     char resp[256];
     size_t written = 0;
     ftp_server_status(resp, sizeof(resp), &written);
     cheat_inc_cmd_count(state);
-    return send_frame(client_fd, FTX2_FRAME_FTP_STATUS_ACK, 0,
-                      trace_id, resp, (uint64_t)written);
+    return mgmt_reply(MGMT_FRAME_FTP_STATUS_ACK, resp, (uint64_t)written);
 }
 
 /* ── Fan curve get handler ───────────────────────────────────────────── */
-static int handle_fan_curve_get(runtime_state_t *state, int client_fd,
-                                 uint64_t trace_id) {
+static int handle_fan_curve_get(runtime_state_t *state) {
     if (!state) return -1;
     char buf[4096];
     int rc = fan_curve_get(buf, sizeof(buf));
@@ -11396,11 +5474,9 @@ static int handle_fan_curve_get(runtime_state_t *state, int client_fd,
     pthread_mutex_unlock(&state->state_mtx);
     if (rc != 0) {
         const char *e = "{\"points\":[]}";
-        return send_frame(client_fd, FTX2_FRAME_HW_FAN_CURVE_GET_ACK, 0,
-                          trace_id, e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_HW_FAN_CURVE_GET_ACK, e, strlen(e));
     }
-    return send_frame(client_fd, FTX2_FRAME_HW_FAN_CURVE_GET_ACK, 0,
-                      trace_id, buf, strlen(buf));
+    return mgmt_reply(MGMT_FRAME_HW_FAN_CURVE_GET_ACK, buf, strlen(buf));
 }
 
 /* The save / screenshot / video lists are built in one heap buffer of LIST_JSON_CAP bytes and
@@ -11508,8 +5584,7 @@ static int append_saves_for_root(const char *root, int user_id, int kind_is_ps4,
     return count;
 }
 
-static int handle_list_saves(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id, const char *body, uint64_t body_len) {
+static int handle_list_saves(runtime_state_t *state, const char *body, uint64_t body_len) {
     if (!state) return -1;
     /* Optional `{"user_id":N}` body filters to one user; else walk all
      * user dirs under /user/home. */
@@ -11532,8 +5607,7 @@ static int handle_list_saves(runtime_state_t *state, int client_fd,
     char *resp = malloc(LIST_JSON_CAP);
     if (!resp) {
         const char *err = "{\"err\":\"oom\"}";
-        return send_frame(client_fd, FTX2_FRAME_LIST_SAVES_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_LIST_SAVES_ACK, err, strlen(err));
     }
     int cap = LIST_JSON_CAP;
     int n = 0;
@@ -11577,8 +5651,7 @@ static int handle_list_saves(runtime_state_t *state, int client_fd,
         closedir(home);
     }
     n = list_json_close(resp, n, cap);
-    int rc = send_frame(client_fd, FTX2_FRAME_LIST_SAVES_ACK, 0, trace_id,
-                        resp, (uint64_t)n);
+    int rc = mgmt_reply(MGMT_FRAME_LIST_SAVES_ACK, resp, (uint64_t)n);
     free(resp);
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
@@ -11925,15 +5998,13 @@ static int glob_match(const char *pat, const char *str, int depth) {
     return *str == '\0';
 }
 
-static int handle_index_start(runtime_state_t *state, int client_fd,
-                               uint64_t trace_id, const char *body, uint64_t body_len) {
+static int handle_index_start(runtime_state_t *state, const char *body, uint64_t body_len) {
     if (!state) return -1;
     pthread_mutex_lock(&g_index_lock);
     if (g_index_phase == 1) {
         pthread_mutex_unlock(&g_index_lock);
         const char *err = "{\"started\":false,\"err\":\"already_building\"}";
-        return send_frame(client_fd, FTX2_FRAME_INDEX_START_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_INDEX_START_ACK, err, strlen(err));
     }
     index_clear_locked();
     g_index_phase = 1;
@@ -11950,8 +6021,7 @@ static int handle_index_start(runtime_state_t *state, int client_fd,
         g_index_phase = 0;
         pthread_mutex_unlock(&g_index_lock);
         const char *err = "{\"started\":false,\"err\":\"oom\"}";
-        return send_frame(client_fd, FTX2_FRAME_INDEX_START_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_INDEX_START_ACK, err, strlen(err));
     }
     if (body && body_len > 0 && body_len < 1024) {
         char tmp[1024];
@@ -11985,20 +6055,17 @@ static int handle_index_start(runtime_state_t *state, int client_fd,
         g_index_phase = 0;
         pthread_mutex_unlock(&g_index_lock);
         const char *err = "{\"started\":false,\"err\":\"thread_create\"}";
-        return send_frame(client_fd, FTX2_FRAME_INDEX_START_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_INDEX_START_ACK, err, strlen(err));
     }
     pthread_detach(g_index_thread);
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
     const char *ok = "{\"started\":true}";
-    return send_frame(client_fd, FTX2_FRAME_INDEX_START_ACK, 0, trace_id,
-                      ok, strlen(ok));
+    return mgmt_reply(MGMT_FRAME_INDEX_START_ACK, ok, strlen(ok));
 }
 
-static int handle_index_status(runtime_state_t *state, int client_fd,
-                                uint64_t trace_id) {
+static int handle_index_status(runtime_state_t *state) {
     if (!state) return -1;
     pthread_mutex_lock(&g_index_lock);
     char body[256];
@@ -12012,12 +6079,10 @@ static int handle_index_status(runtime_state_t *state, int client_fd,
                      (long long)g_index_started_at,
                      (long long)g_index_completed_at);
     pthread_mutex_unlock(&g_index_lock);
-    return send_frame(client_fd, FTX2_FRAME_INDEX_STATUS_ACK, 0,
-                      trace_id, body, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_INDEX_STATUS_ACK, body, (uint64_t)n);
 }
 
-static int handle_search_index(runtime_state_t *state, int client_fd,
-                                uint64_t trace_id, const char *body, uint64_t body_len) {
+static int handle_search_index(runtime_state_t *state, const char *body, uint64_t body_len) {
     if (!state) return -1;
     /* Parse `{"query":"...","size_min":N,"size_max":N,"limit":N}`. */
     char qbuf[256] = {0};
@@ -12063,8 +6128,7 @@ static int handle_search_index(runtime_state_t *state, int client_fd,
     char *resp = malloc(256 * 1024);
     if (!resp) {
         const char *err = "{\"err\":\"oom\"}";
-        return send_frame(client_fd, FTX2_FRAME_SEARCH_INDEX_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_SEARCH_INDEX_ACK, err, strlen(err));
     }
     int cap = 256 * 1024;
     int n = 0;
@@ -12102,8 +6166,7 @@ static int handle_search_index(runtime_state_t *state, int client_fd,
         resp[n++] = ']';
         resp[n++] = '}';
     }
-    int rc = send_frame(client_fd, FTX2_FRAME_SEARCH_INDEX_ACK, 0,
-                        trace_id, resp, (uint64_t)n);
+    int rc = mgmt_reply(MGMT_FRAME_SEARCH_INDEX_ACK, resp, (uint64_t)n);
     free(resp);
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
@@ -12121,8 +6184,7 @@ static int handle_search_index(runtime_state_t *state, int client_fd,
 #define APP_PROCS_MAX_COUNT 64
 #define APP_PROCS_SLOT_BYTES 256
 
-static int handle_app_lifecycle(runtime_state_t *state, int client_fd,
-                                 uint64_t trace_id, const char *body,
+static int handle_app_lifecycle(runtime_state_t *state, const char *body,
                                  uint64_t body_len) {
     if (!state) return -1;
     char action[16] = {0};
@@ -12152,8 +6214,7 @@ static int handle_app_lifecycle(runtime_state_t *state, int client_fd,
     }
     if (action[0] == '\0') {
         const char *err = "{\"ok\":false,\"err\":\"bad_action\"}";
-        return send_frame(client_fd, FTX2_FRAME_APP_LIFECYCLE_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_APP_LIFECYCLE_ACK, err, strlen(err));
     }
     if (strcmp(action, "list") == 0) {
         /* Heap-allocate the procs scratch + response buffers. The
@@ -12169,13 +6230,12 @@ static int handle_app_lifecycle(runtime_state_t *state, int client_fd,
         if (!buf || !resp) {
             free(buf); free(resp);
             const char *err = "{\"ok\":false,\"err\":\"out_of_memory\"}";
-            return send_frame(client_fd, FTX2_FRAME_APP_LIFECYCLE_ACK,
-                              0, trace_id, err, strlen(err));
+            return mgmt_reply(MGMT_FRAME_APP_LIFECYCLE_ACK, err, strlen(err));
         }
         int count = 0;
         int rc = -1;
         /* sceApplication* is Sony code: serialised like every other Sony call
-         * (P3 Task 6: AVA1 runs up to eight management calls at once, FTX2 ran one
+         * (P3 Task 6: AVA1 runs up to eight management calls at once, the old protocol ran one
          * thread per connection, and an unserialised Sony call can take the host
          * process down, CE-108262-9). */
         pthread_mutex_lock(&sony_api_lock);
@@ -12204,16 +6264,14 @@ static int handle_app_lifecycle(runtime_state_t *state, int client_fd,
         pthread_mutex_lock(&state->state_mtx);
         state->command_count += 1;
         pthread_mutex_unlock(&state->state_mtx);
-        int sret = send_frame(client_fd, FTX2_FRAME_APP_LIFECYCLE_ACK,
-                              0, trace_id, resp, (uint64_t)n);
+        int sret = mgmt_reply(MGMT_FRAME_APP_LIFECYCLE_ACK, resp, (uint64_t)n);
         free(buf);
         free(resp);
         return sret;
     }
     if (app_id == 0) {
         const char *err = "{\"ok\":false,\"err\":\"app_id_required\"}";
-        return send_frame(client_fd, FTX2_FRAME_APP_LIFECYCLE_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_APP_LIFECYCLE_ACK, err, strlen(err));
     }
     /* The suspend / resume / kill calls below are Sony APIs: hold sony_api_lock across
      * the whole action (the kill ladder is up to four calls, run back to back as before)
@@ -12222,8 +6280,7 @@ static int handle_app_lifecycle(runtime_state_t *state, int client_fd,
     if (resolve_sce_syscore() != 0) {
         pthread_mutex_unlock(&sony_api_lock);
         const char *err = "{\"ok\":false,\"err\":\"libSceSysCore_unavailable\"}";
-        return send_frame(client_fd, FTX2_FRAME_APP_LIFECYCLE_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_APP_LIFECYCLE_ACK, err, strlen(err));
     }
     int rc = -1;
     if (strcmp(action, "suspend") == 0) {
@@ -12266,8 +6323,7 @@ static int handle_app_lifecycle(runtime_state_t *state, int client_fd,
     } else {
         pthread_mutex_unlock(&sony_api_lock);
         const char *err = "{\"ok\":false,\"err\":\"unknown_action\"}";
-        return send_frame(client_fd, FTX2_FRAME_APP_LIFECYCLE_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_APP_LIFECYCLE_ACK, err, strlen(err));
     }
     pthread_mutex_unlock(&sony_api_lock);
     pthread_mutex_lock(&state->state_mtx);
@@ -12277,8 +6333,7 @@ static int handle_app_lifecycle(runtime_state_t *state, int client_fd,
     int n = snprintf(resp, sizeof(resp),
                      "{\"ok\":%s,\"action\":\"%s\",\"app_id\":%u,\"code\":%d}",
                      rc == 0 ? "true" : "false", action, app_id, rc);
-    return send_frame(client_fd, FTX2_FRAME_APP_LIFECYCLE_ACK, 0,
-                      trace_id, resp, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_APP_LIFECYCLE_ACK, resp, (uint64_t)n);
 }
 
 /* ── Kernel log read ─────────────────────────────────────────────────── */
@@ -12287,8 +6342,7 @@ static int handle_app_lifecycle(runtime_state_t *state, int client_fd,
  * log device returns 0 bytes when the buffer is empty (non-blocking
  * by default). We cap reads at 64 KB per call so the response stays
  * bounded. */
-static int handle_klog_read(runtime_state_t *state, int client_fd,
-                             uint64_t trace_id, const char *body,
+static int handle_klog_read(runtime_state_t *state, const char *body,
                              uint64_t body_len) {
     if (!state) return -1;
     size_t max_bytes = 16 * 1024;
@@ -12311,21 +6365,18 @@ static int handle_klog_read(runtime_state_t *state, int client_fd,
     int fd = open("/dev/klog", O_RDONLY | O_NONBLOCK);
     if (fd < 0) {
         const char *err = "open_klog_failed";
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_ERROR, err, strlen(err));
     }
     char *buf = malloc(max_bytes);
     if (!buf) {
         close(fd);
         const char *err = "klog_oom";
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_ERROR, err, strlen(err));
     }
     ssize_t n = read(fd, buf, max_bytes);
     close(fd);
     if (n < 0) n = 0;
-    int rc = send_frame(client_fd, FTX2_FRAME_KLOG_READ_ACK, 0,
-                        trace_id, buf, (uint64_t)n);
+    int rc = mgmt_reply(MGMT_FRAME_KLOG_READ_ACK, buf, (uint64_t)n);
     free(buf);
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
@@ -12335,8 +6386,7 @@ static int handle_klog_read(runtime_state_t *state, int client_fd,
 
 /* ── Network interface listing ───────────────────────────────────────── */
 
-static int handle_net_interfaces(runtime_state_t *state, int client_fd,
-                                  uint64_t trace_id) {
+static int handle_net_interfaces(runtime_state_t *state) {
     if (!state) return -1;
     /* Two-path enumeration:
      *
@@ -12367,8 +6417,7 @@ static int handle_net_interfaces(runtime_state_t *state, int client_fd,
     char *resp = malloc(resp_cap);
     if (!resp) {
         const char *err = "{\"err\":\"oom\",\"interfaces\":[]}";
-        return send_frame(client_fd, FTX2_FRAME_NET_INTERFACES_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_NET_INTERFACES_ACK, err, strlen(err));
     }
     int n = 0;
     int wrote_any = 0;
@@ -12382,8 +6431,7 @@ static int handle_net_interfaces(runtime_state_t *state, int client_fd,
         if (!if_buf) {
             free(resp);
             const char *err = "{\"err\":\"oom\",\"interfaces\":[]}";
-            return send_frame(client_fd, FTX2_FRAME_NET_INTERFACES_ACK, 0,
-                              trace_id, err, strlen(err));
+            return mgmt_reply(MGMT_FRAME_NET_INTERFACES_ACK, err, strlen(err));
         }
         memset(if_buf, 0, if_buf_sz);
         int count = 0;
@@ -12512,24 +6560,21 @@ static int handle_net_interfaces(runtime_state_t *state, int client_fd,
         const char *err =
             "{\"err\":\"no_interfaces_reported\",\"interfaces\":[],"
             "\"hint\":\"both sceNetGetIfList and getifaddrs returned no usable interfaces\"}";
-        return send_frame(client_fd, FTX2_FRAME_NET_INTERFACES_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_NET_INTERFACES_ACK, err, strlen(err));
     }
     n += snprintf(resp + n, resp_cap - n,
                   "],\"source\":\"%s\"}", source ? source : "unknown");
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    int rc = send_frame(client_fd, FTX2_FRAME_NET_INTERFACES_ACK, 0,
-                        trace_id, resp, (uint64_t)n);
+    int rc = mgmt_reply(MGMT_FRAME_NET_INTERFACES_ACK, resp, (uint64_t)n);
     free(resp);
     return rc;
 }
 
 /* ── Peripheral control (BD/USB power) ───────────────────────────────── */
 
-static int handle_peripheral_control(runtime_state_t *state, int client_fd,
-                                      uint64_t trace_id, const char *body,
+static int handle_peripheral_control(runtime_state_t *state, const char *body,
                                       uint64_t body_len) {
     if (!state) return -1;
     char action[32] = {0};
@@ -12560,7 +6605,7 @@ static int handle_peripheral_control(runtime_state_t *state, int client_fd,
     resolve_sce_kernel_extras();
     int rc = -1;
     /* Peripheral ICC control is serialised with the other Sony calls: AVA1 can run several management
-     * calls at once, FTX2 rarely did. The lock covers only the control block; replies go out after. */
+     * calls at once, the old protocol rarely did. The lock covers only the control block; replies go out after. */
     int periph_known = strcmp(action, "bd_power_off") == 0 || strcmp(action, "bd_power_on") == 0 ||
                        strcmp(action, "eject_disc") == 0 || strcmp(action, "usb_port_off") == 0 ||
                        strcmp(action, "usb_port_on") == 0;
@@ -12591,8 +6636,7 @@ static int handle_peripheral_control(runtime_state_t *state, int client_fd,
                 ? p_sceKernelIccControlUSBPowerState(port, 1) : -1;
     } else {
         const char *err = "{\"ok\":false,\"err\":\"unknown_action\"}";
-        return send_frame(client_fd, FTX2_FRAME_PERIPHERAL_CONTROL_ACK,
-                          0, trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_PERIPHERAL_CONTROL_ACK, err, strlen(err));
     }
     if (periph_known) pthread_mutex_unlock(&sony_api_lock);
     pthread_mutex_lock(&state->state_mtx);
@@ -12602,8 +6646,7 @@ static int handle_peripheral_control(runtime_state_t *state, int client_fd,
     int n = snprintf(resp, sizeof(resp),
                      "{\"ok\":%s,\"action\":\"%s\",\"port\":%d,\"code\":%d}",
                      rc == 0 ? "true" : "false", action, port, rc);
-    return send_frame(client_fd, FTX2_FRAME_PERIPHERAL_CONTROL_ACK,
-                      0, trace_id, resp, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_PERIPHERAL_CONTROL_ACK, resp, (uint64_t)n);
 }
 
 /* ── Shell command exec ──────────────────────────────────────────────── */
@@ -12657,8 +6700,7 @@ char *strdup_safe(const char *s) {
  * `"/path` and `with` and ENOENT immediately). All built-ins that
  * take a path argument now handle quoted paths correctly. */
 #include "shell_builtin.h"
-static int shell_send_json_result(runtime_state_t *state, int client_fd,
-                                  uint64_t trace_id, int exit_code,
+static int shell_send_json_result(runtime_state_t *state, int exit_code,
                                   const char *stdout_text,
                                   const char *cwd_text,
                                   const char *session_id,
@@ -12699,8 +6741,7 @@ static int shell_send_json_result(runtime_state_t *state, int client_fd,
     char *resp = malloc(esc_len + cwd_len * 6 + sid_len * 6 + 680);
     if (!resp) {
         const char *err = "{\"err\":\"oom\"}";
-        return send_frame(client_fd, FTX2_FRAME_SHELL_EXEC_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_SHELL_EXEC_ACK, err, strlen(err));
     }
     int n = 0;
     size_t cap = esc_len + cwd_len * 6 + sid_len * 6 + 680;
@@ -12739,8 +6780,7 @@ static int shell_send_json_result(runtime_state_t *state, int client_fd,
         else { resp[n++] = (char)c; }
     }
     n += snprintf(resp + n, cap - (size_t)n, shell_truncated ? "\",\"truncated\":true}" : "\"}");
-    int rc = send_frame(client_fd, FTX2_FRAME_SHELL_EXEC_ACK, 0,
-                        trace_id, resp, (uint64_t)n);
+    int rc = mgmt_reply(MGMT_FRAME_SHELL_EXEC_ACK, resp, (uint64_t)n);
     free(resp);
     if (state) {
         pthread_mutex_lock(&state->state_mtx);
@@ -12750,8 +6790,7 @@ static int shell_send_json_result(runtime_state_t *state, int client_fd,
     return rc;
 }
 
-static int handle_shell_exec(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id, const char *body,
+static int handle_shell_exec(runtime_state_t *state, const char *body,
                               uint64_t body_len) {
     if (!state) return -1;
     char cmd[2048] = {0};
@@ -12782,8 +6821,7 @@ static int handle_shell_exec(runtime_state_t *state, int client_fd,
     shell_session_get(session_id, fallback_cwd, cwd, sizeof(cwd));
     if (cmd[0] == '\0') {
         const char *err = "{\"err\":\"empty_cmd\"}";
-        return send_frame(client_fd, FTX2_FRAME_SHELL_EXEC_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_SHELL_EXEC_ACK, err, strlen(err));
     }
     {
         char probe[2100];
@@ -12793,7 +6831,7 @@ static int handle_shell_exec(runtime_state_t *state, int client_fd,
         if (argc_probe > 0 && strcmp(argv_probe[0], "pwd") == 0) {
             char out[1100];
             snprintf(out, sizeof(out), "%s\n", cwd);
-            return shell_send_json_result(state, client_fd, trace_id, 0, out, cwd, session_id, 0);
+            return shell_send_json_result(state, 0, out, cwd, session_id, 0);
         }
         if (argc_probe > 0 && strcmp(argv_probe[0], "cd") == 0) {
             const char *target = argc_probe >= 2 ? argv_probe[1] : "/";
@@ -12803,11 +6841,11 @@ static int handle_shell_exec(runtime_state_t *state, int client_fd,
                                   err, sizeof(err)) != 0) {
                 char out[1400];
                 snprintf(out, sizeof(out), "cd: %s: %s\n", target, err);
-                return shell_send_json_result(state, client_fd, trace_id, 1, out, cwd, session_id, 0);
+                return shell_send_json_result(state, 1, out, cwd, session_id, 0);
             }
             shell_session_set(session_id, resolved);
             snprintf(cwd, sizeof(cwd), "%s", resolved);
-            return shell_send_json_result(state, client_fd, trace_id, 0, "", cwd, session_id, 0);
+            return shell_send_json_result(state, 0, "", cwd, session_id, 0);
         }
         if (argc_probe > 0 && strcmp(argv_probe[0], "ls") == 0 && argc_probe <= 2) {
             const char *target = argc_probe >= 2 ? argv_probe[1] : cwd;
@@ -12817,14 +6855,13 @@ static int handle_shell_exec(runtime_state_t *state, int client_fd,
                                   err, sizeof(err)) != 0) {
                 char out[1400];
                 snprintf(out, sizeof(out), "ls: %s: %s\n", target, err);
-                return shell_send_json_result(state, client_fd, trace_id, 1, out, cwd, session_id, 0);
+                return shell_send_json_result(state, 1, out, cwd, session_id, 0);
             }
             char *builtin_out = NULL;
             int builtin_exit = -1;
             int builtin_rc = shell_ls_path(abs_path, &builtin_out, &builtin_exit);
             if (builtin_rc == 0) {
-                int rc = shell_send_json_result(state, client_fd, trace_id,
-                                                builtin_exit,
+                int rc = shell_send_json_result(state, builtin_exit,
                                                 builtin_out ? builtin_out : "",
                                                 cwd,
                                                 session_id,
@@ -12852,8 +6889,7 @@ static int handle_shell_exec(runtime_state_t *state, int client_fd,
 
         if (builtin_rc == 0) {
             (void)timeout_secs;
-            int rc_b = shell_send_json_result(state, client_fd, trace_id,
-                                              builtin_exit,
+            int rc_b = shell_send_json_result(state, builtin_exit,
                                               builtin_out ? builtin_out : "",
                                               cwd,
                                               session_id,
@@ -12869,91 +6905,7 @@ static int handle_shell_exec(runtime_state_t *state, int client_fd,
     snprintf(msg, sizeof(msg),
              "%s: command not found. PS5Upload shell only supports built-ins; type 'help'.\n",
              cmd[0] ? cmd : "shell");
-    return shell_send_json_result(state, client_fd, trace_id, 127, msg, cwd, session_id, 0);
-}
-
-/* ── CRC32 file checksum ─────────────────────────────────────────────── */
-
-static uint32_t g_crc32_table[256];
-static int g_crc32_table_built = 0;
-static void build_crc32_table(void) {
-    if (g_crc32_table_built) return;
-    for (int i = 0; i < 256; i++) {
-        uint32_t c = (uint32_t)i;
-        for (int j = 0; j < 8; j++) {
-            c = (c & 1) ? (0xedb88320u ^ (c >> 1)) : (c >> 1);
-        }
-        g_crc32_table[i] = c;
-    }
-    g_crc32_table_built = 1;
-}
-
-static int handle_crc32_file(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id, const char *body,
-                              uint64_t body_len) {
-    if (!state) return -1;
-    char path[1024] = {0};
-    if (body && body_len > 0 && body_len < 1024) {
-        char tmp[1028];
-        memcpy(tmp, body, (size_t)body_len);
-        tmp[body_len] = '\0';
-        const char *p = strstr(tmp, "\"path\"");
-        if (p) {
-            p = strchr(p, ':');
-            if (p) p = strchr(p, '"');
-            if (p) {
-                p++;
-                const char *e = strchr(p, '"');
-                if (e && (size_t)(e - p) < sizeof(path)) {
-                    memcpy(path, p, (size_t)(e - p));
-                    path[e - p] = '\0';
-                }
-            }
-        }
-    }
-    if (path[0] == '\0') {
-        const char *err = "{\"err\":\"empty_path\"}";
-        return send_frame(client_fd, FTX2_FRAME_CRC32_FILE_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) {
-        const char *err = "{\"err\":\"open_failed\"}";
-        return send_frame(client_fd, FTX2_FRAME_CRC32_FILE_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    build_crc32_table();
-    uint32_t crc = 0xffffffffu;
-    uint64_t total = 0;
-    /* Heap, not stack: 64 KiB on a management thread's stack is what mgmt_audit.py refuses. */
-    char *buf = (char *)malloc(64 * 1024);
-    if (!buf) {
-        close(fd);
-        const char *err = "{\"err\":\"oom\"}";
-        return send_frame(client_fd, FTX2_FRAME_CRC32_FILE_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    while (1) {
-        ssize_t n = read(fd, buf, 64 * 1024);
-        if (n <= 0) break;
-        for (ssize_t i = 0; i < n; i++) {
-            crc = g_crc32_table[(crc ^ (unsigned char)buf[i]) & 0xff]
-                  ^ (crc >> 8);
-        }
-        total += (uint64_t)n;
-    }
-    free(buf);
-    close(fd);
-    crc ^= 0xffffffffu;
-    char resp[160];
-    int rn = snprintf(resp, sizeof(resp),
-                      "{\"crc32\":%u,\"size\":%llu}",
-                      crc, (unsigned long long)total);
-    pthread_mutex_lock(&state->state_mtx);
-    state->command_count += 1;
-    pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_CRC32_FILE_ACK, 0,
-                      trace_id, resp, (uint64_t)rn);
+    return shell_send_json_result(state, 127, msg, cwd, session_id, 0);
 }
 
 /* ── app.db query ────────────────────────────────────────────────────── */
@@ -12971,27 +6923,23 @@ static int handle_crc32_file(runtime_state_t *state, int client_fd,
  * database that will not open at all (locked by the shell, or damaged),
  * which is a genuine runtime condition rather than a permanent one.
  */
-static int handle_appdb_query(runtime_state_t *state, int client_fd,
-                               uint64_t trace_id) {
+static int handle_appdb_query(runtime_state_t *state) {
     if (!state) return -1;
 
     const size_t cap = 64 * 1024;
     char *resp = (char *)malloc(cap);
     if (!resp) {
         const char *err = "{\"err\":\"oom\",\"apps\":[]}";
-        return send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_APPDB_QUERY_ACK, err, strlen(err));
     }
 
     size_t written = 0;
     int rc;
     if (content_db_apps_json(resp, cap, &written) != 0 || written == 0) {
         const char *err = "{\"err\":\"appdb_unreadable\",\"apps\":[]}";
-        rc = send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0, trace_id,
-                        err, strlen(err));
+        rc = mgmt_reply(MGMT_FRAME_APPDB_QUERY_ACK, err, strlen(err));
     } else {
-        rc = send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0, trace_id,
-                        resp, (uint64_t)written);
+        rc = mgmt_reply(MGMT_FRAME_APPDB_QUERY_ACK, resp, (uint64_t)written);
     }
     free(resp);
 
@@ -13010,8 +6958,7 @@ static int parse_json_string_field_local(const char *body, uint64_t body_len,
                                           size_t out_size);
 
 
-static int handle_appinfo_query(runtime_state_t *state, int client_fd,
-                                 uint64_t trace_id, const char *body,
+static int handle_appinfo_query(runtime_state_t *state, const char *body,
                                  uint64_t body_len) {
     if (!state) return -1;
     char title_id[32] = {0};
@@ -13025,26 +6972,22 @@ static int handle_appinfo_query(runtime_state_t *state, int client_fd,
         title_id[0] == '\0') {
         const char *err =
             "{\"ok\":false,\"error\":\"title_id is required\"}";
-        rc = send_frame(client_fd, FTX2_FRAME_APPINFO_QUERY_ACK, 0, trace_id,
-                        err, strlen(err));
+        rc = mgmt_reply(MGMT_FRAME_APPINFO_QUERY_ACK, err, strlen(err));
     } else {
         const size_t cap = 32 * 1024;
         char *resp = (char *)malloc(cap);
         if (!resp) {
             const char *err = "{\"ok\":false,\"error\":\"oom\"}";
-            rc = send_frame(client_fd, FTX2_FRAME_APPINFO_QUERY_ACK, 0,
-                            trace_id, err, strlen(err));
+            rc = mgmt_reply(MGMT_FRAME_APPINFO_QUERY_ACK, err, strlen(err));
         } else {
             size_t written = 0;
             if (content_db_appinfo_json(title_id, keys[0] ? keys : NULL, resp,
                                         cap, &written) != 0 || written == 0) {
                 const char *err =
                     "{\"ok\":false,\"error\":\"appinfo.db unreadable\"}";
-                rc = send_frame(client_fd, FTX2_FRAME_APPINFO_QUERY_ACK, 0,
-                                trace_id, err, strlen(err));
+                rc = mgmt_reply(MGMT_FRAME_APPINFO_QUERY_ACK, err, strlen(err));
             } else {
-                rc = send_frame(client_fd, FTX2_FRAME_APPINFO_QUERY_ACK, 0,
-                                trace_id, resp, (uint64_t)written);
+                rc = mgmt_reply(MGMT_FRAME_APPINFO_QUERY_ACK, resp, (uint64_t)written);
             }
             free(resp);
         }
@@ -13056,8 +6999,7 @@ static int handle_appinfo_query(runtime_state_t *state, int client_fd,
     return rc;
 }
 
-static int handle_appinfo_set(runtime_state_t *state, int client_fd,
-                               uint64_t trace_id, const char *body,
+static int handle_appinfo_set(runtime_state_t *state, const char *body,
                                uint64_t body_len) {
     if (!state) return -1;
     char title_id[32] = {0};
@@ -13093,8 +7035,7 @@ static int handle_appinfo_set(runtime_state_t *state, int client_fd,
         }
     }
 
-    int rc = send_frame(client_fd, FTX2_FRAME_APPINFO_SET_ACK, 0, trace_id,
-                        resp, (uint64_t)(n > 0 ? n : 0));
+    int rc = mgmt_reply(MGMT_FRAME_APPINFO_SET_ACK, resp, (uint64_t)(n > 0 ? n : 0));
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
@@ -13168,8 +7109,7 @@ static int parse_json_string_field_local(const char *body, uint64_t body_len,
     return json_copy_unescaped_string(p, e, out, out_size);
 }
 
-static int handle_pkg_direct_mount(runtime_state_t *state, int client_fd,
-                                    uint64_t trace_id, const char *body,
+static int handle_pkg_direct_mount(runtime_state_t *state, const char *body,
                                     uint64_t body_len) {
     if (!state) return -1;
     char pkg_path[512] = {0};
@@ -13178,8 +7118,7 @@ static int handle_pkg_direct_mount(runtime_state_t *state, int client_fd,
                                        pkg_path, sizeof(pkg_path)) != 0 ||
         pkg_path[0] == '\0') {
         const char *err = "{\"ok\":false,\"err\":\"pkg_path_required\"}";
-        return send_frame(client_fd, FTX2_FRAME_PKG_DIRECT_MOUNT_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_PKG_DIRECT_MOUNT_ACK, err, strlen(err));
     }
     if (parse_json_string_field_local(body, body_len, "mount_point",
                                        mount_point, sizeof(mount_point)) != 0 ||
@@ -13197,14 +7136,12 @@ static int handle_pkg_direct_mount(runtime_state_t *state, int client_fd,
      * roots is rejected. */
     if (!is_path_allowed(mount_point) || !is_path_allowed(pkg_path)) {
         const char *err = "{\"ok\":false,\"err\":\"path_not_allowed\"}";
-        return send_frame(client_fd, FTX2_FRAME_PKG_DIRECT_MOUNT_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_PKG_DIRECT_MOUNT_ACK, err, strlen(err));
     }
     /* Resolve the optional libSceFsInternalForVsh export at first use. */
     if (resolve_sce_fs_internal() != 0 || !p_sceFsMountGamePkg) {
         const char *err = "{\"ok\":false,\"err\":\"libSceFsInternalForVsh_unavailable\"}";
-        return send_frame(client_fd, FTX2_FRAME_PKG_DIRECT_MOUNT_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_PKG_DIRECT_MOUNT_ACK, err, strlen(err));
     }
     /* Best-effort mkdir of the mount point. */
     int created_mp = (mkdir(mount_point, 0755) == 0);
@@ -13223,12 +7160,10 @@ static int handle_pkg_direct_mount(runtime_state_t *state, int client_fd,
     int n = snprintf(resp, sizeof(resp),
                      "{\"ok\":%s,\"code\":%d,\"mount_point\":\"%s\"}",
                      rc == 0 ? "true" : "false", rc, mount_point_esc);
-    return send_frame(client_fd, FTX2_FRAME_PKG_DIRECT_MOUNT_ACK, 0,
-                      trace_id, resp, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_PKG_DIRECT_MOUNT_ACK, resp, (uint64_t)n);
 }
 
-static int handle_ufs_fsck(runtime_state_t *state, int client_fd,
-                            uint64_t trace_id, const char *body,
+static int handle_ufs_fsck(runtime_state_t *state, const char *body,
                             uint64_t body_len) {
     if (!state) return -1;
     char device[256] = {0};
@@ -13236,8 +7171,7 @@ static int handle_ufs_fsck(runtime_state_t *state, int client_fd,
                                        device, sizeof(device)) != 0 ||
         device[0] == '\0') {
         const char *err = "{\"ok\":false,\"err\":\"device_required\"}";
-        return send_frame(client_fd, FTX2_FRAME_UFS_FSCK_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_UFS_FSCK_ACK, err, strlen(err));
     }
     /* Restrict the device to ones we created (md*, lvd*) plus the
      * external storage devices the PS5 exposes. Without this a
@@ -13268,8 +7202,7 @@ static int handle_ufs_fsck(runtime_state_t *state, int client_fd,
         if (strncmp(d, "/dev/da0", 8) == 0) allowed = 0;
         if (!allowed) {
             const char *err = "{\"ok\":false,\"err\":\"device_not_allowed\"}";
-            return send_frame(client_fd, FTX2_FRAME_UFS_FSCK_ACK, 0,
-                              trace_id, err, strlen(err));
+            return mgmt_reply(MGMT_FRAME_UFS_FSCK_ACK, err, strlen(err));
         }
     }
     /* Repair flag — we look for `"repair":true`; anything else is
@@ -13285,8 +7218,7 @@ static int handle_ufs_fsck(runtime_state_t *state, int client_fd,
     }
     if (resolve_sce_fs_internal() != 0 || !p_sceFsUfsFsck) {
         const char *err = "{\"ok\":false,\"err\":\"libSceFsInternalForVsh_unavailable\"}";
-        return send_frame(client_fd, FTX2_FRAME_UFS_FSCK_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_UFS_FSCK_ACK, err, strlen(err));
     }
     /* Sony's flags layout is opaque; per psdevwiki, flag 1 enables
      * write-mode repair and flag 0 is read-only check. The opts
@@ -13303,12 +7235,10 @@ static int handle_ufs_fsck(runtime_state_t *state, int client_fd,
                      "{\"ok\":%s,\"code\":%d,\"device\":\"%s\",\"repair\":%s}",
                      rc == 0 ? "true" : "false", rc, device_esc,
                      repair ? "true" : "false");
-    return send_frame(client_fd, FTX2_FRAME_UFS_FSCK_ACK, 0,
-                      trace_id, resp, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_UFS_FSCK_ACK, resp, (uint64_t)n);
 }
 
-static int handle_lwfs_mount(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id, const char *body,
+static int handle_lwfs_mount(runtime_state_t *state, const char *body,
                               uint64_t body_len) {
     if (!state) return -1;
     char patch_path[512] = {0};
@@ -13318,8 +7248,7 @@ static int handle_lwfs_mount(runtime_state_t *state, int client_fd,
                                        patch_path, sizeof(patch_path)) != 0 ||
         patch_path[0] == '\0') {
         const char *err = "{\"ok\":false,\"err\":\"patch_path_required\"}";
-        return send_frame(client_fd, FTX2_FRAME_LWFS_MOUNT_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_LWFS_MOUNT_ACK, err, strlen(err));
     }
     if (parse_json_string_field_local(body, body_len, "mount_point",
                                        mount_point, sizeof(mount_point)) != 0 ||
@@ -13333,13 +7262,11 @@ static int handle_lwfs_mount(runtime_state_t *state, int client_fd,
                                    title_id, sizeof(title_id));
     if (!is_path_allowed(mount_point) || !is_path_allowed(patch_path)) {
         const char *err = "{\"ok\":false,\"err\":\"path_not_allowed\"}";
-        return send_frame(client_fd, FTX2_FRAME_LWFS_MOUNT_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_LWFS_MOUNT_ACK, err, strlen(err));
     }
     if (resolve_sce_fs_internal() != 0 || !p_sceFsMountLwfs) {
         const char *err = "{\"ok\":false,\"err\":\"libSceFsInternalForVsh_unavailable\"}";
-        return send_frame(client_fd, FTX2_FRAME_LWFS_MOUNT_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_LWFS_MOUNT_ACK, err, strlen(err));
     }
     int created_mp = (mkdir(mount_point, 0755) == 0);
     int rc = p_sceFsMountLwfs(patch_path, mount_point,
@@ -13360,195 +7287,7 @@ static int handle_lwfs_mount(runtime_state_t *state, int client_fd,
                      "\"title_id\":\"%s\"}",
                      rc == 0 ? "true" : "false", rc, mount_point_esc,
                      title_id_esc);
-    return send_frame(client_fd, FTX2_FRAME_LWFS_MOUNT_ACK, 0,
-                      trace_id, resp, (uint64_t)n);
-}
-
-/* ── Atomic small-file write ─────────────────────────────────────────── */
-
-/* Decode base64 into a freshly-malloc'd buffer. Returns NULL on
- * malformed input or oversize. Cap is enforced by the caller. */
-static unsigned char *base64_decode(const char *s, size_t s_len, size_t *out_len) {
-    static const signed char tab[256] = {
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
-        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,62,-1,-1,-1,63,
-        52,53,54,55,56,57,58,59,60,61,-1,-1,-1,-1,-1,-1,
-        -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,
-        15,16,17,18,19,20,21,22,23,24,25,-1,-1,-1,-1,-1,
-        -1,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,
-        41,42,43,44,45,46,47,48,49,50,51,-1,-1,-1,-1,-1,
-    };
-    size_t out_cap = (s_len / 4) * 3 + 4;
-    unsigned char *out = malloc(out_cap);
-    if (!out) return NULL;
-    int v = 0;
-    int bits = 0;
-    size_t out_n = 0;
-    for (size_t i = 0; i < s_len; i++) {
-        unsigned char c = (unsigned char)s[i];
-        if (c == '=' || c == '\n' || c == '\r' || c == ' ') continue;
-        signed char d = tab[c];
-        if (d < 0) {
-            free(out);
-            return NULL;
-        }
-        v = (v << 6) | d;
-        bits += 6;
-        if (bits >= 8) {
-            bits -= 8;
-            if (out_n >= out_cap) {
-                free(out);
-                return NULL;
-            }
-            out[out_n++] = (unsigned char)((v >> bits) & 0xff);
-        }
-    }
-    *out_len = out_n;
-    return out;
-}
-
-/* Path safety: must be absolute, no `..` segments, no `://` scheme. */
-/* Same allowlist as the rest of the destructive FS handlers. The
- * old standalone implementation accepted "any absolute path without
- * .. or ://" — which let a client write under /system, /system_data,
- * /dev, etc. Per audit, replaced with the central is_path_allowed
- * for consistency. Kept the function for call-site stability. */
-static int is_safe_write_path(const char *p) {
-    return is_path_allowed(p);
-}
-
-#define FS_WRITE_BYTES_MAX 262144  /* 256 KB cap */
-
-static int handle_fs_write_bytes(runtime_state_t *state, int client_fd,
-                                  uint64_t trace_id, const char *body,
-                                  uint64_t body_len) {
-    if (!state) return -1;
-    if (!body || body_len == 0 || body_len > 512 * 1024) {
-        const char *err = "{\"ok\":false,\"err\":\"body_required\"}";
-        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    /* Parse path + base64. We do single-pass extraction; no full JSON
-     * library here. */
-    char path[1024] = {0};
-    char mode[16] = "overwrite";
-    if (parse_json_string_field_local(body, body_len, "path",
-                                       path, sizeof(path)) != 0 ||
-        path[0] == '\0') {
-        const char *err = "{\"ok\":false,\"err\":\"path_required\"}";
-        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    if (!is_safe_write_path(path)) {
-        const char *err = "{\"ok\":false,\"err\":\"path_unsafe\"}";
-        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    parse_json_string_field_local(body, body_len, "mode",
-                                   mode, sizeof(mode));
-    /* Locate the bytes field's value. We need its raw start/end so we
-     * don't allocate a huge intermediate buffer to copy it. */
-    const char *p = strstr(body, "\"bytes\"");
-    if (!p) {
-        const char *err = "{\"ok\":false,\"err\":\"bytes_required\"}";
-        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    p = (const char *)memchr(p, ':', body_len - (size_t)(p - body));
-    if (!p) {
-        const char *err = "{\"ok\":false,\"err\":\"bytes_malformed\"}";
-        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    p++;
-    while ((size_t)(p - body) < body_len && (*p == ' ' || *p == '\t')) p++;
-    if ((size_t)(p - body) >= body_len || *p != '"') {
-        const char *err = "{\"ok\":false,\"err\":\"bytes_malformed\"}";
-        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    p++;  /* past opening quote */
-    /* Find closing quote. */
-    const char *e = p;
-    while ((size_t)(e - body) < body_len && *e != '"') e++;
-    if ((size_t)(e - body) >= body_len) {
-        const char *err = "{\"ok\":false,\"err\":\"bytes_unterminated\"}";
-        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    size_t b64_len = (size_t)(e - p);
-    /* Sanity: 256 KB raw → ~342 KB base64. Cap input length so we
-     * don't allocate huge transient buffers for malicious clients. */
-    if (b64_len > 380 * 1024) {
-        const char *err = "{\"ok\":false,\"err\":\"too_large\"}";
-        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    size_t decoded_len = 0;
-    unsigned char *decoded = base64_decode(p, b64_len, &decoded_len);
-    if (!decoded) {
-        const char *err = "{\"ok\":false,\"err\":\"bad_base64\"}";
-        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    if (decoded_len > FS_WRITE_BYTES_MAX) {
-        free(decoded);
-        const char *err = "{\"ok\":false,\"err\":\"size_capped\"}";
-        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    /* `mode=create` rejects pre-existing files. Use stat() to check. */
-    if (strcmp(mode, "create") == 0) {
-        struct stat st;
-        if (stat(path, &st) == 0) {
-            free(decoded);
-            const char *err = "{\"ok\":false,\"err\":\"exists\"}";
-            return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
-                              trace_id, err, strlen(err));
-        }
-    }
-    /* Atomic write: tmp file → rename. */
-    char tmpath[1100];
-    snprintf(tmpath, sizeof(tmpath), "%s.ps5upload.tmp", path);
-    int fd = open(tmpath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) {
-        free(decoded);
-        const char *err = "{\"ok\":false,\"err\":\"open_failed\"}";
-        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    ssize_t written_total = 0;
-    while ((size_t)written_total < decoded_len) {
-        ssize_t w = write(fd, decoded + written_total,
-                          decoded_len - (size_t)written_total);
-        if (w <= 0) {
-            close(fd);
-            unlink(tmpath);
-            free(decoded);
-            const char *err = "{\"ok\":false,\"err\":\"write_failed\"}";
-            return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
-                              trace_id, err, strlen(err));
-        }
-        written_total += w;
-    }
-    fsync(fd);
-    close(fd);
-    free(decoded);
-    if (rename(tmpath, path) != 0) {
-        unlink(tmpath);
-        const char *err = "{\"ok\":false,\"err\":\"rename_failed\"}";
-        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    pthread_mutex_lock(&state->state_mtx);
-    state->command_count += 1;
-    pthread_mutex_unlock(&state->state_mtx);
-    char resp[128];
-    int n = snprintf(resp, sizeof(resp),
-                     "{\"ok\":true,\"size\":%zd}", written_total);
-    return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
-                      trace_id, resp, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_LWFS_MOUNT_ACK, resp, (uint64_t)n);
 }
 
 /* ── Reach-back probe ─────────────────────────────────────────────────── */
@@ -13557,8 +7296,7 @@ static int handle_fs_write_bytes(runtime_state_t *state, int client_fd,
  * strings, so the one string-field parser covers them). Opens a TCP
  * connection from the console and closes it at once; nothing is sent. The
  * engine points it at its own pkg-host listener before a stream install. */
-static int handle_net_reach(runtime_state_t *state, int client_fd,
-                            uint64_t trace_id, const char *body,
+static int handle_net_reach(runtime_state_t *state, const char *body,
                             uint64_t body_len) {
     if (!state) return -1;
     char resp[320];
@@ -13567,7 +7305,7 @@ static int handle_net_reach(runtime_state_t *state, int client_fd,
     pthread_mutex_unlock(&state->state_mtx);
     /* The probe itself lives in net_probe.c so the host tests run the real code. */
     size_t n = net_probe_reach(body, (size_t)body_len, resp, sizeof(resp));
-    return send_frame(client_fd, FTX2_FRAME_NET_REACH_ACK, 0, trace_id, resp, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_NET_REACH_ACK, resp, (uint64_t)n);
 }
 
 /* ── Network round-trip ack ──────────────────────────────────────────── */
@@ -13576,8 +7314,7 @@ static int handle_net_reach(runtime_state_t *state, int client_fd,
  * client sends N empty-body NetSpeedTest frames; the payload just
  * acks each one cheaply. The client measures wall time around the
  * batch and per-frame round-trips. No state on the payload. */
-static int handle_net_speed_test(runtime_state_t *state, int client_fd,
-                                  uint64_t trace_id, const char *body,
+static int handle_net_speed_test(runtime_state_t *state, const char *body,
                                   uint64_t body_len) {
     if (!state) return -1;
     (void)body;
@@ -13586,14 +7323,12 @@ static int handle_net_speed_test(runtime_state_t *state, int client_fd,
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
     const char *resp = "{\"ok\":true}";
-    return send_frame(client_fd, FTX2_FRAME_NET_SPEED_TEST_ACK, 0,
-                      trace_id, resp, strlen(resp));
+    return mgmt_reply(MGMT_FRAME_NET_SPEED_TEST_ACK, resp, strlen(resp));
 }
 
 /* ── Module enumeration ──────────────────────────────────────────────── */
 
-static int handle_proc_modules(runtime_state_t *state, int client_fd,
-                                uint64_t trace_id, const char *body,
+static int handle_proc_modules(runtime_state_t *state, const char *body,
                                 uint64_t body_len) {
     if (!state) return -1;
     /* `pid` parsed for future use — current sceKernelGetModuleList
@@ -13612,8 +7347,7 @@ static int handle_proc_modules(runtime_state_t *state, int client_fd,
     char *resp = malloc(64 * 1024);
     if (!resp) {
         const char *err = "{\"err\":\"oom\",\"modules\":[]}";
-        return send_frame(client_fd, FTX2_FRAME_PROC_MODULES_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_PROC_MODULES_ACK, err, strlen(err));
     }
     int cap = 64 * 1024;
     int n = 0;
@@ -13645,8 +7379,7 @@ static int handle_proc_modules(runtime_state_t *state, int client_fd,
         resp[n++] = ']';
         resp[n++] = '}';
     }
-    int rc2 = send_frame(client_fd, FTX2_FRAME_PROC_MODULES_ACK, 0,
-                         trace_id, resp, (uint64_t)n);
+    int rc2 = mgmt_reply(MGMT_FRAME_PROC_MODULES_ACK, resp, (uint64_t)n);
     free(resp);
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
@@ -13656,8 +7389,7 @@ static int handle_proc_modules(runtime_state_t *state, int client_fd,
 
 /* ── Rich JSON toast (sceNotificationSend) ───────────────────────────── */
 
-static int handle_toast_send(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id, const char *body,
+static int handle_toast_send(runtime_state_t *state, const char *body,
                               uint64_t body_len) {
     if (!state) return -1;
     /* Body is the JSON the renderer wants to forward. We don't try to
@@ -13667,15 +7399,13 @@ static int handle_toast_send(runtime_state_t *state, int client_fd,
      * huge bodies. */
     if (!body || body_len == 0 || body_len > 4096) {
         const char *err = "{\"ok\":false,\"err\":\"body_required\"}";
-        return send_frame(client_fd, FTX2_FRAME_TOAST_SEND_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_TOAST_SEND_ACK, err, strlen(err));
     }
     /* Need a null-terminated copy for sceNotificationSend. */
     char *json = malloc(body_len + 1);
     if (!json) {
         const char *err = "{\"ok\":false,\"err\":\"oom\"}";
-        return send_frame(client_fd, FTX2_FRAME_TOAST_SEND_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_TOAST_SEND_ACK, err, strlen(err));
     }
     memcpy(json, body, body_len);
     json[body_len] = '\0';
@@ -13697,29 +7427,24 @@ static int handle_toast_send(runtime_state_t *state, int client_fd,
     char resp[64];
     int n = snprintf(resp, sizeof(resp), "{\"ok\":%s,\"code\":%d}",
                      rc == 0 ? "true" : "false", rc);
-    return send_frame(client_fd, FTX2_FRAME_TOAST_SEND_ACK, 0, trace_id,
-                      resp, (uint64_t)n);
+    return mgmt_reply(MGMT_FRAME_TOAST_SEND_ACK, resp, (uint64_t)n);
 }
 
-static int handle_index_cancel(runtime_state_t *state, int client_fd,
-                                uint64_t trace_id) {
+static int handle_index_cancel(runtime_state_t *state) {
     if (!state) return -1;
     pthread_mutex_lock(&g_index_lock);
     g_index_cancel = 1;
     pthread_mutex_unlock(&g_index_lock);
     const char *ok = "{\"cancelled\":true}";
-    return send_frame(client_fd, FTX2_FRAME_INDEX_CANCEL_ACK, 0,
-                      trace_id, ok, strlen(ok));
+    return mgmt_reply(MGMT_FRAME_INDEX_CANCEL_ACK, ok, strlen(ok));
 }
 
-static int handle_list_screenshots(runtime_state_t *state, int client_fd,
-                                    uint64_t trace_id) {
+static int handle_list_screenshots(runtime_state_t *state) {
     if (!state) return -1;
     char *resp = malloc(LIST_JSON_CAP);
     if (!resp) {
         const char *err = "{\"err\":\"oom\"}";
-        return send_frame(client_fd, FTX2_FRAME_LIST_SCREENSHOTS_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_LIST_SCREENSHOTS_ACK, err, strlen(err));
     }
     int cap = LIST_JSON_CAP;
     int n = 0;
@@ -13740,8 +7465,7 @@ static int handle_list_screenshots(runtime_state_t *state, int client_fd,
                      resp, &n, cap, &wrote_one, &seen, 1);
     free(seen.names);
     n = list_json_close(resp, n, cap);
-    int rc = send_frame(client_fd, FTX2_FRAME_LIST_SCREENSHOTS_ACK, 0,
-                        trace_id, resp, (uint64_t)n);
+    int rc = mgmt_reply(MGMT_FRAME_LIST_SCREENSHOTS_ACK, resp, (uint64_t)n);
     free(resp);
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
@@ -13751,14 +7475,12 @@ static int handle_list_screenshots(runtime_state_t *state, int client_fd,
 
 /* List gameplay video clips (parallels handle_list_screenshots). No
  * thumbnail tree to dedup — a single flat walk of av_contents/video. */
-static int handle_list_videos(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id) {
+static int handle_list_videos(runtime_state_t *state) {
     if (!state) return -1;
     char *resp = malloc(LIST_JSON_CAP);
     if (!resp) {
         const char *err = "{\"err\":\"oom\"}";
-        return send_frame(client_fd, FTX2_FRAME_LIST_VIDEOS_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_LIST_VIDEOS_ACK, err, strlen(err));
     }
     int cap = LIST_JSON_CAP;
     int n = 0;
@@ -13766,8 +7488,7 @@ static int handle_list_videos(runtime_state_t *state, int client_fd,
     int wrote_one = 0;
     walk_videos("/user/av_contents/video", 5, resp, &n, cap, &wrote_one);
     n = list_json_close(resp, n, cap);
-    int rc = send_frame(client_fd, FTX2_FRAME_LIST_VIDEOS_ACK, 0,
-                        trace_id, resp, (uint64_t)n);
+    int rc = mgmt_reply(MGMT_FRAME_LIST_VIDEOS_ACK, resp, (uint64_t)n);
     free(resp);
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
@@ -13775,23 +7496,21 @@ static int handle_list_videos(runtime_state_t *state, int client_fd,
     return rc;
 }
 
-static int handle_hw_storage(runtime_state_t *state, int client_fd, uint64_t trace_id) {
-    return handle_hw_text_op(state, client_fd, trace_id, hw_storage_get_text,
-                              FTX2_FRAME_HW_STORAGE_ACK, "hw_storage_failed");
+static int handle_hw_storage(runtime_state_t *state) {
+    return handle_hw_text_op(state, hw_storage_get_text,
+                              MGMT_FRAME_HW_STORAGE_ACK, "hw_storage_failed");
 }
 
-static int handle_hw_drive_sensors(runtime_state_t *state, int client_fd, uint64_t trace_id) {
-    return handle_hw_text_op(state, client_fd, trace_id, drive_sensors_get_json,
-                              FTX2_FRAME_HW_DRIVE_SENSORS_ACK, "hw_drive_sensors_failed");
+static int handle_hw_drive_sensors(runtime_state_t *state) {
+    return handle_hw_text_op(state, drive_sensors_get_json,
+                              MGMT_FRAME_HW_DRIVE_SENSORS_ACK, "hw_drive_sensors_failed");
 }
 
 /* Parse body as "NN" (ASCII decimal). Accepts an empty-body shortcut
  * meaning "reset to default 65 °C" so future UI can send a zero-body
  * frame as a quick reset. Leading whitespace and a trailing newline
  * are tolerated because some shells (lab CLI, curl) add them. */
-static int handle_hw_set_fan_threshold(runtime_state_t *state, int client_fd,
-                                        uint64_t trace_id,
-                                        const char *body, uint64_t body_len) {
+static int handle_hw_set_fan_threshold(runtime_state_t *state, const char *body, uint64_t body_len) {
     if (!state) return -1;
 
     uint8_t threshold = 65;  /* Sony's approximate default. */
@@ -13820,15 +7539,13 @@ static int handle_hw_set_fan_threshold(runtime_state_t *state, int client_fd,
         }
     } else if (body_len >= 32) {
         static const char err[] = "body_too_long";
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          err, (uint64_t)(sizeof(err) - 1));
+        return mgmt_reply(MGMT_FRAME_ERROR, err, (uint64_t)(sizeof(err) - 1));
     }
 
     const char *err_reason = NULL;
     if (hw_fan_set_threshold(threshold, &err_reason) != 0) {
         const char *reason = err_reason ? err_reason : "fan_set_failed";
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          reason, (uint64_t)strlen(reason));
+        return mgmt_reply(MGMT_FRAME_ERROR, reason, (uint64_t)strlen(reason));
     }
     /* Update reapply interval if the caller provided one. Done AFTER
      * the threshold set so a bad interval value doesn't prevent the
@@ -13840,8 +7557,7 @@ static int handle_hw_set_fan_threshold(runtime_state_t *state, int client_fd,
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_HW_SET_FAN_THRESHOLD_ACK, 0, trace_id,
-                      NULL, 0);
+    return mgmt_reply(MGMT_FRAME_HW_SET_FAN_THRESHOLD_ACK, NULL, 0);
 }
 
 /* APP_LAUNCH_BROWSER: open the PS5 web browser. Implementation uses
@@ -13850,28 +7566,23 @@ static int handle_hw_set_fan_threshold(runtime_state_t *state, int client_fd,
  * already uses. */
 extern int   register_browser_launch(void);
 
-static int handle_app_launch_browser(runtime_state_t *state, int client_fd,
-                                      uint64_t trace_id) {
+static int handle_app_launch_browser(runtime_state_t *state) {
     if (!state) return -1;
     if (register_browser_launch() != 0) {
         static const char err[] = "launch_browser_unavailable";
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          err, (uint64_t)(sizeof(err) - 1));
+        return mgmt_reply(MGMT_FRAME_ERROR, err, (uint64_t)(sizeof(err) - 1));
     }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_APP_LAUNCH_BROWSER_ACK, 0,
-                      trace_id, NULL, 0);
+    return mgmt_reply(MGMT_FRAME_APP_LAUNCH_BROWSER_ACK, NULL, 0);
 }
 
 /* PROC_LIST: walk allproc via kernel R/W and return a JSON array of
  * running processes. Read-only — we never touch process state here.
  * The body size is bounded so a system with a corrupt proc list can't
  * blow the buffer; see proc_list.c for the truncation policy. */
-static int handle_proc_list(runtime_state_t *state, int client_fd,
-                             uint64_t trace_id,
-                             const char *request_body,
+static int handle_proc_list(runtime_state_t *state, const char *request_body,
                              uint64_t body_len) {
     /* 64 KiB holds ~600 entries after JSON overhead; real PS5 process
      * counts sit in the 60–120 range. Generous-but-not-absurd cap. */
@@ -13885,21 +7596,18 @@ static int handle_proc_list(runtime_state_t *state, int client_fd,
     if (!state) return -1;
     buf = (char *)malloc(cap);
     if (!buf) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "proc_list_oom", 13);
+        return mgmt_reply(MGMT_FRAME_ERROR, "proc_list_oom", 13);
     }
     if (proc_list_get_json(buf, cap, &written, &err) != 0) {
         const char *reason = err ? err : "proc_list_failed";
-        rc = send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                        reason, (uint64_t)strlen(reason));
+        rc = mgmt_reply(MGMT_FRAME_ERROR, reason, (uint64_t)strlen(reason));
         free(buf);
         return rc;
     }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    rc = send_frame(client_fd, FTX2_FRAME_PROC_LIST_ACK, 0, trace_id,
-                    buf, (uint64_t)written);
+    rc = mgmt_reply(MGMT_FRAME_PROC_LIST_ACK, buf, (uint64_t)written);
     free(buf);
     return rc;
 }
@@ -13908,8 +7616,7 @@ static int handle_proc_list(runtime_state_t *state, int client_fd,
  * manager — pid/name/comm/title_id/app_id/memory/threads/kind per process.
  * Same sysctl walk as PROC_LIST but the richer proc_list_get_json_ex body.
  * Read-only; no kernel write, no elevation needed for the enumerate. */
-static int handle_process_list(runtime_state_t *state, int client_fd,
-                               uint64_t trace_id) {
+static int handle_process_list(runtime_state_t *state) {
     /* Detailed entries are ~5x the compact ones; 256 KiB holds the busiest
      * real PS5 (~120 procs) with wide headroom. */
     const size_t cap = 256u * 1024u;
@@ -13920,21 +7627,18 @@ static int handle_process_list(runtime_state_t *state, int client_fd,
     if (!state) return -1;
     buf = (char *)malloc(cap);
     if (!buf) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "process_list_oom", 16);
+        return mgmt_reply(MGMT_FRAME_ERROR, "process_list_oom", 16);
     }
     if (proc_list_get_json_ex(buf, cap, &written, &err) != 0) {
         const char *reason = err ? err : "process_list_failed";
-        rc = send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                        reason, (uint64_t)strlen(reason));
+        rc = mgmt_reply(MGMT_FRAME_ERROR, reason, (uint64_t)strlen(reason));
         free(buf);
         return rc;
     }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    rc = send_frame(client_fd, FTX2_FRAME_PROCESS_LIST_ACK, 0, trace_id,
-                    buf, (uint64_t)written);
+    rc = mgmt_reply(MGMT_FRAME_PROCESS_LIST_ACK, buf, (uint64_t)written);
     free(buf);
     return rc;
 }
@@ -13945,8 +7649,7 @@ static int handle_process_list(runtime_state_t *state, int client_fd,
  * a stopped-and-not-resumed ShellUI freezes the console UI hard enough to
  * need a power-button recovery, which this codebase has already caused
  * once. See focus_probe.h. */
-static int handle_focus_probe(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id) {
+static int handle_focus_probe(runtime_state_t *state) {
     /* Symbol map plus one row per running app. 8 KiB covers the candidate
      * table and a busy console's app list with wide headroom, and keeping it
      * on the stack keeps a 1 Hz poller cheap. */
@@ -13956,21 +7659,18 @@ static int handle_focus_probe(runtime_state_t *state, int client_fd,
     if (!state) return -1;
     if (focus_probe_get_json(buf, sizeof buf, &written, &err) != 0) {
         const char *reason = err ? err : "focus_probe_failed";
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          reason, (uint64_t)strlen(reason));
+        return mgmt_reply(MGMT_FRAME_ERROR, reason, (uint64_t)strlen(reason));
     }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return send_frame(client_fd, FTX2_FRAME_FOCUS_PROBE_ACK, 0, trace_id,
-                      buf, (uint64_t)written);
+    return mgmt_reply(MGMT_FRAME_FOCUS_PROBE_ACK, buf, (uint64_t)written);
 }
 
 /* PROCESS_KILL: SIGKILL the pid in the request body ({"pid":N}). proc_kill
  * guards self/kernel/init; the UI is responsible for warning before a
  * "system" kill. Ack {"ok":bool,"pid":N[,"err":"..."]}. */
-static int handle_process_kill(runtime_state_t *state, int client_fd,
-                               uint64_t trace_id, const char *body,
+static int handle_process_kill(runtime_state_t *state, const char *body,
                                uint64_t body_len) {
     (void)body_len;
     int pid = (int)extract_json_uint64_field(body ? body : "", "pid");
@@ -13999,11 +7699,9 @@ static int handle_process_kill(runtime_state_t *state, int client_fd,
     }
     if (n <= 0 || n >= (int)sizeof(ack)) {
         const char *e = "{\"ok\":false,\"err\":\"format\"}";
-        return send_frame(client_fd, FTX2_FRAME_PROCESS_KILL_ACK, 0,
-                          trace_id, e, strlen(e));
+        return mgmt_reply(MGMT_FRAME_PROCESS_KILL_ACK, e, strlen(e));
     }
-    return send_frame(client_fd, FTX2_FRAME_PROCESS_KILL_ACK, 0,
-                      trace_id, ack, (size_t)n);
+    return mgmt_reply(MGMT_FRAME_PROCESS_KILL_ACK, ack, (size_t)n);
 }
 
 /* SYSLOG_TAIL: return the PS5 kernel-log circular buffer (dmesg
@@ -14014,8 +7712,7 @@ static int handle_process_kill(runtime_state_t *state, int client_fd,
  * default PS5 msgbuf size; if the kernel was rebuilt with a smaller
  * buffer the sysctl just returns less and we ack the actual length.
  */
-static int handle_syslog_tail(runtime_state_t *state, int client_fd,
-                              uint64_t trace_id) {
+static int handle_syslog_tail(runtime_state_t *state) {
     /* Hard cap so a freshly-rebuilt kernel with an absurd msgbuf size
      * (or a sysctl that reports something pathological) can't OOM us. */
     const size_t HARD_CAP = 1024u * 1024u;
@@ -14032,13 +7729,11 @@ static int handle_syslog_tail(runtime_state_t *state, int client_fd,
         char reason[64];
         int rn = snprintf(reason, sizeof(reason),
                           "syslog_tail_sysctl_size_errno_%d", saved);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          reason, rn > 0 ? (uint64_t)rn : 0);
+        return mgmt_reply(MGMT_FRAME_ERROR, reason, rn > 0 ? (uint64_t)rn : 0);
     }
     if (needed == 0) {
         /* Empty msgbuf is a successful read of zero bytes. */
-        return send_frame(client_fd, FTX2_FRAME_SYSLOG_TAIL_ACK, 0,
-                          trace_id, "", 0);
+        return mgmt_reply(MGMT_FRAME_SYSLOG_TAIL_ACK, "", 0);
     }
     /* Cap the *allocation*, but pass the original `needed` to sysctl so
      * the kernel knows we'd accept up to the real size. FreeBSD's sysctl
@@ -14053,8 +7748,7 @@ static int handle_syslog_tail(runtime_state_t *state, int client_fd,
     size_t alloc = needed > HARD_CAP ? HARD_CAP : needed;
     buf = (char *)malloc(alloc);
     if (!buf) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "syslog_tail_oom", 15);
+        return mgmt_reply(MGMT_FRAME_ERROR, "syslog_tail_oom", 15);
     }
     size_t sz = alloc;
     int rcv = sysctlbyname("kern.msgbuf", buf, &sz, NULL, 0);
@@ -14067,8 +7761,7 @@ static int handle_syslog_tail(runtime_state_t *state, int client_fd,
         alloc = HARD_CAP;
         buf = (char *)malloc(alloc);
         if (!buf) {
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "syslog_tail_oom", 15);
+            return mgmt_reply(MGMT_FRAME_ERROR, "syslog_tail_oom", 15);
         }
         sz = alloc;
         rcv = sysctlbyname("kern.msgbuf", buf, &sz, NULL, 0);
@@ -14079,8 +7772,7 @@ static int handle_syslog_tail(runtime_state_t *state, int client_fd,
         int rn = snprintf(reason, sizeof(reason),
                           "syslog_tail_sysctl_errno_%d", saved);
         free(buf);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          reason, rn > 0 ? (uint64_t)rn : 0);
+        return mgmt_reply(MGMT_FRAME_ERROR, reason, rn > 0 ? (uint64_t)rn : 0);
     }
     /* sz holds the actual byte count written by sysctl. The buffer is
      * plain text (kernel printf output) — let the client treat it as a
@@ -14088,34 +7780,16 @@ static int handle_syslog_tail(runtime_state_t *state, int client_fd,
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    rc = send_frame(client_fd, FTX2_FRAME_SYSLOG_TAIL_ACK, 0, trace_id,
-                    buf, (uint64_t)sz);
+    rc = mgmt_reply(MGMT_FRAME_SYSLOG_TAIL_ACK, buf, (uint64_t)sz);
     free(buf);
     return rc;
 }
 
-/* ── PKG_INSTALL (retired) ────────────────────────────────────────────────────
- *
- * Frames 82-85 (PKG_INSTALL / _ACK / _STATUS / _STATUS_ACK) used to drive an
- * in-process install cascade (bgft.c: in-process appinst, ShellUI RPC, BGFT).
- * Every install now goes through the standalone PS5Upload installer daemon on
- * :9115, driven by the engine's unified POST /api/pkg/install, so the frames
- * are no longer handled here and fall through to the unknown-frame reply. The
- * numbers stay reserved in ftx2-proto so they are never reused.
- */
-
-/* ── Binary frame dispatcher ─────────────────────────────────────────────────── */
-
-/* Frame-type → port classification. Transfer frames carry bulk data and
- * serialize a single client on port 9113; management frames are small,
- * responsive, and live on port 9114 in their own pthread. Keeping the
- * split strict (ERROR+close on a mismatch) prevents a badly-written
- * client from STREAM_SHARDing onto the mgmt port and DoS'ing it. */
 /* ── Profile (avatar + offline-account) frame handlers ──────────────────── */
 
-static int handle_profile_info(int client_fd, uint64_t trace_id) {
+static int handle_profile_info(void) {
     /* Serialize the sceRegMgr/sceUserService calls below: these Sony APIs
-     * are not safe to call concurrently from multiple connection threads
+     * are not safe to call concurrently from multiple management workers
      * (the desktop's Profile screen calls this while background status
      * polling also hits the payload), and doing so crashes the process.
      * Same lock register.c/bgft.c use for their Sony calls. The network
@@ -14135,8 +7809,7 @@ static int handle_profile_info(int client_fd, uint64_t trace_id) {
     if (len < 0 || len >= (int)sizeof(body)) {
         pthread_mutex_unlock(&sony_api_lock);
         const char *err = "{\"ok\":false,\"err\":\"format\"}";
-        return send_frame(client_fd, FTX2_FRAME_PROFILE_INFO_ACK, 0,
-                          trace_id, err, strlen(err));
+        return mgmt_reply(MGMT_FRAME_PROFILE_INFO_ACK, err, strlen(err));
     }
     int first = 1;
     for (int s = 1; s <= PROFILE_SLOT_COUNT; s++) {
@@ -14249,12 +7922,10 @@ static int handle_profile_info(int client_fd, uint64_t trace_id) {
     if (tail > 0 && tail < (int)(sizeof(body) - len)) len += tail;
     usleep(SONY_API_POST_SLEEP_US);
     pthread_mutex_unlock(&sony_api_lock);
-    return send_frame(client_fd, FTX2_FRAME_PROFILE_INFO_ACK, 0,
-                      trace_id, body, (uint64_t)len);
+    return mgmt_reply(MGMT_FRAME_PROFILE_INFO_ACK, body, (uint64_t)len);
 }
 
-static int handle_profile_set_username(int client_fd, uint64_t trace_id,
-                                       const char *body) {
+static int handle_profile_set_username(const char *body) {
     int slot = (int)extract_json_uint64_field(body, "slot");
     char name[PROFILE_NAME_MAX] = {0};
     extract_json_string_field(body, "name", name, sizeof(name));
@@ -14272,12 +7943,10 @@ static int handle_profile_set_username(int client_fd, uint64_t trace_id,
     int len = snprintf(resp, sizeof(resp),
         "{\"ok\":%s,\"slot\":%d,\"name\":\"%s\",\"err_code\":%u}",
         rc == 0 ? "true" : "false", slot, nesc, err);
-    return send_frame(client_fd, FTX2_FRAME_PROFILE_SET_USERNAME_ACK, 0,
-                      trace_id, resp, (uint64_t)len);
+    return mgmt_reply(MGMT_FRAME_PROFILE_SET_USERNAME_ACK, resp, (uint64_t)len);
 }
 
-static int handle_profile_activate(int client_fd, uint64_t trace_id,
-                                   const char *body) {
+static int handle_profile_activate(const char *body) {
     int slot = (int)extract_json_uint64_field(body, "slot");
     /* Optional explicit id (hex "0x.." or decimal); 0/absent → derive. */
     char idstr[32] = {0};
@@ -14303,12 +7972,10 @@ static int handle_profile_activate(int client_fd, uint64_t trace_id,
     int len = snprintf(resp, sizeof(resp),
         "{\"ok\":%s,\"slot\":%d,\"id\":\"0x%016llx\"}",
         rc == 0 ? "true" : "false", slot, (unsigned long long)actual);
-    return send_frame(client_fd, FTX2_FRAME_PROFILE_ACTIVATE_ACK, 0,
-                      trace_id, resp, (uint64_t)len);
+    return mgmt_reply(MGMT_FRAME_PROFILE_ACTIVATE_ACK, resp, (uint64_t)len);
 }
 
-static int handle_profile_clear_slot(int client_fd, uint64_t trace_id,
-                                     const char *body) {
+static int handle_profile_clear_slot(const char *body) {
     int slot = (int)extract_json_uint64_field(body, "slot");
     int rc = -1;
     if (slot >= 1 && slot <= PROFILE_SLOT_COUNT) {
@@ -14320,12 +7987,10 @@ static int handle_profile_clear_slot(int client_fd, uint64_t trace_id,
     char resp[96];
     int len = snprintf(resp, sizeof(resp), "{\"ok\":%s,\"slot\":%d}",
                        rc == 0 ? "true" : "false", slot);
-    return send_frame(client_fd, FTX2_FRAME_PROFILE_CLEAR_SLOT_ACK, 0,
-                      trace_id, resp, (uint64_t)len);
+    return mgmt_reply(MGMT_FRAME_PROFILE_CLEAR_SLOT_ACK, resp, (uint64_t)len);
 }
 
-static int handle_profile_apply_avatar(int client_fd, uint64_t trace_id,
-                                       const char *body) {
+static int handle_profile_apply_avatar(const char *body) {
     uint32_t uid = (uint32_t)extract_json_uint64_field(body, "uid");
     if (uid == 0) {
         pthread_mutex_lock(&sony_api_lock);
@@ -14342,8 +8007,7 @@ static int handle_profile_apply_avatar(int client_fd, uint64_t trace_id,
     int len = snprintf(resp, sizeof(resp),
         "{\"ok\":%s,\"uid\":%u,\"uid_hex\":\"0x%08X\",\"copied\":%d}",
         rc == 0 ? "true" : "false", uid, uid, copied);
-    return send_frame(client_fd, FTX2_FRAME_PROFILE_APPLY_AVATAR_ACK, 0,
-                      trace_id, resp, (uint64_t)len);
+    return mgmt_reply(MGMT_FRAME_PROFILE_APPLY_AVATAR_ACK, resp, (uint64_t)len);
 }
 
 /* Keep the home-screen display name in sync after a rename.
@@ -14407,8 +8071,7 @@ static void profile_sync_online_json_firstname(uint32_t uid, const char *name) {
     if (rename(tmp, path) != 0) (void)unlink(tmp);
 }
 
-static int handle_profile_set_local_username(int client_fd, uint64_t trace_id,
-                                             const char *body) {
+static int handle_profile_set_local_username(const char *body) {
     uint32_t uid = (uint32_t)extract_json_uint64_field(body, "uid");
     char name[64] = {0};
     extract_json_string_field(body, "name", name, sizeof(name));
@@ -14428,649 +8091,29 @@ static int handle_profile_set_local_username(int client_fd, uint64_t trace_id,
     int len = snprintf(resp, sizeof(resp),
         "{\"ok\":%s,\"uid\":%u,\"uid_hex\":\"0x%08X\",\"name\":\"%s\"}",
         rc == 0 ? "true" : "false", uid, uid, nesc);
-    return send_frame(client_fd, FTX2_FRAME_PROFILE_SET_LOCAL_USERNAME_ACK, 0,
-                      trace_id, resp, (uint64_t)len);
+    return mgmt_reply(MGMT_FRAME_PROFILE_SET_LOCAL_USERNAME_ACK, resp, (uint64_t)len);
 }
 
-static int is_transfer_frame_type(uint16_t t) {
-    return t == FTX2_FRAME_BEGIN_TX
-        || t == FTX2_FRAME_STREAM_SHARD
-        || t == FTX2_FRAME_COMMIT_TX
-        || t == FTX2_FRAME_ABORT_TX;
-}
-
-/* `tx_ctx` is NULL on the mgmt port (no transfer frames flow there). On
- * the transfer port, pass a per-connection `conn_tx_ctx_t` so the
- * accept-loop wrapper can mark an unfinished tx as interrupted when the
- * socket closes without seeing COMMIT/ABORT. */
-static int handle_begin_tx_frame(runtime_state_t *state, int client_fd,
-                                 ftx2_header_t hdr, conn_tx_ctx_t *tx_ctx) {
-    /* Hard cap on the BEGIN_TX manifest size. PPSA01342 (the
-     * largest small-file workload we validate against) has 223k
-     * files at ~150 bytes per manifest entry → ~33 MB; the cap
-     * leaves an order-of-magnitude headroom for any real upload
-     * while refusing absurd values (e.g., crafted body_len of
-     * several GB) that would otherwise either succeed at malloc
-     * and OOM the payload, or fail malloc and tie up a worker
-     * thread draining bytes from a malicious LAN client until
-     * recv_exact times out. Above this cap we close the connection
-     * (via -1 return) since accepting further frames after a
-     * misaligned drain isn't safe. */
-    #define BEGIN_TX_BODY_MAX ((uint64_t)256 * 1024 * 1024)
-    char resp[2048];
-    char *begin_body = NULL;
-    uint64_t begin_body_len = hdr.body_len;
-    const char *bextra = NULL;
-    uint64_t bextra_len = 0;
-    ftx2_tx_meta_t bmeta;
-    runtime_tx_entry_t *entry = NULL;
-    int ret;
-    int len;
-
-    if (begin_body_len > BEGIN_TX_BODY_MAX) {
-        (void)send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                         "begin_tx_body_too_large", 23);
-        return -1;
-    }
-
-    if (begin_body_len > 0) {
-        begin_body = (char *)malloc((size_t)begin_body_len + 1);
-        if (!begin_body) {
-            /* drain and report OOM */
-            uint64_t rem = begin_body_len;
-            char discard[256];
-            while (rem > 0) {
-                size_t take = rem > sizeof(discard) ? sizeof(discard) : (size_t)rem;
-                if (recv_exact(client_fd, discard, take) != 0) return -1;
-                rem -= (uint64_t)take;
-            }
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                              "out_of_memory", 13);
-        }
-        if (recv_exact(client_fd, begin_body, (size_t)begin_body_len) != 0) {
-            free(begin_body);
-            return -1;
-        }
-        begin_body[begin_body_len] = '\0';
-    }
-
-    if (parse_tx_meta(begin_body ? begin_body : "", begin_body_len,
-                      &bmeta, &bextra, &bextra_len) != 0) {
-        free(begin_body);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                          "invalid_tx_meta", 15);
-    }
-    /* Resolve the tx entry against the journal, picking one of three
-     * outcomes per (has-existing-entry) × (client-wants-resume):
-     *
-     *   existing + resume-flag:  RESUME — adopt, preserve shards_received,
-     *                            tmp file, and manifest heap. (The entry
-     *                            state may be either "interrupted" (clean
-     *                            drop, payload saw it) or "active" (TCP
-     *                            drop, payload's recv returned -1 and we
-     *                            marked it interrupted in the connection
-     *                            cleanup OR we didn't get a chance to yet
-     *                            — both imply the client's partial data is
-     *                            still on disk.)
-     *
-     *   existing + no-resume:    RESTART — client explicitly asked for a
-     *                            fresh tx. Drop tmp, reset counters. This
-     *                            catches "I cancelled and want to start
-     *                            over" where the client intentionally
-     *                            reuses the tx_id.
-     *
-     *   no existing:             FRESH — normal new tx allocation.
-     *
-     * `is_resume` drives whether later code in this handler re-runs
-     * destructive side-effects: unlinking kind=1 tmp files and
-     * re-parsing the kind=2 manifest index. Both must be skipped on
-     * resume — they'd destroy the very state we're trying to adopt. */
-    int is_resume = 0;
-    int want_resume = (bmeta.flags & FTX2_TX_FLAG_RESUME) != 0;
-    /* New in P3: client opts in to APPLY_PROGRESS frames during the
-     * multi-file commit apply loop. The flag is captured into the
-     * tx entry below (both FRESH and RESUME paths) so the apply
-     * loop can check entry->apply_progress_enabled when deciding
-     * whether to emit. Opt-in keeps old clients safe — they don't
-     * set the flag, so we stay silent and they see the legacy
-     * single-CommitTxAck behaviour. */
-    int want_apply_progress =
-        (bmeta.flags & FTX2_TX_FLAG_APPLY_PROGRESS_REQUESTED) != 0;
-    pthread_mutex_lock(&state->state_mtx);
-    {
-        runtime_tx_entry_t *existing = runtime_find_tx_entry(state, bmeta.tx_id);
-        if (existing && want_resume) {
-            /* Adopt. If state is "interrupted" we're coming back from
-             * a paused tx — the mark-interrupted path decremented
-             * `active_transactions` on pause, so bump it back now
-             * so the matching commit/abort decrement balances. If
-             * state is already "active" (TCP drop raced the first
-             * reconnect before mark-interrupted could fire), the
-             * counter already reflects this tx — don't double-count. */
-            int was_interrupted = strcmp(existing->state, "interrupted") == 0;
-            snprintf(existing->state, sizeof(existing->state), "active");
-            if (was_interrupted) {
-                state->active_transactions += 1;
-            }
-            entry = existing;
-            is_resume = 1;
-        } else if (existing && !want_resume) {
-            /* Explicit restart with same tx_id — common when the user
-             * cancels an upload and re-clicks Override. Drop partial
-             * state and reuse the slot. Counter accounting mirrors
-             * the want_resume branch: if the prior state was
-             * "interrupted" we're re-activating, so bump. If it was
-             * still "active" the counter already reflects this tx
-             * (TCP drop raced, mark-interrupted didn't fire). */
-            int was_interrupted = strcmp(existing->state, "interrupted") == 0;
-            entry = existing;
-            runtime_release_tx_resources(entry); /* unlinks tmp */
-            entry->shards_received = 0;
-            entry->bytes_received  = 0;
-            entry->total_shards    = 0;
-            entry->total_bytes     = 0;
-            entry->file_count      = 0;
-            entry->direct_mode     = 0;
-            entry->multi_file      = 0;
-            entry->tmp_path[0]     = '\0';
-            entry->dest_root[0]    = '\0';
-            snprintf(entry->state, sizeof(entry->state), "active");
-            if (was_interrupted) {
-                state->active_transactions += 1;
-            }
-            is_resume = 0;
-        } else {
-            /* Fresh allocation. */
-            state->active_transactions += 1;
-            state->last_tx_seq += 1;
-            entry = runtime_alloc_tx_entry(state, bmeta.tx_id, state->last_tx_seq);
-            is_resume = 0;
-        }
-    }
-    pthread_mutex_unlock(&state->state_mtx);
-    if (!entry) {
-        /* Roll back the optimistic active_transactions increment we
-         * did before calling runtime_alloc_tx_entry. Without this,
-         * every tx_table_full rejection permanently inflates the
-         * counter, corrupting STATUS_ACK and the crash-recovery
-         * journal's "active_transactions=" field. */
-        pthread_mutex_lock(&state->state_mtx);
-        if (state->active_transactions > 0) state->active_transactions -= 1;
-        pthread_mutex_unlock(&state->state_mtx);
-        free(begin_body);
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                          "tx_table_full", 13);
-    }
-    /* Skip manifest/metadata extraction on resume — the entry already
-     * carries the correct values from the original BEGIN_TX (either
-     * still in memory, or reloaded from the journal on payload start).
-     * Re-extracting would be idempotent if the client re-sends the
-     * exact same body, but it would overwrite our dest_root/total_shards
-     * with whatever the client decides to send, and there's no upside. */
-    if (!is_resume && bextra && bextra_len > 0) {
-        extract_json_string_field(bextra, "dest_root",
-                                  entry->dest_root, sizeof(entry->dest_root));
-        /* Reject manifests whose dest_root would let a LAN client
-         * write outside the allowlisted writable roots
-         * (/data, /user, /mnt/ext_, /mnt/usb_, /mnt/ps5upload/_).
-         * Without this, a crafted BEGIN_TX with dest_root of
-         * "/system_ex/..." or "/system_data/priv/..." passes
-         * straight into the open()+write() path further down with
-         * no further validation. The directory traversal check is
-         * inside is_path_allowed (component-scoped, rejects "..").
-         */
-        if (entry->dest_root[0] && !is_path_allowed(entry->dest_root)) {
-            /* runtime_abort_tx_fatal handles the state.active_transactions
-             * decrement, marks state="aborted", flushes the journal
-             * record, and releases tmp/manifest resources — the
-             * complete cleanup path. The earlier draft just unlocked
-             * the per-slot mutex via runtime_release_tx_entry, which
-             * left in_use=1 and active_transactions over-counted —
-             * the slot would leak until the periodic janitor sweep
-             * (or never, since journal flush hadn't yet run). */
-            runtime_abort_tx_fatal(state, entry);
-            free(begin_body);
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0,
-                              hdr.trace_id,
-                              "dest_root_not_allowed", 21);
-        }
-        entry->total_shards = extract_json_uint64_field(bextra, "total_shards");
-        entry->total_bytes  = extract_json_uint64_field(bextra, "total_bytes");
-        entry->file_count   = extract_json_uint64_field(bextra, "file_count");
-        if (entry->file_count == 0) entry->file_count = 1;
-        /* Authoritative single-vs-multi-file decision: the BEGIN_TX kind,
-         * NOT file_count. kind==2 is a multi-file (folder) transaction
-         * even when it carries exactly one file — see runtime_tx_entry_t
-         * ::multi_file. The engine packs lone small files, so this MUST
-         * be set for the packed-shard path to accept them. */
-        entry->multi_file   = (bmeta.kind == 2);
-        (void)runtime_write_manifest(entry, bextra, (size_t)bextra_len);
-    }
-    /* P3: stamp the per-tx apply-progress opt-in from BEGIN_TX flags
-     * onto the entry. Set on every BEGIN_TX (including resume — the
-     * client can change its mind across attempts; an old client
-     * resuming a new-client tx would clear the flag, expectedly).
-     * Only meaningful for multi_file txs since single-file commits
-     * are fast and don't need progress reporting. */
-    entry->apply_progress_enabled = want_apply_progress;
-    /* Enable direct-write path:
-     *   - single-file (kind=1, file_count<=1): stream straight to
-     *     <dest>.ps5up2-tmp, rename at commit.
-     *   - multi-file (kind=2, files[] populated): stream each shard to
-     *     <file_path>.ps5up2-tmp using the manifest to route shard_seq
-     *     to its file. Rename each tmp at commit.
-     *
-     * Shards arrive in sequence within a single connection so per-file
-     * append ordering is guaranteed.
-     *
-     * On resume: direct_mode / tmp_path / manifest_blob / manifest_index
-     * are already set from the original BEGIN_TX, so both branches
-     * short-circuit. The unlink in the kind=1 branch and the manifest
-     * rebuild in the kind=2 branch are the bugs the `is_resume` guard
-     * is here to prevent — both would destroy the partial state that
-     * shards_received is about to tell the client to skip past.
-     */
-    if (is_resume) {
-        /* In-memory resume (TCP drop, payload still running): the entry
-         * already carries manifest_index + direct_mode, so the restore
-         * blocks below are no-ops and we go straight to reconcile.
-         *
-         * Resume AFTER a payload restart (power loss / takeover): the
-         * startup load restored only scalar fields — manifest_index is
-         * NULL and direct_mode is 0. Without restoring them, a multi-
-         * file tx would fall to the spool commit path with its shards
-         * missing (they're in tmps from the original direct run) and
-         * fail; a single-file tx would append at the wrong offset.
-         * Rebuild the direct-mode state from the ON-DISK manifest (the
-         * same builder the fresh path uses) so the resumed transfer
-         * continues on the verified direct path. */
-        if (entry->multi_file && !entry->manifest_index) {
-            char *mbuf = NULL;
-            size_t mlen = 0;
-            int from_begin = 0;
-            /* 2.25.x: PREFER the manifest carried in THIS resume BeginTx
-             * over the stale on-disk journal copy. Since per-file durable
-             * promote landed, the engine reconciles before every resume and
-             * EXCLUDES the files that already promoted to their final path,
-             * so the BeginTx manifest is REDUCED (fewer files, shards
-             * renumbered 1..N). Rebuilding from the journal's ORIGINAL
-             * full manifest would route the reduced stream by the old
-             * numbering — "no manifest file owns shard <n>" → fatal abort,
-             * the exact same-tx-id resume failure the promote change
-             * otherwise introduces. Adopt the engine's current manifest
-             * (authoritative — it already accounts for what's durable),
-             * refresh the scalar totals from it, and re-persist the journal
-             * so a further restart stays consistent. The resume cursor is a
-             * COUNT against the OLD numbering and is meaningless here, but
-             * reconcile_resume_cursor (called just below) re-derives it from
-             * on-disk durable state: every file in a freshly-reduced
-             * manifest is non-durable, so it clamps the cursor to 0 and the
-             * whole reduced set is re-requested cleanly. Fall back to the
-             * journal copy only when this BeginTx carried no manifest (an
-             * older client that doesn't resend it on resume). */
-            if (bextra && bextra_len > 0) {
-                uint64_t fc = extract_json_uint64_field(bextra, "file_count");
-                uint64_t ts = extract_json_uint64_field(bextra, "total_shards");
-                uint64_t tb = extract_json_uint64_field(bextra, "total_bytes");
-                mbuf = (char *)malloc((size_t)bextra_len + 1);
-                if (mbuf) {
-                    memcpy(mbuf, bextra, (size_t)bextra_len);
-                    mbuf[bextra_len] = '\0';
-                    mlen = (size_t)bextra_len;
-                    from_begin = 1;
-                    if (fc > 0) entry->file_count = fc;
-                    entry->total_shards = ts;
-                    entry->total_bytes  = tb;
-                }
-            }
-            if (!mbuf && runtime_read_manifest_alloc(entry, &mbuf, &mlen) != 0) {
-                mbuf = NULL;
-            }
-            if (mbuf) {
-                manifest_index_entry_t *ridx = NULL;
-                uint64_t ridx_count = 0;
-                if (build_manifest_index(mbuf, mlen, entry->file_count,
-                                         &ridx, &ridx_count) == 0) {
-                    entry->manifest_blob        = mbuf;
-                    entry->manifest_blob_len    = mlen;
-                    entry->manifest_index       = ridx;
-                    entry->manifest_index_count = ridx_count;
-                    entry->direct_mode          = 1;
-                    if (from_begin) {
-                        /* Persist the adopted (reduced) manifest so a
-                         * SECOND restart rebuilds from it, not the
-                         * original. */
-                        (void)runtime_write_manifest(entry, mbuf, mlen);
-                        /* CRITICAL (2.25.1): reset the cursor to 0 and
-                         * re-send the whole reduced manifest from scratch.
-                         * The engine reconciled before this resume, so
-                         * every file here is one it wants RE-SENT (durably-
-                         * promoted files were excluded). The journaled
-                         * shards_received is a COUNT against the OLD full-
-                         * manifest numbering — meaningless against the
-                         * renumbered reduced set. Worse: each per-file tmp
-                         * was posix_fallocate()'d to its FULL size on its
-                         * first shard, so a half-written in-flight file
-                         * stat()s at exactly its manifest size, and
-                         * reconcile_resume_cursor's "tmp at exact size =
-                         * durable" test FALSELY marks it complete and skips
-                         * it → the in-flight file lands CORRUPT (confirmed
-                         * on hardware: a mid-file crash + resume produced a
-                         * 0%-matching big.bin). Resetting to 0 makes the
-                         * engine re-send all reduced-manifest shards; each
-                         * file's first shard unlinks + re-truncates its
-                         * tmp, so the write is clean. This exactly mirrors
-                         * the single-file resume path below. Cost: re-send
-                         * the one or two not-yet-complete files from their
-                         * start (completed files are already promoted to
-                         * their final path and excluded). */
-                        entry->shards_received = 0;
-                        entry->bytes_received  = 0;
-                    }
-                } else {
-                    free(mbuf);
-                }
-            }
-        } else if (!entry->multi_file && entry->direct_mode &&
-                   entry->dest_root[0] && entry->tmp_path[0] == '\0') {
-            /* Resuming a direct single-file transaction whose staging path
-             * was cleared by a COMMIT that already succeeded. The entry
-             * stays in the table with direct_mode set, so the restore
-             * branch below (which requires !direct_mode) never ran and
-             * tmp_path stayed empty — leaving shard writes with nowhere to
-             * go and COMMIT with nothing to publish.
-             *
-             * Restore the tmp path so a genuine re-send works. If the
-             * destination is in fact already complete, COMMIT's
-             * already-published check settles it without touching the
-             * file. */
-            snprintf(entry->tmp_path, sizeof(entry->tmp_path),
-                     "%s.ps5up2-tmp", entry->dest_root);
-            (void)unlink(entry->tmp_path);
-            entry->shards_received = 0;
-            entry->bytes_received  = 0;
-        } else if (!entry->multi_file && !entry->direct_mode &&
-                   entry->dest_root[0]) {
-            /* Single-file resume after a restart. We can't precisely map
-             * on-disk bytes back to a shard boundary without the shard
-             * size, so the safe move is a full re-send: restore direct
-             * mode + tmp path, drop the partial tmp, reset the cursor.
-             * Correct and self-healing; cost is re-uploading one file. */
-            entry->direct_mode = 1;
-            snprintf(entry->tmp_path, sizeof(entry->tmp_path),
-                     "%s.ps5up2-tmp", entry->dest_root);
-            (void)unlink(entry->tmp_path);
-            entry->shards_received = 0;
-            entry->bytes_received  = 0;
-        }
-        /* Reconcile the multi-file cursor against what's durably on disk
-         * (see reconcile_resume_cursor). A no-op when everything up to
-         * the journaled cursor is present (the in-memory case); on a
-         * restart it pulls the cursor back to the last fully-written
-         * file so the gap gets re-sent instead of skipped. */
-        if (entry->multi_file) {
-            reconcile_resume_cursor(entry);
-        }
-    } else if (bmeta.kind == 1 && entry->file_count <= 1 && entry->dest_root[0]) {
-        entry->direct_mode = 1;
-        snprintf(entry->tmp_path, sizeof(entry->tmp_path),
-                 "%s.ps5up2-tmp", entry->dest_root);
-        if (ensure_parent_dir(entry->dest_root) != 0) {
-            fprintf(stderr, "[payload2] direct: ensure_parent_dir failed: %s\n",
-                    entry->dest_root);
-            entry->direct_mode = 0;
-        } else {
-            /* Fresh tx: unlink any leftover tmp. Not reached on resume. */
-            (void)unlink(entry->tmp_path);
-        }
-    } else if (bmeta.kind == 2 && entry->file_count > 0 &&
-               bextra && bextra_len > 0 &&
-               strstr(bextra, "\"files\":[")) {
-        /* Multi-file direct mode: parse the manifest once into a heap
-         * index so per-shard routing is O(log N), not O(N) per shard.
-         * If blob exceeds the hard cap or the parse fails, we refuse
-         * the transaction outright — the old code silently truncated a
-         * multi-KiB manifest into an 8 KiB stack buffer per shard, which
-         * corrupted any transfer with more than ~60 files. */
-        if (bextra_len > PS5UPLOAD2_MAX_MANIFEST_BLOB) {
-            runtime_abort_tx_fatal(state, entry);
-            free(begin_body);
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                              "manifest_too_large", 18);
-        }
-        {
-            char *blob = (char *)malloc((size_t)bextra_len + 1);
-            manifest_index_entry_t *idx = NULL;
-            uint64_t idx_count = 0;
-            if (!blob) {
-                runtime_abort_tx_fatal(state, entry);
-                free(begin_body);
-                return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                                  "out_of_memory", 13);
-            }
-            memcpy(blob, bextra, (size_t)bextra_len);
-            blob[bextra_len] = '\0';
-            if (build_manifest_index(blob, (size_t)bextra_len,
-                                     entry->file_count, &idx, &idx_count) != 0) {
-                free(blob);
-                runtime_abort_tx_fatal(state, entry);
-                free(begin_body);
-                return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                                  "manifest_invalid", 16);
-            }
-            entry->manifest_blob         = blob;
-            entry->manifest_blob_len     = (size_t)bextra_len;
-            entry->manifest_index        = idx;
-            entry->manifest_index_count  = idx_count;
-            entry->direct_mode = 1;
-            /* Unlink any stale per-file .ps5up2-tmp files left by a
-             * prior aborted/failed upload of the same destination.
-             * The single-file path at line 7270 already does this for
-             * its single tmp; multi-file mode was missing the
-             * equivalent sweep, which produced a hard-to-spot silent
-             * corruption pattern:
-             *
-             *   1. Prior upload of game G fails partway, some
-             *      <file>.ps5up2-tmp files remain on disk.
-             *   2. User retries upload of game G. Engine's pack
-             *      decision for some files differs from last time
-             *      (because pack threshold or size near boundary),
-             *      OR the file is now packed where it was non-packed.
-             *   3. Pack worker writes correct content to file_path
-             *      directly. No new tmp created for that file.
-             *   4. COMMIT rename loop iterates manifest entries,
-             *      sees the STALE <file>.ps5up2-tmp from step 1,
-             *      rename(stale_tmp, file_path) succeeds — and
-             *      OVERWRITES the just-written-correct packed content
-             *      with the stale tmp. Client sees commit success,
-             *      destination has stale content, game won't launch.
-             *
-             * Sweeping at fresh BEGIN_TX time eliminates the
-             * stale-tmp source. The is_resume branch above
-             * intentionally skips this sweep — a true resume needs
-             * the partial tmps preserved. */
-            {
-                const manifest_index_entry_t *idx_entries =
-                    (const manifest_index_entry_t *)idx;
-                for (uint64_t i = 0; i < idx_count; i++) {
-                    char file_path[512];
-                    char stale_tmp[512 + 16];
-                    size_t plen = idx_entries[i].path_len;
-                    uint32_t poff = idx_entries[i].path_offset;
-                    if (plen == 0 || plen >= sizeof(file_path)) continue;
-                    /* Defense-in-depth bounds check matching
-                     * lookup_manifest_index — build_manifest_index
-                     * already validates these, but the cost is one
-                     * comparison and it makes this loop safe under
-                     * any future manifest-builder change. */
-                    if ((uint64_t)poff + (uint64_t)plen > bextra_len) {
-                        continue;
-                    }
-                    if (json_copy_unescaped_string(blob + poff,
-                                                   blob + poff + plen,
-                                                   file_path,
-                                                   sizeof(file_path)) != 0) {
-                        continue;
-                    }
-                    snprintf(stale_tmp, sizeof(stale_tmp),
-                             "%s.ps5up2-tmp", file_path);
-                    (void)unlink(stale_tmp);
-                }
-            }
-        }
-    }
-    /* Authoritative capacity gate. This runs after resume reconciliation and
-     * credits both journaled progress and real blocks already allocated to
-     * this transaction, so a fallocated tmp is not double-counted. */
-    if (entry->total_bytes > 0 && entry->dest_root[0]) {
-        struct statfs cfs;
-        if (statfs_existing_ancestor(entry->dest_root, &cfs) == 0) {
-            uint64_t bs = (uint64_t)cfs.f_bsize;
-            uint64_t bfree = (uint64_t)cfs.f_bfree * bs;
-            uint64_t free_bytes = ((int64_t)cfs.f_bavail > 0)
-                                      ? (uint64_t)cfs.f_bavail * bs : bfree;
-            uint64_t reserve = capacity_reserve_for_mount(
-                cfs.f_mntonname, cfs.f_mntfromname,
-                (uint64_t)cfs.f_blocks * bs);
-            uint64_t allocatable = free_bytes > reserve
-                                     ? free_bytes - reserve : 0;
-            uint64_t allocated = runtime_tx_allocated_bytes(entry);
-            uint64_t credited = entry->bytes_received > allocated
-                                  ? entry->bytes_received : allocated;
-            uint64_t remaining;
-            if (credited > entry->total_bytes) credited = entry->total_bytes;
-            remaining = entry->total_bytes - credited;
-            if (remaining > allocatable) {
-                uint64_t short_bytes = remaining - allocatable;
-                char dest_esc[1024];
-                int cap_len;
-                json_escape_into(entry->dest_root, dest_esc, sizeof(dest_esc));
-                cap_len = snprintf(
-                    resp, sizeof(resp),
-                    "{\"error\":\"preflight_insufficient_space\","
-                    "\"detail\":\"destination %s needs %llu additional bytes "
-                    "but only %llu are safely allocatable (%llu free, %llu "
-                    "reserved); short by %llu bytes\","
-                    "\"required_bytes\":%llu,\"remaining_bytes\":%llu,"
-                    "\"free_bytes\":%llu,\"safety_reserve_bytes\":%llu,"
-                    "\"allocatable_bytes\":%llu,\"short_bytes\":%llu}",
-                    dest_esc,
-                    (unsigned long long)remaining,
-                    (unsigned long long)allocatable,
-                    (unsigned long long)free_bytes,
-                    (unsigned long long)reserve,
-                    (unsigned long long)short_bytes,
-                    (unsigned long long)entry->total_bytes,
-                    (unsigned long long)remaining,
-                    (unsigned long long)free_bytes,
-                    (unsigned long long)reserve,
-                    (unsigned long long)allocatable,
-                    (unsigned long long)short_bytes);
-                fprintf(stderr,
-                        "[payload2] capacity reject tx %s dest=%s total=%llu "
-                        "credited=%llu remaining=%llu free=%llu reserve=%llu\n",
-                        entry->tx_id_hex, entry->dest_root,
-                        (unsigned long long)entry->total_bytes,
-                        (unsigned long long)credited,
-                        (unsigned long long)remaining,
-                        (unsigned long long)free_bytes,
-                        (unsigned long long)reserve);
-                if (is_resume) {
-                    pthread_mutex_lock(&state->state_mtx);
-                    if (state->active_transactions > 0)
-                        state->active_transactions -= 1;
-                    pthread_mutex_unlock(&state->state_mtx);
-                    snprintf(entry->state, sizeof(entry->state), "interrupted");
-                    (void)runtime_flush_tx_record(state, entry);
-                    runtime_release_tx_resources_ephemeral(entry);
-                    (void)runtime_save_tx_state(state);
-                } else {
-                    runtime_abort_tx_fatal(state, entry);
-                }
-                (void)runtime_append_tx_event(state, "begin_tx_insufficient_space");
-                free(begin_body);
-                if (cap_len < 0) return -1;
-                if ((size_t)cap_len >= sizeof(resp)) cap_len = (int)sizeof(resp) - 1;
-                return send_frame(client_fd, FTX2_FRAME_ERROR, 0,
-                                  hdr.trace_id, resp, (uint64_t)cap_len);
-            }
-        }
-    }
-    (void)runtime_save_tx_state(state);
-    (void)runtime_append_tx_event(state, "begin_tx");
-    (void)runtime_flush_tx_record(state, entry);
-    free(begin_body);
-    pthread_mutex_lock(&state->state_mtx);
-    state->command_count += 1;
-    pthread_mutex_unlock(&state->state_mtx);
-
-    len = snprintf(resp, sizeof(resp),
-                   "{\"accepted\":true,\"tx_id\":\"%s\",\"tx_seq\":%llu,"
-                   "\"active_transactions\":%llu,"
-                   "\"last_acked_shard\":%llu}",
-                   entry->tx_id_hex,
-                   (unsigned long long)entry->tx_seq,
-                   (unsigned long long)state->active_transactions,
-                   (unsigned long long)entry->shards_received);
-    if (len < 0) return -1;
-    /* Remember this tx on the connection so a socket close before
-     * COMMIT/ABORT marks it "interrupted" rather than leaving an
-     * "active" orphan in the journal. */
-    if (tx_ctx) {
-        memcpy(tx_ctx->tx_id, entry->tx_id, 16);
-        tx_ctx->has_tx = 1;
-    }
-    ret = send_frame(client_fd, FTX2_FRAME_BEGIN_TX_ACK, 0, hdr.trace_id,
-                     resp, (uint64_t)len);
-    /* Extend the per-socket idle timeout for the rest of this transfer.
-     * Host-side zip/7z inflate of multi-GB entries can leave the wire
-     * quiet for well over CLIENT_IDLE_SEC before the next STREAM_SHARD;
-     * without this bump we EAGAIN out of recv_exact and mark the tx
-     * interrupted (~120s conn_drop storm). Best-effort — if setsockopt
-     * fails we keep the original 120s and the stream-inflate engine
-     * fix is the primary defense. */
-    if (ret == 0) {
-        struct timeval idle_to;
-        idle_to.tv_sec  = PS5UPLOAD2_CLIENT_IDLE_IN_TX_SEC;
-        idle_to.tv_usec = 0;
-        if (setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO,
-                       &idle_to, sizeof(idle_to)) != 0) {
-            fprintf(stderr,
-                    "[payload] setsockopt(SO_RCVTIMEO=%lds in-tx) failed on fd=%d: %s (errno=%d)\n",
-                    (long)idle_to.tv_sec, client_fd, strerror(errno), errno);
-        }
-    }
-    return ret;
-}
-
-static int handle_status_frame(runtime_state_t *state, int client_fd,
-                               ftx2_header_t hdr, char *body,
-                               size_t body_cap) {
-    /* Snapshot cross-thread fields under the mutex so a concurrent
-     * transfer-side BEGIN/COMMIT/ABORT can't produce a mid-flight
-     * read of active_transactions or last_tx_seq. Keep the lock
-     * window to memory copies only — never hold across send_frame. */
+static int handle_status_frame(runtime_state_t *state) {
+    /* Snapshot cross-thread fields under the mutex; keep the lock window to memory copies only. */
     uint64_t snap_instance_id, snap_started_at, snap_command_count;
-    uint64_t snap_active_tx, snap_last_seq, snap_recovered;
-    int snap_shutdown, snap_startup_reason, snap_takeover_req, snap_port;
+    int snap_shutdown, snap_startup_reason, snap_takeover_req;
     int snap_prior_verdict;
     int len;
+    char body[2048];
+    const size_t body_cap = sizeof body;
     char kernel_version_raw[256];
     char kernel_version_esc[512];
     read_ps5_kernel_version(kernel_version_raw, sizeof(kernel_version_raw));
     json_escape_into(kernel_version_raw, kernel_version_esc, sizeof(kernel_version_esc));
     pthread_mutex_lock(&state->state_mtx);
     snap_instance_id    = state->instance_id;
-    snap_port           = state->runtime_port;
     snap_shutdown       = state->shutdown_requested;
     snap_startup_reason = state->startup_reason;
     snap_prior_verdict  = state->prior_verdict;
     snap_takeover_req   = state->takeover_requested;
     snap_started_at     = state->started_at_unix;
     snap_command_count  = state->command_count;
-    snap_active_tx      = state->active_transactions;
-    snap_last_seq       = state->last_tx_seq;
-    snap_recovered      = state->recovered_transactions;
     pthread_mutex_unlock(&state->state_mtx);
     /* Surface ucred elevation result so the client UI can warn
      * "load kstuff first" when elevation == false without
@@ -15087,19 +8130,18 @@ static int handle_status_frame(runtime_state_t *state, int client_fd,
     len = snprintf(body, body_cap,
                    "{\"version\":\"%s\","
                    "\"ps5_kernel\":\"%s\","
-                   "\"instance_id\":%llu,\"runtime_port\":%d,"
+                   /* runtime_port stays for one release as 0 (there is no helper port but the AVA1 one) so an
+                    * older client UI that still reads it does not break; the current client ignores it. */
+                   "\"instance_id\":%llu,\"runtime_port\":0,"
                    "\"shutdown\":%d,\"startup_reason\":%d,"
                    "\"takeover_requested\":%d,\"started_at_unix\":%llu,"
                    /* How the PREVIOUS instance ended: "clean",
                     * "killed_externally", "wedged" or "stale". Absent on
                     * older payloads — the client treats that as unknown. */
                    "\"prior_instance\":\"%s\","
-                   "\"command_count\":%llu,\"active_transactions\":%llu,"
-                   "\"last_tx_seq\":%llu,\"recovered_transactions\":%llu,"
+                   "\"command_count\":%llu,"
                    "\"ucred_elevated\":%s,"
-                   /* Multi-stream capability: how many parallel transfer
-                    * connections this payload will service concurrently.
-                    * Absent on old payloads → engine treats it as 1. */
+                   /* Also kept for one release: the most data lanes one session can open (the AVA1 lane maximum). */
                    "\"max_transfer_streams\":%d,"
                    /* Fan state: pinned threshold (0 = not set) and the
                     * reapply interval in seconds. Lets the client display
@@ -15109,7 +8151,6 @@ static int handle_status_frame(runtime_state_t *state, int client_fd,
                    PS5UPLOAD2_VERSION,
                    kernel_version_esc,
                    (unsigned long long)snap_instance_id,
-                   snap_port,
                    snap_shutdown,
                    snap_startup_reason,
                    snap_takeover_req,
@@ -15117,694 +8158,24 @@ static int handle_status_frame(runtime_state_t *state, int client_fd,
                    instance_verdict_name(
                        (ps5upload2_prior_verdict_t)snap_prior_verdict),
                    (unsigned long long)snap_command_count,
-                   (unsigned long long)snap_active_tx,
-                   (unsigned long long)snap_last_seq,
-                   (unsigned long long)snap_recovered,
                    ucred_elevated ? "true" : "false",
-                   PS5UPLOAD2_TRANSFER_STREAMS_ADVERTISED,
+                   (int)AVA1_MAX_LANES,
                    fan_pinned,
                    fan_reapply);
-    /* Truncation-safe: if the fields ever grow past `body`, clamp
-     * rather than emit a body_len that drives send_frame to read
-     * past the stack buffer. The JSON is still valid-on-arrival
-     * only when len < body_cap; the engine will fail the
-     * serde_json::from_slice on a truncated body and return 502
-     * to the UI, which is the right failure mode. */
+    /* Truncation-safe: if the fields ever grow past `body`, clamp rather than emit a body_len that
+     * reads past the stack buffer. The node.status runner then fails to parse it, which is the right
+     * failure mode. */
     if (len < 0) return -1;
     if ((size_t)len >= body_cap) len = (int)(body_cap - 1);
-    return send_frame(client_fd, FTX2_FRAME_STATUS_ACK, 0, hdr.trace_id,
-                      body, (uint64_t)len);
-}
-
-static int handle_query_tx_frame(runtime_state_t *state, int client_fd,
-                               ftx2_header_t hdr, char *body,
-                               size_t body_cap,
-                               const char *request_body) {
-    ftx2_tx_meta_t meta;
-    const char *extra = NULL;
-    uint64_t extra_len = 0;
-
-    char record[1024];
-    int len;
-    int requested_specific = 0;
-    int have_snapshot = 0;
-    uint64_t snap_active = 0;
-    uint64_t snap_last = 0;
-    runtime_tx_entry_t snap_entry;
-    memset(&snap_entry, 0, sizeof(snap_entry));
-
-    /* Snapshot the state we need under the lock, then release the
-     * lock before doing I/O. The transfer side takes this mutex on
-     * every SHARD ACK — holding it across `runtime_read_tx_record`
-     * (which does fopen+fread on a UFS-backed file that can stall
-     * tens of milliseconds under pressure) was dropping shards
-     * mid-flight because the writer thread blocked on the lock
-     * past its recv timeout. */
-    pthread_mutex_lock(&state->state_mtx);
-    {
-        runtime_tx_entry_t *entry = NULL;
-        snap_active = state->active_transactions;
-        snap_last   = state->last_tx_seq;
-        if (parse_tx_meta(request_body, hdr.body_len, &meta, &extra, &extra_len) == 0) {
-            requested_specific = 1;
-            entry = runtime_find_tx_entry(state, meta.tx_id);
-        }
-        if (!entry && !requested_specific && snap_last > 0) {
-            int i = 0;
-            for (i = 0; i < PS5UPLOAD2_MAX_TX; i++) {
-                if (state->tx_entries[i].in_use &&
-                    state->tx_entries[i].tx_seq == snap_last) {
-                    entry = &state->tx_entries[i];
-                    break;
-                }
-            }
-        }
-        if (entry) {
-            snap_entry = *entry;   /* copy-by-value while locked */
-            have_snapshot = 1;
-        }
-    }
-    pthread_mutex_unlock(&state->state_mtx);
-
-    if (requested_specific && !have_snapshot) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                          "tx_not_found", 12);
-    }
-
-    /* File read now happens lock-free. If the entry was evicted
-     * between snapshot + read we get a stale or missing record;
-     * that's surfaced as `last_tx_record: null` which is what the
-     * pre-existing code already did for that case. */
-    if (have_snapshot && runtime_read_tx_record(&snap_entry, record, 1024) == 0) {
-        len = snprintf(body, body_cap,
-                       "{\"active_transactions\":%llu,\"last_tx_seq\":%llu,"
-                       "\"tx_id\":\"%s\",\"state\":\"%s\","
-                       "\"shards_received\":%llu,\"bytes_received\":%llu,"
-                       "\"last_tx_record\":%s}",
-                       (unsigned long long)snap_active,
-                       (unsigned long long)snap_last,
-                       snap_entry.tx_id_hex,
-                       snap_entry.state,
-                       (unsigned long long)snap_entry.shards_received,
-                       (unsigned long long)snap_entry.bytes_received,
-                       record);
-    } else {
-        len = snprintf(body, body_cap,
-                       "{\"active_transactions\":%llu,\"last_tx_seq\":%llu,"
-                       "\"last_tx_record\":null}",
-                       (unsigned long long)snap_active,
-                       (unsigned long long)snap_last);
-    }
-    if (len < 0) return -1;
-    if ((size_t)len >= body_cap) len = (int)(body_cap - 1);
-    return send_frame(client_fd, FTX2_FRAME_QUERY_TX_ACK, 0, hdr.trace_id,
-                      body, (uint64_t)len);
-}
-
-static int handle_commit_tx_frame(runtime_state_t *state, int client_fd,
-                               ftx2_header_t hdr, char *body,
-                               size_t body_cap,
-                               const char *request_body,
-                               conn_tx_ctx_t *tx_ctx) {
-    ftx2_tx_meta_t meta;
-    const char *extra = NULL;
-    uint64_t extra_len = 0;
-
-    int len;
-    int rc;
-    runtime_tx_entry_t *entry = NULL;
-    if (parse_tx_meta(request_body, hdr.body_len, &meta, &extra, &extra_len) != 0) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                          "invalid_tx_meta", 15);
-    }
-    /* Acquire exclusive: a concurrent SHARD on the transfer port
-     * must finish before we tear down the manifest/writer state.
-     * Released via the `commit_done:` cleanup. */
-    entry = runtime_acquire_tx_entry(state, meta.tx_id);
-    if (!entry) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                          "tx_not_found", 12);
-    }
-    if (strcmp(entry->state, "active") != 0) {
-        rc = send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                        "tx_not_active", 13);
-        goto commit_done;
-    }
-    /* Verify all expected shards arrived (skip check if total_shards unknown). */
-    if (entry->total_shards > 0 &&
-        entry->shards_received < entry->total_shards) {
-        len = snprintf(body, body_cap,
-                       "{\"error\":\"shards_incomplete\","
-                       "\"shards_received\":%llu,\"total_shards\":%llu}",
-                       (unsigned long long)entry->shards_received,
-                       (unsigned long long)entry->total_shards);
-        if (len < 0) { rc = -1; goto commit_done; }
-        rc = send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                        body, (uint64_t)len);
-        goto commit_done;
-    }
-    pthread_mutex_lock(&state->state_mtx);
-    if (state->active_transactions > 0) state->active_transactions -= 1;
-    pthread_mutex_unlock(&state->state_mtx);
-    /* We hold the per-slot mutex, so we can mutate entry->state
-     * directly. */
-    snprintf(entry->state, sizeof(entry->state), "%s", "committed");
-    (void)runtime_flush_tx_record(state, entry);
-    (void)runtime_save_tx_state(state);
-    (void)runtime_append_tx_event(state, "commit_tx");
-    /* Apply: direct-write tx just renames its tmp file(s); spool tx copies
-     * shards into the destination as before.
-     *
-     * If apply fails (writer reported a disk I/O error mid-stream, or any
-     * rename failed), we DO NOT silently report COMMIT_TX_ACK. The
-     * pre-2.2.28 code logged a WARN and proceeded with the rename anyway,
-     * which destroyed the prior good dest_root and replaced it with a
-     * partial/corrupt file while telling the client "success". On
-     * apply failure we now emit FTX2_FRAME_ERROR with a structured body,
-     * mark the journal state "apply_failed", preserve the tmp file(s) for
-     * user inspection, and return early — the destination at dest_root
-     * is left untouched. */
-    int apply_failed = 0;
-    const char *apply_failure_reason = NULL;
-    char apply_failure_reason_buf[64] = {0};
-    char apply_failure_detail[256] = {0};
-    uint64_t failed_renames = 0;
-    {
-        uint64_t ta0 = now_us();
-        if (entry->direct_mode && !entry->multi_file) {
-            /* Drain the persistent writer + close the fd before rename.
-             * direct_writer_finish also clears direct_fd / direct_writer,
-             * so the upcoming runtime_release_tx_resources call will not
-             * unlink our freshly-renamed dest_root. */
-            int finish_rc = direct_writer_finish(entry);
-            if (finish_rc != 0) {
-                /* Writer thread reported a write_full() failure during
-                 * streaming. The tmp file at entry->tmp_path is
-                 * partial/corrupt; refuse the rename and surface the
-                 * error to the client. */
-                apply_failed = 1;
-                if (entry->last_io_errno > 0) {
-                    snprintf(apply_failure_reason_buf,
-                             sizeof(apply_failure_reason_buf),
-                             "fs_write_failed_errno_%d", entry->last_io_errno);
-                    apply_failure_reason = apply_failure_reason_buf;
-                    snprintf(apply_failure_detail, sizeof(apply_failure_detail),
-                             "writer flush for %s failed: %s; destination preserved",
-                             entry->tmp_path, strerror(entry->last_io_errno));
-                } else {
-                    apply_failure_reason = "direct_writer_io_error";
-                    snprintf(apply_failure_detail, sizeof(apply_failure_detail),
-                             "writer thread reported a disk write error mid-stream; "
-                             "destination preserved, partial at %s",
-                             entry->tmp_path);
-                }
-                fprintf(stderr,
-                        "[payload2] direct writer reported I/O error for tx %s — "
-                        "refusing rename, destination unchanged\n",
-                        entry->tx_id_hex);
-            } else {
-                /* Commit-time integrity check. The shard-count gate
-                 * above proves we RECEIVED total_shards shards, but the
-                 * resume cursor (last_acked_shard) is also a COUNT, and
-                 * during streaming neither the tmp data nor the journal
-                 * is fsync'd — so a kill mid-write (PS5 rest-mode, power
-                 * loss, takeover) can leave the journaled cursor ahead
-                 * of the bytes actually on disk. A later resume then
-                 * skips those shards and we'd rename a tmp that's SHORT
-                 * of the manifest size: a file that reports "done" but
-                 * is missing interior bytes (worst on USB/exFAT, where
-                 * page-cache loss is likely). Verify the tmp is exactly
-                 * the planned size before publishing it; on a mismatch
-                 * refuse the rename and surface a retryable error so the
-                 * host shows a failure instead of a false success.
-                 * (total_bytes == 0 is the empty-file case handled in
-                 * the shard path — skip it. stat() failure is left to
-                 * the rename below, which then reports its own error.) */
-                struct stat st_done;
-                /* Is there actually a staged file to publish? A COMMIT that
-                 * already succeeded cleared tmp_path (see below), and a
-                 * resume of an already-finished transaction keeps
-                 * direct_mode set without restoring it — so a second COMMIT
-                 * arrives here with tmp_path == "".
-                 *
-                 * That MUST NOT reach the rename branch. It unlinks
-                 * dest_root first, so a repeat commit deleted the very file
-                 * the first commit delivered and then failed with
-                 * `rename  -> <dest> failed: No such file or directory` —
-                 * note the empty source, which is exactly how users
-                 * reported it. The upload was gone and every retry made it
-                 * worse. Nothing below may touch dest_root until we know a
-                 * replacement exists. */
-                int have_staged =
-                    entry->tmp_path[0] != '\0' &&
-                    stat(entry->tmp_path, &st_done) == 0;
-                struct stat st_dest;
-                int dest_exists = stat(entry->dest_root, &st_dest) == 0;
-                commit_apply_action_t action = commit_apply_decide(
-                    have_staged,
-                    have_staged ? (uint64_t)st_done.st_size : 0,
-                    dest_exists,
-                    dest_exists ? (uint64_t)st_dest.st_size : 0,
-                    entry->total_bytes);
-                if (action != COMMIT_APPLY_PUBLISH &&
-                    action != COMMIT_APPLY_SIZE_MISMATCH) {
-                    if (action == COMMIT_APPLY_ALREADY_DONE) {
-                        /* Already published by an earlier COMMIT. Committing
-                         * the same transaction twice is idempotent: the file
-                         * the caller asked for is on disk, at the right
-                         * size. Report success and leave it alone. */
-                        printf("[payload2] direct apply: %s already published "
-                               "(idempotent commit, no staged tmp)\n",
-                               entry->dest_root);
-                    } else {
-                        apply_failed = 1;
-                        apply_failure_reason = "direct_staged_file_missing";
-                        snprintf(apply_failure_detail, sizeof(apply_failure_detail),
-                                 "nothing staged to publish for %s and the "
-                                 "destination is missing or the wrong size; "
-                                 "re-upload with Override rather than Resume",
-                                 entry->dest_root);
-                        fprintf(stderr,
-                                "[payload2] commit with no staged tmp tx %s dest=%s "
-                                "— destination left untouched\n",
-                                entry->tx_id_hex, entry->dest_root);
-                    }
-                } else if (action == COMMIT_APPLY_SIZE_MISMATCH) {
-                    apply_failed = 1;
-                    apply_failure_reason = "size_mismatch";
-                    snprintf(apply_failure_detail, sizeof(apply_failure_detail),
-                             "destination would be %lld bytes but manifest expects %llu "
-                             "(transfer incomplete — resume cursor outran durable data?); "
-                             "destination preserved, partial at %s",
-                             (long long)st_done.st_size,
-                             (unsigned long long)entry->total_bytes,
-                             entry->tmp_path);
-                    fprintf(stderr,
-                            "[payload2] commit size mismatch tx %s: tmp=%lld expected=%llu — "
-                            "refusing rename, destination unchanged\n",
-                            entry->tx_id_hex, (long long)st_done.st_size,
-                            (unsigned long long)entry->total_bytes);
-                } else {
-                    (void)unlink(entry->dest_root);
-                    if (rename(entry->tmp_path, entry->dest_root) != 0) {
-                        apply_failed = 1;
-                        apply_failure_reason = "direct_rename_failed";
-                        snprintf(apply_failure_detail, sizeof(apply_failure_detail),
-                                 "rename %s -> %s failed: %s",
-                                 entry->tmp_path, entry->dest_root, strerror(errno));
-                        fprintf(stderr, "[payload2] %s (errno=%d)\n",
-                                apply_failure_detail, errno);
-                    } else {
-                        /* Clear tmp_path so the upcoming release_tx_resources
-                         * doesn't re-unlink a path that no longer exists. */
-                        entry->tmp_path[0] = '\0';
-                        printf("[payload2] direct apply rename -> %s\n", entry->dest_root);
-                    }
-                }
-            }
-        } else if (entry->direct_mode && entry->multi_file) {
-            uint64_t fi = 0;
-            const manifest_index_entry_t *idx =
-                (const manifest_index_entry_t *)entry->manifest_index;
-            if (!idx || !entry->manifest_blob) {
-                apply_failed = 1;
-                apply_failure_reason = "manifest_missing_at_commit";
-                snprintf(apply_failure_detail, sizeof(apply_failure_detail),
-                         "manifest index/blob unavailable at commit time");
-                fprintf(stderr, "[payload2] direct multi commit: missing manifest index for tx %s\n",
-                        entry->tx_id_hex);
-            } else {
-                for (fi = 0; fi < entry->manifest_index_count; fi++) {
-                    char file_path[512];
-                    char tmp_path[512 + 16];
-                    size_t plen = idx[fi].path_len;
-                    if (plen == 0 || plen >= sizeof(file_path)) continue;
-                    if (json_copy_unescaped_string(entry->manifest_blob + idx[fi].path_offset,
-                                                   entry->manifest_blob + idx[fi].path_offset + plen,
-                                                   file_path,
-                                                   sizeof(file_path)) != 0) {
-                        continue;
-                    }
-                    snprintf(tmp_path, sizeof(tmp_path), "%s.ps5up2-tmp", file_path);
-                    /* Two legitimate layouts here:
-                     *   - non-packed record:  data at tmp_path, rename -> file_path
-                     *   - packed record:      data already at file_path, tmp absent
-                     * `rename(tmp, dest)` atomically replaces dest on POSIX, so
-                     * there is no need for the old defensive `unlink(file_path)`
-                     * that this branch used to do — and removing it is what
-                     * keeps packed-record content from being wiped. ENOENT on
-                     * the rename means "packed path already landed the file at
-                     * the destination" which is success, not failure.
-                     *
-                     * Defense-in-depth pre-check (added 2.2.35): a stale
-                     * tmp from a prior aborted run can survive into the
-                     * fresh tx if the BEGIN_TX sweep was skipped (resume
-                     * path) or missed the tmp due to manifest-vs-disk
-                     * path encoding drift. The bug signature is:
-                     *   - file_path exists at the manifest's expected
-                     *     size (pack worker delivered it correctly OR a
-                     *     prior successful run did), AND
-                     *   - tmp_path exists but is *smaller* than expected
-                     *     (a partial write from a prior aborted run).
-                     * In that exact shape, renaming would clobber good
-                     * content with stale partial bytes; unlinking the
-                     * tmp preserves the correct file.
-                     *
-                     * The asymmetric size check avoids false positives:
-                     *   - User replacing a same-size file → new tmp_path
-                     *     holds full new content (size == expected),
-                     *     condition does NOT trigger, rename runs.
-                     *   - Legitimate resume → by COMMIT all shards
-                     *     acked, tmp is at full size; condition does
-                     *     NOT trigger.
-                     * Only the bug case (full file at dest + partial
-                     * stale tmp) hits this guard. */
-                    struct stat st_file;
-                    struct stat st_tmp;
-                    int have_file = (stat(file_path, &st_file) == 0);
-                    int have_tmp  = (stat(tmp_path,  &st_tmp)  == 0);
-                    if (have_file && have_tmp &&
-                        idx[fi].size > 0 &&
-                        (uint64_t)st_file.st_size == idx[fi].size &&
-                        (uint64_t)st_tmp.st_size  <  idx[fi].size) {
-                        fprintf(stderr,
-                                "[payload2] commit: %s already at expected size %llu, tmp partial (%llu) — unlinking stale tmp\n",
-                                file_path,
-                                (unsigned long long)idx[fi].size,
-                                (unsigned long long)st_tmp.st_size);
-                        (void)unlink(tmp_path);
-                        continue;
-                    }
-                    if (rename(tmp_path, file_path) != 0 && errno != ENOENT) {
-                        fprintf(stderr, "[payload2] direct multi rename %s -> %s errno=%d\n",
-                                tmp_path, file_path, errno);
-                        failed_renames += 1;
-                    }
-                }
-                if (failed_renames > 0) {
-                    apply_failed = 1;
-                    apply_failure_reason = "direct_multi_rename_failed";
-                    snprintf(apply_failure_detail, sizeof(apply_failure_detail),
-                             "%llu of %llu file rename(s) failed; partials preserved as .ps5up2-tmp",
-                             (unsigned long long)failed_renames,
-                             (unsigned long long)entry->manifest_index_count);
-                } else {
-                    /* Commit-time integrity check (multi-file analogue
-                     * of the single-file size check above). All renames
-                     * succeeded, but the resume cursor is a shard COUNT
-                     * and streaming writes aren't fsync'd, so a kill
-                     * mid-write (rest-mode / power loss) followed by a
-                     * resume can leave a file SHORT of its manifest size
-                     * while the count-based gate still passes — a game
-                     * that lands looking complete but is silently
-                     * corrupt (the AquaHox USB/exFAT case). Re-stat each
-                     * file against the manifest size and fail loudly on
-                     * any mismatch so the host retries instead of
-                     * trusting a false "done". A bare stat on a
-                     * just-written file hits the inode cache, so this is
-                     * cheap even for a 200k-file game. (size == 0 files
-                     * ride inside packed shards and are skipped — same
-                     * as the stale-tmp guard above.) */
-                    uint64_t bad = 0;
-                    char bad_name[256] = {0};
-                    uint64_t bad_have = 0;
-                    uint64_t bad_want = 0;
-                    for (fi = 0; fi < entry->manifest_index_count; fi++) {
-                        char vpath[512];
-                        size_t vlen = idx[fi].path_len;
-                        if (vlen == 0 || vlen >= sizeof(vpath)) continue;
-                        if (idx[fi].size == 0) continue;
-                        if (json_copy_unescaped_string(
-                                entry->manifest_blob + idx[fi].path_offset,
-                                entry->manifest_blob + idx[fi].path_offset + vlen,
-                                vpath, sizeof(vpath)) != 0) {
-                            continue;
-                        }
-                        struct stat vst;
-                        int have = (stat(vpath, &vst) == 0);
-                        uint64_t got = have ? (uint64_t)vst.st_size : 0;
-                        if (!have || got != idx[fi].size) {
-                            if (bad == 0) {
-                                snprintf(bad_name, sizeof(bad_name), "%s", vpath);
-                                bad_have = got;
-                                bad_want = idx[fi].size;
-                            }
-                            bad += 1;
-                        }
-                    }
-                    if (bad > 0) {
-                        apply_failed = 1;
-                        apply_failure_reason = "size_mismatch";
-                        snprintf(apply_failure_detail, sizeof(apply_failure_detail),
-                                 "%llu file(s) wrong size after commit "
-                                 "(e.g. %s: have %llu, want %llu) — transfer incomplete "
-                                 "(resume cursor outran durable data?)",
-                                 (unsigned long long)bad, bad_name,
-                                 (unsigned long long)bad_have,
-                                 (unsigned long long)bad_want);
-                        fprintf(stderr,
-                                "[payload2] commit multi size mismatch tx %s: %llu bad file(s)\n",
-                                entry->tx_id_hex, (unsigned long long)bad);
-                    } else {
-                        printf("[payload2] direct multi apply: %llu files renamed + verified\n",
-                               (unsigned long long)entry->file_count);
-                    }
-                }
-            }
-        } else if (runtime_apply_spool(entry, client_fd, hdr.trace_id) == 0) {
-            (void)runtime_cleanup_spool(entry);
-        } else {
-            apply_failed = 1;
-            apply_failure_reason = "spool_apply_failed";
-            snprintf(apply_failure_detail, sizeof(apply_failure_detail),
-                     "spool-to-dest apply failed; spool preserved at %s/spool_%s",
-                     PS5UPLOAD2_SPOOL_DIR, entry->tx_id_hex);
-            fprintf(stderr, "[payload2] %s — tx %s dest=%s\n",
-                    apply_failure_detail, entry->tx_id_hex, entry->dest_root);
-        }
-        entry->apply_us += (now_us() - ta0);
-    }
-
-    /* Apply-failure exit path. Overwrite the journal state to reflect
-     * what actually happened on disk, append a distinct event, and
-     * surface a structured FTX2_FRAME_ERROR. We deliberately DO NOT
-     * call runtime_release_tx_resources(entry) here — keeping the
-     * heap state (manifest_blob/index, writer handle if any) lets a
-     * subsequent QUERY_TX or RESUME pick up where we left off, and
-     * skipping the unlink of tmp_path preserves the bytes we wrote
-     * for inspection or manual recovery. */
-    if (apply_failed) {
-        snprintf(entry->state, sizeof(entry->state), "apply_failed");
-        (void)runtime_flush_tx_record(state, entry);
-        (void)runtime_save_tx_state(state);
-        (void)runtime_append_tx_event(state, "commit_tx_apply_failed");
-        /* JSON-escape the detail before interpolating: it embeds
-         * strerror(errno) and PS5 paths. Normal PS5 paths don't
-         * contain `"` or `\`, but a hostile or buggy `entry->
-         * tmp_path` could, and an unescaped backslash or quote
-         * would produce malformed JSON the engine's serde_json
-         * rejects, masking the original error with a parse error.
-         * apply_failure_reason is a static-string code from this
-         * function (e.g. "direct_writer_io_error") so it's
-         * safe-ASCII; tx_id_hex is hex; only detail needs escape. */
-        char detail_esc[512];
-        json_escape_into(apply_failure_detail, detail_esc, sizeof(detail_esc));
-        len = snprintf(body, body_cap,
-                       "{\"error\":\"%s\",\"tx_id\":\"%s\","
-                       "\"failed_renames\":%llu,"
-                       "\"detail\":\"%s\"}",
-                       apply_failure_reason ? apply_failure_reason : "apply_failed",
-                       entry->tx_id_hex,
-                       (unsigned long long)failed_renames,
-                       detail_esc);
-        if (len < 0) { rc = -1; goto commit_done; }
-        if ((size_t)len >= body_cap) len = (int)body_cap - 1;
-        /* Commit attempt failed terminally — clear the connection's
-         * has-open-tx flag so a subsequent socket close doesn't
-         * mark this slot as "interrupted" (overwriting our
-         * apply_failed state). */
-        if (tx_ctx && tx_ctx->has_tx &&
-            memcmp(tx_ctx->tx_id, meta.tx_id, 16) == 0) {
-            tx_ctx->has_tx = 0;
-        }
-        rc = send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                        body, (uint64_t)len);
-        goto commit_done;
-    }
-    /* Manifest blob + index are no longer needed — release the heap
-     * immediately rather than waiting for the slot to be evicted. */
-    runtime_release_tx_resources(entry);
-    fprintf(stderr, "[payload2] tx %s timing(us): recv=%llu write=%llu verify=%llu apply=%llu "
-                    "bytes=%llu shards=%llu\n",
-            entry->tx_id_hex,
-            (unsigned long long)entry->recv_us,
-            (unsigned long long)entry->write_us,
-            (unsigned long long)entry->verify_us,
-            (unsigned long long)entry->apply_us,
-            (unsigned long long)entry->bytes_received,
-            (unsigned long long)entry->shards_received);
-    char dest_root_esc[1024];
-    json_escape_into(entry->dest_root, dest_root_esc, sizeof(dest_root_esc));
-    len = snprintf(body, body_cap,
-                   "{\"committed\":true,\"tx_id\":\"%s\",\"tx_seq\":%llu,"
-                   "\"shards_received\":%llu,\"bytes_received\":%llu,"
-                   "\"dest_root\":\"%s\",\"active_transactions\":%llu,"
-                   "\"timing_us\":{\"recv\":%llu,\"write_wait\":%llu,"
-                   "\"verify\":%llu,\"apply\":%llu,"
-                   "\"open\":%llu,\"join\":%llu,\"close\":%llu,"
-                   "\"hash\":%llu,\"shard_fn\":%llu,"
-                   "\"pack_records\":%llu,\"pack_unlink\":%llu,"
-                   "\"pack_open\":%llu,\"pack_ftruncate\":%llu,"
-                   "\"pack_write\":%llu,\"pack_close\":%llu,"
-                   "\"pack_open_retries\":%llu,\"pack_write_retries\":%llu},"
-                   "\"sock_rcvbuf\":%d,\"listener_rcvbuf_asked\":%d,"
-                   "\"listener_rcvbuf_actual\":%d,\"listener_sndbuf_actual\":%d,"
-                   "\"max_rcvbuf_probed\":%d}",
-                   entry->tx_id_hex,
-                   (unsigned long long)entry->tx_seq,
-                   (unsigned long long)entry->shards_received,
-                   (unsigned long long)entry->bytes_received,
-                   dest_root_esc,
-                   (unsigned long long)state->active_transactions,
-                   (unsigned long long)entry->recv_us,
-                   (unsigned long long)entry->write_us,
-                   (unsigned long long)entry->verify_us,
-                   (unsigned long long)entry->apply_us,
-                   (unsigned long long)entry->open_us,
-                   (unsigned long long)entry->join_us,
-                   (unsigned long long)entry->close_us,
-                   (unsigned long long)entry->hash_us,
-                   (unsigned long long)entry->shard_func_us,
-                   (unsigned long long)entry->pack_records,
-                   (unsigned long long)entry->pack_unlink_us,
-                   (unsigned long long)entry->pack_open_us,
-                   (unsigned long long)entry->pack_ftruncate_us,
-                   (unsigned long long)entry->pack_write_us,
-                   (unsigned long long)entry->pack_close_us,
-                   (unsigned long long)entry->pack_open_retries,
-                   (unsigned long long)entry->pack_write_retries,
-                   state->last_client_rcvbuf,
-                   state->listener_rcvbuf_asked,
-                   state->listener_rcvbuf_actual,
-                   state->listener_sndbuf_actual,
-                   state->max_rcvbuf_probed);
-    if (len < 0) { rc = -1; goto commit_done; }
-    /* Commit took the tx to a terminal state; clear the connection's
-     * "has open tx" marker so a subsequent socket close doesn't
-     * mis-mark it as interrupted. */
-    if (tx_ctx && tx_ctx->has_tx &&
-        memcmp(tx_ctx->tx_id, meta.tx_id, 16) == 0) {
-        tx_ctx->has_tx = 0;
-    }
-    /* User-visible PS5 toast on successful upload (2.16.1+). Fires a
-     * top-right Sony notification on the TV/monitor itself so the user
-     * gets confirmation even when the desktop ps5upload window is
-     * hidden behind the PS5 system chrome. dlsym in pop_notification
-     * silently no-ops on firmwares where the symbol isn't loaded, so
-     * this never breaks the commit path. */
-    {
-        const char *base = strrchr(entry->dest_root, '/');
-        base = base ? base + 1 : entry->dest_root;
-        char toast[200];
-        double mib = (double)entry->bytes_received / (1024.0 * 1024.0);
-        const char *unit = "MiB";
-        double val = mib;
-        if (mib >= 1024.0) { val = mib / 1024.0; unit = "GiB"; }
-        if (entry->file_count > 1) {
-            snprintf(toast, sizeof(toast),
-                     "PS5Upload: %s done (%.1f %s, %llu files)",
-                     base, val, unit,
-                     (unsigned long long)entry->file_count);
-        } else {
-            snprintf(toast, sizeof(toast),
-                     "PS5Upload: %s done (%.1f %s)",
-                     base, val, unit);
-        }
-        pop_notification(toast);
-    }
-    rc = send_frame(client_fd, FTX2_FRAME_COMMIT_TX_ACK, 0, hdr.trace_id,
-                    body, (uint64_t)len);
-commit_done:
-    runtime_release_tx_entry(state, entry);
-    return rc;
-}
-
-static int handle_abort_tx_frame(runtime_state_t *state, int client_fd,
-                               ftx2_header_t hdr, char *body,
-                               size_t body_cap,
-                               const char *request_body,
-                               conn_tx_ctx_t *tx_ctx) {
-    ftx2_tx_meta_t meta;
-    const char *extra = NULL;
-    uint64_t extra_len = 0;
-
-    int len;
-    int rc;
-    runtime_tx_entry_t *entry = NULL;
-    if (parse_tx_meta(request_body, hdr.body_len, &meta, &extra, &extra_len) == 0) {
-        /* Acquire exclusive: same rationale as COMMIT_TX. A
-         * concurrent SHARD must finish before we tear the entry
-         * down. Released via the `abort_done:` cleanup. */
-        entry = runtime_acquire_tx_entry(state, meta.tx_id);
-    }
-    if (!entry) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                          "tx_not_found", 12);
-    }
-    /* Guard against double-finalize. Without this, a replayed
-     * ABORT_TX or a confused client that issues both COMMIT and
-     * ABORT for the same tx_id will re-flush a terminal entry
-     * with state="aborted" — silently overwriting a "committed"
-     * record in the journal.
-     *
-     * NB: state "interrupted" (set when a connection dropped
-     * mid-tx without seeing COMMIT/ABORT) MUST stay abortable,
-     * otherwise the canonical "drop happened, user clicks
-     * Cancel on the dangling tx" flow breaks. Only refuse on
-     * already-terminal states (aborted or committed).
-     *
-     * The entry stays acquired, so the `abort_done:` cleanup
-     * still runs. */
-    if (strcmp(entry->state, "aborted") == 0 ||
-        strcmp(entry->state, "committed") == 0) {
-        rc = send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                        "tx_already_terminal", 19);
-        goto abort_done;
-    }
-    pthread_mutex_lock(&state->state_mtx);
-    if (state->active_transactions > 0) state->active_transactions -= 1;
-    uint64_t active_now = state->active_transactions;
-    pthread_mutex_unlock(&state->state_mtx);
-    snprintf(entry->state, sizeof(entry->state), "%s", "aborted");
-    (void)runtime_flush_tx_record(state, entry);
-    (void)runtime_save_tx_state(state);
-    (void)runtime_append_tx_event(state, "abort_tx");
-    runtime_release_tx_resources(entry);
-    len = snprintf(body, body_cap,
-                   "{\"aborted\":true,\"tx_id\":\"%s\","
-                   "\"active_transactions\":%llu}",
-                   entry->tx_id_hex,
-                   (unsigned long long)active_now);
-    if (len < 0) { rc = -1; goto abort_done; }
-    /* Abort took the tx terminal — see the matching clear in COMMIT_TX
-     * for why we do this. */
-    if (tx_ctx && tx_ctx->has_tx &&
-        memcmp(tx_ctx->tx_id, meta.tx_id, 16) == 0) {
-        tx_ctx->has_tx = 0;
-    }
-    rc = send_frame(client_fd, FTX2_FRAME_ABORT_TX_ACK, 0, hdr.trace_id,
-                    body, (uint64_t)len);
-abort_done:
-    runtime_release_tx_entry(state, entry);
-    return rc;
+    return mgmt_reply(MGMT_FRAME_STATUS_ACK, body, (uint64_t)len);
 }
 
 
 __thread volatile unsigned int g_inflight_frame_type = 0;
 
-/* node.shutdown (the FTX2 SHUTDOWN frame's body, a handler of its own for the AVA1 table). */
+/* node.shutdown (the old shutdown frame's body, a handler of its own for the AVA1 table). */
 /* The native filesystem methods (mgmt_fs.c) take their policy from here: the same allowlist, the same
- * read carve-outs and the same command counter the FTX2 handlers use. */
+ * read carve-outs and the same command counter the management handlers use. */
 static runtime_state_t *g_mgmt_fs_state;
 
 static int mgmt_fs_read_allowed(const char *path, int unsafe_read) {
@@ -15821,157 +8192,131 @@ static void mgmt_fs_count(void) {
 }
 
 /* ---- P3 Task 7 table adapters ----
- * mgmt_table.def calls handlers as (state, fd, trace, body, len). These handlers take a different
+ * mgmt_table.def calls a body handler as (state, body, len). These handlers take a different
  * shape (no length, or no state), so a one-line adapter gives them the table's. Each adapter only
  * forwards the arguments; the body arrives NUL-terminated (mgmt_legacy_call). */
-static int mgmt_w_fan_curve_set(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_fan_curve_set(runtime_state_t *st, const char *b, uint64_t l) {
     (void)l;
-    return handle_fan_curve_set(st, fd, t, b);
+    return handle_fan_curve_set(st, b);
 }
-static int mgmt_w_user_create(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_user_create(runtime_state_t *st, const char *b, uint64_t l) {
     (void)l;
-    return handle_user_create(st, fd, t, b);
+    return handle_user_create(st, b);
 }
-static int mgmt_w_user_delete(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_user_delete(runtime_state_t *st, const char *b, uint64_t l) {
     (void)l;
-    return handle_user_delete(st, fd, t, b);
+    return handle_user_delete(st, b);
 }
-static int mgmt_w_backup_list(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_backup_list(runtime_state_t *st, const char *b, uint64_t l) {
     (void)l;
-    return handle_backup_list(st, fd, t, b);
+    return handle_backup_list(st, b);
 }
-static int mgmt_w_backup_delete(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_backup_delete(runtime_state_t *st, const char *b, uint64_t l) {
     (void)l;
-    return handle_backup_delete(st, fd, t, b);
+    return handle_backup_delete(st, b);
 }
-static int mgmt_w_remoteplay_request(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_remoteplay_request(runtime_state_t *st, const char *b, uint64_t l) {
     (void)l;
-    return handle_remoteplay_request(st, fd, t, b);
+    return handle_remoteplay_request(st, b);
 }
-static int mgmt_w_remoteplay_enable(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_remoteplay_enable(runtime_state_t *st, const char *b, uint64_t l) {
     (void)l;
-    return handle_remoteplay_enable(st, fd, t, b);
+    return handle_remoteplay_enable(st, b);
 }
-static int mgmt_w_activity_db_query(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_activity_db_query(runtime_state_t *st, const char *b, uint64_t l) {
     (void)l;
-    return handle_activity_db_query(st, fd, t, b);
+    return handle_activity_db_query(st, b);
 }
-static int mgmt_w_notif_list(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_notif_list(runtime_state_t *st, const char *b, uint64_t l) {
     (void)l;
-    return handle_notif_list(st, fd, t, b);
+    return handle_notif_list(st, b);
 }
-static int mgmt_w_cheats_get(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_cheats_get(runtime_state_t *st, const char *b, uint64_t l) {
     (void)l;
-    return handle_cheats_get(st, fd, t, b);
+    return handle_cheats_get(st, b);
 }
-static int mgmt_w_cheats_toggle(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_cheats_toggle(runtime_state_t *st, const char *b, uint64_t l) {
     (void)l;
-    return handle_cheats_toggle(st, fd, t, b);
+    return handle_cheats_toggle(st, b);
 }
-static int mgmt_w_cheats_delete(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_cheats_delete(runtime_state_t *st, const char *b, uint64_t l) {
     (void)l;
-    return handle_cheats_delete(st, fd, t, b);
+    return handle_cheats_delete(st, b);
 }
-static int mgmt_w_cheats_engine_set(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_cheats_engine_set(runtime_state_t *st, const char *b, uint64_t l) {
     (void)l;
-    return handle_cheats_engine_set(st, fd, t, b);
+    return handle_cheats_engine_set(st, b);
 }
-static int mgmt_w_sdk_patch(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_sdk_patch(runtime_state_t *st, const char *b, uint64_t l) {
     (void)l;
-    return handle_sdk_patch(st, fd, t, b);
+    return handle_sdk_patch(st, b);
 }
-static int mgmt_w_sdk_restore(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_sdk_restore(runtime_state_t *st, const char *b, uint64_t l) {
     (void)l;
-    return handle_sdk_restore(st, fd, t, b);
+    return handle_sdk_restore(st, b);
 }
-static int mgmt_w_tmdb_fetch(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_tmdb_fetch(runtime_state_t *st, const char *b, uint64_t l) {
     (void)l;
-    return handle_tmdb_fetch(st, fd, t, b);
+    return handle_tmdb_fetch(st, b);
 }
-static int mgmt_w_tmdb_store(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_tmdb_store(runtime_state_t *st, const char *b, uint64_t l) {
     (void)l;
-    return handle_tmdb_store(st, fd, t, b);
+    return handle_tmdb_store(st, b);
 }
-static int mgmt_w_ftp_start(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_ftp_start(runtime_state_t *st, const char *b, uint64_t l) {
     (void)l;
-    return handle_ftp_start(st, fd, t, b);
+    return handle_ftp_start(st, b);
 }
-static int mgmt_w_profile_set_username(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_profile_set_username(runtime_state_t *st, const char *b, uint64_t l) {
     (void)st;
     (void)l;
-    return handle_profile_set_username(fd, t, b);
+    return handle_profile_set_username(b);
 }
-static int mgmt_w_profile_activate(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_profile_activate(runtime_state_t *st, const char *b, uint64_t l) {
     (void)st;
     (void)l;
-    return handle_profile_activate(fd, t, b);
+    return handle_profile_activate(b);
 }
-static int mgmt_w_profile_apply_avatar(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_profile_apply_avatar(runtime_state_t *st, const char *b, uint64_t l) {
     (void)st;
     (void)l;
-    return handle_profile_apply_avatar(fd, t, b);
+    return handle_profile_apply_avatar(b);
 }
-static int mgmt_w_profile_clear_slot(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_profile_clear_slot(runtime_state_t *st, const char *b, uint64_t l) {
     (void)st;
     (void)l;
-    return handle_profile_clear_slot(fd, t, b);
+    return handle_profile_clear_slot(b);
 }
-static int mgmt_w_profile_set_local_username(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
+static int mgmt_w_profile_set_local_username(runtime_state_t *st, const char *b, uint64_t l) {
     (void)st;
     (void)l;
-    return handle_profile_set_local_username(fd, t, b);
+    return handle_profile_set_local_username(b);
 }
-static int mgmt_w_profile_info(runtime_state_t *st, int fd, uint64_t t) {
+static int mgmt_w_profile_info(runtime_state_t *st) {
     (void)st;
-    return handle_profile_info(fd, t);
+    return handle_profile_info();
 }
 
 /* notif.send shares toast.send's 4 KiB request cap over AVA1. */
-static int mgmt_w_notif_send(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
-    if (l > 4096) return send_frame(fd, FTX2_FRAME_ERROR, 0, t, "body_too_large", 14);
-    return handle_notif_send(st, fd, t, b);
+static int mgmt_w_notif_send(runtime_state_t *st, const char *b, uint64_t l) {
+    if (l > 4096) return mgmt_reply(MGMT_FRAME_ERROR, "body_too_large", 14);
+    return handle_notif_send(st, b);
 }
 
-/* toast.send: the FTX2 dispatcher refused a body over 4 KiB before the handler ran (and the handler
+/* toast.send: the old dispatcher refused a body over 4 KiB before the handler ran (and the handler
  * checks it again). Over AVA1 a larger body is ERR_PROTOCOL ("body_too_large"). */
-static int mgmt_w_toast_send(runtime_state_t *st, int fd, uint64_t t, const char *b, uint64_t l) {
-    if (l > 4096) return send_frame(fd, FTX2_FRAME_ERROR, 0, t, "body_too_large", 14);
-    return handle_toast_send(st, fd, t, b, l);
+static int mgmt_w_toast_send(runtime_state_t *st, const char *b, uint64_t l) {
+    if (l > 4096) return mgmt_reply(MGMT_FRAME_ERROR, "body_too_large", 14);
+    return handle_toast_send(st, b, l);
 }
 
 /* The AVA1 management table (mgmt_table.def) and its thread environment. */
-/*
- * Nudge the OTHER accept loop so it notices shutdown_requested. The transfer
- * loop runs on the main thread, blocked in accept(); nothing wakes it but a
- * connection. The host's own status polls would do it within seconds, and so
- * does main closing the mgmt listener, but a loopback connect makes the exit
- * prompt. Best effort: a process that has lost its network may not manage it.
- */
-static void wake_other_listener(runtime_state_t *state, int failing_port) {
-    int other = (failing_port == state->mgmt_port) ? state->runtime_port
-                                                    : state->mgmt_port;
-    struct sockaddr_in sa;
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return;
-    memset(&sa, 0, sizeof(sa));
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons((uint16_t)other);
-    sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    (void)connect(fd, (struct sockaddr *)&sa, sizeof(sa));
-    close(fd);
-}
-
-/* Asks this instance to exit: node.shutdown, the old shutdown frame, and the takeover flag file all
- * land here. Marks open transactions interrupted (so they resume), sets the flag every loop
- * checks, then nudges both accept loops: the transfer loop sits in accept() and nothing but a
- * connection wakes it. Safe to call from any thread, more than once. */
+/* Asks this instance to exit: node.shutdown and the takeover flag file land here. Sets the flag
+ * main() waits on (runtime_wait_for_shutdown). Safe to call from any thread, more than once. */
 static void shutdown_common(runtime_state_t *state, const char *why) {
     if (!state) return;
-    runtime_mark_active_transactions(state, "interrupted");
+    fprintf(stderr, "[payload2] shutdown requested: %s\n", why ? why : "?");
     state->shutdown_requested = 1;
-    (void)runtime_append_tx_event(state, why ? why : "shutdown");
-    wake_other_listener(state, state->mgmt_port);
-    wake_other_listener(state, state->runtime_port);
 }
 
 void runtime_request_shutdown(runtime_state_t *state, const char *why) {
@@ -15983,1213 +8328,17 @@ static void node_shutdown_fire(void *arg) { shutdown_common((runtime_state_t *)a
 /* node.shutdown (AVA1 method 5). The handler runs under the capture sink: its reply leaves only after
  * it returns. So the exit is DEFERRED to a short thread (like power.control): the caller receives the
  * acknowledgement first, then the instance stops (main.c runs ava1_payload_stop after the server loop). */
-static int handle_node_shutdown(runtime_state_t *state, int client_fd, uint64_t trace_id) {
-    int rc = send_frame(client_fd, FTX2_FRAME_SHUTDOWN_ACK, 0, trace_id, "{}", 2);
+static int handle_node_shutdown(runtime_state_t *state) {
+    int rc = mgmt_reply(MGMT_FRAME_SHUTDOWN_ACK, "{}", 2);
     if (ava1_shutdown_defer(300, node_shutdown_fire, state) != 0) node_shutdown_fire(state);
     return rc;
 }
 
 #include "mgmt_install.inc"
 
-static int handle_binary_frame_impl(runtime_state_t *state, int client_fd,
-                                    int is_transfer_port,
-                                    conn_tx_ctx_t *tx_ctx);
-
-/* Wrapper so the in-flight marker is cleared on EVERY return path of the
- * dispatcher (it has dozens) without touching each one. The impl sets the
- * marker as soon as the header is parsed. */
-static int handle_binary_frame(runtime_state_t *state, int client_fd,
-                               int is_transfer_port,
-                               conn_tx_ctx_t *tx_ctx) {
-    int rc = handle_binary_frame_impl(state, client_fd, is_transfer_port, tx_ctx);
-    g_inflight_frame_type = 0;
-    return rc;
-}
-
-static int handle_binary_frame_impl(runtime_state_t *state, int client_fd,
-                                    int is_transfer_port,
-                                    conn_tx_ctx_t *tx_ctx) {
-    unsigned char hdr_bytes[FTX2_HEADER_LEN];
-    char body[2048]; /* large enough for QUERY_TX: outer JSON (~100B) + embedded record (~512B) */
-    char request_body[1024];
-    ftx2_header_t hdr;
-
-    if (!state) return -1;
-    if (recv_exact(client_fd, hdr_bytes, sizeof(hdr_bytes)) != 0) return -1;
-
-    hdr.magic      = read_le32(hdr_bytes + 0);
-    hdr.version    = read_le16(hdr_bytes + 4);
-    hdr.frame_type = read_le16(hdr_bytes + 6);
-    hdr.flags      = read_le32(hdr_bytes + 8);
-    hdr.body_len   = read_le64(hdr_bytes + 12);
-    hdr.trace_id   = read_le64(hdr_bytes + 20);
-    /* Set before ANY work on the frame — including the per-frame ucred
-     * elevation below, which does kernel writes and is itself a candidate
-     * for a firmware-specific crash. No frame type is 0 (HELLO is 1), so 0
-     * stays unambiguous as "not in a request". */
-    g_inflight_frame_type = (unsigned int)hdr.frame_type;
-
-    if (hdr.magic != FTX2_MAGIC) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id, "bad_magic", 9);
-    }
-    if (hdr.version != FTX2_VERSION) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id, "bad_version", 11);
-    }
-
-    /* Per-frame elevation retry. If the startup ucred jailbreak
-     * failed (kernel R/W wasn't available — typically the user
-     * loaded our payload before kstuff), this is the path that
-     * picks up R/W as soon as kstuff lands. The function early-
-     * outs in the steady-state already-elevated case, so the
-     * cost is one branch on the hot path. */
-    runtime_apply_ucred_jailbreak();
-
-    /* Reject wrong-port frames. We can't safely process them: a misrouted
-     * STREAM_SHARD would carry up to 32 MiB we'd otherwise drain, and
-     * processing a BEGIN_TX on the mgmt port would corrupt the transfer
-     * thread's tx table. Emit ERROR and close so the client reconnects
-     * to the correct port. */
-    if (is_transfer_frame_type(hdr.frame_type) != !!is_transfer_port) {
-        (void)send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                         "wrong_port", 10);
-        return -1;
-    }
-
-    /*
-     * STREAM_SHARD bodies can be up to 32 MiB — dispatch before the
-     * 1024-byte body buffer guard; the shard handler reads its own body.
-     */
-    if (hdr.frame_type == FTX2_FRAME_STREAM_SHARD) {
-        return handle_stream_shard(state, client_fd, hdr.trace_id, hdr.body_len);
-    }
-
-    /*
-     * BEGIN_TX carries a manifest JSON that grows linearly with file count.
-     * Heap-allocate the body so large directories don't hit the stack guard.
-     */
-    if (hdr.frame_type == FTX2_FRAME_BEGIN_TX) {
-        return handle_begin_tx_frame(state, client_fd, hdr, tx_ctx);
-    }
-
-    if (hdr.frame_type == FTX2_FRAME_FS_WRITE_BYTES ||
-        hdr.frame_type == FTX2_FRAME_TOAST_SEND) {
-        uint64_t body_cap = hdr.frame_type == FTX2_FRAME_FS_WRITE_BYTES
-            ? (uint64_t)512 * 1024
-            : (uint64_t)4096;
-        char *large_body = NULL;
-        if (hdr.body_len > body_cap) {
-            uint64_t remaining = hdr.body_len;
-            char discard[256];
-            uint16_t ack_frame = hdr.frame_type == FTX2_FRAME_FS_WRITE_BYTES
-                ? FTX2_FRAME_FS_WRITE_BYTES_ACK
-                : FTX2_FRAME_TOAST_SEND_ACK;
-            const char *ack = "{\"ok\":false,\"err\":\"body_too_large\"}";
-            while (remaining > 0) {
-                size_t take = remaining > sizeof(discard)
-                    ? sizeof(discard)
-                    : (size_t)remaining;
-                if (recv_exact(client_fd, discard, take) != 0) return -1;
-                remaining -= (uint64_t)take;
-            }
-            return send_frame(client_fd, ack_frame, 0, hdr.trace_id,
-                              ack, strlen(ack));
-        }
-        if (hdr.body_len > 0) {
-            large_body = (char *)malloc((size_t)hdr.body_len + 1);
-            if (!large_body) {
-                uint64_t remaining = hdr.body_len;
-                char discard[256];
-                uint16_t ack_frame = hdr.frame_type == FTX2_FRAME_FS_WRITE_BYTES
-                    ? FTX2_FRAME_FS_WRITE_BYTES_ACK
-                    : FTX2_FRAME_TOAST_SEND_ACK;
-                const char *ack = "{\"ok\":false,\"err\":\"out_of_memory\"}";
-                while (remaining > 0) {
-                    size_t take = remaining > sizeof(discard)
-                        ? sizeof(discard)
-                        : (size_t)remaining;
-                    if (recv_exact(client_fd, discard, take) != 0) return -1;
-                    remaining -= (uint64_t)take;
-                }
-                return send_frame(client_fd, ack_frame, 0, hdr.trace_id,
-                                  ack, strlen(ack));
-            }
-            if (recv_exact(client_fd, large_body, (size_t)hdr.body_len) != 0) {
-                free(large_body);
-                return -1;
-            }
-            large_body[hdr.body_len] = '\0';
-        }
-        if (hdr.frame_type == FTX2_FRAME_FS_WRITE_BYTES) {
-            int rc = handle_fs_write_bytes(state, client_fd, hdr.trace_id,
-                                           large_body ? large_body : "",
-                                           hdr.body_len);
-            free(large_body);
-            return rc;
-        } else {
-            int rc = handle_toast_send(state, client_fd, hdr.trace_id,
-                                       large_body ? large_body : "",
-                                       hdr.body_len);
-            free(large_body);
-            return rc;
-        }
-    }
-
-    /* Read the body for all other (small) frame types. */
-    request_body[0] = '\0';
-    if (hdr.body_len > 0) {
-        if (hdr.body_len >= sizeof(request_body)) {
-            uint64_t remaining = hdr.body_len;
-            char discard[256];
-            while (remaining > 0) {
-                size_t take = remaining > sizeof(discard) ? sizeof(discard) : (size_t)remaining;
-                if (recv_exact(client_fd, discard, take) != 0) return -1;
-                remaining -= (uint64_t)take;
-            }
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                              "body_too_large", 14);
-        }
-        if (recv_exact(client_fd, request_body, (size_t)hdr.body_len) != 0) return -1;
-        request_body[hdr.body_len] = '\0';
-    }
-
-    /* command_count is a cross-thread counter (incremented on both the
-     * transfer and mgmt listeners). The mutex window is a single add,
-     * so contention is negligible and a torn read from STATUS is
-     * prevented entirely. */
-    pthread_mutex_lock(&state->state_mtx);
-    state->command_count += 1;
-    pthread_mutex_unlock(&state->state_mtx);
-
-    /* ── HELLO ── */
-    if (hdr.frame_type == FTX2_FRAME_HELLO) {
-        int len = snprintf(body, sizeof(body),
-                           "{\"version\":%u,\"instance_id\":%llu,\"runtime_port\":%d,"
-                           "\"ava1_port\":%d,\"ava1\":\"%s\"}",
-                           FTX2_VERSION,
-                           (unsigned long long)state->instance_id,
-                           state->runtime_port, (int)AVA1_DEFAULT_PORT, ava1_payload_state());
-        /* snprintf returns the length that *would* have been written
-         * (excluding NUL). A return > sizeof(body) means truncation;
-         * clamp so we don't ask send_frame to read past the buffer. */
-        if (len < 0) return -1;
-        if ((size_t)len >= sizeof(body)) len = (int)(sizeof(body) - 1);
-        return send_frame(client_fd, FTX2_FRAME_HELLO_ACK, 0, hdr.trace_id,
-                          body, (uint64_t)len);
-    }
-
-    /* ── STATUS ── */
-    if (hdr.frame_type == FTX2_FRAME_STATUS) {
-        return handle_status_frame(state, client_fd, hdr, body, sizeof(body));
-    }
-
-    /* ── QUERY_TX ── */
-    if (hdr.frame_type == FTX2_FRAME_QUERY_TX) {
-        return handle_query_tx_frame(state, client_fd, hdr, body, sizeof(body), request_body);
-    }
-
-    /* ── COMMIT_TX ── */
-    if (hdr.frame_type == FTX2_FRAME_COMMIT_TX) {
-        return handle_commit_tx_frame(state, client_fd, hdr, body, sizeof(body), request_body, tx_ctx);
-    }
-
-    /* ── ABORT_TX ── */
-    if (hdr.frame_type == FTX2_FRAME_ABORT_TX) {
-        return handle_abort_tx_frame(state, client_fd, hdr, body, sizeof(body), request_body, tx_ctx);
-    }
-
-    /* ── TAKEOVER_REQUEST ── */
-    if (hdr.frame_type == FTX2_FRAME_TAKEOVER_REQUEST) {
-        state->takeover_requested = 1;
-        runtime_mark_active_transactions(state, "interrupted");
-        state->shutdown_requested = 1;
-        (void)runtime_append_tx_event(state, "takeover_request");
-        return send_frame(client_fd, FTX2_FRAME_TAKEOVER_ACK, 0, hdr.trace_id, "{}", 2);
-    }
-
-    /* ── SHUTDOWN ── */
-    if (hdr.frame_type == FTX2_FRAME_SHUTDOWN) {
-        runtime_request_shutdown(state, "shutdown");
-        return send_frame(client_fd, FTX2_FRAME_SHUTDOWN_ACK, 0, hdr.trace_id, "{}", 2);
-    }
-
-    /* ── CLEANUP ── */
-    if (hdr.frame_type == FTX2_FRAME_CLEANUP) {
-        return handle_cleanup(state, client_fd, hdr.trace_id,
-                              request_body, hdr.body_len);
-    }
-
-    /* ── FS_LIST_VOLUMES ── */
-    if (hdr.frame_type == FTX2_FRAME_FS_LIST_VOLUMES) {
-        return handle_fs_list_volumes(state, client_fd, hdr.trace_id);
-    }
-
-    /* ── FS_LIST_DIR ── */
-    if (hdr.frame_type == FTX2_FRAME_FS_LIST_DIR) {
-        return handle_fs_list_dir(state, client_fd, hdr.trace_id,
-                                   request_body, hdr.body_len);
-    }
-
-    /* ── FS_HASH ── */
-    if (hdr.frame_type == FTX2_FRAME_FS_HASH) {
-        return handle_fs_hash(state, client_fd, hdr.trace_id,
-                               request_body, hdr.body_len);
-    }
-
-    /* ── FS destructive ops ── */
-    if (hdr.frame_type == FTX2_FRAME_FS_DELETE) {
-        return handle_fs_delete(state, client_fd, hdr.trace_id,
-                                 request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_FS_MOVE) {
-        return handle_fs_move(state, client_fd, hdr.trace_id,
-                               request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_FS_CHMOD) {
-        return handle_fs_chmod(state, client_fd, hdr.trace_id,
-                                request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_FS_MKDIR) {
-        return handle_fs_mkdir(state, client_fd, hdr.trace_id,
-                                request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_FS_READ) {
-        return handle_fs_read(state, client_fd, hdr.trace_id,
-                               request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_FS_COPY) {
-        return handle_fs_copy(state, client_fd, hdr.trace_id,
-                               request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_FS_OP_STATUS) {
-        return handle_fs_op_status(client_fd, hdr.trace_id, request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_FS_OP_CANCEL) {
-        return handle_fs_op_cancel(client_fd, hdr.trace_id, request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_FS_MOUNT) {
-        return handle_fs_mount(state, client_fd, hdr.trace_id,
-                                request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_FS_UNMOUNT) {
-        return handle_fs_unmount(state, client_fd, hdr.trace_id,
-                                  request_body, hdr.body_len);
-    }
-
-    /* ── App lifecycle (register / launch / list) ── */
-    if (hdr.frame_type == FTX2_FRAME_APP_REGISTER) {
-        return handle_app_register(state, client_fd, hdr.trace_id,
-                                    request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_APP_UNREGISTER) {
-        return handle_app_unregister(state, client_fd, hdr.trace_id,
-                                      request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_APP_LAUNCH) {
-        return handle_app_launch(state, client_fd, hdr.trace_id,
-                                  request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_APP_LIST_REGISTERED) {
-        return handle_app_list_registered(state, client_fd, hdr.trace_id,
-                                           request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_APP_LAUNCH_BROWSER) {
-        return handle_app_launch_browser(state, client_fd, hdr.trace_id);
-    }
-
-    /* ── Hardware monitoring ── */
-    if (hdr.frame_type == FTX2_FRAME_HW_INFO) {
-        return handle_hw_info(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_HW_TEMPS) {
-        return handle_hw_temps(state, client_fd, hdr.trace_id,
-                               request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_HW_POWER) {
-        return handle_hw_power(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_HW_STORAGE) {
-        return handle_hw_storage(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_HW_SET_FAN_THRESHOLD) {
-        return handle_hw_set_fan_threshold(state, client_fd, hdr.trace_id,
-                                            request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_TIME_GET) {
-        return handle_time_get(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_TIME_SET) {
-        return handle_time_set(state, client_fd, hdr.trace_id,
-                                request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_TIME_STATE_GET) {
-        return handle_time_state_get(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_TIME_STATE_SET) {
-        return handle_time_state_set(state, client_fd, hdr.trace_id,
-                                       request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_SMP_META_CONTROL) {
-        return handle_smp_meta_control(state, client_fd, hdr.trace_id,
-                                        request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_SMP_META_STATS) {
-        return handle_smp_meta_stats(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_PROC_LIST) {
-        return handle_proc_list(state, client_fd, hdr.trace_id,
-                                request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_PROCESS_LIST) {
-        return handle_process_list(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_FOCUS_PROBE) {
-        return handle_focus_probe(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_PROCESS_KILL) {
-        return handle_process_kill(state, client_fd, hdr.trace_id,
-                                   request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_SYSLOG_TAIL) {
-        return handle_syslog_tail(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_PROFILE_INFO) {
-        return handle_profile_info(client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_PROFILE_SET_USERNAME) {
-        return handle_profile_set_username(client_fd, hdr.trace_id,
-                                           request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_PROFILE_ACTIVATE) {
-        return handle_profile_activate(client_fd, hdr.trace_id, request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_PROFILE_APPLY_AVATAR) {
-        return handle_profile_apply_avatar(client_fd, hdr.trace_id,
-                                           request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_PROFILE_CLEAR_SLOT) {
-        return handle_profile_clear_slot(client_fd, hdr.trace_id,
-                                         request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_PROFILE_SET_LOCAL_USERNAME) {
-        return handle_profile_set_local_username(client_fd, hdr.trace_id,
-                                                 request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_SYSTEM_CONTROL) {
-        return handle_system_control(state, client_fd, hdr.trace_id,
-                                     request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_POWER_TELEMETRY) {
-        return handle_power_telemetry(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_USER_LIST) {
-        return handle_user_list(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_USER_CREATE) {
-        return handle_user_create(state, client_fd, hdr.trace_id,
-                                  request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_USER_DELETE) {
-        return handle_user_delete(state, client_fd, hdr.trace_id,
-                                  request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_BACKUP_SNAPSHOT) {
-        return handle_backup_snapshot(state, client_fd, hdr.trace_id,
-                                      request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_BACKUP_LIST) {
-        return handle_backup_list(state, client_fd, hdr.trace_id,
-                                  request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_BACKUP_RESTORE) {
-        return handle_backup_restore(state, client_fd, hdr.trace_id,
-                                     request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_BACKUP_DELETE) {
-        return handle_backup_delete(state, client_fd, hdr.trace_id,
-                                    request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_REMOTEPLAY_REQUEST) {
-        return handle_remoteplay_request(state, client_fd, hdr.trace_id, request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_REMOTEPLAY_READINESS) {
-        return handle_remoteplay_readiness(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_REMOTEPLAY_ENABLE) {
-        return handle_remoteplay_enable(state, client_fd, hdr.trace_id, request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_REMOTEPLAY_DEVICES) {
-        return handle_remoteplay_devices(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_REMOTEPLAY_STATUS) {
-        return handle_remoteplay_status(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_REMOTEPLAY_CANCEL) {
-        return handle_remoteplay_cancel(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_HW_FAN_CURVE_SET) {
-        return handle_fan_curve_set(state, client_fd, hdr.trace_id, request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_NOTIF_LIST) {
-        return handle_notif_list(state, client_fd, hdr.trace_id, request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_ACTIVITY_RESET) {
-        return handle_activity_reset(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_NOTIF_CLEAR) {
-        return handle_notif_clear(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_NOTIF_SEND) {
-        return handle_notif_send(state, client_fd, hdr.trace_id, request_body);
-    }
-    /* ── Cheat engine ── */
-    if (hdr.frame_type == FTX2_FRAME_CHEATS_LIST) {
-        return handle_cheats_list(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_CHEATS_GET) {
-        return handle_cheats_get(state, client_fd, hdr.trace_id, request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_CHEATS_TOGGLE) {
-        return handle_cheats_toggle(state, client_fd, hdr.trace_id, request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_CHEATS_DELETE) {
-        return handle_cheats_delete(state, client_fd, hdr.trace_id, request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_CHEATS_RELOAD) {
-        return handle_cheats_reload(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_CHEATS_STATUS) {
-        return handle_cheats_status(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_CHEATS_ENGINE_SET) {
-        return handle_cheats_engine_set(state, client_fd, hdr.trace_id, request_body);
-    }
-    /* ── Activity tracker ── */
-    if (hdr.frame_type == FTX2_FRAME_ACTIVITY_GET) {
-        return handle_activity_get(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_ACTIVITY_DB_QUERY) {
-        return handle_activity_db_query(state, client_fd, hdr.trace_id, request_body);
-    }
-    /* ── SDK Changer ── */
-    if (hdr.frame_type == FTX2_FRAME_SDK_SCAN) {
-        return handle_sdk_scan(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_SDK_PATCH) {
-        return handle_sdk_patch(state, client_fd, hdr.trace_id, request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_SDK_RESTORE) {
-        return handle_sdk_restore(state, client_fd, hdr.trace_id, request_body);
-    }
-    /* ── TMDB ── */
-    if (hdr.frame_type == FTX2_FRAME_TMDB_FETCH) {
-        return handle_tmdb_fetch(state, client_fd, hdr.trace_id, request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_TMDB_STORE) {
-        return handle_tmdb_store(state, client_fd, hdr.trace_id, request_body);
-    }
-    /* ── FW Spoof ── */
-    if (hdr.frame_type == FTX2_FRAME_FWSPOOF_STATUS) {
-        return handle_fw_spoof_status(state, client_fd, hdr.trace_id);
-    }
-    /* ── FTP Server ── */
-    if (hdr.frame_type == FTX2_FRAME_FTP_START) {
-        return handle_ftp_start(state, client_fd, hdr.trace_id, request_body);
-    }
-    if (hdr.frame_type == FTX2_FRAME_FTP_STATUS) {
-        return handle_ftp_status(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_HW_FAN_CURVE_GET) {
-        return handle_fan_curve_get(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_LIST_SAVES) {
-        return handle_list_saves(state, client_fd, hdr.trace_id,
-                                 request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_LIST_SCREENSHOTS) {
-        return handle_list_screenshots(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_LIST_VIDEOS) {
-        return handle_list_videos(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_HW_DRIVE_SENSORS) {
-        return handle_hw_drive_sensors(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_INDEX_START) {
-        return handle_index_start(state, client_fd, hdr.trace_id,
-                                  request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_INDEX_STATUS) {
-        return handle_index_status(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_SEARCH_INDEX) {
-        return handle_search_index(state, client_fd, hdr.trace_id,
-                                   request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_INDEX_CANCEL) {
-        return handle_index_cancel(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_APP_LIFECYCLE) {
-        return handle_app_lifecycle(state, client_fd, hdr.trace_id,
-                                    request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_KLOG_READ) {
-        return handle_klog_read(state, client_fd, hdr.trace_id,
-                                request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_NET_INTERFACES) {
-        return handle_net_interfaces(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_PERIPHERAL_CONTROL) {
-        return handle_peripheral_control(state, client_fd, hdr.trace_id,
-                                          request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_PROC_MODULES) {
-        return handle_proc_modules(state, client_fd, hdr.trace_id,
-                                    request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_SHELL_EXEC) {
-        return handle_shell_exec(state, client_fd, hdr.trace_id,
-                                  request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_CRC32_FILE) {
-        return handle_crc32_file(state, client_fd, hdr.trace_id,
-                                  request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_APPDB_QUERY) {
-        return handle_appdb_query(state, client_fd, hdr.trace_id);
-    }
-    if (hdr.frame_type == FTX2_FRAME_APPINFO_QUERY) {
-        return handle_appinfo_query(state, client_fd, hdr.trace_id,
-                                     request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_APPINFO_SET) {
-        return handle_appinfo_set(state, client_fd, hdr.trace_id,
-                                   request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_NET_SPEED_TEST) {
-        return handle_net_speed_test(state, client_fd, hdr.trace_id,
-                                      request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_NET_REACH) {
-        return handle_net_reach(state, client_fd, hdr.trace_id,
-                                request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_PKG_DIRECT_MOUNT) {
-        return handle_pkg_direct_mount(state, client_fd, hdr.trace_id,
-                                        request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_UFS_FSCK) {
-        return handle_ufs_fsck(state, client_fd, hdr.trace_id,
-                                request_body, hdr.body_len);
-    }
-    if (hdr.frame_type == FTX2_FRAME_LWFS_MOUNT) {
-        return handle_lwfs_mount(state, client_fd, hdr.trace_id,
-                                  request_body, hdr.body_len);
-    }
-    return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                      "unsupported_frame", 17);
-}
-
-/* ── Listener cleanup (callable from signal handlers) ────────────────────────── */
-
-void runtime_cleanup_listener(runtime_state_t *state) {
+/* Blocks until something asked this instance to exit. The AVA1 server runs on its own threads; the
+ * main thread has nothing else to serve. */
+void runtime_wait_for_shutdown(runtime_state_t *state) {
     if (!state) return;
-    if (state->listener_fd >= 0) {
-        close(state->listener_fd);
-        state->listener_fd = -1;
-    }
-    if (state->mgmt_listener_fd >= 0) {
-        close(state->mgmt_listener_fd);
-        state->mgmt_listener_fd = -1;
-    }
-}
-
-/* ── Server loop helpers ─────────────────────────────────────────────────────── */
-
-/* Create, configure, bind, and listen on a TCP port. Returns the fd on
- * success, -1 on failure. `port` must be in network-byte-order untouched
- * (we htons it internally). Shared between the transfer and management
- * listeners so we don't duplicate the RCVBUF/SNDBUF probing dance. */
-static int create_listener(int port, int probe_max_rcvbuf, int *out_asked,
-                           int *out_actual_rcv, int *out_actual_snd,
-                           int *out_probed_max) {
-    struct sockaddr_in addr;
-    int bind_attempt = 0;
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) {
-        fprintf(stderr, "[payload2] socket: %s\n", strerror(errno));
-        return -1;
-    }
-    {
-        int one = 1;
-        int rcvbuf = PS5UPLOAD2_CLIENT_RCVBUF_BYTES;
-        int sndbuf = PS5UPLOAD2_CLIENT_SNDBUF_BYTES;
-        int actual = 0;
-        int rc_rcv, rc_snd;
-        socklen_t actual_len = sizeof(actual);
-        (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-        rc_rcv = setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
-        rc_snd = setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
-        (void)rc_rcv; (void)rc_snd;
-        if (out_asked) *out_asked = rcvbuf;
-        if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &actual, &actual_len) == 0) {
-            if (out_actual_rcv) *out_actual_rcv = actual;
-        }
-        if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, &actual, &actual_len) == 0) {
-            if (out_actual_snd) *out_actual_snd = actual;
-        }
-        if (probe_max_rcvbuf && out_probed_max) {
-            int probes[] = {64*1024, 128*1024, 256*1024, 512*1024,
-                            1024*1024, 2*1024*1024, 4*1024*1024,
-                            8*1024*1024, 16*1024*1024};
-            size_t i;
-            int probe_fd = socket(AF_INET, SOCK_STREAM, 0);
-            if (probe_fd >= 0) {
-                int best = 0;
-                for (i = 0; i < sizeof(probes)/sizeof(probes[0]); i++) {
-                    int v = probes[i];
-                    int got = 0;
-                    socklen_t glen = sizeof(got);
-                    (void)setsockopt(probe_fd, SOL_SOCKET, SO_RCVBUF, &v, sizeof(v));
-                    if (getsockopt(probe_fd, SOL_SOCKET, SO_RCVBUF, &got, &glen) == 0) {
-                        if (got > best) best = got;
-                    }
-                }
-                close(probe_fd);
-                *out_probed_max = best;
-            }
-        }
-    }
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port        = htons((uint16_t)port);
-    for (bind_attempt = 0; bind_attempt < 20; bind_attempt++) {
-        if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) break;
-        if (errno != EADDRINUSE) {
-            fprintf(stderr, "[payload2] bind: %s\n", strerror(errno));
-            close(fd);
-            return -1;
-        }
-        usleep(100000);
-    }
-    if (bind_attempt >= 20) {
-        fprintf(stderr, "[payload2] bind timeout on port %d\n", port);
-        close(fd);
-        return -1;
-    }
-    /* Generous accept backlog (was 8). Both the transfer (9113) and mgmt
-     * (9114) listeners share this helper. A burst of concurrent connects —
-     * e.g. a host firing several directory walks at once — could overflow a
-     * backlog of 8, and the kernel then RSTs the excess so the host sees
-     * "connect ... refused". The host side now serializes its remote walks,
-     * but a larger backlog is cheap insurance against any transient burst
-     * (FreeBSD clamps this to the kernel's somaxconn). */
-    if (listen(fd, 128) != 0) {
-        fprintf(stderr, "[payload2] listen: %s\n", strerror(errno));
-        close(fd);
-        return -1;
-    }
-    return fd;
-}
-
-/* Per-connection socket tuning applied to every accepted fd. The PS5
- * kernel caps per-socket SO_RCVBUF at ~512 KiB, so we do the sizing on
- * the accepted socket rather than the listener. */
-static void tune_accepted_client(int client_fd, int *out_last_rcvbuf) {
-    int one = 1;
-    int rcvbuf = PS5UPLOAD2_CLIENT_RCVBUF_BYTES;
-    int sndbuf = PS5UPLOAD2_CLIENT_SNDBUF_BYTES;
-    int actual_rcvbuf = 0;
-    socklen_t actual_len = sizeof(actual_rcvbuf);
-    struct timeval idle_to;
-    idle_to.tv_sec  = PS5UPLOAD2_CLIENT_IDLE_SEC;
-    idle_to.tv_usec = 0;
-    (void)setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-    (void)setsockopt(client_fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
-    /* SO_RCVTIMEO is the knob that converts a stalled client into an
-     * explicit recv error (EAGAIN) rather than an indefinite block on
-     * recv(). If it fails silently, a hung client pins this worker
-     * thread forever — no diagnostic, no recovery. Log any failure
-     * loudly so the dev log carries the signal even if other settings
-     * silently fall back. */
-    if (setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &idle_to, sizeof(idle_to)) != 0) {
-        fprintf(stderr,
-                "[payload] setsockopt(SO_RCVTIMEO=%lds) failed on fd=%d: %s (errno=%d) — "
-                "a stalled client will now block this worker indefinitely\n",
-                (long)idle_to.tv_sec, client_fd, strerror(errno), errno);
-    }
-    (void)setsockopt(client_fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
-    (void)setsockopt(client_fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
-    if (out_last_rcvbuf &&
-        getsockopt(client_fd, SOL_SOCKET, SO_RCVBUF,
-                   &actual_rcvbuf, &actual_len) == 0) {
-        *out_last_rcvbuf = actual_rcvbuf;
-    }
-}
-
-/* ── Transfer server loop (port 9113) ────────────────────────────────────────── */
-
-/* Multi-stream support: the transfer port used to be strictly single-client
- * (accept → handle inline → close → accept next), which pinned upload throughput
- * to one stream's single-thread write speed (~40 MB/s on non-Pro PS5s). We now
- * dispatch each accepted connection to its own worker thread — mirroring the
- * mgmt port — so the engine can open several connections and upload disjoint
- * file sets concurrently. The tx table + per-file writes are already
- * concurrency-safe (per-slot g_entry_mtx; the pack pool writes 4 files at once),
- * so the only change needed is to stop serialising connections here.
- *
- * Backward compatible: an old single-stream engine opens exactly one connection
- * and behaves as before (just handled on a worker thread instead of the accept
- * thread). The number of streams the engine may open is advertised via STATUS
- * (`max_transfer_streams`); old engines that don't read it stay at one. */
-
-/* Internal cap on concurrent transfer-handler threads. This is a safety
- * backstop — the engine is told a SMALLER number (STREAMS_ADVERTISED) and never
- * exceeds it — so the headroom here only absorbs the transient where a stream
- * drops and reconnects (RESUME) while its old connection's thread is still
- * draining. Kept well under any firmware's thread ceiling. */
-#define PS5UPLOAD2_MAX_TRANSFER_THREADS 8
-/* (PS5UPLOAD2_TRANSFER_STREAMS_ADVERTISED — the engine-facing limit — lives in
- * config.h since the STATUS handler above this point reports it. The thread cap
- * is 2x that for reconnect headroom.) */
-static pthread_mutex_t g_transfer_count_mtx = PTHREAD_MUTEX_INITIALIZER;
-static int g_transfer_thread_count = 0;
-
-static void transfer_thread_count_inc(void) {
-    pthread_mutex_lock(&g_transfer_count_mtx);
-    g_transfer_thread_count += 1;
-    pthread_mutex_unlock(&g_transfer_count_mtx);
-}
-
-static void transfer_thread_count_dec(void) {
-    pthread_mutex_lock(&g_transfer_count_mtx);
-    if (g_transfer_thread_count > 0) g_transfer_thread_count -= 1;
-    pthread_mutex_unlock(&g_transfer_count_mtx);
-}
-
-/* pthread cleanup handler so the count is always decremented even if the
- * worker thread is cancelled or exits abnormally (e.g. crash inside
- * handle_binary_frame). The count is only a safety cap (8) above the
- * advertised limit (4); a leak just means we may fall back to inline
- * handling for one extra connection until the payload is replaced. */
-static void transfer_thread_cleanup(void *arg) {
-    (void)arg;
-    transfer_thread_count_dec();
-}
-
-static int transfer_thread_can_spawn(void) {
-    int can;
-    pthread_mutex_lock(&g_transfer_count_mtx);
-    can = (g_transfer_thread_count < PS5UPLOAD2_MAX_TRANSFER_THREADS);
-    pthread_mutex_unlock(&g_transfer_count_mtx);
-    return can;
-}
-
-typedef struct {
-    runtime_state_t *state;
-    int              client_fd;
-} transfer_client_ctx_t;
-
-/* Run one transfer connection to completion: handle frames until the client
- * closes it, an I/O error occurs, or shutdown is requested. Tracks the open tx
- * so a plain TCP disconnect (which runs neither COMMIT nor ABORT) marks the
- * journal entry "interrupted" instead of leaving an "active" orphan that a later
- * TX_FLAG_RESUME would miss. Shared by the threaded path and the inline backstop. */
-static void transfer_handle_connection(runtime_state_t *state, int client_fd) {
-    conn_tx_ctx_t tx_ctx = {0};
-    while (!state->shutdown_requested) {
-        if (handle_binary_frame(state, client_fd, /*is_transfer_port=*/1, &tx_ctx) != 0) break;
-    }
-    if (tx_ctx.has_tx) {
-        runtime_mark_tx_interrupted_by_id(state, tx_ctx.tx_id);
-    }
-    close(client_fd);
-}
-
-static void *transfer_client_thread(void *arg) {
-    /* Name this thread: the process listing shows a representative
-     * thread that is not reliably main, so an unnamed worker makes the
-     * whole process read as "payload.elf". See proc_identity.h. */
-    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
-    transfer_client_ctx_t *ctx = (transfer_client_ctx_t *)arg;
-    runtime_state_t *state = ctx->state;
-    int client_fd = ctx->client_fd;
-    free(ctx);
-
-    /* Guarantee dec even on pthread_cancel or crash paths inside the
-     * connection handler. Normal return also runs the pop(1). */
-    pthread_cleanup_push(transfer_thread_cleanup, NULL);
-    transfer_handle_connection(state, client_fd);
-    pthread_cleanup_pop(1);
-    return NULL;
-}
-
-
-/*
- * accept() failed on a listener. Decide how to carry on — never by giving up.
- *
- * Both accept loops used to `break` on any errno outside a short allow-list,
- * which ends the loop, closes the listener and leaves the helper up but
- * serving nothing: the host sees :9114 "connection refused" and reports the
- * helper as gone. Reproduced on a FW 5.10 Phat under a sustained burst of
- * the requests a bug report sends: after ~2 min both loops logged
- *
- *   [payload2] mgmt accept: error_code=0x000000a3
- *   [payload2] accept: error_code=0x000000a3
- *   [payload2] transfer loop exiting shutdown=0 takeover=0
- *
- * — errno 163, a Sony addition beyond FreeBSD's ELAST (96), which no
- * allow-list will ever anticipate. Nothing crashed and nobody asked it to
- * stop; the helper simply quit. That is the "connects for a few seconds, then
- * disconnects" users reported.
- *
- * So: an EINTR/ECONNABORTED is retried at once, anything else backs off and
- * retries, and a listener that keeps failing is closed and rebuilt on the
- * same port. The only way out of an accept loop is shutdown_requested.
- *
- * Returns 0 to keep looping, -1 when the loop should end: shutdown was
- * requested, or the listener kept failing after ACCEPT_EXIT_AFTER_REBUILDS
- * rebuilds (the process has lost its network; the helper shuts down).
- */
-static int recover_from_accept_error(runtime_state_t *state, int *listener_fd,
-                                     int port, int *consecutive, int *rebuilds,
-                                     const char *which) {
-    int err = errno;
-    accept_action_t action;
-    if (state->shutdown_requested) return -1; /* listener closed from outside */
-    if (accept_error_action(err, 1) == ACCEPT_RETRY_NOW) return 0;
-
-    (*consecutive)++;
-    action = accept_error_action(err, *consecutive);
-    /* Log the first failure and each rebuild, not every 100 ms retry: a
-     * persistent error would otherwise fill stderr.log at 10 lines/s. */
-    if (*consecutive == 1) {
-        fprintf(stderr, "[payload2] %s accept failed, retrying: %s (errno %d)\n",
-                which, strerror(err), err);
-    }
-    usleep(100000); /* 100 ms back-off so a hard failure cannot busy-spin */
-
-    if (action != ACCEPT_REBUILD) return 0;
-
-    /* Rebuilt listeners that fail straight away again mean the process has
-     * lost its network (errno 163 on a FW 5.10 Phat), and no rebuild inside
-     * it will help. Stop serving so the helper exits and a fresh one can take
-     * its place, instead of lingering half alive. See accept_should_exit. */
-    if (accept_should_exit(*rebuilds)) {
-        fprintf(stderr, "[payload2] %s accept still failing after %d listener rebuilds "
-                        "(errno %d) — this process has lost its network; shutting the "
-                        "helper down so a fresh one can start\n",
-                which, *rebuilds, err);
-        runtime_mark_active_transactions(state, "interrupted");
-        (void)runtime_append_tx_event(state, "network_lost");
-        state->shutdown_requested = 1;
-        wake_other_listener(state, port);
-        return -1;
-    }
-
-    /* Still failing: assume the listening socket is dead and rebuild it. */
-    (*rebuilds)++;
-    fprintf(stderr, "[payload2] %s accept failed %d times in a row (errno %d) — "
-                    "rebuilding the listener on port %d (rebuild %d of %d)\n",
-            which, *consecutive, err, port, *rebuilds, ACCEPT_EXIT_AFTER_REBUILDS);
-    if (*listener_fd >= 0) close(*listener_fd);
-    *listener_fd = -1;
-    for (;;) {
-        int fd;
-        if (state->shutdown_requested) return -1;
-        fd = create_listener(port, /*probe_max_rcvbuf=*/0, NULL, NULL, NULL, NULL);
-        if (fd >= 0) {
-            /* main() closes mgmt_listener_fd to stop the mgmt loop. If that
-             * raced this rebuild, honour the shutdown instead of accepting on
-             * a socket nobody will ever close. */
-            if (state->shutdown_requested) {
-                close(fd);
-                return -1;
-            }
-            *listener_fd = fd;
-            *consecutive = 0;
-            fprintf(stderr, "[payload2] %s listener rebuilt on port %d\n", which, port);
-            return 0;
-        }
-        sleep(1); /* bind/listen failed (port held, stack busy) — try again */
-    }
-}
-
-int runtime_server_loop(runtime_state_t *state) {
-    if (!state) return -1;
-
-    state->listener_fd = create_listener(state->runtime_port,
-                                         /*probe_max_rcvbuf=*/1,
-                                         &state->listener_rcvbuf_asked,
-                                         &state->listener_rcvbuf_actual,
-                                         &state->listener_sndbuf_actual,
-                                         &state->max_rcvbuf_probed);
-    if (state->listener_fd < 0) return -1;
-
-    printf("[payload2] transfer listener ready on port %d\n", state->runtime_port);
-
-    int accept_failures = 0;
-    int accept_rebuilds = 0;
-    while (!state->shutdown_requested) {
-        int client_fd = accept(state->listener_fd, NULL, NULL);
-        if (client_fd < 0) {
-            /* See recover_from_accept_error. */
-            if (recover_from_accept_error(state, &state->listener_fd,
-                                          state->runtime_port,
-                                          &accept_failures, &accept_rebuilds,
-                                          "transfer") != 0) {
-                break;
-            }
-            continue;
-        }
-        accept_failures = 0;
-        accept_rebuilds = 0;
-        /* Tune on the accept thread (writes state->last_client_rcvbuf, which no
-         * other thread touches) BEFORE handing off, so the worker threads never
-         * race on it. */
-        tune_accepted_client(client_fd, &state->last_client_rcvbuf);
-
-        int use_thread = transfer_thread_can_spawn();
-        if (use_thread) {
-            transfer_client_ctx_t *ctx = (transfer_client_ctx_t *)malloc(sizeof(*ctx));
-            if (!ctx) {
-                fprintf(stderr, "[payload2] transfer: oom allocating client ctx; inline\n");
-                use_thread = 0;
-            } else {
-                ctx->state = state;
-                ctx->client_fd = client_fd;
-                transfer_thread_count_inc();
-                /* Detached-from-birth (see mgmt loop for the zombie rationale).
-                 * Larger stack than mgmt: the transfer path runs the manifest
-                 * parser + pack/direct writers. */
-                pthread_attr_t attr;
-                pthread_attr_t *attr_p = NULL;
-                if (pthread_attr_init(&attr) == 0) {
-                    if (pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0) {
-                        attr_p = &attr;
-                    }
-                }
-                if (attr_p) {
-                    (void)pthread_attr_setstacksize(attr_p, 1024u * 1024u);
-                }
-                pthread_t tid;
-                int rc = pthread_create(&tid, attr_p, transfer_client_thread, ctx);
-                if (attr_p) pthread_attr_destroy(attr_p);
-                if (rc != 0) {
-                    /* Roll back and fall through to inline rather than drop. */
-                    transfer_thread_count_dec();
-                    free(ctx);
-                    fprintf(stderr, "[payload2] transfer: pthread_create failed (%d); inline fallback\n", rc);
-                    use_thread = 0;
-                }
-            }
-        }
-
-        if (!use_thread) {
-            /* Backstop: handle this connection inline on the accept thread.
-             * Blocks new accepts for this transfer's duration, but only reached
-             * at the thread cap (which the engine never drives us to) or on
-             * pthread_create failure — a rare, safe-degradation path. */
-            transfer_handle_connection(state, client_fd);
-        }
-    }
-
-    if (state->listener_fd >= 0) {
-        close(state->listener_fd);
-        state->listener_fd = -1;
-    }
-    printf("[payload2] transfer loop exiting shutdown=%d takeover=%d commands=%llu\n",
-           state->shutdown_requested,
-           state->takeover_requested,
-           (unsigned long long)state->command_count);
-    return 0;
-}
-
-/* ── Management server loop (pthread, port 9114) ─────────────────────────────── */
-
-/* Per-client handler spawned from the mgmt accept loop. Running each
- * client on its own pthread is critical: the mgmt port services
- * FS_LIST_DIR / FS_HASH / FS_READ which call into the kernel's VFS,
- * and those syscalls can legitimately block indefinitely on a stuck
- * USB mount, a dead NAS, or a filesystem in an error state. If the
- * accept loop stayed single-threaded, one stuck readdir would wedge
- * the entire mgmt port -- meaning TAKEOVER_REQUEST from a newly-sent
- * payload never gets handled and the user has to network-reset to
- * kill the zombie. Per-thread isolation contains the stall to the
- * one client that triggered it.
- *
- * The thread arg is a heap-allocated { state, client_fd } tuple; the
- * handler frees it on exit. Threads are detached so no joinable state
- * leaks during normal churn. */
-typedef struct {
-    runtime_state_t *state;
-    int              client_fd;
-} mgmt_client_ctx_t;
-
-/* Cap on concurrent mgmt-handler threads. Without a cap, a deep
- * Library scan (thousands of FS_LIST_DIR calls over a populated PS5
- * filesystem) spawns enough detached pthreads that the payload
- * eventually exhausts PS5's thread/memory budget and crashes. With a
- * cap, excess clients fall through to inline handling in the accept
- * thread -- slower but never resource-exhausting. 8 is enough to
- * hide a few slow syscalls without wedging the whole mgmt port, and
- * well under any firmware's thread ceiling. */
-#define PS5UPLOAD2_MAX_MGMT_THREADS 8
-static pthread_mutex_t g_mgmt_count_mtx = PTHREAD_MUTEX_INITIALIZER;
-static int g_mgmt_thread_count = 0;
-
-static void mgmt_thread_count_inc(void) {
-    pthread_mutex_lock(&g_mgmt_count_mtx);
-    g_mgmt_thread_count += 1;
-    pthread_mutex_unlock(&g_mgmt_count_mtx);
-}
-
-static void mgmt_thread_count_dec(void) {
-    pthread_mutex_lock(&g_mgmt_count_mtx);
-    if (g_mgmt_thread_count > 0) g_mgmt_thread_count -= 1;
-    pthread_mutex_unlock(&g_mgmt_count_mtx);
-}
-
-static int mgmt_thread_can_spawn(void) {
-    int can;
-    pthread_mutex_lock(&g_mgmt_count_mtx);
-    can = (g_mgmt_thread_count < PS5UPLOAD2_MAX_MGMT_THREADS);
-    pthread_mutex_unlock(&g_mgmt_count_mtx);
-    return can;
-}
-
-static void *mgmt_client_thread(void *arg) {
-    /* Name this thread: the process listing shows a representative
-     * thread that is not reliably main, so an unnamed worker makes the
-     * whole process read as "payload.elf". See proc_identity.h. */
-    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
-    mgmt_client_ctx_t *ctx = (mgmt_client_ctx_t *)arg;
-    runtime_state_t *state = ctx->state;
-    int client_fd = ctx->client_fd;
-    free(ctx);
-
-    while (state && !state->shutdown_requested) {
-        /* Mgmt port handles no transfer frames; no tx context needed. */
-        if (handle_binary_frame(state, client_fd, /*is_transfer_port=*/0, NULL) != 0) break;
-    }
-    close(client_fd);
-    mgmt_thread_count_dec();
-    return NULL;
-}
-
-void *runtime_mgmt_server_loop(void *state_ptr) {
-    /* Name this thread: the process listing shows a representative
-     * thread that is not reliably main, so an unnamed worker makes the
-     * whole process read as "payload.elf". See proc_identity.h. */
-    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
-    runtime_state_t *state = (runtime_state_t *)state_ptr;
-    if (!state) return NULL;
-
-    state->mgmt_listener_fd = create_listener(state->mgmt_port,
-                                              /*probe_max_rcvbuf=*/0,
-                                              NULL, NULL, NULL, NULL);
-    if (state->mgmt_listener_fd < 0) {
-        fprintf(stderr, "[payload2] mgmt listener failed on port %d\n",
-                state->mgmt_port);
-        return NULL;
-    }
-
-    printf("[payload2] mgmt listener ready on port %d\n", state->mgmt_port);
-
-    int accept_failures = 0;
-    int accept_rebuilds = 0;
-    while (!state->shutdown_requested) {
-        int client_fd = accept(state->mgmt_listener_fd, NULL, NULL);
-        if (client_fd < 0) {
-            /* When main() signals shutdown it closes mgmt_listener_fd from
-             * the outside; accept() returns and the helper sees the flag.
-             * Anything else is retried — this is the port the host's
-             * liveness probe hits, so giving up here makes the app declare
-             * the helper gone while it is still running. */
-            if (recover_from_accept_error(state, &state->mgmt_listener_fd,
-                                          state->mgmt_port,
-                                          &accept_failures, &accept_rebuilds,
-                                          "mgmt") != 0) {
-                break;
-            }
-            continue;
-        }
-        accept_failures = 0;
-        accept_rebuilds = 0;
-        tune_accepted_client(client_fd, NULL);
-
-        /* Hand the client off to its own thread so a stuck fs syscall
-         * can't block the accept loop -- BUT cap the concurrent
-         * thread count. A deep Library scan walks thousands of
-         * directories; without the cap, we spawn one pthread per
-         * connection and eventually exhaust PS5's thread/memory
-         * budget (verified: 15k requests crashed the payload). When
-         * the cap is reached, we fall back to inline handling in
-         * the accept thread -- sequential but stable. */
-        int use_thread = mgmt_thread_can_spawn();
-
-        if (use_thread) {
-            mgmt_client_ctx_t *ctx = (mgmt_client_ctx_t *)malloc(sizeof(*ctx));
-            if (!ctx) {
-                fprintf(stderr, "[payload2] mgmt: oom allocating client ctx; closing\n");
-                close(client_fd);
-                continue;
-            }
-            ctx->state = state;
-            ctx->client_fd = client_fd;
-            mgmt_thread_count_inc();
-            /* Detached-from-birth. Previous code was pthread_create + late
-             * pthread_detach, which has a window where a fast-exiting
-             * thread becomes a zombie between create and detach. After
-             * many zombies accumulate, the kernel exhausts thread slots
-             * and every subsequent handler hangs. This was observed in
-             * stress tests where trivial (validation-only) handlers
-             * hung after a few calls because they exited too fast for
-             * the late detach to matter. */
-            pthread_attr_t attr;
-            pthread_attr_t *attr_p = NULL;
-            if (pthread_attr_init(&attr) == 0) {
-                if (pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0) {
-                    attr_p = &attr;
-                }
-            }
-            pthread_t tid;
-            if (attr_p) {
-                (void)pthread_attr_setstacksize(attr_p, 512u * 1024u);
-            }
-            int rc = pthread_create(&tid, attr_p, mgmt_client_thread, ctx);
-            if (attr_p) pthread_attr_destroy(attr_p);
-            if (rc == 0) {
-                /* Already detached; no pthread_detach call needed. */
-            } else {
-                /* Thread creation failed despite our cap allowing it
-                 * (kernel refused for other reasons, e.g., EAGAIN).
-                 * Roll back our counter and fall through to inline
-                 * handling rather than drop the client. */
-                mgmt_thread_count_dec();
-                free(ctx);
-                fprintf(stderr, "[payload2] mgmt: pthread_create failed (%d); inline fallback\n", rc);
-                use_thread = 0;
-            }
-        }
-
-        if (!use_thread) {
-            /* Inline fallback: process this client's frames directly
-             * in the accept thread. Slower for burst traffic but
-             * guarantees we don't exhaust thread resources during a
-             * deep Library scan. */
-            while (!state->shutdown_requested) {
-                if (handle_binary_frame(state, client_fd, /*is_transfer_port=*/0, NULL) != 0) break;
-            }
-            close(client_fd);
-        }
-    }
-
-    if (state->mgmt_listener_fd >= 0) {
-        close(state->mgmt_listener_fd);
-        state->mgmt_listener_fd = -1;
-    }
-    printf("[payload2] mgmt loop exiting shutdown=%d\n", state->shutdown_requested);
-    return NULL;
+    while (!*(volatile int *)&state->shutdown_requested) usleep(100000);
 }
