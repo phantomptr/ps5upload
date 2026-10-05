@@ -691,9 +691,40 @@ This software builds on the following open-source projects:
 
 **Payload (PS5):**
 * [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) — Open-source SDK for PS5 payload development
-* [BLAKE3](https://github.com/BLAKE3-team/BLAKE3) — Fast cryptographic hashing (per-shard verification)
+* [elfldr](https://github.com/ps5-payload-dev/elfldr) (GPLv3) — the ELF loader; a patched copy is **vendored** at [`third_party/elfldr`](third_party/elfldr) (fix for a loader that hangs on a silent client)
+* [Monocypher](https://github.com/LoupVaillant/Monocypher) (CC0 / BSD-2) — AVA1's cryptography on the console (X25519, ChaCha20-Poly1305, BLAKE2b)
+* [BLAKE3](https://github.com/BLAKE3-team/BLAKE3) (CC0 / Apache-2.0) — fast hashing for AVA1 file verification
+* [SQLite](https://sqlite.org/) (public domain) — reading the console's app database
+* [tiny-AES-c](https://github.com/kokke/tiny-AES-c) (Unlicense) — MC4 cheat decryption
 
 ## Thanks
+
+These projects are part of what ps5upload does today. Their code is bundled, ported or launched,
+or their data is read:
+
+**Code we ported and still ship**
+* **elf-arsenal** — the cheat engine (`payload/src/cheats.c`), drive sensors
+  (`payload/src/drive_sensors.c`) and the Remote Play pairing flow are ported from it
+
+**Payloads ps5upload installs, launches or works alongside** (from the Payloads catalogue)
+* [kstuff-lite](https://github.com/EchoStretch/kstuff-lite) — EchoStretch, and [drakmor's fork](https://github.com/drakmor/kstuff-lite)
+* [ShadowMount+](https://github.com/drakmor/shadowMountPlus) and [nanoDNS](https://github.com/drakmor/nanoDNS) — drakmor
+* [etaHEN](https://github.com/LightningMods/etaHEN) and [Itemzflow](https://github.com/LightningMods/Itemzflow) — LightningMods
+* [ftpsrv](https://github.com/ps5-payload-dev/ftpsrv), [websrv](https://github.com/ps5-payload-dev/websrv), [shsrv](https://github.com/ps5-payload-dev/shsrv), [klogsrv](https://github.com/ps5-payload-dev/klogsrv) — ps5-payload-dev
+* [ps5-app-dumper](https://github.com/EchoStretch/ps5-app-dumper) — EchoStretch
+* [PS5 WebKit Autoloader](https://github.com/itsPLK/ps5-webkit-autoloader) and Payload Manager (ps5upload launches through it when the loader is down) — itsPLK
+* [CheatRunner](https://github.com/notmaj0r/CheatRunner) — notmaj0r
+* [np-fake-signin](https://git.etawen.dev/earthonion/np-fake-signin), [garlic-worker](https://git.etawen.dev/earthonion/garlic-worker), [garlic-savemgr](https://git.etawen.dev/earthonion/garlic-savemgr) — earthonion
+* [BackPork](https://github.com/BestPig/BackPork) — BestPig
+* [Ghostpad](https://github.com/StonedModder/Ghostpad) — StonedModder
+
+**Data sources**
+* [PROSPEROPatches](https://prosperopatches.com/) and [ORBISPatches](https://orbispatches.com/) — game details and cover art
+* [TMDB](https://www.themoviedb.org/) — artwork
+* [etaHEN PS5_Cheats](https://github.com/etaHEN/PS5_Cheats) and the GoldHEN cheat repositories — cheat files
+
+**Contributors** — thanks to everyone who sent code, translations and docs, and to the Discord
+community who test builds and report bugs with logs.
 
 ps5upload stands on the shoulders of the **PS5 homebrew scene**. Huge
 thanks to everyone who makes this ecosystem possible — the exploit and
