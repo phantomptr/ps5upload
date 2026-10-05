@@ -150,6 +150,7 @@ export function QueuePanel({ host }: { host?: string } = {}) {
   const runningHosts = useUploadQueueStore((s) => s.runningHosts);
   const loaded = useUploadQueueStore((s) => s.loaded);
   const persistenceError = useUploadQueueStore((s) => s.persistenceError);
+  const isLeader = useUploadQueueStore((s) => s.isLeader);
   const hydrate = useUploadQueueStore((s) => s.hydrate);
   const start = useUploadQueueStore((s) => s.start);
   const stop = useUploadQueueStore((s) => s.stop);
@@ -206,6 +207,18 @@ export function QueuePanel({ host }: { host?: string } = {}) {
 
   return (
     <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+      {!isLeader && (
+        <div
+          role="status"
+          className="mb-4 rounded border border-[var(--color-border)] bg-[var(--color-surface-3)] px-3 py-2 text-xs text-[var(--color-muted)]"
+        >
+          {tr(
+            "queue_other_tab_notice",
+            undefined,
+            "This queue is running in another tab of this browser. This tab only shows it; use the other tab to start, stop or change it.",
+          )}
+        </div>
+      )}
       {persistenceError && (
         <div className="mb-4">
           <ErrorCard

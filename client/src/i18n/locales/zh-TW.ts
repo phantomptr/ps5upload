@@ -419,6 +419,7 @@ queue_start: "開始",
 queue_stop_all: "全部停止",
 queue_start_all: "全部開始",
 queue_console_total: "{count} 台主機",
+queue_other_tab_notice: "此佇列正在本瀏覽器的另一個分頁中執行。本分頁僅供檢視；請在另一個分頁中開始、停止或修改。",
 queue_group_summary:
   "{running} 上傳中 · {pending} 佇列中 · {done} 已完成 · {failed} 失敗",
 queue_group_expand: "顯示此主機的佇列",

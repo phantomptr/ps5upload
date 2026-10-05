@@ -418,6 +418,7 @@ queue_start: "Mulai",
 queue_stop_all: "Hentikan semua",
 queue_start_all: "Mulai semua",
 queue_console_total: "{count} konsol",
+queue_other_tab_notice: "Antrean ini berjalan di tab lain pada peramban ini. Tab ini hanya menampilkannya; gunakan tab lain untuk memulai, menghentikan, atau mengubahnya.",
 queue_group_summary:
   "{running} mengunggah · {pending} antre · {done} selesai · {failed} gagal",
 queue_group_expand: "Tampilkan antrean konsol ini",

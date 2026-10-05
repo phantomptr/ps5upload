@@ -681,6 +681,7 @@ queue_start: "Start",
 queue_stop_all: "Stop all",
 queue_start_all: "Start all",
 queue_console_total: "{count} consoles",
+queue_other_tab_notice: "This queue is running in another tab of this browser. This tab only shows it; use the other tab to start, stop or change it.",
 queue_group_summary:
   "{running} uploading · {pending} queued · {done} done · {failed} failed",
 queue_group_expand: "Show this console's queue",

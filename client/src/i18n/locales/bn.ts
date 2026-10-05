@@ -418,6 +418,7 @@ queue_start: "স্টার্ট",
 queue_stop_all: "সব থামান",
 queue_start_all: "সব শুরু করুন",
 queue_console_total: "{count}টি কনসোল",
+queue_other_tab_notice: "এই সারিটি এই ব্রাউজারের অন্য একটি ট্যাবে চলছে। এই ট্যাবে শুধু দেখা যায়; শুরু, বন্ধ বা পরিবর্তন করতে অন্য ট্যাবটি ব্যবহার করুন।",
 queue_group_summary:
   "{running}টি আপলোড হচ্ছে · {pending}টি সারিতে · {done}টি সম্পন্ন · {failed}টি ব্যর্থ",
 queue_group_expand: "এই কনসোলের সারি দেখান",

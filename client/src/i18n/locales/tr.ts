@@ -418,6 +418,7 @@ queue_start: "Başla",
 queue_stop_all: "Tümünü durdur",
 queue_start_all: "Tümünü başlat",
 queue_console_total: "{count} konsol",
+queue_other_tab_notice: "Bu kuyruk bu tarayıcının başka bir sekmesinde çalışıyor. Bu sekme yalnızca gösterir; başlatmak, durdurmak veya değiştirmek için diğer sekmeyi kullanın.",
 queue_group_summary:
   "{running} yükleniyor · {pending} kuyrukta · {done} tamamlandı · {failed} başarısız",
 queue_group_expand: "Bu konsolun kuyruğunu göster",

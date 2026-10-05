@@ -419,6 +419,7 @@ queue_start: "시작",
 queue_stop_all: "모두 정지",
 queue_start_all: "모두 시작",
 queue_console_total: "콘솔 {count}대",
+queue_other_tab_notice: "이 대기열은 이 브라우저의 다른 탭에서 실행 중입니다. 이 탭은 보기만 가능하며, 시작·중지·변경은 다른 탭에서 하세요.",
 queue_group_summary:
   "업로드 중 {running} · 대기 {pending} · 완료 {done} · 실패 {failed}",
 queue_group_expand: "이 콘솔의 대기열 표시",

@@ -419,6 +419,7 @@ queue_start: "開始",
 queue_stop_all: "すべて停止",
 queue_start_all: "すべて開始",
 queue_console_total: "{count} 台",
+queue_other_tab_notice: "このキューはこのブラウザの別のタブで実行されています。このタブは表示のみです。開始・停止・変更は別のタブで行ってください。",
 queue_group_summary:
   "アップロード中 {running} · 待機 {pending} · 完了 {done} · 失敗 {failed}",
 queue_group_expand: "この本体のキューを表示",

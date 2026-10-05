@@ -418,6 +418,7 @@ queue_start: "Iniciar",
 queue_stop_all: "Parar tudo",
 queue_start_all: "Iniciar tudo",
 queue_console_total: "{count} consoles",
+queue_other_tab_notice: "Esta fila está em execução em outra aba deste navegador. Esta aba apenas a exibe; use a outra aba para iniciar, parar ou alterar.",
 queue_group_summary:
   "{running} enviando · {pending} na fila · {done} concluído · {failed} falhou",
 queue_group_expand: "Mostrar a fila deste console",

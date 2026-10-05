@@ -678,6 +678,7 @@ queue_start: "Indítás",
 queue_stop_all: "Összes leállítása",
 queue_start_all: "Összes indítása",
 queue_console_total: "{count} konzol",
+queue_other_tab_notice: "Ez a sor a böngésző egy másik lapján fut. Ez a lap csak megjeleníti; az indításhoz, leállításhoz vagy módosításhoz használd a másik lapot.",
 queue_group_summary:
   "{running} feltöltés · {pending} sorban · {done} kész · {failed} sikertelen",
 queue_group_expand: "Ennek a konzolnak a várólistája mutatása",

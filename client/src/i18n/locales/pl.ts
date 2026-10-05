@@ -659,6 +659,7 @@ queue_start: "Start",
 queue_stop_all: "Zatrzymaj wszystkie",
 queue_start_all: "Uruchom wszystkie",
 queue_console_total: "{count} konsol",
+queue_other_tab_notice: "Ta kolejka działa w innej karcie tej przeglądarki. Ta karta tylko ją wyświetla; aby ją uruchomić, zatrzymać lub zmienić, użyj drugiej karty.",
 queue_group_summary:
   "{running} przesyłanych · {pending} w kolejce · {done} ukończonych · {failed} nieudanych",
 queue_group_expand: "Pokaż kolejkę tej konsoli",

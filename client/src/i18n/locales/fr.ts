@@ -418,6 +418,7 @@ queue_start: "Début",
 queue_stop_all: "Tout arrêter",
 queue_start_all: "Tout démarrer",
 queue_console_total: "{count} consoles",
+queue_other_tab_notice: "Cette file s'exécute dans un autre onglet de ce navigateur. Cet onglet ne fait que l'afficher ; utilisez l'autre onglet pour la démarrer, l'arrêter ou la modifier.",
 queue_group_summary:
   "{running} en cours · {pending} en file · {done} terminés · {failed} échoués",
 queue_group_expand: "Afficher la file de cette console",

@@ -419,6 +419,7 @@ queue_start: "Starten",
 queue_stop_all: "Alle stoppen",
 queue_start_all: "Alle starten",
 queue_console_total: "{count} Konsolen",
+queue_other_tab_notice: "Diese Warteschlange läuft in einem anderen Tab dieses Browsers. Dieser Tab zeigt sie nur an; zum Starten, Stoppen oder Ändern nutze den anderen Tab.",
 queue_group_summary:
   "{running} werden hochgeladen · {pending} in Warteschlange · {done} fertig · {failed} fehlgeschlagen",
 queue_group_expand: "Warteschlange dieser Konsole anzeigen",
