@@ -3097,6 +3097,9 @@ err_replace_cooldown: "Der Helfer dieser Konsole wurde gerade erst ersetzt. Wart
 "joberr.helper_starting": "Der PS5-Helfer startet noch. Warte einige Sekunden und versuche es erneut.",
 "joberr.ava1_failed": "Der PS5-Helfer wurde gestartet, aber sein Übertragungsserver nicht. Starte die Konsole neu und versuche es erneut.",
 "joberr.helper_not_running": "Auf der PS5 läuft kein Helfer. Sende zuerst den Helfer (Verbindungsbildschirm der Desktop-App oder dein Payload-Loader) und versuche es dann erneut.",
+fs_add_folder: "Ordner hinzufügen",
+fs_add_folder_dialog_title: "Ordner zum Kopieren auf die PS5 auswählen",
+fs_drop_here: "Ablegen, um nach {path} zu kopieren",
 };
 
 export default de;

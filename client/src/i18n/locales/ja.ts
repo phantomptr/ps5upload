@@ -3127,6 +3127,9 @@ err_replace_cooldown: "この本体のヘルパーはつい先ほど置き換え
 "joberr.helper_starting": "PS5 のヘルパーはまだ起動中です。数秒待ってから再試行してください。",
 "joberr.ava1_failed": "PS5 のヘルパーは起動しましたが、転送サーバーが起動しませんでした。コンソールを再起動してから再試行してください。",
 "joberr.helper_not_running": "PS5 でヘルパーが動作していません。先にヘルパーを送信してください（デスクトップアプリの接続画面、またはペイロードローダー）。その後、再試行してください。",
+fs_add_folder: "フォルダーを追加",
+fs_add_folder_dialog_title: "PS5 にコピーするフォルダーを選択",
+fs_drop_here: "ドロップして {path} にコピー",
 };
 
 export default ja;

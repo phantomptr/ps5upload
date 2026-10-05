@@ -17,6 +17,26 @@ const isPackage = (path: string) => /\.pkg$/i.test(path);
  * resolves after unmount, as Upload's is.
  */
 export function useWebviewDrop(onDrop: (path: string) => void, enabled: boolean): boolean {
+  return useWebviewDropCore(
+    (paths) => {
+      const first = paths[0];
+      if (first && !isPackage(first)) onDrop(first);
+    },
+    enabled,
+  );
+}
+
+/**
+ * Every dropped path, packages included, while `enabled` (the Files screen copies whatever is
+ * dropped into the open folder). Returns whether a drag is over the window.
+ */
+export function useWebviewDropAll(onDrop: (paths: string[]) => void, enabled: boolean): boolean {
+  return useWebviewDropCore((paths) => {
+    if (paths.length > 0) onDrop(paths);
+  }, enabled);
+}
+
+function useWebviewDropCore(onDrop: (paths: string[]) => void, enabled: boolean): boolean {
   const [active, setActive] = useState(false);
   const latest = useRef({ onDrop, enabled });
   // The subscription outlives renders; it reads the newest handler through this ref.
@@ -36,8 +56,7 @@ export function useWebviewDrop(onDrop: (path: string) => void, enabled: boolean)
       else if (t === "leave") setActive(false);
       else if (t === "drop") {
         setActive(false);
-        const first = e.payload.paths?.[0];
-        if (first && latest.current.enabled && !isPackage(first)) latest.current.onDrop(first);
+        if (latest.current.enabled) latest.current.onDrop(e.payload.paths ?? []);
       }
     });
     p.then((fn) => {

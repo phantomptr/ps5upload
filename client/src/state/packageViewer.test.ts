@@ -10,7 +10,7 @@ describe("what a drop opens", () => {
   });
 
   it("leaves drops to the screens that take them, and ignores other files", () => {
-    for (const screen of ["/install-package", "/payloads", "/upload", "/convert"]) {
+    for (const screen of ["/install-package", "/payloads", "/upload", "/convert", "/files"]) {
       expect(dropTarget(["/dl/game.pkg"], screen)).toBeNull();
     }
     expect(dropTarget(["/dl/notes.txt", "/dl/payload.elf"], "/")).toBeNull();

@@ -3098,6 +3098,9 @@ err_replace_cooldown: "Pembantu di konsol ini baru saja diganti. Tunggu semenit 
 "joberr.helper_starting": "Pembantu PS5 masih dimulai. Tunggu beberapa detik, lalu coba lagi.",
 "joberr.ava1_failed": "Pembantu PS5 sudah dimulai tetapi server transfernya tidak. Mulai ulang konsol, lalu coba lagi.",
 "joberr.helper_not_running": "Tidak ada pembantu yang berjalan di PS5. Kirim pembantu dulu (layar Koneksi di aplikasi desktop atau pemuat payload Anda), lalu coba lagi.",
+fs_add_folder: "Tambah folder",
+fs_add_folder_dialog_title: "Pilih folder untuk disalin ke PS5",
+fs_drop_here: "Lepaskan untuk menyalin ke {path}",
 };
 
 export default id;

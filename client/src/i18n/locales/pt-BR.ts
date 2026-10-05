@@ -3121,6 +3121,9 @@ err_replace_cooldown: "O auxiliar deste console foi substituído há pouco. Agua
 "joberr.helper_starting": "O auxiliar do PS5 ainda está iniciando. Aguarde alguns segundos e tente novamente.",
 "joberr.ava1_failed": "O auxiliar do PS5 iniciou, mas o servidor de transferência dele não. Reinicie o console e tente novamente.",
 "joberr.helper_not_running": "Nenhum auxiliar está em execução no PS5. Envie o auxiliar primeiro (tela Conexão do app desktop ou seu carregador de payloads) e tente novamente.",
+fs_add_folder: "Adicionar pasta",
+fs_add_folder_dialog_title: "Escolha uma pasta para copiar para o PS5",
+fs_drop_here: "Solte para copiar em {path}",
 };
 
 export default pt_BR;

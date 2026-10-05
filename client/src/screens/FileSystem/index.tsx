@@ -13,6 +13,7 @@ import {
   Trash2,
   Pencil,
   FolderPlus,
+  FolderUp,
   RefreshCw,
   Scissors,
   Copy,
@@ -30,6 +31,7 @@ import {
   BadgeCheck,
 } from "lucide-react";
 import { pickPath, pickPaths } from "../../lib/pickPath";
+import { useWebviewDropAll } from "../../lib/useWebviewDrop";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { isInstallPackagePath } from "../../lib/pkgDropDedupe";
@@ -58,6 +60,8 @@ import {
   startTransferDownload,
   startTransferDownloadZip,
   startTransferFile,
+  startTransferDir,
+  pathKind,
   fetchVolumes,
   type Volume,
 } from "../../api/ps5";
@@ -1069,11 +1073,13 @@ export default function FileSystemScreen() {
       const progressBase = { index: i, count: srcPaths.length, jobId: "" };
       setUploadProgress({ ...progressBase, sent: 0, total: 0, live: undefined });
       try {
-        const jobId = await startTransferFile(
-          src,
-          joinPath(path, remoteName),
-          addr,
-        );
+        // A folder (picked with Add folder, or dropped) uploads whole, into a same-named
+        // folder here; a file goes up on its own.
+        const isFolder =
+          replaceRemoteName === undefined && (await pathKind(src)) === "folder";
+        const jobId = isFolder
+          ? await startTransferDir(src, joinPath(path, remoteName), addr)
+          : await startTransferFile(src, joinPath(path, remoteName), addr);
         progressBase.jobId = jobId;
         // Poll to terminal before starting the next one, so a failure
         // stops the batch instead of racing more writes onto a full or
@@ -1136,6 +1142,26 @@ export default function FileSystemScreen() {
     if (!picked || picked.length === 0) return;
     await addPicked(picked);
   };
+
+  const addFolderHere = async () => {
+    const picked = await pickPath({
+      mode: "folder",
+      title: tr(
+        "fs_add_folder_dialog_title",
+        undefined,
+        "Pick a folder to copy onto the PS5",
+      ),
+    });
+    if (typeof picked !== "string") return;
+    await addPicked([picked]);
+  };
+
+  // Files and folders dragged in from the computer's file manager land in this folder
+  // (a .pkg too: this screen copies it, it does not offer to install it).
+  const dropActive = useWebviewDropAll(
+    (paths) => void addPicked(paths),
+    !loading && !!host?.trim() && busyEntry === null,
+  );
 
   /** Upload picked files (local or on a saved server) into this folder, asking first when
    *  one would overwrite a file already here. */
@@ -1927,6 +1953,16 @@ export default function FileSystemScreen() {
 
   return (
     <div className="app-page">
+      {dropActive && (
+        <div
+          className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-[var(--color-accent-soft)] ring-4 ring-inset ring-[var(--color-accent)]"
+          data-testid="fs-drop-overlay"
+        >
+          <div className="rounded-lg bg-[var(--color-surface)] px-5 py-3 text-sm font-medium shadow-lg">
+            {tr("fs_drop_here", { path }, `Drop to copy into ${path}`)}
+          </div>
+        </div>
+      )}
       {confirmDialogNode}
       {alertDialogNode}
       {promptDialogNode}
@@ -1946,6 +1982,16 @@ export default function FileSystemScreen() {
               onMainClick={() => void addFilesHere()}
               onPick={(p) => void addPicked([p])}
             />
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={<FolderUp size={12} />}
+              onClick={() => void addFolderHere()}
+              disabled={loading || !host?.trim() || busyEntry !== null}
+              title={tr("fs_add_folder_dialog_title", undefined, "Pick a folder to copy onto the PS5")}
+            >
+              {tr("fs_add_folder", undefined, "Add folder")}
+            </Button>
             <Button
               variant="secondary"
               size="sm"

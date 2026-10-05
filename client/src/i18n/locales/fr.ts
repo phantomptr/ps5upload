@@ -3123,6 +3123,9 @@ err_replace_cooldown: "L’assistant de cette console vient d’être remplacé.
 "joberr.helper_starting": "L’assistant de la PS5 démarre encore. Attendez quelques secondes, puis réessayez.",
 "joberr.ava1_failed": "L’assistant de la PS5 a démarré mais pas son serveur de transfert. Redémarrez la console, puis réessayez.",
 "joberr.helper_not_running": "Aucun assistant ne fonctionne sur la PS5. Envoyez d’abord l’assistant (écran Connexion de l’app de bureau, ou votre chargeur de payloads), puis réessayez.",
+fs_add_folder: "Ajouter un dossier",
+fs_add_folder_dialog_title: "Choisir un dossier à copier sur la PS5",
+fs_drop_here: "Déposer pour copier dans {path}",
 };
 
 export default fr;

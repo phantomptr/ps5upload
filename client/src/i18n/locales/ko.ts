@@ -3124,6 +3124,9 @@ err_replace_cooldown: "이 본체의 도우미를 방금 교체했습니다. 다
 "joberr.helper_starting": "PS5 도우미가 아직 시작 중입니다. 몇 초 기다린 후 다시 시도하세요.",
 "joberr.ava1_failed": "PS5 도우미는 시작되었지만 전송 서버가 시작되지 않았습니다. 콘솔을 다시 시작한 후 다시 시도하세요.",
 "joberr.helper_not_running": "PS5에서 실행 중인 도우미가 없습니다. 먼저 도우미를 전송하세요(데스크톱 앱의 연결 화면 또는 페이로드 로더). 그런 다음 다시 시도하세요.",
+fs_add_folder: "폴더 추가",
+fs_add_folder_dialog_title: "PS5에 복사할 폴더 선택",
+fs_drop_here: "놓으면 {path}에 복사됩니다",
 };
 
 export default ko;

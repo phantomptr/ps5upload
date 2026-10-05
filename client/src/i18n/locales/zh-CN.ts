@@ -3042,6 +3042,9 @@ err_replace_cooldown: "这台主机的助手刚刚被替换过。请等待一分
 "joberr.helper_starting": "PS5 助手仍在启动。请等待几秒钟后重试。",
 "joberr.ava1_failed": "PS5 助手已启动，但其传输服务器没有启动。请重启主机后重试。",
 "joberr.helper_not_running": "PS5 上没有运行助手。请先发送助手（桌面应用的“连接”页面，或你的 payload 加载器），然后重试。",
+fs_add_folder: "添加文件夹",
+fs_add_folder_dialog_title: "选择要复制到 PS5 的文件夹",
+fs_drop_here: "拖放以复制到 {path}",
 };
 
 export default zh_CN;

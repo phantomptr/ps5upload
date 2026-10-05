@@ -3096,6 +3096,9 @@ err_replace_cooldown: "Bu konsoldaki yardımcı az önce değiştirildi. Yeniden
 "joberr.helper_starting": "PS5 yardımcısı hâlâ başlıyor. Birkaç saniye bekleyin, sonra yeniden deneyin.",
 "joberr.ava1_failed": "PS5 yardımcısı başladı ama aktarım sunucusu başlamadı. Konsolu yeniden başlatın, sonra yeniden deneyin.",
 "joberr.helper_not_running": "PS5'te çalışan bir yardımcı yok. Önce yardımcıyı gönderin (masaüstü uygulamasının Bağlantı ekranı veya payload yükleyiciniz), sonra yeniden deneyin.",
+fs_add_folder: "Klasör ekle",
+fs_add_folder_dialog_title: "PS5'e kopyalanacak bir klasör seç",
+fs_drop_here: "{path} içine kopyalamak için bırak",
 };
 
 export default tr;
