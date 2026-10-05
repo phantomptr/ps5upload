@@ -185,6 +185,10 @@ pub struct LiveNotes {
     pub skip_total_bytes: std::sync::atomic::AtomicU64,
     /// Files are still settling on the console after the job finished.
     pub settling: std::sync::atomic::AtomicBool,
+    /// The files the console still reports unswept while `settling` (0 outside it), and the
+    /// most it reported: the numerator and denominator of "Finishing on the console: N left".
+    pub unswept: std::sync::atomic::AtomicU32,
+    pub unswept_peak: std::sync::atomic::AtomicU32,
     /// The job's telemetry (where its time went, the console's own end-of-job line), as the
     /// transport last reported it. The engine writes it into the per-job record when the job
     /// ends (review 009 #4).

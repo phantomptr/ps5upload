@@ -2,6 +2,8 @@ import { Loader2 } from "lucide-react";
 
 import { useTr } from "../../state/lang";
 import { formatBytes } from "../../lib/format";
+import { formatEtaSeconds } from "../../lib/uploadEta";
+import { useRateEta } from "../../lib/useRateEta";
 import type { BottleneckCause, JobLive } from "../../lib/jobLive";
 
 /** Catalog key and English fallback for each cause (written out so the i18n scripts see them). */
@@ -49,17 +51,34 @@ export function SkippingLine({ live }: { live: JobLive }) {
   );
 }
 
-/** Files are still settling on the console after the job finished. */
+/** Files are still settling on the console after the job finished. When the engine sends the
+ *  counts, says how many are left and, once the settle has a measurable pace, how long. */
 export function SettlingLine({ live }: { live: JobLive }) {
   const tr = useTr();
+  const total = live.settleTotal ?? 0;
+  const left = live.settleLeft ?? 0;
+  const { rate, etaSeconds } = useRateEta("settle", Math.max(0, total - left), total);
   if (!live.settling) return null;
+  const counted = total > 0;
   return (
     <div
-      className="flex items-center gap-1.5 text-xs text-[var(--color-warn)]"
+      className="flex flex-wrap items-center gap-x-1.5 text-xs text-[var(--color-warn)]"
       data-testid="settling-line"
     >
       <Loader2 size={12} className="animate-spin" aria-hidden />
       <span>{tr("upload_phase_settling", undefined, "Finishing on the console…")}</span>
+      {counted && (
+        <span className="font-mono" data-testid="settling-count">
+          {tr(
+            "upload_phase_settling_count",
+            { left: left.toLocaleString(), total: total.toLocaleString() },
+            `${left.toLocaleString()} of ${total.toLocaleString()} files left`,
+          )}
+          {rate > 0 && ` · ${rate < 10 ? rate.toFixed(1) : Math.round(rate)} ${tr("upload_phase_settling_rate", undefined, "files/s")}`}
+          {etaSeconds !== null &&
+            ` · ${tr("upload_phase_settling_eta", { time: formatEtaSeconds(etaSeconds) }, `about ${formatEtaSeconds(etaSeconds)} left`)}`}
+        </span>
+      )}
     </div>
   );
 }

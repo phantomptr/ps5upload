@@ -11,6 +11,8 @@
 //                                 saved in place (the engine stopped waiting): shown as a warning
 //   settling                      files are still settling on the console after the job
 //                                 finished (the engine sees `unswept` > 0): "Finishing on the console"
+//   settle_files_left/_total      with `settling`: how many files the console still has to make
+//                                 permanent, and the most it had (the "N of M" and the time left)
 //
 // The contract is written down in protocol/ava1/CUTOVER.md.
 
@@ -22,6 +24,10 @@ export interface JobLive {
   skipTotalBytes: number;
   bottleneck: BottleneckCause | null;
   settling: boolean;
+  /** While settling: files the console still has to make permanent, and the most it had. Absent
+   *  when the engine does not send the counts (the line then shows no number). */
+  settleLeft?: number;
+  settleTotal?: number;
   /** A finished job that carries the engine's "console did not confirm saving" warning. */
   unsettled?: boolean;
 }
@@ -33,6 +39,8 @@ export interface JobLiveFields {
   skip_total_bytes?: number | null;
   bottleneck?: string | null;
   settling?: boolean | null;
+  settle_files_left?: number | null;
+  settle_files_total?: number | null;
   commit_ack?: { bottleneck?: string | null; warning?: string | null } | null;
 }
 
@@ -74,5 +82,19 @@ export function jobLiveFromSnapshot(
   const warning = snap.commit_ack?.warning;
   const unsettled = typeof warning === "string" && warning.trim() !== "";
   if (!skipping && !bottleneck && !settling && !unsettled) return undefined;
-  return { skipping, skipDoneBytes, skipTotalBytes, bottleneck, settling, ...(unsettled ? { unsettled } : {}) };
+  const counted =
+    settling && typeof snap.settle_files_left === "number" && Number.isFinite(snap.settle_files_left);
+  const settleLeft = counted ? Math.max(0, snap.settle_files_left as number) : 0;
+  const settleTotal = counted
+    ? Math.max(settleLeft, Number(snap.settle_files_total) || 0)
+    : 0;
+  return {
+    skipping,
+    skipDoneBytes,
+    skipTotalBytes,
+    bottleneck,
+    settling,
+    ...(counted ? { settleLeft, settleTotal } : {}),
+    ...(unsettled ? { unsettled } : {}),
+  };
 }

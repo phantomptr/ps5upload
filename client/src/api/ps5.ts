@@ -4148,6 +4148,10 @@ export interface JobSnapshot {
   /** True while files are still settling on the console after the job finished
    *  ("Finishing on the console"). Absent until the engine sends it. */
   settling?: boolean;
+  /** While `settling`: files the console still has to make permanent, and the most it had.
+   *  Absent on engines that do not send the counts. */
+  settle_files_left?: number;
+  settle_files_total?: number;
   /** The final status of a finished job (AVA1: protocol, files, bytes, bottleneck, ...). */
   commit_ack?: { bottleneck?: string } & Record<string, unknown>;
   /** Files actually sent (Done only). */

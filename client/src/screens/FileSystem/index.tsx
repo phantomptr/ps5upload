@@ -54,6 +54,7 @@ import {
   fsOpStatus,
   fsOpCancel,
   jobStatus,
+  jobCancel,
   startTransferDownload,
   startTransferDownloadZip,
   startTransferFile,
@@ -91,6 +92,9 @@ import { useElapsed } from "../../lib/useElapsed";
 import { useScrollLock } from "../../lib/useScrollLock";
 import { runBulkDelete as runBulkDeleteLoop } from "../../lib/bulkDelete";
 import { formatBytes } from "../../lib/format";
+import { formatEtaSeconds } from "../../lib/uploadEta";
+import { useRateEta } from "../../lib/useRateEta";
+import { jobLiveFromSnapshot, type JobLive } from "../../lib/jobLive";
 import { humanizePs5Error } from "../../lib/humanizeError";
 
 /**
@@ -301,6 +305,14 @@ export default function FileSystemScreen() {
     name: string;
     op: "rename" | "mkdir" | "upload";
   } | null>(null);
+  // Byte progress of an "Add files" upload, from the engine's transfer job. `index` and
+  // `count` place the current file in a multi-file pick; `settling` carries the console's
+  // own "finishing" counts once the bytes are all sent.
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(
+    null,
+  );
+  // The user pressed Cancel on an "Add files" upload: the loop stops quietly.
+  const uploadCancelled = useRef(false);
   // Lifted into Zustand so the in-flight bulk op survives navigation.
   // The async runner writes to the store; the screen reads from it.
   // Re-mount after a tab switch sees the still-running operation.
@@ -1047,16 +1059,22 @@ export default function FileSystemScreen() {
     if (srcPaths.length === 0) return;
     const addr = consoleAddr(host);
     setError(null);
-    for (const src of srcPaths) {
+    uploadCancelled.current = false;
+    for (let i = 0; i < srcPaths.length; i++) {
+      if (uploadCancelled.current) break;
+      const src = srcPaths[i];
       const localName = src.split(/[\\/]/).pop() || "file";
       const remoteName = replaceRemoteName ?? localName;
       setBusyEntry({ name: remoteName, op: "upload" });
+      const progressBase = { index: i, count: srcPaths.length, jobId: "" };
+      setUploadProgress({ ...progressBase, sent: 0, total: 0, live: undefined });
       try {
         const jobId = await startTransferFile(
           src,
           joinPath(path, remoteName),
           addr,
         );
+        progressBase.jobId = jobId;
         // Poll to terminal before starting the next one, so a failure
         // stops the batch instead of racing more writes onto a full or
         // read-only mount.
@@ -1064,8 +1082,15 @@ export default function FileSystemScreen() {
           const snap = await jobStatus(jobId);
           if (snap.status === "done") break;
           if (snap.status === "failed") {
+            if (uploadCancelled.current) break;
             throw new Error(snap.error ?? "upload failed");
           }
+          setUploadProgress({
+            ...progressBase,
+            sent: snap.bytes_sent ?? 0,
+            total: snap.total_bytes ?? 0,
+            live: jobLiveFromSnapshot(snap),
+          });
           await new Promise((r) => setTimeout(r, 500));
         }
       } catch (e) {
@@ -1081,12 +1106,22 @@ export default function FileSystemScreen() {
           { body: human },
         );
         setBusyEntry(null);
+        setUploadProgress(null);
         await refresh();
         return;
       }
     }
     setBusyEntry(null);
+    setUploadProgress(null);
     await refresh();
+  };
+
+  /** Stops an "Add files" upload: the engine ends the transfer job, and the batch stops
+   *  before the next file. What already landed stays; the half-written file does not. */
+  const cancelUpload = () => {
+    uploadCancelled.current = true;
+    const id = uploadProgress?.jobId;
+    if (id) void jobCancel(id).catch(() => {});
   };
 
   /** Toolbar: pick one or more local files and copy them into this folder. */
@@ -1249,9 +1284,9 @@ export default function FileSystemScreen() {
                   fsBulk.setCurrentBytesCopied(snap.bytes_copied);
                 }
               } catch {
-                // 404 from the engine = op finished. Other errors
-                // (transient mgmt-port stall) silently retry next tick.
-                break;
+                // A 404 ("not in flight") arrives before the engine has registered the
+                // op as well as after it ends, and a blip throws too. None of them may
+                // end the poller: it stops when the delete call returns.
               }
               await new Promise((r) => setTimeout(r, 500));
             }
@@ -1447,11 +1482,10 @@ export default function FileSystemScreen() {
                 fsBulk.setCurrentBytesCopied(snap.bytes_copied);
               }
             } catch {
-              // 404 from the engine means the op finished — break
-              // out so we don't keep polling. Other errors (network
-              // blip, transient mgmt-port stall) silently retry on
-              // the next tick.
-              break;
+              // Breaking here used to end progress for the whole copy: a 404 arrives
+              // before the engine registers the op (the console-ready check runs first)
+              // as well as after it ends, and a blip throws too. Keep polling; the
+              // poller stops when the copy call returns.
             }
             await new Promise((r) => setTimeout(r, 500));
           }
@@ -2238,7 +2272,7 @@ export default function FileSystemScreen() {
         )}
 
         {busyEntry && bulkOp.op === null && (
-          <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-xs">
+          <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-xs">
             <Spinner size={12} tone="accent" />
             <span className="font-medium">
               {busyEntry.op === "rename"
@@ -2250,6 +2284,12 @@ export default function FileSystemScreen() {
             <span className="text-[var(--color-muted)]">
               {busyEntry.name} · {formatDuration(elapsedMs / 1000)}
             </span>
+            {busyEntry.op === "upload" && uploadProgress && (
+              <UploadProgressDetail
+                progress={uploadProgress}
+                onCancel={cancelUpload}
+              />
+            )}
           </div>
         )}
 
@@ -2689,6 +2729,92 @@ function RecentPathsDropdown({
   );
 }
 
+/** Byte progress of an "Add files" upload (see `runUpload`). */
+interface UploadProgress {
+  sent: number;
+  total: number;
+  /** Which file of the pick this is (0-based) and how many there are. */
+  index: number;
+  count: number;
+  jobId: string;
+  /** The engine's live notes: carries the console's "finishing" counts. */
+  live: JobLive | undefined;
+}
+
+/** Bytes, percent, speed, time left and a bar for an "Add files" upload, and Cancel. Once every
+ *  byte is sent the console still has to make the files permanent: that phase says so (with the
+ *  console's own count when it sends one) instead of sitting at 100%. */
+function UploadProgressDetail({
+  progress,
+  onCancel,
+}: {
+  progress: UploadProgress;
+  onCancel: () => void;
+}) {
+  const tr = useTr();
+  const { sent, total, index, count, jobId, live } = progress;
+  const { rate, etaSeconds } = useRateEta(jobId, sent, total);
+  const pct = total > 0 ? Math.min(100, (sent / total) * 100) : null;
+  const finishing = total > 0 && sent >= total;
+  const settleLeft = live?.settling ? live.settleLeft : undefined;
+  return (
+    <div className="mt-1 basis-full" data-testid="fs-upload-progress">
+      <div className="mb-1 flex flex-wrap items-center gap-x-2 font-mono text-[var(--color-muted)]">
+        {count > 1 && (
+          <span>
+            {tr(
+              "fs_bulk_progress",
+              { done: index + 1, total: count },
+              "{done} of {total}",
+            )}
+          </span>
+        )}
+        <span>
+          {pct !== null
+            ? `${formatBytes(sent)} / ${formatBytes(total)} (${pct.toFixed(0)}%)`
+            : formatBytes(sent)}
+        </span>
+        {!finishing && rate > 0 && <span>{formatBytes(rate)}/s</span>}
+        {!finishing && etaSeconds !== null && (
+          <span>
+            {tr(
+              "fs_progress_eta",
+              { time: formatEtaSeconds(etaSeconds) },
+              `about ${formatEtaSeconds(etaSeconds)} left`,
+            )}
+          </span>
+        )}
+        {finishing && (
+          <span className="text-[var(--color-warn)]">
+            {tr("upload_phase_settling", undefined, "Finishing on the console…")}
+            {settleLeft !== undefined &&
+              ` ${tr(
+                "fs_finishing_files_left",
+                { left: settleLeft.toLocaleString() },
+                `${settleLeft.toLocaleString()} files left`,
+              )}`}
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={onCancel}
+          className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-0.5 hover:bg-[var(--color-surface-3)]"
+        >
+          {tr("cancel", undefined, "Cancel")}
+        </button>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
+        <div
+          className={`h-full bg-[var(--color-accent)] transition-[width] duration-300 ${
+            pct === null || finishing ? "animate-pulse" : ""
+          }`}
+          style={{ width: `${Math.max(pct ?? 0, 4)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function BulkOpBanner({
   host,
   op,
@@ -2742,15 +2868,27 @@ function BulkOpBanner({
     currentSize !== null && currentSize > 0 && currentBytesCopied > 0
       ? Math.min(100, (currentBytesCopied / currentSize) * 100)
       : null;
-  // Item-level speed: bytes since this item started divided by
-  // elapsed time on this item. Approximation — uses the bulk-op
-  // started_at as the item's start, which is fine for a single-item
-  // paste (the user's PPSA09519.exfat case) and gives a low-side
-  // number for multi-item pastes (sums prior items into the elapsed).
-  const itemSpeed =
-    elapsedSec > 0 && currentBytesCopied > 0
-      ? currentBytesCopied / elapsedSec
-      : 0;
+  // Rate and time left for the item being copied, from the byte counter the poller
+  // keeps current (a trailing window: a big copy moves in bursts). The key restarts the
+  // window for each item, so an earlier item's pace never leaks into the next one.
+  const { rate: itemSpeed, etaSeconds: itemEta } = useRateEta(
+    `${currentName}|${done}`,
+    currentBytesCopied,
+    currentSize ?? 0,
+  );
+  // Every byte is written but the item is not done yet: the console is renaming into
+  // place (and, for a move, deleting the original). It moves no bytes, so say so rather
+  // than sit on 100%.
+  const finishing =
+    op !== "delete" &&
+    currentSize !== null &&
+    currentSize > 0 &&
+    currentBytesCopied >= currentSize;
+  // Whole-batch bar: finished items plus the current item's fraction.
+  const pctOverall =
+    total > 0
+      ? Math.min(100, ((done + (itemPct ?? 0) / 100) / total) * 100)
+      : pctByFiles;
 
   return (
     <div className="mb-3 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface-2)] p-3 text-xs">
@@ -2765,29 +2903,46 @@ function BulkOpBanner({
           )}
           {" · "}
           {formatDuration(elapsedSec)}
-          {itemSpeed > 0 && ` · ${formatBytes(itemSpeed)}/s`}
+          {!finishing && itemSpeed > 0 && ` · ${formatBytes(itemSpeed)}/s`}
+          {!finishing &&
+            itemEta !== null &&
+            ` · ${tr(
+              "fs_progress_eta",
+              { time: formatEtaSeconds(itemEta) },
+              `about ${formatEtaSeconds(itemEta)} left`,
+            )}`}
+          {finishing &&
+            ` · ${tr("upload_phase_settling", undefined, "Finishing on the console…")}`}
         </span>
-        {/* Stop button now drives a real cancel: the loop fires
-            FS_OP_CANCEL via a side-watcher so the payload's cp_rf
-            bails within ~one 4 MiB buffer (sub-second on PS5
-            NVMe). The between-items check still applies for
-            delete (no per-byte cancel concept). */}
+        {/* Cancel drives a real cancel: the loop asks the engine to end the console's
+            copy job (job.cancel), which stops within a moment however big the file is, and
+            the engine then removes the half-written destination. The source is never
+            touched. Delete has no mid-file cancel, so its button waits for the item. */}
         <button
           type="button"
           onClick={() => useFsBulkOpStore.getState().requestCancel(host)}
           disabled={cancelRequested}
+          data-testid="fs-bulk-cancel"
           className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs hover:bg-[var(--color-surface-3)] disabled:opacity-50"
-          title={tr(
-            "fs_bulk_stop_tooltip",
-            undefined,
+          title={
             op === "delete"
-              ? "Stop after the current item finishes"
-              : "Cancel the current copy and skip the rest",
-          )}
+              ? tr(
+                  "fs_bulk_stop_tooltip",
+                  undefined,
+                  "Stop after the current item finishes",
+                )
+              : tr(
+                  "fs_bulk_cancel_copy_tooltip",
+                  undefined,
+                  "Cancel the current copy and skip the rest. The original is not touched; the half-copied files are removed.",
+                )
+          }
         >
           {cancelRequested
             ? tr("fs_bulk_stopping", undefined, "Stopping…")
-            : tr("fs_bulk_stop", undefined, "Stop")}
+            : op === "delete"
+              ? tr("fs_bulk_stop", undefined, "Stop")
+              : tr("fs_bulk_cancel_copy", undefined, "Cancel copy")}
         </button>
       </div>
 
@@ -2821,6 +2976,16 @@ function BulkOpBanner({
             />
           </div>
         )}
+
+      {cancelRequested && op !== "delete" && (
+        <div className="mb-2 rounded-md border border-[var(--color-warn)] bg-[var(--color-warn-soft)] p-2 text-xs text-[var(--color-warn)]">
+          {tr(
+            "fs_bulk_cancel_copy_explainer",
+            undefined,
+            "Cancelling: the PS5 is stopping the copy and removing the half-copied files. Your original files are not touched.",
+          )}
+        </div>
+      )}
 
       {cancelRequested && op === "delete" && (
         // Delete has no per-byte cancel; explain why it's slower.
@@ -2858,9 +3023,9 @@ function BulkOpBanner({
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
         <div
           className={`h-full bg-[var(--color-accent)] transition-[width] duration-300 ${
-            done < total ? "animate-pulse" : ""
+            done < total && (itemPct === null || finishing) ? "animate-pulse" : ""
           }`}
-          style={{ width: `${Math.max(pctByFiles, 4)}%` }}
+          style={{ width: `${Math.max(pctOverall, 4)}%` }}
         />
       </div>
     </div>

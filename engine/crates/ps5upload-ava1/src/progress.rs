@@ -70,6 +70,10 @@ impl Counters {
             );
             l.settling
                 .store(p.settling.load(Ordering::Relaxed), Ordering::Relaxed);
+            l.unswept
+                .store(p.unswept.load(Ordering::Relaxed), Ordering::Relaxed);
+            l.unswept_peak
+                .store(p.unswept_peak.load(Ordering::Relaxed), Ordering::Relaxed);
             if let Some(t) = crate::telemetry::snapshot(p) {
                 *l.telemetry.lock().unwrap_or_else(|e| e.into_inner()) = Some(t);
             }
@@ -140,11 +144,15 @@ mod live_tests {
         p.skip_done_bytes.store(5, Ordering::Relaxed);
         p.skip_total_bytes.store(20, Ordering::Relaxed);
         p.settling.store(true, Ordering::Relaxed);
+        p.unswept.store(7, Ordering::Relaxed);
+        p.unswept_peak.store(40, Ordering::Relaxed);
         drop(bridge); // the final store
         assert_eq!(live.bottleneck.load(Ordering::Relaxed), ava1::gen::BN_DISK);
         assert_eq!(live.phase.load(Ordering::Relaxed), LIVE_PHASE_SKIPPING);
         assert_eq!(live.skip_done_bytes.load(Ordering::Relaxed), 5);
         assert_eq!(live.skip_total_bytes.load(Ordering::Relaxed), 20);
         assert!(live.settling.load(Ordering::Relaxed));
+        assert_eq!(live.unswept.load(Ordering::Relaxed), 7);
+        assert_eq!(live.unswept_peak.load(Ordering::Relaxed), 40);
     }
 }

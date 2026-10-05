@@ -35,7 +35,17 @@
       "fakegame.fw.launch",
       "fakegame.fw.more",
       "install_help_wont_launch",
-      "install_help_what_means"
+      "install_help_what_means",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -81,7 +91,17 @@
       "fakegame.fw.launch",
       "fakegame.fw.more",
       "install_help_wont_launch",
-      "install_help_what_means"
+      "install_help_what_means",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -128,7 +148,17 @@
       "fakegame.fw.launch",
       "fakegame.fw.more",
       "install_help_wont_launch",
-      "install_help_what_means"
+      "install_help_what_means",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -182,7 +212,17 @@
       "fakegame.fw.launch",
       "fakegame.fw.more",
       "install_help_wont_launch",
-      "install_help_what_means"
+      "install_help_what_means",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -232,7 +272,17 @@
       "fakegame.fw.launch",
       "fakegame.fw.more",
       "install_help_wont_launch",
-      "install_help_what_means"
+      "install_help_what_means",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -284,7 +334,17 @@
       "fakegame.fw.launch",
       "fakegame.fw.more",
       "install_help_wont_launch",
-      "install_help_what_means"
+      "install_help_what_means",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -331,7 +391,17 @@
       "fakegame.fw.launch",
       "fakegame.fw.more",
       "install_help_wont_launch",
-      "install_help_what_means"
+      "install_help_what_means",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -389,7 +459,17 @@
       "fakegame.fw.launch",
       "fakegame.fw.more",
       "install_help_wont_launch",
-      "install_help_what_means"
+      "install_help_what_means",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -441,7 +521,17 @@
       "fakegame.fw.launch",
       "fakegame.fw.more",
       "install_help_wont_launch",
-      "install_help_what_means"
+      "install_help_what_means",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -492,7 +582,17 @@
       "fakegame.fw.launch",
       "fakegame.fw.more",
       "install_help_wont_launch",
-      "install_help_what_means"
+      "install_help_what_means",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -541,7 +641,17 @@
       "fakegame.fw.launch",
       "fakegame.fw.more",
       "install_help_wont_launch",
-      "install_help_what_means"
+      "install_help_what_means",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -588,7 +698,17 @@
       "fakegame.fw.launch",
       "fakegame.fw.more",
       "install_help_wont_launch",
-      "install_help_what_means"
+      "install_help_what_means",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -636,7 +756,17 @@
       "fakegame.fw.launch",
       "fakegame.fw.more",
       "install_help_wont_launch",
-      "install_help_what_means"
+      "install_help_what_means",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -689,7 +819,17 @@
       "fakegame.fw.launch",
       "fakegame.fw.more",
       "install_help_wont_launch",
-      "install_help_what_means"
+      "install_help_what_means",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -737,7 +877,17 @@
       "fakegame.fw.launch",
       "fakegame.fw.more",
       "install_help_wont_launch",
-      "install_help_what_means"
+      "install_help_what_means",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -784,7 +934,17 @@
       "fakegame.fw.launch",
       "fakegame.fw.more",
       "install_help_wont_launch",
-      "install_help_what_means"
+      "install_help_what_means",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -833,7 +993,17 @@
       "fakegame.fw.launch",
       "fakegame.fw.more",
       "install_help_wont_launch",
-      "install_help_what_means"
+      "install_help_what_means",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -883,7 +1053,17 @@
       "fakegame.fw.launch",
       "fakegame.fw.more",
       "install_help_wont_launch",
-      "install_help_what_means"
+      "install_help_what_means",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
@@ -930,7 +1110,17 @@
       "fakegame.fw.launch",
       "fakegame.fw.more",
       "install_help_wont_launch",
-      "install_help_what_means"
+      "install_help_what_means",
+      "fs_bulk_cancel_copy",
+      "fs_bulk_cancel_copy_tooltip",
+      "fs_bulk_cancel_copy_explainer",
+      "fs_progress_eta",
+      "fs_finishing_files_left",
+      "engine_job_running_title",
+      "engine_job_files_done",
+      "upload_phase_settling_count",
+      "upload_phase_settling_rate",
+      "upload_phase_settling_eta"
     ],
     "stale": [],
     "untranslated": [
