@@ -59,13 +59,11 @@ fn root() -> Option<&'static Path> {
         let base = match std::env::var("PS5UPLOAD_CACHE_DIR") {
             Ok(v) if !v.trim().is_empty() => PathBuf::from(v),
             _ => {
-                let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"));
-                match home {
-                    Ok(h) if !h.trim().is_empty() => {
-                        PathBuf::from(h).join(".ps5upload").join("cache")
-                    }
-                    _ => {
-                        eprintln!("[icon-cache] no HOME — artwork caching disabled");
+                // The engine's data folder (PS5UPLOAD_DATA_DIR, else ~/.ps5upload; #379).
+                match crate::remote::store::data_dir() {
+                    Some(d) => d.join("cache"),
+                    None => {
+                        eprintln!("[icon-cache] no data folder — artwork caching disabled");
                         return None;
                     }
                 }

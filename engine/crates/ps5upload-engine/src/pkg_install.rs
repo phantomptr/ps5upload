@@ -309,10 +309,8 @@ mod persist {
             Ok(v) if !v.trim().is_empty() => PathBuf::from(v),
             _ if cfg!(test) => return None,
             _ => {
-                let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"));
-                PathBuf::from(home.ok().filter(|h| !h.trim().is_empty())?)
-                    .join(".ps5upload")
-                    .join("state")
+                // The engine's data folder (PS5UPLOAD_DATA_DIR, else ~/.ps5upload; #379).
+                crate::remote::store::data_dir()?.join("state")
             }
         };
         std::fs::create_dir_all(&dir).ok()?;

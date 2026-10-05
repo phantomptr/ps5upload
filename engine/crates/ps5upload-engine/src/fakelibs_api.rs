@@ -37,10 +37,9 @@ pub fn corpus_root() -> Option<PathBuf> {
                 return Some(PathBuf::from(v));
             }
         }
-        let home = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .ok()?;
-        (!home.trim().is_empty()).then(|| PathBuf::from(home).join(".ps5upload").join("fakelibs"))
+        // The engine's data folder (PS5UPLOAD_DATA_DIR, else ~/.ps5upload): a phone has no
+        // home folder, the app points the variable at its private data folder (#379).
+        crate::remote::store::data_dir().map(|d| d.join("fakelibs"))
     })
     .clone()
 }
