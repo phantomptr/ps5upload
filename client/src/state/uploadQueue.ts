@@ -256,6 +256,10 @@ export interface QueueItem {
    *  the finished job's "Why was this slow?" summary. Stale after a restart is harmless: the
    *  summary is simply not found. */
   jobId?: string;
+  /** Set on a reopened web UI for an item whose engine job was still running (or had just
+   *  finished) when the tab closed: the runner adopts this job instead of starting a new
+   *  one, then does the item's post-upload steps. Cleared the moment the runner takes it. */
+  attachJobId?: string;
   /** Mount path the runner produced when `mountAfterUpload` is true and
    *  the image upload + mount succeeded. Surfaced to the row so users
    *  see where the image landed without flipping to the Volumes tab. */
@@ -564,6 +568,30 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
     Object.values(rh).some(Boolean);
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /** Web UI only: the engine kept running these items' jobs while the tab was closed. Ask it
+   *  about each; one that is still running, or finished while the tab was away, goes back to its
+   *  item (`attachJobId`) and the console's queue restarts, so the runner adopts the job,
+   *  shows its progress and does the item's post-upload steps. A job the engine no longer knows
+   *  (it restarted) or one that failed leaves the item pending, to be started again and
+   *  resumed from the console's journal as before. Never throws. */
+  const reattachRunning = async (
+    list: Array<{ id: string; jobId: string; addr: string }>,
+  ) => {
+    const hosts = new Set<string>();
+    for (const { id, jobId, addr } of list) {
+      try {
+        const snap = await jobStatus(jobId, addr);
+        if (snap.status === "running" || snap.status === "done") {
+          set((s) => ({ items: patchItem(s.items, id, { attachJobId: jobId }) }));
+          hosts.add(hostOf(addr));
+        }
+      } catch {
+        /* the engine does not know the job: the item stays pending */
+      }
+    }
+    for (const h of hosts) void get().startHost(h);
+  };
+
   /** Schedule a debounced whole-document save. Idempotent — multiple
    *  calls within 300 ms collapse into one fsync. The runner can
    *  legitimately fire a half-dozen patches per second (bytes_sent
@@ -725,8 +753,17 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
       }
     }
 
+    // A reopened web UI hands the engine's still-running job back to its item (see hydrate):
+    // adopt it rather than start the upload again. Read from the store, not the argument,
+    // so a recovery pass of this same item starts fresh.
+    const attachId = get().items.find((it) => it.id === item.id)?.attachJobId;
+    if (attachId) {
+      set((s) => ({ items: patchItem(s.items, item.id, { attachJobId: undefined }) }));
+    }
     let jobId: string;
-    if (isArchive) {
+    if (attachId) {
+      jobId = attachId;
+    } else if (isArchive) {
       // A .zip/.7z is decompressed host-side and streamed in (lands
       // extracted). Carry the persisted tx_id for cross-session shard resume,
       // just like folders; there's no reconcile mode (no local tree to diff).
@@ -1245,7 +1282,8 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
     // v2.23.1). Best-effort; never throws. Each loop preflights its OWN
     // console's first item.
     const head = pickNext();
-    if (head) {
+    // An item that adopts a running job needs no payload check: the console is mid-transfer.
+    if (head && !head.attachJobId) {
       try {
         await ensurePayloadCurrent(hostOf(head.addr));
       } catch (e) {
@@ -1519,19 +1557,8 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
     persistenceError: null,
 
     async hydrate() {
-      // Browser-only dev/test contexts: Tauri invoke is unavailable.
-      // Mark loaded with the empty in-memory state and skip the call,
-      // otherwise every Upload screen mount logs an "invoke undefined"
-      // error to the user-visible logs. In production (Tauri), this
-      // guard is a no-op.
-      const w = window as unknown as {
-        isTauri?: boolean;
-        __TAURI_INTERNALS__?: unknown;
-      };
-      if (!w.isTauri && !w.__TAURI_INTERNALS__) {
-        set({ loaded: true });
-        return;
-      }
+      // The browser build reads the queue from localStorage (uploadQueueLoad has that branch),
+      // so it hydrates too: without this a self-hosted UI forgot its whole queue on reload.
       try {
         const doc = await uploadQueueLoad<Partial<QueueDocument>>();
         // Sanitise on load:
@@ -1543,8 +1570,11 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
         //   crash the runner. Mint a fresh one — those items lose
         //   resume continuity (acceptable since they pre-date the
         //   feature) but they won't crash.
+        const wasRunning: Array<{ id: string; jobId: string; addr: string }> = [];
         const items = (doc.items ?? []).map((it) => {
           const next = { ...it };
+          // Never carried across a reload: a stale id would adopt a job that is not this item's.
+          delete next.attachJobId;
           // An install that was running is never re-run by itself: Sony may
           // already have accepted it, and repeating a patch install can wipe
           // the base game.
@@ -1557,7 +1587,15 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
             );
             next.completedAt = Date.now();
           }
-          if (next.status === "running") next.status = "pending";
+          if (next.status === "running") {
+            // The web UI's engine outlives the tab, so this item's job may still be going:
+            // remember it so it can be re-attached below. (The desktop engine dies with the
+            // app, so there the job is gone and the item simply re-runs.)
+            if (next.jobId && next.sourceKind !== "install") {
+              wasRunning.push({ id: next.id, jobId: next.jobId, addr: next.addr });
+            }
+            next.status = "pending";
+          }
           if (!next.txIdHex) next.txIdHex = generateTxIdHex();
           // Back-fill the bytes/sec field added in 2.2.22 — older
           // persisted docs don't carry it. Treat unknown as 0 so the
@@ -1615,6 +1653,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
           persistenceError: null,
         });
         if (live.length > 0) scheduleSave();
+        if (!isTauriEnv() && wasRunning.length > 0) void reattachRunning(wasRunning);
       } catch (e) {
         // load_json_or_default returns {} on missing file, so this
         // catch only fires on real corruption (bad JSON, IO error,
