@@ -269,7 +269,19 @@ async fn post_commit_failure_is_not_a_resend() {
     let d = temp_dir("post");
     let src = d.join("src");
     let total = tree(&src, 200, |_| 128 * 1024);
-    let (_addr, pool) = host(&d, true).await;
+    let (addr, pool) = host(&d, true).await;
+    // Capped (~3 s for the 25 MiB) so the destination is created while data still flows: an
+    // uncapped loopback upload can finish before the maker thread sees the first byte.
+    let proxy = ChaosProxy::start(
+        addr.parse().unwrap(),
+        ChaosConfig {
+            bytes_per_sec: Some(8 << 20),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let pool = pool.with_addr(proxy.addr.to_string());
     let c = cfg();
     let sent = c.progress_bytes.clone().unwrap();
     let share = d.join("share/out");

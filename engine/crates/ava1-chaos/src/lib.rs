@@ -22,6 +22,8 @@ pub struct ChaosConfig {
 
 struct Ctl {
     blackhole: AtomicBool,
+    /// The live per-direction cap, bytes/s; 0 = uncapped. Starts at `ChaosConfig::bytes_per_sec`.
+    bytes_per_sec: AtomicU64,
     /// `kill_all` calls that actually aborted a live connection.
     kills: AtomicU64,
     conns: Mutex<Vec<[AbortHandle; 2]>>,
@@ -56,6 +58,7 @@ impl ChaosProxy {
         let addr = listener.local_addr()?;
         let ctl = Arc::new(Ctl {
             blackhole: AtomicBool::new(false),
+            bytes_per_sec: AtomicU64::new(cfg.bytes_per_sec.unwrap_or(0)),
             kills: AtomicU64::new(0),
             conns: Mutex::default(),
         });
@@ -112,6 +115,15 @@ impl ChaosProxy {
 
     pub fn kill_all(&self) {
         kill_all(&self.ctl);
+    }
+
+    /// Changes the cap for every connection, open ones included; `None` lifts it. A test
+    /// throttles only the phase that must be slow (an attempt it interrupts) and runs the
+    /// rest at full speed.
+    pub fn set_bytes_per_sec(&self, bps: Option<u64>) {
+        self.ctl
+            .bytes_per_sec
+            .store(bps.unwrap_or(0), Ordering::SeqCst);
     }
 
     /// Kill only the most recently opened connection (e.g. the lane just opened).
@@ -175,13 +187,17 @@ async fn pump(mut from: OwnedReadHalf, mut to: OwnedWriteHalf, cfg: ChaosConfig,
         }
         // Under a cap the bytes go out in slices of about 20 ms each, as a slow link would
         // deliver them, not as one burst after a long pause.
-        let slice = match cfg.bytes_per_sec {
+        let cap = match ctl.bytes_per_sec.load(Ordering::SeqCst) {
+            0 => None,
+            bps => Some(bps),
+        };
+        let slice = match cap {
             Some(bps) => ((bps / 50).max(1) as usize).min(n),
             None => n,
         };
         let mut failed = false;
         for part in buf[..n].chunks(slice) {
-            if let Some(bps) = cfg.bytes_per_sec {
+            if let Some(bps) = cap {
                 tokio::time::sleep(Duration::from_secs_f64(
                     part.len() as f64 / bps.max(1) as f64,
                 ))

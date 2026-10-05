@@ -648,6 +648,9 @@ async fn upload_file_resumes_after_a_mid_stream_drop() {
                 std::thread::sleep(Duration::from_millis(2));
             }
             proxy.kill_all();
+            // The drop happened mid-transfer, which is all the cap was for: the resume runs
+            // at full speed.
+            proxy.set_bytes_per_sec(None);
         })
     };
     let (pool, src) = (c.pool.clone(), t.path().join("resume.bin"));

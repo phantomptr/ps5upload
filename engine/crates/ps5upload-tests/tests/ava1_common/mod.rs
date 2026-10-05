@@ -287,9 +287,10 @@ pub async fn cancel_midway<T: Send + 'static>(
         .await
         .expect("the cancelled upload never returned")
         .unwrap();
-    // A resume under the same job id follows at once: a JobOpen for a job the receiver still
-    // holds is answered BUSY and retried by the sender (resume-after-cancel fix, 38676afe).
-    let _ = proxy;
+    // The cancel has landed: only the interrupted attempt needed the slow link. The resume
+    // that follows (same job id; a JobOpen for a job the receiver still holds is answered BUSY
+    // and retried, 38676afe) runs at full speed instead of crawling at the cap.
+    proxy.set_bytes_per_sec(None);
     match r {
         Err(e) => e,
         Ok(_) => panic!("the upload finished before the cancel landed (file too small?)"),
