@@ -43,7 +43,7 @@
   screenshots and video clips; register, launch and uninstall games.
 - **Backport tools, payload sender, FTP server, hardware view** and more.
 - **Runs everywhere:** macOS, Windows, Linux, Android, or any web browser via
-  the self-hosted engine / Docker image — in 20 languages.
+  the self-hosted engine / Docker image — in 21 languages.
 
 ---
 
@@ -161,10 +161,10 @@
   title inside the image first so the dashboard stays clean —
   no ghost tiles after unmount.
 - **Speaks your language** — the whole UI, including error messages
-  and troubleshooting hints, is available in 20 languages: English,
+  and troubleshooting hints, is available in 21 languages: English,
   Simplified & Traditional Chinese, Spanish, Hindi, Arabic, Bengali,
   Brazilian Portuguese, Russian, Japanese, German, French, Korean,
-  Turkish, Vietnamese, Indonesian, Italian, Thai, Polish, and Hungarian.
+  Turkish, Vietnamese, Indonesian, Italian, Thai, Polish, Hungarian, and Persian.
 
 ## What it doesn't do
 
@@ -580,7 +580,10 @@ port 9021 — a third-party component, not part of ps5upload.
   in the in-app file picker. That picker browses the *engine's* filesystem,
   not the browser's own machine — a browser tab has no way to reach a
   remote engine's disk except through what the engine itself can already
-  read. A few things are still desktop-only and hidden in the browser UI:
+  read. The picker starts at the engine's home directory (`/data` in the
+  image) unless you point it elsewhere with `PS5UPLOAD_BROWSE_ROOTS=/pkgs`;
+  the value is comma-separated, so it can offer more than one root.
+  A few things are still desktop-only and hidden in the browser UI:
   archive uploads (`.zip`/`.7z`/`.rar`), Payloads (sending a `.elf`/etc. from
   disk) and saving a save-data
   backup to your computer — everything else that operates on the PS5 itself

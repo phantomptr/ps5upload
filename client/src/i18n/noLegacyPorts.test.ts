@@ -31,8 +31,8 @@ const OLD = /ftx\s*2|\b911[34]\b|transfer[- ]port/i;
 
 describe("no_user_visible_string_mentions_ftx2_or_old_ports", () => {
   const files = Object.entries(RAW);
-  it("reads all 20 locales", () => {
-    expect(files.length).toBe(20);
+  it("reads all 21 locales", () => {
+    expect(files.length).toBe(21);
   });
   it.each(files)("%s", (name, src) => {
     const dict = evalLocale(src);
