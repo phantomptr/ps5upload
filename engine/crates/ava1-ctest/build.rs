@@ -214,6 +214,22 @@ fn main() {
         "cargo:rerun-if-changed={}",
         p.join("src/fan_map.c").display()
     );
+    // Remote Play pairing state (payload/src/rp_pair.c) over fake Sony functions.
+    build()
+        .files([p.join("src/rp_pair.c"), here.join("csrc/rp_pair_shim.c")])
+        .include(p.join("include"))
+        .warnings(true)
+        .extra_warnings(true)
+        .warnings_into_errors(true)
+        .compile("rppair");
+    println!(
+        "cargo:rerun-if-changed={}",
+        p.join("src/rp_pair.c").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        p.join("include/rp_pair.h").display()
+    );
     // The AVX2 ChaCha20 is its own unit, built with -mavx2 only on x86-64 (where the
     // run-time CPUID check picks it); elsewhere it compiles to nothing.
     let mut avx2 = build();

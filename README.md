@@ -768,7 +768,7 @@ under Third-Party Libraries above):
 **Code we ported and still ship**
 * [elf-arsenal](https://git.etawen.dev/soniciso/elf-arsenal) (soniciso, Sanad; GPLv3+) — the drive
   sensor reads (`payload/src/drive_sensors.c`) are ported from it, and the cheat engine
-  (`payload/src/cheats.c`), the wake watchdog and the Remote Play pairing flow are based on it
+  (`payload/src/cheats.c`) and the wake watchdog are based on it
 
 **Data sources**
 * [PROSPEROPatches](https://prosperopatches.com/) and [ORBISPatches](https://orbispatches.com/) — game details and cover art

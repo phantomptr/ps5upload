@@ -2262,3 +2262,156 @@ pub fn fan_map_threshold(points_json: &str) -> i32 {
     let c = CString::new(points_json).expect("no NUL in a curve body");
     unsafe { fan_map_threshold(c.as_ptr()) }
 }
+
+/// payload/src/rp_pair.c, the Remote Play pairing state, over the fake Sony functions in
+/// csrc/rp_pair_shim.c. One shared instance: callers serialise (tests/rp_pair.rs holds a lock).
+pub mod rp_pair {
+    use std::ffi::CStr;
+    use std::os::raw::{c_char, c_int};
+
+    pub const IDLE: i32 = 0;
+    pub const WAITING: i32 = 1;
+    pub const PAIRED: i32 = 2;
+    pub const FAILED: i32 = 3;
+    pub const TIMEOUT: i32 = 4;
+    /// RP_PAIR_WAIT_MS.
+    pub const WAIT_MS: i64 = 300 * 1000;
+
+    extern "C" {
+        fn rpt_reset();
+        fn rpt_set_prepare(rc: c_int);
+        fn rpt_set_gen(rc: c_int, pin: u32);
+        fn rpt_set_devices(n: c_int);
+        fn rpt_set_confirm(rc: c_int, status: u32, err: u32);
+        fn rpt_block_confirm(on: c_int);
+        fn rpt_wait_in_confirm(ms: c_int) -> c_int;
+        fn rpt_request(now_ms: i64) -> c_int;
+        fn rpt_poll(now_ms: i64) -> c_int;
+        fn rpt_cancel() -> c_int;
+        fn rpt_settle();
+        #[allow(clippy::too_many_arguments)]
+        fn rpt_view(
+            now_ms: i64,
+            state: *mut c_int,
+            seconds_left: *mut c_int,
+            pin: *mut c_char,
+            pin_cap: usize,
+            err: *mut c_char,
+            err_cap: usize,
+            probes: *mut u32,
+            last_status: *mut u32,
+        );
+        fn rpt_counts(out: *mut c_int);
+        fn rpt_last_notify() -> *const c_char;
+        fn rpt_state_name(s: c_int) -> *const c_char;
+    }
+
+    /// What the payload would report.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct View {
+        pub state: i32,
+        pub seconds_left: i32,
+        pub pin: String,
+        pub err: String,
+        pub probes: u32,
+        pub last_status: u32,
+    }
+
+    /// How often each fake Sony call ran.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct Counts {
+        pub prepare: i32,
+        pub gen_pin: i32,
+        pub confirm: i32,
+        pub invalidate: i32,
+        pub device_count: i32,
+        pub notify: i32,
+    }
+
+    pub fn reset() {
+        unsafe { rpt_reset() }
+    }
+    pub fn set_prepare(rc: i32) {
+        unsafe { rpt_set_prepare(rc) }
+    }
+    pub fn set_gen(rc: i32, pin: u32) {
+        unsafe { rpt_set_gen(rc, pin) }
+    }
+    pub fn set_devices(n: i32) {
+        unsafe { rpt_set_devices(n) }
+    }
+    pub fn set_confirm(rc: i32, status: u32, err: u32) {
+        unsafe { rpt_set_confirm(rc, status, err) }
+    }
+    pub fn block_confirm(on: bool) {
+        unsafe { rpt_block_confirm(on as c_int) }
+    }
+    pub fn wait_in_confirm(ms: i32) -> bool {
+        unsafe { rpt_wait_in_confirm(ms) != 0 }
+    }
+    pub fn request(now_ms: i64) -> i32 {
+        unsafe { rpt_request(now_ms) }
+    }
+    pub fn poll(now_ms: i64) -> i32 {
+        unsafe { rpt_poll(now_ms) }
+    }
+    /// True when the live PIN still has to be invalidated on the console.
+    pub fn cancel() -> bool {
+        unsafe { rpt_cancel() != 0 }
+    }
+    pub fn settle() {
+        unsafe { rpt_settle() }
+    }
+    pub fn view(now_ms: i64) -> View {
+        let (mut state, mut secs, mut probes, mut last) = (0, 0, 0u32, 0u32);
+        let mut pin = [0 as c_char; 16];
+        let mut err = [0 as c_char; 160];
+        unsafe {
+            rpt_view(
+                now_ms,
+                &mut state,
+                &mut secs,
+                pin.as_mut_ptr(),
+                pin.len(),
+                err.as_mut_ptr(),
+                err.len(),
+                &mut probes,
+                &mut last,
+            );
+            View {
+                state,
+                seconds_left: secs,
+                pin: CStr::from_ptr(pin.as_ptr()).to_string_lossy().into_owned(),
+                err: CStr::from_ptr(err.as_ptr()).to_string_lossy().into_owned(),
+                probes,
+                last_status: last,
+            }
+        }
+    }
+    pub fn counts() -> Counts {
+        let mut o = [0 as c_int; 6];
+        unsafe { rpt_counts(o.as_mut_ptr()) };
+        Counts {
+            prepare: o[0],
+            gen_pin: o[1],
+            confirm: o[2],
+            invalidate: o[3],
+            device_count: o[4],
+            notify: o[5],
+        }
+    }
+    pub fn last_notify() -> String {
+        unsafe {
+            CStr::from_ptr(rpt_last_notify())
+                .to_string_lossy()
+                .into_owned()
+        }
+    }
+    pub fn state_name(s: i32) -> String {
+        unsafe {
+            CStr::from_ptr(rpt_state_name(s))
+                .to_string_lossy()
+                .into_owned()
+        }
+    }
+}

@@ -159,7 +159,7 @@ SRCS := src/main.c src/runtime.c src/shell_builtin.c src/takeover.c src/legacy_t
         src/proc_list.c src/ptrace_remote.c src/shellui_rpc.c \
         src/sony_api_lock.c src/kernel_rw_lock.c src/sys_time.c \
         src/sys_registry.c src/smp_meta.c src/profile.c \
-        src/backup.c src/remoteplay.c src/fan_curve.c src/fan_map.c src/notif.c \
+        src/backup.c src/remoteplay.c src/rp_pair.c src/fan_curve.c src/fan_map.c src/notif.c \
         src/wake_watchdog.c src/cheats.c src/cheats_list.c src/xml_encoding.c src/activity.c src/sdk_changer.c src/fakelib_overlay.c \
         src/tmdb.c src/fw_spoof.c src/ftp_server.c src/focus_probe.c \
         src/content_db.c src/mgmt_rpc.c src/fs_jobs.c src/net_probe.c src/mgmt_fs.c src/path_policy.c \

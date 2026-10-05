@@ -15,21 +15,13 @@
 #include "sony_api_lock.h"
 #include "sys_registry.h"
 #include "rp_keys.h"
+#include "rp_pair.h"
 #include "fw_spoof.h"
 
 /* Forward declaration: rp_enable_locked calls this before it is
  * defined. See the serialization note at the bottom of this file for
  * why the cores must call each other rather than the public wrappers. */
 static int rp_readiness_json_locked(char *out, size_t out_size);
-
-#define RP_STATE_IDLE      0
-#define RP_STATE_STARTING  1
-#define RP_STATE_WAITING   2
-#define RP_STATE_PAIRED    3
-#define RP_STATE_FAILED    4
-#define RP_STATE_TIMEOUT   5
-
-#define RP_WAIT_SECONDS    300
 
 /* sceRemoteplayInitialize's "already initialised" return.
  *
@@ -79,26 +71,28 @@ static void rp_user_service_ready(void) {
  * the callee read whatever happened to be in the argument registers.
  * That is why Remote Play never worked. */
 typedef int (*rp_init_fn)(void *opt, size_t opt_size);
-typedef int (*rp_get_op_status_fn)(int32_t user_id);
-typedef int (*rp_get_conn_status_fn)(void);
 /* Writes the PIN through its ONLY argument. The previous
  * `(user_id, char*, size_t)` form passed an integer where the callee
  * performs a pointer store — a wild write, not a PIN. */
 typedef int (*rp_gen_pin_fn)(uint32_t *out_pin);
-typedef int (*rp_is_playing_fn)(void);
-typedef int (*rp_get_mode_fn)(void);
-typedef int (*rp_disconnect_fn)(void);
-/* ConfirmDeviceRegist reports the authoritative pairing outcome:
- *   status 2 = paired, 3/4 = failed (with errcode for diagnostics).
- * NotifyPinCodeError clears stale PIN-error state from a prior session. */
+/* The registration outcome for the live PIN (measured on a Fat at FW 13.60:
+ * returns at once, status 0 while nobody has registered). The status values
+ * rp_pair.h acts on are RP_CONFIRM_*. */
 typedef int (*rp_confirm_regist_fn)(uint32_t *status, uint32_t *errcode);
+/* Called with 1, makes the live PIN unusable: how a PIN is cancelled,
+ * expired or replaced. */
 typedef int (*rp_notify_pin_err_fn)(int errcode);
 
+/* Not used, on purpose: sceRemoteplayGetConnectionStatus and
+ * sceRemoteplayIsRemotePlaying. The old status poll called them with no
+ * arguments as a "pairing done?" fallback; GetConnectionStatus then answered
+ * 0x80FC0001 (bad argument) and any non-zero answer was read as "paired",
+ * so every PIN showed as paired on the first poll (FW 13.60). A session
+ * being up is not a registration anyway. sceRemoteplayDisconnect is not used
+ * either: cancelling a PIN must not drop someone's running session. */
+
 static rp_init_fn           g_init         = NULL;
-static rp_get_conn_status_fn g_conn_status = NULL;
 static rp_gen_pin_fn        g_gen_pin      = NULL;
-static rp_is_playing_fn     g_is_playing   = NULL;
-static rp_disconnect_fn     g_disconnect   = NULL;
 static rp_confirm_regist_fn g_confirm_regist = NULL;
 static rp_notify_pin_err_fn g_notify_pin_err = NULL;
 
@@ -126,10 +120,7 @@ static void resolve_impl(void) {
         lib = RTLD_DEFAULT;
     }
     g_init       = (rp_init_fn)dlsym(lib, "sceRemoteplayInitialize");
-    g_conn_status= (rp_get_conn_status_fn)dlsym(lib, "sceRemoteplayGetConnectionStatus");
     g_gen_pin    = (rp_gen_pin_fn)dlsym(lib, "sceRemoteplayGeneratePinCode");
-    g_is_playing = (rp_is_playing_fn)dlsym(lib, "sceRemoteplayIsRemotePlaying");
-    g_disconnect = (rp_disconnect_fn)dlsym(lib, "sceRemoteplayDisconnect");
     g_confirm_regist = (rp_confirm_regist_fn)dlsym(lib, "sceRemoteplayConfirmDeviceRegist");
     g_notify_pin_err = (rp_notify_pin_err_fn)dlsym(lib, "sceRemoteplayNotifyPinCodeError");
     g_resolved = 1;
@@ -293,38 +284,6 @@ static void rp_get_account_id(char *out, size_t out_sz) {
     snprintf(out, out_sz, "%s", b64);
 }
 
-/* Enumerate the 32-slot registration table — the devices this console
- * has been paired with.
- *
- * A slot whose user_id reads 0 is empty. regist_key and aes_key are
- * deliberately NOT reported: they are pairing secrets, nothing in the UI
- * needs them, and they should not travel over the wire. */
-static int rp_devices_json_locked(char *out, size_t out_size) {
-    size_t n = 0;
-    int first = 1;
-
-    n += (size_t)snprintf(out + n, out_size - n, "{\"devices\":[");
-    for (uint32_t slot = 1; slot <= 32; slot++) {
-        int user_id = 0;
-        int client_type = 0;
-        uint32_t ec = 0;
-        if (sys_registry_get_int(rp_key_regist_user_id(slot), &user_id, &ec) != 0) {
-            continue;
-        }
-        if (user_id == 0 || user_id == -1) continue;
-        (void)sys_registry_get_int(rp_key_regist_client_type(slot),
-                                   &client_type, NULL);
-        /* Leave room for the closing "]}" plus a NUL. */
-        if (n + 80 >= out_size) break;
-        n += (size_t)snprintf(out + n, out_size - n,
-                              "%s{\"slot\":%u,\"user_id\":%d,\"client_type\":%d}",
-                              first ? "" : ",", slot, user_id, client_type);
-        first = 0;
-    }
-    n += (size_t)snprintf(out + n, out_size - n, "]}");
-    return (int)n;
-}
-
 /* Turn Remote Play on.
  *
  * Two scopes, because FW 10.00 split them: the system-wide service
@@ -465,46 +424,45 @@ static void rp_json_escape(const char *src, char *dst, size_t dst_cap) {
     dst[i] = 0;
 }
 
-static pthread_mutex_t g_rp_mtx = PTHREAD_MUTEX_INITIALIZER;
-static int g_rp_state = RP_STATE_IDLE;
-static char g_rp_err[128] = "";
-static char g_rp_pin[16] = "";
-static char g_rp_account_id[32] = "";
-/* CLOCK_MONOTONIC seconds (never 0 once armed): the date can be set under us (time.set, the app's clock
- * sync), and a wall-clock deadline would then expire or never come (final review: console). */
-static int64_t g_rp_deadline = 0;
+/* ── Pairing ─────────────────────────────────────────────────────────
+ *
+ * The state machine is rp_pair.c (pure, host-tested). This file supplies the
+ * Sony calls it makes and the locking around them:
+ *
+ *   request, status  take sony_api_lock for the whole call, like every other
+ *                    Remote Play entry point;
+ *   cancel           flips the state to idle without any Sony lock, then
+ *                    tries for the lock for a bounded time to invalidate the
+ *                    PIN. If the lock is busy, the invalidation is owed and the
+ *                    next status or request settles it. A cancel therefore
+ *                    never waits on a Sony call.
+ *
+ * Pairing advances through status polls (no thread, no sleep loop): each
+ * status call makes one ConfirmDeviceRegist probe. Nothing here kills or
+ * restarts Sony's SceRemotePlay daemon: that froze a PS5 Pro on FW 9.60. */
 
-static int64_t rp_mono_s(void) {
+static pthread_once_t g_pair_once = PTHREAD_ONCE_INIT;
+static rp_pair_t g_pair;
+/* The account id shown next to the PIN; set by a request. */
+static pthread_mutex_t g_rp_acct_mtx = PTHREAD_MUTEX_INITIALIZER;
+static char g_rp_account_id[32] = "";
+
+/* How long a cancel waits for the Sony lock before leaving the PIN's
+ * invalidation to the next status call. */
+#define RP_CANCEL_LOCK_MS 1500
+
+static void rp_pair_once(void) {
+    rp_pair_init(&g_pair);
+}
+
+static int64_t rp_mono_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec + 1; /* +1: a deadline is never 0, which means "none" */
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-/* Clear stale Remote Play pairing state.
- *
- * This used to find the SceRemotePlay system daemon and proc_kill() it,
- * then wait up to 6.5s for the OS to respawn it. That is the same hazard
- * as SIGKILLing SceShellUI (see ptrace_recovery.h): killing a Sony system
- * process to "reset" it can wedge the whole console, and it did — a PS5
- * Pro on FW 9.60 froze on a pairing request and needed a hard reboot.
- *
- * Sony provides the supported way to do this: sceRemoteplayNotifyPinCodeError(1)
- * clears stale PIN state, which is what the reference implementations use
- * and what the caller already invokes. Nothing here needs to kill anything.
- */
-static void rp_reset_daemon(void) {
-    /* Intentionally empty. See the comment above: the daemon must not be
-     * killed. Kept as a named no-op so the call site still reads as
-     * "clear stale state" and nobody reintroduces the kill. */
-}
-
-/* ── Auto-enable Remote Play in registry ────────────────────────────
- *
- * If the rp_enable registry key is 0 (Remote Play disabled in System
- * Settings), the PIN we generate is unusable. Force it to 1 so the
- * pairing handshake succeeds. Best-effort — a registry write failure
- * is logged but doesn't block the PIN flow (some firmwares may reject
- * the write or have already enabled it). */
+/* Auto-enable the service before making a PIN: with rp_enable at 0 the PIN
+ * is unusable and the registration fails without a reason. */
 static void rp_ensure_enabled(void) {
     int enabled = 0;
     if (sys_registry_get_int(SCE_REGMGR_ENT_KEY_REMOTEPLAY_rp_enable,
@@ -514,271 +472,190 @@ static void rp_ensure_enabled(void) {
     }
 }
 
-static const char *state_name(int s) {
-    switch (s) {
-        case RP_STATE_IDLE: return "idle";
-        case RP_STATE_STARTING: return "starting";
-        case RP_STATE_WAITING: return "waiting";
-        case RP_STATE_PAIRED: return "paired";
-        case RP_STATE_FAILED: return "failed";
-        case RP_STATE_TIMEOUT: return "timeout";
-        default: return "unknown";
+/* ── Sony calls for rp_pair (the caller holds sony_api_lock) ── */
+
+static int rp_cb_prepare(void *ctx, char *err, size_t cap) {
+    (void)ctx;
+    resolve_once();
+    if (!g_init || !g_gen_pin || !g_confirm_regist) {
+        snprintf(err, cap, "this firmware does not expose sceRemoteplay to the payload");
+        return -1;
     }
+    rp_ensure_enabled();
+    /* "Already initialised" (0x80FC0003) is what every call after the first
+     * in a payload's lifetime returns, and it means ready. Treating it as
+     * fatal made every pairing after the first fail until the payload was
+     * re-sent (measured on a Pro at 9.60 and a Fat at 5.10). */
+    int64_t t0 = rp_mono_ms();
+    int rc = g_init(0, 0);
+    fprintf(stderr, "[remoteplay] Initialize rc=0x%08X (%lld ms)\n", (unsigned)rc,
+            (long long)(rp_mono_ms() - t0));
+    if (rc == RP_ERR_ALREADY_INITIALIZED) rc = 0;
+    if (rc != 0) {
+        snprintf(err, cap, "sceRemoteplayInitialize failed: 0x%08X", (unsigned)rc);
+        return -1;
+    }
+    /* A signed-in user with an activated account; not necessarily the
+     * foreground one (a console on the dashboard has none, and pairs fine). */
+    if (rp_resolve_account_slot(NULL, NULL) < 0) {
+        snprintf(err, cap, "no signed-in user with an activated PSN account");
+        return -1;
+    }
+    return 0;
+}
+
+static int rp_cb_gen_pin(void *ctx, uint32_t *pin) {
+    (void)ctx;
+    int64_t t0 = rp_mono_ms();
+    int rc = g_gen_pin(pin);
+    fprintf(stderr, "[remoteplay] GeneratePinCode rc=0x%08X (%lld ms)\n", (unsigned)rc,
+            (long long)(rp_mono_ms() - t0));
+    return rc;
+}
+
+static int rp_cb_confirm(void *ctx, uint32_t *status, uint32_t *errcode) {
+    (void)ctx;
+    /* Log only changes: the client polls every couple of seconds. */
+    static int last_rc = -1;
+    static uint32_t last_status = 0xFFFFFFFFu, last_err = 0xFFFFFFFFu;
+    int64_t t0 = rp_mono_ms();
+    int rc = g_confirm_regist(status, errcode);
+    int64_t ms = rp_mono_ms() - t0;
+    if (rc != last_rc || *status != last_status || *errcode != last_err || ms > 500) {
+        fprintf(stderr, "[remoteplay] ConfirmDeviceRegist rc=0x%08X status=%u err=0x%08X (%lld ms)\n",
+                (unsigned)rc, (unsigned)*status, (unsigned)*errcode, (long long)ms);
+        last_rc = rc;
+        last_status = *status;
+        last_err = *errcode;
+    }
+    return rc;
+}
+
+static int rp_cb_invalidate(void *ctx) {
+    (void)ctx;
+    resolve_once();
+    if (!g_notify_pin_err) return -1;
+    int rc = g_notify_pin_err(1);
+    fprintf(stderr, "[remoteplay] NotifyPinCodeError(1) rc=0x%08X\n", (unsigned)rc);
+    return rc;
+}
+
+/* Is registration slot `slot` in use? Fills its user id and client type. */
+static int rp_device_slot(uint32_t slot, int *user_id, int *client_type) {
+    int uid = 0;
+    uint32_t ec = 0;
+    if (sys_registry_get_int(rp_key_regist_user_id(slot), &uid, &ec) != 0) return 0;
+    if (uid == 0 || uid == -1) return 0;
+    if (user_id) *user_id = uid;
+    if (client_type) {
+        *client_type = 0;
+        (void)sys_registry_get_int(rp_key_regist_client_type(slot), client_type, NULL);
+    }
+    return 1;
+}
+
+static int rp_cb_device_count(void *ctx) {
+    (void)ctx;
+    int n = 0;
+    for (uint32_t slot = 1; slot <= 32; slot++) n += rp_device_slot(slot, NULL, NULL);
+    return n;
+}
+
+static void rp_cb_notify(void *ctx, const char *msg, int level) {
+    (void)ctx;
+    int lv = level == 2 ? NOTIF_LEVEL_ERROR : level == 1 ? NOTIF_LEVEL_WARN : NOTIF_LEVEL_INFO;
+    fprintf(stderr, "[remoteplay] %s\n", msg);
+    notif_send(msg, lv);
+}
+
+/* Every op. Only for callers that hold sony_api_lock. */
+static rp_pair_ops_t rp_full_ops(void) {
+    rp_pair_ops_t o;
+    memset(&o, 0, sizeof(o));
+    o.prepare = rp_cb_prepare;
+    o.gen_pin = rp_cb_gen_pin;
+    o.confirm = rp_cb_confirm;
+    o.invalidate = rp_cb_invalidate;
+    o.device_count = rp_cb_device_count;
+    o.notify = rp_cb_notify;
+    return o;
+}
+
+/* Only the invalidation, for a cancel that got the lock. */
+static rp_pair_ops_t rp_settle_ops(void) {
+    rp_pair_ops_t o;
+    memset(&o, 0, sizeof(o));
+    o.invalidate = rp_cb_invalidate;
+    return o;
+}
+
+/* Take sony_api_lock if it frees up within `ms`; 1 = held. */
+static int rp_sony_trylock_for(int ms) {
+    int64_t until = rp_mono_ms() + ms;
+    for (;;) {
+        if (pthread_mutex_trylock(&sony_api_lock) == 0) return 1;
+        if (rp_mono_ms() >= until) return 0;
+        usleep(20 * 1000);
+    }
+}
+
+static int rp_devices_json_locked(char *out, size_t out_size) {
+    size_t n = 0;
+    int first = 1;
+
+    n += (size_t)snprintf(out + n, out_size - n, "{\"devices\":[");
+    for (uint32_t slot = 1; slot <= 32; slot++) {
+        int user_id = 0;
+        int client_type = 0;
+        if (!rp_device_slot(slot, &user_id, &client_type)) continue;
+        /* Leave room for the closing "]}" plus a NUL. */
+        if (n + 80 >= out_size) break;
+        n += (size_t)snprintf(out + n, out_size - n,
+                              "%s{\"slot\":%u,\"user_id\":%d,\"client_type\":%d}",
+                              first ? "" : ",", slot, user_id, client_type);
+        first = 0;
+    }
+    n += (size_t)snprintf(out + n, out_size - n, "]}");
+    return (int)n;
 }
 
 void remoteplay_init(void) {
-    pthread_mutex_lock(&g_rp_mtx);
-    g_rp_state = RP_STATE_IDLE;
-    g_rp_err[0] = 0;
-    g_rp_pin[0] = 0;
+    pthread_once(&g_pair_once, rp_pair_once);
+    (void)rp_pair_cancel(&g_pair);
+    pthread_mutex_lock(&g_rp_acct_mtx);
     g_rp_account_id[0] = 0;
-    g_rp_deadline = 0;
-    pthread_mutex_unlock(&g_rp_mtx);
+    pthread_mutex_unlock(&g_rp_acct_mtx);
 }
 
-static int rp_request_locked(const char *manual_account_id) {
-    resolve_once();
+static void rp_format_status(const rp_pair_view_t *v, char *buf, size_t cap) {
+    char acct[sizeof(g_rp_account_id)];
+    pthread_mutex_lock(&g_rp_acct_mtx);
+    snprintf(acct, sizeof(acct), "%s", g_rp_account_id);
+    pthread_mutex_unlock(&g_rp_acct_mtx);
 
-    /* Resolve the account id before taking the lock — it does registry +
-     * user-service IPC we don't want to hold g_rp_mtx across (status
-     * polls contend on it). A caller-supplied id wins; otherwise
-     * auto-detect the foreground user's so the UI can show what Chiaki/
-     * pxplay need without the user hunting it down. */
-    char account_id[sizeof(g_rp_account_id)] = "";
-    if (manual_account_id && manual_account_id[0]) {
-        snprintf(account_id, sizeof(account_id), "%s", manual_account_id);
-    } else {
-        rp_get_account_id(account_id, sizeof(account_id));
-    }
-
-    pthread_mutex_lock(&g_rp_mtx);
-    g_rp_pin[0] = 0;
-    snprintf(g_rp_account_id, sizeof(g_rp_account_id), "%s", account_id);
-    g_rp_err[0] = 0;
-    g_rp_deadline = 0;
-    if (!g_resolved) {
-        g_rp_state = RP_STATE_FAILED;
-        snprintf(g_rp_err, sizeof(g_rp_err), "remoteplay symbols not resolved");
-        pthread_mutex_unlock(&g_rp_mtx);
-        return -1;
-    }
-    if (!g_init || !g_gen_pin) {
-        g_rp_state = RP_STATE_FAILED;
-        snprintf(g_rp_err, sizeof(g_rp_err), "sceRemoteplayInitialize/GeneratePinCode unavailable");
-        pthread_mutex_unlock(&g_rp_mtx);
-        return -1;
-    }
-
-    g_rp_state = RP_STATE_STARTING;
-    pthread_mutex_unlock(&g_rp_mtx);
-
-    /* Clear stale Remote Play daemon state before initializing. Without
-     * this, a prior failed pairing attempt can leave the IPC channel in
-     * a bad state, causing Initialize or GeneratePinCode to fail. */
-    rp_reset_daemon();
-
-    /* Ensure Remote Play is enabled in system settings — if the user
-     * never toggled Settings → System → Remote Play, the PIN would be
-     * unusable. Force the registry key on before we proceed. */
-    rp_ensure_enabled();
-
-    /* Clear stale PIN-error state from any prior session. */
-    if (g_notify_pin_err) (void)g_notify_pin_err(1);
-
-    /* Initialize the Remoteplay module. Sony's init is idempotent — a
-     * second call returns a benign "already initialised" code which we
-     * treat as success.
-     *
-     * The comment above was true of the intent and false of the code: any
-     * non-zero return was fatal, so only the FIRST pairing attempt in a
-     * payload's lifetime could work. Every later one died on
-     * 0x80FC0003 and the console looked broken until the payload was
-     * re-sent. Measured on both a PS5 Pro (9.60) and a Fat (5.10): fresh
-     * payload succeeds, immediate retry returns 0x80FC0003, re-sending the
-     * payload fixes it — which is what "already initialised" looks like. */
-    int rc = g_init(0, 0);
-    if (rc == RP_ERR_ALREADY_INITIALIZED) rc = 0;
-    if (rc != 0) {
-        pthread_mutex_lock(&g_rp_mtx);
-        g_rp_state = RP_STATE_FAILED;
-        snprintf(g_rp_err, sizeof(g_rp_err),
-                 "sceRemoteplayInitialize failed: 0x%08X", (unsigned)rc);
-        pthread_mutex_unlock(&g_rp_mtx);
-        return -1;
-    }
-
-    /* Require a signed-in user with an activated account.
-     *
-     * This used to demand a FOREGROUND user, which refused to generate a
-     * PIN on a console sitting on the dashboard with nobody on screen
-     * (measured on a PS5 Pro at FW 9.60: rc=0 and uid=-1, i.e. the call
-     * succeeded and honestly reported "nobody"). The uid is not passed to
-     * sceRemoteplayGeneratePinCode — it takes only the out-param — so the
-     * foreground was never a functional requirement, just a gate that
-     * happened to be true on the console it was written against. */
-    int uid = 0;
-    const char *via = "none";
-    if (rp_resolve_account_slot(&uid, &via) < 0) {
-        pthread_mutex_lock(&g_rp_mtx);
-        g_rp_state = RP_STATE_FAILED;
-        snprintf(g_rp_err, sizeof(g_rp_err),
-                 "no signed-in user with an activated PSN account");
-        pthread_mutex_unlock(&g_rp_mtx);
-        return -1;
-    }
-
-    /* Generate the pairing PIN. The caller enters this in the Remote
-     * Play client to pair with this console. */
-    uint32_t pin_raw = 0;
-    rc = g_gen_pin(&pin_raw);
-    char pin[16];
-    snprintf(pin, sizeof(pin), "%08u", (unsigned)pin_raw);
-    if (rc != 0) {
-        pthread_mutex_lock(&g_rp_mtx);
-        g_rp_state = RP_STATE_FAILED;
-        snprintf(g_rp_err, sizeof(g_rp_err),
-                 "sceRemoteplayGeneratePinCode failed: 0x%08X", (unsigned)rc);
-        pthread_mutex_unlock(&g_rp_mtx);
-        return -1;
-    }
-
-    pthread_mutex_lock(&g_rp_mtx);
-    snprintf(g_rp_pin, sizeof(g_rp_pin), "%s", pin);
-    g_rp_state = RP_STATE_WAITING;
-    g_rp_deadline = rp_mono_s() + RP_WAIT_SECONDS;
-    g_rp_err[0] = 0;
-    pthread_mutex_unlock(&g_rp_mtx);
-
-    /* On-console notification so someone at the TV sees the PIN without
-     * needing to look at the desktop app. */
-    char notif_msg[128];
-    snprintf(notif_msg, sizeof(notif_msg),
-             "[ps5upload] Remote Play PIN: %s", pin);
-    notif_send(notif_msg, NOTIF_LEVEL_INFO);
-
-    return 0;
+    char err_esc[sizeof(v->err) * 2];
+    char pin_esc[sizeof(v->pin) * 2];
+    char acct_esc[sizeof(acct) * 2];
+    rp_json_escape(v->err, err_esc, sizeof(err_esc));
+    rp_json_escape(v->pin, pin_esc, sizeof(pin_esc));
+    rp_json_escape(acct, acct_esc, sizeof(acct_esc));
+    snprintf(buf, cap,
+             "{\"state\":\"%s\",\"pin\":\"%s\",\"account_id\":\"%s\","
+             "\"seconds_left\":%d,\"err\":\"%s\",\"probes\":%u,"
+             "\"confirm_rc\":%u,\"confirm_status\":%u,\"confirm_err\":%u}",
+             rp_pair_state_name(v->state), pin_esc, acct_esc, v->seconds_left,
+             err_esc, (unsigned)v->probes, (unsigned)v->last_rc,
+             (unsigned)v->last_status, (unsigned)v->last_err);
 }
 
-static int rp_get_status_locked(char *buf, size_t cap) {
-    if (!buf || cap == 0) return -1;
-    resolve_once();
-
-    pthread_mutex_lock(&g_rp_mtx);
-    int s = g_rp_state;
-
-    /* If we're WAITING, probe for pairing completion. Prefer
-     * ConfirmDeviceRegist (authoritative status codes + error reasons)
-     * when available; fall back to connection/playing status polling. */
-    if (s == RP_STATE_WAITING) {
-        if (g_resolved && g_confirm_regist) {
-            uint32_t status = 0, errcode = 0;
-            if (g_confirm_regist(&status, &errcode) == 0) {
-                if (status == 2) {
-                    g_rp_state = RP_STATE_PAIRED;
-                    s = RP_STATE_PAIRED;
-                    notif_send("[ps5upload] Remote Play pairing successful",
-                               NOTIF_LEVEL_INFO);
-                } else if (status == 3 || status == 4) {
-                    const char *reason =
-                        errcode == 0x80FC1047u ? "invalid PIN" :
-                        errcode == 0x80FC1040u ? "invalid account id" :
-                        "failed";
-                    g_rp_state = RP_STATE_FAILED;
-                    s = RP_STATE_FAILED;
-                    snprintf(g_rp_err, sizeof(g_rp_err),
-                             "pairing %s (0x%08X)", reason, errcode);
-                    char nmsg[160];
-                    snprintf(nmsg, sizeof(nmsg),
-                             "[ps5upload] Remote Play pairing %s", reason);
-                    notif_send(nmsg, NOTIF_LEVEL_ERROR);
-                }
-            }
-        }
-        /* Fall back to connection-status polling if ConfirmDeviceRegist
-         * is unavailable or returned a non-final status. */
-        if (s == RP_STATE_WAITING && g_resolved && g_conn_status && g_is_playing) {
-            int conn = g_conn_status();
-            int playing = g_is_playing();
-            if (conn != 0 || playing != 0) {
-                g_rp_state = RP_STATE_PAIRED;
-                s = RP_STATE_PAIRED;
-            }
-        }
-        if (s == RP_STATE_WAITING && g_rp_deadline != 0) {
-            if (rp_mono_s() >= g_rp_deadline) {
-                g_rp_state = RP_STATE_TIMEOUT;
-                s = RP_STATE_TIMEOUT;
-                if (g_notify_pin_err) (void)g_notify_pin_err(1);
-                notif_send("[ps5upload] Remote Play PIN timed out",
-                           NOTIF_LEVEL_WARN);
-            }
-        }
-    }
-
-    int seconds_left = 0;
-    if (s == RP_STATE_WAITING && g_rp_deadline != 0) {
-        int64_t now = rp_mono_s();
-        if (now < g_rp_deadline) {
-            seconds_left = (int)(g_rp_deadline - now);
-        }
-    }
-
-    char err_esc[160];
-    char pin_esc[32];
-    char acct_esc[48];
-    rp_json_escape(g_rp_err, err_esc, sizeof(err_esc));
-    rp_json_escape(g_rp_pin, pin_esc, sizeof(pin_esc));
-    rp_json_escape(g_rp_account_id, acct_esc, sizeof(acct_esc));
-    int len = snprintf(buf, cap,
-        "{\"state\":\"%s\",\"pin\":\"%s\",\"account_id\":\"%s\","
-        "\"seconds_left\":%d,\"err\":\"%s\"}",
-        state_name(s), pin_esc, acct_esc, seconds_left, err_esc);
-    pthread_mutex_unlock(&g_rp_mtx);
-    return len > 0 ? 0 : -1;
-}
-
-static int rp_cancel_locked(void) {
-    resolve_once();
-    pthread_mutex_lock(&g_rp_mtx);
-    int s = g_rp_state;
-    g_rp_state = RP_STATE_IDLE;
-    g_rp_err[0] = 0;
-    g_rp_pin[0] = 0;
-    g_rp_deadline = 0;
-    pthread_mutex_unlock(&g_rp_mtx);
-
-    /* Disconnect any active session. Done outside the lock to avoid
-     * holding the mutex over a Sony IPC round-trip. */
-    if (s == RP_STATE_WAITING || s == RP_STATE_PAIRED) {
-        if (g_resolved && g_disconnect) {
-            (void)g_disconnect();
-        }
-    }
-    return 0;
-}
-
-/* ── Sony-API serialization ──────────────────────────────────────────
+/* ── Public entry points ──────────────────────────────────────────────
  *
- * Every function below touches sceUserService, sceRegMgr or
- * sceRemoteplay. Those APIs are not safe to call concurrently from
- * multiple connection threads — the same hazard handle_profile_info,
- * register.c and bgft.c already serialize on `sony_api_lock`. The
- * Remote Play entry points were the one Sony-API surface in the
- * payload that did not, so a Profile-screen read racing the desktop's
- * Remote Play status poll could fault inside sceUserService and take
- * the host process down with it (console error CE-108262-9).
- *
- * The lock is held for a whole entry point rather than per call. That
- * is safe here because none of these block: there is no thread, no
- * sleep and no poll loop — pairing progresses through repeated short
- * `remoteplay_get_status` calls. Holding it across the network send
- * would be wrong, so the callers in runtime.c send AFTER these return.
- *
- * Thin wrappers, rather than lock/unlock inside each function, so that
- * the many early `return`s cannot leak the mutex. Internal cross-calls
- * go core-to-core (`rp_enable_locked` -> `rp_readiness_json_locked`);
- * `sony_api_lock` is not recursive, so calling a public wrapper from
- * inside another core would deadlock. */
+ * Every function below that touches sceUserService, sceRegMgr or
+ * sceRemoteplay holds sony_api_lock for the whole call: those APIs are not
+ * safe to call from several management workers at once (a Profile read
+ * racing a Remote Play poll took the host process down, CE-108262-9). The
+ * lock is not recursive, so cores call cores, never these wrappers. Callers
+ * in runtime.c send their reply after these return. */
 
 int remoteplay_devices_json(char *out, size_t out_size) {
     pthread_mutex_lock(&sony_api_lock);
@@ -803,38 +680,68 @@ int remoteplay_readiness_json(char *out, size_t out_size) {
 
 int remoteplay_pin_snapshot(char *out, size_t out_size) {
     if (!out || out_size == 0) return -1;
-    char pin[sizeof(g_rp_pin)];
+    pthread_once(&g_pair_once, rp_pair_once);
+    rp_pair_view_t v;
+    rp_pair_view(&g_pair, rp_mono_ms(), &v);
     char acct[sizeof(g_rp_account_id)];
-    pthread_mutex_lock(&g_rp_mtx);
-    snprintf(pin, sizeof(pin), "%s", g_rp_pin);
+    pthread_mutex_lock(&g_rp_acct_mtx);
     snprintf(acct, sizeof(acct), "%s", g_rp_account_id);
-    pthread_mutex_unlock(&g_rp_mtx);
+    pthread_mutex_unlock(&g_rp_acct_mtx);
 
-    char pin_esc[sizeof(pin) * 2];
+    char pin_esc[sizeof(v.pin) * 2];
     char acct_esc[sizeof(acct) * 2];
-    rp_json_escape(pin, pin_esc, sizeof(pin_esc));
+    rp_json_escape(v.pin, pin_esc, sizeof(pin_esc));
     rp_json_escape(acct, acct_esc, sizeof(acct_esc));
     return snprintf(out, out_size, "{\"pin\":\"%s\",\"account_id\":\"%s\"}",
                     pin_esc, acct_esc);
 }
 
 int remoteplay_request(const char *manual_account_id) {
+    pthread_once(&g_pair_once, rp_pair_once);
     pthread_mutex_lock(&sony_api_lock);
-    int rc = rp_request_locked(manual_account_id);
+    /* A caller-supplied account id wins; otherwise the one pairing will use,
+     * so the UI can show what Chiaki/pxplay need. */
+    char account_id[sizeof(g_rp_account_id)] = "";
+    if (manual_account_id && manual_account_id[0]) {
+        snprintf(account_id, sizeof(account_id), "%s", manual_account_id);
+    } else {
+        rp_get_account_id(account_id, sizeof(account_id));
+    }
+    pthread_mutex_lock(&g_rp_acct_mtx);
+    snprintf(g_rp_account_id, sizeof(g_rp_account_id), "%s", account_id);
+    pthread_mutex_unlock(&g_rp_acct_mtx);
+
+    rp_pair_ops_t ops = rp_full_ops();
+    int rc = rp_pair_request(&g_pair, &ops, rp_mono_ms());
     pthread_mutex_unlock(&sony_api_lock);
     return rc;
 }
 
 int remoteplay_get_status(char *buf, size_t cap) {
+    if (!buf || cap == 0) return -1;
+    pthread_once(&g_pair_once, rp_pair_once);
     pthread_mutex_lock(&sony_api_lock);
-    int rc = rp_get_status_locked(buf, cap);
+    rp_pair_ops_t ops = rp_full_ops();
+    (void)rp_pair_poll(&g_pair, &ops, rp_mono_ms());
     pthread_mutex_unlock(&sony_api_lock);
-    return rc;
+
+    rp_pair_view_t v;
+    rp_pair_view(&g_pair, rp_mono_ms(), &v);
+    rp_format_status(&v, buf, cap);
+    return 0;
 }
 
 int remoteplay_cancel(void) {
-    pthread_mutex_lock(&sony_api_lock);
-    int rc = rp_cancel_locked();
-    pthread_mutex_unlock(&sony_api_lock);
-    return rc;
+    pthread_once(&g_pair_once, rp_pair_once);
+    /* Idle first, with no Sony lock: the answer must not wait on a Sony call
+     * another worker is inside. */
+    if (!rp_pair_cancel(&g_pair)) return 0;
+    if (rp_sony_trylock_for(RP_CANCEL_LOCK_MS)) {
+        rp_pair_ops_t ops = rp_settle_ops();
+        rp_pair_settle(&g_pair, &ops);
+        pthread_mutex_unlock(&sony_api_lock);
+    } else {
+        fprintf(stderr, "[remoteplay] cancel: Sony lock busy, PIN invalidation left to the next poll\n");
+    }
+    return 0;
 }
