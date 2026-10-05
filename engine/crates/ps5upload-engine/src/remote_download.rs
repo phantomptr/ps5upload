@@ -194,11 +194,16 @@ async fn start_handler(
             &format!("cannot create {}: {e}", dir.display()),
         );
     }
-    let name = safe_file_name(if probe.filename.is_empty() {
+    let mut name = safe_file_name(if probe.filename.is_empty() {
         "package.pkg"
     } else {
         &probe.filename
     });
+    // A link that serves a package need not say so in its URL (a share link, a redirect, an
+    // extensionless path). The local file the install reads back must look like one.
+    if !name.to_ascii_lowercase().ends_with(".pkg") {
+        name.push_str(".pkg");
+    }
     let path = dir.join(name);
 
     // Refuse to silently resume into, or clobber, an unrelated file of the

@@ -1062,7 +1062,7 @@ interface PkgLibraryState {
   installUrl: (
     url: string,
     host: string,
-    opts?: { mode?: LinkInstallMode },
+    opts?: { mode?: LinkInstallMode; displayName?: string },
   ) => ReturnType<PkgLibraryState["installStream"]>;
   /** Download a link to this computer's disk, then install the local file.
    *
@@ -3128,6 +3128,8 @@ const makePkgLibraryStore = () =>
       } catch {
         /* _execUrl reports the invalid link */
       }
+      // A redirect or an extensionless link says nothing in its own path; the probe's name does.
+      if (opts?.displayName) name = opts.displayName;
       return enqueueInstall({
         host,
         request: {

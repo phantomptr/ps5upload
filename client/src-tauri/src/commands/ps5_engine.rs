@@ -2714,6 +2714,42 @@ pub async fn pkg_remote_probe(url: String) -> Result<JsonValue, String> {
     let endpoint = format!("{}/api/pkg/remote/probe", engine::url());
     post_json(&endpoint, &serde_json::json!({ "url": url })).await
 }
+/// What an HTTP(S) link actually serves (R4, #368): a package, some other real file, or
+/// something that is not a download. Decided by the engine from the redirected response.
+/// Proxies `/api/link/probe`.
+#[tauri::command]
+pub async fn link_probe(url: String, insecure_tls: Option<bool>) -> Result<JsonValue, String> {
+    let endpoint = format!("{}/api/link/probe", engine::url());
+    post_json(
+        &endpoint,
+        &serde_json::json!({ "url": url, "insecure_tls": insecure_tls.unwrap_or(false) }),
+    )
+    .await
+}
+
+/// Download a link's file to a console folder over AVA1 (R4, #368). `req` is the engine's
+/// `/api/link/download` body (url, dest_dir, addr, file_name, insecure_tls, ...).
+#[tauri::command]
+pub async fn link_download(req: JsonValue) -> Result<JsonValue, String> {
+    let endpoint = format!("{}/api/link/download", engine::url());
+    post_json_long(&endpoint, &req).await
+}
+
+/// The `.pkg` entries of a RAR, from its headers (R6, #370). Proxies `/api/rar/packages`.
+#[tauri::command]
+pub async fn rar_packages(req: RarInspectReq) -> Result<JsonValue, String> {
+    let endpoint = format!("{}/api/rar/packages", engine::url());
+    let body = serde_json::json!({ "archive_path": req.archive_path, "password": req.password });
+    post_json_long(&endpoint, &body).await
+}
+
+/// Identify a package already on the console (R6, #370). Proxies `/api/pkg/console-probe`.
+#[tauri::command]
+pub async fn pkg_console_probe(host: String, path: String) -> Result<JsonValue, String> {
+    let endpoint = format!("{}/api/pkg/console-probe", engine::url());
+    post_json_long(&endpoint, &serde_json::json!({ "host": host, "path": path })).await
+}
+
 /// Unified install (spec 2): start an install through the one engine
 /// endpoint. `req` is the full InstallRequest object (ps5_addr, source,
 /// content_id, title_id, package_app_ver, category, options).
