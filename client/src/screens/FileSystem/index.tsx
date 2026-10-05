@@ -1497,17 +1497,22 @@ export default function FileSystemScreen() {
         const cancelWatcher = (async () => {
           while (!pollerStopped) {
             if (fsBulk.cancelRequested) {
+              // Keep asking until the engine says the op took the cancel: an early press
+              // lands before the engine has registered the copy, and a single try was
+              // lost (the copy ran to the end). The engine also remembers an early
+              // cancel, so this converges either way; the loop ends when the copy call
+              // returns (`pollerStopped`).
+              let acknowledged = false;
               try {
-                await fsOpCancel(addr, opId);
+                acknowledged = await fsOpCancel(addr, opId);
               } catch (e) {
-                // Best effort — even if the cancel RPC fails, the
-                // payload's cp_rf will still complete the current
-                // file and the loop will exit between items. On a
-                // single 28 GiB file though, "between items" never
-                // fires — log so we know when this drops.
+                // Best effort — a failed cancel RPC is retried below. On a single
+                // 28 GiB file "between items" never fires, so log when this drops.
                 console.warn("fsOpCancel (copy) failed:", e);
               }
-              break;
+              if (acknowledged) break;
+              await new Promise((r) => setTimeout(r, 300));
+              continue;
             }
             await new Promise((r) => setTimeout(r, 200));
           }

@@ -36,6 +36,36 @@ struct Op {
     cancel: Arc<AtomicBool>,
 }
 
+/// How long a cancel for an op the engine has not registered yet waits for it to register
+/// (final review #10). The window is the console-ready check before `register`.
+const PENDING_CANCEL_TTL: Duration = Duration::from_secs(120);
+const PENDING_CANCEL_MAX: usize = 64;
+
+/// Cancels that arrived before their copy registered: op id -> when. The user can press
+/// "Cancel copy" in the first moments, before the engine has an entry to flag; the cancel
+/// then used to answer "not running" and be forgotten while the copy ran to the end.
+fn pending_cancels() -> &'static Mutex<HashMap<u64, Instant>> {
+    static P: OnceLock<Mutex<HashMap<u64, Instant>>> = OnceLock::new();
+    P.get_or_init(Mutex::default)
+}
+
+fn remember_cancel(op_id: u64) {
+    let mut p = pending_cancels().lock().unwrap();
+    let now = Instant::now();
+    p.retain(|_, t| now.duration_since(*t) < PENDING_CANCEL_TTL);
+    if p.len() >= PENDING_CANCEL_MAX {
+        return;
+    }
+    p.insert(op_id, now);
+}
+
+/// Whether a cancel for `op_id` is waiting (and consumes it).
+fn take_pending_cancel(op_id: u64) -> bool {
+    let mut p = pending_cancels().lock().unwrap();
+    p.remove(&op_id)
+        .is_some_and(|t| t.elapsed() < PENDING_CANCEL_TTL)
+}
+
 fn ops() -> &'static Mutex<HashMap<u64, Op>> {
     static OPS: OnceLock<Mutex<HashMap<u64, Op>>> = OnceLock::new();
     OPS.get_or_init(Mutex::default)
@@ -57,7 +87,8 @@ fn register(op_id: u64, kind: &str, from: &str, to: &str) -> Result<(Registered,
             "op_id {op_id} is already running; a copy needs its own op id"
         ));
     }
-    let cancel = Arc::new(AtomicBool::new(false));
+    let early = take_pending_cancel(op_id);
+    let cancel = Arc::new(AtomicBool::new(early));
     map.insert(
         op_id,
         Op {
@@ -69,7 +100,7 @@ fn register(op_id: u64, kind: &str, from: &str, to: &str) -> Result<(Registered,
                 to: to.into(),
                 total_bytes: 0,
                 bytes_copied: 0,
-                cancel_requested: false,
+                cancel_requested: early,
             },
             cancel: cancel.clone(),
         },
@@ -92,7 +123,10 @@ pub fn op_snapshot(op_id: u64) -> Option<FsOpSnapshot> {
     ops().lock().unwrap().get(&op_id).map(|o| o.snap.clone())
 }
 
-/// Asks an op this module runs to stop. `false` for an id it does not own.
+/// Asks an op this module runs to stop. `false` for an id it does not own, in which case
+/// the cancel is also remembered for a short while and applied if a copy registers under that
+/// id (the caller may have pressed Stop before the engine registered it; it keeps asking until
+/// it hears `true`).
 pub fn op_cancel(op_id: u64) -> bool {
     match ops().lock().unwrap().get_mut(&op_id) {
         Some(op) => {
@@ -100,7 +134,10 @@ pub fn op_cancel(op_id: u64) -> bool {
             op.cancel.store(true, Ordering::Relaxed);
             true
         }
-        None => false,
+        None => {
+            remember_cancel(op_id);
+            false
+        }
     }
 }
 
@@ -299,6 +336,25 @@ impl CancelCleanup for ConsoleCleanup {
     }
 }
 
+/// A copy that stopped on the user's cancel. `Display` is exactly `cancelled` (the text the
+/// engine route maps to 409) only when the stop is clean: nothing of this copy was ever on the
+/// console, or the console itself confirmed it dropped the job. Otherwise it says what was
+/// left, and nothing is deleted (final review #2).
+#[derive(Debug)]
+pub struct CopyCancelled {
+    /// The console confirmed this copy's job is gone: its leftovers may be removed.
+    clean: bool,
+    note: Option<String>,
+}
+
+impl std::fmt::Display for CopyCancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.note.as_deref().unwrap_or("cancelled"))
+    }
+}
+
+impl std::error::Error for CopyCancelled {}
+
 #[allow(clippy::too_many_arguments)]
 pub fn console_copy_with(
     pool: &Pool,
@@ -310,15 +366,101 @@ pub fn console_copy_with(
     move_source: bool,
     overwrite: bool,
 ) -> Result<()> {
+    console_copy_limited(
+        pool,
+        cleanup,
+        console,
+        from,
+        to,
+        op_id,
+        move_source,
+        overwrite,
+        STALL_LIMIT,
+    )
+}
+
+/// `console_copy_with` with the no-progress limit as a parameter (the tests' seam).
+#[allow(clippy::too_many_arguments)]
+pub fn console_copy_limited(
+    pool: &Pool,
+    cleanup: &dyn CancelCleanup,
+    console: &str,
+    from: &str,
+    to: &str,
+    op_id: u64,
+    move_source: bool,
+    overwrite: bool,
+    stall_limit: Duration,
+) -> Result<()> {
     let dest_was_absent = !overwrite || cleanup.dest_absent(console, to);
-    let r = copy_job(pool, console, from, to, op_id, move_source, overwrite);
-    if matches!(&r, Err(e) if e.to_string() == "cancelled") {
-        // Cancelled, and the console has been told to stop (and waited on, below).
+    let r = copy_job(
+        pool,
+        console,
+        from,
+        to,
+        op_id,
+        move_source,
+        overwrite,
+        stall_limit,
+    );
+    // Only a stop the console confirmed (after it accepted this very copy) may remove anything.
+    if matches!(&r, Err(e) if e.downcast_ref::<CopyCancelled>().is_some_and(|c| c.clean)) {
         cleanup.clean(console, to, dest_was_absent);
     }
     r
 }
 
+/// How the console answered an attempt to stop its job.
+enum Stopped {
+    /// It no longer knows the job: nothing of it is running.
+    Gone,
+    /// The job completed before the stop landed.
+    Finished,
+    /// The stop was not delivered, or the console did not say it let go.
+    Unconfirmed,
+}
+
+/// Sends `job.cancel` and waits (bounded) for the console's own answer that the job is gone.
+/// Best effort: the user's stop must not wait on a console that is not there, and a timeout, a
+/// lost session or an unexpected answer is `Unconfirmed`, never a guess.
+async fn stop_on_console(pool: &Pool, console: &str, jobref: &[u8]) -> Stopped {
+    let Ok(Ok(s)) = tokio::time::timeout(Duration::from_secs(5), pool.session(console)).await
+    else {
+        return Stopped::Unconfirmed;
+    };
+    match tokio::time::timeout(
+        Duration::from_secs(5),
+        s.rpc(gen::METHOD_JOB_CANCEL, jobref),
+    )
+    .await
+    {
+        Ok(Ok(r)) if r.status == gen::ERR_UNKNOWN_JOB => return Stopped::Gone,
+        Ok(Ok(r)) if r.status == gen::STATUS_OK => {}
+        _ => return Stopped::Unconfirmed,
+    }
+    // The console unlists the job and stops its threads; clearing its leftovers while they
+    // still write would race them. Wait (bounded) until it says it no longer knows the job.
+    for _ in 0..20 {
+        match tokio::time::timeout(
+            Duration::from_secs(2),
+            s.rpc(gen::METHOD_JOB_STATUS, jobref),
+        )
+        .await
+        {
+            Ok(Ok(r)) if r.status == gen::ERR_UNKNOWN_JOB => return Stopped::Gone,
+            Ok(Ok(r)) if r.status == gen::STATUS_OK => {
+                if Status::decode(&r.body).ok().and_then(|st| st.state) == Some(1) {
+                    return Stopped::Finished;
+                }
+            }
+            _ => return Stopped::Unconfirmed,
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    Stopped::Unconfirmed
+}
+
+#[allow(clippy::too_many_arguments)]
 fn copy_job(
     pool: &Pool,
     console: &str,
@@ -327,6 +469,7 @@ fn copy_job(
     op_id: u64,
     move_source: bool,
     overwrite: bool,
+    stall_limit: Duration,
 ) -> Result<()> {
     let kind = if move_source { "move" } else { "copy" };
     let (_registered, cancel) = register(op_id, kind, from, to)?;
@@ -350,36 +493,56 @@ fn copy_job(
         // issuing again is idempotent, and resumes from the console's own journal.
         let mut issued = false;
         let (mut busy, mut reissues) = (0u32, 0u32);
+        // The console accepted this copy at least once (the job exists there), and a
+        // `job.copy` was sent whose answer never arrived (it may exist).
+        let (mut accepted, mut unresolved) = (false, false);
         let (mut last_at, mut last_durable) = (Instant::now(), 0u64);
         loop {
             if cancel.load(Ordering::Relaxed) {
-                // Best effort: the user's stop must not wait on a console that is gone.
-                if let Ok(Ok(s)) =
-                    tokio::time::timeout(Duration::from_secs(5), pool.session(console)).await
-                {
-                    let _ = tokio::time::timeout(
-                        Duration::from_secs(5),
-                        s.rpc(gen::METHOD_JOB_CANCEL, &jobref),
-                    )
-                    .await;
-                    // The console unlists the job and stops its threads; clearing its leftovers
-                    // while they still write would race them. Wait (bounded) until it says it
-                    // no longer knows the job.
-                    for _ in 0..20 {
-                        match tokio::time::timeout(
-                            Duration::from_secs(2),
-                            s.rpc(gen::METHOD_JOB_STATUS, &jobref),
-                        )
-                        .await
-                        {
-                            Ok(Ok(r)) if r.status == gen::ERR_UNKNOWN_JOB => break,
-                            Ok(Ok(_)) => {}
-                            _ => break,
-                        }
-                        tokio::time::sleep(Duration::from_millis(250)).await;
+                // Nothing of this copy can be on the console: never sent, or every answer was
+                // a refusal (BUSY). There is nothing to stop and nothing to clean.
+                if !accepted && !unresolved {
+                    return Err(CopyCancelled {
+                        clean: false,
+                        note: None,
                     }
+                    .into());
                 }
-                return Err(anyhow!("cancelled"));
+                return match stop_on_console(pool, console, &jobref).await {
+                    Stopped::Finished => Ok(()),
+                    // The console confirmed it let go. Cleanup is allowed only when it had
+                    // accepted this very copy; a copy whose first request was lost in flight
+                    // may or may not have created anything, so its leftovers stay.
+                    Stopped::Gone if accepted => Err(CopyCancelled {
+                        clean: true,
+                        note: None,
+                    }
+                    .into()),
+                    Stopped::Gone => Err(CopyCancelled {
+                        clean: false,
+                        note: Some(format!(
+                            "cancelled; the console did not confirm it had started the {kind}, so anything it wrote at {to} was left in place"
+                        )),
+                    }
+                    .into()),
+                    Stopped::Unconfirmed => Err(CopyCancelled {
+                        clean: false,
+                        note: Some(format!(
+                            "the {kind} was stopped here but the console did not confirm it stopped: it may still be finishing {from} -> {to}; nothing was deleted{}",
+                            if move_source { " and the source is untouched" } else { "" }
+                        )),
+                    }
+                    .into()),
+                };
+            }
+            // The console may have vanished: the stall limit ends the copy however the loop
+            // is reached (a lost session `continue`s before the progress check below), as it
+            // does for upload, download and relay.
+            if last_at.elapsed() > stall_limit {
+                return Err(anyhow!(
+                    "no copy progress for {stall_limit:?}; the job {} may still be on the console",
+                    hex(&id)
+                ));
             }
             let session = match pool.session(console).await {
                 Ok(s) => s,
@@ -398,12 +561,25 @@ fn copy_job(
             } else {
                 (gen::METHOD_JOB_COPY, &issue)
             };
+            if !issued {
+                unresolved = true;
+            }
             let reply = match rpc_cancellable(&session, method, body, &cancel).await {
                 // The user's stop while a call hangs: the top of the loop cancels the job.
                 Err(RpcStop::Cancelled) => continue,
-                Ok(r) => r,
+                Ok(r) => {
+                    if !issued {
+                        unresolved = false; // answered, one way or the other
+                    }
+                    r
+                }
                 Err(RpcStop::Failed(e)) => {
-                    pool.forget(console).await;
+                    // Only the session that failed, and only on a lost link: a timeout on a
+                    // live session proves nothing, and forgetting a shared session evicts
+                    // every other job's (final review #4).
+                    if !matches!(e, ava1::Ava1Error::Timeout) {
+                        pool.forget_if(console, &session).await;
+                    }
                     // The console held the job and the link dropped: it is back (or about to
                     // be), so the first retry is prompt rather than the top of the ladder.
                     if issued {
@@ -450,6 +626,7 @@ fn copy_job(
             record_status(op_id, &st);
             if !issued {
                 issued = true;
+                accepted = true;
                 backoff = Duration::from_millis(250);
             }
             match st.state {
@@ -474,11 +651,6 @@ fn copy_job(
             // bytes, so the stall clock only runs while bytes are outstanding.
             if st.bytes_durable > last_durable || st.bytes_durable >= st.bytes_total {
                 (last_at, last_durable) = (Instant::now(), st.bytes_durable);
-            } else if last_at.elapsed() > STALL_LIMIT {
-                return Err(anyhow!(
-                    "no copy progress for {STALL_LIMIT:?}; the job {} is still on the console",
-                    hex(&id)
-                ));
             }
             nap(POLL, &cancel).await;
         }

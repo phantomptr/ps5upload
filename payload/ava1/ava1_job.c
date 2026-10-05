@@ -6,7 +6,9 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "ava1_apply.h"
 #include "ava1_data.h"
+#include "ava1_internal.h"
 #include "ava1_op.h"
 #include "ava1_thread.h"
 
@@ -228,6 +230,22 @@ static void job_destroy(ava1_job_t *j) {
     free(j->pend_root);
     free(j->last_ranges);
     ava1_mstore_free(&j->m_in);
+    if (j->lf && j->discard_parts) {
+        /* A cancelled local copy never resumes (every call draws a fresh id), so the part files it
+         * was still writing are garbage, each preallocated to its file's full size. Only a file
+         * this job opened (an lf entry) that has not been committed or finished is removed: its
+         * part path is a name the job created, never the user's existing file, which the final
+         * rename would have replaced. Threads are joined above. */
+        for (i = 0; i < j->m.n; i++) {
+            char part[AVA1_PATH_CAP], fin[AVA1_PATH_CAP], ob[600];
+            if (!j->lf[i] || j->lf[i]->committed || j->lf[i]->committing || ava1_bits_get(&j->done, i)) continue;
+            ava1_apply_path(j, i, 1, part, sizeof part);
+            ava1_apply_path(j, i, 0, fin, sizeof fin);
+            if (part[0] && strcmp(part, fin) != 0) (void)unlink(part);
+            snprintf(ob, sizeof ob, "%s/%u.ob", j->dir, i);
+            (void)unlink(ob);
+        }
+    }
     if (j->lf) {
         for (i = 0; i < j->m.n; i++)
             if (j->lf[i]) {

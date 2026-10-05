@@ -247,10 +247,12 @@ impl AvaTransport {
                     }
                     // A refusal (busy after its retries, a bad request, not paired).
                     Some(_) => return Err(e),
-                    // The connection was lost or the call timed out: the job runs on. Drop the
-                    // dead session and ask again after a pause.
+                    // The connection was lost or the call timed out: the job runs on. Ask
+                    // again after a pause. A closed session is replaced by the pool itself; a
+                    // live one is left alone, because it is shared with every upload and a
+                    // management timeout is not evidence it is broken (final review #4:
+                    // forgetting it made the next call's handshake end the uploads' session).
                     None => {
-                        self.pool().forget(console).await;
                         tokio::time::sleep(
                             backoff.min(deadline.saturating_duration_since(Instant::now())),
                         )

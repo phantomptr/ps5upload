@@ -707,6 +707,7 @@ int ava1_recv_resume(ava1_job_t *j, const uint8_t hash[32]) {
 void ava1_recv_cancel(ava1_job_t *j) {
     pthread_mutex_lock(&j->mu);
     j->stopping = 1;
+    if (j->kind == AVA1_JOB_COPY) j->discard_parts = 1; /* a copy is never resumed: its part files go (final review #9) */
     pthread_cond_broadcast(&j->cv);
     pthread_mutex_unlock(&j->mu);
     ava1_job_free_one(j->id); /* the journal stays: a later JobOpen resumes */

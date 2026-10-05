@@ -837,8 +837,27 @@ impl Pool {
         }
     }
 
-    /// Drops the cached session (async: it takes the sessions lock — C2). Whether to
-    /// `close()` the session is the caller's decision.
+    /// Drops the cached session only when it is `failed` (the one the caller just saw break) or
+    /// is already closed; a newer healthy session that another job cached meanwhile stays
+    /// (final review #4). Every job and management call to a console shares one session and the
+    /// console ends the older one when a new handshake arrives (SPEC section 8), so an
+    /// unconditional forget by a job that lost session S1 would evict the S2 another job had
+    /// just made, and the two would keep ending each other's. Whether to `close()` the
+    /// session is the caller's decision. Async: it takes the sessions lock (C2).
+    pub async fn forget_if(&self, console: &str, failed: &Arc<Session>) {
+        let host = host_of(console);
+        let mut map = self.sessions.lock().await;
+        let drop_it = map
+            .get(&host)
+            .is_some_and(|c| Arc::ptr_eq(&c.session, failed) || c.session.is_closed());
+        if drop_it {
+            self.churn.forgot(&host);
+            map.remove(&host);
+        }
+    }
+
+    /// Drops the cached session whichever it is: a deliberate reset (a bench's cold start, a
+    /// test), never a failure path, which must use [`Pool::forget_if`].
     pub async fn forget(&self, console: &str) {
         let host = host_of(console);
         self.churn.forgot(&host);

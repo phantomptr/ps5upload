@@ -1066,3 +1066,131 @@ async fn a_single_file_with_overwrite_replaces_the_file() {
     );
     assert!(d.join("usb/one.bin").exists(), "an overwrite is not a move");
 }
+
+/* ---- final review #9: a cancelled overwrite copy removes its own part files ------------ */
+
+fn part_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.to_string_lossy().ends_with(".ava-part") {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancelled_overwrite_copy_leaves_no_part_file_and_no_user_file_lost() {
+    let d = dir("copy-cancel-parts");
+    // Large files (above the cutoff, so each is written to its own `.ava-part`), sparse so the
+    // test does not write gigabytes of source.
+    for i in 0..6 {
+        let p = d.join("usb/g").join(format!("big{i}"));
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::File::create(&p)
+            .unwrap()
+            .set_len(256 * 1024 * 1024)
+            .unwrap();
+    }
+    // The destination exists (so the copy writes in place, not staged) with its own files: one
+    // collides with a source file, one is the user's, and one merely looks like a part file.
+    std::fs::create_dir_all(d.join("data/g")).unwrap();
+    for i in 0..6 {
+        std::fs::write(d.join("data/g").join(format!("big{i}")), b"original").unwrap();
+    }
+    std::fs::write(d.join("data/g/mine"), b"mine").unwrap();
+    std::fs::write(d.join("data/g/notours.ava-part"), b"user file").unwrap();
+    let (me, mine) = paired_client(&d.join("peers"));
+    let srv = CServer::start_data(
+        SECRET,
+        &d.join("peers"),
+        &d.join("jobs"),
+        200,
+        2000,
+        2000,
+        3000,
+    );
+    let s = connect(&srv.addr(), me, mine, "rust", calm())
+        .await
+        .unwrap();
+    let job = [0x9c; 16];
+    assert_eq!(
+        start(
+            &s,
+            job,
+            &d.join("usb/g"),
+            &d.join("data/g"),
+            gen::JF_OVERWRITE
+        )
+        .await,
+        0
+    );
+    let mut seen = false;
+    for _ in 0..4000 {
+        if part_files(&d.join("data/g"))
+            .iter()
+            .any(|p| p.file_name().unwrap() != "notours.ava-part")
+        {
+            seen = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(seen, "the copy never began a part file (or finished first)");
+    let r = s
+        .rpc(
+            gen::METHOD_JOB_CANCEL,
+            &JobRef { job_id: job }.to_bytes().unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(r.status, gen::STATUS_OK);
+    // The console's terminal answer: it no longer knows the job.
+    for _ in 0..200 {
+        let r = s
+            .rpc(
+                gen::METHOD_JOB_STATUS,
+                &JobRef { job_id: job }.to_bytes().unwrap(),
+            )
+            .await
+            .unwrap();
+        if r.status == gen::ERR_UNKNOWN_JOB {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    // Part files go once the job is destroyed (its threads joined): bounded wait.
+    for _ in 0..200 {
+        if part_files(&d.join("data/g")).len() == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let left = part_files(&d.join("data/g"));
+    assert_eq!(left, [d.join("data/g/notours.ava-part")], "{left:?}");
+    assert_eq!(
+        std::fs::read(d.join("data/g/notours.ava-part")).unwrap(),
+        b"user file"
+    );
+    assert_eq!(std::fs::read(d.join("data/g/mine")).unwrap(), b"mine");
+    for i in 0..6 {
+        // Each is the user's original or (if its commit had landed) the finished source file:
+        // never a partial one.
+        let m = std::fs::metadata(d.join("data/g").join(format!("big{i}"))).unwrap();
+        assert!(
+            m.len() == 8 || m.len() == 256 * 1024 * 1024,
+            "big{i} is {} bytes",
+            m.len()
+        );
+    }
+    assert!(d.join("usb/g/big0").exists(), "the source is untouched");
+}

@@ -102,3 +102,39 @@ async fn one_engine_reconnecting_is_not_a_second_engine() {
         "our own closes are not evictions"
     );
 }
+
+// ---- final review #4: forgetting is by session, not by console ----------------------------
+
+#[tokio::test]
+async fn a_job_that_failed_on_a_stale_session_does_not_evict_the_fresh_one() {
+    let pools = console_and_pools("forget-if", 1, 100).await;
+    let a = &pools[0];
+    // Jobs A and B both hold S1. A notices the drop first and reconnects: S2 is cached.
+    let s1 = a.session("console").await.unwrap();
+    a.forget("console").await; // the drop (a deliberate reset stands in for it)
+    let s2 = a.session("console").await.unwrap();
+    assert!(!Arc::ptr_eq(&s1, &s2));
+    // B now notices S1 failed. It must not touch S2, and the next caller still gets S2.
+    a.forget_if("console", &s1).await;
+    let again = a.session("console").await.unwrap();
+    assert!(Arc::ptr_eq(&again, &s2), "the fresh session was evicted");
+    assert_eq!(a.attempts(), 2, "no third handshake was made");
+}
+
+#[tokio::test]
+async fn the_session_that_failed_is_forgotten_and_a_stale_cached_one_is_too() {
+    let pools = console_and_pools("forget-real", 2, 100).await;
+    let (a, b) = (&pools[0], &pools[1]);
+    // The failing session itself is dropped.
+    let s1 = a.session("console").await.unwrap();
+    a.forget_if("console", &s1).await;
+    let s2 = a.session("console").await.unwrap();
+    assert!(!Arc::ptr_eq(&s1, &s2), "a real failure forgets the session");
+    // A cached session the console has ended is stale whatever the caller names.
+    let other = b.session("console").await.unwrap(); // the console ends A's s2
+    until("A's session to be ended", || s2.is_closed()).await;
+    a.forget_if("console", &other).await; // not the cached one, but the cached one is closed
+    let s3 = a.session("console").await.unwrap();
+    assert!(!Arc::ptr_eq(&s2, &s3));
+    assert!(!s3.is_closed());
+}
