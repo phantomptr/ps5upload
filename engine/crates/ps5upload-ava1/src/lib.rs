@@ -22,6 +22,7 @@ pub mod relay;
 pub mod seq;
 pub mod source;
 pub mod space;
+pub mod telemetry;
 pub mod upload;
 pub mod zip_source;
 mod zip_stored;

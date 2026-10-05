@@ -2428,6 +2428,10 @@ pub struct LiveNotes {
     pub skip_total_bytes: std::sync::atomic::AtomicU64,
     /// Files are still settling on the console after the job finished.
     pub settling: std::sync::atomic::AtomicBool,
+    /// The job's telemetry (where its time went, the console's own end-of-job line), as the
+    /// transport last reported it. The engine writes it into the per-job record when the job
+    /// ends (review 009 #4).
+    pub telemetry: std::sync::Mutex<Option<serde_json::Value>>,
 }
 
 pub const LIVE_PHASE_SKIPPING: u8 = 1;

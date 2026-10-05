@@ -667,6 +667,7 @@ pub fn upload_with_seq_in(
                 }
             };
             gate.connected();
+            progress.telemetry.lock().unwrap().peer_key = Some(session.peer_key());
             let mut link = session.job(job_id);
             let o = SendOptions {
                 kind: opts.kind,

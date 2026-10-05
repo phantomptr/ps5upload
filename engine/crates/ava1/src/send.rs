@@ -168,6 +168,27 @@ pub struct Progress {
     pub settling: AtomicBool,
     /// The receiver's last reported `unswept` count while the sender waits for it to settle.
     pub unswept: AtomicU32,
+    /// Times the sender ran for this job (more than one: it reconnected and resumed).
+    pub attempts: AtomicU32,
+    /// The most files the receiver reported unswept while the sender waited for it to settle.
+    pub unswept_peak: AtomicU32,
+    /// Milliseconds spent waiting for the receiver to settle, over all attempts.
+    pub settle_ms: AtomicU64,
+    /// What the per-job telemetry record keeps beyond the counters above (review 009 #4).
+    pub telemetry: Mutex<Telemetry>,
+}
+
+/// The parts of a job's history no counter holds: where its time went, the console's own
+/// end-of-job line and which console it was. Written by the sender, read by the engine's
+/// telemetry record.
+#[derive(Debug, Default, Clone)]
+pub struct Telemetry {
+    /// The governor's time shares and lane/chunk series, merged over every attempt.
+    pub shares: JobSummary,
+    /// The receiver's `JobDone` message, verbatim.
+    pub console_line: Option<String>,
+    /// The console's public key (the engine records a hash of it, never an address).
+    pub peer_key: Option<[u8; 32]>,
 }
 
 #[derive(Debug, Clone)]
@@ -1188,6 +1209,7 @@ pub async fn run_upload(
     let (credit, need) = opened;
     let job_id = link.job_id;
     let pg = opts.progress.clone();
+    pg.attempts.fetch_add(1, Ordering::Relaxed);
     pg.bytes_total.store(manifest.bytes(), Ordering::Relaxed);
     pg.files_total
         .store(manifest.files() as u64, Ordering::Relaxed);
@@ -1582,6 +1604,7 @@ pub async fn run_upload(
                     JobDone::TYPE => match f.decode::<JobDone>() {
                         Ok(d) => {
                             settle_after = d.settling == Some(1);
+                            pg.telemetry.lock().unwrap().console_line = d.message.clone();
                             break Ok(SendReport {
                             status: d.status,
                             message: d.message,
@@ -1730,6 +1753,7 @@ pub async fn run_upload(
     for h in readers {
         let _ = h.await;
     }
+    pg.telemetry.lock().unwrap().shares.merge(&summary);
     if let Some(line) = summary.line() {
         use std::io::Write;
         // writeln!, not eprintln!: a dead parent's closed stderr must not panic the engine.
@@ -1757,6 +1781,16 @@ enum Settled {
     Failed(u16, String),
 }
 
+/// Adds a settle wait's length to `Progress::settle_ms` however the wait ends.
+struct SettleTimer<'a>(&'a Progress, Instant);
+
+impl Drop for SettleTimer<'_> {
+    fn drop(&mut self) {
+        let ms = self.1.elapsed().as_millis() as u64;
+        self.0.settle_ms.fetch_add(ms, Ordering::Relaxed);
+    }
+}
+
 /// The receiver said files are still settling: keep the job alive while its `Status` reports `unswept`, so
 /// the engine can show "finishing on the console". Ends when it reaches 0, the receiver reports a failure
 /// (Status `code`, the sweep's sticky error), the job is cancelled, the session closes, or after `max`.
@@ -1769,6 +1803,7 @@ async fn settle_wait(
 ) -> Settled {
     pg.settling.store(true, Ordering::Relaxed);
     let t0 = Instant::now();
+    let _timed = SettleTimer(pg, t0);
     let out = loop {
         if cancel.load(Ordering::Relaxed) {
             break Settled::Cancelled;
@@ -1786,6 +1821,7 @@ async fn settle_wait(
                 }
                 let n = st.unswept.unwrap_or(0);
                 pg.unswept.store(n, Ordering::Relaxed);
+                pg.unswept_peak.fetch_max(n, Ordering::Relaxed);
                 if n == 0 {
                     break Settled::Done;
                 }
@@ -3875,6 +3911,61 @@ mod tests {
         .expect("the upload completed");
         assert_eq!(report.status, 0, "{:?}", report.message);
         assert_eq!(report.bytes, size as u64);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_finished_job_leaves_its_telemetry_on_the_progress() {
+        // Review 009 #4: the engine's per-job record reads these after the job returns.
+        let size = 3usize << 20;
+        let (mut link, _lane_seen, _keep) = fake_link(
+            FakeReceiver {
+                credit: 16 << 20,
+                credit_on_apply: true,
+                done_when_complete: true,
+                credit_after_ack: None,
+                malformed_status: false,
+                retry_unknown: false,
+                ..Default::default()
+            },
+            None,
+        );
+        let dir = std::env::temp_dir().join(format!("ava1-send-telem-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("f"), vec![0x11u8; size]).unwrap();
+        let m = Arc::new(Manifest {
+            entries: vec![Entry {
+                kind: gen::ENTRY_FILE,
+                mode: 0o644,
+                size: size as u64,
+                mtime: 1,
+                path: "f".into(),
+                root: None,
+            }],
+        });
+        let opts = SendOptions::upload("dest");
+        let progress = opts.progress.clone();
+        let report = tokio::time::timeout(
+            Duration::from_secs(20),
+            send_job(
+                &mut link,
+                m,
+                Arc::new(crate::source::LocalSource::new(dir.clone())),
+                opts,
+            ),
+        )
+        .await
+        .expect("bounded")
+        .expect("the upload completed");
+        assert_eq!(report.status, 0, "{:?}", report.message);
+        assert_eq!(progress.attempts.load(Ordering::Relaxed), 1);
+        let t = progress.telemetry.lock().unwrap().clone();
+        assert_eq!(
+            t.shares.history.len() as u32,
+            t.shares.ticks.min(super::governor::HISTORY_MAX as u32)
+        );
+        assert_eq!(progress.unswept_peak.load(Ordering::Relaxed), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

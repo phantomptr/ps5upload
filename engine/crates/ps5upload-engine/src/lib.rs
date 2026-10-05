@@ -52,6 +52,7 @@ mod remote;
 mod remote_download;
 #[cfg(not(target_os = "android"))]
 mod remote_pkg;
+mod telemetry;
 #[cfg(feature = "webui")]
 mod webui;
 
@@ -1313,6 +1314,8 @@ fn live_registry() -> &'static Mutex<HashMap<Uuid, Weak<ps5upload_core::transfer
 /// The live notes for `job_id` (to thread into `TransferConfig::progress_live`).
 pub(crate) fn live_notes_for(job_id: Uuid) -> Arc<ps5upload_core::transfer::LiveNotes> {
     let notes = Arc::new(ps5upload_core::transfer::LiveNotes::default());
+    // Held until the job ends: the telemetry record reads them then (review 009 #4).
+    telemetry::hold_notes(job_id, notes.clone());
     let mut g = live_registry().lock().unwrap_or_else(|e| e.into_inner());
     g.retain(|_, v| v.strong_count() > 0);
     g.insert(job_id, Arc::downgrade(&notes));
@@ -1435,6 +1438,9 @@ pub(crate) fn set_job(
             evict_oldest_terminal(&mut g);
         }
         g.insert(job_id, state.clone());
+    }
+    if matches!(state, JobState::Done { .. } | JobState::Failed { .. }) {
+        telemetry::on_state(job_id, &serde_json::json!(state));
     }
     let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": with_live_notes(job_id, serde_json::json!(state)) });
     let _ = events_tx.send(msg.to_string());
@@ -1568,6 +1574,8 @@ async fn ps5_to_ps5_handler(
         Err(e) => return json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     };
     let job_id = Uuid::new_v4();
+    telemetry::tag(job_id, "relay");
+    telemetry::set_drive(job_id, &req.dest);
     let started_at_ms = now_ms();
     set_job(
         &state.jobs,
@@ -5150,6 +5158,8 @@ async fn transfer_file_handler(
     };
 
     let job_id = Uuid::new_v4();
+    telemetry::tag(job_id, "file");
+    telemetry::set_drive(job_id, &req.dest);
     let started_at_ms = now_ms();
     crate::log_info!(
         "transfer_file: job={job_id} addr={addr} src={} dest={} resume={caller_supplied_tx_id}",
@@ -5402,6 +5412,8 @@ async fn transfer_dir_handler(
     };
 
     let job_id = Uuid::new_v4();
+    telemetry::tag(job_id, "dir");
+    telemetry::set_drive(job_id, &req.dest_root);
     let started_at_ms = now_ms();
     crate::log_info!(
         "transfer_dir: job={job_id} addr={addr} src_dir={} dest_root={} resume={} excludes={}",
@@ -6037,6 +6049,8 @@ async fn transfer_zip_handler(
     let files_sent_count = files.len() as u64;
 
     let job_id = Uuid::new_v4();
+    telemetry::tag(job_id, "zip");
+    telemetry::set_drive(job_id, &req.dest_root);
     let started_at_ms = now_ms();
     crate::log_info!(
         "transfer_zip: job={job_id} addr={addr} zip={} dest_root={} resume={} files={} bytes={total_bytes}",
@@ -7514,6 +7528,8 @@ async fn transfer_7z_handler(
     let files_sent_count = files.len() as u64;
 
     let job_id = Uuid::new_v4();
+    telemetry::tag(job_id, "7z");
+    telemetry::set_drive(job_id, &req.dest_root);
     let started_at_ms = now_ms();
     crate::log_info!(
         "transfer_7z: job={job_id} addr={addr} archive={} dest_root={} resume={} files={} bytes={total_bytes}",
@@ -7732,6 +7748,8 @@ async fn transfer_rar_handler(
     let files_sent_count = files.len() as u64;
 
     let job_id = Uuid::new_v4();
+    telemetry::tag(job_id, "rar");
+    telemetry::set_drive(job_id, &req.dest_root);
     let started_at_ms = now_ms();
     crate::log_info!(
         "transfer_rar: job={job_id} addr={addr} archive={} dest_root={} resume={} files={} bytes={total_bytes}",
@@ -7892,6 +7910,8 @@ async fn transfer_file_list_handler(
     };
 
     let job_id = Uuid::new_v4();
+    telemetry::tag(job_id, "file_list");
+    telemetry::set_drive(job_id, &req.dest_root);
     let started_at_ms = now_ms();
     let entries: Vec<FileListEntry> = req
         .files
@@ -8146,6 +8166,7 @@ fn start_ava1_download(
     target: Ava1DownloadTarget,
 ) -> axum::response::Response {
     let job_id = Uuid::new_v4();
+    telemetry::tag(job_id, "download");
     let started_at_ms = now_ms();
     let basename = src
         .trim_end_matches('/')
@@ -9426,6 +9447,9 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         )
         .route("/api/version", get(engine_version))
         .route("/api/jobs", get(list_jobs))
+        .route("/api/jobs/summaries", get(telemetry::summaries_handler))
+        .route("/api/jobs/{id}/summary", get(telemetry::summary_handler))
+        .route("/api/metrics", get(telemetry::metrics_handler))
         .route("/api/bug-report/bundle", post(bug_report_bundle_handler))
         .route("/api/jobs/{id}", get(get_job))
         .route("/api/jobs/{id}/cancel", post(cancel_job))

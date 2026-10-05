@@ -602,3 +602,59 @@ fn engine_does_not_read_console_files_through_ftpsrv() {
         }
     }
 }
+
+/// Review 009 #4 end to end: a transfer that fails leaves a `job_summary` the API serves,
+/// and the record holds neither the source path nor the console's address.
+#[test]
+fn a_failed_transfer_leaves_a_record_with_no_local_path_and_no_address() {
+    let dir = std::env::temp_dir().join(format!("p5-ava1only-telem-{}", std::process::id()));
+    let src_dir = dir.join("Secret Games Folder");
+    std::fs::create_dir_all(&src_dir).unwrap();
+    let src = src_dir.join("one.bin");
+    std::fs::write(&src, b"hello").unwrap();
+    let records = dir.join("jobs");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let rec = telemetry::with_test_dir(&records, || {
+        rt.block_on(async {
+            let jobs: Arc<Mutex<HashMap<Uuid, JobState>>> = Arc::new(Mutex::new(HashMap::new()));
+            let req = TransferFileReq {
+                addr: Some("127.0.0.1:9113".to_string()),
+                tx_id: None,
+                dest: "/mnt/usb0/x/one.bin".to_string(),
+                src: src.to_string_lossy().into_owned(),
+                bandwidth_cap_mbps: None,
+            };
+            let resp = transfer_file_handler(State(state_for(&jobs)), Json(req))
+                .await
+                .into_response();
+            assert_eq!(resp.status(), StatusCode::ACCEPTED);
+            wait_failed(&jobs).await;
+            let id = *jobs.lock().unwrap().keys().next().unwrap();
+            for _ in 0..200 {
+                if let Some(r) = telemetry::read_record(&records, id) {
+                    return r;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            panic!("no job summary was written");
+        })
+    });
+    assert_eq!(rec["kind"], "file");
+    assert_eq!(rec["result"], "failed");
+    assert_eq!(rec["code"], "helper_not_ava1");
+    assert_eq!(rec["drive"], "/mnt/usb0");
+    let text = rec.to_string();
+    for banned in [
+        "Secret",
+        "one.bin",
+        "127.0.0.1",
+        "9113",
+        &*dir.to_string_lossy(),
+    ] {
+        assert!(!text.contains(banned), "{banned} leaked: {text}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

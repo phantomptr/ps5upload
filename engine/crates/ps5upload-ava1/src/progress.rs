@@ -70,6 +70,9 @@ impl Counters {
             );
             l.settling
                 .store(p.settling.load(Ordering::Relaxed), Ordering::Relaxed);
+            if let Some(t) = crate::telemetry::snapshot(p) {
+                *l.telemetry.lock().unwrap_or_else(|e| e.into_inner()) = Some(t);
+            }
         }
         if let Some(x) = &self.bytes {
             // Skipped bytes count as done, so a resume's bar reaches 100%.

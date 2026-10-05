@@ -396,17 +396,37 @@ impl Governor {
 }
 
 /// Where a job's time went, one tick (a second) at a time: the line CUTOVER §4 rows quote
-/// (review 003 §2.2 item 3).
+/// (review 003 §2.2 item 3), and the counts the engine's per-job telemetry record keeps
+/// (review 009 #4).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct JobSummary {
-    ticks: u32,
-    credit_starved: u32,
-    source_starved: u32,
+    pub ticks: u32,
+    pub credit_starved: u32,
+    pub source_starved: u32,
     /// Credit-starved while the receiver reported disk or workers as its limit.
-    receiver_bound: u32,
-    lanes_sum: u64,
-    chunk_sum: u64,
-    receiver_bottleneck: u8,
+    pub receiver_bound: u32,
+    pub lanes_sum: u64,
+    pub chunk_sum: u64,
+    pub receiver_bottleneck: u8,
+    /// Ticks the governor spent in sequential-write mode (the slow-drive switch).
+    pub sequential_ticks: u32,
+    /// `(tick, lanes, chunk in KiB)`, thinned so a long job stays small (`HISTORY_MAX`).
+    pub history: Vec<(u32, u8, u32)>,
+    stride: u32,
+}
+
+/// The most history points a summary keeps; past it every other point is dropped and the
+/// sampling stride doubles, so any job length fits.
+pub const HISTORY_MAX: usize = 60;
+
+fn thin(history: &mut Vec<(u32, u8, u32)>) {
+    while history.len() > HISTORY_MAX {
+        let mut i = 0;
+        history.retain(|_| {
+            i += 1;
+            i % 2 == 1
+        });
+    }
 }
 
 fn bottleneck_name(b: u8) -> &'static str {
@@ -431,6 +451,35 @@ impl JobSummary {
         self.lanes_sum += u64::from(s.lanes);
         self.chunk_sum += u64::from(d.chunk);
         self.receiver_bottleneck = s.receiver_bottleneck;
+        self.sequential_ticks += u32::from(d.sequential);
+        let stride = self.stride.max(1);
+        if (self.ticks - 1).is_multiple_of(stride) {
+            self.history.push((self.ticks, s.lanes, d.chunk >> 10));
+            if self.history.len() > HISTORY_MAX {
+                thin(&mut self.history);
+                self.stride = stride * 2;
+            }
+        }
+    }
+
+    /// Adds another attempt of the same job (a reconnect runs the sender again): its ticks
+    /// follow this one's.
+    pub fn merge(&mut self, o: &JobSummary) {
+        let base = self.ticks;
+        self.history
+            .extend(o.history.iter().map(|&(t, l, c)| (base + t, l, c)));
+        thin(&mut self.history);
+        self.ticks += o.ticks;
+        self.credit_starved += o.credit_starved;
+        self.source_starved += o.source_starved;
+        self.receiver_bound += o.receiver_bound;
+        self.lanes_sum += o.lanes_sum;
+        self.chunk_sum += o.chunk_sum;
+        self.sequential_ticks += o.sequential_ticks;
+        if o.ticks > 0 {
+            self.receiver_bottleneck = o.receiver_bottleneck;
+        }
+        self.stride = self.stride.max(o.stride);
     }
 
     /// `None` for a job too short to have had a tick.
@@ -919,5 +968,60 @@ mod tests {
         assert!(line.contains("receiver reported disk"), "{line}");
         assert!(line.contains("avg lanes 4.0"), "{line}");
         assert!(line.contains("avg chunk 6.0 MiB"), "{line}");
+    }
+
+    fn tick_of(j: &mut JobSummary, lanes: u8, chunk: u32, sequential: bool) {
+        j.observe(
+            &Sample {
+                secs: 1.0,
+                lanes,
+                ..Default::default()
+            },
+            &Decision {
+                lanes,
+                chunk,
+                bundle: 0,
+                bottleneck: crate::gen::BN_NETWORK,
+                mode: Mode::Mixed,
+                prefer: Class::Stream,
+                sequential,
+            },
+        );
+    }
+
+    #[test]
+    fn the_history_is_thinned_to_a_bounded_series_and_keeps_the_first_tick() {
+        let mut j = JobSummary::default();
+        for i in 0..1000u32 {
+            tick_of(&mut j, 4, (4 + i % 3) << 20, false);
+        }
+        assert!(j.history.len() <= HISTORY_MAX, "{}", j.history.len());
+        assert!(j.history.len() > HISTORY_MAX / 4, "{}", j.history.len());
+        assert_eq!(j.history[0], (1, 4, 4096), "the first tick is kept");
+        let ticks: Vec<u32> = j.history.iter().map(|h| h.0).collect();
+        assert!(ticks.windows(2).all(|w| w[0] < w[1]), "ordered: {ticks:?}");
+        assert_eq!(j.ticks, 1000);
+    }
+
+    #[test]
+    fn sequential_ticks_record_the_slow_drive_switch() {
+        let mut j = JobSummary::default();
+        tick_of(&mut j, 2, 4 << 20, false);
+        tick_of(&mut j, 2, 4 << 20, true);
+        tick_of(&mut j, 2, 4 << 20, true);
+        assert_eq!(j.sequential_ticks, 2);
+    }
+
+    #[test]
+    fn merging_attempts_adds_the_counts_and_offsets_the_history() {
+        let mut a = JobSummary::default();
+        let mut b = JobSummary::default();
+        tick_of(&mut a, 2, 4 << 20, false);
+        tick_of(&mut b, 6, 8 << 20, true);
+        tick_of(&mut b, 6, 8 << 20, true);
+        a.merge(&b);
+        assert_eq!((a.ticks, a.sequential_ticks), (3, 2));
+        assert_eq!(a.lanes_sum, 2 + 6 + 6);
+        assert_eq!(a.history.iter().map(|h| h.0).collect::<Vec<_>>(), [1, 2, 3]);
     }
 }

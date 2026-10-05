@@ -348,6 +348,22 @@ The client reads these, all optional, so an engine that does not send a field sh
 | `bottleneck` | string | AVA1's words: `network`, `source`, `console drive`, `console workers`, `console memory`, `none`. A finished job carries the same word in `commit_ack.bottleneck` (already sent today). |
 | `settling` | bool | Files are still settling on the console after the job finished (the engine sees `unswept` > 0 in `job.status`): the client shows "Finishing on the console…". Send it on the job while it settles; absent or `false` shows nothing. |
 
+**Job summaries** (review 009 #4). Every finished, failed or cancelled transfer leaves one
+`job_summary` JSON in `<data dir>/jobs/<job id>.json` on the engine's machine (the newest 200 are
+kept; `PS5UPLOAD_JOB_SUMMARIES=0` turns it off). Local only: nothing is sent anywhere. The record names the
+console by a hash of its key and holds no address and no local path (the destination is only its
+drive, `/data` or `/mnt/usb0`; free text is scrubbed of home folders and IP addresses).
+`GET /api/jobs/{id}/summary` returns one (404 while the job runs or if none was recorded),
+`GET /api/jobs/summaries?limit=` the newest, newest first (`{"summaries": [...]}`, default 20, at most 200),
+`GET /api/metrics` Prometheus counters (`ps5upload_jobs_total{kind,result}`, bytes, stalls, cross-device refusals).
+The endpoints sit behind the engine's loopback guard like the rest. Fields: `schema`, `type`, `job_id`, `kind`,
+`console`, `started_at_ms`, `ended_at_ms`, `elapsed_ms`, `result` (`done`/`failed`/`cancelled`), `code`, `message`,
+`files`, `bytes`, `skipped_files`, `skipped_bytes`, `resumed`, `attempts`, `drive`, `engine_version`,
+`shares` (`ticks`, `credit_starved_pct`, `source_starved_pct`, `receiver_bound_pct`, `receiver_bottleneck`),
+`lanes_avg`, `lanes_max`, `chunk_avg_kib`, `history` (`[tick, lanes, chunk KiB]`, at most 60 points),
+`slow_drive_switch`, `settle_ms`, `unswept_peak`, `resent_bytes`, `console_line` (the console's own end-of-job
+text), and `why` (`dominant`, `pct`, `text`). The last 20 ride in the bug bundle's `report.json` as `engine.job_summaries`.
+
 **Console status tokens** the status pill and the banners key on, read as substrings of the error
 text of `GET /api/ps5/status` (the one probe; `payload_check`):
 
