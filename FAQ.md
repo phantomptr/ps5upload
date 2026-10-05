@@ -86,6 +86,91 @@ Game pkgs (UP / EP / JP / HP / CUSA / PPSA / PCSA / etc.) work fine.
 
 ---
 
+## Quick start for new users
+
+New to PS5 homebrew? Read this section first. Everything here is covered in
+more depth further down.
+
+**Q: What are the pieces, in plain words?**
+- **Jailbreak and ELF loader.** Your console has to be jailbroken before
+  anything else works. The jailbreak leaves an *ELF loader* listening on
+  port **9021**; every payload below is sent to that port. ps5upload does not
+  jailbreak your console and cannot load without a loader.
+- **kstuff.** A payload that applies live kernel patches. Installing fake
+  packages and launching what you installed need it (see "Which PS5 firmware
+  works?" above).
+- **ShadowMount+.** A payload that automatically mounts game images
+  (`.ffpkg` / `.exfat`) and game folders it finds on your drives, so they show
+  up on the home screen. Disc-image titles need it running.
+- **etaHEN.** A separate, popular homebrew environment for the PS5. If you
+  already run it, you may not need to load other payloads by hand: ps5upload
+  works with a console that etaHEN has already prepared. Check etaHEN's own
+  documentation for what your version includes, because we do not track that.
+  If something you already run loads kstuff for you, send only ps5upload;
+  loading kstuff a second time stacks another copy.
+- **ps5upload helper.** ps5upload's own payload (`ps5upload.elf`) that runs on
+  the console and does the transfers. It is the `helper` dot at the bottom of
+  the app. The app sends it for you.
+
+**Q: In what order do I load payloads?**
+Send **elfldr** first (if your setup uses it), then **kstuff**, then
+**ShadowMount+**, then **ps5upload**. The **Set up your PS5** wizard does the
+last three in this order for you, with the delays the Payloads catalogue
+recommends. Send them one at a time; the loader takes one file per
+connection. After a reboot or rest mode the payloads are gone, so load them
+again.
+
+**Q: Which payloads must already be running before I install a package?**
+The maintainers' own checklist, before any package install, is that all four
+of these are up: **nanoDNS** (`nanodns.elf`), **kstuff** (`kstuff.elf`),
+**ftpsrv-ps5** (`ftpsrv-ps5.elf`) and **ShadowMount+**
+(`shadowmountplus.elf`), plus ps5upload itself. nanoDNS and ftpsrv-ps5 are not
+part of the Setup wizard; send them from the **Payloads** tab. ps5upload's own
+transfers do not use ftpsrv-ps5 (they use the helper on port 9120). If an
+install is refused, the first thing to check is that kstuff is actually
+running.
+
+**Q: Where do I get etaHEN and its toolbox?**
+From the etaHEN project's releases on GitHub (`github.com/etaHEN/etaHEN`).
+Download from there rather than from a re-upload, and follow that project's
+install instructions. The toolbox, and what else it ships, is described there;
+ps5upload does not bundle or install etaHEN.
+
+**Q: Which firmware limits apply to what I install?**
+Users run everything from 5.x to **13.60**. Two rules matter:
+- **PS5 fake *game* packages install on firmware above 11.60 (including 13.60)
+  but are not playable.** PS4 fake packages work, and PS5 homebrew apps launch.
+  The app warns you about this combination. See "My uploaded game won't
+  launch" below for the folder-dump route.
+- On **13.60**, Stream & install is the dependable install route.
+
+**Q: Where do I get the Android app?**
+Download `PS5Upload-<ver>-android.apk` from the
+[Releases page](https://github.com/phantomptr/ps5upload/releases) and open it
+on your phone (see **Android** above for the permissions it needs).
+
+**Q: Quick start: from a fresh jailbreak to my first upload.**
+1. Jailbreak the console and confirm its ELF loader is running (port 9021).
+   Put the console on the same network as your computer, and note its IP
+   address (PS5 **Settings → Network → View Connection Status**).
+2. Install ps5upload (or open the web UI) on your computer. Use a wired
+   connection if you can.
+3. Open **Connection**, enter the console's IP, and click **Check**. If the
+   loader port is not open, the jailbreak or loader is not running yet.
+4. Run **Set up your PS5**. It downloads kstuff and ShadowMount+ and sends
+   them, then ps5upload, in the right order. If you already run kstuff (for
+   example through etaHEN), send only ps5upload.
+5. Wait for the `helper` dot to turn green. If a code appears on the console
+   (helper loaded by another tool), confirm it in the app to pair.
+6. Open **Upload**, choose your game folder, `.zip` or file, pick the
+   destination drive (internal, M.2 or USB) and click **Start**. The free-space
+   check runs before anything is sent.
+7. Open **Library** to see it. For a `.pkg` or `.fpkg`, use **Install
+   Package → Stream & install** instead. If it will not launch, see "My
+   uploaded game won't launch" below.
+
+---
+
 ## Supported platforms
 
 **Q: Which desktop OSes run ps5upload?**
@@ -757,7 +842,11 @@ own filesystem**, not the browser machine's. There's no way for a browser
 tab to read files off a *different* computer's disk (the one running the
 engine), so the in-app file/folder picker instead browses whatever the
 engine process can see — e.g. mount a folder into the Docker container
-with `-v /host/games:/pkgs:ro` and browse to `/pkgs`. **Install Package →
+with `-v /host/games:/pkgs:ro` and browse to `/pkgs`. The picker starts at
+the engine's home directory (`/data` in the image), so set
+`PS5UPLOAD_BROWSE_ROOTS=/pkgs` to have it open on your mount instead; the
+value is comma-separated, so it can offer more than one root.
+**Install Package →
 From this device** is the exception: it uploads a package from the browser's
 machine to the engine, then installs it. Plain files
 and folders upload the same as desktop; **archive uploads (`.zip`/`.7z`/
@@ -889,6 +978,20 @@ check on the PS5 for retries/resumes using the transaction's actual durable
 progress. If the payload reports `preflight_insufficient_space`, free the
 amount shown in the error or choose another destination. Partial upload files
 are credited on Resume, so already-allocated data is not charged twice.
+
+**Q: My USB drive is too small for this game. What can I do?**
+Pick a destination with more room. ps5upload measures the whole transfer
+(including what a `.zip`, `.7z` or `.rar` expands to) and compares it with the
+destination's free space *before* sending anything, so a game that will not fit
+is refused up front, with the shortfall in the message, rather than failing
+hours in. Your options:
+- **Internal storage.** Choose the internal drive as the destination, if it has
+  the space. The Volumes screen shows raw free space and **safe for new
+  uploads**; go by the second number.
+- **An M.2 or extended-storage drive.** If you have one, choose it as the
+  destination in Upload.
+- **A larger exFAT drive.** Use a bigger USB drive formatted as exFAT.
+- Or free up space on the current drive and click Retry.
 
 **Q: What happens when the destination already has files?**
 The app asks: **Override**, **Resume**, or **Cancel**.
