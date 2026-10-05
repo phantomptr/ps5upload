@@ -118,17 +118,22 @@ int takeover_nonce_new(uint64_t *nonce) {
     return 0;
 }
 
+/* Fail closed: only a refused connect proves nobody listens. A socket we could not open (fd
+ * pressure), an interrupted or failed connect, or anything else counts as "still answering", so
+ * a new instance never starts its AVA1 side while the old one may hold the port (seen as a flaky
+ * host test under load, ctest lifecycle.rs). */
 int takeover_port_responding(int port) {
     struct sockaddr_in a;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return 0;
+    if (fd < 0) return 1;
     memset(&a, 0, sizeof a);
     a.sin_family = AF_INET;
     a.sin_port = htons((uint16_t)port);
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    int up = connect(fd, (struct sockaddr *)&a, sizeof a) == 0;
+    int rc = connect(fd, (struct sockaddr *)&a, sizeof a);
+    int err = rc == 0 ? 0 : errno;
     close(fd);
-    return up;
+    return rc == 0 || err != ECONNREFUSED;
 }
 
 int takeover_wait_port_free(int port, int max_ms, int interval_ms) {
