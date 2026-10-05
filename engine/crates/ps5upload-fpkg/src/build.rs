@@ -817,7 +817,12 @@ pub fn free_bytes(path: &Path) -> Option<u64> {
     if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
         return None;
     }
-    Some(st.f_bavail as u64 * st.f_frsize as u64)
+    // `f_bavail`/`f_frsize` are u64 on Linux but u32 on macOS, so the widening cast is
+    // necessary on one target and a no-op (which clippy flags) on the other. Keep the
+    // cast — it is correct everywhere — and silence the lint on the target where the
+    // field is already u64. `saturating_mul` guards the overflow on 32-bit targets.
+    #[allow(clippy::unnecessary_cast)]
+    Some((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
 }
 
 #[cfg(windows)]

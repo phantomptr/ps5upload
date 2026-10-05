@@ -1621,7 +1621,7 @@ mod tests {
             use std::sync::atomic::Ordering;
             if self
                 .busy
-                .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
                 .is_ok()
             {
                 return Err(mgmt::MgmtError {
