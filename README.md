@@ -762,24 +762,12 @@ This software builds on the following open-source projects:
 
 ## Thanks
 
-These projects are part of what ps5upload does today. Their code is bundled, ported or launched,
-or their data is read:
+Projects whose code ps5upload ships or ported, or whose data it reads (bundled libraries are listed
+under Third-Party Libraries above):
 
 **Code we ported and still ship**
 * **elf-arsenal** — the cheat engine (`payload/src/cheats.c`), drive sensors
   (`payload/src/drive_sensors.c`) and the Remote Play pairing flow are ported from it
-
-**Payloads ps5upload installs, launches or works alongside** (from the Payloads catalogue)
-* [kstuff-lite](https://github.com/EchoStretch/kstuff-lite) — EchoStretch, and [drakmor's fork](https://github.com/drakmor/kstuff-lite)
-* [ShadowMount+](https://github.com/drakmor/shadowMountPlus) and [nanoDNS](https://github.com/drakmor/nanoDNS) — drakmor
-* [etaHEN](https://github.com/LightningMods/etaHEN) and [Itemzflow](https://github.com/LightningMods/Itemzflow) — LightningMods
-* [ftpsrv](https://github.com/ps5-payload-dev/ftpsrv), [websrv](https://github.com/ps5-payload-dev/websrv), [shsrv](https://github.com/ps5-payload-dev/shsrv), [klogsrv](https://github.com/ps5-payload-dev/klogsrv) — ps5-payload-dev
-* [ps5-app-dumper](https://github.com/EchoStretch/ps5-app-dumper) — EchoStretch
-* [PS5 WebKit Autoloader](https://github.com/itsPLK/ps5-webkit-autoloader) and Payload Manager (ps5upload launches through it when the loader is down) — itsPLK
-* [CheatRunner](https://github.com/notmaj0r/CheatRunner) — notmaj0r
-* [np-fake-signin](https://git.etawen.dev/earthonion/np-fake-signin), [garlic-worker](https://git.etawen.dev/earthonion/garlic-worker), [garlic-savemgr](https://git.etawen.dev/earthonion/garlic-savemgr) — earthonion
-* [BackPork](https://github.com/BestPig/BackPork) — BestPig
-* [Ghostpad](https://github.com/StonedModder/Ghostpad) — StonedModder
 
 **Data sources**
 * [PROSPEROPatches](https://prosperopatches.com/) and [ORBISPatches](https://orbispatches.com/) — game details and cover art
