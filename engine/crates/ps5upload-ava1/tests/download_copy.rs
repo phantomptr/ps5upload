@@ -1323,6 +1323,12 @@ async fn a_busy_download_open_is_retried_and_a_console_that_stays_busy_fails_cle
 /// reconnect, not by the top of the backoff ladder.
 #[tokio::test(flavor = "multi_thread")]
 async fn periodic_kills_never_strand_a_download() {
+    // A liveness race against a fixed kill period, like the upload twin in adapters.rs: under
+    // coverage instrumentation (CARGO_LLVM_COV) the reconnect + handshake eat most of each
+    // period, so the race measures the instrumentation. Runs in every native build.
+    if std::env::var_os("CARGO_LLVM_COV").is_some() {
+        return;
+    }
     let d = temp("periodic-kill");
     let total = tree(&d.join("share/Game"), 1, |_| 24 << 20);
     let (_flaky, pool) = Flaky::start_with(
