@@ -2747,7 +2747,11 @@ pub async fn rar_packages(req: RarInspectReq) -> Result<JsonValue, String> {
 #[tauri::command]
 pub async fn pkg_console_probe(host: String, path: String) -> Result<JsonValue, String> {
     let endpoint = format!("{}/api/pkg/console-probe", engine::url());
-    post_json_long(&endpoint, &serde_json::json!({ "host": host, "path": path })).await
+    post_json_long(
+        &endpoint,
+        &serde_json::json!({ "host": host, "path": path }),
+    )
+    .await
 }
 
 /// Unified install (spec 2): start an install through the one engine
@@ -2806,7 +2810,11 @@ pub async fn host_net_open_settings(adapter: String) -> Result<JsonValue, String
 pub async fn host_net_allow_firewall(profile: String, confirm: bool) -> Result<JsonValue, String> {
     let url = format!("{}/api/host-net/allow-firewall", engine::url());
     // the consent prompt waits for a person: use the long-timeout poster
-    post_json_long(&url, &serde_json::json!({ "profile": profile, "confirm": confirm })).await
+    post_json_long(
+        &url,
+        &serde_json::json!({ "profile": profile, "confirm": confirm }),
+    )
+    .await
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
