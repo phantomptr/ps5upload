@@ -669,6 +669,7 @@ queue_move_up: "Przenieś w górę",
 queue_move_down: "Przenieś w dół",
 queue_remove: "Usuń z kolejki",
 queue_cancel_item: "Anuluj to przesyłanie (reszta kolejki będzie kontynuowana)",
+queue_size_chip: "{size} do przesłania",
   
 activity_clear_running: "Wyczyść wykonywane",
 fs_download_stop: "Przestań obserwować",

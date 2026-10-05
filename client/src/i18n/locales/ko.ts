@@ -2015,6 +2015,7 @@ processes_title: "프로세스",
 processes_truncated: "프로세스 목록이 잘렸습니다 — 전부 표시하기에 너무 많습니다.",
 profile: "프로필",
 queue_cancel_item: "이 업로드 취소(나머지 대기열은 계속됨)",
+queue_size_chip: "업로드할 용량 {size}",
 remote_play: "리모트 플레이",
 videos: "비디오 클립",
 

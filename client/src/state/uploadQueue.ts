@@ -236,6 +236,13 @@ export interface QueueItem {
   /** Total bytes the engine pre-stat'd for this source. 0 until first
    *  Running tick lands. */
   totalBytes: number;
+  /** Bytes the source is expected to take on the PS5, captured at add time
+   *  from the Upload screen's inspection (pkg header, folder walk or archive
+   *  central directory — for archives the UNCOMPRESSED total). 0 when the
+   *  inspection had no size (plain files, multi-part sets, queued installs);
+   *  the queue size chip (lib/queueSize) then falls back to `totalBytes`,
+   *  which only lands once the item starts running. */
+  estimatedBytes?: number;
   /** Smoothed bytes/sec while running (trailing 2 s window via
    *  `lib/rollingRate`); set to the wall-clock average bytes/sec on
    *  done; 0 when pending or failed. Persisted with the queue so the
@@ -318,6 +325,7 @@ export type AddQueueItem = Pick<
   | "registerAfterUpload"
   | "contentId"
   | "category"
+  | "estimatedBytes"
   | "installAfterUpload"
   | "deletePkgAfterInstall"
   | "install"
@@ -1782,6 +1790,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
         status: "pending",
         bytesSent: 0,
         totalBytes: 0,
+        estimatedBytes: input.estimatedBytes ?? 0,
         bytesPerSec: 0,
         filesFinalized: 0,
         filesFinalizingTotal: 0,

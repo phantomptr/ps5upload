@@ -30,6 +30,19 @@ function baseName(path: string): string {
   return path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? path;
 }
 
+/** Bytes this source is expected to take on the PS5, from the inspection
+ *  the Upload screen already ran at pick time: the pkg header, the folder
+ *  walk, or the archive's central directory (for archives that's the
+ *  UNCOMPRESSED total — what actually lands on the console). 0 when the
+ *  inspection didn't yield a size (plain files, multi-part sets); the
+ *  queue's space check then falls back to the transfer's pre-stat.
+ *  Feeds lib/queueSize. */
+function estimatedBytesFor(source: PickedSource): number {
+  if (source.kind === "pkg") return source.pkgInfo?.totalBytes ?? 0;
+  if (source.kind === "archive") return source.zipInfo?.total_uncompressed ?? 0;
+  return source.meta?.total_size ?? 0;
+}
+
 export function buildUploadQueueItem(
   source: PickedSource,
   rarPassword: string | null,
@@ -52,6 +65,7 @@ export function buildUploadQueueItem(
       excludes: [],
       contentId: cid,
       category: info?.category ?? null,
+      estimatedBytes: estimatedBytesFor(source),
       installAfterUpload: o.installAfterUpload,
       deletePkgAfterInstall: o.deletePkgAfterInstall,
       mountAfterUpload: false,
@@ -79,5 +93,6 @@ export function buildUploadQueueItem(
     mountAfterUpload: source.kind === "image" && o.mountAfterUpload,
     mountReadOnly: o.mountReadOnly,
     registerAfterUpload: source.kind === "game-folder" && o.registerAfterUpload,
+    estimatedBytes: estimatedBytesFor(source),
   };
 }

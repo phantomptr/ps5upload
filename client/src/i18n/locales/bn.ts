@@ -1977,6 +1977,7 @@ processes_title: "প্রসেস",
 processes_truncated: "প্রসেস তালিকা ছোট করা হয়েছে — সব দেখানোর মতো অনেক বেশি।",
 profile: "প্রোফাইল",
 queue_cancel_item: "এই আপলোড বাতিল করুন (বাকি সারি চলতে থাকবে)",
+queue_size_chip: "আপলোডের জন্য {size}",
 remote_play: "রিমোট প্লে",
 videos: "ভিডিও ক্লিপ",
 

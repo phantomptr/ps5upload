@@ -26,6 +26,7 @@ import {
   Toggle,
 } from "../../components";
 import { queueItemViewPath } from "../../lib/queueView";
+import { queueRemainingBytes } from "../../lib/queueSize";
 import { usePackageViewer } from "../../state/packageViewer";
 import { GameIcon } from "../../components/GameIcon";
 import { PlatformBadge } from "../../components/PlatformBadge";
@@ -145,6 +146,9 @@ export function QueuePanel({ host }: { host?: string } = {}) {
   const tr = useTr();
   const allItems = useUploadQueueStore((s) => s.items);
   const items = useMemo(() => queueItemsForHost(allItems, host), [allItems, host]);
+  // Bytes the queue still has to write, across every console shown here.
+  // Counts down live while a transfer runs, alongside the count chips.
+  const totalBytes = useMemo(() => queueRemainingBytes(items), [items]);
   const continueOnFailure = useUploadQueueStore((s) => s.continueOnFailure);
   const running = useUploadQueueStore((s) => s.running);
   const runningHosts = useUploadQueueStore((s) => s.runningHosts);
@@ -239,6 +243,15 @@ export function QueuePanel({ host }: { host?: string } = {}) {
             done={doneCount}
             failed={failedCount}
           />
+          {totalBytes > 0 && (
+            <span className="rounded-full bg-[var(--color-surface-3)] px-2 py-0.5 text-[11px] font-medium tabular-nums text-[var(--color-muted)]">
+              {tr(
+                "queue_size_chip",
+                { size: formatBytes(totalBytes) },
+                `${formatBytes(totalBytes)} to upload`,
+              )}
+            </span>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -448,6 +461,9 @@ function ConsoleGroup({
 
   const positions = useMemo(() => pendingPositions(items), [items]);
   const sections = useMemo(() => queueSections(items), [items]);
+  // This console's remaining queue size, shown as a chip in the group
+  // header next to the counts. Counts down live while an upload runs.
+  const groupBytes = useMemo(() => queueRemainingBytes(items), [items]);
   // A waiting row can move only past a neighbour in the same install tier —
   // the tier (base → update → DLC) decides the order before the list does.
   const movable = useMemo(() => {
@@ -558,6 +574,15 @@ function ConsoleGroup({
               }`,
             )}
           </span>
+          {groupBytes > 0 && (
+            <span className="rounded-full bg-[var(--color-surface-3)] px-2 py-0.5 text-[11px] font-medium tabular-nums text-[var(--color-muted)]">
+              {tr(
+                "queue_size_chip",
+                { size: formatBytes(groupBytes) },
+                `${formatBytes(groupBytes)} to upload`,
+              )}
+            </span>
+          )}
           {hostRunning ? (
             <Button
               variant="secondary"

@@ -687,6 +687,7 @@ queue_move_up: "انتقال به بالا",
 queue_move_down: "انتقال به پایین",
 queue_remove: "حذف از صف",
 queue_cancel_item: "لغو این بارگذاری (بقیه‌ی صف ادامه می‌یابد)",
+queue_size_chip: "{size} برای بارگذاری",
   
 activity_clear_running: "پاک‌سازی در حال اجرا",
 fs_download_stop: "توقف تماشا",

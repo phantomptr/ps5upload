@@ -2014,6 +2014,7 @@ processes_title: "प्रक्रियाएँ",
 processes_truncated: "प्रक्रिया सूची छोटी कर दी गई — सभी दिखाने के लिए बहुत अधिक हैं।",
 profile: "प्रोफ़ाइल",
 queue_cancel_item: "यह अपलोड रद्द करें (बाकी कतार चलती रहेगी)",
+queue_size_chip: "अपलोड के लिए {size}",
 remote_play: "रिमोट प्ले",
 videos: "वीडियो क्लिप",
 

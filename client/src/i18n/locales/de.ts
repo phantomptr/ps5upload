@@ -1985,6 +1985,7 @@ processes_title: "Prozesse",
 processes_truncated: "Die Prozessliste wurde gekürzt – zu viele Prozesse für die Anzeige.",
 profile: "Profil",
 queue_cancel_item: "Diesen Upload abbrechen (der Rest der Warteschlange läuft weiter)",
+queue_size_chip: "{size} hochzuladen",
 remote_play: "Remote Play",
 videos: "Videoclips",
 

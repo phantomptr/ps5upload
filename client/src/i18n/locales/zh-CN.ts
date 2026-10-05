@@ -1930,6 +1930,7 @@ processes_title: "进程",
 processes_truncated: "进程列表已截断——进程过多，无法全部显示。",
 profile: "个人资料",
 queue_cancel_item: "取消此次上传（队列中的其余任务继续）",
+queue_size_chip: "待上传 {size}",
 remote_play: "远程游玩",
 videos: "视频片段",
 

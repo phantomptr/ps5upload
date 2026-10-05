@@ -1925,6 +1925,7 @@ processes_title: "處理程序",
 processes_truncated: "處理程序清單已截斷——數量過多無法全部顯示。",
 profile: "個人檔案",
 queue_cancel_item: "取消此次上傳（佇列中的其餘項目繼續）",
+queue_size_chip: "待上傳 {size}",
 remote_play: "遠端遊玩",
 videos: "影片片段",
 
