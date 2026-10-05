@@ -1073,14 +1073,17 @@ static void run_control(conn_t *k, uint8_t *buf, size_t len) {
         ava1_launch_proof(S.cfg.launch_token, ns.h, wel.launch_proof);
     }
     ava1_w_init(&w, pl, sizeof pl);
-    if (ava1_welcome_encode(&wel, &w) != 0 || ava1_conn_send(&k->io, AVA1_TYPE_WELCOME, 0, pl, w.len) != 0)
-        goto out;
+    if (ava1_welcome_encode(&wel, &w) != 0) goto out;
+    /* Registered BEFORE the Welcome goes out: a client opens its lanes the moment it is
+     * welcomed, and a Join that beat the registration was refused as an unknown session. If
+     * the send then fails, the control connection is dead and the session ends with it. */
     sess_fill(idx, k, sid, c2s, s2c, known, ns.rs, peer_name);
     filled = 1;
     pthread_mutex_lock(&mu);
     S.sessions[idx].pair_code = pair_code;
     memcpy(S.sessions[idx].h, ns.h, 64);
     pthread_mutex_unlock(&mu);
+    if (ava1_conn_send(&k->io, AVA1_TYPE_WELCOME, 0, pl, w.len) != 0) goto out;
     if (!known) {
         /* Only a device that was welcomed is shown, and a stranger reconnecting in a loop
          * must not flood the screen. */

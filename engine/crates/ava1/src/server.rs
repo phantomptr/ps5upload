@@ -1179,6 +1179,9 @@ async fn refuse_on(outbox: &Outbox, code: u16, message: &str) {
 /// The nonces a session remembers, so a captured Join cannot be replayed.
 const JOIN_NONCES: usize = 64;
 
+/// How long a Join for a session not registered yet waits for its registration.
+const JOIN_REGISTER_WAIT: Duration = Duration::from_secs(2);
+
 async fn lane(
     mut r: FrameReader<OwnedReadHalf>,
     mut w: FrameWriter<OwnedWriteHalf>,
@@ -1188,7 +1191,17 @@ async fn lane(
     deadline: tokio::time::Instant,
 ) -> Result<(), Ava1Error> {
     let j: Join = first.decode()?;
-    let entry = ctx.sessions.lock().unwrap().get(&j.session_id).cloned();
+    // The handshake sends Welcome before the session is registered (below the handshake in
+    // `control`), and a client opens its lanes the moment it is welcomed: under load a Join
+    // could beat the registration and be refused as an unknown session. Wait a moment for it
+    // (bounded by the join deadline); a session id is 16 random bytes, so a stranger gains
+    // nothing by the wait.
+    let mut entry = ctx.sessions.lock().unwrap().get(&j.session_id).cloned();
+    let give_up = tokio::time::Instant::now() + JOIN_REGISTER_WAIT;
+    while entry.is_none() && tokio::time::Instant::now() < give_up.min(deadline) {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        entry = ctx.sessions.lock().unwrap().get(&j.session_id).cloned();
+    }
     let refused = |code: u16| Ava1Error::Refused {
         code,
         message: "join refused".into(),
