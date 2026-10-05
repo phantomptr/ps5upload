@@ -1310,7 +1310,7 @@ release-post:
 
 AVA1_C := payload/ava1
 AVA1_C_CODEC := $(AVA1_C)/ava1_wire.c $(AVA1_C)/ava1_frame.c $(AVA1_C)/gen/ava1_gen.c \
-	$(AVA1_C)/ava1_keys.c $(AVA1_C)/ava1_noise.c $(AVA1_C)/ava1_aead.c \
+	$(AVA1_C)/ava1_keys.c $(AVA1_C)/ava1_noise.c $(AVA1_C)/ava1_aead.c $(AVA1_C)/platform_posix.c \
 	payload/third_party/monocypher/monocypher.c
 
 # scripts/ava1-aead-test.sh: the C AEAD against RFC 8439 and Monocypher, including the
