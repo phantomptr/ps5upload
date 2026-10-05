@@ -89,10 +89,22 @@ async fn a_partly_durable_file_resumes_without_hanging() {
     const SIZE: u64 = 160 << 20;
     write_pattern(&a.join("share/src/big"), 5, SIZE);
     let (addr_a, addr_b) = (host(&a, key).await, host(&b, key).await);
+    // The first attempt reads A through a capped link (~5 s for the file), so it is still
+    // running when the test interrupts it — on a fast runner the uncapped relay finished
+    // all 160 MiB before the first durable report was seen. The resume runs uncapped.
+    let slow_a = ChaosProxy::start(
+        addr_a.parse().unwrap(),
+        ChaosConfig {
+            bytes_per_sec: Some(32 << 20),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     let progress = Arc::new(Progress::default());
     let cancel = Arc::new(AtomicBool::new(false));
     let (first_progress, first_cancel) = (progress.clone(), cancel.clone());
-    let (first_ava, first_a, first_b) = (ava.clone(), addr_a.clone(), addr_b.clone());
+    let (first_ava, first_a, first_b) = (ava.clone(), slow_a.addr.to_string(), addr_b.clone());
     let first = tokio::task::spawn_blocking(move || {
         let pa = Pool::new(first_ava.clone()).with_addr(first_a);
         let pb = Pool::new(first_ava).with_addr(first_b);
