@@ -603,3 +603,48 @@ Source: the community report on the `discord-reports` branch
 
 Backlog requests filed as open issues (not scheduled): #368 (R4), #369 (R5), #370 (R6), #371 (R10),
 #372 (R15), #373 (R16).
+
+## 9. Hardware acceptance, 2026-10-04 (both consoles on FW 13.60, gigabit LAN)
+
+Helper built from `5d6590d3` (SDK v0.43), sent to both consoles. The Pro was running an older
+non-AVA1 helper, and the new one took it over cleanly. Medians; "n" is the number of runs.
+The full three-drive matrix was cut to a light pass at the maintainer's request. The remaining
+drive rows, the 223k-file set and the 85 GB install are follow-ups.
+
+| Console / drive | Test | AVA1 | FTX2 | n (AVA1/FTX2) |
+|---|---|---|---|---|
+| Pro /data | 4 GiB file | 107.5 MB/s | 110.8 MB/s | 39 / 4 |
+| Pro /data | 2,000 tiny files up | 235 files/s | 327 files/s | 4 / 4 |
+| Pro /data | 2,000 tiny files down | 2,856 files/s | 2,409 files/s | 4 / 4 |
+| Pro /data | resume (helper killed + relaunched) | 93.9 MB/s | 66.3 MB/s | 1 / 4 |
+| Pro /mnt/usb0 | 4 GiB file | 107.8 MB/s | 111.7 MB/s | 4 / 4 |
+| Pro /mnt/usb0 | 2,000 tiny files up | 446 files/s | 330 files/s | 4 / 4 |
+| Pro /mnt/usb0 | 2,000 tiny files down | 1,916 files/s | 2,027 files/s | 4 / 4 |
+| Pro /mnt/usb0 | resume | 96.5 MB/s | 68.2 MB/s | 4 / 4 |
+| Phat /data | 4 GiB file | 105.4 MB/s | 107.7 MB/s | 36 / 1 |
+| Phat /data | 2,000 tiny files up | 192 files/s | 260 files/s | 1 / 1 |
+| Phat /data | 2,000 tiny files down | 1,513 files/s | 2,345 files/s | 1 / 1 |
+| Phat /data | real game (Minecraft Legends, 1,018 files, 7 GiB) | 108.1 MB/s | 88.0 MB/s | 1 / 1 |
+
+- **Lanes × chunk matrix (§4.1).** On Pro /data, every setting from 2/4/8 lanes × 1/4/15 MiB chunks gave
+  105–110 MB/s, and lanes-first on/off gave the same. The link is the limit. Console crypto costs 12.8 %
+  of one core at 110 MB/s (875 MB/s seal per core). **Decision: no decrypt-off-the-reader change.**
+- **Known gap (perf, not correctness).** Tiny files uploaded to the internal SSD run at ~72 % of FTX2.
+  FTX2 acknowledges before the files are durable: it measures 112 % of the drive's fsync ceiling. On USB
+  and M.2, AVA1 is 30–50 % faster. Tweak later.
+- **Free-space check (015/02), Phat /mnt/usb0.**
+  - C1: a 500 GiB upload into 464 GiB was refused in 2 s, with 0 B sent and the shortfall named.
+  - C2: a second 250 GiB upload was refused in 2 s while the first kept running.
+  - C3 (#365): a resume with 165 GiB free and 292 GiB left was admitted, because the kept part file was
+    credited. **All PASS.**
+- **Convert over AVA1 (015/01).** A real game folder on the Phat (489 files after upload) converted and
+  verified in 176 s, with no FTP. A 1 GiB console read ran at 104.9 MB/s.
+- **Bugs found and fixed during the run.** Each has a regression test:
+  - management calls longer than 60 s were cut short (`b96f9af5`);
+  - a helper restart ended the job after three refusals (`0705be56`, then `43b97625`: a connected job
+    waits for the console);
+  - the `fs.volumes` fallback was sent to the wrong port (`0705be56`);
+  - the bench lacked the AVA1 management path (`2954b099`);
+  - the drop60 rejoin livelock: after a dropped session the engine kept rejoining lanes to a session the
+    console had ended, and was refused with ERR_BAD_JOIN until the 600 s limit. This one is being fixed
+    on `p3-rejoin`.
