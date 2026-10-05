@@ -677,6 +677,7 @@ queue_start: "شروع",
 queue_stop_all: "توقف همه",
 queue_start_all: "شروع همه",
 queue_console_total: "{count} کنسول",
+queue_other_tab_notice: "این صف در برگه‌ی دیگری از همین مرورگر در حال اجراست. این برگه فقط آن را نشان می‌دهد؛ برای شروع، توقف یا تغییر از برگه‌ی دیگر استفاده کنید.",
 queue_group_summary:
   "{running} در حال بارگذاری · {pending} در صف · {done} انجام‌شده · {failed} ناموفق",
 queue_group_expand: "نمایش صف این کنسول",

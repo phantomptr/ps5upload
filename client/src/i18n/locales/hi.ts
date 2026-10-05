@@ -418,6 +418,7 @@ queue_start: "शुरू करें",
 queue_stop_all: "सभी रोकें",
 queue_start_all: "सभी शुरू करें",
 queue_console_total: "{count} कंसोल",
+queue_other_tab_notice: "यह कतार इस ब्राउज़र के किसी दूसरे टैब में चल रही है। यह टैब केवल उसे दिखाता है; शुरू करने, रोकने या बदलने के लिए दूसरे टैब का उपयोग करें।",
 queue_group_summary:
   "{running} अपलोड हो रहे · {pending} कतार में · {done} पूर्ण · {failed} विफल",
 queue_group_expand: "इस कंसोल की कतार दिखाएं",

@@ -418,6 +418,7 @@ queue_start: "Inizio",
 queue_stop_all: "Arresta tutto",
 queue_start_all: "Avvia tutto",
 queue_console_total: "{count} console",
+queue_other_tab_notice: "Questa coda è in esecuzione in un'altra scheda di questo browser. Questa scheda la mostra soltanto; usa l'altra scheda per avviarla, fermarla o modificarla.",
 queue_group_summary:
   "{running} in caricamento · {pending} in coda · {done} completati · {failed} falliti",
 queue_group_expand: "Mostra la coda di questa console",

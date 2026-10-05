@@ -425,6 +425,7 @@ queue_start: "开始",
 queue_stop_all: "全部停止",
 queue_start_all: "全部开始",
 queue_console_total: "{count} 台主机",
+queue_other_tab_notice: "此队列正在本浏览器的另一个标签页中运行。本标签页仅作显示；请在另一个标签页中开始、停止或修改。",
 queue_group_summary:
   "{running} 上传中 · {pending} 排队中 · {done} 已完成 · {failed} 失败",
 queue_group_expand: "显示此主机的队列",

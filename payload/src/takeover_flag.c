@@ -133,6 +133,8 @@ int takeover_port_responding(int port) {
     int rc = connect(fd, (struct sockaddr *)&a, sizeof a);
     int err = rc == 0 ? 0 : errno;
     close(fd);
+    if (rc != 0 && err != ECONNREFUSED)
+        fprintf(stderr, "[takeover] port %d probe: connect failed errno=%d, treating as busy\n", port, err);
     return rc == 0 || err != ECONNREFUSED;
 }
 

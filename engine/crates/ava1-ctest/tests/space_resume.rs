@@ -33,7 +33,7 @@ const MIB: u64 = 1 << 20;
 const SMALL_TOTAL: u64 = 40 * 20_040;
 
 fn cfg() -> TransferConfig {
-    let mut c = TransferConfig::new("127.0.0.1:9113");
+    let mut c = TransferConfig::new("127.0.0.1:9120");
     c.progress_bytes = Some(Arc::new(AtomicU64::new(0)));
     c.progress_files = Some(Arc::new(AtomicU64::new(0)));
     c.progress_files_finalized = Some(Arc::new(AtomicU64::new(0)));

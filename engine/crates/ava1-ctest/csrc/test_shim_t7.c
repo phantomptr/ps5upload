@@ -5,7 +5,7 @@
  * build.rs copies the rows between the "P3 Task 7" markers of mgmt_table.def into
  * $OUT_DIR/t7_rows.def; this file expands them with stub handlers in place of runtime.c's (which is
  * only built by the SDK). So a row added to, changed in or dropped from the real table changes what
- * these tests cover: the method number, the FTX2 frames, the MGMT_SONY flag and the runner are the
+ * these tests cover: the method number, the legacy frames, the MGMT_SONY flag and the runner are the
  * real ones; only the handler body is a stub.
  *
  * The Sony-flagged stubs take the REAL sony_api_lock (payload/src/sony_api_lock.c) around a 15 ms

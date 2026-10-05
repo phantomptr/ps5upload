@@ -418,6 +418,7 @@ queue_start: "[ترجمة المصطلح: Start]",
 queue_stop_all: "إيقاف الكل",
 queue_start_all: "بدء الكل",
 queue_console_total: "{count} أجهزة",
+queue_other_tab_notice: "قائمة الانتظار هذه تعمل في علامة تبويب أخرى في هذا المتصفح. هذه العلامة تعرضها فقط؛ استخدم العلامة الأخرى للبدء أو الإيقاف أو التعديل.",
 queue_group_summary:
   "{running} قيد الرفع · {pending} في الانتظار · {done} تم · {failed} فشل",
 queue_group_expand: "إظهار قائمة انتظار هذا الجهاز",

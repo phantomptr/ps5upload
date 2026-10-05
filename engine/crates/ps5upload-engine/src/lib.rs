@@ -445,7 +445,7 @@ fn extract_payload_error(err: &anyhow::Error) -> (Option<String>, Option<String>
 /// Errors are silently skipped (unreadable entries contribute 0); this
 /// matches the permissive walk behavior elsewhere in core.
 /// The console's address as the engine uses it: the host only. AVA1 has one port, so a `:port`
-/// suffix from an older client (`ip:9113`, `ip:9114`) is ignored. A bracketed IPv6 literal keeps
+/// suffix from an older client (`ip:<retired port>`) is ignored. A bracketed IPv6 literal keeps
 /// its brackets so the pool can add the AVA1 port.
 pub(crate) fn console_addr(addr: &str) -> String {
     let a = addr.trim();
@@ -3210,7 +3210,7 @@ async fn ps5_helper_state(Query(q): Query<HostQuery>) -> impl IntoResponse {
 }
 
 /// POST /api/ps5/helper/replace {host} — replaces an older helper: its shutdown request, a wait for
-/// :9113/:9114 to close, the stamped helper to :9021 (the trust slot and launch token mean no
+/// the retired transfer and management ports to close, the stamped helper to :9021 (the trust slot and launch token mean no
 /// pairing code), a wait for :9120. Replies `{"state","replaced"}`. Errors carry a stable token at
 /// the start of `error`: `legacy_helper_wedged` (409: the old helper did not exit; offer the
 /// console restart), `helper_not_running` (409: nothing to replace). Anything else is a 502 with
@@ -10143,7 +10143,7 @@ mod list_dir_status_tests {
             StatusCode::BAD_GATEWAY
         );
         assert_eq!(
-            list_dir_error_status("connect 192.168.86.99:9114: timed out"),
+            list_dir_error_status("connect 192.168.86.99:9120: timed out"),
             StatusCode::BAD_GATEWAY
         );
     }
@@ -10684,7 +10684,7 @@ mod helpers_tests {
     #[test]
     fn console_addr_or_default_uses_default_when_none() {
         assert_eq!(
-            console_addr_or_default(None, "192.168.0.1:9113"),
+            console_addr_or_default(None, "192.168.0.1:9120"),
             "192.168.0.1"
         );
     }

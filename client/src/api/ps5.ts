@@ -808,7 +808,7 @@ export async function dirDiffPreview(
  *  engine's copy would be shared by every browser pointed at it — so
  *  this is deliberately per-browser, like the rest of the web UI's
  *  settings. */
-const UPLOAD_QUEUE_KEY = "ps5upload.uploadQueue";
+export const UPLOAD_QUEUE_KEY = "ps5upload.uploadQueue";
 
 /** Whole-document load for the upload-queue store. The renderer owns
  *  the shape — see state/uploadQueue.ts. Returns `{}` for first-time

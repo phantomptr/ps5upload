@@ -521,40 +521,40 @@ _wait-payload-ready:
 # check-no-ftx2: the retired protocol (FTX2) and its ports (9113 transfer, 9114
 # management) must not reappear anywhere in the repository.
 #
-# The scope is the whole tree, payload included, except the history the project
-# keeps on purpose and the legacy-helper migration shim (listed below). The pattern is case-insensitive "ftx2" or a bare port
-# 9113/9114. Digits on either side are excluded so the engine's own 19113 is not a
-# match. Binary files and lockfiles are not searched.
+# The scope is the whole tree, payload and the host C tests included, except the history the
+# project keeps on purpose and the files that must name the legacy protocol (listed below). The
+# pattern is case-insensitive "ftx2" or a bare port 9113/9114. Digits on either side are excluded
+# so the engine's own 19113 is not a match. Binary files and lockfiles are not searched.
 #
-# Exceptions (each is a path excluded from the search):
-#   payload/                         the payload still carries FTX2 until its own task.
+# Exceptions (each is a path excluded from the search; keep this list to files that must name
+# the legacy protocol, and reword anything else to AVA1 terms):
+#   payload/src/legacy_takeover.c    the migration shim that asks an old helper to exit.
 #   CHANGELOG.md                     history keeps FTX2 by design.
 #   protocol/ava1/                   the spec, the cutover checklist and the method
 #                                    checklist describe the migration from FTX2.
 #   Makefile, .github/workflows/engine-ci.yml
 #                                    name this check and its pattern.
-#   engine/crates/ava1-ctest         builds the payload's C on the host and reads its
-#                                    FTX2 frame numbers; it goes with the payload task.
-#   .../src/legacy_helper.rs,
-#   .../src/legacy_helper_tests.rs,
-#   .../src/legacy_guard.rs          the migration shim: shuts an old helper down and
+#   .../ava1-ctest/tests/lifecycle.rs
+#                                    pins the legacy takeover frame bytes (the shim's header).
+#   .../ava1-ctest/tests/payload_cutover.rs
+#                                    asserts the payload no longer says FTX2 or 9113/9114.
+#   .../ps5upload-engine/src/legacy_helper.rs, legacy_helper_tests.rs, legacy_guard.rs
+#                                    the migration shim: shuts an old helper down and
 #                                    shows the old-helper banner.
-#   .../src/lib.rs, .../src/ava1_only_tests.rs
-#                                    the shim's wiring and the tests that pin the engine
-#                                    free of the retired symbols.
+#   .../ps5upload-engine/src/ava1_only_tests.rs
+#                                    the tests that pin the engine free of the retired symbols.
 #   client/src/lib/addr.ts,
 #   client/src/lib/humanizeError.ts  tolerate a stale host:9113 / host:9114 a user or an
 #                                    older engine message still carries.
-#   *.test.ts, *.test.tsx, ps5upload-engine/src/**/tests and in-file
-#   test modules use 9113/9114 as fixture addresses for that same tolerance
-#   (files that only hold such fixtures or old-port strip logic:
-#   engine .../install/, pkg_install.rs, fakelibs_api.rs, icon_cache.rs, ps5upload-ava1
-#   pool.rs, the lab's address tests in main.rs and bench.rs).
+#   *.test.ts, *.test.tsx            use 9113/9114 as fixture addresses for that same tolerance.
+#   engine .../install/, fakelibs_api.rs, icon_cache.rs, ps5upload-ava1 pool.rs, the lab's
+#   main.rs and bench.rs             old-port strip logic and its fixtures.
 CHECK_NO_FTX2_PATTERN := ftx2|(^|[^0-9])911[34]([^0-9]|$$)
 CHECK_NO_FTX2_SCOPE := .
 CHECK_NO_FTX2_EXCEPT := \
 	':!payload/src/legacy_takeover.c' \
-	':!engine/crates/ava1-ctest' \
+	':!engine/crates/ava1-ctest/tests/lifecycle.rs' \
+	':!engine/crates/ava1-ctest/tests/payload_cutover.rs' \
 	':!CHANGELOG.md' \
 	':!protocol/ava1' \
 	':!Makefile' \
@@ -563,10 +563,8 @@ CHECK_NO_FTX2_EXCEPT := \
 	':!engine/crates/ps5upload-engine/src/legacy_helper.rs' \
 	':!engine/crates/ps5upload-engine/src/legacy_helper_tests.rs' \
 	':!engine/crates/ps5upload-engine/src/legacy_guard.rs' \
-	':!engine/crates/ps5upload-engine/src/lib.rs' \
 	':!engine/crates/ps5upload-engine/src/ava1_only_tests.rs' \
 	':!engine/crates/ps5upload-engine/src/install' \
-	':!engine/crates/ps5upload-engine/src/pkg_install.rs' \
 	':!engine/crates/ps5upload-engine/src/fakelibs_api.rs' \
 	':!engine/crates/ps5upload-engine/src/icon_cache.rs' \
 	':!engine/crates/ps5upload-ava1/src/pool.rs' \
@@ -889,6 +887,12 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/xml_encoding_selftest.c
 	@/tmp/ps5upload-xml-encoding-selftest
 	@echo "✓ UTF-16 SHN/MC4 cheat files convert so their cheats appear"
+	@echo "Running cheat title list self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-cheats-list-selftest \
+		$(PAYLOAD_DIR)/tests/cheats_list_selftest.c
+	@/tmp/ps5upload-cheats-list-selftest
+	@echo "✓ a large or badly encoded cheat pack lists as valid, bounded JSON"
 	@echo "Checking per-console isolation..."
 	@./scripts/check-per-console-isolation.sh
 	@echo "✓ one console's data cannot be shown under another's name"

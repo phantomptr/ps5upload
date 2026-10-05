@@ -7,6 +7,7 @@
 //! the job — so a fast source can never buffer more than the read-ahead budget in any
 //! queue, however slowly the receiver acknowledges.
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1704,7 +1705,10 @@ pub async fn run_upload(
         let why = settle_wait(link, &pg, &opts.cancel, max).await;
         match (&why, result.as_mut()) {
             (Settled::Failed(code, msg), Ok(_)) => {
-                eprintln!("[ava1] upload: the console cannot make its files durable: {msg}");
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "[ava1] upload: the console cannot make its files durable: {msg}"
+                );
                 result = Err(SendError::Refused {
                     status: *code,
                     message: if msg.is_empty() {
@@ -1755,7 +1759,6 @@ pub async fn run_upload(
     }
     pg.telemetry.lock().unwrap().shares.merge(&summary);
     if let Some(line) = summary.line() {
-        use std::io::Write;
         // writeln!, not eprintln!: a dead parent's closed stderr must not panic the engine.
         let _ = writeln!(std::io::stderr(), "{line}");
     }
@@ -1849,7 +1852,7 @@ fn settle_warning(why: &Settled) -> Option<String> {
         }
         Settled::Failed(..) => return None,
     };
-    eprintln!("[ava1] upload: {w}");
+    let _ = writeln!(std::io::stderr(), "[ava1] upload: {w}");
     Some(w.to_string())
 }
 

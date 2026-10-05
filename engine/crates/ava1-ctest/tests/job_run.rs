@@ -2,7 +2,7 @@
 //! P3 Task 5: long management operations as jobs (`job.run`, payload/ava1/ava1_op.c and
 //! payload/src/fs_jobs.c), driven over AVA1 against the real C. The filesystem operations
 //! (delete, chmod -R, hash, crc32) run on real temporary trees; fsck, backup, cleanup and
-//! sdk.scan run through the real op wrapper (mgmt_rpc.c) around stub FTX2 handlers.
+//! sdk.scan run through the real op wrapper (mgmt_rpc.c) around stub legacy handlers.
 mod common;
 
 use std::os::unix::fs::PermissionsExt;
@@ -534,7 +534,7 @@ async fn crc32_of_a_large_file_is_a_job_that_can_be_cancelled() {
     drop(r.srv);
 }
 
-// ---- operations that wrap an FTX2 handler (stubs behind the real wrapper) ----
+// ---- operations that wrap a legacy handler (stubs behind the real wrapper) ----
 
 #[tokio::test(flavor = "multi_thread")]
 async fn fsck_keeps_its_ok_false_body_as_the_answer_and_a_frame_error_is_a_failure() {

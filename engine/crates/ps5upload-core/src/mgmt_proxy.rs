@@ -20,6 +20,21 @@ use crate::mgmt::{self, JobCall, JobProgress, Method, MgmtError, MgmtTransport};
 /// The route path on the engine.
 pub const ROUTE: &str = "/api/mgmt/call";
 
+/// The call never reached the console through the engine: the engine was unreachable, refused
+/// the hop (a 403, a non-success status) or its reply could not be decoded. Distinct from
+/// [`MgmtError`] (the console answered) and from a dropped console connection, so that a
+/// Reboot/Shutdown/Standby does not report success for a command nobody ran.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForwardError(pub String);
+
+impl std::fmt::Display for ForwardError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ForwardError {}
+
 /// What the caller asks the engine to run.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "op", rename_all = "snake_case")]

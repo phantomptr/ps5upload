@@ -418,6 +418,7 @@ queue_start: "Comienzo",
 queue_stop_all: "Detener todo",
 queue_start_all: "Iniciar todo",
 queue_console_total: "{count} consolas",
+queue_other_tab_notice: "Esta cola se está ejecutando en otra pestaña de este navegador. Esta pestaña solo la muestra; usa la otra pestaña para iniciarla, detenerla o cambiarla.",
 queue_group_summary:
   "{running} subiendo · {pending} en cola · {done} hecho · {failed} fallado",
 queue_group_expand: "Mostrar la cola de esta consola",

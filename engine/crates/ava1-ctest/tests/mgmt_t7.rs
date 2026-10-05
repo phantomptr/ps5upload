@@ -277,7 +277,7 @@ fn the_shim_table_is_the_real_block_row_for_row() {
             u32::from(flags == "MGMT_SONY"),
             "{name}"
         );
-        assert!(row.frame > 0 && row.ack > 0, "{name} names FTX2 frames");
+        assert!(row.frame > 0 && row.ack > 0, "{name} names legacy frames");
     }
 }
 
@@ -370,7 +370,7 @@ async fn a_legacy_failure_travels_with_its_data_as_the_error_cause() {
             gen::STATUS_OK,
             "{name}: an ok:false reply is not a success"
         );
-        // the whole body, so the engine can hand the caller what FTX2 handed it (code, err_code, port...)
+        // the whole body, so the engine can hand the caller what the legacy handlers handed it (code, err_code, port...)
         assert_eq!(
             String::from_utf8(r.body).unwrap(),
             r#"{"ok":false,"code":7,"err":"bad_thing"}"#,

@@ -42,6 +42,9 @@ pub struct CheatsListResponse {
     pub game_running: bool,
     #[serde(default)]
     pub game_title_id: String,
+    /// The console stopped adding titles at its reply ceiling: the list is valid but partial.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -19,6 +19,7 @@
  */
 
 #include "cheats.h"
+#include "cheats_list.h"
 #include "notif.h"
 
 #include <ps5/kernel.h>
@@ -251,20 +252,36 @@ static void jb_init(jbuf_t *jb, char *buf, size_t cap) {
 
 static void jb_str(jbuf_t *jb, const char *s) {
     if (!s) return;
-    for (; *s && jb->off + 2 < jb->cap; s++) {
+    while (*s && jb->off + 2 < jb->cap) {
         char c = *s;
         if (c == '"' || c == '\\') {
             if (jb->off + 3 >= jb->cap) break;
             jb->buf[jb->off++] = '\\';
             jb->buf[jb->off++] = c;
+            s++;
         } else if (c == '\n') {
             if (jb->off + 3 >= jb->cap) break;
             jb->buf[jb->off++] = '\\';
             jb->buf[jb->off++] = 'n';
+            s++;
         } else if ((unsigned char)c < 0x20) {
-            continue;
-        } else {
+            s++;
+        } else if ((unsigned char)c < 0x80) {
             jb->buf[jb->off++] = c;
+            s++;
+        } else {
+            /* A non-ASCII byte must start a valid UTF-8 character, or the whole reply fails to
+             * parse on the engine (Latin-1 / Shift-JIS names; a name cut mid-character). */
+            int n = cheats_utf8_char_len(s);
+            if (n == 0) {
+                jb->buf[jb->off++] = '?';
+                s++;
+            } else {
+                if (jb->off + (size_t)n + 2 >= jb->cap) break;
+                memcpy(jb->buf + jb->off, s, (size_t)n);
+                jb->off += (size_t)n;
+                s += n;
+            }
         }
     }
     jb->buf[jb->off] = '\0';
@@ -919,7 +936,8 @@ static int mc4_base64_decode(const char *in, size_t in_len, uint8_t *out, size_t
         if (c == '\r' || c == '\n' || c == ' ' || c == '\t') continue;
         /* T[] is zero for every unlisted byte, so membership is checked
          * against the alphabet; otherwise garbage decoded as 'A'. */
-        if (!strchr("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", c))
+        /* strchr matches the terminator, so a NUL byte must be refused explicitly. */
+        if (c == 0 || !strchr("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", c))
             return -1;
         int8_t v = T[c];
         acc = (acc << 6) | (uint32_t)v;
@@ -1405,32 +1423,19 @@ int cheats_patches_total_writes(void) {
 /* ── Public API implementations ──────────────────────────────────── */
 
 /* List all titles that have cheat files. */
-/* Pull the target game version out of a cheat filename, mirroring the
- * client's parse: strip the extension, split on '_', and take the second
- * segment when it looks like a version (digits and dots, at least one dot).
- * `CUSA25234_01.08.shn` -> "01.08", `CUSA00018_01.21_default.elf.json` ->
- * "01.21". Leaves `out` empty for names that carry no version. */
-static void extract_cheat_version(const char *filename, char *out, size_t cap) {
-    if (cap) out[0] = '\0';
-    const char *dot = strrchr(filename, '.');
-    size_t stem_len = dot ? (size_t)(dot - filename) : strlen(filename);
-    const char *us = memchr(filename, '_', stem_len);
-    if (!us) return;
-    const char *v = us + 1;
-    const char *stem_end = filename + stem_len;
-    const char *vend = v;
-    while (vend < stem_end && *vend != '_') vend++;
-    size_t vlen = (size_t)(vend - v);
-    if (vlen == 0 || vlen >= cap) return;
-    int has_dot = 0;
-    for (size_t i = 0; i < vlen; i++) {
-        char c = v[i];
-        if (c == '.') has_dot = 1;
-        else if (c < '0' || c > '9') return; /* not a version segment */
+/* The list's per-file reader: the game's own name and the number of mods. The caches in
+ * cheats_list.c call this only when a file's mtime or size changed. */
+static int list_load_file(const char *path, int format, char *name, size_t name_cap,
+                          int *mod_count) {
+    cheat_file_t *cf = (cheat_file_t *)malloc(sizeof(cheat_file_t));
+    if (!cf) return -1;
+    int rc = load_cheat_file(path, format, cf);
+    if (rc == 0) {
+        snprintf(name, name_cap, "%s", cf->game_name);
+        *mod_count = cf->mod_count;
     }
-    if (!has_dot) return;
-    memcpy(out, v, vlen);
-    out[vlen] = '\0';
+    free(cf);
+    return rc;
 }
 
 int cheats_list_titles(char *buf, size_t cap, size_t *written) {
@@ -1440,103 +1445,17 @@ int cheats_list_titles(char *buf, size_t cap, size_t *written) {
     intptr_t rg_base = 0;
     pid_t rg_pid = get_running_game_cached(rg_title, sizeof(rg_title), &rg_base);
 
-    jbuf_t jb;
-    jb_init(&jb, buf, cap);
-
-    jb_raw(&jb, "{\"titles\":[");
-
-    const char *dirs[] = {CHEATS_JSON_DIR, CHEATS_SHN_DIR, CHEATS_MC4_DIR};
-    int first = 1;
-    char seen_titles[256][MAX_TITLE_ID];
-    int seen_count = 0;
-
-    for (int d = 0; d < 3; d++) {
-        DIR *dir = opendir(dirs[d]);
-        if (!dir) continue;
-        struct dirent *de;
-        while ((de = readdir(dir))) {
-            if (de->d_name[0] == '.') continue;
-
-            /* Extract title_id from filename (up to first . or _) */
-            char title[MAX_TITLE_ID] = "";
-            size_t i = 0;
-            while (de->d_name[i] && de->d_name[i] != '.' &&
-                   de->d_name[i] != '_' && i < sizeof(title) - 1) {
-                title[i] = de->d_name[i];
-                i++;
-            }
-            title[i] = '\0';
-            if (i < 4) continue;  /* too short to be a real title id */
-
-            /* Check if we already listed this title */
-            int dup = 0;
-            for (int s = 0; s < seen_count; s++) {
-                if (strcasecmp(seen_titles[s], title) == 0) {
-                    dup = 1;
-                    break;
-                }
-            }
-            if (dup) continue;
-            if (seen_count < 256) {
-                snprintf(seen_titles[seen_count++], MAX_TITLE_ID, "%s", title);
-            }
-
-            int is_running = (rg_pid > 0 &&
-                              strcasecmp(rg_title, title) == 0);
-
-            char version[32] = "";
-            extract_cheat_version(de->d_name, version, sizeof(version));
-
-            /* Which formats exist for this title (the list filter), and the
-             * game's own name from the first file that carries one, so a
-             * downloaded cheat for a game that is not installed shows a name
-             * instead of its title id (R16, #373). */
-            found_file_t tf[16];
-            int tn = find_cheat_files(title, tf, 16, 0);
-            int has_fmt[4] = {0, 0, 0, 0};
-            char game_name[MAX_CHEAT_NAME] = "";
-            int enabled_n = 0;
-            for (int ti = 0; ti < tn; ti++) {
-                if (tf[ti].format >= 1 && tf[ti].format <= 3) has_fmt[tf[ti].format] = 1;
-                cheat_file_t *cf = (cheat_file_t *)malloc(sizeof(cheat_file_t));
-                if (!cf) continue;
-                if (load_cheat_file(tf[ti].path, tf[ti].format, cf) == 0) {
-                    if (!game_name[0] && is_usable_game_name(cf->game_name, title))
-                        snprintf(game_name, sizeof(game_name), "%s", cf->game_name);
-                    /* How many cheats are switched on, for the "switched on"
-                     * list filter. Same sidecar the mod list reads. */
-                    cheats_load_state(title, cf);
-                    for (int mi = 0; mi < cf->mod_count; mi++)
-                        if (cf->mods[mi].enabled) enabled_n++;
-                }
-                free(cf);
-            }
-
-            if (!first) jb_raw(&jb, ",");
-            jb_raw(&jb, "{\"title_id\":\"");
-            jb_str(&jb, title);
-            jb_raw(&jb, "\",\"name\":\"");
-            jb_str(&jb, game_name[0] ? game_name : title);
-            JB_PRINTF(&jb, "\",\"version\":\"%s\",\"formats\":[", version);
-            int ff = 1;
-            static const char *const fmt_names[4] = {"", "json", "shn", "mc4"};
-            for (int fi = 1; fi <= 3; fi++) {
-                if (!has_fmt[fi]) continue;
-                JB_PRINTF(&jb, "%s\"%s\"", ff ? "" : ",", fmt_names[fi]);
-                ff = 0;
-            }
-            JB_PRINTF(&jb, "],\"enabled\":%d,\"running\":%s}", enabled_n,
-                      is_running ? "true" : "false");
-            first = 0;
-        }
-        closedir(dir);
-    }
-
-    JB_PRINTF(&jb, "],\"game_running\":%s,\"game_title_id\":\"%s\"}",
-              rg_pid > 0 ? "true" : "false", rg_title);
-
-    if (written) *written = jb.off;
-    return 0;
+    cheats_list_cfg_t cfg;
+    memset(&cfg, 0, sizeof cfg);
+    cfg.dirs[0] = CHEATS_JSON_DIR;
+    cfg.dirs[1] = CHEATS_SHN_DIR;
+    cfg.dirs[2] = CHEATS_MC4_DIR;
+    cfg.state_dir = CHEATS_STATE_DIR;
+    cfg.load = list_load_file;
+    cfg.usable_name = is_usable_game_name;
+    cfg.running_title = rg_title;
+    cfg.running = rg_pid > 0;
+    return cheats_list_build(&cfg, buf, cap, written);
 }
 
 /* List all mods for a title. */

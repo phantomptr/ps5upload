@@ -2156,7 +2156,7 @@ pub mod events {
 pub mod t7 {
     use super::ffi;
 
-    /// One row of the real table: AVA1 method, `MGMT_*` flags, FTX2 request and ack frame numbers.
+    /// One row of the real table: AVA1 method, `MGMT_*` flags, legacy request and ack frame numbers.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct Row {
         pub method: u32,

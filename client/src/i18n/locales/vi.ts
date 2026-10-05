@@ -419,6 +419,7 @@ queue_start: "Bắt đầu",
 queue_stop_all: "Dừng tất cả",
 queue_start_all: "Bắt đầu tất cả",
 queue_console_total: "{count} máy",
+queue_other_tab_notice: "Hàng đợi này đang chạy trong một tab khác của trình duyệt này. Tab này chỉ hiển thị; hãy dùng tab kia để bắt đầu, dừng hoặc thay đổi.",
 queue_group_summary:
   "{running} đang tải · {pending} chờ · {done} xong · {failed} thất bại",
 queue_group_expand: "Hiện hàng đợi của máy này",

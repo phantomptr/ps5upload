@@ -367,7 +367,7 @@ fn with_transport<T>(t: Arc<AvaTransport>, f: impl FnOnce() -> T) -> T {
     })
 }
 
-const CONSOLE: &str = "ps5-diag-console:9114";
+const CONSOLE: &str = "ps5-diag-console:9120";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn every_diagnostics_method_works_through_the_rust_transport() {

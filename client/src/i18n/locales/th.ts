@@ -418,6 +418,7 @@ queue_start: "เริ่ม",
 queue_stop_all: "หยุดทั้งหมด",
 queue_start_all: "เริ่มทั้งหมด",
 queue_console_total: "{count} เครื่อง",
+queue_other_tab_notice: "คิวนี้กำลังทำงานในอีกแท็บหนึ่งของเบราว์เซอร์นี้ แท็บนี้แสดงผลเท่านั้น ใช้แท็บอื่นเพื่อเริ่ม หยุด หรือแก้ไข",
 queue_group_summary:
   "{running} กำลังอัปโหลด · {pending} ในคิว · {done} เสร็จ · {failed} ล้มเหลว",
 queue_group_expand: "แสดงคิวของเครื่องนี้",

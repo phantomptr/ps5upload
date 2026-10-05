@@ -5084,6 +5084,9 @@ static int handle_notif_send(runtime_state_t *state, const char *body) {
 
 #define CHEATS_TITLE_ID_LEN 32u
 #define CHEATS_JSON_BUF_SZ  (64u * 1024u)
+/* The titles list is bounded by the reply ceiling (AVA1_RPC_TEXT_MAX, 262128 bytes), not by 64 KiB:
+ * a full GoldHEN/etaHEN pack lists thousands of titles. Past this it ends in "truncated":true. */
+#define CHEATS_LIST_BUF_SZ  (240u * 1024u)
 
 static void cheat_inc_cmd_count(runtime_state_t *state) {
     pthread_mutex_lock(&state->state_mtx);
@@ -5093,13 +5096,17 @@ static void cheat_inc_cmd_count(runtime_state_t *state) {
 
 static int handle_cheats_list(runtime_state_t *state) {
     if (!state) return -1;
-    char *buf = malloc(CHEATS_JSON_BUF_SZ);
+    char *buf = malloc(CHEATS_LIST_BUF_SZ);
     if (!buf) {
         const char *e = "{\"titles\":[]}";
         return mgmt_reply(MGMT_FRAME_CHEATS_LIST_ACK, e, strlen(e));
     }
     size_t written = 0;
-    cheats_list_titles(buf, CHEATS_JSON_BUF_SZ, &written);
+    if (cheats_list_titles(buf, CHEATS_LIST_BUF_SZ, &written) != 0) {
+        const char *e = "{\"titles\":[],\"truncated\":false}";
+        free(buf);
+        return mgmt_reply(MGMT_FRAME_CHEATS_LIST_ACK, e, strlen(e));
+    }
     cheat_inc_cmd_count(state);
     int rc = mgmt_reply(MGMT_FRAME_CHEATS_LIST_ACK, buf, (uint64_t)written);
     free(buf);

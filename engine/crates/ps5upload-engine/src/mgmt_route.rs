@@ -5,44 +5,27 @@
 //! (one console session per identity), so it forwards them here and the call goes over the
 //! session this engine already has. The wire is `ps5upload_core::mgmt_proxy`.
 //!
-//! Because it is a passthrough with no per-method policy, it is reachable from this
-//! machine only: the peer must be loopback, whatever `PS5UPLOAD_ALLOW_IP` says (the
-//! general loopback guard lets allow-listed LAN peers in; this route does not). Behind
-//! Docker's NAT the peer is the bridge address, so it is refused there too. The browser
-//! Origin guard applies as to every route. The caller's timeout is honoured end to end:
-//! nothing here adds a deadline of its own.
+//! Guard: none of its own. The route sits behind the same two layers as every other `/api/*`
+//! route, the peer-IP policy (`loopback_guard`: loopback, or a peer matched by
+//! `PS5UPLOAD_ALLOW_IP`) and the browser Origin guard. A desktop whose Engine URL points at a
+//! NAS or a Docker engine (where the peer is a LAN or bridge address) therefore keeps its
+//! management commands whenever that engine admits it for the other routes. The caller's
+//! timeout is honoured end to end: nothing here adds a deadline of its own.
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::extract::ConnectInfo;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use ps5upload_core::mgmt::MgmtTransport;
 use ps5upload_core::mgmt_proxy::{self, ProxyRequest};
 
-pub(crate) async fn mgmt_call_handler(
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    Json(req): Json<ProxyRequest>,
-) -> Response {
-    handle(peer, req, None).await
+pub(crate) async fn mgmt_call_handler(Json(req): Json<ProxyRequest>) -> Response {
+    handle(req, None).await
 }
 
 /// `transport` is a test seam; `None` uses the process's registered transport.
-async fn handle(
-    peer: SocketAddr,
-    req: ProxyRequest,
-    transport: Option<Arc<dyn MgmtTransport>>,
-) -> Response {
-    if !peer.ip().to_canonical().is_loopback() {
-        eprintln!("[ps5upload-engine] refusing /api/mgmt/call from {peer}: loopback only");
-        return (
-            StatusCode::FORBIDDEN,
-            "the management passthrough is loopback only",
-        )
-            .into_response();
-    }
+async fn handle(req: ProxyRequest, transport: Option<Arc<dyn MgmtTransport>>) -> Response {
     let res = tokio::task::spawn_blocking(move || match transport {
         Some(t) => mgmt_proxy::execute_with(t, req),
         None => mgmt_proxy::execute(req),
@@ -96,10 +79,6 @@ mod tests {
                 .store(t.as_millis() as u64, Ordering::SeqCst);
             self.inner.call(addr, m, label, body, t)
         }
-    }
-
-    fn loopback() -> SocketAddr {
-        "127.0.0.1:50000".parse().unwrap()
     }
 
     fn req(timeout_ms: u64) -> ProxyRequest {
@@ -168,7 +147,7 @@ mod tests {
             }),
         )
         .await;
-        let r = parse(handle(loopback(), req(30_000), Some(t)).await).await;
+        let r = parse(handle(req(30_000), Some(t)).await).await;
         match r.into_result().unwrap() {
             ProxyResult::Bytes { body_b64 } => {
                 assert_eq!(decode_body(&body_b64).unwrap(), b"model=PS5\necho=x=1")
@@ -184,7 +163,7 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
         let pool: &'static Pool = Box::leak(Box::new(Pool::new(base).with_addr("127.0.0.1:1")));
         let t: Arc<dyn MgmtTransport> = Arc::new(AvaTransport::with_pool(pool));
-        let r = parse(handle(loopback(), req(5_000), Some(t)).await).await;
+        let r = parse(handle(req(5_000), Some(t)).await).await;
         assert!(!r.ok);
         match r.error.unwrap() {
             ProxyError::Mgmt { label, cause, .. } => {
@@ -195,21 +174,82 @@ mod tests {
         }
     }
 
+    /// The route behind the engine's real guards (`loopback_guard`, `browser_origin_guard`),
+    /// as `run` layers them, with the peer address faked. Returns the status of one POST.
+    async fn post_as(peer: &str, allow: &str, origin: Option<&str>) -> u16 {
+        use axum::extract::connect_info::MockConnectInfo;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let guard_cfg = crate::LoopbackGuardConfig {
+            allowed_ips: crate::parse_allow_ips(allow).into(),
+        };
+        let app = axum::Router::new()
+            .route(
+                ps5upload_core::mgmt_proxy::ROUTE,
+                axum::routing::post(mgmt_call_handler),
+            )
+            .layer(axum::middleware::from_fn(crate::browser_origin_guard))
+            .layer(axum::middleware::from_fn_with_state(
+                guard_cfg,
+                crate::loopback_guard,
+            ))
+            .layer(MockConnectInfo(
+                peer.parse::<std::net::SocketAddr>().unwrap(),
+            ));
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(l, app).await });
+        let body = serde_json::to_string(&req(1_000)).unwrap();
+        let origin = origin
+            .map(|o| format!("Origin: {o}\r\n"))
+            .unwrap_or_default();
+        let msg = format!(
+            "POST {} HTTP/1.1\r\nHost: {addr}\r\n{origin}Content-Type: application/json\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            ps5upload_core::mgmt_proxy::ROUTE,
+            body.len()
+        );
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        s.write_all(msg.as_bytes()).await.unwrap();
+        let mut out = Vec::new();
+        s.read_to_end(&mut out).await.unwrap();
+        let head = String::from_utf8_lossy(&out);
+        head.split_whitespace().nth(1).unwrap().parse().unwrap()
+    }
+
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_non_loopback_peer_is_refused() {
+    async fn a_lan_peer_gets_the_same_answer_as_every_other_api_route() {
+        // Not on the allow list: refused, like /api/ps5/*.
         for peer in ["192.168.1.20:4000", "172.17.0.1:4000", "[2001:db8::1]:4000"] {
-            let r = handle(peer.parse().unwrap(), req(1_000), None).await;
-            assert_eq!(r.status(), StatusCode::FORBIDDEN, "{peer}");
+            assert_eq!(post_as(peer, "", None).await, 403, "{peer}");
         }
-        // IPv4-mapped loopback is still loopback.
-        let t = console("mapped", Box::new(|_, _| text("ok=1"))).await;
-        let r = handle(
-            "[::ffff:127.0.0.1]:4000".parse().unwrap(),
-            req(5_000),
-            Some(t),
-        )
-        .await;
-        assert_eq!(r.status(), StatusCode::OK);
+        // On the allow list (a NAS, or a Docker bridge address): forwarded, not refused.
+        assert_ne!(
+            post_as("192.168.1.20:4000", "192.168.1.0/24", None).await,
+            403
+        );
+        assert_ne!(post_as("172.17.0.1:4000", "172.17.0.1", None).await, 403);
+        // A peer outside the range stays refused.
+        assert_eq!(post_as("10.0.0.5:4000", "192.168.1.0/24", None).await, 403);
+        // Loopback, including IPv4-mapped loopback, never needs the list.
+        assert_ne!(post_as("127.0.0.1:4000", "", None).await, 403);
+        assert_ne!(post_as("[::1]:4000", "", None).await, 403);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_cross_site_browser_origin_is_still_refused_even_from_an_allowed_peer() {
+        assert_eq!(
+            post_as("127.0.0.1:4000", "", Some("https://evil.example")).await,
+            403
+        );
+        assert_eq!(
+            post_as(
+                "192.168.1.20:4000",
+                "192.168.1.0/24",
+                Some("https://evil.example")
+            )
+            .await,
+            403
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -223,7 +263,7 @@ mod tests {
         )
         .await;
         let spy = t.clone();
-        let r = parse(handle(loopback(), req(120_000), Some(t)).await).await;
+        let r = parse(handle(req(120_000), Some(t)).await).await;
         assert!(r.ok, "{r:?}");
         assert_eq!(spy.timeout_ms.load(Ordering::SeqCst), 120_000);
     }

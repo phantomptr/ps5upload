@@ -1112,8 +1112,8 @@ async fn installed_pkg_inventory_handler(Query(q): Query<InstalledPkgQuery>) -> 
     if !valid_title_id(&q.title_id) {
         return json_err(StatusCode::BAD_REQUEST, "invalid title_id");
     }
-    // Normalize the port like every other entry point: the inventory is read
-    // over :9114, and an address carrying a different port doesn't fail — it
+    // Normalize the port like every other entry point: the address is reduced
+    // to the bare host, so an address carrying a port doesn't fail — it
     // reports an empty console.
     let addr = normalize_mgmt_addr(&q.addr);
     let title_id = q.title_id;
@@ -1399,7 +1399,7 @@ async fn parse_remote_handler(_remote_path: &str) -> Response<Body> {
 
 #[derive(Debug, Deserialize)]
 pub struct InstallStartRequest {
-    /// PS5 mgmt-port address, e.g. "192.168.1.42:9114".
+    /// PS5 address, e.g. "192.168.1.42" (a `:port` suffix is dropped).
     pub ps5_addr: String,
     /// Proceed with a staged re-install of an already-installed full game.
     ///
@@ -1941,10 +1941,10 @@ pub(crate) async fn install_start_handler(
         },
         package_type: package_type.clone(),
         package_fingerprint,
-        // Normalize to the MANAGEMENT port, always. Every observation this
+        // Normalize to the bare host, always. Every observation this
         // session makes — the on-disk artifact check, the free-space and
         // title-dir signals that decide `installed_bytes`, the Sony-log
-        // verdict — goes to :9114. A caller that sends a bare IP (a script,
+        // verdict — goes to the console's one AVA1 port. A caller that sends a bare IP (a script,
         // the web UI, a future client) used to get a session whose every
         // filesystem frame failed instantly: 0 ms status polls, `Absent`
         // forever, `installed_bytes: 0`, and a phase stuck on `install` until
@@ -3871,7 +3871,7 @@ fn plain_response(status: StatusCode, msg: &str) -> Response<Body> {
 /// truncates IPv6 to `[` because IPv6 addresses contain colons.
 ///
 /// rsplit_once on the LAST `:` correctly cuts off the port for both
-/// `1.2.3.4:9114` → `1.2.3.4` and `[2001:db8::1]:9114` → `[2001:db8::1]`.
+/// `1.2.3.4:9120` → `1.2.3.4` and `[2001:db8::1]:9120` → `[2001:db8::1]`.
 /// We then strip surrounding brackets to normalise to the bare form
 /// `peer.ip().to_string()` emits.
 ///
@@ -3880,7 +3880,7 @@ fn plain_response(status: StatusCode, msg: &str) -> Response<Body> {
 ///     brackets if present)
 ///   - empty input → empty string (caller is expected to handle)
 pub(crate) fn strip_host_port(host_port: &str) -> String {
-    // Bracketed IPv6 with port: `[2001:db8::1]:9114` →
+    // Bracketed IPv6 with port: `[2001:db8::1]:9120` →
     // rsplit_once on `]:` gives `[2001:db8::1` (with leading bracket).
     if let Some((host, port)) = host_port.rsplit_once("]:") {
         // host has leading `[` from the original; port is just digits.
@@ -4028,7 +4028,7 @@ mod persist_tests {
         let saved = serde_json::json!([{
             "id": id, "parts": [part], "part_sizes": [size], "total_size": size,
             "content_id": "UP0000-TEST00000_00-0000000000000000", "title": "t",
-            "package_type": "app", "package_fingerprint": "f", "ps5_mgmt_addr": "1.2.3.4:9114",
+            "package_type": "app", "package_fingerprint": "f", "ps5_mgmt_addr": "1.2.3.4:9120",
             "serve_only": true, "staging_path": null,
             "created_at_unix": now_unix(), "last_activity_unix": now_unix()
         }]);
@@ -4145,11 +4145,11 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
     fn a_link_that_fits_is_not_shortened() {
         let short = "http://192.168.86.199:20081/UP9000-PPSA03016_00-MARVELSPIDERMAN2.pkg";
         assert_eq!(
-            super::shorten_for_installer("127.0.0.1:9114", short).unwrap(),
+            super::shorten_for_installer("127.0.0.1:9120", short).unwrap(),
             None
         );
         assert_eq!(
-            super::shorten_for_installer("127.0.0.1:9114", "/data/pkg/a.pkg").unwrap(),
+            super::shorten_for_installer("127.0.0.1:9120", "/data/pkg/a.pkg").unwrap(),
             None
         );
     }
@@ -4158,7 +4158,7 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
     /// alias leads back to the exact link.
     #[test]
     fn an_over_long_link_becomes_an_alias_that_fits() {
-        let short = super::shorten_for_installer("127.0.0.1:9114", LONG)
+        let short = super::shorten_for_installer("127.0.0.1:9120", LONG)
             .unwrap()
             .expect("shortened");
         assert!(
@@ -4271,13 +4271,13 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
     #[test]
     fn a_session_address_is_always_normalized_to_the_bare_host() {
         assert_eq!(normalize_mgmt_addr("192.168.86.100"), "192.168.86.100");
-        assert_eq!(normalize_mgmt_addr("192.168.86.100:9114"), "192.168.86.100");
+        assert_eq!(normalize_mgmt_addr("192.168.86.100:9120"), "192.168.86.100");
         // An older client may hand us either retired port; the port is ignored.
-        assert_eq!(normalize_mgmt_addr("192.168.86.100:9113"), "192.168.86.100");
+        assert_eq!(normalize_mgmt_addr("192.168.86.100:9120"), "192.168.86.100");
         // Hostnames and IPv6 literals follow the same rule.
         assert_eq!(normalize_mgmt_addr("ps5.lan"), "ps5.lan");
         assert_eq!(normalize_mgmt_addr("[::1]"), "[::1]");
-        assert_eq!(normalize_mgmt_addr("[::1]:9113"), "[::1]");
+        assert_eq!(normalize_mgmt_addr("[::1]:9120"), "[::1]");
     }
 
     #[test]
@@ -4393,7 +4393,7 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
     fn install_start_request_delete_staging_defaults_true() {
         // Back-compat: an older client that omits delete_staging must keep the
         // historical always-clean behaviour (true), not silently flip to keep.
-        let json = r#"{"ps5_addr":"1.2.3.4:9114","local_ps5_path":"/x.pkg"}"#;
+        let json = r#"{"ps5_addr":"1.2.3.4:9120","local_ps5_path":"/x.pkg"}"#;
         let req: InstallStartRequest = serde_json::from_str(json).unwrap();
         assert!(
             req.delete_staging,
@@ -4405,7 +4405,7 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
     fn install_start_request_delete_staging_false_round_trips() {
         // The current client sends the real preference; false must be honoured.
         let json =
-            r#"{"ps5_addr":"1.2.3.4:9114","local_ps5_path":"/x.pkg","delete_staging":false}"#;
+            r#"{"ps5_addr":"1.2.3.4:9120","local_ps5_path":"/x.pkg","delete_staging":false}"#;
         let req: InstallStartRequest = serde_json::from_str(json).unwrap();
         assert!(!req.delete_staging);
         // And it must flow through to a kept pkg.
@@ -4418,10 +4418,10 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
     #[test]
     fn strip_host_port_handles_ipv4_and_ipv6() {
         // IPv4 with port — the common case.
-        assert_eq!(strip_host_port("192.168.1.42:9114"), "192.168.1.42");
+        assert_eq!(strip_host_port("192.168.1.42:9120"), "192.168.1.42");
         // IPv6 bracketed with port — the SocketAddr-emitted form.
-        assert_eq!(strip_host_port("[2001:db8::1]:9114"), "2001:db8::1");
-        assert_eq!(strip_host_port("[::1]:9114"), "::1");
+        assert_eq!(strip_host_port("[2001:db8::1]:9120"), "2001:db8::1");
+        assert_eq!(strip_host_port("[::1]:9120"), "::1");
         // No port — should pass through unchanged.
         assert_eq!(strip_host_port("192.168.1.42"), "192.168.1.42");
         // Bare bracketless IPv6 without port — the disambiguation
@@ -4430,7 +4430,7 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         assert_eq!(strip_host_port("::1"), "::1");
         assert_eq!(strip_host_port("2001:db8::1"), "2001:db8::1");
         // Hostname with port.
-        assert_eq!(strip_host_port("my-ps5.local:9114"), "my-ps5.local");
+        assert_eq!(strip_host_port("my-ps5.local:9120"), "my-ps5.local");
         // Empty input.
         assert_eq!(strip_host_port(""), "");
         // Edge: bracketed IPv6 with empty/invalid port — Round 4 found
@@ -4460,7 +4460,7 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         // Pin the shape so a divergence between the two routes would
         // break Sony's installer header cross-check visibly here.
         let url = pkg_host_url_for(
-            "127.0.0.1:9114",
+            "127.0.0.1:9120",
             "abc-123",
             "UP9000-CUSA12345_00-GAMECONTENT12345",
         )
@@ -4482,7 +4482,7 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         // direct-install URL must honour it so the daemon fetches from
         // the same port the engine is actually listening on.
         std::env::set_var("PS5UPLOAD_ENGINE_PORT", "29113");
-        let url = pkg_host_url_for("127.0.0.1:9114", "s", "IV0001-X").expect("loopback");
+        let url = pkg_host_url_for("127.0.0.1:9120", "s", "IV0001-X").expect("loopback");
         std::env::remove_var("PS5UPLOAD_ENGINE_PORT");
         assert!(
             url.starts_with("http://127.0.0.1:29113/"),
@@ -4498,7 +4498,7 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         // LAN IP instead. It must win over lan_ip_for_ps5 regardless of the
         // ps5_addr, and an empty value must fall through to the guess.
         std::env::set_var("PS5UPLOAD_PKG_HOST_IP", "192.168.86.199");
-        let url = pkg_host_url_for("192.168.86.100:9114", "s", "IV0001-X").expect("override ip");
+        let url = pkg_host_url_for("192.168.86.100:9120", "s", "IV0001-X").expect("override ip");
         std::env::remove_var("PS5UPLOAD_PKG_HOST_IP");
         assert!(
             url.starts_with("http://192.168.86.199:"),
@@ -4507,7 +4507,7 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         // An empty override must not be treated as a valid IP.
         std::env::set_var("PS5UPLOAD_PKG_HOST_IP", "   ");
         let url2 =
-            pkg_host_url_for("127.0.0.1:9114", "s", "IV0001-X").expect("empty falls through");
+            pkg_host_url_for("127.0.0.1:9120", "s", "IV0001-X").expect("empty falls through");
         std::env::remove_var("PS5UPLOAD_PKG_HOST_IP");
         assert!(
             url2.starts_with("http://127.0.0.1:"),
@@ -4939,7 +4939,7 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         // untouched. This is the safety default: any caller that forgets the
         // field gets the install, not a silent no-op.
         let req: InstallStartRequest = serde_json::from_str(
-            r#"{"ps5_addr":"1.2.3.4:9114","path":"/x.pkg","delete_staging":true}"#,
+            r#"{"ps5_addr":"1.2.3.4:9120","path":"/x.pkg","delete_staging":true}"#,
         )
         .expect("parse");
         assert!(!req.serve_only);
@@ -4953,7 +4953,7 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         // hangs the FW<11 helper). Pin that the field round-trips so the
         // client↔engine contract can't silently regress to the crashing path.
         let req: InstallStartRequest = serde_json::from_str(
-            r#"{"ps5_addr":"1.2.3.4:9114","path":"/x.pkg","serve_only":true}"#,
+            r#"{"ps5_addr":"1.2.3.4:9120","path":"/x.pkg","serve_only":true}"#,
         )
         .expect("parse");
         assert!(req.serve_only);

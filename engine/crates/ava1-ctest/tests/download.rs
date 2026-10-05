@@ -669,7 +669,7 @@ async fn a_wire_resume_starts_writers_for_the_lanes_already_up() {
 }
 
 /// Performance regression (T28): 2,000 tiny files downloaded from the C sender must not
-/// crawl. On the console this ran at 140-300 files/s against FTX2's 2,150+; the root cause was the
+/// crawl. On the console this ran at 140-300 files/s against the retired protocol's 2,150+; the root cause was the
 /// receiver flushing the drive cache once per file (F_FULLFSYNC on macOS).
 #[tokio::test(flavor = "multi_thread")]
 async fn two_thousand_tiny_files_download_fast() {
