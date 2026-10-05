@@ -569,3 +569,37 @@ Recommend: ask the contributor to rebase, then allowlist or translate the missin
 **#362 NixOS docs.** Docs only, 63 lines in the README, pointing at the contributor's own NUR repo. It will conflict with
 `ava1`'s README. Recommend merge after rebase, with the sentence that the package is community maintained and pins one
 release version. The `allowUnfree` note (UnRAR) is accurate.
+
+## 8. User-reported issues: fixed on `ava1`, verify again after the full migration
+
+Users still run v5.41.x (FTX2) until the cutover release. Every fix below exists only on `ava1`,
+so nothing here reaches anyone until that release ships. After the cutover (FTX2 deleted, AVA1
+the only transport), re-run the **Verify after migration** column on hardware before closing
+the matching GitHub issue. Issues stay open until the fix ships (maintainer rule, 2026-10-04).
+
+Source: the community report on the `discord-reports` branch
+(`reports/2026-10-04-issues-and-asks-combined.md`, U1–U18) and the 015 master index.
+
+| # | Issue | Fix on `ava1` | Status | Verify after migration |
+|---|---|---|---|---|
+| U1 | Stream install unreachable (0x8041013d / 0x80431068 / 0x80431064) | Task E (015/06 §3): every stream-unreachable case gets host-IP guidance | in progress | Stream install from Docker and desktop on both consoles; a blocked port shows the guidance |
+| U2 | Console declines an install (0x80b2116f, E2-80B22410 …) | Task F §3 (one-click Retry with Stream, never for a patch) + Task E route matrix | in progress | Force a 0x80b2116f; retry via Stream installs; a patch is never offered the retry |
+| U3 | Install very slow (4.78 MiB/s, hours) | Telemetry (009 #4) splits copy vs install time; 015/03 §3 attribution not built | partial | 85 GB RDR2 (PS4 FPKG) upload-and-install: copy MB/s and install MB/s recorded separately |
+| U4 | patch.pkg / app files offered as installable | #349 ported (`e33fe158`) | done | Scan an ext drive with an installed update: not listed; `/api/pkg/install` refuses it |
+| U5 | Helper not reachable: 9021 closed, "Preparing 0%" | Payload Manager :8084 fallback (v5.41.0); Task E SDK ≥0.43 for 13.60 (#341) | in progress | Fresh console on 13.60: helper loads via 9021 and via the :8084 fallback |
+| U6 | Helper crash loop / reset during transfers | AVA1 single-instance gate, `started=0` fix, ownership record (p3-fix007); sanitizers in CI | done, HW pending | 30-restart stress with jobs running (needs the maintainer present); stderr.log shows no reap loop |
+| U7 | Long upload dies with `insufficient_space` after hours | Resume-aware free space + whole-job reservation (015/02, `9ff6b5e4`) | done, HW pending | `hw/space_test.py`: oversize refused up front, #365 resume admitted, two-at-once refused |
+| U8 | Resume fails after rest mode | AVA1 journal resume (moot on AVA1, #353); rest-mode tests in ctest | done, HW pending | Rest mode mid-upload, then resume, with and without a helper restart (needs the maintainer) |
+| U9 | Convert from a console game fails (ftpsrv :2121) | Convert over AVA1 `fs.read` (015/01, `3b21257e`); live 104.9 MB/s on the Phat | done | Full-size game Convert with ftpsrv stopped, on both consoles |
+| U10 | Uploaded/converted game will not launch | Task E: won't-launch explainer + PS5 fake *game* pkg warning above FW 11.60 (PS4 FPKGs fine) | in progress | On 13.60: warning shown for a PS5 game pkg only; PS4 FPKG installs and launches |
+| U11 | Fan curve ramps to 100% at the first step (#354) | **not fixed**; Task G added "Restore default" only | open | Reproduce #354 and fix it before the release, or carry it over openly |
+| U12 | Windows installer copy offered the portable zip | #348 ported (`934a4ab2`) | done | Installed Windows copy offers `-setup.exe` and starts it |
+| U13 | No progress/ETA in the commit phase | engine `progress.rs` already fills finishing/settling (018); F4 per-file tick optional | verify | 223k-file upload: the finishing phase shows motion and an ETA |
+| U14 | Transfers shown under the wrong console | Task G keys tasks by console profile (`b5369c4c`) | done | Two consoles added, edit one's IP mid-transfer: the job stays under its console |
+| U15 | Docker / web UI problems (403, perms, host IP) | 5.40/5.41 image fixes; Host allowlist dropped (`f3667441`); #361 perms in Task F §1 | in progress | `scripts/docker-smoke.sh` both images; a read-only state dir gives the descriptive error |
+| U16 | White screen on macOS 11 (#352) | Task G boot guard notice (`b5369c4c`); root cause unknown | partial | Open on a macOS 11 / old WebView: a notice, never a blank window |
+| U17 | FPKG output path ignores Downloads on Windows (#364) | Task G resolves USERPROFILE (`b5369c4c`) | done | Windows: default output under the user's Downloads |
+| U18 | Windows cannot sleep after a transfer | #360 ported (`fcaa360f`) | done | Windows: `powercfg /requests` empty after a transfer |
+
+Backlog requests filed as open issues (not scheduled): #368 (R4), #369 (R5), #370 (R6), #371 (R10),
+#372 (R15), #373 (R16).
