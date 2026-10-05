@@ -648,3 +648,26 @@ drive rows, the 223k-file set and the 85 GB install are follow-ups.
   - the drop60 rejoin livelock: after a dropped session the engine kept rejoining lanes to a session the
     console had ended, and was refused with ERR_BAD_JOIN until the 600 s limit. This one is being fixed
     on `p3-rejoin`.
+
+### 8.1 Community asks: maintainer decisions (2026-10-04)
+
+| Ask | Decision |
+|---|---|
+| R1 copy / Add files / finishing progress and ETA (PR #350) | implement |
+| R2 beginner guide (load order, what kstuff/etaHEN/ShadowMount are, quick start) | implement (docs) |
+| R3 compress games on the console | **declined**: most games already ship as exFAT images |
+| R4 link installer for any file + download-only (#368) | explained, decision pending |
+| R5 cancel a running console copy (#369) | implement |
+| R6 multi-pkg RAR without local space (#370) | implement: unpack to the console over AVA1, then install each package |
+| R7 Discord rich presence | **declined** |
+| R8 browse/download games on the console | **declined** |
+| R9 restore default fan curve | kept: maps to the stock 60 °C threshold after #354's fix |
+| R10 docs: mobile app, USB too small (#371) | implement |
+| R11 RDR2 60 fps patch | **declined**: third-party patch |
+| R12 iOS app (#363) | **declined**, closed: needs an Apple developer account |
+| R13 Persian locale (PR #355) | accept, missing keys filled |
+| R14 resume-aware free space (#365) | done (015/02) |
+| R15 web UI keeps uploading after the tab closes (#372) | implement |
+| R16 cheats: MC4, game names, load notification, filters (#373) | implement |
+| R17 Docker browse roots (PR #367) | accept, logging fixed |
+| R18 Retry with Stream | kept, merged (`f0d8280e`) |
