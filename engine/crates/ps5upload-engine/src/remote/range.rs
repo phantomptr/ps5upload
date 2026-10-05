@@ -4,6 +4,9 @@
 //! wherever the bytes live. This is that source for any saved server — the SMB share streaming
 //! of `smb_range` generalised to every protocol. Nothing is copied: each range becomes a few
 //! positioned reads run concurrently, because one read at a time would be bound by round trips.
+//!
+//! Android compiles `remote_pkg` (the only consumer) out, so nothing here is used there.
+#![cfg_attr(target_os = "android", allow(dead_code))]
 
 use std::sync::Arc;
 
