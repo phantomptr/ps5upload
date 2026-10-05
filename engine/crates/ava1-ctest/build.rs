@@ -201,6 +201,18 @@ fn main() {
         "cargo:rerun-if-changed={}",
         p.join("src/sony_api_lock.c").display()
     );
+    // Issue #354: the pure fan curve -> threshold mapping, standalone (no Sony API, no hardware).
+    build()
+        .file(p.join("src/fan_map.c"))
+        .include(p.join("include"))
+        .warnings(true)
+        .extra_warnings(true)
+        .warnings_into_errors(true)
+        .compile("fanmap");
+    println!(
+        "cargo:rerun-if-changed={}",
+        p.join("src/fan_map.c").display()
+    );
     // The AVX2 ChaCha20 is its own unit, built with -mavx2 only on x86-64 (where the
     // run-time CPUID check picks it); elsewhere it compiles to nothing.
     let mut avx2 = build();

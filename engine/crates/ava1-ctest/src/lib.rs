@@ -2245,3 +2245,12 @@ pub fn jobs_gc(jobs: &Path, age_s: i64, max_age_s: i64) -> i32 {
     let j = CString::new(jobs.to_str().unwrap()).unwrap();
     unsafe { ffi::ava1_test_jobs_gc(j.as_ptr(), age_s, max_age_s) }
 }
+
+/// Issue #354: payload/src/fan_map.c, the fan curve -> ICC threshold mapping (-1: no readable point).
+pub fn fan_map_threshold(points_json: &str) -> i32 {
+    extern "C" {
+        fn fan_map_threshold(json: *const std::os::raw::c_char) -> std::os::raw::c_int;
+    }
+    let c = CString::new(points_json).expect("no NUL in a curve body");
+    unsafe { fan_map_threshold(c.as_ptr()) }
+}

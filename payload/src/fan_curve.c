@@ -11,6 +11,9 @@
 
 #include "config.h"
 #include "hw_info.h"
+#include "fan_map.h"
+
+_Static_assert(FAN_MAP_MIN_C == HW_FAN_THRESHOLD_MIN, "fan_map floor must match hw_info");
 
 #define FAN_CURVE_DIR  PS5UPLOAD2_RUNTIME_ROOT
 #define FAN_CURVE_FILE PS5UPLOAD2_RUNTIME_ROOT "/fan_curve.json"
@@ -32,26 +35,6 @@ static int ensure_dir(const char *path) {
         }
     }
     return mkdir(tmp, 0755);
-}
-
-/* Extract the first "temp_c" integer value from a JSON fan-curve body.
- *
- * The engine sends: {"points":[{"temp_c":65,"duty_pct":40},...]}.
- * We scan for the first "\"temp_c\":NN" occurrence and parse NN. This
- * is a minimal scanner matching the extract_json_* style used in
- * runtime.c — no full JSON parser is linked into the payload.
- *
- * Returns the temperature in °C, or -1 if not found. */
-static int fan_curve_parse_first_temp(const char *json) {
-    if (!json) return -1;
-    static const char needle[] = "\"temp_c\":";
-    const char *pos = strstr(json, needle);
-    if (!pos) return -1;
-    pos += sizeof(needle) - 1;
-    /* Skip optional whitespace between : and the number. */
-    while (*pos == ' ' || *pos == '\t') pos++;
-    if (*pos < '0' || *pos > '9') return -1;
-    return (int)strtol(pos, NULL, 10);
 }
 
 int fan_curve_set(const char *points_json, char *err, size_t err_cap) {
@@ -85,12 +68,15 @@ int fan_curve_set(const char *points_json, char *err, size_t err_cap) {
      * pins + persists the value so the 15 s auto-reapply watcher keeps it
      * alive across the fan-state resets the firmware issues on every game
      * launch. A one-shot ioctl here would silently revert on the next
-     * launch — the whole reason hw_info owns the watcher. The PS5's fan
-     * ioctl only accepts a single threshold, so a multi-point curve maps
-     * to its first (ramp-start) point, which is the knob users care about.
+     * launch — the whole reason hw_info owns the watcher. The ICC ioctl takes
+     * ONE temperature, the point where the firmware's own control goes to
+     * turbo, not a curve and not a target. So the curve maps to the lowest
+     * temperature where it asks for 100% duty, capped at the stock threshold
+     * (fan_map.h). It used to send the FIRST point, so a curve starting at
+     * 50 C made the fans run flat out from 50 C: #354.
      * Non-fatal: the curve is already persisted, so a hardware failure
      * still lets the user inspect/retry from the UI. */
-    int threshold = fan_curve_parse_first_temp(points_json);
+    int threshold = fan_map_threshold(points_json);
     if (threshold >= 0) {
         const char *reason = NULL;
         (void)hw_fan_set_threshold((uint8_t)threshold, &reason);
