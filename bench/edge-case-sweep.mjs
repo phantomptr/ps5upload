@@ -3,8 +3,8 @@
  * Upload edge-case sweep (manual hardware test, not CI).
  *
  * Exercises the tricky upload paths the smoke test doesn't: special-char
- * filenames, empty files, nested dirs, reconcile-skip, zip upload, multistream
- * with odd names, and concurrent uploads — and VERIFIES correctness by
+ * filenames, empty files, nested dirs, reconcile-skip, zip upload and
+ * concurrent uploads — and VERIFIES correctness by
  * downloading each upload back and byte-comparing (catches silent corruption,
  * not just "job said ok").
  *
@@ -55,13 +55,13 @@ async function pollJob(id, timeoutMs = 120000) {
 async function del(p) { await jpost("/api/ps5/fs/delete", { path: p, addr: ADDR }); }
 
 // Upload a dir, download it back to a fresh local dir, return map name->sha of downloaded files.
-async function uploadDirAndVerify(label, localDir, ps5Sub, { streams = 1, reconcile = false } = {}) {
+async function uploadDirAndVerify(label, localDir, ps5Sub, { reconcile = false } = {}) {
   const destRoot = `${DEST}/${ps5Sub}`;
   await del(destRoot);
   await new Promise((x) => setTimeout(x, 400));
   const ep = reconcile ? "/api/transfer/dir-reconcile" : "/api/transfer/dir";
   const body = reconcile
-    ? { src_dir: localDir, dest_root: destRoot, addr: ADDR, mode: "fast", tx_id: null, excludes: [], streams }
+    ? { src_dir: localDir, dest_root: destRoot, addr: ADDR, mode: "fast", tx_id: null, excludes: [] }
     : { src_dir: localDir, dest_root: destRoot, addr: ADDR };
   const st = await jpost(ep, body);
   if (!st.ok || !st.json.job_id) return bad(label, `start HTTP ${st.status} ${JSON.stringify(st.json)}`);
@@ -88,7 +88,7 @@ async function uploadDirAndVerify(label, localDir, ps5Sub, { streams = 1, reconc
   await fs.rm(dlDir, { recursive: true, force: true });
   if (missing.length) return bad(label, `${missing.length} file(s) missing after round-trip, e.g. ${JSON.stringify(missing.slice(0,3))}`);
   if (mism) return bad(label, `${mism}/${checked} file(s) byte-mismatch after round-trip`);
-  ok(`${label} (${checked} files round-tripped, streams=${streams}${reconcile ? ", reconcile" : ""})`);
+  ok(`${label} (${checked} files round-tripped${reconcile ? ", reconcile" : ""})`);
   return res.j;
 }
 
@@ -120,8 +120,7 @@ async function main() {
   for (let i = 0; i < trickyNames.length; i++) {
     await fs.writeFile(path.join(specialDir, trickyNames[i]), crypto.randomBytes(1024 + i * 37));
   }
-  await uploadDirAndVerify("special-chars (dir, single stream)", specialDir, "special", { streams: 1 });
-  await uploadDirAndVerify("special-chars (dir, 4 streams)", specialDir, "special4", { streams: 4 });
+  await uploadDirAndVerify("special-chars (dir)", specialDir, "special");
 
   // ---- 2. Empty file + empty-ish mix ----
   const emptyDir = path.join(work, "empties");
@@ -148,11 +147,11 @@ async function main() {
   for (let i = 0; i < 6; i++) await fs.writeFile(path.join(recDir, `rec_${i}.bin`), crypto.randomBytes(64 * 1024));
   const destRec = `${DEST}/rec`;
   await del(destRec); await new Promise((x) => setTimeout(x, 400));
-  const r1 = await jpost("/api/transfer/dir-reconcile", { src_dir: recDir, dest_root: destRec, addr: ADDR, mode: "fast", tx_id: null, excludes: [], streams: 1 });
+  const r1 = await jpost("/api/transfer/dir-reconcile", { src_dir: recDir, dest_root: destRec, addr: ADDR, mode: "fast", tx_id: null, excludes: [] });
   const r1res = await pollJob(r1.json.job_id);
   if (!r1res.ok) bad("reconcile run-1", r1res.error);
   else {
-    const r2 = await jpost("/api/transfer/dir-reconcile", { src_dir: recDir, dest_root: destRec, addr: ADDR, mode: "fast", tx_id: null, excludes: [], streams: 1 });
+    const r2 = await jpost("/api/transfer/dir-reconcile", { src_dir: recDir, dest_root: destRec, addr: ADDR, mode: "fast", tx_id: null, excludes: [] });
     const r2res = await pollJob(r2.json.job_id);
     if (!r2res.ok) bad("reconcile run-2", r2res.error);
     else {

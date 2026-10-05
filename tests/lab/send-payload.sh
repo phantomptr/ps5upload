@@ -3,7 +3,7 @@ set -euo pipefail
 
 PS5_IP="${PS5_IP:-192.168.137.2}"
 PS5_PORT="${PS5_PORT:-9021}"
-PAYLOAD_PATH="${1:-payload2/ps5upload.elf}"
+PAYLOAD_PATH="${1:-payload/ps5upload.elf}"
 
 if [[ ! -f "$PAYLOAD_PATH" ]]; then
   echo "payload file not found: $PAYLOAD_PATH" >&2

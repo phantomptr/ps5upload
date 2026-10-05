@@ -4,8 +4,8 @@
  *
  * 1. Start a 1 GiB single-file upload with a fixed tx_id.
  * 2. Kill the engine mid-transfer (simulates a crash / hard network drop).
- * 3. Restart the engine, re-issue the SAME tx_id → payload resumes from its
- *    journaled last_acked_shard (BeginTxAck), engine sends only the remainder.
+ * 3. Restart the engine, re-issue the SAME tx_id → the payload resumes from the
+ *    progress it journaled (AVA1 job journal), and the engine sends only the remainder.
  * 4. Verify: run-2 sent < full size (proves resume, not re-send) AND the
  *    final file on the PS5 byte-matches the source (download-back sha256).
  *
@@ -127,7 +127,7 @@ async function main() {
   if (back.length !== fullSize) { console.log(`  ✗ size mismatch: ${back.length} vs ${fullSize}`); okAll = false; }
   if (backSha !== srcSha) { console.log(`  ✗ SHA MISMATCH — resumed file is corrupt`); okAll = false; }
   else console.log(`  ✓ final file byte-identical to source (sha match)`);
-  if (partialSeen && sent2 >= fullSize) console.log(`  ⚠ run-2 re-sent the whole file (${(sent2/1048576).toFixed(0)} MiB) — resume did not skip acked shards`);
+  if (partialSeen && sent2 >= fullSize) console.log(`  ⚠ run-2 re-sent the whole file (${(sent2/1048576).toFixed(0)} MiB) — resume did not skip the data the console already had`);
   else if (partialSeen) console.log(`  ✓ resume skipped already-acked data (run-2 sent only ${(sent2 / 1048576).toFixed(0)}/${(fullSize/1048576).toFixed(0)} MiB)`);
 
   await jpost("/api/ps5/fs/delete", { path: DESTDIR, addr: ADDR });

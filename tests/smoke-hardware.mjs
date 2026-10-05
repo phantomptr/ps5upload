@@ -348,7 +348,7 @@ async function main() {
       fail('directory transfer', e.message);
     }
 
-    // ── 5. Multi-shard file transfer (4 MiB > default 1 MiB shard floor) ─
+    // ── 5. Larger single-file transfer (4 MiB) ───────────────────────────
     const bigFile = await makeSingleFile(tmpDir, 'smoke-big.bin', 4 * 1024 * 1024);
     try {
       const created = await postJson(`${opts.engineUrl}/api/transfer/file`, {

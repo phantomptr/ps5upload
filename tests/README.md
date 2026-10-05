@@ -1,6 +1,6 @@
 # Tests
 
-Real-hardware integration, scenario, and regression tests for `ps5upload 2.0`.
+Real-hardware integration, scenario, and regression checks. The Rust tests that need no console live in `engine/crates/*/tests/`; see [`../TESTING.md`](../TESTING.md).
 
 ## smoke-hardware.mjs
 
@@ -41,9 +41,9 @@ The runner prefers the pre-built binary (`engine/target/release/` then `debug/`)
 |---|---|
 | engine reachable | GET /api/jobs returns 200 |
 | ps5 status | GET /api/ps5/status returns non-error |
-| single-file transfer | 256 KiB random file → one shard |
+| single-file transfer | 256 KiB random file |
 | directory transfer | 8 × 32 KiB files → dir on PS5 |
-| multi-shard file transfer | 4 MiB file → multiple shards |
+| larger single-file transfer | 4 MiB file |
 | file-list transfer | 3 explicit src→dest pairs |
 | jobs list sanity | /api/jobs returns array |
 
@@ -51,6 +51,6 @@ The runner prefers the pre-built binary (`engine/target/release/` then `debug/`)
 
 ## Planned coverage
 
-- transaction resume and replay after payload restart mid-transfer
-- takeover lifecycle (old payload killed by new one, TX marked interrupted, replayed)
-- fault injection (BLAKE3 mismatch, partial shard, connection drop mid-transfer)
+- resume after the payload restarts mid-transfer (`bench/resume-test.mjs` drives the engine side today)
+- takeover lifecycle (an old payload asked to stand down by a new one; `tests/lab/reload-and-verify-takeover.sh` is the manual version)
+- fault injection on real hardware (corrupted block, dropped connection mid-transfer); the loopback equivalents run in `ava1-chaos`

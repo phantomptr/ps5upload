@@ -8,8 +8,8 @@ Current contents:
   Runs every profile in `profiles.mjs` against a live PS5 through the engine (`make validate`, `make validate-xl`) and writes a report under `bench/reports/`.
 - `profiles.mjs`
   The shared profile definitions. `scripts/gen-fixtures.mjs` builds the local trees they upload.
-- `resume-test.mjs`, `multistream-hw-test.mjs`, `edge-case-sweep.mjs`
-  Hardware checks for resume, parallel streams and edge cases.
+- `resume-test.mjs`, `edge-case-sweep.mjs`
+  Hardware checks for resume and edge cases.
 
 Protocol benchmarks (AVA1 upload, download, copy, resume, relay and the drop-and-resend run) are `ps5upload-lab bench` scenarios; see `cargo run -p ps5upload-lab -- bench --help` from `engine/`.
 

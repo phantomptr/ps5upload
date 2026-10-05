@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PAYLOAD_PATH="${1:-$ROOT_DIR/payload2/ps5upload.elf}"
+PAYLOAD_PATH="${1:-$ROOT_DIR/../payload/ps5upload.elf}"
 
 echo "[reload] initial status"
 "$ROOT_DIR/lab/status-runtime.sh" || true
