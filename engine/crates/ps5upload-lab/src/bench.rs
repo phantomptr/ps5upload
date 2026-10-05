@@ -1186,6 +1186,7 @@ pub fn summary(rows: &[Row], out: &Path) -> String {
 pub enum PoolRef {
     Global,
     Owned(Arc<ps5upload_ava1::Pool>),
+    Static(&'static ps5upload_ava1::Pool),
 }
 
 impl PoolRef {
@@ -1193,6 +1194,7 @@ impl PoolRef {
         match self {
             PoolRef::Global => ps5upload_ava1::pool(),
             PoolRef::Owned(p) => p,
+            PoolRef::Static(p) => p,
         }
     }
 }
@@ -1992,10 +1994,20 @@ pub async fn run_bench_in(env: &Env, args: &BenchArgs) -> anyhow::Result<Vec<Ben
             },
             p.addr
         );
+        // One pool for the transfer AND its management calls (the free-space check before the
+        // open), as in the engine: a second pool with the same identity would replace this
+        // session on the console every time it connected, and every lane Join behind the proxy
+        // was then refused (hardware run 2026-10-04, ERR_BAD_JOIN until the 600 s limit).
+        let pool: &'static ps5upload_ava1::Pool = Box::leak(Box::new(
+            ps5upload_ava1::Pool::new(env.ava_dir.clone()).with_addr(p.addr.to_string()),
+        ));
+        if args.proto == Proto::Ava1 {
+            ps5upload_core::mgmt::set_transport(Arc::new(
+                ps5upload_ava1::mgmt::AvaTransport::with_pool(pool),
+            ));
+        }
         env_owned = Some(Env {
-            pool: PoolRef::Owned(Arc::new(
-                ps5upload_ava1::Pool::new(env.ava_dir.clone()).with_addr(p.addr.to_string()),
-            )),
+            pool: PoolRef::Static(pool),
             ava_dir: env.ava_dir.clone(),
             idle: env.idle,
             clean: env.clean,
