@@ -3822,6 +3822,12 @@ err_replace_cooldown: "The helper on this console was replaced a moment ago. Wai
 "joberr.ava1_failed": "The PS5 helper started but its transfer server did not. Restart the console, then retry.",
 "joberr.helper_not_running": "No helper is running on the PS5. Send the helper first (Connection screen on the desktop app, or your payload loader), then retry.",
 install_hint_setup_exe: "The installer has opened: follow it, and it updates PS5Upload in place.",
+"fakegame.fw.title": "This PS5 game can be installed but not played on FW {fw}",
+"fakegame.fw.body": "It will install, but PS5 fake game packages can't be played on firmware above {last}. PS4 packages are fine, and PS5 homebrew apps launch normally.",
+"fakegame.fw.launch": "PS5 fake game packages can't be played on firmware above {last} (this console is on {fw}). If this game was installed from a fake package, that is why it won't start. PS4 packages are fine.",
+"fakegame.fw.more": "Why?",
+"install_help_wont_launch": "Game won't launch?",
+"install_help_what_means": "What does this mean?",
 };
 
 export default en;

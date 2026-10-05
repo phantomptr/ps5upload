@@ -58,3 +58,36 @@ export function firmwareMajor(kernel: string | null | undefined): number | null 
   const major = Number(fw.split(".")[0]);
   return Number.isFinite(major) ? major : null;
 }
+
+/** The newest firmware on which a PS5 fake (FPKG) GAME is playable. Above it
+ *  the package still installs, but the game does not start. Measured by the
+ *  maintainer on real hardware. PS4 fake packages and PS5 homebrew apps are
+ *  not affected. */
+export const LAST_PS5_FAKE_GAME_FIRMWARE = "11.60";
+
+/** True when `id` (a content id such as `UP4433-PPSA17221_00-MINECRAFTPS50000`
+ *  or a bare title id) names a PS5 GAME: it carries a `PPSAnnnnn` title id.
+ *  PS4 titles (`CUSAnnnnn`) and PS5 homebrew (`IV0002-ITEM00001_00-…`, whose
+ *  title id is `ITEMnnnnn` or similar) are not PS5 games. An empty or
+ *  unrecognised id is not a game: the warning needs positive evidence. */
+export function isPs5GameId(id: string | null | undefined): boolean {
+  return !!id && /(?:^|[^A-Z0-9])PPSA\d{5}(?![0-9])/.test(id.toUpperCase());
+}
+
+/** The console's firmware ("13.60") when a PS5 fake GAME package with this id
+ *  would install but not be playable there, else null. That needs all of:
+ *  a PS5 game id (not PS4, not homebrew) AND a parseable firmware strictly
+ *  above 11.60. An unparseable kernel string never produces a warning. */
+export function ps5FakeGameUnplayableFirmware(
+  kernel: string | null | undefined,
+  contentOrTitleId: string | null | undefined,
+): string | null {
+  if (!isPs5GameId(contentOrTitleId)) return null;
+  const fw = parsePS5Firmware(kernel);
+  if (!fw) return null;
+  const toNum = (v: string) => {
+    const [maj, min] = v.split(".");
+    return Number(maj) * 100 + Number(min);
+  };
+  return toNum(fw) > toNum(LAST_PS5_FAKE_GAME_FIRMWARE) ? fw : null;
+}

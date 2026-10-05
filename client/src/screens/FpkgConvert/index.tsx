@@ -12,7 +12,8 @@ import { PackagePlus } from "lucide-react";
 import { fpkg, type FpkgEstimates, type FpkgInspection } from "../../api/fpkg";
 import { appLaunch } from "../../api/ps5";
 import { Callout, Card, PageHeader } from "../../components";
-import { transferAddr } from "../../lib/addr";
+import { FakeGameFirmwareNotice } from "../../components/FakeGameFirmwareNotice";
+import { hostOf, transferAddr } from "../../lib/addr";
 import { createLatest } from "../../lib/latest";
 import { openLocalPath } from "../../lib/openLocalPath";
 import { pickPath, pickPaths } from "../../lib/pickPath";
@@ -50,6 +51,9 @@ export default function FpkgConvertScreen() {
   const host = useConnectionStore((s) => s.host) ?? "";
   const payloadUp = useConnectionStore((s) => s.payloadStatus === "up");
   const canInstall = payloadUp && host.trim() !== "";
+  const kernel = useConnectionStore((s) =>
+    host ? (s.runtimeByHost[hostOf(host)]?.ps5Kernel ?? null) : null,
+  );
 
   const outputDir = useConvertPrefs((s) => s.outputDir);
   const setOutputDir = useConvertPrefs((s) => s.setOutputDir);
@@ -289,6 +293,12 @@ export default function FpkgConvertScreen() {
           "Turn a game folder or mount image into an installable package. The work runs on this machine, not the console.",
         )}
       />
+
+      {/* Building still works (it runs on this computer), but a PS5 fake GAME
+          installs and then can't be played on firmware above 11.60. Said
+          before the user spends an hour converting; silent for PS4, for
+          homebrew and when the firmware is unknown. */}
+      <FakeGameFirmwareNotice kernel={kernel} contentId={inspection?.content_id} />
 
       {/* Wide windows: the game and its options on the left, building and the queue on
           the right, so neither column is a long empty strip. */}
