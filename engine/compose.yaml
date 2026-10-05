@@ -30,6 +30,10 @@ services:
       # usual choice; keep it to networks you trust. Never expose the engine
       # to the internet.
       PS5UPLOAD_ALLOW_IP: "192.168.1.0/24"
+      # Where the web UI's file browser opens. Without this it starts at the
+      # engine's home directory (/data), not at your packages below.
+      # Comma-separate the value to offer more than one root.
+      PS5UPLOAD_BROWSE_ROOTS: "/pkgs"
       # Only needed without host networking: this server's LAN IP.
       # PS5UPLOAD_PKG_HOST_IP: "192.168.1.10"
 
@@ -44,8 +48,9 @@ services:
     volumes:
       # The engine's own state: saved servers, install history, artwork cache.
       - ps5upload-data:/data
-      # EDIT: where your packages and game folders are. They show up in the
-      # web UI's file browser under /pkgs; read-only is enough to install.
+      # EDIT: where your packages and game folders are. The web UI's file
+      # browser opens here (see PS5UPLOAD_BROWSE_ROOTS above); read-only is
+      # enough to install.
       - /srv/ps5/pkgs:/pkgs:ro
 
 volumes:
