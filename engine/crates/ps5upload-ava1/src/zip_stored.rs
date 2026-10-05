@@ -375,6 +375,20 @@ impl StoredZipSink {
             .collect())
     }
 
+    /// Writes the descriptor of slot `k` (the current file, every byte written) with its CRC
+    /// and closes it. Shared by `commit` and by `append` when the next file arrives first.
+    fn finish_current(st: &mut State, k: usize) -> io::Result<()> {
+        let layout = st.layout.clone();
+        let slot = &layout.slots[k];
+        let file = Self::file(st)?;
+        let crc = st.crc.clone().finalize();
+        write_all_at(&file, &slot.descriptor(crc), st.pos)?;
+        st.pos += DESC_LEN;
+        st.crcs[k] = Some(crc);
+        st.current = None;
+        Ok(())
+    }
+
     fn file(st: &State) -> io::Result<Arc<File>> {
         st.file.clone().ok_or_else(|| invalid("archive not open"))
     }
@@ -427,10 +441,16 @@ impl StoredZipSink {
             }
             if let Some(cur) = st.current {
                 let s = &layout.slots[cur];
-                return Err(invalid(format!(
-                    "file {} ended at {} of {} bytes",
-                    s.id, st.written, s.size
-                )));
+                if st.written != s.size {
+                    return Err(invalid(format!(
+                        "file {} ended at {} of {} bytes",
+                        s.id, st.written, s.size
+                    )));
+                }
+                // Whole but not finished: a resume took it as in flight with every byte
+                // durable, and its `commit` has not come yet when the next file's data does
+                // (the order the receiver reaches them in). Finish it here, as `commit` would.
+                Self::finish_current(&mut st, cur)?;
             }
             if off != 0 {
                 return Err(invalid(format!(
@@ -559,12 +579,7 @@ impl Sink for StoredZipSink {
         };
         let slot = &layout.slots[k];
         if st.current == Some(k) && st.written == slot.size {
-            let file = Self::file(&st)?;
-            let crc = st.crc.clone().finalize();
-            write_all_at(&file, &slot.descriptor(crc), st.pos)?;
-            st.pos += DESC_LEN;
-            st.crcs[k] = Some(crc);
-            st.current = None;
+            Self::finish_current(&mut st, k)?;
         }
         Ok(())
     }
@@ -1161,6 +1176,32 @@ mod tests {
         s.write_whole(1, &[]).unwrap();
         feed(&s, &m, 2, 1024, 5000);
         feed(&s, &m, 3, 0, 1234);
+        s.finish().unwrap();
+        check_zip(&d.join("o.zip"), &m);
+    }
+
+    #[test]
+    fn a_whole_but_unfinished_file_is_finished_when_the_next_file_arrives_first() {
+        // As above, but the next file's data reaches the sink before commit(2) does (seen on
+        // a CI runner): the sink must finish file 2 itself, not refuse file 3.
+        let d = dir("whole-next");
+        let m = manifest();
+        {
+            let s = StoredZipSink::new(d.join("o.zip"), "P");
+            s.prepare(&m).unwrap();
+            s.position(&BTreeSet::new(), &BTreeMap::new()).unwrap();
+            feed(&s, &m, 0, 0, 3000);
+            feed(&s, &m, 2, 0, 5000);
+            s.sync(&[]).unwrap();
+            std::mem::forget(s);
+        }
+        let s = StoredZipSink::new(d.join("o.zip"), "P");
+        s.prepare(&m).unwrap();
+        s.position(&done(&[0]), &part(2, 5000)).unwrap();
+        s.write_whole(1, &[]).unwrap();
+        feed(&s, &m, 3, 0, 1234);
+        // The late commit is a no-op now.
+        s.commit(2).unwrap();
         s.finish().unwrap();
         check_zip(&d.join("o.zip"), &m);
     }
