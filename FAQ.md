@@ -668,6 +668,7 @@ allowed IP. Same security rules: no password, trusted LAN only.
 - Desktop-only and hidden in the browser: **archive uploads**, **Payloads** (sending a file from
   disk), saving a save backup or downloading files to your computer, and attaching files to a bug
   report. Everything that works on the PS5 itself is the same as on desktop.
+- The docker image can be built using `PS5UPLOAD_BASE_URL` to change the root path of the app.
 
 **Q: What is "Stream install"?**
 It installs a `.pkg` **straight from your computer**: the PS5 pulls the bytes over your network, so

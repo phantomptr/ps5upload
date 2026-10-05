@@ -293,6 +293,8 @@ with **Settings → Engine URL**.
 - An upload keeps running when you close the tab.
 - **No password.** Anyone allowed can read, write and delete on your PS5. Keep it on a trusted
   LAN, never on the internet.
+- You may build the docker container with the `PS5UPLOAD_BASE_URL` to host the webui through a
+  reverse proxy. This cannot be changed on runtime.
 
 ## FAQ
 

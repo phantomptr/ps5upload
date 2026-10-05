@@ -152,7 +152,7 @@ export default function Sidebar() {
           }`}
         >
           <img
-            src="/logo-square.png"
+            src={`${import.meta.env.BASE_URL.replace(/\/+$/, "")}/logo-square.png`}
             alt=""
             className="h-8 w-8 shrink-0 rounded-[0.6rem] shadow-sm"
           />
