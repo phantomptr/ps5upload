@@ -19,6 +19,17 @@ pub struct CheatTitle {
     pub title_id: String,
     #[serde(default)]
     pub name: String,
+    /// Game version the on-console cheat targets, parsed from its filename
+    /// by the payload. Without this field serde dropped it and the client
+    /// never saw it.
+    #[serde(default)]
+    pub version: String,
+    /// Formats present on the console for this title (`json`, `shn`, `mc4`).
+    #[serde(default)]
+    pub formats: Vec<String>,
+    /// How many of its cheats are switched on (saved state).
+    #[serde(default)]
+    pub enabled: i32,
     #[serde(default)]
     pub running: bool,
 }
@@ -714,6 +725,20 @@ mod tests {
         assert!(resp.titles[1].running);
         assert!(resp.game_running);
         assert_eq!(resp.game_title_id, "CUSA00002");
+    }
+
+    #[test]
+    fn cheats_list_keeps_version_and_formats() {
+        let json = r#"{"titles":[{"title_id":"CUSA00002","name":"Killzone","version":"01.00","formats":["shn","mc4"],"running":false}]}"#;
+        let resp: CheatsListResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.titles[0].version, "01.00");
+        assert_eq!(resp.titles[0].formats, vec!["shn", "mc4"]);
+        let back = serde_json::to_value(&resp).unwrap();
+        assert_eq!(back["titles"][0]["formats"][1], "mc4");
+        // An older payload without the fields still parses.
+        let old: CheatsListResponse =
+            serde_json::from_str(r#"{"titles":[{"title_id":"X","name":"X"}]}"#).unwrap();
+        assert!(old.titles[0].formats.is_empty());
     }
 
     #[test]

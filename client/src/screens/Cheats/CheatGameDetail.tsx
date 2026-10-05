@@ -26,6 +26,7 @@ import { humanizePs5Error } from "../../lib/humanizeError";
 import { hasVersionMatch, rankCheatFiles, sameVersion, type CheatGame } from "../../lib/cheatGames";
 import { platformForTitleId } from "../../lib/titleDetails";
 import { useTr } from "../../state/lang";
+import { useToast } from "../../state/toasts";
 
 /** Where a repo keeps its files, in words. */
 function sourceName(repoId: string): string {
@@ -60,6 +61,7 @@ export function CheatGameDetail({
   onBack: () => void;
 }) {
   const tr = useTr();
+  const { toast } = useToast();
   const { confirm, dialog } = useConfirm();
   const [mods, setMods] = useState<CheatMod[]>([]);
   const [modsLoading, setModsLoading] = useState(false);
@@ -107,6 +109,10 @@ export function CheatGameDetail({
         return;
       }
       setFetched((prev) => new Set(prev).add(e.filename));
+      toast({
+        tone: "success",
+        message: tr("cheats_toast_loaded", { name: game.name }, `Cheats loaded for ${game.name}`),
+      });
       // The game now has cheats on the console: refresh so the list moves
       // it to "Cheats ready" and its switches appear above.
       await onChanged();
@@ -129,7 +135,13 @@ export function CheatGameDetail({
       setError(null);
       // Switching a cheat on also turns the engine on (the payload does it),
       // so let the engine bar catch up.
-      if (!m.on) void onChanged();
+      if (!m.on) {
+        toast({
+          tone: "success",
+          message: tr("cheats_toast_applied", { name: m.name || `#${m.index}` }, `${m.name || `#${m.index}`} applied`),
+        });
+        void onChanged();
+      }
     } catch (err) {
       setError(humanizePs5Error(String(err)));
     } finally {

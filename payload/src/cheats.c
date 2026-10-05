@@ -917,8 +917,11 @@ static int mc4_base64_decode(const char *in, size_t in_len, uint8_t *out, size_t
         unsigned char c = (unsigned char)in[i];
         if (c == '=' ) break;
         if (c == '\r' || c == '\n' || c == ' ' || c == '\t') continue;
+        /* T[] is zero for every unlisted byte, so membership is checked
+         * against the alphabet; otherwise garbage decoded as 'A'. */
+        if (!strchr("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", c))
+            return -1;
         int8_t v = T[c];
-        if (v < 0 && c != 'A') return -1; /* 'A' legitimately maps to 0 */
         acc = (acc << 6) | (uint32_t)v;
         bits += 6;
         if (bits >= 8) {
@@ -957,6 +960,11 @@ static int parse_mc4_file(const char *encoded, size_t enc_len, cheat_file_t *cf)
      * it before handing off to the ASCII-oriented SHN parser. */
     size_t clen = 0;
     char *conv = xml_to_utf8(xml, (size_t)bin_len, &clen);
+    /* Real MC4 plaintext is entity/backslash-escaped XML ("&lt;Trainer
+     * Game=\&quot;..."). Without unescaping it the parser sees no tags and
+     * every MC4 file lists zero cheats (R16, #373). */
+    if (conv) clen = xml_unescape_entities(conv, clen);
+    else      bin_len = (int)xml_unescape_entities(xml, (size_t)bin_len);
     int rc = conv ? parse_shn_file(conv, clen, cf)
                   : parse_shn_file(xml, (size_t)bin_len, cf);
     free(conv);
@@ -1479,10 +1487,45 @@ int cheats_list_titles(char *buf, size_t cap, size_t *written) {
             char version[32] = "";
             extract_cheat_version(de->d_name, version, sizeof(version));
 
+            /* Which formats exist for this title (the list filter), and the
+             * game's own name from the first file that carries one, so a
+             * downloaded cheat for a game that is not installed shows a name
+             * instead of its title id (R16, #373). */
+            found_file_t tf[16];
+            int tn = find_cheat_files(title, tf, 16, 0);
+            int has_fmt[4] = {0, 0, 0, 0};
+            char game_name[MAX_CHEAT_NAME] = "";
+            int enabled_n = 0;
+            for (int ti = 0; ti < tn; ti++) {
+                if (tf[ti].format >= 1 && tf[ti].format <= 3) has_fmt[tf[ti].format] = 1;
+                cheat_file_t *cf = (cheat_file_t *)malloc(sizeof(cheat_file_t));
+                if (!cf) continue;
+                if (load_cheat_file(tf[ti].path, tf[ti].format, cf) == 0) {
+                    if (!game_name[0] && is_usable_game_name(cf->game_name, title))
+                        snprintf(game_name, sizeof(game_name), "%s", cf->game_name);
+                    /* How many cheats are switched on, for the "switched on"
+                     * list filter. Same sidecar the mod list reads. */
+                    cheats_load_state(title, cf);
+                    for (int mi = 0; mi < cf->mod_count; mi++)
+                        if (cf->mods[mi].enabled) enabled_n++;
+                }
+                free(cf);
+            }
+
             if (!first) jb_raw(&jb, ",");
-            JB_PRINTF(&jb,
-                      "{\"title_id\":\"%s\",\"name\":\"%s\",\"version\":\"%s\",\"running\":%s}",
-                      title, title, version,
+            jb_raw(&jb, "{\"title_id\":\"");
+            jb_str(&jb, title);
+            jb_raw(&jb, "\",\"name\":\"");
+            jb_str(&jb, game_name[0] ? game_name : title);
+            JB_PRINTF(&jb, "\",\"version\":\"%s\",\"formats\":[", version);
+            int ff = 1;
+            static const char *const fmt_names[4] = {"", "json", "shn", "mc4"};
+            for (int fi = 1; fi <= 3; fi++) {
+                if (!has_fmt[fi]) continue;
+                JB_PRINTF(&jb, "%s\"%s\"", ff ? "" : ",", fmt_names[fi]);
+                ff = 0;
+            }
+            JB_PRINTF(&jb, "],\"enabled\":%d,\"running\":%s}", enabled_n,
                       is_running ? "true" : "false");
             first = 0;
         }
@@ -1571,8 +1614,8 @@ int cheats_toggle(const char *title_id, int mod_index, int turn_on,
     int n = find_cheat_files(title_id, files, 16, 0);
     if (n == 0) {
         if (err) snprintf(err, err_cap,
-                          "no cheat file for %s. Drop a .json/.shn into "
-                          CHEATS_JSON_DIR " or " CHEATS_SHN_DIR,
+                          "no cheat file for %s. Drop a .json/.shn/.mc4 into "
+                          CHEATS_ROOT,
                           title_id);
         return -1;
     }

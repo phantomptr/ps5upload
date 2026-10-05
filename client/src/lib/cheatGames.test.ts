@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import type { CheatRepoEntry, CheatTitle, InstalledTitle } from "../api/ps5";
 import {
+  applyCheatFilters,
   buildCheatGames,
+  EMPTY_CHEAT_FILTERS,
   cheatSections,
   compareVersions,
   filterCheatGames,
@@ -113,5 +115,59 @@ describe("rankCheatFiles", () => {
   });
   it("is newest first when the installed version is unknown", () => {
     expect(rankCheatFiles(files, null)[0].game_version).toBe("01.000.021");
+  });
+});
+
+describe("names, formats and filters (R16)", () => {
+  const games = () =>
+    buildCheatGames({
+      installed: [inst("CUSA00001", "Alpha"), inst("CUSA00003", "Gamma")],
+      downloaded: [
+        { title_id: "CUSA00001", name: "Alpha", version: "01.00", formats: ["mc4"], enabled: 2, running: false },
+        { title_id: "CUSA00002", name: "Killzone Shadow Fall", version: "", formats: ["json", "shn"], enabled: 0, running: true },
+      ],
+      index: [entry("CUSA00003_01.00.shn", "01.00", "shn")],
+      runningTitleId: "CUSA00002",
+    });
+
+  it("names a game that is not installed from its cheat file, falling back to the id", () => {
+    const g = games().find((x) => x.titleId === "CUSA00002")!;
+    expect(g.name).toBe("Killzone Shadow Fall");
+    const bare = buildCheatGames({
+      installed: [],
+      downloaded: [{ title_id: "CUSA00009", name: "CUSA00009", running: false }],
+      index: [],
+    });
+    expect(bare[0].name).toBe("CUSA00009");
+  });
+
+  it("carries the on-console formats and the enabled count", () => {
+    const g = games().find((x) => x.titleId === "CUSA00001")!;
+    expect(g.downloadedFormats).toEqual(["mc4"]);
+    expect(g.enabledCount).toBe(2);
+  });
+
+  const ids = (f: Partial<typeof EMPTY_CHEAT_FILTERS>) =>
+    applyCheatFilters(games(), { ...EMPTY_CHEAT_FILTERS, ...f })
+      .map((g) => g.titleId)
+      .sort();
+
+  it("filters by format on the console or in the collection", () => {
+    expect(ids({ format: "mc4" })).toEqual(["CUSA00001"]);
+    expect(ids({ format: "shn" })).toEqual(["CUSA00002", "CUSA00003"]);
+  });
+
+  it("filters by state", () => {
+    expect(ids({ state: "switchedOn" })).toEqual(["CUSA00001"]);
+    expect(ids({ state: "playing" })).toEqual(["CUSA00002"]);
+    expect(ids({ state: "toDownload" })).toEqual(["CUSA00003"]);
+    expect(ids({ state: "ready" })).toEqual(["CUSA00001", "CUSA00002"]);
+  });
+
+  it("filters by scope and searches by name, combined", () => {
+    expect(ids({ scope: "installed" })).toEqual(["CUSA00001", "CUSA00003"]);
+    expect(ids({ query: "kill" })).toEqual(["CUSA00002"]);
+    expect(ids({ query: "a", format: "mc4" })).toEqual(["CUSA00001"]);
+    expect(ids({})).toHaveLength(3);
   });
 });
