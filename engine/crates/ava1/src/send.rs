@@ -885,6 +885,27 @@ fn spawn_readers(
     handles
 }
 
+/// Stops and wakes a job's readers when the job's future goes away, however it goes (see
+/// its use in `run_upload`). Repeating what the normal teardown already did is harmless.
+struct ReleaseReaders {
+    stop: Arc<AtomicBool>,
+    sh: Arc<Shared>,
+    source: Arc<dyn Source>,
+    seq: Option<Arc<dyn crate::seq::SeqSource>>,
+}
+
+impl Drop for ReleaseReaders {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.sh.bytes_budget.close();
+        self.sh.wake();
+        self.source.close();
+        if let Some(seq) = &self.seq {
+            seq.close();
+        }
+    }
+}
+
 /// The decode thread of a sequential source (SPEC.md §17).
 fn spawn_decoder(ctx: crate::seq::DecodeCtx) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn_blocking(move || crate::seq::run(ctx))
@@ -1300,6 +1321,17 @@ pub async fn run_upload(
     let large_q = Arc::new(Mutex::new(large));
     let (rtx, mut rrx) = mpsc::unbounded_channel();
     let stop = Arc::new(AtomicBool::new(false));
+    // I1 also when this future is dropped mid-job (an aborted relay, a session task torn
+    // down): the readers below park on the read-ahead budget inside spawn_blocking, and only
+    // closing it wakes them. The teardown at the end does this on every normal exit; a drop
+    // skipped it and left a reader parked for good (a leaked blocking thread that also kept
+    // its runtime from shutting down).
+    let _release_readers = ReleaseReaders {
+        stop: stop.clone(),
+        sh: sh.clone(),
+        source: source.clone(),
+        seq: opts.seq.clone(),
+    };
     let seq_retries = Arc::new(crate::seq::Retries::default());
     let budget_wait: Arc<crate::seq::BudgetWait> = Arc::default();
     let mut budget_wait_seen = 0u64;
@@ -2419,6 +2451,38 @@ mod tests {
             (rate[&1] * 2.0) as u64,
             "the cap is two seconds of the lane's rate"
         );
+    }
+
+    // A job dropped while a reader is parked on the read-ahead budget (the relay destination
+    // ending its job; seen as a test binary that never exited on a 2-CPU runner): dropping the
+    // job's guard must wake the reader, or its blocking thread parks forever.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dropped_job_wakes_a_reader_parked_on_the_budget() {
+        let sh = test_shared(governor::START_CHUNK, 4);
+        let held = sh.bytes_budget.clone().acquire_many_owned(4).await.unwrap();
+        let rt = tokio::runtime::Handle::current();
+        let sh2 = sh.clone();
+        let reader = tokio::task::spawn_blocking(move || {
+            rt.block_on(sh2.bytes_budget.clone().acquire_many_owned(4))
+                .is_err()
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let guard = ReleaseReaders {
+            stop: Arc::new(AtomicBool::new(false)),
+            sh: sh.clone(),
+            source: Arc::new(crate::source::LocalSource::new(std::env::temp_dir())),
+            seq: None,
+        };
+        drop(guard);
+        let woke = tokio::time::timeout(Duration::from_secs(5), reader)
+            .await
+            .expect("the parked reader never woke")
+            .unwrap();
+        assert!(
+            woke,
+            "the reader got a permit instead of seeing the budget closed"
+        );
+        drop(held);
     }
 
     fn test_shared(chunk: u32, budget_kib: usize) -> Arc<Shared> {
