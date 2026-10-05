@@ -1486,14 +1486,6 @@ err_payload_rejected: "La PS5 a rejeté la requête : {reason}",
   hw_fan_duty_approx: "Approximatif",
   hw_product_shape: "Forme du produit",
   hw_product_shape_hint: "Code Sony brut · le nom du modèle fait foi",
-  upload_streams: "Flux d'envoi parallèles",
-  upload_streams_off: "1 (unique)",
-  upload_streams_hint:
-    "Par défaut 1 (flux unique) — la voie la plus stable, plafonnée autour de 40 MB/s sur les consoles non Pro (une limite mono-thread, pas votre réseau ni votre SSD). Augmenter cette valeur envoie les gros dossiers sur plusieurs connexions à la fois pour aller plus vite, mais lisez l'avertissement ci-dessous. Seul le maximum supporté par le payload connecté est utilisé.",
-  upload_streams_unsupported:
-    "Le payload connecté ne supporte pas encore plusieurs flux — les envois utiliseront un flux unique jusqu'à sa mise à jour.",
-  upload_streams_unstable:
-    "Plus rapide, mais à utiliser avec prudence : au-delà d'1 flux, plusieurs transferts tournent en même temps vers la PS5, et sur certaines consoles cela peut faire planter le payload en plein envoi (il cesse alors de répondre jusqu'à son rechargement). Si les envois commencent à échouer ou que le payload décroche, remettez cette valeur à 1 — le flux unique est la voie la plus stable.",
   upload_auto_resume: "Reprendre automatiquement les envois après un échec",
   upload_auto_resume_hint:
     "Si un envoi s'interrompt en cours de transfert — le plus souvent parce que le payload de la PS5 a planté — renvoie automatiquement le payload et reprend là où il s'était arrêté, avec quelques tentatives avant d'abandonner. Les problèmes fatals, comme une PS5 à court d'espace, arrêtent toujours immédiatement. Activé par défaut.",

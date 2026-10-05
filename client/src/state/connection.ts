@@ -90,7 +90,6 @@ export interface HostRuntime {
   ps5Kernel: string | null;
   ucredElevated: boolean | null;
   priorInstance: string | null;
-  maxTransferStreams: number | null;
   /** The AVA1 session verdict from the same single probe that sets
    *  `payloadStatus`: connected, needs_pairing, helper_old or down. There
    *  is one listener, so there is no second liveness flag to disagree
@@ -107,7 +106,6 @@ export const EMPTY_HOST_RUNTIME: HostRuntime = {
   ps5Kernel: null,
   ucredElevated: null,
   priorInstance: null,
-  maxTransferStreams: null,
   session: null,
   helperWedged: false,
 };
@@ -150,11 +148,6 @@ export interface ConnectionState {
    *  "clean" | "killed_externally" | "wedged" | "stale" | "replaced". null on payloads
    *  older than this field, which is indistinguishable from "unknown". */
   priorInstance: string | null;
-  /** Max parallel upload streams the payload advertises (STATUS_ACK
-   *  `max_transfer_streams`). null = pre-multi-stream payload (or no probe
-   *  yet); the Upload path treats null as 1. The effective stream count is
-   *  min(this, the user's upload-streams setting). */
-  maxTransferStreams: number | null;
   /** Mirror of the active console's AVA1 session state (see
    *  HostRuntime.session). */
   session: SessionState | null;
@@ -188,7 +181,6 @@ export interface ConnectionState {
         | "ps5Kernel"
         | "ucredElevated"
         | "priorInstance"
-        | "maxTransferStreams"
         | "payloadProbing"
         | "session"
       >
@@ -211,7 +203,6 @@ function mirrorRuntime(host: string, rt: HostRuntime) {
     ps5Kernel: rt.ps5Kernel,
     ucredElevated: rt.ucredElevated,
     priorInstance: rt.priorInstance,
-    maxTransferStreams: rt.maxTransferStreams,
     session: rt.session,
   };
 }
@@ -227,7 +218,6 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   ps5Kernel: null,
   ucredElevated: null,
   priorInstance: null,
-  maxTransferStreams: null,
   session: null,
   payloadProbing: false,
   step1: "idle",

@@ -140,7 +140,6 @@ describe("buildDiagnosticBundle (schema 3 triage fields)", () => {
       "auto_install_after_upload",
       "auto_remove_after_install",
       "always_overwrite",
-      "upload_streams",
       "log_level",
       "theme",
     ]) {

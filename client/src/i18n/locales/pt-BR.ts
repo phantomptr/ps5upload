@@ -1486,14 +1486,6 @@ hw_fan_duty: "Velocidade da ventoinha",
 hw_fan_duty_approx: "Aproximado",
 hw_product_shape: "Formato do produto",
 hw_product_shape_hint: "Código bruto da Sony · o nome do modelo é a referência",
-upload_streams: "Fluxos de upload paralelos",
-upload_streams_off: "1 (único)",
-upload_streams_hint:
-  "O padrão é 1 (fluxo único) — o caminho mais estável, limitado a cerca de 40 MB/s em consoles que não são Pro (um limite de thread única, não da sua rede ou SSD). Aumentar esse valor envia pastas grandes por várias conexões ao mesmo tempo para ganhar velocidade, mas veja o aviso abaixo. Só é usado o máximo suportado pelo payload conectado.",
-upload_streams_unsupported:
-  "O payload conectado ainda não suporta múltiplos fluxos — os uploads usarão um único fluxo até que ele seja atualizado.",
-upload_streams_unstable:
-  "Mais rápido, mas use com cautela: mais de 1 fluxo executa várias transferências contra o PS5 ao mesmo tempo, e em alguns consoles isso pode travar o payload no meio do upload (ele então para de responder até você recarregá-lo). Se os uploads começarem a falhar ou o payload cair, volte para 1 — o caminho de fluxo único é o mais estável.",
 upload_auto_resume: "Retomar uploads automaticamente após uma falha",
 upload_auto_resume_hint:
   "Se um upload cair no meio da transferência — na maioria das vezes porque o payload do PS5 travou — reenvia o payload automaticamente e retoma de onde parou, tentando algumas vezes antes de desistir. Problemas fatais, como o PS5 ficar sem espaço, ainda interrompem na hora. Ativado por padrão.",

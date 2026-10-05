@@ -34,7 +34,6 @@ import {
 import { archiveFormat, useUploadStore, type SourceKind } from "./upload";
 import { useUploadSettingsStore } from "./uploadSettings";
 import { useRecentHostMetricsStore } from "./recentHostMetrics";
-import { effectiveUploadStreams } from "../lib/uploadStreams";
 import { jobLiveFromSnapshot, type JobLive } from "../lib/jobLive";
 import { pushNotification } from "./notifications";
 import { withConsolePrefix } from "./roster";
@@ -359,10 +358,6 @@ export const useTransferStore = create<TransferState>((set) => {
       // through here, so users believed throttling was active when
       // it wasn't.
       const bandwidthCap = useUploadSettingsStore.getState().bandwidthCapMbps;
-      // Resolve parallel streams once at start (min of user setting +
-      // payload's advertised max). Only the reconcile/resume folder path
-      // is multi-stream today; everything else stays single-stream.
-      const streams = effectiveUploadStreams(addr);
       let jobId: string;
       try {
         if (ps5Source) {
@@ -376,7 +371,6 @@ export const useTransferStore = create<TransferState>((set) => {
             txId,
             excludes,
             bandwidthCap,
-            streams,
           );
         } else if (isFolder) {
           jobId = await startTransferDir(
