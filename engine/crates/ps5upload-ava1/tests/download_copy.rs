@@ -19,7 +19,9 @@ use ava1::server::{self, RpcHandler, ServerCtx};
 use ava1::session::RpcReply;
 use ava1::wire::{FrameMessage, Message};
 use ava1_chaos::{ChaosConfig, ChaosProxy};
-use ps5upload_ava1::copy::{console_copy_with, op_cancel, op_snapshot, record_status};
+use ps5upload_ava1::copy::{
+    console_copy_limited, console_copy_with, op_cancel, op_snapshot, record_status,
+};
 use ps5upload_ava1::download::{self, Counters, ZipCompression, ZipSink};
 use ps5upload_ava1::upload::UploadFailure;
 use ps5upload_ava1::Pool;
@@ -1014,9 +1016,13 @@ async fn a_cancel_does_not_wait_on_a_status_call_the_console_never_answers() {
     let t = std::time::Instant::now();
     assert!(op_cancel(7010));
     let e = job.await.unwrap().unwrap_err();
-    assert_eq!(e.to_string(), "cancelled");
+    // The console never confirmed it let go, so this is not a clean cancel (final review #2).
     assert!(
-        t.elapsed() < Duration::from_secs(4),
+        e.to_string().contains("nothing was deleted"),
+        "unconfirmed cancel: {e}"
+    );
+    assert!(
+        t.elapsed() < Duration::from_secs(6),
         "the cancel waited {:?} on a hung call",
         t.elapsed()
     );
@@ -1347,4 +1353,178 @@ async fn periodic_kills_never_strand_a_download() {
     .unwrap();
     assert_eq!(n, total);
     assert_eq!(files_of(&out.join("Game")), files_of(&d.join("share/Game")));
+}
+
+// ---- final review #2, #3, #10: cancel and loss never delete what is not ours ------------
+
+/// A console behind a proxy that can vanish for good (the process dies, the cable is pulled).
+async fn vanishing_console(d: &Path, fake: Arc<Mutex<Fake>>) -> (Arc<Pool>, impl FnOnce()) {
+    let key = Identity::load_or_create(&d.join("ava").join("identity"))
+        .unwrap()
+        .public();
+    let (host, host_addr) = serve_host(d, key, "127.0.0.1:0", fake_rpc(fake), false).await;
+    let proxy = ChaosProxy::start(host_addr.parse().unwrap(), ChaosConfig::default())
+        .await
+        .unwrap();
+    let (pool, _) = engine_pool(d, &proxy.addr.to_string());
+    let gone = move || {
+        host.abort();
+        proxy.kill_all();
+        // Keep the proxy bound but dead upstream: new connections are cut at once.
+        std::mem::forget(proxy);
+    };
+    (Arc::new(pool), gone)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_that_never_reaches_the_console_deletes_nothing() {
+    let d = temp("copy-cancel-lost");
+    let fake = Arc::new(Mutex::new(Fake {
+        end_state: 1,
+        ..Default::default()
+    }));
+    let (pool, gone) = vanishing_console(&d, fake.clone()).await;
+    let rec = Arc::new(Recorder::default());
+    let (p, r) = (pool.clone(), rec.clone());
+    let job = tokio::task::spawn_blocking(move || {
+        console_copy_with(&p, &*r, "c", "/data/a", "/data/b", 7030, true, true)
+    });
+    wait_until("the move is running", || {
+        op_snapshot(7030).is_some_and(|s| s.bytes_copied == 1000)
+    })
+    .await;
+    gone();
+    assert!(op_cancel(7030));
+    let e = within(60, job).await.unwrap().unwrap_err();
+    let msg = e.to_string();
+    assert!(
+        msg.contains("may still be finishing") && msg.contains("nothing was deleted"),
+        "{msg}"
+    );
+    assert!(msg.contains("source is untouched"), "a move says so: {msg}");
+    assert!(
+        rec.0.lock().unwrap().is_empty(),
+        "no cleanup after an undelivered cancel"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_while_waiting_on_busy_deletes_nothing_and_stops_nothing() {
+    let d = temp("copy-cancel-busy");
+    let fake = Arc::new(Mutex::new(Fake {
+        refuse_with: Some(gen::ERR_BUSY),
+        ..Default::default()
+    }));
+    let pool = fake_pool(&d, fake.clone()).await;
+    let rec = Arc::new(Recorder::default());
+    let (p, r) = (pool.clone(), rec.clone());
+    let job = tokio::task::spawn_blocking(move || {
+        console_copy_with(&p, &*r, "c", "/data/a", "/data/b", 7031, false, false)
+    });
+    wait_until("the first BUSY answer", || {
+        fake.lock().unwrap().calls.contains(&gen::METHOD_JOB_COPY)
+    })
+    .await;
+    assert!(op_cancel(7031));
+    let e = within(30, job).await.unwrap().unwrap_err();
+    assert_eq!(e.to_string(), "cancelled");
+    assert!(
+        rec.0.lock().unwrap().is_empty(),
+        "another job's staging is not ours to delete"
+    );
+    assert!(
+        !fake.lock().unwrap().calls.contains(&gen::METHOD_JOB_CANCEL),
+        "no job of ours existed to stop"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_before_the_copy_registers_sticks_and_touches_nothing() {
+    let d = temp("copy-cancel-early");
+    let fake = Arc::new(Mutex::new(Fake {
+        end_state: 1,
+        ..Default::default()
+    }));
+    let pool = fake_pool(&d, fake.clone()).await;
+    // The engine has no entry for the op yet: the cancel is remembered, not dropped.
+    assert!(!op_cancel(7032));
+    let rec = Arc::new(Recorder::default());
+    let (p, r) = (pool.clone(), rec.clone());
+    let e = within(
+        30,
+        tokio::task::spawn_blocking(move || {
+            console_copy_with(&p, &*r, "c", "/data/a", "/data/b", 7032, false, true)
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(e.to_string(), "cancelled");
+    assert!(rec.0.lock().unwrap().is_empty(), "nothing was ever issued");
+    assert!(
+        fake.lock().unwrap().calls.is_empty()
+            || !fake.lock().unwrap().calls.contains(&gen::METHOD_JOB_COPY),
+        "the console was never asked to copy"
+    );
+    // The pending cancel is consumed: the same id, used again, runs normally.
+    fake.lock().unwrap().release = true;
+    run_copy(pool, 7032, false, true).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_copy_ends_when_the_console_never_comes_back() {
+    let d = temp("copy-vanished");
+    let fake = Arc::new(Mutex::new(Fake {
+        end_state: 1,
+        ..Default::default()
+    }));
+    let (pool, gone) = vanishing_console(&d, fake.clone()).await;
+    let (p, t) = (pool.clone(), std::time::Instant::now());
+    let job = tokio::task::spawn_blocking(move || {
+        console_copy_limited(
+            &p,
+            &NoCleanup,
+            "c",
+            "/data/a",
+            "/data/b",
+            7033,
+            false,
+            true,
+            Duration::from_secs(3),
+        )
+    });
+    wait_until("the copy is running", || {
+        op_snapshot(7033).is_some_and(|s| s.bytes_copied == 1000)
+    })
+    .await;
+    gone();
+    let e = within(60, job).await.unwrap().unwrap_err();
+    assert!(e.to_string().contains("no copy progress"), "{e}");
+    assert!(t.elapsed() < Duration::from_secs(40), "{:?}", t.elapsed());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_confirmed_cancel_cleans_up_only_after_the_console_accepted_this_copy() {
+    let d = temp("copy-cancel-confirmed");
+    let fake = Arc::new(Mutex::new(Fake {
+        end_state: 1,
+        ..Default::default()
+    }));
+    let pool = fake_pool(&d, fake.clone()).await;
+    let rec = Arc::new(Recorder::default());
+    let (p, r) = (pool.clone(), rec.clone());
+    let job = tokio::task::spawn_blocking(move || {
+        console_copy_with(&p, &*r, "c", "/data/a", "/data/b", 7034, false, false)
+    });
+    wait_until("the copy is running", || {
+        op_snapshot(7034).is_some_and(|s| s.bytes_copied == 1000)
+    })
+    .await;
+    assert!(fake.lock().unwrap().issued, "the console accepted the copy");
+    assert!(op_cancel(7034));
+    assert_eq!(
+        within(30, job).await.unwrap().unwrap_err().to_string(),
+        "cancelled"
+    );
+    assert_eq!(*rec.0.lock().unwrap(), [("/data/b".to_string(), true)]);
 }
