@@ -292,7 +292,7 @@ mod tests {
         let d = late_no_space_detail(&job, "full");
         ledger().lock().unwrap().remove(&job);
         assert!(d.contains("/data needs "), "{d}");
-        assert!(d.contains(&format!("{} bytes", 164 * GB)), "{d}");
+        assert!(d.contains(&format!("needs {} more bytes", 164 * GB)), "{d}");
         assert!(d.contains(&format!("{} bytes free", 171 * GB)), "{d}");
         assert!(d.contains(POOL_SENTENCE), "{d}");
         assert!(d.contains("partial upload is kept"), "{d}");
