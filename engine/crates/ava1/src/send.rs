@@ -1682,6 +1682,21 @@ pub async fn run_upload(
                 if let Some(st) = stalled {
                     let limit = stall_limit(sh.window.lock().unwrap().outstanding());
                     if st.since.elapsed() >= limit {
+                        // Tell the receiver the job is over before giving up, like every
+                        // other fatal exit (ERR_IO, ERR_VERIFY, ERR_CANCELLED). Without
+                        // this the console is never told a stalled job died: it keeps the
+                        // job alive holding the destination, so the next attempt's JobOpen
+                        // is refused BUSY ("another transfer is writing to this
+                        // destination") until its retries run out. The journal and the
+                        // `.ava-part` stay, so the JobCancel frees the destination for a
+                        // clean resume rather than a conflict.
+                        let _ = link
+                            .control
+                            .send(&gen::JobCancel {
+                                job_id,
+                                reason: gen::ERR_STALLED,
+                            })
+                            .await;
                         break Err(SendError::Protocol(format!(
                             "no queued frame fits the receiver's window ({} bytes granted, the smallest queued frame is {} bytes) and nothing was sent, received or credited for {:?}",
                             st.grant, st.smallest, limit
@@ -4074,6 +4089,7 @@ mod tests {
         // (one group) can never fit and no Credit can arrive — the job must fail with a
         // Protocol error naming the grant, not park forever.
         let size = 8usize << 20;
+        let cancel_seen = Arc::new(AtomicU32::new(0));
         let (mut link, _lane_seen, _keep) = fake_link(
             FakeReceiver {
                 credit: 512 << 10,
@@ -4082,6 +4098,7 @@ mod tests {
                 credit_after_ack: None,
                 malformed_status: false,
                 retry_unknown: false,
+                cancel_seen: cancel_seen.clone(),
                 ..Default::default()
             },
             None,
@@ -4116,6 +4133,15 @@ mod tests {
             matches!(&err, SendError::Protocol(msg) if msg.contains("524288") && msg.contains("window")),
             "{err:?}"
         );
+        // The receiver is told the job is over (reason ERR_STALLED) so it releases the
+        // destination; without it the next attempt's JobOpen is refused BUSY.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while cancel_seen.load(Ordering::SeqCst) != gen::ERR_STALLED as u32 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the receiver saw the JobCancel (reason ERR_STALLED) within the bound");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
