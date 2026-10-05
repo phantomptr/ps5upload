@@ -299,7 +299,7 @@ button:disabled { opacity: .4; cursor: default; }
     <form id="xfer-form">
       <div>
         <label>PS5 address (leave blank for default)</label>
-        <input id="f-addr" type="text" placeholder="192.168.137.2:9113" autocomplete="off" spellcheck="false">
+        <input id="f-addr" type="text" placeholder="192.168.137.2" autocomplete="off" spellcheck="false">
       </div>
       <div>
         <label>Destination root on PS5 <span style="color:var(--failed)">*</span></label>
@@ -341,7 +341,7 @@ function jobHtml(j) {
 
   if (status === 'done') {
     dest   = j.dest ? `<div class="card-dest">${esc(j.dest)}</div>` : '';
-    detail = `${fmtBytes(j.bytes_sent)} &middot; ${j.shards_sent ?? '?'} shard${j.shards_sent !== 1 ? 's' : ''}`;
+    detail = `${fmtBytes(j.bytes_sent)} &middot; ${j.files_sent ?? '?'} file${j.files_sent !== 1 ? 's' : ''}`;
   } else if (status === 'failed') {
     err = j.error || 'unknown error';
   } else {

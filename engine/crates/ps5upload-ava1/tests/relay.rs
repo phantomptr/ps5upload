@@ -332,7 +332,7 @@ async fn a_zip_uploads_and_matches_its_contents() {
         tokio::task::spawn_blocking(move || {
             upload::upload_zip_in(
                 &pool,
-                &TransferConfig::new("127.0.0.1:9113"),
+                &TransferConfig::new("127.0.0.1"),
                 [14; 16],
                 "dst",
                 &path,
@@ -343,7 +343,7 @@ async fn a_zip_uploads_and_matches_its_contents() {
     .expect("zip upload timed out")
     .unwrap()
     .unwrap();
-    assert_eq!(result.shards_sent, 200);
+    assert_eq!(result.files_sent, 200);
     for i in 0..200 {
         let n = if i < 2 { 3 << 20 } else { i + 100 };
         assert_eq!(
@@ -372,7 +372,7 @@ fn traversal_zip_fails_before_connecting() {
     )
     .unwrap_err();
     assert!(err.to_string().contains("../evil"), "{err:#}");
-    // The engine falls back to FTX2 on this type instead of failing the job.
+    // The engine maps this type to `zip_unsupported`.
     assert!(err.downcast_ref::<upload::ZipUnsupported>().is_some());
 }
 
@@ -402,7 +402,7 @@ fn upload_zip_blocking(
     let pool = Pool::new(ava).with_addr(addr);
     upload::upload_zip_in(
         &pool,
-        &TransferConfig::new("127.0.0.1:9113"),
+        &TransferConfig::new("127.0.0.1"),
         [id; 16],
         "dst",
         &path,
@@ -565,7 +565,7 @@ async fn a_zip_entry_over_256_mib_uploads_over_ava1() {
     .expect("big zip upload timed out")
     .unwrap()
     .unwrap();
-    assert_eq!(result.shards_sent, 1);
+    assert_eq!(result.files_sent, 1);
     let out = host_root.join("share/dst/big");
     assert_eq!(std::fs::metadata(&out).unwrap().len(), SIZE);
     let mut f = std::fs::File::open(&out).unwrap();

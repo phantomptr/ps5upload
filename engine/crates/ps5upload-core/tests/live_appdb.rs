@@ -1,9 +1,9 @@
 //! Live hardware probe for the install launchability-verification path.
 //!
-//! Gated on `PS5UPLOAD_LIVE_ADDR` (e.g. "192.168.86.100:9114") so it never
+//! Gated on `PS5UPLOAD_LIVE_ADDR` (e.g. "192.168.86.100") so it never
 //! runs in normal CI — a real, payload-loaded PS5 must be on the LAN. Run:
 //!
-//!   PS5UPLOAD_LIVE_ADDR=192.168.86.100:9114 \
+//!   PS5UPLOAD_LIVE_ADDR=192.168.86.100 \
 //!     cargo test -p ps5upload-core --test live_appdb -- --nocapture --ignored
 //!
 //! It answers the FW-9.60 crux: does the dlsym-only `AppDbQuery` actually

@@ -1,4 +1,4 @@
-//! Remote Play PIN generation over FTX2.
+//! Remote Play PIN generation over AVA1 management.
 
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};

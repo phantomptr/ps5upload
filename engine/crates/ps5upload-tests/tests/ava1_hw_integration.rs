@@ -1,6 +1,6 @@
 //! AVA1 integration tests for the hardware, app-lifecycle, process, shell and volume management
 //! methods. They replace `hw_integration.rs` and `volumes_integration.rs`: the same fixtures the
-//! mock FTX2 server returned are now answered by a scripted AVA1 management node, so a
+//! old in-process mock server returned are now answered by a scripted AVA1 management node, so a
 //! regression in the key=value and JSON body parsing in `ps5upload-core`, in the AVA1 transport's
 //! text/JSON conversion, or in the concurrent-request behaviour of the engine's management
 //! gate surfaces here. No console is involved.

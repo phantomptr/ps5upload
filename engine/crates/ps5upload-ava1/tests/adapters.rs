@@ -136,7 +136,7 @@ fn node_info_rpc() -> ava1::server::RpcHandler {
 }
 
 fn cfg() -> TransferConfig {
-    let mut c = TransferConfig::new("127.0.0.1:9113");
+    let mut c = TransferConfig::new("127.0.0.1");
     c.progress_bytes = Some(Arc::new(AtomicU64::new(0)));
     c.progress_files = Some(Arc::new(AtomicU64::new(0)));
     c.progress_files_finalized = Some(Arc::new(AtomicU64::new(0)));
@@ -208,7 +208,7 @@ async fn upload_list_maps_relative_destinations_under_the_root() {
     .await
     .unwrap()
     .unwrap();
-    assert_eq!(r.shards_sent, 2);
+    assert_eq!(r.files_sent, 2);
     assert_eq!(std::fs::read(d.join("share/list/x/1")).unwrap(), b"one");
     assert_eq!(std::fs::read(d.join("share/list/y/2")).unwrap(), b"two");
     // The rest of the tree is untouched: only the two mapped files exist.
@@ -261,7 +261,7 @@ async fn upload_file_writes_the_destination_path_itself() {
         "the destination was treated as a directory"
     );
     assert_eq!(std::fs::read(&landed).unwrap(), vec![0x5a; 500_000]);
-    assert_eq!(r.shards_sent, 1);
+    assert_eq!(r.files_sent, 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -1,4 +1,4 @@
-//! Fan curve editor over FTX2.
+//! Fan curve editor over AVA1 management.
 
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};

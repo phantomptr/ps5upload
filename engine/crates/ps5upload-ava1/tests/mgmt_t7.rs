@@ -1,7 +1,7 @@
 #![allow(clippy::redundant_closure)]
 //! P3 Task 7 over the Rust transport: every module of the hardware / system / accounts / cheats /
 //! mods / notices / Remote Play group calls its AVA1 method through `AvaTransport` against the Rust
-//! AVA1 server, with the reply bodies FTX2 produced (the payload's JSON and `key=value` text), and
+//! AVA1 server, with the reply bodies the handlers produce (the payload's JSON and `key=value` text), and
 //! reads them back as before. Also the behaviours that changed with the move: a legacy failure that
 //! carries data, a refusal that stays an error, a destructive power action whose reply is lost, the
 //! shell's 10 s bound, and that no core module dials a console directly any more.
@@ -78,7 +78,7 @@ async fn console(tag: &str, handler: RpcHandler) -> (Arc<AvaTransport>, String) 
     tokio::spawn(server::serve(l, Arc::new(ctx)));
     let pool: &'static Pool = Box::leak(Box::new(Pool::new(ava).with_addr(addr)));
     let t = AvaTransport::with_pool(pool).with_busy_delays([Duration::from_millis(5); 3]);
-    (Arc::new(t), format!("{tag}-t7:9114"))
+    (Arc::new(t), format!("{tag}-t7"))
 }
 
 /// Runs a blocking core function with the transport installed on its thread.
@@ -261,7 +261,7 @@ async fn hardware_power_and_time_calls_reach_their_methods_and_parse_the_legacy_
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_failure_that_carries_data_comes_back_as_the_body_the_module_parses() {
-    // time.set: FTX2 answered {"ok":false,"err_code":N} as a normal frame; AVA1 answers an error status
+    // time.set: the legacy handler answered {"ok":false,"err_code":N} as a normal frame; AVA1 answers an error status
     // whose cause is that body; the module still sees err_code.
     let (h, _s) = scripted(vec![
         (
@@ -724,23 +724,23 @@ fn no_core_module_of_this_group_dials_a_console_directly() {
     ] {
         let s = std::fs::read_to_string(src.join(f)).unwrap();
         assert!(
-            !s.contains("Connection::connect("),
+            !s.contains("TcpStream::connect("),
             "{f} still dials a console"
         );
-        assert!(!s.contains("send_frame("), "{f} still sends an FTX2 frame");
+        assert!(!s.contains("send_frame("), "{f} still sends a frame itself");
     }
     // backup.rs: list and delete are converted; snapshot and restore are Task 5's job ops
     let b = std::fs::read_to_string(src.join("backup.rs")).unwrap();
     for f in ["pub fn backup_list", "pub fn backup_delete"] {
         let i = b.find(f).unwrap();
         let end = b[i..].find("\n}\n").unwrap();
-        assert!(!b[i..i + end].contains("Connection::connect"), "{f}");
+        assert!(!b[i..i + end].contains("TcpStream::connect"), "{f}");
     }
     // diagnostics.rs: periph and shell
     let d = std::fs::read_to_string(src.join("diagnostics.rs")).unwrap();
     for f in ["pub fn peripheral_control", "pub fn shell_run"] {
         let i = d.find(f).unwrap();
         let end = d[i..].find("\n}\n").unwrap();
-        assert!(!d[i..i + end].contains("Connection::connect"), "{f}");
+        assert!(!d[i..i + end].contains("TcpStream::connect"), "{f}");
     }
 }

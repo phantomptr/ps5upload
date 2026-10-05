@@ -13,7 +13,7 @@
 //! foreground application; comparing its id against a game's known app id
 //! is a direct foreground/background answer.
 //!
-//! Opens a fresh management-port connection (`host:9114`) per call. Cheap
+//! Makes one management call per probe. Cheap
 //! enough to poll at 1 Hz.
 
 use anyhow::Result;

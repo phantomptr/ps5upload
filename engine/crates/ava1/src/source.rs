@@ -119,7 +119,7 @@ impl Source for LocalSource {
                     "a file name is not UTF-8",
                 ));
             };
-            // Symlinks are followed (metadata, not symlink_metadata), as FTX2 did: a link
+            // Symlinks are followed (metadata, not symlink_metadata), as the older uploader did: a link
             // to a file elsewhere is read under its in-tree name, a dangling one fails the
             // walk, and a cycle fails at the OS's symlink limit (MAX_PATH at the latest).
             out.push((name, meta_of(&std::fs::metadata(e.path())?)));

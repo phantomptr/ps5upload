@@ -1,4 +1,4 @@
-//! In-app process manager over FTX2.
+//! In-app process manager over AVA1 management.
 //!
 //! Thin client wrappers around the payload's PROCESS_LIST / PROCESS_KILL
 //! frames. `process_list` enumerates every running process (pid, name,
@@ -9,8 +9,7 @@
 //! `process_kill` followed by the existing app-launch path (kill + relaunch
 //! by title id), composed on the client so there's one launch code path.
 //!
-//! Each call opens a fresh management-port connection (`host:9114`), sends
-//! one frame, parses the ACK. Enumerate is read-only; kill runs as the
+//! Each call is one management call, parsed from its reply. Enumerate is read-only; kill runs as the
 //! payload's (elevated) ucred.
 
 use anyhow::{bail, Result};

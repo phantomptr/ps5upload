@@ -515,7 +515,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_walk_follows_a_symlink_and_refuses_a_dangling_one() {
-        // §11 says nothing about links; the walk follows them as FTX2 did. Pinned so the
+        // §11 says nothing about links; the walk follows them, as the older uploader did. Pinned so the
         // consequence is deliberate: a link is uploaded under its in-tree name with its
         // target's size, and a link whose target is gone fails the walk rather than
         // silently producing a manifest that does not match the source tree.

@@ -122,7 +122,7 @@ pub fn fs_mkdir_request(body: &[u8], label: &str) -> Result<gen::FsMkdir> {
     })
 }
 
-/// `{"from","to"}` -> `FsRename`. FTX2's move was a plain `rename(2)`, which replaces.
+/// `{"from","to"}` -> `FsRename`. The legacy move was a plain `rename(2)`, which replaces.
 pub fn fs_rename_request(body: &[u8], label: &str) -> Result<gen::FsRename> {
     let v = parse(body, label)?;
     Ok(gen::FsRename {
@@ -133,7 +133,7 @@ pub fn fs_rename_request(body: &[u8], label: &str) -> Result<gen::FsRename> {
 }
 
 /// `{"path","mode":"0777","recursive":0|1}`. `None` for a recursive chmod, which runs as a
-/// `job.run` op (Task 5); until then the caller falls back to FTX2.
+/// `job.run` op (Task 5); a recursive chmod runs as a job.
 pub fn fs_chmod_request(body: &[u8], label: &str) -> Result<Option<gen::FsChmod>> {
     let v = parse(body, label)?;
     let recursive = match v.get("recursive") {
@@ -156,12 +156,12 @@ pub fn fs_chmod_request(body: &[u8], label: &str) -> Result<Option<gen::FsChmod>
 pub struct ReadAsk {
     pub path: String,
     pub offset: u64,
-    /// Bytes wanted in total (already clamped to the FTX2 per-call ceiling).
+    /// Bytes wanted in total (already clamped to the per-call ceiling).
     pub limit: u64,
     pub flags: u32,
 }
 
-/// FTX2 answered at most this much per `FsRead` (`FS_READ_MAX_BYTES`, runtime.c); the
+/// The legacy `FsRead` answered at most this much (`FS_READ_MAX_BYTES`, runtime.c); the
 /// wrapper keeps that ceiling so a caller's limit means what it did.
 pub const LEGACY_READ_MAX: u64 = 2 * 1024 * 1024;
 
@@ -188,7 +188,7 @@ pub struct WriteAsk {
     pub create_only: bool,
 }
 
-/// FTX2's `FsWriteBytes` ceiling (`FS_WRITE_BYTES_MAX`).
+/// The legacy `FsWriteBytes` ceiling (`FS_WRITE_BYTES_MAX`).
 pub const LEGACY_WRITE_MAX: usize = 256 * 1024;
 
 /// `{"path","bytes":"<base64>","mode":"create"|"overwrite"}`.
@@ -238,7 +238,7 @@ pub fn write_chunk_flags(create_only: bool, index: usize, total: usize) -> u32 {
 /// `NodeStatus` -> the legacy STATUS JSON the client and `health.rs` read.
 ///
 /// `ucred_elevated` is a JSON boolean again, `prior_instance` is present only when the
-/// payload sent it (an older payload had no such field). The FTX2 transaction fields
+/// payload sent it (an older payload had no such field). The old transaction fields
 /// (`runtime_port`, `shutdown`, `takeover_requested`, `active_transactions`,
 /// `last_tx_seq`, `recovered_transactions`) no longer exist; nothing reads them.
 pub fn node_status_json(s: &NodeStatus) -> Value {
@@ -311,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn chmod_parses_octal_and_leaves_recursion_to_ftx2() {
+    fn chmod_parses_octal_and_leaves_recursion_to_job_run() {
         let q = fs_chmod_request(br#"{"path":"/a","mode":"0755","recursive":0}"#, "C")
             .unwrap()
             .unwrap();
@@ -325,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn read_limits_are_held_to_the_ftx2_ceiling() {
+    fn read_limits_are_held_to_the_per_call_ceiling() {
         let a = fs_read_request(
             br#"{"path":"/a","offset":3,"limit":99999999,"unsafe":true}"#,
             "R",
@@ -395,9 +395,9 @@ mod tests {
 
     /// `/api/ps5/status` is the legacy JSON rebuilt from `NodeStatus`: the keys that scripts and
     /// the client read are all there (`bench/resume-test.mjs` and `tests/install-fallback-hw.mjs`
-    /// read `version` and `command_count`), and the six FTX2 transaction fields are not.
+    /// read `version` and `command_count`), and the six old transaction fields are not.
     #[test]
-    fn the_status_json_keeps_the_keys_callers_read_and_drops_the_ftx2_transaction_ones() {
+    fn the_status_json_keeps_the_keys_callers_read_and_drops_the_transaction_ones() {
         let v = node_status_json(&NodeStatus::default());
         for k in [
             "version",

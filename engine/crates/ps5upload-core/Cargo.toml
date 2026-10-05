@@ -24,11 +24,10 @@ sha2 = "0.11"
 hmac = "0.13"
 aes = "0.9"
 cfb-mode = "0.9"
-ftx2-proto = { path = "../ftx2-proto" }
 libc = "0.2"
 serde.workspace = true
 serde_json.workspace = true
-# Read .zip game dumps and stream-decompress them straight into the FTX2
+# Read .zip game dumps and stream-decompress them straight into the AVA1
 # shard pipeline (transfer.rs `transfer_zip`). Deflate-only, matching the
 # pin already vetted in client/src-tauri (save_archive.rs) — no bzip2/zstd
 # C libs.

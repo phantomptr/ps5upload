@@ -74,7 +74,7 @@ pub struct TmdbFetchResponse {
 
 fn send_recv(addr: &str, method: Method, label: &str, body: Option<&[u8]>) -> Result<Vec<u8>> {
     // The handler's `{"ok":false,...}` bodies carry data the callers read; call_keep gives them back
-    // as the FTX2 path did, and leaves a plain refusal an error ("payload rejected <label>: <cause>").
+    // as before, and leaves a plain refusal an error ("payload rejected <label>: <cause>").
     mgmt::call_keep(addr, method, label, body.unwrap_or(&[]))
 }
 
@@ -303,7 +303,7 @@ fn fetch_from_store(
 }
 
 /// Push a metadata JSON blob into the payload's on-console cache.
-/// Available on every host (including Android) — it only uses FTX2,
+/// Available on every host (including Android) — it only uses management calls,
 /// not the desktop-only store scrape.
 fn tmdb_store_on_payload(addr: &str, title_id: &str, json: &str) -> Result<()> {
     let req = serde_json::json!({ "title_id": title_id, "json": json });

@@ -46,8 +46,8 @@ pub(crate) const DEFAULT_BUSY_TRIES: u32 = 12;
 pub struct Pool {
     dir: PathBuf,
     /// No identity is an error, not a panic (C4): `session()` turns the reason into an
-    /// `Ava1Error::Io` — "not paired" would misdescribe a missing identity file, and
-    /// both fall back to FTX2 under Auto, so the honest error wins.
+    /// `Ava1Error::Io` — "not paired" would misdescribe a missing identity file, so
+    /// the honest error wins.
     me: Result<Arc<Identity>, String>,
     peers: Arc<Mutex<PeerStore>>,
     sessions: Arc<tokio::sync::Mutex<HashMap<String, Cached>>>,
@@ -768,7 +768,7 @@ impl Pool {
         }
         // C4: no identity is an `Io` error, not `NotPaired` — the latter's message
         // ("the devices are not paired yet") would misdescribe a missing identity
-        // file; both fall back to FTX2 under Auto, so the honest error wins.
+        // file, so the honest error wins.
         // A dialog is waiting on a code: a poll must not open another handshake (it would take
         // one of the console's unconfirmed places and show another pop-up).
         if self

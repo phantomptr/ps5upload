@@ -57,7 +57,7 @@ fn refuse(label: &str, status: u16, cause: &str) -> Result<Option<Vec<u8>>> {
     .into())
 }
 
-const A: &str = "10.0.0.5:9114";
+const A: &str = "10.0.0.5";
 
 #[test]
 fn register_unregister_and_launch_send_their_bodies_with_a_sixty_second_deadline() {

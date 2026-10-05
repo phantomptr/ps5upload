@@ -405,7 +405,7 @@ mod tests {
         // A base game (gd) or an unknown/missing category never triggers a
         // base check — so these return None without touching the network,
         // regardless of the (here unreachable) address.
-        let addr = "203.0.113.1:9114"; // TEST-NET-3, never connects
+        let addr = "203.0.113.1:9120"; // TEST-NET-3, never connects
         assert_eq!(
             preflight_patch_install(addr, "EP4361-PPSA01234_00-REDEMPTION000002", "gd"),
             None

@@ -45,7 +45,7 @@ pub struct FtpStatusResponse {
 
 fn send_recv(addr: &str, method: Method, label: &str, body: Option<&[u8]>) -> Result<Vec<u8>> {
     // The handler's `{"ok":false,...}` bodies carry data the callers read; call_keep gives them back
-    // as the FTX2 path did, and leaves a plain refusal an error ("payload rejected <label>: <cause>").
+    // as before, and leaves a plain refusal an error ("payload rejected <label>: <cause>").
     mgmt::call_keep(addr, method, label, body.unwrap_or(&[]))
 }
 

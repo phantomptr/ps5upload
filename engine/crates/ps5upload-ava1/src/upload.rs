@@ -1,6 +1,6 @@
-//! The upload adapters — the shapes Task 23 swaps in for the FTX2 calls. Blocking:
+//! The upload adapters — the entry points the engine and the lab call. Blocking:
 //! call them from `spawn_blocking` or a non-async thread (C15), exactly like the
-//! FTX2 functions they replace; calling them from inside an async task panics.
+//! calling them from inside an async task panics.
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -28,7 +28,7 @@ use crate::zip_source::ZipSource;
 pub struct ZipTooLarge(pub String);
 
 /// The archive cannot be an AVA1 source (a path the manifest refuses, an unsupported
-/// method, encryption, a damaged directory): FTX2 reads zips its own way.
+/// method, encryption, a damaged directory).
 #[derive(Debug, thiserror::Error)]
 #[error("zip is not usable as an AVA1 source: {0}")]
 pub struct ZipUnsupported(pub String);
@@ -80,8 +80,8 @@ pub fn upload_zip_in(
     })
 }
 
-/// The archive cannot be an AVA1 source for a reason FTX2 might not share (a header
-/// feature this source does not handle): the engine falls back to FTX2.
+/// The archive cannot be an AVA1 source for a reason of its own (a header
+/// feature this source does not handle): the engine fails the job with `7z_unsupported`.
 #[derive(Debug, thiserror::Error)]
 #[error("7z is not usable as an AVA1 source: {0}")]
 pub struct SevenzUnsupported(pub String);
@@ -189,10 +189,9 @@ pub fn upload_zip(
     upload_zip_in(pool(), cfg, job_id, dest_root, zip_path)
 }
 
-/// Retained for the engine's fallback arm; AVA1 no longer raises it. Duplicate paths,
+/// Retained for the engine's error mapping; AVA1 no longer raises it. Duplicate paths,
 /// case clashes, file/directory clashes and unsafe paths in a RAR are terminal
-/// (`ava1_rar_unsupported`): FTX2 writes both variants or refuses the same path (review
-/// M5), so a fallback gains nothing.
+/// (`ava1_rar_unsupported`).
 #[cfg(not(target_os = "android"))]
 #[derive(Debug, thiserror::Error)]
 #[error("rar is not usable as an AVA1 source: {0}")]
@@ -215,8 +214,7 @@ pub fn upload_rar_in(
     let (manifest, source) = match RarSource::open(archive, password, &cfg.excludes) {
         Ok(v) => v,
         Err(RarOpenError::Plan(f)) => return Err(rar_upload_failure(f.reason, f.message).into()),
-        // A duplicate, a case clash, a file/dir clash or an unsafe path: FTX2 writes both
-        // variants (or refuses the same path), so it is terminal, not a fallback.
+        // A duplicate, a case clash, a file/dir clash or an unsafe path: terminal.
         Err(RarOpenError::Unsupported(m)) => {
             return Err(UploadFailure {
                 reason: "ava1_rar_unsupported".into(),
@@ -725,8 +723,8 @@ pub fn upload_with_seq_in(
                     }
                     return Ok(TransferResult {
                         tx_id_hex: hex(&job_id),
-                        // The field name is FTX2's; for AVA1 it is files (C19).
-                        shards_sent: u64::from(r.files),
+                        // The field name predates AVA1; it counts files (C19).
+                        files_sent: u64::from(r.files),
                         bytes_sent: progress.bytes_sent.load(Ordering::Relaxed),
                         dest,
                         commit_ack_body: body.to_string(),
@@ -825,7 +823,7 @@ pub fn upload_file_in(
 ) -> Result<TransferResult> {
     // C11: `dest` is the full destination path (parent directory + file name) —
     // `JF_SINGLE_FILE` writes `<dest>.ava-part` and renames it to `<dest>` on the
-    // console, exactly the FTX2 contract at the call sites. Do not "fix" it into a
+    // console, exactly the contract at the call sites. Do not "fix" it into a
     // root/name split.
     let parent = src
         .parent()
@@ -850,7 +848,7 @@ pub fn upload_dir_in(
 ) -> Result<TransferResult> {
     let source = source_for(cfg, src_dir);
     let excludes = cfg.excludes.clone();
-    // The same matcher FTX2 uses, so excludes behave identically.
+    // The same matcher the engine uses, so excludes behave identically.
     let manifest = manifest::walk(source.as_ref(), &|p: &str| {
         ps5upload_core::excludes::is_excluded_strings(Path::new(p), &excludes)
     })?;
@@ -911,8 +909,8 @@ pub fn upload_dir_skip_existing(
     upload_dir_skip_existing_in(pool(), cfg, job_id, dest_root, src_dir, mode)
 }
 
-/// The path within an AVA1 job's destination root. FTX2 treats relative list
-/// destinations as relative to that root; absolute destinations must really be
+/// The path within an AVA1 job's destination root. A relative list
+/// destination is relative to that root; absolute destinations must really be
 /// below it, with a path-component boundary.
 fn relative_list_path(dest_root: &str, dest: &str) -> Result<String> {
     let root = if dest_root == "/" {
@@ -1147,7 +1145,7 @@ fn merge_results(parts: Vec<TransferResult>) -> TransferResult {
     let mut ack: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(&out.commit_ack_body).unwrap_or_default();
     for p in it {
-        out.shards_sent += p.shards_sent;
+        out.files_sent += p.files_sent;
         out.bytes_sent += p.bytes_sent;
         let other: serde_json::Map<String, serde_json::Value> =
             serde_json::from_str(&p.commit_ack_body).unwrap_or_default();

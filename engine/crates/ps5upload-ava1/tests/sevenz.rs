@@ -194,7 +194,7 @@ async fn host(dir: &Path) -> (String, PathBuf) {
 }
 
 fn cfg() -> TransferConfig {
-    let mut c = TransferConfig::new("127.0.0.1:9113");
+    let mut c = TransferConfig::new("127.0.0.1");
     c.progress_bytes = Some(Arc::new(AtomicU64::new(0)));
     c.progress_files = Some(Arc::new(AtomicU64::new(0)));
     c.progress_files_finalized = Some(Arc::new(AtomicU64::new(0)));
@@ -759,7 +759,7 @@ fn directories_interleaved_in_a_solid_block_are_refused_not_misread() {
     );
     // The crate's block walk covers fewer entries than such a block spans (it would
     // silently drop the last files), so the source refuses it up front, with its own
-    // reason: no FTX2 fallback, which would drop them too.
+    // reason: the archive is refused rather than partly uploaded.
     let e = SevenzSource::open(&d.join("a.7z"), &[])
         .err()
         .expect("refused at open");
@@ -771,7 +771,7 @@ fn directories_interleaved_in_a_solid_block_are_refused_not_misread() {
     let e = upload::upload_7z_in(&p, &cfg(), [1; 16], "out", &d.join("a.7z")).unwrap_err();
     assert!(
         e.downcast_ref::<upload::SevenzUnsupported>().is_none(),
-        "must not take the FTX2 fallback"
+        "must be refused, not partly uploaded"
     );
     let f = failure(&e);
     assert_eq!(f.reason, "ava1_7z_unsupported_layout");
@@ -958,7 +958,7 @@ fn sevenz_rss_stays_bounded_at_one_thread() {
 }
 
 #[test]
-fn a_duplicate_name_is_terminal_not_an_ftx2_fallback() {
+fn a_duplicate_name_is_terminal_not_a_fallback() {
     let d = temp_dir("dup");
     let spec = Spec {
         folders: vec![

@@ -8,7 +8,7 @@
 //! second one, which is what makes re-issuing after a lost connection safe; a failed
 //! job is retired and restarted by a re-issue; and a move reports "running" until the
 //! source has been deleted, so `state = 1` is the only point at which a move is done.
-//! The op registry below mirrors the FTX2 op table the client already polls
+//! The op registry below backs the endpoints the client already polls
 //! (`/api/ps5/fs/op-status`, `op-cancel`) for the ids this module owns.
 
 use std::collections::HashMap;
@@ -87,7 +87,7 @@ pub fn record_status(op_id: u64, st: &Status) {
 }
 
 /// The snapshot for an op this module runs; `None` for any other id, so the caller falls
-/// through to the FTX2 query (which is how FTX2's own ops keep working).
+/// through to the management job query (which is how the console's own jobs keep working).
 pub fn op_snapshot(op_id: u64) -> Option<FsOpSnapshot> {
     ops().lock().unwrap().get(&op_id).map(|o| o.snap.clone())
 }
@@ -306,7 +306,7 @@ pub fn console_copy_in(
                 }
                 gen::ERR_EXISTS => {
                     // The client keys its "already there" prompts on this token (the
-                    // FTX2 payload's own word for it).
+                    // payload's own word for it).
                     return Err(UploadFailure {
                         reason: "ava1_exists".into(),
                         detail: format!("fs_copy_dest_exists: {to} already exists"),

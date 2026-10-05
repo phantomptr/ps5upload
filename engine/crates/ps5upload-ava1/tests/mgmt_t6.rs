@@ -80,7 +80,7 @@ async fn console(tag: &str, handler: RpcHandler) -> (Arc<AvaTransport>, String) 
     tokio::spawn(server::serve(l, Arc::new(ctx)));
     let pool: &'static Pool = Box::leak(Box::new(Pool::new(ava).with_addr(addr)));
     let t = AvaTransport::with_pool(pool).with_busy_delays([Duration::from_millis(5); 3]);
-    (Arc::new(t), format!("{tag}-t6:9114"))
+    (Arc::new(t), format!("{tag}-t6"))
 }
 
 async fn call(
@@ -426,7 +426,7 @@ async fn install_register_step_uses_app_register_over_ava1() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_refused_kill_over_ava1_reads_like_the_ftx2_one() {
+async fn a_refused_kill_over_ava1_reads_like_the_legacy_one() {
     let (t, c) = console(
         "kill",
         Box::new(|method, _| {

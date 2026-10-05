@@ -1,5 +1,5 @@
-//! PS5 system clock RPCs — get + set, via TIME_GET / TIME_SET FTX2
-//! frames. The payload side is in payload/src/sys_time.c; both the
+//! PS5 system clock RPCs — get + set, via the `time.get` / `time.set`
+//! management methods. The payload side is in payload/src/sys_time.c; both the
 //! wire shape and the err_code semantics are documented there.
 //!
 //! Set requires a ucred-elevated loader on the PS5 side (kstuff or

@@ -1,9 +1,8 @@
-//! Power control + telemetry + user enumeration over FTX2.
+//! Power control + telemetry + user enumeration over AVA1 management.
 //!
 //! These are thin client wrappers around the new SystemControl /
 //! PowerTelemetry / UserList frames the payload added in this round.
-//! Each call opens a fresh management-port connection (caller passes
-//! the `host:9114` address), sends one frame, parses the ACK.
+//! Each call is one management call (the caller passes the console's host), parsed from its reply.
 //!
 //! Power control is treated specially: `reboot`, `shutdown`, and
 //! `standby` are destructive (the PS5's network stack tears down as

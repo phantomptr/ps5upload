@@ -155,7 +155,7 @@ fn archive_of(f: &Files, solid: bool, dirs: &[&str]) -> Vec<u8> {
 }
 
 fn cfg() -> TransferConfig {
-    TransferConfig::new("127.0.0.1:9113")
+    TransferConfig::new("127.0.0.1")
 }
 
 async fn setup(tag: &str) -> (PathBuf, PathBuf, Pool) {
@@ -211,7 +211,7 @@ async fn a_nonsolid_rar_uploads_and_verifies() {
     let f = sample(40);
     write(&d.join("a.rar"), &archive_of(&f, false, &["empty_dir"]));
     let r = upload_rar(pool, d.join("a.rar"), None, 1).await.unwrap();
-    assert_eq!(r.shards_sent, 40);
+    assert_eq!(r.files_sent, 40);
     assert_landed(&d, &f);
     assert!(d.join("host/share/dst/empty_dir").is_dir());
 }
@@ -222,7 +222,7 @@ async fn a_solid_rar_uploads_and_verifies() {
     let f = sample(40);
     write(&d.join("a.rar"), &archive_of(&f, true, &[]));
     let r = upload_rar(pool, d.join("a.rar"), None, 2).await.unwrap();
-    assert_eq!(r.shards_sent, 40);
+    assert_eq!(r.files_sent, 40);
     assert_landed(&d, &f);
 }
 
@@ -271,7 +271,7 @@ async fn a_rar_upload_resumes_after_the_connection_drops() {
     });
     let r = upload_rar(pool, d.join("a.rar"), None, 3).await.unwrap();
     killer.join().unwrap();
-    assert_eq!(r.shards_sent, 12);
+    assert_eq!(r.files_sent, 12);
     assert_landed(&d, &f);
 }
 
@@ -474,7 +474,7 @@ async fn rar_password_wrong_is_a_clear_error() {
     let r = upload_rar(pool, fixture("crypted.rar"), Some("unrar"), 6)
         .await
         .unwrap();
-    assert!(r.shards_sent >= 1);
+    assert!(r.files_sent >= 1);
     assert_eq!(
         std::fs::read(d.join("host/share/dst/.gitignore")).unwrap(),
         b"target\nCargo.lock\n"
@@ -697,7 +697,7 @@ fn an_entrys_own_mtime_is_carried_into_the_manifest() {
 }
 
 #[test]
-fn duplicates_and_case_clashes_are_terminal_not_an_ftx2_fallback() {
+fn duplicates_and_case_clashes_are_terminal_not_a_fallback() {
     let d = temp("rar-terminal");
     let pool = Pool::new(d.join("ava")).with_addr("127.0.0.1:1");
     for (name, ents, what) in [
