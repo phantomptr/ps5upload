@@ -19,16 +19,10 @@ import {
 const KEY_ALWAYS_OVERWRITE = "ps5upload.always_overwrite";
 const KEY_SHOW_FILES = "ps5upload.show_transfer_files";
 const KEY_BANDWIDTH_CAP = "ps5upload.bandwidth_cap_mbps";
-const KEY_UPLOAD_STREAMS = "ps5upload.upload_streams";
 const KEY_AUTO_RESUME = "ps5upload.auto_resume";
 const KEY_KEEP_PS5_AWAKE = "ps5upload.keep_ps5_awake";
 const KEY_AUTO_REDEPLOY_ON_WAKE = "ps5upload.auto_redeploy_on_wake";
 const KEY_SYSTEM_FILE_READ = "ps5upload.system_file_read";
-
-/** Upper bound on the user-selectable stream count, mirroring the engine's
- *  MAX_TRANSFER_STREAMS. The effective count is further clamped to whatever
- *  the connected payload advertises. */
-export const MAX_UPLOAD_STREAMS = 4;
 
 function loadAlwaysOverwrite(): boolean {
   if (typeof window === "undefined") return false;
@@ -57,40 +51,6 @@ function loadBandwidthCap(): number {
   if (!v) return 0;
   const n = parseFloat(v);
   return isFinite(n) && n > 0 ? n : 0;
-}
-
-/** Default parallel upload streams for a fresh install.
- *
- *  1 (single stream = off). Multi-stream IS faster (hardware-validated
- *  2026-06-02: ~1.7× on Fat, ~1.4× on Pro) but drives N concurrent
- *  transactions against a payload whose memory/thread budget was tuned for
- *  ONE transaction at a time (see payload/include/config.h). On some consoles
- *  that sustained concurrency crashes the payload's transfer listener
- *  mid-upload — it then refuses connections and the user is stuck until they
- *  reload the payload (user-reported v2.24.0, 4-stream 74 GB folder, listener
- *  died ~7 min in). So we ship the rock-solid single-stream path by default
- *  and let users opt UP to 4 with an in-UI stability warning. */
-const DEFAULT_UPLOAD_STREAMS = 1;
-
-/** Clamp a requested stream count to the supported range. Rounds, floors at
- *  1 (zero/negative is meaningless), and caps at MAX_UPLOAD_STREAMS — more
- *  than the payload supports can crash it mid-upload. Pure, so it's unit-
- *  tested directly. */
-export function clampUploadStreams(n: number): number {
-  if (!Number.isFinite(n)) return DEFAULT_UPLOAD_STREAMS;
-  return Math.min(Math.max(Math.round(n), 1), MAX_UPLOAD_STREAMS);
-}
-
-function loadUploadStreams(): number {
-  // The effective count at upload time is min(setting, the payload's advertised
-  // max_transfer_streams), so an older payload that predates multi-stream still
-  // clamps to 1 regardless of this setting.
-  if (typeof window === "undefined") return DEFAULT_UPLOAD_STREAMS;
-  const v = safeGetItem(KEY_UPLOAD_STREAMS);
-  if (!v) return DEFAULT_UPLOAD_STREAMS;
-  const n = parseInt(v, 10);
-  if (!Number.isFinite(n)) return DEFAULT_UPLOAD_STREAMS;
-  return clampUploadStreams(n);
 }
 
 /** Keep-PS5-awake policy. The app periodically sends a power-tick
@@ -182,11 +142,6 @@ interface UploadSettingsState {
   /** Outbound bandwidth cap in MB/s. 0 = no cap (use the engine's
    *  env-var default, also typically 0). Persisted to localStorage. */
   bandwidthCapMbps: number;
-  /** Desired parallel upload streams (1 = single stream = default/off).
-   *  The effective count is min(this, the payload's advertised
-   *  max_transfer_streams), resolved at upload start. Breaks the
-   *  single-stream ~40 MB/s write ceiling on non-Pro PS5s. */
-  uploadStreams: number;
   /** When true (default), a failed upload auto-recovers: backoff, re-deploy
    *  the payload if it crashed, then resume. Bounded retries; fatal errors
    *  still surface. */
@@ -206,7 +161,6 @@ interface UploadSettingsState {
   setAlwaysOverwrite: (on: boolean) => void;
   setShowTransferFiles: (on: boolean) => void;
   setBandwidthCapMbps: (n: number) => void;
-  setUploadStreams: (n: number) => void;
   setAutoResume: (on: boolean) => void;
   setKeepPs5AwakeMode: (mode: KeepPs5AwakeMode) => void;
   setAutoRedeployOnWake: (on: boolean) => void;
@@ -218,7 +172,6 @@ export const useUploadSettingsStore = create<UploadSettingsState>((set) => ({
   reconcileMode: loadReconcileMode(),
   showTransferFiles: loadShowFiles(),
   bandwidthCapMbps: loadBandwidthCap(),
-  uploadStreams: loadUploadStreams(),
   autoResume: loadAutoResume(),
   keepPs5AwakeMode: loadKeepPs5AwakeMode(),
   autoRedeployOnWake: loadAutoRedeployOnWake(),
@@ -247,11 +200,6 @@ export const useUploadSettingsStore = create<UploadSettingsState>((set) => ({
       safeRemoveItem(KEY_BANDWIDTH_CAP);
     }
     set({ bandwidthCapMbps });
-  },
-  setUploadStreams: (n) => {
-    const clamped = clampUploadStreams(n);
-    safeSetItem(KEY_UPLOAD_STREAMS, clamped.toString());
-    set({ uploadStreams: clamped });
   },
   setAutoResume: (autoResume) => {
     safeSetItem(KEY_AUTO_RESUME, autoResume ? "true" : "false");

@@ -238,7 +238,6 @@ function useStatusPolling() {
         ps5Kernel: null,
         ucredElevated: null,
         priorInstance: null,
-        maxTransferStreams: null,
       });
       return;
     }
@@ -488,9 +487,6 @@ function useStatusPolling() {
           ps5Kernel: carryOver ? prev.ps5Kernel : s.ps5Kernel,
           ucredElevated: carryOver ? prev.ucredElevated : s.ucredElevated,
           priorInstance: carryOver ? prev.priorInstance : s.priorInstance,
-          maxTransferStreams: carryOver
-            ? prev.maxTransferStreams
-            : s.maxTransferStreams,
           // The one probe's verdict. Never carried over: a stale "connected" would
           // hide a console that needs pairing or an update.
           session: s.session,

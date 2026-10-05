@@ -119,7 +119,6 @@ export interface DiagnosticBundle {
     always_overwrite: boolean;
     show_transfer_files: boolean;
     bandwidth_cap_mbps: number;
-    upload_streams: number;
     auto_resume: boolean;
     auto_redeploy_on_wake: boolean;
     system_file_read: boolean;
@@ -293,7 +292,6 @@ export function buildDiagnosticBundle(opts: {
       always_overwrite: uploadSettings.alwaysOverwrite,
       show_transfer_files: uploadSettings.showTransferFiles,
       bandwidth_cap_mbps: uploadSettings.bandwidthCapMbps,
-      upload_streams: uploadSettings.uploadStreams,
       auto_resume: uploadSettings.autoResume,
       auto_redeploy_on_wake: uploadSettings.autoRedeployOnWake,
       system_file_read: uploadSettings.systemFileRead,

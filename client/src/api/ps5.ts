@@ -654,7 +654,6 @@ export async function startTransferDirReconcile(
   txId?: string | null,
   excludes?: string[],
   bandwidthCapMbps?: number,
-  streams?: number,
 ): Promise<string> {
   const res = await invoke<{ job_id: string }>("transfer_dir_reconcile", {
     req: {
@@ -666,9 +665,6 @@ export async function startTransferDirReconcile(
       excludes: excludes ?? [],
       bandwidth_cap_mbps:
         bandwidthCapMbps && bandwidthCapMbps > 0 ? bandwidthCapMbps : null,
-      // Resolved upstream as min(user setting, payload max_transfer_streams).
-      // <=1 (or undefined) → single stream, unchanged behaviour.
-      streams: streams && streams > 1 ? streams : null,
     },
   });
   return res.job_id;
@@ -4713,12 +4709,6 @@ export async function payloadCheck(ip: string): Promise<{
    *  "clean" | "killed_externally" | "wedged" | "stale" | "replaced". null on payloads
    *  older than this field, which is indistinguishable from "unknown". */
   priorInstance: string | null;
-  /** Max parallel upload streams this payload will service concurrently
-   *  (from STATUS_ACK `max_transfer_streams`). Absent on payloads that
-   *  predate multi-stream → null, which the caller treats as 1 (single
-   *  stream). The Upload path resolves the actual count as
-   *  min(user setting, this). See docs/multistream-upload.md. */
-  maxTransferStreams: number | null;
   /** Whether the ENGINE answered at all — a different question from
    *  `reachable`, which is about the console. Every console verdict comes
    *  from the engine, so when this is false the console's state is simply
@@ -4747,7 +4737,6 @@ export async function payloadCheck(ip: string): Promise<{
       ps5_kernel?: string;
       ucred_elevated?: boolean;
       prior_instance?: string;
-      max_transfer_streams?: number;
     };
   }>("payload_check", { ip });
   const error = resp?.reachable ? null : (resp?.error ?? null);
@@ -4765,11 +4754,6 @@ export async function payloadCheck(ip: string): Promise<{
     priorInstance:
       typeof resp?.status?.prior_instance === "string"
         ? resp.status.prior_instance
-        : null,
-    maxTransferStreams:
-      typeof resp?.status?.max_transfer_streams === "number" &&
-      resp.status.max_transfer_streams > 0
-        ? resp.status.max_transfer_streams
         : null,
     error,
   };

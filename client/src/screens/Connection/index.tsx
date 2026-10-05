@@ -548,7 +548,6 @@ export default function ConnectionScreen() {
                 ps5Kernel: status.ps5Kernel,
                 ucredElevated: status.ucredElevated,
                 priorInstance: status.priorInstance,
-                maxTransferStreams: status.maxTransferStreams,
                 payloadProbing: false,
               });
             }

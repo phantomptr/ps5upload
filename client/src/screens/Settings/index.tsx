@@ -60,10 +60,7 @@ import { useConfirm } from "../../components/ConfirmDialog";
 import { useKeepAwakeStore } from "../../state/keepAwake";
 import { useNotificationsStore } from "../../state/notifications";
 import { useLangStore, useTr, LANGUAGES } from "../../state/lang";
-import {
-  useUploadSettingsStore,
-  MAX_UPLOAD_STREAMS,
-} from "../../state/uploadSettings";
+import { useUploadSettingsStore } from "../../state/uploadSettings";
 import { useConnectionStore } from "../../state/connection";
 import { useEngineStore, DEFAULT_ENGINE_URL } from "../../state/engine";
 import { useSaveSettingsStore, DEFAULT_SAVE_PATH } from "../../state/saveSettings";
@@ -535,7 +532,6 @@ export default function SettingsScreen() {
   const {
     alwaysOverwrite,
     showTransferFiles,
-    uploadStreams,
     autoResume,
     keepPs5AwakeMode,
     autoRedeployOnWake,
@@ -543,14 +539,12 @@ export default function SettingsScreen() {
     bandwidthCapMbps,
     setAlwaysOverwrite,
     setShowTransferFiles,
-    setUploadStreams,
     setAutoResume,
     setKeepPs5AwakeMode,
     setBandwidthCapMbps,
     setAutoRedeployOnWake,
     setSystemFileRead,
   } = useUploadSettingsStore();
-  const payloadMaxStreams = useConnectionStore((s) => s.maxTransferStreams);
   const restAfterUpload = useRestAfterUploadStore((s) => s.enabled);
   const setRestAfterUpload = useRestAfterUploadStore((s) => s.setEnabled);
   const betaFeatures = useBetaFeaturesStore((s) => s.enabled);
@@ -847,55 +841,6 @@ export default function SettingsScreen() {
 
         <Section title={tr("settings_card_upload_speed", undefined, "Speed")}>
           <div className="grid gap-3">
-            <div className="text-sm">
-              <Select
-                id="upload-streams"
-                label={tr("upload_streams", undefined, "Parallel upload streams")}
-                value={uploadStreams}
-                onChange={(e) => setUploadStreams(Number(e.target.value))}
-                options={Array.from(
-                  { length: MAX_UPLOAD_STREAMS },
-                  (_, i) => i + 1,
-                ).map((n) => ({
-                  value: String(n),
-                  label:
-                    n === 1
-                      ? tr("upload_streams_off", undefined, "1 (single)")
-                      : `${n}`,
-                }))}
-                block={false}
-                className="text-sm"
-              />
-              <div className="mt-0.5 text-xs text-[var(--color-muted)]">
-                {tr(
-                  "upload_streams_hint",
-                  undefined,
-                  "Upload large folders over several connections at once. A single stream caps around 40 MB/s on non-Pro consoles (a single-thread limit, not your network or SSD); more streams aggregate toward your wired-LAN ceiling. Only the connected payload's supported maximum is used.",
-                )}
-              </div>
-              {uploadStreams > 1 &&
-                (payloadMaxStreams == null || payloadMaxStreams < 2) && (
-                  <div className="mt-1 text-xs text-[var(--color-warn,#b8860b)]">
-                    {tr(
-                      "upload_streams_unsupported",
-                      undefined,
-                      "The connected payload doesn't support multiple streams yet — uploads will use a single stream until it's updated.",
-                    )}
-                  </div>
-                )}
-              {uploadStreams > 1 &&
-                payloadMaxStreams != null &&
-                payloadMaxStreams >= 2 && (
-                  <div className="mt-1 text-xs text-[var(--color-warn,#b8860b)]">
-                    {tr(
-                      "upload_streams_unstable",
-                      undefined,
-                      "Faster, but use with caution: more than 1 stream runs several transfers against the PS5 at once, and on some consoles that can crash the payload mid-upload (it then stops responding until you reload it). If uploads start failing or the payload drops, set this back to 1 — the single-stream path is the most stable.",
-                    )}
-                  </div>
-                )}
-            </div>
-
             <BandwidthControl
               value={bandwidthCapMbps}
               onChange={setBandwidthCapMbps}

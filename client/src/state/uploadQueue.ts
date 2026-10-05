@@ -94,7 +94,6 @@ import {
 } from "./consoleQueueBridge";
 import { trStatic } from "../lib/trStatic";
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
-import { effectiveUploadStreams } from "../lib/uploadStreams";
 import {
   autoRecoverBackoffMs,
   isAutoRecoverable,
@@ -944,10 +943,6 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
         item.txIdHex,
         item.excludes,
         bandwidthCap,
-        // Clamp to THIS item's console — the queue drains every console
-        // in parallel, so the active tab's advertised max is the wrong
-        // capability for a background console's transfer.
-        effectiveUploadStreams(item.addr),
       );
     } else if (isFolder) {
       const bandwidthCap = useUploadSettingsStore.getState().bandwidthCapMbps;
