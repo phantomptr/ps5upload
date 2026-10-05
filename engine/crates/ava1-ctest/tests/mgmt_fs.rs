@@ -995,6 +995,25 @@ mod transport {
     }
 
     #[test]
+    fn fs_write_bytes_large_copies_a_700_kb_file_that_the_plain_call_refuses() {
+        let t = rig("t-write-large", true);
+        let data: Vec<u8> = (0..700_000u32).map(|i| (i % 239) as u8).collect();
+        let e =
+            ps5upload_core::diagnostics::fs_write_bytes(&t.console, &t.p("big.bin"), &data, false)
+                .unwrap_err();
+        assert!(format!("{e:#}").contains("too_large"), "{e:#}");
+        ps5upload_core::diagnostics::fs_write_bytes_large(
+            &t.console,
+            &t.p("big.bin"),
+            &data,
+            false,
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(t.root.join("big.bin")).unwrap(), data);
+        assert!(!t.root.join("big.bin.ps5upload.tmp").exists());
+    }
+
+    #[test]
     fn fs_stat_exists_and_the_not_found_text() {
         let t = rig("t-stat", true);
         std::fs::write(t.root.join("f"), b"abc").unwrap();

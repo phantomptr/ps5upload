@@ -395,13 +395,38 @@ pub fn fs_write_bytes(
     bytes: &[u8],
     create_only: bool,
 ) -> Result<WriteBytesResult> {
+    fs_write_bytes_inner(addr, path, bytes, create_only, false)
+}
+
+/// Like [`fs_write_bytes`] for files up to 16 MiB (an `icon0.png` is often 300-700 KB and a
+/// `snd0.at9` a few MB). The transport sends it as 48 KiB chunks and commits once, so the
+/// target never holds a partial file.
+pub fn fs_write_bytes_large(
+    addr: &str,
+    path: &str,
+    bytes: &[u8],
+    create_only: bool,
+) -> Result<WriteBytesResult> {
+    fs_write_bytes_inner(addr, path, bytes, create_only, true)
+}
+
+fn fs_write_bytes_inner(
+    addr: &str,
+    path: &str,
+    bytes: &[u8],
+    create_only: bool,
+    large: bool,
+) -> Result<WriteBytesResult> {
     use base64::Engine as _;
     let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "path": path,
         "bytes": b64,
         "mode": if create_only { "create" } else { "overwrite" },
     });
+    if large {
+        body["large"] = serde_json::Value::Bool(true);
+    }
     let body = serde_json::to_vec(&body)?;
     // The AVA1 payload answers a refusal with an error status and the legacy token as its
     // cause; `call_legacy_ok` turns that back into the `{"ok":false,"err":..}` body this

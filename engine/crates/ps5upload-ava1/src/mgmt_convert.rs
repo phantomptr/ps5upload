@@ -191,7 +191,11 @@ pub struct WriteAsk {
 /// The legacy `FsWriteBytes` ceiling (`FS_WRITE_BYTES_MAX`).
 pub const LEGACY_WRITE_MAX: usize = 256 * 1024;
 
-/// `{"path","bytes":"<base64>","mode":"create"|"overwrite"}`.
+/// The ceiling for a write that says `"large":true` (Heal appmeta copies a 300 KB to several MB
+/// `icon0.png` / `snd0.at9`). The data still goes down as `FSW_CHUNK_MAX` chunks, committed once.
+pub const LARGE_WRITE_MAX: usize = 16 * 1024 * 1024;
+
+/// `{"path","bytes":"<base64>","mode":"create"|"overwrite","large":bool}`.
 pub fn fs_write_request(body: &[u8], label: &str) -> Result<WriteAsk> {
     use base64::Engine as _;
     let v = parse(body, label)?;
@@ -202,7 +206,13 @@ pub fn fs_write_request(body: &[u8], label: &str) -> Result<WriteAsk> {
     let data = base64::engine::general_purpose::STANDARD
         .decode(b64)
         .map_err(|_| bad_request(label, "bad_base64"))?;
-    if data.len() > LEGACY_WRITE_MAX {
+    let large = v.get("large").and_then(Value::as_bool).unwrap_or(false);
+    let cap = if large {
+        LARGE_WRITE_MAX
+    } else {
+        LEGACY_WRITE_MAX
+    };
+    if data.len() > cap {
         return Err(bad_request(label, "too_large"));
     }
     let path = str_field(&v, "path");

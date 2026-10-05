@@ -19,26 +19,49 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use ps5upload_core::diagnostics::fs_write_bytes;
+use ps5upload_core::diagnostics::fs_write_bytes_large;
 use ps5upload_core::fs_ops::{
     fs_mkdir, fs_read_with_timeout, list_dir_with_timeout, ListDirOptions,
 };
 
-/// The largest file this command copies (an `icon0.png` is ~256 KB, `param.json` ~4 KB). A bigger
-/// `snd0.at9` is skipped as an error rather than copied in many writes.
-const HEAL_COPY_MAX: u64 = 4 * 1024 * 1024;
+/// The largest file this command copies (`icon0.png` is 300-700 KB, `snd0.at9` a few MB,
+/// `param.json` ~4 KB). A bigger file is skipped as an error.
+const HEAL_COPY_MAX: u64 = 16 * 1024 * 1024;
 
-/// Copies one small file on the console: read it, write it. (The console-side copy is an AVA1
-/// job that needs the engine's session; these files are small enough to go through management.)
+/// How much one `fs.read` call asks for (the legacy ceiling per call is 2 MiB).
+const HEAL_READ_STEP: u64 = 1024 * 1024;
+
+/// Copies one file on the console: reads it in steps, then writes it as one chunked, committed
+/// write (`fs_write_bytes_large`), so the target never holds a partial file and a file over
+/// 256 KiB still copies.
 fn copy_small_file(addr: &str, src: &str, dst: &str) -> Result<(), String> {
-    let bytes = fs_read_with_timeout(addr, src, 0, HEAL_COPY_MAX + 1, Some(RPC_TIMEOUT), false)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > HEAL_COPY_MAX {
-        return Err(format!("{src} is larger than {HEAL_COPY_MAX} bytes"));
-    }
-    fs_write_bytes(addr, dst, &bytes, false)
+    let bytes = read_whole(addr, src)?;
+    fs_write_bytes_large(addr, dst, &bytes, false)
         .map(|_| ())
         .map_err(|e| e.to_string())
+}
+
+fn read_whole(addr: &str, src: &str) -> Result<Vec<u8>, String> {
+    let mut out: Vec<u8> = Vec::new();
+    loop {
+        let chunk = fs_read_with_timeout(
+            addr,
+            src,
+            out.len() as u64,
+            HEAL_READ_STEP,
+            Some(RPC_TIMEOUT),
+            false,
+        )
+        .map_err(|e| e.to_string())?;
+        let n = chunk.len();
+        out.extend_from_slice(&chunk);
+        if out.len() as u64 > HEAL_COPY_MAX {
+            return Err(format!("{src} is larger than {HEAL_COPY_MAX} bytes"));
+        }
+        if (n as u64) < HEAL_READ_STEP {
+            return Ok(out);
+        }
+    }
 }
 
 /// Per-call deadline. Copying an icon0.png (~256 KB typical) plus
@@ -216,4 +239,87 @@ fn run_heal(addr: &str, title_id: &str, source_path: &str) -> Result<HealResult,
         already_present,
         errors,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+    use base64::Engine as _;
+    use ps5upload_core::mgmt::{self, Method, MgmtTransport};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    /// An in-memory console that enforces the legacy 256 KiB write cap unless `"large":true`.
+    struct MemConsole {
+        files: Mutex<HashMap<String, Vec<u8>>>,
+    }
+
+    impl MgmtTransport for MemConsole {
+        fn call(
+            &self,
+            _addr: &str,
+            method: Method,
+            _label: &str,
+            body: &[u8],
+            _timeout: Duration,
+        ) -> Result<Option<Vec<u8>>> {
+            let v: serde_json::Value = serde_json::from_slice(body)?;
+            let path = v["path"].as_str().unwrap_or_default().to_string();
+            let mut files = self.files.lock().unwrap();
+            if method.id == 38 {
+                let data = files
+                    .get(&path)
+                    .ok_or_else(|| anyhow::anyhow!("fs_read_failed_errno_2"))?;
+                let off = (v["offset"].as_u64().unwrap_or(0) as usize).min(data.len());
+                let lim = (v["limit"].as_u64().unwrap_or(0) as usize).min(2 * 1024 * 1024);
+                let end = (off + lim).min(data.len());
+                return Ok(Some(data[off..end].to_vec()));
+            }
+            assert_eq!(method.id, 39, "only fs.read and fs.write are expected");
+            let data = base64::engine::general_purpose::STANDARD
+                .decode(v["bytes"].as_str().unwrap())
+                .unwrap();
+            let large = v["large"].as_bool().unwrap_or(false);
+            if data.len() > 256 * 1024 && !large {
+                return Ok(Some(br#"{"ok":false,"err":"too_large"}"#.to_vec()));
+            }
+            let n = data.len();
+            files.insert(path, data);
+            Ok(Some(format!(r#"{{"ok":true,"size":{n}}}"#).into_bytes()))
+        }
+    }
+
+    fn console_with(src: &str, data: Vec<u8>) -> (Arc<MemConsole>, mgmt::ScopedTransport) {
+        let c = Arc::new(MemConsole {
+            files: Mutex::new(HashMap::from([(src.to_string(), data)])),
+        });
+        let g = mgmt::scoped_transport(c.clone());
+        (c, g)
+    }
+
+    #[test]
+    fn a_file_over_256_kib_is_copied_whole() {
+        let data: Vec<u8> = (0..700_000u32).map(|i| (i % 251) as u8).collect();
+        let (c, _g) = console_with("/s/icon0.png", data.clone());
+        copy_small_file("h", "/s/icon0.png", "/d/icon0.png").unwrap();
+        assert_eq!(c.files.lock().unwrap()["/d/icon0.png"], data);
+    }
+
+    #[test]
+    fn a_multi_megabyte_file_crosses_the_read_step_and_still_matches() {
+        let data: Vec<u8> = (0..3_500_000u32).map(|i| (i % 253) as u8).collect();
+        let (c, _g) = console_with("/s/snd0.at9", data.clone());
+        copy_small_file("h", "/s/snd0.at9", "/d/snd0.at9").unwrap();
+        assert_eq!(c.files.lock().unwrap()["/d/snd0.at9"], data);
+    }
+
+    #[test]
+    fn a_file_over_the_heal_ceiling_is_an_error_and_writes_nothing() {
+        let data = vec![1u8; HEAL_COPY_MAX as usize + 1];
+        let (c, _g) = console_with("/s/big", data);
+        let e = copy_small_file("h", "/s/big", "/d/big").unwrap_err();
+        assert!(e.contains("larger than"), "{e}");
+        assert!(!c.files.lock().unwrap().contains_key("/d/big"));
+    }
 }
