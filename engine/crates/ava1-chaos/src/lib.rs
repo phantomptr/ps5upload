@@ -140,6 +140,26 @@ impl ChaosProxy {
         }
     }
 
+    /// Kill the most recently opened **data lane**, never the control connection, so the
+    /// session survives the kill. A session opens its control connection first and its data
+    /// lanes after, so among the live connections the oldest is control and any later one is
+    /// a data lane. If only the control connection is live (no lane open yet), nothing is
+    /// killed. Unlike [`kill_newest`], this never races onto control after a reconnect or
+    /// before the first lane opens — the case that made a lane-kill test drop the session.
+    pub fn kill_newest_lane(&self) {
+        let mut conns = self.ctl.conns.lock().unwrap();
+        conns.retain(|hs| hs.iter().any(|h| !h.is_finished()));
+        // conns[0] is the oldest live connection — the session's control link. Only a
+        // connection opened after it can be a data lane.
+        if conns.len() < 2 {
+            return;
+        }
+        let hs = conns.pop().expect("len >= 2 checked above");
+        for h in &hs {
+            h.abort();
+        }
+    }
+
     /// How many times every connection was killed (the periodic killer and manual
     /// `kill_all` calls alike); a kill that found nothing open is not counted.
     pub fn kills(&self) -> u64 {
