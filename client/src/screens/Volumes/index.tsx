@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { HardDrive, FileArchive, Unplug, RefreshCw, PackageCheck } from "lucide-react";
 
 import { useConnectionStore } from "../../state/connection";
-import { fetchVolumes, fsUnmount, type Volume } from "../../api/ps5";
+import { fetchHwStorage, fetchVolumes, fsUnmount, type Volume } from "../../api/ps5";
 import {
   PageHeader,
   EmptyState,
@@ -36,6 +36,9 @@ export default function VolumesScreen() {
   const guard = useStaleHostGuard();
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const [volumes, setVolumes] = useState<Volume[] | null>(null);
+  // What the console keeps back of its internal storage for its own use (a fact the console
+  // reports; nothing is derived from it). Null = not reported.
+  const [consoleKept, setConsoleKept] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unmountingPath, setUnmountingPath] = useState<string | null>(null);
@@ -59,6 +62,14 @@ export default function VolumesScreen() {
       const list = await fetchVolumes(transferAddr(probe.host));
       if (probe.isStale()) return;
       setVolumes(list);
+      // Best effort: a payload without the storage summary just shows no "kept" line.
+      fetchHwStorage(transferAddr(probe.host))
+        .then((hw) => {
+          if (!probe.isStale()) setConsoleKept(hw.user_reserved_bytes > 0 ? hw.user_reserved_bytes : null);
+        })
+        .catch(() => {
+          if (!probe.isStale()) setConsoleKept(null);
+        });
     } catch (e) {
       if (probe.isStale()) return;
       const raw = e instanceof Error ? e.message : String(e);
@@ -245,6 +256,7 @@ export default function VolumesScreen() {
                   key={v.path}
                   volume={v}
                   packageDrive={packageDrive}
+                  consoleKeptBytes={isInternalVolume(v.path) ? consoleKept : null}
                   onUseForPackages={() =>
                     host && setPackageDrive(host, isInternalVolume(v.path) ? null : v.path)
                   }
@@ -374,9 +386,12 @@ function MountedImageCard({
 export function StorageCard({
   volume: v,
   packageDrive,
+  consoleKeptBytes = null,
   onUseForPackages,
 }: {
   volume: Volume;
+  /** The console's own reserved pool on this drive (internal storage only), as it reports it. */
+  consoleKeptBytes?: number | null;
   /** This console's chosen package drive; null = internal storage. */
   packageDrive: string | null;
   onUseForPackages: () => void;
@@ -428,6 +443,15 @@ export function StorageCard({
               {tr("volumes_pct_used_storage", undefined, "% used")}
             </span>
           </div>
+          {consoleKeptBytes !== null && consoleKeptBytes > 0 && (
+            <div className="mb-2 text-xs text-[var(--color-muted)]">
+              {tr(
+                "volumes_kept_by_console",
+                { kept: formatStorageBytes(consoleKeptBytes) },
+                "{kept} kept by the console for its own use",
+              )}
+            </div>
+          )}
           {uploadSafeBytes !== undefined &&
             uploadSafeBytes < v.free_bytes && (
               <div className="mb-2 text-xs text-[var(--color-muted)]">

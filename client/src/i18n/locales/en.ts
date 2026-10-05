@@ -3410,6 +3410,7 @@ upload_split_unsupported_title: "This is a split archive ({count} volumes) that 
 upload_split_unsupported_body: "Uploading it sends the raw volume to your PS5, which can't use it. Join the volumes back into one archive first — open the first volume with 7-Zip or WinRAR and extract, then upload the extracted folder or a single archive of it.",
 upload_split_unsupported_target: "Joins into: {name}",
 volumes_upload_safe_capacity: "{safe} safe for new uploads · {reserve} kept as system/filesystem headroom",
+volumes_kept_by_console: "{kept} kept by the console for its own use",
 "volumes_use_for_packages": "Use for packages",
 "volumes_packages_here": "Packages go here",
 "volumes_packages_hint": "Uploaded install packages are kept on the drive marked “Packages go here”. If that drive isn't connected, they go to internal storage.",

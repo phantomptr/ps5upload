@@ -46,6 +46,19 @@ describe("StorageCard — default package drive", () => {
     expect(internal).not.toContain("Packages go here");
   });
 
+  it("shows the console's reserved pool as a fact, and nothing when it is not reported", () => {
+    const withKept = renderToStaticMarkup(
+      <StorageCard
+        volume={vol("/data", { fs_type: "nullfs" })}
+        packageDrive={null}
+        consoleKeptBytes={66.1e9}
+        onUseForPackages={() => {}}
+      />,
+    );
+    expect(withKept).toContain("66.1 GB kept by the console for its own use");
+    expect(html(vol("/data", { fs_type: "nullfs" }), null)).not.toContain("kept by the console");
+  });
+
   it("offers nothing on a read-only drive", () => {
     const out = html(vol("/mnt/usb1", { writable: false }), null);
     expect(out).not.toContain("Use for packages");
