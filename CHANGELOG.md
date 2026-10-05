@@ -15,7 +15,8 @@ What's new in ps5upload, written for humans.
 - **Re-pairing:** a console that got a new identity opens the "forget and re-pair" dialog
   instead of retrying for 20 seconds.
 - **Fixed:** a resumed zip download from the console could fail on a file that was already
-  complete; a connection could drop right after it was made on a busy console.
+  complete; a connection could drop right after it was made on a busy console; a stopped
+  console-to-console copy could leave work running in the background.
 
 ---
 
