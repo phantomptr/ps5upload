@@ -23,6 +23,7 @@ pub mod installer_client;
 pub mod local_image;
 pub mod log;
 pub mod mgmt;
+pub mod mgmt_proxy;
 pub mod net;
 pub mod notif;
 pub mod patch_verify;

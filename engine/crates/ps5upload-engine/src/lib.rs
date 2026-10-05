@@ -46,6 +46,7 @@ mod legacy_guard;
 mod legacy_helper;
 mod local_fs;
 mod log_dedup;
+mod mgmt_route;
 mod pkg_install;
 mod pkg_sidecar;
 mod remote;
@@ -9145,6 +9146,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/status", get(ps5_status))
         .route("/api/ps5/port-check", get(ps5_port_check))
         .route("/api/ps5/readiness", get(ps5_readiness))
+        .route(
+            ps5upload_core::mgmt_proxy::ROUTE,
+            post(mgmt_route::mgmt_call_handler),
+        )
         .route("/api/ps5/health/scan", get(health_scan_handler))
         .route("/api/ps5/health/junk", get(health_junk_handler))
         .route("/api/ps5/health/fix", post(health_fix_handler))

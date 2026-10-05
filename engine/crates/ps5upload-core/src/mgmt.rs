@@ -300,7 +300,7 @@ pub struct JobCall<'a> {
 }
 
 /// A running operation's progress, from the console.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct JobProgress {
     pub kind: String,
     pub subject: String,
