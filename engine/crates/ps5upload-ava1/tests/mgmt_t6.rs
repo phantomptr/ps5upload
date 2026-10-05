@@ -327,11 +327,18 @@ async fn six_launches_put_at_most_two_in_flight_and_other_calls_still_answer() {
             })
         })
         .collect();
-    tokio::time::sleep(Duration::from_millis(80)).await;
+    // Wait for a launch to be running (not a fixed sleep: a slow runner may take longer than
+    // any guess to start the first one).
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while inflight.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the launches started");
     // While launches run, an unrelated call answers: it returns with a launch still in
     // flight (each holds the console 800 ms), not after them. A state check, not a wall-clock
     // bound, so a slow runner cannot flip it.
-    assert!(inflight.load(Ordering::SeqCst) > 0, "the launches started");
     call(&t, &c, m::PROC_LIST, "PROC_LIST", b"")
         .await
         .unwrap()
