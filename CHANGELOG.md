@@ -4,6 +4,21 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.1.0
+
+**Files works like FileZilla.**
+
+- **Files:** add whole folders, drag files and folders in from your computer, right-click
+  any item (open, download, cut, copy, paste into, rename, copy path, delete), keyboard
+  shortcuts, sort by name, size or date, and type a path to jump to it.
+- **One console at a time:** the upload queue and Activity show only the selected console.
+- **Re-pairing:** a console that got a new identity opens the "forget and re-pair" dialog
+  instead of retrying for 20 seconds.
+- **Fixed:** a resumed zip download from the console could fail on a file that was already
+  complete; a connection could drop right after it was made on a busy console.
+
+---
+
 ## 6.0.0
 
 **One encrypted connection for everything (AVA1).**
