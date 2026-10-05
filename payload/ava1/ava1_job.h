@@ -90,6 +90,7 @@ typedef struct ava1_work { /* a unit for the worker pool */
 struct ava1_job {
     uint8_t id[16], owner[32], sid[16];
     int attached, refs, stopping, finished, prepared;
+    int discard_parts;              /* a cancelled local copy: destroy removes the .ava-part files this job itself was writing (final review #9) */
     uint64_t parked_at_ms;
     int op_delivered;               /* an operation job: its terminal status was first delivered at parked_at_ms (the grace starts) */
     uint8_t kind, policy;
