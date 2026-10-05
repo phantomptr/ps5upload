@@ -5,6 +5,7 @@ import { useFsClipboardStore, evictFsClipboard } from "./fsClipboard";
 import { useUploadStore, evictUploadDraft } from "./upload";
 import { evictPkgLibraryStore } from "./pkgLibrary";
 import { hostOf } from "../lib/addr";
+import { setConsoleKeyResolver } from "./tasks";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 /**
@@ -430,6 +431,30 @@ export function profileNameForHost(
   return match?.name?.trim() || bare;
 }
 
+/** Pure: the stable console identity (profile id) for a host, when it is in the roster. */
+export function profileIdForHost(
+  host: string,
+  profiles: PS5Profile[],
+): string | undefined {
+  const bare = hostOf(host);
+  if (!bare) return undefined;
+  return profiles.find((p) => hostOf(p.host) === bare)?.id;
+}
+
+/** Pure: the console name a task shows under. The task's console identity wins over its address,
+ *  so a transfer stays under the console it ran on even when two profiles share an address or the
+ *  profile's IP was edited since. Tasks without an identity fall back to the address. */
+export function profileNameForTask(
+  task: { consoleId: string; consoleKey?: string },
+  profiles: PS5Profile[],
+): string {
+  if (task.consoleKey) {
+    const byKey = profiles.find((p) => p.id === task.consoleKey);
+    if (byKey) return byKey.name?.trim() || hostOf(byKey.host);
+  }
+  return profileNameForHost(task.consoleId, profiles);
+}
+
 /** Pure: friendly console name for an `ip:port` transfer/mgmt addr. */
 export function profileNameForAddr(
   addr: string,
@@ -546,3 +571,6 @@ export function ensureRosterMigrated() {
   const id = add({ name: `PS5 (${host})`, host });
   setActive(id);
 }
+
+// Tasks record which console they ran on by roster identity (see `Task.consoleKey`).
+setConsoleKeyResolver((host) => profileIdForHost(host, useRosterStore.getState().profiles));

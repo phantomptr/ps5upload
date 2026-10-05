@@ -147,6 +147,11 @@ export interface Task {
   maxAttempts: number;
   /** Bare host (port-stripped) of the PS5 this task runs against. */
   consoleId: string;
+  /** Stable identity of that console: the roster profile id, resolved when the task was
+   *  registered. Unlike the address it survives an IP change and is unique per console, so a
+   *  task is attributed to the console it ran on, never to whichever console now has that
+   *  address or is selected. Absent for tasks on a host that is not in the roster. */
+  consoleKey?: string;
   /** The engine job_id / fsOp op_id / install tracking id — whichever
    *  the engine uses to identify the underlying operation. Linked here
    *  so cancel/retry/status can reach the right engine endpoint. */
@@ -259,6 +264,13 @@ function newTaskId(): string {
 // Store
 // ---------------------------------------------------------------------------
 
+let consoleKeyResolver: ((host: string) => string | undefined) | null = null;
+/** The roster registers how a host maps to its console identity (kept out of this module so the
+ *  task store has no dependency on the roster). */
+export function setConsoleKeyResolver(fn: ((host: string) => string | undefined) | null): void {
+  consoleKeyResolver = fn;
+}
+
 interface TaskState {
   tasks: Task[];
 
@@ -271,6 +283,7 @@ interface TaskState {
     label: string;
     detail?: string;
     consoleId: string;
+    consoleKey?: string;
     payload?: TaskPayload;
     engineJobId?: string;
     control?: TaskControlRef;
@@ -321,7 +334,7 @@ interface TaskState {
 
   /** Tasks for a specific console (bare host). Used by the per-console
    *  queue view in the Tasks tab. */
-  tasksForConsole: (consoleId: string) => Task[];
+  tasksForConsole: (consoleId: string, consoleKey?: string) => Task[];
 }
 
 export const useTaskStore = create<TaskState>((set, get) => ({
@@ -337,6 +350,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       label: init.label,
       detail: init.detail,
       consoleId: hostOf(init.consoleId),
+      consoleKey: init.consoleKey ?? consoleKeyResolver?.(hostOf(init.consoleId)),
       payload: init.payload ?? {},
       engineJobId: init.engineJobId,
       control: init.control,
@@ -421,9 +435,12 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   runningTasks: () => get().tasks.filter((t) => t.status === "running"),
 
-  tasksForConsole: (consoleId) => {
+  tasksForConsole: (consoleId, consoleKey) => {
     const host = hostOf(consoleId);
-    return get().tasks.filter((t) => t.consoleId === host);
+    // By identity when both sides have one; by address otherwise (older tasks, unlisted hosts).
+    return get().tasks.filter((t) =>
+      consoleKey && t.consoleKey ? t.consoleKey === consoleKey : t.consoleId === host,
+    );
   },
 }));
 

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router";
 
 import { useActivityPanel } from "../state/activityPanel";
 import { summarize, type ActivitySummary } from "../state/activitySummary";
-import { profileNameForAddr, useRosterStore } from "../state/roster";
+import { profileNameForTask, useRosterStore } from "../state/roster";
 import { commandTask, taskCapabilities } from "../state/taskControls";
 import { interruptedAtLoad, isTerminal, useTaskStore, type Task } from "../state/tasks";
 import { ActivityPanelView, ActivitySummaryLine } from "./ActivitySummary";
@@ -56,7 +56,7 @@ function OpenPanel() {
         canCancel={(task) => taskCapabilities(task).canCancel}
         canRetry={(task) => taskCapabilities(task).canRetry}
         consoleOf={(task) =>
-          profiles.length > 1 && task.consoleId ? profileNameForAddr(task.consoleId, profiles) : null
+          profiles.length > 1 && task.consoleId ? profileNameForTask(task, profiles) : null
         }
       />
     </div>
