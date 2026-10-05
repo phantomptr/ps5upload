@@ -196,6 +196,15 @@ describe("engine-backed commands the web UI depends on (#300)", () => {
     expect(calls[0].url).toBe(`${B}/api/ps5/cheats/list`);
   });
 
+  it("sends Remote Play cancel's console in the query, like the desktop app", async () => {
+    // A body-only addr reached the default console on engines that read the query alone:
+    // cancel timed out and the real console kept its PIN.
+    const calls = captureFetch({ ok: true });
+    await browserInvoke("remoteplay_cancel", { addr: "192.168.86.99" });
+    expect(calls[0].url).toBe(`${B}/api/ps5/remoteplay/cancel?addr=192.168.86.99`);
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ addr: "192.168.86.99" });
+  });
+
   it("asks the engine about the console's elfldr", async () => {
     const calls = captureFetch({ health: "healthy" });
     await browserInvoke("ps5_elfldr_health", { host: "10.0.0.2" });

@@ -6865,11 +6865,32 @@ async fn remoteplay_devices_handler(
     }
 }
 
+/// The console a POST is about: `?addr=` (the desktop app) or a JSON body's `addr` (the browser
+/// build, `postJson(..., { addr })`). The query wins when both are given.
+///
+/// Remote Play cancel read only the query, so a browser cancel went to the default console and
+/// failed with "the console did not answer on the AVA1 port in time" while the real console kept
+/// its PIN (seen on a Phat at FW 13.60).
+fn post_addr(query: Option<String>, body: &[u8]) -> Option<String> {
+    #[derive(Deserialize)]
+    struct AddrBody {
+        #[serde(default)]
+        addr: Option<String>,
+    }
+    query.filter(|a| !a.trim().is_empty()).or_else(|| {
+        serde_json::from_slice::<AddrBody>(body)
+            .ok()
+            .and_then(|b| b.addr)
+            .filter(|a| !a.trim().is_empty())
+    })
+}
+
 async fn remoteplay_cancel_handler(
     State(state): State<AppState>,
     Query(q): Query<AddrQuery>,
+    body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+    let addr = console_addr_or_default(post_addr(q.addr, &body), &state.default_ps5_addr);
     let r =
         tokio::task::spawn_blocking(move || ps5upload_core::remoteplay::remoteplay_cancel(&addr))
             .await
@@ -10679,6 +10700,30 @@ mod helpers_tests {
         );
         let done = serde_json::json!({"status": "done"});
         assert_eq!(merge_live_notes(Some(&n), done.clone()), done);
+    }
+
+    #[test]
+    fn post_addr_reads_the_query_or_the_json_body() {
+        // The desktop app sends ?addr=, the browser build a JSON body.
+        assert_eq!(
+            post_addr(Some("10.0.0.5".into()), b"{}"),
+            Some("10.0.0.5".into())
+        );
+        assert_eq!(
+            post_addr(None, br#"{"addr":"10.0.0.7"}"#),
+            Some("10.0.0.7".into())
+        );
+        // both: the query wins
+        assert_eq!(
+            post_addr(Some("10.0.0.5".into()), br#"{"addr":"10.0.0.7"}"#),
+            Some("10.0.0.5".into())
+        );
+        // nothing usable: the caller falls back to the default console
+        assert_eq!(post_addr(None, b""), None);
+        assert_eq!(post_addr(None, b"{}"), None);
+        assert_eq!(post_addr(None, br#"{"addr":null}"#), None);
+        assert_eq!(post_addr(Some("".into()), br#"{"addr":" "}"#), None);
+        assert_eq!(post_addr(None, b"not json"), None);
     }
 
     #[test]

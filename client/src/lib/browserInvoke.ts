@@ -533,7 +533,12 @@ export async function browserInvoke<T>(
       return getJson<T>(addrUrl("/api/ps5/remoteplay/status", args["addr"]));
 
     case "remoteplay_cancel":
-      return postJson<T>("/api/ps5/remoteplay/cancel", { addr: args["addr"] });
+      // In the query like the desktop app: engines before the cancel fix read only that, and sent
+      // a body-only addr to the default console instead.
+      return postJson<T>(
+        addrUrl("/api/ps5/remoteplay/cancel", args["addr"] as string | null),
+        { addr: args["addr"] },
+      );
 
     case "remoteplay_request": {
       // TS caller nests everything under `req`.

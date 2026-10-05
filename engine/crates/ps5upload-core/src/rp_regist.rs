@@ -723,11 +723,9 @@ pub fn pair_with_console(mgmt_addr: &str, host: &str) -> Result<PairResult> {
 
     let account_id = readiness.account_id_b64.clone();
 
-    // Clear any session left over from an abandoned attempt before asking
-    // for a PIN. An outstanding one makes Sony's own Initialize fail with
-    // 0x80FC0003 on the next try, and the console stays that way until
-    // something resets it — measured on both consoles here, where a second
-    // pairing attempt could never succeed without this.
+    // Give up any PIN left over from an abandoned attempt before asking for
+    // a new one (the request replaces a live PIN anyway; this also clears a
+    // finished attempt's state). Cancel makes no Sony call that can block.
     let _ = crate::remoteplay::remoteplay_cancel(mgmt_addr);
 
     // The PIN comes back in the ack. It must NOT be fetched by polling

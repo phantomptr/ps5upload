@@ -21,6 +21,53 @@ pub struct RemotePlayStatus {
     /// the bare word "failed".
     #[serde(default)]
     pub err: String,
+    /// ConfirmDeviceRegist probes made for the live PIN, and the last answer (rc, status,
+    /// reason code). Diagnostics only: `state` is already the payload's verdict. Absent
+    /// (zero) from payloads before the pairing-state rewrite.
+    #[serde(default)]
+    pub probes: u32,
+    #[serde(default)]
+    pub confirm_rc: u32,
+    #[serde(default)]
+    pub confirm_status: u32,
+    #[serde(default)]
+    pub confirm_err: u32,
+}
+
+/// Where a pairing stands, from the payload's `state` word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairingPhase {
+    /// No PIN outstanding.
+    Idle,
+    /// A PIN is live; `seconds_left` counts down to its expiry. Older payloads also said
+    /// `starting` while making the PIN.
+    Waiting,
+    /// A device registration was confirmed by the console.
+    Paired,
+    /// The request or the registration failed; `err` says why.
+    Failed,
+    /// The PIN expired with no registration.
+    Timeout,
+    /// A word this engine does not know (a newer payload).
+    Unknown,
+}
+
+impl RemotePlayStatus {
+    pub fn phase(&self) -> PairingPhase {
+        match self.state.as_str() {
+            "idle" => PairingPhase::Idle,
+            "waiting" | "starting" => PairingPhase::Waiting,
+            "paired" => PairingPhase::Paired,
+            "failed" => PairingPhase::Failed,
+            "timeout" => PairingPhase::Timeout,
+            _ => PairingPhase::Unknown,
+        }
+    }
+
+    /// The PIN can still be entered on a device.
+    pub fn pin_is_live(&self) -> bool {
+        self.phase() == PairingPhase::Waiting && !self.pin.is_empty() && self.seconds_left > 0
+    }
 }
 
 pub fn remoteplay_request(addr: &str, manual_account_id: Option<&str>) -> Result<PinSnapshot> {
@@ -255,5 +302,83 @@ mod firmware_tests {
     #[test]
     fn unknown_firmware_has_no_version() {
         assert_eq!(with_magic(0).firmware(), None);
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::{PairingPhase, RemotePlayStatus};
+
+    fn parse(json: &str) -> RemotePlayStatus {
+        serde_json::from_str(json).expect("a payload status body")
+    }
+
+    #[test]
+    fn a_live_pin_is_waiting_with_its_countdown() {
+        // Shape of the payload's answer three seconds after a request (Phat, FW 13.60).
+        let s = parse(
+            r#"{"state":"waiting","pin":"36876659","account_id":"XCDiqZluNXo=",
+                "seconds_left":297,"err":"","probes":1,"confirm_rc":0,
+                "confirm_status":0,"confirm_err":0}"#,
+        );
+        assert_eq!(s.phase(), PairingPhase::Waiting);
+        assert!(s.pin_is_live());
+        assert_eq!(s.seconds_left, 297);
+        assert_eq!(s.probes, 1);
+    }
+
+    #[test]
+    fn every_payload_state_maps() {
+        for (word, phase) in [
+            ("idle", PairingPhase::Idle),
+            ("waiting", PairingPhase::Waiting),
+            ("starting", PairingPhase::Waiting),
+            ("paired", PairingPhase::Paired),
+            ("failed", PairingPhase::Failed),
+            ("timeout", PairingPhase::Timeout),
+            ("", PairingPhase::Unknown),
+            ("registering", PairingPhase::Unknown),
+        ] {
+            let s = parse(&format!(r#"{{"state":"{word}"}}"#));
+            assert_eq!(s.phase(), phase, "{word:?}");
+        }
+    }
+
+    #[test]
+    fn paired_timeout_and_failed_carry_no_live_pin() {
+        let paired = parse(r#"{"state":"paired","pin":"","seconds_left":0,"confirm_status":2}"#);
+        assert_eq!(paired.phase(), PairingPhase::Paired);
+        assert!(!paired.pin_is_live());
+        assert_eq!(paired.confirm_status, 2);
+
+        let timeout = parse(
+            r#"{"state":"timeout","pin":"","seconds_left":0,
+                "err":"the PIN expired before a device paired"}"#,
+        );
+        assert_eq!(timeout.phase(), PairingPhase::Timeout);
+        assert!(timeout.err.contains("expired"));
+
+        let failed = parse(
+            r#"{"state":"failed","err":"pairing failed: the PIN was entered wrong (status 3, 0x80FC1047)",
+                "confirm_status":3,"confirm_err":2164002887}"#,
+        );
+        assert_eq!(failed.phase(), PairingPhase::Failed);
+        assert_eq!(failed.confirm_err, 0x80FC1047);
+        assert!(!failed.pin_is_live());
+    }
+
+    #[test]
+    fn a_waiting_state_with_no_time_left_is_not_a_live_pin() {
+        let s = parse(r#"{"state":"waiting","pin":"12345678","seconds_left":0}"#);
+        assert!(!s.pin_is_live());
+    }
+
+    #[test]
+    fn an_older_payload_without_the_diagnostics_still_parses() {
+        let s = parse(
+            r#"{"state":"idle","pin":"","account_id":"XCDiqZluNXo=","seconds_left":0,"err":""}"#,
+        );
+        assert_eq!(s.phase(), PairingPhase::Idle);
+        assert_eq!((s.probes, s.confirm_rc, s.confirm_status), (0, 0, 0));
     }
 }
