@@ -112,6 +112,18 @@ async fn a_destination_that_ends_its_job_stops_the_relay_within_seconds() {
         write_pattern(&a.join(format!("share/src/f{i}")), i, 32 << 20);
     }
     let addr_a = host(&a, key).await;
+    // The source is read through a capped link (~8 s for the 128 MiB) so the destination's
+    // first durable report, which ends its job, always lands mid-transfer: uncapped on a fast
+    // runner the whole relay finished before the destination ended anything.
+    let slow_a = ava1_chaos::ChaosProxy::start(
+        addr_a.parse().unwrap(),
+        ava1_chaos::ChaosConfig {
+            bytes_per_sec: Some(16 << 20),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     let ended = Arc::new(AtomicBool::new(false));
     let mut peers = ava1::peers::PeerStore::in_memory();
     peers.add(key, "engine").unwrap();
@@ -127,7 +139,7 @@ async fn a_destination_that_ends_its_job_stops_the_relay_within_seconds() {
     let addr_b = l.local_addr().unwrap().to_string();
     let server = tokio::spawn(ava1::server::serve(l, Arc::new(ctx)));
     let (pa, pb) = (
-        Pool::new(ava.clone()).with_addr(addr_a),
+        Pool::new(ava.clone()).with_addr(slow_a.addr.to_string()),
         Pool::new(ava).with_addr(addr_b),
     );
     // A plain thread, not spawn_blocking: a hung relay must fail this test at the bound, and
