@@ -104,8 +104,10 @@ jobs:
         working-directory: engine
         run: cargo check -p ps5upload-engine --features webui
 
+      # Bounded per step: a hung test fails here in minutes instead of holding the job.
       - name: cargo test
         working-directory: engine
+        timeout-minutes: 25
         env:
           RUST_BACKTRACE: 1
         run: cargo test --workspace --exclude ava1-ctest -- --nocapture
@@ -114,6 +116,7 @@ jobs:
       # runs one test at a time so a test that holds the server cannot starve the others.
       - name: cargo test (ava1 C interop, serial)
         working-directory: engine
+        timeout-minutes: 25
         env:
           RUST_BACKTRACE: 1
         run: cargo test -p ava1-ctest -- --test-threads=1

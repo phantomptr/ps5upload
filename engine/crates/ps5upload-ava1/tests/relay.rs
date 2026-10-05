@@ -886,13 +886,22 @@ async fn a_destination_that_ends_its_job_stops_the_relay_within_seconds() {
         Pool::new(ava.clone()).with_addr(addr_a),
         Pool::new(ava).with_addr(addr_b),
     );
-    let (reason, took) = tokio::time::timeout(
-        Duration::from_secs(60),
-        tokio::task::spawn_blocking(move || relay_failure(pa, pb)),
-    )
-    .await
-    .expect("the relay hung")
-    .unwrap();
+    // A plain thread, not spawn_blocking: a hung relay must fail this test at the bound, and
+    // a runtime waits for its blocking threads on drop — the binary then hung for the whole
+    // CI job instead of failing here.
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(relay_failure(pa, pb));
+    });
+    let (reason, took) = tokio::time::timeout(Duration::from_secs(60), rx)
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "the relay hung (destination ended: {})",
+                ended.load(Ordering::Relaxed)
+            )
+        })
+        .unwrap();
     server.abort();
     assert!(ended.load(Ordering::Relaxed), "the destination never ended");
     assert!(
