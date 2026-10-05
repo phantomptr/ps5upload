@@ -808,6 +808,32 @@ export async function browserInvoke<T>(
     case "pkg_remote_probe":
       return postJson<T>("/api/pkg/remote/probe", { url: args["url"] });
 
+    // What a link actually serves (package / other file / not a download) and
+    // download-only to a console folder (R4, #368).
+    case "link_probe":
+      return postJson<T>("/api/link/probe", {
+        url: args["url"],
+        insecure_tls: args["insecure_tls"] ?? args["insecureTls"] ?? false,
+      });
+    case "link_download":
+      return postJson<T>("/api/link/download", args["req"], /*long=*/ true);
+
+    // R6 (#370): the packages inside a RAR, and a package already on the console.
+    case "rar_packages":
+      return postJson<T>(
+        "/api/rar/packages",
+        {
+          archive_path: args["req"]?.archive_path,
+          password: args["req"]?.password,
+        },
+        /*long=*/ true,
+      );
+    case "pkg_console_probe":
+      return postJson<T>("/api/pkg/console-probe", {
+        host: args["host"],
+        path: args["path"],
+      });
+
     // Download-then-install: the engine pulls the package to ITS disk, which
     // for the browser build is the machine running the engine, not the one
     // running the browser. Same routes, so the mode works from the web UI.

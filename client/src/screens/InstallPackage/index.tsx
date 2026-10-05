@@ -84,6 +84,9 @@ import {
   type InstalledPkgArtifact,
 } from "../../api/ps5";
 import { transferAddr, hostOf } from "../../lib/addr";
+import { linkProbe, type LinkClass } from "../../api/links";
+import { LinkDownloadCard } from "./LinkDownloadCard";
+import { RarPackagesCard } from "./RarPackagesCard";
 import { formatBytes, formatDuration } from "../../lib/format";
 import { remainingSeconds } from "../../lib/rollingRate";
 import { acceptPkgDrop, isInstallPackagePath } from "../../lib/pkgDropDedupe";
@@ -635,6 +638,9 @@ export default function InstallPackageScreen() {
   const [viewEntry, setViewEntry] = useState<PkgEntry | null>(null);
   const [picking, setPicking] = useState(false);
   const [remoteUrl, setRemoteUrl] = useState("");
+  // A link that is a real file but not a package (R4, #368): offered as a download-only.
+  const [linkDownload, setLinkDownload] = useState<{ url: string; info: LinkClass } | null>(null);
+  const [checkingLink, setCheckingLink] = useState(false);
   const [dropActive, setDropActive] = useState(false);
   const browserPkgInputRef = useRef<HTMLInputElement>(null);
   const [alternativeSelections, setAlternativeSelections] =
@@ -978,6 +984,27 @@ export default function InstallPackageScreen() {
 
   async function handleUrlInstall() {
     setPickError(null);
+    setLinkDownload(null);
+    const link = remoteUrl.trim();
+    // Decide by what the link serves, after its redirects: a package installs, another real
+    // file is download-only, and a page / error / login / empty body is refused with the
+    // reason. The URL's spelling decides nothing (R4, #368). A probe that cannot be made
+    // (offline from here, an old engine) falls through: the install reports its own errors.
+    setCheckingLink(true);
+    const info: LinkClass | null = await linkProbe(link, linkInsecure)
+      .catch(() => null)
+      .finally(() => setCheckingLink(false));
+    if (info?.kind === "refused") {
+      setPickError(
+        info.message ??
+          tr("linkdl.refused", undefined, "That link is not a file download."),
+      );
+      return;
+    }
+    if (info?.kind === "file") {
+      setLinkDownload({ url: link, info });
+      return;
+    }
     const approved = await confirm({
       title: tr("pkglib.url.confirmTitle", "Start experimental link install?"),
       message: tr("pkglib.url.confirmBody", "This computer downloads the package from the link and feeds it to the PS5, so it must stay awake and connected until the install finishes. Reinstalling over an existing title may remove it if Sony's installer fails. Use only a trusted package URL you are authorized to install."),
@@ -985,11 +1012,12 @@ export default function InstallPackageScreen() {
       cancelLabel: tr("pkglib.stream.fallback.cancel", "Not now"),
     });
     if (!approved) return;
-    const link = remoteUrl.trim();
     const startedAt = Date.now();
     try {
       const result = await installUrl(link, host, {
         mode: linkMode,
+        // The name the link ended up with (a redirect or Content-Disposition), for the row.
+        displayName: info?.filename,
       });
       // A link that reached the queue (as itself, or as the file a
       // download-first produced) reports on its row. One that never got there
@@ -1571,11 +1599,23 @@ export default function InstallPackageScreen() {
               className="min-w-52 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-1.5 text-sm text-[var(--color-text)]"
             />
             <Button variant="secondary" size="sm" onClick={handleUrlInstall}
-              disabled={!hostReady || !remoteUrl.trim()}>
-              {tr("pkglib.url.install", "Install link")}
+              disabled={!hostReady || !remoteUrl.trim() || checkingLink}>
+              {checkingLink
+                ? tr("linkdl.checking", undefined, "Checking link…")
+                : tr("pkglib.url.install", "Install link")}
             </Button>
           </div>
         </div>
+        {linkDownload && (
+          <LinkDownloadCard
+            host={host}
+            url={linkDownload.url}
+            info={linkDownload.info}
+            insecureTls={linkInsecure}
+            onClose={() => setLinkDownload(null)}
+          />
+        )}
+        {hostReady && <RarPackagesCard host={host} />}
         {hostReady && <ExternalPackages host={host} />}
         {/* Workflow options, grouped near the top where they're set before
             adding a package (not buried under the library list). Both govern the

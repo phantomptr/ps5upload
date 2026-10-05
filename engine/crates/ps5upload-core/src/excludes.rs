@@ -17,6 +17,10 @@
 //!   - Component + star:     ".git/**"         same — the `/**` suffix is accepted for readability,
 //!     treated as "any descendant of a `.git` dir"
 //!
+//!   - Allow-list:           "!*.pkg"          INVERTED: when any `!` pattern is present, a path is
+//!     excluded unless it matches at least one of them (case-insensitively). Lets a caller say
+//!     "only these" with the same grammar; `*.pkg` unpacks only packages from a RAR (#370).
+//!
 //! We iterate patterns once per path so `contains(...)` with a small Vec
 //! is cheap enough not to need a compiled matcher struct for typical
 //! default-rules sizes (<20 entries).
@@ -58,13 +62,28 @@ pub fn is_excluded(path: &Path, patterns: &[&str]) -> bool {
     let components: Vec<&str> = components_owned.iter().map(String::as_str).collect();
     let basename = basename_owned.as_str();
 
+    let mut has_allow = false;
+    let mut allowed = false;
     for raw in patterns {
+        if let Some(allow) = raw.strip_prefix('!') {
+            has_allow = true;
+            if !allowed {
+                let lower: Vec<String> = components.iter().map(|c| c.to_lowercase()).collect();
+                let lower_refs: Vec<&str> = lower.iter().map(String::as_str).collect();
+                allowed = matches_pattern(
+                    &strip_glob_suffix(allow).to_lowercase(),
+                    &basename.to_lowercase(),
+                    &lower_refs,
+                );
+            }
+            continue;
+        }
         let pat = strip_glob_suffix(raw);
         if matches_pattern(pat, basename, &components) {
             return true;
         }
     }
-    false
+    has_allow && !allowed
 }
 
 /// Convenience: match against an owned `String` slice (what the UI sends
@@ -191,6 +210,23 @@ mod tests {
         assert!(is_excluded_strings(&p("/a/b/foo.esbak"), &patterns));
         assert!(is_excluded_strings(&p("Thumbs.db"), &patterns));
         assert!(!is_excluded_strings(&p("eboot.bin"), &patterns));
+    }
+
+    #[test]
+    fn an_allow_list_keeps_only_what_it_names() {
+        let only_pkg: &[&str] = &["!*.pkg"];
+        assert!(!is_excluded(&p("a/b/Game.pkg"), only_pkg));
+        assert!(!is_excluded(&p("GAME.PKG"), only_pkg));
+        assert!(is_excluded(&p("a/readme.txt"), only_pkg));
+        assert!(is_excluded(&p("a/pkg"), only_pkg));
+        // Several allow entries are alternatives, not a conjunction.
+        let two: &[&str] = &["!*.pkg", "!*.fpkg"];
+        assert!(!is_excluded(&p("x.fpkg"), two));
+        assert!(!is_excluded(&p("x.pkg"), two));
+        assert!(is_excluded(&p("x.zip"), two));
+        // An ordinary exclude still wins over the allow-list.
+        let mixed: &[&str] = &["!*.pkg", "skip"];
+        assert!(is_excluded(&p("skip/a.pkg"), mixed));
     }
 
     #[test]

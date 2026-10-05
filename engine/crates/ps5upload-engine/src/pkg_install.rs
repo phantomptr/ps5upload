@@ -779,6 +779,7 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         // the whole image to the PS5 first.
         .route("/api/ffpkg/extract", post(extract_handler))
         .route("/api/pkg/remote/probe", post(remote_probe_handler))
+        .route("/api/pkg/console-probe", post(console_probe_handler))
         // Unified install (spec 2): one endpoint owns resolve → deliver →
         // install (through the :9115 daemon) → verify → record. Replaces the
         // old install/start + dpi-* surface. Status is per-job; history is a
@@ -3198,6 +3199,71 @@ async fn remote_probe_handler(Json(req): Json<RemoteProbeRequest>) -> Response<B
                     .and_then(|n| n.to_str())
                     .unwrap_or("")
                     .to_string(),
+                content_id: meta.content_id,
+                title: meta.title,
+                title_id: meta.title_id,
+                category: meta.category,
+                app_ver: meta.app_ver,
+                platform: meta.platform,
+                package_type,
+                fingerprint: meta.fingerprint,
+            })
+        }
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, &e),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ConsoleProbeRequest {
+    /// The console, as the other install routes name it (`host` or `host:port`).
+    pub host: String,
+    /// Absolute path of a package already on the console.
+    pub path: String,
+}
+
+/// Identify a package that is already on the console (R6, #370): after a RAR's packages are
+/// unpacked there, the client reads each one's category and title so a base installs before
+/// its patch. Reads only the header ranges, over the helper.
+async fn console_probe_handler(Json(req): Json<ConsoleProbeRequest>) -> Response<Body> {
+    let host = req.host.trim().to_string();
+    let path = req.path.trim().to_string();
+    if host.is_empty() || host.contains('/') || !path.starts_with('/') || path.contains('\0') {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "host and an absolute console path are required",
+        );
+    }
+    let url = format!("ps5://{host}{path}");
+    let probe_req = InstallStartRequest {
+        ps5_addr: String::new(),
+        allow_destructive_reinstall: false,
+        insecure_tls: false,
+        path: None,
+        split_root: None,
+        remote_url: None,
+        package_type_override: None,
+        local_ps5_path: None,
+        content_id: None,
+        expected_size: None,
+        package_fingerprint: None,
+        delete_staging: false,
+        serve_only: true,
+    };
+    match resolve_console_source(&url, &probe_req).await {
+        Ok((_, _, total_size, meta, _)) => {
+            let package_type = meta
+                .package_type
+                .clone()
+                .or_else(|| {
+                    ps5upload_pkg::package_type_for_category_and_platform(
+                        &meta.category,
+                        &meta.platform,
+                    )
+                })
+                .unwrap_or_default();
+            json_ok(&RemoteProbeResponse {
+                total_size,
+                filename: path.rsplit('/').next().unwrap_or("").to_string(),
                 content_id: meta.content_id,
                 title: meta.title,
                 title_id: meta.title_id,
