@@ -36,8 +36,20 @@
     return m;
   }
 
-  function show(reason) {
-    if (shown || mounted()) return;
+  // The app's stylesheet sets margin:0 on <body>; a WebView that dropped the sheet leaves the
+  // default 8px. The React tree still renders then, so mounted() alone cannot see it (#352).
+  function stylesMissing() {
+    try {
+      if (typeof w.getComputedStyle !== "function" || !d.body) return false;
+      var m = w.getComputedStyle(d.body).marginTop;
+      return typeof m === "string" && m !== "" && m !== "0px" && m !== "0";
+    } catch (err) {
+      return false;
+    }
+  }
+
+  function show(reason, force) {
+    if (shown || (!force && mounted())) return;
     shown = true;
     box = d.createElement("div");
     box.id = "ps5u-boot-notice";
@@ -90,7 +102,11 @@
 
   w.setTimeout(function check() {
     if (mounted()) {
-      if (shown) hide();
+      if (stylesMissing()) {
+        show("the stylesheet was not applied", true);
+      } else if (shown) {
+        hide();
+      }
       return;
     }
     show("the app did not start within " + BOOT_TIMEOUT_MS / 1000 + " seconds");

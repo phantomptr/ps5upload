@@ -66,6 +66,7 @@ function harness(over: Record<string, unknown> = {}) {
     setTimeout: (f: () => void) => timers.push(f),
     ...over,
   };
+  win.getComputedStyle = over.getComputedStyle ?? (() => ({ marginTop: "0px" }));
   vm.runInNewContext(SRC, { window: win, document: doc, Object, Array });
   const notice = () => body.children.find((c) => c.id === "ps5u-boot-notice");
   return { root, listeners, timers, notice, mount: () => root.appendChild(el("DIV")) };
@@ -114,6 +115,20 @@ describe("boot guard (#352)", () => {
   it("ignores an unrelated runtime error", () => {
     const h = harness();
     h.listeners.error[0]({ message: "Network request failed", target: {} });
+    expect(h.notice()).toBeUndefined();
+  });
+
+  it("shows the notice when the app rendered but its stylesheet did not apply", () => {
+    const h = harness({ getComputedStyle: () => ({ marginTop: "8px" }) });
+    h.mount();
+    h.timers[0]();
+    expect(h.notice()).toBeDefined();
+  });
+
+  it("stays quiet when the stylesheet applied", () => {
+    const h = harness({ getComputedStyle: () => ({ marginTop: "0px" }) });
+    h.mount();
+    h.timers[0]();
     expect(h.notice()).toBeUndefined();
   });
 

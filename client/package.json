@@ -42,6 +42,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@csstools/postcss-cascade-layers": "^6.0.1",
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.63.0",
     "@tailwindcss/vite": "^4.3.3",
