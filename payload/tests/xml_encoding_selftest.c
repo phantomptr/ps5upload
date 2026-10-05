@@ -105,6 +105,35 @@ int main(void) {
         CHECK(r == NULL);
     }
 
+    /* MC4 plaintext is entity- and backslash-escaped XML (R16, #373). This is
+     * the head of the real decrypted etaHEN CUSA00002_01.00.mc4. */
+    {
+        char t[] = "&lt;?xml version=\\&quot;1.0\\&quot; encoding=\\&quot;utf-16\\&quot;?&gt;\r\n"
+                   "&lt;Trainer Game=\\&quot;Killzone Shadow Fall\\&quot; Cusa=\\&quot;CUSA00002\\&quot;&gt;\r\n"
+                   "  &lt;Cheat Control=\\&quot;Toggel\\&quot; Text=\\&quot;A &amp; B&quot;&gt;&#60;&#x3E;";
+        size_t n = xml_unescape_entities(t, strlen(t));
+        CHECK(n == strlen(t));
+        CHECK(strstr(t, "<?xml version=\"1.0\" encoding=\"utf-16\"?>") == t);
+        CHECK(strstr(t, "<Trainer Game=\"Killzone Shadow Fall\" Cusa=\"CUSA00002\">") != NULL);
+        CHECK(strstr(t, "<Cheat Control=\"Toggel\" Text=\"A & B\"><>") != NULL);
+    }
+    /* Plain XML and other text are untouched. */
+    {
+        char t[] = "<Trainer Game=\"a &amp; b\"></Trainer>";
+        size_t n = xml_unescape_entities(t, strlen(t));
+        CHECK(n == strlen(t));
+        CHECK(strcmp(t, "<Trainer Game=\"a &amp; b\"></Trainer>") == 0);
+        char u[] = "{\\\"x\\\":1}";
+        CHECK(xml_unescape_entities(u, strlen(u)) == strlen(u));
+    }
+    /* Unknown entities and a lone trailing backslash survive. */
+    {
+        char t[] = "&lt;a b=&nbsp;&gt;\\";
+        size_t n = xml_unescape_entities(t, strlen(t));
+        CHECK(strcmp(t, "<a b=&nbsp;>\\") == 0);
+        CHECK(n == strlen(t));
+    }
+
     if (failures == 0) {
         printf("xml_encoding_selftest: all checks passed\n");
         return 0;

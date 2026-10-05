@@ -2,7 +2,16 @@ import { useState } from "react";
 import { ChevronDown, Search } from "lucide-react";
 
 import { GameIcon } from "../../components";
-import { hasVersionMatch, type CheatGame, type CheatSection } from "../../lib/cheatGames";
+import {
+  cheatFiltersActive,
+  EMPTY_CHEAT_FILTERS,
+  hasVersionMatch,
+  type CheatGame,
+  type CheatListFilters,
+  type CheatScopeFilter,
+  type CheatSection,
+  type CheatStateFilter,
+} from "../../lib/cheatGames";
 import { hostOf } from "../../lib/addr";
 import { useTr } from "../../state/lang";
 import type { AppInfoDetails } from "../../api/ps5";
@@ -12,16 +21,16 @@ import type { AppInfoDetails } from "../../api/ps5";
 export function CheatGameList({
   host,
   sections,
-  query,
-  onQuery,
+  filters,
+  onFilters,
   selectedId,
   onSelect,
   details,
 }: {
   host: string;
   sections: CheatSection[];
-  query: string;
-  onQuery: (q: string) => void;
+  filters: CheatListFilters;
+  onFilters: (f: CheatListFilters) => void;
   selectedId: string | null;
   onSelect: (titleId: string) => void;
   details: Map<string, AppInfoDetails | null>;
@@ -38,6 +47,20 @@ export function CheatGameList({
     none: tr("cheats_section_none", undefined, "No cheats published"),
   };
   const total = sections.reduce((n, s) => n + s.games.length, 0);
+  const query = filters.query;
+  const filtering = cheatFiltersActive(filters);
+  const scopes: [CheatScopeFilter, string][] = [
+    ["all", tr("cheats_filter_scope_all", undefined, "All games")],
+    ["installed", tr("cheats_filter_scope_installed", undefined, "Installed here")],
+    ["withCheats", tr("cheats_filter_scope_with", undefined, "With cheats")],
+  ];
+  const states: [CheatStateFilter, string][] = [
+    ["all", tr("cheats_filter_state_all", undefined, "Any state")],
+    ["playing", tr("cheats_filter_state_playing", undefined, "Playing now")],
+    ["switchedOn", tr("cheats_filter_state_on", undefined, "Cheats switched on")],
+    ["ready", tr("cheats_filter_state_ready", undefined, "Cheats ready")],
+    ["toDownload", tr("cheats_filter_state_download", undefined, "Cheats to download")],
+  ];
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
@@ -49,7 +72,7 @@ export function CheatGameList({
         <input
           type="search"
           value={query}
-          onChange={(e) => onQuery(e.target.value)}
+          onChange={(e) => onFilters({ ...filters, query: e.target.value })}
           placeholder={tr("cheats_find_game", undefined, "Find a game")}
           aria-label={tr("cheats_find_game", undefined, "Find a game")}
           className="input"
@@ -59,16 +82,65 @@ export function CheatGameList({
         />
       </label>
 
+      <div className="grid grid-cols-3 gap-1.5" role="group" aria-label={tr("cheats_filters", undefined, "Filters")}>
+        <select
+          className="input"
+          value={filters.scope}
+          onChange={(e) => onFilters({ ...filters, scope: e.target.value as CheatScopeFilter })}
+          aria-label={tr("cheats_filter_scope", undefined, "Games")}
+        >
+          {scopes.map(([v, l]) => (
+            <option key={v} value={v}>
+              {l}
+            </option>
+          ))}
+        </select>
+        <select
+          className="input"
+          value={filters.state}
+          onChange={(e) => onFilters({ ...filters, state: e.target.value as CheatStateFilter })}
+          aria-label={tr("cheats_filter_state", undefined, "State")}
+        >
+          {states.map(([v, l]) => (
+            <option key={v} value={v}>
+              {l}
+            </option>
+          ))}
+        </select>
+        <select
+          className="input"
+          value={filters.format}
+          onChange={(e) => onFilters({ ...filters, format: e.target.value })}
+          aria-label={tr("cheats_filter_format", undefined, "Format")}
+        >
+          <option value="">{tr("cheats_filter_format_any", undefined, "Any format")}</option>
+          {["json", "shn", "mc4"].map((f) => (
+            <option key={f} value={f}>
+              {f.toUpperCase()}
+            </option>
+          ))}
+        </select>
+      </div>
+      {filtering && (
+        <button
+          type="button"
+          onClick={() => onFilters(EMPTY_CHEAT_FILTERS)}
+          className="self-start text-xs text-[var(--color-accent)] hover:underline"
+        >
+          {tr("cheats_filter_clear", undefined, "Clear filters")}
+        </button>
+      )}
+
       {total === 0 && (
         <p className="px-1 py-4 text-center text-sm text-[var(--color-muted)]">
-          {query
+          {filtering
             ? tr("cheats_no_game_match", undefined, "No game matches that search.")
             : tr("cheats_no_games", undefined, "No games found on this PS5.")}
         </p>
       )}
 
       {sections.map((section) => {
-        const folded = section.key === "none" && !showNone && !query;
+        const folded = section.key === "none" && !showNone && !filtering;
         return (
           <section key={section.key}>
             {section.key === "none" ? (
@@ -162,7 +234,9 @@ function GameRow({
             </span>
           ) : game.downloaded ? (
             <span className="text-[var(--color-accent)]">
-              {tr("cheats_badge_ready", undefined, "Ready")}
+              {game.enabledCount > 0
+                ? tr("cheats_badge_on", { n: game.enabledCount }, `${game.enabledCount} on`)
+                : tr("cheats_badge_ready", undefined, "Ready")}
             </span>
           ) : n > 0 ? (
             <span className={match ? "text-[var(--color-good)]" : "text-[var(--color-muted)]"}>

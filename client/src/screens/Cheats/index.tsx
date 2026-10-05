@@ -31,7 +31,14 @@ import { RepoBrowser } from "./RepoBrowser";
 import { CheatGameList } from "./CheatGameList";
 import { CheatGameDetail } from "./CheatGameDetail";
 import { namesFromRepoEntries } from "../../lib/cheatBrowse";
-import { buildCheatGames, cheatSections, filterCheatGames } from "../../lib/cheatGames";
+import {
+  applyCheatFilters,
+  buildCheatGames,
+  cheatSections,
+  EMPTY_CHEAT_FILTERS,
+  type CheatListFilters,
+} from "../../lib/cheatGames";
+import { useToast } from "../../state/toasts";
 
 /** The cheat collection's index, for the session.
  *
@@ -59,7 +66,8 @@ export default function CheatsScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
+  const [filters, setFilters] = useState<CheatListFilters>(EMPTY_CHEAT_FILTERS);
+  const { toast } = useToast();
   const [showBrowser, setShowBrowser] = useState(false);
   const [details, setDetails] = useState<Map<string, AppInfoDetails | null>>(new Map());
 
@@ -114,7 +122,7 @@ export default function CheatsScreen() {
       }),
     [installed, downloaded, index, status, repoNames],
   );
-  const sections = useMemo(() => cheatSections(filterCheatGames(games, query)), [games, query]);
+  const sections = useMemo(() => cheatSections(applyCheatFilters(games, filters)), [games, filters]);
   const selected = games.find((g) => g.titleId === selectedId) ?? null;
 
   // Versions for the games that have cheats, fetched one at a time in the
@@ -173,6 +181,10 @@ export default function CheatsScreen() {
   async function reload() {
     try {
       await cheatsReload(addr);
+      toast({
+        tone: "success",
+        message: tr("cheats_toast_reloaded", undefined, "Cheats reloaded for the running game."),
+      });
     } catch (e) {
       setError(humanizePs5Error(String(e)));
     }
@@ -280,8 +292,8 @@ export default function CheatsScreen() {
               <CheatGameList
                 host={host}
                 sections={sections}
-                query={query}
-                onQuery={setQuery}
+                filters={filters}
+                onFilters={setFilters}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
                 details={details}

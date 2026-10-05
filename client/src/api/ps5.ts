@@ -5057,6 +5057,10 @@ export interface CheatTitle {
   /** Game version the downloaded cheat targets, parsed from its filename
    *  (e.g. "01.08"). Empty when the filename carries no version. */
   version?: string;
+  /** Formats on the console for this title: "json" | "shn" | "mc4". */
+  formats?: string[];
+  /** How many of its cheats are switched on. */
+  enabled?: number;
   running: boolean;
 }
 

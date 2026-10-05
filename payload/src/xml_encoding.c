@@ -71,3 +71,77 @@ char *xml_to_utf8(const char *in, size_t in_len, size_t *out_len) {
     if (out_len) *out_len = o;
     return (char *)out;
 }
+
+size_t xml_unescape_entities(char *buf, size_t len) {
+    if (!buf) return 0;
+    size_t i = 0;
+    while (i < len && (buf[i] == ' ' || buf[i] == '\t' || buf[i] == '\r' ||
+                       buf[i] == '\n' || buf[i] == '\0'))
+        i++;
+    if (len - i < 4 || buf[i] != '&' || buf[i + 1] != 'l' || buf[i + 2] != 't' ||
+        buf[i + 3] != ';')
+        return len;
+
+    size_t o = 0;
+    for (size_t r = i; r < len;) {
+        char c = buf[r];
+        if (c == '&') {
+            size_t semi = r + 1;
+            while (semi < len && semi - r <= 8 && buf[semi] != ';') semi++;
+            if (semi < len && buf[semi] == ';') {
+                size_t n = semi - r - 1;
+                const char *e = buf + r + 1;
+                int ch = -1;
+                if (n == 2 && e[0] == 'l' && e[1] == 't') ch = '<';
+                else if (n == 2 && e[0] == 'g' && e[1] == 't') ch = '>';
+                else if (n == 3 && e[0] == 'a' && e[1] == 'm' && e[2] == 'p') ch = '&';
+                else if (n == 4 && e[0] == 'q' && e[1] == 'u' && e[2] == 'o' && e[3] == 't') ch = '"';
+                else if (n == 4 && e[0] == 'a' && e[1] == 'p' && e[2] == 'o' && e[3] == 's') ch = '\'';
+                else if (n >= 2 && e[0] == '#') {
+                    unsigned v = 0;
+                    int ok = 1;
+                    if (e[1] == 'x' || e[1] == 'X') {
+                        if (n < 3) ok = 0;
+                        for (size_t k = 2; ok && k < n; k++) {
+                            char d = e[k];
+                            if (d >= '0' && d <= '9') v = v * 16 + (unsigned)(d - '0');
+                            else if (d >= 'a' && d <= 'f') v = v * 16 + (unsigned)(d - 'a' + 10);
+                            else if (d >= 'A' && d <= 'F') v = v * 16 + (unsigned)(d - 'A' + 10);
+                            else ok = 0;
+                        }
+                    } else {
+                        for (size_t k = 1; ok && k < n; k++) {
+                            if (e[k] >= '0' && e[k] <= '9') v = v * 10 + (unsigned)(e[k] - '0');
+                            else ok = 0;
+                        }
+                    }
+                    if (ok && v > 0 && v < 0x80) ch = (int)v;
+                }
+                if (ch >= 0) {
+                    /* `\&quot;` is an escaped quote written as an entity:
+                     * drop the backslash that came before it. */
+                    if (ch == '"' && o > 0 && buf[o - 1] == '\\') o--;
+                    buf[o++] = (char)ch;
+                    r = semi + 1;
+                    continue;
+                }
+            }
+        } else if (c == '\\' && r + 1 < len) {
+            char d = buf[r + 1];
+            int ch = -1;
+            if (d == '"' || d == '\\' || d == '/') ch = d;
+            else if (d == 'r') ch = '\r';
+            else if (d == 'n') ch = '\n';
+            else if (d == 't') ch = '\t';
+            if (ch >= 0) {
+                buf[o++] = (char)ch;
+                r += 2;
+                continue;
+            }
+        }
+        buf[o++] = c;
+        r++;
+    }
+    buf[o] = '\0';
+    return o;
+}

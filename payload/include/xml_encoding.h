@@ -25,4 +25,21 @@
  */
 char *xml_to_utf8(const char *in, size_t in_len, size_t *out_len);
 
+/*
+ * MC4 files decrypt to XML that was serialised as an escaped string: the real
+ * plaintext of etaHEN's CUSA00002_01.00.mc4 begins
+ *     &lt;?xml version=\&quot;1.0\&quot; encoding=\&quot;utf-16\&quot;?&gt;
+ * i.e. every '<' '>' '"' is an XML entity and every '"' also carries a
+ * backslash. The tag scan never sees "<Cheat" in that, so every real MC4 file
+ * parsed to zero cheats even though decryption was correct (R16, #373).
+ *
+ * If the text (after leading whitespace/NULs) starts with "&lt;", decode it in
+ * place: &lt; &gt; &quot; &amp; &apos; &#N; &#xN; and the backslash escapes
+ * \" \\ \/ \r \n \t. Text that already starts with '<' (or anything else)
+ * is left untouched. The result is never longer than the input; it is
+ * NUL-terminated and the new length is returned (the old length if untouched).
+ * `len` is the byte length; buf[len] need not be writable beyond it.
+ */
+size_t xml_unescape_entities(char *buf, size_t len);
+
 #endif /* PS5UPLOAD_XML_ENCODING_H */
