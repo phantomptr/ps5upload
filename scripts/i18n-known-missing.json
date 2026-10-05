@@ -23,7 +23,10 @@
       "job_why_resumed",
       "job_why_slow_drive",
       "job_why_settle",
-      "job_why_local_note"
+      "job_why_local_note",
+      "fanCurve_restore",
+      "fanCurve_restore_title",
+      "fanCurve_restore_msg"
     ],
     "stale": [],
     "untranslated": [
@@ -57,7 +60,10 @@
       "job_why_resumed",
       "job_why_slow_drive",
       "job_why_settle",
-      "job_why_local_note"
+      "job_why_local_note",
+      "fanCurve_restore",
+      "fanCurve_restore_title",
+      "fanCurve_restore_msg"
     ],
     "stale": [],
     "untranslated": [
@@ -92,7 +98,10 @@
       "job_why_resumed",
       "job_why_slow_drive",
       "job_why_settle",
-      "job_why_local_note"
+      "job_why_local_note",
+      "fanCurve_restore",
+      "fanCurve_restore_title",
+      "fanCurve_restore_msg"
     ],
     "stale": [],
     "untranslated": [
@@ -134,7 +143,10 @@
       "job_why_resumed",
       "job_why_slow_drive",
       "job_why_settle",
-      "job_why_local_note"
+      "job_why_local_note",
+      "fanCurve_restore",
+      "fanCurve_restore_title",
+      "fanCurve_restore_msg"
     ],
     "stale": [],
     "untranslated": [
@@ -172,7 +184,10 @@
       "job_why_resumed",
       "job_why_slow_drive",
       "job_why_settle",
-      "job_why_local_note"
+      "job_why_local_note",
+      "fanCurve_restore",
+      "fanCurve_restore_title",
+      "fanCurve_restore_msg"
     ],
     "stale": [],
     "untranslated": [
@@ -212,7 +227,10 @@
       "job_why_resumed",
       "job_why_slow_drive",
       "job_why_settle",
-      "job_why_local_note"
+      "job_why_local_note",
+      "fanCurve_restore",
+      "fanCurve_restore_title",
+      "fanCurve_restore_msg"
     ],
     "stale": [],
     "untranslated": [
@@ -247,7 +265,10 @@
       "job_why_resumed",
       "job_why_slow_drive",
       "job_why_settle",
-      "job_why_local_note"
+      "job_why_local_note",
+      "fanCurve_restore",
+      "fanCurve_restore_title",
+      "fanCurve_restore_msg"
     ],
     "stale": [],
     "untranslated": [
@@ -293,7 +314,10 @@
       "job_why_resumed",
       "job_why_slow_drive",
       "job_why_settle",
-      "job_why_local_note"
+      "job_why_local_note",
+      "fanCurve_restore",
+      "fanCurve_restore_title",
+      "fanCurve_restore_msg"
     ],
     "stale": [],
     "untranslated": [
@@ -333,7 +357,10 @@
       "job_why_resumed",
       "job_why_slow_drive",
       "job_why_settle",
-      "job_why_local_note"
+      "job_why_local_note",
+      "fanCurve_restore",
+      "fanCurve_restore_title",
+      "fanCurve_restore_msg"
     ],
     "stale": [],
     "untranslated": [
@@ -372,7 +399,10 @@
       "job_why_resumed",
       "job_why_slow_drive",
       "job_why_settle",
-      "job_why_local_note"
+      "job_why_local_note",
+      "fanCurve_restore",
+      "fanCurve_restore_title",
+      "fanCurve_restore_msg"
     ],
     "stale": [],
     "untranslated": [
@@ -409,7 +439,10 @@
       "job_why_resumed",
       "job_why_slow_drive",
       "job_why_settle",
-      "job_why_local_note"
+      "job_why_local_note",
+      "fanCurve_restore",
+      "fanCurve_restore_title",
+      "fanCurve_restore_msg"
     ],
     "stale": [],
     "untranslated": [
@@ -444,7 +477,10 @@
       "job_why_resumed",
       "job_why_slow_drive",
       "job_why_settle",
-      "job_why_local_note"
+      "job_why_local_note",
+      "fanCurve_restore",
+      "fanCurve_restore_title",
+      "fanCurve_restore_msg"
     ],
     "stale": [],
     "untranslated": [
@@ -480,7 +516,10 @@
       "job_why_resumed",
       "job_why_slow_drive",
       "job_why_settle",
-      "job_why_local_note"
+      "job_why_local_note",
+      "fanCurve_restore",
+      "fanCurve_restore_title",
+      "fanCurve_restore_msg"
     ],
     "stale": [],
     "untranslated": [
@@ -521,7 +560,10 @@
       "job_why_resumed",
       "job_why_slow_drive",
       "job_why_settle",
-      "job_why_local_note"
+      "job_why_local_note",
+      "fanCurve_restore",
+      "fanCurve_restore_title",
+      "fanCurve_restore_msg"
     ],
     "stale": [],
     "untranslated": [
@@ -557,7 +599,10 @@
       "job_why_resumed",
       "job_why_slow_drive",
       "job_why_settle",
-      "job_why_local_note"
+      "job_why_local_note",
+      "fanCurve_restore",
+      "fanCurve_restore_title",
+      "fanCurve_restore_msg"
     ],
     "stale": [],
     "untranslated": [
@@ -592,7 +637,10 @@
       "job_why_resumed",
       "job_why_slow_drive",
       "job_why_settle",
-      "job_why_local_note"
+      "job_why_local_note",
+      "fanCurve_restore",
+      "fanCurve_restore_title",
+      "fanCurve_restore_msg"
     ],
     "stale": [],
     "untranslated": [
@@ -629,7 +677,10 @@
       "job_why_resumed",
       "job_why_slow_drive",
       "job_why_settle",
-      "job_why_local_note"
+      "job_why_local_note",
+      "fanCurve_restore",
+      "fanCurve_restore_title",
+      "fanCurve_restore_msg"
     ],
     "stale": [],
     "untranslated": [
@@ -667,7 +718,10 @@
       "job_why_resumed",
       "job_why_slow_drive",
       "job_why_settle",
-      "job_why_local_note"
+      "job_why_local_note",
+      "fanCurve_restore",
+      "fanCurve_restore_title",
+      "fanCurve_restore_msg"
     ],
     "stale": [],
     "untranslated": [
@@ -702,7 +756,10 @@
       "job_why_resumed",
       "job_why_slow_drive",
       "job_why_settle",
-      "job_why_local_note"
+      "job_why_local_note",
+      "fanCurve_restore",
+      "fanCurve_restore_title",
+      "fanCurve_restore_msg"
     ],
     "stale": [],
     "untranslated": [

@@ -91,7 +91,7 @@ const PRESETS: ReadonlyArray<{
   },
 ];
 
-const DEFAULT_POINTS: FanCurvePoint[] = [
+export const DEFAULT_POINTS: FanCurvePoint[] = [
   { temp_c: 50, duty_pct: 30 },
   { temp_c: 65, duty_pct: 55 },
   { temp_c: 75, duty_pct: 80 },
@@ -165,25 +165,38 @@ export default function FanCurveScreen() {
     setApplied(false);
   }, []);
 
-  const handleApply = useCallback(async () => {
+  const applyCurve = useCallback(
+    async (curve: FanCurvePoint[], restore: boolean) => {
     if (!addr) return;
     const ok = await confirm({
-      title: tr("fanCurve_confirm_title", undefined, "Apply fan curve?"),
-      message: tr(
-        "fanCurve_confirm_msg",
-        undefined,
-        "This overrides the PS5's built-in fan control. Incorrect settings may cause overheating. The first point's temperature becomes the persistent fan threshold — it survives payload redeploy and console reboot.",
-      ),
-      confirmLabel: tr("fanCurve_apply", undefined, "Apply"),
-      destructive: true,
+      title: restore
+        ? tr("fanCurve_restore_title", undefined, "Restore the default fan curve?")
+        : tr("fanCurve_confirm_title", undefined, "Apply fan curve?"),
+      message: restore
+        ? tr(
+            "fanCurve_restore_msg",
+            undefined,
+            "This replaces the saved curve with the app's default (Balanced) curve and applies it now.",
+          )
+        : tr(
+            "fanCurve_confirm_msg",
+            undefined,
+            "This overrides the PS5's built-in fan control. Incorrect settings may cause overheating. The first point's temperature becomes the persistent fan threshold — it survives payload redeploy and console reboot.",
+          ),
+      confirmLabel: restore
+        ? tr("fanCurve_restore", undefined, "Restore default")
+        : tr("fanCurve_apply", undefined, "Apply"),
+      destructive: !restore,
     });
     if (!ok) return;
     setBusy(true);
     setError(null);
     const probe = guard.capture();
     try {
-      await fanCurveSet(sorted, addr);
+      // The one existing fan path: the same curve format, the same command.
+      await fanCurveSet(curve, addr);
       if (probe.isStale()) return;
+      if (restore) setPoints(curve.map((pt) => ({ ...pt })));
       setApplied(true);
       setHasSavedCurve(true);
     } catch (e) {
@@ -192,7 +205,17 @@ export default function FanCurveScreen() {
     } finally {
       setBusy(false);
     }
-  }, [addr, confirm, tr, sorted, guard]);
+    },
+    [addr, confirm, tr, guard],
+  );
+  const handleApply = useCallback(
+    () => applyCurve(sorted, false),
+    [applyCurve, sorted],
+  );
+  const handleRestoreDefault = useCallback(
+    () => applyCurve(DEFAULT_POINTS, true),
+    [applyCurve],
+  );
 
   // SVG preview
   // Drawn in a fixed viewBox and scaled by CSS, so the graph fills whatever
@@ -472,6 +495,15 @@ export default function FanCurveScreen() {
                     <Fan size={14} />
                   )}
                   {tr("fanCurve_apply", undefined, "Apply")}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="md"
+                  className="ml-2"
+                  onClick={handleRestoreDefault}
+                  disabled={busy || payloadStatus !== "up" || !addr}
+                >
+                  {tr("fanCurve_restore", undefined, "Restore default")}
                 </Button>
               </div>
             </div>
