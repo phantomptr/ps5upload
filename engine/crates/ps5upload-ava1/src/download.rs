@@ -723,7 +723,7 @@ fn run(
             };
             let durable = progress.bytes_durable.load(Ordering::Relaxed);
             if dropped {
-                pool.forget(console).await;
+                pool.forget_if(console, &session).await;
                 rearm(&mut backoff, started, work_before, durable);
             }
             if fresh_per_attempt || !dropped {

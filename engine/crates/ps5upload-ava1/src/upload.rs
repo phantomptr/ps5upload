@@ -746,7 +746,7 @@ pub fn upload_with_seq_in(
                     // Whatever ended the session (a dead control link, a lane refused because the
                     // console already dropped the session, a replayed join), a fresh handshake is
                     // the answer; the job and its journal stay, so the resume continues.
-                    pool.forget(console).await;
+                    pool.forget_if(console, &session).await;
                     rearm(&mut backoff, started, durable_before, durable);
                     wait(&mut backoff, &format!("{why} ({durable} bytes durable)")).await;
                 }

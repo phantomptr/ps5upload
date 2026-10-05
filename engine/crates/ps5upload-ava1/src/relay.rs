@@ -580,7 +580,7 @@ pub fn ps5_to_ps5_between(
             let m = match download_open(&mut la, src, gen::JF_ORDERED, RELAY_CAP as u64).await {
                 Ok(m) => m,
                 Err(SendError::Disconnected(_)) => {
-                    from_pool.forget(from).await;
+                    from_pool.forget_if(from, &sa).await;
                     tokio::time::sleep(backoff).await;
                     continue;
                 }
@@ -607,7 +607,7 @@ pub fn ps5_to_ps5_between(
             let opened = match open_upload(&mut lb, &m, &o).await {
                 Ok(opened) => opened,
                 Err(SendError::Disconnected(_)) => {
-                    to_pool.forget(to).await;
+                    to_pool.forget_if(to, &sb).await;
                     tokio::time::sleep(backoff).await;
                     continue;
                 }
@@ -713,8 +713,8 @@ pub fn ps5_to_ps5_between(
                 }
                 Settle::Cancelled => return Err(anyhow!("transfer_cancelled")),
                 Settle::Retry => {
-                    from_pool.forget(from).await;
-                    to_pool.forget(to).await;
+                    from_pool.forget_if(from, &sa).await;
+                    to_pool.forget_if(to, &sb).await;
                     rearm(
                         &mut backoff,
                         attempt_started,
