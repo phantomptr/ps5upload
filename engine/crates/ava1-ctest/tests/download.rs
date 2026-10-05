@@ -710,10 +710,14 @@ async fn two_thousand_tiny_files_download_fast() {
     );
     assert_eq!(r.files, 2000);
     assert!(same_tree(&src, &d.join("got")));
-    assert!(
-        rate >= FLOOR_FILES_PER_S,
-        "{rate:.0} files/s < {FLOOR_FILES_PER_S}"
-    );
+    // Coverage instrumentation (cargo-llvm-cov sets CARGO_LLVM_COV) slows every call several
+    // times over; the floor guards the real build, so it is skipped there.
+    if std::env::var_os("CARGO_LLVM_COV").is_none() {
+        assert!(
+            rate >= FLOOR_FILES_PER_S,
+            "{rate:.0} files/s < {FLOOR_FILES_PER_S}"
+        );
+    }
 }
 
 /// Measured on a Mac (loopback): the debug build (what `cargo test` runs; blake3 and the

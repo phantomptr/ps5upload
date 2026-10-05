@@ -128,7 +128,9 @@ fn untext(b: &[u8]) -> MgmtText {
 
 /// The engine's transport over its own pool, aimed at the C server.
 fn transport(r: &Rig) -> Arc<AvaTransport> {
-    let pool: &'static Pool = Box::leak(Box::new(Pool::new(r.ava.clone()).with_addr(r.srv.addr())));
+    let pool: &'static Pool = keep(Box::leak(Box::new(
+        Pool::new(r.ava.clone()).with_addr(r.srv.addr()),
+    )));
     Arc::new(AvaTransport::with_pool(pool))
 }
 
@@ -857,4 +859,14 @@ async fn a_real_upload_leaves_open_and_done_lines_with_its_numbers() {
         "{done}"
     );
     assert!(done.contains(&format!("bytes={bytes}/{bytes}")), "{done}");
+}
+
+/// `AvaTransport::with_pool` takes a `&'static Pool`, so each test pool is leaked on purpose.
+/// Keeping it in a static list makes it reachable for the process lifetime, so LeakSanitizer
+/// does not report it (the sessions it holds live on the pool's own threads, beyond any
+/// frame-name suppression). C leaks are still reported.
+fn keep(p: &'static Pool) -> &'static Pool {
+    static KEPT: std::sync::Mutex<Vec<&'static Pool>> = std::sync::Mutex::new(Vec::new());
+    KEPT.lock().unwrap_or_else(|e| e.into_inner()).push(p);
+    p
 }

@@ -892,7 +892,7 @@ mod transport {
             .add(Identity::from_secret(SECRET).public(), "C test server")
             .unwrap();
         let srv = CServer::start(SECRET, &base.join("srv-peers"), 0, 100, 3000, 800);
-        let pool: &'static Pool = Box::leak(Box::new(Pool::new(ava).with_addr(srv.addr())));
+        let pool: &'static Pool = keep(Box::leak(Box::new(Pool::new(ava).with_addr(srv.addr()))));
         let transport = Arc::new(AvaTransport::with_pool(pool));
         let scope = mgmt::scoped_transport(transport.clone());
         T {
@@ -1637,4 +1637,15 @@ fn s2_a_dotdot_path_fails_closed() {
         "the unsafe-read check rejects `..`"
     );
     mgmt_fs::uninstall();
+}
+
+/// `AvaTransport::with_pool` takes a `&'static Pool`, so each test pool is leaked on purpose.
+/// Keeping it in a static list makes it reachable for the process lifetime, so LeakSanitizer
+/// does not report it (the sessions it holds live on the pool's own threads, beyond any
+/// frame-name suppression). C leaks are still reported.
+fn keep(p: &'static ps5upload_ava1::Pool) -> &'static ps5upload_ava1::Pool {
+    static KEPT: std::sync::Mutex<Vec<&'static ps5upload_ava1::Pool>> =
+        std::sync::Mutex::new(Vec::new());
+    KEPT.lock().unwrap_or_else(|e| e.into_inner()).push(p);
+    p
 }
