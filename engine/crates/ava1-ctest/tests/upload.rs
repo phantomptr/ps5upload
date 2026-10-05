@@ -123,7 +123,13 @@ async fn lane_killed_mid_chunk_requeues_and_completes() {
     let (pg, pg2) = (progress.clone(), progress.clone());
     let px2 = px.clone();
     let killer = tokio::spawn(async move {
-        for _ in 0..3 {
+        // Up to 8 kills, stopping once a requeued frame was resent: a kill can land on a lane
+        // with nothing in flight (the newest lane idle, as under the sanitizers), which proves
+        // nothing either way.
+        for _ in 0..8 {
+            if pg2.resent_bytes.load(Ordering::Relaxed) > 0 {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(700)).await;
             // R2: only kill while a lane is open, so the kill lands on a lane, not on
             // control (which would cost the session).

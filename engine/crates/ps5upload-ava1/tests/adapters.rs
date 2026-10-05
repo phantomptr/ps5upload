@@ -934,6 +934,13 @@ async fn cancelling_ends_the_busy_wait() {
 /// continues from its durable state and ends byte-exact.
 #[tokio::test(flavor = "multi_thread")]
 async fn periodic_kills_never_strand_an_upload() {
+    // A liveness race against a fixed 2 s kill period: ~6 s natively (3 attempts). Coverage
+    // instrumentation (CARGO_LLVM_COV) makes the reconnect + handshake eat most of each period,
+    // so the race measures the instrumentation, not the code. The resume paths themselves are
+    // covered by `a_killed_session_resumes_the_same_job`.
+    if std::env::var_os("CARGO_LLVM_COV").is_some() {
+        return;
+    }
     let d = temp_dir("periodic-kill");
     let src = d.join("src");
     let total = tree(&src, 1, |_| 32 << 20);
@@ -952,15 +959,8 @@ async fn periodic_kills_never_strand_an_upload() {
     let c = cfg();
     let finalized = c.progress_bytes_finalized.clone().unwrap();
     let (pool2, src2) = (pool.clone(), src.clone());
-    // ~6 s natively. Coverage instrumentation (CARGO_LLVM_COV) slows every handshake against
-    // the same 2 s kill period, so each attempt lands less: give it room there.
-    let bound = if std::env::var_os("CARGO_LLVM_COV").is_some() {
-        240
-    } else {
-        60
-    };
     within(
-        bound,
+        60,
         tokio::task::spawn_blocking(move || {
             upload::upload_dir_in(&pool2, &c, [9; 16], "in", &src2)
         }),
