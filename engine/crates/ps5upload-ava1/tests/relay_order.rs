@@ -31,11 +31,12 @@ async fn a_small_file_after_a_slow_large_one_outlasts_the_wait_bound() {
     write_pattern(&a.join("share/src/a_big"), 3, BIG);
     write_pattern(&a.join("share/src/z_small"), 4, 5);
     let (addr_a, addr_b) = (host(&a, key).await, host(&b, key).await);
-    // Capped so the large file runs well past the knob.
+    // Capped so the large file runs well past the knob: ~10.7 s nominal. 4 MiB/s left too
+    // little margin — socket buffers absorb a few MiB past the cap (5.9 s seen on CI).
     let proxy = ChaosProxy::start(
         addr_a.parse().unwrap(),
         ChaosConfig {
-            bytes_per_sec: Some(4 << 20),
+            bytes_per_sec: Some(3 << 20),
             ..Default::default()
         },
     )

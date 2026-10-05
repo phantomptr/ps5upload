@@ -219,6 +219,9 @@ fn gate(port: u16, max_ms: i32) -> (bool, i32, Duration) {
 
 #[test]
 fn a_second_helper_waits_then_refuses_to_co_run_beside_a_live_receiver() {
+    // The C server is one global (`ava1_server_stop` stops whichever runs): tests that start
+    // it must not overlap, whatever --test-threads the runner (coverage) picks.
+    let _one = CServer::lock_for_shim_tests();
     // "Unverifiable" ends here: whatever the reap decided, a prior that still answers the transfer
     // port means the new instance never starts its AVA1 side.
     let d = tmp("gate");
@@ -248,6 +251,9 @@ fn a_second_helper_waits_then_refuses_to_co_run_beside_a_live_receiver() {
 
 #[test]
 fn a_second_helper_starts_once_the_first_lets_go_of_the_port() {
+    // The C server is one global (`ava1_server_stop` stops whichever runs): tests that start
+    // it must not overlap, whatever --test-threads the runner (coverage) picks.
+    let _one = CServer::lock_for_shim_tests();
     let d = tmp("gate2");
     let peers = CString::new(d.join("peers").to_str().unwrap()).unwrap();
     let port = unsafe {
