@@ -231,13 +231,13 @@ and note that ps5upload bundles UnRAR for `.rar` support, so nixpkgs needs
 `config.allowUnfree = true`:
 
 ```nix
-{ pkgs, fetchTarball, ... }:
+{ pkgs, ... }:
 {
   nixpkgs.config.allowUnfree = true;
 
   environment.systemPackages = [
     (pkgs.callPackage
-      ((fetchTarball
+      ((builtins.fetchTarball
         "https://github.com/GriefNorth/nur-packages/archive/refs/heads/main.tar.gz")
         + "/pkgs/ps5upload")
       { })
