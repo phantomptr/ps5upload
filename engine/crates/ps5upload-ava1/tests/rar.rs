@@ -737,3 +737,82 @@ fn duplicates_and_case_clashes_are_terminal_not_a_fallback() {
     }
     assert_eq!(pool.attempts(), 0);
 }
+
+// ---- R6 (#370): only the packages of a multi-package RAR -------------------------------
+
+fn pkg_like(seed: u8, size: usize) -> Vec<u8> {
+    let mut v = pattern(seed, 0, size);
+    v[..4].copy_from_slice(b"\x7FCNT");
+    v
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_allow_list_unpacks_only_the_packages_from_folders() {
+    for solid in [false, true] {
+        let (d, _, pool) = setup(if solid { "rar-pkgs-solid" } else { "rar-pkgs" }).await;
+        let base = pkg_like(1, 300_000);
+        let patch = pkg_like(2, 120_000);
+        let upper = pkg_like(3, 5_000);
+        let readme = pattern(9, 0, 700);
+        let nfo = pattern(8, 0, 90);
+        let arch = rar5(
+            &[
+                Ent::Dir("Game"),
+                Ent::Dir("Game/Update"),
+                Ent::Dir("docs"),
+                Ent::File("Game/readme.txt", &readme),
+                Ent::File("Game/Base.pkg", &base),
+                Ent::File("Game/Update/Patch.pkg", &patch),
+                Ent::File("docs/info.nfo", &nfo),
+                Ent::File("Loose.PKG", &upper),
+            ],
+            solid,
+        );
+        write(&d.join("m.rar"), &arch);
+        let mut c = cfg();
+        c.excludes = vec!["!*.pkg".into()];
+        let archive = d.join("m.rar");
+        let r = tokio::time::timeout(
+            Duration::from_secs(90),
+            tokio::task::spawn_blocking(move || {
+                upload::upload_rar_in(&pool, &c, [5; 16], "dst", &archive, None)
+            }),
+        )
+        .await
+        .expect("timed out")
+        .unwrap()
+        .unwrap();
+        assert_eq!(r.files_sent, 3, "solid={solid}");
+        let root = d.join("host/share/dst");
+        assert_eq!(std::fs::read(root.join("Game/Base.pkg")).unwrap(), base);
+        assert_eq!(
+            std::fs::read(root.join("Game/Update/Patch.pkg")).unwrap(),
+            patch
+        );
+        assert_eq!(std::fs::read(root.join("Loose.PKG")).unwrap(), upper);
+        // Nothing else came across, and a folder that held no package was not created.
+        assert!(!root.join("Game/readme.txt").exists());
+        assert!(!root.join("docs").exists(), "no empty shell for docs/");
+    }
+}
+
+#[test]
+fn the_package_listing_finds_nested_packages_and_ignores_the_rest() {
+    let d = temp("rar-pkg-list");
+    let patch = pkg_like(2, 100);
+    let arch = rar5(
+        &[
+            Ent::File("a/readme.txt", b"hi"),
+            Ent::File("a/b/One.pkg", &patch),
+            Ent::File("Two.pkg", &patch),
+        ],
+        false,
+    );
+    write(&d.join("l.rar"), &arch);
+    let layout =
+        ps5upload_core::transfer::rar_layout(&d.join("l.rar"), None, &["!*.pkg".to_string()])
+            .unwrap();
+    let mut names: Vec<_> = layout.files.iter().map(|(n, _)| n.clone()).collect();
+    names.sort();
+    assert_eq!(names, ["Two.pkg", "a/b/One.pkg"]);
+}

@@ -44,6 +44,8 @@ mod inspect;
 mod install;
 mod legacy_guard;
 mod legacy_helper;
+#[cfg(not(target_os = "android"))]
+mod link;
 mod local_fs;
 mod log_dedup;
 mod mgmt_route;
@@ -1740,6 +1742,42 @@ struct TransferRarReq {
     excludes: Vec<String>,
     #[serde(default)]
     bandwidth_cap_mbps: Option<f64>,
+    #[serde(default)]
+    password: Option<String>,
+}
+
+/// `/api/link/probe` request (R4, #368). Desktop-only, same gate as the handler.
+#[cfg(not(target_os = "android"))]
+#[derive(Deserialize)]
+struct LinkProbeReq {
+    url: String,
+    #[serde(default)]
+    insecure_tls: bool,
+}
+
+/// `/api/link/download` request: download a link's file to a console folder.
+#[cfg(not(target_os = "android"))]
+#[derive(Deserialize)]
+struct LinkDownloadReq {
+    addr: Option<String>,
+    tx_id: Option<String>,
+    url: String,
+    /// Absolute console folder the file lands in.
+    dest_dir: String,
+    /// Overrides the name the link supplies.
+    #[serde(default)]
+    file_name: Option<String>,
+    #[serde(default)]
+    insecure_tls: bool,
+    #[serde(default)]
+    bandwidth_cap_mbps: Option<f64>,
+}
+
+/// `/api/rar/packages` request. Desktop-only, same gate as the handler.
+#[cfg(not(target_os = "android"))]
+#[derive(Deserialize)]
+struct RarPackagesReq {
+    archive_path: String,
     #[serde(default)]
     password: Option<String>,
 }
@@ -7890,6 +7928,315 @@ async fn transfer_rar_handler() -> impl IntoResponse {
     .into_response()
 }
 
+/// POST /api/rar/packages — desktop only. The `.pkg` entries of a RAR (any folder depth), from
+/// the headers alone, so several packages in one archive can be found before anything is
+/// unpacked (R6, #370). `PKG_ALLOW` is the same allow-list the unpack passes as `excludes`, so
+/// what is listed here is exactly what `/api/transfer/rar` will send.
+#[cfg(not(target_os = "android"))]
+async fn rar_packages_handler(Json(req): Json<RarPackagesReq>) -> impl IntoResponse {
+    let p = req.archive_path.clone();
+    let pw = req.password.clone();
+    let r = tokio::task::spawn_blocking(move || {
+        ps5upload_core::transfer::rar_layout(
+            std::path::Path::new(&p),
+            pw.as_deref(),
+            &[RAR_PKG_ALLOW.to_string()],
+        )
+    })
+    .await;
+    match r {
+        Ok(Ok(layout)) => {
+            let mut packages: Vec<serde_json::Value> = layout
+                .files
+                .iter()
+                .map(|(path, size)| serde_json::json!({ "path": path, "size": size }))
+                .collect();
+            packages.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "packages": packages, "allow": RAR_PKG_ALLOW })),
+            )
+                .into_response()
+        }
+        Ok(Err(e)) => json_err(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
+        Err(e) => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("rar packages task: {e}"),
+        )
+        .into_response(),
+    }
+}
+
+#[cfg(target_os = "android")]
+async fn rar_packages_handler() -> impl IntoResponse {
+    json_err(
+        StatusCode::NOT_IMPLEMENTED,
+        "RAR is not supported on this build",
+    )
+    .into_response()
+}
+
+/// The exclude entry that keeps only packages (see `ps5upload_core::excludes`).
+#[cfg(not(target_os = "android"))]
+const RAR_PKG_ALLOW: &str = "!*.pkg";
+
+/// POST /api/link/probe — desktop only. What a link actually serves: a package, some other
+/// real file, or something that is not a download (R4, #368). Decided from the response, not
+/// the URL's spelling.
+#[cfg(not(target_os = "android"))]
+async fn link_probe_handler(Json(req): Json<LinkProbeReq>) -> impl IntoResponse {
+    let url = req.url.trim().to_string();
+    if !valid_link_url(&url) {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "url must be an http(s) link with no fragment or control characters",
+        )
+        .into_response();
+    }
+    let insecure = req.insecure_tls;
+    match tokio::task::spawn_blocking(move || link::probe(&url, insecure)).await {
+        Ok(Ok(c)) => (StatusCode::OK, Json(c)).into_response(),
+        Ok(Err(e)) => json_err(StatusCode::BAD_GATEWAY, e).into_response(),
+        Err(e) => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("link probe task: {e}"),
+        )
+        .into_response(),
+    }
+}
+
+#[cfg(target_os = "android")]
+async fn link_probe_handler() -> impl IntoResponse {
+    json_err(
+        StatusCode::NOT_IMPLEMENTED,
+        "link downloads are not available in the Android build",
+    )
+    .into_response()
+}
+
+#[cfg(not(target_os = "android"))]
+fn valid_link_url(url: &str) -> bool {
+    url.len() <= 4093
+        && !url.bytes().any(|b| b < 0x20 || b == 0x7f)
+        && !url.contains('#')
+        && url.parse::<axum::http::Uri>().ok().is_some_and(|u| {
+            matches!(u.scheme_str(), Some("http" | "https"))
+                && u.host().is_some_and(|h| !h.is_empty())
+        })
+}
+
+/// POST /api/link/download — desktop only. Download-only (R4, #368): the engine's ranged
+/// fetcher is the AVA1 source, so the link streams to a console folder with nothing staged on
+/// this computer. The link is probed AGAIN here and refused unless it is a real file
+/// download; the client's earlier probe is a convenience, never the authority.
+#[cfg(not(target_os = "android"))]
+async fn link_download_handler(
+    State(state): State<AppState>,
+    Json(req): Json<LinkDownloadReq>,
+) -> impl IntoResponse {
+    let url = req.url.trim().to_string();
+    if !valid_link_url(&url) {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "url must be an http(s) link with no fragment or control characters",
+        )
+        .into_response();
+    }
+    let dest_dir = match link::valid_console_dir(&req.dest_dir) {
+        Ok(d) => d,
+        Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let tx_id = match parse_or_random_tx_id(req.tx_id.as_deref()) {
+        Ok(id) => id,
+        Err(e) => return json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    };
+    let insecure = req.insecure_tls;
+    let probe_url = url.clone();
+    let class = match tokio::task::spawn_blocking(move || link::probe(&probe_url, insecure)).await {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => return json_err(StatusCode::BAD_GATEWAY, e).into_response(),
+        Err(e) => {
+            return json_err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("link probe task: {e}"),
+            )
+            .into_response()
+        }
+    };
+    if class.kind == link::LinkKind::Refused {
+        let msg = class.message.clone().unwrap_or_default();
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": msg,
+                "reason": class.reason,
+            })),
+        )
+            .into_response();
+    }
+    let Some(total) = class.total_size.filter(|t| *t > 0) else {
+        return json_err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "the server did not say how big the file is, so it cannot be streamed to the console",
+        )
+        .into_response();
+    };
+    if !class.ranges {
+        return json_err(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "the server does not support partial downloads (HTTP Range), which streaming to the \
+             console needs. Download the file on this computer and upload it instead.",
+        )
+        .into_response();
+    }
+    let name = req
+        .file_name
+        .as_deref()
+        .map(link::sanitize_name)
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| class.filename.clone());
+    let dest_path = format!("{dest_dir}/{name}");
+
+    let job_id = Uuid::new_v4();
+    telemetry::tag(job_id, "link_download");
+    telemetry::set_drive(job_id, &dest_dir);
+    let started_at_ms = now_ms();
+    // The host only: a link can carry a signed token in its path or query.
+    let host = url
+        .parse::<axum::http::Uri>()
+        .ok()
+        .and_then(|u| u.host().map(str::to_string))
+        .unwrap_or_default();
+    crate::log_info!(
+        "link_download: job={job_id} addr={addr} host={host} dest={dest_path} bytes={total}"
+    );
+    let progress = Arc::new(AtomicU64::new(0));
+    let progress_files = Arc::new(AtomicU64::new(0));
+    let progress_files_finalized = Arc::new(AtomicU64::new(0));
+    let progress_bytes_finalized = Arc::new(AtomicU64::new(0));
+    let ctx = TickerContext {
+        started_at_ms,
+        total_bytes: total,
+        dynamic_total_bytes: None,
+        skipped_files: 0,
+        skipped_bytes: 0,
+    };
+    set_job(
+        &state.jobs,
+        &state.events_tx,
+        job_id,
+        JobState::Running {
+            stage: None,
+            started_at_ms,
+            bytes_sent: 0,
+            total_bytes: total,
+            files: vec![PlannedFile {
+                rel_path: name.clone(),
+                size: total,
+            }],
+            skipped_files: 0,
+            skipped_bytes: 0,
+            files_processing: 0,
+            files_finalized: 0,
+            files_finalizing_total: 0,
+            bytes_finalized: 0,
+        },
+    );
+    let jobs = Arc::clone(&state.jobs);
+    let events_tx = state.events_tx.clone();
+    let stop_ticker = spawn_progress_ticker(
+        Arc::clone(&jobs),
+        events_tx.clone(),
+        job_id,
+        ctx,
+        Arc::clone(&progress),
+        Arc::clone(&progress_files),
+        Arc::clone(&progress_files_finalized),
+        Arc::clone(&progress_bytes_finalized),
+    );
+
+    tokio::task::spawn_blocking(move || {
+        let _stop_guard = TickerStopGuard::new(stop_ticker);
+        let mut fail_guard =
+            JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
+        if fail_job_unless_console_ready(&jobs, &events_tx, job_id, started_at_ms, &addr) {
+            fail_guard.mark_succeeded();
+            return;
+        }
+        let mut cfg = make_transfer_config(&addr);
+        cfg.cancel = Some(register_transfer_cancel(job_id));
+        cfg.progress_bytes = Some(Arc::clone(&progress));
+        cfg.progress_files = Some(Arc::clone(&progress_files));
+        cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
+        cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
+        cfg.progress_live = Some(live_notes_for(job_id));
+        apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
+        let remote = Arc::new(crate::remote_pkg::RemoteSource::new_with_options(
+            url, total, insecure,
+        ));
+        let source = Arc::new(link::LinkSource::new(remote, name.clone(), total));
+        let result = ava1::manifest::single(source.as_ref(), &name)
+            .map_err(anyhow::Error::from)
+            .and_then(|manifest| {
+                // `dest` is the full path: JF_SINGLE_FILE writes `<dest>.ava-part` and
+                // renames it (the same contract `upload_file_in` follows).
+                let mut opts = ava1::send::SendOptions::upload(&dest_path);
+                opts.flags = ava1::gen::JF_SINGLE_FILE;
+                ps5upload_ava1::upload::upload_with(&cfg.addr, tx_id, manifest, source, opts, &cfg)
+            });
+        match result {
+            Ok(r) => {
+                let completed_at_ms = now_ms();
+                set_job(
+                    &jobs,
+                    &events_tx,
+                    job_id,
+                    JobState::Done {
+                        started_at_ms,
+                        completed_at_ms,
+                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                        tx_id_hex: r.tx_id_hex,
+                        bytes_sent: r.bytes_sent,
+                        dest: r.dest,
+                        files_sent: 1,
+                        skipped_files: 0,
+                        skipped_bytes: 0,
+                        commit_ack: serde_json::from_str(&r.commit_ack_body).ok(),
+                    },
+                )
+            }
+            Err(e) => {
+                let completed_at_ms = now_ms();
+                set_job(
+                    &jobs,
+                    &events_tx,
+                    job_id,
+                    job_failed_from_err(started_at_ms, completed_at_ms, &e),
+                )
+            }
+        }
+        fail_guard.mark_succeeded();
+    });
+
+    (
+        StatusCode::ACCEPTED,
+        Json(JobCreated {
+            job_id: job_id.to_string(),
+        }),
+    )
+        .into_response()
+}
+
+#[cfg(target_os = "android")]
+async fn link_download_handler() -> impl IntoResponse {
+    json_err(
+        StatusCode::NOT_IMPLEMENTED,
+        "link downloads are not available in the Android build",
+    )
+    .into_response()
+}
+
 /// POST /api/transfer/file-list
 async fn transfer_file_list_handler(
     State(state): State<AppState>,
@@ -9406,6 +9753,9 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         )
         .route("/api/transfer/rar", post(transfer_rar_handler))
         .route("/api/rar/inspect", post(rar_inspect_handler))
+        .route("/api/rar/packages", post(rar_packages_handler))
+        .route("/api/link/probe", post(link_probe_handler))
+        .route("/api/link/download", post(link_download_handler))
         .route("/api/transfer/file-list", post(transfer_file_list_handler))
         .route("/api/transfer/download", post(transfer_download_handler))
         .route(
