@@ -229,7 +229,7 @@ pub fn human_bytes(bytes: u64) -> String {
 
 // ── The scan ────────────────────────────────────────────────────────
 
-/// Directories this tool needs on the console. The FTX2 `spool` and `tx` folders are gone:
+/// Directories this tool needs on the console. The pre-6.0 helper's `spool` and `tx` folders are gone:
 /// the AVA1 helper never reads them, and the 6.0 upgrade deletes them (listing them here would
 /// flag them missing and the fix would recreate them).
 const TOOL_DIRS: [&str; 3] = [

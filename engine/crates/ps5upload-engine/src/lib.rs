@@ -3143,7 +3143,7 @@ async fn ps5_elfldr_ensure(Json(q): Json<HostQuery>) -> impl IntoResponse {
     }
 }
 
-/// The first time a console answers with the 6.0 helper, delete its FTX2 folders (once per
+/// The first time a console answers with the 6.0 helper, delete the pre-6.0 helper's folders (once per
 /// console, remembered on disk; a failed attempt is retried on a later answer). Background and
 /// best-effort: it never delays or fails the state answer.
 fn spawn_console_upgrade_cleanup(console: String) {

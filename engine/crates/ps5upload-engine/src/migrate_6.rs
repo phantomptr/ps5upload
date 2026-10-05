@@ -5,7 +5,7 @@
 //!
 //! Host side (`run_host`, once per data dir): pre-5.x config files that neither 5.41 nor 6.0
 //! reads move to `<data_dir>/legacy-5x/`. Console side (`clean_console`, once per console, on
-//! the first answer from a 6.0 helper): the FTX2 transfer records and staging folders, which
+//! the first answer from a 6.0 helper): the old transfer records and staging folders, which
 //! the AVA1 helper never reads, are deleted.
 
 use std::path::Path;
@@ -25,7 +25,7 @@ const HOST_LEGACY_FILES: [&str; 5] = [
     "app-config.json",
 ];
 
-/// The FTX2 helper's transfer records and staging area. The AVA1 helper keeps its state under
+/// The pre-6.0 helper's transfer records and staging area. The AVA1 helper keeps its state under
 /// `/data/ps5upload/ava`; nothing reads these any more.
 pub const CONSOLE_LEGACY_DIRS: [&str; 2] = ["/data/ps5upload/tx", "/data/ps5upload/spool"];
 
@@ -85,7 +85,7 @@ pub fn is_not_found(err: &str) -> bool {
     e.contains("errno_2") || e.contains("no such file") || e.contains("not found")
 }
 
-/// Deletes the console's FTX2 folders through `delete` (the engine passes the management
+/// Deletes the pre-6.0 helper's folders on the console through `delete` (the engine passes the management
 /// call). True when every folder is gone, so the console is marked and never asked again.
 pub fn clean_console(delete: impl Fn(&str) -> Result<(), String>) -> bool {
     let mut all = true;
