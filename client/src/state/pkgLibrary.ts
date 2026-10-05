@@ -57,6 +57,7 @@ import { useInstallSettingsStore } from "./installSettings";
 import { useConnectionStore } from "./connection";
 import { log } from "./logs";
 import { pushNotification } from "./notifications";
+import { installErrorLink } from "../lib/installErrorDoc";
 import { useActivityHistoryStore } from "./activityHistory";
 import {
   useLinkInstallPrefs,
@@ -287,8 +288,16 @@ export function statusToOutcome(st: InstallStatus): PkgInstallOutcome {
       // likely cause (a firewall dropping the connection, say) — keep it.
       const reachCheck =
         st.reason === "stream_unreachable" && st.code === 0 && !!st.hint?.trim();
+      // The engine's unreachable-stream hint names the exact cause and the fix
+      // (a container address needs PS5UPLOAD_PKG_HOST_IP or host networking;
+      // a firewall needs a rule). The static wording cannot, so the engine's
+      // text wins whenever it carries that host-IP guidance.
+      const engineHostIpHint =
+        st.reason === "stream_unreachable" && /PS5UPLOAD_PKG_HOST_IP/.test(st.hint ?? "");
       const preferred =
-        !reachCheck && (st.reason ? REASON_GUIDANCE[st.reason]?.[2] : false);
+        !reachCheck &&
+        !engineHostIpHint &&
+        (st.reason ? REASON_GUIDANCE[st.reason]?.[2] : false);
       const guidance = reasonGuidance(st.reason);
       errMessage = preferred
         ? st.code
@@ -1226,6 +1235,7 @@ export function streamUnreachableMessage(rcHex: string, servedFrom: string | nul
     `The PS5 never reached this computer${where} to fetch the package (${rcHex}). ` +
     "Allow ps5upload through this computer's firewall (on Windows, for both Private and Public networks), " +
     "keep the computer and the PS5 on the same network with any VPN off, and set the PS5's Proxy Server to “Do Not Use”. " +
+    "If the address shown is not this computer's LAN address (a VPN, virtual-machine or container address), set PS5UPLOAD_PKG_HOST_IP to the LAN IP and restart the engine. " +
     "Upload & install works without this connection."
   );
 }
@@ -2783,6 +2793,7 @@ const makePkgLibraryStore = () =>
           // if the user navigated away from the Library tab mid-install.
           pushNotification("error", `${label} install failed`, {
             body: mainErr || "The PS5 didn’t confirm the install. Try again.",
+            link: installErrorLink(mainErr),
           });
         }
       } catch (e) {
@@ -2795,7 +2806,10 @@ const makePkgLibraryStore = () =>
           (candidate) => candidate.path === path,
         );
         const label = entry?.title || entry?.contentId || basenameOf(path);
-        pushNotification("error", `${label} install failed`, { body: message });
+        pushNotification("error", `${label} install failed`, {
+          body: message,
+          link: installErrorLink(message),
+        });
         outcome = { ok: false, message };
       } finally {
         set({ installing: false, busyNotice: null });

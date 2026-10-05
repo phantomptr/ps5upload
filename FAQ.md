@@ -109,7 +109,7 @@ Game pkgs (UP / EP / JP / HP / CUSA / PPSA / PCSA / etc.) work fine.
 There is no 32-bit x86 (i386 / i686) build for any desktop OS.
 
 **Q: Which PS5 firmware works?**
-ps5upload is built against PS5 Payload SDK v0.42, which resolves
+ps5upload is built against PS5 Payload SDK v0.43, which resolves
 kernel offsets at startup for every firmware it knows about. The
 same binary runs on the full range **1.00 – 13.60**.
 
@@ -1464,6 +1464,108 @@ on the Install Package screen. A **Stream install** never puts a copy on
 the PS5 at all.
 
 ---
+
+## Install routes: what works for what (support matrix)
+
+Most "the installer is broken" reports are really "this route doesn't work for
+this kind of content on this firmware". Find your content in the left column,
+then use a route marked **works**. Error toasts in the app link here.
+
+The routes:
+
+- **Stream & install** — the PS5 downloads the package from this computer (or
+  the engine) over your network. Nothing is staged on the console.
+- **Upload & install** — the package is copied to the console first and installed
+  from there. A phone can only use this route.
+- **Folder dump + ShadowMount+** — a decrypted game folder on the console's
+  drive, mounted by ShadowMount+. No package, no installer.
+- **exFAT image + ShadowMount+** — the same game as a single `.exfat` /
+  `.ffpkg` image, mounted by ShadowMount+.
+
+| Content | Stream & install | Upload & install | Folder dump + ShadowMount+ | exFAT image + ShadowMount+ |
+|---|---|---|---|---|
+| **PS4 package** (base game) | Works. The most reliable route; PS4 fake packages play on every firmware. | Less reliable than Stream; on FW 13.60 Sony refuses it with `0x80B2116F` (the app re-serves it from the engine for you), and a failed staged re-install of an installed game can remove it. Prefer Stream. | Works (PS4 folder dumps). | Works. |
+| **PS5 package** (fake / FPKG game) | Installs. **On firmware above 11.60 the game installs but cannot be played.** | Same as Stream, plus the FW 13.60 refusal above. | Works for a decrypted PS5 dump — the route people use on 13.60. | Works — also the route used on 13.60. |
+| **PS5 homebrew app** (for example Itemzflow, `IV0002-ITEM00001`) | Works and launches, including on FW 13.60. | Works. | n/a | n/a |
+| **Patch / update** | Works (verified: a PS4 base plus its patch, streamed). Install the base first. | Risky: an update shares its content id with the base game, so a failed fallback can remove the base. Prefer Stream. | n/a — copy the update into the game folder. | n/a |
+| **DLC** | Works after its base is installed. | Works after its base is installed. | n/a | n/a |
+| **FPKG made by Convert** | Same as the content type above. | Same as the content type above. | Convert output is a package, not a folder. | Convert can start from an `.exfat` image. |
+| **Folder dump** | n/a | n/a | **Works** — see "My uploaded game won't launch" for the recipe. | Convert the folder to an `.exfat` image first. |
+
+Firmware notes:
+
+- **FW 13.60:** Stream & install works. Upload & install is refused by Sony
+  with `0x80B2116F`; since 5.41.0 the app retries by re-serving the package
+  from the engine, so you normally only see the error if that also fails.
+  Payloads need SDK 0.43 or newer (this build uses it).
+- **PS5 fake game packages above FW 11.60:** they install, but the game cannot
+  be played. PS4 fake packages and PS5 homebrew apps are not affected. The app
+  warns on Install and Convert when it sees this combination.
+- **Load order matters:** send `elfldr` first, then kstuff, ShadowMount+ and
+  ps5upload. Every package install needs kstuff, ShadowMount+ and the other
+  payloads from the Setup wizard to be running.
+
+### What the common messages mean
+
+- **"This PS5 never reached this computer" (`0x80431064`, `0x80431068`,
+  `0x8041013d`).** The console could not open a connection to the engine.
+  Allow ps5upload through the firewall (on Windows, for both Private and Public
+  networks), keep the PS5 and the computer on the same network with any VPN
+  off, and set the PS5's Proxy Server to "Do Not Use". If the address in the
+  message is not your computer's LAN address (a VPN, virtual-machine or
+  container address), set `PS5UPLOAD_PKG_HOST_IP` to the LAN IP (for example
+  `192.168.1.20`) and restart the engine. In Docker, use host networking or set
+  `PS5UPLOAD_PKG_HOST_IP` to the Docker host's LAN IP and publish port 19113.
+  **Upload & install** works without this connection.
+- **Proxy blocked the stream (`0x80431084`).** In the PS5's network Advanced
+  Settings set Proxy Server to "Do Not Use", or use Upload & install.
+- **`0x80B2116F` (or `0x80B2150F` on FW 5.10).** Sony refused a package the
+  console serves from its own storage. It is a limit of that route, not a
+  problem with the file. Use **Stream & install** from a computer.
+- **`E2-80B22410`.** An error code the PS5's own installer or system software
+  shows; ps5upload does not generate it and we have no confirmed single cause.
+  It has been reported on packages the console would not accept as built.
+  Try Stream & install, make sure the package is complete and matches the
+  console (PS4 vs PS5), and send a bug report from the app if it persists.
+- **`CE-108255-1`.** Another code the PS5 shows itself, usually when a game or
+  app fails to start rather than when an install fails. See "My uploaded game
+  won't launch" below; if it appears right after an install, the checks there
+  apply.
+- **"View product" instead of Play, or "missing base entitlement".** The
+  console treats the title as one you have not bought. An update or DLC
+  installed without its base game, or a package whose entitlement is not
+  present, shows this. Install the base game first, or use a method that
+  doesn't rely on an entitlement (see below).
+- **"This PS4 game isn't playable on PS5".** The console's own message for a
+  PS4 title it will not run. It has been seen with an update installed without
+  its base and with fake-package support not loaded. Install the complete
+  package (base first) with kstuff running, and see "My uploaded game won't
+  launch" below.
+
+## My uploaded game won't launch
+
+This is almost never a bug in ps5upload: the transfer worked, and Sony's side
+refuses to start the title. Check these in order.
+
+1. **A PS5 fake game on firmware above 11.60.** The package installs, but PS5
+   fake game packages can't be played on firmware above 11.60. This is the case
+   for a PS5 game installed from a fake package on FW 11.61, 12.xx or 13.60.
+   PS4 packages are fine, and PS5 homebrew apps (Itemzflow and similar) launch.
+   The app shows a warning for this combination on Install, Convert and when a
+   launch fails. Use a PS4 package, or the folder-dump route below.
+2. **"View product" or "missing base entitlement".** Install the base game
+   before its update or DLC. A package that needs an entitlement the console
+   does not have will always show "View product".
+3. **kstuff or ShadowMount+ is not running.** Launching needs kernel access.
+   The Installed screen says when the helper has none; load kstuff and
+   reconnect. Disc-image titles need ShadowMount+ running.
+4. **Convert to exFAT + ShadowMount+ (reported working on FW 13.60).** Put the
+   decrypted game folder on the console's drive (or convert it to an `.exfat`
+   image with **Convert**), let ShadowMount+ mount it, and launch from the
+   console's home screen. This does not depend on the package installer.
+5. **A launch the app sent is not the same as a game that started.** The
+   console accepts a launch and may take a while on the first start. If the
+   game never appears, close it from the PS5 and start it from there.
 
 ## Troubleshooting
 

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router";
 import { loadBundledDoc } from "../../lib/bundledDoc";
 import { HelpCircle, Search, X } from "lucide-react";
 
@@ -57,7 +58,14 @@ export default function FAQScreen() {
   const tr = useTr();
   const [raw, setRaw] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
+  // `/faq?q=…` opens the FAQ already filtered: error toasts link to the section
+  // that explains them (lib/installErrorDoc.ts).
+  const [searchParams] = useSearchParams();
+  const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
+  const linkedQuery = searchParams.get("q");
+  useEffect(() => {
+    if (linkedQuery !== null) setQuery(linkedQuery);
+  }, [linkedQuery]);
   // Bumping `loadAttempt` re-runs the load effect — used by the
   // retry button so we can recover without a full window reload
   // (which would dump every other tab's in-flight state too).
