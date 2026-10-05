@@ -124,7 +124,7 @@ const CHURN_WINDOW: Duration = Duration::from_secs(120);
 /// A session that ends this soon after `forget` is the engine's own doing, not an eviction.
 const CHURN_FORGET_GRACE: Duration = Duration::from_secs(5);
 
-/// The shared message, also quoted by SPEC.md §8 and CUTOVER.md.
+/// The shared message, also quoted by SPEC.md §8.
 pub const SUPERSEDED_WARNING: &str = "another ps5upload engine using the same identity is connected to this console; the console keeps one session per identity, so the two engines keep evicting each other (give each engine its own data directory, i.e. its own identity)";
 
 /// A cached session and whether its end has been counted yet (the watcher and the lookup

@@ -5,7 +5,7 @@
 //! has to recognise that helper, ask it to exit and wait for its ports to close. This is the only
 //! engine code that speaks the old protocol; the constants are inlined on purpose (no `ftx2-proto`).
 //!
-//! The state and error tokens are stable (the client matches on them): see `protocol/ava1/CUTOVER.md`.
+//! The state and error tokens are stable (the client matches on them): see `protocol/ava1/CLIENT_CONTRACT.md`.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};

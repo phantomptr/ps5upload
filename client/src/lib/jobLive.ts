@@ -14,7 +14,7 @@
 //   settle_files_left/_total      with `settling`: how many files the console still has to make
 //                                 permanent, and the most it had (the "N of M" and the time left)
 //
-// The contract is written down in protocol/ava1/CUTOVER.md.
+// The contract is written down in protocol/ava1/CLIENT_CONTRACT.md.
 
 export type BottleneckCause = "network" | "source" | "disk" | "workers" | "memory";
 
