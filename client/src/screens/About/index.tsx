@@ -95,7 +95,7 @@ export default function AboutScreen() {
           desktop two-column treatment lives below. */}
       <header className="flex flex-col items-center pt-4 pb-10 text-center">
         <img
-          src="/logo-square.png"
+          src={`${import.meta.env.BASE_URL.replace(/\/+$/, "")}/logo-square.png`}
           alt=""
           aria-hidden
           className="mb-5 h-24 w-24 rounded-2xl shadow-[var(--shadow-logo)]"

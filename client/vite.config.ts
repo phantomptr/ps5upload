@@ -39,7 +39,7 @@ const port = Number(process.env.PS5UPLOAD_VITE_PORT) || 1420;
 export default defineConfig({
   plugins: [react(), tailwindcss(), bundledDocs()],
   clearScreen: false,
-  base: "./",
+  base: process.env.VITE_BASE_URL || "./",
   server: {
     port,
     strictPort: true,

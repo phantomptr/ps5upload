@@ -45,6 +45,8 @@ RUN npm ci --silent
 # Now copy the rest of the client source and build
 COPY client/ .
 COPY FAQ.md CHANGELOG.md ../
+ARG PS5UPLOAD_BASE_URL=/
+ENV VITE_BASE_URL=$PS5UPLOAD_BASE_URL
 RUN npm run build:vite
 
 # ── Stage 2: build the Rust engine with embedded web UI ──────────────────────
@@ -82,6 +84,7 @@ RUN mkdir -p /rootfs/tmp /rootfs-data/data && chmod 1777 /rootfs/tmp /rootfs-dat
 
 # ── Stage 3: minimal scratch image ───────────────────────────────────────────
 FROM scratch
+ARG PS5UPLOAD_BASE_URL=/
 COPY --from=builder /build/engine/target/release/ps5upload-engine /ps5upload-engine
 # /tmp: staging for uploaded packages, archive extraction and the like. It
 # is copied as a child of /rootfs because copying a directory applies only
@@ -90,7 +93,7 @@ COPY --from=builder /build/engine/target/release/ps5upload-engine /ps5upload-eng
 # /data/.ps5upload), owned by the runtime user so it is writable.
 COPY --from=builder /rootfs/ /
 COPY --from=builder --chown=65532:65532 /rootfs-data/ /
-ENV HOME=/data TMPDIR=/tmp
+ENV HOME=/data TMPDIR=/tmp PS5UPLOAD_BASE_URL=$PS5UPLOAD_BASE_URL
 # Saved servers (with their encrypted credentials), install history, the
 # artwork cache and the backport library live here. Mount a volume on it so
 # they survive a container upgrade: `-v ps5upload-data:/data`.

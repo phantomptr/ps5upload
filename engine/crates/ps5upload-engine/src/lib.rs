@@ -9834,6 +9834,26 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     #[cfg(feature = "webui")]
     let app = app.fallback(webui::spa_fallback);
 
+    let app = if let Ok(base) = std::env::var("PS5UPLOAD_BASE_URL") {
+        let base = base.trim_end_matches('/');
+        if !base.is_empty() {
+            // Format Base URL
+            let base = if !base.starts_with('/') {
+                format!("/{}", base)
+            } else {
+                base.to_string()
+            };
+            // Create Axum Router using the base URL as a prefix for all routes.
+            axum::Router::new()
+                .nest(&base, app)
+                .route(&format!("{}/", base), get(ui_handler))
+        } else {
+            app
+        }
+    } else {
+        app
+    };
+
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(|origin, request| {
             let Some(host) = request

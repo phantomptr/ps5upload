@@ -90,7 +90,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <RootErrorBoundary>
       {/* react-router 8 removed the react-router-dom package;
           imports come from react-router and react-router/dom. */}
-      <BrowserRouter>
+      <BrowserRouter basename={(import.meta.env.VITE_BASE_URL || "/").replace(/\/+$/, "") || "/"}>
         <App />
       </BrowserRouter>
     </RootErrorBoundary>

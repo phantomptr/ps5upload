@@ -1275,7 +1275,7 @@ export default function AppShell() {
       <div className="h-top-bar flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-raised)] px-3 pb-2 pt-[calc(env(safe-area-inset-top)_+_0.5rem)] shadow-sm md:hidden">
         <NavigationControls />
         <img
-          src="/logo-square.png"
+          src={`${import.meta.env.BASE_URL.replace(/\/+$/, "")}/logo-square.png`}
           alt="PS5Upload"
           className="h-8 w-8 rounded-[0.6rem]"
         />

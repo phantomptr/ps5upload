@@ -137,7 +137,7 @@ async fn lane_killed_mid_chunk_requeues_and_completes() {
                 pg2.lanes.load(Ordering::Relaxed) > 0
             })
             .await;
-            px2.kill_newest();
+            px2.kill_newest_lane();
         }
     });
     let dest = d.join("out.bin");
