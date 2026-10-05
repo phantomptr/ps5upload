@@ -4,6 +4,16 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.1.1
+
+**Smoother recovery after a stalled upload.**
+
+- **Uploads:** an upload that stalls now releases the console's destination, so the retry
+  resumes instead of being refused as busy.
+- **Docker web UI:** can be served under a sub-path with `PS5UPLOAD_BASE_URL`.
+
+---
+
 ## 6.1.0
 
 **Files works like FileZilla.**
