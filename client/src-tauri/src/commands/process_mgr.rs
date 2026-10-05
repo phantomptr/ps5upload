@@ -2,8 +2,7 @@
 //!
 //! Thin Tauri command layer over `ps5upload_core::process_mgr`. The
 //! renderer's Processes screen calls `process_list_get` on a ~2s poll and
-//! `process_kill_pid` per row. `addr` is the management-port address
-//! ("ip:9114"). Confirmation for killing a "system"-classified process
+//! `process_kill_pid` per row. `addr` is the console's host. Confirmation for killing a "system"-classified process
 //! lives in the renderer; this side just relays.
 
 use ps5upload_core::process_mgr::{process_kill, process_list};

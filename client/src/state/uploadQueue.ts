@@ -242,10 +242,10 @@ export interface QueueItem {
    *  done-row average survives an app restart and stays comparable
    *  across runs. */
   bytesPerSec: number;
-  /** P3 / v2.18.0 — apply-phase counters forwarded from JobSnapshot.
-   *  Surface a "Finalized N of M files" pill on the queue row during
-   *  the post-100% commit-apply phase. Both 0 outside the finalize
-   *  phase and on pre-P3 payloads that don't emit APPLY_PROGRESS. */
+  /** Durable-file counters forwarded from JobSnapshot. Surface a
+   *  "Finalized N of M files" pill on the queue row while the console
+   *  makes the last files durable. Both 0 until the console reports its
+   *  first durable file. */
   filesFinalized: number;
   filesFinalizingTotal: number;
   /** Transient live notes (skipping phase, bottleneck, "finishing on the

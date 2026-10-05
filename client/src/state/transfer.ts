@@ -98,9 +98,9 @@ export type TransferPhase =
       /** Reconcile-mode counters. 0 for plain uploads. */
       skippedFiles: number;
       skippedBytes: number;
-      /** P3 / v2.18.0 — post-100% commit-phase counters fed by
-       *  payload's APPLY_PROGRESS frames. Zero outside the
-       *  finalize phase and on old payloads that don't emit. */
+      /** Durable-file counters fed by the console (files and bytes it has
+       *  made durable so far, and the file total). Zero until the console
+       *  reports its first durable file. */
       filesFinalized: number;
       filesFinalizingTotal: number;
       bytesFinalized: number;

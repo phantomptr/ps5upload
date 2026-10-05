@@ -10,7 +10,7 @@ use ps5upload_core::smp::{collect_status, SmpStatus};
 /// One-shot status snapshot. Tauri command — invoked from the
 /// Library tab's SMP panel mount + refresh button.
 ///
-/// `addr` is the management-port address ("ip:9114"). Renderer is
+/// `addr` is the console's host. Renderer is
 /// expected to construct it via the existing `toMgmtAddr` helper.
 ///
 /// Runs on a `spawn_blocking` so we don't tie up the async reactor;

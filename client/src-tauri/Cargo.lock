@@ -1745,14 +1745,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ftx2-proto"
-version = "5.41.0"
-dependencies = [
- "serde",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "futures"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4128,7 +4120,6 @@ dependencies = [
  "blake3",
  "cfb-mode",
  "crc32fast",
- "ftx2-proto",
  "getrandom 0.4.3",
  "hmac",
  "image",

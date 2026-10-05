@@ -330,7 +330,7 @@ pub fn run() {
             commands::companion_probe,
             // ── LAN discovery (mDNS-SD + TCP probe) ─────────────────
             // `discover_ps5` browses well-known mDNS service types
-            // and TCP-probes :9021/:9114 on each discovered host so
+            // and TCP-probes :9021/:9120 on each discovered host so
             // the Connection screen's "Find PS5s" button can populate
             // the IP field automatically. Read-only (we don't
             // advertise ourselves). See commands/discover.rs.

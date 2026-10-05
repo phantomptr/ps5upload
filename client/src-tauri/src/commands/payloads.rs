@@ -334,7 +334,7 @@ const CATALOGUE: &[CatalogueEntry] = &[
         id: "shsrv",
         display_name: "shsrv (telnet shell + ELF launcher + gdb)",
         role: "42-command telnet shell + hbldr + hbdbg",
-        description: "Telnet server on :2323 with 42 POSIX-ish commands (sfoinfo, file, hexdump, find with -exec, etc.) plus hbldr (launch unsigned ELF with full A/V) and hbdbg (gdb-style debugger). Our Shell tab covers the same 42 built-ins via :9114 authenticated FTX2; install shsrv if you want hbldr/hbdbg or you prefer telnet access. Connect via `telnet <ps5-ip> 2323`.",
+        description: "Telnet server on :2323 with 42 POSIX-ish commands (sfoinfo, file, hexdump, find with -exec, etc.) plus hbldr (launch unsigned ELF with full A/V) and hbdbg (gdb-style debugger). Our Shell tab covers the same 42 built-ins over the paired AVA1 session; install shsrv if you want hbldr/hbdbg or you prefer telnet access. Connect via `telnet <ps5-ip> 2323`.",
         repo_host: "github.com",
         repo_owner: "ps5-payload-dev",
         repo_name: "shsrv",

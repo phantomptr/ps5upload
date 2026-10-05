@@ -16,10 +16,10 @@ use tauri::{AppHandle, Emitter};
 
 use crate::DEFAULT_ENGINE_URL;
 
-/// Default PS5 transfer address. The renderer passes `?addr=...` on
+/// Default PS5 address. The renderer passes `?addr=...` on
 /// every call, so this only matters for the few diagnostic endpoints
 /// that don't — same contract as the desktop sidecar's `PS5_ADDR`.
-const DEFAULT_PS5_ADDR: &str = "192.168.137.2:9113";
+const DEFAULT_PS5_ADDR: &str = "192.168.137.2";
 
 /// Bind for the in-process server: every interface, like the desktop
 /// sidecar, so the PS5 can download a package from the phone (Stream &

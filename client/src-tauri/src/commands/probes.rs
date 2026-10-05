@@ -210,7 +210,7 @@ async fn do_payload_send(ip: &str, path: &str, target_port: u16) -> Result<u64, 
         ));
     }
     // Does the ELF we're about to load identify as a ps5upload payload?
-    // Only ps5upload payloads bind :9114/:9113, so only they contend with a
+    // Only ps5upload payloads bind :9120, so only they contend with a
     // running ps5upload — and only they warrant evicting it (below). Other
     // ELFs (the DPI install daemon on :9115, scene tools) bind different
     // ports and can load ALONGSIDE ps5upload, so they must NOT knock it
@@ -245,18 +245,18 @@ async fn do_payload_send(ip: &str, path: &str, target_port: u16) -> Result<u64, 
     // Best-effort old-payload eviction. When the user resends payload
     // bytes to :9021, the PS5 ELF loader spawns a fresh process — but
     // the OLD ps5upload payload is unaware and keeps running. The two
-    // contend for :9114 and the new bind fails, leaving the OLD
-    // payload still answering with whatever its (possibly stale) wire
-    // protocol expects. Symptom users see: "I sent the payload but
-    // installs still fail with read frame header." Send a Shutdown
-    // frame to the existing :9114 first, give it a moment to free
-    // the ports, THEN push the new ELF. No-op when nothing's
-    // listening on :9114 (first send of the session, console
+    // contend for :9120 and the new bind fails, leaving the OLD
+    // payload still answering with whatever its (possibly stale)
+    // behaviour expects. Symptom users see: "I sent the payload but
+    // nothing changed." Send a node.shutdown to the existing helper
+    // first, give it a moment to free the port, THEN push the new
+    // ELF. No-op when nothing's listening on :9120 (first send of the
+    // session, console
     // rebooted, etc) — shutdown_running_payload returns Ok(false)
     // and we proceed normally.
     //
     // GATED on `sending_ps5upload`: we ONLY evict when the incoming ELF is
-    // itself a ps5upload payload (the only thing that contends for :9114).
+    // itself a ps5upload payload (the only thing that contends for :9120).
     // Loading a different-port daemon — e.g. the DPI installer (:9115) —
     // leaves ps5upload running, so an install no longer drops the transfer
     // connection. (On a single-payload loader the loader itself may still
@@ -283,13 +283,13 @@ async fn do_payload_send(ip: &str, path: &str, target_port: u16) -> Result<u64, 
         }
     }
     if target_port == PS5_LOADER_PORT && sending_ps5upload {
-        let mgmt_addr = format!("{ip}:9114");
-        // Off the async runtime — Connection is blocking I/O.
+        let host = ip.to_string();
+        // Off the async runtime — the management call is blocking I/O.
         let _ = tokio::task::spawn_blocking(move || {
-            ps5upload_core::payload_lifecycle::shutdown_running_payload(&mgmt_addr)
+            ps5upload_core::payload_lifecycle::shutdown_running_payload(&host)
         })
         .await;
-        // Brief grace period for the OS to recycle :9114 after the
+        // Brief grace period for the OS to recycle :9120 after the
         // old process exits. 600 ms is enough for the typical FreeBSD
         // close-wait → unbind transition on the PS5 we've measured;
         // anything more would noticeably slow the user-facing send.
@@ -858,7 +858,7 @@ fn memmem_ascii(haystack: &[u8], needle: &[u8]) -> bool {
 
 /// True when the file we're about to send is a ps5upload payload — by
 /// filename (`ps5upload.elf`) or by the ASCII signature embedded in its
-/// section headers. This is the only kind of ELF that binds :9114/:9113
+/// section headers. This is the only kind of ELF that binds :9120
 /// and thus contends with a running ps5upload, so it's the only kind that
 /// should trigger eviction of the current payload. `head` is the leading
 /// chunk of the file (payload_probe / do_payload_send both pass 512 KiB).
