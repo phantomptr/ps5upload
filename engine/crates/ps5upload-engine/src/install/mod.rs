@@ -264,6 +264,33 @@ pub fn refusal_reason(never_fetched: bool, code: u32, route: Route) -> FailReaso
     }
 }
 
+/// Whether a failed install should offer "Retry with Stream".
+///
+/// Only a package the console refused from its own storage qualifies, and only a `console_path`
+/// source (every other source already streams). A patch or add-on shares its base game's
+/// content_id, and every in-process fallback tier re-registers that id and WIPES the base, so
+/// DPI (the installer daemon) is its only safe route: it is offered for those categories only
+/// when the stream goes through the daemon (`via_daemon`). Every route this engine's
+/// `install_handler` runs does, which is why the engine passes `true`; the parameter keeps the
+/// rule explicit and testable.
+pub fn stream_retry_offered(
+    reason: Option<FailReason>,
+    source: &Source,
+    category: &str,
+    via_daemon: bool,
+) -> bool {
+    reason == Some(FailReason::StagedRefused)
+        && matches!(source, Source::ConsolePath(_))
+        && stream_retry_allowed(category, via_daemon)
+}
+
+/// A forced-stream install of a patch/DLC package may only run through the daemon.
+pub fn stream_retry_allowed(category: &str, via_daemon: bool) -> bool {
+    let c = category.to_ascii_lowercase();
+    let shares_base_id = c.ends_with("gp") || c.ends_with("dp") || c.ends_with("ac");
+    via_daemon || !shares_base_id
+}
+
 /// Sony codes measured refusing the staged (Loopback) route while the same
 /// package streamed from a computer installed: 0x80B2116F on FW 9.60 and
 /// 13.60 (the latter from a user whose every install came from a phone, which
@@ -474,6 +501,11 @@ pub struct InstallOptions {
     pub delete_source_copy_after: bool,
     #[serde(default)]
     pub allow_destructive_reinstall: bool,
+    /// Skip the console-local attempt and serve the package from this engine through
+    /// the installer daemon ("Retry with Stream" after 0x80B2116F). Only meaningful for a
+    /// `console_path` source; see [`stream_retry_allowed`].
+    #[serde(default)]
+    pub force_stream: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -538,6 +570,25 @@ pub async fn install_handler(
                     "{path} is the console's own copy of an installed game, update or \
                      add-on, not a package to install. Install from the original .pkg instead."
                 )})),
+            )
+                .into_response();
+        }
+    }
+    if req.options.force_stream {
+        if !matches!(req.source, Source::ConsolePath(_)) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"ok":false,"error":
+                    "force_stream only applies to a package on the console; other sources already stream"})),
+            )
+                .into_response();
+        }
+        // Every route in this handler goes through the installer daemon (DPI).
+        if !stream_retry_allowed(req.category.as_deref().unwrap_or(""), true) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"ok":false,"error":
+                    "a patch or add-on can only be installed through the installer daemon"})),
             )
                 .into_response();
         }
@@ -721,9 +772,19 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         match &req.source {
             Source::ConsolePath(path) => {
                 let (i, p, h) = (ip.clone(), path.clone(), hint_name.clone());
-                let r = tokio::task::spawn_blocking(move || ic::install_path(&i, &p, &h))
-                    .await
-                    .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
+                // "Retry with Stream": the user already saw the console refuse its own
+                // copy, so skip straight to serving it from this engine.
+                let forced = req.options.force_stream;
+                let r = if forced {
+                    Ok(ic::InstallReply::Sony {
+                        code: STAGED_ROUTE_REFUSALS[0],
+                        hint: None,
+                    })
+                } else {
+                    tokio::task::spawn_blocking(move || ic::install_path(&i, &p, &h))
+                        .await
+                        .unwrap_or_else(|e| Err(format!("install task failed: {e}")))
+                };
                 // The console refused the copy it serves itself (0x80B2116F on
                 // FW 9.60/13.60, 0x80B2150F on 5.10: Sony's overwrite/patch
                 // check). The same bytes served from this engine install, so
@@ -745,7 +806,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                                         &sid,
                                     );
                                     crate::log_warn!("{tag}: {block}");
-                                    (r, None, false)
+                                    (if forced { Err(block) } else { r }, None, false)
                                 } else {
                                     route = Route::Stream;
                                     state.jobs.update(&job, |s| s.route = Some(Route::Stream));
@@ -760,7 +821,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                             }
                             Err(e) => {
                                 crate::log_warn!("{tag}: could not serve the console's copy: {e}");
-                                (r, None, false)
+                                (if forced { Err(e) } else { r }, None, false)
                             }
                         }
                     }
@@ -924,7 +985,9 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         state.jobs.update(&job, |s| {
             s.phase = Phase::Failed;
             s.verdict = Some(Verdict::Failed);
-            s.reason = Some(refusal_reason(never_fetched, code, route));
+            let reason = refusal_reason(never_fetched, code, route);
+            s.retry_with_stream = stream_retry_offered(Some(reason), &req.source, &category, true);
+            s.reason = Some(reason);
             s.code = code;
             s.hint = hint.clone();
             s.shortened = shortened;
@@ -1396,6 +1459,50 @@ mod tests {
         ] {
             assert!(!is_installed_content_path(p), "{p}");
         }
+    }
+
+    #[test]
+    fn retry_with_stream_is_offered_only_for_a_staged_refusal_from_the_consoles_own_copy() {
+        let on_console = Source::ConsolePath("/user/data/ps5upload/pkg_library/a.pkg".into());
+        let staged = Some(FailReason::StagedRefused);
+        assert!(stream_retry_offered(staged, &on_console, "PS4GD", true));
+        // Unrelated failures never get the action.
+        for other in [
+            FailReason::SonyRefused,
+            FailReason::StreamUnreachable,
+            FailReason::Stalled,
+        ] {
+            assert!(!stream_retry_offered(
+                Some(other),
+                &on_console,
+                "PS4GD",
+                true
+            ));
+        }
+        assert!(!stream_retry_offered(None, &on_console, "PS4GD", true));
+        // A source that already streams has nothing to retry.
+        let url = Source::Url("http://x/a.pkg".into());
+        assert!(!stream_retry_offered(staged, &url, "PS4GD", true));
+    }
+
+    #[test]
+    fn a_patch_or_addon_gets_retry_with_stream_only_through_the_daemon() {
+        let on_console = Source::ConsolePath("/user/data/ps5upload/pkg_library/p.pkg".into());
+        let staged = Some(FailReason::StagedRefused);
+        for cat in ["PS4DP", "PS5DP", "gp", "PS4AC", "ac"] {
+            // A patch shares its base's content_id; any in-process route wipes the base.
+            assert!(
+                !stream_retry_offered(staged, &on_console, cat, false),
+                "{cat}"
+            );
+            assert!(!stream_retry_allowed(cat, false), "{cat}");
+            assert!(
+                stream_retry_offered(staged, &on_console, cat, true),
+                "{cat}"
+            );
+        }
+        // A base game does not carry that risk.
+        assert!(stream_retry_allowed("PS4GD", false));
     }
 
     #[tokio::test]

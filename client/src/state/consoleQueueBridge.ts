@@ -9,7 +9,7 @@ import type { AddQueueItem } from "./uploadQueue";
 /** What to install and where it comes from. */
 export type InstallRequest =
   /** A package already staged in the library on the PS5. */
-  | { via: "library"; path: string }
+  | { via: "library"; path: string; forceStream?: boolean }
   /** Any package path on the PS5 (File System). */
   | { via: "console-path"; path: string }
   /** A package found on an external drive (External Packages). */

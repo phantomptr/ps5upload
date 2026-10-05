@@ -21,6 +21,7 @@ vi.mock("../api/ps5", () => ({
 vi.mock("../lib/ps5Transfers", () => ({ transferScreenBusy: () => false }));
 
 import {
+  pkgLibraryStore,
   PKG_MAY_NOT_LAUNCH_MESSAGE,
   PKG_PATCH_DID_NOT_APPLY_HINT,
   PKG_PATCH_REGRESSED_HINT,
@@ -28,6 +29,8 @@ import {
   statusToOutcome,
 } from "./pkgLibrary";
 import type { InstallStatus } from "../api/ps5";
+import { registerInstallEnqueuer } from "./consoleQueueBridge";
+import type { InstallRequest } from "./consoleQueueBridge";
 
 /** A minimal terminal status; the tests override the fields under test. */
 function status(over: Partial<InstallStatus>): InstallStatus {
@@ -212,3 +215,46 @@ describe("sampleFromStatus — drives the live progress bar from metrics", () =>
 // Keep a reference to the imported message so an unused-import lint can't fire
 // if a future refactor drops one of the assertions above.
 expect(typeof PKG_MAY_NOT_LAUNCH_MESSAGE).toBe("string");
+
+describe("Retry with Stream (review 015 #04 §3)", () => {
+  it("the outcome carries the retry only when the engine offers it on a failure", () => {
+    const failed = status({
+      phase: "failed",
+      verdict: "failed",
+      reason: "staged_refused",
+      code: 0x80b2116f,
+      retry_with_stream: true,
+    });
+    expect(statusToOutcome(failed).retryWithStream).toBe(true);
+    // An unrelated refusal: the engine does not set it, so no action.
+    const other = status({ phase: "failed", verdict: "failed", reason: "sony_refused", code: 0x80b21401 });
+    expect(statusToOutcome(other).retryWithStream).toBeUndefined();
+    // A success never offers it, whatever the flag says.
+    expect(statusToOutcome(status({ retry_with_stream: true })).retryWithStream).toBeUndefined();
+  });
+});
+
+describe("retryWithStream store action", () => {
+  const HOST = "10.9.9.9";
+  const entry = (path: string, status: "idle" | "installing" | "queued") =>
+    ({ path, status, title: path, lastResult: { ok: false, message: "x", retryWithStream: true } }) as never;
+
+  it("queues the same package once, as a forced stream, and never while it is already queued or running", async () => {
+    const seen: InstallRequest[] = [];
+    registerInstallEnqueuer((input) => {
+      seen.push(input.request);
+      return { id: "q", done: Promise.resolve({ ok: true }) };
+    });
+    const store = pkgLibraryStore(HOST);
+    store.setState({ entries: [entry("/a.pkg", "idle"), entry("/b.pkg", "installing"), entry("/c.pkg", "queued")] });
+    expect((await store.getState().retryWithStream("/a.pkg", HOST)).ok).toBe(true);
+    expect(seen).toEqual([{ via: "library", path: "/a.pkg", forceStream: true }]);
+    // The failure that offered the button is cleared as the retry starts.
+    expect(store.getState().entries.find((e) => e.path === "/a.pkg")?.lastResult).toBeUndefined();
+    for (const p of ["/b.pkg", "/c.pkg"]) {
+      const r = await store.getState().retryWithStream(p, HOST);
+      expect(r.ok).toBe(false);
+    }
+    expect(seen).toHaveLength(1);
+  });
+});

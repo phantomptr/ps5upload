@@ -5479,7 +5479,12 @@ export interface InstallRequestBody {
   title_id?: string | null;
   package_app_ver?: string | null;
   category?: string | null;
-  options?: { delete_source_copy_after?: boolean; allow_destructive_reinstall?: boolean };
+  options?: {
+    delete_source_copy_after?: boolean;
+    allow_destructive_reinstall?: boolean;
+    /** Skip the console-local attempt and serve the package through Stream (console_path only). */
+    force_stream?: boolean;
+  };
 }
 
 export interface InstallStatus {
@@ -5505,6 +5510,9 @@ export interface InstallStatus {
   app_ver_after: string | null;
   patch_verdict: string | null;
   shortened: boolean;
+  /** The PS5 refused a package from its own storage and the engine can safely send it through
+   *  Stream: offer "Retry with Stream". Absent from an older engine. */
+  retry_with_stream?: boolean;
   started_at: number;
   updated_at: number;
 }

@@ -109,6 +109,7 @@ function PkgRow({
   selectedForInstallAll,
   onSelectAlternative,
   onInstall,
+  onRetryStream,
   onDelete,
   onView,
 }: {
@@ -121,6 +122,8 @@ function PkgRow({
   selectedForInstallAll?: boolean;
   onSelectAlternative?: () => void;
   onInstall: () => void;
+  /** Re-run a refused package through Stream (shown only when the engine offers it). */
+  onRetryStream?: () => void;
   onDelete: () => void;
   /** Open the package viewer on this row's original file (when known). */
   onView?: () => void;
@@ -380,6 +383,21 @@ function PkgRow({
                 ? tr("pkglib.reinstall", "Reinstall")
                 : tr("pkglib.install", "Install")}
             </Button>
+            {entry.lastResult?.retryWithStream && onRetryStream && (
+              <Button
+                variant="primary"
+                size="sm"
+                leftIcon={<Download size={13} />}
+                onClick={onRetryStream}
+                title={tr(
+                  "pkglib.retry_stream_hint",
+                  undefined,
+                  "Send this package from the PS5's own storage through Stream instead. The PS5 refused it the other way (0x80b2116f); the package is not copied again.",
+                )}
+              >
+                {tr("pkglib.retry_stream", undefined, "Retry with Stream")}
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -572,6 +590,7 @@ export default function InstallPackageScreen() {
   const install = usePkgLibrary(host, (s) => s.install);
   const installAll = usePkgLibrary(host, (s) => s.installAll);
   const installStream = usePkgLibrary(host, (s) => s.installStream);
+  const retryWithStream = usePkgLibrary(host, (s) => s.retryWithStream);
   // How this console should fetch a link, remembered per host — the right
   // answer follows the link, and two consoles can sit behind different ones.
   const linkMode = useLinkInstallPrefs((s) => s.modeFor(host));
@@ -1280,6 +1299,7 @@ export default function InstallPackageScreen() {
           alternativeKey ? () => toggleAlternative(entry) : undefined
         }
         onInstall={() => void handleInstall(entry)}
+        onRetryStream={() => void retryWithStream(entry.path, host)}
         onDelete={() => void handleDelete(entry)}
         onView={() => setViewEntry(entry)}
       />
