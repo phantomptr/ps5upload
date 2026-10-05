@@ -982,7 +982,7 @@ test-payload: payload
 	@echo "Running FTP lifecycle self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
 		-o /tmp/ps5upload-ftp-lifecycle-selftest \
-		$(PAYLOAD_DIR)/tests/ftp_lifecycle_selftest.c
+		$(PAYLOAD_DIR)/tests/ftp_lifecycle_selftest.c $(PAYLOAD_DIR)/src/path_policy.c
 	@/tmp/ps5upload-ftp-lifecycle-selftest
 	@echo "✓ FTP stop/start drains sessions without stale listeners or fd reuse"
 	@echo "Running FTP trust-store self-test (host build)..."
