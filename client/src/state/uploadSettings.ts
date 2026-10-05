@@ -24,6 +24,13 @@ const KEY_KEEP_PS5_AWAKE = "ps5upload.keep_ps5_awake";
 const KEY_AUTO_REDEPLOY_ON_WAKE = "ps5upload.auto_redeploy_on_wake";
 const KEY_SYSTEM_FILE_READ = "ps5upload.system_file_read";
 
+// 6.0 upgrade: 5.x saved a user-picked stream count here. AVA1 sizes its lanes itself, so the
+// setting is gone and its stale value is dropped once (every other setting carries over as is).
+const RETIRED_KEYS = ["ps5upload.upload_streams"];
+if (typeof window !== "undefined") {
+  for (const k of RETIRED_KEYS) safeRemoveItem(k);
+}
+
 function loadAlwaysOverwrite(): boolean {
   if (typeof window === "undefined") return false;
   return safeGetItem(KEY_ALWAYS_OVERWRITE) === "true";

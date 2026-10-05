@@ -49,6 +49,7 @@ mod link;
 mod local_fs;
 mod log_dedup;
 mod mgmt_route;
+mod migrate_6;
 mod pkg_install;
 mod pkg_sidecar;
 mod remote;
@@ -3142,6 +3143,41 @@ async fn ps5_elfldr_ensure(Json(q): Json<HostQuery>) -> impl IntoResponse {
     }
 }
 
+/// The first time a console answers with the 6.0 helper, delete its FTX2 folders (once per
+/// console, remembered on disk; a failed attempt is retried on a later answer). Background and
+/// best-effort: it never delays or fails the state answer.
+fn spawn_console_upgrade_cleanup(console: String) {
+    static RUNNING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    let Some(dir) = crate::remote::store::data_dir() else {
+        return;
+    };
+    let host = console_addr(&console);
+    if !migrate_6::console_pending(&dir, &host) {
+        return;
+    }
+    {
+        let mut running = RUNNING.lock().unwrap_or_else(|e| e.into_inner());
+        if running.contains(&host) {
+            return;
+        }
+        running.push(host.clone());
+    }
+    tokio::task::spawn_blocking(move || {
+        let done = migrate_6::clean_console(|path| {
+            fs_delete_with_op_id(&host, path, 0, Some(std::time::Duration::from_secs(300)))
+                .map_err(|e| format!("{e:#}"))
+        });
+        if done {
+            migrate_6::mark_console_done(&dir, &host);
+            crate::log_info!("6.0 upgrade: removed the old transfer folders on {host}");
+        }
+        RUNNING
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|h| h != &host);
+    });
+}
+
 /// GET /api/ps5/helper/state?host= — `{"state": "ava1" | "helper_old" | "starting" | "ava1_failed" | "not_running"}`: whether the
 /// console runs an AVA1 helper, an older helper that only speaks the old protocol (the UI offers
 /// the one-click update), or nothing (the usual send-payload flow). A TCP-level answer: pairing is
@@ -3149,10 +3185,14 @@ async fn ps5_elfldr_ensure(Json(q): Json<HostQuery>) -> impl IntoResponse {
 async fn ps5_helper_state(Query(q): Query<HostQuery>) -> impl IntoResponse {
     // The client sends `[v6]:port` for an IPv6 console; the probes add their own ports.
     let host = legacy_guard::key(&q.host);
+    let console = host.clone();
     let r = tokio::task::spawn_blocking(move || {
         legacy_helper::state(&host, legacy_helper::Ports::default())
     })
     .await;
+    if matches!(r, Ok(legacy_helper::AVA1)) {
+        spawn_console_upgrade_cleanup(console);
+    }
     match r {
         Ok(s) => (StatusCode::OK, Json(serde_json::json!({ "state": s }))).into_response(),
         Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
@@ -9419,6 +9459,17 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     for (new, old) in [ZIP_RAM_THRESHOLD_ENV, ARCHIVE_STAGE_ENV] {
         if renamed_env(new, old).is_some() {
             crate::log_info!("{new} is set; archives stream now, so it has no effect");
+        }
+    }
+    // One-time 6.0 upgrade clean-up of files no 6.x code reads (moved aside, never deleted).
+    if let Some(dir) = crate::remote::store::data_dir() {
+        let moved = migrate_6::run_host(&dir);
+        if !moved.is_empty() {
+            crate::log_info!(
+                "6.0 upgrade: moved old files nothing reads any more to {}: {}",
+                dir.join("legacy-5x").display(),
+                moved.join(", ")
+            );
         }
     }
     // SPEC.md §14.3: expire old AVA1 job directories at start and then daily.
