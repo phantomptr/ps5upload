@@ -2,7 +2,7 @@
 /**
  * scripts/gen-fixtures.mjs
  *
- * Generate local fixture trees consumed by bench/run-ftx2-sweep.mjs.
+ * Generate local fixture trees consumed by bench/run-sweep.mjs.
  * Profiles are declared in bench/profiles.mjs. Fixtures land under
  * bench/fixtures/<profile-name>/ (gitignored).
  *

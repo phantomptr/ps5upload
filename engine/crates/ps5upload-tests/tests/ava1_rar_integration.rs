@@ -1,6 +1,6 @@
 //! AVA1 integration tests for the `.rar` upload path. They replace `transfer_rar_integration.rs`.
 //! The load-bearing one is equivalence: what lands on the console must be exactly what the
-//! host-side extractor produces from the same archive (the old test compared two FTX2 paths,
+//! host-side extractor produces from the same archive (the old test compared two upload paths,
 //! staged and streamed; the staged path no longer exists, so the oracle is the extractor).
 
 #![cfg(not(target_os = "android"))]

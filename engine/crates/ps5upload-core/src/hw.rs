@@ -1,4 +1,4 @@
-//! Hardware monitoring over FTX2.
+//! Hardware monitoring over AVA1 management.
 //!
 //! Three RPCs — HW_INFO / GET_TEMPS / GET_POWER_INFO:
 //!   - [`hw_info`] returns static info (model, serial, OS, RAM, CPU count).

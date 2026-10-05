@@ -190,8 +190,8 @@ async fn reap_orphan_listener_on(port: u16) {
         // can't collide with our port). Then `findstr /C:":%PORT% "`
         // is a *literal* match anchored by a trailing space: that
         // pins it to the end of the local-address column and stops
-        // `:9113` from also matching a `:91130`-style neighbour or a
-        // bare `9113` substring elsewhere on the line. The old
+        // `:19113` from also matching a `:191130`-style neighbour or a
+        // bare `19113` substring elsewhere on the line. The old
         // `findstr :%PORT%` was an unanchored substring search and
         // could taskkill an unrelated PID.
         (

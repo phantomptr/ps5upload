@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use ps5upload_core::transfer::{transfer_file_path, TransferConfig};
+use ps5upload_core::transfer::TransferConfig;
 use ps5upload_engine::scan_external_pkgs;
 
 fn env(k: &str) -> Option<String> {
@@ -23,17 +23,18 @@ fn live_scan_external_usb() {
         None => return,
     };
     let pkg = env("PS5UPLOAD_LIVE_PKG").expect("set PS5UPLOAD_LIVE_PKG");
-    let mgmt = format!("{ip}:9114");
-    let tx = format!("{ip}:9113");
+    // AVA1 has one port; the engine and the core take the bare host.
+    let mgmt = ip.clone();
     let dest = "/mnt/usb0/ps5upload-scan-test.pkg";
 
     println!("staging {pkg} -> {dest} (on the USB drive)");
-    let cfg = TransferConfig::new(tx);
+    let cfg = TransferConfig::new(ip.clone());
     let txid: [u8; 16] = [
         0x05, 0x05, 0x10, 0xad, 0x00, 0x01, 0x65, 0x00, 0xde, 0xad, 0xbe, 0xef, 0x00, 0x00, 0x00,
         0x07,
     ];
-    let r = transfer_file_path(&cfg, txid, dest, Path::new(&pkg)).expect("transfer to /mnt/usb0");
+    let r = ps5upload_ava1::upload::upload_file(&cfg, txid, dest, Path::new(&pkg))
+        .expect("transfer to /mnt/usb0");
     println!("  staged {} bytes", r.bytes_sent);
 
     println!("\nscanning external drives…");

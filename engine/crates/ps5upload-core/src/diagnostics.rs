@@ -198,7 +198,7 @@ pub fn crc32_file(addr: &str, path: &str) -> Result<Crc32FileResult> {
         },
     ) {
         Ok(resp) => Ok(serde_json::from_slice(&resp)?),
-        // The FTX2 handler answered a failure as a normal ack carrying `err`; keep that shape
+        // The legacy handler answered a failure as a normal ack carrying `err`; keep that shape
         // for a job the console ran and could not finish (a missing file, a refused path).
         Err(e) => match e.downcast_ref::<mgmt::MgmtError>() {
             Some(m) if m.status != 0 => Ok(Crc32FileResult {

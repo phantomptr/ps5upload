@@ -10,7 +10,6 @@ blake3.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 flate2 = "1"
-ftx2-proto = { path = "../ftx2-proto" }
 ps5upload-core = { path = "../ps5upload-core" }
 ava1 = { path = "../ava1" }
 ava1-chaos = { path = "../ava1-chaos" }

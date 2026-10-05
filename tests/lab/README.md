@@ -26,25 +26,17 @@ addresses in a local env file rather than editing these scripts.
 ## What's here
 
 **Runtime state** — `hello-runtime.sh`, `status-runtime.sh`,
-`check-runtime-port.sh`, `smoke-runtime.sh`
-
-**Transactions** — `begin-tx.sh`, `query-tx.sh`, `abort-tx.sh`,
-`exercise-tx-stub.sh`, `full-cycle.sh`
+`check-runtime-port.sh`, `smoke-runtime.sh` (the first two call
+`ps5upload-lab hello` / `status`)
 
 **Payload lifecycle** — `send-payload.sh`, `shutdown-runtime.sh`,
-`takeover-runtime.sh`, `verify-takeover.sh`,
-`reload-and-verify-takeover.sh`, `reload-and-verify-replay.sh`
+`reload-and-verify-takeover.sh`
 
-**Diagnostics** — `capture-runtime-trace.sh`, the legacy-protocol probes,
-`elev_probe`
+**Diagnostics** — `capture-runtime-trace.sh`, `elev_probe`
 
-**Install/launch probes** — `test_install_launch.py`,
-`test_launch_only.py`
-
-The legacy-protocol probes are a baseline kept until the cutover
-release is out, then removed; they speak the old protocol and do not
-work against a current helper. For current checks use the engine's HTTP
-API or `../smoke-hardware.mjs`.
+For anything else, use `ps5upload-lab` (see `engine/crates/ps5upload-lab`):
+every command goes over AVA1, takes the console's host, and accepts a
+trailing `:port` that it ignores.
 
 ## Don't delete these because nothing calls them
 

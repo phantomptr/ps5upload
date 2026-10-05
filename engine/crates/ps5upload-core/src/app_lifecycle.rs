@@ -122,7 +122,7 @@ pub fn toast_send(addr: &str, req: &ToastRequest) -> Result<ToastSendAck> {
     });
     let body = serde_json::to_vec(&body)?;
     // toast.send: over 4 KiB the payload answers ERR_PROTOCOL "body_too_large" (a refusal, an error here);
-    // `{"ok":false,"code":N}` (daemon offline) comes back as the body, as FTX2 delivered it.
+    // `{"ok":false,"code":N}` (daemon offline) comes back as the body, as the handler built it.
     let resp = mgmt::call_keep(addr, m::TOAST_SEND, "TOAST_SEND", &body)?;
     let parsed: ToastSendAck = serde_json::from_slice(&resp)?;
     if !parsed.ok {

@@ -2,8 +2,8 @@
 /**
  * tests2/smoke-hardware.mjs
  *
- * Real-hardware smoke test for the FTX2 engine + PS5 payload.
- * Requires a live PS5 at PS5_ADDR (default 192.168.137.2:9113) and
+ * Real-hardware smoke test for the engine + PS5 payload.
+ * Requires a live PS5 at PS5_ADDR (default 192.168.137.2) and
  * ps5upload-engine running at ENGINE_URL (default http://127.0.0.1:19113).
  *
  * Usage:
@@ -11,7 +11,7 @@
  *
  * Options:
  *   --engine-url=URL       engine HTTP base URL  (default: http://127.0.0.1:19113)
- *   --ps5-addr=HOST:PORT   PS5 FTX2 address      (default: 192.168.137.2:9113)
+ *   --ps5-addr=HOST        PS5 address (a :port suffix is ignored) (default: 192.168.137.2)
  *   --dest-root=PATH       destination on PS5    (default: /data/ps5upload-smoke)
  *   --spawn-engine         spawn engine via cargo run if not already up
  *   --no-cleanup           skip tmp dir removal on exit
@@ -33,7 +33,7 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 
 const DEFAULT_ENGINE_URL = 'http://127.0.0.1:19113';
-const DEFAULT_PS5_ADDR = '192.168.137.2:9113';
+const DEFAULT_PS5_ADDR = '192.168.137.2';
 // All test uploads live under a single per-drive sandbox so the user can
 // wipe them with one CLEANUP call, e.g. POST /api/ps5/cleanup
 // {"path":"/data/ps5upload/tests"}. To target an M.2 or USB drive instead,
@@ -101,10 +101,6 @@ function tryParse(text) {
   try { return JSON.parse(text); } catch { return text; }
 }
 
-function mgmtAddrFor(transferAddr) {
-  const i = transferAddr.lastIndexOf(':');
-  return i < 0 ? `${transferAddr}:9114` : `${transferAddr.slice(0, i)}:9114`;
-}
 
 async function pollJob(engineUrl, jobId, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
@@ -173,7 +169,7 @@ async function main() {
   const opts = parseArgs(process.argv.slice(2));
   log(`engine: ${opts.engineUrl}`);
   log(`ps5:    ${opts.ps5Addr}`);
-  const ps5MgmtAddr = mgmtAddrFor(opts.ps5Addr);
+  const ps5MgmtAddr = opts.ps5Addr;
   log(`ps5 fs: ${ps5MgmtAddr}`);
   log(`dest:   ${opts.destRoot}`);
 
@@ -365,13 +361,13 @@ async function main() {
 
       const job = await pollJob(opts.engineUrl, jobId, opts.jobTimeoutMs);
       if (job.status === 'done') {
-        const shards = Number(job.shards_sent ?? 0);
-        pass(`multi-shard file transfer (job ${jobId}, ${shards} shards, ${Number(job.elapsed_ms ?? 0)} ms)`);
+        const files = Number(job.files_sent ?? 0);
+        pass(`large file transfer (job ${jobId}, ${files} file(s), ${Number(job.elapsed_ms ?? 0)} ms)`);
       } else {
-        fail('multi-shard file transfer', `job ${jobId} failed: ${job.error ?? JSON.stringify(job)}`);
+        fail('large file transfer', `job ${jobId} failed: ${job.error ?? JSON.stringify(job)}`);
       }
     } catch (e) {
-      fail('multi-shard file transfer', e.message);
+      fail('large file transfer', e.message);
     }
 
     // ── 6. File-list transfer (3 explicit src→dest pairs) ─────────────────

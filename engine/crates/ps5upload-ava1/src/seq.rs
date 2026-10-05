@@ -36,15 +36,14 @@ pub enum SevenzFault {
     #[error("the 7z archive has an unsafe entry path: {0}")]
     UnsafePath(String),
     /// A solid block with stream-less entries between its files (the crate's walk would
-    /// drop files); never falls back to FTX2, which would drop them too.
+    /// drop files); the archive is refused rather than partly uploaded.
     #[error("{}", ps5upload_core::transfer::SEVENZ_LAYOUT_UNSUPPORTED)]
     UnsupportedLayout,
-    /// An unsupported coder method or header feature (the engine falls back to FTX2).
+    /// An unsupported coder method or header feature (the engine fails the job with `7z_unsupported`).
     #[error("the 7z archive is not usable as an AVA1 source: {0}")]
     Unsupported(String),
     /// A duplicate name, a path that is both a file and a directory, or a decoder memory
-    /// limit: FTX2 has the same problem (it writes both duplicates, or hits the same
-    /// limit), so this is terminal (`ava1_7z_unsupported`), never a fallback.
+    /// limit: retrying cannot fix it, so this is terminal (`ava1_7z_unsupported`).
     #[error("the 7z archive cannot be uploaded: {0}")]
     Conflict(String),
 }
@@ -450,7 +449,7 @@ impl SeqSource for SevenzSource {
             }
             if !reached_last {
                 // Stream-less entries inside a folder were refused at open, so this is a
-                // damaged archive (or a crate change), which FTX2 would hit too.
+                // damaged archive (or a crate change), which any decoder would hit.
                 return Err(short_folder(j, members.len()));
             }
         }
@@ -523,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn only_coder_methods_may_fall_back_to_ftx2() {
+    fn only_coder_methods_are_unsupported_rest_are_conflicts() {
         let mem = SzError::MaxMemLimited {
             max_kb: 1,
             actaul_kb: 2,

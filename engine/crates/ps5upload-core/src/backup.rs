@@ -1,4 +1,4 @@
-//! Tag-based backup & restore over FTX2.
+//! Tag-based backup & restore over AVA1 management.
 //!
 //! Snapshots are stored on the PS5 at
 //! `/data/ps5upload/backups/<tag>/<unix_timestamp>/`. Each snapshot has

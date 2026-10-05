@@ -19,11 +19,29 @@ use std::time::Duration;
 
 use serde::Serialize;
 
+use ps5upload_core::diagnostics::fs_write_bytes;
 use ps5upload_core::fs_ops::{
-    fs_copy_with_timeout, fs_mkdir, fs_read_with_timeout, list_dir_with_timeout, ListDirOptions,
+    fs_mkdir, fs_read_with_timeout, list_dir_with_timeout, ListDirOptions,
 };
 
-/// Per-call deadline. FS_COPY of an icon0.png (~256 KB typical) plus
+/// The largest file this command copies (an `icon0.png` is ~256 KB, `param.json` ~4 KB). A bigger
+/// `snd0.at9` is skipped as an error rather than copied in many writes.
+const HEAL_COPY_MAX: u64 = 4 * 1024 * 1024;
+
+/// Copies one small file on the console: read it, write it. (The console-side copy is an AVA1
+/// job that needs the engine's session; these files are small enough to go through management.)
+fn copy_small_file(addr: &str, src: &str, dst: &str) -> Result<(), String> {
+    let bytes = fs_read_with_timeout(addr, src, 0, HEAL_COPY_MAX + 1, Some(RPC_TIMEOUT), false)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > HEAL_COPY_MAX {
+        return Err(format!("{src} is larger than {HEAL_COPY_MAX} bytes"));
+    }
+    fs_write_bytes(addr, dst, &bytes, false)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Per-call deadline. Copying an icon0.png (~256 KB typical) plus
 /// its accompanying param.json (~4 KB) finishes in well under 5s on
 /// a healthy LAN; this caps the worst case where the PS5 is
 /// thrashing under another workload.
@@ -63,7 +81,7 @@ pub struct HealResult {
 
 /// Heal /user/appmeta/<TITLE_ID>/ for a single title.
 ///
-/// `addr` — management-port address ("ip:9114").
+/// `addr` — the console's host.
 /// `title_id` — e.g. "CUSA12345" or "PPSA01234".
 /// `source_path` — absolute path on the PS5 to the game folder
 ///                 containing `sce_sys/`. Caller can pass either
@@ -169,7 +187,7 @@ fn run_heal(addr: &str, title_id: &str, source_path: &str) -> Result<HealResult,
             });
             continue;
         }
-        match fs_copy_with_timeout(addr, &src, &dst, Some(RPC_TIMEOUT)) {
+        match copy_small_file(addr, &src, &dst) {
             Ok(()) => {
                 outcomes.push(HealOutcome {
                     file: (*file).to_string(),
@@ -182,7 +200,7 @@ fn run_heal(addr: &str, title_id: &str, source_path: &str) -> Result<HealResult,
                 outcomes.push(HealOutcome {
                     file: (*file).to_string(),
                     status: "error".into(),
-                    error: Some(e.to_string()),
+                    error: Some(e),
                 });
                 errors += 1;
             }

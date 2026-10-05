@@ -312,8 +312,9 @@ Three layers:
   Port 9120 (AVA1). Handles transfers, BLAKE3 verification, mount
   pipelines, FS ops and every management call. The protocol spec is
   [`protocol/ava1/SPEC.md`](protocol/ava1/SPEC.md).
-- **`engine/`** — Rust workspace with the protocol types, transfer
-  logic, HTTP service, lab CLI, mock server, and benchmarks.
+- **`engine/`** — Rust workspace with the AVA1 protocol, transfer
+  logic, HTTP service, lab CLI (with its benchmarks), and the
+  loopback test console.
 - **`client/`** — Tauri 2 desktop app. Tauri IPC commands proxy to the
   sidecar HTTP engine, keeping the engine usable from CLI / CI too.
 

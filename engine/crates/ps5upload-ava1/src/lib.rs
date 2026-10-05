@@ -3,7 +3,7 @@
 //! functions, so benchmarks exercise exactly what the app runs.
 //!
 //! The functions here are blocking: call them from `spawn_blocking` or a non-async
-//! thread, exactly like the FTX2 functions they replace. Calling them from inside an
+//! thread, exactly like the functions they replaced. Calling them from inside an
 //! async task panics (`block_on` has tokio's "Cannot start a runtime from within a
 //! runtime" behaviour — C15).
 
@@ -38,7 +38,7 @@ pub use upload::{PostCommitError, PostCommitKind};
 /// That fallback runtime is built once and lives for the process.
 ///
 /// Calling this from inside an async task panics — tokio refuses to nest a runtime in
-/// an async execution context — which is the same behaviour the blocking FTX2
+/// an async execution context — which is the same behaviour the earlier blocking
 /// functions have, and why the upload adapters must be called from `spawn_blocking`.
 /// Inside a runtime, that runtime must be a multi-thread one (the engine's is).
 pub fn block_on<F: std::future::Future>(f: F) -> F::Output {

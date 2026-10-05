@@ -51,7 +51,7 @@ jobs:
         run: node scripts/update-version.js --check
 
   # ─────────────────────────────────────────────────────────────────────
-  # Rust workspace (engine + core + ftx2-proto). Format, clippy, tests.
+  # Rust workspace (engine, core, AVA1 crates). Format, clippy, tests.
   # Gates PRs that touch any Rust code.
   # ─────────────────────────────────────────────────────────────────────
   rust-engine:
@@ -137,7 +137,7 @@ jobs:
       - name: C frame AEAD (RFC 8439 + Monocypher differential, AVX2 and portable paths)
         run: scripts/ava1-aead-test.sh
 
-      - name: No FTX2 or ports 9113/9114 in the guides, client and engine
+      - name: No FTX2 or ports 9113/9114 outside the payload
         run: make check-no-ftx2
 
       - name: Fuzz C decoders + data-plane parsers (60 s each)

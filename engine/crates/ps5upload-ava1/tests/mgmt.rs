@@ -24,10 +24,6 @@ const T: Duration = Duration::from_secs(10);
 const JOB_CANCEL: ps5upload_core::mgmt::Method = ps5upload_core::mgmt::Method {
     id: gen::METHOD_JOB_CANCEL,
     label: "FS_OP_CANCEL",
-    ftx2: Some((
-        ftx2_proto::FrameType::FsOpCancel,
-        ftx2_proto::FrameType::FsOpCancelAck,
-    )),
 };
 
 fn temp(tag: &str) -> PathBuf {
@@ -85,7 +81,7 @@ async fn console(tag: &str, handler: RpcHandler) -> (Arc<AvaTransport>, &'static
     let pool: &'static Pool = Box::leak(Box::new(Pool::new(ava).with_addr(addr)));
     let t = AvaTransport::with_pool(pool).with_busy_delays([Duration::from_millis(5); 3]);
     // The console string is only a key: the pool resolves it to the loopback address.
-    (Arc::new(t), pool, format!("{tag}-console:9114"))
+    (Arc::new(t), pool, format!("{tag}-console"))
 }
 
 /// `AvaTransport::call` is blocking (it is called from `spawn_blocking` in the engine).
@@ -451,7 +447,7 @@ async fn a_read_stops_at_eof_and_continues_after_a_short_read() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_read_never_asks_past_the_ftx2_ceiling() {
+async fn a_read_never_asks_past_the_per_call_ceiling() {
     let file = file_bytes(3 * 1024 * 1024);
     let calls = Arc::new(Mutex::new(Vec::new()));
     let (t, _p, c) = console("ceiling", read_server(file.clone(), usize::MAX, calls)).await;
@@ -613,7 +609,7 @@ async fn a_failed_chunk_stops_the_write_and_a_create_refusal_reads_as_the_legacy
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_write_over_the_ftx2_ceiling_is_refused_like_before() {
+async fn a_write_over_the_per_call_ceiling_is_refused_like_before() {
     let (t, _p, c) = console("wbig", write_server(Arc::default(), None)).await;
     let e = call(
         &t,
@@ -719,7 +715,7 @@ async fn a_console_without_cap_mgmt_is_helper_not_ava1_without_a_request() {
     tokio::spawn(server::serve(l, Arc::new(ctx)));
     let pool: &'static Pool = Box::leak(Box::new(Pool::new(ava).with_addr(addr)));
     let t = Arc::new(AvaTransport::with_pool(pool));
-    let c = "old-console:9114";
+    let c = "old-console";
     for m in [m::HW_INFO, m::FS_LIST, m::NODE_STATUS] {
         let e = call(&t, c, m, "X", b"{}", T).await.unwrap_err();
         assert!(e.to_string().contains("helper_not_ava1"), "{e}");
@@ -757,7 +753,7 @@ async fn cap_mgmt_alone_routes_management_over_ava1() {
     tokio::spawn(server::serve(l, Arc::new(ctx)));
     let pool: &'static Pool = Box::leak(Box::new(Pool::new(ava).with_addr(addr)));
     let t = Arc::new(AvaTransport::with_pool(pool));
-    let r = call(&t, "mo-console:9114", m::HW_INFO, "HW_INFO", b"", T)
+    let r = call(&t, "mo-console", m::HW_INFO, "HW_INFO", b"", T)
         .await
         .unwrap();
     assert_eq!(r.unwrap(), b"hi");
@@ -770,7 +766,7 @@ async fn an_unreachable_console_is_helper_not_ava1() {
         Pool::new(base.join("ava")).with_addr("127.0.0.1:1"),
     ));
     let t = Arc::new(AvaTransport::with_pool(pool));
-    let e = call(&t, "down-console:9114", m::HW_INFO, "HW_INFO", b"", T)
+    let e = call(&t, "down-console", m::HW_INFO, "HW_INFO", b"", T)
         .await
         .unwrap_err();
     assert!(e.to_string().contains("helper_not_ava1"), "{e}");
@@ -1024,14 +1020,8 @@ fn job_status(job_id: [u8; 16], state: u8) -> gen::Status {
 #[tokio::test(flavor = "multi_thread")]
 async fn two_ports_of_one_console_share_one_gate() {
     let (t, _p, _c) = console("gate", Box::new(|_, _| text("x"))).await;
-    assert!(Arc::ptr_eq(
-        &t.gate("10.1.1.1:9114"),
-        &t.gate("10.1.1.1:9120")
-    ));
-    assert!(!Arc::ptr_eq(
-        &t.gate("10.1.1.1:9114"),
-        &t.gate("10.1.1.2:9114")
-    ));
+    assert!(Arc::ptr_eq(&t.gate("10.1.1.1"), &t.gate("10.1.1.1:9120")));
+    assert!(!Arc::ptr_eq(&t.gate("10.1.1.1"), &t.gate("10.1.1.2")));
 }
 
 /// `call` is blocking, but a caller on an async worker must not panic the runtime.

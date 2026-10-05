@@ -423,7 +423,8 @@ fn old_env_names_are_accepted_once_with_a_warning() {
     assert_eq!((v.as_deref(), w), (Some("64"), false));
 }
 
-/// The five transport-tuning variables tuned the retired protocol's shards; they are gone.
+/// The five transport-tuning variables tuned the retired protocol's shards; they are gone: setting them
+/// changes nothing about the transfer configuration.
 #[test]
 fn the_retired_tuning_variables_are_not_read() {
     let old = [
@@ -431,7 +432,6 @@ fn the_retired_tuning_variables_are_not_read() {
         "INFLIGHT_BYTES",
         "PACK_SIZE",
         "PACK_FILE_MAX",
-        "BANDWIDTH_MBPS",
     ];
     let prefix = ["FT", "X2_"].concat();
     for name in old {
@@ -439,10 +439,8 @@ fn the_retired_tuning_variables_are_not_read() {
     }
     let cfg = make_transfer_config("127.0.0.1");
     let base = TransferConfig::new("127.0.0.1");
-    assert_eq!(cfg.inflight_shards, base.inflight_shards);
-    assert_eq!(cfg.inflight_bytes, base.inflight_bytes);
-    assert_eq!(cfg.pack_size, base.pack_size);
-    assert_eq!(cfg.pack_file_max, base.pack_file_max);
+    assert_eq!(cfg.addr, base.addr);
+    assert_eq!(cfg.bandwidth_cap_bps, base.bandwidth_cap_bps);
     for name in old {
         std::env::remove_var(format!("{prefix}{name}"));
     }

@@ -37,6 +37,9 @@ mod engine;
 // HTTP client for talking to either engine. `pub` only so
 // tests/engine_http_proxy.rs can drive it with proxy variables set.
 pub mod engine_http;
+// Desktop management calls ride the sidecar engine's AVA1 session (see the module doc).
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod mgmt_forward;
 
 /// Build and run the Tauri application. The desktop `main.rs` calls this
 /// directly; on mobile the `tauri::mobile_entry_point` macro generates
@@ -146,6 +149,10 @@ pub fn run() {
         // (see lib/osNotify.ts). Works on every platform.
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
+            // Before anything can call into core: management calls forward to the sidecar.
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            mgmt_forward::install();
+
             // Open the main window centred + fully on-screen. Desktop-only —
             // the centre/monitor/size window APIs don't exist on mobile, so
             // this is a no-op there (see center_main_window).
@@ -330,7 +337,7 @@ pub fn run() {
             commands::companion_probe,
             // ── LAN discovery (mDNS-SD + TCP probe) ─────────────────
             // `discover_ps5` browses well-known mDNS service types
-            // and TCP-probes :9021/:9114 on each discovered host so
+            // and TCP-probes :9021/:9120 on each discovered host so
             // the Connection screen's "Find PS5s" button can populate
             // the IP field automatically. Read-only (we don't
             // advertise ourselves). See commands/discover.rs.

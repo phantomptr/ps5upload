@@ -1,4 +1,4 @@
-//! User account enumeration over FTX2 USER_LIST.
+//! User account enumeration over AVA1 management (`user.list`).
 //!
 //! Returns the list of user accounts on the console, with the
 //! foreground (currently logged-in) user marked. Read-only.

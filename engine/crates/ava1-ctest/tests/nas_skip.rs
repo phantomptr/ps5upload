@@ -452,7 +452,7 @@ fn nas_upload_resume_after_a_drop() {
             "f{i:02}"
         );
     }
-    assert_eq!(res.shards_sent, 40);
+    assert_eq!(res.files_sent, 40);
     // Only the missing files were read again: f00..f19 reached the console's journal
     // before the drop and were opened exactly once. (f20.. may be opened twice: the
     // first attempt's readers were released into the dead session.)

@@ -8,7 +8,7 @@
 # Flow:
 #   1. Build the payload
 #   2. `nc` the ELF to PS5_IP:9021 (the loader)
-#   3. Poll :9114 until the mgmt listener comes up
+#   3. Poll :9120 (AVA1) until the helper comes up
 #   4. Exercise every command via ps5upload-lab so we can see exactly
 #      which feature breaks, with the payload's own error string
 #      surfaced (not a generic "HTTP 502")
@@ -24,7 +24,7 @@ if [ $# -lt 1 ]; then
 fi
 PS5_IP="$1"
 LOADER_PORT=9021
-MGMT_PORT=9114
+AVA1_PORT=9120
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$SCRIPT_DIR"
 
@@ -54,24 +54,24 @@ print(f'  sent {len(data)} bytes')
 " 2>&1 || { echo "  SEND FAILED -- loader stuck, ask user to reset network"; exit 2; }
 
 # --- 4. wait for mgmt port -------------------------------------------
-say "4. Waiting for mgmt port :$MGMT_PORT"
+say "4. Waiting for the AVA1 port :$AVA1_PORT"
 for i in $(seq 1 20); do
-  if nc -zv -G 2 "$PS5_IP" "$MGMT_PORT" 2>&1 | grep -q "open"; then
-    echo "  mgmt :$MGMT_PORT up after $i attempt(s)"
+  if nc -zv -G 2 "$PS5_IP" "$AVA1_PORT" 2>&1 | grep -q "open"; then
+    echo "  :$AVA1_PORT up after $i attempt(s)"
     break
   fi
   sleep 1
-  [ "$i" -eq 20 ] && { echo "  ERROR: payload never bound :$MGMT_PORT"; exit 3; }
+  [ "$i" -eq 20 ] && { echo "  ERROR: payload never bound :$AVA1_PORT"; exit 3; }
 done
 
 # --- 5. exercise via lab CLI -----------------------------------------
 say "5. status (basic health)"
-cargo run -q --manifest-path engine/Cargo.toml -p ps5upload-lab -- "$PS5_IP:$MGMT_PORT" status 2>&1 | head -20
+cargo run -q --manifest-path engine/Cargo.toml -p ps5upload-lab -- "$PS5_IP" status 2>&1 | head -20
 
 say "6. volumes (FS_LIST_VOLUMES)"
-cargo run -q --manifest-path engine/Cargo.toml -p ps5upload-lab -- "$PS5_IP:$MGMT_PORT" volumes 2>&1 | head -20
+cargo run -q --manifest-path engine/Cargo.toml -p ps5upload-lab -- "$PS5_IP" volumes 2>&1 | head -20
 
 say "7. apps (APP_LIST_REGISTERED via sqlite)"
-cargo run -q --manifest-path engine/Cargo.toml -p ps5upload-lab -- "$PS5_IP:$MGMT_PORT" apps 2>&1 | head -20
+cargo run -q --manifest-path engine/Cargo.toml -p ps5upload-lab -- "$PS5_IP" apps 2>&1 | head -20
 
 say "DONE"

@@ -5,8 +5,8 @@
 //! relays the action and translates the SystemControlAck into a
 //! flat JSON the renderer can render directly.
 //!
-//! `addr` here is the management-port address ("ip:9114"). Renderer
-//! constructs it via the existing `${host}:9114` pattern.
+//! `addr` here is the console's host (a `:port` suffix is ignored by
+//! the engine).
 
 use ps5upload_core::system_control::{power_telemetry, system_control, PowerAction};
 use ps5upload_core::users::user_list;

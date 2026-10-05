@@ -8,7 +8,7 @@
 //! `smp_meta_stats` periodically to render the panel.
 //!
 //! All RPCs are synchronous and use a single round-trip on the
-//! mgmt-port FTX2 channel (Connection::connect).
+//! AVA1 management channel (`crate::mgmt`).
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};

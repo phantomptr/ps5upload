@@ -16,7 +16,7 @@
  * Env: ENGINE_URL (default http://127.0.0.1:19113)
  */
 const ENGINE = process.env.ENGINE_URL || "http://127.0.0.1:19113";
-const MGMT = (h) => (h.includes(":") ? h : `${h}:9113`); // engine derives mgmt from this
+const MGMT = (h) => h; // the engine takes the console's host
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const mib = (b) => b / (1024 * 1024);
@@ -61,7 +61,7 @@ async function cmdDelete(host, ps5path) {
 }
 
 // Poll a job to completion, sampling bytes_sent to estimate peak instantaneous
-// rate. Returns { ok, elapsedMs, bytes, shards, files, peakMiBs, error }.
+// rate. Returns { ok, elapsedMs, bytes, files, peakMiBs, error }.
 async function pollJob(jobId, { sampleMs = 500 } = {}) {
   let last = { t: Date.now(), bytes: 0 };
   let peak = 0;
@@ -86,7 +86,6 @@ async function pollJob(jobId, { sampleMs = 500 } = {}) {
         ok: true,
         elapsedMs: j.elapsed_ms || 0,
         bytes: j.bytes_sent || 0,
-        shards: j.shards_sent || 0,
         files: j.files_sent || 0,
         peakMiBs: peak,
       };
@@ -135,7 +134,7 @@ async function cmdDir(host, src, destRoot, csv) {
     console.log(
       `  OK ${(mib(res.bytes)).toFixed(0)} MiB / ${(res.elapsedMs / 1000).toFixed(1)}s` +
         ` | avg ${avg.toFixed(1)} MiB/s (job) ${avgWall.toFixed(1)} MiB/s (wall)` +
-        ` | peak ${res.peakMiBs.toFixed(1)} MiB/s | files=${res.files} shards=${res.shards}`,
+        ` | peak ${res.peakMiBs.toFixed(1)} MiB/s | files=${res.files}`,
     );
     results.push({ streams, ok: true, bytes: res.bytes, elapsedMs: res.elapsedMs, avg, peak: res.peakMiBs });
     await sleep(2000);

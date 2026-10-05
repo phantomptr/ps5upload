@@ -1,4 +1,4 @@
-//! Save data + screenshot listing over FTX2.
+//! Save data + screenshot listing over AVA1 management.
 //!
 //! Both ops walk a known PS5 path tree on the payload side and return
 //! per-entry metadata. The actual download/upload of save data uses

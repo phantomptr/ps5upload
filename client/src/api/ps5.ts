@@ -4099,12 +4099,12 @@ export interface JobSnapshot {
   status: JobStatus;
   /** Present on a running job that reports stages (an FPKG build). */
   stage?: JobStageSnapshot;
-  /** A finished FPKG build's content id (the transfer id field, reused). */
+  /** The job id in hex (an FPKG build reuses the field for its content id). */
   tx_id_hex?: string;
   started_at_ms?: number;
   elapsed_ms?: number;
-  /** Populated for `running` (live counter, 200 ms cadence) AND `done`
-   *  (final count from COMMIT_TX_ACK). */
+  /** Bytes sent so far. Populated for `running` (live counter, 200 ms cadence)
+   *  AND `done` (the job's final count). */
   bytes_sent?: number;
   /** Populated for `running` only — total expected bytes so the UI can
    *  render percent + ETA. Pre-computed from source size at job start. */
@@ -4116,32 +4116,23 @@ export interface JobSnapshot {
   /** Reconcile-mode skip counts. 0 for plain uploads. */
   skipped_files?: number;
   skipped_bytes?: number;
-  /** Per-file progress (Running, multi-file uploads). Climbs as the
-   *  engine reads each source file into a pack frame (one bump per file).
-   *  Smoother than deriving file-count from bytes_sent, which jumps in
-   *  ~200-file chunks on packed-shard ACKs and looked like
-   *  "start → finished" on 46k-file game folders. `undefined` (or 0)
-   *  means the upload path doesn't report it; the UI falls back to its
-   *  size-derived estimate. */
+  /** Files read from the source so far (running multi-file uploads): one bump
+   *  per source file as the sender takes it up. Smoother than deriving a file
+   *  count from bytes_sent, which jumps in large steps on folders of many
+   *  small files. `undefined` (or 0) means the upload path doesn't report it;
+   *  the UI falls back to its size-derived estimate. */
   files_processing?: number;
-  /** P3 / v2.18.0: files the payload has fully committed during the
-   *  post-100% COMMIT_TX apply loop. Ticks up from 0 to
-   *  `files_finalizing_total` as APPLY_PROGRESS frames arrive from
-   *  new payloads (those that recognise TX_FLAG_APPLY_PROGRESS_REQUESTED,
-   *  which the engine sets on every multi-file BEGIN_TX). UI surfaces
-   *  this as a "Finalized N of M files" counter on the running banner
-   *  so users see motion through the 10-30 min commit phase that used
-   *  to be a silent black box. `undefined` (or 0) on old payloads
-   *  that don't emit progress — UI falls back to the plain "Finalizing
-   *  on PS5…" pill from v2.17.3. */
+  /** Files the console has made durable so far (AVA1's durable-file count: each
+   *  file is fsynced and renamed into place before it counts). The UI shows it
+   *  as "Finalized N of M files" on the running banner. `undefined` (or 0)
+   *  until the console reports its first durable file; the UI then falls back
+   *  to the plain "Finalizing on PS5…" pill. */
   files_finalized?: number;
-  /** P3 / v2.18.0: total files the payload will commit. Surfaced as a
-   *  paired denominator for `files_finalized`. 0 outside the finalize
-   *  phase. */
+  /** Total files the job will make durable: the denominator for
+   *  `files_finalized`. 0 when the job does not know it yet. */
   files_finalizing_total?: number;
-  /** P3 / v2.18.0: cumulative bytes finalized during commit-apply.
-   *  Second progress dimension alongside file count; useful when file
-   *  sizes vary wildly. */
+  /** Bytes the console has made durable so far. A second progress dimension
+   *  beside the file count, useful when file sizes vary wildly. */
   bytes_finalized?: number;
   /** The sending phase when it is not plain sending: `"skipping"` while a 7z/RAR
    *  resume discards data the console already has. Absent otherwise (and on engines
@@ -4157,23 +4148,21 @@ export interface JobSnapshot {
   /** True while files are still settling on the console after the job finished
    *  ("Finishing on the console"). Absent until the engine sends it. */
   settling?: boolean;
-  /** The commit ack of a finished job (AVA1: protocol, files, bytes, bottleneck, ...). */
+  /** The final status of a finished job (AVA1: protocol, files, bytes, bottleneck, ...). */
   commit_ack?: { bottleneck?: string } & Record<string, unknown>;
   /** Files actually sent (Done only). */
   files_sent?: number;
-  shards_sent?: number;
   dest?: string;
   error?: string;
-  /** Machine-parseable error category lifted from the payload's
-   *  error frame body. Populated alongside `error` when the failure
-   *  originated from a PS5 protocol error frame. UI uses this for
-   *  humanized rendering (e.g. `direct_writer_io_error` → "PS5 is
-   *  out of free space"). `undefined` for local-side / non-payload
-   *  errors — fall back to `error` text. */
+  /** Machine-parseable error category. Populated alongside `error` when the
+   *  failure came from the console (a refusal or an AVA1 job failure) or is one
+   *  the engine names (`helper_not_ava1`, `not_paired`, `zip_unsupported`, ...).
+   *  UI uses this for humanized rendering (e.g. `insufficient_space` → "PS5 is
+   *  out of free space"). `undefined` for local-side errors — fall back to
+   *  `error` text. */
   error_reason?: string;
-  /** Human-readable detail string lifted from the payload's error
-   *  frame `"detail"` field. Often pinpoints the on-PS5 path or
-   *  underlying errno. Shown as a secondary line under the
+  /** Human-readable detail from the console's refusal. Often pinpoints the
+   *  on-PS5 path or underlying errno. Shown as a secondary line under the
    *  humanized title. */
   error_detail?: string;
   /** The console the failure came from, when the engine names one (a PS5 to PS5 relay talks

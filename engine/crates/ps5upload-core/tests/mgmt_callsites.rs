@@ -51,7 +51,7 @@ fn reply(b: &[u8]) -> Result<Option<Vec<u8>>> {
 #[test]
 fn hw_info_parses_the_text_reply_it_asked_for() {
     let (t, _g) = fake(|_, _| reply(b"model=PS5 Pro\nserial=ABC\nncpu=8\n"));
-    let i = ps5upload_core::hw::hw_info("10.0.0.5:9114").unwrap();
+    let i = ps5upload_core::hw::hw_info("10.0.0.5").unwrap();
     assert_eq!(
         (i.model.as_str(), i.serial.as_str(), i.ncpu),
         ("PS5 Pro", "ABC", 8)

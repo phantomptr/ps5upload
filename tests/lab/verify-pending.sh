@@ -11,7 +11,7 @@ MODE="${1:-help}"
 
 need_up() {
   ping -c1 -W2000 "$PS5" >/dev/null 2>&1 || { echo "ABORT: $PS5 is not reachable — wake the console / re-run your loader."; exit 1; }
-  nc -z -G3 "$PS5" 9114 2>/dev/null || { echo "ABORT: payload port :9114 closed — load ps5upload first (make send-payload PS5_HOST=$PS5)."; exit 1; }
+  nc -z -G3 "$PS5" 9120 2>/dev/null || { echo "ABORT: payload port :9120 closed — load ps5upload first (make send-payload PS5_HOST=$PS5)."; exit 1; }
 }
 
 case "$MODE" in
@@ -24,7 +24,7 @@ case "$MODE" in
     [ -f "$PKG" ] || { echo "no such pkg: $PKG"; exit 1; }
     MAGIC=$(xxd -l4 -p "$PKG"); [ "$MAGIC" = "7f434e54" ] || { echo "ABORT: $PKG magic=$MAGIC, not a PS4/PS5 package (7f434e54)."; exit 1; }
     need_up
-    ADDR="$PS5:9114"
+    ADDR="$PS5"
     echo "1. upload"; UP=$(curl -s -X POST "$ENGINE/api/pkg/upload" -F "f=@$PKG"); PATHV=$(jq -r .path <<<"$UP"); UPID=$(jq -r .upload_id <<<"$UP"); echo "   -> $PATHV"
     HEAD=$(curl -s -X POST "$ENGINE/api/pkg/parse" -H 'content-type: application/json' -d "{\"path\":\"$PATHV\"}")
     CID=$(jq -r '.head.content_id // .content_id' <<<"$HEAD"); TID=$(jq -r '.head.title_id // .title_id' <<<"$HEAD"); CAT=$(jq -r '.head.package_type // .package_type' <<<"$HEAD")

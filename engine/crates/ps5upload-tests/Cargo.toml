@@ -6,9 +6,7 @@ license.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
-# The retired protocol's integration tests (and their mock server) stay until the FTX2
-# baseline is recorded (P3 Task 18 Step 3); the ava1_* tests below are their replacements.
-ftx2-proto = { path = "../ftx2-proto" }
+blake3.workspace = true
 ps5upload-core = { path = "../ps5upload-core" }
 # The AVA1 test console: the Rust job host and a scripted management node.
 ava1 = { path = "../ava1" }

@@ -18,8 +18,8 @@
 //!     port) on every host that did show up via mDNS for any reason.
 //!   - And, as a last-ditch fallback when mDNS turns up zero hosts,
 //!     a concurrent /24 sweep of EVERY local subnet (all network
-//!     interfaces — Ethernet + Wi-Fi + USB-tether) probing :9114 (our
-//!     own payload's mgmt port). Nothing else binds 9114, so a hit is
+//!     interfaces — Ethernet + Wi-Fi + USB-tether) probing :9120 (our
+//!     own payload's AVA1 port). Nothing else binds 9120, so a hit is
 //!     a near-certain PS5-with-our-payload signal. Keeps discovery
 //!     working when the LAN has mDNS suppressed (some routers/APs
 //!     intentionally drop multicast).
@@ -75,12 +75,8 @@ const BROWSED_SERVICES: &[&str] = &[
 /// PS5 right now" signal.
 const PS5_LOADER_PORT: u16 = 9021;
 
-/// ps5upload payload's management port. Open ≈ our payload is already
+/// ps5upload payload's one port (AVA1: management and data). Open ≈ our payload is already
 /// running — UI can show that and skip the "send payload" step.
-const PS5_MGMT_PORT: u16 = 9114;
-
-/// The same payload's AVA1 port (P3 cutover, MGMT_METHODS "raw :9114 probe"). A payload that
-/// only speaks AVA1 no longer opens 9114, so "our payload is running" is either port.
 const PS5_AVA1_PORT: u16 = 9120;
 
 /// Max wallclock for a single discovery run, in seconds. The default
@@ -109,9 +105,9 @@ mod confidence {
     /// is bound by every common PS5 payload loader and by very little
     /// else.
     pub const LOADER_PORT_OPEN: u8 = 60;
-    /// :9114 accepting connections. Means our own payload is already
+    /// :9120 accepting connections. Means our own payload is already
     /// running on that host — even stronger than the loader port,
-    /// because nothing else binds 9114.
+    /// because nothing else binds 9120.
     pub const PAYLOAD_PORT_OPEN: u8 = 70;
     /// `_sonic-loader._tcp` mDNS service type seen for this host —
     /// a PS5-homebrew-specific advertisement that strongly indicates
@@ -149,7 +145,7 @@ pub struct DiscoveredHost {
     /// :9021 reachable. Drives the loader-port confidence boost and
     /// the green "ready to receive payload" indicator.
     loader_port_open: bool,
-    /// :9114 reachable — our payload is already running. UI can skip
+    /// :9120 reachable — our payload is already running. UI can skip
     /// the Connection screen entirely and route to Upload directly
     /// when the user picks a host with this set.
     payload_port_open: bool,
@@ -321,7 +317,7 @@ async fn discover_ps5_inner(started: Instant, budget: Duration) -> serde_json::V
     let _ = daemon.shutdown();
 
     // Promote mDNS accumulators to candidates: TCP-probe each one for
-    // :9021 + :9114 in parallel, score them, and sort. We do this BEFORE
+    // :9021 + :9120 in parallel, score them, and sort. We do this BEFORE
     // deciding whether to run the LAN sweep, because the right "should I
     // sweep?" signal is "did mDNS find anything that's actually a PS5
     // running our payload?" — not "did mDNS find ANYTHING" (which would
@@ -330,14 +326,14 @@ async fn discover_ps5_inner(started: Instant, budget: Duration) -> serde_json::V
     let mut candidates = probe_and_score_accum(accum).await;
 
     // LAN-sweep fallback. Runs when none of the mDNS candidates have
-    // our payload's :9114 port open — that's the only signal that
+    // our payload's :9120 port open — that's the only signal that
     // unambiguously means "PS5 with our payload" (because nothing else
-    // binds 9114). The sweep targets only :9114 for the same reason;
+    // binds 9120). The sweep targets only :9120 for the same reason;
     // :9021 is shared across jailbreak chains and would false-positive
     // on PS5s running competing payloads.
     //
     // Deliberate design: the gate is intentionally narrow. If mDNS
-    // surfaces a PS5 via :9021 (loader) but not :9114 (our payload),
+    // surfaces a PS5 via :9021 (loader) but not :9120 (our payload),
     // the sweep STILL runs — because the user might have a second PS5
     // on the LAN that IS running our payload but isn't advertising on
     // mDNS. The ~1 s extra wallclock for that case is worth always
@@ -355,7 +351,7 @@ async fn discover_ps5_inner(started: Instant, budget: Duration) -> serde_json::V
             let ip_str = ip.to_string();
             if already_known.contains(&ip_str) {
                 // mDNS already surfaced this host (probe just said
-                // 9114 closed at probe time, but sweep saw it open).
+                // 9120 closed at probe time, but sweep saw it open).
                 // Re-confirming via a second probe pass below would
                 // double the wallclock for the common case where
                 // mDNS+probe is authoritative — accept the mDNS
@@ -467,20 +463,15 @@ async fn tcp_probe(ip: &str, port: u16) -> bool {
     )
 }
 
-/// True when either of our payload's ports (AVA1 :9120, FTX2 management :9114) accepts a connection.
+/// True when our payload's AVA1 port (:9120) accepts a connection.
 async fn payload_port_open(ip: &str) -> bool {
-    any_port_open(ip, PS5_AVA1_PORT, PS5_MGMT_PORT).await
+    tcp_probe(ip, PS5_AVA1_PORT).await
 }
 
-async fn any_port_open(ip: &str, a: u16, b: u16) -> bool {
-    let (x, y) = tokio::join!(tcp_probe(ip, a), tcp_probe(ip, b));
-    x || y
-}
-
-/// Concurrent /24 sweep against PS5_MGMT_PORT (9114) on the local
+/// Concurrent /24 sweep against PS5_AVA1_PORT (9120) on the local
 /// subnet. Used as the last-ditch fallback when mDNS finds nothing.
 ///
-/// 9114 is our payload's own mgmt port — we picked the number, no
+/// 9120 is our payload's own port — we picked the number, no
 /// off-the-shelf software binds it — so a successful connect is a
 /// near-certain "PS5 with our payload" signal. That's why the sweep
 /// here targets only this single port (not :9021, which is shared
@@ -664,16 +655,16 @@ mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     #[tokio::test]
-    async fn a_payload_is_seen_on_either_of_its_ports() {
+    async fn a_listening_port_probes_open_and_a_closed_one_does_not() {
         let open = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let open_port = open.local_addr().unwrap().port();
         let closed = {
             let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             l.local_addr().unwrap().port()
         };
-        assert!(any_port_open("127.0.0.1", open_port, closed).await);
-        assert!(any_port_open("127.0.0.1", closed, open_port).await);
-        assert!(!any_port_open("127.0.0.1", closed, closed).await);
+        assert!(tcp_probe("127.0.0.1", open_port).await);
+        assert!(!tcp_probe("127.0.0.1", closed).await);
+        assert_eq!(PS5_AVA1_PORT, 9120, "the one port our payload listens on");
     }
 
     #[test]

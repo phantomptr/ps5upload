@@ -63,7 +63,7 @@ fn live_inspect_pkg_category() {
     };
     let pkg_path = env("PS5UPLOAD_LIVE_PKGPATH")
         .expect("set PS5UPLOAD_LIVE_PKGPATH to the staged .pkg path on the console");
-    let mgmt = format!("{ip}:9114");
+    let mgmt = ip.clone();
 
     println!("mounting {pkg_path} ...");
     let m = pkg_direct_mount(&mgmt, &pkg_path, None).expect("pkg_direct_mount");

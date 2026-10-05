@@ -35,9 +35,8 @@ export interface HostMetrics {
   throughputMibps: number;
   /** Per-file commit time observed during the most recent successful
    *  upload's apply phase, in milliseconds. Only present for hosts
-   *  that have completed at least one P3-aware upload (the payload
-   *  has to emit `APPLY_PROGRESS` frames for us to derive this).
-   *  Undefined on hosts that have only completed pre-P3 uploads. */
+   *  whose uploads reported a finalize phase (derived from the
+   *  console's durable-file counts). Undefined otherwise. */
   commitMsPerFile?: number;
   /** When the measurement was taken, ms-since-epoch. Used to age out
    *  very old records — a PS5 whose USB drive got swapped out between

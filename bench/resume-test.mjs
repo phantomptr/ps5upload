@@ -23,7 +23,7 @@ const ENGINE_BIN = path.join(repoRoot, "engine", "target", "release", "ps5upload
 const ENGINE = "http://127.0.0.1:19113";
 const HOST = process.argv[2];
 if (!HOST) { console.error("usage: resume-test.mjs <ps5-ip>"); process.exit(2); }
-const ADDR = `${HOST}:9113`;
+const ADDR = HOST;
 const SRC = path.join(repoRoot, "bench", "fixtures", "huge-file", "huge-file.bin");
 const TXID = "aabbccddeeff00112233445566778899";
 const DEST = "/data/ps5upload/tests/resume/huge.bin";
@@ -99,7 +99,7 @@ async function main() {
   const r2 = await jpost("/api/transfer/file", { src: SRC, dest: DEST, addr: ADDR, tx_id: TXID });
   if (!r2.job_id) { console.log("  ✗ run-2 start failed", JSON.stringify(r2)); process.exit(1); }
   // Diagnostic: log run-2 progress + the payload's command count every 5s so a stall is visible
-  // (AVA1's node.status has no transaction fields; the FTX2 ones were dropped).
+  // (AVA1's node.status has no transaction fields).
   const diag = setInterval(async () => {
     const j = await jget(`/api/jobs/${r2.job_id}`).catch(() => ({}));
     const st = await jget(`/api/ps5/status?addr=${encodeURIComponent(ADDR)}`).catch(() => ({}));

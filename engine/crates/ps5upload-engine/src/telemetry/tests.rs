@@ -10,7 +10,7 @@ fn tmp(name: &str) -> PathBuf {
 fn done_state() -> Value {
     json!({
         "status": "done", "started_at_ms": 1000, "completed_at_ms": 61000, "elapsed_ms": 60000,
-        "tx_id_hex": "00", "shards_sent": 3, "bytes_sent": 5_000_000, "dest": "/mnt/usb0/homebrew/Game",
+        "tx_id_hex": "00", "bytes_sent": 5_000_000, "dest": "/mnt/usb0/homebrew/Game",
         "files_sent": 3, "skipped_files": 1, "skipped_bytes": 10,
         "commit_ack": {"protocol": "ava1", "files": 3, "bytes": 5_000_000},
     })

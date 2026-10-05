@@ -308,7 +308,6 @@ pub(crate) async fn start_fetch(r: Arc<Remote>, deps: FetchDeps, body: FetchBody
                         completed_at_ms,
                         elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
                         tx_id_hex: String::new(),
-                        shards_sent: 0,
                         bytes_sent: total,
                         dest: dest.display().to_string(),
                         files_sent: file_count,

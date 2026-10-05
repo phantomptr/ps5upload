@@ -52,7 +52,7 @@ const ALLOWED_STRINGS = new Set([
 // Regex allowlist for code-like literals that vary (paths, env lines,
 // glob examples). Tested against the trimmed text.
 const ALLOWED_PATTERNS = [
-  /^[A-Z0-9_]+=.*/, //   FTX2_BANDWIDTH_MBPS=10  # …
+  /^[A-Z0-9_]+=.*/, //   PS5UPLOAD_BANDWIDTH_MBPS=10  # …
   /^[*./\s]*\*\.[a-z]+/i, //   *.pkg  /  eboot.bin  /  PPSA*  /  *.log globs
   /\.(ini|log|gz|elf|bin|pkg|txt)\b/i, //   filenames
   /^\/[\w./-]+$/, //   absolute paths

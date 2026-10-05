@@ -58,7 +58,7 @@ pub fn job_id(seed: u8) -> [u8; 16] {
 
 pub fn cfg() -> TransferConfig {
     // The address is only the pool's key: the pool resolves it to the loopback console.
-    TransferConfig::new("127.0.0.1:9113")
+    TransferConfig::new("127.0.0.1")
 }
 
 /// A console that accepts uploads into (and serves downloads from) `share/`, and the engine's pool

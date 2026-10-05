@@ -209,7 +209,7 @@ async fn console(
     tokio::spawn(server::serve(l, Arc::new(ctx)));
     let pool: &'static Pool = Box::leak(Box::new(Pool::new(ava).with_addr(addr)));
     let t = AvaTransport::with_pool(pool).with_busy_delays([Duration::from_millis(5); 3]);
-    (Arc::new(t), pool, format!("{tag}-console:9114"), state)
+    (Arc::new(t), pool, format!("{tag}-console"), state)
 }
 
 async fn run_op(
@@ -778,7 +778,7 @@ async fn recursive_chmod_hash_crc32_fsck_and_backup_run_as_jobs_with_their_reply
     );
 }
 
-/// A refused crc32 keeps the shape the FTX2 handler answered: a body with `err`.
+/// A refused crc32 keeps the shape the handler answered: a body with `err`.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_crc32_the_console_could_not_run_is_an_err_field_not_an_error() {
     let (t, _p, c, _st) = console(

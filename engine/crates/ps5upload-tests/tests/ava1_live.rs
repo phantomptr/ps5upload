@@ -75,7 +75,8 @@ fn live_ps5_hash_compare_file() {
     };
     eprintln!("hashing remote {remote} (PS5 {addr}) and local {local}");
     let local_bytes = std::fs::read(&local).expect("read local file");
-    let local_hex: String = ps5upload_core::hash_shard(&local_bytes)
+    let local_hex: String = blake3::hash(&local_bytes)
+        .as_bytes()
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();

@@ -277,7 +277,7 @@ impl Sink for CheckedSink {
 }
 
 /// The zip entry's name. A folder's entries sit under `<basename>/`; a single file's
-/// entry is exactly `<basename>` (FTX2's `enumerate_download_set` puts the basename in
+/// entry is exactly `<basename>` (the download listing puts the basename in
 /// `rel_path` for a file and `download_to_zip_ex` writes it verbatim, so prefixing here
 /// would produce `foo.pkg/foo.pkg`).
 pub fn zip_entry_name(single: bool, basename: &str, rel: &str) -> String {
@@ -310,7 +310,7 @@ struct ZipState {
 /// ordered flag); anything else is a protocol violation, never garbage in the archive.
 /// Writes `<dest>.ava-part` and renames over `dest` in `finish`, so the final path never
 /// holds a half-written archive; an abandoned sink removes its part file.
-/// Empty directories are not entries (FTX2's zip manifest holds files only). Empty
+/// Empty directories are not entries (the zip manifest holds files only). Empty
 /// files are appended at `finish`: the receiver creates them up front, out of order,
 /// and a zip can only have one entry open at a time.
 pub struct ZipSink {
@@ -392,7 +392,7 @@ impl ZipSink {
     }
 
     fn opts() -> SimpleFileOptions {
-        // zip64 so a single >4 GiB game file is encoded correctly (the FTX2 zip's rule).
+        // zip64 so a single >4 GiB game file is encoded correctly (the zip format's rule).
         SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated)
             .large_file(true)

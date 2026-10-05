@@ -607,8 +607,8 @@ mod tests {
             "ts=1780601834.879 bad=<IPv4>"
         );
         assert_eq!(
-            redact_diagnostic_text("connect [fe80::1234]:9114 refused"),
-            "connect [<IPv6>]:9114 refused"
+            redact_diagnostic_text("connect [fe80::1234]:9120 refused"),
+            "connect [<IPv6>]:9120 refused"
         );
     }
 }

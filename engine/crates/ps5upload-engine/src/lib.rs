@@ -46,6 +46,7 @@ mod legacy_guard;
 mod legacy_helper;
 mod local_fs;
 mod log_dedup;
+mod mgmt_route;
 mod pkg_install;
 mod pkg_sidecar;
 mod remote;
@@ -261,7 +262,6 @@ pub(crate) enum JobState {
         completed_at_ms: u64,
         elapsed_ms: u64,
         tx_id_hex: String,
-        shards_sent: u64,
         bytes_sent: u64,
         dest: String,
         /// File count + skipped count for the summary card. `files_sent`
@@ -1675,7 +1675,6 @@ async fn ps5_to_ps5_handler(
                 completed_at_ms,
                 elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
                 tx_id_hex: ava1::hex::encode(&tx_id),
-                shards_sent: r.files as u64,
                 bytes_sent: progress.bytes_sent.load(Ordering::Relaxed),
                 dest: req.dest,
                 files_sent: r.files as u64,
@@ -5348,7 +5347,6 @@ async fn transfer_file_handler(
                         completed_at_ms,
                         elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
                         tx_id_hex: r.tx_id_hex,
-                        shards_sent: r.shards_sent,
                         bytes_sent: r.bytes_sent,
                         dest: r.dest,
                         files_sent: files_sent_count,
@@ -5654,7 +5652,6 @@ async fn transfer_dir_handler(
                         completed_at_ms,
                         elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
                         tx_id_hex: r.tx_id_hex,
-                        shards_sent: r.shards_sent,
                         bytes_sent: r.bytes_sent,
                         dest: r.dest,
                         files_sent: files_sent_count,
@@ -6153,7 +6150,6 @@ async fn transfer_zip_handler(
                         completed_at_ms,
                         elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
                         tx_id_hex: r.tx_id_hex,
-                        shards_sent: r.shards_sent,
                         bytes_sent: r.bytes_sent,
                         dest: r.dest,
                         files_sent: files_sent_count,
@@ -7634,7 +7630,6 @@ async fn transfer_7z_handler(
                         completed_at_ms,
                         elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
                         tx_id_hex: r.tx_id_hex,
-                        shards_sent: r.shards_sent,
                         bytes_sent: r.bytes_sent,
                         dest: r.dest,
                         files_sent: files_sent_count,
@@ -7855,7 +7850,6 @@ async fn transfer_rar_handler(
                         completed_at_ms,
                         elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
                         tx_id_hex: r.tx_id_hex,
-                        shards_sent: r.shards_sent,
                         bytes_sent: r.bytes_sent,
                         dest: r.dest,
                         files_sent: files_sent_count,
@@ -8077,7 +8071,6 @@ async fn transfer_file_list_handler(
                         completed_at_ms,
                         elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
                         tx_id_hex: r.tx_id_hex,
-                        shards_sent: r.shards_sent,
                         bytes_sent: r.bytes_sent,
                         dest: r.dest,
                         files_sent: files_sent_count,
@@ -8275,8 +8268,6 @@ fn start_ava1_download(
                         completed_at_ms,
                         elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
                         tx_id_hex: id.iter().map(|b| format!("{b:02x}")).collect::<String>(),
-                        // For AVA1 `shards_sent` carries files (as uploads do).
-                        shards_sent: files,
                         bytes_sent: bytes,
                         dest: dest_display,
                         files_sent: files,
@@ -9155,6 +9146,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/status", get(ps5_status))
         .route("/api/ps5/port-check", get(ps5_port_check))
         .route("/api/ps5/readiness", get(ps5_readiness))
+        .route(
+            ps5upload_core::mgmt_proxy::ROUTE,
+            post(mgmt_route::mgmt_call_handler),
+        )
         .route("/api/ps5/health/scan", get(health_scan_handler))
         .route("/api/ps5/health/junk", get(health_junk_handler))
         .route("/api/ps5/health/fix", post(health_fix_handler))

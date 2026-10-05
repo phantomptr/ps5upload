@@ -1,43 +1,44 @@
-//! ps5upload-lab — CLI tool for exercising the payload2 control channel.
+//! ps5upload-lab — CLI tool for exercising the console's management and data channels.
 //!
 //! Usage:
 //!   ps5upload-lab [ADDR] COMMAND [ARGS...]
 //!
-//! Default ADDR: 192.168.137.2:9113
+//! ADDR is the console's host (default 192.168.137.2). A trailing `:port` is accepted and
+//! ignored: every command goes over AVA1 (data and management share one port, 9120).
 //!
-//! Commands:
-//!   hello                           send HELLO, print HELLO_ACK
-//!   status                          send STATUS, print STATUS_ACK body
-//!   shutdown                        send SHUTDOWN
-//!   takeover                        send TAKEOVER_REQUEST
-//!   begin-tx TX_ID_HEX              send BEGIN_TX with the given 32-hex-char tx_id
-//!   query-tx TX_ID_HEX              send QUERY_TX for the given tx_id
-//!   abort-tx TX_ID_HEX              send ABORT_TX for the given tx_id
-//!   send-shard TX_ID_HEX SEQ        send a dummy STREAM_SHARD and print SHARD_ACK
-//!   transfer TX_ID_HEX DEST FILE    single-file transfer (begin→shards→commit→query)
-//!   transfer-dir TX_ID_HEX DEST DIR multi-file transfer of a local directory
-//!   volumes                         enumerate PS5 storage volumes (FS_LIST_VOLUMES)
+//! Commands: see `ps5upload-lab` with no arguments.
 
 use anyhow::{bail, Context, Result};
-use ftx2_proto::{FrameType, ShardAck, ShardHeader, TxMeta};
-use ps5upload_core::connection::Connection;
 use ps5upload_core::diagnostics::shell_run;
 use ps5upload_core::fs_ops::{app_launch, app_list_registered, app_register, app_unregister};
-use ps5upload_core::hash_shard;
 use ps5upload_core::hw::{hw_info, hw_temps, syslog_tail};
 use ps5upload_core::payload_lifecycle::{send_elf_to_loader, LoaderImage};
 use ps5upload_core::saves::list_saves;
-use ps5upload_core::transfer::{
-    inspect_zip, transfer_dir, transfer_file, transfer_zip, TransferConfig,
-};
+use ps5upload_core::transfer::TransferConfig;
 use ps5upload_core::volumes::list_volumes;
 use std::path::Path;
 
 mod bench;
 
-const DEFAULT_ADDR: &str = "192.168.137.2:9113";
+const DEFAULT_ADDR: &str = "192.168.137.2";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/// The console's host from whatever the caller typed: `host`, `host:9113` and `host:9114` all
+/// mean the same console (the ports they name no longer exist; AVA1 has one). A bracketed IPv6
+/// literal keeps its brackets; a bare one (several colons) has no port to lose.
+fn console_host(addr: &str) -> String {
+    if let Some(rest) = addr.strip_prefix('[') {
+        return match rest.find(']') {
+            Some(i) => format!("[{}]", &rest[..i]),
+            None => addr.to_string(),
+        };
+    }
+    match addr.split_once(':') {
+        Some((host, port)) if !port.contains(':') => host.to_string(),
+        _ => addr.to_string(),
+    }
+}
 
 fn parse_tx_id(hex: &str) -> Result<[u8; 16]> {
     if hex.len() != 32 {
@@ -59,45 +60,6 @@ fn hex_val(b: u8) -> Result<u8> {
         b'A'..=b'F' => Ok(10 + b - b'A'),
         _ => bail!("invalid hex char: {}", b as char),
     }
-}
-
-fn tx_meta_body(tx_id: [u8; 16], kind: u32, extra: &[u8]) -> Vec<u8> {
-    let meta = TxMeta {
-        tx_id,
-        kind,
-        flags: 0,
-    };
-    let mut buf = meta.encode().to_vec();
-    buf.extend_from_slice(extra);
-    buf
-}
-
-/// Swap a transfer-port address (`ip:9113`) for the matching mgmt-port
-/// address (`ip:9114`). The transfer-style do_transfer / do_transfer_dir
-/// / do_transfer_zip flows verify success post-commit by calling
-/// `do_query_tx`, but QueryTx is a mgmt-port frame and the lab tool
-/// was previously passing the same transfer-port addr through —
-/// resulting in a `wrong_port` Error frame and a non-zero exit code
-/// on what was actually a successful upload (observed during the
-/// v2.17.7 huge-folder verification run). Engine binary has its own
-/// `mgmt_addr_for` helper; this is the lab-only inline copy since
-/// ps5upload-core doesn't export the engine version.
-fn to_mgmt_addr(transfer_addr: &str) -> String {
-    match transfer_addr.rsplit_once(':') {
-        Some((host, _)) => format!("{host}:9114"),
-        None => format!("{transfer_addr}:9114"),
-    }
-}
-
-fn expect_frame(conn: &mut Connection, expected: FrameType) -> Result<Vec<u8>> {
-    let (hdr, body) = conn.recv_frame()?;
-    let ft = hdr.frame_type().unwrap_or(FrameType::Error);
-    println!("frame_type={ft:?}");
-    if ft != expected {
-        eprintln!("  body: {}", String::from_utf8_lossy(&body));
-        bail!("expected {expected:?}, got {ft:?}");
-    }
-    Ok(body)
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────────
@@ -138,18 +100,98 @@ fn format_bytes(b: u64) -> String {
     format!("{:.2} {}", v, UNITS[i])
 }
 
+/// `node.info` over an AVA1 session.
 fn do_hello(addr: &str) -> Result<()> {
-    let mut c = Connection::connect(addr)?;
-    c.send_frame(FrameType::Hello, b"{}")?;
-    let body = expect_frame(&mut c, FrameType::HelloAck)?;
-    println!("{}", String::from_utf8_lossy(&body));
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(ava1_cmds::hello(addr))
+}
+
+/// What an upload command prints: the result's counters and the job's final status JSON.
+fn print_upload(r: &ps5upload_core::transfer::TransferResult) {
+    println!(
+        "done: files={} bytes={} job={}",
+        r.files_sent, r.bytes_sent, r.tx_id_hex
+    );
+    println!("final status: {}", r.commit_ack_body);
+}
+
+fn do_transfer(addr: &str, id_hex: &str, dest: &str, file_path: &str) -> Result<()> {
+    let id = parse_tx_id(id_hex)?;
+    let cfg = TransferConfig::new(addr);
+    println!("upload: file={file_path} dest={dest}");
+    print_upload(&ps5upload_ava1::upload::upload_file(
+        &cfg,
+        id,
+        dest,
+        Path::new(file_path),
+    )?);
     Ok(())
 }
 
+fn do_transfer_dir(addr: &str, id_hex: &str, dest_root: &str, src_dir: &str) -> Result<()> {
+    let id = parse_tx_id(id_hex)?;
+    let cfg = TransferConfig::new(addr);
+    print_upload(&ps5upload_ava1::upload::upload_dir(
+        &cfg,
+        id,
+        dest_root,
+        Path::new(src_dir),
+    )?);
+    Ok(())
+}
+
+fn do_transfer_zip(addr: &str, id_hex: &str, dest_root: &str, zip_path: &str) -> Result<()> {
+    let id = parse_tx_id(id_hex)?;
+    let cfg = TransferConfig::new(addr);
+    let zp = Path::new(zip_path);
+    let ins = ps5upload_core::transfer::inspect_zip(zp)?;
+    println!(
+        "zip: {} files, {} zipped -> {} extracted",
+        ins.file_count, ins.compressed_size, ins.total_uncompressed
+    );
+    print_upload(&ps5upload_ava1::upload::upload_zip(
+        &cfg, id, dest_root, zp,
+    )?);
+    Ok(())
+}
+
+fn do_transfer_7z(addr: &str, id_hex: &str, dest_root: &str, archive_path: &str) -> Result<()> {
+    let id = parse_tx_id(id_hex)?;
+    let cfg = TransferConfig::new(addr);
+    let ap = Path::new(archive_path);
+    let ins = ps5upload_core::transfer::inspect_7z(ap)?;
+    println!(
+        "7z: {} files, {} compressed -> {} extracted",
+        ins.file_count, ins.compressed_size, ins.total_uncompressed
+    );
+    print_upload(&ps5upload_ava1::upload::upload_7z(&cfg, id, dest_root, ap)?);
+    Ok(())
+}
+
+fn do_transfer_rar(
+    addr: &str,
+    id_hex: &str,
+    dest_root: &str,
+    archive_path: &str,
+    password: Option<&str>,
+) -> Result<()> {
+    let id = parse_tx_id(id_hex)?;
+    let cfg = TransferConfig::new(addr);
+    let ap = Path::new(archive_path);
+    let ins = ps5upload_core::transfer::inspect_rar(ap, password)?;
+    println!(
+        "rar: {} files, {} extracted",
+        ins.file_count, ins.total_uncompressed
+    );
+    print_upload(&ps5upload_ava1::upload::upload_rar(
+        &cfg, id, dest_root, ap, password,
+    )?);
+    Ok(())
+}
+
+/// `node.status`: the payload's status JSON (version, kernel, fans, ...).
 fn do_status(addr: &str) -> Result<()> {
-    let mut c = Connection::connect(addr)?;
-    c.send_frame(FrameType::Status, b"")?;
-    let body = expect_frame(&mut c, FrameType::StatusAck)?;
+    let body = ps5upload_core::mgmt::call(addr, ps5upload_core::mgmt::m::NODE_STATUS, b"")?;
     println!("{}", String::from_utf8_lossy(&body));
     Ok(())
 }
@@ -167,121 +209,21 @@ fn do_hw_temps(addr: &str, extended: bool) -> Result<()> {
 }
 
 fn do_shutdown(addr: &str) -> Result<()> {
-    let mut c = Connection::connect(addr)?;
-    c.send_frame(FrameType::Shutdown, b"")?;
-    let (hdr, body) = c.recv_frame()?;
-    println!(
-        "frame_type={:?}",
-        hdr.frame_type().unwrap_or(FrameType::Error)
-    );
+    let body = ps5upload_core::mgmt::call(addr, ps5upload_core::mgmt::m::NODE_SHUTDOWN, b"")?;
     println!("{}", String::from_utf8_lossy(&body));
     Ok(())
 }
 
 /// Streams a local ELF to the console's loader on :9021 — the first step of a hardware
 /// pass, before any `ava1-*` command. `send_elf_to_loader` shuts the running payload down
-/// (mgmt port 9114) and waits the same 600 ms grace the desktop send uses.
+/// over management and waits the same 600 ms grace the desktop send uses.
 fn do_send_elf(addr: &str, file: &str) -> Result<()> {
-    let host = addr.split(':').next().unwrap_or(addr);
+    let host = addr;
     let bytes = std::fs::read(file).with_context(|| format!("read {file}"))?;
     let n = send_elf_to_loader(host, 9021, &bytes, LoaderImage::Ps5Upload)
         .map_err(|e| anyhow::anyhow!(e))?;
     println!("sent {n} bytes to {host}:9021");
     Ok(())
-}
-
-fn do_takeover(addr: &str) -> Result<()> {
-    let mut c = Connection::connect(addr)?;
-    c.send_frame(FrameType::TakeoverRequest, b"")?;
-    let (hdr, body) = c.recv_frame()?;
-    println!(
-        "frame_type={:?}",
-        hdr.frame_type().unwrap_or(FrameType::Error)
-    );
-    println!("{}", String::from_utf8_lossy(&body));
-    Ok(())
-}
-
-fn do_begin_tx(addr: &str, tx_id_hex: &str) -> Result<()> {
-    let tx_id = parse_tx_id(tx_id_hex)?;
-    let extra = format!(r#"{{"tx_id":"{}"}}"#, tx_id_hex);
-    let body = tx_meta_body(tx_id, 1 /* upload_tree */, extra.as_bytes());
-    let mut c = Connection::connect(addr)?;
-    c.send_frame(FrameType::BeginTx, &body)?;
-    let resp = expect_frame(&mut c, FrameType::BeginTxAck)?;
-    println!("{}", String::from_utf8_lossy(&resp));
-    Ok(())
-}
-
-fn do_query_tx(addr: &str, tx_id_hex: &str) -> Result<()> {
-    let tx_id = parse_tx_id(tx_id_hex)?;
-    let body = tx_meta_body(tx_id, 0, b"");
-    let mut c = Connection::connect(addr)?;
-    c.send_frame(FrameType::QueryTx, &body)?;
-    let resp = expect_frame(&mut c, FrameType::QueryTxAck)?;
-    println!("{}", String::from_utf8_lossy(&resp));
-    Ok(())
-}
-
-fn do_commit_tx(addr: &str, tx_id_hex: &str) -> Result<()> {
-    let tx_id = parse_tx_id(tx_id_hex)?;
-    let body = tx_meta_body(tx_id, 0, b"");
-    let mut c = Connection::connect(addr)?;
-    c.send_frame(FrameType::CommitTx, &body)?;
-    let resp = expect_frame(&mut c, FrameType::CommitTxAck)?;
-    println!("{}", String::from_utf8_lossy(&resp));
-    Ok(())
-}
-
-fn do_abort_tx(addr: &str, tx_id_hex: &str) -> Result<()> {
-    let tx_id = parse_tx_id(tx_id_hex)?;
-    let body = tx_meta_body(tx_id, 0, b"");
-    let mut c = Connection::connect(addr)?;
-    c.send_frame(FrameType::AbortTx, &body)?;
-    let resp = expect_frame(&mut c, FrameType::AbortTxAck)?;
-    println!("{}", String::from_utf8_lossy(&resp));
-    Ok(())
-}
-
-fn do_transfer(addr: &str, tx_id_hex: &str, dest: &str, file_path: &str) -> Result<()> {
-    let tx_id = parse_tx_id(tx_id_hex)?;
-    let data = std::fs::read(file_path).with_context(|| format!("read {file_path}"))?;
-    let cfg = TransferConfig::new(addr);
-    println!(
-        "transfer: file={file_path} bytes={} dest={dest}",
-        data.len()
-    );
-    let r = transfer_file(&cfg, tx_id, dest, &data)?;
-    println!(
-        "done: shards={} bytes={} tx={}",
-        r.shards_sent, r.bytes_sent, r.tx_id_hex
-    );
-    println!("commit_ack: {}", r.commit_ack_body);
-    // QueryTx is a mgmt-port frame; the transfer flows above use the
-    // :9113 transfer-port addr to drive the upload, so we swap to
-    // the matching :9114 mgmt addr for the post-commit verification
-    // step. Without the swap the payload returned `wrong_port` and
-    // the lab tool exited non-zero on actually-successful uploads
-    // (v2.17.7-era observed bug).
-    do_query_tx(&to_mgmt_addr(addr), tx_id_hex)
-}
-
-fn do_transfer_dir(addr: &str, tx_id_hex: &str, dest_root: &str, src_dir: &str) -> Result<()> {
-    let tx_id = parse_tx_id(tx_id_hex)?;
-    let cfg = TransferConfig::new(addr);
-    let r = transfer_dir(&cfg, tx_id, dest_root, std::path::Path::new(src_dir))?;
-    println!(
-        "done: shards={} bytes={} tx={}",
-        r.shards_sent, r.bytes_sent, r.tx_id_hex
-    );
-    println!("commit_ack: {}", r.commit_ack_body);
-    // QueryTx is a mgmt-port frame; the transfer flows above use the
-    // :9113 transfer-port addr to drive the upload, so we swap to
-    // the matching :9114 mgmt addr for the post-commit verification
-    // step. Without the swap the payload returned `wrong_port` and
-    // the lab tool exited non-zero on actually-successful uploads
-    // (v2.17.7-era observed bug).
-    do_query_tx(&to_mgmt_addr(addr), tx_id_hex)
 }
 
 fn do_saves(addr: &str) -> Result<()> {
@@ -296,82 +238,8 @@ fn do_saves(addr: &str) -> Result<()> {
     Ok(())
 }
 
-fn do_transfer_zip(addr: &str, tx_id_hex: &str, dest_root: &str, zip_path: &str) -> Result<()> {
-    let tx_id = parse_tx_id(tx_id_hex)?;
-    let cfg = TransferConfig::new(addr);
-    let zp = std::path::Path::new(zip_path);
-    let ins = inspect_zip(zp)?;
-    println!(
-        "zip: {} files, {} zipped -> {} extracted{}",
-        ins.file_count,
-        ins.compressed_size,
-        ins.total_uncompressed,
-        ins.title
-            .as_deref()
-            .map(|t| format!(" [{t} / {}]", ins.title_id.as_deref().unwrap_or("?")))
-            .unwrap_or_default()
-    );
-    let r = transfer_zip(&cfg, tx_id, dest_root, zp)?;
-    println!(
-        "done: shards={} bytes={} tx={}",
-        r.shards_sent, r.bytes_sent, r.tx_id_hex
-    );
-    println!("commit_ack: {}", r.commit_ack_body);
-    // QueryTx is a mgmt-port frame; the transfer flows above use the
-    // :9113 transfer-port addr to drive the upload, so we swap to
-    // the matching :9114 mgmt addr for the post-commit verification
-    // step. Without the swap the payload returned `wrong_port` and
-    // the lab tool exited non-zero on actually-successful uploads
-    // (v2.17.7-era observed bug).
-    do_query_tx(&to_mgmt_addr(addr), tx_id_hex)
-}
-
-fn do_transfer_7z(addr: &str, tx_id_hex: &str, dest_root: &str, archive_path: &str) -> Result<()> {
-    let tx_id = parse_tx_id(tx_id_hex)?;
-    let cfg = TransferConfig::new(addr);
-    let ap = std::path::Path::new(archive_path);
-    let ins = ps5upload_core::transfer::inspect_7z(ap)?;
-    println!(
-        "7z: {} files, {} compressed -> {} extracted",
-        ins.file_count, ins.compressed_size, ins.total_uncompressed
-    );
-    let r = ps5upload_core::transfer::transfer_7z_with_opts(&cfg, tx_id, dest_root, ap, 0)?;
-    println!(
-        "done: shards={} bytes={} tx={}",
-        r.shards_sent, r.bytes_sent, r.tx_id_hex
-    );
-    println!("commit_ack: {}", r.commit_ack_body);
-    do_query_tx(&to_mgmt_addr(addr), tx_id_hex)
-}
-
-fn do_transfer_rar(
-    addr: &str,
-    tx_id_hex: &str,
-    dest_root: &str,
-    archive_path: &str,
-    password: Option<&str>,
-) -> Result<()> {
-    let tx_id = parse_tx_id(tx_id_hex)?;
-    let cfg = TransferConfig::new(addr);
-    let ap = std::path::Path::new(archive_path);
-    let ins = ps5upload_core::transfer::inspect_rar(ap, password)?;
-    println!(
-        "rar: {} files, {} extracted",
-        ins.file_count, ins.total_uncompressed
-    );
-    let r = ps5upload_core::transfer::transfer_rar_resumable(
-        &cfg, tx_id, dest_root, ap, password, 3, 0,
-    )?;
-    println!(
-        "done: shards={} bytes={} tx={}",
-        r.shards_sent, r.bytes_sent, r.tx_id_hex
-    );
-    println!("commit_ack: {}", r.commit_ack_body);
-    do_query_tx(&to_mgmt_addr(addr), tx_id_hex)
-}
-
 fn do_profile_info(addr: &str) -> Result<()> {
-    let info = ps5upload_core::profile::profile_info(&to_mgmt_addr(addr))?;
+    let info = ps5upload_core::profile::profile_info(addr)?;
     println!(
         "foreground user: uid={} ({}) name={:?}",
         info.uid, info.uid_hex, info.username
@@ -393,25 +261,25 @@ fn do_profile_info(addr: &str) -> Result<()> {
 }
 
 fn do_profile_set_username(addr: &str, slot: i32, name: &str) -> Result<()> {
-    ps5upload_core::profile::profile_set_username(&to_mgmt_addr(addr), slot, name)?;
+    ps5upload_core::profile::profile_set_username(addr, slot, name)?;
     println!("renamed slot {slot} -> {name:?}");
     Ok(())
 }
 
 fn do_profile_rename_user(addr: &str, uid: u32, name: &str) -> Result<()> {
-    ps5upload_core::profile::profile_set_local_username(&to_mgmt_addr(addr), uid, name)?;
+    ps5upload_core::profile::profile_set_local_username(addr, uid, name)?;
     println!("renamed user 0x{uid:08X} -> {name:?}");
     Ok(())
 }
 
 fn do_profile_activate(addr: &str, slot: i32, id: Option<u64>) -> Result<()> {
-    let id = ps5upload_core::profile::profile_activate(&to_mgmt_addr(addr), slot, id)?;
+    let id = ps5upload_core::profile::profile_activate(addr, slot, id)?;
     println!("activated slot {slot}, id={id}");
     Ok(())
 }
 
 fn do_profile_clear_slot(addr: &str, slot: i32) -> Result<()> {
-    ps5upload_core::profile::profile_clear_slot(&to_mgmt_addr(addr), slot)?;
+    ps5upload_core::profile::profile_clear_slot(addr, slot)?;
     println!("cleared slot {slot}");
     Ok(())
 }
@@ -424,59 +292,12 @@ fn do_profile_apply_avatar(
 ) -> Result<()> {
     let bytes = std::fs::read(image_path)?;
     let mode = ps5upload_core::profile::SquareMode::parse(mode);
-    let applied = ps5upload_core::profile::profile_apply_avatar(
-        &to_mgmt_addr(addr),
-        uid.unwrap_or(0),
-        None,
-        &bytes,
-        mode,
-    )?;
+    let applied =
+        ps5upload_core::profile::profile_apply_avatar(addr, uid.unwrap_or(0), None, &bytes, mode)?;
     println!(
         "avatar applied: uid={} username={:?} files_copied={}",
         applied.uid, applied.username, applied.files_copied
     );
-    Ok(())
-}
-
-fn do_send_shard(addr: &str, tx_id_hex: &str, shard_seq: u64) -> Result<()> {
-    let tx_id = parse_tx_id(tx_id_hex)?;
-
-    // Dummy shard: 256 bytes of 0xAB payload.
-    let shard_data = vec![0xABu8; 256];
-    let shard_hdr = ShardHeader {
-        tx_id,
-        shard_seq,
-        shard_digest: hash_shard(&shard_data),
-        record_count: 1,
-        flags: 0,
-    };
-    let hdr_bytes = shard_hdr.encode();
-
-    let mut c = Connection::connect(addr)?;
-    c.send_frame_split(FrameType::StreamShard, &hdr_bytes, &shard_data)?;
-
-    // Receive SHARD_ACK (binary body)
-    let (resp_hdr, resp_body) = c.recv_frame()?;
-    let ft = resp_hdr.frame_type().unwrap_or(FrameType::Error);
-    println!("frame_type={ft:?}");
-
-    if ft == FrameType::ShardAck {
-        match ShardAck::decode(&resp_body) {
-            Ok(ack) => {
-                println!(
-                    "shard_seq={} ack_state={:?} bytes_committed={} files_committed={}",
-                    ack.shard_seq,
-                    ack.ack_state,
-                    ack.bytes_committed_total,
-                    ack.files_committed_total,
-                );
-            }
-            Err(e) => eprintln!("failed to decode SHARD_ACK: {e}"),
-        }
-    } else {
-        eprintln!("body: {}", String::from_utf8_lossy(&resp_body));
-        bail!("expected SHARD_ACK, got {ft:?}");
-    }
     Ok(())
 }
 
@@ -533,7 +354,7 @@ mod ava1_cmds {
         ))
     }
 
-    /// `192.168.1.5` or `192.168.1.5:9113` → `192.168.1.5:9120` (`AVA1_PORT` overrides the
+    /// `192.168.1.5` or `192.168.1.5:<any port>` → `192.168.1.5:9120` (`AVA1_PORT` overrides the
     /// port, e.g. to go through a local chaos proxy).
     pub fn ava1_addr(addr: &str) -> String {
         let host = addr.rsplit_once(':').map(|(h, _)| h).unwrap_or(addr);
@@ -574,6 +395,21 @@ mod ava1_cmds {
             println!("paired");
         }
         Ok(s)
+    }
+
+    /// `node.info`: who the console says it is.
+    pub async fn hello(addr: &str) -> Result<()> {
+        let s = session(addr).await?;
+        let info = s.node_info().await?;
+        println!(
+            "node.info: {} {} {} fw={}",
+            info.name,
+            info.platform,
+            info.version,
+            info.firmware.unwrap_or_default()
+        );
+        s.close().await;
+        Ok(())
     }
 
     pub async fn ping(addr: &str, seconds: u64) -> Result<()> {
@@ -997,47 +833,41 @@ fn usage() -> ! {
         "                                ratio (single-threaded; a 223k-file corpus takes minutes)"
     );
     eprintln!("  ava1-calibrate CONSOLE DIR [FILES=2000] [SIZE=4096] [--out FILE]");
-    eprintln!("  bench CONSOLE SCENARIO --proto ava1|ftx2 --src P [--dest P] [--runs N] [--elf F]");
+    eprintln!("  bench CONSOLE SCENARIO --proto ava1 --src P [--dest P] [--runs N] [--elf F]");
     eprintln!("        [--to CONSOLE2] [--out FILE] [--kill-every-s N]   (see `bench --help`)");
     eprintln!(
         "  ava1-relay FROM SRC TO DEST [TX_ID_HEX]   relay a console tree through this computer"
     );
     eprintln!("                                five disk points; FILES ≤ 20000, SIZE ≤ 1 MiB");
     eprintln!("Usage: ps5upload-lab [ADDR] COMMAND [ARGS...]");
-    eprintln!("  Default ADDR: {DEFAULT_ADDR}");
+    eprintln!("  Default ADDR: {DEFAULT_ADDR} (a host; host:9113 and host:9114 are accepted and mean the same console)");
     eprintln!("Commands:");
-    eprintln!("  hello");
-    eprintln!("  status");
-    eprintln!("  shutdown");
+    eprintln!("  hello                      node.info over AVA1");
+    eprintln!("  status                     node.status JSON");
+    eprintln!("  shutdown                   node.shutdown: stop the running payload");
     eprintln!("  send-elf FILE      stream a local ELF to the loader on :9021 (shuts the running helper down first)");
-    eprintln!("  takeover");
-    eprintln!("  begin-tx TX_ID_HEX");
-    eprintln!("  query-tx TX_ID_HEX");
-    eprintln!("  commit-tx TX_ID_HEX");
-    eprintln!("  abort-tx  TX_ID_HEX");
-    eprintln!("  send-shard   TX_ID_HEX SHARD_SEQ");
-    eprintln!("  transfer     TX_ID_HEX DEST_FILE FILE_PATH");
-    eprintln!("  transfer-dir TX_ID_HEX DEST_ROOT SRC_DIR");
-    eprintln!("  transfer-zip TX_ID_HEX DEST_ROOT ZIP_PATH  decompress+stream a .zip");
-    eprintln!("  transfer-7z  TX_ID_HEX DEST_ROOT 7Z_PATH   decompress+stream a .7z");
-    eprintln!("  transfer-rar TX_ID_HEX DEST_ROOT RAR_PATH [PASSWORD]  host-extract+stream a .rar");
+    eprintln!("  transfer     JOB_ID_HEX DEST_FILE FILE_PATH   upload one file over AVA1");
+    eprintln!("  transfer-dir JOB_ID_HEX DEST_ROOT SRC_DIR     upload a folder over AVA1");
+    eprintln!("  transfer-zip JOB_ID_HEX DEST_ROOT ZIP_PATH    upload a .zip's contents");
+    eprintln!("  transfer-7z  JOB_ID_HEX DEST_ROOT 7Z_PATH     upload a .7z's contents");
+    eprintln!("  transfer-rar JOB_ID_HEX DEST_ROOT RAR_PATH [PASSWORD]  upload a .rar's contents");
     eprintln!("  register     SRC_PATH      register a game folder");
     eprintln!("  unregister   TITLE_ID      reverse registration");
     eprintln!("  launch       TITLE_ID      sceLncUtilLaunchApp");
-    eprintln!("  power        tick|standby|reboot|shutdown  (mgmt port; tick = keep-awake)");
+    eprintln!("  power        tick|standby|reboot|shutdown  (tick = keep-awake)");
     eprintln!("  apps                       list titles present in app.db");
     eprintln!(
         "  processes                  detailed process list (pid/comm/title/mem/threads/kind)"
     );
     eprintln!("  process-kill <pid>         SIGKILL a process by pid");
-    eprintln!("  saves                      list save-data folders + sizes (:9114)");
-    eprintln!("  profile-info                       foreground user + account name slots (:9114)");
+    eprintln!("  saves                      list save-data folders + sizes");
+    eprintln!("  profile-info                       foreground user + account name slots");
     eprintln!("  profile-set-username SLOT NAME     rename an account-name slot");
     eprintln!("  profile-rename-user  UID_HEX NAME  rename a local console user");
     eprintln!("  profile-activate     SLOT [ID_HEX] activate a slot (derive id if omitted)");
     eprintln!("  profile-clear-slot   SLOT          de-activate a slot (zero id+flags)");
     eprintln!("  profile-apply-avatar IMAGE [crop|fit]  set the foreground user's avatar");
-    eprintln!("  shell       SESSION CWD CMD...   run shell command via :9114");
+    eprintln!("  shell       SESSION CWD CMD...   run a shell command through management");
     std::process::exit(1);
 }
 
@@ -1161,6 +991,12 @@ fn main() -> Result<()> {
         } else {
             (DEFAULT_ADDR, &args[..])
         };
+    // `host`, `host:9113` and `host:9114` all mean that console.
+    let host = console_host(addr);
+    let addr = host.as_str();
+
+    // Every management call goes over AVA1: register the transport the engine registers.
+    ps5upload_ava1::mgmt::install();
 
     if rest.is_empty() {
         usage();
@@ -1225,58 +1061,36 @@ fn main() -> Result<()> {
             let file = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
             do_send_elf(addr, file)
         }
-        "takeover" => do_takeover(addr),
-        "begin-tx" => {
-            let tx_id = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
-            do_begin_tx(addr, tx_id)
-        }
-        "query-tx" => {
-            let tx_id = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
-            do_query_tx(addr, tx_id)
-        }
-        "commit-tx" => {
-            let tx_id = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
-            do_commit_tx(addr, tx_id)
-        }
-        "abort-tx" => {
-            let tx_id = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
-            do_abort_tx(addr, tx_id)
-        }
-        "send-shard" => {
-            let tx_id = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
-            let seq: u64 = rest.get(2).and_then(|s| s.parse().ok()).unwrap_or(1);
-            do_send_shard(addr, tx_id, seq)
-        }
         "transfer" => {
-            let tx_id = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
-            let dest_root = rest.get(2).map(|s| s.as_str()).unwrap_or_else(|| usage());
-            let file_path = rest.get(3).map(|s| s.as_str()).unwrap_or_else(|| usage());
-            do_transfer(addr, tx_id, dest_root, file_path)
+            let id = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            let dest = rest.get(2).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            let file = rest.get(3).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            do_transfer(addr, id, dest, file)
         }
         "transfer-dir" => {
-            let tx_id = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
-            let dest_root = rest.get(2).map(|s| s.as_str()).unwrap_or_else(|| usage());
-            let src_dir = rest.get(3).map(|s| s.as_str()).unwrap_or_else(|| usage());
-            do_transfer_dir(addr, tx_id, dest_root, src_dir)
+            let id = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            let dest = rest.get(2).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            let dir = rest.get(3).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            do_transfer_dir(addr, id, dest, dir)
         }
         "transfer-zip" => {
-            let tx_id = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
-            let dest_root = rest.get(2).map(|s| s.as_str()).unwrap_or_else(|| usage());
-            let zip_path = rest.get(3).map(|s| s.as_str()).unwrap_or_else(|| usage());
-            do_transfer_zip(addr, tx_id, dest_root, zip_path)
+            let id = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            let dest = rest.get(2).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            let zip = rest.get(3).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            do_transfer_zip(addr, id, dest, zip)
         }
         "transfer-7z" => {
-            let tx_id = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
-            let dest_root = rest.get(2).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            let id = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            let dest = rest.get(2).map(|s| s.as_str()).unwrap_or_else(|| usage());
             let arc = rest.get(3).map(|s| s.as_str()).unwrap_or_else(|| usage());
-            do_transfer_7z(addr, tx_id, dest_root, arc)
+            do_transfer_7z(addr, id, dest, arc)
         }
         "transfer-rar" => {
-            let tx_id = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
-            let dest_root = rest.get(2).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            let id = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            let dest = rest.get(2).map(|s| s.as_str()).unwrap_or_else(|| usage());
             let arc = rest.get(3).map(|s| s.as_str()).unwrap_or_else(|| usage());
             let password = rest.get(4).map(|s| s.as_str());
-            do_transfer_rar(addr, tx_id, dest_root, arc, password)
+            do_transfer_rar(addr, id, dest, arc, password)
         }
         "register" => {
             let src_path = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
@@ -1425,11 +1239,6 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             let parsed = bench::BenchArgs::parse(tail)?;
-            // An AVA1 run uses the management path the engine installs at startup (the
-            // free-space check's fs.freespace among it); FTX2 runs keep their legacy path.
-            if parsed.proto == bench::Proto::Ava1 {
-                ps5upload_ava1::mgmt::install();
-            }
             let rt = tokio::runtime::Runtime::new()?;
             let rows = rt.block_on(bench::run_bench(&parsed))?;
             let failed = rows.iter().filter(|r| !r.ok).count();
@@ -1502,8 +1311,28 @@ mod tests {
             "192.168.86.100:9120"
         );
         assert_eq!(
+            super::ava1_cmds::ava1_addr("192.168.86.100:9114"),
+            "192.168.86.100:9120"
+        );
+        assert_eq!(
             super::ava1_cmds::ava1_addr("192.168.86.100"),
             "192.168.86.100:9120"
         );
+    }
+
+    #[test]
+    fn a_console_is_named_by_its_host_whatever_port_the_caller_typed() {
+        for typed in [
+            "10.0.0.5",
+            "10.0.0.5:9113",
+            "10.0.0.5:9114",
+            "10.0.0.5:9120",
+        ] {
+            assert_eq!(super::console_host(typed), "10.0.0.5", "{typed}");
+        }
+        assert_eq!(super::console_host("[::1]:9114"), "[::1]");
+        assert_eq!(super::console_host("[::1]"), "[::1]");
+        assert_eq!(super::console_host("fe80::1"), "fe80::1");
+        assert_eq!(super::console_host("ps5.lan:9113"), "ps5.lan");
     }
 }

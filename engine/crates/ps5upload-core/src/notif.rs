@@ -1,4 +1,4 @@
-//! Persistent notification browser over FTX2.
+//! Persistent notification browser over AVA1 management.
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};

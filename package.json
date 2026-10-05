@@ -11,8 +11,6 @@
     "i18n:check": "node scripts/i18n-coverage.mjs",
     "i18n:report": "node scripts/i18n-coverage.mjs --report",
     "i18n:bootstrap": "node scripts/i18n-coverage.mjs --update-allowlist",
-    "bench:ftx2-upload": "node bench/run-ftx2-upload.mjs",
-    "bench:ftx2-gate": "node bench/check-ftx2-baseline.mjs",
     "smoke:hardware": "node tests/smoke-hardware.mjs",
     "release": "./scripts/release.sh"
   },

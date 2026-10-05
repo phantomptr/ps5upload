@@ -394,7 +394,7 @@ impl AvaTransport {
         }
         if tail && t.more.unwrap_or(0) != 0 {
             // Say so in the text itself: a bug report that quietly starts mid-log reads as if
-            // the console had nothing older (the legacy FTX2 reply had no such limit).
+            // the console had nothing older (the legacy reply had no such limit).
             let mut v = TAIL_CLIPPED.as_bytes().to_vec();
             v.extend_from_slice(&t.body);
             return Ok(v);

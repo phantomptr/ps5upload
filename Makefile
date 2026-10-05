@@ -2,11 +2,11 @@
 #
 # Tree layout (current):
 #   payload/   — PS5 C payload (FreeBSD 11)
-#   engine/    — Rust workspace: ftx2-proto, ps5upload-core, -engine HTTP service,
-#                -lab CLI, -tests mock server, -bench, -pkg
+#   engine/    — Rust workspace: ava1, ps5upload-core, -ava1, -engine HTTP service,
+#                -lab CLI, -tests, -pkg
 #   client/    — Tauri 2 desktop app, cross-platform (Linux/macOS/Windows, x64+arm64)
 #   tests/     — root integration smoke + tests/lab/ (real-hardware shell scripts)
-#   bench/     — golden workloads, baselines, perf-gate helpers
+#   bench/     — hardware sweep, golden workloads and profiles
 #   scripts/   — install + dev helpers (one per OS, plus shared mjs utilities)
 #
 # Retired pre-2.1: app/ (browser server), shared/ (legacy JS modules),
@@ -502,8 +502,8 @@ gen-fixtures:
 	@node scripts/gen-fixtures.mjs
 
 sweep:
-	@echo "Running FTX2 sweep against live PS5 at $(PS5_HOST) ..."
-	@node bench/run-ftx2-sweep.mjs --spawn-engine --gen-fixtures
+	@echo "Running the upload sweep against live PS5 at $(PS5_HOST) ..."
+	@node bench/run-sweep.mjs --spawn-engine --gen-fixtures
 
 # Wait for the payload's runtime port to accept connections after send.
 # Retries 15×/2s = 30s ceiling; exits non-zero if the port never opens.
@@ -518,47 +518,48 @@ _wait-payload-ready:
 	echo "ERROR: PS5 AVA1 port 9120 did not open within 30s"; exit 1
 
 #──────────────────────────────────────────────────────────────────────────────
-# check-no-ftx2: FTX2 and its ports (9113 transfer, 9114 management) must not
-# reappear in the guides, the client or the AVA1 engine crates.
+# check-no-ftx2: the retired protocol (FTX2) and its ports (9113 transfer, 9114
+# management) must not reappear anywhere in the repository.
 #
-# SCOPE IS TEMPORARY. FTX2 still lives in core, lab, bench, ftx2-proto and the
-# old tests until Task 18 deletes it, so only the documentation, client/src,
-# ps5upload-engine and the payload (Task 19: its servers, transaction table and
-# ports are gone) are checked now (ps5upload-ava1 is exempt for now, see below).
-# The scope widens to the whole repo at the FTX2 deletion (P3 Task 18 Step 3),
-# and the exceptions below shrink to CHANGELOG.md alone.
-#
-# The pattern is case-insensitive "ftx2" or a bare port 9113/9114. Digits on
-# either side are excluded so the engine's own 19113 is not a match.
+# The scope is the whole tree, payload included, except the history the project
+# keeps on purpose and the legacy-helper migration shim (listed below). The pattern is case-insensitive "ftx2" or a bare port
+# 9113/9114. Digits on either side are excluded so the engine's own 19113 is not a
+# match. Binary files and lockfiles are not searched.
 #
 # Exceptions (each is a path excluded from the search):
+#   payload/                         the payload still carries FTX2 until its own task.
 #   CHANGELOG.md                     history keeps FTX2 by design.
-#   Makefile                         names the legacy bench scripts and this pattern.
-#   bench/README.md                  (outside the scanned list now) names the legacy
-#                                    baseline scripts by file name until they go.
-#   payload/src/legacy_takeover.c    the migration shim: shuts an old helper down.
+#   protocol/ava1/                   the spec, the cutover checklist and the method
+#                                    checklist describe the migration from FTX2.
+#   Makefile, .github/workflows/engine-ci.yml
+#                                    name this check and its pattern.
+#   engine/crates/ava1-ctest         builds the payload's C on the host and reads its
+#                                    FTX2 frame numbers; it goes with the payload task.
 #   .../src/legacy_helper.rs,
 #   .../src/legacy_helper_tests.rs,
-#   .../src/legacy_guard.rs          the old-helper banner strings and migration guard.
+#   .../src/legacy_guard.rs          the migration shim: shuts an old helper down and
+#                                    shows the old-helper banner.
 #   .../src/lib.rs, .../src/ava1_only_tests.rs
-#                                    the migration/deprecation lines and the env-var
-#                                    fallback tests (the old FTX2_* names).
+#                                    the shim's wiring and the tests that pin the engine
+#                                    free of the retired symbols.
 #   client/src/lib/addr.ts,
 #   client/src/lib/humanizeError.ts  tolerate a stale host:9113 / host:9114 a user or an
 #                                    older engine message still carries.
-#   *.test.ts, *.test.tsx, */tests/*, ps5upload-engine/src/**/tests and in-file
+#   *.test.ts, *.test.tsx, ps5upload-engine/src/**/tests and in-file
 #   test modules use 9113/9114 as fixture addresses for that same tolerance
-#   (engine src files that only hold such fixtures or old-port strip logic:
-#   install/, pkg_install.rs, fakelibs_api.rs, fpkg_remote.rs, icon_cache.rs).
-#   ps5upload-ava1 (not scanned yet)  the whole crate still depends on ftx2-proto and compares itself to
-#                                    the FTX2 behaviour in comments until Task 18/19.
+#   (files that only hold such fixtures or old-port strip logic:
+#   engine .../install/, pkg_install.rs, fakelibs_api.rs, icon_cache.rs, ps5upload-ava1
+#   pool.rs, the lab's address tests in main.rs and bench.rs).
 CHECK_NO_FTX2_PATTERN := ftx2|(^|[^0-9])911[34]([^0-9]|$$)
-CHECK_NO_FTX2_SCOPE := README.md CONTRIBUTING.md TESTING.md FAQ.md \
-	engine/README.md tests/README.md tests/lab/README.md \
-	client/src engine/crates/ps5upload-engine payload
+CHECK_NO_FTX2_SCOPE := .
 CHECK_NO_FTX2_EXCEPT := \
-	':!CHANGELOG.md' \
 	':!payload/src/legacy_takeover.c' \
+	':!engine/crates/ava1-ctest' \
+	':!CHANGELOG.md' \
+	':!protocol/ava1' \
+	':!Makefile' \
+	':!.github/workflows/engine-ci.yml' \
+	':!*Cargo.lock' ':!*package-lock.json' \
 	':!engine/crates/ps5upload-engine/src/legacy_helper.rs' \
 	':!engine/crates/ps5upload-engine/src/legacy_helper_tests.rs' \
 	':!engine/crates/ps5upload-engine/src/legacy_guard.rs' \
@@ -567,16 +568,16 @@ CHECK_NO_FTX2_EXCEPT := \
 	':!engine/crates/ps5upload-engine/src/install' \
 	':!engine/crates/ps5upload-engine/src/pkg_install.rs' \
 	':!engine/crates/ps5upload-engine/src/fakelibs_api.rs' \
-	':!engine/crates/ps5upload-engine/src/fpkg_remote.rs' \
 	':!engine/crates/ps5upload-engine/src/icon_cache.rs' \
-	':!engine/crates/ps5upload-engine/tests' \
-	':!engine/crates/ps5upload-engine/static' \
+	':!engine/crates/ps5upload-ava1/src/pool.rs' \
+	':!engine/crates/ps5upload-lab/src/main.rs' \
+	':!engine/crates/ps5upload-lab/src/bench.rs' \
 	':!client/src/lib/addr.ts' \
 	':!client/src/lib/humanizeError.ts' \
 	':!client/src/**/*.test.ts' ':!client/src/**/*.test.tsx'
 
 check-no-ftx2:
-	@if git grep -n -i -E '$(CHECK_NO_FTX2_PATTERN)' -- $(CHECK_NO_FTX2_SCOPE) $(CHECK_NO_FTX2_EXCEPT); then \
+	@if git grep -n -I -i -E '$(CHECK_NO_FTX2_PATTERN)' -- $(CHECK_NO_FTX2_SCOPE) $(CHECK_NO_FTX2_EXCEPT); then \
 		echo "ERROR: FTX2 or port 9113/9114 found above (see the check-no-ftx2 notes in the Makefile)"; exit 1; \
 	else echo "✓ check-no-ftx2: clean"; fi
 
@@ -586,7 +587,7 @@ validate: check-no-ftx2 send-payload _wait-payload-ready
 	@npm run --silent smoke:hardware
 	@echo ""
 	@echo "── Running sweep (default profiles) ────────────────────"
-	@node bench/run-ftx2-sweep.mjs --spawn-engine --gen-fixtures
+	@node bench/run-sweep.mjs --spawn-engine --gen-fixtures
 	@echo ""
 	@echo "✓ validate complete — see bench/reports/ for the full report"
 
@@ -596,7 +597,7 @@ validate-xl: send-payload _wait-payload-ready
 	@npm run --silent smoke:hardware
 	@echo ""
 	@echo "── Running sweep (INCLUDING XL 200k-file stress) ───────"
-	@node bench/run-ftx2-sweep.mjs --spawn-engine --gen-fixtures --xl
+	@node bench/run-sweep.mjs --spawn-engine --gen-fixtures --xl
 	@echo ""
 	@echo "✓ validate-xl complete — see bench/reports/ for the full report"
 
@@ -810,9 +811,7 @@ ci-full: quality-full
 test-root:
 	@echo "Syntax-checking root node scripts..."
 	@node --check tests/smoke-hardware.mjs
-	@node --check bench/run-ftx2-sweep.mjs
-	@node --check bench/run-ftx2-upload.mjs
-	@node --check bench/check-ftx2-baseline.mjs
+	@node --check bench/run-sweep.mjs
 	@node --check scripts/gen-fixtures.mjs
 	@node --check scripts/check-lockfile.mjs
 	@node scripts/check-lockfile.mjs --self-test

@@ -20,7 +20,7 @@
 //!   2. A process named `shadowmountplus` appears in PROC_LIST.
 //!      Definitive proof it's currently running.
 //!
-//! All Sony API calls go through the engine's existing FTX2 RPCs
+//! All Sony API calls go through the engine's management RPCs
 //! (FS_LIST_DIR, PROC_LIST, FS_READ); nothing here speaks the wire
 //! directly.
 //!
@@ -36,7 +36,7 @@ use serde::Serialize;
 use crate::fs_ops::{fs_read_with_timeout, list_dir_with_timeout, ListDirOptions};
 use crate::hw::proc_list;
 
-/// Per-call deadline for any single FTX2 RPC. SMP's config is small,
+/// Per-call deadline for any single management RPC. SMP's config is small,
 /// the directory listings are small, the proc list is small. 5s is
 /// generous and bounds the whole snapshot if any one call hangs.
 const RPC_TIMEOUT: Duration = Duration::from_secs(5);
@@ -106,7 +106,7 @@ pub struct SmpStatus {
 }
 
 /// Collect a full SMP status snapshot for the PS5 at `addr`
-/// (management-port address, "ip:9114").
+/// (the console's host).
 ///
 /// Sync — run this on a `spawn_blocking` task from an async caller.
 /// Never fails outright: individual probe failures are recorded in

@@ -561,7 +561,7 @@ const STALL_FATAL: Duration = Duration::from_secs(10);
 /// drive in a long flush), not a dead one: it returns the credit when it has applied them,
 /// and a receiver that really died is caught by the session's liveness. Only a stall with
 /// no progress at all for this long fails the job, so a drive that stalls for minutes
-/// does not fail an upload that FTX2 (which never waits on the drive) would finish.
+/// does not fail an upload that a sender which never waits on the drive would finish.
 const STALL_SLOW_RECEIVER_FATAL: Duration = Duration::from_secs(600);
 
 /// How long a credit stall may last before the job fails, given the window bytes the
