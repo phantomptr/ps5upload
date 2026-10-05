@@ -89,6 +89,11 @@ struct Promise {
     key: (String, String),
     to_allocate: u64,
     room_then: u64,
+    /// The figures the check was admitted on, for the message if the console's own allocator
+    /// refuses later (see [`late_no_space_detail`]).
+    volume: String,
+    free_bytes: u64,
+    reserve_bytes: u64,
 }
 
 impl Promise {
@@ -174,6 +179,49 @@ pub fn judge(figures: &SpaceFigures, room: &Room, promised_elsewhere: u64) -> Re
     Err(m)
 }
 
+/// The sentence that explains a gap between what Volumes shows and what the console can allocate.
+pub const POOL_SENTENCE: &str =
+    "The console keeps part of its storage for its own use, so less is usable than Volumes shows.";
+
+/// The refusal text for a console that ran out of room (ENOSPC while preparing a file, or on a
+/// write) after the up-front check had admitted the job. Same figures as the check, plus
+/// [`POOL_SENTENCE`]. Pure, so the wording is tested without a console.
+pub fn pool_refusal(
+    volume: &str,
+    need: u64,
+    avail: u64,
+    free_bytes: u64,
+    reserve_bytes: u64,
+) -> String {
+    format!(
+        "{volume} needs {need} more bytes ({}) for this upload and {avail} bytes ({}) were \
+         allocatable when it was checked ({free_bytes} bytes free, {reserve_bytes} reserved), but \
+         the console ran out of room before the transfer could use it. {POOL_SENTENCE} \
+         Nothing was lost: the partial upload is kept, so freeing space and retrying resumes it.",
+        gib(need),
+        gib(avail),
+    )
+}
+
+/// The detail for an ENOSPC the console reported after admitting `job`, built from the figures it
+/// was admitted on; without them (the room was never probed) the sentence alone, no invented numbers.
+pub(crate) fn late_no_space_detail(job: &[u8; 16], console_message: &str) -> String {
+    let l = ledger().lock().unwrap_or_else(|e| e.into_inner());
+    match l.get(job) {
+        Some(p) => pool_refusal(
+            &p.volume,
+            p.to_allocate,
+            p.room_then,
+            p.free_bytes,
+            p.reserve_bytes,
+        ),
+        None => format!(
+            "The console ran out of room for this upload ({console_message}). {POOL_SENTENCE} \
+             The partial upload is kept, so freeing space and retrying resumes it."
+        ),
+    }
+}
+
 /// The gate an upload to `dest` on `console` runs once the receiver has answered. Runs on a
 /// blocking thread (it asks the console over the management channel).
 pub(crate) fn gate(probe: RoomProbe, console: String, dest: String, job: [u8; 16]) -> SpaceGate {
@@ -201,6 +249,9 @@ pub(crate) fn gate(probe: RoomProbe, console: String, dest: String, job: [u8; 16
                         key,
                         to_allocate: figures.to_allocate(),
                         room_then: room.allocatable_bytes,
+                        volume: room.volume.clone(),
+                        free_bytes: room.free_bytes,
+                        reserve_bytes: room.reserve_bytes,
                     },
                 );
                 Ok(())
@@ -223,6 +274,32 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_late_enospc_reads_as_the_up_front_refusal_with_the_pool_sentence() {
+        let job = [0x5a; 16];
+        ledger().lock().unwrap().insert(
+            job,
+            Promise {
+                key: ("h".into(), "v".into()),
+                to_allocate: 164 * GB,
+                room_then: 170 * GB,
+                volume: "/data".into(),
+                free_bytes: 171 * GB,
+                reserve_bytes: GB,
+            },
+        );
+        let d = late_no_space_detail(&job, "full");
+        ledger().lock().unwrap().remove(&job);
+        assert!(d.contains("/data needs "), "{d}");
+        assert!(d.contains(&format!("{} bytes", 164 * GB)), "{d}");
+        assert!(d.contains(&format!("{} bytes free", 171 * GB)), "{d}");
+        assert!(d.contains(POOL_SENTENCE), "{d}");
+        assert!(d.contains("partial upload is kept"), "{d}");
+        // Never admitted by a probe: the sentence, and no figures made up.
+        let d = late_no_space_detail(&[0x5b; 16], "drive is full");
+        assert!(d.contains(POOL_SENTENCE) && !d.contains("needs"), "{d}");
+    }
 
     const GB: u64 = 1 << 30;
 

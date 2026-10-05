@@ -442,6 +442,16 @@ pub(crate) fn refusal(status: u16, message: String) -> UploadFailure {
     }
 }
 
+/// The console's own ENOSPC (its preallocation of a file, or a write) after the up-front check
+/// admitted the job: the same refusal the check gives, with the same figures and the pool
+/// sentence. The console keeps the journal and the `.ava-part`, so a retry resumes.
+pub(crate) fn late_no_space(job: &[u8; 16], console_message: String) -> UploadFailure {
+    UploadFailure {
+        reason: "preflight_insufficient_space".into(),
+        detail: crate::space::late_no_space_detail(job, &console_message),
+    }
+}
+
 impl PostCommitError {
     fn new(kind: PostCommitKind, message: Option<String>) -> Self {
         let detail = message
@@ -740,6 +750,9 @@ pub fn upload_with_seq_in(
                 Ok(r) if r.status == gen::ERR_CROSS_DEVICE => {
                     return Err(PostCommitError::new(PostCommitKind::CrossDevice, r.message).into());
                 }
+                Ok(r) if r.status == gen::ERR_NO_SPACE => {
+                    return Err(late_no_space(&job_id, r.message.unwrap_or_default()).into());
+                }
                 Ok(r) => return Err(refusal(r.status, r.message.unwrap_or_default()).into()),
                 Err(SendError::Disconnected(why)) => {
                     let durable = progress.bytes_durable.load(Ordering::Relaxed);
@@ -779,6 +792,9 @@ pub fn upload_with_seq_in(
                     return Err(
                         PostCommitError::new(PostCommitKind::CrossDevice, Some(message)).into(),
                     );
+                }
+                Err(SendError::Refused { status, message }) if status == gen::ERR_NO_SPACE => {
+                    return Err(late_no_space(&job_id, message).into());
                 }
                 Err(SendError::Refused { status, message }) => {
                     return Err(refusal(status, message).into());

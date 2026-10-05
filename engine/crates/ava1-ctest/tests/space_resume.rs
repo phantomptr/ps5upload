@@ -510,3 +510,59 @@ async fn an_upload_survives_the_console_resting_with_the_engine_running() {
 async fn an_upload_survives_the_console_resting_and_the_engine_restarting() {
     rest_mode("space-rest-restart", true).await;
 }
+
+// ---- (4) the console's own allocator says no at preallocate (Discord 2026-10-04: F1.2) -----
+
+#[test]
+fn a_preallocate_enospc_is_the_up_front_refusal_with_the_pool_sentence_and_keeps_the_partial() {
+    let t = dir("space-prealloc");
+    let ava = pair(&t);
+    let srv = serve(&t);
+    // Volumes-style room says there is plenty: the up-front check admits the job.
+    let room = Arc::new(AtomicU64::new(u64::MAX / 4));
+    let pool = pool_with_room(ava, srv.addr(), "/ctest-prealloc", room);
+    let src = t.join("src");
+    write(&src.join("big.bin"), &bytes((8 * MIB) as usize, 30));
+    let dest = t.join("dest");
+
+    // The console's pool refuses the first file's preallocation.
+    srv.fault_prealloc(Some(0));
+    let c = cfg();
+    let (durable_bytes, durable_files) = (
+        c.progress_bytes_finalized.clone().unwrap(),
+        c.progress_files_finalized.clone().unwrap(),
+    );
+    let r = upload_dir_in(&pool, &c, job(9), dest.to_str().unwrap(), &src);
+    srv.fault_prealloc(None);
+    let e = r.expect_err("the console refused the preallocation");
+    let f = refusal(&e).unwrap_or_else(|| panic!("not the up-front refusal: {e:#}"));
+    assert!(
+        f.detail.contains(ps5upload_ava1::space::POOL_SENTENCE),
+        "{}",
+        f.detail
+    );
+    assert!(
+        f.detail.contains("needs 8388608 more bytes"),
+        "{}",
+        f.detail
+    );
+    // Refused before anything was acknowledged: no byte or file was ever reported durable,
+    // and the destination was never published.
+    assert_eq!(durable_bytes.load(Ordering::Relaxed), 0);
+    assert_eq!(durable_files.load(Ordering::Relaxed), 0);
+    assert!(!dest.join("big.bin").exists());
+    // The journal stays (no Done record ends the job), so a retry resumes rather than restarts.
+    let jobs = t.join("jobs");
+    assert!(
+        std::fs::read_dir(&jobs).unwrap().next().is_some(),
+        "the job's journal was removed"
+    );
+
+    // Freed space (the fault cleared): the same job id goes through, byte-identical.
+    upload_dir_in(&pool, &cfg(), job(9), dest.to_str().unwrap(), &src)
+        .unwrap_or_else(|e| panic!("the retry did not resume: {e:#}"));
+    assert_eq!(
+        std::fs::read(dest.join("big.bin")).unwrap(),
+        bytes((8 * MIB) as usize, 30)
+    );
+}

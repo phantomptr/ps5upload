@@ -1017,6 +1017,14 @@ impl CServer {
     }
 }
 
+impl CServer {
+    /// While set, the data server's preallocation of file `id` answers ENOSPC (`None` clears it).
+    /// Process-wide like the rest of the data layer's test hooks; hold the server while it is set.
+    pub fn fault_prealloc(&self, id: Option<u32>) {
+        unsafe { ffi::ava1_test_apply_fault_prealloc(id.unwrap_or(u32::MAX - 1)) }
+    }
+}
+
 impl Drop for CServer {
     fn drop(&mut self) {
         if self.data.is_some() {
