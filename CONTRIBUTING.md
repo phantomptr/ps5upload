@@ -12,7 +12,7 @@ same way.
 3. Make your change, keeping it focused — one logical change per PR.
 4. **Run the quality gate locally** (see below) until it's green.
 5. Open a **pull request** against `phantomptr/ps5upload:main` and fill out
-   the PR template (`.github/PULL_REQUEST_TEMPLATE.md`).
+   the PR template.
 
 Every PR is gated by CI (the **`PR gate`** check) and reviewed by the code
 owner before it can merge. PRs are squash-merged, so your branch becomes a
@@ -29,28 +29,34 @@ make run-client  # launch the Tauri dev app
 See the [README](README.md) and [TESTING.md](TESTING.md) for the full
 toolchain (PS5 Payload SDK, Rust, Node 22, Tauri prerequisites).
 
-## Quality gate — run before opening a PR
+## Quality gate: run before opening a PR
 
-CI runs the same checks; running them locally first saves a round-trip:
+CI runs the same checks; running them locally first saves a round-trip.
+`npm run validate` runs most of it in one command (version sync, script checks, i18n,
+engine and desktop fmt/clippy/tests, client typecheck/lint/tests/build). The complete gate is
+these, and `cargo fmt --check` must pass in BOTH `engine/` and `client/src-tauri`:
 
 ```bash
-npm run validate        # lints + unit/integration tests + typecheck + i18n + build
+( cd engine && cargo fmt --all -- --check )       # fmt in BOTH workspaces
+( cd client/src-tauri && cargo fmt --all -- --check )
+( cd engine && cargo clippy --workspace -- -D warnings )
+( cd engine && cargo test --workspace )
+( cd engine && cargo test -p ava1-ctest -- --test-threads=1 )
+make test-payload                                 # needs PS5_PAYLOAD_SDK
+make check-no-ftx2                                # the retired protocol must stay gone
+( cd client && npm run lint && npm run typecheck && npm test && npm run build:vite )
+npm run i18n:check                                # from the repo root
 ```
 
-`npm run validate` covers, across all three layers:
-
-- **Lints** — `cargo fmt`/`clippy` (engine + Tauri shell), ESLint, `tsc`,
-  script syntax/audit, and the i18n coverage gate.
-- **Unit + integration tests** — `cargo test --workspace` (protocol, core,
-  engine, pkg, ava1, and the loopback AVA1 integration tests that run the
-  payload's C on the host — no PS5 required),
-  the Tauri shell tests, and the client Vitest suite.
+`ava1-ctest` builds the payload's AVA1 C on the host and tests it against the Rust side, so no
+PS5 is needed. `check-no-ftx2` fails if the old protocol name or ports 9113/9114 reappear
+outside the changelog and a short list of exceptions in the Makefile.
 
 Other useful targets:
 
 ```bash
 make test               # script + engine + payload + client checks
-npm run validate:full   # adds the payload ELF build (needs PS5_PAYLOAD_SDK)
+npm run validate:full   # adds the payload ELF build and self-tests
 npm run coverage        # frontend + Rust coverage reports
 ```
 

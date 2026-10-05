@@ -33,6 +33,8 @@ client (Tauri/React)  ──HTTP──▶  ps5upload-engine :19113
 
 ```sh
 cargo test --workspace          # no PS5 required — loopback peers
+cargo test -p ava1-ctest -- --test-threads=1   # payload AVA1 C vs Rust, on the host
+cargo fmt --all -- --check      # CI fails on this; client/src-tauri has its own
 cargo build --release -p ps5upload-engine
 ```
 

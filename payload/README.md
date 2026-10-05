@@ -55,17 +55,12 @@ Everything compiles with `-Wall -Wextra -Werror`.
 
 Logic that can be separated from the console lives in a header under
 `include/` and gets a host-compiled self-test in `tests/`, run by
-`make test-payload` with the same warning flags. Current cores:
+`make test-payload` with the same warning flags.
 
-| Header | Self-test covers |
-|---|---|
-| `hw_guard.h` | Recovering from a faulting Sony getter without losing the helper |
-| `ptrace_recovery.h` | Timeout recovery never resuming injected registers |
-| `appdb_scan.h` | Reading `app.db` — a real SQLite record reader, because column values are stored with no separators between them |
-| `ftp_format.h` | PASV/EPSV/LIST reply shapes, which clients parse strictly |
-| `sdk_param.h` | Rewriting `param.json` version fields, and reporting when nothing changed |
-| `elf_param.h` | Finding SDK fields via program headers, not by scanning for magic bytes |
-| `timed_init.h` | Bounded one-time init that never starts a second initializer |
+See `tests/*_selftest.c` for the full list (hardware guards, ptrace recovery, `app.db`
+reading, FTP, SDK param rewriting, installer, cheats, wake watchdog and more). AVA1 itself is
+tested from Rust: `cargo test -p ava1-ctest -- --test-threads=1` in `engine/` compiles
+`ava1/` on the host and checks it against the Rust side.
 
 Prefer adding to this set over testing on hardware: a host self-test runs
 in milliseconds and can't wedge a console.
