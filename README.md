@@ -762,21 +762,10 @@ This software builds on the following open-source projects:
 
 ## Thanks
 
-Projects whose code ps5upload ships or ported, or whose data it reads (bundled libraries are listed
-under Third-Party Libraries above):
-
-**Code we ported and still ship**
-* [elf-arsenal](https://git.etawen.dev/soniciso/elf-arsenal) (soniciso, Sanad; GPLv3+) — the drive
-  sensor reads (`payload/src/drive_sensors.c`) are ported from it, and the cheat engine
-  (`payload/src/cheats.c`) and the wake watchdog are based on it
-
-**Data sources**
-* [PROSPEROPatches](https://prosperopatches.com/) and [ORBISPatches](https://orbispatches.com/) — game details and cover art
-* [TMDB](https://www.themoviedb.org/) — artwork
-* [etaHEN PS5_Cheats](https://github.com/etaHEN/PS5_Cheats) and the GoldHEN cheat repositories — cheat files
-
-**Contributors** — thanks to everyone who sent code, translations and docs, and to the Discord
-community who test builds and report bugs with logs.
+* [elf-arsenal](https://git.etawen.dev/soniciso/elf-arsenal) (soniciso, Sanad) — parts of the drive sensor, cheat and wake-watchdog code
+* [PROSPEROPatches](https://prosperopatches.com/), [ORBISPatches](https://orbispatches.com/) and [TMDB](https://www.themoviedb.org/) — game details and artwork
+* [etaHEN PS5_Cheats](https://github.com/etaHEN/PS5_Cheats) and GoldHEN — cheat files
+* Everyone who contributed code, translations and docs, and the Discord testers
 
 ps5upload stands on the shoulders of the **PS5 homebrew scene**. Huge
 thanks to everyone who makes this ecosystem possible — the exploit and
