@@ -79,7 +79,7 @@ fn parse_lines(path: &Path) -> Vec<HistoryEntry> {
 /// `cap` lines. The truncation rewrites via a temp sibling + `rename` in the
 /// same directory (same device — no cross-device rename).
 pub fn append(dir: &Path, ps5_addr: &str, entry: &HistoryEntry, cap: usize) -> std::io::Result<()> {
-    fs::create_dir_all(dir)?;
+    fs::create_dir_all(dir).map_err(|e| crate::state_io::io_error("install history", dir, e))?;
     let path = console_file(dir, ps5_addr);
     let line = serde_json::to_string(entry)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -87,7 +87,8 @@ pub fn append(dir: &Path, ps5_addr: &str, entry: &HistoryEntry, cap: usize) -> s
         let mut f = fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&path)?;
+            .open(&path)
+            .map_err(|e| crate::state_io::io_error("install history", &path, e))?;
         writeln!(f, "{line}")?;
     }
     // Truncate to the newest `cap` lines if we've grown past it.

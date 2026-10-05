@@ -33,6 +33,14 @@ services:
       # Only needed without host networking: this server's LAN IP.
       # PS5UPLOAD_PKG_HOST_IP: "192.168.1.10"
 
+    # Synology and other NAS boxes: the container runs as UID 65532 unless told
+    # otherwise, and your bind mount is owned by someone else. Pick ONE:
+    #   - run as the folder's owner: `user: "1234:77777"` (see `ls -ln` on the
+    #     host folder), or
+    #   - `chown -R 65532:65532 /volume1/docker/ps5upload/data` on the host.
+    # (A USER_ID/GROUP_ID environment variable is not read by these images.)
+    # user: "1234:77777"
+
     volumes:
       # The engine's own state: saved servers, install history, artwork cache.
       - ps5upload-data:/data

@@ -52,6 +52,7 @@ mod remote;
 mod remote_download;
 #[cfg(not(target_os = "android"))]
 mod remote_pkg;
+mod state_io;
 mod telemetry;
 #[cfg(feature = "webui")]
 mod webui;

@@ -72,3 +72,17 @@ Anything touching real transfer behaviour still needs hardware — see
   data because there it means "unsupported on this console".
 - **One port, one session.** Everything goes to 9120 as AVA1: management
   calls on the session's control connection, bulk data on its lanes.
+
+## Synology and other NAS boxes (saved servers: "Permission denied")
+
+The Docker images keep their state (saved servers, install history, artwork cache) in `/data`
+and run as UID:GID 65532 unless you override `user:`. If you bind-mount a host folder that
+someone else owns, writing fails and the engine says so, naming the folder, the UID:GID it runs
+as, and the owner it found (#361). Fix it one of two ways:
+
+- set `user:` in the compose file to the folder's owner (`ls -ln` on the host shows the numbers),
+  for example `user: "1234:77777"`; or
+- `chown -R 65532:65532 <host folder>` for the mount.
+
+`USER_ID` / `GROUP_ID` environment variables are not read by these images; use `user:`.
+The account must also be allowed to write that folder in the NAS's own permission settings.

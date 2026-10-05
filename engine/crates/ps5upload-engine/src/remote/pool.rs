@@ -25,7 +25,7 @@ pub fn global() -> Result<Arc<Remote>, RemoteError> {
             let dir = super::store::data_dir().ok_or_else(|| {
                 "no home folder to keep saved connections in; set PS5UPLOAD_DATA_DIR".to_string()
             })?;
-            let store = Store::open(&dir).map_err(|e| format!("saved connections: {e}"))?;
+            let store = Store::open(&dir).map_err(|e| e.to_string())?;
             Ok(Arc::new(Remote {
                 store: Arc::new(store),
                 pool: Arc::new(Pool::new(Box::new(RealConnector))),

@@ -493,7 +493,7 @@ pub fn jobs_dir() -> Option<PathBuf> {
 }
 
 pub fn write_record(dir: &Path, job_id: Uuid, record: &Value) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
+    std::fs::create_dir_all(dir).map_err(|e| crate::state_io::io_error("job summaries", dir, e))?;
     let tmp = dir.join(format!("{job_id}.json.tmp"));
     let dst = dir.join(format!("{job_id}.json"));
     std::fs::write(&tmp, serde_json::to_vec_pretty(record).unwrap_or_default())?;

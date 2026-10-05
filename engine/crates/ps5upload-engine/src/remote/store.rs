@@ -123,7 +123,9 @@ impl Store {
     /// Load `<dir>/connections.json` (missing = empty) with the key in `<dir>/connections.key`
     /// (created on first use, readable by this user only).
     pub fn open(dir: &Path) -> anyhow::Result<Self> {
-        std::fs::create_dir_all(dir)?;
+        std::fs::create_dir_all(dir).map_err(|e| {
+            anyhow::anyhow!(crate::state_io::describe("saved connections", dir, &e))
+        })?;
         let key = load_or_create_key(&dir.join("connections.key"))?;
         let path = dir.join("connections.json");
         let mut state = Vec::new();
@@ -234,8 +236,11 @@ impl Store {
         };
         let path = self.dir.join("connections.json");
         let tmp = self.dir.join("connections.json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(&shape)?)?;
-        std::fs::rename(&tmp, &path)?;
+        let describe = |p: &Path, e: std::io::Error| {
+            anyhow::anyhow!(crate::state_io::describe("saved connections", p, &e))
+        };
+        std::fs::write(&tmp, serde_json::to_vec_pretty(&shape)?).map_err(|e| describe(&tmp, e))?;
+        std::fs::rename(&tmp, &path).map_err(|e| describe(&path, e))?;
         Ok(())
     }
 }
@@ -286,7 +291,10 @@ fn load_or_create_key(path: &Path) -> anyhow::Result<[u8; 32]> {
     }
     let mut key = [0u8; 32];
     getrandom::fill(&mut key).map_err(|e| anyhow::anyhow!("reading OS randomness: {e}"))?;
-    write_private(path, &key)?;
+    write_private(path, &key).map_err(|e| match e.downcast_ref::<std::io::Error>() {
+        Some(io) => anyhow::anyhow!(crate::state_io::describe("saved connections", path, io)),
+        None => e,
+    })?;
     Ok(key)
 }
 
