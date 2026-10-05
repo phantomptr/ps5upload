@@ -235,7 +235,8 @@ async fn rust_to_rust_upload_into_a_folder_host() {
         root: d.join("share"),
         jobs_dir: d.join("hjobs"),
     });
-    let (addr, _ctx, id, peers) = common::paired_ctx(|c| c.with_jobs(host)).await;
+    let (addr, _ctx, id, peers) =
+        common::paired_ctx(|c| c.with_jobs(host).with_timing(common::fast())).await;
     let s = connect(&addr.to_string(), id, peers, "client", common::fast())
         .await
         .unwrap();
@@ -257,7 +258,8 @@ async fn rust_to_rust_download_from_a_folder_host() {
         root: d.join("share"),
         jobs_dir: d.join("hjobs"),
     });
-    let (addr, _ctx, id, peers) = common::paired_ctx(|c| c.with_jobs(host)).await;
+    let (addr, _ctx, id, peers) =
+        common::paired_ctx(|c| c.with_jobs(host).with_timing(common::fast())).await;
     let s = connect(&addr.to_string(), id, peers, "client", common::fast())
         .await
         .unwrap();
@@ -311,7 +313,8 @@ async fn a_host_refuses_paths_outside_its_share() {
         root: d.join("share"),
         jobs_dir: d.join("hjobs"),
     });
-    let (addr, _ctx, id, peers) = common::paired_ctx(|c| c.with_jobs(host)).await;
+    let (addr, _ctx, id, peers) =
+        common::paired_ctx(|c| c.with_jobs(host).with_timing(common::fast())).await;
     let s = connect(&addr.to_string(), id, peers, "client", common::fast())
         .await
         .unwrap();
@@ -333,7 +336,8 @@ async fn a_download_of_a_path_outside_the_share_is_refused_too() {
         root: d.join("share"),
         jobs_dir: d.join("hjobs"),
     });
-    let (addr, _ctx, id, peers) = common::paired_ctx(|c| c.with_jobs(host)).await;
+    let (addr, _ctx, id, peers) =
+        common::paired_ctx(|c| c.with_jobs(host).with_timing(common::fast())).await;
     let s = connect(&addr.to_string(), id, peers, "client", common::fast())
         .await
         .unwrap();
@@ -371,7 +375,8 @@ async fn an_over_credit_chunk_closes_only_its_lane() {
         jobs: d.join("hjobs"),
         credit: 2 << 20,
     });
-    let (addr, _ctx, id, peers) = common::paired_ctx(|c| c.with_jobs(host)).await;
+    let (addr, _ctx, id, peers) =
+        common::paired_ctx(|c| c.with_jobs(host).with_timing(common::fast())).await;
     let s = connect(&addr.to_string(), id, peers, "client", common::fast())
         .await
         .unwrap();
@@ -465,7 +470,8 @@ async fn an_upload_larger_than_its_grant_completes_through_credit_returns() {
         jobs: d.join("hjobs"),
         credit: 4 << 20,
     });
-    let (addr, _ctx, id, peers) = common::paired_ctx(|c| c.with_jobs(host)).await;
+    let (addr, _ctx, id, peers) =
+        common::paired_ctx(|c| c.with_jobs(host).with_timing(common::fast())).await;
     let s = connect(&addr.to_string(), id, peers, "client", common::fast())
         .await
         .unwrap();
@@ -497,7 +503,8 @@ async fn a_zero_byte_file_completes_in_an_ordinary_download() {
         root: d.join("share"),
         jobs_dir: d.join("hjobs"),
     });
-    let (addr, _ctx, id, peers) = common::paired_ctx(|c| c.with_jobs(host)).await;
+    let (addr, _ctx, id, peers) =
+        common::paired_ctx(|c| c.with_jobs(host).with_timing(common::fast())).await;
     let s = connect(&addr.to_string(), id, peers, "client", common::fast())
         .await
         .unwrap();
@@ -528,7 +535,8 @@ async fn an_empty_file_never_stalls_the_ordered_files_behind_it() {
         root: d.join("share"),
         jobs_dir: d.join("hjobs"),
     });
-    let (addr, _ctx, id, peers) = common::paired_ctx(|c| c.with_jobs(host)).await;
+    let (addr, _ctx, id, peers) =
+        common::paired_ctx(|c| c.with_jobs(host).with_timing(common::fast())).await;
     let s = connect(&addr.to_string(), id, peers, "client", common::fast())
         .await
         .unwrap();
@@ -562,7 +570,8 @@ async fn a_file_with_no_frames_still_completes_the_job() {
         jobs: d.join("hjobs"),
         credit: 1 << 20,
     });
-    let (addr, _ctx, id, peers) = common::paired_ctx(|c| c.with_jobs(host)).await;
+    let (addr, _ctx, id, peers) =
+        common::paired_ctx(|c| c.with_jobs(host).with_timing(common::fast())).await;
     let s = connect(&addr.to_string(), id, peers, "client", common::fast())
         .await
         .unwrap();
@@ -624,7 +633,8 @@ async fn a_host_refuses_backslash_paths() {
         root: d.join("share"),
         jobs_dir: d.join("hjobs"),
     });
-    let (addr, _ctx, id, peers) = common::paired_ctx(|c| c.with_jobs(host)).await;
+    let (addr, _ctx, id, peers) =
+        common::paired_ctx(|c| c.with_jobs(host).with_timing(common::fast())).await;
     let s = connect(&addr.to_string(), id, peers, "client", common::fast())
         .await
         .unwrap();
@@ -654,7 +664,8 @@ async fn a_reopened_job_resumes_from_the_engine_journal_and_credits_are_deltas()
         jobs: d.join("hjobs"),
         credit: 1 << 20,
     });
-    let (addr, _ctx, id, peers) = common::paired_ctx(|c| c.with_jobs(host)).await;
+    let (addr, _ctx, id, peers) =
+        common::paired_ctx(|c| c.with_jobs(host).with_timing(common::fast())).await;
     let job = [0x11; 16];
     let m = Manifest {
         entries: vec![
@@ -830,7 +841,8 @@ async fn resume_answers_a_job_map_for_a_parked_job_else_unknown_job() {
         root: d.join("share"),
         jobs_dir: d.join("hjobs"),
     });
-    let (addr, _ctx, id, peers) = common::paired_ctx(|c| c.with_jobs(host)).await;
+    let (addr, _ctx, id, peers) =
+        common::paired_ctx(|c| c.with_jobs(host).with_timing(common::fast())).await;
     let job = [0x31; 16];
     let file = |p: &str| Entry {
         kind: gen::ENTRY_FILE,
@@ -949,7 +961,8 @@ async fn a_sequential_source_uploads_into_a_folder_host() {
         root: d.join("share"),
         jobs_dir: d.join("hjobs"),
     });
-    let (addr, _ctx, id, peers) = common::paired_ctx(|c| c.with_jobs(host)).await;
+    let (addr, _ctx, id, peers) =
+        common::paired_ctx(|c| c.with_jobs(host).with_timing(common::fast())).await;
     let s = connect(&addr.to_string(), id, peers, "client", common::fast())
         .await
         .unwrap();
@@ -1108,7 +1121,8 @@ async fn deadline_job(
         sync_delay,
         ended,
     });
-    let (addr, _ctx, id, peers) = common::paired_ctx(|c| c.with_jobs(host)).await;
+    let (addr, _ctx, id, peers) =
+        common::paired_ctx(|c| c.with_jobs(host).with_timing(common::fast())).await;
     let s = connect(&addr.to_string(), id, peers, "client", common::fast())
         .await
         .unwrap();
@@ -1236,7 +1250,8 @@ async fn a_flood_of_job_opens_is_bounded_with_err_busy() {
         jobs: d.join("hjobs"),
         credit: 1 << 20,
     });
-    let (addr, _ctx, id, peers) = common::paired_ctx(|c| c.with_jobs(host)).await;
+    let (addr, _ctx, id, peers) =
+        common::paired_ctx(|c| c.with_jobs(host).with_timing(common::fast())).await;
     let s = connect(&addr.to_string(), id, peers, "client", common::fast())
         .await
         .unwrap();
@@ -1357,7 +1372,8 @@ async fn a_done_only_resume_outlives_the_fresh_deadline() {
         sync_delay: None,
         ended,
     });
-    let (addr, _ctx, id, peers) = common::paired_ctx(|c| c.with_jobs(host)).await;
+    let (addr, _ctx, id, peers) =
+        common::paired_ctx(|c| c.with_jobs(host).with_timing(common::fast())).await;
     let job = [0x94u8; 16];
     let m = small_files(3);
     // First run: file 0 lands and is durable, then the sender goes away.
@@ -1434,7 +1450,8 @@ async fn ordered_with_empty_files(tag: &str, job: u8, preexisting_root: bool) {
         root: d.join("share"),
         jobs_dir: d.join("hjobs"),
     });
-    let (addr, _ctx, id, peers) = common::paired_ctx(|c| c.with_jobs(host)).await;
+    let (addr, _ctx, id, peers) =
+        common::paired_ctx(|c| c.with_jobs(host).with_timing(common::fast())).await;
     let s = connect(&addr.to_string(), id, peers, "client", common::fast())
         .await
         .unwrap();
