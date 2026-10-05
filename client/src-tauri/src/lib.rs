@@ -40,6 +40,9 @@ pub mod engine_http;
 // Desktop management calls ride the sidecar engine's AVA1 session (see the module doc).
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod mgmt_forward;
+// One-time 6.0 upgrade clean-up of the app's data folder (see the module doc).
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod migrate_6;
 
 /// Build and run the Tauri application. The desktop `main.rs` calls this
 /// directly; on mobile the `tauri::mobile_entry_point` macro generates
@@ -157,6 +160,18 @@ pub fn run() {
             // the centre/monitor/size window APIs don't exist on mobile, so
             // this is a no-op there (see center_main_window).
             center_main_window(app.handle());
+
+            // One-time 6.0 upgrade clean-up of this app's data folder (old files are moved
+            // aside, never reset). Desktop-only: mobile installs start on 6.x.
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            {
+                use tauri::Manager;
+                if let Ok(dir) = app.path().app_data_dir() {
+                    for line in migrate_6::run(&dir) {
+                        eprintln!("[tauri] 6.0 upgrade: {line}");
+                    }
+                }
+            }
 
             // Spawn the Rust engine binary as a sidecar. On failure we log and
             // keep the window open so the user can see diagnostic info — the
