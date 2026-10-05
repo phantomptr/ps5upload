@@ -287,23 +287,33 @@ fn stream_unreachable_hint_for(
     code: u32,
     bridged_container: bool,
 ) -> String {
-    let rc = format!("0x{code:08x}");
+    // Code 0 means the console reported nothing (a reach check or a stall):
+    // do not print a made-up "0x00000000".
+    let rc = if code == 0 {
+        String::new()
+    } else {
+        format!(" (0x{code:08x})")
+    };
+    let at = served_from.map(|o| format!(" at {o}")).unwrap_or_default();
     if bridged_container {
-        let at = served_from.map(|o| format!(" at {o}")).unwrap_or_default();
         return format!(
-            "The PS5 never reached the engine{at} to fetch the package ({rc}). The engine is running in a container, so that is the container's internal address, which the PS5 cannot reach. Run the container with host networking (`--network host`, or `network_mode: host` in Compose), or set PS5UPLOAD_PKG_HOST_IP to the Docker host's LAN IP and publish port 19113."
+            "The PS5 never reached the engine{at} to fetch the package{rc}. The engine is running in a container, so that is the container's internal address, which the PS5 cannot reach. Run the container with host networking (`--network host`, or `network_mode: host` in Compose), or set PS5UPLOAD_PKG_HOST_IP to the Docker host's LAN IP and publish port 19113."
         );
     }
     if code == SCE_HTTP_ERROR_PROXY {
         return format!(
-            "The PS5's proxy setting blocked the stream ({rc}). In the PS5's network Advanced Settings set Proxy Server to \u{201c}Do Not Use\u{201d}, or use Upload & install, which reads the package from PS5-local storage."
+            "The PS5's proxy setting blocked the stream{rc}. In the PS5's network Advanced Settings set Proxy Server to \u{201c}Do Not Use\u{201d}, or use Upload & install, which reads the package from PS5-local storage."
         );
     }
-    let at = served_from.map(|o| format!(" at {o}")).unwrap_or_default();
     format!(
-        "The PS5 never reached this computer{at} to fetch the package ({rc}). Allow ps5upload through this computer's firewall (on Windows, for both Private and Public networks), keep the computer and the PS5 on the same network with any VPN off, and set the PS5's Proxy Server to \u{201c}Do Not Use\u{201d}. Upload & install works without this connection."
+        "The PS5 never reached this computer{at} to fetch the package{rc}. Allow ps5upload through this computer's firewall (on Windows, for both Private and Public networks), keep the computer and the PS5 on the same network with any VPN off, and set the PS5's Proxy Server to \u{201c}Do Not Use\u{201d}. {HOST_IP_ADVICE} Upload & install works without this connection."
     )
 }
+
+/// The remedy for the other half of "the PS5 could not reach us": the engine
+/// advertised an address the console cannot route to (a VPN, a virtual-machine
+/// or container adapter) rather than this computer's LAN address.
+const HOST_IP_ADVICE: &str = "If the address shown is not this computer's LAN address (a VPN, virtual-machine or container address), set PS5UPLOAD_PKG_HOST_IP to this computer's LAN IP (for example 192.168.x.y) and restart the engine.";
 
 /// Ask the helper whether the console can open a connection to the engine's
 /// pkg-host origin in `url`. `Some(message)` only when it definitely cannot;
@@ -324,13 +334,34 @@ async fn reach_block(ip: &str, url: &str) -> Option<String> {
     .await
     .ok()?
     .ok()?;
-    (!r.ok).then(|| reach_block_message(&origin, &r))
+    (!r.ok).then(|| {
+        reach_block_message_for(
+            &origin,
+            &r,
+            crate::pkg_install::bridged_container_without_pkg_host_ip(),
+        )
+    })
 }
 
 /// The user-facing reason a reach check failed. A timeout means packets are
 /// being dropped (a firewall on this computer, or client isolation on the
 /// network); a refusal means nothing accepted the connection on that port.
+#[cfg(test)]
 fn reach_block_message(origin: &str, r: &ps5upload_core::diagnostics::NetReach) -> String {
+    reach_block_message_for(origin, r, false)
+}
+
+/// `reach_block_message` with the container check passed in. Every
+/// stream-unreachable path ends in one of the two hint builders here, so the
+/// host-IP / host-networking remedy is never missing.
+fn reach_block_message_for(
+    origin: &str,
+    r: &ps5upload_core::diagnostics::NetReach,
+    bridged_container: bool,
+) -> String {
+    if bridged_container {
+        return stream_unreachable_hint_for(Some(origin), 0, true);
+    }
     let cause = if r.timed_out {
         "the connection timed out, which usually means a firewall on this computer is silently dropping it (on Windows, allow ps5upload for both Private and Public networks; a PS5 connected through Internet Connection Sharing sits on a Public network), or the Wi-Fi isolates devices from each other"
     } else if r.errno == 61 || r.errno == 111 || r.err.to_ascii_lowercase().contains("refused") {
@@ -339,7 +370,7 @@ fn reach_block_message(origin: &str, r: &ps5upload_core::diagnostics::NetReach) 
         "the network would not let it through"
     };
     format!(
-        "The PS5 cannot connect to this computer at {origin} ({}), so a stream install cannot start: {cause}. Upload & install copies the package to the PS5 instead and does not need this connection.",
+        "The PS5 cannot connect to this computer at {origin} ({}), so a stream install cannot start: {cause}. {HOST_IP_ADVICE} Upload & install copies the package to the PS5 instead and does not need this connection.",
         if r.err.is_empty() { format!("after {} ms", r.ms) } else { format!("{} after {} ms", r.err, r.ms) }
     )
 }
@@ -979,14 +1010,26 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             );
             recycle_daemon(&ip).await;
         }
+        // A stream the console never fetched a single byte of is not a stall:
+        // it could not reach this computer, so give the same guidance as the
+        // other unreachable paths (host IP, firewall) rather than "stopped
+        // fetching".
+        let never_reached = route == Route::Stream && session_id.is_some() && last_served == 0;
+        let stall_hint = if never_reached {
+            stream_unreachable_hint(served_from.as_deref(), 0)
+        } else {
+            "the console stopped fetching the package before it finished; the package was kept so you can retry"
+                .into()
+        };
         state.jobs.update(&job, |s| {
             s.phase = Phase::Failed;
             s.verdict = Some(Verdict::Failed);
-            s.reason = Some(FailReason::Stalled);
-            s.hint = Some(
-                "the console stopped fetching the package before it finished; the package was kept so you can retry"
-                    .into(),
-            );
+            s.reason = Some(if never_reached {
+                FailReason::StreamUnreachable
+            } else {
+                FailReason::Stalled
+            });
+            s.hint = Some(stall_hint.clone());
             s.shortened = shortened;
             s.metrics.phase_ms.insert("deliver".into(), deliver_ms);
         });
@@ -1294,6 +1337,45 @@ mod tests {
             ms: 3,
         };
         assert!(reach_block_message("http://x:1", &refused).contains("refused"));
+    }
+
+    #[test]
+    fn every_unreachable_path_carries_the_host_ip_guidance() {
+        use ps5upload_core::diagnostics::NetReach;
+        let timed_out = NetReach {
+            ok: false,
+            timed_out: true,
+            errno: 0,
+            err: "timed out".into(),
+            ms: 4000,
+        };
+        // 1. the reach check on a desktop: firewall cause + the host-IP remedy.
+        let m = reach_block_message_for("http://172.17.0.2:19113", &timed_out, false);
+        assert!(m.contains("PS5UPLOAD_PKG_HOST_IP"), "{m}");
+        // 2. the reach check inside a bridged container: host networking.
+        let c = reach_block_message_for("http://172.17.0.2:19113", &timed_out, true);
+        assert!(
+            c.contains("PS5UPLOAD_PKG_HOST_IP") && c.contains("--network host"),
+            "{c}"
+        );
+        assert!(c.contains("172.17.0.2"), "{c}");
+        // 3. Sony refused a stream it never fetched (no proxy error).
+        let r = stream_unreachable_hint_for(Some("http://10.8.0.2:19113"), 0x80431068, false);
+        assert!(
+            r.contains("PS5UPLOAD_PKG_HOST_IP") && r.contains("0x80431068"),
+            "{r}"
+        );
+        // 4. accepted but never fetched (the stall path passes code 0): no
+        //    made-up return code, same remedy.
+        let z = stream_unreachable_hint_for(Some("http://10.8.0.2:19113"), 0, false);
+        assert!(z.contains("PS5UPLOAD_PKG_HOST_IP"), "{z}");
+        assert!(!z.contains("0x0000"), "{z}");
+        // The proxy case is its own cause and keeps its own remedy.
+        let p = stream_unreachable_hint_for(None, SCE_HTTP_ERROR_PROXY, false);
+        assert!(
+            p.contains("Do Not Use") && !p.contains("PKG_HOST_IP"),
+            "{p}"
+        );
     }
 
     #[test]

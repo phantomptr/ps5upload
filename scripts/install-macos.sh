@@ -9,7 +9,7 @@
 #     (the Makefile discovers Homebrew's current LLVM prefix automatically)
 #   - Rust toolchain (rustup, stable, default profile)
 #   - Repository-pinned PS5 Payload SDK → $PS5_PAYLOAD_SDK
-#     (currently v0.42; default $HOME/ps5-payload-sdk)
+#     (currently v0.43; default $HOME/ps5-payload-sdk)
 #
 # After it finishes the script prints the env exports you need to add to ~/.zshrc
 # (or ~/.bash_profile) so `make build` and `make run-client` work in any new shell.

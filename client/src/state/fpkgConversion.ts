@@ -2,6 +2,7 @@
 // of the package it wrote — streamed from this computer, or uploaded to the PS5 first. The screen renders `pipeline`; every action here checks the
 // phase it is allowed from, so a stray click cannot act on the wrong package or reset a run.
 
+import { installErrorLink } from "../lib/installErrorDoc";
 import { create } from "zustand";
 
 import { fpkg, type FpkgBuildRequest } from "../api/fpkg";
@@ -211,7 +212,12 @@ function fail(stage: PipelineStage, message: string, packagePath: string | null)
       titleId: p.titleId,
     },
   });
-  pushNotification("error", `${what} failed`, { body: message, link: "/convert" });
+  // An install-stage failure links to the install-route matrix entry for its
+  // error; a build failure has no such page, so it goes back to Convert.
+  pushNotification("error", `${what} failed`, {
+    body: message,
+    link: stage === "install" ? installErrorLink(message) : "/convert",
+  });
 }
 
 /** A build that ends the run (Convert only, or a .ffpfsc image). */

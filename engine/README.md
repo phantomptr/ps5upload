@@ -72,6 +72,15 @@ Anything touching real transfer behaviour still needs hardware — see
   data because there it means "unsupported on this console".
 - **One port, one session.** Everything goes to 9120 as AVA1: management
   calls on the session's control connection, bulk data on its lanes.
+- **A stream install has the PS5 fetch the package from the engine.** The
+  engine tells the console an address to connect to; behind Docker's bridge
+  network, a VPN or a virtual adapter that address is one the PS5 cannot
+  reach. `PS5UPLOAD_PKG_HOST_IP` pins the LAN IP the console is given (publish
+  port 19113 when the engine is in a container; `compose.yaml` uses host
+  networking instead). Every stream-unreachable failure — the pre-install
+  reach check, a Sony refusal before any byte was fetched, and an accepted
+  install the console never fetched from — ends in `install/mod.rs`
+  `stream_unreachable_hint_for`, which names this variable.
 
 ## Synology and other NAS boxes (saved servers: "Permission denied")
 

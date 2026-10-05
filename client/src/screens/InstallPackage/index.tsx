@@ -50,6 +50,8 @@ import {
   Toggle,
 } from "../../components";
 import { BrowseButton } from "../../components/BrowseButton";
+import { FakeGameFirmwareNotice } from "../../components/FakeGameFirmwareNotice";
+import { DOC_ANCHORS, faqLink, installErrorLink } from "../../lib/installErrorDoc";
 import { openInFileSystem } from "../../state/fsNavigation";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useConnectionStore } from "../../state/connection";
@@ -125,6 +127,7 @@ function PkgRow({
 }) {
   const tr = useTr();
   const navigate = useNavigate();
+  const kernel = useConnectionStore((s) => s.runtimeByHost[hostOf(host)]?.ps5Kernel ?? null);
   const uploading = entry.status === "uploading";
   const installingThis = entry.status === "installing";
   const queued = entry.status === "queued";
@@ -504,8 +507,36 @@ function PkgRow({
           ) : (
             <XCircle size={13} className="mt-px shrink-0" />
           )}
-          <span>{entry.lastResult.message}</span>
+          <span>
+            {entry.lastResult.message}
+            {(!entry.lastResult.ok || entry.lastResult.warn) && (
+              <button
+                type="button"
+                className="ml-1.5 underline underline-offset-2"
+                onClick={() =>
+                  navigate(
+                    entry.lastResult!.ok
+                      ? faqLink(DOC_ANCHORS.wontLaunch)
+                      : installErrorLink(entry.lastResult!.message),
+                  )
+                }
+              >
+                {entry.lastResult.ok
+                  ? tr("install_help_wont_launch", undefined, "Game won't launch?")
+                  : tr("install_help_what_means", undefined, "What does this mean?")}
+              </button>
+            )}
+          </span>
         </div>
+      )}
+      {/* A fake PS5 GAME on firmware above 11.60 installs but cannot be
+          played. Not shown for a retail-signed package, PS4, or homebrew. */}
+      {!installed && entry.authenticity !== "retail" && (
+        <FakeGameFirmwareNotice
+          compact
+          kernel={kernel}
+          contentId={entry.contentId || entry.titleId}
+        />
       )}
     </li>
   );

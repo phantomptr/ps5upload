@@ -71,6 +71,8 @@ import {
 } from "../../components";
 // Direct import to avoid the barrel's circular-dep warning at build.
 import { useConfirm } from "../../components/ConfirmDialog";
+import { DOC_ANCHORS, faqLink, installErrorLink } from "../../lib/installErrorDoc";
+import { LAST_PS5_FAKE_GAME_FIRMWARE, ps5FakeGameUnplayableFirmware } from "../../lib/ps5Firmware";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
@@ -783,6 +785,22 @@ export default function InstalledAppsScreen({
     };
   }, [host]);
 
+  /** A launch message plus, for a PS5 game on firmware above 11.60, the note
+   *  that a fake PS5 game package installs but can't be played there. */
+  const launchHelpBody = useCallback(
+    (body: string, launchHost: string, titleId: string) => {
+      const kernel = useConnectionStore.getState().runtimeByHost[hostOf(launchHost)]?.ps5Kernel;
+      const fw = ps5FakeGameUnplayableFirmware(kernel, titleId);
+      if (!fw) return body;
+      return `${body} ${tr(
+        "fakegame.fw.launch",
+        { fw, last: LAST_PS5_FAKE_GAME_FIRMWARE },
+        `PS5 fake game packages can't be played on firmware above ${LAST_PS5_FAKE_GAME_FIRMWARE} (this console is on ${fw}). If this game was installed from a fake package, that is why it won't start. PS4 packages are fine.`,
+      )}`;
+    },
+    [tr],
+  );
+
   const handleLaunch = useCallback(
     async (t: InstalledTitle) => {
       if (!host?.trim()) return;
@@ -831,24 +849,30 @@ export default function InstalledAppsScreen({
           // The launch was accepted; a slow first start just hasn't surfaced in
           // the process list yet.
           pushNotification("info", withConsolePrefix(probe.host, t.titleName), {
-            body: tr(
-              "installed_launch_slow",
-              undefined,
-              "Launch sent — first starts can take a while. Give it a moment and check your PS5.",
+            body: launchHelpBody(
+              tr(
+                "installed_launch_slow",
+                undefined,
+                "Launch sent — first starts can take a while. Give it a moment and check your PS5.",
+              ),
+              probe.host,
+              t.titleId,
             ),
+            link: faqLink(DOC_ANCHORS.wontLaunch),
           });
         }
       } catch (e) {
         if (probe.isStale()) return;
         const raw = e instanceof Error ? e.message : String(e);
         pushNotification("error", withConsolePrefix(probe.host, t.titleName), {
-          body: humanizePs5Error(raw),
+          body: launchHelpBody(humanizePs5Error(raw), probe.host, t.titleId),
+          link: installErrorLink(raw),
         });
       } finally {
         setLaunchingId(null);
       }
     },
-    [host, guard, tr],
+    [host, guard, tr, launchHelpBody],
   );
 
   /* Bring an already-running title to the screen.

@@ -100,6 +100,25 @@ describe("statusToOutcome — maps the unified verdict to the UI outcome", () =>
     expect(o.errMessage).not.toContain("http://x");
   });
 
+  it("the engine's host-IP guidance (container / VPN address) is never replaced by the generic text", () => {
+    // U1: a Docker engine advertising 172.17.x gave a Sony code AND a hint
+    // naming PS5UPLOAD_PKG_HOST_IP; the app's static firewall wording used to
+    // replace it, hiding the one thing that fixes it.
+    const hint =
+      "The PS5 never reached the engine at http://172.17.0.2:19113 to fetch the package (0x80431064). The engine is running in a container… set PS5UPLOAD_PKG_HOST_IP to the Docker host's LAN IP";
+    const o = statusToOutcome(
+      status({
+        phase: "failed",
+        verdict: "failed",
+        reason: "stream_unreachable",
+        code: 0x80431064,
+        hint,
+      }),
+    );
+    expect(o.errMessage).toBe(hint);
+    expect(o.errMessage).toContain("PS5UPLOAD_PKG_HOST_IP");
+  });
+
   it("the engine's own reach-check finding is shown as is", () => {
     // #342: the console could not connect back to the PC. No Sony code — the
     // engine's reach check found it and names the likely cause.
