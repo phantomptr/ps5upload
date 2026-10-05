@@ -24,7 +24,8 @@ type Known = (u64, bool, Option<i64>);
 
 pub struct RemoteSourceFs {
     handle: tokio::runtime::Handle,
-    fs: Arc<dyn RemoteFs>,
+    /// Held so the pooled session the listings came from stays open.
+    _fs: Arc<dyn RemoteFs>,
     pool: Arc<Pool>,
     store: Arc<Store>,
     id: String,
@@ -50,7 +51,7 @@ impl RemoteSourceFs {
         let fs = pool.fs(&store, connection_id).await?;
         Ok(Self {
             handle: tokio::runtime::Handle::current(),
-            fs,
+            _fs: fs,
             pool,
             store,
             id: connection_id.to_string(),
@@ -191,22 +192,6 @@ impl SourceFs for RemoteSourceFs {
             }
         }
     }
-}
-
-/// `file` read sequentially (with seeks) through the read-ahead buffer. Blocks on `handle`,
-/// so call it from a blocking thread.
-pub(crate) fn read_ahead(
-    handle: tokio::runtime::Handle,
-    file: Arc<dyn RemoteFile>,
-) -> Box<dyn ReadSeek> {
-    Box::new(Reader {
-        handle,
-        size: file.size(),
-        file,
-        pos: 0,
-        buf: Vec::new(),
-        buf_start: 0,
-    })
 }
 
 /// A server file read sequentially (with seeks) through a read-ahead buffer.

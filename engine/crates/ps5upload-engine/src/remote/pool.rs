@@ -93,6 +93,7 @@ impl Pool {
     }
 
     /// Sign-ins so far (tests use it to see a session reused or dropped).
+    #[cfg(test)]
     pub fn connects(&self) -> usize {
         self.connects.load(Ordering::SeqCst)
     }
@@ -165,6 +166,7 @@ impl Backoff {
             Duration::from_secs(10),
         ])
     }
+    #[cfg(test)]
     pub fn instant() -> Self {
         Self(vec![Duration::ZERO; 3])
     }

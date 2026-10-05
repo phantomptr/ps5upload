@@ -342,7 +342,6 @@ mod ava1_cmds {
     /// directory the engine treats as its data dir, never the repo or an implicit CWD.
     /// Commands that record take `--out PATH` to override it.
     // Consumed by the follow-up calibrate arm (Task 26b) and Task 27's runner.
-    #[allow(dead_code)]
     pub fn bench_results_default() -> PathBuf {
         data_dir().join("bench-results.jsonl")
     }

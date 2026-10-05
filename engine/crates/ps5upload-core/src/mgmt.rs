@@ -436,17 +436,6 @@ pub fn call_legacy_body(addr: &str, method: Method, label: &str, body: &[u8]) ->
     legacy_body(call_as(addr, method, label, body))
 }
 
-/// [`call_legacy_body`] with a caller-chosen deadline.
-pub fn call_legacy_body_with(
-    addr: &str,
-    method: Method,
-    label: &str,
-    body: &[u8],
-    timeout: Option<Duration>,
-) -> Result<Vec<u8>> {
-    legacy_body(call_with(addr, method, label, body, timeout))
-}
-
 /// [`call_legacy_body`]'s conversion, separately testable.
 pub fn legacy_body(r: Result<Vec<u8>>) -> Result<Vec<u8>> {
     match r {

@@ -26,13 +26,7 @@ void cheats_init(void);
 
 /* ── Engine master flag ──────────────────────────────────────────── */
 
-int  cheats_engine_enabled(void);
 void cheats_engine_set_enabled(int on);
-
-/* ── Watcher / auto-patch state ──────────────────────────────────── */
-
-int cheats_patches_last_mod_count(void);
-int cheats_patches_total_writes(void);
 
 /* ── JSON builders (fill buf, return 0 on success) ───────────────── */
 

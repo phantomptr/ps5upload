@@ -167,14 +167,6 @@ impl Plan {
             .collect()
     }
 
-    /// Each file's logical offset by afid.
-    pub fn afid_offsets(&self) -> Vec<u64> {
-        self.afid_order
-            .iter()
-            .map(|&fi| self.files[fi].logical_offset)
-            .collect()
-    }
-
     /// `(logical, on_disk, size)` per file in afid order — everything the descriptor needs,
     /// since a file's two offsets no longer imply its length.
     pub fn placements(&self) -> Vec<(u64, u64, u64)> {

@@ -372,16 +372,6 @@ pub fn humanize_err(err_code: u32) -> String {
 // See reference_ps5_date_registry_keys.md for the hardware-
 // verification status of each individual key.
 
-/// One per-field availability + error triple. Every numeric field in
-/// `PsTimeState` has an `_avail` and `_err` companion field; this is
-/// just the type those companions share.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PsTimeStateField<T> {
-    pub value: T,
-    pub avail: bool,
-    pub err: u32,
-}
-
 /// Full PS5 Date & Time state surfaced by TIME_STATE_GET. The shape
 /// here mirrors the payload's flat JSON (one `<name>` + `<name>_avail`
 /// + `<name>_err` triple per field) — we don't fold it into nested

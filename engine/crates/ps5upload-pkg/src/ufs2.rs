@@ -47,12 +47,6 @@ const NDADDR: usize = 12;
 const NIADDR: usize = 3;
 /// Inode size for UFS2 (UFS1 was 128).
 const INODE_SIZE: u64 = 256;
-/// Directory block size — directory entries can't span this boundary.
-/// Currently unused because we read the entire directory at once and
-/// trust the embedded record-length field; if we ever stream large
-/// directories we'd need to align reads to this boundary.
-#[allow(dead_code)]
-const DIRBLKSIZ: u64 = 512;
 /// Root inode number. Always 2 in UFS — inode 0 is reserved, 1 is the
 /// bad-block list (historic).
 pub const ROOT_INODE: u64 = 2;

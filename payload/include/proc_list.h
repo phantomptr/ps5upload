@@ -86,10 +86,6 @@ int proc_find_pid_by_name(const char *name);
  * makes the shell bounce it to the background. */
 int proc_find_pid_by_title_id(const char *title_id);
 
-/* App id of a running title (0 = not running). Sony's focus/kill APIs key on
- * this, which is NOT the pid. */
-unsigned int proc_app_id_by_title_id(const char *title_id);
-
 /* Emit the scheduler-visible state of every APP process, as JSON:
  *
  *   [{"pid":154,"title_id":"PPSA23226","app_id":24600,

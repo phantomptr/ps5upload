@@ -170,24 +170,7 @@ static int rpc(uint16_t method, const uint8_t *body, uint32_t body_len, uint8_t 
     return AVA1_STATUS_OK;
 }
 
-/* 0 not started, 1 listening, 2 start failed: what Hello reports so an app can tell a helper that is
- * still booting from one whose AVA1 server never came up. */
-static volatile int g_ava1_state;
-const char *ava1_payload_state(void) {
-    return g_ava1_state == 1 ? "up" : g_ava1_state == 2 ? "failed" : "starting";
-}
-
-void ava1_payload_refused(void) { g_ava1_state = 2; }
-
-static int ava1_payload_start_inner(void);
-
 int ava1_payload_start(void) {
-    int rc = ava1_payload_start_inner();
-    g_ava1_state = rc == 0 ? 1 : 2;
-    return rc;
-}
-
-static int ava1_payload_start_inner(void) {
     ava1_server_cfg_t cfg;
     uint8_t launcher[32], token[16];
     memset(&cfg, 0, sizeof cfg);

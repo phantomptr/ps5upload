@@ -43,6 +43,7 @@ pub fn parse(s: &str) -> Result<RemotePath, RemoteError> {
 
 /// `remote://id/path`. The path is kept readable (spaces as they are); `parse` accepts both
 /// that and a percent-encoded form.
+#[cfg(test)]
 pub fn format(id: &str, path: &str) -> String {
     format!("{SCHEME}{id}/{}", path.trim_start_matches('/'))
 }

@@ -5,8 +5,6 @@
 //! in-app browser, positioned reads for streaming installs and uploads, and whole-file copies for
 //! the jobs that need the bytes on this computer.
 
-#![allow(dead_code)] // Consumers arrive in later steps of the remote-sources plan.
-
 pub mod api;
 #[cfg(test)]
 pub(crate) mod contract;
@@ -22,9 +20,13 @@ pub mod smb_fs;
 pub mod source_fs;
 pub mod store;
 
+#[cfg(test)]
 use std::collections::BTreeMap;
+#[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 
 use serde::Serialize;
 
@@ -81,6 +83,7 @@ pub trait RemoteFs: Send + Sync {
     async fn walk(&self, path: &str, limit: usize) -> Result<Vec<(String, Entry)>, RemoteError>;
 }
 
+#[cfg(test)]
 /// An in-memory tree standing in for a server in tests. Directories are implied by file paths.
 pub(crate) struct MemFs {
     files: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
@@ -90,6 +93,7 @@ pub(crate) struct MemFs {
     fail_lists: AtomicUsize,
 }
 
+#[cfg(test)]
 impl MemFs {
     pub fn new(files: &[(&str, &[u8])]) -> Self {
         let map = files.iter().map(|(p, b)| (normal(p), b.to_vec())).collect();
@@ -191,6 +195,7 @@ impl MemFs {
     }
 }
 
+#[cfg(test)]
 fn normal(p: &str) -> String {
     let segs: Vec<&str> = p
         .split('/')
@@ -199,11 +204,13 @@ fn normal(p: &str) -> String {
     format!("/{}", segs.join("/"))
 }
 
+#[cfg(test)]
 struct MemFile {
     bytes: Vec<u8>,
     fail_reads: Arc<AtomicUsize>,
 }
 
+#[cfg(test)]
 #[async_trait::async_trait]
 impl RemoteFile for MemFile {
     fn size(&self) -> u64 {
@@ -224,6 +231,7 @@ impl RemoteFile for MemFile {
     }
 }
 
+#[cfg(test)]
 #[async_trait::async_trait]
 impl RemoteFs for MemFs {
     async fn list(&self, path: &str, cursor: Option<String>) -> Result<Page, RemoteError> {

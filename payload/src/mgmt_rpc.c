@@ -756,8 +756,6 @@ static const mgmt_entry_t *find_entry(uint16_t method) {
 
 int mgmt_rpc_installed(void) { return G.n > 0; }
 
-int mgmt_rpc_handles(uint16_t method) { return find_entry(method) != NULL; }
-
 int mgmt_rpc_dispatch(uint16_t method, const uint8_t *body, uint32_t len, uint8_t *out, size_t cap,
                       size_t *out_len) {
     const mgmt_entry_t *e = find_entry(method);

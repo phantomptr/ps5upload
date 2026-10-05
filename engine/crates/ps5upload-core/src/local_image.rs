@@ -245,15 +245,6 @@ pub fn status() -> Vec<AttachedImage> {
     attached().lock().map(|l| l.clone()).unwrap_or_default()
 }
 
-/// Detach everything we attached. Called on shutdown so a session does
-/// not leave devices behind.
-pub fn detach_all() {
-    let all = status();
-    for a in all {
-        let _ = detach(&a.device);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

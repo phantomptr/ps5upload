@@ -36,12 +36,6 @@ pub struct TmdbFetchRequest {
     pub region: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TmdbStoreRequest {
-    pub title_id: String,
-    pub json: String,
-}
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TmdbFetchResponse {
     #[serde(default)]

@@ -5,7 +5,6 @@
 //! of `smb_range` generalised to every protocol. Nothing is copied: each range becomes a few
 //! positioned reads run concurrently, because one read at a time would be bound by round trips.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use super::pool::{Backoff, Pool};
@@ -23,8 +22,6 @@ pub struct RemoteRangeSource {
     size: u64,
     /// Server host, for logs. Never the path or credentials.
     host: String,
-    origin_bytes: AtomicU64,
-    origin_nanos: AtomicU64,
 }
 
 impl std::fmt::Debug for RemoteRangeSource {
@@ -62,8 +59,6 @@ impl RemoteRangeSource {
             file,
             size,
             host,
-            origin_bytes: AtomicU64::new(0),
-            origin_nanos: AtomicU64::new(0),
         })
     }
 
@@ -85,25 +80,10 @@ impl RemoteRangeSource {
             ));
         }
         let end = end.min(self.size - 1);
-        let began = std::time::Instant::now();
         let bytes = self
             .handle
             .block_on(read_pieces(Arc::clone(&self.file), start, end))?;
-        self.origin_bytes
-            .fetch_add(bytes.len() as u64, Ordering::Relaxed);
-        self.origin_nanos
-            .fetch_add(began.elapsed().as_nanos() as u64, Ordering::Relaxed);
         Ok(bytes)
-    }
-
-    /// Average read throughput from the server so far, for the install status.
-    pub fn origin_rate_bps(&self) -> Option<u64> {
-        let bytes = self.origin_bytes.load(Ordering::Relaxed);
-        let nanos = self.origin_nanos.load(Ordering::Relaxed);
-        if bytes == 0 || nanos == 0 {
-            return None;
-        }
-        Some(((bytes as u128 * 1_000_000_000u128) / nanos as u128) as u64)
     }
 }
 

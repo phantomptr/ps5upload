@@ -118,7 +118,6 @@ async fn transfer_zip_with_no_ava1_listener_is_helper_not_ava1() {
         zip_path: zp.to_string_lossy().into_owned(),
         excludes: vec![],
         bandwidth_cap_mbps: None,
-        ram_threshold_mb: None,
     };
     let resp = transfer_zip_handler(State(state_for(&jobs)), Json(req))
         .await
@@ -219,7 +218,6 @@ async fn transfer_dir_reconcile_with_no_ava1_listener_is_helper_not_ava1() {
         mode: Some("safe".to_string()),
         excludes: vec![],
         bandwidth_cap_mbps: None,
-        streams: None,
     };
     let resp = transfer_dir_reconcile_handler(State(state_for(&jobs)), Json(req))
         .await
@@ -239,7 +237,6 @@ async fn transfer_download_with_no_ava1_listener_is_helper_not_ava1() {
         src_path: "/data/x/file.bin".to_string(),
         dest_dir: dir.to_string_lossy().into_owned(),
         kind: "file".to_string(),
-        streams: None,
         unsafe_read: false,
     };
     let resp = transfer_download_handler(State(state_for(&jobs)), Json(req))

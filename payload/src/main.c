@@ -697,7 +697,6 @@ int main(void) {
                 "not starting the server or the data layer beside it. This helper exits: send the payload again "
                 "or restart the console.\n",
                 (int)AVA1_DEFAULT_PORT);
-        ava1_payload_refused();
         pop_notification("PS5Upload: another helper still holds the transfer port. Send the payload again or restart the PS5");
     } else if (g_ava1_start_rc != 0) {
         ava1_up = 0;

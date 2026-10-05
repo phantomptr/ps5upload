@@ -271,7 +271,7 @@ pub(crate) async fn start_fetch(r: Arc<Remote>, deps: FetchDeps, body: FetchBody
     let base = p.path.clone();
     tokio::spawn(async move {
         let result = copy_all(CopyJob {
-            fs,
+            _fs: fs,
             pool,
             store,
             id,
@@ -352,7 +352,8 @@ pub(crate) async fn start_fetch(r: Arc<Remote>, deps: FetchDeps, body: FetchBody
 }
 
 struct CopyJob<'a> {
-    fs: Arc<dyn RemoteFs>,
+    /// Held for the job's lifetime so the pooled session it was listed on stays open.
+    _fs: Arc<dyn RemoteFs>,
     pool: Arc<super::pool::Pool>,
     store: Arc<super::store::Store>,
     id: String,

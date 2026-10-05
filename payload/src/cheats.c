@@ -1404,20 +1404,8 @@ void cheats_init(void) {
 
 /* ── Engine flag ─────────────────────────────────────────────────── */
 
-int cheats_engine_enabled(void) {
-    return atomic_load(&g_engine_enabled);
-}
-
 void cheats_engine_set_enabled(int on) {
     atomic_store(&g_engine_enabled, on ? 1 : 0);
-}
-
-int cheats_patches_last_mod_count(void) {
-    return atomic_load(&g_patches_last);
-}
-
-int cheats_patches_total_writes(void) {
-    return atomic_load(&g_patches_total);
 }
 
 /* ── Public API implementations ──────────────────────────────────── */

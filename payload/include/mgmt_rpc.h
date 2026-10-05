@@ -80,8 +80,6 @@ int mgmt_rpc_install(const mgmt_entry_t *table, size_t n, void *state, void (*en
                      void (*leave)(void));
 /* 1 when a table is installed (the server then advertises CAP_MGMT). */
 int mgmt_rpc_installed(void);
-/* 1 when `method` has a table entry. */
-int mgmt_rpc_handles(uint16_t method);
 
 /* Runs a management method. Returns an AVA1 status; the reply body (or the cause of an
  * error) is in out / *out_len. Same shape as ava1_data_rpc(). An unknown method is

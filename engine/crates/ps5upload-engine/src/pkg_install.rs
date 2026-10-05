@@ -37,11 +37,6 @@ use uuid::Uuid;
 /// One in-flight install. The session lives from `install/start` until
 /// the user dismisses the result or cancels. The HTTP-host listener
 /// uses `parts` to satisfy Range requests.
-///
-/// Several fields are recorded for diagnostics / future introspection
-/// endpoints (e.g. listing active sessions in the engine logs) even
-/// though no current handler reads them — `#[allow(dead_code)]` documents
-/// this intentional surplus rather than churn the struct each release.
 /// A package being proxied from an HTTP(S) origin for an install-from-a-link
 /// session (see `remote_pkg`).
 ///
@@ -146,7 +141,6 @@ pub(crate) fn console_path_url(url: &str) -> Option<(String, String)> {
 const SERVE_RATE_LOG_SECS: u64 = 15;
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct InstallSession {
     pub id: String,
     pub parts: Vec<PathBuf>,
@@ -194,17 +188,6 @@ pub struct InstallSession {
     /// over HTTP and the DPI daemon performs the install, so this session
     /// legitimately never gets a BGFT task_id.
     pub serve_only: bool,
-    /// True once the console-side "install finished" toast has been sent.
-    ///
-    /// The status endpoint is polled repeatedly and a session can be observed
-    /// terminal on any number of those polls, so without this latch the
-    /// console would get a fresh toast every poll interval forever.
-    pub notified_console: bool,
-    /// Free bytes on the data volume at the first status poll — the baseline
-    /// the progress tracker measures "bytes consumed" against. `None` until the
-    /// first poll captures it (or if volumes couldn't be listed). See
-    /// `observe_consumed` / `install_verdict`.
-    pub install_start_free_bytes: Option<u64>,
     /// Max bytes the install has consumed so far (monotonic) — `max(free-space
     /// drop, title-dir size)`. Drives the live progress % and the stall clock.
     pub progress_consumed_bytes: u64,
@@ -241,13 +224,6 @@ pub struct InstallSession {
     /// is its derived `bytes()`; see `TransferCoverage` for why neither a raw
     /// sum nor a furthest-offset can stand in for it.
     pub transfer: TransferCoverage,
-    /// The DPI daemon's answer for a Stream/serve-only session, recorded on the
-    /// session rather than only in the HTTP reply. A caller that stopped waiting
-    /// (browser, proxy, or a client timeout) still gets the verdict from the
-    /// status poll, and a slow hand-off stops being an ambiguous outcome.
-    pub dpi_ok: Option<bool>,
-    pub dpi_rc: Option<i32>,
-    pub dpi_detail: String,
     /// Unix time of the last sign of life for this session — a pkg-host range
     /// served, or a status poll. Session expiry is measured from THIS, not from
     /// creation: a 200-300 GB install on a modest link runs for many hours, and
@@ -428,8 +404,6 @@ mod persist {
                     terminal_status: None,
                     launchable: None,
                     serve_only: s.serve_only,
-                    notified_console: false,
-                    install_start_free_bytes: None,
                     progress_consumed_bytes: 0,
                     last_progress_unix: None,
                     stalled: false,
@@ -439,9 +413,6 @@ mod persist {
                     bytes_served: 0,
                     transfer_bytes: 0,
                     transfer: TransferCoverage::new(s.total_size),
-                    dpi_ok: None,
-                    dpi_rc: None,
-                    dpi_detail: String::new(),
                     remote: None,
                 };
                 (s.id, session)
@@ -1965,8 +1936,6 @@ pub(crate) async fn install_start_handler(
         terminal_status: None,
         launchable: None,
         serve_only: req.serve_only,
-        notified_console: false,
-        install_start_free_bytes: None,
         progress_consumed_bytes: 0,
         last_progress_unix: None,
         stalled: false,
@@ -1976,9 +1945,6 @@ pub(crate) async fn install_start_handler(
         bytes_served: 0,
         transfer_bytes: 0,
         transfer: TransferCoverage::new(expected_size),
-        dpi_ok: None,
-        dpi_rc: None,
-        dpi_detail: String::new(),
         remote,
     };
 
@@ -4573,8 +4539,6 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
             terminal_status: None,
             launchable: None,
             serve_only: false,
-            notified_console: false,
-            install_start_free_bytes: None,
             progress_consumed_bytes: 0,
             last_progress_unix: None,
             stalled: false,
@@ -4584,9 +4548,6 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
             bytes_served: 0,
             transfer_bytes: 0,
             transfer: TransferCoverage::new(total),
-            dpi_ok: None,
-            dpi_rc: None,
-            dpi_detail: String::new(),
             remote: None,
         }
     }

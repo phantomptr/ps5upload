@@ -277,26 +277,12 @@ pub fn parse_cheat_filename(filename: &str) -> (String, String) {
     (title.to_ascii_uppercase(), version)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CheatRepoSearchRequest {
-    pub addr: String,
-    pub query: String,
-}
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CheatRepoSearchResponse {
     #[serde(default)]
     pub entries: Vec<CheatRepoEntry>,
     #[serde(default)]
     pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CheatDownloadRequest {
-    pub addr: String,
-    pub repo_id: String,
-    pub filename: String,
-    pub title_id: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

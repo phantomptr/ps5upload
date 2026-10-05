@@ -25,7 +25,6 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Result};
 use ava1::gen::{self, JobRef, JobRun, Status};
 use ava1::wire::Message;
-use ava1::Ava1Error;
 use ps5upload_core::mgmt::{JobCall, JobOp, JobProgress, MgmtError};
 
 use crate::mgmt::AvaTransport;
@@ -333,12 +332,6 @@ impl AvaTransport {
             Err(e) => Err(e),
         }
     }
-}
-
-/// Whether `e` is the transport losing the connection (test helper for callers).
-#[allow(dead_code)]
-pub(crate) fn is_lost(e: &Ava1Error) -> bool {
-    matches!(e, Ava1Error::Lost(_) | Ava1Error::Closed | Ava1Error::Io(_))
 }
 
 #[cfg(test)]

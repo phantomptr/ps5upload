@@ -50,7 +50,6 @@ pub const LISTING_MARKER: &str = ".ps5upload-lab-listing";
 // FIXME-ish note, not a lint hack: SCHEMA is consumed by the record-writing commands
 // (the follow-up calibrate arm and Task 27's runner) and by the tests; until then the
 // bin build sees it unused.
-#[allow(dead_code)]
 pub const SCHEMA: u64 = 1;
 
 /// One corpus's statistics. Serializes (T27/T28 record it); `duplicate_ratio` is `NaN`
@@ -456,7 +455,6 @@ pub fn stats(dir: &Path) -> io::Result<Stats> {
 /// timestamp (unix epoch seconds).
 // Consumed via `record_envelope` (below); unused until the first record-writing
 // command lands.
-#[allow(dead_code)]
 fn bench_machine() -> String {
     std::env::var("PS5UPLOAD_BENCH_MACHINE")
         .ok()
@@ -464,7 +462,6 @@ fn bench_machine() -> String {
         .unwrap_or_else(|| format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH))
 }
 
-#[allow(dead_code)] // see bench_machine
 fn started_at() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -483,7 +480,6 @@ fn started_at() -> u64 {
 ///   — the wire reports µs; the record converts to `ms`.
 /// - `"bench"` (Task 27): the scenario record, same envelope.
 // Consumed by the same commands as `record` (below).
-#[allow(dead_code)]
 pub fn record_envelope(
     kind: &str,
     corpus: Option<&str>,
@@ -508,7 +504,6 @@ pub fn record_envelope(
 /// concurrent run can never interleave a partial line.
 // Consumed by the first record-writing command (the follow-up calibrate arm) and
 // Task 27's runner; the tests exercise it today.
-#[allow(dead_code)]
 pub fn record(out: &Path, line: &serde_json::Value) -> io::Result<()> {
     if let Some(d) = out.parent() {
         std::fs::create_dir_all(d)?;

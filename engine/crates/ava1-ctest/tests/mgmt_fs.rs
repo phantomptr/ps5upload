@@ -847,7 +847,6 @@ async fn node_and_net_methods_answer_and_map_their_errors() {
     assert_eq!(MgmtText::decode(&b).unwrap().body, br#"{"ok":true}"#);
 }
 
-#[allow(dead_code)]
 fn _unused(_: &Path) {}
 
 // ---- the Rust transport against the C payload (core call sites, end to end) ----

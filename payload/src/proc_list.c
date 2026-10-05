@@ -463,49 +463,6 @@ void proc_log_homebrew_neighbours(void) {
  * "it starts then immediately minimises" report.
  *
  * Returns the pid (>0) when a process for `title_id` exists, -1 otherwise. */
-/* App id (not pid) of a running title, or 0 when it isn't running.
- *
- * Sony's focus and kill APIs are keyed on the APP id from
- * sceKernelGetAppInfo, which is a different number from the pid. launch_title
- * needs it to hand focus to a game it has just started. */
-unsigned int proc_app_id_by_title_id(const char *title_id) {
-    if (!title_id || !title_id[0]) return 0;
-
-    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC, 0};
-    size_t buf_size = 0;
-    if (sysctl(mib, 4, NULL, &buf_size, NULL, 0) != 0) return 0;
-    if (buf_size == 0) return 0;
-
-    uint8_t *buf = (uint8_t *)malloc(buf_size);
-    if (!buf) return 0;
-    if (sysctl(mib, 4, buf, &buf_size, NULL, 0) != 0) {
-        free(buf);
-        return 0;
-    }
-
-    unsigned int found = 0;
-    for (uint8_t *ptr = buf; ptr < buf + buf_size;) {
-        int ki_structsize = *(int *)ptr;
-        if (ki_structsize <= 0 ||
-            (size_t)(ptr - buf) + (size_t)ki_structsize > buf_size) break;
-        if (ki_structsize <= KINFO_PID_OFFSET) break;
-        pid_t ki_pid = *(pid_t *)&ptr[KINFO_PID_OFFSET];
-        app_info_t info;
-        if (sceKernelGetAppInfo(ki_pid, &info) == 0) {
-            char tid[sizeof(info.title_id) + 1];
-            memcpy(tid, info.title_id, sizeof(info.title_id));
-            tid[sizeof(info.title_id)] = '\0';
-            if (strcmp(tid, title_id) == 0 && info.app_id != 0) {
-                found = info.app_id;
-                break;
-            }
-        }
-        ptr += ki_structsize;
-    }
-    free(buf);
-    return found;
-}
-
 int proc_find_pid_by_title_id(const char *title_id) {
     if (!title_id || !title_id[0]) return -1;
 

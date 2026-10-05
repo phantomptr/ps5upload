@@ -23,7 +23,7 @@ use crate::pfsimage;
 use crate::plan::Plan;
 use crate::si_write;
 use crate::xts::{Xts, SIGNED_SECTOR_FLAG};
-use crate::{format_err, Result, BLOCK};
+use crate::{Result, BLOCK};
 
 /// What a streaming build needs beyond the plan.
 pub struct StreamRequest<'a> {
@@ -505,15 +505,6 @@ pub fn write_package(
         game_digest,
         content_id: request.content_id.to_string(),
     })
-}
-
-/// The write is interruptible and the file is left as it is: the caller removes the
-/// partial. Sized so a cancel during a long data pass is noticed within a block.
-pub fn check_cancelled(cancel: &AtomicBool) -> Result<()> {
-    if cancel.load(Ordering::Relaxed) {
-        return format_err("the build was cancelled");
-    }
-    Ok(())
 }
 
 /// The timestamps a build writes into both images. Publishing Tools' plaintext packages (the

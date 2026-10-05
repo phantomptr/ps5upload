@@ -522,47 +522,6 @@ const ARCHIVE_STAGE_ENV: (&str, &str) = (
     concat!("FT", "X2_ARCHIVE_STAGE_MB"),
 );
 
-/// Recursively `chmod 0777` a destination tree on the PS5.
-///
-/// **No longer called automatically after uploads** (v2.16.1+): the payload
-/// now `umask(0)`s at startup, opens game files at `0777`, and `fchmod`s
-/// after every open — so freshly-uploaded files are world-rwx already and
-/// the per-upload recursive walk (which took ~30 s on a 22k-file folder)
-/// is redundant overhead. Kept for explicit use: a future Library "Fix
-/// permissions" button, or for repairing old uploads written by pre-2.16.1
-/// payloads (which created files at `0644` → Sony loader returns CE-107750-0
-/// "can't start game or app").
-#[allow(dead_code)]
-fn auto_chmod_uploaded_tree(transfer_addr: &str, dest: &str) {
-    let mgmt = console_addr(transfer_addr);
-    let started = std::time::Instant::now();
-    match ps5upload_core::fs_ops::fs_chmod_with_timeout(
-        &mgmt,
-        dest,
-        "0777",
-        true,
-        Some(Duration::from_secs(600)),
-    ) {
-        Ok(()) => {
-            crate::log_info!(
-                "auto-chmod 0777 -R OK on {} ({} ms)",
-                dest,
-                started.elapsed().as_millis()
-            );
-        }
-        Err(e) => {
-            crate::log_warn!(
-                "auto-chmod 0777 -R on {} failed after {} ms ({}); upload is byte-exact, \
-                 user can re-chmod manually via File System tab if Sony's loader rejects \
-                 the title with CE-107750-0",
-                dest,
-                started.elapsed().as_millis(),
-                e
-            );
-        }
-    }
-}
-
 /// Loopback guard for the API surface. Pre-2.2.52 the engine bound
 /// `127.0.0.1` only, which kept the API safe from the LAN by accident
 /// — but also broke `.pkg` install because the PS5 couldn't reach
@@ -1559,11 +1518,6 @@ struct TransferZipReq {
     excludes: Vec<String>,
     #[serde(default)]
     bandwidth_cap_mbps: Option<f64>,
-    /// Accepted for older clients and ignored: zip entries stream, nothing is held back to
-    /// inflate.
-    #[serde(default)]
-    #[allow(dead_code)]
-    ram_threshold_mb: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -1827,10 +1781,6 @@ struct TransferDirReconcileReq {
     excludes: Vec<String>,
     #[serde(default)]
     bandwidth_cap_mbps: Option<f64>,
-    /// Accepted for older clients and ignored: AVA1 spreads one job over its own lanes.
-    #[serde(default)]
-    #[allow(dead_code)]
-    streams: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -8474,12 +8424,6 @@ struct TransferDownloadReq {
     /// (Library/FileSystem row) so we trust the hint and skip a
     /// stat round-trip just to classify.
     kind: String,
-    /// Parallel download streams for a FOLDER pull (one connection per
-    /// disjoint file subset). None / <=1 = single stream. Capped at
-    /// `MAX_DOWNLOAD_STREAMS`. Ignored for single-file downloads.
-    #[serde(default)]
-    #[allow(dead_code)]
-    streams: Option<usize>,
     /// When true, bypasses the payload's writable-root allowlist so system
     /// files (/system/, /system_data/, /system_ex/) can be downloaded.
     /// Read-only — the payload ignores this flag for destructive ops.

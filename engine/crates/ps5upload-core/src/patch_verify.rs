@@ -120,15 +120,6 @@ pub fn verify_patch_applied(
     PatchVerdict::DidNotApply
 }
 
-/// The message shown when a patch was accepted but changed nothing. It has to
-/// carry the workaround, because the workaround is not guessable: the base
-/// game has to be re-installed through ps5upload before the patch will take.
-/// Shown when, after waiting out the install, the game is on a lower version
-/// than it started on.
-pub const REGRESSED_HINT: &str = "This update left the game on an older version than it had before. The base game is intact. Apply the update again to bring the game back up to date — if it keeps ending lower, re-install the base game through ps5upload (choose Override) and then apply the update.";
-
-pub const DID_NOT_APPLY_HINT: &str = "The PS5 accepted this update and then did nothing with it — the game is still on its previous version. This means the console could not match the update to the base game you have installed. Re-install the base game through ps5upload from the base package that goes with this update (choose Override), then apply the update again.";
-
 #[cfg(test)]
 mod tests {
     use super::*;

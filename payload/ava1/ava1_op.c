@@ -88,12 +88,6 @@ static int lookup(uint8_t op, ava1_op_fn *fn, void **arg) {
     return found;
 }
 
-int ava1_op_registered(uint8_t op) {
-    ava1_op_fn fn;
-    void *arg;
-    return lookup(op, &fn, &arg);
-}
-
 /* ---- for operations ---- */
 
 int ava1_op_cancelled(const ava1_op_ctx_t *c) { return __atomic_load_n(&c->cancel, __ATOMIC_ACQUIRE); }

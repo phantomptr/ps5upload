@@ -285,6 +285,7 @@ pub(crate) fn under(home: &str, path: &str) -> String {
 }
 
 impl FtpFs {
+    #[cfg(test)]
     pub fn counters(&self) -> (usize, usize) {
         use std::sync::atomic::Ordering::SeqCst;
         (self.counts.0.load(SeqCst), self.counts.1.load(SeqCst))

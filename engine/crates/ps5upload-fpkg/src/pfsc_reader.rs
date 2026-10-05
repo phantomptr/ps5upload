@@ -111,10 +111,6 @@ impl<R: Read + Seek> PfscReader<R> {
         &self.name
     }
 
-    pub fn is_compressed(&self) -> bool {
-        self.offsets.is_some()
-    }
-
     /// Decoded block `n`, from the cache or the image.
     fn block(&mut self, n: u64) -> io::Result<&[u8]> {
         if let Some(i) = self.cache.iter().position(|(b, _)| *b == n) {

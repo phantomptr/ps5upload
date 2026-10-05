@@ -36,7 +36,6 @@ typedef int (*ava1_op_fn)(void *arg, ava1_op_ctx_t *c, const uint8_t *args, size
 /* Registers (or, with the same `op`, replaces) an operation. 0, or -1 when the table is full. */
 int ava1_op_register(uint8_t op, ava1_op_fn fn, void *arg);
 void ava1_op_unregister_all(void);
-int ava1_op_registered(uint8_t op);
 
 /* ---- for operations ---- */
 int ava1_op_cancelled(const ava1_op_ctx_t *c);                      /* 1 when job.cancel arrived */
