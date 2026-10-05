@@ -3375,6 +3375,19 @@ err_replace_cooldown: "Helper na tej konsoli został wymieniony przed chwilą. O
 "joberr.helper_starting": "Helper PS5 jeszcze się uruchamia. Poczekaj kilka sekund i spróbuj ponownie.",
 "joberr.ava1_failed": "Helper PS5 uruchomił się, ale jego serwer transferu nie. Zrestartuj konsolę i spróbuj ponownie.",
 "joberr.helper_not_running": "Na PS5 nie działa żaden helper. Najpierw wyślij helpera (ekran Połączenie w aplikacji na komputer lub twój loader payloadów) i spróbuj ponownie.",
+fs_add_folder: "Dodaj folder",
+fs_add_folder_dialog_title: "Wybierz folder do skopiowania na PS5",
+fs_drop_here: "Upuść, aby skopiować do {path}",
+fs_sort_name: "Nazwa",
+fs_sort_size: "Rozmiar",
+fs_sort_modified: "Zmodyfikowano",
+fs_menu_open: "Otwórz",
+fs_menu_download: "Pobierz",
+fs_menu_copy: "Kopiuj",
+fs_menu_paste_into: "Wklej do tego folderu",
+fs_menu_copy_path: "Kopiuj ścieżkę",
+fs_go_to_path: "Przejdź do ścieżki",
+fs_copy_path_failed: "Nie udało się skopiować ścieżki do schowka.",
 };
 
 export default pl;

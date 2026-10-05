@@ -3122,6 +3122,19 @@ err_replace_cooldown: "इस कंसोल का सहायक अभी-�
 "joberr.helper_starting": "PS5 सहायक अभी शुरू हो रहा है। कुछ सेकंड रुकें, फिर कोशिश करें।",
 "joberr.ava1_failed": "PS5 सहायक शुरू हुआ लेकिन उसका ट्रांसफ़र सर्वर शुरू नहीं हुआ। कंसोल रीस्टार्ट करें, फिर कोशिश करें।",
 "joberr.helper_not_running": "PS5 पर कोई सहायक नहीं चल रहा। पहले सहायक भेजें (डेस्कटॉप ऐप की कनेक्शन स्क्रीन या आपका पेलोड लोडर), फिर कोशिश करें।",
+fs_add_folder: "फ़ोल्डर जोड़ें",
+fs_add_folder_dialog_title: "PS5 पर कॉपी करने के लिए फ़ोल्डर चुनें",
+fs_drop_here: "{path} में कॉपी करने के लिए छोड़ें",
+fs_sort_name: "नाम",
+fs_sort_size: "आकार",
+fs_sort_modified: "संशोधित",
+fs_menu_open: "खोलें",
+fs_menu_download: "डाउनलोड",
+fs_menu_copy: "कॉपी",
+fs_menu_paste_into: "इस फ़ोल्डर में पेस्ट करें",
+fs_menu_copy_path: "पाथ कॉपी करें",
+fs_go_to_path: "पाथ पर जाएँ",
+fs_copy_path_failed: "पाथ क्लिपबोर्ड पर कॉपी नहीं हो सका।",
 };
 
 export default hi;

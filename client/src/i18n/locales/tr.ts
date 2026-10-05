@@ -3096,6 +3096,19 @@ err_replace_cooldown: "Bu konsoldaki yardımcı az önce değiştirildi. Yeniden
 "joberr.helper_starting": "PS5 yardımcısı hâlâ başlıyor. Birkaç saniye bekleyin, sonra yeniden deneyin.",
 "joberr.ava1_failed": "PS5 yardımcısı başladı ama aktarım sunucusu başlamadı. Konsolu yeniden başlatın, sonra yeniden deneyin.",
 "joberr.helper_not_running": "PS5'te çalışan bir yardımcı yok. Önce yardımcıyı gönderin (masaüstü uygulamasının Bağlantı ekranı veya payload yükleyiciniz), sonra yeniden deneyin.",
+fs_add_folder: "Klasör ekle",
+fs_add_folder_dialog_title: "PS5'e kopyalanacak bir klasör seç",
+fs_drop_here: "{path} içine kopyalamak için bırak",
+fs_sort_name: "Ad",
+fs_sort_size: "Boyut",
+fs_sort_modified: "Değiştirilme",
+fs_menu_open: "Aç",
+fs_menu_download: "İndir",
+fs_menu_copy: "Kopyala",
+fs_menu_paste_into: "Bu klasöre yapıştır",
+fs_menu_copy_path: "Yolu kopyala",
+fs_go_to_path: "Yola git",
+fs_copy_path_failed: "Yol panoya kopyalanamadı.",
 };
 
 export default tr;

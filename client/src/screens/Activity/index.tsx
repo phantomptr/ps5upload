@@ -34,6 +34,8 @@ import { useFsBulkOpStore, useFsDownloadOpStore } from "../../state/fsBulkOp";
 import { useTransferStore } from "../../state/transfer";
 import { useUploadQueueStore } from "../../state/uploadQueue";
 import { useTaskStore } from "../../state/tasks";
+import { useConnectionStore } from "../../state/connection";
+import { activityForHost } from "../../lib/activityScope";
 import { profileNameForAddr, useRosterStore } from "../../state/roster";
 import { ConsoleChip } from "../../components/ConsoleChip";
 
@@ -49,7 +51,11 @@ import { ConsoleChip } from "../../components/ConsoleChip";
  */
 export default function ActivityScreen() {
   const tr = useTr();
-  const entries = useActivityHistoryStore((s) => s.entries);
+  const allEntries = useActivityHistoryStore((s) => s.entries);
+  // The selected console's activity only (a PS5 tab is that console's workspace); entries
+  // with no console (local-only work) show under every console.
+  const activeHost = useConnectionStore((s) => s.host);
+  const entries = activityForHost(allEntries, activeHost);
   const clear = useActivityHistoryStore((s) => s.clear);
   const clearRunning = useActivityHistoryStore((s) => s.clearRunning);
   const taskCount = useTaskStore((s) => s.tasks.length);

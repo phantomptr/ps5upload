@@ -18,7 +18,8 @@ export const usePackageViewer = create<ViewerState>((set) => ({
 }));
 
 /** Screens with their own drop zone keep their drops. */
-const OWN_DROPS = ["/install-package", "/payloads", "/upload", "/convert"];
+// Files copies whatever is dropped into the open folder, a .pkg included (no install offer).
+const OWN_DROPS = ["/install-package", "/payloads", "/upload", "/convert", "/files"];
 
 /** The first dropped thing the viewer can show — a package, a game image, or a folder (a path
  *  with no extension) — unless this screen takes drops itself. */

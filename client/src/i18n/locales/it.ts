@@ -3036,6 +3036,19 @@ err_replace_cooldown: "L’assistente di questa console è stato sostituito poco
 "joberr.helper_starting": "L’assistente della PS5 si sta ancora avviando. Attendi qualche secondo, poi riprova.",
 "joberr.ava1_failed": "L’assistente della PS5 è partito ma il suo server di trasferimento no. Riavvia la console, poi riprova.",
 "joberr.helper_not_running": "Nessun assistente è in esecuzione sulla PS5. Invia prima l’assistente (schermata Connessione dell’app desktop o il tuo caricatore di payload), poi riprova.",
+fs_add_folder: "Aggiungi cartella",
+fs_add_folder_dialog_title: "Scegli una cartella da copiare sulla PS5",
+fs_drop_here: "Rilascia per copiare in {path}",
+fs_sort_name: "Nome",
+fs_sort_size: "Dimensione",
+fs_sort_modified: "Modificato",
+fs_menu_open: "Apri",
+fs_menu_download: "Scarica",
+fs_menu_copy: "Copia",
+fs_menu_paste_into: "Incolla in questa cartella",
+fs_menu_copy_path: "Copia percorso",
+fs_go_to_path: "Vai al percorso",
+fs_copy_path_failed: "Impossibile copiare il percorso negli appunti.",
 };
 
 export default it;

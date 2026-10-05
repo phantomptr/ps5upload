@@ -856,7 +856,7 @@ export default function UploadScreen() {
       )}
 
       <RunningEngineJobs />
-      <QueuePanel />
+      <QueuePanel host={host?.trim() ? host : undefined} />
     </div>
   );
 }

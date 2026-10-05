@@ -3089,6 +3089,19 @@ err_replace_cooldown: "এই কনসোলের সহায়ক একট
 "joberr.helper_starting": "PS5 সহায়ক এখনো চালু হচ্ছে। কয়েক সেকেন্ড অপেক্ষা করে আবার চেষ্টা করুন।",
 "joberr.ava1_failed": "PS5 সহায়ক চালু হয়েছে কিন্তু এর ট্রান্সফার সার্ভার চালু হয়নি। কনসোল রিস্টার্ট করে আবার চেষ্টা করুন।",
 "joberr.helper_not_running": "PS5-এ কোনো সহায়ক চলছে না। আগে সহায়ক পাঠান (ডেস্কটপ অ্যাপের সংযোগ স্ক্রিন বা আপনার পেলোড লোডার), তারপর আবার চেষ্টা করুন।",
+fs_add_folder: "ফোল্ডার যোগ করুন",
+fs_add_folder_dialog_title: "PS5-এ কপি করার জন্য একটি ফোল্ডার বেছে নিন",
+fs_drop_here: "{path}-এ কপি করতে ছেড়ে দিন",
+fs_sort_name: "নাম",
+fs_sort_size: "আকার",
+fs_sort_modified: "পরিবর্তিত",
+fs_menu_open: "খুলুন",
+fs_menu_download: "ডাউনলোড",
+fs_menu_copy: "কপি",
+fs_menu_paste_into: "এই ফোল্ডারে পেস্ট করুন",
+fs_menu_copy_path: "পাথ কপি করুন",
+fs_go_to_path: "পাথে যান",
+fs_copy_path_failed: "পাথটি ক্লিপবোর্ডে কপি করা যায়নি।",
 };
 
 export default bn;

@@ -3036,6 +3036,19 @@ err_replace_cooldown: "El asistente de esta consola se reemplazó hace un moment
 "joberr.helper_starting": "El asistente de la PS5 aún está arrancando. Espera unos segundos y reintenta.",
 "joberr.ava1_failed": "El asistente de la PS5 arrancó pero su servidor de transferencia no. Reinicia la consola y reintenta.",
 "joberr.helper_not_running": "No hay ningún asistente en ejecución en la PS5. Envía primero el asistente (pantalla Conexión de la app de escritorio o tu cargador de payloads) y reintenta.",
+fs_add_folder: "Añadir carpeta",
+fs_add_folder_dialog_title: "Elige una carpeta para copiar a la PS5",
+fs_drop_here: "Suelta para copiar en {path}",
+fs_sort_name: "Nombre",
+fs_sort_size: "Tamaño",
+fs_sort_modified: "Modificado",
+fs_menu_open: "Abrir",
+fs_menu_download: "Descargar",
+fs_menu_copy: "Copiar",
+fs_menu_paste_into: "Pegar en esta carpeta",
+fs_menu_copy_path: "Copiar ruta",
+fs_go_to_path: "Ir a ruta",
+fs_copy_path_failed: "No se pudo copiar la ruta al portapapeles.",
 };
 
 export default es;

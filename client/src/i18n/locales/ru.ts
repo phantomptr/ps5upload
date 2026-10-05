@@ -3036,6 +3036,19 @@ err_replace_cooldown: "Помощник на этой консоли был за
 "joberr.helper_starting": "Помощник PS5 ещё запускается. Подождите несколько секунд и повторите.",
 "joberr.ava1_failed": "Помощник PS5 запустился, но его сервер передачи — нет. Перезагрузите консоль и повторите.",
 "joberr.helper_not_running": "На PS5 не запущен помощник. Сначала отправьте помощник (экран «Подключение» в настольном приложении или ваш загрузчик payload) и повторите.",
+fs_add_folder: "Добавить папку",
+fs_add_folder_dialog_title: "Выберите папку для копирования на PS5",
+fs_drop_here: "Отпустите, чтобы скопировать в {path}",
+fs_sort_name: "Имя",
+fs_sort_size: "Размер",
+fs_sort_modified: "Изменён",
+fs_menu_open: "Открыть",
+fs_menu_download: "Скачать",
+fs_menu_copy: "Копировать",
+fs_menu_paste_into: "Вставить в эту папку",
+fs_menu_copy_path: "Копировать путь",
+fs_go_to_path: "Перейти к пути",
+fs_copy_path_failed: "Не удалось скопировать путь в буфер обмена.",
 };
 
 export default ru;

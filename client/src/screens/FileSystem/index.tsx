@@ -1,5 +1,13 @@
 import { consoleAddr } from "../../lib/addr";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+} from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { usePackageViewer } from "../../state/packageViewer";
 import { useShallow } from "zustand/react/shallow";
@@ -13,6 +21,7 @@ import {
   Trash2,
   Pencil,
   FolderPlus,
+  FolderUp,
   RefreshCw,
   Scissors,
   Copy,
@@ -28,12 +37,31 @@ import {
   ScanSearch,
   Hash,
   BadgeCheck,
+  FolderOpen,
+  Link2,
 } from "lucide-react";
 import { pickPath, pickPaths } from "../../lib/pickPath";
+import { useWebviewDropAll } from "../../lib/useWebviewDrop";
+import { writeClipboard } from "../../lib/clipboard";
+import {
+  fsKeyAction,
+  keysBelongElsewhere,
+  nextSort,
+  normalizeTypedPath,
+  sortEntries,
+  type SortKey,
+  type SortState,
+} from "./fsBrowse";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { isInstallPackagePath } from "../../lib/pkgDropDedupe";
-import { PageHeader, Button, ConnectionGate, Spinner, ErrorCard } from "../../components";
+import {
+  PageHeader,
+  Button,
+  ConnectionGate,
+  Spinner,
+  ErrorCard,
+} from "../../components";
 import { BrowseButton } from "../../components/BrowseButton";
 import EditSessionBanner from "../../components/EditSessionBanner";
 // Direct import to avoid the barrel's circular-dep warning at build.
@@ -58,6 +86,8 @@ import {
   startTransferDownload,
   startTransferDownloadZip,
   startTransferFile,
+  startTransferDir,
+  pathKind,
   fetchVolumes,
   type Volume,
 } from "../../api/ps5";
@@ -120,6 +150,8 @@ interface DirEntry {
   name: string;
   kind: string; // "file" | "dir" | "link" | "other" | "unknown"
   size: number;
+  /** Seconds since the epoch; older helpers omit it. */
+  mtime?: number;
 }
 
 function formatDuration(sec: number): string {
@@ -746,7 +778,12 @@ export default function FileSystemScreen() {
     try {
       // The activity bar reads the task store; a big folder can take minutes to delete.
       await trackTask(
-        { kind: "fs-delete", origin: "files.delete", label: `Delete ${name}`, consoleId: host },
+        {
+          kind: "fs-delete",
+          origin: "files.delete",
+          label: `Delete ${name}`,
+          consoleId: host,
+        },
         () => fsDelete(consoleAddr(host), itemPath),
       );
       await refresh();
@@ -1052,10 +1089,7 @@ export default function FileSystemScreen() {
    *
    *  Sequential on purpose: these land inside one mounted image, and the
    *  payload writes a packed shard's records serially anyway. */
-  const runUpload = async (
-    srcPaths: string[],
-    replaceRemoteName?: string,
-  ) => {
+  const runUpload = async (srcPaths: string[], replaceRemoteName?: string) => {
     if (srcPaths.length === 0) return;
     const addr = consoleAddr(host);
     setError(null);
@@ -1067,13 +1101,20 @@ export default function FileSystemScreen() {
       const remoteName = replaceRemoteName ?? localName;
       setBusyEntry({ name: remoteName, op: "upload" });
       const progressBase = { index: i, count: srcPaths.length, jobId: "" };
-      setUploadProgress({ ...progressBase, sent: 0, total: 0, live: undefined });
+      setUploadProgress({
+        ...progressBase,
+        sent: 0,
+        total: 0,
+        live: undefined,
+      });
       try {
-        const jobId = await startTransferFile(
-          src,
-          joinPath(path, remoteName),
-          addr,
-        );
+        // A folder (picked with Add folder, or dropped) uploads whole, into a same-named
+        // folder here; a file goes up on its own.
+        const isFolder =
+          replaceRemoteName === undefined && (await pathKind(src)) === "folder";
+        const jobId = isFolder
+          ? await startTransferDir(src, joinPath(path, remoteName), addr)
+          : await startTransferFile(src, joinPath(path, remoteName), addr);
         progressBase.jobId = jobId;
         // Poll to terminal before starting the next one, so a failure
         // stops the batch instead of racing more writes onto a full or
@@ -1136,6 +1177,26 @@ export default function FileSystemScreen() {
     if (!picked || picked.length === 0) return;
     await addPicked(picked);
   };
+
+  const addFolderHere = async () => {
+    const picked = await pickPath({
+      mode: "folder",
+      title: tr(
+        "fs_add_folder_dialog_title",
+        undefined,
+        "Pick a folder to copy onto the PS5",
+      ),
+    });
+    if (typeof picked !== "string") return;
+    await addPicked([picked]);
+  };
+
+  // Files and folders dragged in from the computer's file manager land in this folder
+  // (a .pkg too: this screen copies it, it does not offer to install it).
+  const dropActive = useWebviewDropAll(
+    (paths) => void addPicked(paths),
+    !loading && !!host?.trim() && busyEntry === null,
+  );
 
   /** Upload picked files (local or on a saved server) into this folder, asking first when
    *  one would overwrite a file already here. */
@@ -1359,8 +1420,44 @@ export default function FileSystemScreen() {
   // Cut / Copy: stage selection into the shared clipboard. Clears local
   // selection so the UI reflects that the items are "in flight" via
   // the toolbar instead of by highlighting.
-  const stageClipboard = (op: "cut" | "copy") => {
-    const items: ClipboardItem[] = selectedEntries.map((e) => ({
+  // ── FileZilla-style browsing: sort columns, keyboard, row menu, typed path ──
+  const [sort, setSort] = useState<SortState>({ key: "name", desc: false });
+  const sortedEntries = useMemo(
+    () => (entries ? sortEntries(entries, sort) : []),
+    [entries, sort],
+  );
+  const [rowMenu, setRowMenu] = useState<{
+    x: number;
+    y: number;
+    entry: DirEntry;
+  } | null>(null);
+  const [pathDraft, setPathDraft] = useState<string | null>(null);
+
+  const openEntry = (e: DirEntry) => {
+    if (e.kind === "dir") setPath(joinPath(path, e.name));
+    else viewEntry(e);
+  };
+  const startRename = (name: string) => {
+    setRenaming(name);
+    setRenameDraft(name);
+  };
+  const copyEntryPath = async (e: DirEntry) => {
+    const ok = await writeClipboard(joinPath(path, e.name));
+    if (!ok)
+      setError(
+        tr(
+          "fs_copy_path_failed",
+          undefined,
+          "Couldn't copy the path to the clipboard.",
+        ),
+      );
+  };
+
+  const stageClipboard = (
+    op: "cut" | "copy",
+    list: DirEntry[] = selectedEntries,
+  ) => {
+    const items: ClipboardItem[] = list.map((e) => ({
       path: joinPath(path, e.name),
       name: e.name,
       size: e.size,
@@ -1383,7 +1480,7 @@ export default function FileSystemScreen() {
   // Clipboard clears only when every cut succeeded cleanly. Any
   // failure keeps the clipboard so the user can retry (maybe after
   // freeing space or fixing permissions).
-  const runPaste = async () => {
+  const runPaste = async (into: string = path) => {
     // Single-flight guard PER CONSOLE: same rationale as runBulkDelete.
     if (fsBulk.op !== null) return;
     if (clipboard.items.length === 0 || !clipboard.op) return;
@@ -1395,7 +1492,16 @@ export default function FileSystemScreen() {
     // and let the user decide once for the whole paste. Before this, pasting
     // a file over one that already existed just failed with
     // `fs_copy_dest_exists` and no way forward.
-    const existingNames = new Set((entries ?? []).map((e) => e.name));
+    // Pasting into a subfolder (the row menu's "Paste into"): its own listing decides the
+    // conflicts, not the folder on screen.
+    const existingNames =
+      into === path
+        ? new Set((entries ?? []).map((e) => e.name))
+        : new Set(
+            (await fsListDir(consoleAddr(host), into).catch(() => [])).map(
+              (e) => e.name,
+            ),
+          );
     const conflicts = items.filter((i) => existingNames.has(i.name));
     let overwrite = false;
     if (conflicts.length > 0) {
@@ -1428,7 +1534,7 @@ export default function FileSystemScreen() {
       op: op === "cut" ? "paste-move" : "paste-copy",
       total: items.length,
       fromPath: clipboard.sourceLabel ?? "",
-      toPath: path,
+      toPath: into,
     });
     const addr = consoleAddr(host);
     const errors: string[] = [];
@@ -1440,7 +1546,7 @@ export default function FileSystemScreen() {
         // — that's what gives a 28 GiB copy a sub-second Stop.
         if (fsBulk.cancelRequested) break;
         const item = items[i];
-        const target = joinPath(path, item.name);
+        const target = joinPath(into, item.name);
         fsBulk.setProgress({
           done: i,
           currentPath: item.path,
@@ -1781,7 +1887,8 @@ export default function FileSystemScreen() {
       if (!destZip || typeof destZip !== "string") return;
       dest = destZip;
       rootName = destZip.split(/[\\/]/).pop() || `${entry.name}.zip`;
-      start = () => startTransferDownloadZip(remote, destZip, addr, kind, systemFileRead);
+      start = () =>
+        startTransferDownloadZip(remote, destZip, addr, kind, systemFileRead);
     } else {
       const picked = await pickPath({
         mode: "folder",
@@ -1794,7 +1901,8 @@ export default function FileSystemScreen() {
       if (typeof picked !== "string") return;
       dest = picked;
       rootName = entry.name;
-      start = () => startTransferDownload(remote, picked, addr, kind, systemFileRead);
+      start = () =>
+        startTransferDownload(remote, picked, addr, kind, systemFileRead);
     }
     setError(null);
     let jobId: string;
@@ -1909,6 +2017,67 @@ export default function FileSystemScreen() {
   //     known volume root." Treat it as null so the picker shows
   //     "(custom path)" instead of arbitrarily picking the
   //     longest-named volume.
+  // The keyboard map (fsBrowse.fsKeyAction). One window listener reading the newest state
+  // through a ref, so it never re-subscribes per render; a text field or a dialog keeps its keys.
+  const keyHandler = useRef<(e: KeyboardEvent) => void>(() => {});
+  keyHandler.current = (e: KeyboardEvent) => {
+    if (
+      keysBelongElsewhere(e.target) ||
+      renaming !== null ||
+      mkdirDraft !== null
+    )
+      return;
+    if (!entries || !host?.trim()) return;
+    const action = fsKeyAction(e);
+    if (!action) return;
+    const sel = selectedEntries;
+    const busy = busyEntry !== null || fsBulk.op !== null;
+    switch (action) {
+      case "select-all":
+        setSelected(new Set(entries.map((x) => x.name)));
+        break;
+      case "copy":
+      case "cut":
+        if (sel.length === 0) return;
+        stageClipboard(action);
+        break;
+      case "paste":
+        if (busy || clipboard.items.length === 0) return;
+        void runPaste();
+        break;
+      case "delete":
+        if (busy || sel.length === 0) return;
+        if (sel.length === 1) void runDelete(sel[0].name);
+        else void runBulkDelete();
+        break;
+      case "rename":
+        if (sel.length !== 1) return;
+        startRename(sel[0].name);
+        break;
+      case "refresh":
+        void refresh();
+        break;
+      case "up":
+        if (path === "/") return;
+        setPath(parent(path));
+        break;
+      case "open":
+        if (sel.length !== 1) return;
+        openEntry(sel[0]);
+        break;
+      case "clear":
+        setSelected(new Set());
+        setRowMenu(null);
+        break;
+    }
+    e.preventDefault();
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => keyHandler.current(e);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const currentVolumePath = useMemo(() => {
     if (!volumes || volumes.length === 0) return null;
     if (path === "/" || path === "") return null;
@@ -1927,6 +2096,78 @@ export default function FileSystemScreen() {
 
   return (
     <div className="app-page">
+      {dropActive && (
+        <div
+          className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-[var(--color-accent-soft)] ring-4 ring-inset ring-[var(--color-accent)]"
+          data-testid="fs-drop-overlay"
+        >
+          <div className="rounded-lg bg-[var(--color-surface)] px-5 py-3 text-sm font-medium shadow-lg">
+            {tr("fs_drop_here", { path }, `Drop to copy into ${path}`)}
+          </div>
+        </div>
+      )}
+      {rowMenu && (
+        <RowMenu
+          x={rowMenu.x}
+          y={rowMenu.y}
+          onClose={() => setRowMenu(null)}
+          items={[
+            {
+              icon: rowMenu.entry.kind === "dir" ? FolderOpen : Eye,
+              label: tr("fs_menu_open", undefined, "Open"),
+              run: () => openEntry(rowMenu.entry),
+            },
+            {
+              icon: Download,
+              label: tr("fs_menu_download", undefined, "Download"),
+              run: () => void runDownload(rowMenu.entry),
+              disabled: downloadOp.active,
+            },
+            {
+              icon: Scissors,
+              label: tr("fs_cut", "Cut"),
+              run: () => stageClipboard("cut", [rowMenu.entry]),
+            },
+            {
+              icon: Copy,
+              label: tr("fs_menu_copy", undefined, "Copy"),
+              run: () => stageClipboard("copy", [rowMenu.entry]),
+            },
+            ...(rowMenu.entry.kind === "dir" && clipboard.items.length > 0
+              ? [
+                  {
+                    icon: ClipboardPaste,
+                    label: tr(
+                      "fs_menu_paste_into",
+                      undefined,
+                      "Paste into this folder",
+                    ),
+                    run: () =>
+                      void runPaste(joinPath(path, rowMenu.entry.name)),
+                    disabled: fsBulk.op !== null,
+                  },
+                ]
+              : []),
+            {
+              icon: Pencil,
+              label: tr("fs_rename", "Rename"),
+              run: () => startRename(rowMenu.entry.name),
+            },
+            {
+              icon: Link2,
+              label: tr("fs_menu_copy_path", undefined, "Copy path"),
+              run: () => void copyEntryPath(rowMenu.entry),
+            },
+            {
+              icon: Trash2,
+              label: tr("delete", undefined, "Delete"),
+              run: () => void runDelete(rowMenu.entry.name),
+              destructive: true,
+              disabled: busyEntry !== null,
+            },
+          ]}
+        />
+      )}
       {confirmDialogNode}
       {alertDialogNode}
       {promptDialogNode}
@@ -1941,11 +2182,29 @@ export default function FileSystemScreen() {
               remote
               icon={<Upload size={12} />}
               label={tr("fs_add_files", "Add files")}
-              title={tr("fs_add_files_dialog_title", undefined, "Pick files to copy onto the PS5")}
+              title={tr(
+                "fs_add_files_dialog_title",
+                undefined,
+                "Pick files to copy onto the PS5",
+              )}
               disabled={loading || !host?.trim() || busyEntry !== null}
               onMainClick={() => void addFilesHere()}
               onPick={(p) => void addPicked([p])}
             />
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={<FolderUp size={12} />}
+              onClick={() => void addFolderHere()}
+              disabled={loading || !host?.trim() || busyEntry !== null}
+              title={tr(
+                "fs_add_folder_dialog_title",
+                undefined,
+                "Pick a folder to copy onto the PS5",
+              )}
+            >
+              {tr("fs_add_folder", undefined, "Add folder")}
+            </Button>
             <Button
               variant="secondary"
               size="sm"
@@ -2028,7 +2287,11 @@ export default function FileSystemScreen() {
                       distinction survives, without implying selection. */}
                   <Icon
                     size={12}
-                    className={external ? "text-[var(--color-ps4)]" : "text-[var(--color-muted)]"}
+                    className={
+                      external
+                        ? "text-[var(--color-ps4)]"
+                        : "text-[var(--color-muted)]"
+                    }
                   />
                   {v.path}
                   <span className="opacity-60">
@@ -2068,32 +2331,67 @@ export default function FileSystemScreen() {
             >
               <ArrowUp size={14} />
             </button>
-            {crumbs(path).map((c, i, arr) => (
-              <span key={c.path} className="flex shrink-0 items-center gap-1">
+            {pathDraft !== null ? (
+              <input
+                autoFocus
+                value={pathDraft}
+                onChange={(ev) => setPathDraft(ev.target.value)}
+                onKeyDown={(ev) => {
+                  if (ev.key === "Enter") {
+                    const next = normalizeTypedPath(pathDraft);
+                    if (next) {
+                      setPath(next);
+                      setPathDraft(null);
+                    }
+                  }
+                  if (ev.key === "Escape") setPathDraft(null);
+                }}
+                onBlur={() => setPathDraft(null)}
+                spellCheck={false}
+                aria-label={tr("fs_go_to_path", undefined, "Go to path")}
+                className="min-w-0 flex-1 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 font-mono text-xs"
+              />
+            ) : (
+              <>
+                {crumbs(path).map((c, i, arr) => (
+                  <span
+                    key={c.path}
+                    className="flex shrink-0 items-center gap-1"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setPath(c.path)}
+                      className={
+                        "rounded px-1.5 py-0.5 font-mono " +
+                        (i === arr.length - 1
+                          ? "font-medium text-[var(--color-text)]"
+                          : "text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]")
+                      }
+                    >
+                      {i === 0 ? (
+                        <Home size={12} className="inline -translate-y-[1px]" />
+                      ) : (
+                        c.label
+                      )}
+                    </button>
+                    {i < arr.length - 1 && (
+                      <ChevronRight
+                        size={12}
+                        className="text-[var(--color-muted)]"
+                      />
+                    )}
+                  </span>
+                ))}
                 <button
                   type="button"
-                  onClick={() => setPath(c.path)}
-                  className={
-                    "rounded px-1.5 py-0.5 font-mono " +
-                    (i === arr.length - 1
-                      ? "font-medium text-[var(--color-text)]"
-                      : "text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]")
-                  }
+                  onClick={() => setPathDraft(path)}
+                  title={tr("fs_go_to_path", undefined, "Go to path")}
+                  className="ml-1 shrink-0 rounded-md p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
                 >
-                  {i === 0 ? (
-                    <Home size={12} className="inline -translate-y-[1px]" />
-                  ) : (
-                    c.label
-                  )}
+                  <Pencil size={12} />
                 </button>
-                {i < arr.length - 1 && (
-                  <ChevronRight
-                    size={12}
-                    className="text-[var(--color-muted)]"
-                  />
-                )}
-              </span>
-            ))}
+              </>
+            )}
           </div>
           <RecentPathsDropdown onPick={(p) => setPath(p)} currentPath={path} />
         </div>
@@ -2121,7 +2419,7 @@ export default function FileSystemScreen() {
             <div className="ml-auto flex items-center gap-1">
               <button
                 type="button"
-                onClick={runPaste}
+                onClick={() => void runPaste()}
                 disabled={bulkOp.op !== null || !host?.trim()}
                 className="flex items-center gap-1 rounded-md bg-[var(--color-accent)] px-2 py-1 text-xs font-medium text-[var(--color-accent-contrast)] disabled:opacity-50"
               >
@@ -2381,11 +2679,36 @@ export default function FileSystemScreen() {
                 `${entries.length} item${entries.length === 1 ? "" : "s"}`,
               )}
             </span>
+            <span className="ml-auto flex items-center gap-1">
+              {(
+                [
+                  ["name", tr("fs_sort_name", undefined, "Name")],
+                  ["size", tr("fs_sort_size", undefined, "Size")],
+                  ["mtime", tr("fs_sort_modified", undefined, "Modified")],
+                ] as [SortKey, string][]
+              ).map(([k, label]) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setSort((cur) => nextSort(cur, k))}
+                  className={
+                    "rounded px-1.5 py-0.5 hover:bg-[var(--color-surface-3)] " +
+                    (sort.key === k
+                      ? "font-medium text-[var(--color-text)]"
+                      : "")
+                  }
+                  aria-pressed={sort.key === k}
+                >
+                  {label}
+                  {sort.key === k ? (sort.desc ? " ↓" : " ↑") : ""}
+                </button>
+              ))}
+            </span>
           </div>
         )}
 
         <ul className="grid gap-1">
-          {entries?.map((e) => {
+          {sortedEntries.map((e) => {
             const isDir = e.kind === "dir";
             const Icon = isDir ? Folder : FileIcon;
             const isRenaming = renaming === e.name;
@@ -2393,6 +2716,15 @@ export default function FileSystemScreen() {
             return (
               <li
                 key={e.name}
+                onDoubleClick={(ev) => {
+                  if ((ev.target as HTMLElement).closest("input,button"))
+                    return;
+                  openEntry(e);
+                }}
+                onContextMenu={(ev) => {
+                  ev.preventDefault();
+                  setRowMenu({ x: ev.clientX, y: ev.clientY, entry: e });
+                }}
                 className={
                   "list-row-contain-sm flex items-center gap-3 rounded-md border p-2 text-sm " +
                   (isSelected
@@ -2791,7 +3123,11 @@ function UploadProgressDetail({
         )}
         {finishing && (
           <span className="text-[var(--color-warn)]">
-            {tr("upload_phase_settling", undefined, "Finishing on the console…")}
+            {tr(
+              "upload_phase_settling",
+              undefined,
+              "Finishing on the console…",
+            )}
             {settleLeft !== undefined &&
               ` ${tr(
                 "fs_finishing_files_left",
@@ -3028,7 +3364,9 @@ function BulkOpBanner({
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
         <div
           className={`h-full bg-[var(--color-accent)] transition-[width] duration-300 ${
-            done < total && (itemPct === null || finishing) ? "animate-pulse" : ""
+            done < total && (itemPct === null || finishing)
+              ? "animate-pulse"
+              : ""
           }`}
           style={{ width: `${Math.max(pctOverall, 4)}%` }}
         />
@@ -3141,6 +3479,87 @@ function DownloadOpBanner({
           style={{ width: `${pct}%` }}
         />
       </div>
+    </div>
+  );
+}
+
+interface RowMenuItem {
+  icon: ComponentType<{ size?: number; className?: string }>;
+  label: string;
+  run: () => void;
+  disabled?: boolean;
+  destructive?: boolean;
+}
+
+/** The Files row's right-click menu: at the pointer, kept on screen, closed by a click
+ *  elsewhere, Escape, scroll or a resize. */
+function RowMenu({
+  x,
+  y,
+  items,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  items: RowMenuItem[];
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: x, top: y });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos({
+      left: Math.max(4, Math.min(x, window.innerWidth - r.width - 4)),
+      top: Math.max(4, Math.min(y, window.innerHeight - r.height - 4)),
+    });
+  }, [x, y]);
+  useEffect(() => {
+    const close = (e: Event) => {
+      if (e instanceof MouseEvent && ref.current?.contains(e.target as Node))
+        return;
+      onClose();
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("mousedown", close);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      data-testid="fs-row-menu"
+      style={{ left: pos.left, top: pos.top }}
+      className="fixed z-50 min-w-[12rem] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-raised)] py-1 text-sm shadow-lg"
+    >
+      {items.map((it) => (
+        <button
+          key={it.label}
+          type="button"
+          role="menuitem"
+          disabled={it.disabled}
+          onClick={() => {
+            onClose();
+            it.run();
+          }}
+          className={
+            "flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--color-surface-3)] disabled:opacity-40 " +
+            (it.destructive ? "text-[var(--color-bad)]" : "")
+          }
+        >
+          <it.icon size={14} className="shrink-0" />
+          {it.label}
+        </button>
+      ))}
     </div>
   );
 }

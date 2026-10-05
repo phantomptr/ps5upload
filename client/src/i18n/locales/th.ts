@@ -3113,6 +3113,19 @@ err_replace_cooldown: "ตัวช่วยของเครื่องนี
 "joberr.helper_starting": "ตัวช่วยบน PS5 ยังเริ่มทำงานอยู่ รอสักครู่ แล้วลองอีกครั้ง",
 "joberr.ava1_failed": "ตัวช่วยบน PS5 เริ่มทำงานแล้ว แต่เซิร์ฟเวอร์ถ่ายโอนของมันไม่เริ่ม รีสตาร์ตคอนโซล แล้วลองอีกครั้ง",
 "joberr.helper_not_running": "ไม่มีตัวช่วยทำงานอยู่บน PS5 ส่งตัวช่วยก่อน (หน้าจอการเชื่อมต่อของแอปเดสก์ท็อปหรือตัวโหลด payload ของคุณ) แล้วลองอีกครั้ง",
+fs_add_folder: "เพิ่มโฟลเดอร์",
+fs_add_folder_dialog_title: "เลือกโฟลเดอร์ที่จะคัดลอกไปยัง PS5",
+fs_drop_here: "วางเพื่อคัดลอกไปที่ {path}",
+fs_sort_name: "ชื่อ",
+fs_sort_size: "ขนาด",
+fs_sort_modified: "แก้ไขล่าสุด",
+fs_menu_open: "เปิด",
+fs_menu_download: "ดาวน์โหลด",
+fs_menu_copy: "คัดลอก",
+fs_menu_paste_into: "วางในโฟลเดอร์นี้",
+fs_menu_copy_path: "คัดลอกพาธ",
+fs_go_to_path: "ไปที่พาธ",
+fs_copy_path_failed: "คัดลอกพาธไปยังคลิปบอร์ดไม่ได้",
 };
 
 export default th;
