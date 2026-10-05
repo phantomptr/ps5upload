@@ -952,8 +952,15 @@ async fn periodic_kills_never_strand_an_upload() {
     let c = cfg();
     let finalized = c.progress_bytes_finalized.clone().unwrap();
     let (pool2, src2) = (pool.clone(), src.clone());
+    // ~6 s natively. Coverage instrumentation (CARGO_LLVM_COV) slows every handshake against
+    // the same 2 s kill period, so each attempt lands less: give it room there.
+    let bound = if std::env::var_os("CARGO_LLVM_COV").is_some() {
+        240
+    } else {
+        60
+    };
     within(
-        60,
+        bound,
         tokio::task::spawn_blocking(move || {
             upload::upload_dir_in(&pool2, &c, [9; 16], "in", &src2)
         }),
