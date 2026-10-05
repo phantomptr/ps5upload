@@ -656,7 +656,7 @@ drive rows, the 223k-file set and the 85 GB install are follow-ups.
 | R1 copy / Add files / finishing progress and ETA (PR #350) | implement |
 | R2 beginner guide (load order, what kstuff/etaHEN/ShadowMount are, quick start) | implement (docs) |
 | R3 compress games on the console | **declined**: most games already ship as exFAT images |
-| R4 link installer for any file + download-only (#368) | explained, decision pending |
+| R4 link installer (#368) | implement: a link that resolves to a .pkg (redirects, share links, no extension) installs; any other link is download-only to a console folder, and only when it is a real file download (not an HTML page or error) |
 | R5 cancel a running console copy (#369) | implement |
 | R6 multi-pkg RAR without local space (#370) | implement: unpack to the console over AVA1, then install each package |
 | R7 Discord rich presence | **declined** |
