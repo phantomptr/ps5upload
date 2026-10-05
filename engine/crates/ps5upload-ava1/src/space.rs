@@ -379,6 +379,9 @@ mod tests {
             key: ("h".into(), "/data".into()),
             to_allocate: 100 * GB,
             room_then: 150 * GB,
+            volume: "/data".into(),
+            free_bytes: 0,
+            reserve_bytes: 0,
         };
         assert_eq!(p.outstanding(150 * GB), 100 * GB, "nothing written yet");
         assert_eq!(p.outstanding(120 * GB), 70 * GB, "30 GB written");
