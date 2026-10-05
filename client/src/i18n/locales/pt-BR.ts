@@ -2012,6 +2012,7 @@ processes_title: "Processos",
 processes_truncated: "A lista de processos foi cortada — processos demais para exibir.",
 profile: "Perfil",
 queue_cancel_item: "Cancelar este envio (o resto da fila continua)",
+queue_size_chip: "{size} para enviar",
 remote_play: "Remote Play",
 videos: "Videoclipes",
 

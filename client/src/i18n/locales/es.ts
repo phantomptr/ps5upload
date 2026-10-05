@@ -1924,6 +1924,7 @@ processes_title: "Procesos",
 processes_truncated: "La lista de procesos se recortó: hay demasiados para mostrarlos todos.",
 profile: "Perfil",
 queue_cancel_item: "Cancelar esta subida (el resto de la cola continúa)",
+queue_size_chip: "{size} por subir",
 remote_play: "Remote Play",
 videos: "Clips de vídeo",
 

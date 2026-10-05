@@ -1986,6 +1986,7 @@ processes_title: "Proses",
 processes_truncated: "Daftar proses dipangkas — terlalu banyak proses untuk ditampilkan semua.",
 profile: "Profil",
 queue_cancel_item: "Batalkan unggahan ini (sisa antrean tetap berjalan)",
+queue_size_chip: "{size} untuk diunggah",
 remote_play: "Remote Play",
 videos: "Klip video",
 

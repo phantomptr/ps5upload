@@ -1924,6 +1924,7 @@ processes_title: "Processi",
 processes_truncated: "L'elenco dei processi è stato troncato: troppi processi da mostrare.",
 profile: "Profilo",
 queue_cancel_item: "Annulla questo caricamento (il resto della coda prosegue)",
+queue_size_chip: "{size} da caricare",
 remote_play: "Remote Play",
 videos: "Videoclip",
 

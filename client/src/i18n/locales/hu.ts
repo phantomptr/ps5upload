@@ -688,6 +688,7 @@ queue_move_up: "Mozgatás felfelé",
 queue_move_down: "Mozgatás lefelé",
 queue_remove: "Eltávolítás a várólistából",
 queue_cancel_item: "Ennek a feltöltésnek a megszakítása (a várólista többi tagja tovább fut)",
+queue_size_chip: "{size} feltöltésre vár",
 
 activity_clear_running: "Futók törlése",
 fs_download_stop: "Figyelés leállítása",

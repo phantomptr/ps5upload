@@ -1984,6 +1984,7 @@ processes_title: "İşlemler",
 processes_truncated: "İşlem listesi kısaltıldı — tümünü göstermek için çok fazla işlem var.",
 profile: "Profil",
 queue_cancel_item: "Bu yüklemeyi iptal et (kuyruğun kalanı devam eder)",
+queue_size_chip: "Yüklenecek: {size}",
 remote_play: "Uzaktan Oynama",
 videos: "Video klipleri",
 

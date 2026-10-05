@@ -1979,6 +1979,7 @@ processes_title: "Tiến trình",
 processes_truncated: "Danh sách tiến trình đã bị cắt bớt — quá nhiều để hiển thị hết.",
 profile: "Hồ sơ",
 queue_cancel_item: "Hủy lần tải lên này (phần còn lại của hàng đợi vẫn tiếp tục)",
+queue_size_chip: "{size} cần tải lên",
 remote_play: "Remote Play",
 videos: "Đoạn video",
 

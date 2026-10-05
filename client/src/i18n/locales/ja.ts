@@ -2019,6 +2019,7 @@ processes_title: "プロセス",
 processes_truncated: "プロセス一覧は省略されました — 数が多すぎて全件表示できません。",
 profile: "プロフィール",
 queue_cancel_item: "このアップロードをキャンセル（残りのキューは継続）",
+queue_size_chip: "アップロード残り {size}",
 remote_play: "リモートプレイ",
 videos: "ビデオクリップ",
 

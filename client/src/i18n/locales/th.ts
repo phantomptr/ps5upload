@@ -2004,6 +2004,7 @@ processes_title: "โปรเซส",
 processes_truncated: "รายการโปรเซสถูกตัดให้สั้นลง — มีมากเกินกว่าจะแสดงทั้งหมด",
 profile: "โปรไฟล์",
 queue_cancel_item: "ยกเลิกการอัปโหลดนี้ (คิวที่เหลือทำงานต่อ)",
+queue_size_chip: "ต้องอัปโหลด {size}",
 remote_play: "เล่นระยะไกล",
 videos: "คลิปวิดีโอ",
 

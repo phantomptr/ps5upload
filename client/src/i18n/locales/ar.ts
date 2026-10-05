@@ -1977,6 +1977,7 @@ processes_title: "العمليات",
 processes_truncated: "تم اقتطاع قائمة العمليات — عددها أكبر من أن يُعرض بالكامل.",
 profile: "الملف الشخصي",
 queue_cancel_item: "إلغاء هذا الرفع (تستمر بقية القائمة)",
+queue_size_chip: "{size} للرفع",
 remote_play: "اللعب عن بُعد",
 videos: "مقاطع الفيديو",
 

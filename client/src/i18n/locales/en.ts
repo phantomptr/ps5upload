@@ -691,6 +691,7 @@ queue_move_up: "Move up",
 queue_move_down: "Move down",
 queue_remove: "Remove from queue",
 queue_cancel_item: "Cancel this upload (keeps the rest of the queue going)",
+queue_size_chip: "{size} to upload",
   
 activity_clear_running: "Clear running",
 fs_download_stop: "Stop watching",

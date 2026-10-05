@@ -2014,6 +2014,7 @@ processes_title: "Processus",
 processes_truncated: "La liste des processus a été tronquée — trop de processus à afficher.",
 profile: "Profil",
 queue_cancel_item: "Annuler cet envoi (le reste de la file continue)",
+queue_size_chip: "{size} à envoyer",
 remote_play: "Remote Play",
 videos: "Clips vidéo",
 
