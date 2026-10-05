@@ -31,10 +31,6 @@ check_updates: "بررسی به‌روزرسانی",
 language: "زبان",
 // Source
 // Destination
-// The previous upload-mode union (payload / ftp / mix / ftx2) is
-// collapsing to a single FTX2-engine path, rebranded as "Payload"
-// for users. The legacy string keys stay for config/back-compat —
-// all four point to the same label now.
 // Queues
 // Transfer Control
 upload: "بارگذاری",
@@ -360,7 +356,7 @@ logs_filter_all: "همه",
 status_engine: "موتور",
 status_engine_tooltip: "ps5upload-engine — بک‌اند برنامه ({url})",
 status_payload: "راهنما",
-status_payload_tooltip: "راهنمای PS5Upload روی :9113",
+status_payload_tooltip: "راهنمای PS5Upload روی :9120",
 status_kernel_ok: "کرنل OK",
 status_no_active_transfers: "انتقال فعالی نیست",
 status_ps5: "PS5",
@@ -431,7 +427,7 @@ about_credits_text: "برای شرایط مجوز LICENSE را ببینید.",
 // these are declared here by hand).
 about_feat_fast_transfers_title: "انتقال‌های سریع",
 about_feat_fast_transfers_body:
-  "پروتکل باینری FTX2 با تأیید shard BLAKE3 + بهینه‌سازی بسته‌بندی فایل‌های کوچک. از LAN شما نهایت استفاده را می‌کند.",
+  "پروتکل انتقال AVA1 با تأیید BLAKE3، نشست‌های رمزگذاری‌شده، کارهای قابل ازسرگیری و بسته‌بندی فایل‌های کوچک. از LAN شما نهایت استفاده را می‌کند.",
 about_feat_native_mount_title: "اتصال بومی تصویر",
 about_feat_native_mount_body:
   "تصاویر .exfat و .ffpkg را از طریق MDIOCATTACH + nmount به /mnt/ps5upload/ متصل می‌کند — بدون نیاز به ابزارهای شخص ثالث.",
