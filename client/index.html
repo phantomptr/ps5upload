@@ -17,6 +17,8 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Plain ES5, before the bundle: a notice instead of a white window on an old WebView (#352). -->
+    <script src="./boot-guard.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
