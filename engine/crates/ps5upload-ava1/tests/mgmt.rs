@@ -1099,3 +1099,30 @@ async fn a_clamped_log_tail_is_led_by_a_note_and_a_whole_one_is_not() {
         .unwrap();
     assert_eq!(r, b"xxxxx");
 }
+
+/// A management call carries its caller's bound all the way down: the session's own default
+/// (`RPC_TIMEOUT`, for callers that name none) must not cut a call the caller allowed longer.
+/// It did: `ava1-calibrate` on a console's internal drive (about 90 s) failed at 60 s.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_call_longer_than_the_session_default_gets_its_callers_bound() {
+    let held = ava1::session::RPC_TIMEOUT + Duration::from_secs(3);
+    let (t, _p, c) = console(
+        "long",
+        Box::new(move |_, _| {
+            std::thread::sleep(held);
+            text("done")
+        }),
+    )
+    .await;
+    let r = call(
+        &t,
+        &c,
+        m::HW_INFO,
+        "HW_INFO",
+        b"",
+        held + Duration::from_secs(30),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.unwrap(), b"done");
+}

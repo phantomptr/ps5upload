@@ -26,6 +26,9 @@ use crate::Ava1Error;
 /// The longest an RPC waits for its reply when the caller names no bound.
 pub const RPC_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// `disk.calibrate` writes and fsyncs up to 20,000 files five times over.
+const CALIBRATE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
 #[derive(Debug, Clone, Copy)]
 pub struct Timing {
     pub ping_every: Duration,
@@ -352,7 +355,11 @@ impl Session {
             size,
         }
         .to_bytes()?;
-        let reply = self.rpc(gen::METHOD_DISK_CALIBRATE, &body).await?;
+        // Five disk points over up to 20,000 files: ~90 s on a console's internal drive, far
+        // past the default bound.
+        let reply = self
+            .rpc_within(gen::METHOD_DISK_CALIBRATE, &body, CALIBRATE_TIMEOUT)
+            .await?;
         if reply.status != gen::STATUS_OK {
             return Err(Ava1Error::Refused {
                 code: reply.status,

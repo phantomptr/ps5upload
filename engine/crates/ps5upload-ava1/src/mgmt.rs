@@ -311,7 +311,12 @@ impl AvaTransport {
                 queued.store(true, std::sync::atomic::Ordering::Relaxed);
                 let _permit = gate.acquire_for(method).await;
                 queued.store(false, std::sync::atomic::Ordering::Relaxed);
-                session.rpc(method, body).await
+                // The caller's bound, not the session default, is the limit a long call (a big
+                // hash, a calibration) meets. The inner bound sits just past it so the outer
+                // timeout always fires first and keeps its own error and accounting.
+                session
+                    .rpc_within(method, body, timeout + Duration::from_secs(1))
+                    .await
             })
             .await;
             let reply = match attempt {
