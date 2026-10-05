@@ -72,7 +72,6 @@ tests/lab/elev_probe/*.elf
 
 # ─── Bench artefacts (generated on demand) ───────────────────────────────
 bench/fixtures/
-bench/results/
 bench/reports/
 bench/baselines/*.tmp
 
@@ -195,7 +194,7 @@ ps5upload.elf.gz.blake3.tmp
 
 # ─── Built payload artifacts ────────────────────────────────────────────
 # CI rebuilds these from C source on every release (see
-# .github/workflows/release.yml: "make payload" step). Tracking them
+# .github/workflows/publish.yml: "make payload" step). Tracking them
 # caused two recurring problems:
 #   1. Binary churn: contributors who run `make payload` locally get a
 #      diff-noise commit they have to revert (hit twice in 2.8.0 dev).
