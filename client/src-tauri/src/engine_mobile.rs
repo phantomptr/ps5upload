@@ -37,6 +37,7 @@ const BIND: &str = "0.0.0.0:19113";
 /// The renderer's engine-status tick tolerates the brief startup race
 /// (it retries), matching how the desktop readiness probe is advisory.
 pub async fn start(app: &AppHandle) -> Result<&'static str> {
+    point_engine_at_app_data(app);
     let app = app.clone();
     tokio::spawn(async move {
         if let Err(e) = ps5upload_engine::serve_in_process(BIND, DEFAULT_PS5_ADDR.to_string()).await
@@ -49,6 +50,34 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
         }
     });
     Ok(DEFAULT_ENGINE_URL)
+}
+
+/// A phone has no home folder, so the engine's data directory (saved connections, AVA1 identity,
+/// pairing, job journals) would resolve to nothing: saved connections failed with "no home folder"
+/// (#379) and AVA1 reported itself unavailable. Point it at this app's private data folder before
+/// the engine reads it (the AVA1 pool and the connection store read the variable when first used,
+/// which is after this). An explicit `PS5UPLOAD_DATA_DIR` wins.
+fn point_engine_at_app_data(app: &AppHandle) {
+    use tauri::Manager;
+    if std::env::var_os("PS5UPLOAD_DATA_DIR").is_some_and(|v| !v.is_empty()) {
+        return;
+    }
+    match app.path().app_data_dir() {
+        Ok(dir) => {
+            let dir = dir.join("ps5upload");
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                eprintln!(
+                    "[engine] cannot create the data folder {}: {e}",
+                    dir.display()
+                );
+                return;
+            }
+            // Set before the engine task starts; nothing else reads or writes the environment
+            // concurrently at this point of startup.
+            std::env::set_var("PS5UPLOAD_DATA_DIR", &dir);
+        }
+        Err(e) => eprintln!("[engine] no app data folder for the engine: {e}"),
+    }
 }
 
 /// No-op on mobile: the in-process server shares the app's lifecycle and

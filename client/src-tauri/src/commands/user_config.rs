@@ -46,6 +46,7 @@ fn user_config_path(app: &AppHandle) -> Result<PathBuf, String> {
             .path()
             .app_config_dir()
             .map_err(|e| format!("cannot resolve app config dir: {e}"))?;
+        #[allow(clippy::needless_return)] // the desktop block below follows on other targets
         return Ok(dir.join("settings.json"));
     }
     // Desktop: the user-facing mirror lives at `~/.ps5upload/settings.json`.
