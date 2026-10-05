@@ -280,6 +280,11 @@ pub fn console_copy_in(
                 Ok(r) => r,
                 Err(RpcStop::Failed(e)) => {
                     pool.forget(console).await;
+                    // The console held the job and the link dropped: it is back (or about to
+                    // be), so the first retry is prompt rather than the top of the ladder.
+                    if issued {
+                        backoff = crate::upload::BACKOFF_FLOOR;
+                    }
                     issued = false;
                     wait(&mut backoff, &e.to_string()).await;
                     continue;

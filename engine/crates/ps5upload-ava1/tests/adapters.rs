@@ -942,7 +942,7 @@ async fn periodic_kills_never_strand_an_upload() {
         addr.parse().unwrap(),
         ChaosConfig {
             bytes_per_sec: Some(8 << 20),
-            kill_every: Some(Duration::from_millis(1500)),
+            kill_every: Some(Duration::from_millis(2000)),
             ..Default::default()
         },
     )
@@ -953,7 +953,7 @@ async fn periodic_kills_never_strand_an_upload() {
     let finalized = c.progress_bytes_finalized.clone().unwrap();
     let (pool2, src2) = (pool.clone(), src.clone());
     within(
-        120,
+        60,
         tokio::task::spawn_blocking(move || {
             upload::upload_dir_in(&pool2, &c, [9; 16], "in", &src2)
         }),

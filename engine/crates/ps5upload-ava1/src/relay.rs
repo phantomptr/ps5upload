@@ -15,7 +15,7 @@ use ava1::send::{open_upload, run_upload, Progress, SendError, SendOptions, Send
 use ava1::source::{ReadAt, Source, SourceMeta};
 
 use crate::pool::{pool, Pool};
-use crate::upload::{refusal, ConsoleFailure, SessionGate};
+use crate::upload::{rearm, refusal, ConsoleFailure, SessionGate};
 
 const RELAY_CAP: usize = 64 << 20;
 // A blocked source or lane may leave both halves alive without progress.
@@ -540,6 +540,7 @@ pub fn ps5_to_ps5_between(
                 Err(e) => return Err(e.into()),
             }
             let durable = progress.bytes_durable.load(Ordering::Relaxed);
+            let attempt_started = Instant::now();
             if durable > last_durable {
                 last_at = Instant::now();
                 last_durable = durable;
@@ -714,6 +715,12 @@ pub fn ps5_to_ps5_between(
                 Settle::Retry => {
                     from_pool.forget(from).await;
                     to_pool.forget(to).await;
+                    rearm(
+                        &mut backoff,
+                        attempt_started,
+                        durable,
+                        progress.bytes_durable.load(Ordering::Relaxed),
+                    );
                     tokio::time::sleep(backoff).await;
                     backoff = (backoff * 2).min(Duration::from_secs(5));
                 }

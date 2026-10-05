@@ -411,19 +411,24 @@ struct Flaky {
 
 impl Flaky {
     async fn start(d: &Path) -> (Flaky, Pool) {
-        let key = Identity::load_or_create(&d.join("ava").join("identity"))
-            .unwrap()
-            .public();
-        let (host, host_addr) = serve_host(d, key, "127.0.0.1:0", node_info(), true).await;
-        let proxy = ChaosProxy::start(
-            host_addr.parse().unwrap(),
+        Self::start_with(
+            d,
             ChaosConfig {
                 bytes_per_sec: Some(2 << 20),
                 ..Default::default()
             },
         )
         .await
-        .unwrap();
+    }
+
+    async fn start_with(d: &Path, cfg: ChaosConfig) -> (Flaky, Pool) {
+        let key = Identity::load_or_create(&d.join("ava").join("identity"))
+            .unwrap()
+            .public();
+        let (host, host_addr) = serve_host(d, key, "127.0.0.1:0", node_info(), true).await;
+        let proxy = ChaosProxy::start(host_addr.parse().unwrap(), cfg)
+            .await
+            .unwrap();
         let (pool, _) = engine_pool(d, &proxy.addr.to_string());
         (
             Flaky {
@@ -1243,4 +1248,41 @@ async fn a_busy_download_open_is_retried_and_a_console_that_stays_busy_fails_cle
             );
         }
     }
+}
+
+/// Hardware run 2026-10-04 (drop60 rejoin livelock), download side: a link that is cut on a
+/// short period must still end byte-exact, because every drop is followed by a prompt
+/// reconnect, not by the top of the backoff ladder.
+#[tokio::test(flavor = "multi_thread")]
+async fn periodic_kills_never_strand_a_download() {
+    let d = temp("periodic-kill");
+    let total = tree(&d.join("share/Game"), 1, |_| 24 << 20);
+    let (_flaky, pool) = Flaky::start_with(
+        &d,
+        ChaosConfig {
+            bytes_per_sec: Some(8 << 20),
+            kill_every: Some(Duration::from_millis(2500)),
+            ..Default::default()
+        },
+    )
+    .await;
+    let pool = Arc::new(pool);
+    let out = d.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let c = counters();
+    let n = within(
+        90,
+        local(
+            pool.clone(),
+            "Game",
+            DownloadKind::Folder,
+            &out,
+            c.clone(),
+            11,
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(n, total);
+    assert_eq!(files_of(&out.join("Game")), files_of(&d.join("share/Game")));
 }
