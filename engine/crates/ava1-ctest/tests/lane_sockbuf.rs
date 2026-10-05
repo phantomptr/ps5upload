@@ -15,9 +15,10 @@ fn a_lane_socket_asks_for_four_mib_each_way() {
     let (mut rcv, mut snd) = (0, 0);
     let rc = unsafe { ava1_conn_tune_buffers(s.as_raw_fd(), &mut rcv, &mut snd) };
     assert_eq!(rc, 0);
-    // The kernel may cap the request (or double it, as Linux does), but never below what
-    // the default would have been; 1 MiB is far above any default.
-    assert!(rcv >= 1 << 20, "rcv {rcv}");
-    assert!(snd >= 1 << 20, "snd {snd}");
+    // The kernel may cap the request (Linux CI caps the send side at wmem_max, reported
+    // doubled as 416 KiB; the PS5 gives 512 KiB), so assert only that tuning lifted both well
+    // above a stock default (16-87 KiB), not the full 4 MiB ask.
+    assert!(rcv >= 128 << 10, "rcv {rcv}");
+    assert!(snd >= 128 << 10, "snd {snd}");
     drop(c);
 }
