@@ -74,10 +74,27 @@ fn language_of(v: Option<String>) -> Option<String> {
 /// Where packages go when the caller does not say: the user's Downloads folder, which is
 /// where a package is easiest to find afterwards.
 pub(crate) fn default_output_dir() -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    home.join("Downloads").join("fpkgs")
+    user_home().join("Downloads").join("fpkgs")
+}
+
+/// The user's home folder: `HOME` on Unix, `USERPROFILE` (or `HOMEDRIVE`+`HOMEPATH`) on Windows,
+/// where `HOME` is normally unset. Only when none of them resolves does it fall back to the
+/// temp folder (#364: on Windows that fallback was the *usual* case).
+fn user_home() -> PathBuf {
+    home_from(|k| std::env::var_os(k))
+}
+
+fn home_from(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> PathBuf {
+    let non_empty = |k: &str| get(k).filter(|v| !v.is_empty());
+    if let Some(h) = non_empty("HOME").or_else(|| non_empty("USERPROFILE")) {
+        return PathBuf::from(h);
+    }
+    if let (Some(d), Some(p)) = (non_empty("HOMEDRIVE"), non_empty("HOMEPATH")) {
+        let mut h = d;
+        h.push(p);
+        return PathBuf::from(h);
+    }
+    std::env::temp_dir()
 }
 
 pub(crate) fn resolve_engine_path(raw: &str) -> PathBuf {
@@ -87,9 +104,7 @@ pub(crate) fn resolve_engine_path(raw: &str) -> PathBuf {
         return PathBuf::from(raw);
     }
     let expanded = if raw == "~" || raw.starts_with("~/") {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
+        let home = user_home();
         if raw == "~" {
             home
         } else {
@@ -462,10 +477,35 @@ mod path_tests {
     }
 
     #[test]
+    fn windows_home_resolves_from_userprofile() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |k: &str| {
+                pairs
+                    .iter()
+                    .find(|(n, _)| *n == k)
+                    .map(|(_, v)| std::ffi::OsString::from(v))
+            }
+        };
+        // Windows: no HOME.
+        assert_eq!(
+            home_from(env(&[("USERPROFILE", r"C:\Users\len")])),
+            PathBuf::from(r"C:\Users\len")
+        );
+        assert_eq!(
+            home_from(env(&[("HOMEDRIVE", "C:"), ("HOMEPATH", r"\Users\len")])),
+            PathBuf::from(r"C:\Users\len")
+        );
+        // An empty HOME does not win.
+        assert_eq!(
+            home_from(env(&[("HOME", ""), ("USERPROFILE", "/u")])),
+            PathBuf::from("/u")
+        );
+        assert_eq!(home_from(env(&[])), std::env::temp_dir());
+    }
+
+    #[test]
     fn expands_home_and_resolves_relative_output_paths() {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
+        let home = user_home();
         assert_eq!(
             output_dir(Some("~/Downloads/fpkg")),
             home.join("Downloads/fpkg")
