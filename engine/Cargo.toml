@@ -38,54 +38,6 @@ uuid = { version = "1", features = ["v4"] }
 [profile.dev]
 split-debuginfo = "unpacked"
 
-# The crypto, hash and compression crates run byte-at-a-time loops that are 10-50x slower
-# unoptimized: a debug FPKG build of a few thousand files took 9 minutes on a CI runner,
-# almost all of it inside these. Optimizing only them keeps our own code debuggable.
-[profile.dev.package.aes]
-opt-level = 3
-[profile.dev.package.sha2]
-opt-level = 3
-[profile.dev.package.sha3]
-opt-level = 3
-[profile.dev.package.keccak]
-opt-level = 3
-[profile.dev.package.hmac]
-opt-level = 3
-[profile.dev.package.crc32fast]
-opt-level = 3
-[profile.dev.package.miniz_oxide]
-opt-level = 3
-[profile.dev.package.blake3]
-opt-level = 3
-[profile.dev.package.num-bigint]
-opt-level = 3
-[profile.dev.package.crypto-common]
-opt-level = 3
-[profile.dev.package.sponge-cursor]
-opt-level = 3
-[profile.dev.package.cipher]
-opt-level = 3
-[profile.dev.package.digest]
-opt-level = 3
-[profile.dev.package.block-buffer]
-opt-level = 3
-[profile.dev.package.inout]
-opt-level = 3
-[profile.dev.package.chacha20]
-opt-level = 3
-[profile.dev.package.poly1305]
-opt-level = 3
-[profile.dev.package.chacha20poly1305]
-opt-level = 3
-[profile.dev.package.universal-hash]
-opt-level = 3
-[profile.dev.package.curve25519-dalek]
-opt-level = 3
-[profile.dev.package.x25519-dalek]
-opt-level = 3
-[profile.dev.package.blake2]
-opt-level = 3
-
 # Same for the release engine binary — not a shipped bundle, so trade a
 # little size for faster link times.
 [profile.release]
