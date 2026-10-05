@@ -795,6 +795,13 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         )
         .route("/api/pkg/install/sessions", get(install_sessions_handler))
         .route("/api/pkg/install/cancel", post(install_cancel_handler))
+        // Windows: fixes for "the console cannot reach this computer" (F2.1). Neither is silent:
+        // one only opens Settings, the other refuses a request the UI has not confirmed.
+        .route("/api/host-net/open-settings", post(host_net_open_settings))
+        .route(
+            "/api/host-net/allow-firewall",
+            post(host_net_allow_firewall),
+        )
         .route("/api/pkg/installed", get(installed_pkg_inventory_handler))
         // "Do you already have this?" answered by the same artifact matching the
         // install tracker uses, so the UI and the completion check can't
@@ -2301,6 +2308,60 @@ fn staged_file_size(addr: &str, path: &str) -> u64 {
                 .map(|e| e.size)
         })
         .unwrap_or(0)
+}
+
+// ─── /api/host-net/* (Windows network fixes) ─────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct OpenSettingsRequest {
+    #[serde(default)]
+    pub adapter: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AllowFirewallRequest {
+    pub profile: String,
+    /// The person said yes in the UI. Without it the engine does nothing.
+    #[serde(default)]
+    pub confirm: bool,
+}
+
+/// The profile to add a rule for, or why the request is refused. Pure, so the "never silently"
+/// rule is a tested fact rather than a comment.
+fn allow_firewall_decision(req: &AllowFirewallRequest) -> Result<&'static str, &'static str> {
+    if !req.confirm {
+        return Err("the request was not confirmed by the person");
+    }
+    crate::win_net::allowed_profile(&req.profile).ok_or("unknown network profile")
+}
+
+/// POST /api/host-net/open-settings — opens Windows Settings at the network page (the person
+/// changes the category themselves).
+async fn host_net_open_settings(Json(req): Json<OpenSettingsRequest>) -> Response<Body> {
+    let r =
+        tokio::task::spawn_blocking(move || crate::win_net::open_network_settings(&req.adapter))
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
+    match r {
+        Ok(()) => json_ok(&serde_json::json!({ "ok": true })),
+        Err(e) => json_err(StatusCode::BAD_REQUEST, &e),
+    }
+}
+
+/// POST /api/host-net/allow-firewall — adds an inbound rule for this engine on one network
+/// profile through an elevated `netsh` (Windows asks for consent). Refused without `confirm`.
+async fn host_net_allow_firewall(Json(req): Json<AllowFirewallRequest>) -> Response<Body> {
+    let profile = match allow_firewall_decision(&req) {
+        Ok(p) => p,
+        Err(why) => return json_err(StatusCode::FORBIDDEN, why),
+    };
+    let r = tokio::task::spawn_blocking(move || crate::win_net::allow_on_profile(profile))
+        .await
+        .unwrap_or_else(|e| Err(e.to_string()));
+    match r {
+        Ok(()) => json_ok(&serde_json::json!({ "ok": true, "profile": profile })),
+        Err(e) => json_err(StatusCode::BAD_REQUEST, &e),
+    }
 }
 
 // ─── /api/pkg/install/cancel ─────────────────────────────────────────
@@ -5167,5 +5228,27 @@ mod payload_restore_tests {
     fn a_helper_that_cannot_be_loaded_is_not_sent() {
         let r = super::payload_restore_bytes(|| Err("no image".into()), stamp_test_key);
         assert_eq!(r.unwrap_err(), "no image");
+    }
+}
+
+#[cfg(test)]
+mod host_net_tests {
+    use super::*;
+
+    fn req(profile: &str, confirm: bool) -> AllowFirewallRequest {
+        AllowFirewallRequest {
+            profile: profile.into(),
+            confirm,
+        }
+    }
+
+    #[test]
+    fn the_firewall_is_never_changed_without_the_persons_confirmation() {
+        assert!(allow_firewall_decision(&req("Public", false)).is_err());
+        assert_eq!(allow_firewall_decision(&req("Public", true)), Ok("Public"));
+        assert!(allow_firewall_decision(&req("any", true)).is_err());
+        let r: AllowFirewallRequest = serde_json::from_str(r#"{"profile":"Public"}"#).unwrap();
+        assert!(!r.confirm, "a missing flag is a no");
+        assert!(allow_firewall_decision(&r).is_err());
     }
 }

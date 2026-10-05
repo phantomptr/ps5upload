@@ -116,6 +116,11 @@ pub struct InstallStatus {
     /// package can safely be sent through Stream: the client may offer "Retry with Stream".
     #[serde(default)]
     pub retry_with_stream: bool,
+    /// Windows only: which local adapter faces the console, what network category Windows gave it
+    /// and whether the firewall lets this engine in on it. Set when the console could not reach
+    /// this computer; the UI offers the fixes it implies. Never set off Windows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net_diag: Option<crate::win_net::NetDiag>,
     /// Epoch seconds (the engine has no date crate and stamps time this way
     /// everywhere, e.g. session `created_at_unix`); the client formats it.
     pub started_at: u64,
@@ -144,6 +149,7 @@ impl InstallStatus {
             patch_verdict: None,
             shortened: false,
             retry_with_stream: false,
+            net_diag: None,
             started_at: now,
             updated_at: now,
         }
@@ -189,6 +195,7 @@ mod tests {
             patch_verdict: None,
             shortened: false,
             retry_with_stream: false,
+            net_diag: None,
             started_at: 1_790_000_000,
             updated_at: 1_790_000_001,
         };

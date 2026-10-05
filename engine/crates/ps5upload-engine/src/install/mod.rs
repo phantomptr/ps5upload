@@ -297,11 +297,16 @@ pub fn stream_retry_allowed(category: &str, via_daemon: bool) -> bool {
 /// can only stage), 0x80B2150F on FW 5.10.
 const STAGED_ROUTE_REFUSALS: &[u32] = &[0x80B2_116F, 0x80B2_150F];
 
-pub fn stream_unreachable_hint(served_from: Option<&str>, code: u32) -> String {
+pub fn stream_unreachable_hint(
+    served_from: Option<&str>,
+    code: u32,
+    diag: Option<&crate::win_net::NetDiag>,
+) -> String {
     stream_unreachable_hint_for(
         served_from,
         code,
         crate::pkg_install::bridged_container_without_pkg_host_ip(),
+        diag,
     )
 }
 
@@ -313,6 +318,7 @@ fn stream_unreachable_hint_for(
     served_from: Option<&str>,
     code: u32,
     bridged_container: bool,
+    diag: Option<&crate::win_net::NetDiag>,
 ) -> String {
     // Code 0 means the console reported nothing (a reach check or a stall):
     // do not print a made-up "0x00000000".
@@ -332,6 +338,13 @@ fn stream_unreachable_hint_for(
             "The PS5's proxy setting blocked the stream{rc}. In the PS5's network Advanced Settings set Proxy Server to \u{201c}Do Not Use\u{201d}, or use Upload & install, which reads the package from PS5-local storage."
         );
     }
+    // Windows knows which network the console is on and whether the firewall lets us in on it:
+    // say that instead of the generic firewall paragraph (F2.3).
+    if let Some(why) = diag.and_then(|d| d.explain()) {
+        return format!(
+            "The PS5 never reached this computer{at} to fetch the package{rc}. {why} Keep the computer and the PS5 on the same network with any VPN off, and set the PS5's Proxy Server to \u{201c}Do Not Use\u{201d}. {HOST_IP_ADVICE} Upload & install works without this connection."
+        );
+    }
     format!(
         "The PS5 never reached this computer{at} to fetch the package{rc}. Allow ps5upload through this computer's firewall (on Windows, for both Private and Public networks), keep the computer and the PS5 on the same network with any VPN off, and set the PS5's Proxy Server to \u{201c}Do Not Use\u{201d}. {HOST_IP_ADVICE} Upload & install works without this connection."
     )
@@ -346,7 +359,7 @@ const HOST_IP_ADVICE: &str = "If the address shown is not this computer's LAN ad
 /// pkg-host origin in `url`. `Some(message)` only when it definitely cannot;
 /// `None` when it can, or when the check could not run (an older helper, an
 /// unparseable URL) — that must never block an install that might work.
-async fn reach_block(ip: &str, url: &str) -> Option<String> {
+async fn reach_block(ip: &str, url: &str) -> Option<ReachBlock> {
     let origin = origin_of(url)?;
     let authority = origin.split_once("://")?.1.to_string();
     let (host, port) = authority.rsplit_once(':')?;
@@ -361,13 +374,37 @@ async fn reach_block(ip: &str, url: &str) -> Option<String> {
     .await
     .ok()?
     .ok()?;
-    (!r.ok).then(|| {
-        reach_block_message_for(
-            &origin,
-            &r,
-            crate::pkg_install::bridged_container_without_pkg_host_ip(),
-        )
+    if r.ok {
+        return None;
+    }
+    let bridged = crate::pkg_install::bridged_container_without_pkg_host_ip();
+    // Windows: which adapter and category the console is on (never in a container).
+    let diag = if bridged {
+        None
+    } else {
+        net_diag_for(ip, &origin).await
+    };
+    Some(ReachBlock {
+        message: reach_block_message_for(&origin, &r, bridged, diag.as_ref()),
+        diag,
     })
+}
+
+/// A failed reach check: the words for the person, and what Windows said about the link.
+struct ReachBlock {
+    message: String,
+    diag: Option<crate::win_net::NetDiag>,
+}
+
+/// The Windows diagnosis of the link to the console at `ip`, for an engine reachable at `origin`
+/// (`http://host:port`). `None` off Windows. Runs only after a failure: it takes a second or two.
+async fn net_diag_for(ip: &str, origin: &str) -> Option<crate::win_net::NetDiag> {
+    let port: u16 = origin.rsplit_once(':')?.1.parse().ok()?;
+    let console = crate::console_addr(ip);
+    tokio::task::spawn_blocking(move || crate::win_net::diagnose(&console, port))
+        .await
+        .ok()
+        .flatten()
 }
 
 /// The user-facing reason a reach check failed. A timeout means packets are
@@ -375,7 +412,7 @@ async fn reach_block(ip: &str, url: &str) -> Option<String> {
 /// network); a refusal means nothing accepted the connection on that port.
 #[cfg(test)]
 fn reach_block_message(origin: &str, r: &ps5upload_core::diagnostics::NetReach) -> String {
-    reach_block_message_for(origin, r, false)
+    reach_block_message_for(origin, r, false, None)
 }
 
 /// `reach_block_message` with the container check passed in. Every
@@ -385,9 +422,20 @@ fn reach_block_message_for(
     origin: &str,
     r: &ps5upload_core::diagnostics::NetReach,
     bridged_container: bool,
+    diag: Option<&crate::win_net::NetDiag>,
 ) -> String {
     if bridged_container {
-        return stream_unreachable_hint_for(Some(origin), 0, true);
+        return stream_unreachable_hint_for(Some(origin), 0, true, None);
+    }
+    let how = if r.err.is_empty() {
+        format!("after {} ms", r.ms)
+    } else {
+        format!("{} after {} ms", r.err, r.ms)
+    };
+    if let Some(why) = diag.and_then(|d| d.explain()) {
+        return format!(
+            "The PS5 cannot connect to this computer at {origin} ({how}), so a stream install cannot start. {why} {HOST_IP_ADVICE} Upload & install copies the package to the PS5 instead and does not need this connection."
+        );
     }
     let cause = if r.timed_out {
         "the connection timed out, which usually means a firewall on this computer is silently dropping it (on Windows, allow ps5upload for both Private and Public networks; a PS5 connected through Internet Connection Sharing sits on a Public network), or the Wi-Fi isolates devices from each other"
@@ -398,7 +446,7 @@ fn reach_block_message_for(
     };
     format!(
         "The PS5 cannot connect to this computer at {origin} ({}), so a stream install cannot start: {cause}. {HOST_IP_ADVICE} Upload & install copies the package to the PS5 instead and does not need this connection.",
-        if r.err.is_empty() { format!("after {} ms", r.ms) } else { format!("{} after {} ms", r.err, r.ms) }
+        how
     )
 }
 
@@ -801,6 +849,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                             Ok((sid, url)) => {
                                 served_from = origin_of(&url);
                                 if let Some(block) = reach_block(&ip, &url).await {
+                                    let block = block.message;
                                     crate::pkg_install::release_serve_session(
                                         &state.sessions,
                                         &sid,
@@ -865,6 +914,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                             Ok((sid, purl)) => {
                                 served_from = origin_of(&purl);
                                 if let Some(block) = reach_block(&ip, &purl).await {
+                                    let block = block.message;
                                     crate::pkg_install::release_serve_session(
                                         &state.sessions,
                                         &sid,
@@ -901,12 +951,13 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                         // Sony's 0x80431068 after a 30 s wait (#342).
                         if let Some(block) = reach_block(&ip, &url).await {
                             crate::pkg_install::release_serve_session(&state.sessions, &sid);
-                            crate::log_warn!("{tag}: {block}");
+                            crate::log_warn!("{tag}: {}", block.message);
                             state.jobs.update(&job, |s| {
                                 s.phase = Phase::Failed;
                                 s.verdict = Some(Verdict::Failed);
                                 s.reason = Some(FailReason::StreamUnreachable);
-                                s.hint = Some(block.clone());
+                                s.hint = Some(block.message.clone());
+                                s.net_diag = block.diag.clone();
                             });
                             finalize(&state, &job, &req, started);
                             return;
@@ -968,8 +1019,20 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             let s = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
             s.get(sid).is_some_and(|x| x.bytes_served == 0)
         });
+        let net_diag = if never_fetched && code != 0 {
+            match served_from.as_deref() {
+                Some(o) => net_diag_for(&ip, o).await,
+                None => None,
+            }
+        } else {
+            None
+        };
         let hint = if never_fetched && code != 0 {
-            Some(stream_unreachable_hint(served_from.as_deref(), code))
+            Some(stream_unreachable_hint(
+                served_from.as_deref(),
+                code,
+                net_diag.as_ref(),
+            ))
         } else {
             hint
         };
@@ -990,6 +1053,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             s.reason = Some(reason);
             s.code = code;
             s.hint = hint.clone();
+            s.net_diag = net_diag.clone();
             s.shortened = shortened;
             s.metrics.sony_rc = code;
             s.metrics.phase_ms.insert("deliver".into(), deliver_ms);
@@ -1078,8 +1142,12 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         // other unreachable paths (host IP, firewall) rather than "stopped
         // fetching".
         let never_reached = route == Route::Stream && session_id.is_some() && last_served == 0;
+        let stall_diag = match (never_reached, served_from.as_deref()) {
+            (true, Some(o)) => net_diag_for(&ip, o).await,
+            _ => None,
+        };
         let stall_hint = if never_reached {
-            stream_unreachable_hint(served_from.as_deref(), 0)
+            stream_unreachable_hint(served_from.as_deref(), 0, stall_diag.as_ref())
         } else {
             "the console stopped fetching the package before it finished; the package was kept so you can retry"
                 .into()
@@ -1093,6 +1161,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                 FailReason::Stalled
             });
             s.hint = Some(stall_hint.clone());
+            s.net_diag = stall_diag.clone();
             s.shortened = shortened;
             s.metrics.phase_ms.insert("deliver".into(), deliver_ms);
         });
@@ -1365,7 +1434,7 @@ mod tests {
     fn unreachable_stream_names_the_address_and_the_firewall() {
         // Measured on the Phat: a firewall-blocked engine gave 0x80431064 with
         // 0 bytes served, and the UI said only "The PS5 declined the install."
-        let h = stream_unreachable_hint(Some("http://192.168.86.199:19200"), 0x80431064);
+        let h = stream_unreachable_hint(Some("http://192.168.86.199:19200"), 0x80431064, None);
         assert!(
             h.contains("never reached this computer at http://192.168.86.199:19200"),
             "{h}"
@@ -1413,28 +1482,28 @@ mod tests {
             ms: 4000,
         };
         // 1. the reach check on a desktop: firewall cause + the host-IP remedy.
-        let m = reach_block_message_for("http://172.17.0.2:19113", &timed_out, false);
+        let m = reach_block_message_for("http://172.17.0.2:19113", &timed_out, false, None);
         assert!(m.contains("PS5UPLOAD_PKG_HOST_IP"), "{m}");
         // 2. the reach check inside a bridged container: host networking.
-        let c = reach_block_message_for("http://172.17.0.2:19113", &timed_out, true);
+        let c = reach_block_message_for("http://172.17.0.2:19113", &timed_out, true, None);
         assert!(
             c.contains("PS5UPLOAD_PKG_HOST_IP") && c.contains("--network host"),
             "{c}"
         );
         assert!(c.contains("172.17.0.2"), "{c}");
         // 3. Sony refused a stream it never fetched (no proxy error).
-        let r = stream_unreachable_hint_for(Some("http://10.8.0.2:19113"), 0x80431068, false);
+        let r = stream_unreachable_hint_for(Some("http://10.8.0.2:19113"), 0x80431068, false, None);
         assert!(
             r.contains("PS5UPLOAD_PKG_HOST_IP") && r.contains("0x80431068"),
             "{r}"
         );
         // 4. accepted but never fetched (the stall path passes code 0): no
         //    made-up return code, same remedy.
-        let z = stream_unreachable_hint_for(Some("http://10.8.0.2:19113"), 0, false);
+        let z = stream_unreachable_hint_for(Some("http://10.8.0.2:19113"), 0, false, None);
         assert!(z.contains("PS5UPLOAD_PKG_HOST_IP"), "{z}");
         assert!(!z.contains("0x0000"), "{z}");
         // The proxy case is its own cause and keeps its own remedy.
-        let p = stream_unreachable_hint_for(None, SCE_HTTP_ERROR_PROXY, false);
+        let p = stream_unreachable_hint_for(None, SCE_HTTP_ERROR_PROXY, false, None);
         assert!(
             p.contains("Do Not Use") && !p.contains("PKG_HOST_IP"),
             "{p}"
@@ -1459,6 +1528,61 @@ mod tests {
         ] {
             assert!(!is_installed_content_path(p), "{p}");
         }
+    }
+
+    #[test]
+    fn a_windows_diagnosis_replaces_the_generic_firewall_paragraph() {
+        use crate::win_net::{NetCategory, NetDiag};
+        let d = NetDiag {
+            adapter: "Ethernet 3".into(),
+            local_ip: "192.168.88.1".into(),
+            category: NetCategory::Public,
+            firewall_enabled: Some(true),
+            allowed_by_rule: Some(false),
+        };
+        let origin = "http://192.168.88.1:19113";
+        // the stream the console never fetched (a Sony code, or none)
+        for code in [0x80431068, 0] {
+            let h = stream_unreachable_hint_for(Some(origin), code, false, Some(&d));
+            assert!(
+                h.contains("Ethernet 3") && h.contains("Public network"),
+                "{h}"
+            );
+            assert!(h.contains("Make this network Private"), "{h}");
+            assert!(
+                !h.contains("on Windows, for both Private and Public"),
+                "{h}"
+            );
+            assert!(
+                h.contains("PS5UPLOAD_PKG_HOST_IP") && h.contains("Upload & install"),
+                "{h}"
+            );
+        }
+        // the reach check that found it before the console waited 30 s
+        let r = ps5upload_core::diagnostics::NetReach {
+            ok: false,
+            timed_out: true,
+            errno: 0,
+            err: "timed out".into(),
+            ms: 4000,
+        };
+        let m = reach_block_message_for(origin, &r, false, Some(&d));
+        assert!(
+            m.contains("Ethernet 3") && m.contains("Public network"),
+            "{m}"
+        );
+        assert!(!m.contains("Internet Connection Sharing"), "{m}");
+        // no diagnosis (not Windows, or not read): today's wording, unchanged
+        let plain = reach_block_message_for(origin, &r, false, None);
+        assert!(plain.contains("Internet Connection Sharing"), "{plain}");
+        let g = stream_unreachable_hint_for(Some(origin), 0x80431068, false, None);
+        assert!(g.contains("on Windows, for both Private and Public"), "{g}");
+        // a container still gets the container advice, never a Windows one
+        let c = stream_unreachable_hint_for(Some(origin), 0, true, Some(&d));
+        assert!(
+            c.contains("--network host") && !c.contains("Ethernet 3"),
+            "{c}"
+        );
     }
 
     #[test]
@@ -1527,12 +1651,13 @@ mod tests {
         // A homelab engine in Docker with default bridge networking hands the
         // PS5 its 172.17.x address; "allow it through the Windows firewall"
         // sent people chasing the wrong thing.
-        let h = stream_unreachable_hint_for(Some("http://172.17.0.2:19113"), 0x80431064, true);
+        let h =
+            stream_unreachable_hint_for(Some("http://172.17.0.2:19113"), 0x80431064, true, None);
         assert!(h.contains("container"), "{h}");
         assert!(h.contains("--network host"), "{h}");
         assert!(h.contains("PS5UPLOAD_PKG_HOST_IP"), "{h}");
         assert!(!h.contains("firewall"), "{h}");
-        let plain = stream_unreachable_hint_for(None, 0x80431064, false);
+        let plain = stream_unreachable_hint_for(None, 0x80431064, false, None);
         assert!(plain.contains("firewall"), "{plain}");
     }
 
@@ -1591,7 +1716,7 @@ mod tests {
 
     #[test]
     fn a_proxy_reject_gets_the_proxy_guidance() {
-        let h = stream_unreachable_hint(None, 0x80431084);
+        let h = stream_unreachable_hint(None, 0x80431084, None);
         assert!(h.contains("proxy"), "{h}");
         assert!(h.contains("Do Not Use"), "{h}");
     }

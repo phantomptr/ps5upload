@@ -59,6 +59,7 @@ mod state_io;
 mod telemetry;
 #[cfg(feature = "webui")]
 mod webui;
+mod win_net;
 
 #[cfg(test)]
 mod ava1_only_tests;
