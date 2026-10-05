@@ -390,13 +390,28 @@ pub(crate) fn terminal_connection_reason(error: &Ava1Error) -> Option<&'static s
 /// How many consecutive terminal connection failures end a job.
 pub(crate) const TERMINAL_ATTEMPTS: u32 = 3;
 
+/// How long a job that was already connected waits for a console whose listener went away
+/// (a helper restarting after a crash, a reload or an update refuses connections for seconds
+/// while it comes back). Measured on hardware: the bench's kill-and-relaunch outlasted the
+/// three ~2 s refusals that used to end the job.
+pub(crate) const RESTART_GRACE: Duration = Duration::from_secs(90);
+
 /// The session-level retry policy every AVA1 job shares (uploads and the relay): a
 /// console that refuses us, is not paired, has another key or has no listener is
 /// given three tries and then reported with a stable reason; anything else is
-/// transient and resets the count.
-#[derive(Default)]
+/// transient and resets the count. Once a job has been connected, "no listener" is a
+/// helper restarting and is waited for up to [`RESTART_GRACE`] instead.
 pub(crate) struct SessionGate {
     terminal: u32,
+    connected_once: bool,
+    refused_since: Option<Instant>,
+    restart_grace: Duration,
+}
+
+impl Default for SessionGate {
+    fn default() -> Self {
+        Self::with_restart_grace(RESTART_GRACE)
+    }
 }
 
 impl SessionGate {
@@ -411,9 +426,20 @@ impl SessionGate {
         })
     }
 
+    pub(crate) fn with_restart_grace(restart_grace: Duration) -> Self {
+        Self {
+            terminal: 0,
+            connected_once: false,
+            refused_since: None,
+            restart_grace,
+        }
+    }
+
     /// A session was opened.
     pub(crate) fn connected(&mut self) {
         self.terminal = 0;
+        self.connected_once = true;
+        self.refused_since = None;
     }
 
     /// A session attempt failed: `Some` when the job must end now.
@@ -422,6 +448,19 @@ impl SessionGate {
             self.terminal = 0;
             return None;
         };
+        if reason == "ava1_unreachable" && self.connected_once {
+            let since = *self.refused_since.get_or_insert_with(Instant::now);
+            if since.elapsed() < self.restart_grace {
+                return None;
+            }
+            return Some(UploadFailure {
+                reason: reason.into(),
+                detail: format!(
+                    "{e} (the console stopped listening {:?} ago and did not come back)",
+                    since.elapsed()
+                ),
+            });
+        }
         self.terminal += 1;
         (self.terminal >= TERMINAL_ATTEMPTS).then(|| UploadFailure {
             reason: reason.into(),
@@ -1527,6 +1566,44 @@ mod tests {
         }
         g.connected();
         assert!(g.failed(&refused()).is_none());
+    }
+
+    #[test]
+    fn a_helper_restart_mid_job_is_waited_for_not_ended_on_the_third_refusal() {
+        // Hardware run 2026-10-04: the bench killed and relaunched the helper mid-upload; its
+        // port refused for a few seconds and the job ended after three refusals (~2 s).
+        let mut g = SessionGate::default();
+        g.connected();
+        for _ in 0..20 {
+            assert!(
+                g.failed(&refused()).is_none(),
+                "a restarting helper is waited for"
+            );
+        }
+    }
+
+    #[test]
+    fn a_helper_that_stays_down_past_the_restart_grace_ends_the_job() {
+        let mut g = SessionGate::with_restart_grace(Duration::from_millis(30));
+        g.connected();
+        assert!(g.failed(&refused()).is_none());
+        std::thread::sleep(Duration::from_millis(50));
+        let f = g
+            .failed(&refused())
+            .expect("down past the grace is terminal");
+        assert_eq!(f.reason, "ava1_unreachable");
+    }
+
+    #[test]
+    fn pairing_failures_after_a_connection_still_end_the_job_on_the_third_try() {
+        let mut g = SessionGate::default();
+        g.connected();
+        assert!(g.failed(&Ava1Error::NotPaired).is_none());
+        assert!(g.failed(&Ava1Error::NotPaired).is_none());
+        assert_eq!(
+            g.failed(&Ava1Error::NotPaired).unwrap().reason,
+            "ava1_not_paired"
+        );
     }
 
     #[test]

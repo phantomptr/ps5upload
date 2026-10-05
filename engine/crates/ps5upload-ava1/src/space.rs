@@ -38,9 +38,16 @@ pub type RoomProbe = Arc<dyn Fn(&str, &str) -> Option<Room> + Send + Sync>;
 /// The real probe: `fs.freespace` (usable room on the drive holding `dest`, the console's own
 /// post-reserve figure); a payload without it is asked `fs.volumes` instead and the same margin is
 /// applied here. Either answer is "free space less a small working margin": nothing is guessed.
+/// The management address of a console given as its transfer address (`host:9113`) or a bare
+/// host: `fs.volumes` on a helper without AVA1 management answers only on :9114, and a bare
+/// host or :9113 there is refused as `wrong_port` (hardware run, 2026-10-04).
+pub(crate) fn mgmt_addr(console: &str) -> String {
+    format!("{}:9114", host_of(console))
+}
+
 pub fn volumes_probe() -> RoomProbe {
     Arc::new(|console, dest| {
-        let host = host_of(console);
+        let host = mgmt_addr(console);
         match ps5upload_core::volumes::free_space(&host, dest) {
             Ok(f) => {
                 return Some(Room {
@@ -209,6 +216,16 @@ pub(crate) fn gate(probe: RoomProbe, console: String, dest: String, job: [u8; 16
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_volume_fallback_asks_the_management_port() {
+        assert_eq!(
+            super::mgmt_addr("192.168.86.100:9113"),
+            "192.168.86.100:9114"
+        );
+        assert_eq!(super::mgmt_addr("192.168.86.100"), "192.168.86.100:9114");
+        assert_eq!(super::mgmt_addr("[fe80::1]:9113"), "[fe80::1]:9114");
+    }
+
     use super::*;
 
     const GB: u64 = 1 << 30;
