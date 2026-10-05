@@ -220,6 +220,114 @@ pub fn console_copy_in(
     move_source: bool,
     overwrite: bool,
 ) -> Result<()> {
+    console_copy_with(
+        pool,
+        &ConsoleCleanup,
+        console,
+        from,
+        to,
+        op_id,
+        move_source,
+        overwrite,
+    )
+}
+
+/// What a cancelled copy leaves on the console, and how to remove it (R5, #369).
+///
+/// A copy to a destination that did not exist is staged: the console makes `<to>` as an empty
+/// folder (its lock on the name) and writes into `<to>.ava-part`, renaming that over `<to>`
+/// only when every file is durable. `job.cancel` keeps the console's journal (a later resume
+/// may use it) but a user who pressed Stop wants the half-copy gone, and the empty `<to>` would
+/// make the next try refuse with "already exists". The source is never touched here: only the
+/// destination's own leftovers are named.
+pub trait CancelCleanup: Sync {
+    /// Whether `to` is absent on the console right now (asked before the copy starts, and only
+    /// when the caller allowed overwriting: without that flag the console refuses an existing
+    /// destination, so the answer is known).
+    fn dest_absent(&self, console: &str, to: &str) -> bool;
+    /// Removes what the cancelled copy left at `to`. Best effort: a failure is logged, not
+    /// returned, because the user's cancel has already happened.
+    fn clean(&self, console: &str, to: &str, dest_was_absent: bool);
+}
+
+/// The paths a cancelled copy to `to` may remove, in order: its staging sibling, then `to`
+/// itself, and `to` only when the copy created it (it was absent at the start) and it is still
+/// an empty folder (a finished rename leaves it full, and then it is the user's copy).
+pub fn cancel_leftovers(to: &str, dest_was_absent: bool, dest_is_empty_dir: bool) -> Vec<String> {
+    let to = to.trim_end_matches('/');
+    if to.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![format!("{to}.ava-part")];
+    if dest_was_absent && dest_is_empty_dir {
+        out.push(to.to_string());
+    }
+    out
+}
+
+struct ConsoleCleanup;
+
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(60);
+
+impl CancelCleanup for ConsoleCleanup {
+    fn dest_absent(&self, console: &str, to: &str) -> bool {
+        match ps5upload_core::fs_ops::fs_stat(console, to) {
+            Ok(_) => false,
+            Err(e) => ps5upload_core::fs_ops::is_not_found(&format!("{e:#}")),
+        }
+    }
+
+    fn clean(&self, console: &str, to: &str, dest_was_absent: bool) {
+        use ps5upload_core::fs_ops::{
+            fs_delete_with_timeout, list_dir_with_timeout, ListDirOptions,
+        };
+        let empty = dest_was_absent
+            && list_dir_with_timeout(
+                console,
+                to,
+                ListDirOptions::default(),
+                Some(CLEANUP_TIMEOUT),
+            )
+            .map(|l| l.entries.is_empty() && !l.truncated)
+            .unwrap_or(false);
+        for p in cancel_leftovers(to, dest_was_absent, empty) {
+            // The staging sibling is usually absent for a copy cancelled before its first
+            // byte, and the engine has no logger here (a write to a dead stderr panics): a
+            // failure leaves the console's own 7-day sweep to collect the leftovers.
+            let _ = fs_delete_with_timeout(console, &p, Some(CLEANUP_TIMEOUT));
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn console_copy_with(
+    pool: &Pool,
+    cleanup: &dyn CancelCleanup,
+    console: &str,
+    from: &str,
+    to: &str,
+    op_id: u64,
+    move_source: bool,
+    overwrite: bool,
+) -> Result<()> {
+    let dest_was_absent = !overwrite || cleanup.dest_absent(console, to);
+    let r = copy_job(pool, console, from, to, op_id, move_source, overwrite);
+    if matches!(&r, Err(e) if e.to_string() == "cancelled") {
+        // Cancelled, and the console has been told to stop (and waited on, below).
+        cleanup.clean(console, to, dest_was_absent);
+    }
+    r
+}
+
+fn copy_job(
+    pool: &Pool,
+    console: &str,
+    from: &str,
+    to: &str,
+    op_id: u64,
+    move_source: bool,
+    overwrite: bool,
+) -> Result<()> {
     let kind = if move_source { "move" } else { "copy" };
     let (_registered, cancel) = register(op_id, kind, from, to)?;
     // Once per call: the retries below re-issue this same id.
@@ -254,6 +362,22 @@ pub fn console_copy_in(
                         s.rpc(gen::METHOD_JOB_CANCEL, &jobref),
                     )
                     .await;
+                    // The console unlists the job and stops its threads; clearing its leftovers
+                    // while they still write would race them. Wait (bounded) until it says it
+                    // no longer knows the job.
+                    for _ in 0..20 {
+                        match tokio::time::timeout(
+                            Duration::from_secs(2),
+                            s.rpc(gen::METHOD_JOB_STATUS, &jobref),
+                        )
+                        .await
+                        {
+                            Ok(Ok(r)) if r.status == gen::ERR_UNKNOWN_JOB => break,
+                            Ok(Ok(_)) => {}
+                            _ => break,
+                        }
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                    }
                 }
                 return Err(anyhow!("cancelled"));
             }
@@ -387,6 +511,32 @@ mod tests {
         let a = copy_job_id(&new_nonce().unwrap(), "/a", "/b", false, false);
         let b = copy_job_id(&new_nonce().unwrap(), "/a", "/b", false, false);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn a_cancelled_copy_removes_its_staging_and_only_an_empty_folder_it_made() {
+        // Created by the copy and still empty: both go (the next try must not hit "exists").
+        assert_eq!(
+            cancel_leftovers("/data/g", true, true),
+            ["/data/g.ava-part", "/data/g"]
+        );
+        // Created by the copy but the rename already landed (the folder is full): keep it.
+        assert_eq!(
+            cancel_leftovers("/data/g", true, false),
+            ["/data/g.ava-part"]
+        );
+        // The destination was the user's before the copy began: never remove it.
+        assert_eq!(
+            cancel_leftovers("/data/g", false, true),
+            ["/data/g.ava-part"]
+        );
+        assert_eq!(
+            cancel_leftovers("/data/g/", false, false),
+            ["/data/g.ava-part"]
+        );
+        // No path at all names nothing (never `.ava-part` at the root).
+        assert!(cancel_leftovers("", true, true).is_empty());
+        assert!(cancel_leftovers("/", true, true).is_empty());
     }
 
     #[test]
