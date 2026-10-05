@@ -189,7 +189,7 @@ static int stub_env(void *st, int fd, uint64_t t, const char *b, uint64_t l) {
 static int stub_status(void *st, int fd, uint64_t t, const char *b, uint64_t l) {
     static const char body[] =
         "{\"version\":\"9.9.9\",\"ps5_kernel\":\"FreeBSD \\\"11\\\" test\","
-        "\"instance_id\":18446744073709551000,\"runtime_port\":9113,\"shutdown\":0,\"startup_reason\":2,"
+        "\"instance_id\":18446744073709551000,\"runtime_port\":9120,\"shutdown\":0,\"startup_reason\":2,"
         "\"takeover_requested\":0,\"started_at_unix\":1700000000,\"prior_instance\":\"killed_externally\","
         "\"command_count\":5,\"active_transactions\":0,\"last_tx_seq\":0,\"recovered_transactions\":0,"
         "\"ucred_elevated\":true,\"max_transfer_streams\":4,\"fan_threshold\":70,\"fan_reapply_sec\":30}";
@@ -2201,7 +2201,7 @@ int ava1_test_apply_reserve(size_t n, int take) {
     return ava1_apply_reserve(g_job, n);
 }
 
-/* ---- P3 Task 5: job.run operations wrapped around stub FTX2 handlers -------------------- */
+/* ---- P3 Task 5: job.run operations wrapped around stub legacy handlers -------------------- */
 
 /* A slow stub: `loops` rounds of 20 ms, each reporting one unit of progress and honouring
  * job.cancel the way backup.c does (mgmt_op_cancelled / mgmt_op_progress). */

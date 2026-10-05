@@ -5,7 +5,7 @@
 //! (originally) P3 Task 5: long management operations as jobs (`job.run`, payload/ava1/ava1_op.c and
 //! payload/src/fs_jobs.c), driven over AVA1 against the real C. The filesystem operations
 //! (delete, chmod -R, hash, crc32) run on real temporary trees; fsck, backup, cleanup and
-//! sdk.scan run through the real op wrapper (mgmt_rpc.c) around stub FTX2 handlers.
+//! sdk.scan run through the real op wrapper (mgmt_rpc.c) around stub legacy handlers.
 mod common;
 
 use std::os::unix::fs::PermissionsExt;

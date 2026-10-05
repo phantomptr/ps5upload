@@ -213,7 +213,7 @@ async fn list_reports_kinds_sizes_mtime_and_mode_and_defaults_the_limit() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn list_refuses_what_the_ftx2_handler_refused() {
+async fn list_refuses_what_the_legacy_handler_refused() {
     let r = rig("listerr").await;
     let ask = |p: &str| FsList {
         path: p.into(),
@@ -901,7 +901,7 @@ mod transport {
             _srv: srv,
             _scope: scope,
             transport,
-            console: "c-console:9114".into(),
+            console: "c-console:9120".into(),
             root,
         }
     }
@@ -943,7 +943,7 @@ mod transport {
         let t = rig("t-read", true);
         let data: Vec<u8> = (0..3 * 1024 * 1024u32).map(|i| (i % 253) as u8).collect();
         std::fs::write(t.root.join("big"), &data).unwrap();
-        // the FTX2 per-call ceiling is held: 3 MiB file, 5 MiB ask, 2 MiB back (8 round trips of <= 256 KiB)
+        // the legacy per-call ceiling is held: 3 MiB file, 5 MiB ask, 2 MiB back (8 round trips of <= 256 KiB)
         let got =
             ps5upload_core::fs_ops::fs_read(&t.console, &t.p("big"), 0, 5 * 1024 * 1024).unwrap();
         assert_eq!(got.len(), 2 * 1024 * 1024);

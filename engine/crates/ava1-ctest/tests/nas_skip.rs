@@ -61,7 +61,7 @@ struct Run {
 }
 
 fn cfg(fs: Option<Arc<dyn SourceFs>>) -> (TransferConfig, Arc<AtomicU64>) {
-    let mut c = TransferConfig::new("127.0.0.1:9113");
+    let mut c = TransferConfig::new("127.0.0.1:9120");
     let sent = Arc::new(AtomicU64::new(0));
     c.progress_bytes = Some(sent.clone());
     c.progress_files = Some(Arc::new(AtomicU64::new(0)));

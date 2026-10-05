@@ -51,7 +51,7 @@ fn a_running_upload_reports_its_bottleneck_before_it_finishes() {
     }
 
     let live = Arc::new(LiveNotes::default());
-    let mut c = TransferConfig::new("127.0.0.1:9113");
+    let mut c = TransferConfig::new("127.0.0.1:9120");
     c.progress_bytes = Some(Arc::new(AtomicU64::new(0)));
     c.progress_files = Some(Arc::new(AtomicU64::new(0)));
     c.progress_files_finalized = Some(Arc::new(AtomicU64::new(0)));
@@ -130,7 +130,7 @@ fn an_upload_the_console_did_not_confirm_carries_its_warning_in_the_commit_ack()
     std::fs::create_dir_all(t.join("dest")).unwrap(); // a merge: files settle behind JobDone
     ava1_ctest::sweep_failures(-1);
     let cancel = Arc::new(AtomicBool::new(false));
-    let mut c = TransferConfig::new("127.0.0.1:9113");
+    let mut c = TransferConfig::new("127.0.0.1:9120");
     c.progress_bytes = Some(Arc::new(AtomicU64::new(0)));
     c.progress_files = Some(Arc::new(AtomicU64::new(0)));
     c.progress_files_finalized = Some(Arc::new(AtomicU64::new(0)));

@@ -581,7 +581,7 @@ fn legacy_tokens_map_to_the_closest_status() {
 
 #[test]
 fn the_environment_hook_counts_no_command() {
-    // runtime.c's handlers bump command_count themselves (as they did under FTX2); the hook that
+    // runtime.c's handlers bump command_count themselves (as they did under the retired protocol); the hook that
     // runs around them must not add a second count.
     let inc = std::fs::read_to_string(payload().join("src/mgmt_install.inc")).unwrap();
     assert!(

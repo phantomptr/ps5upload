@@ -60,7 +60,7 @@ fn main() {
         .warnings(false)
         .compile("ava1b3");
     // P3 Task 7: the shim expands the REAL rows of the "P3 Task 7" block of mgmt_table.def, with the
-    // FTX2 frame numbers from runtime.c, so the table and the tests cannot drift apart.
+    // legacy frame numbers from runtime.c, so the table and the tests cannot drift apart.
     let out = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     {
         let table = std::fs::read_to_string(p.join("src/mgmt_table.def")).unwrap();

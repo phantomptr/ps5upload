@@ -50,7 +50,7 @@ const REAP_UNVERIFIABLE: c_int = 2;
 
 fn fmt(started: u64, pid: c_int) -> Option<String> {
     let mut b = [0 as c_char; 256];
-    let n = unsafe { ownership_record_format(b.as_mut_ptr(), b.len(), 77, 9113, 1, started, pid) };
+    let n = unsafe { ownership_record_format(b.as_mut_ptr(), b.len(), 77, 9120, 1, started, pid) };
     if n < 0 {
         return None;
     }
@@ -95,7 +95,7 @@ fn every_truncation_of_a_record_is_incomplete_never_a_wrong_number() {
 
 #[test]
 fn an_old_format_record_without_a_start_time_is_incomplete() {
-    let (ok, r) = parse("instance_id=5\nruntime_port=9113\npid=250\n");
+    let (ok, r) = parse("instance_id=5\nruntime_port=9120\npid=250\n");
     assert!(!ok);
     assert_eq!((r.pid, r.started), (250, 0));
 }

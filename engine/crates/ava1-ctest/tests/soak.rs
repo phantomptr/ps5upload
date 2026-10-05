@@ -27,7 +27,7 @@ use ps5upload_core::download::DownloadKind;
 use ps5upload_core::transfer::TransferConfig;
 
 fn cfg() -> TransferConfig {
-    let mut c = TransferConfig::new("127.0.0.1:9113");
+    let mut c = TransferConfig::new("127.0.0.1:9120");
     c.progress_bytes = Some(Arc::new(AtomicU64::new(0)));
     c.progress_files = Some(Arc::new(AtomicU64::new(0)));
     c.progress_files_finalized = Some(Arc::new(AtomicU64::new(0)));
