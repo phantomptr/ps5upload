@@ -23,12 +23,11 @@ client (Tauri/React)  ──HTTP──▶  ps5upload-engine :19113
 | `ava1-gen` | Generates the Rust and C codecs from `protocol/ava1/schema/ava1.toml`. Run it after editing the schema. |
 | `ava1-ctest` | Builds the payload's AVA1 C on the host so `cargo test` checks C against Rust. |
 | `ava1-chaos` | A misbehaving TCP proxy (latency, bandwidth caps, blackholes, kills) for resilience tests. |
-| `ps5upload-core` | The bulk of the logic — connection handling and socket tuning, transfer/resume/verification, filesystem and app RPCs, volume parsing, package install, saves, cheats, hardware, SMB, BPS patching. |
+| `ps5upload-core` | The bulk of the logic — socket helpers, the management seam, archive inspection and plan previews, filesystem and app RPCs, volume parsing, package install, saves, cheats, hardware, SMB, BPS patching. |
 | `ps5upload-engine` | The Axum HTTP service (~100 routes), job tracking, SSE progress events, and the desktop + mobile entry points. |
 | `ps5upload-pkg` | `.pkg` parsing — headers, entries, split-file sets. |
-| `ps5upload-lab` | CLI for driving the payload's control channel by hand. Useful when you want one frame, not a workflow. |
+| `ps5upload-lab` | CLI for driving the console by hand over AVA1: management calls, uploads, benchmarks (`bench`), pairing and chaos tools. Useful when you want one call, not a workflow. |
 | `ps5upload-tests` | Integration tests that run against in-process and loopback AVA1 peers, with no console. |
-| `ps5upload-bench` | Throughput benchmarks. |
 
 ## Working on it
 
@@ -50,11 +49,11 @@ keep it on a trusted LAN.
 
 ## Testing
 
-`engine/crates/ps5upload-tests/tests/` runs against a loopback mock
-server: single-file, streaming, directory, packed small-file shards,
-resume-after-drop, retry classification, digest mismatch, exclude rules,
-`.zip`/`.7z` streaming, hardware commands, and volume parsing. Unit tests
-live beside their modules.
+`engine/crates/ps5upload-tests/tests/` runs against a loopback AVA1 console
+(the Rust job host plus a scripted management node): single-file, folder,
+small-file, resume-after-drop, retry classification, exclude rules,
+`.zip`/`.7z`/`.rar` streaming, hardware commands, and volume parsing. Unit
+tests live beside their modules.
 
 Anything touching real transfer behaviour still needs hardware — see
 [`../TESTING.md`](../TESTING.md).

@@ -27,68 +27,54 @@ Project 2 (the AVA1 data plane, `SPEC.md` §11–§16) ships beside FTX2 and del
 above belong to the project 3 cutover release and stay unticked until it ships. Everything below is
 checkable against the tree at the commit that adds this section.
 
-## 1. FTX2 call sites that still exist
+## 1. FTX2 call sites: status after P3 Tasks 17-18
 
-Find them again with `git grep -n -i ftx2 -- engine client/src payload`, then
-`git grep -n "use_ava1\|route::mode"` for the routing seam.
+The engine side is done. Re-derive the list with
+`git grep -n -i "ftx2\|ftx2_proto\|FrameType\|Connection::connect" -- engine client/src scripts tests Makefile`:
+what it finds is the migration shim (below), tolerance for a stale `host:9113` / `host:9114`, and
+comments in `ava1-ctest`, which builds the payload's C and reads its FTX2 constants.
+`make check-no-ftx2` pins the rest: the whole tree except `payload/`, this directory and the
+CHANGELOG.
 
-**Engine handlers with an FTX2 branch** (`engine/crates/ps5upload-engine/src/lib.rs`). Each decides
-`use_ava1` and otherwise runs the `ps5upload_core` path; the FTX2 branch is what is deleted.
-- Routing and startup: `route::use_ava1` calls at 1972, 2045, 5072, 5378, 5930, 7909, 8260, 8523,
-  9062; the startup line at 9616–9631; imports of `transfer::*` at 103–107 and `FrameType` at 70.
-- Uploads: `transfer_file_handler` 4880 (FTX2 call 5082), `transfer_dir_handler` 5139 (5388),
-  `transfer_zip_handler` 5739 (FTX2 closure 5917, also the fallback for zip entries above 256 MiB),
-  `transfer_file_list_handler` 7730 (7920), `transfer_dir_reconcile_handler` 8754 (9080).
-- Archives with no AVA1 path at all: `transfer_7z_handler` 7303 (7443), `transfer_rar_handler` 7529
-  (7667), the inspect/plan calls at 5662, 6079, 7502, 7551.
-- Downloads: `transfer_download_handler` 8175 (the FTX2 enumeration at 8295),
-  `transfer_download_zip_handler` 8470 (8543, `download_to_zip_ex` 8612).
-- Console file operations: `ps5_fs_move` 1935 (the same-drive rename is still an FTX2 management
-  frame; only a cross-mount refusal becomes an AVA1 job), `ps5_fs_copy` 2016 (FTX2 `fs_copy_robust`
-  at 2048).
-- FTX2 tuning environment: `FTX2_INFLIGHT_SHARDS`, `FTX2_INFLIGHT_BYTES`, `FTX2_PACK_SIZE`,
-  `FTX2_PACK_FILE_MAX`, `FTX2_BANDWIDTH_MBPS` (114–150), `FTX2_ZIP_RAM_THRESHOLD_MB` (1395, 5817).
-- Routing code: `engine/crates/ps5upload-ava1/src/route.rs` (the whole `Mode` seam),
-  and `PS5UPLOAD_TRANSFER` in `engine/crates/ps5upload-lab/src/bench.rs:2206`.
+**Deleted by Task 17** (engine handlers): every `use_ava1` branch and the FTX2 closure behind it,
+`route.rs` and the `Mode` seam, `PS5UPLOAD_TRANSFER`, and the five FTX2 shard-tuning variables
+(`FTX2_INFLIGHT_SHARDS`, `FTX2_INFLIGHT_BYTES`, `FTX2_PACK_SIZE`, `FTX2_PACK_FILE_MAX`; the
+bandwidth cap is `PS5UPLOAD_BANDWIDTH_MBPS`).
 
-**Engine core** (`engine/crates/ps5upload-core/src`): `transfer.rs` (the FTX2 transfer pipeline, 7z and
-RAR streaming), `download.rs`, `connection.rs` (FTX2 framing), `fs_ops.rs` and about twenty management
-modules that speak FTX2 frames to :9114 (`hw.rs`, `smp.rs`, `notif.rs`, `users.rs`, `saves.rs`,
-`volumes.rs`, `system_control.rs`, `sys_time.rs`, `remoteplay.rs`, `process_mgr.rs`,
-`payload_lifecycle.rs`, `fan_curve.rs`, `backup.rs`, and the rest of `grep -l -i ftx2`). These are the
-management RPCs below: they cannot go until AVA1 carries them.
+**Deleted by Task 18** (git tag `ftx2-last` marks the commit before):
+- `engine/crates/ftx2-proto` and `engine/crates/ps5upload-bench`.
+- In `ps5upload-core`: the FTX2 transfer, download and framing code (`connection.rs`, the
+  `transfer_*` entry points with their pipelined sender, shard and pack machinery, `download.rs`
+  apart from `DownloadKind`, the `fs_ops` direct dials, the FTX2 arm of `mgmt::call`). Kept: the
+  inspectors, plan previews, entry-name sanitizers and RAR walker in `transfer.rs`, the live notes,
+  `TransferConfig` (without its shard fields), and the socket helpers, which moved to `net.rs`.
+- The mock FTX2 server and its tests in `ps5upload-tests` (the `ava1_*` tests replace them; the
+  mapping is in the Task 18 commit message).
+- The `--proto ftx2` arms of `ps5upload-lab bench` and the lab's FTX2-only commands (`takeover`,
+  `begin-tx`, `query-tx`, `commit-tx`, `abort-tx`, `send-shard`). `hello`, `status`, `shutdown`,
+  `power`, `shell`, `send-elf` and every other management command go through
+  `ps5upload_ava1::mgmt::install()`; `transfer`, `transfer-dir`, `transfer-zip`, `transfer-7z`
+  and `transfer-rar` are AVA1 uploads. Any `host`, `host:9113` or `host:9114` names the console.
+- `tests/lab/ftx2_control.py`, `ftx2_probe.py` and the scripts that spoke them, `bench/run-ftx2-upload.mjs`,
+  `bench/check-ftx2-baseline.mjs` and the FTX2 baseline snapshots. `bench/run-ftx2-sweep.mjs` is
+  now `bench/run-sweep.mjs`.
+- The desktop shell's probes of :9114: discovery sweeps and probes :9120 only.
+- `JobSnapshot.shards_sent` (engine and client): the field repeated `files_sent`.
 
-**Crates and tests**: `engine/crates/ftx2-proto` (used by core, engine, bench, lab and tests), the mock
-server and FTX2 integration tests in `engine/crates/ps5upload-tests/tests/` (`mock_server/mod.rs`,
-`transfer_integration.rs`, `transfer_zip_integration.rs`, `transfer_7z_integration.rs`,
-`hw_integration.rs`), `engine/crates/ps5upload-bench`, and the `--proto ftx2` arms of
-`engine/crates/ps5upload-lab/src/bench.rs` (about 70 references; keep them until the last FTX2
-measurement is no longer needed, then delete).
-
-**Client** (`client/src`): `state/connection.ts:49-96` (the :9113 transfer-port probe and its comments),
-`lib/addr.ts:20`, `api/ps5.ts:145`, `screens/Upload/index.tsx:1100`, `lib/uploadEta.ts:21`,
-`lib/keepAwakeHold.ts:10`, `state/activityWiring.ts:323`, and the strings `About/index.tsx:53` /
-`i18n/locales/*.ts` (`en.ts:35`, `en.ts:435`, and the translations of each).
-
-**Payload** (`payload/`): `src/runtime.c` (about 770 references: the frame types from line 103, the
-transaction table and its journal files, the spool, the transfer server loop at 16577 and the
-management loop at 16876), `src/main.c` (86, 529, 679), `src/takeover.c:129`,
-`include/config.h:20-34` (`PS5UPLOAD2_RUNTIME_PORT` 9113, `PS5UPLOAD2_MGMT_PORT` 9114,
-`PS5UPLOAD2_TX_DIR`, `PS5UPLOAD2_SPOOL_DIR`), `include/runtime.h:141`, `include/wake_watchdog.h:35`.
-The FTX2 journal directories are `/data/ps5upload/tx` (`tx_<id>.json`, `runtime_tx_state.txt`,
-`events.log`) and `/data/ps5upload/spool` (`spool_<id>/<shard>`), created at `runtime.c:1398-1401`;
-the cutover payload removes both on first start. AVA1's own state is `/data/ps5upload/ava` and is
-kept.
+**Still on the tree, by design:** `payload/` (Task 19), the migration shim
+(`ps5upload-engine/src/legacy_helper*.rs`, `legacy_guard.rs`, `payload/src/legacy_takeover.c`: it
+shuts an older helper down), and the deprecated `FTX2_BANDWIDTH_MBPS`, `FTX2_ZIP_RAM_THRESHOLD_MB`
+and `FTX2_ARCHIVE_STAGE_MB` names the engine still reads once with a deprecation line (removed in
+the release after the cutover).
 
 ## 2. Checklist
 
-- [ ] 7z and RAR uploads still run on FTX2. They need sequential AVA1 sources (the decoders are
-      forward-only, so the random-access `Source` of `SPEC.md` §10 does not fit) before FTX2 can be
-      deleted.
-- [ ] Zip entries above 256 MiB (`ZIP_MAX_ENTRY`, `ps5upload-ava1/src/upload.rs:36`) fall back to
-      FTX2 (`ZipTooLarge`); they need a streaming entry reader.
-- [ ] Management RPCs: every :9114 FTX2 frame the engine core sends (list above) needs an AVA1
-      method. `SPEC.md` §7.1 defines only 1–3 and 16–19. This is project 3's main work.
+- [x] 7z and RAR uploads: sequential AVA1 sources (`ps5upload-ava1/src/seq.rs`, `rar_source.rs`)
+      replaced the FTX2 pipeline, which is deleted (P3 Tasks 17-18).
+- [x] Zip entries above 256 MiB stream through `ZipEntryReader`; the FTX2 fallback is gone (P3 Task 17).
+- [x] Management RPCs: every :9114 FTX2 frame the engine core sent has an AVA1 method
+      (`MGMT_METHODS.md`) and the core's FTX2 dial is deleted (Task 18); the
+      `hw-verified` ticks in `MGMT_METHODS.md` stay open until the hardware pass.
 - [ ] Task 9 leftovers: `net.speedtest` now measures round trips on the shared AVA1 session (gate and
       pool included), so its numbers are not comparable with the FTX2 one-connection figures; the AVA1
       event log has no line for a `job.copy` ending (only upload/download receivers and peer-ended
@@ -107,7 +93,7 @@ kept.
       (SPEC.md section 11.2), so the list is split into the root's job plus one job per other destination
       directory, run in sequence under one call (`upload_list_in`): progress aggregates, a cancel stops the
       rest, a failure names the first failing path.
-- [ ] `ps5_fs_move`'s same-drive rename moves to an AVA1 RPC with the `st_dev` guard (never an
+- [x] `ps5_fs_move`'s same-drive rename moves to an AVA1 RPC with the `st_dev` guard (never an
       unguarded `rename()` across mounts: that panics the console's kernel).
 - [x] NAS sources: `SourceFs` now has an `mtime` (SMB, FTP and SFTP report one; a backend that does
       not reports unknown), carried into the manifest. `upload::apply_existing_policy` picks
@@ -146,9 +132,9 @@ kept.
 - [x] `PS5UPLOAD_TRANSFER` (P3 Task 17): `route.rs`, the variable and the `Mode` seam are deleted and every engine call site is AVA1 only. A console with no AVA1 listener or an older helper fails with `helper_not_ava1`; one that has not accepted this app fails with `not_paired`. The startup line is now `ava1: dir=<ava_dir> identity=<key prefix> paired=<n>`; each transfer still logs `protocol=ava1`. The benchmark harness calls each protocol directly and no longer cross-checks the variable.
 - [ ] The payload's FTX2 journal directories (`/data/ps5upload/tx`, `/data/ps5upload/spool`) are
       removed by the cutover payload on first start.
-- [ ] Engine tests that stub or assert FTX2 (list in section 1) are replaced by their AVA1
-      equivalents, and `git grep -n -i ftx2` over engine, client and payload is empty except for the
-      CHANGELOG.
+- [x] Engine tests that stub or assert FTX2 are replaced by their AVA1 equivalents (P3 Task 18), and
+      `make check-no-ftx2` is clean over the whole tree except `payload/`, this directory and the
+      CHANGELOG. **Open:** widen it over `payload/` when Task 19 lands.
 - [ ] Review 002 L1, deferred: a RAR entry's mtime comes from a DOS local time read through the
       host's time zone with a "more than a day in the future is none" rule, and the mtime is part of the
       manifest hash. A resume after a host time-zone change, or after such a stamp comes within a day of
