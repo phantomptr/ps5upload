@@ -3101,6 +3101,16 @@ err_replace_cooldown: "Pembantu di konsol ini baru saja diganti. Tunggu semenit 
 fs_add_folder: "Tambah folder",
 fs_add_folder_dialog_title: "Pilih folder untuk disalin ke PS5",
 fs_drop_here: "Lepaskan untuk menyalin ke {path}",
+fs_sort_name: "Nama",
+fs_sort_size: "Ukuran",
+fs_sort_modified: "Diubah",
+fs_menu_open: "Buka",
+fs_menu_download: "Unduh",
+fs_menu_copy: "Salin",
+fs_menu_paste_into: "Tempel ke folder ini",
+fs_menu_copy_path: "Salin path",
+fs_go_to_path: "Buka path",
+fs_copy_path_failed: "Tidak dapat menyalin path ke papan klip.",
 };
 
 export default id;

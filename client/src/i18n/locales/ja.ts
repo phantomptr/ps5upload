@@ -3130,6 +3130,16 @@ err_replace_cooldown: "この本体のヘルパーはつい先ほど置き換え
 fs_add_folder: "フォルダーを追加",
 fs_add_folder_dialog_title: "PS5 にコピーするフォルダーを選択",
 fs_drop_here: "ドロップして {path} にコピー",
+fs_sort_name: "名前",
+fs_sort_size: "サイズ",
+fs_sort_modified: "更新日時",
+fs_menu_open: "開く",
+fs_menu_download: "ダウンロード",
+fs_menu_copy: "コピー",
+fs_menu_paste_into: "このフォルダーに貼り付け",
+fs_menu_copy_path: "パスをコピー",
+fs_go_to_path: "パスへ移動",
+fs_copy_path_failed: "パスをクリップボードにコピーできませんでした。",
 };
 
 export default ja;

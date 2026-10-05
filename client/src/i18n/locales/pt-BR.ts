@@ -3124,6 +3124,16 @@ err_replace_cooldown: "O auxiliar deste console foi substituído há pouco. Agua
 fs_add_folder: "Adicionar pasta",
 fs_add_folder_dialog_title: "Escolha uma pasta para copiar para o PS5",
 fs_drop_here: "Solte para copiar em {path}",
+fs_sort_name: "Nome",
+fs_sort_size: "Tamanho",
+fs_sort_modified: "Modificado",
+fs_menu_open: "Abrir",
+fs_menu_download: "Baixar",
+fs_menu_copy: "Copiar",
+fs_menu_paste_into: "Colar nesta pasta",
+fs_menu_copy_path: "Copiar caminho",
+fs_go_to_path: "Ir para caminho",
+fs_copy_path_failed: "Não foi possível copiar o caminho para a área de transferência.",
 };
 
 export default pt_BR;

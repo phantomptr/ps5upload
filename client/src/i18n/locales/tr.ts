@@ -3099,6 +3099,16 @@ err_replace_cooldown: "Bu konsoldaki yardımcı az önce değiştirildi. Yeniden
 fs_add_folder: "Klasör ekle",
 fs_add_folder_dialog_title: "PS5'e kopyalanacak bir klasör seç",
 fs_drop_here: "{path} içine kopyalamak için bırak",
+fs_sort_name: "Ad",
+fs_sort_size: "Boyut",
+fs_sort_modified: "Değiştirilme",
+fs_menu_open: "Aç",
+fs_menu_download: "İndir",
+fs_menu_copy: "Kopyala",
+fs_menu_paste_into: "Bu klasöre yapıştır",
+fs_menu_copy_path: "Yolu kopyala",
+fs_go_to_path: "Yola git",
+fs_copy_path_failed: "Yol panoya kopyalanamadı.",
 };
 
 export default tr;

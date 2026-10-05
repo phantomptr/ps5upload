@@ -3094,6 +3094,16 @@ err_replace_cooldown: "Trình trợ giúp trên máy này vừa được thay th
 fs_add_folder: "Thêm thư mục",
 fs_add_folder_dialog_title: "Chọn thư mục để sao chép lên PS5",
 fs_drop_here: "Thả để sao chép vào {path}",
+fs_sort_name: "Tên",
+fs_sort_size: "Kích thước",
+fs_sort_modified: "Đã sửa",
+fs_menu_open: "Mở",
+fs_menu_download: "Tải xuống",
+fs_menu_copy: "Sao chép",
+fs_menu_paste_into: "Dán vào thư mục này",
+fs_menu_copy_path: "Sao chép đường dẫn",
+fs_go_to_path: "Đi tới đường dẫn",
+fs_copy_path_failed: "Không thể sao chép đường dẫn vào bộ nhớ tạm.",
 };
 
 export default vi;

@@ -3100,6 +3100,16 @@ err_replace_cooldown: "Der Helfer dieser Konsole wurde gerade erst ersetzt. Wart
 fs_add_folder: "Ordner hinzufügen",
 fs_add_folder_dialog_title: "Ordner zum Kopieren auf die PS5 auswählen",
 fs_drop_here: "Ablegen, um nach {path} zu kopieren",
+fs_sort_name: "Name",
+fs_sort_size: "Größe",
+fs_sort_modified: "Geändert",
+fs_menu_open: "Öffnen",
+fs_menu_download: "Herunterladen",
+fs_menu_copy: "Kopieren",
+fs_menu_paste_into: "In diesen Ordner einfügen",
+fs_menu_copy_path: "Pfad kopieren",
+fs_go_to_path: "Zu Pfad wechseln",
+fs_copy_path_failed: "Der Pfad konnte nicht in die Zwischenablage kopiert werden.",
 };
 
 export default de;

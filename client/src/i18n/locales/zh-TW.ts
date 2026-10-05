@@ -3039,6 +3039,16 @@ err_replace_cooldown: "這台主機的協助程式剛剛被取代過。請等待
 fs_add_folder: "新增資料夾",
 fs_add_folder_dialog_title: "選擇要複製到 PS5 的資料夾",
 fs_drop_here: "拖放以複製到 {path}",
+fs_sort_name: "名稱",
+fs_sort_size: "大小",
+fs_sort_modified: "修改時間",
+fs_menu_open: "開啟",
+fs_menu_download: "下載",
+fs_menu_copy: "複製",
+fs_menu_paste_into: "貼上到此資料夾",
+fs_menu_copy_path: "複製路徑",
+fs_go_to_path: "前往路徑",
+fs_copy_path_failed: "無法將路徑複製到剪貼簿。",
 };
 
 export default zh_TW;

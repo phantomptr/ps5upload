@@ -3045,6 +3045,16 @@ err_replace_cooldown: "这台主机的助手刚刚被替换过。请等待一分
 fs_add_folder: "添加文件夹",
 fs_add_folder_dialog_title: "选择要复制到 PS5 的文件夹",
 fs_drop_here: "拖放以复制到 {path}",
+fs_sort_name: "名称",
+fs_sort_size: "大小",
+fs_sort_modified: "修改时间",
+fs_menu_open: "打开",
+fs_menu_download: "下载",
+fs_menu_copy: "复制",
+fs_menu_paste_into: "粘贴到此文件夹",
+fs_menu_copy_path: "复制路径",
+fs_go_to_path: "转到路径",
+fs_copy_path_failed: "无法将路径复制到剪贴板。",
 };
 
 export default zh_CN;

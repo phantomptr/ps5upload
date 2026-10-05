@@ -3039,6 +3039,16 @@ err_replace_cooldown: "El asistente de esta consola se reemplazó hace un moment
 fs_add_folder: "Añadir carpeta",
 fs_add_folder_dialog_title: "Elige una carpeta para copiar a la PS5",
 fs_drop_here: "Suelta para copiar en {path}",
+fs_sort_name: "Nombre",
+fs_sort_size: "Tamaño",
+fs_sort_modified: "Modificado",
+fs_menu_open: "Abrir",
+fs_menu_download: "Descargar",
+fs_menu_copy: "Copiar",
+fs_menu_paste_into: "Pegar en esta carpeta",
+fs_menu_copy_path: "Copiar ruta",
+fs_go_to_path: "Ir a ruta",
+fs_copy_path_failed: "No se pudo copiar la ruta al portapapeles.",
 };
 
 export default es;

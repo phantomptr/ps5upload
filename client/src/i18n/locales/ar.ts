@@ -3092,6 +3092,16 @@ err_replace_cooldown: "تم استبدال المساعد على هذه الوح
 fs_add_folder: "إضافة مجلد",
 fs_add_folder_dialog_title: "اختر مجلدًا لنسخه إلى PS5",
 fs_drop_here: "أفلت للنسخ إلى {path}",
+fs_sort_name: "الاسم",
+fs_sort_size: "الحجم",
+fs_sort_modified: "آخر تعديل",
+fs_menu_open: "فتح",
+fs_menu_download: "تنزيل",
+fs_menu_copy: "نسخ",
+fs_menu_paste_into: "لصق في هذا المجلد",
+fs_menu_copy_path: "نسخ المسار",
+fs_go_to_path: "الانتقال إلى مسار",
+fs_copy_path_failed: "تعذّر نسخ المسار إلى الحافظة.",
 };
 
 export default ar;

@@ -3126,6 +3126,16 @@ err_replace_cooldown: "L’assistant de cette console vient d’être remplacé.
 fs_add_folder: "Ajouter un dossier",
 fs_add_folder_dialog_title: "Choisir un dossier à copier sur la PS5",
 fs_drop_here: "Déposer pour copier dans {path}",
+fs_sort_name: "Nom",
+fs_sort_size: "Taille",
+fs_sort_modified: "Modifié",
+fs_menu_open: "Ouvrir",
+fs_menu_download: "Télécharger",
+fs_menu_copy: "Copier",
+fs_menu_paste_into: "Coller dans ce dossier",
+fs_menu_copy_path: "Copier le chemin",
+fs_go_to_path: "Aller au chemin",
+fs_copy_path_failed: "Impossible de copier le chemin dans le presse-papiers.",
 };
 
 export default fr;

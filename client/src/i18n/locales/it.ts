@@ -3039,6 +3039,16 @@ err_replace_cooldown: "L’assistente di questa console è stato sostituito poco
 fs_add_folder: "Aggiungi cartella",
 fs_add_folder_dialog_title: "Scegli una cartella da copiare sulla PS5",
 fs_drop_here: "Rilascia per copiare in {path}",
+fs_sort_name: "Nome",
+fs_sort_size: "Dimensione",
+fs_sort_modified: "Modificato",
+fs_menu_open: "Apri",
+fs_menu_download: "Scarica",
+fs_menu_copy: "Copia",
+fs_menu_paste_into: "Incolla in questa cartella",
+fs_menu_copy_path: "Copia percorso",
+fs_go_to_path: "Vai al percorso",
+fs_copy_path_failed: "Impossibile copiare il percorso negli appunti.",
 };
 
 export default it;

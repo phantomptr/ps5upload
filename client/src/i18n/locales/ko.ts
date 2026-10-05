@@ -3127,6 +3127,16 @@ err_replace_cooldown: "이 본체의 도우미를 방금 교체했습니다. 다
 fs_add_folder: "폴더 추가",
 fs_add_folder_dialog_title: "PS5에 복사할 폴더 선택",
 fs_drop_here: "놓으면 {path}에 복사됩니다",
+fs_sort_name: "이름",
+fs_sort_size: "크기",
+fs_sort_modified: "수정한 날짜",
+fs_menu_open: "열기",
+fs_menu_download: "다운로드",
+fs_menu_copy: "복사",
+fs_menu_paste_into: "이 폴더에 붙여넣기",
+fs_menu_copy_path: "경로 복사",
+fs_go_to_path: "경로로 이동",
+fs_copy_path_failed: "경로를 클립보드에 복사하지 못했습니다.",
 };
 
 export default ko;

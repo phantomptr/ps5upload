@@ -3116,6 +3116,16 @@ err_replace_cooldown: "ตัวช่วยของเครื่องนี
 fs_add_folder: "เพิ่มโฟลเดอร์",
 fs_add_folder_dialog_title: "เลือกโฟลเดอร์ที่จะคัดลอกไปยัง PS5",
 fs_drop_here: "วางเพื่อคัดลอกไปที่ {path}",
+fs_sort_name: "ชื่อ",
+fs_sort_size: "ขนาด",
+fs_sort_modified: "แก้ไขล่าสุด",
+fs_menu_open: "เปิด",
+fs_menu_download: "ดาวน์โหลด",
+fs_menu_copy: "คัดลอก",
+fs_menu_paste_into: "วางในโฟลเดอร์นี้",
+fs_menu_copy_path: "คัดลอกพาธ",
+fs_go_to_path: "ไปที่พาธ",
+fs_copy_path_failed: "คัดลอกพาธไปยังคลิปบอร์ดไม่ได้",
 };
 
 export default th;

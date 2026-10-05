@@ -3092,6 +3092,16 @@ err_replace_cooldown: "এই কনসোলের সহায়ক একট
 fs_add_folder: "ফোল্ডার যোগ করুন",
 fs_add_folder_dialog_title: "PS5-এ কপি করার জন্য একটি ফোল্ডার বেছে নিন",
 fs_drop_here: "{path}-এ কপি করতে ছেড়ে দিন",
+fs_sort_name: "নাম",
+fs_sort_size: "আকার",
+fs_sort_modified: "পরিবর্তিত",
+fs_menu_open: "খুলুন",
+fs_menu_download: "ডাউনলোড",
+fs_menu_copy: "কপি",
+fs_menu_paste_into: "এই ফোল্ডারে পেস্ট করুন",
+fs_menu_copy_path: "পাথ কপি করুন",
+fs_go_to_path: "পাথে যান",
+fs_copy_path_failed: "পাথটি ক্লিপবোর্ডে কপি করা যায়নি।",
 };
 
 export default bn;
