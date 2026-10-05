@@ -31,7 +31,9 @@ run("git whitespace", "git", ["diff", "--check"]);
 
 run("engine fmt", "cargo", ["fmt", "--all", "--", "--check"], { cwd: path.join(repoRoot, "engine") });
 run("engine clippy", "cargo", ["clippy", "--workspace", "--", "-D", "warnings"], { cwd: path.join(repoRoot, "engine") });
-run("engine tests", "cargo", ["test", "--workspace"], { cwd: path.join(repoRoot, "engine") });
+run("engine tests", "cargo", ["test", "--workspace", "--exclude", "ava1-ctest"], { cwd: path.join(repoRoot, "engine") });
+// The C interop tests share one C server and must run serially (as in CI).
+run("ava1 C interop tests", "cargo", ["test", "-p", "ava1-ctest", "--", "--test-threads=1"], { cwd: path.join(repoRoot, "engine") });
 
 run("desktop cargo check", "cargo", ["check", "--all-targets"], { cwd: path.join(repoRoot, "client", "src-tauri") });
 run("desktop clippy", "cargo", ["clippy", "--all-targets", "--", "-D", "warnings"], { cwd: path.join(repoRoot, "client", "src-tauri") });

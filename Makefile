@@ -161,7 +161,7 @@ help:
 	@echo "  make coverage         - Rust + frontend coverage reports"
 	@echo "  make coverage-engine  - Rust coverage report only"
 	@echo "  make coverage-client  - Frontend coverage report only"
-	@echo "  make test-engine      - cargo test --workspace"
+	@echo "  make test-engine      - cargo test --workspace (C interop serial)"
 	@echo "  make test-desktop     - Tauri Rust cargo check/clippy/test"
 	@echo "  make test-ava1        - AVA1 Rust + C conformance and interop tests"
 	@echo "  make test-payload     - Validate $(PAYLOAD_ELF)"
