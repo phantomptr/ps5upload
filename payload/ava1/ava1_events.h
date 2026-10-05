@@ -1,6 +1,6 @@
 /* The AVA1 event log: /data/ps5upload/ava/events.log, a human-readable line per job event
  * (open, resume, done, fail) that a bug report can read with fs.read (P3 Task 9). The
- * FTX2 transaction logs (tx/events.log, tx_*.json) it replaces no longer exist; the job
+ * the old transaction logs (tx/events.log, tx_*.json) it replaces no longer exist; the job
  * journals under ava/jobs are binary and say nothing a person can read.
  *
  * Rolling: when the file would pass ava1_events_limit (1 MiB), it is renamed to

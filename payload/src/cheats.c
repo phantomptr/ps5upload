@@ -15,7 +15,7 @@
  *     redeploy.
  *
  * Ported from elf-arsenal/src/cheats.c, adapted to ps5upload's ptrace
- * infrastructure (ptrace_remote.c) and FTX2 frame protocol.
+ * infrastructure (ptrace_remote.c) and management protocol.
  */
 
 #include "cheats.h"

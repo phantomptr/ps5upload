@@ -3,48 +3,46 @@
 
 #define MGMT_H0(m, f, a, fl, h, helper)                                                                    \
     static int mgmt_l_##m(void *st, int fd, uint64_t t, const char *b, uint64_t l) {                       \
+        (void)fd;                                                                                          \
+        (void)t;                                                                                           \
         (void)b;                                                                                           \
         (void)l;                                                                                           \
-        return h((runtime_state_t *)st, fd, t);                                                            \
+        return h((runtime_state_t *)st);                                                            \
     }                                                                                                      \
     static int mgmt_r_##m(const uint8_t *q, uint32_t n, mgmt_ctx_t *cx) { return helper(q, n, cx, mgmt_l_##m); }
 #define MGMT_H1(m, f, a, fl, h, helper)                                                                    \
     static int mgmt_l_##m(void *st, int fd, uint64_t t, const char *b, uint64_t l) {                       \
-        return h((runtime_state_t *)st, fd, t, b, l);                                                      \
-    }                                                                                                      \
-    static int mgmt_r_##m(const uint8_t *q, uint32_t n, mgmt_ctx_t *cx) { return helper(q, n, cx, mgmt_l_##m); }
-#define MGMT_HS(m, f, a, fl, h, helper)                                                                    \
-    static int mgmt_l_##m(void *st, int fd, uint64_t t, const char *b, uint64_t l) {                       \
-        ftx2_header_t hdr;                                                                                  \
-        char scratch[2048]; /* the old dispatcher's `body` buffer */                                        \
-        (void)b;                                                                                           \
-        (void)l;                                                                                           \
-        memset(&hdr, 0, sizeof hdr);                                                                        \
-        hdr.trace_id = t;                                                                                   \
-        return h((runtime_state_t *)st, fd, hdr, scratch, sizeof scratch);                                  \
+        (void)fd;                                                                                          \
+        (void)t;                                                                                           \
+        return h((runtime_state_t *)st, b, l);                                                      \
     }                                                                                                      \
     static int mgmt_r_##m(const uint8_t *q, uint32_t n, mgmt_ctx_t *cx) { return helper(q, n, cx, mgmt_l_##m); }
 #define MGMT_N(m, f, a, fl, run) /* native: the runner is the table's own */
 /* job.run operations: the handler adapted to mgmt_legacy_fn. */
 #define MGMT_OP0(op, f, a, fl, h)                                                                          \
     static int mgmt_lo_##op(void *st, int fd, uint64_t t, const char *b, uint64_t l) {                     \
+        (void)fd;                                                                                          \
+        (void)t;                                                                                           \
         (void)b;                                                                                           \
         (void)l;                                                                                           \
-        return h((runtime_state_t *)st, fd, t);                                                            \
+        return h((runtime_state_t *)st);                                                            \
     }
 #define MGMT_OP1(op, f, a, fl, h)                                                                          \
     static int mgmt_lo_##op(void *st, int fd, uint64_t t, const char *b, uint64_t l) {                     \
-        return h((runtime_state_t *)st, fd, t, b, l);                                                      \
+        (void)fd;                                                                                          \
+        (void)t;                                                                                           \
+        return h((runtime_state_t *)st, b, l);                                                      \
     }
 #define MGMT_OP1B(op, f, a, fl, h)                                                                         \
     static int mgmt_lo_##op(void *st, int fd, uint64_t t, const char *b, uint64_t l) {                     \
+        (void)fd;                                                                                          \
+        (void)t;                                                                                           \
         (void)l;                                                                                           \
-        return h((runtime_state_t *)st, fd, t, b);                                                         \
+        return h((runtime_state_t *)st, b);                                                         \
     }
 #include "mgmt_table.def"
 #undef MGMT_H0
 #undef MGMT_H1
-#undef MGMT_HS
 #undef MGMT_N
 #undef MGMT_OP0
 #undef MGMT_OP1
@@ -55,14 +53,12 @@
 #define MGMT_OP1B(op, f, a, fl, h)
 #define MGMT_H0(m, f, a, fl, h, helper) {(uint16_t)(m), (uint16_t)(f), (uint16_t)(a), (fl), mgmt_r_##m},
 #define MGMT_H1(m, f, a, fl, h, helper) {(uint16_t)(m), (uint16_t)(f), (uint16_t)(a), (fl), mgmt_r_##m},
-#define MGMT_HS(m, f, a, fl, h, helper) {(uint16_t)(m), (uint16_t)(f), (uint16_t)(a), (fl), mgmt_r_##m},
 #define MGMT_N(m, f, a, fl, run) {(uint16_t)(m), (uint16_t)(f), (uint16_t)(a), (fl), run},
 static const mgmt_entry_t k_mgmt_table[] = {
 #include "mgmt_table.def"
 };
 #undef MGMT_H0
 #undef MGMT_H1
-#undef MGMT_HS
 #undef MGMT_N
 #undef MGMT_OP0
 #undef MGMT_OP1
@@ -70,7 +66,6 @@ static const mgmt_entry_t k_mgmt_table[] = {
 
 #define MGMT_H0(m, f, a, fl, h, helper)
 #define MGMT_H1(m, f, a, fl, h, helper)
-#define MGMT_HS(m, f, a, fl, h, helper)
 #define MGMT_N(m, f, a, fl, run)
 #define MGMT_OP0(op, f, a, fl, h) {(uint8_t)(op), (uint16_t)(f), (uint16_t)(a), (fl), mgmt_lo_##op},
 #define MGMT_OP1(op, f, a, fl, h) {(uint8_t)(op), (uint16_t)(f), (uint16_t)(a), (fl), mgmt_lo_##op},
@@ -80,18 +75,15 @@ static const mgmt_op_entry_t k_mgmt_ops[] = {
 };
 #undef MGMT_H0
 #undef MGMT_H1
-#undef MGMT_HS
 #undef MGMT_N
 #undef MGMT_OP0
 #undef MGMT_OP1
 #undef MGMT_OP1B
 
-_Static_assert(FTX2_FRAME_ERROR == 3u, "mgmt_rpc.c's MGMT_FRAME_ERROR must match FTX2_FRAME_ERROR");
-
-/* What the FTX2 management thread did around every frame (handle_binary_frame_impl):
+/* What the old management thread did around every frame:
  * the crash breadcrumb names the operation and the credentials are re-elevated (the first
  * attempt may predate kstuff). It does not move the command counter: the handlers bump it themselves
- * on success (as they did under FTX2), and a second count here would double it. */
+ * on success (as they did under the old protocol), and a second count here would double it. */
 static void mgmt_env_enter(uint16_t legacy_frame) {
     g_inflight_frame_type = (unsigned int)legacy_frame;
     runtime_apply_ucred_jailbreak();
@@ -100,7 +92,7 @@ static void mgmt_env_enter(uint16_t legacy_frame) {
 static void mgmt_env_leave(void) { g_inflight_frame_type = 0; }
 
 /* The native filesystem methods (mgmt_fs.c) get their policy from here: the same allowlist, the
- * same read carve-outs and the same command counter the FTX2 handlers use. */
+ * same read carve-outs and the same command counter the management handlers use. */
 /* (the policy callbacks, and the counter the fs runners call, are defined in runtime.c above this include) */
 int runtime_mgmt_install(runtime_state_t *state) {
     mgmt_fs_policy_t pol;
@@ -116,6 +108,6 @@ int runtime_mgmt_install(runtime_state_t *state) {
     rc = mgmt_rpc_install(k_mgmt_table, sizeof k_mgmt_table / sizeof k_mgmt_table[0], state, mgmt_env_enter,
                               mgmt_env_leave);
     if (rc != 0) return rc;
-    /* job.run operations that wrap an FTX2 handler (the rest: fs_jobs.c, registered by ava1_glue.c). */
+    /* job.run operations that wrap a management handler (the rest: fs_jobs.c, registered by ava1_glue.c). */
     return mgmt_rpc_install_ops(k_mgmt_ops, sizeof k_mgmt_ops / sizeof k_mgmt_ops[0]);
 }

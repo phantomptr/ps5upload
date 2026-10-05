@@ -154,7 +154,7 @@ CFLAGS := -Wall -Wextra -Werror -g $(INCLUDES)
 LIBS := -lSceSystemService -lSceUserService -lSceIpmi -lSceAppInstUtil \
         -lSceNotification -lSceRegMgr -lkernel_sys
 
-SRCS := src/main.c src/runtime.c src/shell_builtin.c src/takeover.c src/legacy_takeover.c src/takeover_flag.c src/ownership_record.c src/ava1_stop.c src/register.c src/hw_info.c \
+SRCS := src/main.c src/runtime.c src/shell_builtin.c src/takeover.c src/legacy_takeover.c src/state_migrate.c src/takeover_flag.c src/ownership_record.c src/ava1_stop.c src/register.c src/hw_info.c \
         src/drive_sensors.c \
         src/proc_list.c src/ptrace_remote.c src/shellui_rpc.c \
         src/sony_api_lock.c src/kernel_rw_lock.c src/sys_time.c \

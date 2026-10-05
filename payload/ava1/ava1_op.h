@@ -9,7 +9,7 @@
  * after it ended, exactly like a console-local copy.
  *
  * Operations are registered by the embedder: the pure filesystem ones in payload/src/fs_jobs.c
- * and the ones that wrap an FTX2 handler through payload/src/mgmt_table.def.
+ * and the ones that wrap a management handler through payload/src/mgmt_table.def.
  */
 #ifndef AVA1_OP_H
 #define AVA1_OP_H

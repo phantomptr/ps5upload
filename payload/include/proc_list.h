@@ -22,7 +22,7 @@
  * This is a simple observability primitive, not a stepping stone to
  * process control. The payload never writes back to the kernel via
  * this path — only reads. The caller (the management-port handler)
- * is responsible for framing the returned bytes into an FTX2 frame.
+ * is responsible for framing the returned bytes into a reply.
  *
  * Returns 0 on success (buf contains valid JSON, *written_out set to
  * byte count), non-zero on internal error. `err_out` receives a short

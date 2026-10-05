@@ -29,12 +29,12 @@ static void test_parse(void) {
     CHECK(r.op == INST_OP_HELLO);
 
     /* install by url */
-    const char *iu = "{\"op\":\"install\",\"url\":\"http://10.0.0.2:9113/a.pkg\",\"name_hint\":\"CUSA1 (Base)\"}";
+    const char *iu = "{\"op\":\"install\",\"url\":\"http://10.0.0.2:9300/a.pkg\",\"name_hint\":\"CUSA1 (Base)\"}";
     inst_parse_request(iu, strlen(iu), &r);
     CHECK(r.error == NULL);
     CHECK(r.op == INST_OP_INSTALL);
     CHECK(r.src == INST_SRC_URL);
-    CHECK(strcmp(r.url, "http://10.0.0.2:9113/a.pkg") == 0);
+    CHECK(strcmp(r.url, "http://10.0.0.2:9300/a.pkg") == 0);
     CHECK(strcmp(r.name_hint, "CUSA1 (Base)") == 0);
 
     /* install by path */

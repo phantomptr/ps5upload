@@ -8,8 +8,6 @@
 #include "ava1_gen.h"
 #include "ava1_wire.h"
 
-/* The FTX2 error frame's number (runtime.c asserts its FTX2_FRAME_ERROR is the same). */
-#define MGMT_FRAME_ERROR 3u
 /* The sink's room for a paged method's whole (unpaged) answer. */
 #define MGMT_PAGED_CAPTURE_MAX (1024u * 1024u)
 /* MgmtText overhead: u32 length + u16 ext count, plus a `more` ext (tag, length, value). */
@@ -524,7 +522,7 @@ int mgmt_call_fs_mkdir(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx, mgmt_lega
 }
 
 /* node.status: NodeStatus (SPEC.md section 7.3) built from the legacy handler's JSON. The legacy
- * keys the typed body drops (runtime_port, shutdown, takeover_requested and the FTX2 transaction
+ * keys the typed body drops (runtime_port, shutdown, takeover_requested and the old transaction
  * counters) are ignored. An absent number is 0, as an older payload's missing field was to the client. */
 static int json_bool(const char *json, const char *key) {
     char needle[40];

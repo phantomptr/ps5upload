@@ -15,7 +15,7 @@
  * for months.
  *
  * Split out because it is almost entirely self-contained: it needs
- * nothing from the FTX2 runtime except two helpers, declared below. The
+ * nothing from the runtime except two helpers, declared below. The
  * frame plumbing (shell_send_json_result, handle_shell_exec) stays in
  * runtime.c, since that genuinely does need runtime_state_t.
  */
@@ -35,7 +35,7 @@ void shell_session_set(const char *session_id, const char *cwd);
 int shell_json_string_field(const char *body, uint64_t body_len,
                             const char *field, char *out, size_t cap);
 
-/* Helpers the FTX2 shell handler still needs for its fast paths. */
+/* Helpers the shell handler still needs for its fast paths. */
 int shell_split(char *cmd, char *argv[], int max_args);
 size_t shell_appendf(char **buf, size_t *cap, size_t len, const char *fmt, ...);
 int shell_resolve_dir(const char *cwd, const char *path, char *out, size_t cap,

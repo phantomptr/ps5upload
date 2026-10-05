@@ -41,7 +41,7 @@ static int g_data_on;
  * trust store AND its ancestors (path_policy.h: path_tree_op_refused). */
 static int may_write(const char *p) { return is_path_allowed(p) && !path_tree_op_refused(p); }
 
-/* The same rule the FTX2 read handlers use (runtime.c): the writable allowlist, or a system
+/* The same rule the management read handlers use (runtime.c): the writable allowlist, or a system
  * partition read when the peer asked for an unsafe read. */
 static int may_read(const char *p, int unsafe_read) {
     if (path_tree_op_refused(p)) return 0;
@@ -150,7 +150,7 @@ static int rpc(uint16_t method, const uint8_t *body, uint32_t body_len, uint8_t 
         if (rc != -1) return rc;
     }
     if (method == AVA1_METHOD_CRYPTO_BENCH) return crypto_bench(body, body_len, out, cap, out_len);
-    /* The management methods (4 and up): the FTX2 handlers behind the capture sink. An
+    /* The management methods (4 and up): the management handlers behind the capture sink. An
      * unknown method answers ERR_UNKNOWN_METHOD from there. */
     if (method != AVA1_METHOD_NODE_INFO) return mgmt_rpc_dispatch(method, body, body_len, out, cap, out_len);
     read_firmware(firmware, sizeof firmware);
@@ -214,8 +214,8 @@ static int ava1_payload_start_inner(void) {
         dc.refuse_link = path_tree_op_refused;
         dc.same_device = same_device;
         if (mkdir(AVA1_JOBS, 0755) != 0 && errno != EEXIST) {
-            /* Not fatal: the server and FTX2 keep working without the data plane. */
-            on_log("ava1: cannot create the jobs folder; transfers stay on FTX2");
+            /* Not fatal: the server keeps working without the data plane. */
+            on_log("ava1: cannot create the jobs folder; transfers are unavailable");
         } else {
             /* The human-readable job event log a bug report reads (SPEC section 7.3 / Task 9). */
             ava1_events_set_path(AVA1_DIR "/events.log");
@@ -230,7 +230,7 @@ static int ava1_payload_start_inner(void) {
             else if (rc > 0)
                 fprintf(stderr, "ava1: removed %d idle job directories\n", rc);
             if ((rc = ava1_data_start(&dc)) != 0)
-                fprintf(stderr, "ava1: data layer did not start (%d); transfers stay on FTX2\n", rc);
+                fprintf(stderr, "ava1: data layer did not start (%d); transfers are unavailable\n", rc);
             else {
                 cfg.data = ava1_data_hooks();
                 cfg.caps = AVA1_CAP_DATA_PLANE;
@@ -239,7 +239,7 @@ static int ava1_payload_start_inner(void) {
             }
         }
     }
-    /* The management methods are served when the FTX2 handlers' table is installed (main.c does it
+    /* The management methods are served when the management handlers' table is installed (main.c does it
      * before this): a client routes management by this bit, not by probing for ERR_UNKNOWN_METHOD. */
     if (mgmt_rpc_installed()) cfg.caps |= AVA1_CAP_MGMT;
     if (ava1_trust_slot_key(launcher) == 0) {

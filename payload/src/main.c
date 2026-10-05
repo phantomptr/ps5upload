@@ -23,6 +23,7 @@
 #include "fakelib_overlay.h"
 #include "ava1_glue.h"
 #include "takeover_flag.h"
+#include "state_migrate.h"
 #include "ava1_stop.h"
 #include "ava1_data.h"
 #include "ava1_gen.h"
@@ -91,10 +92,8 @@ void pop_notification(const char *message) {
 }
 
 /*
- * Global pointer to the runtime state so signal handlers can close the
- * listening socket and release port 9113 before the process dies.
- * A crashed payload that keeps the port open prevents the next payload
- * from binding (and makes every incoming connection get RST'd).
+ * Global pointer to the runtime state so the signal handler can remove the ownership record
+ * of a crashed instance.
  */
 static runtime_state_t *g_state = NULL;
 
@@ -141,7 +140,7 @@ static void fatal_put_str(char *buf, size_t cap, size_t *pos, const char *s) {
 
 /* "[fatal] signal 11 while serving frame 68\n", or "... outside any request"
  * for a background thread (watchdog, fan reapply, activity tracker). The
- * frame number maps to FTX2_FRAME_* in runtime.c. */
+ * frame number maps to MGMT_FRAME_* in runtime.c. */
 static void write_fatal_breadcrumb(int sig, unsigned int frame) {
     char buf[96];
     size_t pos = 0;
@@ -180,32 +179,20 @@ static void handle_fatal(int sig) {
      * PS5 UI for the duration. Best-effort detach first; the call
      * is signal-safe (no mutex; just a kernel ioctl path). */
     shellui_rpc_emergency_detach();
-    /* Close the listener immediately so the port is freed for the next
-     * payload instance. Only safe operations here — this is a signal
-     * handler. Full TX/journal/pack-pool/direct-writer teardown (which
-     * takes per-slot mutexes and may pthread_join) is deliberately *not*
-     * attempted; it would risk deadlock or further corruption.
+    /* Only async-signal-safe work here: this is a signal handler. Nothing is torn down: the kernel closes
+     * our sockets when the process dies, which frees the AVA1 port for the next instance.
      *
-     * Cooperative shutdown paths (FTX2 SHUTDOWN frame, TAKEOVER_REQUEST,
-     * normal client disconnects that hit the "while (!shutdown)" loops)
-     * *do* call runtime_mark_active_transactions(..., "interrupted") so
-     * that the on-disk journal correctly reflects resumable state and
-     * tmp files / mounts are left in a state the next payload's
-     * reconciliation + desktop-side logic can recover.
-     *
-     * On fatal we rely on:
+     * Cooperative exits (node.shutdown, the takeover flag) run ava1_payload_stop first and leave durable
+     * jobs resumable. On a fatal we rely on:
      *   - the 8-second runtime_shutdown_watchdog (armed on clean paths)
-     *   - startup reconciliation (runtime_reconcile_mounts, sweep of
-     *     stale pkg_temp, ownership record, etc.)
-     *   - explicit takeover from a fresh payload (which forces the
-     *     previous instance out and marks everything interrupted).
+     *   - startup reconciliation (runtime_reconcile_mounts, sweep of stale pkg_temp, ownership record)
+     *   - the AVA1 job journals, which resume a durable job after any exit
+     *   - explicit takeover from a fresh payload (which forces the previous instance out)
      *   - desktop "replace payload" + re-send flow.
      *
-     * This is the fundamental contract: the payload is a best-effort
-     * helper; anything left behind must be tolerable after a PS5
-     * reboot or a fresh send of a newer payload. */
+     * This is the fundamental contract: the payload is a best-effort helper; anything left behind must be
+     * tolerable after a PS5 reboot or a fresh send of a newer payload. */
     if (g_state) {
-        runtime_cleanup_listener(g_state);
         /* Unlink the ownership record directly (not via
          * runtime_clear_ownership, whose failure path calls fprintf — not
          * async-signal-safe). unlink() itself is async-signal-safe. Without
@@ -435,10 +422,12 @@ static void redirect_stdio_to_file(void) {
 }
 
 /* Starts the AVA1 side; only ever reached through takeover_gate_start (no other helper holds the port). */
+static int g_ava1_start_rc = 0;
 static void start_ava1_cb(void *ctx) {
     (void)ctx;
     int ava1_rc = ava1_payload_start();
-    if (ava1_rc != 0) fprintf(stderr, "ava1: server did not start (%d); FTX2 continues\n", ava1_rc);
+    if (ava1_rc != 0) fprintf(stderr, "ava1: server did not start (%d)\n", ava1_rc);
+    g_ava1_start_rc = ava1_rc;
 }
 
 int main(void) {
@@ -548,7 +537,7 @@ int main(void) {
      * sceAppInstUtilInitialize + sceLncUtilInitialize) have been
      * observed to hang on some firmware/loader combinations,
      * preventing the payload from ever reaching
-     * `runtime_try_takeover` and binding :9113/:9114. With the
+     * `runtime_try_takeover` and starting the AVA1 server. With the
      * payload listener never up, the desktop times out waiting for
      * the payload to boot.
      *
@@ -628,6 +617,12 @@ int main(void) {
     }
     startup_trace("WRITE_OWNERSHIP_DONE");
 
+    /* First start of the AVA1-only payload: the retired transfer protocol's transaction journal and
+     * shard spool are removed (state_migrate.c). It runs after the takeover, so an older helper that was
+     * still using them has exited; AVA1's own state (<root>/ava) is never touched. */
+    (void)payload_remove_retired_dirs(PS5UPLOAD2_RUNTIME_ROOT);
+    startup_trace("RETIRED_DIRS_REMOVED");
+
     /* Restore persisted fan threshold. The runtime root now exists
      * (created by runtime_ensure_directories above), so the persist
      * file is readable if a previous session wrote one. A non-zero
@@ -687,87 +682,57 @@ int main(void) {
      * → Refresh action. Trades a ~100ms per-request delay on first
      * use for a payload that actually comes up reliably. */
 
-    printf("ps5upload2 payload ready on ports transfer=%d mgmt=%d (instance=%llu)\n",
-           state.runtime_port, state.mgmt_port,
-           (unsigned long long)state.instance_id);
-    /* One-shot toast on startup — makes the user see on the TV/monitor
-     * that the ELF actually loaded and is listening, without needing to
-     * pull out a laptop to probe the port. Includes version + author so
-     * the console screen is enough to identify *which* build is running
-     * (useful when debugging across revisions). */
-    {
-        char banner[192];
-        snprintf(banner, sizeof(banner),
-                 "PS5Upload v%s by %s\nready on %d/%d",
-                 PS5UPLOAD2_VERSION, PS5UPLOAD2_AUTHOR,
-                 state.runtime_port, state.mgmt_port);
-        pop_notification(banner);
-    }
-    startup_trace("TOAST_DONE");
-    /* Spawn the management listener thread BEFORE entering the transfer
-     * loop. The mgmt loop owns :9114 and answers STATUS/TAKEOVER/etc.
-     * while the transfer loop is busy inside a long upload on :9113. */
-    /* Explicit 512 KiB stack. With NULL attrs this thread got whatever
-     * default the HOST process uses — which differs by loader — while a
-     * comment in runtime.c's create_worker_thread claimed it was "proven" at
-     * 512 KiB. It matters more than an accept loop normally would: once
-     * PS5UPLOAD2_MAX_MGMT_THREADS handlers are busy, further clients are
-     * served INLINE on this thread, so every handler's stack budget is
-     * whatever this thread was given. Falls back to the default if attr
-     * setup fails, so it can never regress. */
-    pthread_attr_t mgmt_attr;
-    pthread_attr_t *mgmt_attr_p = NULL;
-    if (pthread_attr_init(&mgmt_attr) == 0) {
-        if (pthread_attr_setstacksize(&mgmt_attr, 512u * 1024u) == 0) {
-            mgmt_attr_p = &mgmt_attr;
-        } else {
-            pthread_attr_destroy(&mgmt_attr);
-        }
-    }
-    /* Probe the real descriptor ceiling before the listener threads exist: the probe opens descriptors
+    /* Probe the real descriptor ceiling before the server threads exist: the probe opens descriptors
      * until the kernel refuses, and a thread that opens or accepts meanwhile fails. */
     ava1_fd_limits_probe();
-    int mgmt_rc = pthread_create(&state.mgmt_thread, mgmt_attr_p,
-                                 runtime_mgmt_server_loop, &state);
-    if (mgmt_attr_p) pthread_attr_destroy(mgmt_attr_p);
-    if (mgmt_rc != 0) {
-        startup_trace("MGMT_THREAD_FAILED");
-        fprintf(stderr, "pthread_create(mgmt) failed\n");
-        pop_notification("PS5Upload failed: cannot start management thread");
-        /* We've already taken over and written ownership; the kernel
-         * will reap the bound sockets at exit, but a stale ownership
-         * record would mislead the next payload's startup probe. */
+    if (runtime_mgmt_install(&state) != 0) fprintf(stderr, "ava1: management table not installed\n");
+    /* Never two helpers with AVA1 at once (the 2026-10-03 Pro outage: the prior instance was
+     * not reaped and its AVA1 server and data layer ran beside the new one; the console hung).
+     * The takeover has asked the prior instance to leave; give it a bounded time to release
+     * :9120, and if something still answers there start neither the server nor the data layer. */
+    int ava1_up = takeover_gate_start((int)AVA1_DEFAULT_PORT, 15000, 100, start_ava1_cb, NULL);
+    if (!ava1_up) {
+        fprintf(stderr,
+                "ava1: REFUSING TO START: port %d is still answered by another process 15 s after the takeover; "
+                "not starting the server or the data layer beside it. This helper exits: send the payload again "
+                "or restart the console.\n",
+                (int)AVA1_DEFAULT_PORT);
+        ava1_payload_refused();
+        pop_notification("PS5Upload: another helper still holds the transfer port. Send the payload again or restart the PS5");
+    } else if (g_ava1_start_rc != 0) {
+        ava1_up = 0;
+        pop_notification("PS5Upload failed: cannot start the transfer server. Send the payload again or restart the PS5");
+    }
+    if (!ava1_up) {
+        /* Nothing is serving: a helper that idles with no port is worse than none (the app would wait on it).
+         * Leave, and take our ownership record with us so the next instance does not read it as live. */
         (void)runtime_clear_ownership(&state);
         return 1;
     }
-    state.mgmt_thread_started = 1;
+    startup_trace("AVA1_STARTED");
+    printf("ps5upload2 payload ready on port %d (instance=%llu)\n", (int)AVA1_DEFAULT_PORT,
+           (unsigned long long)state.instance_id);
+    /* One-shot toast on startup: makes the user see on the TV/monitor that the ELF actually loaded and is
+     * listening, without needing to pull out a laptop to probe the port. Includes version + author so
+     * the console screen is enough to identify *which* build is running (useful when debugging across
+     * revisions). */
     {
-        if (runtime_mgmt_install(&state) != 0) fprintf(stderr, "ava1: management table not installed\n");
-        /* Never two helpers with AVA1 at once (the 2026-10-03 Pro outage: the prior instance was
-         * not reaped and its AVA1 server and data layer ran beside the new one; the console hung).
-         * The takeover has asked the prior instance to leave; give it a bounded time to release
-         * :9120, and if something still answers there start neither the server nor the data layer.
-         * FTX2 keeps running so the app can still replace this instance. */
-        if (!takeover_gate_start((int)AVA1_DEFAULT_PORT, 15000, 100, start_ava1_cb, NULL)) {
-            fprintf(stderr,
-                    "ava1: REFUSING TO START: port %d is still answered by another process 15 s after the takeover; "
-                    "not starting the server or the data layer beside it. FTX2 continues; replace this helper "
-                    "from the app or restart the console.\n",
-                    (int)AVA1_DEFAULT_PORT);
-            ava1_payload_refused();
-            pop_notification("PS5Upload: another helper still holds the transfer port - AVA1 is off. Send the payload again or restart the PS5");
-        }
+        char banner[192];
+        snprintf(banner, sizeof(banner),
+                 "PS5Upload v%s by %s\nready on %d",
+                 PS5UPLOAD2_VERSION, PS5UPLOAD2_AUTHOR, (int)AVA1_DEFAULT_PORT);
+        pop_notification(banner);
     }
-    startup_trace("MGMT_THREAD_SPAWNED");
+    startup_trace("TOAST_DONE");
 
-    rc = runtime_server_loop(&state);
-    startup_trace("SERVER_LOOP_EXITED");
+    /* The AVA1 server runs on its own threads; this thread has nothing left to serve. It waits for
+     * node.shutdown or the takeover flag (runtime_request_shutdown), then tears down. */
+    runtime_wait_for_shutdown(&state);
+    startup_trace("SHUTDOWN_REQUESTED");
 
-    /* Arm a watchdog so that, however we shut down from here, the process
-     * cannot hang forever (e.g. pthread_join below on a mgmt thread wedged in
-     * an uninterruptible Sony API). A lingering process is exactly what the
-     * next resend would duplicate. Healthy shutdown exits via the return
-     * below long before this fires. */
+    /* Arm a watchdog so that, however we shut down from here, the process cannot hang forever (e.g. on
+     * an uninterruptible Sony API). A lingering process is exactly what the next resend would duplicate.
+     * Healthy shutdown exits via the return below long before this fires. */
     /* Persist tracked play time before we go. The watcher only saves every
      * 60s, so a payload swap in between would otherwise drop the current
      * session — which is most of what a short session IS. */
@@ -782,27 +747,6 @@ int main(void) {
     {
         int sr = ava1_payload_stop(2000, 3000);
         if (sr) fprintf(stderr, "ava1: stop was slow (0x%x): sessions or a Sony call outlived the soft wait\n", sr);
-    }
-
-    /* Ask the mgmt thread to exit by closing its listener. accept()
-     * returns with EBADF, mgmt loop sees shutdown_requested and
-     * exits. Ordering matters: set shutdown_requested first so the
-     * mgmt loop's post-accept check short-circuits.
-     *
-     * Note: when the shutdown was triggered by an explicit FTX2
-     * SHUTDOWN or TAKEOVER_REQUEST frame, the handler already called
-     * runtime_mark_active_transactions(..., "interrupted") before
-     * setting the flag (see runtime.c). That ensures the journal and
-     * any open direct-writer/pack-pool state are torn down cleanly
-     * for resume/reconciliation. Fatal signal paths cannot do the
-     * same (see handle_fatal). */
-    state.shutdown_requested = 1;
-    if (state.mgmt_listener_fd >= 0) {
-        close(state.mgmt_listener_fd);
-        state.mgmt_listener_fd = -1;
-    }
-    if (state.mgmt_thread_started) {
-        pthread_join(state.mgmt_thread, NULL);
     }
 
     (void)runtime_clear_ownership(&state);

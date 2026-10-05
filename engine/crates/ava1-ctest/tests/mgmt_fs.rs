@@ -1180,7 +1180,7 @@ fn lint_the_guard_header_judges_a_source_link_by_lstat() {
         "the lstat device lookup exists"
     );
     // Every caller that renames a user-chosen source passes the lstat lookup for it.
-    for f in ["src/runtime.c", "src/ftp_server.c", "src/mgmt_fs.c"] {
+    for f in ["src/ftp_server.c", "src/mgmt_fs.c"] {
         let c = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../../payload")
@@ -1202,7 +1202,7 @@ fn lint_the_guard_header_judges_a_source_link_by_lstat() {
     .unwrap();
     assert!(sh.contains("mv_same_dev = (lstat(argv[i]"));
     // Fail closed (review 007 #4): every guard caller refuses anything but a definite SAME.
-    for f in ["src/runtime.c", "src/ftp_server.c", "src/mgmt_fs.c"] {
+    for f in ["src/ftp_server.c", "src/mgmt_fs.c"] {
         let c = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../../payload")
@@ -1504,8 +1504,7 @@ async fn s2_the_trust_store_is_found_through_every_spelling() {
 
 // ---- review S2, round 2: ancestors and recursive operations ----
 
-/// LINT (a source check, not a behavioural test: runtime.c and ava1_glue.c are SDK-only and cannot be
-/// built on the host). Every entry point that walks a tree, or that moves/replaces one, refuses a path that
+/// LINT (a source check, not a behavioural test: ava1_glue.c is SDK-only and cannot be built on the host). Every entry point that walks a tree, or that moves/replaces one, refuses a path that
 /// is the trust store or an ancestor of it through the shared `path_tree_op_refused`. The behaviour of that
 /// function itself is pinned by `s2_tree_op_refusal_covers_ancestors_and_the_store`, the FTP handlers by
 /// payload/tests/ftp_trust_store_selftest.c (run by the root Makefile's payload selftests and by
@@ -1513,29 +1512,20 @@ async fn s2_the_trust_store_is_found_through_every_spelling() {
 #[test]
 fn s2_lint_recursive_entry_points_use_the_shared_refusal() {
     let payload = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../payload");
-    let rt = std::fs::read_to_string(payload.join("src/runtime.c")).unwrap();
-    let body = |name: &str| -> String {
-        let a = rt
-            .find(&format!("static int {name}("))
-            .unwrap_or_else(|| panic!("{name} missing"));
-        let rest = &rt[a..];
-        rest[..rest.find("\n}\n").unwrap()].to_string()
-    };
-    for f in [
-        "handle_fs_copy",
-        "handle_fs_chmod",
-        "handle_fs_delete",
-        "handle_fs_move",
-    ] {
+    // The old per-handler checks in runtime.c went with the handlers (the AVA1 paths replaced them): fs.rename
+    // is native (mgmt_fs.c), the tree jobs (delete, chmod -R, hash, crc32) are in fs_jobs.c behind may_write, and
+    // copy / upload / download are the data layer's hooks below.
+    let src = |f: &str| std::fs::read_to_string(payload.join(f)).unwrap();
+    for f in ["src/mgmt_fs.c", "src/fs_jobs.c"] {
         assert!(
-            body(f).contains("path_tree_op_refused("),
+            src(f).contains("path_tree_op_refused("),
             "{f} must refuse trust-store ancestors"
         );
     }
-    // round 3: the merge-copy destination is opened O_NOFOLLOW (a planted link at dst is never written through)
+    // round 3: every file the data layer writes is opened O_NOFOLLOW (a planted link is never written through)
     assert!(
-        rt.contains("open(dst, O_WRONLY | O_CREAT | O_NOFOLLOW |"),
-        "cp_rf_op must not open dst through a link"
+        src("ava1/ava1_apply.c").contains("O_CREAT | O_TRUNC | O_NOFOLLOW"),
+        "the apply path must not open its destination through a link"
     );
     let glue = std::fs::read_to_string(payload.join("src/ava1_glue.c")).unwrap();
     assert!(

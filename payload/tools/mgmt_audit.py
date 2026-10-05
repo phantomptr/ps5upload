@@ -3,8 +3,8 @@
 
   mgmt_audit.py table    every entry names a real AVA1_METHOD_* constant, a handler defined in
                          runtime.c, a method listed in protocol/ava1/MGMT_METHODS.md, once
-  mgmt_audit.py recv     no management handler reads from client_fd after the header
-                         (the capture path calls handlers with fd = -1)
+  mgmt_audit.py recv     no management handler reads from a socket (the handlers run on AVA1 workers
+                         behind the capture sink: there is no connection to read)
   mgmt_audit.py sony     every entry whose handler can reach register/profile/registry/Remote
                          Play/notification code or a Sony API carries MGMT_SONY
   mgmt_audit.py lock     every MGMT_SONY entry of a "P3 Task N" block of mgmt_table.def (and app.launch) reaches a
@@ -281,15 +281,11 @@ def check_recv():
     for name, (body, f) in FUNCS.items():
         if f != "src/runtime.c" or not name.startswith("handle_"):
             continue
-        if name in TRANSFER_HANDLERS:
-            continue
-        if "recv_exact(client_fd" in strip(body):
-            bad.append("%s reads from client_fd" % name)
+        # A handler runs on an AVA1 worker with no socket: it must never read one.
+        if re.search(r"\brecv(?:_exact|from)?\s*\(", strip(body)):
+            bad.append("%s reads from a socket" % name)
     return bad
 
-
-# The FTX2 transfer-port handlers and the dispatcher read their own bodies; none is a table entry.
-TRANSFER_HANDLERS = {"handle_stream_shard", "handle_begin_tx_frame", "handle_binary_frame_impl", "handle_packed_shard"}
 
 SONY_RE = re.compile(r"\b(p_?sce(?:Application|LncUtil|SystemService|AppInstUtil|UserService|RegMgr)\w*|sceUserService\w*|sceRegMgr\w*|sceAppInstUtil\w*|sceLncUtil\w*|sceSystemService\w*|sony_api_lock\w*)\b")
 

@@ -18,7 +18,7 @@
 #include "path_policy.h"
 
 #define FS_PATH_MAX 1024u
-/* fs.list: entries per call (FTX2's ceiling) and the room an entry list may take in a reply. */
+/* fs.list: entries per call (the old per-call ceiling) and the room an entry list may take in a reply. */
 #define FS_LIST_MAX 256u
 #define FS_LIST_BLOB_MAX (192u * 1024u)
 #define FS_DEFAULT_FILE_MODE 0644u
@@ -128,7 +128,7 @@ int mgmt_run_fs_list(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
         }
         if (snprintf(full, sizeof full, "%s/%s", path, name) >= (int)sizeof path) {
             /* Skipped without counting, so the caller's offset arithmetic still lines up
-             * (the FTX2 handler's rule: a page of such names must not look like the end). */
+             * (the handler's rule: a page of such names must not look like the end). */
             continue;
         }
         stat_ok = lstat(full, &st) == 0;
@@ -267,7 +267,7 @@ int mgmt_run_fs_freespace(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
 
 /* ---- fs.mkdir ---- */
 
-/* mkdir -p of every ancestor of `path` (not `path`). Intermediate directories get 0777 as FTX2's did. */
+/* mkdir -p of every ancestor of `path` (not `path`). Intermediate directories get 0777 as the old protocol's did. */
 static int make_parents(const char *path) {
     char tmp[FS_PATH_MAX];
     size_t len = strlen(path), i;
@@ -348,7 +348,7 @@ int mgmt_run_fs_chmod(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
     if (ava1_fs_chmod_decode(req, n, &q) != 0) return mgmt_reply_error(cx, AVA1_ERR_PROTOCOL, "bad FsChmod request");
     if ((rc = take_path(cx, q.path, q.path_len, path, "fs_chmod_path_not_allowed")) != AVA1_STATUS_OK) return rc;
     if (!write_ok(path)) return mgmt_reply_error(cx, AVA1_ERR_PATH, "fs_chmod_path_not_allowed");
-    /* Bits above 07777 are not permissions: clamp as FTX2 did. */
+    /* Bits above 07777 are not permissions: clamp as the old protocol did. */
     if (chmod(path, (mode_t)(q.mode > 07777 ? 07777 : q.mode)) != 0) return mgmt_reply_error(cx, AVA1_ERR_IO, "fs_chmod_failed");
     counted();
     return reply_empty(cx);
@@ -376,7 +376,7 @@ int mgmt_run_fs_read(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
     fd = open(path, O_RDONLY | O_NONBLOCK); /* a FIFO must not block a worker; fstat below refuses it */
     if (fd < 0) {
         int e = errno;
-        /* The FTX2 handler said stat_failed for a missing file and open_failed for the rest. */
+        /* The handler said stat_failed for a missing file and open_failed for the rest. */
         if (e == ENOENT || e == ENOTDIR) return mgmt_reply_error(cx, AVA1_ERR_IO, "fs_read_stat_failed");
         return mgmt_reply_error(cx, AVA1_ERR_IO, "fs_read_open_failed");
     }

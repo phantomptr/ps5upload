@@ -917,7 +917,7 @@ static atomic_int g_fan_watcher_started  = 0;
 static atomic_int g_fan_reapply_sec = FAN_REAPPLY_DEFAULT_SEC;
 /* Serializes the (ioctl, pin) sequence inside `hw_fan_set_threshold`.
  *
- * Two concurrent FTX2 callers setting different thresholds could
+ * Two concurrent callers setting different thresholds could
  * otherwise interleave: A opens/ioctls 50 → kernel state = 50;
  * B opens/ioctls 70 → kernel state = 70; A pins 50 → atomic = 50;
  * B pins 70 → atomic = 70.   That sequence ends consistent, but
@@ -1107,7 +1107,7 @@ static int hw_fan_apply_locked(uint8_t threshold_c) {
 int hw_fan_set_threshold(uint8_t threshold_c, const char **err_reason_out) {
     /* Clamp. Intentionally silent — the client UI also clamps, but
      * we enforce here so a malicious/buggy caller can't bypass it by
-     * talking FTX2 directly. Out-of-range values get pulled to the
+     * talking to the payload directly. Out-of-range values get pulled to the
      * nearest safe bound rather than rejected, so the user still gets
      * a working outcome. */
     if (threshold_c < HW_FAN_THRESHOLD_MIN) threshold_c = HW_FAN_THRESHOLD_MIN;

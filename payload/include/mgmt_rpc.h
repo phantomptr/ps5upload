@@ -1,6 +1,6 @@
 /* AVA1 management dispatcher (P3 Task 2).
  *
- * Routes an AVA1 management RPC (methods 4..141, SPEC.md §7.3) to the FTX2 handler in
+ * Routes an AVA1 management RPC (methods 4..141, SPEC.md §7.3) to the handler in
  * runtime.c that already implements it. The handler is called unchanged with client_fd = -1;
  * the frame it would have written to the socket is captured by a thread-local sink
  * (runtime.c's send_frame asks mgmt_capture_active() first), and this file turns the
@@ -25,8 +25,12 @@
 #define MGMT_SONY (1u << 0) /* the handler reaches Sony code (register/profile/registry/remoteplay/notif or a Sony API) and takes the serialisation lock itself; the dispatcher adds no lock and no Sony call */
 #define MGMT_LONG (1u << 1) /* refused here: the operation runs as a job (job.run) */
 
-/* The management worker stack (the FTX2 mgmt thread had 512 KiB; AVA1 workers 256 KiB). */
+/* The management worker stack (the old management thread had 512 KiB; AVA1 workers 256 KiB). */
 #define MGMT_THREAD_STACK (512u * 1024u)
+
+/* The frame number of an error reply: what a handler passes to mgmt_reply() to fail (any other number is a
+ * success). */
+#define MGMT_FRAME_ERROR 3u
 
 /* The cause a handler returns when its answer did not fit (SPEC.md §7.3). */
 #define MGMT_ERR_TRUNCATED "reply truncated"
@@ -35,7 +39,7 @@
 
 struct mgmt_ctx;
 
-/* A legacy FTX2 handler adapted to one signature: (runtime state, fd, trace id, request
+/* A legacy handler adapted to one signature: (runtime state, fd, trace id, request
  * body as a NUL-terminated string, its length). It answers through send_frame(). */
 typedef int (*mgmt_legacy_fn)(void *state, int fd, uint64_t trace_id, const char *body, uint64_t body_len);
 
@@ -46,8 +50,8 @@ typedef int (*mgmt_run_fn)(const uint8_t *req, uint32_t req_len, struct mgmt_ctx
 
 typedef struct {
     uint16_t method;       /* AVA1_METHOD_* */
-    uint16_t legacy_frame; /* the FTX2 frame number: g_inflight_frame_type and the crash breadcrumb */
-    uint16_t ack_frame;    /* the FTX2 success frame (informational; the sink accepts any non-error frame) */
+    uint16_t legacy_frame; /* the legacy frame number: g_inflight_frame_type and the crash breadcrumb */
+    uint16_t ack_frame;    /* the legacy success frame (informational; the sink accepts any non-error frame) */
     uint32_t flags;        /* MGMT_* */
     mgmt_run_fn run;
 } mgmt_entry_t;
@@ -85,7 +89,7 @@ int mgmt_rpc_handles(uint16_t method);
 int mgmt_rpc_dispatch(uint16_t method, const uint8_t *body, uint32_t len, uint8_t *out, size_t cap,
                       size_t *out_len);
 
-/* ---- job.run operations wrapped around an FTX2 handler (P3 Task 5) ----
+/* ---- job.run operations wrapped around a management handler (P3 Task 5) ----
  *
  * An operation entry (the MGMT_OP* lines of mgmt_table.def) runs on an op job's worker: the
  * environment hook, the handler behind the capture sink, then the reply becomes the job's
@@ -95,7 +99,7 @@ int mgmt_rpc_dispatch(uint16_t method, const uint8_t *body, uint32_t len, uint8_
  * token, cause = the token). */
 typedef struct {
     uint8_t op;            /* AVA1_JOB_OP_* */
-    uint16_t legacy_frame; /* the FTX2 frame number (g_inflight_frame_type, the crash breadcrumb) */
+    uint16_t legacy_frame; /* the legacy frame number (g_inflight_frame_type, the crash breadcrumb) */
     uint16_t ack_frame;
     uint32_t flags;        /* MGMT_* */
     mgmt_legacy_fn fn;
@@ -104,7 +108,7 @@ typedef struct {
 /* Registers the operations with ava1_op.c (after mgmt_rpc_install). 0, or -1. */
 int mgmt_rpc_install_ops(const mgmt_op_entry_t *table, size_t n);
 
-/* For a legacy handler running as an operation (no-ops anywhere else, e.g. on the FTX2 path):
+/* For a legacy handler running as an operation (no-ops anywhere else, e.g. on any other path):
  * has job.cancel arrived, and progress / totals for job.status. */
 int mgmt_op_cancelled(void);
 void mgmt_op_progress(uint64_t files, uint64_t bytes);

@@ -15,11 +15,36 @@
  * rather than let the kernel find out.
  *
  * Callers that hold a user-supplied destination path MUST consult this.
- * The three call sites are FS_MOVE (runtime.c), the shell's `mv`
+ * The call sites are fs.rename (mgmt_fs.c), the shell's `mv`
  * (shell_builtin.c), and FTP RNFR/RNTO (ftp_server.c) — anywhere a
- * remote client picks both paths. Renames of our own tmp files into
- * their final name in the SAME directory are safe by construction and
- * do not need it.
+ * remote client picks both paths — and AVA1's commit of an uploaded file
+ * or folder (ava1_apply.c, through the same_device hook). Renames of our
+ * own tmp files into their final name in the SAME directory are safe by
+ * construction and do not need it.
+ *
+ * RENAME AUDIT (P3 Task 19). Every rename(2) call in payload/src, payload/ava1 and payload/installer, by file
+ * and count. "dir" = the two names are siblings (a tmp file or a `.old` generation beside the original, the
+ * destination built from the source's path), so no device can differ; "guard" = checked with this header (or
+ * the hook that wraps it) first, failing closed. A new rename() site must be added here, with its kind; the
+ * ava1-ctest test c_every_rename_site_is_audited counts them.
+ *
+ *   src/activity.c        1  dir    play-time file: tmp -> final
+ *   src/cheats.c          1  dir    cheat state: tmp -> final
+ *   src/main.c            1  dir    stderr.log -> stderr.log.old
+ *   src/notif.c           1  dir    notification store: tmp -> final
+ *   src/ftp_server.c      1  guard  RNFR/RNTO (xdev_rename_crosses_l, refuses UNKNOWN)
+ *   src/mgmt_fs.c         2  1 guard (fs.rename), 1 dir (fs.write tmp -> final)
+ *   src/sdk_changer.c     3  dir    backup copy, patched file, restore (suffix stripped from the same name)
+ *   src/takeover_flag.c   1  dir    takeover flag: tmp -> final
+ *   src/runtime.c         3  dir    mount tracker, ownership record, online.json (all tmp -> final)
+ *   src/fs_jobs.c         1  dir    chmod/copy tmp inside the destination folder
+ *   src/register.c        1  dir    param.json: tmp -> final
+ *   src/shell_builtin.c   1  guard  `mv` (mv_same_dev, lstat of the source)
+ *   ava1/ava1_events.c    1  dir    events.log -> events.log.old
+ *   ava1/ava1_apply.c     2  guard  file and folder commit (same_device hook, only a definite 1 renames)
+ *   ava1/ava1_journal.c   1  dir    journal: tmp -> final
+ *   ava1/ava1_store.c     1  dir    key and trust stores: tmp -> final
+ *   ava1/ava1_recv.c      2  dir    outboard renames inside the job folder
  *
  * `XDEV_UNKNOWN` is deliberately a third value rather than being folded
  * into "safe", and it is FAIL CLOSED: a caller proceeds to rename() only on
