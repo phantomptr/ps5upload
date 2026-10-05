@@ -10,7 +10,8 @@
  *   {"points":[{"temp_c":N,"duty_pct":N},...]}
  *
  * The curve is persisted to /data/ps5upload/fan_curve.json AND applied
- * to hardware via hw_fan_set_threshold(): the first point's temperature
+ * to hardware via hw_fan_set_threshold(): the lowest temperature at which
+ * the curve asks for 100% duty (capped at the stock 60 C, see fan_map.h)
  * becomes the pinned fan threshold, so hw_info's watcher keeps re-applying
  * it across the firmware's per-game-launch fan resets (a one-shot ioctl
  * would silently revert).
