@@ -1729,6 +1729,29 @@ pub async fn run_upload(
             _ => {}
         }
     }
+    // A failed job leaves one line of the sender's state, so a stall can be placed:
+    // readers parked (budget), frames never acknowledged (inflight), or nothing queued.
+    if result.is_err() {
+        let s = sh.sched.lock().unwrap();
+        let _ = writeln!(
+            std::io::stderr(),
+            "[ava1] sender state at failure: small queue {}, large queue {}, pending records {}, \
+             bundles {}, chunks {}, requeue {}, inflight {}, roots waiting {}, budget free {} KiB, \
+             window {} B, lanes {}, readers running {}",
+            small_q.lock().unwrap().len(),
+            large_q.lock().unwrap().len(),
+            pending.len(),
+            s.bundles.len(),
+            s.chunks.len(),
+            s.requeue.len(),
+            s.inflight.len(),
+            root_next.len(),
+            sh.bytes_budget.available_permits(),
+            sh.window.lock().unwrap().available(),
+            link.lanes().len(),
+            readers.iter().filter(|h| !h.is_finished()).count(),
+        );
+    }
     // Every exit: stop the readers' flag, wake the sleepers, cancel and join every
     // lane task still held (correction 5; a dead lane's task was detached at its
     // LaneDown and exits on its own) — and then the readers (I1): close the read-ahead

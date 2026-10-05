@@ -149,7 +149,7 @@ int main(void) {
     struct ftp_session s;
     snprintf(base, sizeof base, "/tmp/ps5-ftp-s2-%d", (int)getpid());
     snprintf(p, sizeof p, "rm -rf %s", base);
-    (void)system(p);
+    if (system(p) != 0) { /* best-effort cleanup */ }
     snprintf(p, sizeof p, "mkdir -p %s/d/ava %s/evil/ava", base, base);
     if (system(p) != 0) return 2;
     /* realpath of the temp dir (macOS /tmp is a link) so spellings compare */
@@ -230,7 +230,7 @@ int main(void) {
     overflow_and_sentinel_tests(base);
 
     snprintf(p, sizeof p, "rm -rf %s", base);
-    (void)system(p);
+    if (system(p) != 0) { /* best-effort cleanup */ }
     if (failures) { fprintf(stderr, "ftp_trust_store_selftest: %d failure(s)\n", failures); return 1; }
     printf("ftp_trust_store_selftest: ALL PASS\n");
     return 0;

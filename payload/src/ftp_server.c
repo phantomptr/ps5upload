@@ -616,12 +616,13 @@ static void handle_stor(struct ftp_session *s, const char *arg) {
         total += n;
     }
     free(buf);
-    if (!aborted) ftruncate(fd, total);
+    int trunc_err = !aborted && ftruncate(fd, total) != 0;
     close(fd);
     ftp_close_socket(&s->data_fd);
     s->data_offset = 0;
     atomic_store(&s->abort_requested, 0);
-    if (!aborted) send_resp(s->ctrl_fd, 226, "Transfer complete");
+    if (trunc_err) send_resp(s->ctrl_fd, 451, "Could not finish the file");
+    else if (!aborted) send_resp(s->ctrl_fd, 226, "Transfer complete");
 }
 
 static void handle_feat(struct ftp_session *s) {

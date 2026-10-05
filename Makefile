@@ -819,7 +819,9 @@ test-root:
 
 test-engine: setup-engine
 	@echo "Running Rust engine tests..."
-	@cd $(ENGINE_DIR) && $(CARGO) test --workspace
+	@cd $(ENGINE_DIR) && $(CARGO) test --workspace --exclude ava1-ctest
+	@# The C interop tests share one C server and must run serially (as in CI).
+	@cd $(ENGINE_DIR) && $(CARGO) test -p ava1-ctest -- --test-threads=1
 	@echo "✓ Engine tests passed"
 	@# Android cross-compile check. The engine cfg's some modules out on
 	@# Android (remote_pkg, which needs an HTTP client), so a call site added
