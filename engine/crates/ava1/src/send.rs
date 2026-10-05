@@ -1410,20 +1410,10 @@ pub async fn run_upload(
             }
         }
         tokio::select! {
-            r = rrx.recv() => match r {
+            r = rrx.recv() => { match r {
                 Some(Read::Record { file_id, root, data, budget }) => {
                     pending_bytes += data.len() + 48;
                     pending.push((BundleRecord { file_id, root, data }, budget));
-                    // A slow source never holds a half-full bundle back: flush when the
-                    // record channel is momentarily empty; a fast source keeps it full and
-                    // the bundles reach the governor's size.
-                    let flush = pending_bytes >= sh.bundle.load(Ordering::Relaxed) as usize || rrx.is_empty();
-                    if flush {
-                        let f = bundle_frame(job_id, std::mem::take(&mut pending));
-                        pending_bytes = 0;
-                        sh.sched.lock().unwrap().bundles.push_back(f);
-                        sh.wake();
-                    }
                 }
                 Some(Read::Chunk { file_id, offset, data, budget }) => {
                     let f = chunk_frame(job_id, file_id, offset, data, budget);
@@ -1450,6 +1440,20 @@ pub async fn run_upload(
                 Some(Read::Failed(_)) => {} // a failure is already queued: it wins
                 // The retry path holds `rtx` alive, so the channel never closes mid-job.
                 None => {}
+            }
+                // A slow source never holds a half-full bundle back: flush when the
+                // reader channel is momentarily empty; a fast source keeps it full and
+                // the bundles reach the governor's size. Checked after every message,
+                // not only a record: the last record can arrive with a large file's
+                // chunk or root still queued behind it, and nothing would flush it.
+                if !pending.is_empty()
+                    && (pending_bytes >= sh.bundle.load(Ordering::Relaxed) as usize || rrx.is_empty())
+                {
+                    let f = bundle_frame(job_id, std::mem::take(&mut pending));
+                    pending_bytes = 0;
+                    sh.sched.lock().unwrap().bundles.push_back(f);
+                    sh.wake();
+                }
             },
             root_sent = async {
                 let (file_id, root) = root_next
