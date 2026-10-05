@@ -68,9 +68,11 @@ import {
   recordPkgAlternativeSelection,
   skipPkgAlternativeSelection,
   PKG_ALTERNATIVE_SKIP,
+  stagedRefusedMessage,
   type PkgEntry,
   type PkgAlternativeSelections,
 } from "../../state/pkgLibrary";
+import { NetworkFixActions } from "./NetworkFixActions";
 import { useLinkInstallPrefs } from "../../state/linkInstallPrefs";
 import { useInstallSettingsStore } from "../../state/installSettings";
 import { pkgCategoryLabel, isAddonCategory } from "../../lib/pkgStagingPath";
@@ -134,6 +136,10 @@ function PkgRow({
   const tr = useTr();
   const navigate = useNavigate();
   const kernel = useConnectionStore((s) => s.runtimeByHost[hostOf(host)]?.ps5Kernel ?? null);
+  // After the console refused this package from its own storage the staged route is not offered
+  // again; Retry goes through Stream when the engine says that is safe for this package.
+  const stagedRefused = !!entry.lastResult?.stagedRefused;
+  const streamOffered = !!entry.lastResult?.retryWithStream && !!onRetryStream;
   const uploading = entry.status === "uploading";
   const installingThis = entry.status === "installing";
   const queued = entry.status === "queued";
@@ -365,40 +371,56 @@ function PkgRow({
         {/* Actions */}
         {!busy && (
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-            <Button
-              variant={installed ? "secondary" : "primary"}
-              size="sm"
-              leftIcon={
-                installed ? <RotateCcw size={13} /> : <Download size={13} />
-              }
-              onClick={onInstall}
-              disabled={installDisabled}
-              title={
-                installDisabled
-                  ? tr(
-                      "pkglib.install.busyHint",
-                      "Installing replaces the PS5 payload, which would interrupt an active upload. Wait for the current upload (or install) to finish first.",
-                    )
-                  : undefined
-              }
-            >
-              {installed
-                ? tr("pkglib.reinstall", "Reinstall")
-                : tr("pkglib.install", "Install")}
-            </Button>
-            {entry.lastResult?.retryWithStream && onRetryStream && (
+            {stagedRefused ? (
+              // The console refused this package from its own storage. The button that would
+              // repeat that is replaced: Retry switches the route to Stream, or says why it can't.
+              streamOffered ? (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  leftIcon={<Download size={13} />}
+                  onClick={onRetryStream}
+                  disabled={installDisabled}
+                  title={tr(
+                    "pkglib.retry_stream_hint",
+                    undefined,
+                    "Send this package from the PS5's own storage through Stream instead. The PS5 refused it the other way (0x80b2116f); the package is not copied again.",
+                  )}
+                >
+                  {tr("pkglib.retry_stream", undefined, "Retry with Stream")}
+                </Button>
+              ) : (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  leftIcon={<Download size={13} />}
+                  disabled
+                  title={stagedRefusedMessage(false)}
+                >
+                  {tr("pkglib.retry_unavailable", undefined, "Retry unavailable")}
+                </Button>
+              )
+            ) : (
               <Button
-                variant="primary"
+                variant={installed ? "secondary" : "primary"}
                 size="sm"
-                leftIcon={<Download size={13} />}
-                onClick={onRetryStream}
-                title={tr(
-                  "pkglib.retry_stream_hint",
-                  undefined,
-                  "Send this package from the PS5's own storage through Stream instead. The PS5 refused it the other way (0x80b2116f); the package is not copied again.",
-                )}
+                leftIcon={
+                  installed ? <RotateCcw size={13} /> : <Download size={13} />
+                }
+                onClick={onInstall}
+                disabled={installDisabled}
+                title={
+                  installDisabled
+                    ? tr(
+                        "pkglib.install.busyHint",
+                        "Installing replaces the PS5 payload, which would interrupt an active upload. Wait for the current upload (or install) to finish first.",
+                      )
+                    : undefined
+                }
               >
-                {tr("pkglib.retry_stream", undefined, "Retry with Stream")}
+                {installed
+                  ? tr("pkglib.reinstall", "Reinstall")
+                  : tr("pkglib.install", "Install")}
               </Button>
             )}
             <Button
@@ -549,6 +571,10 @@ function PkgRow({
             )}
           </span>
         </div>
+      )}
+      {/* Windows: the console could not reach this computer, and the engine knows why. */}
+      {!busy && !entry.lastResult?.ok && entry.lastResult?.netDiag && (
+        <NetworkFixActions diag={entry.lastResult.netDiag} />
       )}
       {/* A fake PS5 GAME on firmware above 11.60 installs but cannot be
           played. Not shown for a retail-signed package, PS4, or homebrew. */}

@@ -2790,6 +2790,25 @@ pub async fn pkg_install_cancel(session: String) -> Result<JsonValue, String> {
     post_json(&url, &serde_json::json!({ "session": session })).await
 }
 
+/// Windows: open Settings at the network page of the adapter that faces the console, so the
+/// person can make that network Private (F2.1). Proxies `/api/host-net/open-settings`; the engine
+/// is the process that runs on the computer the console talks to.
+#[tauri::command]
+pub async fn host_net_open_settings(adapter: String) -> Result<JsonValue, String> {
+    let url = format!("{}/api/host-net/open-settings", engine::url());
+    post_json(&url, &serde_json::json!({ "adapter": adapter })).await
+}
+
+/// Windows: allow ps5upload inbound on one network profile through an elevated `netsh` (Windows
+/// asks for consent). `confirm` must be true: the UI sets it only after the person said yes, and
+/// the engine refuses the request otherwise. Proxies `/api/host-net/allow-firewall`.
+#[tauri::command]
+pub async fn host_net_allow_firewall(profile: String, confirm: bool) -> Result<JsonValue, String> {
+    let url = format!("{}/api/host-net/allow-firewall", engine::url());
+    // the consent prompt waits for a person: use the long-timeout poster
+    post_json_long(&url, &serde_json::json!({ "profile": profile, "confirm": confirm })).await
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Tiny URL-encode that handles the characters we feed into query strings

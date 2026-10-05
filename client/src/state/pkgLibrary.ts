@@ -23,6 +23,7 @@ import {
   pkgInstallStatus,
   type InstallSource,
   type InstallStatus,
+  type NetDiag,
 } from "../api/ps5";
 import {
   listVolumes,
@@ -294,9 +295,13 @@ export function statusToOutcome(st: InstallStatus): PkgInstallOutcome {
       // text wins whenever it carries that host-IP guidance.
       const engineHostIpHint =
         st.reason === "stream_unreachable" && /PS5UPLOAD_PKG_HOST_IP/.test(st.hint ?? "");
+      // Windows knew which adapter and category the console is on: that text names the cause
+      // and the fix, so it beats the generic wording the same way.
+      const engineNetDiag = st.reason === "stream_unreachable" && !!st.net_diag && !!st.hint?.trim();
       const preferred =
         !reachCheck &&
         !engineHostIpHint &&
+        !engineNetDiag &&
         (st.reason ? REASON_GUIDANCE[st.reason]?.[2] : false);
       const guidance = reasonGuidance(st.reason);
       errMessage = preferred
@@ -311,7 +316,25 @@ export function statusToOutcome(st: InstallStatus): PkgInstallOutcome {
     mayNotLaunch,
     errMessage,
     ...(!installed && st.retry_with_stream ? { retryWithStream: true } : {}),
+    ...(!installed && st.reason === "staged_refused" ? { stagedRefused: true } : {}),
+    ...(!installed && st.net_diag ? { netDiag: st.net_diag } : {}),
   };
+}
+
+/** What to tell the person when a package the console already refused from its own storage is
+ *  asked to go that way again. After one refusal the staged route is never retried by itself:
+ *  repeating it only repeats the refusal (and a refused re-install of an installed title can
+ *  remove it), so the row switches route instead. */
+export function stagedRefusedMessage(streamOffered: boolean): string {
+  return streamOffered
+    ? trStatic(
+        "pkglib.staged_refused_use_stream",
+        "The PS5 already refused this package from its own storage, so it will not be tried that way again. Use Retry with Stream.",
+      )
+    : trStatic(
+        "pkglib.staged_refused_no_stream",
+        "The PS5 already refused this package from its own storage, so it will not be tried that way again, and Stream is not offered for it from here. Install it with Stream & install from the original file on a computer.",
+      );
 }
 
 /** Derive a live progress sample from the unified status. The unified metrics
@@ -444,6 +467,10 @@ export interface PkgEntry {
     warn?: boolean;
     /** Show "Retry with Stream" beside this failure (see `PkgInstallOutcome`). */
     retryWithStream?: boolean;
+    /** The console refused this package from its own storage: Install switches route. */
+    stagedRefused?: boolean;
+    /** Windows: the link to the console, for the network fixes (see `PkgInstallOutcome`). */
+    netDiag?: NetDiag;
   };
 }
 
@@ -1202,6 +1229,12 @@ export interface PkgInstallOutcome {
   /** The engine says the PS5 refused this package from its own storage and it can safely be
    *  sent through Stream: the row offers "Retry with Stream". */
   retryWithStream?: boolean;
+  /** The console refused the package from its own storage (0x80b2116f and kin). The staged
+   *  route is never tried again for this package by itself; see `stagedRefusedMessage`. */
+  stagedRefused?: boolean;
+  /** Windows: the adapter facing the console and its network category, when the console could
+   *  not reach this computer. The row offers the fixes it implies. */
+  netDiag?: NetDiag;
 }
 
 /**
@@ -2675,6 +2708,15 @@ const makePkgLibraryStore = () =>
     },
 
     async _execLibrary(path, host, hooks, forceStream) {
+      // The console already refused this package from its own storage: never try that route
+      // again by itself, whoever asks (Install, Install all, a queued retry). Only the explicit
+      // Stream retry goes on, and the console is not touched here.
+      {
+        const prior = get().entries.find((e) => e.path === path)?.lastResult;
+        if (!forceStream && prior?.stagedRefused) {
+          return { ok: false, message: stagedRefusedMessage(!!prior.retryWithStream) };
+        }
+      }
       // Runs from the console queue, one install at a time per console.
       set({ installing: true, busyNotice: null });
       let outcome: InstallResult;
@@ -2758,6 +2800,8 @@ const makePkgLibraryStore = () =>
           mayNotLaunch,
           errMessage: mainErr,
           retryWithStream,
+          stagedRefused,
+          netDiag,
         } = await runPkgInstall(
           host,
           path,
@@ -2818,6 +2862,8 @@ const makePkgLibraryStore = () =>
               ok: false,
               message: mainErr || "Install was rejected.",
               ...(retryWithStream ? { retryWithStream: true } : {}),
+              ...(stagedRefused ? { stagedRefused: true } : {}),
+              ...(netDiag ? { netDiag } : {}),
             },
           });
           // Surface failures in the bell too (success already notifies above).
@@ -2868,6 +2914,12 @@ const makePkgLibraryStore = () =>
       // hides the button then, and this guards a double click that beats the re-render.
       if (entry && entry.status !== "idle") {
         return { ok: false, message: "This package already has an install in progress." };
+      }
+      // The engine decides whether Stream is safe for this package (a patch or add-on only goes
+      // through the installer daemon). A refusal it did not mark as retryable is explained, not
+      // sent anyway.
+      if (entry?.lastResult?.stagedRefused && !entry.lastResult.retryWithStream) {
+        return { ok: false, message: stagedRefusedMessage(false) };
       }
       set({
         entries: get().entries.map((e) =>

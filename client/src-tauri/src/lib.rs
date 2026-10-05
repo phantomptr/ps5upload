@@ -335,6 +335,8 @@ pub fn run() {
             commands::pkg_install_status_v2,
             commands::pkg_install_history,
             commands::pkg_install_cancel,
+            commands::host_net_open_settings,
+            commands::host_net_allow_firewall,
             // ── Scene-tool integration ──────────────────────────────
             // `companion_probe` checks which well-known scene tools
             // are alive on the PS5 host.

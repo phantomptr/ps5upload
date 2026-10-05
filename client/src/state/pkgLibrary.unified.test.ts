@@ -258,3 +258,84 @@ describe("retryWithStream store action", () => {
     expect(seen).toHaveLength(1);
   });
 });
+
+describe("after one staged refusal (Discord 2026-10-04: F3.3)", () => {
+  const HOST = "10.9.9.10";
+
+  it("the outcome says the console refused its own storage, and keeps the engine's hint when Windows named the cause", () => {
+    const refused = statusToOutcome(
+      status({
+        phase: "failed",
+        verdict: "failed",
+        reason: "staged_refused",
+        code: 0x80b2116f,
+        retry_with_stream: true,
+      }),
+    );
+    expect(refused.stagedRefused).toBe(true);
+    // not for other refusals, and never on success
+    expect(
+      statusToOutcome(status({ phase: "failed", verdict: "failed", reason: "sony_refused" })).stagedRefused,
+    ).toBeUndefined();
+    expect(statusToOutcome(status({ reason: "staged_refused" })).stagedRefused).toBeUndefined();
+
+    const hint = "The PS5 never reached this computer. “Ethernet 3” (192.168.88.1) is on a Public network.";
+    const diag = {
+      adapter: "Ethernet 3",
+      local_ip: "192.168.88.1",
+      category: "public" as const,
+      firewall_enabled: true,
+      allowed_by_rule: false,
+    };
+    const o = statusToOutcome(
+      status({
+        phase: "failed",
+        verdict: "failed",
+        reason: "stream_unreachable",
+        code: 0x80431068,
+        hint,
+        net_diag: diag,
+      }),
+    );
+    // the engine's sentence (adapter and category), not the generic firewall paragraph
+    expect(o.errMessage).toBe(hint);
+    expect(o.netDiag).toEqual(diag);
+  });
+
+  it("the console queue's executor never runs the staged route again, and does not touch the console", async () => {
+    const store = pkgLibraryStore(HOST);
+    store.setState({
+      entries: [
+        { path: "/a.pkg", status: "idle", title: "a", lastResult: { ok: false, message: "x", stagedRefused: true, retryWithStream: true } },
+        { path: "/b.pkg", status: "idle", title: "b", lastResult: { ok: false, message: "x", stagedRefused: true } },
+      ] as never,
+    });
+    const a = await store.getState()._execLibrary("/a.pkg", HOST, undefined, false);
+    expect(a.ok).toBe(false);
+    expect(a.message).toContain("Use Retry with Stream");
+    const b = await store.getState()._execLibrary("/b.pkg", HOST, undefined, false);
+    expect(b.ok).toBe(false);
+    expect(b.message).toContain("Stream is not offered");
+    // the rows keep their refusal (nothing ran, so nothing was reset)
+    expect(store.getState().entries.every((e) => e.lastResult?.stagedRefused)).toBe(true);
+    expect(store.getState().installing).toBe(false);
+  });
+
+  it("Retry explains itself when the engine did not offer Stream for the package (a patch off the safe route)", async () => {
+    const seen: InstallRequest[] = [];
+    registerInstallEnqueuer((input) => {
+      seen.push(input.request);
+      return { id: "q", done: Promise.resolve({ ok: true }) };
+    });
+    const store = pkgLibraryStore(HOST);
+    store.setState({
+      entries: [
+        { path: "/patch.pkg", status: "idle", title: "p", category: "gp", lastResult: { ok: false, message: "x", stagedRefused: true } },
+      ] as never,
+    });
+    const r = await store.getState().retryWithStream("/patch.pkg", HOST);
+    expect(r.ok).toBe(false);
+    expect(r.message).toContain("Stream is not offered");
+    expect(seen).toHaveLength(0);
+  });
+});

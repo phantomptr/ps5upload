@@ -5484,6 +5484,27 @@ export interface InstallRequestBody {
   };
 }
 
+/** What the engine found about the link to the console on Windows (see engine win_net.rs). */
+export interface NetDiag {
+  adapter: string;
+  local_ip: string;
+  category: "public" | "private" | "domain" | "unknown";
+  firewall_enabled?: boolean | null;
+  allowed_by_rule?: boolean | null;
+}
+
+/** Open Windows Settings at the network page for `adapter`. Nothing is changed by this call. */
+export async function hostNetOpenSettings(adapter: string): Promise<void> {
+  await invoke("host_net_open_settings", { adapter });
+}
+
+/** Add an inbound firewall rule for ps5upload on `profile` through an elevated `netsh`. Windows
+ *  shows its own consent prompt. Call it only after the person confirmed; the engine refuses an
+ *  unconfirmed request. */
+export async function hostNetAllowFirewall(profile: "public" | "private"): Promise<void> {
+  await invoke("host_net_allow_firewall", { profile, confirm: true });
+}
+
 export interface InstallStatus {
   job: string;
   ps5_addr: string;
@@ -5510,6 +5531,9 @@ export interface InstallStatus {
   /** The PS5 refused a package from its own storage and the engine can safely send it through
    *  Stream: offer "Retry with Stream". Absent from an older engine. */
   retry_with_stream?: boolean;
+  /** Windows only: the local adapter facing the console and what Windows says about it, set
+   *  when the console could not reach this computer. Absent elsewhere and from an older engine. */
+  net_diag?: NetDiag | null;
   started_at: number;
   updated_at: number;
 }

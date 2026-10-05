@@ -892,6 +892,18 @@ export async function browserInvoke<T>(
         session: args["session"],
       });
 
+    // Windows network fixes (F2.1): run by the engine, on the computer the console talks to.
+    case "host_net_open_settings":
+      return postJson<T>("/api/host-net/open-settings", {
+        adapter: args["adapter"],
+      });
+    case "host_net_allow_firewall":
+      return postJson<T>(
+        "/api/host-net/allow-firewall",
+        { profile: args["profile"], confirm: args["confirm"] },
+        /*long=*/ true,
+      );
+
     case "payload_restore":
       // Browser-only command (no Tauri twin): the desktop resolves its
       // bundled payload path and calls `payload_send`, which a browser
