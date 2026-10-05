@@ -6,75 +6,43 @@ What's new in ps5upload, written for humans.
 
 ## 6.0.0: one encrypted connection for everything (AVA1)
 
-**Update the app and the helper together.** 6.0 talks to the console over a new protocol,
-AVA1, on a single port: **9120**. The old ports 9113 and 9114 are gone. A 6.0 app cannot use a
-v5.41 helper and a v5.41 app cannot use the 6.0 helper; the app offers **Update the helper**
-and replaces an old one in one click. If you allow ports by hand, you now need only **9120**
-and **9021** (your ELF loader).
+**Update the app and the helper together.** 6.0 uses a new protocol, AVA1, on one port: **9120**.
+Ports 9113 and 9114 are gone, so allow only **9120** and **9021** (your ELF loader) in a
+firewall. A 6.0 app cannot use a v5.41 helper (or the reverse); the app offers **Update the
+helper** and replaces an old one in one click.
 
-**What changes for you**
-- **Pairing.** A helper the app launched pairs by itself. One you loaded another way shows a
-  **6-digit code** on the console; confirm it once and the computer is remembered.
-- **Uploads survive drops and helper restarts.** A dropped connection, a helper restart or rest
-  mode no longer ends the job: the app waits for the console to come back and continues from what
-  is already safely on the console.
-- **Out of space is said up front.** A job that will not fit is refused in seconds, before anything
-  is sent, with the shortfall in GB. A retry into the same folder counts what is already there,
-  so it no longer "needs the whole folder again" (#365). Two uploads into room for one: the second
-  is refused at once. Volumes shows how much the console keeps for itself.
+- **Pairing:** a helper the app launched pairs by itself; otherwise confirm the 6-digit code
+  shown on the console once.
+- **Uploads resume** after a dropped connection, a helper restart or rest mode, from what is
+  already on the console.
+- **Out of space is said up front:** a job that will not fit is refused in seconds, and a retry
+  counts what is already there (#365).
 - **Convert reads games from the console** without ftpsrv (#351).
-- **7z and RAR uploads resume**; a RAR with several packages is unpacked straight to the console and
-  each package installed in turn (base, then patch, then DLC). Zip entries over 256 MiB stream;
-  zip downloads resume.
-- **Links:** a link that serves a .pkg installs, even without ".pkg" in the URL; any other real
-  file can be downloaded to a console folder.
-- **Progress everywhere:** copy/paste and Add files show progress and ETA, and "Finishing on the
-  console" shows files left and an ETA. **Cancel copy** stops a console copy and cleans up only
-  what it created.
-- **Web UI:** an upload keeps running when you close the tab; reopening shows it. Only one tab runs
-  the queue.
-- **Installs:** a package the PS5 refuses from its own storage offers **Retry with Stream** instead
-  of repeating the same route. On Windows, a stream install that cannot reach the computer now
-  names the network adapter and whether Windows treats it as Public, with one-click fixes.
-- **Cheats:** MC4 files list and toggle again; game names, filters and a load notification (#373).
-- **Fan curve:** sending a curve no longer runs the fans at 100% from the first point (#354);
-  "Restore default" returns to the stock behaviour.
-- **Remote Play:** pairing shows "waiting" with a countdown until a device really pairs, and
-  Cancel works from the web UI.
-- **Persian** translation (thanks to mrnpc336), NixOS install docs (GriefNorth), Docker
-  `PS5UPLOAD_BROWSE_ROOTS` (nopoz), queue size chip (intelp917-crypto), Windows sleep after a
-  transfer fixed (lowbit, #360).
-- **Also fixed:** Windows installer updates with the installer (#348); installed game files are no
-  longer offered as packages (#349); Docker/NAS "Permission denied" names the folder and the fix
-  (#361); Windows fpkg output path (#364); macOS 11 white screen (#352); the payload builds
-  with SDK v0.43 for FW 13.60 (#341).
-- **Removed:** the "Parallel upload streams" setting (AVA1 picks lanes itself).
+- **7z and RAR uploads resume;** a multi-package RAR installs base, then patch, then DLC.
+- **Links:** a link that serves a .pkg installs, and any other file can be downloaded to a console folder.
+- **Progress and cancel** for copy, paste and Add files; the web UI keeps an upload running when
+  the tab closes.
+- **Installs:** a package the PS5 refuses from its own storage offers **Retry with Stream**.
+- **Fixed:** cheats toggling and names (#373), fan curve at 100% (#354), Windows sleep after a
+  transfer (#360), Windows installer updates (#348), game files offered as packages (#349),
+  Docker "Permission denied" (#361), fpkg output path (#364), macOS 11 white screen (#352),
+  payload build for FW 13.60 (#341).
+- **Removed:** the "Parallel upload streams" setting; AVA1 picks lanes itself.
+- **Thanks** to mrnpc336 (Persian), GriefNorth (NixOS docs), nopoz (`PS5UPLOAD_BROWSE_ROOTS`),
+  intelp917-crypto (queue size chip) and lowbit (#360).
 
-**Measured on two PS5s (Pro and Phat, FW 13.60, gigabit), AVA1 vs 5.41**
-
-| Test | 6.0 (AVA1) | 5.41 |
+| Measured on two PS5s, gigabit | 6.0 | 5.41 |
 |---|---|---|
 | 4 GiB file, internal SSD | 105-108 MB/s | 108-111 MB/s |
-| Real game (Minecraft Legends, 7 GiB, 1,018 files) | **108 MB/s** | 88 MB/s |
-| Resume after the helper is killed mid-upload | **94-97 MB/s** | 66-68 MB/s |
-| Connection cut every 10 s, 4 GiB | **97-101 MB/s** | not run |
-| 2,000 tiny files to a USB drive | **446 files/s** | 330 files/s |
-| 2,000 tiny files to the internal SSD | 192-235 files/s | 260-327 files/s |
-| 2,000 tiny files download (Pro) | **2,856 files/s** | 2,409 files/s |
+| Real game, 7 GiB, 1,018 files | **108 MB/s** | 88 MB/s |
+| Resume after helper killed | **94-97 MB/s** | 66-68 MB/s |
+| 2,000 tiny files to USB | **446 files/s** | 330 files/s |
+| 2,000 tiny files to internal SSD | 192-235 files/s | 260-327 files/s |
 
-Large files run at the gigabit limit either way. Tiny files to the internal SSD are slower
-because 6.0 makes each file durable before calling it done; 5.41 acknowledged earlier. That gap
-is being worked on.
+**Environment variables:** `FTX2_*` settings are now `PS5UPLOAD_*` (old names work for this release only).
 
-**Environment variables:** `FTX2_BANDWIDTH_MBPS`, `FTX2_ZIP_RAM_THRESHOLD_MB` and
-`FTX2_ARCHIVE_STAGE_MB` are now `PS5UPLOAD_*`; the old names work for this release only.
-`PS5UPLOAD_TRANSFER` is gone.
-
-**Known limitations**
-- Tiny-file uploads to the internal SSD are slower than 5.41 (above).
-- A file larger than the space the console really has left on its internal drive should now fail
-  in the first seconds; confirming that on a nearly full drive is still to do.
-- The compressed (deflate) zip download cannot resume; the default stored zip can.
+**Known limitations:** tiny files to the internal SSD are slower than 5.41; the compressed zip
+download cannot resume.
 
 ## 5.41.0
 

@@ -556,6 +556,7 @@ CHECK_NO_FTX2_EXCEPT := \
 	':!engine/crates/ava1-ctest/tests/lifecycle.rs' \
 	':!engine/crates/ava1-ctest/tests/payload_cutover.rs' \
 	':!CHANGELOG.md' \
+	':!CONTRIBUTING.md' ':!TESTING.md' \
 	':!protocol/ava1' \
 	':!Makefile' \
 	':!.github/workflows/engine-ci.yml' \

@@ -27,6 +27,7 @@
 
 If yes, which files:
 - [ ] README.md
+- [ ] CHANGELOG.md
 - [ ] TESTING.md
 - [ ] FAQ.md
 - [ ] bench/README.md
@@ -38,8 +39,8 @@ If yes, which files:
 ## Testing
 <!-- Describe the tests you ran -->
 
-- [ ] `npm run validate`
-- [ ] `npm run coverage`
+- [ ] `npm run validate` (CI also needs `cargo fmt --check` in `engine/` AND `client/src-tauri`)
+- [ ] `cargo test -p ava1-ctest -- --test-threads=1` (in `engine/`), `make test-payload`, and the retired-protocol check (see CONTRIBUTING.md)
 - [ ] Built PS5 payload successfully
 - [ ] Cross-platform CI target checks passed
 - [ ] Tested on real PS5 hardware
