@@ -19,14 +19,19 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use ps5upload_core::mgmt::{self, JobCall, JobOp, JobProgress, Method, MgmtTransport};
 use ps5upload_core::mgmt_proxy::{
-    decode_body, encode_body, ProxyRequest, ProxyResponse, ProxyResult, ROUTE,
+    decode_body, encode_body, ForwardError, ProxyRequest, ProxyResponse, ProxyResult, ROUTE,
 };
 
 /// Slack on top of the call's own timeout for the HTTP hop and the engine's own bookkeeping.
 const MARGIN: Duration = Duration::from_secs(20);
+
+/// A failure of the hop itself (see [`ForwardError`]).
+fn fwd(message: String) -> anyhow::Error {
+    anyhow::Error::new(ForwardError(message))
+}
 
 pub struct ForwardTransport {
     base: Box<dyn Fn() -> String + Send + Sync>,
@@ -54,32 +59,32 @@ impl ForwardTransport {
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
-                    .context("build the management forwarder runtime")?;
+                    .map_err(|e| fwd(format!("build the management forwarder runtime: {e}")))?;
                 rt.block_on(async {
                     let client = crate::engine_http::engine_client_builder()
                         .timeout(timeout)
                         .build()
-                        .context("build the management forwarder client")?;
+                        .map_err(|e| fwd(format!("build the management forwarder client: {e}")))?;
                     let r = client.post(&url).json(req).send().await.map_err(|e| {
-                        anyhow!(
+                        fwd(format!(
                             "engine unreachable for a management call: {}",
                             crate::engine_http::error_chain(&e)
-                        )
+                        ))
                     })?;
                     let status = r.status();
                     if !status.is_success() {
                         let text = r.text().await.unwrap_or_default();
-                        return Err(anyhow!(
+                        return Err(fwd(format!(
                             "engine refused the management call ({status}): {text}"
-                        ));
+                        )));
                     }
                     r.json::<ProxyResponse>()
                         .await
-                        .context("decode the engine's management reply")
+                        .map_err(|e| fwd(format!("decode the engine's management reply: {e}")))
                 })
             })
             .join()
-            .unwrap_or_else(|_| Err(anyhow!("management forwarder thread panicked")))
+            .unwrap_or_else(|_| Err(fwd("management forwarder thread panicked".to_string())))
         })?;
         resp.into_result()
     }
@@ -323,6 +328,8 @@ mod tests {
             .call("c", m::HW_INFO, "HW_INFO", b"", Duration::from_secs(2))
             .unwrap_err();
         assert!(e.to_string().contains("engine unreachable"), "{e}");
+        // Typed, so a power action can tell "never sent" from "console dropped the link".
+        assert!(e.downcast_ref::<ForwardError>().is_some(), "{e}");
     }
 
     /// A command path that reaches the transport: `process_list_get` -> core `process_list`

@@ -115,6 +115,13 @@ pub fn system_control(addr: &str, action: PowerAction) -> Result<SystemControlAc
             if e.downcast_ref::<mgmt::MgmtError>().is_some() {
                 return Err(e);
             }
+            // Nor is a command that never left the desktop: the engine was unreachable or
+            // refused the hop, so nothing was sent to the console.
+            if e.downcast_ref::<crate::mgmt_proxy::ForwardError>()
+                .is_some()
+            {
+                return Err(e);
+            }
             // Destructive actions intentionally sever the connection: "request sent + reply lost"
             // is success for those actions.
             match action {

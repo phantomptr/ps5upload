@@ -186,3 +186,30 @@ fn the_health_scan_reads_the_rebuilt_status_json() {
     assert!(format!("{:?}", c.status).contains("Pass"), "{c:?}");
     assert_eq!(t.seen.lock().unwrap()[0].0, 4);
 }
+
+#[test]
+fn power_actions_do_not_report_success_when_the_engine_was_never_reached() {
+    use ps5upload_core::mgmt_proxy::ForwardError;
+    use ps5upload_core::system_control::{system_control, PowerAction};
+    // The forwarder could not reach the engine (or the engine refused the hop with a 403):
+    // nothing was sent to the console, so Reboot/Shutdown/Standby must fail.
+    for action in [
+        PowerAction::Reboot,
+        PowerAction::Shutdown,
+        PowerAction::Standby,
+    ] {
+        let (_t, _g) = fake(|_, _| {
+            Err(anyhow::Error::new(ForwardError(
+                "engine refused the management call (403 Forbidden): loopback only".into(),
+            )))
+        });
+        let e = system_control("a:1", action).unwrap_err();
+        assert!(
+            e.downcast_ref::<ForwardError>().is_some(),
+            "{action:?}: {e}"
+        );
+    }
+    // A connection the console dropped after the request is still the expected success.
+    let (_t, _g) = fake(|_, _| Err(anyhow::anyhow!("connection reset by peer")));
+    assert!(system_control("a:1", PowerAction::Reboot).unwrap().ok);
+}
