@@ -68,7 +68,6 @@ import {
   recordPkgAlternativeSelection,
   skipPkgAlternativeSelection,
   PKG_ALTERNATIVE_SKIP,
-  stagedRefusedMessage,
   type PkgEntry,
   type PkgAlternativeSelections,
 } from "../../state/pkgLibrary";
@@ -136,9 +135,8 @@ function PkgRow({
   const tr = useTr();
   const navigate = useNavigate();
   const kernel = useConnectionStore((s) => s.runtimeByHost[hostOf(host)]?.ps5Kernel ?? null);
-  // After the console refused this package from its own storage the staged route is not offered
-  // again; Retry goes through Stream when the engine says that is safe for this package.
-  const stagedRefused = !!entry.lastResult?.stagedRefused;
+  // After the console refused this package from its own storage, Retry with Stream is offered
+  // beside Install when the engine says that is safe for this package.
   const streamOffered = !!entry.lastResult?.retryWithStream && !!onRetryStream;
   const uploading = entry.status === "uploading";
   const installingThis = entry.status === "installing";
@@ -371,10 +369,9 @@ function PkgRow({
         {/* Actions */}
         {!busy && (
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-            {stagedRefused ? (
-              // The console refused this package from its own storage. The button that would
-              // repeat that is replaced: Retry switches the route to Stream, or says why it can't.
-              streamOffered ? (
+            {/* After a refusal from the PS5's own storage, Install tries that route again and
+                Retry with Stream (when offered) serves the same copy from this engine. */}
+            {streamOffered && (
                 <Button
                   variant="primary"
                   size="sm"
@@ -389,18 +386,7 @@ function PkgRow({
                 >
                   {tr("pkglib.retry_stream", undefined, "Retry with Stream")}
                 </Button>
-              ) : (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  leftIcon={<Download size={13} />}
-                  disabled
-                  title={stagedRefusedMessage(false)}
-                >
-                  {tr("pkglib.retry_unavailable", undefined, "Retry unavailable")}
-                </Button>
-              )
-            ) : (
+            )}
               <Button
                 variant={installed ? "secondary" : "primary"}
                 size="sm"
@@ -422,7 +408,6 @@ function PkgRow({
                   ? tr("pkglib.reinstall", "Reinstall")
                   : tr("pkglib.install", "Install")}
               </Button>
-            )}
             <Button
               variant="ghost"
               size="sm"
