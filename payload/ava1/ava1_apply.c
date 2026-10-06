@@ -104,7 +104,7 @@ static int mkdirs_to(const char *path, int self, int sync) {
         int rc;
         if (i < n ? p[i] != '/' : !self) continue;
         p[i] = 0;
-        if (mkdir(p, 0755) == 0) {
+        if (mkdir(p, AVA1_CONSOLE_DIR_MODE) == 0) {
             if (sync) {
                 parent_of(p, parent, sizeof parent);
                 if ((rc = sync_dir(parent)) != 0) return -rc;
@@ -1296,7 +1296,7 @@ static int apply_record_logged(ava1_job_t *j, const ava1_bundle_record_t *r, con
         close(fd);
         goto fail;
     }
-    (void)fchmod(fd, (mode_t)(e->mode & 07777));
+    (void)fchmod(fd, AVA1_CONSOLE_FILE_MODE);
     ava1_platform_set_mtime(fd, path, e->mtime);
     close(fd);
     pthread_mutex_lock(&j->mu);
@@ -1354,7 +1354,7 @@ static int apply_record(ava1_job_t *j, const ava1_bundle_record_t *r) {
         ava1_pend_release(1);
         return rc;
     }
-    (void)fchmod(fd, (mode_t)(e->mode & 07777));
+    (void)fchmod(fd, AVA1_CONSOLE_FILE_MODE);
     ava1_platform_set_mtime(fd, path, e->mtime);
     pthread_mutex_lock(&j->mu);
     j->bytes_received += r->data_len;
@@ -1703,7 +1703,7 @@ static int write_small(ava1_job_t *j, const ava1_ment_t *e, uint32_t id, const a
         close(fd);
         return -rc;
     }
-    (void)fchmod(fd, (mode_t)(e->mode & 07777));
+    (void)fchmod(fd, AVA1_CONSOLE_FILE_MODE);
     ava1_platform_set_mtime(fd, path, e->mtime);
     close(fd);
     return 0;
@@ -2870,7 +2870,7 @@ static void commit_large(ava1_job_t *j, uint32_t id) {
     pthread_mutex_unlock(&j->mu);
     /* Truncate (preallocate may have reserved more) before the mtime: on Linux ftruncate
      * itself sets the mtime. The fsync makes all three durable. */
-    (void)fchmod(lf->fd, (mode_t)(e->mode & 07777));
+    (void)fchmod(lf->fd, AVA1_CONSOLE_FILE_MODE);
     if (ftruncate(lf->fd, (off_t)e->size) != 0) {
         commit_fail(j, AVA1_ERR_IO, "final truncate failed", errno, 0);
         return;

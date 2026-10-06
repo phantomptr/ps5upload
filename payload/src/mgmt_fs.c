@@ -21,7 +21,11 @@
 /* fs.list: entries per call (the old per-call ceiling) and the room an entry list may take in a reply. */
 #define FS_LIST_MAX 256u
 #define FS_LIST_BLOB_MAX (192u * 1024u)
-#define FS_DEFAULT_FILE_MODE 0644u
+/* Files and folders written here are 0777, whatever mode was asked for: the PS5's app loader
+ * refuses game files without world-execute, so everything that lands on the console stays
+ * launchable (as with the 5.x helper). fs_chmod still sets exactly what it is given. */
+#define FS_DEFAULT_FILE_MODE 0777u
+#define FS_DEFAULT_DIR_MODE 0777u
 
 static mgmt_fs_policy_t P;
 
@@ -295,13 +299,13 @@ int mgmt_run_fs_mkdir(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
     len = strlen(path);
     while (len > 1 && path[len - 1] == '/') path[--len] = '\0';
     if (q.parents && make_parents(path) != 0) return mgmt_reply_error(cx, AVA1_ERR_IO, "fs_mkdir_parents_failed");
-    created = mkdir(path, (mode_t)(q.mode & 07777)) == 0;
+    created = mkdir(path, (mode_t)FS_DEFAULT_DIR_MODE) == 0;
     if (!created) {
         if (errno != EEXIST) return mgmt_reply_error(cx, AVA1_ERR_IO, "fs_mkdir_failed");
         /* It exists: fine for a directory (mkdir -p), an error for anything else. */
         if (stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) return mgmt_reply_error(cx, AVA1_ERR_EXISTS, "fs_mkdir_exists_not_dir");
-    } else if (chmod(path, (mode_t)(q.mode & 07777)) != 0) {
-        /* mkdir(2) applies the umask; the caller asked for these bits. */
+    } else if (chmod(path, (mode_t)FS_DEFAULT_DIR_MODE) != 0) {
+        /* mkdir(2) applies the umask. */
         return mgmt_reply_error(cx, AVA1_ERR_IO, "fs_mkdir_chmod_failed");
     }
     counted();
@@ -461,7 +465,7 @@ int mgmt_run_fs_write(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx) {
     /* FSW_CREATE: the target must not exist. Checked up front for the single-call write (nothing is
      * written for a refusal) and again at commit (it may have appeared while chunks were sent). */
     if (whole && (f & AVA1_FSW_CREATE) && lstat(path, &st) == 0) return mgmt_reply_error(cx, AVA1_ERR_EXISTS, "exists");
-    mode = (mode_t)(q.has_mode ? (q.mode & 07777) : FS_DEFAULT_FILE_MODE);
+    mode = (mode_t)FS_DEFAULT_FILE_MODE;
     /* The tmp file is ours alone, opened so that nothing planted there can redirect the write:
      * O_NOFOLLOW (a symlink at the tmp name is an error, never followed) and O_NONBLOCK (a FIFO
      * cannot block a worker; fstat below refuses anything but a regular file). The single-call write

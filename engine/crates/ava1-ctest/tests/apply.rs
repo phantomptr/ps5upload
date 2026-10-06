@@ -70,9 +70,10 @@ fn a_large_file_assembles_out_of_order_and_commits() {
     assert!(!root.join("sub/big.bin.ava-part").exists());
     let md = std::fs::metadata(&out).unwrap();
     assert_eq!(std::os::unix::fs::MetadataExt::mtime(&md), 1_600_000_000);
+    // Whatever mode the computer sent (0640 here), the console gets 0777 so the PS5 can launch it.
     assert_eq!(
         std::os::unix::fs::PermissionsExt::mode(&md.permissions()) & 0o777,
-        0o640
+        0o777
     );
     let ev = job.events();
     assert!(ev.contains("durable files=1+1"), "{ev}");

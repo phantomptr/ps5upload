@@ -5,9 +5,17 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #include "ava1_b3.h"
 #include "ava1_job.h"
+
+/* Every file and folder an upload writes on the console is 0777, whatever mode the computer
+ * sent (Windows has none and sends 0644). The PS5's app loader refuses game files without
+ * world-execute ("can't start the game or app"), which is why the 5.x helper forced 0777 too.
+ * main() sets umask(0), so these land as written. */
+#define AVA1_CONSOLE_FILE_MODE ((mode_t)0777)
+#define AVA1_CONSOLE_DIR_MODE ((mode_t)0777)
 
 #define AVA1_PATH_CAP (2 * AVA1_MAX_PATH + 64) /* base (root + .ava-part) / entry path + .ava-part */
 
