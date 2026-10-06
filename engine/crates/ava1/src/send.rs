@@ -1645,6 +1645,14 @@ pub async fn run_upload(
                     },
                     JobDone::TYPE => match f.decode::<JobDone>() {
                         Ok(d) => {
+                            if d.status == gen::STATUS_OK {
+                                // A finished job holds every byte, so a frame whose
+                                // Received this loop never read was received too.
+                                let s = sh.sched.lock().unwrap();
+                                for (_, fr) in s.inflight.values() {
+                                    pg.bytes_sent.fetch_add(fr.payload, Ordering::Relaxed);
+                                }
+                            }
                             settle_after = d.settling == Some(1);
                             pg.telemetry.lock().unwrap().console_line = d.message.clone();
                             break Ok(SendReport {
