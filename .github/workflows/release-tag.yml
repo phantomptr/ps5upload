@@ -1,0 +1,55 @@
+# Cuts a release from GitHub instead of a local clone: creates the annotated
+# `vX.Y.Z` tag that scripts/release.sh would push, at the commit this run was
+# dispatched on, then dispatches publish.yml for it.
+#
+#   gh workflow run release-tag.yml --ref main
+#
+# A tag pushed with GITHUB_TOKEN does not trigger `push: tags` workflows, so
+# publish.yml is dispatched explicitly (workflow_dispatch is exempt from that
+# rule). The tag is VERSION's; a run whose VERSION already has a tag stops.
+name: release-tag
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: release-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Create and push the tag
+        id: tag
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::VERSION '$version' is not X.Y.Z"
+            exit 1
+          fi
+          tag="v$version"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "::error::$tag already exists"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "$tag" "$GITHUB_SHA"
+          git push origin "refs/tags/$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Tagged $GITHUB_SHA as $tag"
+
+      - name: Dispatch publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: gh workflow run publish.yml --ref "$TAG" -f tag="$TAG"
