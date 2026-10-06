@@ -4,6 +4,17 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.1.2
+
+**Game folders upload all the way through.**
+
+- **Uploads:** a folder with many mid-sized files could freeze part-way on the console
+  (seen at about 13,000 of 35,000 files). Fixed in the helper, so update the helper too.
+- **Errors:** when the console refuses a connection, the app shows the console's reason
+  (for example, not paired) instead of "broken pipe".
+
+---
+
 ## 6.1.1
 
 **Smoother recovery after a stalled upload.**
