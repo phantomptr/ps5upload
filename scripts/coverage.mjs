@@ -111,26 +111,25 @@ if (!existsOnPath("cargo-llvm-cov")) {
 
 fs.mkdirSync(path.join(coverageRoot, "engine"), { recursive: true });
 const llvmEnv = llvmToolEnv();
+// The test suite runs once; both reports are read from that run's profiles. Running
+// `cargo llvm-cov --lcov` and then `--html` ran every test twice, and the second pass
+// pushed the CI job past its time limit.
+const engineOpts = { cwd: path.join(repoRoot, "engine"), env: llvmEnv };
+run("engine llvm-cov test", "cargo", ["llvm-cov", "--workspace", "--no-report"], engineOpts);
 run("engine llvm-cov lcov", "cargo", [
   "llvm-cov",
-  "--workspace",
+  "report",
   "--lcov",
   "--output-path",
   path.join("..", "coverage", "engine", "lcov.info"),
-], {
-  cwd: path.join(repoRoot, "engine"),
-  env: llvmEnv,
-});
+], engineOpts);
 run("engine llvm-cov html", "cargo", [
   "llvm-cov",
-  "--workspace",
+  "report",
   "--html",
   "--output-dir",
   path.join("..", "coverage", "engine"),
-], {
-  cwd: path.join(repoRoot, "engine"),
-  env: llvmEnv,
-});
+], engineOpts);
 
 process.stdout.write("\ncoverage reports:\n");
 if (!engineOnly) {
