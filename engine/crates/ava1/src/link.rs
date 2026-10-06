@@ -64,6 +64,10 @@ pub(crate) struct Outbox {
     writer_dead: Arc<AtomicBool>,
 }
 
+/// How long a failed write waits for the reader to deliver the peer's own reason (an Error
+/// it sent before closing) before the link records the write failure.
+const WRITE_FAIL_GRACE: Duration = Duration::from_millis(200);
+
 /// Sets the flag when the writer task ends, however it ends (it is dropped when the
 /// task is aborted or returns): after that nothing further can leave the process.
 struct DeadOnDrop(Arc<AtomicBool>);
@@ -308,7 +312,7 @@ where
         let close = close.clone();
         let writer_dead = writer_dead.clone();
         tokio::spawn(async move {
-            let _dead = DeadOnDrop(writer_dead);
+            let dead = DeadOnDrop(writer_dead);
             while let Some(o) = out_rx.recv().await {
                 let sent = match o {
                     Out::Frame {
@@ -339,12 +343,22 @@ where
                     }
                 };
                 if let Err(e) = sent {
+                    // The writer is done either way: say so at once (a dead lane's
+                    // teardown waits on it), before any grace below.
+                    drop(dead);
                     let why = match e {
                         Ava1Error::Timeout => format!(
                             "the other device stopped taking data ({} ms without progress)",
                             timing.dead_after.as_millis()
                         ),
-                        e => format!("write failed: {e}"),
+                        e => {
+                            // A peer that refuses us writes an Error and then closes: our next
+                            // write (a ping) fails before the reader has read that Error, and
+                            // "broken pipe" would hide the real reason ("not paired"). Give
+                            // the reader a moment; its close, with the peer's reason, wins.
+                            tokio::time::sleep(WRITE_FAIL_GRACE).await;
+                            format!("write failed: {e}")
+                        }
                     };
                     return close(why);
                 }

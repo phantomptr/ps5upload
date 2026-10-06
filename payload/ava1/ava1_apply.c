@@ -785,7 +785,12 @@ static int lf_evict_one(ava1_job_t *j) {
         uint32_t id = j->lfo[k];
         ava1_lfile_t *lf = j->lf[id];
         if (!lf || lf->fd < 0 || lf->opening || lf->committing || lf->committed || lf->writers || lf->written.n) continue;
-        if (lf->has_root) continue; /* every byte is in: its commit is about to run and needs them open */
+        /* Has its root AND every byte durable: its commit is about to run and needs them open. A root
+         * alone does not mean that: it comes on the control connection and can arrive before the file's
+         * last chunks are applied. Those chunks sit in the queue behind the workers waiting here, so such
+         * a file can neither commit nor (before this check) be closed, and once a job's whole share was
+         * files like it every worker waited for a slot forever (a 35k-file game froze on the console). */
+        if (lf->has_root && (j->m.e[id].size == 0 || ava1_rset_covers(&lf->durable, 0, j->m.e[id].size))) continue;
         ava1_lf_close_fds(j, id, lf);
         return 1;
     }

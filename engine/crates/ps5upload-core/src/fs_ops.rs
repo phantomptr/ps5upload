@@ -1619,11 +1619,14 @@ mod tests {
             _: &mgmt::JobCall<'_>,
         ) -> Result<Option<Vec<u8>>> {
             use std::sync::atomic::Ordering;
-            if self
+            // `fetch_update` is the name CI's stable Rust has; newer toolchains rename it to
+            // `try_update` (unstable there) and warn. Same behaviour either way.
+            #[allow(deprecated)]
+            let took = self
                 .busy
                 .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
-                .is_ok()
-            {
+                .is_ok();
+            if took {
                 return Err(mgmt::MgmtError {
                     label: label.into(),
                     status: STATUS_BUSY,
