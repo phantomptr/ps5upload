@@ -4,6 +4,27 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.2.0
+
+**Games launch again, and installs stop giving up early.** Update the app and the helper together.
+
+- **Games that would not start:** since 6.0, games uploaded from Windows lost their run
+  permission, so the PS5 refused them. Everything the helper writes is now readable and runnable
+  (777), including its own folders. Games uploaded with 6.0–6.1.2 get a **Fix permissions**
+  button, and Play repairs them by itself when it can.
+- **"PS5 launcher returned 0x80940033":** now says what it means. If kstuff isn't running,
+  the app tells you to load it; that error is not about the one game.
+- **Installs:** a package the PS5 refuses from its own storage can always be tried again, and
+  Stream is tried straight away instead of after a connection pre-check.
+- **"The PS5 cannot connect to this computer":** failed queue items offer the Windows firewall
+  fix in one click. The FAQ lists every port ps5upload uses.
+- **Storage:** an upload you gave up on no longer leaves its half-written copy behind for good;
+  the helper clears it after a week. If a drive runs out of room part-way through an upload, the
+  app remembers how much that drive really holds, so the next upload that cannot fit is
+  refused before it starts and Volumes shows the real "safe for new uploads" figure.
+
+---
+
 ## 6.1.2
 
 **Game folders upload all the way through.**
