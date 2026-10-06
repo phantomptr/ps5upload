@@ -21,3 +21,22 @@ export function networkFixOffers(diag: NetDiag | null | undefined): NetworkFixOf
   if (diag.category === "private") return { makePrivate: false, allowProfile: "private" };
   return none;
 }
+
+/** True when an install error says the console could not connect to this computer to stream
+ *  (the engine's reach failure, or Sony's never-fetched network codes). */
+export function isStreamUnreachableError(raw: string | null | undefined): boolean {
+  return (
+    !!raw &&
+    /cannot connect to this computer|never reached this computer|0x80431064|0x80431068|0x8041013d/i.test(raw)
+  );
+}
+
+/** The offers when the engine could not read Windows' network state (no diagnosis): a direct
+ *  cable or Internet Connection Sharing link is almost always a Public network, so allowing
+ *  ps5upload on Public networks is the fix that helps. Only on the Windows desktop app, where
+ *  the engine runs on this computer. */
+export function fallbackNetworkFixOffers(windowsDesktop: boolean): NetworkFixOffers {
+  return windowsDesktop
+    ? { makePrivate: false, allowProfile: "public" }
+    : { makePrivate: false, allowProfile: null };
+}

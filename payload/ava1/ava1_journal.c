@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "ava1_frame.h"
+#include "ava1_manifest.h"
 #include "ava1_wire.h"
 
 static const uint8_t MAGIC[8] = { 'A', 'V', 'A', '1', 'J', 'N', 'L', '1' };
@@ -175,7 +176,7 @@ int ava1_jnl_create(ava1_jnl_t *j, const char *dir, const ava1_jnl_open_t *o) {
     j->fd = -1;
     rc = set_dir(j, dir);
     if (rc != 0) return rc;
-    if (mkdir(dir, 0755) != 0 && errno != EEXIST) return -errno; /* parent must exist */
+    if (mkdir(dir, 0777) != 0 && errno != EEXIST) return -errno; /* parent must exist */
     ava1_w_init(&w, body, sizeof body);
     if (ava1_jnl_open_encode(o, &w) != 0) return AVA1_E_SPACE;
     rec = frame_rec(AVA1_JNL_OPEN, body, w.len, &rn);
@@ -461,6 +462,35 @@ static int gc_strike(const char *dir, const struct stat *st, int64_t now_unix) {
     return n;
 }
 
+/* The staged destination an upload job writes into (`<root>.ava-part`), or 0 when the job is not a
+ * staged upload or its journal cannot be read. */
+static int staged_part_of(const char *job_dir, char *out, size_t cap) {
+    uint8_t buf[AVA1_MAX_PATH + 256];
+    ava1_jnl_open_t o;
+    if (ava1_jnl_peek_open(job_dir, buf, sizeof buf, &o) != 0) return 0;
+    if (o.kind != AVA1_JOB_UPLOAD || !(o.staged & 1) || o.root_len == 0 || o.root_len >= AVA1_MAX_PATH ||
+        o.root[0] != '/')
+        return 0;
+    if ((size_t)snprintf(out, cap, "%.*s.ava-part", (int)o.root_len, (const char *)o.root) >= cap) return 0;
+    return 1;
+}
+
+/* True when a job directory other than `self` in jobs_dir writes into the same staged `part`: that
+ * job may still resume into it, so it is not this job's to delete. */
+static int part_shared(const char *jobs_dir, const char *self, const char *part) {
+    DIR *d = opendir(jobs_dir);
+    struct dirent *e;
+    char p[700], other[AVA1_MAX_PATH + 16];
+    int shared = 0;
+    while (d && !shared && (e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.' || strcmp(e->d_name, self) == 0) continue;
+        snprintf(p, sizeof p, "%s/%s", jobs_dir, e->d_name);
+        shared = staged_part_of(p, other, sizeof other) && strcmp(other, part) == 0;
+    }
+    if (d) closedir(d);
+    return shared;
+}
+
 /* Collects job directories idle for more than max_age_s by `now_unix`, a WALL clock (file mtimes are wall
  * time). The wall clock is the user's to set, so (final review: console):
  *   - before 2024 it is a reset clock: nothing is collected;
@@ -500,6 +530,16 @@ int ava1_jobs_gc(const char *jobs_dir, int64_t now_unix, int64_t max_age_s) {
                 if (now_unix - last <= max_age_s + AVA1_PACK_GC_GRACE_S) continue;
                 if (gc_strike(p, &st, now_unix) < AVA1_GC_STRIKES) continue;
                 fprintf(stderr, "[ava1] gc: giving up on %s: its log was never recovered\n", e->d_name);
+            }
+            {
+                /* An abandoned staged upload leaves its half-written copy at <root>.ava-part, which only
+                 * this job could resume. Without its journal nothing ever finishes or removes it, and it
+                 * holds storage for good (the PS5 counts it as "Other"). A finished job renamed it away,
+                 * so this only finds leftovers. */
+                char part[AVA1_MAX_PATH + 16];
+                if (staged_part_of(p, part, sizeof part) && !part_shared(jobs_dir, e->d_name, part) &&
+                    rm_tree(part) == 0)
+                    fprintf(stderr, "[ava1] gc: removed the abandoned upload copy %s\n", part);
             }
             if (rm_tree(p) == 0) n++;
         }

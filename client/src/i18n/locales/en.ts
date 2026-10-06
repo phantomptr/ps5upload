@@ -2086,6 +2086,8 @@ err_launch_busy:
   "PS5 launcher is busy with another title. Close any running game on the PS5 and try Launch again.",
 err_launch_corrupt:
   "PS5 says this title's data is corrupted. The eboot.bin or sce_sys folder may be incomplete — re-upload the game.",
+err_launch_homebrew_refused:
+  "The PS5 refused to start this title (0x80940033). The console isn't starting homebrew or fake-package games right now: load kstuff (or reboot and run the jailbreak again), then try again.",
 err_launch_unknown:
   "PS5 launcher returned 0x{code}. The title may have been removed, or the install isn't complete — try Re-register from the Library tab.",
 err_launch_title_id_invalid:

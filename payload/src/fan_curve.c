@@ -30,11 +30,11 @@ static int ensure_dir(const char *path) {
     for (char *p = tmp + 1; *p; p++) {
         if (*p == '/') {
             *p = 0;
-            mkdir(tmp, 0755);
+            mkdir(tmp, 0777);
             *p = '/';
         }
     }
-    return mkdir(tmp, 0755);
+    return mkdir(tmp, 0777);
 }
 
 int fan_curve_set(const char *points_json, char *err, size_t err_cap) {

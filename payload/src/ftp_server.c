@@ -949,7 +949,7 @@ static void handle_mkd(struct ftp_session *s, const char *arg) {
         send_resp(s->ctrl_fd, 550, "Not permitted");
         return;
     }
-    if (mkdir(path, 0755) != 0) {
+    if (mkdir(path, 0777) != 0) {
         send_resp(s->ctrl_fd, 550, "Failed to create directory");
         return;
     }

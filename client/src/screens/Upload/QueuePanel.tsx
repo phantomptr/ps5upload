@@ -53,6 +53,8 @@ import { BottleneckLine, JobLiveNotes, UnsettledLine } from "./Bottleneck";
 import { WhySlowPanel } from "./WhySlow";
 import { RarPasswordPrompt } from "./RarPasswordPrompt";
 import { rarPasswordProblem } from "../../lib/rarPassword";
+import { isStreamUnreachableError } from "../../lib/networkFix";
+import { NetworkFixActions } from "../InstallPackage/NetworkFixActions";
 
 /** One console's slice of the queue, in first-seen order. */
 interface ConsoleGroup {
@@ -1075,6 +1077,9 @@ export function QueueRow({
           reason={item.errorReason}
           detail={item.errorDetail}
         />
+      )}
+      {item.status === "failed" && isStreamUnreachableError(item.error) && (
+        <NetworkFixActions diag={null} />
       )}
 
       {item.status === "failed" &&

@@ -242,6 +242,9 @@ export function humanizePs5Error(
     if (code === "8094001F") {
       return te("err_launch_corrupt");
     }
+    if (code === "80940033") {
+      return te("err_launch_homebrew_refused");
+    }
     return te("err_launch_unknown", { code });
   }
 

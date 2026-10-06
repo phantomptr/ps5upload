@@ -619,8 +619,21 @@ Yes, up to 16 sessions; each computer pairs once. Browsing and the hardware view
 cleanly. Two uploads to the same path will fight, since nothing locks a destination.
 
 **Q: What is the pairing code, and which ports does ps5upload use?**
-Two ports: **9120** (the helper, AVA1) and **9021** (the ELF loader). Allow only those in a
-firewall. Every connection is encrypted and each computer pairs with the console once. A helper
+Outgoing from this computer to the PS5, two ports: **9120** (the helper, AVA1) and **9021** (the
+ELF loader). Stream & install also needs the PS5 to connect **in** to this computer on **19113**
+(the engine); on Windows allow ps5upload on both Private and Public networks, since a cable
+straight to the console is a Public network.
+
+| Port | On | Used for |
+|---|---|---|
+| 9120 TCP | PS5 | The helper: uploads, files, management (encrypted) |
+| 9021 TCP | PS5 | ELF loader: sending the helper |
+| 9115 TCP | PS5 | The installer the helper starts |
+| 8084 TCP | PS5 | Payload Manager, when there is no ELF loader |
+| 19113 TCP | this computer | The engine: the PS5 fetches packages from it during Stream & install |
+| 9295, 9302 | PS5 | Remote Play pairing and wake |
+
+Every connection is encrypted and each computer pairs with the console once. A helper
 the app launched pairs by itself; one loaded another way shows a 6-digit code on the console,
 which you enter in the app. If the console shows a different PS5 at an address you reuse, forget
 the old one and pair again.
@@ -1092,8 +1105,8 @@ The routes:
 
 | Content | Stream & install | Upload & install | Folder dump + ShadowMount+ | exFAT image + ShadowMount+ |
 |---|---|---|---|---|
-| **PS4 package** (base game) | Works. The most reliable route; PS4 fake packages play on every firmware. | Less reliable than Stream; on FW 13.60 Sony refuses it with `0x80B2116F` (the app re-serves it from the engine for you), and a failed staged re-install of an installed game can remove it. Prefer Stream. | Works (PS4 folder dumps). | Works. |
-| **PS5 package** (fake / FPKG game) | Installs. **On firmware above 11.60 the game installs but cannot be played.** | Same as Stream, plus the FW 13.60 refusal above. | Works for a decrypted PS5 dump — the route people use on 13.60. | Works — also the route used on 13.60. |
+| **PS4 package** (base game) | Works. The most reliable route; PS4 fake packages play on every firmware. | Less reliable than Stream; on some firmwares (seen on 9.60, 11.20, 13.60) Sony refuses it with `0x80B2116F` (the app re-serves it from the engine for you), and a failed staged re-install of an installed game can remove it. Prefer Stream. | Works (PS4 folder dumps). | Works. |
+| **PS5 package** (fake / FPKG game) | Installs. **On firmware above 11.60 the game installs but cannot be played.** | Same as Stream, plus the `0x80B2116F` refusal above. | Works for a decrypted PS5 dump — the route people use on 13.60. | Works — also the route used on 13.60. |
 | **PS5 homebrew app** (for example Itemzflow, `IV0002-ITEM00001`) | Works and launches, including on FW 13.60. | Works. | n/a | n/a |
 | **Patch / update** | Works (verified: a PS4 base plus its patch, streamed). Install the base first. | Risky: an update shares its content id with the base game, so a failed fallback can remove the base. Prefer Stream. | n/a — copy the update into the game folder. | n/a |
 | **DLC** | Works after its base is installed. | Works after its base is installed. | n/a | n/a |
@@ -1102,9 +1115,10 @@ The routes:
 
 Firmware notes:
 
-- **FW 13.60:** Stream & install works. Sony refuses Upload & install with `0x80B2116F`; the app
-  then offers **Retry with Stream**, or re-serves the package from the engine, so you normally see
-  the error only if that also fails.
+- **Upload & install (`0x80B2116F`):** seen on FW 9.60, 11.20 and 13.60 (and `0x80B2150F` on
+  5.10), not only 13.60. The app then re-serves the package from the engine, which needs the PS5
+  to reach this computer (see the ports below), and offers **Retry with Stream**. You see the
+  error only if that also fails, usually because a firewall blocks port 19113.
 
 ### What the common messages mean
 

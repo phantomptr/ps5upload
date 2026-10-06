@@ -174,8 +174,8 @@ int ava1_payload_start(void) {
     ava1_server_cfg_t cfg;
     uint8_t launcher[32], token[16];
     memset(&cfg, 0, sizeof cfg);
-    if (mkdir("/data/ps5upload", 0755) != 0 && errno != EEXIST) return -errno;
-    if (mkdir(AVA1_DIR, 0755) != 0 && errno != EEXIST) return -errno;
+    if (mkdir("/data/ps5upload", 0777) != 0 && errno != EEXIST) return -errno;
+    if (mkdir(AVA1_DIR, 0777) != 0 && errno != EEXIST) return -errno;
     if (ava1_identity_load_or_create(AVA1_DIR "/identity", &cfg.identity) != 0) return -EIO;
     snprintf(cfg.peers_path, sizeof cfg.peers_path, "%s", AVA1_DIR "/peers");
     snprintf(cfg.name, sizeof cfg.name, "%s", "PS5");
@@ -196,7 +196,7 @@ int ava1_payload_start(void) {
         dc.may_read = may_read;
         dc.refuse_link = path_tree_op_refused;
         dc.same_device = same_device;
-        if (mkdir(AVA1_JOBS, 0755) != 0 && errno != EEXIST) {
+        if (mkdir(AVA1_JOBS, 0777) != 0 && errno != EEXIST) {
             /* Not fatal: the server keeps working without the data plane. */
             on_log("ava1: cannot create the jobs folder; transfers are unavailable");
         } else {

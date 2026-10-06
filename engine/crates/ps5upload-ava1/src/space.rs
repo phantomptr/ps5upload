@@ -7,8 +7,9 @@
 //! cannot both be admitted into room only one of them can use.
 //!
 //! It never guesses. The room is the volume's free space less a small working margin
-//! (`Volume::allocatable_bytes`, never the console's hidden allocator pool), and the credit is
-//! only what the console reported. A console that cannot be asked (an old payload, a busy
+//! (`Volume::allocatable_bytes`) and less what this drive was seen not to allocate when an
+//! earlier upload ran out of room part-way (`ps5upload_core::space_gap`, learned, never assumed),
+//! and the credit is only what the console reported. A console that cannot be asked (an old payload, a busy
 //! management port) is not a refusal: the transfer's own ENOSPC still ends it.
 use std::collections::HashMap;
 use std::io::Write;
@@ -19,7 +20,7 @@ use ava1::send::{SpaceFigures, SpaceGate};
 use crate::pool::host_of;
 
 /// What the destination's volume offers right now.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Room {
     /// What the message calls the drive: its mount path (`/data`, `/mnt/ext0`) or the
     /// destination asked about.
@@ -29,8 +30,21 @@ pub struct Room {
     pub dev: Option<u64>,
     pub free_bytes: u64,
     pub reserve_bytes: u64,
-    /// Free space less the reserve: what an upload may fill.
+    /// Free space less the reserve and the learned gap: what an upload may fill.
     pub allocatable_bytes: u64,
+    /// The drive's total size (0 = unknown): with the console it names the drive the gap is
+    /// remembered for.
+    pub total_bytes: u64,
+    /// The learned gap already taken off `allocatable_bytes`.
+    pub gap_bytes: u64,
+}
+
+/// Takes the learned gap for `console`'s drive off a room the console reported.
+fn less_learned_gap(console: &str, mut r: Room) -> Room {
+    let g = ps5upload_core::space_gap::gap(&host_of(console), r.total_bytes);
+    r.gap_bytes = g;
+    r.allocatable_bytes = r.allocatable_bytes.saturating_sub(g);
+    r
 }
 
 /// Asks the console for the room under `dest`. `None` = unknown (never a refusal).
@@ -50,13 +64,18 @@ pub fn volumes_probe() -> RoomProbe {
         let host = mgmt_addr(console);
         match ps5upload_core::volumes::free_space(&host, dest) {
             Ok(f) => {
-                return Some(Room {
-                    volume: dest.to_string(),
-                    dev: Some(f.dev),
-                    free_bytes: f.free_bytes,
-                    reserve_bytes: f.reserve_bytes,
-                    allocatable_bytes: f.usable_bytes,
-                })
+                return Some(less_learned_gap(
+                    console,
+                    Room {
+                        volume: dest.to_string(),
+                        dev: Some(f.dev),
+                        free_bytes: f.free_bytes,
+                        reserve_bytes: f.reserve_bytes,
+                        allocatable_bytes: f.usable_bytes,
+                        total_bytes: f.total_bytes,
+                        gap_bytes: 0,
+                    },
+                ))
             }
             Err(e) => {
                 let _ = writeln!(
@@ -82,13 +101,18 @@ pub fn volumes_probe() -> RoomProbe {
             );
             return None;
         };
-        Some(Room {
-            volume: v.path.clone(),
-            dev: None,
-            free_bytes: v.free_bytes,
-            reserve_bytes: v.safety_reserve_bytes(),
-            allocatable_bytes: v.allocatable_bytes(),
-        })
+        Some(less_learned_gap(
+            console,
+            Room {
+                volume: v.path.clone(),
+                dev: None,
+                free_bytes: v.free_bytes,
+                reserve_bytes: v.safety_reserve_bytes(),
+                allocatable_bytes: v.allocatable_bytes(),
+                total_bytes: v.total_bytes,
+                gap_bytes: 0,
+            },
+        ))
     })
 }
 
@@ -104,6 +128,12 @@ struct Promise {
     volume: String,
     free_bytes: u64,
     reserve_bytes: u64,
+    /// Who and which drive, for learning from how the upload ends.
+    host: String,
+    total_bytes: u64,
+    gap_bytes: u64,
+    /// The receiver's durable bytes when the job was admitted.
+    durable_then: u64,
 }
 
 impl Promise {
@@ -215,20 +245,50 @@ pub fn pool_refusal(
 
 /// The detail for an ENOSPC the console reported after admitting `job`, built from the figures it
 /// was admitted on; without them (the room was never probed) the sentence alone, no invented numbers.
-pub(crate) fn late_no_space_detail(job: &[u8; 16], console_message: &str) -> String {
+pub(crate) fn late_no_space_detail(
+    job: &[u8; 16],
+    console_message: &str,
+    durable_now: u64,
+) -> String {
     let l = ledger().lock().unwrap_or_else(|e| e.into_inner());
     match l.get(job) {
-        Some(p) => pool_refusal(
-            &p.volume,
-            p.to_allocate,
-            p.room_then,
-            p.free_bytes,
-            p.reserve_bytes,
-        ),
+        Some(p) => {
+            // The room the console reported (before any gap came off) less what was written is
+            // room that was never there: remember it so the next upload is refused up front.
+            ps5upload_core::space_gap::learn_from_failure(
+                &p.host,
+                p.total_bytes,
+                p.room_then.saturating_add(p.gap_bytes),
+                durable_now.saturating_sub(p.durable_then),
+            );
+            pool_refusal(
+                &p.volume,
+                p.to_allocate,
+                p.room_then,
+                p.free_bytes,
+                p.reserve_bytes,
+            )
+        }
         None => format!(
             "The console ran out of room for this upload ({console_message}). {POOL_SENTENCE} \
              The partial upload is kept, so freeing space and retrying resumes it."
         ),
+    }
+}
+
+/// The upload `job` finished with `durable_now` bytes durable: if it wrote past the room the learned
+/// gap allowed, the gap was too large and is lowered.
+pub(crate) fn finished(job: &[u8; 16], durable_now: u64) {
+    let l = ledger().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(p) = l.get(job) {
+        if p.gap_bytes > 0 {
+            ps5upload_core::space_gap::learn_from_success(
+                &p.host,
+                p.total_bytes,
+                p.room_then.saturating_add(p.gap_bytes),
+                durable_now.saturating_sub(p.durable_then),
+            );
+        }
     }
 }
 
@@ -262,6 +322,10 @@ pub(crate) fn gate(probe: RoomProbe, console: String, dest: String, job: [u8; 16
                         volume: room.volume.clone(),
                         free_bytes: room.free_bytes,
                         reserve_bytes: room.reserve_bytes,
+                        host: host_of(&console),
+                        total_bytes: room.total_bytes,
+                        gap_bytes: room.gap_bytes,
+                        durable_then: figures.durable_bytes,
                     },
                 );
                 Ok(())
@@ -297,9 +361,13 @@ mod tests {
                 volume: "/data".into(),
                 free_bytes: 171 * GB,
                 reserve_bytes: GB,
+                host: "h".into(),
+                total_bytes: 0,
+                gap_bytes: 0,
+                durable_then: 0,
             },
         );
-        let d = late_no_space_detail(&job, "full");
+        let d = late_no_space_detail(&job, "full", 0);
         ledger().lock().unwrap().remove(&job);
         assert!(d.contains("/data needs "), "{d}");
         assert!(d.contains(&format!("needs {} more bytes", 164 * GB)), "{d}");
@@ -307,7 +375,7 @@ mod tests {
         assert!(d.contains(POOL_SENTENCE), "{d}");
         assert!(d.contains("partial upload is kept"), "{d}");
         // Never admitted by a probe: the sentence, and no figures made up.
-        let d = late_no_space_detail(&[0x5b; 16], "drive is full");
+        let d = late_no_space_detail(&[0x5b; 16], "drive is full", 0);
         assert!(d.contains(POOL_SENTENCE) && !d.contains("needs"), "{d}");
     }
 
@@ -320,6 +388,7 @@ mod tests {
             free_bytes: free,
             reserve_bytes: GB,
             allocatable_bytes: free.saturating_sub(GB),
+            ..Room::default()
         }
     }
 
@@ -392,6 +461,10 @@ mod tests {
             volume: "/data".into(),
             free_bytes: 0,
             reserve_bytes: 0,
+            host: "h".into(),
+            total_bytes: 0,
+            gap_bytes: 0,
+            durable_then: 0,
         };
         assert_eq!(p.outstanding(150 * GB), 100 * GB, "nothing written yet");
         assert_eq!(p.outstanding(120 * GB), 70 * GB, "30 GB written");

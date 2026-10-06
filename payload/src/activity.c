@@ -429,7 +429,7 @@ void activity_flush(void) {
 }
 
 void activity_init(void) {
-    mkdir(ACTIVITY_DIR, 0755);
+    mkdir(ACTIVITY_DIR, 0777);
     load_state();
 
     int expected = 0;

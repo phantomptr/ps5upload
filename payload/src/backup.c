@@ -43,11 +43,11 @@ static int mkpath_p(const char *path) {
     for (char *p = tmp + 1; *p; p++) {
         if (*p == '/') {
             *p = 0;
-            mkdir(tmp, 0755);
+            mkdir(tmp, 0777);
             *p = '/';
         }
     }
-    return mkdir(tmp, 0755);
+    return mkdir(tmp, 0777);
 }
 
 static int bk_cancelled(void *arg) {

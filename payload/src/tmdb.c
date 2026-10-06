@@ -18,8 +18,8 @@
 
 static int ensure_dirs(void) {
     struct stat st;
-    if (stat(TMDB_ROOT_DIR, &st) != 0) mkdir(TMDB_ROOT_DIR, 0755);
-    if (stat(TMDB_CACHE_DIR, &st) != 0) mkdir(TMDB_CACHE_DIR, 0755);
+    if (stat(TMDB_ROOT_DIR, &st) != 0) mkdir(TMDB_ROOT_DIR, 0777);
+    if (stat(TMDB_CACHE_DIR, &st) != 0) mkdir(TMDB_CACHE_DIR, 0777);
     return 0;
 }
 

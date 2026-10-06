@@ -35,9 +35,12 @@ async fn large_files_with_early_roots_never_wedge_the_descriptor_slots() {
     );
     // Tighter than the console's ~490 so the job's share of slots fills at once.
     srv.knob("fd_budget", 120);
+    // A wedge never finishes, so the bound only has to be well past a healthy run: about 65 s
+    // here, several times that under ASan/UBSan (90 s timed out a healthy sanitizer run on CI).
+    let bound = if cfg!(ava1_ctest_sanitize) { 900 } else { 300 };
     let t = Instant::now();
     let r = tokio::time::timeout(
-        Duration::from_secs(90),
+        Duration::from_secs(bound),
         upload(
             &srv.addr(),
             me,
