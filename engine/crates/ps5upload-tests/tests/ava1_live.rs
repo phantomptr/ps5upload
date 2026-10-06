@@ -53,6 +53,15 @@ fn tag() -> String {
         .collect()
 }
 
+/// A job id unique to this run: a console remembers a finished job under its id, and a later
+/// run that reused a fixed id for its new (tagged) destination was refused ("this job was
+/// opened for another destination").
+fn live_job(seed: u8) -> [u8; 16] {
+    let mut id = job_id(seed);
+    id[12..16].copy_from_slice(&std::process::id().to_le_bytes());
+    id
+}
+
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../ps5upload-core/testdata/rar")
@@ -151,7 +160,7 @@ fn live_ps5_folder_upload_smoke() {
     let cfg = TransferConfig::new(&addr).with_default_excludes();
     let dest_root = format!("/data/ps5upload/tests/smoke_{}", tag());
     let t0 = std::time::Instant::now();
-    let r = upload::upload_dir(&cfg, job_id(0x5B), &dest_root, t.path())
+    let r = upload::upload_dir(&cfg, live_job(0x5B), &dest_root, t.path())
         .unwrap_or_else(|e| panic!("live PS5 folder upload failed: {e:#}"));
     let elapsed = t0.elapsed();
     assert_eq!(r.bytes_sent, total, "bytes_sent should match the plan");
@@ -176,7 +185,7 @@ fn live_ps5_folder_upload_perf() {
     let dest_root = format!("/data/ps5upload/tests/perf_{}", tag());
     eprintln!("uploading {src:?} -> PS5 {dest_root}");
     let t0 = std::time::Instant::now();
-    let r = upload::upload_dir(&cfg, job_id(0x5C), &dest_root, &src)
+    let r = upload::upload_dir(&cfg, live_job(0x5C), &dest_root, &src)
         .unwrap_or_else(|e| panic!("live PS5 perf upload failed: {e:#}"));
     let elapsed = t0.elapsed();
     let mib = r.bytes_sent as f64 / (1024.0 * 1024.0);
@@ -197,7 +206,7 @@ fn live_ps5_streams_a_rar_and_reads_it_back() {
     let cfg = TransferConfig::new(&addr);
     let r = upload::upload_rar(
         &cfg,
-        job_id(0x5D),
+        live_job(0x5D),
         dest_root,
         &fixture("crypted.rar"),
         Some("unrar"),
@@ -241,7 +250,7 @@ fn live_ps5_streams_a_real_game_subset() {
     let mut cfg = TransferConfig::new(&addr);
     cfg.excludes = excludes;
     let t0 = std::time::Instant::now();
-    let r = upload::upload_rar(&cfg, job_id(0x5E), dest_root, &archive, pw.as_deref())
+    let r = upload::upload_rar(&cfg, live_job(0x5E), dest_root, &archive, pw.as_deref())
         .expect("streamed to the console");
     eprintln!("committed {} bytes in {:?}", r.bytes_sent, t0.elapsed());
     let mut bad = Vec::new();
@@ -282,7 +291,7 @@ fn real_archive_uploads_every_entry_at_its_declared_size() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let c = rt.block_on(console());
     let (pool, path) = (c.pool.clone(), archive.clone());
-    let r = upload::upload_rar_in(&pool, &cfg(), job_id(0x5F), "dst", &path, pw.as_deref())
+    let r = upload::upload_rar_in(&pool, &cfg(), live_job(0x5F), "dst", &path, pw.as_deref())
         .expect("upload");
     assert_eq!(r.bytes_sent, total);
     let got = landed(&c.share.join("dst"));
