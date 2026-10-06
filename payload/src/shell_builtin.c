@@ -794,7 +794,7 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
         int any_err = 0;
         for (int i = first_path; i < argc; i++) {
             if (!parents) {
-                if (mkdir(argv[i], 0755) != 0) {
+                if (mkdir(argv[i], 0777) != 0) {
                     len = shell_appendf(&out, &cap, len,
                                          "mkdir: %s: %s\n", argv[i],
                                          strerror(errno));
@@ -814,7 +814,7 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
             for (char *p = tmp + (tmp[0] == '/' ? 1 : 0); *p; p++) {
                 if (*p == '/') {
                     *p = '\0';
-                    if (mkdir(tmp, 0755) != 0 && errno != EEXIST) {
+                    if (mkdir(tmp, 0777) != 0 && errno != EEXIST) {
                         len = shell_appendf(&out, &cap, len,
                                              "mkdir: %s: %s\n", tmp,
                                              strerror(errno));
@@ -824,7 +824,7 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
                     *p = '/';
                 }
             }
-            if (mkdir(tmp, 0755) != 0 && errno != EEXIST) {
+            if (mkdir(tmp, 0777) != 0 && errno != EEXIST) {
                 len = shell_appendf(&out, &cap, len,
                                      "mkdir: %s: %s\n", tmp, strerror(errno));
                 any_err = 1;

@@ -5031,13 +5031,28 @@ async fn ps5_volumes(
     Query(q): Query<AddrQuery>,
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+    let host = addr.clone();
     let result: Result<VolumeList, anyhow::Error> =
         tokio::task::spawn_blocking(move || list_volumes(&addr))
             .await
             .map_err(anyhow::Error::from)
             .and_then(|inner| inner);
     match result {
-        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Ok(mut v) => {
+            // "Safe for new uploads" leaves out what this drive was seen not to allocate when an
+            // upload ran out of room part-way, the same figure the upload's space check uses.
+            for vol in &mut v.volumes {
+                let g = ps5upload_core::space_gap::gap(&host, vol.total_bytes);
+                if g > 0 {
+                    // The client reads these two fields as they are: safe = allocatable,
+                    // "kept as headroom" = the reserve, which now includes the gap.
+                    let (reserve, alloc) = (vol.safety_reserve_bytes(), vol.allocatable_bytes());
+                    vol.allocatable_bytes = alloc.saturating_sub(g);
+                    vol.safety_reserve_bytes = reserve.saturating_add(g);
+                }
+            }
+            (StatusCode::OK, Json(v)).into_response()
+        }
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }

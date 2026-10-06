@@ -41,6 +41,8 @@ import {
   processKill,
   smpStatus,
   sdkScan,
+  processList,
+  fsChmod,
   type InstalledTitle,
   type SmpStatus,
   type SdkScanResponse,
@@ -74,6 +76,7 @@ import { useConfirm } from "../../components/ConfirmDialog";
 import { DOC_ANCHORS, faqLink, installErrorLink } from "../../lib/installErrorDoc";
 import { LAST_PS5_FAKE_GAME_FIRMWARE, ps5FakeGameUnplayableFirmware } from "../../lib/ps5Firmware";
 import { humanizePs5Error } from "../../lib/humanizeError";
+import { handleHomebrewRefusal, isHomebrewRefusal, type RefusalOutcome } from "../../lib/launchRefusal";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import { useTr } from "../../state/lang";
@@ -290,6 +293,13 @@ function NowPlayingBanner({
 const LAUNCH_CONFIRM_TIMEOUT_MS = 90_000;
 const LAUNCH_CONFIRM_POLL_MS = 2_000;
 
+/** A 0x80940033 launch refusal that the repair in launchRefusal.ts could not clear. */
+class HomebrewRefused extends Error {
+  constructor(readonly outcome: Exclude<RefusalOutcome, { kind: "fixed" }>) {
+    super("launch_sony_error_0x80940033");
+  }
+}
+
 // ── App card ─────────────────────────────────────────────────────────────────
 
 function AppCard({
@@ -307,6 +317,7 @@ function AppCard({
   onStop,
   backportEligible,
   onBackport,
+  onFixPermissions,
 }: {
   host: string;
   title: InstalledTitle;
@@ -327,6 +338,8 @@ function AppCard({
   onStop: (t: InstalledTitle) => void;
   backportEligible: boolean;
   onBackport: (t: InstalledTitle) => void;
+  /** Make the title's folder 0777 (uploads from 6.0-6.1.2 kept the computer's modes). */
+  onFixPermissions: (t: InstalledTitle) => void;
   /** Re-issue the launch for an already-running title, which is what brings it
    *  to the screen. Separate from onLaunch so the confirm/patient-launch
    *  bookkeeping around a cold start doesn't run for a foreground nudge. */
@@ -544,6 +557,24 @@ function AppCard({
               className="shrink-0 rounded-md border border-[var(--color-border)] p-2.5 text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
             >
               <FolderOpen size={15} />
+            </button>
+          )}
+          {/* Fix permissions: a folder uploaded by 6.0-6.1.2 kept the computer's modes
+              (0644 from Windows) and the PS5 will not start a game without world-execute. */}
+          {sourceFolder && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onFixPermissions(title)}
+              title={tr(
+                "installed_fix_permissions",
+                undefined,
+                "Fix permissions: make this game's folder readable and runnable by the PS5 (chmod 777)",
+              )}
+              aria-label={tr("installed_fix_permissions_short", undefined, "Fix permissions")}
+              className="shrink-0 rounded-md border border-[var(--color-border)] p-2.5 text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <ShieldCheck size={15} />
             </button>
           )}
           {/* Uninstall — de-emphasized icon button (destructive action stays
@@ -801,6 +832,34 @@ export default function InstalledAppsScreen({
     [tr],
   );
 
+  const handleFixPermissions = useCallback(
+    async (t: InstalledTitle) => {
+      if (!host?.trim() || !t.source) return;
+      const probe = guard.capture();
+      setBusyId(t.titleId);
+      try {
+        await fsChmod(transferAddr(probe.host), t.source, "0777", true);
+        if (probe.isStale()) return;
+        pushNotification("success", withConsolePrefix(probe.host, t.titleName), {
+          body: tr(
+            "installed_fix_permissions_done",
+            undefined,
+            "Permissions fixed: every file in this game's folder is now 0777. Press Play.",
+          ),
+        });
+      } catch (e) {
+        if (probe.isStale()) return;
+        const raw = e instanceof Error ? e.message : String(e);
+        pushNotification("error", withConsolePrefix(probe.host, t.titleName), {
+          body: humanizePs5Error(raw),
+        });
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [host, guard, tr],
+  );
+
   const handleLaunch = useCallback(
     async (t: InstalledTitle) => {
       if (!host?.trim()) return;
@@ -812,7 +871,20 @@ export default function InstalledAppsScreen({
       // game's process to appear; we never act on a starting game.
       setLaunchingId(t.titleId);
       try {
-        await appLaunch(transferAddr(probe.host), t.titleId);
+        try {
+          await appLaunch(transferAddr(probe.host), t.titleId);
+        } catch (e) {
+          const raw = e instanceof Error ? e.message : String(e);
+          if (!isHomebrewRefusal(raw) || probe.isStale()) throw e;
+          // The console refused a non-Sony title: find out whether kstuff is missing, and
+          // repair a folder uploaded without world-execute (see launchRefusal.ts).
+          const outcome = await handleHomebrewRefusal(t.source, {
+            processes: async () => (await processList(mgmtAddr(probe.host))).processes,
+            chmod777: (path) => fsChmod(transferAddr(probe.host), path, "0777", true),
+            relaunch: () => appLaunch(transferAddr(probe.host), t.titleId),
+          });
+          if (outcome.kind !== "fixed") throw new HomebrewRefused(outcome);
+        }
         if (probe.isStale()) return;
         // Patiently wait for the title to actually come up. A first launch
         // (just-installed, cold cache, disc image) can take a while; the launch
@@ -863,6 +935,26 @@ export default function InstalledAppsScreen({
         }
       } catch (e) {
         if (probe.isStale()) return;
+        if (e instanceof HomebrewRefused) {
+          // Not this game's fault and not the 11.60 fake-package limit: the console is
+          // refusing every non-Sony title, so name the cause instead.
+          pushNotification("error", withConsolePrefix(probe.host, t.titleName), {
+            body:
+              e.outcome.kind === "no_kstuff"
+                ? tr(
+                    "installed_launch_no_kstuff",
+                    undefined,
+                    "The PS5 refused to start this game (0x80940033) because kstuff isn't running. Without it the console starts no homebrew or fake-package game. Load kstuff (your autoloader, or Connection → Set up) and press Play again.",
+                  )
+                : tr(
+                    "installed_launch_homebrew_refused",
+                    undefined,
+                    "The PS5 refused to start this game (0x80940033). The console isn't starting homebrew or fake-package games right now: reload kstuff (or reboot and run the jailbreak again), then press Play again.",
+                  ),
+            link: faqLink(DOC_ANCHORS.wontLaunch),
+          });
+          return;
+        }
         const raw = e instanceof Error ? e.message : String(e);
         pushNotification("error", withConsolePrefix(probe.host, t.titleName), {
           body: launchHelpBody(humanizePs5Error(raw), probe.host, t.titleId),
@@ -1135,6 +1227,7 @@ export default function InstalledAppsScreen({
       return isBackportEligible(t, row, ps5Kernel);
     })(),
     onBackport: setBackportTitle,
+    onFixPermissions: handleFixPermissions,
   });
 
   // #116: order/filter the Installed group. Least-played first when sorting

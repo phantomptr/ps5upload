@@ -883,3 +883,41 @@ fn n2_a_folders_only_manifest_creates_its_folders() {
     assert!(t.join("dest/a/b").is_dir(), "{}", r.events());
     assert!(!t.join("dest.ava-part").exists());
 }
+
+#[test]
+fn gc_removes_the_half_written_copy_of_an_abandoned_staged_upload() {
+    // An upload given up on part-way leaves dest.ava-part. Only its job could resume it; once the
+    // job is collected nothing else ever removes it, and it holds storage on the console for good.
+    let t = tmp("gcpart");
+    let m = small_files(3);
+    let r = CRecv::open(&t.join("jobs"), &t.join("dest"), 0, gen::POLICY_REPLACE, 0);
+    r.manifest(&m);
+    r.wait_event("map status=0", 5000);
+    r.record(1, &body(0), *blake3::hash(&body(0)).as_bytes());
+    r.wait_event("durable", 10_000);
+    drop(r);
+    assert!(
+        t.join("dest.ava-part").exists(),
+        "the abandoned copy is there"
+    );
+    assert_eq!(jobs_gc(&t.join("jobs"), 3 * 86_400, 86_400), 1);
+    assert!(!job_dir(&t.join("jobs"), &[7; 16]).exists());
+    assert!(
+        !t.join("dest.ava-part").exists(),
+        "gc removed the abandoned copy"
+    );
+}
+
+#[test]
+fn gc_keeps_a_recent_staged_upload_and_its_copy() {
+    let t = tmp("gcpartyoung");
+    let m = small_files(3);
+    let r = CRecv::open(&t.join("jobs"), &t.join("dest"), 0, gen::POLICY_REPLACE, 0);
+    r.manifest(&m);
+    r.wait_event("map status=0", 5000);
+    r.record(1, &body(0), *blake3::hash(&body(0)).as_bytes());
+    r.wait_event("durable", 10_000);
+    drop(r);
+    assert_eq!(jobs_gc(&t.join("jobs"), 0, 86_400), 0);
+    assert!(t.join("dest.ava-part").exists());
+}

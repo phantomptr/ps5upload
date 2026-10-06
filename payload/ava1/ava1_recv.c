@@ -878,7 +878,7 @@ static uint16_t take_dest(ava1_job_t *j, int fresh, char *msg, size_t cap) {
         snprintf(msg, cap, "cannot create the folder that holds the destination");
         return AVA1_ERR_IO;
     }
-    if (mkdir(j->root, 0755) == 0) {
+    if (mkdir(j->root, AVA1_CONSOLE_DIR_MODE) == 0) {
         if ((rc = ava1_sync_dir(parent)) != 0) {
             snprintf(msg, cap, "syncing the destination's folder failed: %s", strerror(rc));
             return AVA1_ERR_IO;
@@ -1114,7 +1114,7 @@ static uint16_t prepare(ava1_job_t *j, char *msg, size_t cap) {
                     snprintf(msg, cap, "%.100s is not a folder", rel);
                     status = AVA1_ERR_PATH;
                 }
-            } else if (mkdir(p, 0755) == 0 || (errno == ENOENT && ava1_mkdirs(p, 1) == 0)) {
+            } else if (mkdir(p, AVA1_CONSOLE_DIR_MODE) == 0 || (errno == ENOENT && ava1_mkdirs(p, 1) == 0)) {
                 ava1_parent_of(p, parent, sizeof parent);
                 if (!(d[nd].dir = strdup(parent))) status = AVA1_ERR_INTERNAL;
                 else d[nd++].id = i;

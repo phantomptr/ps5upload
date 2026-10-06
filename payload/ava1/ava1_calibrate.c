@@ -146,7 +146,7 @@ int ava1_calibrate(const uint8_t *body, uint32_t len, uint8_t *out, size_t cap, 
             break;
         }
         /* An existing directory is not ours to overwrite or sweep. */
-        if (mkdir(sub, 0755) != 0) {
+        if (mkdir(sub, 0777) != 0) {
             status = errno == EEXIST ? AVA1_ERR_EXISTS : AVA1_ERR_IO;
             snprintf(why, sizeof why, "disk.calibrate: mkdir %s failed: %s", sub, strerror(errno));
             break;

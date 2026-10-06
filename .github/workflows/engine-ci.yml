@@ -464,8 +464,9 @@ jobs:
     # run and leaves main red over a job that is explicitly not a gate. It
     # reached 20m17s on 2026-09-16 against a 16m02s green run the day
     # before, so the headroom here is deliberate — keep it well clear of
-    # the real runtime as the test suite grows.
-    timeout-minutes: 40
+    # the real runtime as the test suite grows. On 2026-10-06 one test pass took
+    # ~34 min under instrumentation (scripts/coverage.mjs now runs the suite once).
+    timeout-minutes: 60
     # Reporting job — not a gate. cargo-llvm-cov occasionally trails
     # rustc's profraw format version (we hit "raw profile version
     # mismatch: ... expected version = 9" when rustc bumped to v10),

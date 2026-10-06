@@ -4,18 +4,23 @@ import { hostNetAllowFirewall, hostNetOpenSettings, type NetDiag } from "../../a
 import { Button } from "../../components";
 // Direct import to avoid the barrel's circular-dep warning at build.
 import { useConfirm } from "../../components/ConfirmDialog";
-import { networkFixOffers } from "../../lib/networkFix";
+import { fallbackNetworkFixOffers, networkFixOffers } from "../../lib/networkFix";
+import { isTauriEnv } from "../../lib/tauriEnv";
 import { useTr } from "../../state/lang";
 
 /** The two fixes for "the console cannot reach this computer" on Windows (F2.1). Neither runs
  *  by itself: the first only opens Windows Settings, the second asks first and then Windows
- *  shows its own administrator prompt. */
-export function NetworkFixActions({ diag }: { diag: NetDiag }) {
+ *  shows its own administrator prompt. Without a diagnosis (`diag` null: a queue row, or the
+ *  engine could not read Windows' network state) only "allow on Public networks" is offered,
+ *  and only in the Windows desktop app. */
+export function NetworkFixActions({ diag }: { diag: NetDiag | null }) {
   const tr = useTr();
   const { confirm, dialog } = useConfirm();
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
-  const offers = networkFixOffers(diag);
+  const offers = diag
+    ? networkFixOffers(diag)
+    : fallbackNetworkFixOffers(isTauriEnv() && /Windows/i.test(navigator.userAgent));
   if (!offers.makePrivate && !offers.allowProfile) return null;
   const network =
     offers.allowProfile === "private"
@@ -25,6 +30,7 @@ export function NetworkFixActions({ diag }: { diag: NetDiag }) {
   const openSettings = async () => {
     setNote(null);
     try {
+      if (!diag) return;
       await hostNetOpenSettings(diag.adapter);
       setNote({
         ok: true,

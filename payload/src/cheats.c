@@ -1372,7 +1372,7 @@ static void *watcher_thread(void *arg) {
 /* ── Initialization ──────────────────────────────────────────────── */
 
 static void ensure_dir(const char *path) {
-    mkdir(path, 0755);
+    mkdir(path, 0777);
 }
 
 void cheats_init(void) {

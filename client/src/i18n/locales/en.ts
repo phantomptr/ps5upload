@@ -2086,6 +2086,8 @@ err_launch_busy:
   "PS5 launcher is busy with another title. Close any running game on the PS5 and try Launch again.",
 err_launch_corrupt:
   "PS5 says this title's data is corrupted. The eboot.bin or sce_sys folder may be incomplete — re-upload the game.",
+err_launch_homebrew_refused:
+  "The PS5 refused to start this title (0x80940033). The console isn't starting homebrew or fake-package games right now: load kstuff (or reboot and run the jailbreak again), then try again.",
 err_launch_unknown:
   "PS5 launcher returned 0x{code}. The title may have been removed, or the install isn't complete — try Re-register from the Library tab.",
 err_launch_title_id_invalid:
@@ -3048,9 +3050,6 @@ upload_split_unsupported_body: "Uploading it sends the raw volume to your PS5, w
 upload_split_unsupported_target: "Joins into: {name}",
 volumes_upload_safe_capacity: "{safe} safe for new uploads · {reserve} kept as system/filesystem headroom",
 volumes_kept_by_console: "{kept} kept by the console for its own use",
-"pkglib.staged_refused_use_stream": "The PS5 already refused this package from its own storage, so it will not be tried that way again. Use Retry with Stream.",
-"pkglib.staged_refused_no_stream": "The PS5 already refused this package from its own storage, so it will not be tried that way again, and Stream is not offered for it from here. Install it with Stream & install from the original file on a computer.",
-"pkglib.retry_unavailable": "Retry unavailable",
 net_fix_private: "Private",
 net_fix_public: "Public",
 net_fix_make_private: "Make this network Private",
@@ -3546,6 +3545,11 @@ err_replace_cooldown: "The helper on this console was replaced a moment ago. Wai
 install_hint_setup_exe: "The installer has opened: follow it, and it updates PS5Upload in place.",
 "fakegame.fw.title": "This PS5 game can be installed but not played on FW {fw}",
 "fakegame.fw.body": "It will install, but PS5 fake game packages can't be played on firmware above {last}. PS4 packages are fine, and PS5 homebrew apps launch normally.",
+"installed_fix_permissions": "Fix permissions: make this game's folder readable and runnable by the PS5 (chmod 777)",
+"installed_fix_permissions_short": "Fix permissions",
+"installed_fix_permissions_done": "Permissions fixed: every file in this game's folder is now 0777. Press Play.",
+"installed_launch_no_kstuff": "The PS5 refused to start this game (0x80940033) because kstuff isn't running. Without it the console starts no homebrew or fake-package game. Load kstuff (your autoloader, or Connection → Set up) and press Play again.",
+"installed_launch_homebrew_refused": "The PS5 refused to start this game (0x80940033). The console isn't starting homebrew or fake-package games right now: reload kstuff (or reboot and run the jailbreak again), then press Play again.",
 "fakegame.fw.launch": "PS5 fake game packages can't be played on firmware above {last} (this console is on {fw}). If this game was installed from a fake package, that is why it won't start. PS4 packages are fine.",
 "fakegame.fw.more": "Why?",
 "install_help_wont_launch": "Game won't launch?",

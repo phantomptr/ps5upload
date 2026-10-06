@@ -355,47 +355,6 @@ fn stream_unreachable_hint_for(
 /// or container adapter) rather than this computer's LAN address.
 const HOST_IP_ADVICE: &str = "If the address shown is not this computer's LAN address (a VPN, virtual-machine or container address), set PS5UPLOAD_PKG_HOST_IP to this computer's LAN IP (for example 192.168.x.y) and restart the engine.";
 
-/// Ask the helper whether the console can open a connection to the engine's
-/// pkg-host origin in `url`. `Some(message)` only when it definitely cannot;
-/// `None` when it can, or when the check could not run (an older helper, an
-/// unparseable URL) — that must never block an install that might work.
-async fn reach_block(ip: &str, url: &str) -> Option<ReachBlock> {
-    let origin = origin_of(url)?;
-    let authority = origin.split_once("://")?.1.to_string();
-    let (host, port) = authority.rsplit_once(':')?;
-    let port: u16 = port.parse().ok()?;
-    let (mgmt, h) = (
-        crate::console_addr(ip),
-        host.trim_matches(|c| c == '[' || c == ']').to_string(),
-    );
-    let r = tokio::task::spawn_blocking(move || {
-        ps5upload_core::diagnostics::net_reach(&mgmt, &h, port, 4000)
-    })
-    .await
-    .ok()?
-    .ok()?;
-    if r.ok {
-        return None;
-    }
-    let bridged = crate::pkg_install::bridged_container_without_pkg_host_ip();
-    // Windows: which adapter and category the console is on (never in a container).
-    let diag = if bridged {
-        None
-    } else {
-        net_diag_for(ip, &origin).await
-    };
-    Some(ReachBlock {
-        message: reach_block_message_for(&origin, &r, bridged, diag.as_ref()),
-        diag,
-    })
-}
-
-/// A failed reach check: the words for the person, and what Windows said about the link.
-struct ReachBlock {
-    message: String,
-    diag: Option<crate::win_net::NetDiag>,
-}
-
 /// The Windows diagnosis of the link to the console at `ip`, for an engine reachable at `origin`
 /// (`http://host:port`). `None` off Windows. Runs only after a failure: it takes a second or two.
 async fn net_diag_for(ip: &str, origin: &str) -> Option<crate::win_net::NetDiag> {
@@ -405,49 +364,6 @@ async fn net_diag_for(ip: &str, origin: &str) -> Option<crate::win_net::NetDiag>
         .await
         .ok()
         .flatten()
-}
-
-/// The user-facing reason a reach check failed. A timeout means packets are
-/// being dropped (a firewall on this computer, or client isolation on the
-/// network); a refusal means nothing accepted the connection on that port.
-#[cfg(test)]
-fn reach_block_message(origin: &str, r: &ps5upload_core::diagnostics::NetReach) -> String {
-    reach_block_message_for(origin, r, false, None)
-}
-
-/// `reach_block_message` with the container check passed in. Every
-/// stream-unreachable path ends in one of the two hint builders here, so the
-/// host-IP / host-networking remedy is never missing.
-fn reach_block_message_for(
-    origin: &str,
-    r: &ps5upload_core::diagnostics::NetReach,
-    bridged_container: bool,
-    diag: Option<&crate::win_net::NetDiag>,
-) -> String {
-    if bridged_container {
-        return stream_unreachable_hint_for(Some(origin), 0, true, None);
-    }
-    let how = if r.err.is_empty() {
-        format!("after {} ms", r.ms)
-    } else {
-        format!("{} after {} ms", r.err, r.ms)
-    };
-    if let Some(why) = diag.and_then(|d| d.explain()) {
-        return format!(
-            "The PS5 cannot connect to this computer at {origin} ({how}), so a stream install cannot start. {why} {HOST_IP_ADVICE} Upload & install copies the package to the PS5 instead and does not need this connection."
-        );
-    }
-    let cause = if r.timed_out {
-        "the connection timed out, which usually means a firewall on this computer is silently dropping it (on Windows, allow ps5upload for both Private and Public networks; a PS5 connected through Internet Connection Sharing sits on a Public network), or the Wi-Fi isolates devices from each other"
-    } else if r.errno == 61 || r.errno == 111 || r.err.to_ascii_lowercase().contains("refused") {
-        "the connection was refused, so nothing is accepting connections on that port for the PS5 — a firewall rule that rejects it, or the engine listening on another address"
-    } else {
-        "the network would not let it through"
-    };
-    format!(
-        "The PS5 cannot connect to this computer at {origin} ({}), so a stream install cannot start: {cause}. {HOST_IP_ADVICE} Upload & install copies the package to the PS5 instead and does not need this connection.",
-        how
-    )
 }
 
 /// True when `path` is a game's own installed file on the console —
@@ -848,25 +764,15 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                         match create_serve_session_for(&state, &req, &console_url).await {
                             Ok((sid, url)) => {
                                 served_from = origin_of(&url);
-                                if let Some(block) = reach_block(&ip, &url).await {
-                                    let block = block.message;
-                                    crate::pkg_install::release_serve_session(
-                                        &state.sessions,
-                                        &sid,
-                                    );
-                                    crate::log_warn!("{tag}: {block}");
-                                    (if forced { Err(block) } else { r }, None, false)
-                                } else {
-                                    route = Route::Stream;
-                                    state.jobs.update(&job, |s| s.route = Some(Route::Stream));
-                                    let (i, u, h) = (ip.clone(), url, hint_name.clone());
-                                    let r2 = tokio::task::spawn_blocking(move || {
-                                        ic::install_url(&i, &u, &h)
-                                    })
-                                    .await
-                                    .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
-                                    (r2, Some(sid), false)
-                                }
+                                route = Route::Stream;
+                                state.jobs.update(&job, |s| s.route = Some(Route::Stream));
+                                let (i, u, h) = (ip.clone(), url, hint_name.clone());
+                                let r2 = tokio::task::spawn_blocking(move || {
+                                    ic::install_url(&i, &u, &h)
+                                })
+                                .await
+                                .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
+                                (r2, Some(sid), false)
                             }
                             Err(e) => {
                                 crate::log_warn!("{tag}: could not serve the console's copy: {e}");
@@ -913,25 +819,15 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                         match create_serve_session_for(&state, &req, url).await {
                             Ok((sid, purl)) => {
                                 served_from = origin_of(&purl);
-                                if let Some(block) = reach_block(&ip, &purl).await {
-                                    let block = block.message;
-                                    crate::pkg_install::release_serve_session(
-                                        &state.sessions,
-                                        &sid,
-                                    );
-                                    crate::log_warn!("{tag}: {block}");
-                                    (r, None, was_short)
-                                } else {
-                                    route = Route::Stream;
-                                    state.jobs.update(&job, |s| s.route = Some(Route::Stream));
-                                    let (i, u, h) = (ip.clone(), purl, hint_name.clone());
-                                    let r2 = tokio::task::spawn_blocking(move || {
-                                        ic::install_url(&i, &u, &h)
-                                    })
-                                    .await
-                                    .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
-                                    (r2, Some(sid), false)
-                                }
+                                route = Route::Stream;
+                                state.jobs.update(&job, |s| s.route = Some(Route::Stream));
+                                let (i, u, h) = (ip.clone(), purl, hint_name.clone());
+                                let r2 = tokio::task::spawn_blocking(move || {
+                                    ic::install_url(&i, &u, &h)
+                                })
+                                .await
+                                .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
+                                (r2, Some(sid), false)
                             }
                             Err(e) => {
                                 crate::log_warn!("{tag}: could not proxy the link: {e}");
@@ -946,22 +842,8 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                 match create_serve_session(&state, &req).await {
                     Ok((sid, url)) => {
                         served_from = origin_of(&url);
-                        // Can the console reach us at all? A firewall that
-                        // drops the connection otherwise shows up only as
-                        // Sony's 0x80431068 after a 30 s wait (#342).
-                        if let Some(block) = reach_block(&ip, &url).await {
-                            crate::pkg_install::release_serve_session(&state.sessions, &sid);
-                            crate::log_warn!("{tag}: {}", block.message);
-                            state.jobs.update(&job, |s| {
-                                s.phase = Phase::Failed;
-                                s.verdict = Some(Verdict::Failed);
-                                s.reason = Some(FailReason::StreamUnreachable);
-                                s.hint = Some(block.message.clone());
-                                s.net_diag = block.diag.clone();
-                            });
-                            finalize(&state, &job, &req, started);
-                            return;
-                        }
+                        // No reach pre-check: hand the URL to the console and let it try. If it
+                        // never fetches, the failure below explains why (firewall, host IP).
                         let (i, u, h) = (ip.clone(), url, hint_name.clone());
                         let r = tokio::task::spawn_blocking(move || ic::install_url(&i, &u, &h))
                             .await
@@ -1445,59 +1327,21 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_reach_check_names_the_likely_cause() {
-        use ps5upload_core::diagnostics::NetReach;
-        // #342: a PS5 on Windows Internet Connection Sharing could never
-        // reach the PC; the dropped connection timed out.
-        let dropped = NetReach {
-            ok: false,
-            timed_out: true,
-            errno: 0,
-            err: "timed out".into(),
-            ms: 4000,
-        };
-        let m = reach_block_message("http://192.168.137.1:19113", &dropped);
-        assert!(m.contains("192.168.137.1:19113"), "{m}");
-        assert!(m.contains("firewall"), "{m}");
-        assert!(m.contains("Public"), "{m}");
-        assert!(m.contains("Upload & install"), "{m}");
-        let refused = NetReach {
-            ok: false,
-            timed_out: false,
-            errno: 61,
-            err: "Connection refused".into(),
-            ms: 3,
-        };
-        assert!(reach_block_message("http://x:1", &refused).contains("refused"));
-    }
-
-    #[test]
     fn every_unreachable_path_carries_the_host_ip_guidance() {
-        use ps5upload_core::diagnostics::NetReach;
-        let timed_out = NetReach {
-            ok: false,
-            timed_out: true,
-            errno: 0,
-            err: "timed out".into(),
-            ms: 4000,
-        };
-        // 1. the reach check on a desktop: firewall cause + the host-IP remedy.
-        let m = reach_block_message_for("http://172.17.0.2:19113", &timed_out, false, None);
-        assert!(m.contains("PS5UPLOAD_PKG_HOST_IP"), "{m}");
-        // 2. the reach check inside a bridged container: host networking.
-        let c = reach_block_message_for("http://172.17.0.2:19113", &timed_out, true, None);
+        // 1. a bridged container: host networking.
+        let c = stream_unreachable_hint_for(Some("http://172.17.0.2:19113"), 0, true, None);
         assert!(
             c.contains("PS5UPLOAD_PKG_HOST_IP") && c.contains("--network host"),
             "{c}"
         );
         assert!(c.contains("172.17.0.2"), "{c}");
-        // 3. Sony refused a stream it never fetched (no proxy error).
+        // 2. Sony refused a stream it never fetched (no proxy error).
         let r = stream_unreachable_hint_for(Some("http://10.8.0.2:19113"), 0x80431068, false, None);
         assert!(
             r.contains("PS5UPLOAD_PKG_HOST_IP") && r.contains("0x80431068"),
             "{r}"
         );
-        // 4. accepted but never fetched (the stall path passes code 0): no
+        // 3. accepted but never fetched (the stall path passes code 0): no
         //    made-up return code, same remedy.
         let z = stream_unreachable_hint_for(Some("http://10.8.0.2:19113"), 0, false, None);
         assert!(z.contains("PS5UPLOAD_PKG_HOST_IP"), "{z}");
@@ -1558,23 +1402,6 @@ mod tests {
                 "{h}"
             );
         }
-        // the reach check that found it before the console waited 30 s
-        let r = ps5upload_core::diagnostics::NetReach {
-            ok: false,
-            timed_out: true,
-            errno: 0,
-            err: "timed out".into(),
-            ms: 4000,
-        };
-        let m = reach_block_message_for(origin, &r, false, Some(&d));
-        assert!(
-            m.contains("Ethernet 3") && m.contains("Public network"),
-            "{m}"
-        );
-        assert!(!m.contains("Internet Connection Sharing"), "{m}");
-        // no diagnosis (not Windows, or not read): today's wording, unchanged
-        let plain = reach_block_message_for(origin, &r, false, None);
-        assert!(plain.contains("Internet Connection Sharing"), "{plain}");
         let g = stream_unreachable_hint_for(Some(origin), 0x80431068, false, None);
         assert!(g.contains("on Windows, for both Private and Public"), "{g}");
         // a container still gets the container advice, never a Windows one

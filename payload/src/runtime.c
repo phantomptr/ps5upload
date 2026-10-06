@@ -537,6 +537,25 @@ static int extract_json_bool_field(const char *json, const char *field,
 
 /* ── Public lifecycle ─────────────────────────────────────────────────────────── */
 
+/* chmod 0777 a ps5upload folder and the folders directly inside it. Everything the helper
+ * makes is 0777 (the PS5 runs games and reads packages from here as other users); folders an
+ * older helper made 0755 are opened up on the next start. Files keep their own modes, so the
+ * pairing keys under ava/ stay 0600. Best effort. */
+static void open_up_dir(const char *path) {
+    DIR *d;
+    struct dirent *e;
+    char child[512];
+    struct stat st;
+    if (chmod(path, 0777) != 0) return;
+    if (!(d = opendir(path))) return;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        snprintf(child, sizeof child, "%s/%s", path, e->d_name);
+        if (lstat(child, &st) == 0 && S_ISDIR(st.st_mode)) (void)chmod(child, 0777);
+    }
+    closedir(d);
+}
+
 int runtime_ensure_directories(void) {
     /* Critical dirs — all under /data which the loader's process
      * always has write access to. If any of these fail, the payload
@@ -545,6 +564,7 @@ int runtime_ensure_directories(void) {
     if (ensure_dir(PS5UPLOAD2_RUNTIME_DIR)  != 0) return -1;
     if (ensure_dir(PS5UPLOAD2_DEBUG_DIR)    != 0) return -1;
     if (ensure_dir(PS5UPLOAD2_MOUNTS_DIR)   != 0) return -1;
+    open_up_dir(PS5UPLOAD2_RUNTIME_ROOT);
     /* Optional dirs under /user — Sony-managed root with stricter
      * permissions. Without ucred elevation (kstuff not loaded yet)
      * these mkdirs fail with EACCES. They're only used by the pkg
@@ -563,6 +583,7 @@ int runtime_ensure_directories(void) {
                 "pkg install will retry on demand\n");
     } else {
         /* Only attempt the leaf if the parent succeeded. */
+        open_up_dir(PS5UPLOAD2_USER_DATA_ROOT);
         if (ensure_dir(PS5UPLOAD2_PKG_TEMP_DIR) != 0) {
             fprintf(stderr,
                     "[payload2] pkg_temp dir create skipped; "

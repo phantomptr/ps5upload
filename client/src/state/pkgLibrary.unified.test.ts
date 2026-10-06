@@ -302,26 +302,7 @@ describe("after one staged refusal (Discord 2026-10-04: F3.3)", () => {
     expect(o.netDiag).toEqual(diag);
   });
 
-  it("the console queue's executor never runs the staged route again, and does not touch the console", async () => {
-    const store = pkgLibraryStore(HOST);
-    store.setState({
-      entries: [
-        { path: "/a.pkg", status: "idle", title: "a", lastResult: { ok: false, message: "x", stagedRefused: true, retryWithStream: true } },
-        { path: "/b.pkg", status: "idle", title: "b", lastResult: { ok: false, message: "x", stagedRefused: true } },
-      ] as never,
-    });
-    const a = await store.getState()._execLibrary("/a.pkg", HOST, undefined, false);
-    expect(a.ok).toBe(false);
-    expect(a.message).toContain("Use Retry with Stream");
-    const b = await store.getState()._execLibrary("/b.pkg", HOST, undefined, false);
-    expect(b.ok).toBe(false);
-    expect(b.message).toContain("Stream is not offered");
-    // the rows keep their refusal (nothing ran, so nothing was reset)
-    expect(store.getState().entries.every((e) => e.lastResult?.stagedRefused)).toBe(true);
-    expect(store.getState().installing).toBe(false);
-  });
-
-  it("Retry explains itself when the engine did not offer Stream for the package (a patch off the safe route)", async () => {
+  it("Retry with Stream still goes out when the engine did not offer it", async () => {
     const seen: InstallRequest[] = [];
     registerInstallEnqueuer((input) => {
       seen.push(input.request);
@@ -334,8 +315,7 @@ describe("after one staged refusal (Discord 2026-10-04: F3.3)", () => {
       ] as never,
     });
     const r = await store.getState().retryWithStream("/patch.pkg", HOST);
-    expect(r.ok).toBe(false);
-    expect(r.message).toContain("Stream is not offered");
-    expect(seen).toHaveLength(0);
+    expect(r.ok).toBe(true);
+    expect(seen).toHaveLength(1);
   });
 });

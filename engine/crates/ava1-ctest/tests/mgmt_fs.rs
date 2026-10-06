@@ -327,7 +327,7 @@ async fn fs_stat_reports_dev() {
 // ---- fs.mkdir ----
 
 #[tokio::test(flavor = "multi_thread")]
-async fn mkdir_honours_mode_and_parents() {
+async fn mkdir_makes_0777_and_parents() {
     let r = rig("mkdir").await;
     let mk = |rel: &str, mode: u32, parents: u8| gen::FsMkdir {
         path: r.p(rel),
@@ -338,8 +338,8 @@ async fn mkdir_honours_mode_and_parents() {
     assert_eq!((st, b.len()), (OK, 0));
     assert_eq!(
         std::fs::metadata(r.path("a/b/c")).unwrap().mode() & 0o7777,
-        0o750,
-        "mode applies to the new directory (the umask does not eat it)"
+        0o777,
+        "a new directory is 0777 whatever mode was asked (the umask does not eat it)"
     );
     // parents = 0: a missing parent is an error and nothing is created
     let (st, b) = r.rpc(gen::METHOD_FS_MKDIR, &mk("x/y", 0o755, 0)).await;
@@ -350,7 +350,7 @@ async fn mkdir_honours_mode_and_parents() {
     assert_eq!(st, OK);
     assert_eq!(
         std::fs::metadata(r.path("a/b/c")).unwrap().mode() & 0o7777,
-        0o750
+        0o777
     );
     std::fs::write(r.path("file"), b"").unwrap();
     let (st, b) = r.rpc(gen::METHOD_FS_MKDIR, &mk("file", 0o755, 1)).await;
@@ -613,14 +613,14 @@ const AT: u32 = gen::FSW_AT_OFFSET;
 const COMMIT: u32 = gen::FSW_COMMIT;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn fs_write_whole_file_is_atomic_and_honours_create_and_mode() {
+async fn fs_write_whole_file_is_atomic_honours_create_and_lands_0777() {
     let r = rig("write1").await;
     let (st, b) = r.write("w", 0, OVERWRITE, b"hello", None).await;
     assert_eq!((st, b.len()), (OK, 0));
     assert_eq!(std::fs::read(r.path("w")).unwrap(), b"hello");
     assert_eq!(
         std::fs::metadata(r.path("w")).unwrap().mode() & 0o7777,
-        0o644
+        0o777
     );
     assert!(
         !r.path("w.ps5upload.tmp").exists(),
@@ -632,7 +632,7 @@ async fn fs_write_whole_file_is_atomic_and_honours_create_and_mode() {
     assert_eq!(std::fs::read(r.path("w")).unwrap(), b"v2");
     assert_eq!(
         std::fs::metadata(r.path("w")).unwrap().mode() & 0o7777,
-        0o600
+        0o777
     );
     let (st, b) = r.write("w", 0, CREATE, b"v3", None).await;
     assert_eq!((st, cause(&b).as_str()), (gen::ERR_EXISTS, "exists"));
@@ -684,7 +684,7 @@ async fn fs_write_chunks_commit_on_the_last_and_a_retry_starts_clean() {
     assert!(!r.path("c.ps5upload.tmp").exists());
     assert_eq!(
         std::fs::metadata(r.path("c")).unwrap().mode() & 0o7777,
-        0o640
+        0o777
     );
     // CREATE is checked at commit: the target appeared while chunks were sent
     let (st, _) = r.write("d", 0, CREATE | AT, b"zz", None).await;
