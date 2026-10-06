@@ -1017,6 +1017,109 @@ fn smooth_rates(lane_bytes: &mut HashMap<u16, u64>, lane_rate: &mut HashMap<u16,
     }
 }
 
+/// A frame a lane took: its seq, type, shared body and take-marker.
+type Picked = (u32, u8, Arc<Vec<u8>>, Arc<AtomicBool>);
+
+/// What one pick of a lane task found.
+enum Pick {
+    /// A frame charged to the lane and recorded in `inflight`: the lane must send it.
+    Frame(Picked),
+    /// Nothing this lane can send now: it waits for a wake.
+    Idle,
+    /// The lane was stopped (its `LaneDown` is being handled): nothing was charged.
+    Stopped,
+}
+
+/// One pick for `lane` under the scheduler's locks: the next frame the window allows is
+/// charged to the lane and recorded in `inflight`, or a credit stall is noted.
+fn pick_for_lane(sh: &Shared, lane: u16, stop: &AtomicBool) -> Pick {
+    let mut s = sh.sched.lock().unwrap();
+    // The stop flag is read again under the sched lock, not only at the top of the
+    // lane's loop. `LaneDown` sets it before `lane_death` sweeps, and the sweeps take
+    // this lock: a task that passed the loop-top check just before the stop, and
+    // reached this pick only after `lane_death` had finished (both sweeps done),
+    // would otherwise charge a frame to the dead lane and move it into `inflight`.
+    // Its send then fails against the closed queue, nothing sweeps that lane again,
+    // and the frame stays in `inflight` with no lane to carry it: never sent, never
+    // `Received`, nothing queued, so the job parks forever and the stall rule (which
+    // needs a queued frame) never fires. Under this lock the check is exact: a pick
+    // ordered before the first sweep's lock is found by one of the two sweeps, and a
+    // pick ordered after it sees the stop (the store precedes that lock).
+    if stop.load(Ordering::Relaxed) {
+        return Pick::Stopped;
+    }
+    let mut w = sh.window.lock().unwrap();
+    let chunk = sh.chunk.load(Ordering::Relaxed);
+    let rate = s.lane_rate.get(&lane).copied().unwrap_or(0.0);
+    let cap = governor::inflight_cap(chunk, rate);
+    match pick_any(&mut s, lane, &w, cap) {
+        Some(mut f) => {
+            let len = f.body.len() as u64;
+            s.next_seq += 1;
+            let seq = s.next_seq;
+            let ty = f.ty;
+            // Shared, not copied: the frame stays in `inflight` for a resend.
+            let body = f.body.clone();
+            if f.class == Class::Bundle {
+                s.bundles_inflight += 1;
+            }
+            assert!(w.sent(lane, seq, len), "can_send passed");
+            // The take-marker: the writer flips it the moment it takes the
+            // frame out of its queue (see `LaneDown` in `run_upload`).
+            let taken = Arc::new(AtomicBool::new(false));
+            f.taken = Some(taken.clone());
+            s.inflight.insert(seq, (lane, f));
+            drop(w);
+            drop(s);
+            // Progress: a stall another lane observed is not a deadlock.
+            *sh.stall.lock().unwrap() = None;
+            Pick::Frame((seq, ty, body, taken))
+        }
+        None => {
+            let pending = !s.requeue.is_empty() || !s.bundles.is_empty() || !s.chunks.is_empty();
+            if pending {
+                let grant = w.available();
+                let smallest = smallest_queued(&s).unwrap_or(0);
+                let mut stall = sh.stall.lock().unwrap();
+                if smallest > grant {
+                    // I2: a genuine credit stall — the window cannot hold the
+                    // smallest queued frame, so nothing can be sent on any lane
+                    // until the receiver grants Credit. When that persists with
+                    // no send, Received or Credit anywhere, the receiver is
+                    // applying nothing and will grant nothing — the control loop
+                    // fails the job loudly instead of parking it forever. Record
+                    // the window and the smallest queued frame once (progress
+                    // clears it; the earliest mark wins).
+                    s.credit_starved = true;
+                    if stall.is_none() {
+                        *stall = Some(Stall {
+                            since: Instant::now(),
+                            grant,
+                            smallest,
+                        });
+                    }
+                } else {
+                    // The smallest frame fits the window but not this lane's
+                    // in-flight cap (a frame larger than the cap, or charged
+                    // before its rate warmed): ordinary per-lane backpressure.
+                    // The Received for those bytes — or another lane's send —
+                    // moves the job by itself; it must never mark a stall, and
+                    // a stale mark from a window that has since changed is
+                    // cleared here. Accepted tradeoff (see `Stall`): a receiver
+                    // that keeps the link alive but never acknowledges can
+                    // park such a lane forever — SPEC §12.3 obliges the
+                    // receiver to acknowledge promptly, so the parking receiver
+                    // is the one outside the protocol.
+                    *stall = None;
+                }
+            } else {
+                s.source_starved = true;
+            }
+            Pick::Idle
+        }
+    }
+}
+
 /// One per lane: take the next frame the window allows, send it, repeat. Exits when the
 /// lane's send fails (the control loop sees LaneDown and requeues) or `stop` is set.
 async fn lane_task(lane: LaneTx, sh: Arc<Shared>, cap_bps: Option<u64>, stop: Arc<AtomicBool>) {
@@ -1030,79 +1133,10 @@ async fn lane_task(lane: LaneTx, sh: Arc<Shared>, cap_bps: Option<u64>, stop: Ar
         // The version is marked seen before the state check: a wake between the check and
         // the wait below lands as a version bump and is not lost (correction 4).
         let _ = *wake.borrow_and_update();
-        let next = {
-            let mut s = sh.sched.lock().unwrap();
-            let mut w = sh.window.lock().unwrap();
-            let chunk = sh.chunk.load(Ordering::Relaxed);
-            let rate = s.lane_rate.get(&lane.id).copied().unwrap_or(0.0);
-            let cap = governor::inflight_cap(chunk, rate);
-            match pick_any(&mut s, lane.id, &w, cap) {
-                Some(mut f) => {
-                    let len = f.body.len() as u64;
-                    s.next_seq += 1;
-                    let seq = s.next_seq;
-                    let ty = f.ty;
-                    // Shared, not copied: the frame stays in `inflight` for a resend.
-                    let body = f.body.clone();
-                    if f.class == Class::Bundle {
-                        s.bundles_inflight += 1;
-                    }
-                    assert!(w.sent(lane.id, seq, len), "can_send passed");
-                    // The take-marker: the writer flips it the moment it takes the
-                    // frame out of its queue (see `LaneDown` in `run_upload`).
-                    let taken = Arc::new(AtomicBool::new(false));
-                    f.taken = Some(taken.clone());
-                    s.inflight.insert(seq, (lane.id, f));
-                    drop(w);
-                    drop(s);
-                    // Progress: a stall another lane observed is not a deadlock.
-                    *sh.stall.lock().unwrap() = None;
-                    Some((seq, ty, body, taken))
-                }
-                None => {
-                    let pending =
-                        !s.requeue.is_empty() || !s.bundles.is_empty() || !s.chunks.is_empty();
-                    if pending {
-                        let grant = w.available();
-                        let smallest = smallest_queued(&s).unwrap_or(0);
-                        let mut stall = sh.stall.lock().unwrap();
-                        if smallest > grant {
-                            // I2: a genuine credit stall — the window cannot hold the
-                            // smallest queued frame, so nothing can be sent on any lane
-                            // until the receiver grants Credit. When that persists with
-                            // no send, Received or Credit anywhere, the receiver is
-                            // applying nothing and will grant nothing — the control loop
-                            // fails the job loudly instead of parking it forever. Record
-                            // the window and the smallest queued frame once (progress
-                            // clears it; the earliest mark wins).
-                            s.credit_starved = true;
-                            if stall.is_none() {
-                                *stall = Some(Stall {
-                                    since: Instant::now(),
-                                    grant,
-                                    smallest,
-                                });
-                            }
-                        } else {
-                            // The smallest frame fits the window but not this lane's
-                            // in-flight cap (a frame larger than the cap, or charged
-                            // before its rate warmed): ordinary per-lane backpressure.
-                            // The Received for those bytes — or another lane's send —
-                            // moves the job by itself; it must never mark a stall, and
-                            // a stale mark from a window that has since changed is
-                            // cleared here. Accepted tradeoff (see `Stall`): a receiver
-                            // that keeps the link alive but never acknowledges can
-                            // park such a lane forever — SPEC §12.3 obliges the
-                            // receiver to acknowledge promptly, so the parking receiver
-                            // is the one outside the protocol.
-                            *stall = None;
-                        }
-                    } else {
-                        s.source_starved = true;
-                    }
-                    None
-                }
-            }
+        let next = match pick_for_lane(&sh, lane.id, &stop) {
+            Pick::Frame(p) => Some(p),
+            Pick::Idle => None,
+            Pick::Stopped => return,
         };
         let Some((seq, ty, body, taken)) = next else {
             if wake.changed().await.is_err() {
@@ -2809,6 +2843,89 @@ mod tests {
             (1 << 20) - len,
             "the frame's charge was released although the writer took it: the window was spent twice"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_pick_that_slips_past_the_stop_after_the_lane_death_strands_nothing() {
+        // The soak's resume hang (120 s parked with `inflight 1`, nothing queued, no lane
+        // carrying it, no stall): a lane task passed its loop-top stop check just before
+        // its LaneDown and reached its pick only after `lane_death` had finished both
+        // sweeps. The pick charged a frame to the dead lane and moved it into `inflight`;
+        // its send failed against the closed queue, nothing swept that lane again, and the
+        // frame was never sent nor `Received`. The job waited for a JobDone that could not
+        // come, and the stall rule never fired because nothing was queued. This replays
+        // that order deterministically: the stop is set and `lane_death` runs to the end
+        // against a dead writer, then comes the pick the straggling task makes next.
+        let timing = Timing {
+            ping_every: Duration::from_secs(3600),
+            dead_after: Duration::from_secs(3600),
+            handshake: Duration::from_secs(1),
+            min_frame_rate: crate::link::MIN_FRAME_RATE,
+        };
+        let (a, _b) = duplex(1 << 20);
+        let (ar, aw) = split(a);
+        let (tx, _rx) = mpsc::channel(crate::link::DELIVER_DEPTH);
+        let (link, outbox) =
+            crate::link::drive(FrameReader::new(ar), FrameWriter::new(aw), timing, tx);
+        let tx = ConnTx::new(outbox);
+        // The writer is running before it is killed (it marks its own death once started).
+        let running = Arc::new(AtomicBool::new(false));
+        tx.send_raw_marked(Chunk::TYPE, 0, 99, vec![0x11; 64], running.clone())
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !running.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the writer started within the bound");
+        let sh = test_shared(governor::START_CHUNK, READ_AHEAD_KIB as usize);
+        // One frame charged to lane 1 and in flight, never taken by its writer.
+        let mut f = test_frame(Chunk::TYPE, 1024);
+        f.taken = Some(Arc::new(AtomicBool::new(false)));
+        assert!(sh.window.lock().unwrap().sent(1, 7, f.body.len() as u64));
+        sh.sched.lock().unwrap().inflight.insert(7, (1, f));
+        // The LaneDown, in the control loop's order: the stop first, then the death
+        // handling, run to its end once the writer is dead.
+        let stop = AtomicBool::new(false);
+        stop.store(true, Ordering::Relaxed);
+        drop(link);
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !tx.writer_dead() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the writer died within the bound");
+        lane_death(sh.clone(), 1, tx).await;
+        {
+            let s = sh.sched.lock().unwrap();
+            assert!(
+                s.inflight.is_empty() && s.requeue.len() == 1,
+                "the sweep requeued it"
+            );
+        }
+        assert_eq!(sh.window.lock().unwrap().available(), 1 << 20);
+        // The straggler's pick, after the sweeps: it must charge nothing to the dead lane.
+        assert!(
+            matches!(pick_for_lane(&sh, 1, &stop), Pick::Stopped),
+            "a stopped lane picked a frame after its death was handled"
+        );
+        {
+            let s = sh.sched.lock().unwrap();
+            assert!(
+                s.inflight.is_empty(),
+                "a frame was charged to a dead lane after its sweeps: no lane will ever carry it"
+            );
+            assert_eq!(s.requeue.len(), 1, "the frame stays queued for a live lane");
+        }
+        assert_eq!(sh.window.lock().unwrap().available(), 1 << 20);
+        // A live lane takes it.
+        assert!(matches!(
+            pick_for_lane(&sh, 2, &AtomicBool::new(false)),
+            Pick::Frame((1, _, _, _))
+        ));
     }
 
     /// A lane task over an in-memory pipe with a custom window: the task, the shared
