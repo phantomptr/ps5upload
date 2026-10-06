@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dutyAtTemp } from "./index";
+import { dutyAtTemp, turboThresholdC } from "./index";
 import type { FanCurvePoint } from "../../api/ps5";
 
 // The graph's "you are here" marker reads the duty off this function, so if it
@@ -46,5 +46,23 @@ describe("dutyAtTemp", () => {
       { temp_c: 60, duty_pct: 80 },
     ];
     expect(dutyAtTemp(flat, 60)).toBe(20);
+  });
+});
+
+// The console takes ONE temperature, not a curve (#400). This must agree with
+// payload/src/fan_map.c, or the screen names a temperature the console is not using.
+describe("turboThresholdC", () => {
+  it("is the lowest point asking for 100%, capped at the stock 60 °C", () => {
+    expect(turboThresholdC(curve)).toBe(60);
+    expect(
+      turboThresholdC([
+        { temp_c: 45, duty_pct: 40 },
+        { temp_c: 50, duty_pct: 100 },
+      ]),
+    ).toBe(50);
+  });
+  it("stays at stock when no point asks for 100%, and never goes below 45 °C", () => {
+    expect(turboThresholdC([{ temp_c: 40, duty_pct: 30 }])).toBe(60);
+    expect(turboThresholdC([{ temp_c: 30, duty_pct: 100 }])).toBe(45);
   });
 });

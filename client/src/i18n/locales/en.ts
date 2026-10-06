@@ -3554,6 +3554,9 @@ install_hint_setup_exe: "The installer has opened: follow it, and it updates PS5
 "fakegame.fw.more": "Why?",
 "install_help_wont_launch": "Game won't launch?",
 "install_help_what_means": "What does this mean?",
+fanCurve_subtitle_v2: "Set the temperature at which the PS5's fans go to full speed. Persists across reboots.",
+fanCurve_one_threshold: "The PS5 has one fan setting: the temperature at which its fans go to full speed. It cannot follow a curve. With these points that temperature is {temp} °C: the lowest point that asks for 100%, never above the stock 60 °C or below 45 °C. Below it the console runs its fans as it normally does, so the other points change nothing.",
+fanCurve_persisted_v2: "A fan setting is saved on this PS5. It is restored every time the helper loads; no desktop app needed.",
 };
 
 export default en;

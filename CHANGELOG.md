@@ -4,6 +4,21 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.2.1
+
+**Retrying a big file continues where it stopped.** Update the app and the helper together.
+
+- **Retrying a single-file upload:** starting the same file again (Start, or adding it to the
+  queue again) now continues the copy the PS5 kept, instead of asking for room for the whole
+  file a second time while the partial copy still takes up that room.
+- **Fan Curve:** the screen now says what it really sets. The PS5 has one fan setting, the
+  temperature at which the fans go to full speed, and cannot follow a curve; the screen shows
+  the temperature your points give.
+- **"The PS5 declined the install":** now shows Sony's error code, so a report can say which
+  refusal it was.
+
+---
+
 ## 6.2.0
 
 **Games launch again, and installs stop giving up early.** Update the app and the helper together.

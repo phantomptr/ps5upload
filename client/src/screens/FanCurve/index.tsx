@@ -47,6 +47,25 @@ export function dutyAtTemp(
   return last.duty_pct;
 }
 
+/** Stock turbo temperature and the lowest the console accepts (payload fan_map.h). */
+const TURBO_STOCK_C = 60;
+const TURBO_MIN_C = 45;
+
+/**
+ * The one temperature a curve really sets on the console.
+ *
+ * The PS5's fan controller takes a single value: the temperature at which its
+ * own fan control goes to full speed. It cannot follow a curve, so the payload
+ * maps one to the lowest point asking for 100%, kept within
+ * [TURBO_MIN_C, TURBO_STOCK_C] (payload/src/fan_map.c: same rule, same bounds).
+ * Shown on the screen so nobody waits for the other points to do something (#400).
+ */
+export function turboThresholdC(points: readonly FanCurvePoint[]): number {
+  const full = points.filter((p) => p.duty_pct >= 100).map((p) => p.temp_c);
+  const t = full.length ? Math.min(...full) : TURBO_STOCK_C;
+  return Math.max(TURBO_MIN_C, Math.min(TURBO_STOCK_C, t));
+}
+
 /** Named starting points. Seeds the editor only — every point stays editable.
  *  The common ask is "quieter" or "cooler", not a specific duty at a specific
  *  degree, which is what the four number fields alone forced you to think in. */
@@ -250,14 +269,25 @@ export default function FanCurveScreen() {
         icon={Fan}
         title={tr("fanCurve_title", undefined, "Fan Curve")}
         description={tr(
-          "fanCurve_subtitle",
+          "fanCurve_subtitle_v2",
           undefined,
-          "Define a custom fan duty curve by temperature. Persists across reboots.",
+          "Set the temperature at which the PS5's fans go to full speed. Persists across reboots.",
         )}
       />
 
       <ConnectionGate>
         {error && <ErrorCard title={error} />}
+
+        <div className="flex items-start gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-3 text-sm text-[var(--color-text)]">
+          <Info size={14} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
+          <span>
+            {tr(
+              "fanCurve_one_threshold",
+              { temp: turboThresholdC(points) },
+              `The PS5 has one fan setting: the temperature at which its fans go to full speed. It cannot follow a curve. With these points that temperature is ${turboThresholdC(points)} °C: the lowest point that asks for 100%, never above the stock 60 °C or below 45 °C. Below it the console runs its fans as it normally does, so the other points change nothing.`,
+            )}
+          </span>
+        </div>
 
         {applied && (
           <div className="rounded-lg border border-[var(--color-good)] bg-[var(--color-good-soft)] px-4 py-3 text-sm text-[var(--color-good)]">
@@ -274,9 +304,9 @@ export default function FanCurveScreen() {
             <Info size={14} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
             <span>
               {tr(
-                "fanCurve_persisted",
+                "fanCurve_persisted_v2",
                 undefined,
-                "A fan curve is saved on this PS5. The first point's temperature is the active fan threshold and auto-restores on every payload load — no desktop app needed.",
+                "A fan setting is saved on this PS5. It is restored every time the helper loads; no desktop app needed.",
               )}
             </span>
           </div>

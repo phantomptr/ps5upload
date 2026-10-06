@@ -24,8 +24,10 @@ import {
   uploadQueueSave,
   UploadJobError,
   powerStandby,
+  resumeTxidForget,
   type ReconcileMode,
 } from "../api/ps5";
+import { fileResumeTxId } from "../lib/fileResumeTx";
 import { restAfterUploadEnabled } from "./restAfterUpload";
 import {
   moveItemDownWithinGroup,
@@ -964,11 +966,24 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
       // user clicks "Retry / Resume" — pick up from the payload's
       // last-acked shard instead of restarting from zero. Same pattern
       // as folder uploads.
+      // An earlier attempt at this same file (the Upload screen's Start, or
+      // a queue item since removed) left its partial under ITS id; only that
+      // id resumes it and has its bytes credited by the space check (#401).
+      const txIdHex = await fileResumeTxId(
+        hostOf(item.addr),
+        item.sourcePath,
+        item.resolvedDest,
+        item.txIdHex,
+      );
+      if (txIdHex !== item.txIdHex) {
+        set((s) => ({ items: patchItem(s.items, item.id, { txIdHex }) }));
+        scheduleSave();
+      }
       jobId = await startTransferFile(
         item.sourcePath,
         item.resolvedDest,
         item.addr,
-        item.txIdHex,
+        txIdHex,
       );
     }
 
@@ -1003,6 +1018,18 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
         throw new Error("queue stopped");
       }
       if (snap.status === "done") {
+        if (!isFolder && !isArchive) {
+          // Nothing left to resume: the next upload of this file is a new job.
+          try {
+            void resumeTxidForget(
+              hostOf(item.addr),
+              item.sourcePath,
+              item.resolvedDest,
+            ).catch(() => undefined);
+          } catch {
+            /* no store */
+          }
+        }
         let mountedAt: string | null = null;
         const mountWarnings: string[] = [];
         // Re-check liveness before initiating the mount. Without this,

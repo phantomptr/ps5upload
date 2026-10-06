@@ -87,6 +87,13 @@ describe("statusToOutcome — maps the unified verdict to the UI outcome", () =>
     expect(o.errMessage).toBe("Sony refused it");
   });
 
+  it("a plain refusal keeps Sony's code, the only thing that tells one from another (#399)", () => {
+    const o = statusToOutcome(
+      status({ phase: "failed", verdict: "failed", reason: "sony_refused", code: 0x80b21106 }),
+    );
+    expect(o.errMessage).toBe("The PS5 declined the install. (0x80b21106)");
+  });
+
   it("a stream the PS5 never reached gets the app's guidance and the code, not the engine's English", () => {
     const o = statusToOutcome(
       status({

@@ -308,7 +308,10 @@ export function statusToOutcome(st: InstallStatus): PkgInstallOutcome {
         ? st.code
           ? `${guidance} (${hexCode(st.code)})`
           : guidance
-        : (st.hint && st.hint.trim()) || guidance || hexCode(st.code);
+        : (st.hint && st.hint.trim()) ||
+          // Sony's code is the only thing that tells one refusal from another (#399).
+          (guidance && st.code ? `${guidance} (${hexCode(st.code)})` : guidance) ||
+          hexCode(st.code);
     }
   }
   return {

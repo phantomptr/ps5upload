@@ -24,6 +24,7 @@ import {
   type ReconcileMode,
 } from "../api/ps5";
 import { startPs5ToPs5 } from "../api/ava1";
+import { fileResumeTxId } from "../lib/fileResumeTx";
 import { createRunGen } from "../lib/runGen";
 import { log } from "./logs";
 import {
@@ -286,9 +287,9 @@ export const useTransferStore = create<TransferState>((set) => {
       // For folder uploads we carry the tx_id ourselves so a Resume
       // click (even after an app restart, within the 24 h TTL) reuses
       // the same tx and the payload's journal can surface
-      // last_acked_shard. For file uploads, engine mints a fresh tx_id
-      // each time — no Resume UX on single files today, so persisting
-      // a tx_id would just create surprise skip-behavior on re-upload.
+      // last_acked_shard. A single file reuses the id of an earlier
+      // failed attempt the same way (see fileResumeTxId): the console
+      // only credits a kept `.ava-part` to the job that wrote it (#401).
       const host = hostFromAddr(addr);
       // Friendly name for the PS5-side toasts (start + complete).
       const uploadName =
@@ -347,6 +348,10 @@ export const useTransferStore = create<TransferState>((set) => {
         }
       }
 
+      if (!isFolder && !isArchive && !ps5Source) {
+        txId = await fileResumeTxId(host, srcPath, dest, generateTxIdHex());
+      }
+
       log.info(
         "upload",
         `start "${uploadName}" → ${dest} [${sourceKind}, ${strategy}${txId ? `, tx=${txId.slice(0, 8)}` : ""}]`,
@@ -403,7 +408,7 @@ export const useTransferStore = create<TransferState>((set) => {
             jobId = await start(srcPath, dest, addr, txId, excludes, bandwidthCap);
           }
         } else {
-          jobId = await startTransferFile(srcPath, dest, addr);
+          jobId = await startTransferFile(srcPath, dest, addr, txId);
         }
       } catch (e) {
         if (!isLive()) return;
@@ -635,12 +640,11 @@ export const useTransferStore = create<TransferState>((set) => {
           // lingering record would make a subsequent upload-of-same-
           // source's Resume click look up a committed tx_id, which the
           // payload's journal may or may not still carry (depending on
-          // eviction pressure). Forget proactively. Archives persist a
-          // resume tx_id at start too (the remember/lookup block is
-          // gated on `isFolder || isArchive`), so they must be evicted
-          // here as well — otherwise a re-upload of the same .zip
-          // "resumes" against a committed tx.
-          if (isFolder || isArchive) {
+          // eviction pressure). Forget proactively. Archives and single
+          // files persist a resume tx_id at start too, so they must be
+          // evicted here as well — otherwise a re-upload of the same
+          // source "resumes" against a committed tx.
+          if (txId) {
             void resumeTxidForget(host, srcPath, dest);
           }
           // Persist this host's measured throughput so the next upload

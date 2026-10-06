@@ -147,7 +147,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "ava1"
-version = "6.2.0"
+version = "6.2.1"
 dependencies = [
  "ava1-chaos",
  "blake2 0.10.6",
@@ -165,14 +165,14 @@ dependencies = [
 
 [[package]]
 name = "ava1-chaos"
-version = "6.2.0"
+version = "6.2.1"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "ava1-ctest"
-version = "6.2.0"
+version = "6.2.1"
 dependencies = [
  "anyhow",
  "ava1",
@@ -188,7 +188,7 @@ dependencies = [
 
 [[package]]
 name = "ava1-gen"
-version = "6.2.0"
+version = "6.2.1"
 dependencies = [
  "serde",
  "toml",
@@ -1980,7 +1980,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-ava1"
-version = "6.2.0"
+version = "6.2.1"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2000,7 +2000,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-core"
-version = "6.2.0"
+version = "6.2.1"
 dependencies = [
  "aes 0.9.3",
  "anyhow",
@@ -2023,7 +2023,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-engine"
-version = "6.2.0"
+version = "6.2.1"
 dependencies = [
  "aes-gcm 0.11.1",
  "anyhow",
@@ -2060,7 +2060,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-fpkg"
-version = "6.2.0"
+version = "6.2.1"
 dependencies = [
  "aes 0.9.3",
  "crc32fast",
@@ -2079,7 +2079,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-lab"
-version = "6.2.0"
+version = "6.2.1"
 dependencies = [
  "anyhow",
  "ava1",
@@ -2096,7 +2096,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-pkg"
-version = "6.2.0"
+version = "6.2.1"
 dependencies = [
  "blake3",
  "serde",
@@ -2106,7 +2106,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-tests"
-version = "6.2.0"
+version = "6.2.1"
 dependencies = [
  "anyhow",
  "ava1",
