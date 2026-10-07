@@ -886,8 +886,9 @@ mod tests {
             .unwrap()
             .iter()
             .any(|(p, _)| p == "p" || p == "q"));
-        assert_eq!(s.delivered.load(Ordering::SeqCst), 2);
+        // Receiving the last record can race the source's post-send accounting.
         r.end();
+        assert_eq!(s.delivered.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test(flavor = "multi_thread")]

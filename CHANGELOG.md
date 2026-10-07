@@ -4,6 +4,12 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.2.3
+
+The 6.2.2 fixes, with a more reliable CI test run. No app or helper behavior changed.
+
+---
+
 ## 6.2.2
 
 **Fan control that respects the console, and a round of fixes from your reports.** Update the app and the helper together.
