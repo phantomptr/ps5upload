@@ -33,6 +33,9 @@ import {
   type RemotePlayReadiness,
 } from "../../api/ps5";
 import { humanizePs5Error } from "../../lib/humanizeError";
+import { openExternalUrl } from "../../lib/openExternalUrl";
+import { NP_FAKE_SIGNIN_URL, NpSignInCard } from "./NpSignInCard";
+import { useNavigate } from "react-router";
 
 /** Firmware magic to a human version, e.g. 0x09600004 -> "9.60".
  *
@@ -196,6 +199,7 @@ export default function RemotePlayScreen() {
   const addr = host ? transferAddr(host) : "";
   const visible = useDocumentVisible();
   const guard = useStaleHostGuard();
+  const navigate = useNavigate();
 
   const [manualAccountId, setManualAccountId] = useState("");
   const [status, setStatus] = useState<RemotePlayStatus | null>(null);
@@ -354,6 +358,11 @@ export default function RemotePlayScreen() {
           onEnable={handleEnable}
           busy={busy}
           tr={tr}
+        />
+
+        <NpSignInCard
+          onDownload={() => void openExternalUrl(NP_FAKE_SIGNIN_URL)}
+          onOpenPayloads={() => navigate("/payloads")}
         />
 
         {/* Request form */}

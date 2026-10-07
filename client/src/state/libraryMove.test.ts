@@ -7,9 +7,11 @@ const {
   runLibraryMove,
   stopLibraryMove,
   dismissLibraryMove,
+  moveRetryDest,
 } = await import("./libraryMove");
 type Deps = import("./libraryMove").LibraryMoveDeps;
 type End = import("./libraryMove").LibraryMoveState;
+type LibraryMoveState = End;
 
 const HOST = "192.168.0.5";
 const SRC = "/data/homebrew/GAME";
@@ -150,5 +152,33 @@ describe("runLibraryMove", () => {
     await p;
     dismissLibraryMove(KEY);
     expect(state()).toBeNull();
+  });
+});
+
+describe("moveRetryDest", () => {
+  const ended = (phase: LibraryMoveState["phase"]): LibraryMoveState => ({
+    phase,
+    from: "/data/homebrew/Game",
+    to: "/mnt/ext0/homebrew/Game",
+    bytesCopied: 10,
+    totalBytes: 100,
+    error: null,
+    progressUnsupported: null,
+    stopRequested: false,
+    startedAtMs: 0,
+  });
+
+  it("offers the same destination again after a stop or a failed copy", () => {
+    expect(moveRetryDest(ended("cancelled"))).toBe("/mnt/ext0/homebrew/Game");
+    expect(moveRetryDest(ended("copy-failed"))).toBe("/mnt/ext0/homebrew/Game");
+  });
+
+  it("offers nothing once the copy has landed, or while it runs", () => {
+    // After a landed copy the destination is the user's game: a second copy would be refused.
+    expect(moveRetryDest(ended("done"))).toBeNull();
+    expect(moveRetryDest(ended("delete-failed"))).toBeNull();
+    expect(moveRetryDest(ended("copying"))).toBeNull();
+    expect(moveRetryDest(ended("deleting"))).toBeNull();
+    expect(moveRetryDest(null)).toBeNull();
   });
 });

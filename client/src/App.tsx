@@ -1,7 +1,11 @@
 import { readLastRoute } from "./lib/lastRoute";
-import { Suspense, type ReactNode } from "react";
-import { useConnectionStore } from "./state/connection";
-import { Navigate, Route, Routes } from "react-router";
+import { Activity, Suspense, useEffect, useState, type ReactNode } from "react";
+import {
+  ConnectionScope,
+  connectionSnapshotFor,
+  useConnectionStore,
+} from "./state/connection";
+import { Navigate, Route, Routes, useLocation, type Location } from "react-router";
 
 import { lazyWithReload } from "./lib/lazyWithReload";
 import AppShell from "./layout/AppShell";
@@ -102,24 +106,64 @@ function NativeOnlyRoute({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+/** How many consoles keep their screens alive at once (the selected one included). */
+const KEPT_CONSOLES = 3;
+
+const NO_CONSOLE = "no-console";
+
 export default function App() {
   // Screen state is per-console, and nothing from one console should
   // ever be shown against another.
   //
-  // Individual screens guard their own in-flight calls with
-  // useStaleHostGuard, but that only covers screens that remembered to
-  // use it -- most do not, and every new screen starts out not using
-  // it. Keying the whole route tree on the selected console closes the
-  // class instead of patching it site by site: on a switch, React
-  // unmounts every screen and remounts it fresh, so no cached list,
-  // scan result, or error message can survive the change, and a reply
-  // that arrives late lands on an unmounted component and is dropped.
+  // Each console the user selects gets its own tree of screens. Only the
+  // selected console's tree is on show; the others stay mounted but
+  // hidden, so switching console tabs and back loses nothing that was
+  // typed, opened or loaded. A hidden tree runs no effects (no timers,
+  // no requests), reads the connection state as it was when its console
+  // was last selected (ConnectionScope), and keeps the address it was
+  // last on. So it cannot turn into the selected console, and a reply
+  // that arrives late lands on the tree of the console that asked.
   //
   // Transfers and queues are unaffected: they live in stores outside
   // the React tree, not in screen state.
   const host = useConnectionStore((s) => s.host);
+  const here = host || NO_CONSOLE;
+  const location = useLocation();
+  const [kept, setKept] = useState<Array<{ key: string; location: Location }>>([]);
+  useEffect(() => {
+    // Most recent last; the console selected longest ago is let go beyond the limit.
+    setKept((prev) =>
+      [...prev.filter((k) => k.key !== here), { key: here, location }].slice(-KEPT_CONSOLES),
+    );
+  }, [here, location]);
+  // The console being selected is not in `kept` until the effect above has run.
+  const trees = kept.some((k) => k.key === here) ? kept : [...kept, { key: here, location }];
   return (
-    <Routes key={host || "no-console"}>
+    <>
+      {[...trees]
+        .sort((a, b) => a.key.localeCompare(b.key))
+        .map(({ key, location: last }) => {
+          const active = key === here;
+          const treeHost = key === NO_CONSOLE ? "" : key;
+          // A hidden tree with nothing remembered for its console would read the selected
+          // console's state: better gone than wrong.
+          if (!active && !connectionSnapshotFor(treeHost)) return null;
+          return (
+            <Activity key={key} mode={active ? "visible" : "hidden"}>
+              <ConnectionScope host={treeHost} frozen={!active}>
+                {/* Always given a location, so the tree keeps one shape whether shown or hidden. */}
+                <AppRoutes location={active ? location : last} />
+              </ConnectionScope>
+            </Activity>
+          );
+        })}
+    </>
+  );
+}
+
+function AppRoutes({ location }: { location: Location }) {
+  return (
+    <Routes location={location}>
       <Route element={<AppShell />}>
         {/* Landing: fresh installs go to Connection (see LandingRedirect);
          * returning users land on the changelog and route-restore takes

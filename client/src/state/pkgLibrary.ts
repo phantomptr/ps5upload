@@ -244,7 +244,7 @@ const REASON_GUIDANCE: Record<string, [string, string, boolean]> = {
   ],
   staged_refused: [
     "pkg.reason.staged_refused",
-    "The PS5 refused this package from its own storage. That is a limit of this install route on these firmwares, not a problem with the file. Install it with Stream & install from a computer instead: the desktop app, or the web UI on a home server. Installing from a phone can only use this route.",
+    "The PS5 refused this package from its own storage. A bug in ps5upload caused this before 6.3.1 and is fixed, so it should no longer happen; it is not a problem with the file. If you see it again, install it with Stream & install from a computer (the desktop app, or the web UI on a home server) and send us a bug report.",
     true,
   ],
   stream_proxy: [

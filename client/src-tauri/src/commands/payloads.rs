@@ -392,8 +392,8 @@ const CATALOGUE: &[CatalogueEntry] = &[
     CatalogueEntry {
         id: "np-fake-signin",
         display_name: "NP Fake Sign-in",
-        role: "Offline account activation (no PSN required)",
-        description: "Headless payload that registers PS5 user slots directly via the system registry. Replaces having to sign into a real PSN account just to set up local users — handy for fresh jailbreaks, secondary accounts, or test profiles. One-shot ELF: send, runs, exits.",
+        role: "Fake PSN sign-in: unlocks the PS5's Remote Play setting",
+        description: "Makes the console treat an activated local account as signed in to PlayStation Network, with no real PSN sign-in. That is what lets you turn on Settings → System → Remote Play. Use v1.4 or later. The account must already be activated (offline activation). One-shot ELF: send it, it runs and exits; restart the PS5 afterwards. To undo: Settings → Users and Accounts → Other → Sign out.",
         repo_host: "git.etawen.dev",
         repo_owner: "earthonion",
         repo_name: "np-fake-signin",

@@ -76,6 +76,13 @@ export function libraryMove(
   return s.byKey[key] ?? null;
 }
 
+/** Where a move that ended can be tried again: the same destination after a stop or a failed
+ *  copy (the console removes what a stopped copy left, so the name is free again). Null once
+ *  the copy has landed, when a second copy would be refused, and while one runs. */
+export function moveRetryDest(m: LibraryMoveState | null): string | null {
+  return m?.phase === "cancelled" || m?.phase === "copy-failed" ? m.to : null;
+}
+
 const running = (m: LibraryMoveState | null) =>
   m?.phase === "copying" || m?.phase === "deleting";
 

@@ -19,7 +19,10 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 
-#define LB_MAX_CONNS   8
+/* Kept-alive connections hold a worker while they idle, so there is room for the several
+ * streams Sony's downloader opens plus its probes. */
+#define LB_MAX_CONNS   16
+#define LB_MAX_REQS_PER_CONN 100000
 #define LB_IO_TIMEOUT  60
 #define LB_REQ_MAX     8192
 #define LB_SEND_CHUNK  (1024 * 1024)
@@ -36,6 +39,8 @@ struct inst_loopback {
     char            attempt[64];
     char            basename[256];
     time_t          fixed_lm;      /* Last-Modified: fixed, in the past */
+    int             req_seq;       /* requests seen, for the log */
+    int             conns[LB_MAX_CONNS]; /* open connections, -1 = free: stop() hangs them up */
     inst_coverage_t coverage;      /* body bytes actually sent */
     double          last_req_mono; /* CLOCK_MONOTONIC of the last request */
     volatile int    workers;
@@ -87,17 +92,43 @@ static int send_file_bytes(int conn, const char *path, int head_only) {
     return 0;
 }
 
-static void serve_one(struct inst_loopback *lb, int conn, const char *req, size_t rlen) {
+/* What Sony's installer asked for and what it got, in installer.log: the first requests of a
+ * job (the ones that decide whether the install is accepted) and every refusal after them.
+ * A bug report carries this file, so a refused install can be read from its requests. */
+#define LB_LOG_FIRST 48
+static void log_request(struct inst_loopback *lb, const char *req, const char *what) {
+    char line[160], range[96] = "-";
+    size_t n = 0;
+    int ok2xx = what[0] == '2';
+    int seq;
+    pthread_mutex_lock(&lb->mutex);
+    seq = lb->req_seq++;
+    pthread_mutex_unlock(&lb->mutex);
+    if (seq >= LB_LOG_FIRST && ok2xx) return;
+    while (req[n] && req[n] != '\r' && req[n] != '\n' && n + 1 < sizeof(line)) {
+        line[n] = req[n];
+        n++;
+    }
+    line[n] = '\0';
+    (void)inst_http_header(req, "Range", range, sizeof(range));
+    fprintf(stderr, "[loopback] #%d %s range=%s -> %s\n", seq, line, range, what);
+}
+
+/* Answers one request. Returns 1 when the connection may carry another (the client asked to
+ * keep it open and the whole answer went out), 0 when it must be closed. */
+static int serve_one(struct inst_loopback *lb, int conn, const char *req, size_t rlen) {
     inst_http_req_t h;
     if (inst_http_parse_head(req, rlen, &h) != 0) {
+        log_request(lb, req, "404 (unparsed)");
         char b[128]; int n = inst_http_hdr_404(b, sizeof(b), 0);
         if (n > 0) send_all(conn, b, (size_t)n);
-        return;
+        return 0;
     }
     if (!h.is_get && !h.is_head) {
-        char b[128]; int n = inst_http_hdr_404(b, sizeof(b), 0);
-        if (n > 0) send_all(conn, b, (size_t)n);
-        return;
+        log_request(lb, req, "404 (method)");
+        char b[128]; int n = inst_http_hdr_404(b, sizeof(b), h.keep_alive);
+        if (n <= 0 || send_all(conn, b, (size_t)n) != 0) return 0;
+        return h.keep_alive;
     }
 
     /* record request time for the idle clock */
@@ -122,11 +153,15 @@ static void serve_one(struct inst_loopback *lb, int conn, const char *req, size_
         if (is_crc) {
             char side[600];
             snprintf(side, sizeof(side), "%s/%s", lb->dir, name);
-            if (send_file_bytes(conn, side, h.is_head) == 0) return;
+            if (send_file_bytes(conn, side, h.is_head) == 0) {
+                log_request(lb, req, "200 (crc sidecar)");
+                return 0; /* sent with Connection: close */
+            }
         }
-        char b[128]; int n = inst_http_hdr_404(b, sizeof(b), 0);
-        if (n > 0) send_all(conn, b, (size_t)n);
-        return;
+        log_request(lb, req, "404 (path)");
+        char b[128]; int n = inst_http_hdr_404(b, sizeof(b), h.keep_alive);
+        if (n <= 0 || send_all(conn, b, (size_t)n) != 0) return 0;
+        return h.keep_alive;
     }
 
     uint64_t total = lb->total;
@@ -140,22 +175,23 @@ static void serve_one(struct inst_loopback *lb, int conn, const char *req, size_
     char hdr[1024];
     int hlen;
     time_t now = time(NULL);
+    log_request(lb, req, rr == INST_RANGE_UNSAT ? "416" : rr == INST_RANGE_OK ? "206" : "200");
     if (rr == INST_RANGE_UNSAT) {
-        hlen = inst_http_hdr_416(hdr, sizeof(hdr), total, 0);
-        if (hlen > 0) send_all(conn, hdr, (size_t)hlen);
-        return;
+        hlen = inst_http_hdr_416(hdr, sizeof(hdr), total, h.keep_alive);
+        if (hlen <= 0 || send_all(conn, hdr, (size_t)hlen) != 0) return 0;
+        return h.keep_alive;
     } else if (rr == INST_RANGE_OK) {
-        hlen = inst_http_hdr_206(hdr, sizeof(hdr), start, end, total, now, lb->fixed_lm, 0);
+        hlen = inst_http_hdr_206(hdr, sizeof(hdr), start, end, total, now, lb->fixed_lm, h.keep_alive);
     } else {
         start = 0; end = (total > 0) ? total - 1 : 0;
-        hlen = inst_http_hdr_200(hdr, sizeof(hdr), total, now, lb->fixed_lm, 0);
+        hlen = inst_http_hdr_200(hdr, sizeof(hdr), total, now, lb->fixed_lm, h.keep_alive);
     }
-    if (hlen <= 0 || send_all(conn, hdr, (size_t)hlen) != 0) return;
-    if (h.is_head || total == 0) return;
+    if (hlen <= 0 || send_all(conn, hdr, (size_t)hlen) != 0) return 0;
+    if (h.is_head || total == 0) return h.keep_alive;
 
     /* body — heap buffer, never the thread stack (see send_file_bytes). */
     char *buf = malloc(LB_SEND_CHUNK);
-    if (!buf) return;
+    if (!buf) return 0;
     uint64_t off = start;
     while (off <= end) {
         uint64_t remain = end - off + 1;
@@ -169,6 +205,9 @@ static void serve_one(struct inst_loopback *lb, int conn, const char *req, size_
         off += (uint64_t)n;
     }
     free(buf);
+    /* A body cut short leaves the stream out of step: only a complete answer keeps the
+     * connection. */
+    return (off > end) ? h.keep_alive : 0;
 }
 
 typedef struct { struct inst_loopback *lb; int conn; } worker_arg_t;
@@ -179,21 +218,53 @@ static void *worker(void *arg) {
     int conn = wa->conn;
     free(wa);
 
+    /* Registered so stop() can hang the connection up: a kept-alive connection idles in
+     * recv() for up to LB_IO_TIMEOUT, far longer than stop() waits. */
+    int slot = -1;
+    pthread_mutex_lock(&lb->mutex);
+    for (int i = 0; i < LB_MAX_CONNS; i++) {
+        if (lb->conns[i] < 0) { lb->conns[i] = conn; slot = i; break; }
+    }
+    pthread_mutex_unlock(&lb->mutex);
+
     struct timeval tv = { LB_IO_TIMEOUT, 0 };
     setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(conn, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
+    /* One connection carries many requests (HTTP/1.1 keep-alive), as Sony's installer asks
+     * for: it saves a connect per range. It is not what decides whether an install is
+     * accepted (see MetaInfo in sceAppInstUtil.h for that).
+     * Requests have no body, so whatever follows one request's blank line is the next. */
     char req[LB_REQ_MAX + 1];
     size_t rlen = 0;
-    while (rlen < LB_REQ_MAX) {
-        ssize_t n = recv(conn, req + rlen, LB_REQ_MAX - rlen, 0);
-        if (n <= 0) break;
-        rlen += (size_t)n;
+    for (int served = 0; served < LB_MAX_REQS_PER_CONN && lb->running; served++) {
+        char *end = NULL;
         req[rlen] = '\0';
-        if (strstr(req, "\r\n\r\n")) break;
+        while ((end = strstr(req, "\r\n\r\n")) == NULL && rlen < LB_REQ_MAX) {
+            ssize_t n = recv(conn, req + rlen, LB_REQ_MAX - rlen, 0);
+            if (n <= 0) break; /* closed by the client, or idle past LB_IO_TIMEOUT */
+            rlen += (size_t)n;
+            req[rlen] = '\0';
+        }
+        if (end == NULL) {
+            /* A request that never completed is answered only if it is all we got (the old
+             * behaviour for a short, unterminated request). */
+            if (rlen > 0 && served == 0) (void)serve_one(lb, conn, req, rlen);
+            break;
+        }
+        size_t one = (size_t)(end + 4 - req);
+        char saved = req[one];
+        req[one] = '\0';
+        int keep = serve_one(lb, conn, req, one);
+        req[one] = saved;
+        if (!keep) break;
+        memmove(req, req + one, rlen - one);
+        rlen -= one;
     }
-    if (rlen > 0) serve_one(lb, conn, req, rlen);
 
+    pthread_mutex_lock(&lb->mutex);
+    if (slot >= 0) lb->conns[slot] = -1;
+    pthread_mutex_unlock(&lb->mutex);
     close(conn);
     __sync_sub_and_fetch(&lb->workers, 1);
     return NULL;
@@ -236,13 +307,13 @@ int inst_loopback_start(inst_loopback_t **out, const char *pkg_path,
     if (!lb) return -1;
     pthread_mutex_init(&lb->mutex, NULL);
     inst_coverage_reset(&lb->coverage);
+    for (int i = 0; i < LB_MAX_CONNS; i++) lb->conns[i] = -1;
     lb->total = (uint64_t)st.st_size;
     /* A fixed date well in the past, the same one the engine's pkg-host
-     * sends. With Last-Modified = the job's start (≈ the response Date) the
-     * response is not cacheable, and on FW 13.60 Sony's installer then takes
-     * its patch path (DbgGetPatchInfo → DbgCancelPatch 0x80B21401) and
-     * refuses with 0x80B2116F — every "Upload & install". Measured on a 13.60
-     * Pro: the same link without it refused, with it installed, back to back. */
+     * sends, so the validator is stable across requests. An earlier note here
+     * blamed a fresh Last-Modified for 0x80B2116F on FW 13.60; that refusal
+     * was the bytes after MetaInfo (see sceAppInstUtil.h), and whether the
+     * date matters on its own has not been measured since. */
     lb->fixed_lm = (time_t)1735689600;  /* Wed, 01 Jan 2025 00:00:00 GMT */
     lb->last_req_mono = mono_now();
     snprintf(lb->attempt, sizeof(lb->attempt), "%s", attempt);
@@ -302,8 +373,22 @@ void inst_loopback_stop(inst_loopback_t *lb) {
     shutdown(lb->listen_fd, SHUT_RDWR);
     close(lb->listen_fd);
     pthread_join(lb->listener, NULL);
-    /* let any in-flight detached workers drain briefly */
-    for (int i = 0; i < 200 && lb->workers > 0; i++) usleep(10000);
+    /* Hang up every open connection: an idle kept-alive one would otherwise sit in recv()
+     * long after this returns. */
+    pthread_mutex_lock(&lb->mutex);
+    for (int i = 0; i < LB_MAX_CONNS; i++) {
+        if (lb->conns[i] >= 0) shutdown(lb->conns[i], SHUT_RDWR);
+    }
+    pthread_mutex_unlock(&lb->mutex);
+    /* let the detached workers drain */
+    for (int i = 0; i < 500 && lb->workers > 0; i++) usleep(10000);
+    if (lb->workers > 0) {
+        /* A worker is still using this server (stuck in a send): leaking it is the only safe
+         * choice, since freeing it under a live thread would crash the daemon. */
+        fprintf(stderr, "[loopback] %d worker(s) still busy at stop; leaving the server allocated\n",
+                lb->workers);
+        return;
+    }
     close(lb->pkg_fd);
     pthread_mutex_destroy(&lb->mutex);
     free(lb);

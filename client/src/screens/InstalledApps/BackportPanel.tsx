@@ -1,3 +1,4 @@
+import { useMakeWay } from "../../lib/useMakeWay";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Layers, Play, RotateCcw } from "lucide-react";
 import { Button, Callout, Modal, Spinner, Toggle } from "../../components";
@@ -244,12 +245,18 @@ export function BackportPanel({
    *  click to move past rather than a manual launch, a manual close and a
    *  guess about what went wrong. */
   /** One launch, watched to the end of the window. */
+  const { makeWay, dialog: makeWayDialog } = useMakeWay();
   const attempt = useCallback(
     async (): Promise<VerifyVerdict> => {
       // Drain whatever is already buffered so the diagnosis reads only lines
       // from THIS launch — a previous attempt's unpatched-function line would
       // otherwise be read as this one's.
       await klogChunk(mgmtAddr(host)).catch(() => "");
+      // One game at a time: a running one is closed first, with the user's say-so. A "no"
+      // is a launch that did not happen, which the verdict below reports as such.
+      if (!(await makeWay(host, title.titleId, title.titleName))) {
+        throw new Error("another game is still running");
+      }
       await appLaunch(transferAddr(host), title.titleId);
       const samples: VerifySample[] = [];
       // Drain klog on EVERY tick and keep it all. The kernel log is a small
@@ -282,7 +289,7 @@ export function BackportPanel({
       // process, in both arms of a library experiment.)
       return verdict;
     },
-    [host, title.titleId, title.source],
+    [host, title.titleId, title.titleName, title.source, makeWay],
   );
 
   /** Verify, retrying a failure before believing it.
@@ -539,6 +546,7 @@ export function BackportPanel({
 
   return (
     <Modal open={open} onClose={onClose} title={tr("backport_title", { name: title.titleName }, `Backport ${title.titleName}`)} titleIcon={<Layers size={16} />} size="lg">
+      {makeWayDialog}
       <div className="space-y-4 p-4 text-sm">
         {overlayBlocked ? (
           <Callout tone="warn" title={tr("backport_overlay_unavailable", undefined, "Library overlay is not available")}>

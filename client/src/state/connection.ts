@@ -1,3 +1,4 @@
+import { createContext, createElement, useContext, type ReactNode } from "react";
 import { create } from "zustand";
 import { hostOf } from "../lib/addr";
 import type { SessionState } from "../lib/consoleSession";
@@ -207,7 +208,7 @@ function mirrorRuntime(host: string, rt: HostRuntime) {
   };
 }
 
-export const useConnectionStore = create<ConnectionState>((set) => ({
+const useLiveConnectionStore = create<ConnectionState>((set) => ({
   host: loadStoredHost(),
   runtimeByHost: {},
   engineStatus: "unknown",
@@ -266,3 +267,65 @@ export function useHostRuntime(host: string): HostRuntime {
     (s) => s.runtimeByHost[hostOf(host) || "_"] ?? EMPTY_HOST_RUNTIME,
   );
 }
+
+/**
+ * The connection state as one console's screens see it.
+ *
+ * Each console the user has open keeps its own tree of screens (see App.tsx). Only one is on
+ * show; the others are hidden, not unmounted, so what was typed or loaded in them is still
+ * there on return. A hidden tree must not turn into the selected console: its screens read
+ * this store for `host`, and would otherwise re-render as the other console. So while a
+ * console is hidden its tree reads the state as it last was when that console was selected.
+ *
+ * `getState`, `setState` and `subscribe` are always the live store: code that runs outside
+ * rendering (runners, callbacks) asks for the selected console on purpose.
+ */
+const lastStateByHost = new Map<string, ConnectionState>();
+const remember = (s: ConnectionState) => lastStateByHost.set(s.host, s);
+remember(useLiveConnectionStore.getState());
+useLiveConnectionStore.subscribe(remember);
+
+/** `host`'s connection state as it last was while that console was selected. */
+export function connectionSnapshotFor(host: string): ConnectionState | null {
+  return lastStateByHost.get(host) ?? null;
+}
+
+const FrozenConnection = createContext<ConnectionState | null>(null);
+
+/** Wraps one console's tree of screens. `frozen`: that console is not the selected one. */
+export function ConnectionScope({
+  host,
+  frozen,
+  children,
+}: {
+  host: string;
+  frozen: boolean;
+  children: ReactNode;
+}) {
+  return createElement(
+    FrozenConnection.Provider,
+    { value: frozen ? connectionSnapshotFor(host) : null },
+    children,
+  );
+}
+
+/** Whether this screen belongs to a console that is not the selected one right now. */
+export function useConnectionFrozen(): boolean {
+  return useContext(FrozenConnection) !== null;
+}
+
+function useScopedConnectionStore(): ConnectionState;
+function useScopedConnectionStore<T>(selector: (s: ConnectionState) => T): T;
+function useScopedConnectionStore<T>(selector?: (s: ConnectionState) => T) {
+  const frozen = useContext(FrozenConnection);
+  const pick = selector ?? ((s: ConnectionState) => s as unknown as T);
+  const live = useLiveConnectionStore(pick);
+  return frozen ? pick(frozen) : live;
+}
+
+export const useConnectionStore = Object.assign(useScopedConnectionStore, {
+  getState: useLiveConnectionStore.getState,
+  getInitialState: useLiveConnectionStore.getInitialState,
+  setState: useLiveConnectionStore.setState,
+  subscribe: useLiveConnectionStore.subscribe,
+});

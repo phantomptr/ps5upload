@@ -708,7 +708,9 @@ int shellui_rpc_get_soc_power_mw(uint32_t *out_mw) {
 /* MetaInfo — first arg to sceAppInstUtilInstallByPackage. 6 pointers,
  * absolute (in target address space). Sony reads these fields as
  * NUL-terminated strings; we point them at offsets within the
- * scratch buffer (see layout below). 48 bytes. */
+ * scratch buffer (see layout below). 48 bytes here, but Sony also reads the
+ * 8 bytes that follow (see MetaInfo in sceAppInstUtil.h): in this layout
+ * those are the start of pkg_info, which must therefore stay zeroed. */
 typedef struct {
     intptr_t uri;
     intptr_t ex_uri;

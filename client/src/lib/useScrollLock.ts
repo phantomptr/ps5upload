@@ -25,8 +25,20 @@ import { useEffect } from "react";
 let lockCount = 0;
 let previousOverflow = "";
 
+/** Of the elements marked as scroll root, the one on show. Screens kept alive behind the
+ *  current one (another screen, or another console's whole tree) are `display: none` and so
+ *  have no boxes; one of them can still carry the marker for a moment, because React
+ *  re-renders hidden trees late. */
+export function pickScrollRoot<T extends { getClientRects(): { length: number } }>(
+  candidates: readonly T[],
+): T | null {
+  return candidates.find((c) => c.getClientRects().length > 0) ?? candidates[0] ?? null;
+}
+
 function scrollRoot(): HTMLElement | null {
-  return document.querySelector<HTMLElement>("[data-scroll-root]");
+  return pickScrollRoot(
+    Array.from(document.querySelectorAll<HTMLElement>("[data-scroll-root]")),
+  );
 }
 
 export function useScrollLock(active = true): void {

@@ -39,6 +39,11 @@ interface PairingState {
   openFor: (host?: string) => Promise<void>;
   /** Asks again (after the user opened the pairing window on the console). */
   retry: () => Promise<void>;
+  /** Asks again after the helper was sent again, and keeps asking for a short while if the
+   *  window still reads closed: the new helper pairs with the app that sent it, but a moment
+   *  after it starts. Measured from a phone: closed at once, paired seconds later, and the
+   *  dialog was left explaining a closed window to a console that had already accepted. */
+  retryAfterResend: (sleep?: (ms: number) => Promise<void>) => Promise<void>;
   /** Sends the six digits the user typed. */
   confirm: (code: string) => Promise<void>;
   /** "Forget the old one and pair this one": clears the pinned key, then pairs afresh. */
@@ -48,6 +53,10 @@ interface PairingState {
   /** Closes it because the user said no: automatic opens for this console go quiet. */
   dismiss: () => void;
 }
+
+/** How often, and how far apart, a closed window is asked again after a resend (about 16 s). */
+const RESEND_ASKS = 8;
+const RESEND_ASK_GAP_MS = 2000;
 
 export const usePairingStore = create<PairingState>((set, get) => {
   const load = async (host: string) => {
@@ -94,6 +103,20 @@ export const usePairingStore = create<PairingState>((set, get) => {
     async retry() {
       const { host } = get();
       if (host) await load(host);
+    },
+
+    async retryAfterResend(
+      sleep = (ms) => new Promise<void>((r) => setTimeout(r, ms)),
+    ) {
+      const { host } = get();
+      if (!host) return;
+      for (let attempt = 0; attempt < RESEND_ASKS; attempt++) {
+        if (attempt > 0) await sleep(RESEND_ASK_GAP_MS);
+        // The user closed the dialog, or it moved to another console, while this waited.
+        if (!get().open || get().host !== host) return;
+        await load(host);
+        if (get().view?.state !== "closed") return;
+      }
     },
 
     async confirm(code) {

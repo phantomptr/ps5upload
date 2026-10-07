@@ -54,12 +54,10 @@ pub enum RemotePkg {
     #[cfg(not(target_os = "android"))]
     Remote(crate::remote::range::RemoteRangeSource),
     /// A package already on the console, read back through the helper and
-    /// served to the console from this engine. Sony's installer refuses a
-    /// package the console serves itself (127.0.0.1, or its own address) in
-    /// the overwrite case — 0x80B2116F via DbgGetPatchInfo/DbgCancelPatch,
-    /// which is every "Upload & install" of an app that is already installed
-    /// — and accepts the same bytes from another host (measured on a 13.60
-    /// Pro, 2026-09-30). On every platform: the phone app needs it most.
+    /// served to the console from this engine: the second try when the
+    /// console refuses its own copy (`STAGED_ROUTE_REFUSALS`). That refusal
+    /// was once put down to the host; on FW 13.60 it was the installer
+    /// daemon's own call (fixed in daemon 1.3.9). On every platform.
     Console(ConsoleFile),
 }
 

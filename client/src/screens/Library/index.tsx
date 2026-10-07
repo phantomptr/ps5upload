@@ -1,8 +1,10 @@
+import { useMakeWay } from "../../lib/useMakeWay";
 import { smpHandoffNote } from "../../lib/smpHandoffNote";
 import {
   dismissLibraryMove,
   libraryMove,
   libraryMoveKey,
+  moveRetryDest,
   runLibraryMove,
   stopLibraryMove,
   useLibraryMoveStore,
@@ -996,6 +998,10 @@ function LibraryRowImpl({
   // row's own timer.
   const [rowShownAtMs] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
+  // After a failed download: the folder it was going to, so Resume can carry on there.
+  const [resumeDest, setResumeDest] = useState<string | null>(null);
+  // Where a stopped or failed Move was going, so it can be tried again in one click.
+  const [retryMoveDest, setRetryMoveDest] = useState<string | null>(null);
   const [mountNote, setMountNote] = useState<string | null>(null);
   const [meta, setMeta] = useState<GameMeta | null>(null);
   const [moveOpen, setMoveOpen] = useState(false);
@@ -1009,6 +1015,7 @@ function LibraryRowImpl({
   // than the row's inline ConfirmRow (which is for the simple delete/chmod
   // pair and has no room for the explanation this needs).
   const { confirm: confirmDialog, dialog: confirmDialogNode } = useConfirm();
+  const { makeWay, dialog: makeWayDialog } = useMakeWay();
   const [detailsOpen, setDetailsOpen] = useState(false);
   // Cancellation flag for the download poll loop. The loop runs for
   // the entire duration of the engine job (potentially minutes for a
@@ -1042,6 +1049,7 @@ function LibraryRowImpl({
   useEffect(() => {
     if (!mv || mv.phase === "copying" || mv.phase === "deleting") return;
     if (mv.progressUnsupported) setMoveUnsupportedSeen(mv.progressUnsupported);
+    setRetryMoveDest(moveRetryDest(mv));
     if (mv.phase === "done") {
       setMountNote(
         tr("library_move_succeeded", { dest: mv.to }, "Moved to {dest}."),
@@ -1081,6 +1089,7 @@ function LibraryRowImpl({
         ),
       );
     } else if (dl.phase === "failed") {
+      setResumeDest(dl.dest);
       setError(
         tr(
           "library_download_failed",
@@ -1530,6 +1539,7 @@ function LibraryRowImpl({
     setError(null);
     setMountNote(null);
     setMoveUnsupportedSeen(null);
+    setRetryMoveDest(null);
     const addr = consoleAddr(host);
     // The activity log shows the move from any screen; its Stop button cancels the
     // console's copy by op id, with no reference back to this row.
@@ -1616,8 +1626,15 @@ function LibraryRowImpl({
       ),
     });
     if (typeof picked !== "string") return;
+    startDownload(picked);
+  };
+
+  /** Starts (or, after a failure, carries on) the download into `picked`. The engine keeps
+   *  what a failed download saved, so starting it again into the same folder continues. */
+  const startDownload = (picked: string) => {
     setError(null);
     setMountNote(null);
+    setResumeDest(null);
     const addr = consoleAddr(host);
     const kind: "file" | "folder" = entry.kind === "image" ? "file" : "folder";
     // The activity log shows the download while the user is on another screen; the task
@@ -1977,6 +1994,12 @@ function LibraryRowImpl({
       // Settle delay so the registration commit hits app.db
       // before the launch query reads it.
       await new Promise((resolve) => setTimeout(resolve, 600));
+      // One game at a time: a running one is closed first, with the user's say-so.
+      if (!(await makeWay(host, entry.titleId, entry.name))) {
+        setBusy(null);
+        setMountNote(null);
+        return;
+      }
       setBusy("launch");
       setMountNote(`Launching ${entry.titleId}…`);
       await appLaunch(addr, entry.titleId);
@@ -2833,6 +2856,30 @@ function LibraryRowImpl({
       )}
 
       {error && <ErrorCard title={error} />}
+      {resumeDest && !busy && (
+        <div className="mt-1">
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => startDownload(resumeDest)}
+            data-testid="library-download-resume"
+          >
+            {tr("library_download_resume", undefined, "Resume download")}
+          </Button>
+        </div>
+      )}
+      {retryMoveDest && !busy && (
+        <div className="mt-1">
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => void runMove(retryMoveDest)}
+            data-testid="library-move-retry"
+          >
+            {tr("library_move_retry", undefined, "Try the move again")}
+          </Button>
+        </div>
+      )}
 
       {confirm && (
         <ConfirmRow
@@ -2853,6 +2900,7 @@ function LibraryRowImpl({
       )}
 
       {confirmDialogNode}
+      {makeWayDialog}
       {mountOpen && entry.kind === "image" && (
         <MountModal
           entry={entry}

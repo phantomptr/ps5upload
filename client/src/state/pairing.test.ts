@@ -163,4 +163,38 @@ describe("pairing store", () => {
     expect(usePairingStore.getState().view).toEqual(CODE);
     expect(usePairingStore.getState().error).toBeNull();
   });
+  it("after the helper is sent again, keeps asking while the window still reads closed", async () => {
+    api.pairingStatus.mockResolvedValueOnce({ state: "closed" });
+    await usePairingStore.getState().openFor("10.0.0.2");
+    // The new helper is still starting: closed twice more, then it has paired by itself.
+    api.pairingStatus
+      .mockResolvedValueOnce({ state: "closed" })
+      .mockResolvedValueOnce({ state: "closed" })
+      .mockResolvedValueOnce({ state: "accepted" });
+    const naps: number[] = [];
+    await usePairingStore.getState().retryAfterResend(async (ms) => {
+      naps.push(ms);
+    });
+    const s = usePairingStore.getState();
+    expect(s.open).toBe(false);
+    expect(s.paired).toBe("10.0.0.2");
+    expect(naps).toHaveLength(2);
+  });
+
+  it("after the helper is sent again, stops asking once there is a code to type or it gave up", async () => {
+    api.pairingStatus.mockResolvedValueOnce({ state: "closed" });
+    await usePairingStore.getState().openFor("10.0.0.2");
+    api.pairingStatus.mockResolvedValueOnce(CODE);
+    await usePairingStore.getState().retryAfterResend(async () => {});
+    expect(usePairingStore.getState().view).toEqual(CODE);
+    expect(api.pairingStatus).toHaveBeenCalledTimes(2);
+
+    // A window that stays closed is asked a bounded number of times, and stays explained.
+    api.pairingStatus.mockReset();
+    api.pairingStatus.mockResolvedValue({ state: "closed" });
+    await usePairingStore.getState().retryAfterResend(async () => {});
+    expect(api.pairingStatus.mock.calls.length).toBeLessThanOrEqual(10);
+    expect(usePairingStore.getState().view).toEqual({ state: "closed" });
+    expect(usePairingStore.getState().open).toBe(true);
+  });
 });

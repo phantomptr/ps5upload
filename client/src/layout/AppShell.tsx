@@ -10,6 +10,7 @@ import ActivityBar from "./ActivityBar";
 import UpdateToast from "./UpdateToast";
 import { Button } from "../components/Button";
 import {
+  useConnectionFrozen,
   useConnectionStore,
   EMPTY_HOST_RUNTIME,
   PS5_LOADER_PORT,
@@ -1428,10 +1429,11 @@ const KEPT_SCREENS = 6;
  * Each screen has its own scroll container, so scroll position is per screen too. Only the
  * one on show carries `data-scroll-root` (see lib/useScrollLock).
  *
- * This covers switching screens. Switching console still rebuilds every screen (App.tsx keys
- * the routes by console, so one console's late answers never land on another's screen). */
+ * This covers switching screens. Switching console is covered one level up: App.tsx keeps a
+ * whole tree of screens per console, and this component is inside each of them. */
 function KeptScreens({ pathname, className }: { pathname: string; className: string }) {
   const outlet = useOutlet();
+  const behindAnotherConsole = useConnectionFrozen();
   // path -> the route element as first rendered for it. The element's props do not change
   // for a given route, so the first one keeps rendering the same component instance.
   const [kept, setKept] = useState<Array<{ path: string; node: ReactNode }>>([]);
@@ -1457,7 +1459,8 @@ function KeptScreens({ pathname, className }: { pathname: string; className: str
           return (
             <Activity key={path} mode={active ? "visible" : "hidden"}>
               <div
-                {...(active ? { "data-scroll-root": "" } : {})}
+                // Not in a console's tree that is itself hidden behind another console.
+                {...(active && !behindAnotherConsole ? { "data-scroll-root": "" } : {})}
                 data-screen={path}
                 // Hidden screens are out of reach as well as out of sight: nothing in them
                 // can take focus, be clicked, or be read out.

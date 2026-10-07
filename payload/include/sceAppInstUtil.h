@@ -23,6 +23,17 @@ typedef struct {
     int          content_platform;
 } SceAppInstallPkgInfo;
 
+/* The six pointers are the layout everyone publishes, and it is too short: Sony reads the
+ * 8 bytes that follow icon_url. Measured on a CFI-1115A (FW 13.60) with the same package,
+ * the same link and nothing else changed between calls:
+ *   those 8 bytes zero        -> a plain install (an installed copy is uninstalled first)
+ *   those 8 bytes 0xAA...     -> the patch path (DbgCancelPatch), refused 0x80B2116F
+ *   the next 40 bytes 0xAA... -> no effect
+ * With a bare six-pointer struct on the stack they were whatever an earlier call left
+ * there, which is what "the console refuses its own copy" and every other intermittent
+ * 0x80B2116F turned out to be. What the field means is not known (1 was accepted, and
+ * skipped the uninstall); a plain install wants 0. The rest is zeroed room in case a
+ * firmware reads further. */
 typedef struct {
     const char *uri;
     const char *ex_uri;
@@ -30,7 +41,10 @@ typedef struct {
     const char *content_id;
     const char *content_name;
     const char *icon_url;
+    uint64_t    unknown_30;     /* read by Sony; must be 0 for a plain install */
+    uint64_t    reserved[7];    /* keep zero */
 } MetaInfo;
+_Static_assert(sizeof(MetaInfo) == 0x70, "MetaInfo must carry the zeroed tail Sony reads");
 
 typedef struct {
     language_t           languages[SCE_NUM_LANGUAGES];

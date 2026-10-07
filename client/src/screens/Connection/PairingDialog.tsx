@@ -243,6 +243,7 @@ export function PairingDialog() {
   const confirm = usePairingStore((s) => s.confirm);
   const forgetAndPair = usePairingStore((s) => s.forgetAndPair);
   const retry = usePairingStore((s) => s.retry);
+  const retryAfterResend = usePairingStore((s) => s.retryAfterResend);
   const dismiss = usePairingStore((s) => s.dismiss);
   const host = usePairingStore((s) => s.host);
   const [sending, setSending] = useState(false);
@@ -254,10 +255,10 @@ export function PairingDialog() {
           setSending(true);
           try {
             await sendHelperTo(host, tr);
+            await retryAfterResend();
           } finally {
             setSending(false);
           }
-          await retry();
         }
       : undefined;
   return (

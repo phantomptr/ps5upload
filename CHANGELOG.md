@@ -4,6 +4,35 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.3.1
+
+**"The PS5 declined the install" (`0x80B2116F`) is fixed.** Update the app; it sends its new
+installer to the console by itself on the next install.
+
+- **`0x80B2116F` was our bug.** The install request ps5upload handed the PS5 was a few bytes
+  short, so the PS5 read leftover memory and sometimes took a full package for a patch. That
+  refused every **Upload & install**, and made **Stream** installs fail at random after a few
+  attempts. Measured on two consoles on FW 13.60: refused every time before, accepted every
+  time after, including a 3.6 GB game installed over itself and its patch. FW 9.60, 11.20 and
+  5.10 showed the same refusal and should be fixed by the same change; we could not test them.
+- **Console tabs keep their screens:** switching to another console and back keeps what you
+  typed, opened and loaded for each one (the last three consoles).
+- **Volumes: "Kept by ps5upload"** lists the folders the app itself writes on each drive and
+  how much they hold, with **Clean up** for temp and test files. Your package library and
+  save backups are only opened from there, never deleted.
+- **Play closes a running game first** from every Play button (Game hub, Game files,
+  Backport, Convert), not only in Games.
+- **Games:** a failed Download can be **resumed**, and a stopped or failed Move offers
+  **Try the move again**.
+- **Pairing (Android and desktop):** after **Resend helper** in the pairing dialog, the app
+  waits for the PS5 to accept instead of asking once and leaving "not accepting new pairings"
+  on screen. An app upgraded from 5.x is a new device to the PS5; this is the one-tap way in.
+- **Remote Play:** how to unlock the PS5's own Remote Play setting with np-fake-signin v1.4.
+- The on-console package server keeps its connections open and logs what the PS5 asked for,
+  so a refused install can be read from a bug report.
+
+---
+
 ## 6.3.0
 
 **Switching screens no longer loses what you were doing.** Update the app; the helper is

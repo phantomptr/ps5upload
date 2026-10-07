@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router";
 import { HardDrive, FileArchive, Unplug, RefreshCw, PackageCheck } from "lucide-react";
 
 import { useConnectionStore } from "../../state/connection";
@@ -25,6 +26,8 @@ import { formatStorageBytes } from "../../lib/format";
 import { hostOf, transferAddr } from "../../lib/addr";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { isInternalVolume, usePkgStorageStore } from "../../lib/pkgStorage";
+import { saveFsLastPath } from "../../lib/fsLastPath";
+import { KeptByApp } from "./KeptByApp";
 
 /** Path prefix for volumes our FS_MOUNT creates. Showing an Unmount
  *  button only for these keeps us from accidentally offering to
@@ -41,7 +44,10 @@ export default function VolumesScreen() {
   const host = useConnectionStore((s) => s.host);
   const guard = useStaleHostGuard();
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
+  const navigate = useNavigate();
   const [volumes, setVolumes] = useState<Volume[] | null>(null);
+  // Counts completed drive-list loads, so what ps5upload keeps is measured again with them.
+  const [loadedCount, setLoadedCount] = useState(0);
   // What the console keeps back of its internal storage for its own use (a fact the console
   // reports; nothing is derived from it). Null = not reported.
   const [consoleKept, setConsoleKept] = useState<number | null>(null);
@@ -68,6 +74,7 @@ export default function VolumesScreen() {
       const list = await fetchVolumes(transferAddr(probe.host));
       if (probe.isStale()) return;
       setVolumes(list);
+      setLoadedCount((n) => n + 1);
       // Best effort: a payload without the storage summary just shows no "kept" line.
       fetchHwStorage(transferAddr(probe.host))
         .then((hw) => {
@@ -156,6 +163,22 @@ export default function VolumesScreen() {
     }
     return { storageDrives: storage, mountedImages: mounted };
   }, [volumes]);
+
+  // The drives ps5upload may have written its own folders to: writable ones, and internal
+  // storage once however many mount points it shows under.
+  const keptDrives = useMemo(() => {
+    const out: string[] = [];
+    let internalSeen = false;
+    for (const v of storageDrives) {
+      if (!v.writable || v.is_placeholder) continue;
+      if (isInternalVolume(v.path)) {
+        if (internalSeen) continue;
+        internalSeen = true;
+      }
+      out.push(v.path);
+    }
+    return out;
+  }, [storageDrives]);
 
   return (
     <div className="app-page">
@@ -277,6 +300,21 @@ export default function VolumesScreen() {
               )}
             </p>
           </section>
+        )}
+
+        {host && keptDrives.length > 0 && (
+          <KeptByApp
+            host={host}
+            drives={keptDrives}
+            refreshKey={loadedCount}
+            confirm={confirmDialog}
+            onOpenPath={(path) => {
+              // `?path=`: Files reads its saved folder only when it mounts (see EditSessionBanner).
+              saveFsLastPath(host, path);
+              navigate(`/files?path=${encodeURIComponent(path)}`);
+            }}
+            onChanged={() => void refresh()}
+          />
         )}
       </ConnectionGate>
     </div>

@@ -30,29 +30,33 @@ test("each screen scrolls by itself and comes back where it was left", async ({
   page,
 }) => {
   await page.goto("/faq", { waitUntil: "domcontentloaded" });
-  const scroller = page.locator("[data-scroll-root]");
+  const scroller = page.locator("[data-scroll-root]:visible");
   await expect(scroller).toHaveCount(1, { timeout: 30_000 });
   await page.getByRole("main").getByRole("heading").first().waitFor();
-  await scroller.evaluate((el) => {
-    el.scrollTop = 600;
-  });
+  // Scroll once the page is tall enough to scroll: its content arrives after the heading.
   await expect
-    .poll(() => scroller.evaluate((el) => el.scrollTop))
+    .poll(() =>
+      scroller.evaluate((el) => {
+        if (el.scrollTop < 300) el.scrollTop = 600;
+        return el.scrollTop;
+      }),
+    )
     .toBeGreaterThan(300);
 
   const primary = page.getByRole("navigation", { name: "Primary" });
   await primary.getByRole("link", { name: "Tasks", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
-  // Only the screen on show is the scroll root, so a dialog's scroll lock finds the right one.
-  await expect(page.locator("[data-scroll-root]")).toHaveCount(1);
+  // One scroll root is on show (a hidden screen may carry the marker a moment longer; the
+  // scroll lock takes the visible one).
+  await expect(page.locator("[data-scroll-root]:visible")).toHaveCount(1);
   expect(
-    await page.locator("[data-scroll-root]").evaluate((el) => el.scrollTop),
+    await page.locator("[data-scroll-root]:visible").evaluate((el) => el.scrollTop),
   ).toBe(0);
 
   await page.goBack();
   await expect
     .poll(() =>
-      page.locator("[data-scroll-root]").evaluate((el) => el.scrollTop),
+      page.locator("[data-scroll-root]:visible").evaluate((el) => el.scrollTop),
     )
     .toBeGreaterThan(300);
 });

@@ -163,6 +163,9 @@ export async function watchJob(
     store.put(key, {
       phase: "failed",
       error: e instanceof Error ? e.message : String(e),
+      // Where it was headed: the engine keeps what was saved, so starting it again there
+      // carries on.
+      dest: init.fallbackDest ?? null,
     });
     task?.fail(e);
     end();

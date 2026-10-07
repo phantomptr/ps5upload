@@ -10,6 +10,7 @@
  * own data. Most tabs start as placeholder shells that the user can
  * navigate to; each gets fleshed out in subsequent phases.
  */
+import { useMakeWay } from "../../lib/useMakeWay";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate, Link, useSearchParams } from "react-router";
 import {
@@ -163,6 +164,7 @@ export default function GameHubScreen() {
   // ── Launch ────────────────────────────────────────────────────────
   const guard = useStaleHostGuard();
   const [launching, setLaunching] = useState(false);
+  const { makeWay, dialog: makeWayDialog } = useMakeWay();
 
   /**
    * Start this title on the console, then wait for it to actually come up.
@@ -180,6 +182,9 @@ export default function GameHubScreen() {
 
     setLaunching(true);
     try {
+      // One game at a time: a running one is closed first, with the user's say-so.
+      if (!(await makeWay(probe.host, title_id, title_id))) return;
+      if (probe.isStale()) return;
       await appLaunch(transferAddr(probe.host), title_id);
       if (probe.isStale()) return;
 
@@ -220,7 +225,7 @@ export default function GameHubScreen() {
     } finally {
       setLaunching(false);
     }
-  }, [title_id, launching, guard, tr]);
+  }, [title_id, launching, guard, tr, makeWay]);
 
   if (!title_id) {
     return (
@@ -276,6 +281,7 @@ export default function GameHubScreen() {
 
   return (
     <div className="app-page">
+      {makeWayDialog}
       {/* Header */}
       <header className="mb-6">
         <div className="mb-3 flex items-center gap-2">

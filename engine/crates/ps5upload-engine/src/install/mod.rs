@@ -334,10 +334,13 @@ pub fn stream_retry_allowed(category: &str, via_daemon: bool) -> bool {
     via_daemon || !shares_base_id
 }
 
-/// Sony codes measured refusing the staged (Loopback) route while the same
+/// Sony codes seen refusing the staged (Loopback) route while the same
 /// package streamed from a computer installed: 0x80B2116F on FW 9.60 and
-/// 13.60 (the latter from a user whose every install came from a phone, which
-/// can only stage), 0x80B2150F on FW 5.10.
+/// 13.60, 0x80B2150F on FW 5.10. On 13.60 the cause was ours, not the route
+/// (installer daemon before 1.3.9 handed Sony a too-short MetaInfo; see
+/// payload/include/sceAppInstUtil.h), and the staged route installs there
+/// now. 9.60 and 5.10 have not been measured since, so the retry through
+/// this engine stays.
 const STAGED_ROUTE_REFUSALS: &[u32] = &[0x80B2_116F, 0x80B2_150F];
 
 pub fn stream_unreachable_hint(
@@ -797,10 +800,10 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                         .await
                         .unwrap_or_else(|e| Err(format!("install task failed: {e}")))
                 };
-                // The console refused the copy it serves itself (0x80B2116F on
-                // FW 9.60/13.60, 0x80B2150F on 5.10: Sony's overwrite/patch
-                // check). The same bytes served from this engine install, so
-                // do that — read back through the helper, one job, one result.
+                // The console refused its own copy (see STAGED_ROUTE_REFUSALS;
+                // not expected on FW 13.60 since daemon 1.3.9). Try once more
+                // with the same bytes served from this engine — read back
+                // through the helper, one job, one result.
                 match &r {
                     Ok(ic::InstallReply::Sony { code, .. })
                         if STAGED_ROUTE_REFUSALS.contains(code) =>
@@ -852,11 +855,10 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                 let r = tokio::task::spawn_blocking(move || ic::install_url(&i, &final_url, &h))
                     .await
                     .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
-                // The console refused the link as served by its own server. On
-                // FW 13.60 that is what a server without a usable
-                // Last-Modified gets (0x80B2116F; the same link with one
-                // installs — measured back to back). This engine's link proxy
-                // always sends one, so serve the link through it instead.
+                // The console refused the link as its own server serves it
+                // (once put down to a missing Last-Modified; on FW 13.60 the
+                // refusal was the daemon's own call, fixed in 1.3.9). This
+                // engine's link proxy is the second try either way.
                 match &r {
                     Ok(ic::InstallReply::Sony { code, .. })
                         if STAGED_ROUTE_REFUSALS.contains(code) =>

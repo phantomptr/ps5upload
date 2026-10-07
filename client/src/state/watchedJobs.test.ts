@@ -181,6 +181,12 @@ describe("watchJob", () => {
     expect(end).toBe("failed:boom");
   });
 
+  it("a failed run remembers where it was headed, so it can be started again there", async () => {
+    const e = engine([{ status: "failed", error: "link dropped" } as Snap]);
+    await watchJob({ ...INIT, fallbackDest: "/pc/Downloads" }, async () => "job-9", e.deps);
+    expect(state()).toMatchObject({ phase: "failed", dest: "/pc/Downloads" });
+  });
+
   it("dismiss forgets a finished run and leaves a running one alone", async () => {
     const e = engine([]);
     const release = e.hold();

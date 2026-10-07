@@ -5,6 +5,7 @@
 // install. `state/fpkgConversion` drives the run; this screen holds the source, its check and the
 // remembered options, and hands every action the exact package the run names.
 
+import { useMakeWay } from "../../lib/useMakeWay";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { PackagePlus } from "lucide-react";
@@ -252,6 +253,7 @@ export default function FpkgConvertScreen() {
     void deletePackage().catch((e) => setError(e instanceof Error ? e.message : String(e)));
   };
 
+  const { makeWay, dialog: makeWayDialog } = useMakeWay();
   const onLaunch = () => {
     // The title id of the package this result built, never of whatever the Game card shows.
     const titleId = pipeline.phase === "done" ? pipeline.titleId : null;
@@ -260,9 +262,10 @@ export default function FpkgConvertScreen() {
       setError(tr("fpkg.launchUnknown", undefined, "Cannot tell which title to launch; start it from the PS5."));
       return;
     }
-    void appLaunch(transferAddr(target), titleId).catch((e) =>
-      setError(e instanceof Error ? e.message : String(e)),
-    );
+    // One game at a time: a running one is closed first, with the user's say-so.
+    void makeWay(target, titleId, titleId)
+      .then((clear) => (clear ? appLaunch(transferAddr(target), titleId) : undefined))
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
   };
 
   const onAnother = () => {
@@ -284,6 +287,7 @@ export default function FpkgConvertScreen() {
 
   return (
     <div className="app-page flex flex-col gap-4">
+      {makeWayDialog}
       <PageHeader
         icon={PackagePlus}
         title={tr("fpkg_title", undefined, "Convert to FPKG")}

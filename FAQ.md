@@ -1122,20 +1122,24 @@ The routes:
 
 | Content | Stream & install | Upload & install | Folder dump + ShadowMount+ | exFAT image + ShadowMount+ |
 |---|---|---|---|---|
-| **PS4 package** (base game) | Works. The most reliable route; PS4 fake packages play on every firmware. | Less reliable than Stream; on some firmwares (seen on 9.60, 11.20, 13.60) Sony refuses it with `0x80B2116F` (the app re-serves it from the engine for you), and a failed staged re-install of an installed game can remove it. Prefer Stream. | Works (PS4 folder dumps). | Works. |
-| **PS5 package** (fake / FPKG game) | Installs. **On firmware above 11.60 the game installs but cannot be played.** | Same as Stream, plus the `0x80B2116F` refusal above. | Works for a decrypted PS5 dump — the route people use on 13.60. | Works — also the route used on 13.60. |
+| **PS4 package** (base game) | Works. The most reliable route; PS4 fake packages play on every firmware. | Works on FW 13.60 from 6.3.1 (a 3.6 GiB base installed over itself on both of our consoles). Before 6.3.1 Sony refused it with `0x80B2116F`; see the firmware note below. | Works (PS4 folder dumps). | Works. |
+| **PS5 package** (fake / FPKG game) | Installs. **On firmware above 11.60 the game installs but cannot be played.** | Same as Stream. | Works for a decrypted PS5 dump — the route people use on 13.60. | Works — also the route used on 13.60. |
 | **PS5 homebrew app** (for example Itemzflow, `IV0002-ITEM00001`) | Works and launches, including on FW 13.60. | Works. | n/a | n/a |
-| **Patch / update** | Works (verified: a PS4 base plus its patch, streamed). Install the base first. | Risky: an update shares its content id with the base game, so a failed fallback can remove the base. Prefer Stream. | n/a — copy the update into the game folder. | n/a |
+| **Patch / update** | Works (verified: a PS4 base plus its patch, streamed). Install the base first. | Works on FW 13.60 from 6.3.1 (a PS4 1.00 base took its 1.04 patch this way). Install the base first. | n/a — copy the update into the game folder. | n/a |
 | **DLC** | Works after its base is installed. | Works after its base is installed. | n/a | n/a |
 | **FPKG made by Convert** | Same as the content type above. | Same as the content type above. | Convert output is a package, not a folder. | Convert can start from an `.exfat` image. |
 | **Folder dump** | n/a | n/a | **Works** — see "My uploaded game won't launch" for the recipe. | Convert the folder to an `.exfat` image first. |
 
 Firmware notes:
 
-- **Upload & install (`0x80B2116F`):** seen on FW 9.60, 11.20 and 13.60 (and `0x80B2150F` on
-  5.10), not only 13.60. The app then re-serves the package from the engine, which needs the PS5
-  to reach this computer (see the ports below), and offers **Retry with Stream**. You see the
-  error only if that also fails, usually because a firewall blocks port 19113.
+- **Upload & install (`0x80B2116F`):** fixed in 6.3.1. It was our bug, not a limit of the PS5:
+  the install request we handed Sony was a few bytes short, so Sony read leftover memory and
+  sometimes took the package for a patch. That refused every Upload & install, and made some
+  Stream installs fail at random until the helper was sent again. Measured on FW 13.60 (two
+  consoles): refused every time before, accepted every time after. FW 9.60, 11.20 and 5.10
+  (`0x80B2150F` there) showed the same refusal and should be fixed by the same change, but we
+  have not been able to test them since. If you still see it, the app serves the package from
+  the engine as a second try, and offers **Retry with Stream**.
 
 ### What the common messages mean
 
@@ -1151,9 +1155,11 @@ Firmware notes:
   **Upload & install** works without this connection.
 - **Proxy blocked the stream (`0x80431084`).** In the PS5's network Advanced
   Settings set Proxy Server to "Do Not Use", or use Upload & install.
-- **`0x80B2116F` (or `0x80B2150F` on FW 5.10).** Sony refused a package the
-  console serves from its own storage. It is a limit of that route, not a
-  problem with the file. Use **Stream & install** from a computer.
+- **`0x80B2116F` (or `0x80B2150F` on FW 5.10).** Sony took the package for a
+  patch and refused it. Before 6.3.1 this was a bug in ps5upload's install
+  request, not a problem with the file or the route: update to 6.3.1 or later
+  and let the app send its helper again. If it still appears, use **Stream &
+  install** from a computer and send us a bug report.
 - **`E2-80B22410`.** An error code the PS5's own installer or system software
   shows; ps5upload does not generate it and we have no confirmed single cause.
   It has been reported on packages the console would not accept as built.

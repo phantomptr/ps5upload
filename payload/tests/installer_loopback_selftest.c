@@ -34,6 +34,9 @@ static int http_roundtrip(uint16_t port, const char *req, char *resp, size_t cap
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (connect(fd, (struct sockaddr *)&a, sizeof(a)) != 0) { close(fd); return -1; }
     if (write(fd, req, strlen(req)) < 0) { close(fd); return -1; }
+    /* A kept-alive connection stays open after the answer: do not wait it out. */
+    struct timeval tv = { 1, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     size_t got = 0;
     for (;;) {
         ssize_t n = read(fd, resp + got, cap - 1 - got);
@@ -146,6 +149,64 @@ int main(void) {
     CHECK(strncmp(resp, "HTTP/1.1 200 OK\r\n", 17) == 0);
     CHECK(body_len(resp, n) == 8);
     CHECK(strstr(resp, "CRCDATA!") != NULL);
+
+    /* Keep-alive: Sony's installer asks to carry on on the same connection. Two requests
+     * on one connection must both be answered, and the first must say it stays open. */
+    {
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        struct sockaddr_in a;
+        memset(&a, 0, sizeof(a));
+        a.sin_family = AF_INET;
+        a.sin_port = htons(port);
+        a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        CHECK(connect(fd, (struct sockaddr *)&a, sizeof(a)) == 0);
+        struct timeval tv = { 3, 0 };
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        char one[512];
+        snprintf(one, sizeof(one),
+            "GET /%s/%s?product=0284&serverIpAddr=127.0.0.1&r=0 HTTP/1.1\r\nHost: h\r\nRange: bytes=0-3\r\n\r\n",
+            attempt, base);
+        char kresp[2048];
+        size_t got = 0;
+        CHECK(write(fd, one, strlen(one)) > 0);
+        while (got < sizeof(kresp) - 1) {
+            ssize_t k = read(fd, kresp + got, sizeof(kresp) - 1 - got);
+            if (k <= 0) break;
+            got += (size_t)k;
+            kresp[got] = '\0';
+            char *body = strstr(kresp, "\r\n\r\n");
+            if (body && got - (size_t)(body + 4 - kresp) >= 4) break;
+        }
+        CHECK(strncmp(kresp, "HTTP/1.1 206", 12) == 0);
+        CHECK(strstr(kresp, "Connection: keep-alive") != NULL);
+        /* The same connection answers a second request. */
+        got = 0;
+        kresp[0] = '\0';
+        CHECK(write(fd, one, strlen(one)) > 0);
+        while (got < sizeof(kresp) - 1) {
+            ssize_t k = read(fd, kresp + got, sizeof(kresp) - 1 - got);
+            if (k <= 0) break;
+            got += (size_t)k;
+            kresp[got] = '\0';
+            char *body = strstr(kresp, "\r\n\r\n");
+            if (body && got - (size_t)(body + 4 - kresp) >= 4) break;
+        }
+        CHECK(strncmp(kresp, "HTTP/1.1 206", 12) == 0);
+        /* And "Connection: close" is honoured: the server answers and hangs up. */
+        snprintf(one, sizeof(one),
+            "GET /%s/%s HTTP/1.1\r\nHost: h\r\nRange: bytes=0-3\r\nConnection: close\r\n\r\n",
+            attempt, base);
+        CHECK(write(fd, one, strlen(one)) > 0);
+        got = 0;
+        for (;;) {
+            ssize_t k = read(fd, kresp + got, sizeof(kresp) - 1 - got);
+            if (k <= 0) { CHECK(k == 0); break; } /* EOF, not a timeout */
+            got += (size_t)k;
+        }
+        kresp[got] = '\0';
+        CHECK(strstr(kresp, "Connection: close") != NULL);
+        close(fd);
+    }
 
     /* bytes_served accounts for the pkg body union, not the sidecar */
     snprintf(req, sizeof(req),

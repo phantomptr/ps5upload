@@ -3,57 +3,48 @@
 #
 # Individual screens can guard their in-flight calls with
 # useStaleHostGuard, but most do not and every new screen starts out not
-# using it. The mechanism that actually closes the hole is keying the
-# route tree on the selected console: switching remounts every screen,
-# so no cached list or scan result survives, and a reply that arrives
-# late lands on an unmounted component and is dropped.
+# using it. The mechanism that actually closes the hole is in App.tsx:
+# each selected console has its own tree of screens. The trees are told
+# apart by a key derived from the console, only the selected one is on
+# show, and a hidden one reads the connection state frozen as it was for
+# its own console (ConnectionScope) and keeps its own address. So no
+# cached list or scan result is shown under another console, and a reply
+# that arrives late lands on the tree of the console that asked.
 #
-# That is one line in App.tsx. Deleting it would silently reopen
+# Those are a few lines. Deleting any of them would silently reopen
 # cross-console bleed with nothing failing anywhere. Hence this check.
 set -eu
 
 APP="${1:-client/src/App.tsx}"
+STORE="${2:-client/src/state/connection.ts}"
 
-if [ ! -f "$APP" ]; then
-    echo "ERROR: $APP not found" >&2
-    exit 1
-fi
+for f in "$APP" "$STORE"; do
+    if [ ! -f "$f" ]; then
+        echo "ERROR: $f not found" >&2
+        exit 1
+    fi
+done
 
-key_line=$(grep -n '<Routes' "$APP" | head -1 || true)
-if [ -z "$key_line" ]; then
-    echo "ERROR: no <Routes> element found in $APP" >&2
-    exit 1
-fi
+need() { # need <file> <fixed string> <what it guarantees>
+    if ! grep -qF -- "$2" "$1"; then
+        echo "ERROR: $1 no longer has: $2" >&2
+        echo "  $3" >&2
+        echo "  Without it, one console's data can be shown under another console's name." >&2
+        exit 1
+    fi
+}
 
-case "$key_line" in
-*'key={'*) ;;
-*)
-    echo "ERROR: <Routes> in $APP has no key." >&2
-    echo "  Screens are keyed on the selected console so that switching" >&2
-    echo "  consoles remounts them. Without it, one console's data can be" >&2
-    echo "  shown under another console's name." >&2
-    exit 1
-    ;;
-esac
+need "$APP" 'const here = host || NO_CONSOLE;' \
+    "Each tree of screens is keyed on the selected console, with a fallback for 'no console selected'."
+need "$APP" '<Activity key={key} mode={active ? "visible" : "hidden"}>' \
+    "One tree per console, and only the selected console's tree is on show."
+need "$APP" '<ConnectionScope host={treeHost} frozen={!active}>' \
+    "A hidden console's tree reads its own console's connection state, not the selected one's."
+need "$APP" 'if (!active && !connectionSnapshotFor(treeHost)) return null;' \
+    "A hidden tree with nothing remembered for its console is dropped rather than shown live."
+need "$APP" '<AppRoutes location={active ? location : last} />' \
+    "A hidden console's tree stays on the address it was last on."
+need "$STORE" 'return frozen ? pick(frozen) : live;' \
+    "useConnectionStore answers from the frozen state inside a hidden console's tree."
 
-case "$key_line" in
-*host*) ;;
-*)
-    echo "ERROR: the <Routes> key in $APP is not derived from the host." >&2
-    echo "  Line: $key_line" >&2
-    exit 1
-    ;;
-esac
-
-# A bare `key={host}` remounts on every render once host is empty-ish;
-# the fallback keeps it stable when no console is selected.
-case "$key_line" in
-*'||'*|*'??'*) ;;
-*)
-    echo "ERROR: the <Routes> key has no fallback for 'no console selected'." >&2
-    echo "  Line: $key_line" >&2
-    exit 1
-    ;;
-esac
-
-printf '  %-24s route tree is keyed on the selected console\n' "$(basename "$APP")"
+printf '  %-24s one tree of screens per console, hidden ones frozen on their own console\n' "$(basename "$APP")"

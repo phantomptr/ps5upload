@@ -138,7 +138,7 @@ test("an Add files upload keeps its progress across a screen change", async ({
   await primary.getByRole("link", { name: "Tasks", exact: true }).click();
   // Only the screen on show: the hidden Files screen also names the file.
   await expect(
-    page.locator("[data-scroll-root]").getByText("big.exfat").first(),
+    page.locator("[data-scroll-root]:visible").getByText("big.exfat").first(),
   ).toBeVisible();
   await primary.getByRole("link", { name: "Files", exact: true }).click();
   await expect(progress).toBeVisible({ timeout: 15_000 });
