@@ -485,6 +485,7 @@ mod tests {
             source_image: String::new(),
             safety_reserve_bytes: 0,
             allocatable_bytes: 0,
+            likely_fits_bytes: 0,
         }
     }
 

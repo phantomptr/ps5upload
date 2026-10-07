@@ -30,8 +30,11 @@ export type RefusalOutcome =
   | { kind: "no_kstuff" }
   /** The folder was made 0777 and the second launch was accepted. */
   | { kind: "fixed" }
-  /** Nothing here could fix it (no folder to repair, or it was refused again). */
-  | { kind: "refused" };
+  /** Nothing here could fix it (no folder to repair, or it was refused again).
+   *  `shadowmount`: ShadowMount+ is running. Since 1.7 it mounts a game only when the game
+   *  starts, so with kstuff up a refusal usually means that mount did not happen: reloading
+   *  ShadowMount+ fixed exactly this on two consoles (2026-10-07). */
+  | { kind: "refused"; shadowmount: boolean };
 
 /** Works out why the launch was refused and repairs what it can. Never throws: a
  *  process list or chmod that fails just leaves the refusal as it was. */
@@ -40,18 +43,21 @@ export async function handleHomebrewRefusal(
   deps: RefusalDeps,
 ): Promise<RefusalOutcome> {
   let kstuff: boolean | null;
+  let shadowmount = false;
   try {
-    kstuff = runningChainPayloads(await deps.processes()).has("kstuff");
+    const chain = runningChainPayloads(await deps.processes());
+    kstuff = chain.has("kstuff");
+    shadowmount = chain.has("shadowmount");
   } catch {
     kstuff = null; // unknown: still try the folder repair
   }
   if (kstuff === false) return { kind: "no_kstuff" };
-  if (!source) return { kind: "refused" };
+  if (!source) return { kind: "refused", shadowmount };
   try {
     await deps.chmod777(source);
     await deps.relaunch();
     return { kind: "fixed" };
   } catch {
-    return { kind: "refused" };
+    return { kind: "refused", shadowmount };
   }
 }

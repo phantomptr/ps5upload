@@ -552,6 +552,29 @@ const CATALOGUE: &[CatalogueEntry] = &[
         autoload_delay_ms: 200,
         homepage: "https://github.com/StonedModder/Ghostpad",
     },
+    CatalogueEntry {
+        // Pharaoh2k/ps5debug-NG — a debugger for jailbroken PS5s (GPL-3). The
+        // payload is an installer: it loads the debugger into the console's own
+        // SceShellCore process and exits, so there is no process of its own to
+        // look for; the command port (744) is how "running" is told. Release
+        // assets carry the version (`ps5debug-NG_v1.3.2.elf`), so the hint stops
+        // before it. It is a developer tool, never part of a default bring-up:
+        // last in any autoload order.
+        id: "ps5debug-ng",
+        display_name: "ps5debug-NG",
+        role: "Debugger: inspect and change a running game's memory",
+        description: "A debugger that runs inside the PS5's system process. Tools on your computer (trainers, cheat finders, the ps5dbg Python client) connect to it to read and write a game's memory, scan for values, and set breakpoints. For developers and cheat makers; ps5upload does not need it. While it is attached to a game, ps5upload's own Cheats may not apply to that game.",
+        repo_host: "github.com",
+        repo_owner: "Pharaoh2k",
+        repo_name: "ps5debug-NG",
+        asset_name_hint: "ps5debug-ng",
+        on_console_marker_path: None,
+        process_name_hint: None,
+        ports: &[744],
+        autoload_priority: 9,
+        autoload_delay_ms: 500,
+        homepage: "https://github.com/Pharaoh2k/ps5debug-NG",
+    },
 ];
 
 /// Serializable mirror of `CatalogueEntry`. Has owned `String` fields
@@ -2061,6 +2084,31 @@ mod tests {
         assert_eq!(n, "");
         assert_eq!(u, "");
         assert_eq!(s, 0);
+    }
+
+    #[test]
+    fn ps5debug_ng_entry_picks_the_versioned_release_elf() {
+        // The asset name carries the version (`ps5debug-NG_v1.3.2.elf`), so the hint
+        // stops before it, and matching ignores case.
+        let e = find_entry("ps5debug-ng").expect("ps5debug-NG is in the catalogue");
+        assert_eq!(e.ports, &[744]);
+        // It runs inside the console's system process, so there is no process to look for.
+        assert!(e.process_name_hint.is_none());
+        let r = GithubRelease {
+            tag_name: "1.3.2".into(),
+            name: "".into(),
+            body: "".into(),
+            published_at: "".into(),
+            html_url: "".into(),
+            prerelease: false,
+            assets: vec![GithubAsset {
+                name: "ps5debug-NG_v1.3.2.elf".into(),
+                browser_download_url: "https://example/ps5debug".into(),
+                size: 1,
+            }],
+        };
+        let (n, _, _) = pick_asset(&r, e.asset_name_hint);
+        assert_eq!(n, "ps5debug-NG_v1.3.2.elf");
     }
 
     #[test]

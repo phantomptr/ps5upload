@@ -3455,6 +3455,19 @@ err_replace_cooldown: "A konzol segédprogramját az imént cserélték le. Vár
 "joberr.helper_starting": "A PS5 segédprogramja még indul. Várj néhány másodpercet, majd próbáld újra.",
 "joberr.ava1_failed": "A PS5 segédprogramja elindult, de az átviteli szervere nem. Indítsd újra a konzolt, majd próbáld újra.",
 "joberr.helper_not_running": "Nem fut segédprogram a PS5-ön. Előbb küldd el a segédprogramot (az asztali alkalmazás Kapcsolat képernyője vagy a payload-betöltőd), majd próbáld újra.",
+fs_upload_retrying: "A kapcsolat megszakadt. Újrapróbálkozás ({attempt}/{of})…",
+fs_upload_stopped_title: "A PS5-re másolás megállt itt: {name} ({done}/{count} kész)",
+fs_upload_stopped_by_user: "Ezt a másolást itt állítottad le: {name} ({done}/{count} kész)",
+fs_upload_stopped_interrupted: "Ez a másolás az alkalmazás bezárásakor megszakadt itt: {name} ({done}/{count} kész)",
+fs_upload_stopped_hint: "Ami már megérkezett a PS5-re, megmarad. A folytatás csak a maradékot küldi el.",
+fs_upload_interrupted_notice: "Egy PS5-re másolás megszakadt. A folytatáshoz nyisd meg a Fájlokat.",
+installed_launch_smp_refused: "A PS5 megtagadta a játék indítását (0x80940033), pedig a kstuff fut. A ShadowMount+ a játékot induláskor csatolja, és ez nem történt meg. Zárd be a futó játékot, küldd el újra a ShadowMount+-t a Payloads oldalról, majd nyomd meg a Lejátszást.",
+connection_mac_local_network_hint: "Lehet, hogy a macOS blokkolja az alkalmazás hozzáférését a helyi hálózathoz. Nyisd meg: Rendszerbeállítások → Adatvédelem és biztonság → Helyi hálózat, engedélyezd a PS5Uploadot, majd ellenőrizd újra.",
+batch_space_tight: "{drive}: lehet, hogy {size} nem fér el. A PS5 írás közben nagyjából egyötöddel többet tart vissza, így várhatóan kb. {fits} fér el. Ettől még megpróbálhatod.",
+installed_swap_confirm_title: "Előbb bezárod ezt: {other}?",
+installed_swap_confirm_body: "A(z) {other} fut, és a PS5 egyszerre csak egy játékot futtat. Bezárod, és elindítod ezt: {name}? A(z) {other} nem mentett előrehaladása elvész.",
+installed_swap_confirm_ok: "Bezárás és indítás",
+installed_swap_close_failed: "A(z) {other} még fut, és nem sikerült bezárni, ezért a(z) {name} nem indult el. Zárd be a PS5-ön, majd nyomd meg újra a Lejátszást.",
 };
 
 export default hu;

@@ -57,6 +57,17 @@ describe("pairing_dialog_takes_the_code_from_the_console_screen", () => {
     expect(html).not.toContain("pairing-code-input");
   });
 
+  it("offers to send the helper again when the window is closed: a helper the app sends pairs by itself", () => {
+    const html = panel({ view: { state: "closed" }, onResend: () => {} });
+    expect(html).toContain("Resend helper");
+    expect(html).toContain("pairing-resend-helper");
+  });
+
+  it("has no resend button where the app cannot send the helper", () => {
+    const html = panel({ view: { state: "closed" } });
+    expect(html).not.toContain("pairing-resend-helper");
+  });
+
   it("says when the console could not be reached", () => {
     const html = panel({ view: null, error: "timed out" });
     expect(html).toContain("Pairing failed: timed out");

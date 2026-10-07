@@ -891,6 +891,10 @@ export interface Volume {
   safety_reserve_bytes?: number;
   /** Bytes a new upload may safely allocate after the reserve above. */
   allocatable_bytes?: number;
+  /** How much new data is likely to fit. Less than `allocatable_bytes` on internal storage,
+   *  where the PS5 holds back about a fifth more as data is written (measured); equal to it
+   *  elsewhere. Absent from an older engine. For telling the user, never for refusing. */
+  likely_fits_bytes?: number;
   writable: boolean;
   is_placeholder?: boolean;
   /** For `/mnt/ps5upload/*` mounts, the backing image file. Empty
@@ -903,6 +907,12 @@ export interface Volume {
  * fallback; the engine still applies its own conservative preflight. */
 export function volumeAllocatableBytes(volume: Volume): number {
   return Math.max(0, volume.allocatable_bytes ?? volume.free_bytes);
+}
+
+/** How much new data is likely to fit on a volume (see `Volume.likely_fits_bytes`). */
+export function volumeLikelyFitsBytes(volume: Volume): number {
+  const room = volumeAllocatableBytes(volume);
+  return Math.max(0, Math.min(room, volume.likely_fits_bytes ?? room));
 }
 
 /** Enumerate the PS5's mounted storage volumes (internal + extended), with

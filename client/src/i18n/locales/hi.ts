@@ -3135,6 +3135,19 @@ fs_menu_paste_into: "इस फ़ोल्डर में पेस्ट क�
 fs_menu_copy_path: "पाथ कॉपी करें",
 fs_go_to_path: "पाथ पर जाएँ",
 fs_copy_path_failed: "पाथ क्लिपबोर्ड पर कॉपी नहीं हो सका।",
+fs_upload_retrying: "कनेक्शन टूट गया। फिर से कोशिश हो रही है ({attempt}/{of})…",
+fs_upload_stopped_title: "PS5 पर कॉपी {name} पर रुक गई ({count} में से {done} पूरे)",
+fs_upload_stopped_by_user: "आपने यह कॉपी {name} पर रोकी ({count} में से {done} पूरे)",
+fs_upload_stopped_interrupted: "ऐप बंद होने पर यह कॉपी {name} पर रुक गई ({count} में से {done} पूरे)",
+fs_upload_stopped_hint: "जो PS5 तक पहुँच चुका है वह सुरक्षित है। फिर शुरू करने पर केवल बाकी हिस्सा भेजा जाता है।",
+fs_upload_interrupted_notice: "PS5 पर एक कॉपी बीच में रुक गई। उसे फिर शुरू करने के लिए Files खोलें।",
+installed_launch_smp_refused: "kstuff चल रहा है, फिर भी PS5 ने यह गेम शुरू करने से मना कर दिया (0x80940033)। ShadowMount+ गेम शुरू होते समय उसे माउंट करता है, और ऐसा नहीं हुआ। चल रहा कोई भी गेम बंद करें, Payloads से ShadowMount+ फिर भेजें, फिर Play दबाएँ।",
+connection_mac_local_network_hint: "हो सकता है macOS इस ऐप को आपके लोकल नेटवर्क तक पहुँचने से रोक रहा हो। System Settings → Privacy & Security → Local Network खोलें, PS5Upload को अनुमति दें, फिर दोबारा जाँचें।",
+batch_space_tight: "{drive}: {size} शायद न समाए। लिखते समय PS5 लगभग पाँचवाँ हिस्सा अतिरिक्त रोक लेता है, इसलिए लगभग {fits} समाने की संभावना है। फिर भी आप कोशिश कर सकते हैं।",
+installed_swap_confirm_title: "पहले {other} बंद करें?",
+installed_swap_confirm_body: "{other} चल रहा है, और PS5 एक समय में एक ही गेम चलाता है। इसे बंद करके {name} शुरू करें? {other} की बिना सेव की प्रगति खो जाएगी।",
+installed_swap_confirm_ok: "बंद करके शुरू करें",
+installed_swap_close_failed: "{other} अब भी चल रहा है और बंद नहीं हो सका, इसलिए {name} शुरू नहीं हुआ। इसे PS5 पर बंद करें और फिर Play दबाएँ।",
 };
 
 export default hi;

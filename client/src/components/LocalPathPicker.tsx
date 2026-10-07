@@ -359,8 +359,17 @@ function joinServer(dir: string, name: string): string {
   return `${dir.replace(/\/+$/, "")}/${name}`;
 }
 
+/** Whether the picker steps aside for the package viewer. It does only for a View pressed in
+ *  the picker itself, and only while that viewer is open: closing the viewer returns to the
+ *  picker in the folder it was left in, instead of making the user find the folder again. */
+export function pickerHiddenForViewer(viewingFromPicker: boolean, viewerOpen: boolean): boolean {
+  return viewingFromPicker && viewerOpen;
+}
+
 export function LocalPathPicker() {
   const tr = useTr();
+  const viewerOpen = usePackageViewer((s) => s.request !== null);
+  const [viewingFromPicker, setViewingFromPicker] = useState(false);
   const navigate = useNavigate();
   const pending = useLocalPickerStore((s) => s.pending);
   const settle = useLocalPickerStore((s) => s.settle);
@@ -478,7 +487,9 @@ export function LocalPathPicker() {
   useEffect(() => {
     if (!pending) return;
     const h = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      // While the package viewer is open on top, Esc is the viewer's: it must not also
+      // close the picker waiting underneath.
+      if (e.key === "Escape" && usePackageViewer.getState().request === null) {
         e.preventDefault();
         settle(null);
       }
@@ -487,7 +498,11 @@ export function LocalPathPicker() {
     return () => window.removeEventListener("keydown", h);
   }, [pending, settle]);
 
+  // The viewer opened from here has closed: the flag has done its job. (Derived visibility,
+  // so no effect is needed to "re-show" the picker.)
+  const hidden = pickerHiddenForViewer(viewingFromPicker, viewerOpen);
   if (!pending) return null;
+  if (hidden) return null;
 
   const parent = cwd ? (connectionId || consoleHost ? serverParent(cwd) : parentOf(cwd)) : null;
   const resultOf = (path: string) =>
@@ -544,8 +559,10 @@ export function LocalPathPicker() {
         if (act && connectionId) act.onInstall(remotePath(connectionId, p));
       }}
       onView={(p) => {
-        settle(null);
-        if (connectionId) usePackageViewer.getState().open(remotePath(connectionId, p));
+        if (!connectionId) return;
+        // The picker stays open underneath, with its folder: see pickerHiddenForViewer.
+        setViewingFromPicker(true);
+        usePackageViewer.getState().open(remotePath(connectionId, p));
       }}
       onSend={(p) => {
         const act = pending.actions;

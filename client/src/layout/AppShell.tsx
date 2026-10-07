@@ -1,6 +1,6 @@
 import { saveLastRoute } from "../lib/lastRoute";
-import { Outlet, useLocation, useNavigate } from "react-router";
-import { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate, useOutlet } from "react-router";
+import { Activity, useEffect, useRef, useState, type ReactNode } from "react";
 import { Lock, RefreshCw, X } from "lucide-react";
 import StatusBar from "./StatusBar";
 import SessionBanner from "./SessionBanner";
@@ -81,6 +81,10 @@ import {
 } from "../lib/addr";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { useUploadQueueStore } from "../state/uploadQueue";
+import {
+  interruptedFsUploadHosts,
+  resumeStoppedFsUploadOnWake,
+} from "../state/fsUploadRuntime";
 import { useTransferStore } from "../state/transfer";
 import { useUploadSettingsStore } from "../state/uploadSettings";
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
@@ -238,6 +242,23 @@ function useStatusPolling() {
     if (!useUploadQueueStore.getState().loaded) {
       void useUploadQueueStore.getState().hydrate();
     }
+  }, []);
+  // A Files upload the app closed or crashed in the middle of was saved: say so once, with
+  // the way back to its Resume button.
+  const trNotice = useTr();
+  useEffect(() => {
+    if (interruptedFsUploadHosts().length === 0) return;
+    pushNotification(
+      "info",
+      trNotice(
+        "fs_upload_interrupted_notice",
+        undefined,
+        "A copy to the PS5 was interrupted. Open Files to resume it.",
+      ),
+      { link: "/files" },
+    );
+    // Once, at startup.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -516,6 +537,12 @@ function useStatusPolling() {
               Date.now() - resumedAt < AUTO_LOADER_COOLDOWN_MS;
             if (!resumeCooling && !transferScreenBusy(probedHost)) {
               uploadResumeFiredAtRef.current[key] = Date.now();
+              // A Files-screen upload the outage stopped carries on the same way.
+              if (resumeStoppedFsUploadOnWake(probedHost))
+                log.info(
+                  "connection",
+                  `wake resume: carrying on with the Files upload on ${probedHost}`,
+                );
               void useUploadQueueStore
                 .getState()
                 .resumeFailedRecoverable(probedHost)
@@ -1368,13 +1395,7 @@ export default function AppShell() {
               guarantees scroll position resets per screen. Same-path query
               changes (e.g. /payloads?tab=send) keep the node, so tab
               switches inside a screen don't re-animate. */}
-          <div
-            key={location.pathname}
-            data-scroll-root
-            className="anim-screen flex-1 overflow-y-auto overflow-x-hidden pb-[calc(56px+var(--safe-bottom))] md:pb-0 [overscroll-behavior:contain]"
-          >
-            <Outlet />
-          </div>
+          <KeptScreens pathname={location.pathname} className="anim-screen flex-1 overflow-y-auto overflow-x-hidden pb-[calc(56px+var(--safe-bottom))] md:pb-0 [overscroll-behavior:contain]" />
         </main>
       </div>
       <ActivityBar />
@@ -1388,5 +1409,69 @@ export default function AppShell() {
       <Toaster />
       <PairingDialog />
     </div>
+  );
+}
+
+
+/** How many screens stay alive behind the one on show. Enough for going back and forth in a
+ *  workflow; bounded so a long session does not keep every screen it ever opened. */
+const KEPT_SCREENS = 6;
+
+/** The current screen, and the last few visited ones kept alive but hidden.
+ *
+ * A route change used to unmount the screen: anything typed, selected, opened or scrolled was
+ * gone on return, and a screen-local operation lost its progress. Each visited screen now
+ * stays mounted inside a hidden <Activity>, which keeps its state and DOM but tears its
+ * effects down, so a hidden screen runs no timers and polls nothing: it costs the console no
+ * traffic. Coming back re-runs its effects (lists refresh) with the state as it was left.
+ *
+ * Each screen has its own scroll container, so scroll position is per screen too. Only the
+ * one on show carries `data-scroll-root` (see lib/useScrollLock).
+ *
+ * This covers switching screens. Switching console still rebuilds every screen (App.tsx keys
+ * the routes by console, so one console's late answers never land on another's screen). */
+function KeptScreens({ pathname, className }: { pathname: string; className: string }) {
+  const outlet = useOutlet();
+  // path -> the route element as first rendered for it. The element's props do not change
+  // for a given route, so the first one keeps rendering the same component instance.
+  const [kept, setKept] = useState<Array<{ path: string; node: ReactNode }>>([]);
+  useEffect(() => {
+    setKept((prev) => {
+      const here = prev.find((k) => k.path === pathname) ?? { path: pathname, node: outlet };
+      // Most recent last; the oldest beyond the limit is let go.
+      return [...prev.filter((k) => k.path !== pathname), here].slice(-KEPT_SCREENS);
+    });
+    // The outlet element is new on every render; only a change of screen matters here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname]);
+  // The screen being opened is not in `kept` until the effect above has run.
+  const screens = kept.some((k) => k.path === pathname)
+    ? kept
+    : [...kept, { path: pathname, node: outlet }];
+  return (
+    <>
+      {[...screens]
+        .sort((a, b) => a.path.localeCompare(b.path))
+        .map(({ path, node }) => {
+          const active = path === pathname;
+          return (
+            <Activity key={path} mode={active ? "visible" : "hidden"}>
+              <div
+                {...(active ? { "data-scroll-root": "" } : {})}
+                data-screen={path}
+                // Hidden screens are out of reach as well as out of sight: nothing in them
+                // can take focus, be clicked, or be read out.
+                inert={!active}
+                aria-hidden={!active}
+                className={className}
+              >
+                {/* The screen on show renders the live route element; a hidden one keeps
+                    the element it was last shown with. Same component either way. */}
+                {active ? outlet : node}
+              </div>
+            </Activity>
+          );
+        })}
+    </>
   );
 }

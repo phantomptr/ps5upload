@@ -56,6 +56,9 @@ export function validateBatch(
   rows: BatchCheckRow[],
   queued: { sourcePath: string; resolvedDest: string }[],
   freeByVolume: Map<string, number | null>,
+  /** How much is likely to fit on each drive. Less than free on internal storage, where the
+   *  PS5 holds back more as it writes. A batch over this is warned about, never blocked. */
+  likelyFitsByVolume: Map<string, number | null> = new Map(),
 ): BatchCheck {
   const issues = new Map<string, BatchMsg[]>();
   const note = (id: string, msg: BatchMsg) => issues.set(id, [...(issues.get(id) ?? []), msg]);
@@ -110,6 +113,13 @@ export function validateBatch(
         key: "batch_space_short",
         vars: { drive: vol, size: formatBytes(known), free: formatBytes(free) },
         text: `${vol}: needs ${formatBytes(known)}, only ${formatBytes(free)} free`,
+      });
+    } else if ((likelyFitsByVolume.get(vol) ?? free) < known) {
+      const fits = likelyFitsByVolume.get(vol) ?? free;
+      space.push({
+        key: "batch_space_tight",
+        vars: { drive: vol, size: formatBytes(known), fits: formatBytes(fits) },
+        text: `${vol}: ${formatBytes(known)} may not fit. The PS5 holds back about a fifth more as it writes, so about ${formatBytes(fits)} is likely to fit. You can still try.`,
       });
     } else if (unknown > 0) {
       space.push({

@@ -42,6 +42,7 @@ import {
   pathKind,
   probeDestination,
   volumeAllocatableBytes,
+  volumeLikelyFitsBytes,
   type PlannedFile,
   type Volume,
   type ZipInspect,
@@ -699,6 +700,7 @@ export default function UploadScreen() {
       .filter((q) => (q.status === "pending" || q.status === "running") && hostOf(q.addr) === hostOf(host ?? ""))
       .map((q) => ({ sourcePath: q.sourcePath, resolvedDest: q.resolvedDest })),
     new Map(availableVolumes.map((v) => [v.path, volumeAllocatableBytes(v)] as [string, number | null])),
+    new Map(availableVolumes.map((v) => [v.path, volumeLikelyFitsBytes(v)] as [string, number | null])),
   );
   const toAdd = included.filter((r) => r.source && r.status === "ready" && !batchCheck.skip.has(r.id));
   const batchReady =
@@ -3377,7 +3379,8 @@ function DestinationCard({
   // is what lets someone pick a workable destination up front.
   const usableBytesByPath = new Map<string, number>();
   for (const v of availableVolumes) {
-    usableBytesByPath.set(v.path, volumeAllocatableBytes(v));
+    // What is likely to fit, which on internal storage is less than what is allocatable.
+    usableBytesByPath.set(v.path, volumeLikelyFitsBytes(v));
   }
   const formatUsable = (bytes: number) => {
     const gib = bytes / 1024 ** 3;

@@ -34,6 +34,9 @@ test("guides a disconnected user through primary navigation and recovery", async
   // page body: the sidebar carries the same links.
   const body = page.getByRole("main");
   await page.getByRole("link", { name: "More" }).click();
+  // Wait for More itself: Home also has a "Tasks" link, and Home stays in the page (hidden)
+  // after the switch, so a click aimed at it would wait on a link that never shows again.
+  await expect(page.getByRole("heading", { name: "More" })).toBeVisible();
   await body.getByRole("link", { name: "Tasks", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Tasks" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Tasks", pressed: true })).toBeVisible();

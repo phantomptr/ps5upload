@@ -3,10 +3,24 @@ import { useEffect, useRef, useState } from "react";
 import { startLinkDownload, type LinkClass } from "../../api/links";
 import { fetchVolumes, jobCancel, jobStatus } from "../../api/ps5";
 import { Button, Input, Spinner } from "../../components";
-import { consoleAddr, transferAddr } from "../../lib/addr";
+import { consoleAddr, hostOf, transferAddr } from "../../lib/addr";
 import { formatBytes } from "../../lib/format";
 import { pkgStorageFor } from "../../lib/pkgStorage";
 import { useTr } from "../../state/lang";
+import {
+  dismissWatchedJob,
+  stopWatchedJob,
+  useWatchedJobStore,
+  watchJob,
+  watchedJob,
+  type WatchedJobDeps,
+} from "../../state/watchedJobs";
+
+const watchDeps: WatchedJobDeps = {
+  jobStatus: (id) => jobStatus(id),
+  jobCancel,
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+};
 
 /** Where a download-only file goes when the user does not choose: next to the package
  *  library on the console's default drive, in its own `downloads` folder. */
@@ -33,11 +47,16 @@ export function LinkDownloadCard({
   const tr = useTr();
   const [dir, setDir] = useState(() => defaultDownloadDir(host));
   const [name, setName] = useState(info.filename);
-  const [phase, setPhase] = useState<"idle" | "running" | "done" | "failed">("idle");
-  const [sent, setSent] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [landed, setLanded] = useState<string | null>(null);
-  const jobRef = useRef<string | null>(null);
+  // The download belongs to this console and link, not to this card (see state/watchedJobs):
+  // it keeps running, and shows in Tasks, when the user leaves the screen.
+  const jobKey = `linkdl:${hostOf(host)}:${url}`;
+  const job = useWatchedJobStore((s) => watchedJob(s, jobKey));
+  const phase: "idle" | "running" | "done" | "failed" =
+    !job || job.phase === "stopped" ? "idle" : job.phase;
+  const sent = job?.sent ?? 0;
+  const error = job?.phase === "failed" ? job.error : null;
+  const landed =
+    job?.phase === "done" ? (job.dest ?? `${dir.trim()}/${name.trim()}`) : null;
   const alive = useRef(true);
 
   useEffect(() => {
@@ -61,45 +80,39 @@ export function LinkDownloadCard({
 
   const total = info.total_size ?? 0;
 
-  async function start() {
-    setPhase("running");
-    setError(null);
-    setSent(0);
-    try {
-      const id = await startLinkDownload({
-        url,
-        destDir: dir.trim(),
-        addr: consoleAddr(host),
-        fileName: name.trim() || null,
-        insecureTls,
-      });
-      jobRef.current = id;
-      for (;;) {
-        const snap = await jobStatus(id, host);
-        if (!alive.current) return;
-        if (snap.status === "done") {
-          setLanded(snap.dest ?? `${dir.trim()}/${name.trim()}`);
-          setPhase("done");
-          return;
-        }
-        if (snap.status === "failed") {
-          setError(snap.error ?? "The download failed.");
-          setPhase("failed");
-          return;
-        }
-        setSent(snap.bytes_sent ?? 0);
-        await new Promise((r) => setTimeout(r, 500));
-      }
-    } catch (e) {
-      if (!alive.current) return;
-      setError(e instanceof Error ? e.message : String(e));
-      setPhase("failed");
-    }
+  function start() {
+    const fileName = name.trim() || null;
+    const destDir = dir.trim();
+    void watchJob(
+      {
+        key: jobKey,
+        kind: "download",
+        origin: "install",
+        label: fileName ?? info.filename,
+        host,
+        detail: destDir,
+      },
+      () =>
+        startLinkDownload({
+          url,
+          destDir,
+          addr: consoleAddr(host),
+          fileName,
+          insecureTls,
+        }),
+      watchDeps,
+    );
   }
 
-  async function cancel() {
-    if (jobRef.current) await jobCancel(jobRef.current).catch(() => {});
+  function cancel() {
+    stopWatchedJob(jobKey, watchDeps);
   }
+
+  // Closing the card after a finished download forgets it; a running one stays in Tasks.
+  const close = () => {
+    dismissWatchedJob(jobKey);
+    onClose();
+  };
 
   return (
     <div className="mb-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
@@ -167,11 +180,15 @@ export function LinkDownloadCard({
         )}
         {phase === "done" && (
           <span className="text-xs text-[var(--color-good)]">
-            {tr("linkdl.done", { path: landed ?? "" }, "Saved on the PS5 at {path}")}
+            {tr(
+              "linkdl.done",
+              { path: landed ?? "" },
+              "Saved on the PS5 at {path}",
+            )}
           </span>
         )}
         {phase !== "running" && (
-          <Button variant="ghost" size="sm" onClick={onClose}>
+          <Button variant="ghost" size="sm" onClick={close}>
             {phase === "done"
               ? tr("linkdl.close", undefined, "Close")
               : tr("linkdl.dismiss", undefined, "Not now")}

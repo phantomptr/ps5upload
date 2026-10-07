@@ -10,7 +10,12 @@ vi.mock("../state/lang", () => ({
     },
 }));
 
-import { consolePickResult, PickerView, type PickerViewProps } from "./LocalPathPicker";
+import {
+  consolePickResult,
+  pickerHiddenForViewer,
+  PickerView,
+  type PickerViewProps,
+} from "./LocalPathPicker";
 
 // No DOM here: render to markup and check what a user would see and could press.
 const noop = () => {};
@@ -139,5 +144,16 @@ describe("the console as a source", () => {
       "ps5://192.168.86.99/data/homebrew/G.exfat",
     );
     expect(consolePickResult("10.0.0.2", "/")).toBe("ps5://10.0.0.2/");
+  });
+});
+
+describe("viewing a package from the picker", () => {
+  it("hides the picker while the viewer is open and brings it back when the viewer closes", () => {
+    // Not viewing: the picker shows whatever the viewer is doing for someone else.
+    expect(pickerHiddenForViewer(false, true)).toBe(false);
+    // View pressed and the viewer is up: the picker steps aside, keeping its folder.
+    expect(pickerHiddenForViewer(true, true)).toBe(true);
+    // The viewer was closed: back to the picker, in the folder it was left in.
+    expect(pickerHiddenForViewer(true, false)).toBe(false);
   });
 });

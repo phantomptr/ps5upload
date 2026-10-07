@@ -3102,6 +3102,19 @@ fs_menu_paste_into: "এই ফোল্ডারে পেস্ট করু�
 fs_menu_copy_path: "পাথ কপি করুন",
 fs_go_to_path: "পাথে যান",
 fs_copy_path_failed: "পাথটি ক্লিপবোর্ডে কপি করা যায়নি।",
+fs_upload_retrying: "সংযোগ বিচ্ছিন্ন হয়েছে। আবার চেষ্টা করা হচ্ছে ({attempt}/{of})…",
+fs_upload_stopped_title: "PS5-এ কপি {name}-এ থেমে গেছে ({count}-এর মধ্যে {done}টি সম্পন্ন)",
+fs_upload_stopped_by_user: "আপনি এই কপিটি {name}-এ থামিয়েছেন ({count}-এর মধ্যে {done}টি সম্পন্ন)",
+fs_upload_stopped_interrupted: "অ্যাপ বন্ধ হওয়ায় এই কপি {name}-এ থেমে গেছে ({count}-এর মধ্যে {done}টি সম্পন্ন)",
+fs_upload_stopped_hint: "PS5-এ যা পৌঁছেছে তা রাখা আছে। পুনরায় শুরু করলে শুধু বাকিটুকু পাঠানো হয়।",
+fs_upload_interrupted_notice: "PS5-এ একটি কপি মাঝপথে থেমে গেছে। আবার শুরু করতে Files খুলুন।",
+installed_launch_smp_refused: "kstuff চালু থাকা সত্ত্বেও PS5 এই গেমটি চালু করতে অস্বীকার করেছে (0x80940033)। ShadowMount+ গেম শুরু হওয়ার সময় সেটি মাউন্ট করে, আর তা হয়নি। চলমান কোনো গেম থাকলে বন্ধ করুন, Payloads থেকে ShadowMount+ আবার পাঠান, তারপর Play চাপুন।",
+connection_mac_local_network_hint: "macOS হয়তো এই অ্যাপটিকে আপনার লোকাল নেটওয়ার্কে যেতে দিচ্ছে না। System Settings → Privacy & Security → Local Network খুলে PS5Upload-কে অনুমতি দিন, তারপর আবার পরীক্ষা করুন।",
+batch_space_tight: "{drive}: {size} নাও আঁটতে পারে। লেখার সময় PS5 প্রায় এক-পঞ্চমাংশ বেশি জায়গা ধরে রাখে, তাই প্রায় {fits} আঁটার সম্ভাবনা। তবু চেষ্টা করতে পারেন।",
+installed_swap_confirm_title: "আগে {other} বন্ধ করবেন?",
+installed_swap_confirm_body: "{other} চলছে, আর PS5 একবারে একটি গেমই চালায়। এটি বন্ধ করে {name} শুরু করবেন? {other}-এর অসংরক্ষিত অগ্রগতি হারিয়ে যাবে।",
+installed_swap_confirm_ok: "বন্ধ করে শুরু করুন",
+installed_swap_close_failed: "{other} এখনও চলছে এবং বন্ধ করা যায়নি, তাই {name} শুরু হয়নি। PS5-এ এটি বন্ধ করে আবার Play চাপুন।",
 };
 
 export default bn;

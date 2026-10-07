@@ -77,6 +77,7 @@ import { DOC_ANCHORS, faqLink, installErrorLink } from "../../lib/installErrorDo
 import { LAST_PS5_FAKE_GAME_FIRMWARE, ps5FakeGameUnplayableFirmware } from "../../lib/ps5Firmware";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { handleHomebrewRefusal, isHomebrewRefusal, type RefusalOutcome } from "../../lib/launchRefusal";
+import { closeRunningGameFirst } from "../../lib/launchSwap";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import { useTr } from "../../state/lang";
@@ -644,6 +645,28 @@ function Section({
 
 // ── Screen ───────────────────────────────────────────────────────────────────
 
+/** Closes a running game: Sony's app-kill by app id, then a SIGKILL of its pid. app-kill can
+ *  THROW (FW 12.20 rejects the app id), so the fallback runs on a throw as well as on
+ *  ok=false; treating both the same is what makes the SIGKILL path reachable. */
+async function killGame(addr: string, game: RunningGame): Promise<boolean> {
+  let killed = false;
+  if (game.appId) {
+    try {
+      killed = (await appKill(addr, game.appId)).ok;
+    } catch {
+      /* Sony's app-kill failed or threw: fall through to SIGKILL. */
+    }
+  }
+  if (!killed && game.pid) {
+    try {
+      killed = (await processKill(addr, game.pid)).ok;
+    } catch {
+      /* SIGKILL failed too: reported by the caller. */
+    }
+  }
+  return killed;
+}
+
 export default function InstalledAppsScreen({
   embedded = false,
 }: {
@@ -871,6 +894,40 @@ export default function InstalledAppsScreen({
       // game's process to appear; we never act on a starting game.
       setLaunchingId(t.titleId);
       try {
+        // One game at a time: a launch over a running game closes it and then fails (see
+        // lib/launchSwap), so the running one is closed first, with the user's say-so.
+        const nameOf = (id: string) =>
+          titles?.find((x) => x.titleId === id)?.titleName ?? id;
+        let otherName = "";
+        const way = await closeRunningGameFirst(t.titleId, {
+          running: () => fetchRunningGames(mgmtAddr(probe.host)),
+          confirm: (other) => {
+            otherName = nameOf(other.titleId);
+            return confirmDialog({
+              title: tr("installed_swap_confirm_title", { other: otherName }, "Close {other} first?"),
+              message: tr(
+                "installed_swap_confirm_body",
+                { other: otherName, name: t.titleName },
+                "{other} is running, and the PS5 runs one game at a time. Close it and start {name}? Any unsaved progress in {other} will be lost.",
+              ),
+              confirmLabel: tr("installed_swap_confirm_ok", undefined, "Close and start"),
+              destructive: true,
+            });
+          },
+          close: (other) => killGame(mgmtAddr(probe.host), other),
+          sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+        });
+        if (probe.isStale() || way === "cancelled") return;
+        if (way === "close_failed") {
+          pushNotification("error", withConsolePrefix(probe.host, t.titleName), {
+            body: tr(
+              "installed_swap_close_failed",
+              { other: otherName, name: t.titleName },
+              "{other} is still running and could not be closed, so {name} was not started. Close it on the PS5 and press Play again.",
+            ),
+          });
+          return;
+        }
         try {
           await appLaunch(transferAddr(probe.host), t.titleId);
         } catch (e) {
@@ -940,7 +997,13 @@ export default function InstalledAppsScreen({
           // refusing every non-Sony title, so name the cause instead.
           pushNotification("error", withConsolePrefix(probe.host, t.titleName), {
             body:
-              e.outcome.kind === "no_kstuff"
+              e.outcome.kind === "refused" && e.outcome.shadowmount
+                ? tr(
+                    "installed_launch_smp_refused",
+                    undefined,
+                    "The PS5 refused to start this game (0x80940033) although kstuff is running. ShadowMount+ mounts a game when it starts, and that did not happen. Close any game that is running, send ShadowMount+ again from Payloads, then press Play.",
+                  )
+                : e.outcome.kind === "no_kstuff"
                 ? tr(
                     "installed_launch_no_kstuff",
                     undefined,
@@ -964,7 +1027,7 @@ export default function InstalledAppsScreen({
         setLaunchingId(null);
       }
     },
-    [host, guard, tr, launchHelpBody],
+    [host, guard, tr, launchHelpBody, titles, confirmDialog],
   );
 
   /* Bring an already-running title to the screen.
@@ -1012,23 +1075,7 @@ export default function InstalledAppsScreen({
         // 12.20 appKill threw straight to the outer catch and the pid fallback
         // (which runs with the payload's elevated ucred) never fired, so the
         // Close button "did nothing".
-        const addr = mgmtAddr(probe.host);
-        let killed = false;
-        if (game.appId) {
-          try {
-            killed = (await appKill(addr, game.appId)).ok;
-          } catch {
-            /* Sony's app-kill failed/threw — fall through to SIGKILL. */
-          }
-        }
-        if (!killed && game.pid) {
-          try {
-            killed = (await processKill(addr, game.pid)).ok;
-          } catch {
-            /* SIGKILL also failed — reported as "couldn't close" below. */
-          }
-        }
-        const ack = { ok: killed };
+        const ack = { ok: await killGame(mgmtAddr(probe.host), game) };
         if (probe.isStale()) return;
         if (ack.ok) {
           // Drop it from the running set immediately so the card flips back to

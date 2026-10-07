@@ -82,12 +82,8 @@ import {
   fsOpStatus,
   fsOpCancel,
   jobStatus,
-  jobCancel,
   startTransferDownload,
   startTransferDownloadZip,
-  startTransferFile,
-  startTransferDir,
-  pathKind,
   fetchVolumes,
   type Volume,
 } from "../../api/ps5";
@@ -119,12 +115,21 @@ import {
   fsDownloadOpHandle,
 } from "../../state/fsBulkOp";
 import { useElapsed } from "../../lib/useElapsed";
+import {
+  cancelFsUpload,
+  fsUploadForHost,
+  runFsUpload,
+  dismissFsUploadStopped,
+  resumeFsUpload,
+  useFsUploadStore,
+  type FsUploadActive,
+} from "../../state/fsUpload";
+import { fsUploadDeps } from "../../state/fsUploadRuntime";
 import { useScrollLock } from "../../lib/useScrollLock";
 import { runBulkDelete as runBulkDeleteLoop } from "../../lib/bulkDelete";
 import { formatBytes } from "../../lib/format";
 import { formatEtaSeconds } from "../../lib/uploadEta";
 import { useRateEta } from "../../lib/useRateEta";
-import { jobLiveFromSnapshot, type JobLive } from "../../lib/jobLive";
 import { humanizePs5Error } from "../../lib/humanizeError";
 
 /**
@@ -333,18 +338,34 @@ export default function FileSystemScreen() {
   const [renameDraft, setRenameDraft] = useState("");
   const [mkdirDraft, setMkdirDraft] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [busyEntry, setBusyEntry] = useState<{
+  const [localBusy, setBusyEntry] = useState<{
     name: string;
-    op: "rename" | "mkdir" | "upload";
+    op: "rename" | "mkdir";
   } | null>(null);
-  // Byte progress of an "Add files" upload, from the engine's transfer job. `index` and
-  // `count` place the current file in a multi-file pick; `settling` carries the console's
-  // own "finishing" counts once the bytes are all sent.
-  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(
-    null,
+  // An "Add files" / drag-in upload belongs to the console, not this screen (see
+  // state/fsUpload): it keeps running, and stays visible here, across navigation. Narrow
+  // selectors on purpose: the byte counters tick twice a second and only the progress
+  // detail below reads them.
+  const uploadName = useFsUploadStore(
+    (s) => fsUploadForHost(s, host).active?.name ?? null,
   );
-  // The user pressed Cancel on an "Add files" upload: the loop stops quietly.
-  const uploadCancelled = useRef(false);
+  const uploadStartedAtMs = useFsUploadStore(
+    (s) => fsUploadForHost(s, host).active?.startedAtMs ?? 0,
+  );
+  const uploadStopped = useFsUploadStore(
+    (s) => fsUploadForHost(s, host).stopped,
+  );
+  const uploadRuns = useFsUploadStore(
+    (s) => fsUploadForHost(s, host).finishedRuns,
+  );
+  const stoppedAt = {
+    name: uploadStopped?.name ?? "",
+    done: uploadStopped?.doneCount ?? 0,
+    count: uploadStopped?.count ?? 0,
+  };
+  const busyEntry: { name: string; op: "rename" | "mkdir" | "upload" } | null =
+    localBusy ??
+    (uploadName !== null ? { name: uploadName, op: "upload" } : null);
   // Lifted into Zustand so the in-flight bulk op survives navigation.
   // The async runner writes to the store; the screen reads from it.
   // Re-mount after a tab switch sees the still-running operation.
@@ -577,6 +598,15 @@ export default function FileSystemScreen() {
       cancelled = true;
     };
   }, [host, payloadStatus]);
+
+  // An "Add files" run ended (here, or while another screen was open): list the folder
+  // again so what landed shows. The count is per console, so a console switch is not a run.
+  const seenUploadRuns = useRef({ host, runs: uploadRuns });
+  useEffect(() => {
+    const seen = seenUploadRuns.current;
+    seenUploadRuns.current = { host, runs: uploadRuns };
+    if (seen.host === host && seen.runs !== uploadRuns) void refresh();
+  }, [host, uploadRuns, refresh]);
 
   // When the host changes (user typed a new IP), restore the
   // last-browsed path for THAT host. Without this, switching consoles
@@ -1091,79 +1121,35 @@ export default function FileSystemScreen() {
    *  payload writes a packed shard's records serially anyway. */
   const runUpload = async (srcPaths: string[], replaceRemoteName?: string) => {
     if (srcPaths.length === 0) return;
-    const addr = consoleAddr(host);
     setError(null);
-    uploadCancelled.current = false;
-    for (let i = 0; i < srcPaths.length; i++) {
-      if (uploadCancelled.current) break;
-      const src = srcPaths[i];
-      const localName = src.split(/[\\/]/).pop() || "file";
-      const remoteName = replaceRemoteName ?? localName;
-      setBusyEntry({ name: remoteName, op: "upload" });
-      const progressBase = { index: i, count: srcPaths.length, jobId: "" };
-      setUploadProgress({
-        ...progressBase,
-        sent: 0,
-        total: 0,
-        live: undefined,
-      });
-      try {
-        // A folder (picked with Add folder, or dropped) uploads whole, into a same-named
-        // folder here; a file goes up on its own.
-        const isFolder =
-          replaceRemoteName === undefined && (await pathKind(src)) === "folder";
-        const jobId = isFolder
-          ? await startTransferDir(src, joinPath(path, remoteName), addr)
-          : await startTransferFile(src, joinPath(path, remoteName), addr);
-        progressBase.jobId = jobId;
-        // Poll to terminal before starting the next one, so a failure
-        // stops the batch instead of racing more writes onto a full or
-        // read-only mount.
-        for (;;) {
-          const snap = await jobStatus(jobId);
-          if (snap.status === "done") break;
-          if (snap.status === "failed") {
-            if (uploadCancelled.current) break;
-            throw new Error(snap.error ?? "upload failed");
-          }
-          setUploadProgress({
-            ...progressBase,
-            sent: snap.bytes_sent ?? 0,
-            total: snap.total_bytes ?? 0,
-            live: jobLiveFromSnapshot(snap),
-          });
-          await new Promise((r) => setTimeout(r, 500));
-        }
-      } catch (e) {
-        const raw = e instanceof Error ? e.message : String(e);
-        const human = humanizePs5Error(raw) || raw;
-        setError(human);
-        pushNotification(
-          "error",
-          withConsolePrefix(
-            host,
-            tr("notif_fs_upload_failed", undefined, "Copy to PS5 failed"),
+    // The run reports its own end through the store (see the effects below), so it is
+    // handled the same whether this screen is still mounted or was left and reopened.
+    await runFsUpload(
+      {
+        host,
+        addr: consoleAddr(host),
+        destDir: path,
+        srcPaths,
+        replaceRemoteName,
+      },
+      {
+        ...fsUploadDeps,
+        onFailed: (raw) =>
+          pushNotification(
+            "error",
+            withConsolePrefix(
+              host,
+              tr("notif_fs_upload_failed", undefined, "Copy to PS5 failed"),
+            ),
+            { body: humanizePs5Error(raw) || raw },
           ),
-          { body: human },
-        );
-        setBusyEntry(null);
-        setUploadProgress(null);
-        await refresh();
-        return;
-      }
-    }
-    setBusyEntry(null);
-    setUploadProgress(null);
-    await refresh();
+      },
+    );
   };
 
   /** Stops an "Add files" upload: the engine ends the transfer job, and the batch stops
    *  before the next file. What already landed stays; the half-written file does not. */
-  const cancelUpload = () => {
-    uploadCancelled.current = true;
-    const id = uploadProgress?.jobId;
-    if (id) void jobCancel(id).catch(() => {});
-  };
+  const cancelUpload = () => cancelFsUpload(host, fsUploadDeps);
 
   /** Toolbar: pick one or more local files and copy them into this folder. */
   const addFilesHere = async () => {
@@ -2020,58 +2006,60 @@ export default function FileSystemScreen() {
   // The keyboard map (fsBrowse.fsKeyAction). One window listener reading the newest state
   // through a ref, so it never re-subscribes per render; a text field or a dialog keeps its keys.
   const keyHandler = useRef<(e: KeyboardEvent) => void>(() => {});
-  keyHandler.current = (e: KeyboardEvent) => {
-    if (
-      keysBelongElsewhere(e.target) ||
-      renaming !== null ||
-      mkdirDraft !== null
-    )
-      return;
-    if (!entries || !host?.trim()) return;
-    const action = fsKeyAction(e);
-    if (!action) return;
-    const sel = selectedEntries;
-    const busy = busyEntry !== null || fsBulk.op !== null;
-    switch (action) {
-      case "select-all":
-        setSelected(new Set(entries.map((x) => x.name)));
-        break;
-      case "copy":
-      case "cut":
-        if (sel.length === 0) return;
-        stageClipboard(action);
-        break;
-      case "paste":
-        if (busy || clipboard.items.length === 0) return;
-        void runPaste();
-        break;
-      case "delete":
-        if (busy || sel.length === 0) return;
-        if (sel.length === 1) void runDelete(sel[0].name);
-        else void runBulkDelete();
-        break;
-      case "rename":
-        if (sel.length !== 1) return;
-        startRename(sel[0].name);
-        break;
-      case "refresh":
-        void refresh();
-        break;
-      case "up":
-        if (path === "/") return;
-        setPath(parent(path));
-        break;
-      case "open":
-        if (sel.length !== 1) return;
-        openEntry(sel[0]);
-        break;
-      case "clear":
-        setSelected(new Set());
-        setRowMenu(null);
-        break;
-    }
-    e.preventDefault();
-  };
+  useEffect(() => {
+    keyHandler.current = (e: KeyboardEvent) => {
+      if (
+        keysBelongElsewhere(e.target) ||
+        renaming !== null ||
+        mkdirDraft !== null
+      )
+        return;
+      if (!entries || !host?.trim()) return;
+      const action = fsKeyAction(e);
+      if (!action) return;
+      const sel = selectedEntries;
+      const busy = busyEntry !== null || fsBulk.op !== null;
+      switch (action) {
+        case "select-all":
+          setSelected(new Set(entries.map((x) => x.name)));
+          break;
+        case "copy":
+        case "cut":
+          if (sel.length === 0) return;
+          stageClipboard(action);
+          break;
+        case "paste":
+          if (busy || clipboard.items.length === 0) return;
+          void runPaste();
+          break;
+        case "delete":
+          if (busy || sel.length === 0) return;
+          if (sel.length === 1) void runDelete(sel[0].name);
+          else void runBulkDelete();
+          break;
+        case "rename":
+          if (sel.length !== 1) return;
+          startRename(sel[0].name);
+          break;
+        case "refresh":
+          void refresh();
+          break;
+        case "up":
+          if (path === "/") return;
+          setPath(parent(path));
+          break;
+        case "open":
+          if (sel.length !== 1) return;
+          openEntry(sel[0]);
+          break;
+        case "clear":
+          setSelected(new Set());
+          setRowMenu(null);
+          break;
+      }
+      e.preventDefault();
+    };
+  });
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => keyHandler.current(e);
     window.addEventListener("keydown", onKey);
@@ -2585,13 +2573,15 @@ export default function FileSystemScreen() {
                   : tr("fs_busy_creating_folder", undefined, "Creating folder")}
             </span>
             <span className="text-[var(--color-muted)]">
-              {busyEntry.name} · {formatDuration(elapsedMs / 1000)}
+              {busyEntry.name} ·{" "}
+              {busyEntry.op === "upload" && uploadStartedAtMs > 0 ? (
+                <ElapsedSince sinceMs={uploadStartedAtMs} />
+              ) : (
+                formatDuration(elapsedMs / 1000)
+              )}
             </span>
-            {busyEntry.op === "upload" && uploadProgress && (
-              <UploadProgressDetail
-                progress={uploadProgress}
-                onCancel={cancelUpload}
-              />
+            {busyEntry.op === "upload" && (
+              <FsUploadProgress host={host} onCancel={cancelUpload} />
             )}
           </div>
         )}
@@ -2609,6 +2599,62 @@ export default function FileSystemScreen() {
         {error && (
           <div className="mb-3">
             <ErrorCard title={tr("fs_error_title", "Error")} detail={error} />
+          </div>
+        )}
+
+        {/* An "Add files" upload that ended on a failure. It lives in the store, so it is
+          here on every visit until the user resumes it or dismisses it. */}
+        {uploadStopped && uploadName === null && (
+          <div
+            className={`mb-3 rounded-md border bg-[var(--color-surface-2)] p-3 text-sm ${uploadStopped.why === "failed" ? "border-[var(--color-bad)]" : "border-[var(--color-border)]"}`}
+            data-testid="fs-upload-stopped"
+          >
+            <div className="font-medium">
+              {uploadStopped.why === "user"
+                ? tr(
+                    "fs_upload_stopped_by_user",
+                    stoppedAt,
+                    "You stopped this copy at {name} ({done} of {count} done)",
+                  )
+                : uploadStopped.why === "interrupted"
+                  ? tr(
+                      "fs_upload_stopped_interrupted",
+                      stoppedAt,
+                      "This copy was interrupted when the app closed, at {name} ({done} of {count} done)",
+                    )
+                  : tr(
+                      "fs_upload_stopped_title",
+                      stoppedAt,
+                      "Copy to PS5 stopped at {name} ({done} of {count} done)",
+                    )}
+            </div>
+            {uploadStopped.error && (
+              <div className="mt-1 break-words text-xs text-[var(--color-muted)]">
+                {humanizePs5Error(uploadStopped.error) || uploadStopped.error}
+              </div>
+            )}
+            <div className="mt-1 text-xs text-[var(--color-muted)]">
+              {tr(
+                "fs_upload_stopped_hint",
+                undefined,
+                "What already reached the PS5 is kept. Resume sends only the rest.",
+              )}
+            </div>
+            <div className="mt-2 flex gap-2">
+              <Button
+                size="sm"
+                onClick={() => void resumeFsUpload(host, fsUploadDeps)}
+              >
+                {tr("upload_dialog_resume", undefined, "Resume")}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => dismissFsUploadStopped(host)}
+              >
+                {tr("dismiss", undefined, "Dismiss")}
+              </Button>
+            </div>
           </div>
         )}
 
@@ -3067,15 +3113,35 @@ function RecentPathsDropdown({
 }
 
 /** Byte progress of an "Add files" upload (see `runUpload`). */
-interface UploadProgress {
-  sent: number;
-  total: number;
-  /** Which file of the pick this is (0-based) and how many there are. */
-  index: number;
-  count: number;
-  jobId: string;
-  /** The engine's live notes: carries the console's "finishing" counts. */
-  live: JobLive | undefined;
+type UploadProgress = Pick<
+  FsUploadActive,
+  "sent" | "total" | "index" | "count" | "jobId" | "live" | "retry"
+>;
+
+/** Time since `sinceMs`, ticking: a run that outlives the screen keeps its real age. */
+function ElapsedSince({ sinceMs }: { sinceMs: number }) {
+  const [now, setNow] = useState(sinceMs);
+  useEffect(() => {
+    const tick = () => setNow(Date.now());
+    tick();
+    const t = window.setInterval(tick, 500);
+    return () => window.clearInterval(t);
+  }, [sinceMs]);
+  return <>{formatDuration(Math.max(0, now - sinceMs) / 1000)}</>;
+}
+
+/** The console's running upload, read straight from the store so only this part of the
+ *  screen re-renders at the poll rate. */
+function FsUploadProgress({
+  host,
+  onCancel,
+}: {
+  host: string;
+  onCancel: () => void;
+}) {
+  const active = useFsUploadStore((s) => fsUploadForHost(s, host).active);
+  if (!active) return null;
+  return <UploadProgressDetail progress={active} onCancel={onCancel} />;
 }
 
 /** Bytes, percent, speed, time left and a bar for an "Add files" upload, and Cancel. Once every
@@ -3089,13 +3155,25 @@ function UploadProgressDetail({
   onCancel: () => void;
 }) {
   const tr = useTr();
-  const { sent, total, index, count, jobId, live } = progress;
+  const { sent, total, index, count, jobId, live, retry } = progress;
   const { rate, etaSeconds } = useRateEta(jobId, sent, total);
   const pct = total > 0 ? Math.min(100, (sent / total) * 100) : null;
   const finishing = total > 0 && sent >= total;
   const settleLeft = live?.settling ? live.settleLeft : undefined;
   return (
     <div className="mt-1 basis-full" data-testid="fs-upload-progress">
+      {retry && (
+        <div
+          className="mb-1 text-[var(--color-warn)]"
+          data-testid="fs-upload-retrying"
+        >
+          {tr(
+            "fs_upload_retrying",
+            { attempt: retry.attempt, of: retry.of },
+            "Connection lost. Trying again ({attempt} of {of})…",
+          )}
+        </div>
+      )}
       <div className="mb-1 flex flex-wrap items-center gap-x-2 font-mono text-[var(--color-muted)]">
         {count > 1 && (
           <span>

@@ -2,7 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { HardDrive, FileArchive, Unplug, RefreshCw, PackageCheck } from "lucide-react";
 
 import { useConnectionStore } from "../../state/connection";
-import { fetchHwStorage, fetchVolumes, fsUnmount, type Volume } from "../../api/ps5";
+import {
+  fetchHwStorage,
+  fetchVolumes,
+  fsUnmount,
+  volumeLikelyFitsBytes,
+  type Volume,
+} from "../../api/ps5";
 import {
   PageHeader,
   EmptyState,
@@ -400,7 +406,10 @@ export function StorageCard({
   const isPackageDrive = isInternalVolume(v.path)
     ? isInternalVolume(packageDrive)
     : packageDrive === v.path.replace(/\/+$/, "");
-  const uploadSafeBytes = v.allocatable_bytes;
+  // What is likely to fit: on internal storage less than free, since the PS5 holds back
+  // more as data is written. The line under the bar shows it with the difference.
+  const uploadSafeBytes =
+    v.allocatable_bytes === undefined ? undefined : volumeLikelyFitsBytes(v);
   const pct =
     v.total_bytes > 0
       ? Math.max(0, Math.min(100, 100 - (v.free_bytes / v.total_bytes) * 100))
@@ -459,7 +468,11 @@ export function StorageCard({
                   "volumes_upload_safe_capacity",
                   {
                     safe: formatStorageBytes(uploadSafeBytes),
-                    reserve: formatStorageBytes(v.safety_reserve_bytes ?? 0),
+                    // Everything between "free" and "likely to fit": the working margin,
+                    // and on internal storage what the PS5 holds back as it writes.
+                    reserve: formatStorageBytes(
+                      Math.max(0, v.free_bytes - uploadSafeBytes),
+                    ),
                   },
                   "{safe} safe for new uploads · {reserve} kept as system/filesystem headroom",
                 )}

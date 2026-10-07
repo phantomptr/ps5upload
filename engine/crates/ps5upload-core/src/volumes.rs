@@ -51,6 +51,30 @@ pub fn external_reserve_for_total(total_bytes: u64) -> u64 {
     EXTERNAL_STORAGE_SAFETY_RESERVE_BYTES.min(total_bytes / 64)
 }
 
+/// What the console holds back, per step, as data is written to internal storage. Its reserve
+/// grows in steps of about this size (one per ~5 GB written on the Phat).
+pub const INTERNAL_WRITE_STEP_BYTES: u64 = 1024 * 1024 * 1024;
+
+/// What writing `bytes` of new data to internal storage takes off its available space.
+///
+/// The console's reserve (free minus available) is not a fixed pool: it grows as data is
+/// written and shrinks again when the data is deleted. Measured 2026-10-07 with one 10.39 GB
+/// file: the Phat's available space fell 12.50 GB (reserve +2.11 GB), the Pro's 12.07 GB
+/// (+1.68 GB), and an extended UFS drive's exactly 10.39 GB. A field report matches: 149 GB
+/// written used up 180 GB available. So internal storage is charged a fifth more than is
+/// written, plus one step for the rounding.
+///
+/// This tells the user an upload may not fit; it is never what refuses one. The refusal is
+/// still "the bytes themselves do not fit" (`Volume::allocatable_bytes`).
+pub fn internal_write_cost(bytes: u64) -> u64 {
+    if bytes == 0 {
+        return 0;
+    }
+    bytes
+        .saturating_add(bytes / 5)
+        .saturating_add(INTERNAL_WRITE_STEP_BYTES)
+}
+
 /// One entry in the payload's volume list.
 ///
 /// Fields mirror `struct statfs` on PS5 FreeBSD: `fs_type` is the short
@@ -91,6 +115,10 @@ pub struct Volume {
     /// responses from older payloads remain safe too.
     #[serde(default)]
     pub allocatable_bytes: u64,
+    /// How much new data is likely to fit (see `likely_fits_bytes()`). Filled in by the engine
+    /// for the app; a payload never sends it.
+    #[serde(default)]
+    pub likely_fits_bytes: u64,
 }
 
 impl Volume {
@@ -138,6 +166,17 @@ impl Volume {
         } else {
             self.allocatable_bytes()
         }
+    }
+
+    /// How much new data is likely to fit: all of `allocatable_bytes()` on an external or
+    /// extended drive, and on internal storage the most whose `internal_write_cost` still
+    /// fits. For telling the user, never for refusing an upload.
+    pub fn likely_fits_bytes(&self) -> u64 {
+        let room = self.allocatable_bytes();
+        if !self.is_internal_user_storage() {
+            return room;
+        }
+        room.saturating_sub(INTERNAL_WRITE_STEP_BYTES) / 6 * 5
     }
 
     pub fn allocatable_bytes(&self) -> u64 {
@@ -277,6 +316,7 @@ mod tests {
                     source_image: String::new(),
                     safety_reserve_bytes: 0,
                     allocatable_bytes: 0,
+                    likely_fits_bytes: 0,
                 },
                 Volume {
                     path: "/data".to_string(),
@@ -289,6 +329,7 @@ mod tests {
                     source_image: String::new(),
                     safety_reserve_bytes: 0,
                     allocatable_bytes: 0,
+                    likely_fits_bytes: 0,
                 },
                 Volume {
                     path: "/mnt/ext0".to_string(),
@@ -301,6 +342,7 @@ mod tests {
                     source_image: String::new(),
                     safety_reserve_bytes: 0,
                     allocatable_bytes: 0,
+                    likely_fits_bytes: 0,
                 },
             ],
         };
@@ -437,6 +479,41 @@ mod tests {
             "got {} allocatable",
             stale.allocatable_bytes()
         );
+    }
+
+    /// Measured on two consoles (2026-10-07): 10.39 GB written to /data took 12.50 GB (Phat)
+    /// and 12.07 GB (Pro) off the available figure, and exactly 10.39 GB on an extended drive.
+    #[test]
+    fn internal_storage_charges_about_a_fifth_more_than_is_written() {
+        const GB: u64 = 1_000_000_000;
+        let cost = internal_write_cost(10_390 * GB / 1000);
+        // At least what the Phat measured, and not wildly more.
+        assert!(cost >= 12_500 * GB / 1000, "cost {cost}");
+        assert!(cost <= 14_000 * GB / 1000, "cost {cost}");
+        assert_eq!(internal_write_cost(0), 0);
+    }
+
+    #[test]
+    fn likely_fits_is_less_than_free_on_internal_storage_and_all_of_it_elsewhere() {
+        let internal: Volume = serde_json::from_str(
+            r#"{"path":"/data","mount_from":"/user/data","fs_type":"nullfs","total_bytes":670694309888,"free_bytes":179888652288,"writable":true}"#,
+        )
+        .unwrap();
+        // frozone45's console: 179.9 GB shown free, the 163.9 GB upload died at 149 GB.
+        let fits = internal.likely_fits_bytes();
+        assert!(
+            fits < 163_940_663_296,
+            "the upload that failed must not be called a fit: {fits}"
+        );
+        assert!(fits > 140_000_000_000, "but what did land must be: {fits}");
+        // What is called a fit really costs no more than is allocatable.
+        assert!(internal_write_cost(fits) <= internal.allocatable_bytes());
+
+        let ext: Volume = serde_json::from_str(
+            r#"{"path":"/mnt/ext0","mount_from":"/dev/nvme1","fs_type":"ufs","total_bytes":499000000000,"free_bytes":459180000000,"writable":true}"#,
+        )
+        .unwrap();
+        assert_eq!(ext.likely_fits_bytes(), ext.allocatable_bytes());
     }
 
     /// The estimate survives, but only where it cannot block anything.

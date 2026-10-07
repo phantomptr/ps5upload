@@ -445,14 +445,10 @@ pub(crate) fn refusal(status: u16, message: String) -> UploadFailure {
 /// The console's own ENOSPC (its preallocation of a file, or a write) after the up-front check
 /// admitted the job: the same refusal the check gives, with the same figures and the pool
 /// sentence. The console keeps the journal and the `.ava-part`, so a retry resumes.
-pub(crate) fn late_no_space(
-    job: &[u8; 16],
-    console_message: String,
-    durable_now: u64,
-) -> UploadFailure {
+pub(crate) fn late_no_space(job: &[u8; 16], console_message: String) -> UploadFailure {
     UploadFailure {
         reason: "preflight_insufficient_space".into(),
-        detail: crate::space::late_no_space_detail(job, &console_message, durable_now),
+        detail: crate::space::late_no_space_detail(job, &console_message),
     }
 }
 
@@ -718,7 +714,6 @@ pub fn upload_with_seq_in(
             match send_job(&mut link, manifest.clone(), source.clone(), o).await {
                 Ok(r) if r.status == gen::STATUS_OK => {
                     let _ = std::fs::remove_dir_all(&persist);
-                    crate::space::finished(&job_id, progress.bytes_durable.load(Ordering::Relaxed));
                     let skipped_files = progress.skipped_files.load(Ordering::Relaxed);
                     let skipped_bytes = progress.skipped_bytes.load(Ordering::Relaxed);
                     let mut body = serde_json::json!({
@@ -756,10 +751,7 @@ pub fn upload_with_seq_in(
                     return Err(PostCommitError::new(PostCommitKind::CrossDevice, r.message).into());
                 }
                 Ok(r) if r.status == gen::ERR_NO_SPACE => {
-                    let durable = progress.bytes_durable.load(Ordering::Relaxed);
-                    return Err(
-                        late_no_space(&job_id, r.message.unwrap_or_default(), durable).into(),
-                    );
+                    return Err(late_no_space(&job_id, r.message.unwrap_or_default()).into());
                 }
                 Ok(r) => return Err(refusal(r.status, r.message.unwrap_or_default()).into()),
                 Err(SendError::Disconnected(why)) => {
@@ -802,8 +794,7 @@ pub fn upload_with_seq_in(
                     );
                 }
                 Err(SendError::Refused { status, message }) if status == gen::ERR_NO_SPACE => {
-                    let durable = progress.bytes_durable.load(Ordering::Relaxed);
-                    return Err(late_no_space(&job_id, message, durable).into());
+                    return Err(late_no_space(&job_id, message).into());
                 }
                 Err(SendError::Refused { status, message }) => {
                     return Err(refusal(status, message).into());

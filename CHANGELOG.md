@@ -4,6 +4,35 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.3.0
+
+**Switching screens no longer loses what you were doing.** Update the app; the helper is
+unchanged apart from its version.
+
+- **Screens keep their state:** going to another screen and back keeps what you typed, what
+  you selected, open panels and where you had scrolled.
+- **Operations keep running and stay visible** when you switch screens or console tabs:
+  copying files into **Files** (drag-in, Add files, Add folder), downloading a link to the
+  PS5, a game's Download and Move in **Games**, and **Send helper**. They also show in Tasks.
+- **Resume a copy into Files** after you stop it, after it fails, or after the app closes or
+  crashes part-way. What already reached the PS5 is kept, so Resume sends only the rest. A
+  dropped connection is retried by itself, and the copy carries on when the PS5 comes back
+  from rest mode.
+- **Storage that adds up:** the PS5's internal drive holds back about a fifth more than you
+  write (measured on two consoles). **Volumes** and the Upload screen now show what is likely
+  to fit, and an upload over that says it **may not fit** but lets you go ahead. Only a real
+  shortfall still refuses an upload. The FAQ explains it, and what fills "Other" on the PS5.
+- **Play while another game is running** asks to close that game first, closes it, then
+  starts yours. Before, the running game closed and the new one never started.
+- **Clearer messages:** a game the PS5 refuses to start while kstuff is running points at
+  ShadowMount+; Mount on an image ShadowMount+ manages says it mounts when the game starts;
+  on a Mac, "No route to host" names the Local Network permission; "not accepting new
+  pairings" has a **Resend helper** button.
+- **Connections:** closing a package you viewed returns to the same folder.
+- **Payloads:** ps5debug-NG is in the catalogue.
+
+---
+
 ## 6.2.3
 
 The 6.2.2 fixes, with a more reliable CI test run. No app or helper behavior changed.

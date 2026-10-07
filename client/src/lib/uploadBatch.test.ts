@@ -67,4 +67,22 @@ describe("checking a batch before it is added", () => {
     expect(unknownFree.blocked).toBe(false);
     expect(unknownFree.space.map((m) => m.text).join(" ")).toMatch(/free space/);
   });
+
+  it("warns, without blocking, when internal storage would be left too tight", () => {
+    // 100 fits by bytes (120 free), but the PS5 holds back more as it writes: 95 is what
+    // is likely to fit.
+    const free = new Map<string, number | null>([["/data", 120]]);
+    const fits = new Map<string, number | null>([["/data", 95]]);
+    const tight = validateBatch([row("a", "/data/x/A", 100)], [], free, fits);
+    expect(tight.blocked).toBe(false);
+    expect(tight.space.map((m) => m.key)).toEqual(["batch_space_tight"]);
+
+    const fine = validateBatch([row("a", "/data/x/A", 90)], [], free, fits);
+    expect(fine.space).toEqual([]);
+
+    // A real shortfall is still the blocking message, not the warning.
+    const over = validateBatch([row("a", "/data/x/A", 130)], [], free, fits);
+    expect(over.blocked).toBe(true);
+    expect(over.space.map((m) => m.key)).toEqual(["batch_space_short"]);
+  });
 });

@@ -9,8 +9,6 @@ import {
 import {
   portProbe,
   payloadCheck,
-  sendPayload,
-  bundledPayloadPath,
   bundledPayloadInfo,
   probeCompanions,
   discoverPs5,
@@ -18,8 +16,13 @@ import {
   type CompanionStatus,
   type DiscoveredHost,
 } from "../../api/ps5";
-import { pollUntilReady, type PollHandle } from "../../lib/pollUntilReady";
-import { isNotPairedError, reportIfNotPaired } from "../../lib/consoleSession";
+import {
+  clearHelperSend,
+  helperSendFor,
+  useHelperSendStore,
+} from "../../state/helperSend";
+import { sendHelperTo } from "../../state/helperSendRuntime";
+import { looksLikeMacLocalNetworkBlock } from "../../lib/localNetworkHint";
 import { parsePS5Firmware } from "../../lib/ps5Firmware";
 import { compareVersions } from "../../lib/semver";
 import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
@@ -27,7 +30,6 @@ import { AlertTriangle, CheckCircle2, CircleDashed, XCircle, Send, ArrowRight, R
 import { PageHeader, Button, Spinner, ErrorCard } from "../../components";
 import { useRosterStore } from "../../state/roster";
 import { hostOf } from "../../lib/addr";
-import { STUCK_LOADER_MESSAGE, waitForLoader } from "../../lib/elfldrGuard";
 import { useTr } from "../../state/lang";
 import PowerControl from "./PowerControl";
 import { BringUpPanel } from "./BringUpPanel";
@@ -205,38 +207,16 @@ export default function ConnectionScreen() {
    *  otherwise-silent ~3-20s probe window. null when not in progress. */
   const sendStartedAt = useRef<number | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
-  // Explicit send phase for the Send button label — set by handleSend, cleared
-  // on settle. Drives sendButtonLabel so the label localizes (it used to be
-  // re-derived from the localized status message via English substring matches).
-  const [sendPhase, setSendPhase] = useState<SendPhase | null>(null);
-
-  /** Active boot-probe poller. Held so the component-unmount effect can
-   *  cancel it — otherwise a poll fires up to 20 s after unmount and
-   *  calls `setTransientStep2(null)` on a dead component. That was
-   *  harmless today (React 18 silently drops the update) but surfaces
-   *  as a dev warning and leaves the stale transient state behind if
-   *  the user navigates back before stored state caught up. */
-  const pollHandle = useRef<PollHandle | null>(null);
-  useEffect(() => {
-    return () => {
-      pollHandle.current?.cancel();
-      pollHandle.current = null;
-      // Cancelling the poll above stops any further writes from
-      // handleSend's probe loop, but it doesn't undo the
-      // payloadProbing=true that handleSend set when the user
-      // clicked Replace. Without an explicit clear here, navigating
-      // away mid-probe leaves the "rechecking…" badge latched in
-      // the store until the next AppShell tick (up to 10 s).
-      // Self-heals eventually but feels broken in the meantime —
-      // unmount cleanup is the right place to reset.
-      useConnectionStore.getState().setStatus({ payloadProbing: false });
-    };
-  }, []);
+  // A send to this console belongs to the console, not this screen (see state/helperSend):
+  // it runs to its end across a view or console-tab switch, and this screen shows it.
+  const helperSend = useHelperSendStore((st) => helperSendFor(st, host));
+  const sendPhase: SendPhase | null = helperSend?.phase ?? null;
 
   const step1: StepState = transientStep1 ?? storedStep1;
   const step1Msg = transientStep1Msg ?? storedStep1Msg;
-  const step2: StepState = transientStep2 ?? storedStep2;
-  const step2Msg = transientStep2Msg ?? storedStep2Msg;
+  const step2: StepState =
+    helperSend?.state ?? transientStep2 ?? storedStep2;
+  const step2Msg = helperSend?.msg ?? transientStep2Msg ?? storedStep2Msg;
   const step3: StepState = step2 === "ok" ? "ok" : "idle";
 
   // 250ms tick while send/probe is busy — gives a smooth counter
@@ -248,7 +228,10 @@ export default function ConnectionScreen() {
       return;
     }
     if (sendStartedAt.current === null) {
-      sendStartedAt.current = Date.now();
+      // A send that was already running when this screen opened keeps its real age.
+      sendStartedAt.current =
+        helperSendFor(useHelperSendStore.getState(), host)?.startedAtMs ??
+        Date.now();
     }
     const id = window.setInterval(() => {
       if (sendStartedAt.current !== null) {
@@ -256,7 +239,7 @@ export default function ConnectionScreen() {
       }
     }, 250);
     return () => window.clearInterval(id);
-  }, [step2]);
+  }, [step2, host]);
 
   // Auto-heal from the app's background status poller. When the
   // payloadStatus flips to "up" mid-flow (e.g., handleSend's own poll
@@ -282,6 +265,7 @@ export default function ConnectionScreen() {
           `Port ${PS5_LOADER_PORT} is open on ${host}`,
         ));
       }
+      clearHelperSend(host);
       if ((transientStep2 ?? storedStep2) !== "ok") {
         settleStep2("ok", tr("connection_payload_running", { host }, `Helper is running on ${host}`));
       }
@@ -366,12 +350,7 @@ export default function ConnectionScreen() {
       setTransientStep1Msg(msg);
     }
   };
-  const flashStep2 = (s: StepState, msg: string) => {
-    setTransientStep2(s);
-    setTransientStep2Msg(msg);
-  };
   const settleStep2 = (s: "ok" | "fail" | "idle", msg: string) => {
-    setSendPhase(null);
     if (s === "ok") {
       setStoredStep2("ok", msg);
       setTransientStep2(null);
@@ -409,6 +388,7 @@ export default function ConnectionScreen() {
         "Checking {target}:{port}…",
       ),
     );
+    clearHelperSend(target);
     settleStep2("idle", tr("connection_payload_not_loaded", undefined, "Helper not loaded yet"));
     setTransientStep2(null);
     setTransientStep2Msg(null);
@@ -443,7 +423,16 @@ export default function ConnectionScreen() {
         { port: PS5_LOADER_PORT, host: target },
         "Port {port} is not open on {host}",
       );
-      settleStep1("fail", probe.error ? `${base} — ${probe.error}` : base);
+      const detail = probe.error ? `${base} — ${probe.error}` : base;
+      // "No route to host" at once, on a Mac, with the console known to be up from another
+      // computer, is what a denied Local Network permission looks like: say where it is.
+      const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
+      settleStep1(
+        "fail",
+        looksLikeMacLocalNetworkBlock(probe.error, ua)
+          ? `${detail}. ${tr("connection_mac_local_network_hint", undefined, "macOS may be blocking this app from your local network. Open System Settings → Privacy & Security → Local Network, allow PS5Upload, then check again.")}`
+          : detail,
+      );
     }
   }
 
@@ -451,163 +440,12 @@ export default function ConnectionScreen() {
     const target = host.trim();
     if (step1 !== "ok") return;
     if (step2 === "busy") return;
-    // Mark version + kernel as stale the moment the user clicks Send.
-    // Two effects:
-    //   1. The VersionBlock immediately renders with a "rechecking…"
-    //      badge instead of letting the user squint at numbers from
-    //      the *old* payload while the new one is still uploading.
-    //   2. AppShell's 10 s-cadence poller doesn't owe us a fresh
-    //      version anymore — handleSend's own probe loop (below) will
-    //      flush both fields the moment payloadCheck succeeds, so the
-    //      banner clears in lock-step with step2 going "ok" rather
-    //      than waiting for the next AppShell tick.
-    setStatus({
-      payloadProbing: true,
-      payloadVersion: null,
-      ps5Kernel: null,
-    });
-    setSendPhase("locating");
-    flashStep2(
-      "busy",
-      tr(
-        "connection_locating_elf",
-        undefined,
-        "Locating bundled payload ELF…",
-      ),
-    );
-    // A stuck elfldr would take the send and never answer (see lib/elfldrGuard.ts).
-    flashStep2(
-      "busy",
-      tr("connection_checking_loader", undefined, "Checking the PS5's elfldr…"),
-    );
-    if ((await waitForLoader(target)) === "stuck") {
-      setStatus({ payloadProbing: false });
-      settleStep2(
-        "fail",
-        tr("connection_elfldr_stuck", undefined, STUCK_LOADER_MESSAGE),
-      );
-      return;
-    }
-    try {
-      const elf = await bundledPayloadPath();
-      setSendPhase("sending");
-      flashStep2(
-        "busy",
-        tr(
-          "connection_sending_elf",
-          { elf, host: target, port: PS5_LOADER_PORT },
-          "Sending {elf} to {host}:{port}…",
-        ),
-      );
-      await sendPayload(target, elf);
-    } catch (e) {
-      // Send itself failed (loader-port unreachable, ELF missing,
-      // etc.) — no new payload to probe; clear the probing flag so
-      // VersionBlock stops showing the rechecking badge.
-      setStatus({ payloadProbing: false });
-      settleStep2("fail", e instanceof Error ? e.message : String(e));
-      return;
-    }
-    setSendPhase("waiting");
-    flashStep2(
-      "busy",
-      tr("connection_waiting_boot", undefined, "Waiting for payload to boot…"),
-    );
-    // Cancel any prior in-flight poll (e.g. user mashed Send twice)
-    // before arming a new one — otherwise two polls race and both
-    // eventually call settleStep2, flipping the visible state.
-    pollHandle.current?.cancel();
-    // Capture the last raw probe error so the timeout banner can
-    // tell the user *why* the payload looks dead (kstuff not loaded,
-    // mgmt port refused, etc.) rather than the generic "didn't come
-    // up". Updated on every failed probe; surfaced in onResolved.
-    let lastProbeError = "";
-    pollHandle.current = pollUntilReady({
-      probe: async () => {
-        // payloadCheck returns reachability AND the new version /
-        // kernel (from STATUS_ACK). The original code only consumed
-        // `reachable` and discarded the rest, leaving the store with
-        // the *old* version until the next AppShell 10 s tick — that's
-        // the "old data was the latest" feel the user reported. By
-        // writing version + kernel into the store the moment the new
-        // payload answers, the VersionBlock flips to the new numbers
-        // in lock-step with step2 going "ok".
-        try {
-          const status = await payloadCheck(target);
-          if (status.reachable) {
-            // Guard against a host change mid-flight. handleSend
-            // captured `host` in its closure when the user clicked
-            // Replace; if they typed a new IP into the input before
-            // this probe resolved, the result we're holding is for
-            // the OLD host. Don't pollute the store with it — let
-            // AppShell's host-change effect handle the NEW host.
-            if (useConnectionStore.getState().host === target) {
-              setStatus({
-                payloadStatus: "up",
-                payloadStatusHost: target,
-                payloadVersion: status.payloadVersion,
-                ps5Kernel: status.ps5Kernel,
-                ucredElevated: status.ucredElevated,
-                priorInstance: status.priorInstance,
-                payloadProbing: false,
-              });
-            }
-            return "ok";
-          }
-          // Reachable=false: the engine returned 502 or similar.
-          // Stash the engine's diagnostic for the timeout banner.
-          if (status.error) lastProbeError = status.error;
-          // The helper answered but this app may not use it yet (not paired, or a different
-          // key than the one remembered for this address). Re-sending cannot fix that: stop
-          // polling and open the pairing dialog, which explains it and offers the fix.
-          if (status.error && isNotPairedError(status.error)) {
-            pollHandle.current?.cancel();
-            pollHandle.current = null;
-            setStatus({ payloadProbing: false });
-            reportIfNotPaired(status.error, target);
-            settleStep2(
-              "fail",
-              status.error.toLowerCase().includes("different device")
-                ? tr("pairing_wrong_console_title", undefined, "A different PS5 answered at this address")
-                : tr("pairing_title", undefined, "Pair with your PS5"),
-            );
-          }
-          return "fail";
-        } catch (e) {
-          lastProbeError = e instanceof Error ? e.message : String(e);
-          return "fail";
-        }
-      },
-      initialDelayMs: 1500,
-      intervalMs: 1000,
-      maxAttempts: 20,
-      onResolved: (result) => {
-        pollHandle.current = null;
-        if (result === "ok") {
-          settleStep2("ok", tr("connection_payload_running", { host: target }, `Helper is running on ${target}`));
-        } else {
-          // Probe loop exhausted without a reachable payload. Clear
-          // the rechecking flag so the banner doesn't dangle —
-          // there's nothing further coming for it.
-          setStatus({ payloadProbing: false });
-          // Suggest the most common cause (no kstuff loaded yet) when
-          // the symptom looks like "boot then immediate exit". Surface
-          // the last raw probe error if any so the user has something
-          // concrete to search for / report.
-          const tail = lastProbeError
-            ? ` Last probe: ${lastProbeError}.`
-            : "";
-          settleStep2(
-            "fail",
-            tr(
-              "connection_payload_timeout",
-              { tail },
-              "Payload didn't come up within 20s.{tail} Just send it again — a fresh send now force-evicts any stuck previous instance on its own, so you usually don't need to restart the PS5. If it still fails: kstuff may not be loaded yet (run First Run, or send kstuff first), the ELF crashed on boot, or the PS5 is unreachable.",
-            ),
-          );
-        }
-      },
-    });
+    setTransientStep2(null);
+    setTransientStep2Msg(null);
+    // Version and kernel are stale from the moment Send is pressed: the run turns the
+    // "rechecking…" badge on, and writes the new helper's own figures when it answers.
+    setStatus({ payloadVersion: null, ps5Kernel: null });
+    await sendHelperTo(target, tr);
   }
 
   return (

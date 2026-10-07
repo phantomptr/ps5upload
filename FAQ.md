@@ -745,14 +745,31 @@ screen. Common presets are offered: `homebrew` (recommended),
 
 **Q: Why can an upload say there is not enough space when the PS5 shows free space?**
 Before anything is sent, ps5upload measures the whole job (including what an archive expands to)
-and compares it with what the console can really take. Internal storage keeps part of its space
-for the system and filesystem, so the raw free number overstates it. **Volumes** shows raw free
-space, **safe for new uploads**, and how much the console keeps for itself.
+and compares it with the console's free space.
 
-A job that will not fit is refused in seconds with the shortfall in GB. A retry into the same
-folder counts what is already on the console, so it does not ask for the whole folder again. Two
-uploads into room for one: the second is refused at once. Free the amount shown, or pick another
-destination.
+A job whose bytes will not fit is refused in seconds with the shortfall in GB. A retry into the
+same folder counts what is already on the console, so it does not ask for the whole folder again.
+Two uploads into room for one: the second is refused at once. Free the amount shown, or pick
+another destination.
+
+**Q: Why does internal storage fill up faster than what I upload?**
+The PS5 holds back extra space on its internal drive as data is written: about a fifth more than
+the size of what you copy. We measured it on two consoles: a 10.4 GB upload took 12.5 GB and
+12.1 GB off the free figure, and exactly 10.4 GB on an extended drive. Deleting the data gives all
+of it back.
+
+So on internal storage, plan for a game to need about 1.2 times its size. **Volumes** shows this
+as **safe for new uploads**, which is what is likely to fit, not the raw free number. When an
+upload is over that but its bytes would still fit, the Upload screen says it **may not fit** and
+lets you go ahead; it is an estimate, so it never blocks you. If the console does run out part-way,
+the partial upload is kept: free some space and press Resume. An M.2, extended or USB drive does
+not have this overhead.
+
+**Q: The PS5's storage screen shows more used, or more under "Other", than I expect.**
+Two things from uploading can add to it. The first is the held-back space above, which grows with
+everything stored on the internal drive and comes back when it is deleted. The second is an
+upload that did not finish: its partial copy stays on the console so it can be resumed. Resume it
+or delete the partial folder in **Files**; the helper also clears abandoned ones after a week.
 
 **Q: My USB drive is too small for this game.**
 The up-front check refuses it with the shortfall. Choose a destination with more room: the

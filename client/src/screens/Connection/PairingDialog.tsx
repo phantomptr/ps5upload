@@ -5,6 +5,8 @@ import { Button } from "../../components";
 import { Modal } from "../../components/Modal";
 import { useTr } from "../../state/lang";
 import { usePairingStore } from "../../state/pairing";
+import { sendHelperTo } from "../../state/helperSendRuntime";
+import { isTauriEnv } from "../../lib/tauriEnv";
 import type { PairingView } from "../../api/ava1";
 
 export interface PairingPanelProps {
@@ -17,6 +19,9 @@ export interface PairingPanelProps {
   onCancel: () => void;
   /** "Forget the old one and pair this one" (a different PS5 answered at the address). */
   onForget?: () => void;
+  /** Send the helper again, then pair: a helper this app sends pairs by itself. Absent where
+   *  the app cannot send a helper (the browser build). */
+  onResend?: () => void;
 }
 
 /** The body and buttons of the pairing dialog, separate from the store so it renders (and
@@ -32,6 +37,7 @@ export function PairingPanel({
   onRetry,
   onCancel,
   onForget,
+  onResend,
 }: PairingPanelProps) {
   const tr = useTr();
   const [digits, setDigits] = useState("");
@@ -178,6 +184,16 @@ export function PairingPanel({
           <Button variant="ghost" onClick={onCancel}>
             {tr("close", undefined, "Close")}
           </Button>
+          {onResend && (
+            <Button
+              variant="secondary"
+              loading={busy}
+              onClick={onResend}
+              data-testid="pairing-resend-helper"
+            >
+              {tr("connection_send_resend", undefined, "Resend helper")}
+            </Button>
+          )}
           <Button variant="primary" loading={busy} onClick={onRetry}>
             {tr("pairing_retry", undefined, "Try again")}
           </Button>
@@ -228,6 +244,22 @@ export function PairingDialog() {
   const forgetAndPair = usePairingStore((s) => s.forgetAndPair);
   const retry = usePairingStore((s) => s.retry);
   const dismiss = usePairingStore((s) => s.dismiss);
+  const host = usePairingStore((s) => s.host);
+  const [sending, setSending] = useState(false);
+  // The quickest way out of a closed pairing window: a helper this app sends pairs by itself,
+  // so send it and ask again. Only where the app can send one.
+  const resend =
+    isTauriEnv() && host
+      ? async () => {
+          setSending(true);
+          try {
+            await sendHelperTo(host, tr);
+          } finally {
+            setSending(false);
+          }
+          await retry();
+        }
+      : undefined;
   return (
     <Modal
       open={open}
@@ -238,8 +270,9 @@ export function PairingDialog() {
     >
       <PairingPanel
         view={view}
-        busy={busy}
+        busy={busy || sending}
         error={error}
+        onResend={resend ? () => void resend() : undefined}
         onConfirm={(code) => void confirm(code)}
         onForget={() => void forgetAndPair()}
         onRetry={() => void retry()}

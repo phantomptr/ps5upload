@@ -1,4 +1,22 @@
-import { consoleAddr } from "../../lib/addr";
+import { smpHandoffNote } from "../../lib/smpHandoffNote";
+import {
+  dismissLibraryMove,
+  libraryMove,
+  libraryMoveKey,
+  runLibraryMove,
+  stopLibraryMove,
+  useLibraryMoveStore,
+  type LibraryMoveDeps,
+} from "../../state/libraryMove";
+import {
+  dismissWatchedJob,
+  stopWatchedJob,
+  useWatchedJobStore,
+  watchJob,
+  watchedJob,
+  type WatchedJobDeps,
+} from "../../state/watchedJobs";
+import { consoleAddr, hostOf } from "../../lib/addr";
 import {
   memo,
   useCallback,
@@ -67,6 +85,7 @@ import {
   cachedGameIcon,
   gameIconDataUrl,
   appsInstalled,
+  jobCancel,
   jobStatus,
   startTransferDownload,
   healAppmeta,
@@ -84,7 +103,6 @@ import {
 } from "../../lib/moveTarget";
 import {
   imageBasename,
-  SMP_MOUNT_ROOT,
   smpMountImageBasename,
 } from "../../lib/mountPaths";
 import EditSessionBanner from "../../components/EditSessionBanner";
@@ -103,10 +121,6 @@ import { useImageRetry } from "../../lib/useImageRetry";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { createLimiter } from "../../lib/limitConcurrency";
 import { deleteWithRetry } from "../../lib/deleteWithRetry";
-import {
-  classifyMovePollError,
-  isExpectedNotInFlight,
-} from "../../lib/movePollerPolicy";
 import { filterLibraryEntries } from "../../lib/libraryFilter";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import {
@@ -552,7 +566,10 @@ export default function LibraryScreen({
                 unchanged (filterLibraryEntries returns the same
                 reference, so memoization downstream stays warm). */}
             <div className="mb-4 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2">
-              <Search size={14} className="shrink-0 text-[var(--color-muted)]" />
+              <Search
+                size={14}
+                className="shrink-0 text-[var(--color-muted)]"
+              />
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
@@ -829,6 +846,45 @@ type BusyState =
   | "edit-checkout"
   | "heal";
 
+/** What a move needs from the app (see state/libraryMove). */
+const libraryMoveDeps: LibraryMoveDeps = {
+  copy: (addr, from, to, opId) => fsCopy(addr, from, to, opId),
+  opStatus: fsOpStatus,
+  opCancel: fsOpCancel,
+  deleteSource: (addr, path) =>
+    deleteWithRetry({
+      deleter: () => fsDelete(addr, path),
+      onAttemptFail: (attempt, e) =>
+        console.warn(
+          `[library] move delete attempt ${attempt}/3 for ${path} failed:`,
+          e,
+        ),
+    }),
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  newOpId: () => Math.floor(Math.random() * Number.MAX_SAFE_INTEGER),
+};
+
+/** "Copied, but the source is still there": shown in the row and in the notification. */
+function moveDeleteFailedText(
+  tr: ReturnType<typeof useTr>,
+  dest: string,
+  src: string,
+  error: string,
+): string {
+  return tr(
+    "library_move_delete_failed",
+    { dest, src, error },
+    "Copied to {dest}, but couldn't remove the source {src} after 3 attempts: {error}. Both copies now exist — delete the original yourself when ready.",
+  );
+}
+
+/** What a watched download needs from the app (see state/watchedJobs). */
+const libraryWatchDeps: WatchedJobDeps = {
+  jobStatus: (id) => jobStatus(id),
+  jobCancel,
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+};
+
 interface DownloadProgress {
   bytesReceived: number;
   totalBytes: number;
@@ -906,7 +962,39 @@ function LibraryRowImpl({
     ? (fromImagePath.split("/").pop() ?? fromImagePath)
     : null;
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
-  const [busy, setBusy] = useState<BusyState>(null);
+  const [localBusy, setBusy] = useState<BusyState>(null);
+  // A download of this entry belongs to the console and the entry, not to this row (see
+  // state/watchedJobs): it keeps running and stays visible here across navigation.
+  const dlKey = `libdl:${hostOf(host)}:${entry.path}`;
+  const dl = useWatchedJobStore((s) => watchedJob(s, dlKey));
+  const downloading = dl?.phase === "running";
+  // Latched when the helper turned out too old to report a move's byte progress (which fix
+  // it lacks), so the hint stays after the move has ended.
+  const [moveUnsupportedSeen, setMoveUnsupportedSeen] = useState<
+    "2.2.7" | "2.2.16" | null
+  >(null);
+  // A move of this entry, likewise (see state/libraryMove).
+  const mvKey = libraryMoveKey(host, entry.path);
+  const mv = useLibraryMoveStore((s) => libraryMove(s, mvKey));
+  const moving =
+    mv?.phase === "copying"
+      ? "move-copying"
+      : mv?.phase === "deleting"
+        ? "move-deleting"
+        : null;
+  const busy: BusyState =
+    localBusy ?? moving ?? (downloading ? "download" : null);
+  const moveProgress =
+    mv?.phase === "copying"
+      ? { bytesCopied: mv.bytesCopied, totalBytes: mv.totalBytes }
+      : null;
+  const moveProgressUnsupportedThreshold =
+    mv?.progressUnsupported ?? moveUnsupportedSeen;
+  const downloadProgress: DownloadProgress | null =
+    downloading && dl ? { bytesReceived: dl.sent, totalBytes: dl.total } : null;
+  // When this row appeared: a download that was already running then is older than the
+  // row's own timer.
+  const [rowShownAtMs] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
   const [mountNote, setMountNote] = useState<string | null>(null);
   const [meta, setMeta] = useState<GameMeta | null>(null);
@@ -922,8 +1010,6 @@ function LibraryRowImpl({
   // pair and has no room for the explanation this needs).
   const { confirm: confirmDialog, dialog: confirmDialogNode } = useConfirm();
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [downloadProgress, setDownloadProgress] =
-    useState<DownloadProgress | null>(null);
   // Cancellation flag for the download poll loop. The loop runs for
   // the entire duration of the engine job (potentially minutes for a
   // multi-GiB game folder). Without this, navigating away from the
@@ -937,30 +1023,6 @@ function LibraryRowImpl({
       mountedRef.current = false;
     };
   }, []);
-  // User-requested abort for the download poll loop. The Stop button
-  // sets this to true; the loop's next iteration sees it and exits
-  // cleanly (the engine job continues server-side — no engine-side
-  // cancel API today, so the .part file may still finish landing).
-  const downloadStopRef = useRef(false);
-  // Per-row Move progress (bytes copied from the in-flight PS5 fs_copy)
-  // — fed by the FS_OP_STATUS poller spawned in runMove. null when no
-  // move is in flight or the poller hasn't seen a reply yet.
-  const [moveProgress, setMoveProgress] = useState<{
-    bytesCopied: number;
-    totalBytes: number;
-  } | null>(null);
-  // Set when classifyMovePollError decides the running payload is
-  // too old to drive byte-progress (predates the FS_OP_STATUS handler
-  // in 2.2.7, or the FS_OP_STATUS_ACK body buffer fix in 2.2.16). The
-  // banner uses `moveProgressUnsupportedThreshold` to render the
-  // matching version in its hint so the user knows which fix they're
-  // missing. Stays null on transient errors / current payloads —
-  // we'd rather show no banner than gaslight a user on the latest
-  // payload (the original bug this rework addresses).
-  const [
-    moveProgressUnsupportedThreshold,
-    setMoveProgressUnsupportedThreshold,
-  ] = useState<"2.2.7" | "2.2.16" | null>(null);
   // Read the running-payload version from the Connection store so the
   // poller can decide whether a poll error reflects a real old-payload
   // (latch the banner) or just a transient hiccup on a current build
@@ -968,12 +1030,71 @@ function LibraryRowImpl({
   // probe; null until the probe completes or on a payload too old to
   // report a version.
   const payloadVersion = useConnectionStore((s) => s.payloadVersion);
-  // User-requested abort for the move's in-flight fs_copy. Set by the
-  // Stop button; the side-watcher fires fsOpCancel as soon as it
-  // observes this flip, and the payload's cp_rf bails within ~one
-  // 16 MiB buffer.
-  const moveStopRef = useRef(false);
-  const elapsedMs = useElapsed(busy !== null);
+  const rowElapsedMs = useElapsed(busy !== null);
+  const elapsedMs =
+    rowElapsedMs +
+    (moving && mv
+      ? Math.max(0, rowShownAtMs - mv.startedAtMs)
+      : downloading && dl
+        ? Math.max(0, rowShownAtMs - dl.startedAtMs)
+        : 0);
+  // The move ended (here, or while another screen was open): say how, once.
+  useEffect(() => {
+    if (!mv || mv.phase === "copying" || mv.phase === "deleting") return;
+    if (mv.progressUnsupported) setMoveUnsupportedSeen(mv.progressUnsupported);
+    if (mv.phase === "done") {
+      setMountNote(
+        tr("library_move_succeeded", { dest: mv.to }, "Moved to {dest}."),
+      );
+    } else if (mv.phase === "cancelled") {
+      setError(
+        tr(
+          "library_move_cancelled",
+          undefined,
+          "Move cancelled. The source is unchanged.",
+        ),
+      );
+    } else if (mv.phase === "copy-failed") {
+      setError(
+        tr(
+          "library_move_copy_failed",
+          { error: mv.error ?? "" },
+          "Couldn't copy to the new location: {error}. Source is unchanged.",
+        ),
+      );
+    } else {
+      setError(moveDeleteFailedText(tr, mv.to, mv.from, mv.error ?? ""));
+    }
+    dismissLibraryMove(mvKey);
+    // The list is stale either way once the copy landed.
+    if (mv.phase === "done" || mv.phase === "delete-failed") onChanged();
+  }, [mv, mvKey, tr, onChanged]);
+  // The download ended (here, or while another screen was open): say how, once.
+  useEffect(() => {
+    if (!dl || dl.phase === "running") return;
+    if (dl.phase === "done") {
+      setMountNote(
+        tr(
+          "library_download_succeeded",
+          { dest: dl.dest ?? "", bytes: dl.sent },
+          "Downloaded to {dest} ({bytes} bytes).",
+        ),
+      );
+    } else if (dl.phase === "failed") {
+      setError(
+        tr(
+          "library_download_failed",
+          { error: dl.error ?? "" },
+          "Download failed: {error}",
+        ),
+      );
+    } else {
+      setMountNote(
+        tr("library_download_stopped", undefined, "Download stopped."),
+      );
+    }
+    dismissWatchedJob(dlKey);
+  }, [dl, dlKey, tr]);
 
   /** Current mount point for this entry (null = not mounted). Only
    *  meaningful for image rows — games don't go through fs_mount.
@@ -1203,14 +1324,8 @@ function LibraryRowImpl({
           // image within ~15s of noticing its mount is gone, so a second,
           // writable mount of the same file would race it.
           const chosePath = !!(opts.mountPoint || opts.mountName);
-          const where = `ShadowMount+ mounts it under ${SMP_MOUNT_ROOT}/ and registers it (watch your PS5 for the toast).`;
-          const ignored = chosePath
-            ? ` Your chosen mount point wasn't used — ShadowMount+ owns this image while it's in a folder ShadowMount+ scans. To mount it somewhere of your own, move it out of that folder first.`
-            : "";
           setMountNote(
-            r.added
-              ? `Handed "${entry.name}" to ShadowMount+. ${where}${ignored}`
-              : `"${entry.name}" is already in ShadowMount+'s install list. ${where}${ignored}`,
+            smpHandoffNote(entry.name, { added: r.added, chosePath }),
           );
           onChanged();
           return;
@@ -1412,248 +1527,75 @@ function LibraryRowImpl({
    *  the user can clean up manually instead of guessing what happened. */
   const runMove = async (destPath: string) => {
     setMoveOpen(false);
-    setBusy("move-copying");
     setError(null);
     setMountNote(null);
-    setMoveProgress({ bytesCopied: 0, totalBytes: 0 });
-    setMoveProgressUnsupportedThreshold(null);
-    moveStopRef.current = false;
+    setMoveUnsupportedSeen(null);
     const addr = consoleAddr(host);
-    // Generate a unique op_id so the payload can stamp the in-flight
-    // fs_copy with it; we can then poll FS_OP_STATUS for live byte
-    // progress and fire FS_OP_CANCEL on Stop.
-    const opId = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
-    // Record into the cross-screen Activity log so the ActivityBar
-    // and Activity tab can show this op alongside FS bulk + transfer
-    // ops. Library has its own component-local state, so without
-    // this entry the move would never appear in the global view.
-    // Storing op_id + addr lets the Activity tab's Stop button call
-    // fsOpCancel directly without needing a reference back to this
-    // component.
-    const activityId = useActivityHistoryStore
-      .getState()
-      .start("library-move", `Moving ${entry.name}`, {
-        fromPath: entry.path,
-        toPath: destPath,
-        opId,
-        addr,
-      });
-    let pollerStopped = false;
-    const pollerDone = (async () => {
-      // Small initial delay before the first poll. The payload now
-      // registers the op slot *before* the recursive_size walk
-      // (runtime.c handle_fs_copy), so this delay is no longer
-      // load-bearing for the register race — it just amortizes the
-      // engine connect cost so we don't pay it twice (once for poll,
-      // once for the FS_COPY frame the engine sends in parallel).
-      await new Promise((r) => setTimeout(r, 250));
-      // Tracks back-to-back poll failures (non-404). Reset on every
-      // successful snapshot. The threshold lives in
-      // movePollerPolicy.ts so it can be shared with tests.
-      let consecutiveFailures = 0;
-      while (!pollerStopped) {
-        try {
-          const snap = await fsOpStatus(addr, opId);
-          consecutiveFailures = 0;
-          if (mountedRef.current) {
-            setMoveProgress({
-              bytesCopied: snap.bytes_copied,
-              totalBytes: snap.total_bytes,
-            });
-          }
-          // Mirror to Activity so the ActivityBar / Activity tab
-          // tick in lockstep with the local row.
-          useActivityHistoryStore.getState().update(activityId, {
-            bytes: snap.bytes_copied,
-            totalBytes: snap.total_bytes,
-          });
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          // 404 / "not in flight" is the engine's surface for the
-          // payload's `{found:false}` ACK. That happens twice in a
-          // healthy op: briefly at the start (frame in flight before
-          // fs_op_register; rare now that the payload registers
-          // before walking) and once at the end (slot released as
-          // the FS_COPY handler returns). Don't count either toward
-          // the consecutive-failure budget.
-          if (isExpectedNotInFlight(msg)) {
-            await new Promise((r) => setTimeout(r, 500));
-            continue;
-          }
-          consecutiveFailures += 1;
-          const outcome = classifyMovePollError(
-            payloadVersion,
-            msg,
-            consecutiveFailures,
-          );
-          if (outcome.kind === "stop-old-payload") {
-            // The version probe (or the error-string fallback) says
-            // the running payload is too old to drive progress.
-            // Latch the banner with the matching threshold so the
-            // user can see exactly which fix they're missing.
-            if (mountedRef.current) {
-              setMoveProgressUnsupportedThreshold(outcome.threshold);
-            }
-            useActivityHistoryStore.getState().update(activityId, {
-              error:
-                outcome.threshold === "2.2.16"
-                  ? "Live progress unavailable — payload predates 2.2.16 FS_OP_STATUS_ACK fix. Click Replace payload on the Connection screen, or run `make send-payload`."
-                  : "Live progress unavailable — payload predates 2.2.7 FS_OP_STATUS. Click Replace payload on the Connection screen.",
-            });
-            break;
-          }
-          if (outcome.kind === "stop-silent") {
-            // Healthy or unknown payload, repeated transient
-            // failures. Stop polling but don't show a banner — the
-            // move continues on its own connection regardless of
-            // whether we can render progress. Console-warn so the
-            // failure is visible during debug instead of swallowed.
-            console.warn(
-              `[library] FS_OP_STATUS poll gave up after ${consecutiveFailures} consecutive failures:`,
-              msg,
-            );
-            break;
-          }
-          // outcome.kind === "retry" — log only the first one in a
-          // run so we don't spam the console at 2 Hz on a sustained
-          // outage.
-          if (consecutiveFailures === 1) {
-            console.warn(
-              "[library] FS_OP_STATUS poll failed (will retry):",
-              msg,
-            );
-          }
-        }
-        await new Promise((r) => setTimeout(r, 500));
-      }
-    })();
-    const cancelWatcher = (async () => {
-      while (!pollerStopped) {
-        if (moveStopRef.current) {
-          try {
-            await fsOpCancel(addr, opId);
-          } catch (e) {
-            // Best effort — the payload's cp_rf will still bail at
-            // its next cancel check via the in-band flag set by
-            // the engine's RPC; even if our cancel call lost the
-            // race or hit a transient error, the user-visible
-            // "Stop" goal is met by the between-iterations check.
-            // Greppable warn so we know when this drops.
-            console.warn("fsOpCancel (library move) failed:", e);
-          }
-          break;
-        }
-        await new Promise((r) => setTimeout(r, 200));
-      }
-    })();
-    let copyOk = true;
-    let copyErr: unknown = null;
-    try {
-      await fsCopy(addr, entry.path, destPath, opId);
-    } catch (e) {
-      copyOk = false;
-      copyErr = e;
-    } finally {
-      pollerStopped = true;
-      await Promise.allSettled([pollerDone, cancelWatcher]);
-      if (mountedRef.current) setMoveProgress(null);
-    }
-    if (!copyOk) {
-      const msg = copyErr instanceof Error ? copyErr.message : String(copyErr);
-      // The payload returns "fs_copy_cancelled" → engine maps to
-      // 409 with body "cancelled". Surface that as a user-facing
-      // "you stopped this" rather than a generic copy failure.
-      if (msg.includes("cancelled")) {
-        setError(
-          tr(
-            "library_move_cancelled",
-            undefined,
-            "Move cancelled. The source is unchanged.",
-          ),
-        );
-        useActivityHistoryStore.getState().finish(activityId, "stopped", {
-          error: "cancelled by user",
-        });
-      } else {
-        const friendly = tr(
-          "library_move_copy_failed",
-          { error: msg },
-          "Couldn't copy to the new location: {error}. Source is unchanged.",
-        );
-        setError(friendly);
-        pushNotification(
-          "error",
-          withConsolePrefix(
-            host,
-            tr("notif_library_move_failed", undefined, "Move failed"),
-          ),
-          { body: friendly },
-        );
-        useActivityHistoryStore.getState().finish(activityId, "failed", {
-          error: msg,
-        });
-      }
-      setBusy(null);
-      return;
-    }
-    setBusy("move-deleting");
-    const delResult = await deleteWithRetry({
-      deleter: () => fsDelete(addr, entry.path),
-      onAttemptFail: (attempt, e) =>
-        console.warn(
-          `[library] move delete attempt ${attempt}/3 for ${entry.path} failed:`,
-          e,
-        ),
-    });
-    if (!delResult.ok) {
-      const lastErr = delResult.lastError;
-      const lastErrMsg =
-        lastErr instanceof Error ? lastErr.message : String(lastErr);
-      const friendly = tr(
-        "library_move_delete_failed",
-        {
-          dest: destPath,
-          src: entry.path,
-          error: lastErrMsg,
-        },
-        "Copied to {dest}, but couldn't remove the source {src} after 3 attempts: {error}. Both copies now exist — delete the original yourself when ready.",
-      );
-      setError(friendly);
+    // The activity log shows the move from any screen; its Stop button cancels the
+    // console's copy by op id, with no reference back to this row.
+    const history = () => useActivityHistoryStore.getState();
+    let activityId = "";
+    const failed = (body: string, error: string) => {
       pushNotification(
         "error",
         withConsolePrefix(
           host,
           tr("notif_library_move_failed", undefined, "Move failed"),
         ),
-        { body: friendly },
+        { body },
       );
-      // Treat a "copied but couldn't delete source" as a partial
-      // failure so the Activity tab makes the duplicate-files
-      // situation visible.
-      useActivityHistoryStore.getState().finish(activityId, "failed", {
-        error: `copy ok, source delete failed: ${lastErrMsg}`,
-      });
-      setBusy(null);
-      onChanged();
-      return;
-    }
-    setMountNote(
-      tr("library_move_succeeded", { dest: destPath }, "Moved to {dest}."),
+      history().finish(activityId, "failed", { error });
+    };
+    await runLibraryMove(
+      { host, addr, from: entry.path, to: destPath, payloadVersion },
+      libraryMoveDeps,
+      {
+        onStart: (opId) => {
+          activityId = history().start("library-move", `Moving ${entry.name}`, {
+            fromPath: entry.path,
+            toPath: destPath,
+            opId,
+            addr,
+          });
+        },
+        onProgress: (bytes, totalBytes) =>
+          history().update(activityId, { bytes, totalBytes }),
+        // The entry's error field doubles as a note while it runs.
+        onProgressUnsupported: (threshold) =>
+          history().update(activityId, {
+            error:
+              threshold === "2.2.16"
+                ? "Live progress unavailable — payload predates 2.2.16 FS_OP_STATUS_ACK fix. Click Replace payload on the Connection screen, or run `make send-payload`."
+                : "Live progress unavailable — payload predates 2.2.7 FS_OP_STATUS. Click Replace payload on the Connection screen.",
+          }),
+        onEnd: (m) => {
+          const raw = m.error ?? "";
+          if (m.phase === "done") {
+            // Clears a progress note left in the error field while it ran.
+            history().finish(activityId, "done", { error: undefined });
+          } else if (m.phase === "cancelled") {
+            history().finish(activityId, "stopped", {
+              error: "cancelled by user",
+            });
+          } else if (m.phase === "copy-failed") {
+            failed(
+              tr(
+                "library_move_copy_failed",
+                { error: raw },
+                "Couldn't copy to the new location: {error}. Source is unchanged.",
+              ),
+              raw,
+            );
+          } else {
+            // Copied but the source remains: a failure, so the duplicate is visible.
+            failed(
+              moveDeleteFailedText(tr, m.to, m.from, raw),
+              `copy ok, source delete failed: ${raw}`,
+            );
+          }
+        },
+      },
     );
-    // Explicitly clear `error` on the success finish. The poller may
-    // have written a "Live progress unavailable — payload predates
-    // 2.2.16…" *note* into the entry's error field while the move
-    // was running (see lines ~631; the field doubles as a "note"
-    // during running per the design comment). finish() spreads its
-    // extras over the entry, so without this the successful "done"
-    // entry would persist that stale note as its terminal error
-    // message — the Activity tab would render a green checkmark
-    // next to a red-looking error string, which is confusing.
-    useActivityHistoryStore
-      .getState()
-      .finish(activityId, "done", { error: undefined });
-    setBusy(null);
-    onChanged();
   };
 
   /** Save a copy of this library entry to the host. Games are
@@ -1674,187 +1616,68 @@ function LibraryRowImpl({
       ),
     });
     if (typeof picked !== "string") return;
-    setBusy("download");
     setError(null);
     setMountNote(null);
-    setDownloadProgress({ bytesReceived: 0, totalBytes: 0 });
-    downloadStopRef.current = false;
     const addr = consoleAddr(host);
     const kind: "file" | "folder" = entry.kind === "image" ? "file" : "folder";
-    // Track the download in the global activity log so the
-    // ActivityBar shows live progress + "still running" while the
-    // user is on another tab. Library Download has its own polling
-    // loop (it doesn't go through useFsDownloadOpStore that
-    // FileSystem uses, since the row holds component-local state),
-    // so without an explicit activity entry these multi-GiB game
-    // downloads were invisible globally.
-    const activityId = useActivityHistoryStore
-      .getState()
-      .start("library-download", `Downloading ${entry.name}`, {
-        addr: consoleAddr(host),
-        fromPath: entry.path,
-        toPath: picked,
-      });
-    let jobId: string;
-    try {
-      jobId = await startTransferDownload(entry.path, picked, addr, kind);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      const friendly = tr(
-        "library_download_start_failed",
-        { error: msg },
-        "Couldn't start the download: {error}",
-      );
-      setError(friendly);
-      pushNotification(
-        "error",
-        withConsolePrefix(
-          host,
-          tr("notif_library_download_failed", undefined, "Download failed"),
-        ),
-        { body: friendly },
-      );
-      useActivityHistoryStore
-        .getState()
-        .finish(activityId, "failed", { error: msg });
-      setBusy(null);
-      setDownloadProgress(null);
-      return;
-    }
-    // Poll until terminal. The mountedRef gate makes a navigate-away
-    // mid-download exit the loop instead of writing state on an
-    // unmounted component. The engine job keeps running on the
-    // engine side (no engine cancel API today); the file still
-    // lands on disk and the user finds it where they picked, just
-    // without the in-row "Done" note.
-    //
-    // Closing the activity entry on unmount: an orphan-running
-    // entry would be confusing (Activity tab shows "Downloading X"
-    // forever; if the user starts the download again from a re-
-    // mount, they get TWO running rows for the same file). The
-    // previous behavior relied on `loadInitial` to convert orphans
-    // to "stopped" on the next app launch — fine for a crash, not
-    // fine for a tab switch. So we close the entry on every
-    // unmounted-bail with a "stopped watching" note that mirrors
-    // the user-Stop wording: the engine job may still finish, the
-    // entry just reflects that we stopped observing it.
-    const bailOnUnmount = () => {
-      useActivityHistoryStore.getState().finish(activityId, "stopped", {
-        error: "stopped watching (engine job may continue)",
-      });
-    };
-    while (true) {
-      if (!mountedRef.current) {
-        bailOnUnmount();
-        return;
-      }
-      if (downloadStopRef.current) {
-        // User clicked Stop. Engine job continues server-side; we
-        // just stop polling. Surface a note so the row clears the
-        // spinner with a clear "you stopped this" instead of going
-        // back to idle silently. The activity entry transitions to
-        // "stopped" with the same wording.
-        useActivityHistoryStore.getState().finish(activityId, "stopped", {
-          error: "stopped by user (engine job may continue)",
-        });
-        setMountNote(
-          tr(
-            "library_download_stopped",
-            undefined,
-            "Download stopped. The engine may still finish writing the file in the background.",
-          ),
-        );
-        setBusy(null);
-        setDownloadProgress(null);
-        return;
-      }
-      try {
-        const snap = await jobStatus(jobId);
-        if (!mountedRef.current) {
-          bailOnUnmount();
-          return;
-        }
-        if (snap.status === "done") {
-          useActivityHistoryStore.getState().finish(activityId, "done", {
-            bytes: snap.bytes_sent ?? 0,
-            totalBytes: snap.total_bytes ?? 0,
-          });
-          setMountNote(
-            tr(
-              "library_download_succeeded",
+    // The activity log shows the download while the user is on another screen; the task
+    // bridge mirrors it into Tasks, so the watched job registers no task of its own.
+    const history = () => useActivityHistoryStore.getState();
+    const activityId = history().start(
+      "library-download",
+      `Downloading ${entry.name}`,
+      { addr, fromPath: entry.path, toPath: picked },
+    );
+    void watchJob(
+      {
+        key: dlKey,
+        kind: "download",
+        origin: "library",
+        label: entry.name,
+        host,
+        track: false,
+        fallbackDest: picked,
+      },
+      () => startTransferDownload(entry.path, picked, addr, kind),
+      libraryWatchDeps,
+      {
+        onProgress: (sent, total) =>
+          history().update(activityId, { bytes: sent, totalBytes: total }),
+        onEnd: (job) => {
+          if (job.phase === "done") {
+            history().finish(activityId, "done", {
+              bytes: job.sent,
+              totalBytes: job.total,
+            });
+          } else if (job.phase === "stopped") {
+            history().finish(activityId, "stopped", {
+              error: "stopped by user",
+            });
+          } else {
+            const errMsg = job.error ?? "download failed";
+            history().finish(activityId, "failed", { error: errMsg });
+            pushNotification(
+              "error",
+              withConsolePrefix(
+                host,
+                tr(
+                  "notif_library_download_failed",
+                  undefined,
+                  "Download failed",
+                ),
+              ),
               {
-                dest: snap.dest ?? picked,
-                bytes: snap.bytes_sent ?? 0,
+                body: tr(
+                  "library_download_failed",
+                  { error: errMsg },
+                  "Download failed: {error}",
+                ),
               },
-              "Downloaded to {dest} ({bytes} bytes).",
-            ),
-          );
-          setBusy(null);
-          setDownloadProgress(null);
-          return;
-        }
-        if (snap.status === "failed") {
-          const errMsg = snap.error ?? "download failed";
-          useActivityHistoryStore
-            .getState()
-            .finish(activityId, "failed", { error: errMsg });
-          const friendly = tr(
-            "library_download_failed",
-            { error: errMsg },
-            "Download failed: {error}",
-          );
-          setError(friendly);
-          pushNotification(
-            "error",
-            withConsolePrefix(
-              host,
-              tr("notif_library_download_failed", undefined, "Download failed"),
-            ),
-            { body: friendly },
-          );
-          setBusy(null);
-          setDownloadProgress(null);
-          return;
-        }
-        setDownloadProgress({
-          bytesReceived: snap.bytes_sent ?? 0,
-          totalBytes: snap.total_bytes ?? 0,
-        });
-        // Mirror live progress to the activity entry so the
-        // ActivityBar speedometer ticks.
-        useActivityHistoryStore.getState().update(activityId, {
-          bytes: snap.bytes_sent ?? 0,
-          totalBytes: snap.total_bytes ?? 0,
-        });
-      } catch (e) {
-        if (!mountedRef.current) {
-          bailOnUnmount();
-          return;
-        }
-        const msg = e instanceof Error ? e.message : String(e);
-        useActivityHistoryStore
-          .getState()
-          .finish(activityId, "failed", { error: msg });
-        const friendly = tr(
-          "library_download_poll_failed",
-          { error: msg },
-          "Lost contact with the engine while downloading: {error}",
-        );
-        setError(friendly);
-        pushNotification(
-          "error",
-          withConsolePrefix(
-            host,
-            tr("notif_library_download_failed", undefined, "Download failed"),
-          ),
-          { body: friendly },
-        );
-        setBusy(null);
-        setDownloadProgress(null);
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
+            );
+          }
+        },
+      },
+    );
   };
 
   /** Unmount: flipped from Mount when the archive is currently
@@ -2227,9 +2050,7 @@ function LibraryRowImpl({
           const r = await smpManualInstall(mgmt, entry.path);
           handedToSmp = true;
           setMountNote(
-            r.added
-              ? `Handed "${entry.name}" to ShadowMount+ — it will mount + register it shortly (watch your PS5 for the toast).`
-              : `"${entry.name}" is already in ShadowMount+'s install list.`,
+            smpHandoffNote(entry.name, { added: r.added, chosePath: false }),
           );
           onChanged();
         }
@@ -2237,13 +2058,9 @@ function LibraryRowImpl({
         handedToSmp = false; // SMP unreachable → register it ourselves
       }
       if (!handedToSmp) {
-        const res = await appRegister(
-          consoleAddr(host),
-          entry.path,
-          {
-            patchDrmType: opts.patchDrmType,
-          },
-        );
+        const res = await appRegister(consoleAddr(host), entry.path, {
+          patchDrmType: opts.patchDrmType,
+        });
         const drmSuffix = opts.patchDrmType
           ? " (DRM type patched to standard)"
           : "";
@@ -2508,83 +2325,83 @@ function LibraryRowImpl({
               </Button>
             ) : (
               <>
-              {/* Edit sits NEXT TO Mount rather than inside the ⋯ menu: the two
+                {/* Edit sits NEXT TO Mount rather than inside the ⋯ menu: the two
                   are different actions (Mount hands the image to ShadowMount+
                   so you can play it, read-only; Edit checks it out so you can
                   change what's inside), and users only discovered editing by
                   opening a menu they had no reason to open. Showing both is
                   what makes the distinction visible at all. */}
-              {smpRunning && !isMounted && (
+                {smpRunning && !isMounted && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    leftIcon={<FilePenLine size={12} />}
+                    onClick={() => {
+                      setMountIntent("edit");
+                      setMountOpen(true);
+                    }}
+                    disabled={busy !== null || !entry.imageFormat}
+                    loading={busy === "edit-checkout"}
+                    title={tr(
+                      "library_edit_files_tooltip",
+                      undefined,
+                      "Take this image out of ShadowMount+ and mount it read-write so you can add or replace files inside it",
+                    )}
+                  >
+                    {tr("library_edit_files_short", undefined, "Edit files")}
+                  </Button>
+                )}
                 <Button
-                  variant="secondary"
+                  variant="primary"
                   size="sm"
-                  leftIcon={<FilePenLine size={12} />}
+                  leftIcon={<Play size={12} />}
                   onClick={() => {
-                    setMountIntent("edit");
+                    // When ShadowMount+ is running it OWNS the mount: it picks
+                    // the mount point and registers the title. Opening the
+                    // destination picker here offered a choice we then threw
+                    // away — which is also why Mount and Edit appeared to open
+                    // "the same window". No decision to make, so no dialog.
+                    if (smpRunning) {
+                      void runMount({});
+                      return;
+                    }
+                    setMountIntent("mount");
                     setMountOpen(true);
                   }}
+                  /* Pre-disable on entries with no recognized image
+                   * format (imageFormat null/undefined) — the payload
+                   * would respond with `fs_mount_unsupported_format`
+                   * after the user clicks, which produces a back-end
+                   * error string the user has to read in the row
+                   * banner. Disabling the button up front avoids the
+                   * detour. Real cause is usually a renamed file
+                   * with a non-.exfat / non-.ffpkg / non-.ffpfs
+                   * extension that still got into the library scan via
+                   * the size / existence checks. */
                   disabled={busy !== null || !entry.imageFormat}
-                  loading={busy === "edit-checkout"}
-                  title={tr(
-                    "library_edit_files_tooltip",
-                    undefined,
-                    "Take this image out of ShadowMount+ and mount it read-write so you can add or replace files inside it",
-                  )}
-                >
-                  {tr("library_edit_files_short", undefined, "Edit files")}
-                </Button>
-              )}
-              <Button
-                variant="primary"
-                size="sm"
-                leftIcon={<Play size={12} />}
-                onClick={() => {
-                  // When ShadowMount+ is running it OWNS the mount: it picks
-                  // the mount point and registers the title. Opening the
-                  // destination picker here offered a choice we then threw
-                  // away — which is also why Mount and Edit appeared to open
-                  // "the same window". No decision to make, so no dialog.
-                  if (smpRunning) {
-                    void runMount({});
-                    return;
-                  }
-                  setMountIntent("mount");
-                  setMountOpen(true);
-                }}
-                /* Pre-disable on entries with no recognized image
-                 * format (imageFormat null/undefined) — the payload
-                 * would respond with `fs_mount_unsupported_format`
-                 * after the user clicks, which produces a back-end
-                 * error string the user has to read in the row
-                 * banner. Disabling the button up front avoids the
-                 * detour. Real cause is usually a renamed file
-                 * with a non-.exfat / non-.ffpkg / non-.ffpfs
-                 * extension that still got into the library scan via
-                 * the size / existence checks. */
-                disabled={busy !== null || !entry.imageFormat}
-                loading={busy === "mount"}
-                title={
-                  !entry.imageFormat
-                    ? tr(
-                        "library_mount_unsupported_tooltip",
-                        undefined,
-                        "Unsupported image format — only .exfat, .ffpkg and .ffpfs can be mounted",
-                      )
-                    : smpRunning
+                  loading={busy === "mount"}
+                  title={
+                    !entry.imageFormat
                       ? tr(
-                          "library_mount_tooltip_smp",
+                          "library_mount_unsupported_tooltip",
                           undefined,
-                          "Hand this image to ShadowMount+, which mounts and registers it so you can play it (read-only)",
+                          "Unsupported image format — only .exfat, .ffpkg and .ffpfs can be mounted",
                         )
-                      : tr(
-                          "library_mount_tooltip",
-                          undefined,
-                          "Mount this image on your PS5",
-                        )
-                }
-              >
-                {tr("library_mount", undefined, "Mount")}
-              </Button>
+                      : smpRunning
+                        ? tr(
+                            "library_mount_tooltip_smp",
+                            undefined,
+                            "Hand this image to ShadowMount+, which mounts and registers it so you can play it (read-only)",
+                          )
+                        : tr(
+                            "library_mount_tooltip",
+                            undefined,
+                            "Mount this image on your PS5",
+                          )
+                  }
+                >
+                  {tr("library_mount", undefined, "Mount")}
+                </Button>
               </>
             )
           ) : (
@@ -2671,13 +2488,6 @@ function LibraryRowImpl({
               )}
             </>
           )}
-          {/* eslint-disable react-hooks/refs --
-              The IIFE below builds menu items that capture row-
-              local handlers (runDownload, runUnregister, etc.).
-              The handlers themselves read refs (mountedRef et al.)
-              but only when the user clicks — NOT during render —
-              so the rule's "ref read during render" warning is a
-              false positive. The closures are intentional. */}
           {(() => {
             // Overflow menu items, kind-specific. Order is the
             // expected frequency-of-use: register actions first
@@ -2839,7 +2649,6 @@ function LibraryRowImpl({
               />
             );
           })()}
-          {/* eslint-enable react-hooks/refs */}
         </div>
       </div>
 
@@ -2922,14 +2731,12 @@ function LibraryRowImpl({
             {busy === "download" && (
               <button
                 type="button"
-                onClick={() => {
-                  downloadStopRef.current = true;
-                }}
+                onClick={() => stopWatchedJob(dlKey, libraryWatchDeps)}
                 className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs hover:bg-[var(--color-surface-3)]"
                 title={tr(
                   "library_download_stop_tooltip",
                   undefined,
-                  "Stop watching this download (engine job continues server-side)",
+                  "Stop this download",
                 )}
               >
                 {tr("fs_download_stop", undefined, "Stop")}
@@ -2939,7 +2746,7 @@ function LibraryRowImpl({
               <button
                 type="button"
                 onClick={() => {
-                  moveStopRef.current = true;
+                  stopLibraryMove(mvKey);
                 }}
                 className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs hover:bg-[var(--color-surface-3)]"
                 title={tr(
@@ -3913,7 +3720,11 @@ function MountModal({
             onChange={setReadOnly}
             label={
               <span className="font-medium">
-                {tr("library_mount_modal_read_only", undefined, "Mount read-only")}
+                {tr(
+                  "library_mount_modal_read_only",
+                  undefined,
+                  "Mount read-only",
+                )}
               </span>
             }
             hint={tr(
