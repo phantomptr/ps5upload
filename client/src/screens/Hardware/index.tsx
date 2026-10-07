@@ -53,6 +53,7 @@ import {
   smpMetaStats,
   FAN_THRESHOLD_MIN_C,
   FAN_THRESHOLD_MAX_C,
+  FAN_RESTORE_CONSOLE,
   type HwInfo,
   type HwPower,
   type HwStorage,
@@ -703,6 +704,8 @@ export default function HardwareScreen() {
             host={host ?? ""}
             payloadUp={payloadStatus === "up"}
             pinnedC={temps?.fan_pinned_c ?? 0}
+            targetC={temps?.fan_target_c ?? -1}
+            stockC={temps?.fan_stock_c ?? 0}
           />
 
           <SmpMetaCard host={host ?? ""} payloadUp={payloadStatus === "up"} />
@@ -817,10 +820,16 @@ function FanThresholdCard({
   host,
   payloadUp,
   pinnedC,
+  targetC,
+  stockC,
 }: {
   host: string;
   payloadUp: boolean;
   pinnedC: number;
+  /** What the console's fan control is working to now (read back), -1 = unknown. */
+  targetC: number;
+  /** The console's own value, as it was before ps5upload changed it; 0 = never seen. */
+  stockC: number;
 }) {
   const tr = useTr();
   /* pinnedC comes from the payload's hw_fan_pinned_threshold() — an
@@ -834,8 +843,34 @@ function FanThresholdCard({
   const [lastSetC, setLastSetC] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [restored, setRestored] = useState<"done" | "restart" | null>(null);
 
   const canSet = payloadUp && !!host.trim() && !busy;
+
+  // Give the fan back to the console: its own value restored, ours no longer re-applied.
+  const restoreConsole = useCallback(async () => {
+    if (!canSet) return;
+    setBusy(true);
+    setError(null);
+    setRestored(null);
+    try {
+      await setFanThreshold(transferAddr(host), FAN_RESTORE_CONSOLE);
+      setLastSetC(null);
+      setRestored("done");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // Ours was dropped, but the console's value was never seen (set by an older
+      // helper, no restart since): it returns by itself at the next restart.
+      if (msg.includes("fan_restore_needs_restart")) {
+        setLastSetC(null);
+        setRestored("restart");
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }, [canSet, host]);
 
   const applyThreshold = useCallback(
     async (targetC: number) => {
@@ -846,6 +881,7 @@ function FanThresholdCard({
       );
       setBusy(true);
       setError(null);
+      setRestored(null);
       try {
         const addr = transferAddr(host);
         await setFanThreshold(addr, clamped);
@@ -932,6 +968,43 @@ function FanThresholdCard({
         </div>
       )}
 
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-[var(--color-text)]" data-testid="fan-now">
+          {targetC > 0 &&
+            tr(
+              "hardware_fan_now",
+              { target: targetC },
+              `The console is holding ${targetC} °C now.`,
+            )}{" "}
+          {stockC > 0 &&
+            tr(
+              "hardware_fan_stock",
+              { stock: stockC },
+              `Its own setting is ${stockC} °C.`,
+            )}
+        </p>
+        <button
+          type="button"
+          onClick={restoreConsole}
+          disabled={!canSet || (pinnedC === 0 && lastSetC === null)}
+          className="rounded-md border border-[var(--color-border)] px-3 py-1 text-xs hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+        >
+          {tr("hardware_fan_restore", undefined, "Use the console's own setting")}
+        </button>
+      </div>
+
+      {restored && (
+        <p className="mt-2 text-xs text-[var(--color-good)]">
+          {restored === "done"
+            ? tr("hardware_fan_restored", undefined, "The console's own fan setting is back.")
+            : tr(
+                "hardware_fan_restore_restart",
+                undefined,
+                "ps5upload's setting was removed. The console goes back to its own setting the next time it restarts.",
+              )}
+        </p>
+      )}
+
       <p className="mt-3 text-xs text-[var(--color-muted)]">
         {lastSetC !== null ? (
           <>
@@ -945,8 +1018,9 @@ function FanThresholdCard({
           </>
         ) : null}
         {tr(
-          "hardware_fan_persist_note",
-          "Persists until PS5 reboot. Fan RPM can't be read back — only the threshold is writable.",
+          "hardware_fan_lower_louder",
+          undefined,
+          "This is the temperature the console's fan control works to hold. Lower is louder: under load the fans run as hard as it takes to stay there. Kept across restarts.",
         )}
       </p>
     </section>

@@ -19,7 +19,7 @@ int inst_sony_init(inst_sony_state_t *st);
 typedef struct {
     int         accepted;  /* 1 when Sony rc == 0 */
     uint32_t    code;      /* Sony rc (0 on accept) */
-    const char *via;       /* "url" | "loopback" | "path" */
+    const char *via;       /* "url" | "loopback" | "path" | "file" */
     const char *hint;      /* non-NULL for a known error code */
 } inst_install_result_t;
 

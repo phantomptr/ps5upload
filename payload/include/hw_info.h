@@ -95,6 +95,25 @@ int hw_storage_get_text(char *out, size_t out_cap, size_t *out_written,
  * ("icc_fan_open_failed", "icc_fan_ioctl_failed"). */
 int hw_fan_set_threshold(uint8_t threshold_c, const char **err_reason_out);
 
+/* The temperature the controller is working to right now (read back from /dev/icc_fan), or
+ * -1 when it cannot be read. */
+int hw_fan_read_target(void);
+
+/* The console's own value: what the controller held before this helper first changed it
+ * (remembered in fan_stock.conf), or 0 when it was never seen. */
+int hw_fan_stock_target(void);
+
+/* Whether a reading of `current_c` is the console's own value rather than ours (`ours_c` is
+ * what this helper last applied or has on file, 0 = nothing). */
+int hw_fan_is_stock_reading(int current_c, int ours_c);
+
+/* Give the fan back to the console: apply its own value, stop re-applying ours and forget
+ * the saved threshold. 0 on success (also when nothing of ours was in force); -1 with
+ * *err_reason_out: "fan_restore_needs_restart" (ours was dropped, but the console's value was
+ * never seen, so it returns at the next restart), "icc_fan_ioctl_failed",
+ * "icc_fan_not_applied". */
+int hw_fan_restore_stock(const char **err_reason_out);
+
 /* Safe clamp bounds. 45 °C floor keeps the fan from running at turbo
  * during normal idle; 80 °C ceiling leaves thermal headroom before
  * Sony's ~95 °C emergency cutoff. */

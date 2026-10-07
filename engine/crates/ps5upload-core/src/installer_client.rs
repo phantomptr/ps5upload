@@ -17,7 +17,7 @@ use crate::payload_lifecycle::{
 const INSTALLER_ELF_NAME: &str = "ps5upload-installer.elf";
 
 /// Must match the daemon's INST_VERSION in payload/installer/main.c.
-pub const INSTALLER_VERSION: &str = "1.2.0";
+pub const INSTALLER_VERSION: &str = "1.3.6";
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const SHORT_TIMEOUT: Duration = Duration::from_secs(5); // hello / job / stop
@@ -380,6 +380,24 @@ pub fn install_path(ip: &str, path: &str, name_hint: &str) -> Result<InstallRepl
     install_at(&join_host_port(ip, INSTALLER_PORT), &req)
 }
 
+/// Install the console's own file by its plain path, never over the daemon's loopback server
+/// (`"route":"path"`, daemon 1.3.0+). The engine's guarded last resort: see
+/// `install::path_fallback_allowed` for when it may be asked for.
+pub fn install_path_plain(ip: &str, path: &str, name_hint: &str) -> Result<InstallReply, String> {
+    install_at(
+        &join_host_port(ip, INSTALLER_PORT),
+        &plain_path_request(path, name_hint),
+    )
+}
+
+fn plain_path_request(path: &str, name_hint: &str) -> String {
+    format!(
+        "{{\"op\":\"install\",\"path\":{},\"name_hint\":{},\"route\":\"path\"}}",
+        esc(path),
+        esc(name_hint)
+    )
+}
+
 /// Ask the installer daemon to exit; the next `ensure` sends a fresh one.
 /// Recycles a daemon whose Sony install state a failed network install has
 /// wedged — measured on FW 5.10: after one stream the console could not
@@ -487,6 +505,17 @@ mod tests {
             }
         });
         (sa.ip().to_string(), sa.port(), reqs, stop)
+    }
+
+    #[test]
+    fn the_plain_path_request_names_its_route() {
+        // The daemon serves a path over loopback unless the route says otherwise.
+        let r = plain_path_request("/data/a \"b\".pkg", "PPSA1 (Base)");
+        let v: serde_json::Value = serde_json::from_str(&r).unwrap();
+        assert_eq!(v["op"], "install");
+        assert_eq!(v["path"], "/data/a \"b\".pkg");
+        assert_eq!(v["route"], "path");
+        assert!(v.get("url").is_none());
     }
 
     #[test]

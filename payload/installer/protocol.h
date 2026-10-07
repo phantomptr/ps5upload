@@ -31,6 +31,11 @@ typedef struct {
     char       path[INST_PATH_MAX];
     char       name_hint[INST_HINT_MAX];
     char       job[INST_JOBID_MAX];
+    /* An install with `"route":"path"`: hand Sony the file's plain path and
+     * never serve it over loopback. Only the engine's guarded last resort
+     * asks for it (a base game that is not installed, on a console that
+     * refused its own loopback copy and cannot reach the engine). */
+    int        bare_path;
     /* NULL on success; otherwise our string error code ("bad_request"). */
     const char *error;
 } inst_request_t;

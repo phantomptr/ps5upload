@@ -1,3 +1,4 @@
+#include "indicator.h"
 #include "shell_builtin.h"
 
 #include <ctype.h>
@@ -358,6 +359,9 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
     char *out = NULL;
     size_t cap = 0, len = 0;
 
+    /* beep / led: the console's beeper and front LED (indicator.c). */
+    if (indicator_shell(argc, argv, out_text, out_exit)) return 0;
+
     if (strcmp(prog, "help") == 0) {
         len = shell_appendf(&out, &cap, len,
             "ps5upload built-in shell commands (PS5 has no /bin/sh).\n"
@@ -410,6 +414,8 @@ int handle_shell_builtin(const char *cmd_in, char **out_text,
             "  sync                    flush dirty buffers\n"
             "  klog [-n N]             last N bytes of /dev/klog\n"
             "  notify <msg...>         PS5 toast notification\n"
+            "  beep [0-3]              sound the console's beeper once\n"
+            "  led off|on|dim <0-2>    front LED off, back to normal, or brightness\n"
             "\n"
             "Path utils:\n"
             "  basename <path>         strip dir part\n"

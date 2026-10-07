@@ -44,6 +44,22 @@ static void test_parse(void) {
     CHECK(r.op == INST_OP_INSTALL);
     CHECK(r.src == INST_SRC_PATH);
     CHECK(strcmp(r.path, "/data/x.pkg") == 0);
+    CHECK(r.bare_path == 0); /* loopback first, unless asked otherwise */
+
+    /* install by plain path: the guarded last resort, asked for by name */
+    const char *bp = "{\"op\":\"install\",\"path\":\"/data/x.pkg\",\"route\":\"path\"}";
+    inst_parse_request(bp, strlen(bp), &r);
+    CHECK(r.error == NULL);
+    CHECK(r.src == INST_SRC_PATH);
+    CHECK(r.bare_path == 1);
+    /* an unknown route is refused, never quietly served over loopback */
+    const char *br = "{\"op\":\"install\",\"path\":\"/data/x.pkg\",\"route\":\"paht\"}";
+    inst_parse_request(br, strlen(br), &r);
+    CHECK(r.error != NULL && strcmp(r.error, "bad_request") == 0);
+    /* and it means nothing for a url */
+    const char *bu = "{\"op\":\"install\",\"url\":\"http://h/a.pkg\",\"route\":\"path\"}";
+    inst_parse_request(bu, strlen(bu), &r);
+    CHECK(r.error != NULL && strcmp(r.error, "bad_request") == 0);
 
     /* install with BOTH url and path -> bad_request (must be exactly one) */
     const char *both = "{\"op\":\"install\",\"url\":\"http://h/a.pkg\",\"path\":\"/data/x.pkg\"}";

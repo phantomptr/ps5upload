@@ -456,8 +456,12 @@ pub fn interpret(shares: &Value, ava1: &Value, result: &str) -> Value {
         "source_starved" => format!(
             "source-starved {shown} %: reading the source was the limit (a slow disk, a network share, or archive decoding on this computer)."
         ),
+        // The window is what was sent and not yet acknowledged. When the console says neither
+        // its drive nor its workers held it back, those bytes were not waiting on the console:
+        // they were on the way to it. Calling that "console memory" sent people looking at the
+        // console for what is nearly always the link (Wi-Fi at about 1 MB/s read 88 %).
         _ => format!(
-            "credit-starved {shown} %: the console's receive window was full, so it was the limit (its memory, not its drive)."
+            "credit-starved {shown} %: data was sent faster than the console acknowledged it, while the console reported neither its drive nor its workers as the limit. That usually means a slow network link (Wi-Fi, a weak signal or a busy network)."
         ),
     };
     json!({"dominant": dominant, "pct": shown, "text": text})

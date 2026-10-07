@@ -72,6 +72,7 @@ struct Job {
 struct Console {
     script: Script,
     jobs: HashMap<[u8; 16], Job>,
+    run_started: bool,
     runs: Vec<(u8, Vec<u8>)>,
     cancels: usize,
     /// The scripted forgetting happened (it happens once per console).
@@ -100,7 +101,11 @@ fn status(job_id: [u8; 16], state: u8, polls: u32, current: Option<&str>) -> Sta
 
 fn handle(c: &Mutex<Console>, method: u16, body: &[u8]) -> RpcReply {
     if method == gen::METHOD_JOB_RUN {
-        let delay = c.lock().unwrap().script.run_delay_ms;
+        let delay = {
+            let mut c = c.lock().unwrap();
+            c.run_started = true;
+            c.script.run_delay_ms
+        };
         if delay > 0 {
             std::thread::sleep(Duration::from_millis(delay)); // not listed until it answers
         }
@@ -524,7 +529,7 @@ async fn the_wait_ends_at_the_callers_deadline_and_says_the_job_may_still_run() 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_progress_query_before_the_job_is_listed_waits_instead_of_reading_zero() {
-    let (t, _p, c, _st) = console(
+    let (t, _p, c, st) = console(
         "unlisted",
         Script {
             finish_at: 1_000,
@@ -546,7 +551,15 @@ async fn a_progress_query_before_the_job_is_listed_waits_instead_of_reading_zero
         )
         .await
     });
-    tokio::time::sleep(Duration::from_millis(100)).await; // the run call is in flight, unanswered
+    // Wait for the server to receive job.run, rather than guessing when a parallel test worker
+    // will schedule the runner. Its delayed reply still leaves the job unlisted here.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !st.lock().unwrap().run_started {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("job.run reached the server");
     let started = Instant::now();
     let (t3, c3) = (t.clone(), c.clone());
     let p = tokio::task::spawn_blocking(move || t3.job_progress(&c3, 9_300))

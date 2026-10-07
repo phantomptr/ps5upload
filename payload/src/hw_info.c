@@ -112,6 +112,10 @@ int hw_guard_try_recover(int sig) {
  * on future firmware), our behavior will fail the same way theirs
  * does, and we can match their eventual fix. */
 #define ICC_FAN_IOCTL_SET_THRESHOLD 0xC01C8F07UL
+/* The read side of the same 28-byte profile. Byte 5 is the temperature the firmware's own
+ * fan control works to hold; measured on FW 13.60 (CFI-1115A and CFI-7019) it reads 0x5b =
+ * 91 C out of the box, and a write changes that byte and nothing else in the profile. */
+#define ICC_FAN_IOCTL_GET_STATE     0xC01C8F08UL
 #define ICC_FAN_DEVICE_NODE         "/dev/icc_fan"
 #define ICC_FAN_CMD_LEN             28  /* = IOCPARM_LEN(0xC01C8F07); kernel copies in/out this many bytes */
 #define ICC_FAN_THRESHOLD_OFFSET    5
@@ -711,9 +715,12 @@ int hw_temps_get_text_ex(int flags, char *out, size_t out_cap,
         "cpu_usage_pct=%d\n"
         "fan_duty_pct=%d\n"
         "product_shape=%d\n"
-        "fan_pinned_c=%d\n",
+        "fan_pinned_c=%d\n"
+        "fan_target_c=%d\n"
+        "fan_stock_c=%d\n",
         cpu_temp, soc_temp, m2_temp, cpu_freq_mhz, power_mw,
-        cpu_usage_pct, fan_duty_pct, product_shape, fan_pinned_c);
+        cpu_usage_pct, fan_duty_pct, product_shape, fan_pinned_c,
+        hw_fan_read_target(), hw_fan_stock_target());
     if (n < 0 || (size_t)n >= out_cap) {
         if (err_reason_out) *err_reason_out = "hw_temps_format_failed";
         return -1;
@@ -1032,6 +1039,63 @@ void hw_fan_set_reapply_interval(int seconds) {
  * fd open/ioctl pattern via a static helper. */
 static int hw_fan_apply_locked(uint8_t threshold_c);
 
+/* ── What the console is using, and what it used before us ─────────
+ *
+ * The controller can be read back. That gives two things the feature never had: proof that a
+ * write took, and the firmware's own value, so "restore" can mean the console's default and
+ * not another number of ours. The default is NOT 60 C as this code long assumed: it read 91 C
+ * on both FW 13.60 consoles measured, so every threshold and curve we applied (capped at 60
+ * to 80) ran the fans harder than stock with no way back (#400). */
+
+#define FAN_STOCK_PERSIST_PATH PS5UPLOAD2_RUNTIME_ROOT "/fan_stock.conf"
+/* A sane reading: below this the fans would never rest, above it the console is at its limit. */
+#define FAN_TARGET_SANE_MIN 30
+#define FAN_TARGET_SANE_MAX 110
+
+static atomic_int g_fan_stock_c = 0;
+
+int hw_fan_read_target(void) {
+    unsigned char st[ICC_FAN_CMD_LEN] = {0};
+    int fd = open(ICC_FAN_DEVICE_NODE, O_RDONLY);
+    if (fd < 0) return -1;
+    int rc = ioctl(fd, ICC_FAN_IOCTL_GET_STATE, st);
+    close(fd);
+    if (rc != 0) return -1;
+    return (int)st[ICC_FAN_THRESHOLD_OFFSET];
+}
+
+int hw_fan_stock_target(void) {
+    int v = atomic_load(&g_fan_stock_c);
+    if (v) return v;
+    FILE *fp = fopen(FAN_STOCK_PERSIST_PATH, "r");
+    if (!fp) return 0;
+    int val = 0;
+    int matched = fscanf(fp, "v1 %d", &val);
+    fclose(fp);
+    if (matched != 1 || val < FAN_TARGET_SANE_MIN || val > FAN_TARGET_SANE_MAX) return 0;
+    atomic_store(&g_fan_stock_c, val);
+    return val;
+}
+
+int hw_fan_is_stock_reading(int current_c, int ours_c) {
+    return current_c >= FAN_TARGET_SANE_MIN && current_c <= FAN_TARGET_SANE_MAX &&
+           (ours_c <= 0 || current_c != ours_c);
+}
+
+/* Remember the console's own value the first time it is seen: whatever the controller holds
+ * that we did not put there. `ours_c` is the value this helper last applied or has on file
+ * (0 = none); a reading equal to it is ours and says nothing about the firmware. */
+static void hw_fan_note_stock(int ours_c) {
+    if (hw_fan_stock_target()) return;
+    int cur = hw_fan_read_target();
+    if (!hw_fan_is_stock_reading(cur, ours_c)) return;
+    atomic_store(&g_fan_stock_c, cur);
+    FILE *fp = fopen(FAN_STOCK_PERSIST_PATH, "w");
+    if (!fp) return;
+    fprintf(fp, "v1 %d\n", cur);
+    fclose(fp);
+}
+
 static void *hw_fan_watcher_thread_fn(void *arg) {
     (void)arg;
     /* Best-effort thread name for ps/top output; ignored if the
@@ -1127,12 +1191,31 @@ int hw_fan_set_threshold(uint8_t threshold_c, const char **err_reason_out) {
         return -1;
     }
 
+    /* Before the first write of this helper's life: what is in the controller now is the
+     * console's own value unless it is the one we have on file from an earlier run. */
+    {
+        int ours = atomic_load(&g_pinned_threshold_c);
+        if (!ours) ours = hw_fan_load_persisted();
+        hw_fan_note_stock(ours);
+    }
+
     unsigned char cmd[ICC_FAN_CMD_LEN] = {0};
     cmd[ICC_FAN_THRESHOLD_OFFSET] = threshold_c;
 
     int rc = ioctl(fd, ICC_FAN_IOCTL_SET_THRESHOLD, cmd);
     int saved_errno = errno;
     close(fd);
+
+    /* Read it back. A write the controller accepted but did not take used to be reported as
+     * success. A read that fails proves nothing either way and is not held against the write. */
+    if (rc == 0) {
+        int now = hw_fan_read_target();
+        if (now >= 0 && now != (int)threshold_c) {
+            pthread_mutex_unlock(&g_fan_set_mtx);
+            if (err_reason_out) *err_reason_out = "icc_fan_not_applied";
+            return -1;
+        }
+    }
 
     if (rc < 0) {
         pthread_mutex_unlock(&g_fan_set_mtx);
@@ -1157,5 +1240,43 @@ int hw_fan_set_threshold(uint8_t threshold_c, const char **err_reason_out) {
     hw_fan_save_persisted(threshold_c);
     pthread_mutex_unlock(&g_fan_set_mtx);
     hw_fan_watcher_start_once();
+    return 0;
+}
+
+int hw_fan_restore_stock(const char **err_reason_out) {
+    pthread_mutex_lock(&g_fan_set_mtx);
+    int stock = hw_fan_stock_target();
+    if (!stock) {
+        /* Nothing of ours is in force and nothing was ever recorded: the controller already
+         * holds the console's own value. */
+        int ours = atomic_load(&g_pinned_threshold_c);
+        if (!ours) ours = hw_fan_load_persisted();
+        if (!ours) {
+            pthread_mutex_unlock(&g_fan_set_mtx);
+            return 0;
+        }
+        /* Ours is in force but the console's value was never seen (set by a build that did
+         * not record it, and no restart since). Stop overriding it: the console goes back to
+         * its own value the next time it restarts, which is the honest answer. */
+        atomic_store(&g_pinned_threshold_c, 0);
+        (void)unlink(FAN_PERSIST_PATH);
+        pthread_mutex_unlock(&g_fan_set_mtx);
+        if (err_reason_out) *err_reason_out = "fan_restore_needs_restart";
+        return -1;
+    }
+    /* Stop re-applying first, so the watcher cannot put our value back behind the restore. */
+    atomic_store(&g_pinned_threshold_c, 0);
+    (void)unlink(FAN_PERSIST_PATH);
+    int rc = hw_fan_apply_locked((uint8_t)stock);
+    int now = rc == 0 ? hw_fan_read_target() : -1;
+    pthread_mutex_unlock(&g_fan_set_mtx);
+    if (rc != 0) {
+        if (err_reason_out) *err_reason_out = "icc_fan_ioctl_failed";
+        return -1;
+    }
+    if (now >= 0 && now != stock) {
+        if (err_reason_out) *err_reason_out = "icc_fan_not_applied";
+        return -1;
+    }
     return 0;
 }

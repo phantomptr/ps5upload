@@ -452,6 +452,113 @@ fn an_ffpfsc_opens_as_the_tree_of_its_image() {
     assert!(packed.describe().contains("ffpfsc"));
 }
 
+/// A PFS image of one small game folder, unpacked from its gzipped fixture: `nested.ffpfsc`
+/// (a container holding a PFS image that holds an exFAT image: what a tester's console held),
+/// `compressed.ffpfs` (a PFS image holding a compressed exFAT image) and `raw.ffpfs` (a PFS
+/// image holding the game's files themselves).
+fn pfs_fixture(name: &str) -> PathBuf {
+    use std::io::Read;
+    let gz = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/pfs/{name}.gz"));
+    let dir = std::env::temp_dir().join(format!("fpkg-pfs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = dir.join(name);
+    let mut bytes = Vec::new();
+    flate2::read::GzDecoder::new(std::fs::File::open(gz).unwrap())
+        .read_to_end(&mut bytes)
+        .unwrap();
+    std::fs::write(&out, bytes).unwrap();
+    out
+}
+
+/// The folder those images were packed from: path, size and FNV-1a 64 of every file.
+const PFS_FIXTURE_FILES: &[(&str, u64, u64)] = &[
+    ("data/deep/er/leaf.dat", 40, 0x33a7a995c1730cc5),
+    ("data/noise.bin", 70000, 0x5112984a7b777a22),
+    ("data/text.txt", 300000, 0xa0565bb22b3b00a5),
+    ("data/zero.bin", 0, 0xcbf29ce484222325),
+    ("eboot.bin", 10255, 0x3a5c1a4f2c9e831d),
+    ("sce_sys/param.json", 312, 0xe1abce88c66970e7),
+];
+
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| {
+        (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+/// Every kind of PFS game image opens as the game's own files, byte for byte: the
+/// `.ffpfsc` that nests a PFS image that nests an exFAT image (a tester's Convert failed on one
+/// with "neither exFAT nor UFS2"), the compressed `.ffpfs`, and the raw one that holds the
+/// files themselves.
+#[test]
+fn a_pfs_image_opens_as_the_game_inside_it() {
+    for (name, kind) in [
+        ("nested.ffpfsc", "exfat"),
+        ("compressed.ffpfs", "exfat"),
+        ("raw.ffpfs", "PFS"),
+    ] {
+        let mut tree = source::open(&pfs_fixture(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let listed: Vec<(&str, u64)> = tree
+            .files()
+            .iter()
+            .map(|f| (f.path.as_str(), f.size))
+            .collect();
+        let expected: Vec<(&str, u64)> = PFS_FIXTURE_FILES.iter().map(|f| (f.0, f.1)).collect();
+        assert_eq!(listed, expected, "{name}");
+        for (path, size, hash) in PFS_FIXTURE_FILES {
+            let whole = tree.read(path).unwrap();
+            assert_eq!(whole.len() as u64, *size, "{name} {path}");
+            assert_eq!(fnv1a(&whole), *hash, "{name} {path}");
+            // A read across a 64 KiB block boundary, and one past the end.
+            let from = 65_000usize.min(whole.len());
+            let to = (from + 2_000).min(whole.len());
+            assert_eq!(
+                tree.read_range(path, from as u64, 2_000).unwrap(),
+                &whole[from..to],
+                "{name} {path}"
+            );
+            assert!(tree.read_range(path, *size + 10, 16).unwrap().is_empty());
+        }
+        assert!(
+            tree.describe()
+                .to_ascii_lowercase()
+                .contains(&kind.to_ascii_lowercase()),
+            "{name}: {}",
+            tree.describe()
+        );
+    }
+}
+
+/// A PFS image that is damaged, or of a kind Convert does not read, is refused with its own
+/// reason and never read past its end.
+#[test]
+fn a_damaged_or_unsupported_pfs_image_is_refused() {
+    let good = std::fs::read(pfs_fixture("raw.ffpfs")).unwrap();
+    let dir = std::env::temp_dir().join(format!("fpkg-pfs-bad-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let refused = |name: &str, bytes: &[u8]| -> String {
+        let p = dir.join(name);
+        std::fs::write(&p, bytes).unwrap();
+        source::open(&p).err().expect("refused").to_string()
+    };
+    // Signed (mode bit 0) and encrypted (bit 2) images are other formats.
+    let mut signed = good.clone();
+    signed[0x1C] |= 0x1;
+    assert!(refused("signed.ffpfs", &signed).contains("signed"));
+    let mut encrypted = good.clone();
+    encrypted[0x1C] |= 0x4;
+    assert!(refused("encrypted.ffpfs", &encrypted).contains("encrypted"));
+    // Cut short: the inode table or the files run past the image.
+    assert!(refused("short.ffpfs", &good[..0x10000]).contains("PFS"));
+    assert!(refused("cut.ffpfs", &good[..good.len() / 2]).contains("shorter"));
+    // An inode count no image could hold.
+    let mut huge = good.clone();
+    huge[0x30..0x38].copy_from_slice(&u64::MAX.to_le_bytes());
+    assert!(refused("huge.ffpfs", &huge).contains("inode"));
+    // Not a PFS image at all.
+    assert!(refused("zero.ffpfs", &vec![0u8; 0x20000]).contains("not a PFS image"));
+}
+
 /// A file that only claims to be `.ffpfsc` is refused with a reason.
 #[test]
 fn a_bogus_ffpfsc_is_refused() {

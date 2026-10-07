@@ -194,7 +194,7 @@ export default function FpkgConvertScreen() {
               mode,
               title,
               filters:
-                mode === "file" ? [{ name: "Game image or archive", extensions: ["exfat", "ffpkg", "ffpfsc", "zip", "7z", "rar"] }] : undefined,
+                mode === "file" ? [{ name: "Game image or archive", extensions: ["exfat", "ffpkg", "ffpfs", "ffpfsc", "zip", "7z", "rar"] }] : undefined,
             });
         if (picked) chooseSource(picked);
       } catch {
@@ -430,7 +430,7 @@ export default function FpkgConvertScreen() {
               void (async () => {
                 const picked = await pickPaths({
                   title: tr("fpkg.pickImage", undefined, "Choose a game image or archive"),
-                  filters: [{ name: "Game image or archive", extensions: ["exfat", "ffpkg", "ffpfsc", "zip", "7z", "rar"] }],
+                  filters: [{ name: "Game image or archive", extensions: ["exfat", "ffpkg", "ffpfs", "ffpfsc", "zip", "7z", "rar"] }],
                 }).catch(() => [] as string[]);
                 const dupes = picked.filter((p) => !queueAdd(p)).length;
                 if (dupes) setError(tr("cq_already", undefined, "This game is already in the queue."));

@@ -126,6 +126,19 @@ void inst_parse_request(const char *buf, size_t len, inst_request_t *req) {
         if (have_url == 1 && have_path == 1) { req->error = "bad_request"; return; }
         if (have_url == 0 && have_path == 0) { req->error = "bad_request"; return; }
         req->src = (have_url == 1) ? INST_SRC_URL : INST_SRC_PATH;
+        /* `route` is optional. Anything but "path" is an error rather than
+         * ignored, so a typo cannot silently mean "serve it over loopback";
+         * and it only has a meaning for a path. */
+        char route[16];
+        int have_route = json_get_string(buf, len, "route", route, sizeof(route));
+        if (have_route < 0) { req->error = "bad_request"; return; }
+        if (have_route == 1) {
+            if (strcmp(route, "path") != 0 || req->src != INST_SRC_PATH) {
+                req->error = "bad_request";
+                return;
+            }
+            req->bare_path = 1;
+        }
         req->error = NULL;
         return;
     }

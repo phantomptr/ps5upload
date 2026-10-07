@@ -14,6 +14,7 @@
 #include "fan_map.h"
 
 _Static_assert(FAN_MAP_MIN_C == HW_FAN_THRESHOLD_MIN, "fan_map floor must match hw_info");
+_Static_assert(FAN_MAP_MAX_C == HW_FAN_THRESHOLD_MAX, "fan_map ceiling must match hw_info");
 
 #define FAN_CURVE_DIR  PS5UPLOAD2_RUNTIME_ROOT
 #define FAN_CURVE_FILE PS5UPLOAD2_RUNTIME_ROOT "/fan_curve.json"
@@ -69,15 +70,17 @@ int fan_curve_set(const char *points_json, char *err, size_t err_cap) {
      * alive across the fan-state resets the firmware issues on every game
      * launch. A one-shot ioctl here would silently revert on the next
      * launch — the whole reason hw_info owns the watcher. The ICC ioctl takes
-     * ONE temperature, the point where the firmware's own control goes to
-     * turbo, not a curve and not a target. So the curve maps to the lowest
-     * temperature where it asks for 100% duty, capped at the stock threshold
-     * (fan_map.h). It used to send the FIRST point, so a curve starting at
-     * 50 C made the fans run flat out from 50 C: #354.
+     * ONE temperature, the one the firmware's own fan control holds, not a
+     * curve. So the curve maps to the lowest temperature where it asks for
+     * 100% duty; one that never does (or only above what we may set) hands
+     * the fan back to the console (fan_map.h).
      * Non-fatal: the curve is already persisted, so a hardware failure
      * still lets the user inspect/retry from the UI. */
     int threshold = fan_map_threshold(points_json);
-    if (threshold >= 0) {
+    if (threshold == FAN_MAP_CONSOLE_OWN) {
+        const char *reason = NULL;
+        (void)hw_fan_restore_stock(&reason);
+    } else if (threshold > 0) {
         const char *reason = NULL;
         (void)hw_fan_set_threshold((uint8_t)threshold, &reason);
     }

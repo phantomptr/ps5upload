@@ -56,6 +56,14 @@ pub enum PeripheralAction {
     EjectDisc,
     UsbPortOff,
     UsbPortOn,
+    /// Sound the console's beeper once; `port` is the pattern (0-3).
+    Beep,
+    /// Turn the front LED off.
+    LedOff,
+    /// Hand the front LED back to the console.
+    LedOn,
+    /// Front LED brightness; `port` is the level (0-2).
+    LedDim,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +97,10 @@ pub fn peripheral_control(
             PeripheralAction::EjectDisc => "eject_disc",
             PeripheralAction::UsbPortOff => "usb_port_off",
             PeripheralAction::UsbPortOn => "usb_port_on",
+            PeripheralAction::Beep => "beep",
+            PeripheralAction::LedOff => "led_off",
+            PeripheralAction::LedOn => "led_on",
+            PeripheralAction::LedDim => "led_dim",
         },
         "port": port,
     });

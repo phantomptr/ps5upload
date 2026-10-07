@@ -99,7 +99,7 @@ export function GameCard(props: GameCardProps) {
                 remote
                 label={tr("fpkg.browseImage", undefined, "Image or archive…")}
                 title={tr("fpkg.pickImage", undefined, "Choose a game image or archive")}
-                filters={[{ name: "Game image or archive", extensions: ["exfat", "ffpkg", "ffpfsc", "zip", "7z", "rar"] }]}
+                filters={[{ name: "Game image or archive", extensions: ["exfat", "ffpkg", "ffpfs", "ffpfsc", "zip", "7z", "rar"] }]}
                 disabled={props.locked || props.checking}
                 onMainClick={props.onBrowseImage}
                 onPick={props.onRemotePick}

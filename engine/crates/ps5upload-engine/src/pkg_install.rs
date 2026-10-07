@@ -913,6 +913,17 @@ fn collect_dlc_pkgs(addr: &str, dir: &str, depth: u8, out: &mut Vec<InstalledPkg
     }
 }
 
+/// Whether `title_id` has installed content (`<root>/user/app/<id>/app.pkg` on internal
+/// storage or an extended drive), as opposed to only a home-screen tile. A tile can exist with
+/// nothing behind it: `/user/appmeta/<id>` written and `/user/app/<id>` never created is what
+/// an install that "succeeded" without copying anything leaves.
+pub(crate) fn base_content_present(addr: &str, title_id: &str) -> bool {
+    installed_pkg_inventory(addr, title_id)
+        .artifacts
+        .iter()
+        .any(|a| a.kind == "base")
+}
+
 fn installed_pkg_inventory(addr: &str, title_id: &str) -> InstalledPkgInventory {
     let mut artifacts = Vec::new();
     for root in installed_storage_roots(addr) {

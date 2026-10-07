@@ -75,9 +75,19 @@ pub enum Decision {
 /// Whether to replace the running elfldr. Only the standard `elfldr.elf` is touched (another
 /// loader on :9021 is someone else's), only when it answers (a stuck one can't take the send),
 /// and not when the one running is the one this engine installed.
+///
+/// And never when more than one process carries the loader's name. A new elfldr starts by
+/// killing EVERY process named `elfldr.elf` (third_party/elfldr/socksrv.c: a loop over
+/// `elfldr_find_pid`, by thread name), which is right when that is one old loader and fatal
+/// when a loader that does not rename what it starts has left kstuff or ShadowMount+ running
+/// under its own name: the swap takes them down with it (reported on FW 11.60: "the elfloader
+/// is relaunched; ShadowMount and kstuff stop working").
 pub fn decide(elfldr_pids: &[i32], installed: Option<i32>, health: Health) -> Decision {
     if elfldr_pids.is_empty() {
         return Decision::Skip("no elfldr");
+    }
+    if elfldr_pids.len() > 1 {
+        return Decision::Skip("other payloads share the loader's name");
     }
     if installed.is_some_and(|pid| elfldr_pids == [pid]) {
         return Decision::Skip("current");
@@ -102,6 +112,92 @@ pub fn took_over(before: &[i32], now: &[i32], health: Health) -> Option<i32> {
 fn installed() -> &'static Mutex<HashMap<String, i32>> {
     static M: OnceLock<Mutex<HashMap<String, i32>>> = OnceLock::new();
     M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// An elfldr this engine installed, as it is remembered across engine restarts: its pid and
+/// when the console it runs on booted (on this computer's clock).
+///
+/// The in-memory table alone forgot every swap when the app closed, so each app start found
+/// "an elfldr this engine did not install" and replaced the patched build with itself again:
+/// a loader relaunch on every launch (reported on FW 11.60, where the phone app starts a new
+/// engine each time). A pid means nothing after a reboot, when the stock loader may get the
+/// same one, so the record only counts for the boot it was made in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, Serialize)]
+pub struct Remembered {
+    pub pid: i32,
+    pub booted_at: i64,
+}
+
+/// Two readings of one boot differ by the time the two requests took, and by whatever this
+/// computer's clock was corrected in between.
+const SAME_BOOT_SLACK_SECS: i64 = 120;
+
+/// The pid to treat as ours: the remembered one, if the console has not rebooted since.
+pub fn remembered_pid(r: Option<Remembered>, booted_at: Option<i64>) -> Option<i32> {
+    let (r, now) = (r?, booted_at?);
+    ((r.booted_at - now).abs() <= SAME_BOOT_SLACK_SECS).then_some(r.pid)
+}
+
+fn store_path() -> Option<std::path::PathBuf> {
+    if cfg!(test) {
+        return None; // tests never touch the person's data folder
+    }
+    let data = std::env::var("PS5UPLOAD_DATA_DIR")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let home = std::env::var("HOME")
+        .ok()
+        .or_else(|| std::env::var("USERPROFILE").ok())
+        .filter(|v| !v.trim().is_empty());
+    data.map(std::path::PathBuf::from)
+        .or_else(|| home.map(|h| std::path::PathBuf::from(h).join(".ps5upload")))
+        .map(|d| d.join("elfldr_installed.json"))
+}
+
+fn load_remembered(host: &str) -> Option<Remembered> {
+    let all: HashMap<String, Remembered> =
+        serde_json::from_slice(&std::fs::read(store_path()?).ok()?).ok()?;
+    all.get(host).copied()
+}
+
+fn save_remembered(host: &str, r: Remembered) {
+    let Some(p) = store_path() else { return };
+    let mut all: HashMap<String, Remembered> = std::fs::read(&p)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    all.insert(host.to_string(), r);
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(b) = serde_json::to_vec(&all) {
+        let tmp = p.with_extension("json.tmp");
+        if std::fs::write(&tmp, b).is_ok() {
+            let _ = std::fs::rename(&tmp, &p);
+        }
+    }
+}
+
+/// When the console booted, on this computer's clock. `None` when it cannot be asked: the swap
+/// is then remembered for this engine's lifetime only, as before.
+fn console_booted_at(mgmt: &str) -> Option<i64> {
+    let up = ps5upload_core::hw::hw_power(mgmt).ok()?.operating_time_sec;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    (up > 0).then(|| now as i64 - up as i64)
+}
+
+/// Records `pid` as the elfldr this engine put on `host`.
+fn record_installed(host: &str, mgmt: &str, pid: i32) {
+    installed()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(host.to_string(), pid);
+    if let Some(booted_at) = console_booted_at(mgmt) {
+        save_remembered(host, Remembered { pid, booted_at });
+    }
 }
 
 fn elfldr_pids(mgmt: &str) -> Result<Vec<i32>, String> {
@@ -133,7 +229,8 @@ pub fn ensure(host: &str) -> Result<Outcome, String> {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .get(host)
-        .copied();
+        .copied()
+        .or_else(|| remembered_pid(load_remembered(host), console_booted_at(&mgmt)));
     let health = probe(
         host,
         LOADER_PORT,
@@ -181,10 +278,7 @@ pub fn ensure(host: &str) -> Result<Outcome, String> {
                 );
                 if let Some(pid) = took_over(&before, &now, answering) {
                     ps5upload_core::payload_manager::forget(host, "ps5upload-elfldr.elf");
-                    installed()
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .insert(host.to_string(), pid);
+                    record_installed(host, &mgmt, pid);
                     crate::log_info!("elfldr on {host} was {reason}; recovered through Payload Manager (pid {pid})");
                     return Ok(Outcome {
                         action: "recovered",
@@ -212,10 +306,7 @@ pub fn ensure(host: &str) -> Result<Outcome, String> {
                     Duration::from_secs(3),
                 );
                 if let Some(pid) = took_over(&before, &now, answering) {
-                    installed()
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .insert(host.to_string(), pid);
+                    record_installed(host, &mgmt, pid);
                     return Ok(Outcome {
                         action: "upgraded",
                         health: answering,
@@ -286,6 +377,26 @@ mod tests {
     }
 
     #[test]
+    fn a_swap_is_remembered_across_engine_restarts_but_not_across_a_console_reboot() {
+        use Decision::*;
+        let r = Some(Remembered {
+            pid: 97,
+            booted_at: 1_000_000,
+        });
+        // A new engine (the app was reopened), same console boot: the elfldr is still ours.
+        let mine = remembered_pid(r, Some(1_000_030));
+        assert_eq!(mine, Some(97));
+        assert_eq!(decide(&[97], mine, Health::Healthy), Skip("current"));
+        // The console rebooted: a stock elfldr may hold the same pid, so it is replaced.
+        let mine = remembered_pid(r, Some(1_086_400));
+        assert_eq!(mine, None);
+        assert_eq!(decide(&[97], mine, Health::Healthy), Upgrade);
+        // Nothing remembered, or the console cannot say when it booted: as before.
+        assert_eq!(remembered_pid(None, Some(1_000_000)), None);
+        assert_eq!(remembered_pid(r, None), None);
+    }
+
+    #[test]
     fn only_a_healthy_stock_elfldr_is_replaced() {
         use Decision::*;
         // Stock elfldr, answering: replace it.
@@ -294,6 +405,12 @@ mod tests {
         assert_eq!(decide(&[680], Some(680), Health::Healthy), Skip("current"));
         // A reboot (or an autoloader) started a new stock one: replace it again.
         assert_eq!(decide(&[84], Some(680), Health::Healthy), Upgrade);
+        // Several processes carry the loader's name: a new elfldr would kill all of them, and
+        // the others are payloads (kstuff, ShadowMount+) an older loader never renamed.
+        let shared = Skip("other payloads share the loader's name");
+        assert_eq!(decide(&[84, 91, 93], None, Health::Healthy), shared);
+        assert_eq!(decide(&[680, 91], Some(680), Health::Healthy), shared);
+        assert_eq!(decide(&[84, 91], None, Health::Stuck), shared);
         // No elfldr.elf at all: the loader on :9021 is someone else's (etaHEN, …).
         assert_eq!(decide(&[], None, Health::Healthy), Skip("no elfldr"));
         // Stuck or gone: nothing can be sent through it.

@@ -65,6 +65,7 @@ import { useConnectionStore } from "../../state/connection";
 import { useEngineStore, DEFAULT_ENGINE_URL } from "../../state/engine";
 import { useSaveSettingsStore, DEFAULT_SAVE_PATH } from "../../state/saveSettings";
 import { useBetaFeaturesStore } from "../../state/betaFeatures";
+import { useInstallPathFallbackStore } from "../../state/installPathFallback";
 import { hasBetaItems } from "../../layout/navItems";
 import { useRestAfterUploadStore } from "../../state/restAfterUpload";
 import { userConfigPath, resetAllAppData } from "../../state/userConfig";
@@ -549,6 +550,8 @@ export default function SettingsScreen() {
   const setRestAfterUpload = useRestAfterUploadStore((s) => s.setEnabled);
   const betaFeatures = useBetaFeaturesStore((s) => s.enabled);
   const setBetaFeatures = useBetaFeaturesStore((s) => s.setEnabled);
+  const installPathFallback = useInstallPathFallbackStore((s) => s.enabled);
+  const setInstallPathFallback = useInstallPathFallbackStore((s) => s.setEnabled);
   // UA-based, stable for the whole session — safe to read during render.
   const mobile = isMobile();
 
@@ -949,13 +952,28 @@ export default function SettingsScreen() {
 
         {/* Only while something is in beta: a switch that reveals nothing
             reads as broken. */}
-        {hasBetaItems() && (
+        {
           <>
             <GroupHeading>
               {tr("settings_group_beta", undefined, "Beta features")}
             </GroupHeading>
 
             <Section title={tr("settings_card_beta", undefined, "Beta features")} full>
+              <Toggle
+                checked={installPathFallback}
+                onChange={(on) => setInstallPathFallback(on)}
+                label={tr(
+                  "install_path_fallback_label",
+                  undefined,
+                  "Install by file path when the PS5 cannot reach this computer",
+                )}
+                hint={tr(
+                  "install_path_fallback_hint",
+                  undefined,
+                  "A last resort for a package that is already on the PS5, when the PS5 refuses it from its own storage and cannot fetch it from this computer either. Only used for a base game that is not installed, so it cannot remove anything. Unproven: it has worked on firmware 11.20 and is refused on 13.60. If you try it, please report whether it worked.",
+                )}
+              />
+              {hasBetaItems() && (
               <Toggle
                 checked={betaFeatures}
                 onChange={(on) => setBetaFeatures(on)}
@@ -970,9 +988,10 @@ export default function SettingsScreen() {
                   "Adds work-in-progress screens to the sidebar when there are any. These are usable but not yet reliable, and may change or be removed.",
                 )}
               />
+              )}
             </Section>
           </>
-        )}
+        }
 
         <GroupHeading>
           {tr("settings_group_automation", undefined, "Automation")}

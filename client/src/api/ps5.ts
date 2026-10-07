@@ -1547,6 +1547,12 @@ export interface HwTemps {
    *  default). A positive value means a permanent fan speed is active and
    *  auto-reapplied every 15s. Always present (even on basic read). */
   fan_pinned_c: number;
+  /** The temperature the fan controller is working to now, read back from the console
+   *  (°C). `-1` = not reported (an older helper) or unreadable. */
+  fan_target_c?: number;
+  /** The console's own value, as it was before ps5upload first changed it (°C). `0` =
+   *  never seen. 91 on FW 13.60. */
+  fan_stock_c?: number;
 }
 
 export interface HwPower {
@@ -2439,6 +2445,20 @@ export async function saveArchiveMakeTemp(prefix: string): Promise<string> {
   return invoke<string>("save_archive_make_temp", { prefix });
 }
 
+/** Where the next automatic backup of a save goes. Makes `<dir>/<titleId>/` and removes that
+ *  save's oldest automatic backups so `keep` remain with the new one. Desktop only. */
+export async function saveAutoBackupSlot(
+  dir: string,
+  titleId: string,
+  userId: number,
+  stamp: string,
+  keep: number,
+): Promise<string> {
+  return invoke<string>("save_auto_backup_slot", {
+    req: { dir, title_id: titleId, user_id: userId, stamp, keep },
+  });
+}
+
 /** Best-effort recursive delete of a scratch dir. Refuses to remove
  *  anything outside the system temp root, so a bad call can't wipe
  *  user data. Returns immediately on missing paths. */
@@ -2717,6 +2737,21 @@ export async function peripheralUsbOn(
   port: number,
 ): Promise<PeripheralAck> {
   return invoke<PeripheralAck>("peripheral_usb_on", { addr, port });
+}
+/** Sound the console's beeper once (pattern 0-3).
+ *  ok-checked-by-caller: PeripheralPanel's run() checks ok once for every action. */
+export async function peripheralBeep(addr: string, pattern = 1): Promise<PeripheralAck> {
+  return invoke<PeripheralAck>("peripheral_beep", { addr, pattern });
+}
+/** Turn the front LED off, or hand it back to the console.
+ *  ok-checked-by-caller: PeripheralPanel's run() checks ok once for every action. */
+export async function peripheralLed(addr: string, on: boolean): Promise<PeripheralAck> {
+  return invoke<PeripheralAck>("peripheral_led", { addr, on });
+}
+/** Front LED brightness (0-2); the console keeps it across restarts.
+ *  ok-checked-by-caller: PeripheralPanel's run() checks ok once for every action. */
+export async function peripheralLedDim(addr: string, level: number): Promise<PeripheralAck> {
+  return invoke<PeripheralAck>("peripheral_led_dim", { addr, level });
 }
 
 export interface ModuleInfo {
@@ -3014,6 +3049,8 @@ export async function fsReadPreview(
  *  Keeping them in sync here lets the UI prevent out-of-range
  *  requests before they ever hit the engine round-trip. */
 export const FAN_THRESHOLD_MIN_C = 45;
+/** Not a temperature: asks the helper to give the fan back to the console. */
+export const FAN_RESTORE_CONSOLE = 0;
 export const FAN_THRESHOLD_MAX_C = 80;
 
 /** Set the PS5's fan-turbo threshold in °C. `/dev/icc_fan` ioctl —
@@ -5465,6 +5502,9 @@ export interface InstallRequestBody {
     allow_destructive_reinstall?: boolean;
     /** Skip the console-local attempt and serve the package through Stream (console_path only). */
     force_stream?: boolean;
+    /** Let the engine use its last resort for a console that cannot reach it: install the
+     *  console's copy by plain file path (a base game that is not installed, nothing else). */
+    console_path_fallback?: boolean;
   };
 }
 

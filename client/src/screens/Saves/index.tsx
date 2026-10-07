@@ -55,6 +55,7 @@ import { pickPath } from "../../lib/pickPath";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import { isTauriEnv } from "../../lib/tauriEnv";
+import AutoBackupCard from "./AutoBackupCard";
 
 /**
  * Save data manager.
@@ -843,6 +844,7 @@ export default function SavesScreen() {
       />
 
       <ConnectionGate require="payload">
+        <AutoBackupCard />
         {error && (
           <div className="mb-4">
             <ErrorCard

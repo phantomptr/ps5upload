@@ -48,6 +48,24 @@ pub async fn peripheral_usb_on(addr: String, port: i32) -> Result<JsonValue, Str
     invoke_periph(addr, PeripheralAction::UsbPortOn, port).await
 }
 
+#[tauri::command]
+pub async fn peripheral_beep(addr: String, pattern: i32) -> Result<JsonValue, String> {
+    invoke_periph(addr, PeripheralAction::Beep, pattern).await
+}
+#[tauri::command]
+pub async fn peripheral_led(addr: String, on: bool) -> Result<JsonValue, String> {
+    let action = if on {
+        PeripheralAction::LedOn
+    } else {
+        PeripheralAction::LedOff
+    };
+    invoke_periph(addr, action, 0).await
+}
+#[tauri::command]
+pub async fn peripheral_led_dim(addr: String, level: i32) -> Result<JsonValue, String> {
+    invoke_periph(addr, PeripheralAction::LedDim, level).await
+}
+
 async fn invoke_periph(
     addr: String,
     action: PeripheralAction,

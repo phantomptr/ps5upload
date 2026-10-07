@@ -24,6 +24,7 @@ pub mod license;
 pub mod naps;
 pub mod outer;
 pub mod outer_write;
+pub mod pfs_source;
 pub mod pfsc;
 pub mod pfsc_reader;
 pub mod pfsimage;

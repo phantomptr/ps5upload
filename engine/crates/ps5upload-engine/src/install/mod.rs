@@ -119,6 +119,49 @@ pub fn is_destructive_reinstall(category: &str, already_installed: bool) -> bool
     !is_patch_or_dlc
 }
 
+/// Whether the plain-path last resort may run.
+///
+/// The situation it exists for: the package is on the console, the console refused it from
+/// its own loopback server (0x80B2116F), and it cannot fetch it from this engine either (a
+/// firewall, a direct cable with no route back). Sony's installer treats a plain file path
+/// differently from a URL on the console itself, and sometimes accepts it.
+///
+/// That route has destroyed things: a patch or add-on shares its base game's content id and
+/// a failed attempt wiped the base; a failed re-install removed the working copy it was
+/// replacing (Sony clears the old title before writing the new one). So it runs only where a
+/// failure has nothing to delete: a base game (`…gd`, stated, never assumed) whose title id
+/// is known and is NOT installed. And only when asked for, and only as the last route.
+pub fn path_fallback_allowed(
+    enabled: bool,
+    source: &Source,
+    category: &str,
+    title_known: bool,
+    already_installed: bool,
+    console_cannot_reach_engine: bool,
+) -> bool {
+    enabled
+        && console_cannot_reach_engine
+        && matches!(source, Source::ConsolePath(_))
+        && category.to_ascii_lowercase().ends_with("gd")
+        && title_known
+        && !already_installed
+}
+
+/// How long the last resort waits for the title's content to appear before calling the
+/// accept empty. A stream install of a 3 MB package wrote `app.pkg` within seconds; a large
+/// one preallocates it at the start.
+pub const PLAIN_PATH_CONTENT_WAIT: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// What the user reads when Sony accepted the file path and then installed nothing.
+pub const PLAIN_PATH_NO_CONTENT_HINT: &str = "The PS5 accepted the package by file path, but no game content appeared on any drive, so it is not installed. If a tile for it shows on the home screen, delete it there. The package was kept: let the PS5 reach this computer and use Stream & install, or install it on the console from Settings > System > Debug Settings > Game > Package Installer.";
+
+/// What the user reads when the last resort was refused too.
+pub fn path_fallback_refused_hint(code: u32) -> String {
+    format!(
+        "The PS5 could not reach this computer to fetch the package, and it also refused the copy on its own storage by file path (0x{code:08X}). Nothing was changed and the package was kept. Either let the PS5 reach this computer (allow ps5upload through the firewall, same network, Proxy Server set to Do Not Use) and use Stream & install, or install it on the console from Settings > System > Debug Settings > Game > Package Installer."
+    )
+}
+
 pub fn guard_decision(category: &str, already_installed: bool, allow: bool) -> GuardDecision {
     if is_destructive_reinstall(category, already_installed) && !allow {
         GuardDecision::Refuse
@@ -470,6 +513,11 @@ pub struct InstallOptions {
     /// `console_path` source; see [`stream_retry_allowed`].
     #[serde(default)]
     pub force_stream: bool,
+    /// Allow the last resort for a console that cannot reach this engine: install the
+    /// console's copy by its plain file path. Off unless the client asks (a beta setting);
+    /// see [`path_fallback_allowed`] for everything else that must hold.
+    #[serde(default)]
+    pub console_path_fallback: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -854,6 +902,48 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                 }
             }
         };
+    // The guarded last resort (see `path_fallback_allowed`): the console refused its own
+    // copy and cannot fetch it from this engine, so offer Sony the plain file path.
+    let (mut reply, mut session_id) = (reply, session_id);
+    let mut via_plain_path = false;
+    if let (Source::ConsolePath(path), Ok(ic::InstallReply::Sony { code, .. })) =
+        (&req.source, &reply)
+    {
+        let fetched = match &session_id {
+            Some(sid) => {
+                let s = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+                s.get(sid).map_or(0, |x| x.bytes_served)
+            }
+            None => 0,
+        };
+        // Served from this engine and never fetched, or refused from the console with no
+        // way to serve it at all.
+        let unreachable = *code != 0
+            && fetched == 0
+            && (session_id.is_some() || STAGED_ROUTE_REFUSALS.contains(code));
+        if path_fallback_allowed(
+            req.options.console_path_fallback,
+            &req.source,
+            &category,
+            title_id.is_some(),
+            already_installed,
+            unreachable,
+        ) {
+            crate::log_info!(
+                "{tag}: the console cannot fetch from this engine (0x{code:08X}); last resort: installing its own copy by file path"
+            );
+            if let Some(sid) = session_id.take() {
+                crate::pkg_install::release_serve_session(&state.sessions, &sid);
+            }
+            let (i, p, h) = (ip.clone(), path.clone(), hint_name.clone());
+            reply = tokio::task::spawn_blocking(move || ic::install_path_plain(&i, &p, &h))
+                .await
+                .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
+            route = Route::Path;
+            via_plain_path = true;
+            state.jobs.update(&job, |s| s.route = Some(Route::Path));
+        }
+    }
     let deliver_ms = deliver_started.elapsed().as_millis() as u64;
 
     // interpret the daemon reply.
@@ -909,7 +999,9 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         } else {
             None
         };
-        let hint = if never_fetched && code != 0 {
+        let hint = if via_plain_path {
+            Some(path_fallback_refused_hint(code))
+        } else if never_fetched && code != 0 {
             Some(stream_unreachable_hint(
                 served_from.as_deref(),
                 code,
@@ -1024,31 +1116,68 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         // other unreachable paths (host IP, firewall) rather than "stopped
         // fetching".
         let never_reached = route == Route::Stream && session_id.is_some() && last_served == 0;
-        let stall_diag = match (never_reached, served_from.as_deref()) {
-            (true, Some(o)) => net_diag_for(&ip, o).await,
-            _ => None,
-        };
-        let stall_hint = if never_reached {
-            stream_unreachable_hint(served_from.as_deref(), 0, stall_diag.as_ref())
-        } else {
-            "the console stopped fetching the package before it finished; the package was kept so you can retry"
-                .into()
-        };
-        state.jobs.update(&job, |s| {
-            s.phase = Phase::Failed;
-            s.verdict = Some(Verdict::Failed);
-            s.reason = Some(if never_reached {
-                FailReason::StreamUnreachable
+        // Sony took the URL and then never fetched a byte: the same dead end as a refusal,
+        // so the same guarded last resort.
+        let mut plain_path_refusal: Option<u32> = None;
+        if let Source::ConsolePath(path) = &req.source {
+            if !via_plain_path
+                && path_fallback_allowed(
+                    req.options.console_path_fallback,
+                    &req.source,
+                    &category,
+                    title_id.is_some(),
+                    already_installed,
+                    never_reached,
+                )
+            {
+                crate::log_info!(
+                    "{tag}: the console never fetched from this engine; last resort: installing its own copy by file path"
+                );
+                let (i, p, h) = (ip.clone(), path.clone(), hint_name.clone());
+                let r = tokio::task::spawn_blocking(move || ic::install_path_plain(&i, &p, &h))
+                    .await
+                    .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
+                via_plain_path = true;
+                match r {
+                    Ok(ic::InstallReply::Accepted { .. }) => {
+                        route = Route::Path;
+                        state.jobs.update(&job, |s| s.route = Some(Route::Path));
+                    }
+                    Ok(ic::InstallReply::Sony { code, .. }) => plain_path_refusal = Some(code),
+                    _ => plain_path_refusal = Some(0),
+                }
+            }
+        }
+        let recovered = via_plain_path && route == Route::Path && plain_path_refusal.is_none();
+        if !recovered {
+            let stall_diag = match (never_reached, served_from.as_deref()) {
+                (true, Some(o)) => net_diag_for(&ip, o).await,
+                _ => None,
+            };
+            let stall_hint = if let Some(code) = plain_path_refusal {
+                path_fallback_refused_hint(code)
+            } else if never_reached {
+                stream_unreachable_hint(served_from.as_deref(), 0, stall_diag.as_ref())
             } else {
-                FailReason::Stalled
+                "the console stopped fetching the package before it finished; the package was kept so you can retry"
+                .into()
+            };
+            state.jobs.update(&job, |s| {
+                s.phase = Phase::Failed;
+                s.verdict = Some(Verdict::Failed);
+                s.reason = Some(if never_reached {
+                    FailReason::StreamUnreachable
+                } else {
+                    FailReason::Stalled
+                });
+                s.hint = Some(stall_hint.clone());
+                s.net_diag = stall_diag.clone();
+                s.shortened = shortened;
+                s.metrics.phase_ms.insert("deliver".into(), deliver_ms);
             });
-            s.hint = Some(stall_hint.clone());
-            s.net_diag = stall_diag.clone();
-            s.shortened = shortened;
-            s.metrics.phase_ms.insert("deliver".into(), deliver_ms);
-        });
-        finalize(&state, &job, &req, started);
-        return;
+            finalize(&state, &job, &req, started);
+            return;
+        }
     }
 
     // verify.
@@ -1078,6 +1207,39 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         }
         _ => (verdict_no_identity(true), None, None),
     };
+    // The last resort is the one route with nothing to observe: no bytes served, no session.
+    // Sony's "accepted" is not proof there: one form of it returned 0 and left a tile with no
+    // content. So this route is only "installed" once the content is on a drive.
+    let mut no_content_hint: Option<String> = None;
+    let verdict = match (&title_id, via_plain_path && route == Route::Path) {
+        (Some(t), true) => {
+            let (m, t) = (mgmt.clone(), t.clone());
+            let present = tokio::task::spawn_blocking(move || {
+                let deadline = std::time::Instant::now() + PLAIN_PATH_CONTENT_WAIT;
+                loop {
+                    if crate::pkg_install::base_content_present(&m, &t) {
+                        return true;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        return false;
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                }
+            })
+            .await
+            .unwrap_or(false);
+            if present {
+                verdict
+            } else {
+                crate::log_warn!(
+                    "{tag}: the console accepted the package by file path but no content appeared"
+                );
+                no_content_hint = Some(PLAIN_PATH_NO_CONTENT_HINT.to_string());
+                Verdict::Failed
+            }
+        }
+        _ => verdict,
+    };
     let verify_ms = verify_started.elapsed().as_millis() as u64;
 
     // metrics: served bytes + throughput.
@@ -1101,8 +1263,16 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
     };
 
     state.jobs.update(&job, |s| {
-        s.phase = Phase::Done;
+        s.phase = if no_content_hint.is_some() {
+            Phase::Failed
+        } else {
+            Phase::Done
+        };
         s.verdict = Some(verdict);
+        if let Some(h) = &no_content_hint {
+            s.reason = Some(FailReason::SonyRefused);
+            s.hint = Some(h.clone());
+        }
         s.patch_verdict = patch_verdict;
         s.app_ver_after = app_ver_after.clone();
         s.shortened = shortened;
@@ -1410,6 +1580,54 @@ mod tests {
             c.contains("--network host") && !c.contains("Ethernet 3"),
             "{c}"
         );
+    }
+
+    #[test]
+    fn the_plain_path_last_resort_runs_only_where_a_failure_has_nothing_to_delete() {
+        let on_console = Source::ConsolePath("/user/data/ps5upload/pkg_library/a.pkg".into());
+        let ok = |enabled, cat: &str, known, installed, unreachable| {
+            path_fallback_allowed(enabled, &on_console, cat, known, installed, unreachable)
+        };
+        // The one case: asked for, a base game, title known and not installed, no way to stream.
+        assert!(ok(true, "PS5GD", true, false, true));
+        assert!(ok(true, "gd", true, false, true));
+        // Off unless the client asks.
+        assert!(!ok(false, "PS5GD", true, false, true));
+        // A console that can reach this engine streams instead.
+        assert!(!ok(true, "PS5GD", true, false, false));
+        // A patch or add-on shares the base game's content id: a failure wiped the base.
+        assert!(!ok(true, "PS4DP", true, false, true));
+        assert!(!ok(true, "gp", true, false, true));
+        assert!(!ok(true, "PS5AC", true, false, true));
+        // An unknown category is not assumed to be a base game.
+        assert!(!ok(true, "", true, false, true));
+        // Installed already: Sony clears the old copy first, so a failure leaves neither.
+        assert!(!ok(true, "PS5GD", true, true, true));
+        // Without a title id nobody checked whether it is installed.
+        assert!(!ok(true, "PS5GD", false, false, true));
+        // Only the console's own copy has a path to offer.
+        let on_pc = Source::HostFile("/games/a.pkg".into());
+        assert!(!path_fallback_allowed(
+            true, &on_pc, "PS5GD", true, false, true
+        ));
+        // The refusal says nothing was lost and names both ways out.
+        let h = path_fallback_refused_hint(0x80B2116F);
+        assert!(
+            h.contains("0x80B2116F") && h.contains("Nothing was changed"),
+            "{h}"
+        );
+        assert!(
+            h.contains("Stream & install") && h.contains("Package Installer"),
+            "{h}"
+        );
+    }
+
+    #[test]
+    fn the_last_resort_is_off_unless_the_request_asks_for_it() {
+        let o: InstallOptions = serde_json::from_str("{}").unwrap();
+        assert!(!o.console_path_fallback);
+        let o: InstallOptions = serde_json::from_str(r#"{"console_path_fallback":true}"#).unwrap();
+        assert!(o.console_path_fallback);
     }
 
     #[test]

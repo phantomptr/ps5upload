@@ -4130,6 +4130,41 @@ async fn ps5_fs_write_bytes(
 }
 
 #[derive(Debug, serde::Deserialize)]
+struct PeripheralReq {
+    addr: Option<String>,
+    action: ps5upload_core::diagnostics::PeripheralAction,
+    /// The USB port, beep pattern or brightness level the action takes; 0 otherwise.
+    #[serde(default)]
+    port: i32,
+}
+
+/// POST /api/ps5/peripheral
+/// Body: `{ "addr": "IP", "action": "beep", "port": 1 }`
+///
+/// The disc drive, the USB ports, the beeper and the front light. Replies with the
+/// helper's own ack (`ok`, `action`, `code`); a transport failure is a 502.
+async fn ps5_peripheral(
+    State(state): State<AppState>,
+    Json(q): Json<PeripheralReq>,
+) -> impl IntoResponse {
+    let addr = q.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let (action, port) = (q.action, q.port);
+    match tokio::task::spawn_blocking(move || {
+        ps5upload_core::diagnostics::peripheral_control(&addr, action, port)
+    })
+    .await
+    {
+        Ok(Ok(ack)) => Json(serde_json::to_value(ack).unwrap_or_default()).into_response(),
+        // The helper answered ok=false: that is an answer, not a transport failure.
+        Ok(Err(e)) if format!("{e:#}").contains("PERIPHERAL_CONTROL failed") => {
+            Json(serde_json::json!({ "ok": false, "err": format!("{e:#}") })).into_response()
+        }
+        Ok(Err(e)) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e}")).into_response(),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
 struct FanThresholdReq {
     addr: Option<String>,
     threshold_c: u8,
@@ -5192,6 +5227,40 @@ async fn ps5_readiness(
         Json(serde_json::json!({ "ready": ready, "detail": detail })),
     )
         .into_response()
+}
+
+/// Consecutive console stalls (36 s each) a link download rides out with nothing made
+/// durable in between: twelve minutes of a host delivering nothing.
+const LINK_STALL_TRIES: u32 = 20;
+
+#[derive(Debug, PartialEq, Eq)]
+enum LinkStall {
+    Retry,
+    Done,
+}
+
+/// What a link download does with one attempt's result: a console stall is retried while
+/// the host still makes progress (or has not yet used up its tries); anything else, a
+/// cancel included, is the job's result.
+fn link_stall_verdict<T>(
+    r: &anyhow::Result<T>,
+    cancelled: bool,
+    progressed: bool,
+    stalls: &mut u32,
+) -> LinkStall {
+    let stalled = r.as_ref().err().is_some_and(|e| {
+        e.downcast_ref::<ps5upload_ava1::upload::UploadFailure>()
+            .is_some_and(|f| f.reason == "ava1_stalled")
+    });
+    if !stalled || cancelled {
+        return LinkStall::Done;
+    }
+    *stalls = if progressed { 1 } else { *stalls + 1 };
+    if *stalls > LINK_STALL_TRIES {
+        LinkStall::Done
+    } else {
+        LinkStall::Retry
+    }
 }
 
 /// POST /api/transfer/file
@@ -8214,9 +8283,41 @@ async fn link_download_handler(
             .and_then(|manifest| {
                 // `dest` is the full path: JF_SINGLE_FILE writes `<dest>.ava-part` and
                 // renames it (the same contract `upload_file_in` follows).
-                let mut opts = ava1::send::SendOptions::upload(&dest_path);
-                opts.flags = ava1::gen::JF_SINGLE_FILE;
-                ps5upload_ava1::upload::upload_with(&cfg.addr, tx_id, manifest, source, opts, &cfg)
+                // The console ends a job whose sender delivers nothing for 36 s
+                // (ERR_STALLED). For a file on disk that means a wedged read; for a link
+                // it is an ordinary slow host: the first byte is only handed over once a
+                // whole download window has arrived. The download keeps running here in
+                // the meantime and the console keeps the job, so open it again and carry
+                // on, until the host has delivered nothing durable for too long.
+                let mut stalls = 0u32;
+                let mut durable_seen = progress_bytes_finalized.load(Ordering::Relaxed);
+                loop {
+                    let mut opts = ava1::send::SendOptions::upload(&dest_path);
+                    opts.flags = ava1::gen::JF_SINGLE_FILE;
+                    let r = ps5upload_ava1::upload::upload_with(
+                        &cfg.addr,
+                        tx_id,
+                        manifest.clone(),
+                        source.clone(),
+                        opts,
+                        &cfg,
+                    );
+                    let durable = progress_bytes_finalized.load(Ordering::Relaxed);
+                    let cancelled = cfg
+                        .cancel
+                        .as_ref()
+                        .is_some_and(|c| c.load(Ordering::Relaxed));
+                    match link_stall_verdict(&r, cancelled, durable > durable_seen, &mut stalls) {
+                        LinkStall::Retry => {
+                            durable_seen = durable;
+                            crate::log_info!(
+                                "link_download: job={job_id} the host delivered no data in time (stall {stalls}/{LINK_STALL_TRIES}); reopening the job"
+                            );
+                            std::thread::sleep(std::time::Duration::from_secs(1));
+                        }
+                        LinkStall::Done => break r,
+                    }
+                }
             });
         match result {
             Ok(r) => {
@@ -9763,6 +9864,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             post(ps5_smp_image_rw_finish),
         )
         .route("/api/ps5/hw/fan-threshold", post(ps5_hw_set_fan_threshold))
+        .route("/api/ps5/peripheral", post(ps5_peripheral))
         .route("/api/ps5/fs/chmod", post(ps5_fs_chmod))
         .route("/api/ps5/fs/mkdir", post(ps5_fs_mkdir))
         .route("/api/ps5/fs/write-bytes", post(ps5_fs_write_bytes))
@@ -10781,6 +10883,52 @@ mod helpers_tests {
     fn parse_or_random_tx_id_rejects_invalid_hex() {
         let bad = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
         assert!(parse_or_random_tx_id(Some(bad)).is_err());
+    }
+
+    #[test]
+    fn a_link_download_rides_out_a_slow_host_but_not_a_dead_one() {
+        let stall = || -> anyhow::Result<()> {
+            Err(ps5upload_ava1::upload::UploadFailure {
+                reason: "ava1_stalled".into(),
+                detail: "console refused the transfer (18): progress stalled".into(),
+            }
+            .into())
+        };
+        // The host is slow: the console gave up waiting, the download did not.
+        let mut n = 0;
+        assert_eq!(
+            link_stall_verdict(&stall(), false, false, &mut n),
+            LinkStall::Retry
+        );
+        // Progress since the last stall starts the count again.
+        n = LINK_STALL_TRIES;
+        assert_eq!(
+            link_stall_verdict(&stall(), false, true, &mut n),
+            LinkStall::Retry
+        );
+        assert_eq!(n, 1);
+        // Nothing durable for every try: the failure is the result.
+        n = LINK_STALL_TRIES;
+        assert_eq!(
+            link_stall_verdict(&stall(), false, false, &mut n),
+            LinkStall::Done
+        );
+        // A cancel, a success and any other failure are never retried.
+        let mut n = 0;
+        assert_eq!(
+            link_stall_verdict(&stall(), true, false, &mut n),
+            LinkStall::Done
+        );
+        assert_eq!(
+            link_stall_verdict(&Ok(()), false, false, &mut n),
+            LinkStall::Done
+        );
+        let other: anyhow::Result<()> = Err(anyhow::anyhow!("no route to host"));
+        assert_eq!(
+            link_stall_verdict(&other, false, false, &mut n),
+            LinkStall::Done
+        );
+        assert_eq!(n, 0);
     }
 
     #[test]

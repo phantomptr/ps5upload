@@ -17,6 +17,14 @@ import {
 import { usePayloadPlaylistsStore } from "../state/payloadPlaylists";
 import { log } from "../state/logs";
 import { playlistResendsOurHelper } from "../lib/playlistOps";
+import { useAutoSaveBackup } from "./useAutoSaveBackup";
+import {
+  autoRunStillLoaded,
+  bootEpochMs,
+  distinctPayloads,
+  loadAutoRun,
+  rememberAutoRun,
+} from "../lib/autoLoaderGuard";
 import { capturePayloadBlackBox } from "../lib/ps5Snapshot";
 import {
   BLACK_BOX_SETTLE_MS,
@@ -24,7 +32,7 @@ import {
 } from "../lib/payloadBlackBox";
 import { useUpdateStore } from "../state/update";
 import { engineApi } from "../api/engine";
-import { payloadCheck, portCheck } from "../api/ps5";
+import { fetchHwPower, payloadCheck, portCheck, procListGet } from "../api/ps5";
 import {
   isLegacyHelperWedged,
   sessionNeedsAttention,
@@ -129,6 +137,50 @@ const AUTO_LOADER_COOLDOWN_MS = 90_000;
  *  enough to be cheap while the PS5 is asleep. */
 const AUTO_REDEPLOY_INTERVAL_MS = 30_000;
 
+
+/** What is running on a console and when it booted, or nulls when it cannot be asked. */
+async function consoleBootAndProcesses(
+  host: string,
+): Promise<{ boot: number | null; names: string[] | null }> {
+  const [power, procs] = await Promise.all([
+    fetchHwPower(host).catch(() => null),
+    procListGet(mgmtAddr(host)).catch(() => null),
+  ]);
+  const uptime = power?.operating_time_sec ?? 0;
+  return {
+    boot: uptime > 0 ? bootEpochMs(Date.now(), uptime) : null,
+    names: procs?.ok ? procs.procs.map((p) => p.name) : null,
+  };
+}
+
+/** How long after the playlist ends its payloads are looked for: one-shot payloads have
+ *  exited by then, so only the ones that stay are remembered. */
+const AUTO_LOADER_SETTLE_MS = 20_000;
+
+/** Run the auto-loader's playlist on a console that just came up, unless this boot already
+ *  ran it and what it loaded is still running (lib/autoLoaderGuard). */
+async function runAutoLoaderOnce(
+  key: string,
+  host: string,
+  playlistId: string,
+  playlistName: string,
+): Promise<void> {
+  const before = await consoleBootAndProcesses(host);
+  if (autoRunStillLoaded(loadAutoRun(key), before.boot, before.names)) {
+    log.info(
+      "connection",
+      `auto-loader: not running "${playlistName}" on ${host} — it already ran since this console started and its payloads are still loaded`,
+    );
+    return;
+  }
+  log.info("connection", `auto-loader: running "${playlistName}" on ${host}`);
+  await usePayloadPlaylistsStore.getState().run(playlistId, host, PS5_LOADER_PORT);
+  await new Promise((r) => setTimeout(r, AUTO_LOADER_SETTLE_MS));
+  const after = await consoleBootAndProcesses(host);
+  if (after.boot !== null && after.names !== null) {
+    rememberAutoRun(key, { bootEpochMs: after.boot, payloads: distinctPayloads(after.names) });
+  }
+}
 
 function useStatusPolling() {
   const setStatus = useConnectionStore((s) => s.setStatus);
@@ -427,11 +479,7 @@ function useStatusPolling() {
               : null;
             if (cfg.enabled && auto && auto.steps.length > 0 && !onCooldown && !selfSend) {
               autoLoaderFiredAtRef.current[key] = Date.now();
-              log.info(
-                "connection",
-                `auto-loader: running "${auto.name}" on ${probedHost}`,
-              );
-              void pl.run(auto.id, probedHost, PS5_LOADER_PORT);
+              void runAutoLoaderOnce(key, probedHost, auto.id, auto.name);
             } else if (cfg.enabled && selfSend) {
               log.warn(
                 "connection",
@@ -1173,6 +1221,7 @@ function AndroidStorageAccessBanner() {
 
 export default function AppShell() {
   useStatusPolling();
+  useAutoSaveBackup();
   useAutoRedeployDownHelpers();
   useUpdateCheckOnMount();
   useKeepPs5Awake();

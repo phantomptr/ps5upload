@@ -47,23 +47,25 @@ export function dutyAtTemp(
   return last.duty_pct;
 }
 
-/** Stock turbo temperature and the lowest the console accepts (payload fan_map.h). */
-const TURBO_STOCK_C = 60;
-const TURBO_MIN_C = 45;
+/** The range a curve may set (payload fan_map.h: FAN_MAP_MIN_C..FAN_MAP_MAX_C). */
+const TARGET_MAX_C = 80;
+const TARGET_MIN_C = 45;
 
 /**
- * The one temperature a curve really sets on the console.
+ * The one temperature a curve really sets on the console, or null when the fan is left to
+ * the console.
  *
- * The PS5's fan controller takes a single value: the temperature at which its
- * own fan control goes to full speed. It cannot follow a curve, so the payload
- * maps one to the lowest point asking for 100%, kept within
- * [TURBO_MIN_C, TURBO_STOCK_C] (payload/src/fan_map.c: same rule, same bounds).
- * Shown on the screen so nobody waits for the other points to do something (#400).
+ * The PS5's fan controller takes a single value: the temperature its own fan control works
+ * to hold (lower is louder). It cannot follow a curve, so the payload maps one to the lowest
+ * point asking for 100%; a curve that never asks for it, or only above what may be set,
+ * hands the fan back to the console's own setting, which is 91 °C on FW 13.60 and not the
+ * 60 °C this code long assumed (payload/src/fan_map.c: same rule, same bounds; #400).
  */
-export function turboThresholdC(points: readonly FanCurvePoint[]): number {
+export function turboThresholdC(points: readonly FanCurvePoint[]): number | null {
   const full = points.filter((p) => p.duty_pct >= 100).map((p) => p.temp_c);
-  const t = full.length ? Math.min(...full) : TURBO_STOCK_C;
-  return Math.max(TURBO_MIN_C, Math.min(TURBO_STOCK_C, t));
+  if (full.length === 0) return null;
+  const t = Math.min(...full);
+  return t > TARGET_MAX_C ? null : Math.max(TARGET_MIN_C, t);
 }
 
 /** Named starting points. Seeds the editor only — every point stays editable.
@@ -281,11 +283,17 @@ export default function FanCurveScreen() {
         <div className="flex items-start gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-3 text-sm text-[var(--color-text)]">
           <Info size={14} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
           <span>
-            {tr(
-              "fanCurve_one_threshold",
-              { temp: turboThresholdC(points) },
-              `The PS5 has one fan setting: the temperature at which its fans go to full speed. It cannot follow a curve. With these points that temperature is ${turboThresholdC(points)} °C: the lowest point that asks for 100%, never above the stock 60 °C or below 45 °C. Below it the console runs its fans as it normally does, so the other points change nothing.`,
-            )}
+            {turboThresholdC(points) === null
+              ? tr(
+                  "fanCurve_target_console",
+                  undefined,
+                  "The PS5 has one fan setting: the temperature its fan control works to hold (lower is louder). It cannot follow a curve. These points never ask for 100% at 80 °C or below, so applying them leaves the fan to the console's own setting.",
+                )
+              : tr(
+                  "fanCurve_target_note",
+                  { temp: turboThresholdC(points) ?? 0 },
+                  `The PS5 has one fan setting: the temperature its fan control works to hold (lower is louder). It cannot follow a curve. Applying these points sets it to ${turboThresholdC(points)} °C, the lowest point that asks for 100%, so the other points change nothing.`,
+                )}
           </span>
         </div>
 

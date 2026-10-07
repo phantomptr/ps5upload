@@ -1,7 +1,9 @@
 #![cfg(unix)]
-//! Issue #354: the fan curve must never become a "max fans" threshold. The PS5's ICC fan ioctl takes
-//! one temperature, the point where the firmware goes to turbo (stock 60 C); a curve is mapped to
-//! the lowest 100%-duty point, capped at stock and floored at 45 C.
+//! The fan curve mapping (#354, #400). The PS5's ICC fan ioctl takes one temperature, the one the
+//! firmware's fan control holds; lower is louder. The console's own value is 91 C (read back on
+//! FW 13.60), not the 60 C this mapping used to cap at, so a curve maps to its lowest 100%-duty
+//! point only when that is something we may set (45..=80 C); otherwise the fan goes back to the
+//! console (0).
 use ava1_ctest::fan_map_threshold as map;
 
 fn curve(points: &[(i32, i32)]) -> String {
@@ -14,16 +16,16 @@ fn curve(points: &[(i32, i32)]) -> String {
 
 #[test]
 fn the_reporters_curve_does_not_become_a_max_fans_target() {
-    // first point 50 C / 30%: the old code sent 50 (turbo from 50 C). The curve only reaches
-    // 100% at 85 C, which is above stock, so the console keeps its stock 60.
+    // First point 50 C / 30%: the old code sent 50. The next sent "stock 60", which is 31 C
+    // below what the console uses by itself. It only reaches 100% at 85 C: leave it to the console.
     let t = map(&curve(&[(50, 30), (65, 55), (75, 80), (85, 100)]));
-    assert_eq!(t, 60);
-    assert_ne!(t, 50);
+    assert_eq!(t, 0);
 }
 
 #[test]
-fn a_100_percent_point_below_stock_is_honoured() {
+fn a_100_percent_point_we_may_set_is_honoured() {
     assert_eq!(map(&curve(&[(40, 20), (55, 100), (70, 100)])), 55);
+    assert_eq!(map(&curve(&[(60, 40), (80, 100)])), 80);
 }
 
 #[test]
@@ -32,10 +34,11 @@ fn lowest_full_duty_point_wins_even_if_unsorted() {
 }
 
 #[test]
-fn clamped_to_the_floor_and_never_above_stock() {
+fn floored_at_45_and_handed_back_to_the_console_above_80() {
     assert_eq!(map(&curve(&[(30, 100)])), 45);
-    assert_eq!(map(&curve(&[(80, 100)])), 60);
-    assert_eq!(map(&curve(&[(50, 10), (90, 60)])), 60); // never asks for 100%: stock
+    assert_eq!(map(&curve(&[(81, 100)])), 0);
+    assert_eq!(map(&curve(&[(90, 100)])), 0);
+    assert_eq!(map(&curve(&[(50, 10), (90, 60)])), 0); // never asks for 100%
 }
 
 #[test]

@@ -4,6 +4,31 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.2.2
+
+**Fan control that respects the console, and a round of fixes from your reports.** Update the app and the helper together.
+
+- **Fan:** the app now shows the temperature the console is really holding and its own
+  setting, and has a **Use the console's own setting** button. Earlier versions treated 60 °C
+  as the console's default; it is much higher, so any setting ran the fans harder than normal
+  with no way back. A curve that never asks for full speed now leaves the fan to the console.
+- **Convert to FPKG:** reads `.ffpfs` images and `.ffpfsc` files that hold one, including from
+  the console.
+- **Other payloads keep running:** connecting no longer replaces the console's loader on every
+  app start, and never when doing so would stop kstuff or ShadowMount+. The auto-loader no
+  longer runs its playlist twice in one boot.
+- **Saves:** optional automatic backups of changed saves to a folder on your computer (Saves
+  screen).
+- **Front light and beeper:** beep the console, turn its light off or on, set its brightness
+  (Hardware screen).
+- **Link downloads to the PS5** no longer fail on a slow host.
+- **"Why was this slow?"** names the network link instead of blaming console memory.
+- **Installs:** an optional last resort for a console that cannot reach this computer
+  (Settings → Beta features; off by default).
+- **Uploads** are a little faster.
+
+---
+
 ## 6.2.1
 
 **Retrying a big file continues where it stopped.** Update the app and the helper together.

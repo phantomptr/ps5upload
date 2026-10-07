@@ -52,17 +52,19 @@ describe("dutyAtTemp", () => {
 // The console takes ONE temperature, not a curve (#400). This must agree with
 // payload/src/fan_map.c, or the screen names a temperature the console is not using.
 describe("turboThresholdC", () => {
-  it("is the lowest point asking for 100%, capped at the stock 60 °C", () => {
-    expect(turboThresholdC(curve)).toBe(60);
+  it("is the lowest point asking for 100%, when that is something we may set", () => {
     expect(
       turboThresholdC([
         { temp_c: 45, duty_pct: 40 },
         { temp_c: 50, duty_pct: 100 },
       ]),
     ).toBe(50);
-  });
-  it("stays at stock when no point asks for 100%, and never goes below 45 °C", () => {
-    expect(turboThresholdC([{ temp_c: 40, duty_pct: 30 }])).toBe(60);
+    expect(turboThresholdC([{ temp_c: 80, duty_pct: 100 }])).toBe(80);
     expect(turboThresholdC([{ temp_c: 30, duty_pct: 100 }])).toBe(45);
+  });
+  it("leaves the fan to the console when no point asks for 100% at 80 °C or below", () => {
+    // The default curve only reaches 100% at 85 °C.
+    expect(turboThresholdC(curve)).toBeNull();
+    expect(turboThresholdC([{ temp_c: 40, duty_pct: 30 }])).toBeNull();
   });
 });

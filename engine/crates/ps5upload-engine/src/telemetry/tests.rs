@@ -202,6 +202,9 @@ fn interpretation_for_each_dominant_share() {
         .as_str()
         .unwrap()
         .starts_with("credit-starved 50 %"));
+    // Not the console's doing (it reported no limit of its own): the link is named.
+    assert!(r["text"].as_str().unwrap().contains("network link"));
+    assert!(!r["text"].as_str().unwrap().contains("memory"));
     let r = interpret(&shares(10.0, 10.0, 0.0, "none"), &none, "done");
     assert_eq!(r["dominant"], "network");
     let r = interpret(&json!({"ticks": 0}), &none, "failed");

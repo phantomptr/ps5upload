@@ -37,6 +37,7 @@
 
 #include "content_db.h"
 #include "register.h"
+#include "indicator.h"
 #include "hw_info.h"
 #include "drive_sensors.h"
 #include "backup.h"
@@ -6662,6 +6663,15 @@ static int handle_peripheral_control(runtime_state_t *state, const char *body,
     } else if (strcmp(action, "usb_port_on") == 0) {
         rc = p_sceKernelIccControlUSBPowerState
                 ? p_sceKernelIccControlUSBPowerState(port, 1) : -1;
+    } else if (strcmp(action, "beep") == 0) {
+        /* The beeper and the front LED (indicator.c): `port` carries the pattern or level. */
+        rc = indicator_beep(port);
+    } else if (strcmp(action, "led_off") == 0) {
+        rc = indicator_led(0);
+    } else if (strcmp(action, "led_on") == 0) {
+        rc = indicator_led(1);
+    } else if (strcmp(action, "led_dim") == 0) {
+        rc = indicator_led_dim(port);
     } else {
         const char *err = "{\"ok\":false,\"err\":\"unknown_action\"}";
         return mgmt_reply(MGMT_FRAME_PERIPHERAL_CONTROL_ACK, err, strlen(err));
@@ -7541,7 +7551,9 @@ static int handle_hw_drive_sensors(runtime_state_t *state) {
 static int handle_hw_set_fan_threshold(runtime_state_t *state, const char *body, uint64_t body_len) {
     if (!state) return -1;
 
-    uint8_t threshold = 65;  /* Sony's approximate default. */
+    uint8_t threshold = 65;
+    /* "0" asks for the console's own fan setting back (hw_fan_restore_stock). */
+    int restore = 0;
     /* Optional reapply interval in seconds. If present in the body
      * (as the second integer), update the watcher's interval too.
      * Backward compat: a body with just the threshold ("65") leaves
@@ -7560,6 +7572,8 @@ static int handle_hw_set_fan_threshold(runtime_state_t *state, const char *body,
         int matched = sscanf(buf, "%d %d", &parsed, &second);
         if (matched >= 1 && parsed > 0 && parsed < 255) {
             threshold = (uint8_t)parsed;
+        } else if (matched >= 1 && parsed == 0) {
+            restore = 1;
         }
         if (matched >= 2 && second > 0) {
             has_reapply = 1;
@@ -7571,7 +7585,7 @@ static int handle_hw_set_fan_threshold(runtime_state_t *state, const char *body,
     }
 
     const char *err_reason = NULL;
-    if (hw_fan_set_threshold(threshold, &err_reason) != 0) {
+    if ((restore ? hw_fan_restore_stock(&err_reason) : hw_fan_set_threshold(threshold, &err_reason)) != 0) {
         const char *reason = err_reason ? err_reason : "fan_set_failed";
         return mgmt_reply(MGMT_FRAME_ERROR, reason, (uint64_t)strlen(reason));
     }

@@ -104,8 +104,12 @@ pub fn open(path: &Path) -> Result<Box<dyn SourceTree>> {
         "exfat" => Ok(Box::new(crate::exfat::ExFatSource::open(path)?)),
         "ffpkg" | "ufs2" => Ok(Box::new(crate::ufs2_source::Ufs2Source::open(path)?)),
         "ffpfsc" => open_ffpfsc(path),
+        "ffpfs" => crate::pfs_source::open(
+            Box::new(std::fs::File::open(path)?),
+            format!("ffpfs {}", path.display()),
+        ),
         _ => format_err(format!(
-            "{} is neither a folder nor a supported image (.exfat, .ffpkg, .ffpfsc)",
+            "{} is neither a folder nor a supported image (.exfat, .ffpkg, .ffpfs, .ffpfsc)",
             path.display()
         )),
     }
@@ -140,6 +144,11 @@ pub(crate) fn ffpfsc_tree(
             label.clone(),
         )?))
     };
+    // A nested PFS image (a `pfs_image.dat` inside a `.ffpfsc`) is a third kind of image.
+    let mut reader = reader;
+    if crate::pfs_source::is_pfs_image(&mut reader) {
+        return crate::pfs_source::open(Box::new(reader), label);
+    }
     if inner.ends_with(".exfat") {
         return exfat(reader);
     }
@@ -150,7 +159,7 @@ pub(crate) fn ffpfsc_tree(
         Ok(tree) => Ok(tree),
         Err(first) => ufs2(pfsc(open()?)?).map_err(|_| {
             crate::Error::Format(format!(
-                "{label}: the image inside is neither exFAT nor UFS2 ({first})"
+                "{label}: the image inside is not exFAT, UFS2 or PFS ({first})"
             ))
         }),
     }

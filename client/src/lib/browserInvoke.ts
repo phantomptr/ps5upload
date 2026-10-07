@@ -464,6 +464,31 @@ export async function browserInvoke<T>(
     case "ps5_hw_storage":
       return getJson<T>(addrUrl("/api/ps5/hw/storage", args["addr"]));
 
+    // The disc drive, the beeper and the front light: one engine route, one action each.
+    case "peripheral_eject":
+      return postJson<T>("/api/ps5/peripheral", { addr: args["addr"], action: "eject_disc" });
+    case "peripheral_bd_off":
+      return postJson<T>("/api/ps5/peripheral", { addr: args["addr"], action: "bd_power_off" });
+    case "peripheral_bd_on":
+      return postJson<T>("/api/ps5/peripheral", { addr: args["addr"], action: "bd_power_on" });
+    case "peripheral_beep":
+      return postJson<T>("/api/ps5/peripheral", {
+        addr: args["addr"],
+        action: "beep",
+        port: args["pattern"],
+      });
+    case "peripheral_led":
+      return postJson<T>("/api/ps5/peripheral", {
+        addr: args["addr"],
+        action: args["on"] ? "led_on" : "led_off",
+      });
+    case "peripheral_led_dim":
+      return postJson<T>("/api/ps5/peripheral", {
+        addr: args["addr"],
+        action: "led_dim",
+        port: args["level"],
+      });
+
     case "ps5_hw_set_fan_threshold":
       // TS caller: { addr, thresholdC } — engine body uses threshold_c
       return postJson<T>("/api/ps5/hw/fan-threshold", {

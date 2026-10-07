@@ -815,6 +815,109 @@ fn sanitize_entry(name: &str) -> Option<PathBuf> {
     Some(out)
 }
 
+// ─── Automatic save backups ────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct SaveAutoBackupSlotReq {
+    /// The folder the user chose for automatic backups.
+    pub dir: String,
+    pub title_id: String,
+    pub user_id: u32,
+    /// `YYYY-MM-DD_HHMMSS`, local time (the renderer's `backupTimestamp`).
+    pub stamp: String,
+    /// How many backups of one save to keep, this one included (at least 1).
+    pub keep: u32,
+}
+
+/// The name stem every automatic backup of one user's save of one title carries.
+fn auto_backup_stem(title_id: &str, user_id: u32) -> String {
+    format!("{title_id}_user{user_id:08x}_")
+}
+
+/// Which of `existing` (file names in the title's folder) to delete so that, with one more
+/// about to be written, `keep` remain: the oldest of this save's own backups. Names sort by
+/// their timestamp. Files that are not this save's backups are never listed.
+pub fn auto_backups_to_prune(existing: &[String], stem: &str, keep: u32) -> Vec<String> {
+    let mut mine: Vec<&String> = existing
+        .iter()
+        .filter(|n| n.starts_with(stem) && n.ends_with(".zip"))
+        .collect();
+    mine.sort();
+    let keep_old = keep.max(1) as usize - 1;
+    let drop = mine.len().saturating_sub(keep_old);
+    mine.into_iter().take(drop).cloned().collect()
+}
+
+/// Where the next automatic backup of a save goes: `<dir>/<title_id>/<stem><stamp>.zip`. Makes
+/// the folder and removes this save's oldest backups beyond `keep`. Only plain names are
+/// accepted for the title and the stamp, so nothing outside `dir` can be reached.
+#[tauri::command]
+pub async fn save_auto_backup_slot(req: SaveAutoBackupSlotReq) -> Result<String, String> {
+    let plain = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    };
+    if !plain(&req.title_id) || !plain(&req.stamp) {
+        return Err("automatic backup: unexpected title id or timestamp".into());
+    }
+    if req.dir.trim().is_empty() {
+        return Err("automatic backup: no folder chosen".into());
+    }
+    tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let folder = Path::new(&req.dir).join(&req.title_id);
+        std::fs::create_dir_all(&folder)
+            .map_err(|e| format!("create {}: {e}", folder.display()))?;
+        let stem = auto_backup_stem(&req.title_id, req.user_id);
+        let existing: Vec<String> = std::fs::read_dir(&folder)
+            .map_err(|e| format!("read {}: {e}", folder.display()))?
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect();
+        for old in auto_backups_to_prune(&existing, &stem, req.keep) {
+            let _ = std::fs::remove_file(folder.join(old));
+        }
+        Ok(folder
+            .join(format!("{stem}{}.zip", req.stamp))
+            .to_string_lossy()
+            .into_owned())
+    })
+    .await
+    .map_err(|e| format!("automatic backup task: {e}"))?
+}
+
+#[cfg(test)]
+mod auto_backup_tests {
+    use super::*;
+
+    #[test]
+    fn only_this_saves_oldest_backups_are_pruned() {
+        let stem = auto_backup_stem("CUSA00900", 0x1234_5678);
+        assert_eq!(stem, "CUSA00900_user12345678_");
+        let names: Vec<String> = [
+            "CUSA00900_user12345678_2026-10-01_090000.zip",
+            "CUSA00900_user12345678_2026-10-03_090000.zip",
+            "CUSA00900_user12345678_2026-10-02_090000.zip",
+            "CUSA00900_user0000abcd_2026-09-01_090000.zip", // another user's
+            "CUSA00900.zip",                                // a manual backup
+            "notes.txt",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        // Keep 3 with one more about to be written: the oldest of ours goes.
+        assert_eq!(
+            auto_backups_to_prune(&names, &stem, 3),
+            vec!["CUSA00900_user12345678_2026-10-01_090000.zip".to_string()]
+        );
+        // Room for all: nothing goes.
+        assert!(auto_backups_to_prune(&names, &stem, 4).is_empty());
+        // Keep 1: every earlier one of ours goes, and nothing that is not ours.
+        assert_eq!(auto_backups_to_prune(&names, &stem, 1).len(), 3);
+        assert_eq!(auto_backups_to_prune(&names, &stem, 0).len(), 3);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

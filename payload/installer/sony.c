@@ -21,7 +21,14 @@ int inst_sony_init(inst_sony_state_t *st) {
 }
 
 /* One InstallByPackage call with the given URI. content_id is always "".
- * When `swap_shellcore` is set, swap to ShellCore authid around the call. */
+ * When `swap_shellcore` is set, swap to ShellCore authid around the call.
+ *
+ * This call must stay on the connection's own thread. Running it on a thread of its own, to
+ * put a time limit on it, makes Sony refuse every package with 0x80B2116F: measured on a
+ * CFI-1115A (FW 13.60), where the identical call installed the same package inline and was
+ * refused from a thread started for it and joined (nothing else changed between the two). So
+ * a call that never returns cannot be given up on from inside this process; the engine's own
+ * deadline on the request is what bounds it. */
 static uint32_t call_install(const char *uri, const char *name_hint,
                              int swap_shellcore) {
     fprintf(stderr, "[installer] InstallByPackage uri=%s swap=%d\n", uri, swap_shellcore);
@@ -48,6 +55,40 @@ static uint32_t call_install(const char *uri, const char *name_hint,
     return (uint32_t)rc;
 }
 
+/* The plain-path last resort (`"route":"path"`): the forms a console-local package can be
+ * offered in that are NOT a URL on the console itself: its path, then a file:// URI. The first
+ * Sony accepts wins; the last refusal is the one reported. Only reached for a base game that
+ * is not installed (the engine's guard), so a refusal has nothing to undo.
+ *
+ * sceAppInstUtilAppInstallPkg is deliberately NOT tried, though it is the one form FW 13.60
+ * accepts here (path: 0x80B2116F, file://: 0x80B21106, measured on a CFI-1115A). It returned
+ * 0 and left a tile with no content: /user/appmeta/<id> written, /user/app/<id> never created,
+ * launch 0x80B21401, where a stream install of the same package wrote app.pkg. An install
+ * that reports success and cannot start is worse than a refusal. */
+static inst_install_result_t install_plain_path(const inst_request_t *req,
+                                                inst_sony_state_t *st) {
+    inst_install_result_t r = { 0, 0x80020002u, "path", NULL };
+    char fixed[INST_PATH_MAX];
+    if (inst_rewrite_path(req->path, fixed, sizeof(fixed)) != 0) return r;
+
+    int swap = (st->fw_major > 0 && st->fw_major < 11);
+    r.code = call_install(fixed, req->name_hint, swap);
+    r.via = "path";
+    if (r.code == 0) { r.accepted = 1; return r; }
+
+    char file_uri[INST_PATH_MAX + 8];
+    int n = snprintf(file_uri, sizeof(file_uri), "file://%s", fixed);
+    if (n > 0 && (size_t)n < sizeof(file_uri)) {
+        uint32_t code = call_install(file_uri, req->name_hint, swap);
+        if (code == 0) { r.accepted = 1; r.code = 0; r.via = "file"; return r; }
+        r.code = code;
+        r.via = "file";
+    }
+
+    r.hint = inst_install_hint(r.code);
+    return r;
+}
+
 inst_install_result_t inst_sony_install(const inst_request_t *req,
                                         inst_sony_state_t *st,
                                         inst_loopback_t **lb_out,
@@ -62,6 +103,11 @@ inst_install_result_t inst_sony_install(const inst_request_t *req,
         if (!r.accepted) r.hint = inst_install_hint(r.code);
         return r;
     }
+
+    /* The plain path was asked for (`"route":"path"`): the caller has already
+     * seen the console refuse its own loopback copy, so serving it again
+     * would only be refused again. */
+    if (req->bare_path) return install_plain_path(req, st);
 
     /* INST_SRC_PATH: try loopback first. */
     const char *base = inst_basename(req->path);

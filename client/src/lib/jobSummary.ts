@@ -97,8 +97,8 @@ export const WHY_TEXT: Record<DominantShare, { key: string; text: string }> = {
     text: "Source-bound {pct} %: reading the source was the limit (a slow disk, a network share, or archive decoding on this computer).",
   },
   credit_starved: {
-    key: "job_why_credit_starved",
-    text: "Console memory {pct} %: the console's receive window was full, so it was the limit.",
+    key: "job_why_window_full",
+    text: "Receive window full {pct} %: data was sent faster than the console acknowledged it, while the console reported neither its drive nor its workers as the limit. That usually means a slow network link (Wi-Fi, a weak signal or a busy network); a wired connection is the usual fix.",
   },
   network: {
     key: "job_why_network",

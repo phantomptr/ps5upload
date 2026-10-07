@@ -1369,6 +1369,11 @@ int ava1_server_start(const ava1_server_cfg_t *cfg) {
     S.listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (S.listen_fd < 0) return -errno;
     (void)setsockopt(S.listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    /* The buffers are asked for here as well as after accept(): a connection takes its window
+     * scale from the listening socket at the handshake, so a size set only once the connection
+     * exists cannot open the window past what was negotiated. Whatever the kernel grants is
+     * inherited by every accepted connection. */
+    (void)ava1_conn_tune_buffers(S.listen_fd, NULL, NULL);
     memset(&a, 0, sizeof a);
     a.sin_family = AF_INET;
     a.sin_port = htons(cfg->port);

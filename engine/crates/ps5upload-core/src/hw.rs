@@ -79,6 +79,14 @@ pub struct HwTemps {
     /// value, not a sensor syscall.
     #[serde(default)]
     pub fan_pinned_c: i32,
+    /// The temperature the fan controller is working to right now, read back from the
+    /// console (°C). `-1` = not reported (an older helper) or unreadable.
+    #[serde(default = "default_sensor_unavailable")]
+    pub fan_target_c: i32,
+    /// The console's own value: what the controller held before ps5upload first changed
+    /// it (°C). `0` = never seen. 91 on FW 13.60, not the 60 this app long assumed.
+    #[serde(default)]
+    pub fan_stock_c: i32,
 }
 
 fn default_sensor_unavailable() -> i32 {
@@ -278,6 +286,10 @@ fn parse_hw_temps(body: &[u8]) -> HwTemps {
         fan_pinned_c: get("fan_pinned_c")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0),
+        fan_target_c: get("fan_target_c")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(-1),
+        fan_stock_c: get("fan_stock_c").and_then(|v| v.parse().ok()).unwrap_or(0),
     }
 }
 
@@ -363,6 +375,8 @@ pub fn hw_storage(addr: &str) -> Result<HwStorage> {
 /// enforce here mostly for clearer error surfacing.
 pub const FAN_THRESHOLD_MIN_C: u8 = 45;
 pub const FAN_THRESHOLD_MAX_C: u8 = 80;
+/// The "threshold" that means "restore the console's own fan setting".
+pub const FAN_RESTORE_CONSOLE: u8 = 0;
 
 /// Set the PS5's fan-turbo threshold in °C. Rings through to the
 /// payload's `/dev/icc_fan` ioctl — the canonical fan-threshold
@@ -386,7 +400,11 @@ pub fn hw_set_fan_threshold_ex(
     threshold_c: u8,
     reapply_sec: Option<u32>,
 ) -> Result<()> {
-    if !(FAN_THRESHOLD_MIN_C..=FAN_THRESHOLD_MAX_C).contains(&threshold_c) {
+    // 0 is not a temperature: it asks the helper to give the fan back to the console (its own
+    // value restored, ours no longer re-applied).
+    if threshold_c != FAN_RESTORE_CONSOLE
+        && !(FAN_THRESHOLD_MIN_C..=FAN_THRESHOLD_MAX_C).contains(&threshold_c)
+    {
         bail!(
             "threshold {threshold_c}°C is outside the safe range \
              {FAN_THRESHOLD_MIN_C}–{FAN_THRESHOLD_MAX_C}°C"
@@ -659,6 +677,8 @@ mod tests {
             fan_duty_pct: 100,
             product_shape: 3,
             fan_pinned_c: 0,
+            fan_target_c: -1,
+            fan_stock_c: 0,
         });
         assert_eq!(lo.cpu_temp, SENSOR_TEMP_MIN_C);
         assert_eq!(lo.soc_temp, SENSOR_TEMP_MAX_C);
@@ -680,6 +700,8 @@ mod tests {
             fan_duty_pct: -5,
             product_shape: -1,
             fan_pinned_c: 0,
+            fan_target_c: -1,
+            fan_stock_c: 0,
         });
         assert_eq!(hi.cpu_temp, 0, "one above max temp is rejected");
         assert_eq!(hi.soc_temp, 0);
@@ -877,5 +899,10 @@ mod tests {
         // Above the safe ceiling: too close to thermal throttle.
         let high = hw_set_fan_threshold("127.0.0.1:0", 95);
         assert!(high.is_err());
+
+        // 0 is "give the fan back to the console": it passes the range check and fails only
+        // because nothing is listening.
+        let restore = hw_set_fan_threshold("127.0.0.1:0", FAN_RESTORE_CONSOLE);
+        assert!(!format!("{}", restore.unwrap_err()).contains("safe range"));
     }
 }

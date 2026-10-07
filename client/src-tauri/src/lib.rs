@@ -432,6 +432,7 @@ pub fn run() {
             commands::save_archive_make_temp,
             commands::save_archive_cleanup_temp,
             commands::save_archive_zip,
+            commands::save_auto_backup_slot,
             commands::save_archive_unzip,
             // Format-aware backup/restore: strip `sdimg_` prefix from
             // PS4-style images and drop Sony's nested bookkeeping so
@@ -492,6 +493,9 @@ pub fn run() {
             commands::peripheral_bd_on,
             commands::peripheral_usb_off,
             commands::peripheral_usb_on,
+            commands::peripheral_beep,
+            commands::peripheral_led,
+            commands::peripheral_led_dim,
             commands::proc_modules_get,
             commands::proc_list_get,
             // Shell + CRC32 + app.db query + net speed test

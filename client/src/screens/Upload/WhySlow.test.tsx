@@ -64,7 +64,7 @@ describe("why_slow_panel", () => {
     const text = (d: JobSummary["why"]["dominant"]) =>
       renderToStaticMarkup(<WhySlowBody s={summary({ why: { dominant: d, pct: 64, text: "" } })} />);
     expect(text("source_starved")).toContain("Source-bound 64 %");
-    expect(text("credit_starved")).toContain("Console memory 64 %");
+    expect(text("credit_starved")).toContain("Receive window full 64 %");
     expect(text("network")).toContain("network link was the limit");
     expect(text("unmeasured")).toContain("before it could be measured");
   });

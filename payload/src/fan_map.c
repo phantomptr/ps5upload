@@ -43,8 +43,8 @@ int fan_map_threshold(const char *json) {
         cur = after;
     }
     if (!seen) return -1;
-    int t = best < 0 ? FAN_MAP_STOCK_C : best;
-    if (t > FAN_MAP_STOCK_C) t = FAN_MAP_STOCK_C;
-    if (t < FAN_MAP_MIN_C) t = FAN_MAP_MIN_C;
-    return t;
+    /* Never 100%, or only above what we may set: the console's own setting is the closest
+     * thing to what was asked, and it is quieter than anything we could apply instead. */
+    if (best < 0 || best > FAN_MAP_MAX_C) return FAN_MAP_CONSOLE_OWN;
+    return best < FAN_MAP_MIN_C ? FAN_MAP_MIN_C : best;
 }

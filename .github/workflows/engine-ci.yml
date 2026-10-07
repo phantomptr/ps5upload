@@ -104,26 +104,101 @@ jobs:
         working-directory: engine
         run: cargo check -p ps5upload-engine --features webui
 
+  # The workspace's tests, in two legs that run side by side: the engine crate (and the
+  # integration suite built on it) is about half of the time, everything else the other half.
+  # Together they are `cargo test --workspace --exclude ava1-ctest`; a crate added later lands
+  # in `libs` without anyone listing it.
+  rust-engine-tests:
+    name: rust tests (${{ matrix.part }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: engine
+            select: -p ps5upload-engine -p ps5upload-tests
+          - part: libs
+            select: --workspace --exclude ava1-ctest --exclude ps5upload-engine --exclude ps5upload-tests
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: ${{ runner.os }}-engine-test-${{ matrix.part }}-${{ hashFiles('engine/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-engine-test-${{ matrix.part }}-
+            ${{ runner.os }}-engine-cargo-
+
       # Bounded per step: a hung test fails here in minutes instead of holding the job.
       - name: cargo test
         working-directory: engine
         timeout-minutes: 25
         env:
           RUST_BACKTRACE: 1
-        run: cargo test --workspace --exclude ava1-ctest -- --nocapture
+        run: cargo test ${{ matrix.select }} -- --nocapture
 
-      # The C server and the data layer are process-wide singletons: the C interop suite
-      # runs one test at a time so a test that holds the server cannot starve the others.
+  # The C interop suite. The C server and the data layer are process-wide singletons, so the
+  # suite runs one test at a time: a test that holds the server cannot starve the others. That
+  # rule holds inside one machine, so the test files are dealt across four machines, each still
+  # running its share one at a time.
+  rust-ctest:
+    name: rust (ava1 C interop ${{ matrix.shard }}/4)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: ${{ runner.os }}-engine-ctest-${{ hashFiles('engine/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-engine-ctest-
+            ${{ runner.os }}-engine-cargo-
+
       - name: cargo test (ava1 C interop, serial)
         working-directory: engine
         timeout-minutes: 25
         env:
           RUST_BACKTRACE: 1
-        run: cargo test -p ava1-ctest -- --test-threads=1
+          SHARD: ${{ matrix.shard }}
+        run: |
+          # Every test file, sorted, dealt round-robin: file N goes to shard (N mod 4) + 1.
+          # A file added later is picked up by one of the four without being listed anywhere.
+          mapfile -t all < <(ls crates/ava1-ctest/tests/*.rs | sort)
+          args=()
+          for i in "${!all[@]}"; do
+            if [ $(( i % 4 + 1 )) -eq "$SHARD" ]; then
+              args+=(--test "$(basename "${all[$i]}" .rs)")
+            fi
+          done
+          [ "${#args[@]}" -gt 0 ] || { echo "::error::shard $SHARD got no test files"; exit 1; }
+          echo "shard $SHARD of 4: ${#args[@]} of ${#all[@]} test files"
+          cargo test -p ava1-ctest "${args[@]}" -- --test-threads=1
 
   # ─────────────────────────────────────────────────────────────────────
-  # AVA1: C/Rust conformance + interop runs in rust-engine (cargo test
-  # --workspace, then ava1-ctest serially). This job adds what that one cannot:
+  # AVA1: C/Rust conformance + interop runs in rust-engine-tests and rust-ctest
+  # above. This job adds what those cannot:
   # fuzzing the C decoders and data-plane parsers under ASan/UBSan and the
   # Rust decoders with cargo-fuzz.
   # ─────────────────────────────────────────────────────────────────────
@@ -755,6 +830,8 @@ jobs:
     needs:
       - version-sync
       - rust-engine
+      - rust-engine-tests
+      - rust-ctest
       - ava1
       - ava1-ctest-sanitize
       - rust-engine-targets

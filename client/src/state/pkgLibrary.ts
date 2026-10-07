@@ -1,3 +1,4 @@
+import { installPathFallbackOptions } from "./installPathFallback";
 import { displayPath, isRemotePath } from "../lib/remotePath";
 import { useConnectionsStore } from "./connections";
 import { trStatic } from "../lib/trStatic";
@@ -2004,7 +2005,9 @@ async function driveUnifiedInstall(
     title_id: meta.titleId ?? null,
     package_app_ver: meta.packageAppVer ?? null,
     category: meta.category ?? null,
-    options: meta.options,
+    // The trial switch (Settings > Beta) only lets the engine consider its last resort;
+    // the engine's own guards decide whether it runs.
+    options: { ...meta.options, ...installPathFallbackOptions() },
   });
   if (!start.ok || !start.job) {
     throw new Error(
