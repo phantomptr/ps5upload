@@ -2732,8 +2732,6 @@ fanCurve_preview: "Preview",
 
 
   // ── Pre-existing tr() keys that were missing ─────────────────────
-  connection_step2_browser_unsupported:
-    "The browser can't read a local helper file to send. Load the helper from the desktop app or a USB autoloader first, then this page will detect it automatically.",
   notifications_unread: "{count} unread",
   "profile.username.cancel": "Cancel",
   "profile.username.createBtn": "Create",

@@ -2348,8 +2348,6 @@ backup_title: "Kopia zapasowa i przywracanie",
 
 
   // ── Pre-existing tr() keys that were missing ─────────────────────
-  connection_step2_browser_unsupported:
-    "Przeglądarka nie może odczytać lokalnego pliku helpera w celu jego wysłania. Załaduj najpierw helpera z aplikacji desktopowej lub autoloadera USB, a ta strona wykryje go automatycznie.",
   notifications_unread: "Nieprzeczytane: {count}",
   "profile.username.cancel": "Anuluj",
   "profile.username.createBtn": "Utwórz",

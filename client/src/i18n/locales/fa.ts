@@ -2687,8 +2687,6 @@ fanCurve_preview: "پیش‌نمایش",
 
 
   // ── Pre-existing tr() keys that were missing ─────────────────────
-  connection_step2_browser_unsupported:
-    "مرورگر نمی‌تواند یک فایل راهنمای محلی برای ارسال بخواند. ابتدا راهنما را از برنامه‌ی دسکتاپ یا یک autoloader USB بارگذاری کنید، سپس این صفحه به‌طور خودکار شناسایی می‌کند.",
   notifications_unread: "{count} خوانده‌نشده",
   "profile.username.cancel": "لغو",
   "profile.username.createBtn": "ایجاد",

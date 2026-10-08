@@ -183,6 +183,9 @@ allowed IP. Same security rules: no password, trusted LAN only.
   `PS5UPLOAD_BROWSE_ROOTS=/pkgs` (comma-separated for several) so the picker opens there.
   **Install Package → From this device** uploads a package from your browser machine instead.
 - An upload keeps running when you close the tab; reopening shows it. Only one tab runs the queue.
+- **Connection → Send payload** works in the browser too: the engine sends its own bundled helper.
+  That also pairs the engine, so it is the way in when the desktop app (or another device) is
+  already paired and the console shows no code for the web UI.
 - Desktop-only and hidden in the browser: **archive uploads**, **Payloads** (sending a file from
   disk), saving a save backup or downloading files to your computer, and attaching files to a bug
   report. Everything that works on the PS5 itself is the same as on desktop.

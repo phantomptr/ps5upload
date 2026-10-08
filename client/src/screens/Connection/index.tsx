@@ -599,35 +599,24 @@ export default function ConnectionScreen() {
                 "Loading ps5upload with an autoloader or PLDMGR? Put elfldr first in its list, before ps5upload.elf. Without elfldr loaded first, ps5upload connects and then drops within seconds.",
               )}
             </p>
-            {isTauriEnv() ? (
-              <>
-                <BundledPayloadBanner />
-                <Button
-                  variant="primary"
-                  size="md"
-                  leftIcon={<Send size={14} />}
-                  onClick={() => void handleSend()}
-                  disabled={step2 === "busy"}
-                  loading={step2 === "busy"}
-                >
-                  {sendButtonLabel(step2, sendPhase, elapsedMs, tr)}
-                </Button>
-                {step2 === "busy" && (
-                  <p className="mt-3 text-xs text-[var(--color-muted)]">
-                    {tr(
-                      "connection_step2_busy_hint",
-                      undefined,
-                      "The PS5 typically boots the helper within 3-5 seconds. We keep polling for up to 20 seconds before giving up — if it times out, send it again.",
-                    )}
-                  </p>
-                )}
-              </>
-            ) : (
-              <p className="text-xs text-[var(--color-muted)]">
+            {/* Browser: the engine sends its own bundled helper (see helperSendRuntime). */}
+            {isTauriEnv() && <BundledPayloadBanner />}
+            <Button
+              variant="primary"
+              size="md"
+              leftIcon={<Send size={14} />}
+              onClick={() => void handleSend()}
+              disabled={step2 === "busy"}
+              loading={step2 === "busy"}
+            >
+              {sendButtonLabel(step2, sendPhase, elapsedMs, tr)}
+            </Button>
+            {step2 === "busy" && (
+              <p className="mt-3 text-xs text-[var(--color-muted)]">
                 {tr(
-                  "connection_step2_browser_unsupported",
+                  "connection_step2_busy_hint",
                   undefined,
-                  "The browser can't read a local helper file to send. Load the helper from the desktop app or a USB autoloader first, then this page will detect it automatically.",
+                  "The PS5 typically boots the helper within 3-5 seconds. We keep polling for up to 20 seconds before giving up — if it times out, send it again.",
                 )}
               </p>
             )}
@@ -1473,7 +1462,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
               )}
             </p>
           </div>
-          {onResend && isTauriEnv() && (
+          {onResend && (
             <Button
               variant="secondary"
               size="sm"

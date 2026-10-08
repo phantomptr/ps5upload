@@ -496,6 +496,18 @@ export async function sendPayload(
   }
 }
 
+/** Browser build's `sendPayload` for the helper: a browser has neither the ELF bytes nor a
+ *  socket to the loader, so the engine sends its bundled helper itself. The engine stamps its
+ *  own AVA1 key into the copy it sends, so the console trusts this engine without a pairing
+ *  code — the only way a web UI pairs once another device already has (SPEC.md §5.1). */
+export async function sendBundledPayloadViaEngine(ip: string): Promise<void> {
+  const resp = await invoke<{ ok?: boolean; error?: string }>(
+    "payload_restore",
+    { ip },
+  );
+  assertOk(resp, "Send helper");
+}
+
 // ─── Transfer jobs ────────────────────────────────────────────────────────
 
 /** Start a single-file upload. Returns the job id; poll `jobStatus(id)`

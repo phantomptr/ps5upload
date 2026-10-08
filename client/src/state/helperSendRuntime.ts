@@ -1,13 +1,35 @@
-import { bundledPayloadPath, payloadCheck, sendPayload } from "../api/ps5";
+import {
+  bundledPayloadPath,
+  payloadCheck,
+  sendBundledPayloadViaEngine,
+  sendPayload,
+} from "../api/ps5";
 import { PS5_LOADER_PORT } from "../lib/addr";
 import { isNotPairedError, reportIfNotPaired } from "../lib/consoleSession";
 import { STUCK_LOADER_MESSAGE, waitForLoader } from "../lib/elfldrGuard";
+import { isTauriEnv } from "../lib/tauriEnv";
 import { useConnectionStore } from "./connection";
-import { runHelperSend, type HelperSendResult } from "./helperSend";
+import {
+  runHelperSend,
+  type HelperSendDeps,
+  type HelperSendResult,
+} from "./helperSend";
 import type { Translator } from "./lang";
 
 const TIMEOUT_EN =
   "Payload didn't come up within 20s.{tail} Just send it again — a fresh send now force-evicts any stuck previous instance on its own, so you usually don't need to restart the PS5. If it still fails: kstuff may not be loaded yet (run First Run, or send kstuff first), the ELF crashed on boot, or the PS5 is unreachable.";
+
+/** Where the helper comes from. The desktop sends the ELF it ships; a browser asks the engine
+ *  to send its own bundled copy (see `sendBundledPayloadViaEngine`). */
+export function helperSource(
+  tauri = isTauriEnv(),
+): Pick<HelperSendDeps, "bundledPath" | "send"> {
+  if (tauri) return { bundledPath: bundledPayloadPath, send: sendPayload };
+  return {
+    bundledPath: async () => "ps5upload.elf",
+    send: (host) => sendBundledPayloadViaEngine(host),
+  };
+}
 
 /** Sends the bundled helper to `host` and waits for it to answer (see state/helperSend), wired
  *  to the real console. One implementation for every place that offers "Send helper".
@@ -24,8 +46,7 @@ export function sendHelperTo(
     target,
     {
       waitForLoader,
-      bundledPath: bundledPayloadPath,
-      send: sendPayload,
+      ...helperSource(),
       check: payloadCheck,
       isNotPaired: isNotPairedError,
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),

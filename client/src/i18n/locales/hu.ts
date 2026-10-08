@@ -2629,8 +2629,6 @@ fanCurve_preview: "Előnézet",
 
 
   // ── Már létező tr() kulcsok, amelyek hiányoztak ─────────────────────
-  connection_step2_browser_unsupported:
-    "A böngésző nem tud helyi segédprogram-fájlt olvasni a küldéshez. Töltsd be előbb a segédprogramot az asztali alkalmazásból vagy egy USB-s automatikus betöltőből, ezt az oldal ezután automatikusan felismeri.",
   notifications_unread: "{count} olvasatlan",
   "profile.username.cancel": "Mégse",
   "profile.username.createBtn": "Létrehozás",
