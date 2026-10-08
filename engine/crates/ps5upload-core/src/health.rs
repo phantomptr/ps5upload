@@ -30,6 +30,8 @@ pub enum CheckStatus {
 #[serde(rename_all = "lowercase")]
 pub enum CheckCategory {
     Connectivity,
+    /// What sits between this computer and the console: ports, reach, reply time.
+    Network,
     Runtime,
     Storage,
     System,
@@ -66,7 +68,7 @@ pub struct HealthCheck {
 }
 
 impl HealthCheck {
-    fn new(
+    pub fn new(
         id: &str,
         title: &str,
         category: CheckCategory,
@@ -84,7 +86,7 @@ impl HealthCheck {
         }
     }
 
-    fn with_remedy(mut self, remedy: impl Into<String>) -> Self {
+    pub fn with_remedy(mut self, remedy: impl Into<String>) -> Self {
         self.remedy = remedy.into();
         self
     }
@@ -195,6 +197,21 @@ pub fn is_junk_entry(name: &str) -> bool {
         || n.ends_with(".partial")
         || n.ends_with(".staging")
         || n.ends_with(".download")
+}
+
+/// Folders whose whole contents are throwaway once they have sat for a while, with how long
+/// "a while" is. A staged install reads its package from `pkg_temp` while it runs, and a speed
+/// test writes into `tests`, so only what has not been touched for that long is offered.
+pub const DISPOSABLE_DIRS: [(&str, u64); 2] = [
+    ("/data/ps5upload/pkg_temp", 60 * 60),
+    ("/data/ps5upload/tests", 10 * 60),
+];
+
+/// Whether an entry last written at `mtime` (Unix seconds, the console's clock) is old enough
+/// to throw away at `now` (this computer's clock). An entry "from the future" means the two
+/// clocks disagree, so its age is unknown and it is kept.
+pub fn is_stale_entry(mtime: u64, now: u64, min_age_secs: u64) -> bool {
+    mtime > 0 && mtime <= now && now - mtime >= min_age_secs
 }
 
 /// Roll individual checks up into counts.
@@ -501,6 +518,7 @@ pub fn run_health_scan(addr: &str, engine_version: &str) -> HealthReport {
     }
     checks.push(dircheck);
 
+    junk_files.extend(disposable_junk(addr));
     let junk_total: u64 = junk_files.iter().map(|(_, s)| s).sum();
     let mut junkcheck = if !dirs_readable && junk_files.is_empty() {
         HealthCheck::new(
@@ -621,11 +639,32 @@ pub struct FixOutcome {
     pub error: Option<String>,
 }
 
+/// What has sat untouched for long enough in the throwaway folders (see `DISPOSABLE_DIRS`).
+fn disposable_junk(addr: &str) -> Vec<(String, u64)> {
+    let mut out = Vec::new();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    for (dir, min_age) in DISPOSABLE_DIRS {
+        // Absent is the usual case, and nothing to clean.
+        let Ok(listing) = crate::fs_ops::list_dir(addr, dir, Default::default()) else {
+            continue;
+        };
+        for e in &listing.entries {
+            if is_stale_entry(u64::try_from(e.mtime).unwrap_or(0), now, min_age) {
+                out.push((format!("{dir}/{}", e.name), e.size));
+            }
+        }
+    }
+    out
+}
+
 /// Everything the cleanup action is willing to delete, gathered but not
 /// yet removed. Returned to the UI first so the user sees the exact
 /// list before anything is destroyed.
 pub fn preview_junk(addr: &str) -> Vec<(String, u64)> {
-    let mut out = Vec::new();
+    let mut out = disposable_junk(addr);
     for dir in TOOL_DIRS {
         let Ok(listing) = crate::fs_ops::list_dir(addr, dir, Default::default()) else {
             continue;
@@ -707,6 +746,16 @@ pub fn apply_fix(addr: &str, action: &FixAction, engine_version: &str) -> FixOut
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_what_has_sat_long_enough_is_stale() {
+        let now = 1_000_000;
+        assert!(is_stale_entry(now - 3600, now, 3600));
+        assert!(!is_stale_entry(now - 3599, now, 3600));
+        // No time recorded, or a time ahead of ours (the clocks disagree): age unknown, kept.
+        assert!(!is_stale_entry(0, now, 60));
+        assert!(!is_stale_entry(now + 5, now, 60));
+    }
+
     use super::*;
 
     fn gb(n: u64) -> u64 {

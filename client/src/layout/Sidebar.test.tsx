@@ -70,7 +70,7 @@ describe("Sidebar", () => {
 
   it("offers to hide each screen but Home", () => {
     const html = render();
-    expect(html).toContain('aria-label="Hide Convert to FPKG from the sidebar"');
+    expect(html).toContain('aria-label="Hide Convert Games from the sidebar"');
     expect(html).not.toContain('aria-label="Hide Home from the sidebar"');
   });
 

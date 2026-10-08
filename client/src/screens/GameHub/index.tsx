@@ -680,7 +680,7 @@ function MediaTab() {
           variant="secondary"
           size="sm"
           leftIcon={<ImageIcon size={14} />}
-          onClick={() => navigate("/screenshots")}
+          onClick={() => navigate("/captures")}
         >
           {tr("game_hub_open_screenshots", undefined, "Screenshots")}
         </Button>
@@ -688,7 +688,7 @@ function MediaTab() {
           variant="secondary"
           size="sm"
           leftIcon={<Film size={14} />}
-          onClick={() => navigate("/videos")}
+          onClick={() => navigate("/captures?tab=videos")}
         >
           {tr("game_hub_open_videos", undefined, "Video clips")}
         </Button>

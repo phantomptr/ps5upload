@@ -4873,7 +4873,13 @@ export interface RemotePlayDevice {
 export type HealthStatus = "pass" | "warn" | "fail" | "skip";
 
 export type HealthCategory =
-  "connectivity" | "runtime" | "storage" | "system" | "remoteplay" | "hygiene";
+  | "connectivity"
+  | "network"
+  | "runtime"
+  | "storage"
+  | "system"
+  | "remoteplay"
+  | "hygiene";
 
 /** Repairs the engine can perform. Closed set -- the UI names one. */
 export type HealthFixAction =
@@ -5515,6 +5521,10 @@ export interface InstallRequestBody {
     /** Let the engine use its last resort for a console that cannot reach it: install the
      *  console's copy by plain file path (a base game that is not installed, nothing else). */
     console_path_fallback?: boolean;
+    /** A link: the engine downloads and serves it instead of handing the PS5 the link. */
+    proxy_link?: boolean;
+    /** A link the engine fetches: skip its certificate check. */
+    insecure_tls?: boolean;
   };
 }
 

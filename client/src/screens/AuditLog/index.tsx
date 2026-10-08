@@ -40,9 +40,9 @@ export default function AuditLogScreen() {
         icon={ShieldCheck}
         title={tr("audit_log_title", undefined, "Audit log")}
         description={tr(
-          "audit_log_description",
+          "audit_log_description_v2",
           undefined,
-          "Permanent local record of destructive and irreversible actions you've taken. No clear button — that's deliberate. Last 100 entries shown; older entries roll off the ring buffer.",
+          "A permanent record, kept on this computer, of what you deleted or changed that cannot be undone. It cannot be cleared, on purpose. The last 100 entries are shown.",
         )}
       />
       {entries.length === 0 ? (

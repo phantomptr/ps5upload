@@ -146,7 +146,9 @@ int takeover_wait_port_free(int port, int max_ms, int interval_ms) {
         long waited;
         if (!takeover_port_responding(port)) return 0;
         clock_gettime(CLOCK_MONOTONIC, &now);
-        waited = (long)(now.tv_sec - t0.tv_sec) * 1000 + (now.tv_nsec - t0.tv_nsec) / 1000000;
+        /* Whole nanoseconds first: dividing a negative tv_nsec difference rounds toward zero,
+         * which reported up to 1 ms more than had passed and ended the wait early. */
+        waited = (long)((((long long)(now.tv_sec - t0.tv_sec)) * 1000000000LL + (now.tv_nsec - t0.tv_nsec)) / 1000000LL);
         if (waited >= max_ms) return -1;
         usleep((useconds_t)interval_ms * 1000u);
     }

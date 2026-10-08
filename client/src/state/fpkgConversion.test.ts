@@ -261,6 +261,58 @@ describe("fpkg pipeline", () => {
     });
   });
 
+  it("makes a game image from a folder, showing the bytes written", async () => {
+    const buildImage = vi.fn().mockResolvedValue({ job_id: "i1" });
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { buildImage: unknown }).buildImage = buildImage;
+    jobStatus.mockResolvedValueOnce({ status: "running", bytes_sent: 3, total_bytes: 9 });
+    await useFpkgConversion.getState().buildImage("/games/PPSA1-app", "/out", false);
+    await tick();
+    expect(buildImage).toHaveBeenCalledWith("/games/PPSA1-app", "/out");
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "running",
+      mode: "image",
+      stage: "write",
+      stageDone: 3,
+      stageTotal: 9,
+    });
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/PPSA1-app.exfat", bytes_sent: 9 });
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "done",
+      mode: "image",
+      packagePath: "/out/PPSA1-app.exfat",
+    });
+  });
+
+  it("can compress the image it made, and then keeps only the compressed one", async () => {
+    const buildImage = vi.fn().mockResolvedValue({ job_id: "i1" });
+    const compressJob = vi.fn().mockResolvedValue({ job_id: "c1" });
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { buildImage: unknown }).buildImage = buildImage;
+    (fpkg as unknown as { compress: unknown }).compress = compressJob;
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/G.exfat", bytes_sent: 9 });
+    await useFpkgConversion.getState().buildImage("/games/G", "/out", true);
+    await tick();
+    // The image is done: the same run goes on to compress it.
+    expect(compressJob).toHaveBeenCalledWith("/out/G.exfat", "/out");
+    jobStatus.mockResolvedValueOnce({ status: "running", bytes_sent: 4, total_bytes: 9 });
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "running",
+      mode: "image",
+      stage: "compress",
+      stageDone: 4,
+    });
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/G.ffpfsc", bytes_sent: 5 });
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "done",
+      packagePath: "/out/G.ffpfsc",
+    });
+    expect(deletePackage).toHaveBeenCalledWith("/out/G.exfat");
+  });
+
   it("without a console, Convert & install stops at send with the package kept", async () => {
     conn.payloadStatus = "down";
     jobStatus.mockResolvedValue({ status: "done", dest: "/out/a.pkg", bytes_sent: 1 });

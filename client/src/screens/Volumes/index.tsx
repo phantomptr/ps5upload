@@ -294,9 +294,9 @@ export default function VolumesScreen() {
             </div>
             <p className="mt-3 text-xs text-[var(--color-muted)]">
               {tr(
-                "volumes_packages_hint",
+                "volumes_pkg_copies_hint",
                 undefined,
-                "Uploaded install packages are kept on the drive marked “Packages go here”. If that drive isn't connected, they go to internal storage.",
+                "What this choice does: “Upload & install” first copies the .pkg file onto the PS5, then installs from that copy. This only sets which drive holds those copies. It does not change where games are installed (the PS5 decides that in its own Storage settings), and “Stream & install” keeps no copy at all. If the chosen drive isn't connected, copies go to internal storage.",
               )}
             </p>
           </section>
@@ -472,7 +472,7 @@ export function StorageCard({
         {v.writable && isPackageDrive && (
           <Badge tone="accent" variant="soft" size="md">
             <PackageCheck size={12} className="mr-1 inline" aria-hidden />
-            {tr("volumes_packages_here", undefined, "Packages go here")}
+            {tr("volumes_pkg_copies_here", undefined, "Package copies are stored here")}
           </Badge>
         )}
       </div>
@@ -533,7 +533,7 @@ export function StorageCard({
       {v.writable && !v.is_placeholder && !isPackageDrive && (
         <div>
           <Button variant="secondary" size="sm" onClick={onUseForPackages}>
-            {tr("volumes_use_for_packages", undefined, "Use for packages")}
+            {tr("volumes_store_pkg_copies", undefined, "Store package copies here")}
           </Button>
         </div>
       )}

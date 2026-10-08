@@ -12,7 +12,7 @@ test("guides a disconnected user through primary navigation and recovery", async
   // until the user hides it.
   const primary = page.getByRole("navigation", { name: "Primary" });
   await expect(primary.getByRole("link", { name: "Home" })).toBeVisible();
-  for (const shown of ["Games", "Files", "Console", "Tasks", "Convert to FPKG"]) {
+  for (const shown of ["Games", "Files", "Console", "Tasks", "Convert Games"]) {
     await expect(primary.getByRole("link", { name: shown, exact: true })).toBeVisible();
   }
 

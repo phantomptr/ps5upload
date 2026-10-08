@@ -1059,7 +1059,11 @@ interface PkgLibraryState {
     host: string,
     /** `onTask` receives the id of the task that tracks this install, as soon as it exists,
      *  so a caller (Convert) can follow its progress. */
-    opts?: { onTask?: (taskId: string) => void },
+    opts?: {
+      onTask?: (taskId: string) => void;
+      /** What the queue row is called instead of the file's own name. */
+      displayName?: string;
+    },
   ) => Promise<{
     ok: boolean;
     message?: string;
@@ -1090,6 +1094,8 @@ interface PkgLibraryState {
     url: string,
     host: string,
     insecureTls: boolean,
+    /** The user's name for the link: on the download's task and the install's queue row. */
+    displayName?: string,
   ) => ReturnType<PkgLibraryState["installStream"]>;
   /** Install every staged, not-yet-installed, idle row sequentially, in
    *  base → update → DLC order (`pkgEntryInstallOrder`). Each item runs the
@@ -1993,6 +1999,11 @@ async function driveUnifiedInstall(
       delete_source_copy_after?: boolean;
       allow_destructive_reinstall?: boolean;
       force_stream?: boolean;
+      /** A link: the engine downloads it and serves it to the PS5, instead of handing the
+       *  PS5 the link ("Stream through this computer"). */
+      proxy_link?: boolean;
+      /** A link the engine fetches: skip its certificate check. */
+      insecure_tls?: boolean;
     };
   },
   onSample?: (s: InstallSample) => void,
@@ -3016,7 +3027,7 @@ const makePkgLibraryStore = () =>
       );
     },
 
-    async installDownloadedLink(url, host, insecureTls) {
+    async installDownloadedLink(url, host, insecureTls, displayName) {
       // Two legs, reported separately: people need to know which one is slow.
       // The download is the fragile one; once it finishes, the install is an
       // ordinary local-file install at LAN speed.
@@ -3031,6 +3042,7 @@ const makePkgLibraryStore = () =>
       } catch {
         /* the caller validated the URL; keep the generic name */
       }
+      if (displayName?.trim()) name = displayName.trim();
       const tasks = useTaskStore.getState();
       const taskId = tasks.registerTask({
         kind: "download",
@@ -3132,7 +3144,11 @@ const makePkgLibraryStore = () =>
       });
       log.info("install", "download finished; installing from the local file");
       // From here it is a local file, so the link can expire freely.
-      return get().installStream(path, host);
+      return get().installStream(
+        path,
+        host,
+        displayName?.trim() ? { displayName: displayName.trim() } : undefined,
+      );
     },
     async installUrl(url, host, opts) {
       const trimmed = url.trim();
@@ -3147,6 +3163,7 @@ const makePkgLibraryStore = () =>
           trimmed,
           host,
           useLinkInstallPrefs.getState().insecureFor(host),
+          opts?.displayName,
         );
       }
       let name = "package";
@@ -3361,6 +3378,7 @@ const makePkgLibraryStore = () =>
           try {
             const probe = (await invoke("pkg_remote_probe", {
               url: remoteUrl,
+              insecureTls: useLinkInstallPrefs.getState().insecureFor(host),
             })) as {
               total_size?: number;
               content_id?: string;
@@ -3486,7 +3504,18 @@ const makePkgLibraryStore = () =>
               // The user explicitly chose this install and the preflight above
               // already surfaced any "already installed" state, so let the
               // engine's guard proceed (a re-install was never blocked before).
-              options: { allow_destructive_reinstall: true },
+              options: {
+                allow_destructive_reinstall: true,
+                // A link in this mode is streamed THROUGH this computer: the engine fetches
+                // it and serves it. Without the flag the engine handed the PS5 the link
+                // first, so one only this computer can reach just failed.
+                ...(remoteUrl
+                  ? {
+                      proxy_link: true,
+                      insecure_tls: useLinkInstallPrefs.getState().insecureFor(host),
+                    }
+                  : {}),
+              },
             },
             (sample) => {
               const now = Date.now();
@@ -3588,6 +3617,7 @@ const makePkgLibraryStore = () =>
       } catch {
         /* keep the generic name */
       }
+      if (opts?.displayName?.trim()) name = opts.displayName.trim();
       const request: InstallRequest =
         typeof source === "object"
           ? { via: "link", url: source.remoteUrl, mode: "stream", insecureTls: false }

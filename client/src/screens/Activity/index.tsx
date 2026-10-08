@@ -93,9 +93,9 @@ export default function ActivityScreen() {
         icon={ActivityIcon}
         title={tr("v5_tab_tasks", undefined, "Tasks")}
         description={tr(
-          "activity_description",
+          "activity_description_v2",
           undefined,
-          "Your last 100 operations across uploads, downloads, and file management. Persisted across app restarts.",
+          "Everything the app is doing and has done on your consoles: uploads, downloads, installs and file operations. Stop or retry one from here. The last 100 are kept, also after a restart.",
         )}
         right={
           <div className="flex flex-wrap items-center gap-2">

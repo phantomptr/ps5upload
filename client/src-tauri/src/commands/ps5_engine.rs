@@ -913,6 +913,21 @@ pub async fn health_fix(addr: Option<String>, action: String) -> Result<JsonValu
     post_json(&url, &serde_json::json!({ "addr": addr, "action": action })).await
 }
 
+/// Makes the speed test's file on this computer (see the engine's `/api/speed-test/prepare`).
+#[tauri::command]
+pub async fn speed_test_prepare(size_mib: Option<u64>) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/speed-test/prepare");
+    post_json(&url, &serde_json::json!({ "size_mib": size_mib })).await
+}
+
+#[tauri::command]
+pub async fn speed_test_cleanup() -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/speed-test/cleanup");
+    post_json(&url, &serde_json::json!({})).await
+}
+
 #[tauri::command]
 pub async fn remoteplay_readiness(addr: Option<String>) -> Result<JsonValue, String> {
     let base = engine::url();
@@ -2526,6 +2541,18 @@ pub async fn ffpfsc_compress(
     .await
 }
 
+/// Write a game folder as one `.exfat` image for ShadowMountPlus; runs as an engine job.
+#[tauri::command]
+pub async fn exfat_build(source: String, output_dir: Option<String>) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/exfat/build");
+    post_json(
+        &url,
+        &serde_json::json!({ "source": source, "output_dir": output_dir }),
+    )
+    .await
+}
+
 #[tauri::command]
 pub async fn job_status(job_id: String) -> Result<JsonValue, String> {
     let base = engine::url();
@@ -2677,12 +2704,14 @@ pub async fn pkg_remote_download_start(
     url: String,
     insecure_tls: Option<bool>,
     dest_dir: Option<String>,
+    keep_name: Option<bool>,
 ) -> Result<JsonValue, String> {
     let endpoint = format!("{}/api/pkg/remote/download/start", engine::url());
     let body = serde_json::json!({
         "url": url,
         "insecure_tls": insecure_tls.unwrap_or(false),
         "dest_dir": dest_dir,
+        "keep_name": keep_name.unwrap_or(false),
     });
     post_json(&endpoint, &body).await
 }
@@ -2710,9 +2739,16 @@ pub async fn pkg_remote_download_cancel(id: String) -> Result<JsonValue, String>
 /// UI can show what it is (and reject a share page) before the user commits to
 /// a multi-hour install. Reads only a few byte ranges from the origin.
 #[tauri::command]
-pub async fn pkg_remote_probe(url: String) -> Result<JsonValue, String> {
+pub async fn pkg_remote_probe(
+    url: String,
+    insecure_tls: Option<bool>,
+) -> Result<JsonValue, String> {
     let endpoint = format!("{}/api/pkg/remote/probe", engine::url());
-    post_json(&endpoint, &serde_json::json!({ "url": url })).await
+    post_json(
+        &endpoint,
+        &serde_json::json!({ "url": url, "insecure_tls": insecure_tls.unwrap_or(false) }),
+    )
+    .await
 }
 /// What an HTTP(S) link actually serves (R4, #368): a package, some other real file, or
 /// something that is not a download. Decided by the engine from the redirected response.

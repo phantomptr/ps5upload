@@ -29,9 +29,12 @@ export type PipelineStage =
   | "send"
   | "install";
 
-/** What a run does: a package, a package then its install, an install of a kept package, or
- *  a compressed .ffpfsc image. */
-export type PipelineMode = "convert" | "convert-install" | "install" | "ffpfsc";
+/** What a run does: a package, a package then its install, an install of a kept package, a
+ *  compressed .ffpfsc image from an image, or a game image (.exfat) from a folder. */
+export type PipelineMode = "convert" | "convert-install" | "install" | "ffpfsc" | "image";
+
+/** A run whose result is a game image to mount, not a package to install. */
+export const makesImage = (mode: PipelineMode) => mode === "ffpfsc" || mode === "image";
 
 /** How a built package reaches the console: streamed from this computer over HTTP (nothing
  *  staged), or uploaded to PS5 staging and installed from there (never needs the console to
@@ -109,6 +112,9 @@ export interface ConversionState {
   ) => Promise<void>;
   /** Compress an .exfat / .ffpkg image into a .ffpfsc. */
   compress: (source: string, outputDir?: string) => Promise<void>;
+  /** Write a game folder as one .exfat image; with `thenCompress`, compress that into a
+   *  .ffpfsc and keep only the compressed one. */
+  buildImage: (source: string, outputDir: string | undefined, thenCompress: boolean) => Promise<void>;
   /** Install the kept package again: after a failed install, or Install again on a result. */
   retryInstall: (host: string, method?: InstallMethod) => Promise<void>;
   cancel: () => Promise<void>;
@@ -198,7 +204,14 @@ function fail(stage: PipelineStage, message: string, packagePath: string | null)
         lastError: { code: "FPKG_FAILED", message, recoverable: false },
       });
   }
-  const what = p.mode === "ffpfsc" ? "Compression" : p.mode === "convert" ? "FPKG conversion" : "Convert & install";
+  const what =
+    p.mode === "ffpfsc"
+      ? "Compression"
+      : p.mode === "image"
+        ? "Making the game image"
+        : p.mode === "convert"
+          ? "FPKG conversion"
+          : "Convert & install";
   useFpkgConversion.setState({
     pipeline: {
       phase: "failed",
@@ -385,6 +398,9 @@ function poll(jobId: string, install: InstallMethod | null, failures = 0) {
       } else if (!s && p.mode === "ffpfsc") {
         // A compression job reports no stages, only its overall bytes.
         enterStage("compress", snapshot.bytes_sent ?? 0, snapshot.total_bytes ?? 0);
+      } else if (!s && p.mode === "image") {
+        // Nor does an image build: the stage is whichever of its two jobs this is.
+        enterStage(p.stage === "compress" ? "compress" : "write", snapshot.bytes_sent ?? 0, snapshot.total_bytes ?? 0);
       }
       poll(jobId, install);
       return;
@@ -394,6 +410,25 @@ function poll(jobId: string, install: InstallMethod | null, failures = 0) {
       const bytes = snapshot.bytes_sent ?? 0;
       packageSizes.set(path, bytes);
       const cur = running()!;
+      // A folder's image that is to be compressed too: the same run carries on, and only the
+      // compressed image is kept (the engine deletes only what it built itself).
+      if (cur.mode === "image" && imageThenCompress && cur.stage !== "compress") {
+        const outputDir = imageThenCompress.outputDir;
+        imageThenCompress = { ...imageThenCompress, image: path };
+        enterStage("compress");
+        try {
+          const { job_id } = await fpkg.compress(path, outputDir);
+          update({ jobId: job_id });
+          poll(job_id, null);
+        } catch (error) {
+          fail("compress", error instanceof Error ? error.message : String(error), null);
+        }
+        return;
+      }
+      if (cur.mode === "image" && imageThenCompress?.image) {
+        void fpkg.deletePackage(imageThenCompress.image).catch(() => {});
+        imageThenCompress = null;
+      }
       update({ packagePath: path, jobId: null, titleId: titleIdOf(snapshot.tx_id_hex) });
       if (install) {
         // The console of the moment the install starts: the user may have switched during an
@@ -405,7 +440,11 @@ function poll(jobId: string, install: InstallMethod | null, failures = 0) {
         finish(path, bytes, Date.now() - cur.startedMs);
         pushNotification(
           "success",
-          cur.mode === "ffpfsc" ? "Compression complete" : "FPKG conversion complete",
+          cur.mode === "ffpfsc"
+            ? "Compression complete"
+            : cur.mode === "image"
+              ? "Game image ready"
+              : "FPKG conversion complete",
           { body: path, link: "/convert" },
         );
       }
@@ -415,6 +454,10 @@ function poll(jobId: string, install: InstallMethod | null, failures = 0) {
   }, POLL_MS);
 }
 
+/** Set while a folder's image is to be compressed afterwards: where the compressed image
+ *  goes, and (once written) the intermediate image to remove at the end. */
+let imageThenCompress: { outputDir: string | undefined; image: string | null } | null = null;
+
 function beginRun(mode: PipelineMode, source: string, host: string | null, stage: PipelineStage) {
   const now = Date.now();
   const taskId =
@@ -423,7 +466,7 @@ function beginRun(mode: PipelineMode, source: string, host: string | null, stage
       : useTaskStore.getState().registerTask({
           kind: mode === "ffpfsc" ? "ffpfsc-compress" : "fpkg-convert",
           origin: "convert",
-          label: `${mode === "ffpfsc" ? "Compress" : "Convert"} ${baseName(source)}`,
+          label: `${mode === "ffpfsc" ? "Compress" : mode === "image" ? "Make image of" : "Convert"} ${baseName(source)}`,
           detail: source,
           consoleId: host ?? "",
           control: { owner: "fpkg-convert" },
@@ -623,12 +666,26 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
     }
   },
 
+  buildImage: async (source, outputDir, thenCompress) => {
+    if (get().pipeline.phase === "running") return;
+    imageThenCompress = thenCompress ? { outputDir, image: null } : null;
+    beginRun("image", source, null, "write");
+    try {
+      const { job_id } = await fpkg.buildImage(source, outputDir);
+      update({ jobId: job_id });
+      poll(job_id, null);
+    } catch (error) {
+      imageThenCompress = null;
+      fail("write", error instanceof Error ? error.message : String(error), null);
+    }
+  },
+
   retryInstall: async (host, method = "stream") => {
     const p = get().pipeline;
     const path =
       p.phase === "failed" ? p.packagePath : p.phase === "done" && !p.deleted ? p.packagePath : null;
     if (!path || (p.phase !== "failed" && p.phase !== "done")) return;
-    if (p.phase === "done" && p.mode === "ffpfsc") return;
+    if (p.phase === "done" && makesImage(p.mode)) return;
     beginRun("install", p.source, host, "send");
     update({ packagePath: path, titleId: p.titleId });
     await runInstall(path, host, method);

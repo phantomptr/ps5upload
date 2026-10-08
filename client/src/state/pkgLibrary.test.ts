@@ -65,6 +65,7 @@ vi.mock("../lib/ensurePayloadCurrent", () => ({ ensurePayloadCurrent: vi.fn(asyn
 vi.mock("../lib/ps5Transfers", () => ({ transferScreenBusy: () => false }));
 
 import { invoke } from "@tauri-apps/api/core";
+import { useLinkInstallPrefs } from "./linkInstallPrefs";
 import { useUploadQueueStore } from "./uploadQueue";
 import { useUploadSettingsStore } from "./uploadSettings";
 import { getInstallExecutor, registerInstallExecutor } from "./consoleQueueBridge";
@@ -2109,6 +2110,29 @@ describe("installs go through the console queue", () => {
     await vi.waitFor(() => expect(useUploadQueueStore.getState().items).toHaveLength(1));
     await r;
     expect(useUploadQueueStore.getState().items).toHaveLength(1);
+  });
+
+  it("a link streamed through this computer asks the engine to proxy it, with the certificate choice", async () => {
+    useLinkInstallPrefs.getState().setInsecure(HOST, true);
+    await pkgLibraryStore(HOST)
+      .getState()
+      .installUrl("https://example.com/x.pkg", HOST, { mode: "stream" });
+    const calls = vi.mocked(pkgInstall).mock.calls;
+    const sent = calls[calls.length - 1]?.[0];
+    expect(sent?.source).toEqual({ url: "https://example.com/x.pkg" });
+    // Without this the engine handed the link to the PS5 first, and a link only this
+    // computer could reach failed with a network error.
+    expect(sent?.options).toMatchObject({ proxy_link: true, insecure_tls: true });
+    useLinkInstallPrefs.getState().setInsecure(HOST, false);
+  });
+
+  it("a link the PS5 downloads itself is not proxied", async () => {
+    await pkgLibraryStore(HOST)
+      .getState()
+      .installUrl("https://example.com/x.pkg", HOST, { mode: "direct" });
+    const first = vi.mocked(pkgInstall).mock.calls[0]?.[0];
+    expect(first?.source).toEqual({ url: "https://example.com/x.pkg" });
+    expect(first?.options?.proxy_link).toBeUndefined();
   });
 
   it("[RF 2] installFromConsolePath on internal storage runs as ONE item", async () => {

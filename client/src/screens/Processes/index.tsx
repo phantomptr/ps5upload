@@ -238,9 +238,9 @@ export default function ProcessesScreen() {
         title={tr("processes_title", undefined, "Processes")}
         count={procs.length || undefined}
         description={tr(
-          "processes_subtitle",
+          "processes_subtitle_v2",
           undefined,
-          "Live process list for the connected PS5. Kill or restart processes.",
+          "The programs running on the PS5 right now. You can stop or restart one; take care with system processes, since stopping the wrong one can freeze the console.",
         )}
       />
 

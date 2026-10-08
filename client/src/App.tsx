@@ -60,8 +60,7 @@ const PayloadsScreen = lazyWithReload(() => import("./screens/Payloads"));
 const FirstRunScreen = lazyWithReload(() => import("./screens/FirstRun"));
 const SavesScreen = lazyWithReload(() => import("./screens/Saves"));
 const ProcessesScreen = lazyWithReload(() => import("./screens/Processes"));
-const ScreenshotsScreen = lazyWithReload(() => import("./screens/Screenshots"));
-const VideosScreen = lazyWithReload(() => import("./screens/Videos"));
+const CapturesScreen = lazyWithReload(() => import("./screens/Captures"));
 const StatsScreen = lazyWithReload(() => import("./screens/Stats"));
 const ShellScreen = lazyWithReload(() => import("./screens/Shell"));
 const DiskUsageScreen = lazyWithReload(() => import("./screens/DiskUsage"));
@@ -416,21 +415,16 @@ function AppRoutes({ location }: { location: Location }) {
           }
         />
         <Route
-          path="/screenshots"
+          path="/captures"
           element={
             <Suspense fallback={<ScreenLoader />}>
-              <ScreenshotsScreen />
+              <CapturesScreen />
             </Suspense>
           }
         />
-        <Route
-          path="/videos"
-          element={
-            <Suspense fallback={<ScreenLoader />}>
-              <VideosScreen />
-            </Suspense>
-          }
-        />
+        {/* Screenshots and Video clips were two screens; old links and bookmarks still land. */}
+        <Route path="/screenshots" element={<Navigate to="/captures" replace />} />
+        <Route path="/videos" element={<Navigate to="/captures?tab=videos" replace />} />
         {/* v5: /tasks is the canonical tasks/activity route. */}
         <Route
           path="/tasks"

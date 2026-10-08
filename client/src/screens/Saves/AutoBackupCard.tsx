@@ -21,14 +21,16 @@ export default function AutoBackupCard() {
     if (picked) set({ dir: picked });
   }
 
+  // Sized like a settings card, not the full page: three short controls stretched across a
+  // wide window read as a mistake.
   return (
     <section
-      className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
+      className="mb-4 max-w-3xl rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
       data-testid="auto-save-backup"
     >
-      <header className="mb-2 flex items-center gap-2">
+      <header className="mb-1 flex items-center gap-2">
         <History size={14} />
-        <h3 className="text-sm font-semibold">
+        <h3 className="flex-1 text-sm font-semibold">
           {tr("saves_auto_title", undefined, "Automatic backups")}
         </h3>
       </header>
@@ -39,38 +41,44 @@ export default function AutoBackupCard() {
           "While this app is open and connected, saves that changed are copied to a folder on this computer every ten minutes. A save still being written is left for the next round.",
         )}
       </p>
-      <div className="flex flex-wrap items-center gap-3 text-sm">
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={enabled}
-            disabled={!dir.trim()}
-            onChange={(e) => set({ enabled: e.target.checked })}
-          />
-          {tr("saves_auto_enable", undefined, "Back up changed saves automatically")}
-        </label>
+      <div className="grid gap-2 text-sm sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+        <div className="min-w-0">
+          <div className="text-xs text-[var(--color-muted)]">
+            {tr("saves_auto_folder_label", undefined, "Backup folder")}
+          </div>
+          <div className="break-all font-mono text-xs">
+            {dir.trim()
+              ? dir
+              : tr("saves_auto_no_folder", undefined, "Choose a folder to turn this on.")}
+          </div>
+        </div>
         <Button variant="secondary" size="sm" leftIcon={<FolderOpen size={12} />} onClick={chooseFolder}>
           {tr("saves_auto_folder", undefined, "Choose folder")}
         </Button>
-        <label className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
+        <label htmlFor="saves-auto-keep" className="text-xs text-[var(--color-muted)]">
           {tr("saves_auto_keep", undefined, "Versions to keep")}
-          <input
-            type="number"
-            min={1}
-            max={50}
-            value={keep}
-            onChange={(e) => set({ keep: clampKeep(Number(e.target.value)) })}
-            className="w-16 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-sm text-[var(--color-text)]"
-          />
         </label>
+        <input
+          id="saves-auto-keep"
+          type="number"
+          min={1}
+          max={50}
+          value={keep}
+          onChange={(e) => set({ keep: clampKeep(Number(e.target.value)) })}
+          className="w-20 justify-self-start rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-sm text-[var(--color-text)] sm:justify-self-end"
+        />
       </div>
-      <p className="mt-2 break-all font-mono text-xs text-[var(--color-muted)]">
-        {dir.trim()
-          ? dir
-          : tr("saves_auto_no_folder", undefined, "Choose a folder to turn this on.")}
-      </p>
+      <label className="mt-3 flex items-center gap-2 border-t border-[var(--color-border)] pt-3 text-sm">
+        <input
+          type="checkbox"
+          checked={enabled}
+          disabled={!dir.trim()}
+          onChange={(e) => set({ enabled: e.target.checked })}
+        />
+        {tr("saves_auto_enable", undefined, "Back up changed saves automatically")}
+      </label>
       {(running || last) && (
-        <p className="mt-1 text-xs text-[var(--color-muted)]">
+        <p className="mt-2 text-xs text-[var(--color-muted)]">
           {running
             ? tr("saves_auto_running", undefined, "Backing up now…")
             : tr(

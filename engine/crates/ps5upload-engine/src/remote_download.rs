@@ -119,6 +119,11 @@ pub struct DownloadStartRequest {
     /// Directory to download into. Defaults to `~/Downloads/ps5upload`.
     #[serde(default)]
     pub dest_dir: Option<String>,
+    /// Keep the name the link gives the file. Off (the default) for a package, whose local
+    /// file must end in `.pkg` to be installed; on for an archive part, whose name is how the
+    /// parts of a set find each other (`game.part2.rar`).
+    #[serde(default)]
+    pub keep_name: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -147,6 +152,19 @@ pub struct DownloadIdQuery {
 #[derive(Debug, Deserialize)]
 pub struct DownloadCancelRequest {
     pub id: String,
+}
+
+/// The local file name for a download. A link that serves a package need not say so in its
+/// URL (a share link, a redirect, an extensionless path), and the file the install reads back
+/// must look like one, so `.pkg` is added unless the caller asked to keep the name.
+#[cfg(not(target_os = "android"))]
+fn local_name_for(probed: &str, keep_name: bool) -> String {
+    let fallback = if keep_name { "download" } else { "package.pkg" };
+    let mut name = safe_file_name(if probed.is_empty() { fallback } else { probed });
+    if !keep_name && !name.to_ascii_lowercase().ends_with(".pkg") {
+        name.push_str(".pkg");
+    }
+    name
 }
 
 fn json_err(code: StatusCode, msg: &str) -> Response {
@@ -200,16 +218,7 @@ async fn start_handler(
             &format!("cannot create {}: {e}", dir.display()),
         );
     }
-    let mut name = safe_file_name(if probe.filename.is_empty() {
-        "package.pkg"
-    } else {
-        &probe.filename
-    });
-    // A link that serves a package need not say so in its URL (a share link, a redirect, an
-    // extensionless path). The local file the install reads back must look like one.
-    if !name.to_ascii_lowercase().ends_with(".pkg") {
-        name.push_str(".pkg");
-    }
+    let name = local_name_for(&probe.filename, req.keep_name);
     let path = dir.join(name);
 
     // Refuse to silently resume into, or clobber, an unrelated file of the
@@ -401,6 +410,20 @@ async fn cancel_handler(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn a_package_gets_its_extension_and_an_archive_part_keeps_its_name() {
+        assert_eq!(super::local_name_for("game", false), "game.pkg");
+        assert_eq!(super::local_name_for("Game.PKG", false), "Game.PKG");
+        assert_eq!(super::local_name_for("", false), "package.pkg");
+        // Parts of a set find each other by name.
+        assert_eq!(
+            super::local_name_for("game.part2.rar", true),
+            "game.part2.rar"
+        );
+        assert_eq!(super::local_name_for("", true), "download");
+    }
+
     use super::*;
 
     #[test]

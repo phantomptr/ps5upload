@@ -224,9 +224,9 @@ export default function BackupScreen() {
           icon={Archive}
           title={tr("backup_title", undefined, "Backup & Restore")}
           description={tr(
-            "backup_subtitle",
+          "backup_subtitle_v2",
             undefined,
-            "Snapshot files on the PS5 and restore them later",
+            "Copy files and folders from the PS5 to this computer as a snapshot, and put a snapshot back on the PS5 later.",
           )}
           right={
             <Button

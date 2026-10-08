@@ -93,4 +93,8 @@ export const fpkg = {
    *  Starts a job; the output lands next to the source unless outputDir says otherwise. */
   compress: (source: string, outputDir?: string) =>
     invoke<{ job_id: string }>("ffpfsc_compress", { source, outputDir }),
+  /** Write a game folder as one .exfat image for ShadowMountPlus. Starts a job; the image
+   *  lands in the output folder, named after the game folder. */
+  buildImage: (source: string, outputDir?: string) =>
+    invoke<{ job_id: string }>("exfat_build", { source, outputDir }),
 };

@@ -4,6 +4,38 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.4.0
+
+**Install is two tabs, links say what they ask of you, and Home tells you when something is
+wrong.** Update the app; the helper only gets a small timing fix.
+
+- **Install: Stream & install and Upload & install are separate tabs**, each saying when to
+  use it. Progress stays in the queue and in Tasks when you open another screen.
+- **Install from a link** shows the three ways side by side with what each one needs (this
+  computer awake or not, disk space or not, where progress shows). The warning now matches
+  the way you picked, and **Skip the certificate check** appears only where this computer
+  makes the connection, and now really takes effect there. Picking a way also works again
+  while a second console is open (the choices used to fight each other across consoles).
+- **Name your links** (optional). The name shows in the queue, in Tasks and in recent links,
+  so you can find and retry the right one.
+- **"Stream through this computer" really streams through this computer**, so it works for
+  links only this computer can reach. PS5 packages from a link are recognised as packages.
+- **Archives:** install packages from a **.zip, .7z or .rar**, including multi-part RARs with
+  a password. The archive can also come from download links, one per part.
+- **Convert Games** (was Convert to FPKG) can also write a game folder as a **game image**
+  (`.exfat`, or the smaller `.ffpfsc`) that ShadowMount+ mounts.
+- **Health check on Home:** Home shows anything unhealthy for the selected console. The check
+  now covers ports, the connection in both directions, the installer and the web/Docker
+  setup. A **speed test** measures the real transfer speed to and from the PS5, and
+  **Clean up** removes leftovers ps5upload made and no longer needs.
+- **FAQ:** section tabs, topics, ranked search with excerpts, and a link to any answer.
+- **Captures:** screenshots and video clips are one screen with two tabs. **Payloads** moved
+  under Setup. The Saves automatic-backups card fits the page.
+- **Plainer words:** Volumes says what the package-copy drive is for, and every screen's
+  description says what it is and how to use it.
+
+---
+
 ## 6.3.1
 
 **"The PS5 declined the install" (`0x80B2116F`) is fixed.** Update the app; it sends its new

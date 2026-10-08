@@ -50,6 +50,7 @@ mod local_fs;
 mod log_dedup;
 mod mgmt_route;
 mod migrate_6;
+mod net_health;
 mod pkg_install;
 mod pkg_sidecar;
 mod remote;
@@ -5128,13 +5129,121 @@ async fn health_scan_handler(
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
     let result = tokio::task::spawn_blocking(move || {
-        ps5upload_core::health::run_health_scan(&addr, env!("CARGO_PKG_VERSION"))
+        let mut report = ps5upload_core::health::run_health_scan(&addr, env!("CARGO_PKG_VERSION"));
+        // The path between this computer and the console, measured from this engine.
+        let helper_up = report.checks.iter().any(|c| {
+            c.id == "mgmt_reachable" && c.status == ps5upload_core::health::CheckStatus::Pass
+        });
+        report
+            .checks
+            .extend(net_health::network_checks(&addr, helper_up));
+        report.summary = ps5upload_core::health::summarize(&report.checks);
+        report
     })
     .await;
     match result {
         Ok(report) => (StatusCode::OK, Json(report)).into_response(),
         Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
+}
+
+/// Where the speed test's file is written on this computer: the data folder, or the system
+/// temp folder when there is none.
+fn speed_test_dir() -> std::path::PathBuf {
+    remote::store::data_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("speedtest")
+}
+
+/// Smallest and largest speed-test file, in MiB. Small enough to finish quickly on Wi-Fi,
+/// large enough at the top that a fast link is measured over seconds, not milliseconds.
+const SPEED_TEST_MIN_MIB: u64 = 16;
+const SPEED_TEST_MAX_MIB: u64 = 2048;
+
+fn speed_test_size_mib(asked: Option<u64>) -> u64 {
+    asked
+        .unwrap_or(256)
+        .clamp(SPEED_TEST_MIN_MIB, SPEED_TEST_MAX_MIB)
+}
+
+/// Writes `mib` MiB that cannot be compressed (a transfer of zeros would measure nothing).
+/// A xorshift generator: fast, and no two megabytes alike.
+fn write_speed_test_file(path: &std::path::Path, mib: u64) -> std::io::Result<u64> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
+    let mut x: u64 = 0x9E37_79B9_7F4A_7C15
+        ^ std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(1);
+    let mut block = vec![0u8; 1024 * 1024];
+    for _ in 0..mib {
+        for chunk in block.as_chunks_mut::<8>().0 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            *chunk = x.to_le_bytes();
+        }
+        f.write_all(&block)?;
+    }
+    f.flush()?;
+    Ok(mib * 1024 * 1024)
+}
+
+#[derive(Deserialize)]
+struct SpeedTestPrepareReq {
+    #[serde(default)]
+    size_mib: Option<u64>,
+}
+
+/// POST /api/speed-test/prepare {size_mib?}
+///
+/// Makes the file the speed test sends: the client then uploads it with the ordinary transfer
+/// route and downloads it back, so what is measured is what a real copy gets. Returns where
+/// the file is and the folder the download should go to.
+async fn speed_test_prepare_handler(Json(req): Json<SpeedTestPrepareReq>) -> impl IntoResponse {
+    let mib = speed_test_size_mib(req.size_mib);
+    let dir = speed_test_dir();
+    let path = dir.join("ps5upload-speedtest.bin");
+    let back = dir.join("back");
+    let (p, b) = (path.clone(), back.clone());
+    let r = tokio::task::spawn_blocking(move || {
+        // A previous run's files, if it was interrupted.
+        let _ = std::fs::remove_dir_all(&b);
+        std::fs::create_dir_all(&b)?;
+        write_speed_test_file(&p, mib)
+    })
+    .await;
+    match r {
+        Ok(Ok(bytes)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "path": path.to_string_lossy(),
+                "download_dir": back.to_string_lossy(),
+                "bytes": bytes,
+            })),
+        )
+            .into_response(),
+        Ok(Err(e)) => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "could not write the speed-test file in {}: {e}",
+                dir.display()
+            ),
+        )
+        .into_response(),
+        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+    }
+}
+
+/// POST /api/speed-test/cleanup: removes the speed test's files from this computer.
+async fn speed_test_cleanup_handler() -> impl IntoResponse {
+    let dir = speed_test_dir();
+    let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(dir)).await;
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
 }
 
 #[derive(Deserialize)]
@@ -8030,18 +8139,10 @@ async fn transfer_rar_handler() -> impl IntoResponse {
 async fn rar_packages_handler(Json(req): Json<RarPackagesReq>) -> impl IntoResponse {
     let p = req.archive_path.clone();
     let pw = req.password.clone();
-    let r = tokio::task::spawn_blocking(move || {
-        ps5upload_core::transfer::rar_layout(
-            std::path::Path::new(&p),
-            pw.as_deref(),
-            &[RAR_PKG_ALLOW.to_string()],
-        )
-    })
-    .await;
+    let r = tokio::task::spawn_blocking(move || archive_package_entries(&p, pw.as_deref())).await;
     match r {
-        Ok(Ok(layout)) => {
-            let mut packages: Vec<serde_json::Value> = layout
-                .files
+        Ok(Ok(files)) => {
+            let mut packages: Vec<serde_json::Value> = files
                 .iter()
                 .map(|(path, size)| serde_json::json!({ "path": path, "size": size }))
                 .collect();
@@ -8073,6 +8174,52 @@ async fn rar_packages_handler() -> impl IntoResponse {
 /// The exclude entry that keeps only packages (see `ps5upload_core::excludes`).
 #[cfg(not(target_os = "android"))]
 const RAR_PKG_ALLOW: &str = "!*.pkg";
+
+/// Which archive reader a path's name asks for. A split RAR is recognised by any of its
+/// parts' names; a `.7z.001` style split 7z is not supported and is not claimed here.
+#[cfg(not(target_os = "android"))]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum ArchiveKind {
+    Zip,
+    SevenZ,
+    Rar,
+}
+
+#[cfg(not(target_os = "android"))]
+fn archive_kind_of(path: &str) -> Option<ArchiveKind> {
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".zip") {
+        Some(ArchiveKind::Zip)
+    } else if lower.ends_with(".7z") {
+        Some(ArchiveKind::SevenZ)
+    } else if lower.ends_with(".rar") {
+        Some(ArchiveKind::Rar)
+    } else {
+        None
+    }
+}
+
+/// The `.pkg` files inside a ZIP, 7z or RAR (path inside the archive, unpacked size), read
+/// from the archive's listing without unpacking anything. `password` only applies to RAR:
+/// the ZIP and 7z readers here do not decrypt.
+#[cfg(not(target_os = "android"))]
+fn archive_package_entries(
+    path: &str,
+    password: Option<&str>,
+) -> anyhow::Result<Vec<(String, u64)>> {
+    let allow = [RAR_PKG_ALLOW.to_string()];
+    let p = std::path::Path::new(path);
+    match archive_kind_of(path) {
+        Some(ArchiveKind::Zip) => Ok(ps5upload_core::transfer::zip_plan_preview(p, &allow)?.1),
+        Some(ArchiveKind::SevenZ) => {
+            Ok(ps5upload_core::transfer::sevenz_plan_preview(p, &allow)?.1)
+        }
+        Some(ArchiveKind::Rar) => {
+            Ok(ps5upload_core::transfer::rar_layout(p, password, &allow)?.files)
+        }
+        None => anyhow::bail!("not a .zip, .7z or .rar archive: {path}"),
+    }
+}
 
 /// POST /api/link/probe — desktop only. What a link actually serves: a package, some other
 /// real file, or something that is not a download (R4, #368). Decided from the response, not
@@ -9629,6 +9776,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             post(mgmt_route::mgmt_call_handler),
         )
         .route("/api/ps5/health/scan", get(health_scan_handler))
+        .route("/api/speed-test/prepare", post(speed_test_prepare_handler))
+        .route("/api/speed-test/cleanup", post(speed_test_cleanup_handler))
         .route("/api/ps5/health/junk", get(health_junk_handler))
         .route("/api/ps5/health/fix", post(health_fix_handler))
         .route("/api/ps5/cleanup", post(ps5_cleanup))
@@ -9676,6 +9825,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             "/api/ffpfsc/compress",
             post(fpkg_api::ffpfsc_compress_handler),
         )
+        .route("/api/exfat/build", post(fpkg_api::exfat_build_handler))
         .route("/api/local/list-dir", get(local_list_dir_handler))
         .route("/api/local/storage-roots", get(local_storage_roots_handler))
         .route("/api/ps5/fs/delete", post(ps5_fs_delete))
@@ -11402,5 +11552,89 @@ mod appdb_installed_additions_tests {
         let rows = vec![("PLDM00001".to_string(), "Payload Manager".to_string())];
         let got = appdb_installed_additions(&rows, &set(&["PLDM00001"]), &set(&["PLDM00001"]));
         assert!(got.is_empty());
+    }
+}
+
+#[cfg(all(test, not(target_os = "android")))]
+mod archive_packages_tests {
+    use super::{archive_kind_of, archive_package_entries, ArchiveKind};
+    use std::io::Write;
+
+    #[test]
+    fn the_archive_kind_follows_the_file_name() {
+        assert_eq!(archive_kind_of("/x/Game.ZIP"), Some(ArchiveKind::Zip));
+        assert_eq!(archive_kind_of("/x/game.7z"), Some(ArchiveKind::SevenZ));
+        assert_eq!(
+            archive_kind_of("/x/game.part01.rar"),
+            Some(ArchiveKind::Rar)
+        );
+        assert_eq!(archive_kind_of("/x/game.pkg"), None);
+        assert_eq!(archive_kind_of("/x/game.7z.001"), None);
+    }
+
+    #[test]
+    fn a_zip_lists_only_its_packages_at_any_depth() {
+        let dir = std::env::temp_dir().join(format!("ps5upload-arcpkg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("bundle.zip");
+        let mut zw = zip::ZipWriter::new(std::fs::File::create(&path).expect("create"));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (name, body) in [
+            ("readme.txt", &b"hello"[..]),
+            ("game/base.pkg", &b"0123456789"[..]),
+            ("game/updates/patch.PKG", &b"abc"[..]),
+            ("game/cover.png", &b"png"[..]),
+        ] {
+            zw.start_file(name, opts).expect("start");
+            zw.write_all(body).expect("write");
+        }
+        zw.finish().expect("finish");
+
+        let mut got = archive_package_entries(path.to_str().expect("utf8"), None).expect("list");
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                ("game/base.pkg".to_string(), 10),
+                ("game/updates/patch.PKG".to_string(), 3)
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_that_is_no_archive_is_refused_by_name() {
+        let err = archive_package_entries("/x/game.pkg", None).expect_err("refused");
+        assert!(format!("{err:#}").contains("not a .zip, .7z or .rar"));
+    }
+}
+
+#[cfg(test)]
+mod speed_test_file_tests {
+    use super::{speed_test_size_mib, write_speed_test_file};
+
+    #[test]
+    fn the_size_is_kept_within_bounds() {
+        assert_eq!(speed_test_size_mib(None), 256);
+        assert_eq!(speed_test_size_mib(Some(1)), 16);
+        assert_eq!(speed_test_size_mib(Some(1_000_000)), 2048);
+        assert_eq!(speed_test_size_mib(Some(512)), 512);
+    }
+
+    #[test]
+    fn the_file_has_the_asked_size_and_does_not_repeat() {
+        let dir = std::env::temp_dir().join(format!("ps5upload-speedfile-{}", std::process::id()));
+        let path = dir.join("f.bin");
+        assert_eq!(
+            write_speed_test_file(&path, 2).expect("write"),
+            2 * 1024 * 1024
+        );
+        let data = std::fs::read(&path).expect("read");
+        assert_eq!(data.len(), 2 * 1024 * 1024);
+        // Not compressible in the cheapest sense: the two megabytes differ, and it is not zeros.
+        assert_ne!(data[..1024 * 1024], data[1024 * 1024..]);
+        assert!(data.iter().any(|b| *b != 0));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

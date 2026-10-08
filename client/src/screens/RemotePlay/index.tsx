@@ -334,9 +334,9 @@ export default function RemotePlayScreen() {
         icon={MonitorPlay}
         title={tr("remotePlay_title", undefined, "Remote Play")}
         description={tr(
-          "remotePlay_subtitle",
+          "remotePlay_subtitle_v2",
           undefined,
-          "Generate a Remote Play PIN to connect from the PS Remote Play app",
+          "Set this PS5 up for Remote Play and get the PIN that pairs the PS Remote Play app with it.",
         )}
         right={
           <Button

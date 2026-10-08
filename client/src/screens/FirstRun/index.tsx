@@ -374,9 +374,9 @@ export default function FirstRunScreen() {
         icon={Sparkles}
         title={tr("first_run_title", undefined, "Set up your PS5")}
         description={tr(
-          "first_run_description",
+          "first_run_description_v2",
           undefined,
-          "One-click install of the recommended payload chain: kernel exploit (kstuff) + auto-mount daemon (ShadowMount+) + this app's payload. Re-run any time from Settings.",
+          "Loads what most set-ups need, in the right order: kstuff (lets fake packages install and run), ShadowMount+ (puts game images and folders on the PS5's home screen) and ps5upload's own helper. You can run it again any time from Settings.",
         )}
       />
       <div className="mx-auto max-w-3xl space-y-4">

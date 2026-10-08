@@ -29,7 +29,8 @@ test("a screen keeps what was typed across a screen change", async ({
 test("each screen scrolls by itself and comes back where it was left", async ({
   page,
 }) => {
-  await page.goto("/faq", { waitUntil: "domcontentloaded" });
+  // What's New is one long page; the FAQ opens on a short list of questions.
+  await page.goto("/whats-new", { waitUntil: "domcontentloaded" });
   const scroller = page.locator("[data-scroll-root]:visible");
   await expect(scroller).toHaveCount(1, { timeout: 30_000 });
   await page.getByRole("main").getByRole("heading").first().waitFor();

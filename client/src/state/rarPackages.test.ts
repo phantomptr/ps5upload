@@ -9,6 +9,8 @@ vi.mock("../api/ps5", () => ({
   fsMkdir: vi.fn(async () => {}),
   jobStatus: vi.fn(),
   startTransferRar: vi.fn(async () => "job-1"),
+  startTransferZip: vi.fn(async () => "job-z"),
+  startTransfer7z: vi.fn(async () => "job-7"),
 }));
 const installFromConsolePath = vi.fn();
 vi.mock("./pkgLibrary", () => ({
@@ -16,9 +18,12 @@ vi.mock("./pkgLibrary", () => ({
 }));
 
 import { pkgConsoleProbe, rarPackages } from "../api/links";
-import { jobStatus, startTransferRar } from "../api/ps5";
+import { jobStatus, startTransfer7z, startTransferRar, startTransferZip } from "../api/ps5";
 import {
+  archiveFolderName,
+  archiveKindOf,
   installRarPackages,
+  isArchiveFirstVolume,
   isRarFirstVolume,
   orderForInstall,
   rarFolderName,
@@ -170,5 +175,50 @@ describe("installRarPackages", () => {
     expect(r.ok).toBe(false);
     expect(r.message).toBe("out of space");
     expect(installFromConsolePath).not.toHaveBeenCalled();
+  });
+});
+
+describe("archives of any kind", () => {
+  it("tells a ZIP, a 7z and a RAR by name", () => {
+    expect(archiveKindOf("/x/Game.ZIP")).toBe("zip");
+    expect(archiveKindOf("C:\\x\\game.7z")).toBe("7z");
+    expect(archiveKindOf("/x/game.part01.rar")).toBe("rar");
+    expect(archiveKindOf("/x/game.pkg")).toBeNull();
+    // A split 7z is not something the engine reads.
+    expect(archiveKindOf("/x/game.7z.001")).toBeNull();
+  });
+
+  it("only a RAR has parts to choose between", () => {
+    expect(isArchiveFirstVolume("/x/a.zip")).toBe(true);
+    expect(isArchiveFirstVolume("/x/a.7z")).toBe(true);
+    expect(isArchiveFirstVolume("/x/a.part1.rar")).toBe(true);
+    expect(isArchiveFirstVolume("/x/a.part2.rar")).toBe(false);
+    expect(isArchiveFirstVolume("/x/a.pkg")).toBe(false);
+  });
+
+  it("names the console folder after the archive and its kind", () => {
+    expect(archiveFolderName("/x/My Game.zip")).toBe("zip_My_Game");
+    expect(archiveFolderName("/x/My Game.7z")).toBe("7z_My_Game");
+    expect(archiveFolderName("/x/Multi.part01.rar")).toBe("rar_Multi");
+  });
+
+  it("unpacks a ZIP's packages with the ZIP reader, and a 7z's with the 7z reader", async () => {
+    vi.mocked(rarPackages).mockResolvedValue([{ path: "Base.pkg", size: 20 }]);
+    probeAs({ "Base.pkg": { category: "gd", title_id: "PPSA1" } });
+
+    let r = await installRarPackages({ host: HOST, archivePath: "/x/Bundle.zip" });
+    expect(r.ok).toBe(true);
+    expect(vi.mocked(startTransferRar)).not.toHaveBeenCalled();
+    let call = vi.mocked(startTransferZip).mock.calls[0];
+    expect(call[0]).toBe("/x/Bundle.zip");
+    expect(call[1]).toBe("/user/data/ps5upload/pkg_library/zip_Bundle");
+    expect(call[4]).toEqual(["!*.pkg"]);
+
+    r = await installRarPackages({ host: HOST, archivePath: "/x/Bundle.7z" });
+    expect(r.ok).toBe(true);
+    call = vi.mocked(startTransfer7z).mock.calls[0];
+    expect(call[1]).toBe("/user/data/ps5upload/pkg_library/7z_Bundle");
+    expect(call[4]).toEqual(["!*.pkg"]);
+    expect(vi.mocked(startTransferRar)).not.toHaveBeenCalled();
   });
 });

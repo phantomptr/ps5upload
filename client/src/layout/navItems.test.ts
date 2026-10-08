@@ -233,9 +233,9 @@ describe("retired screens", () => {
   });
 });
 
-// Convert to FPKG left the beta program once its packages installed and played: it shows for
+// Convert Games left the beta program once its packages installed and played: it shows for
 // everyone, with the beta switch off.
-describe("Convert to FPKG", () => {
+describe("Convert Games", () => {
   it("is no longer a beta feature", () => {
     const convert = NAV_ITEMS.find((i) => i.to === "/convert");
     expect(convert).toBeDefined();

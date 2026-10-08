@@ -28,8 +28,9 @@
 - **Install any package.** PS4 `.pkg` and PS5 fake packages (base, update, DLC) from your
   computer (**Stream & install** or **Upload & install**), a NAS/SMB share, a USB drive or a
   link. If the PS5 refuses one route, the app offers another.
-- **Convert to FPKG.** Build an installable package from a decrypted game folder or an
-  `.exfat` / `.ffpkg` image on your computer, then install it in one click.
+- **Convert Games.** Build an installable package from a decrypted game folder or an
+  image, or write a game folder as a game image (`.exfat`, or the smaller `.ffpfsc`) that
+  ShadowMount+ mounts.
 - **Browse and manage.** Files, games, disk images (mount, edit in place), saves, screenshots
   and video clips; register, launch, stop and uninstall games; copy, move, delete.
 - **Cheats, fan curve, hardware view,** Remote Play pairing, payload sender with a catalogue

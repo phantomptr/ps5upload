@@ -1,5 +1,5 @@
 import { consoleAddr } from "../../lib/addr";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Video as VideoIcon,
   RefreshCw,
@@ -50,7 +50,7 @@ function joinDir(dir: string, name: string): string {
  * in-house — if this screen is empty with clips present, the payload's
  * walk_videos() root/extension filter is what to adjust (see runtime.c).
  */
-export default function VideosScreen() {
+export default function VideosScreen({ tabs }: { tabs?: ReactNode } = {}) {
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const tr = useTr();
@@ -271,15 +271,17 @@ export default function VideosScreen() {
 
   return (
     <div className="app-page">
+      {/* The Captures screen puts its Screenshots / Video clips switch here. */}
+      {tabs}
       <PageHeader
         icon={VideoIcon}
         title={tr("videos_title", undefined, "Video clips")}
         count={items?.length}
         loading={loading}
         description={tr(
-          "videos_description",
+          "videos_description_v2",
           undefined,
-          "Gameplay video clips saved on the PS5 (Capture Gallery). Download to your computer, or delete via the File System tab. Clips download as-is — no conversion needed.",
+          "Video clips saved on the PS5 (its Capture Gallery). Download them to this computer as they are; no conversion is needed. To delete one, use Files.",
         )}
         right={
           <div className="flex items-center gap-2">

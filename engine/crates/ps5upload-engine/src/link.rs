@@ -3,7 +3,7 @@
 //! The link installer used to trust the URL text. That fails the three ways a real link looks:
 //! a redirect (`/get?id=…` that answers 302 to a CDN), a share link, and a package whose URL
 //! has no `.pkg` in it. So the decision is made from what the origin sends back, after
-//! redirects: the first bytes (`\x7FCNT`, the PS4/PS5 package magic) and the content headers.
+//! redirects: the first bytes (a PS4 or PS5 package magic) and the content headers.
 //!
 //! * A link that serves a package installs through the existing paths (`remote_pkg`).
 //! * Any other link is "download only", to a console folder, over AVA1: the engine's ranged
@@ -21,8 +21,13 @@ use serde::Serialize;
 
 use crate::remote_pkg::RemoteSource;
 
-/// The PS4/PS5 package magic, the first four bytes of every `.pkg`.
+/// The PS4 package magic (`\x7FCNT`): the first four bytes of a PS4 `.pkg`, and of the
+/// metadata container inside a PS5 one.
 pub const PKG_MAGIC: &[u8; 4] = b"\x7FCNT";
+/// The first four bytes of a PS5 `.pkg`: a finalized image (`\x7FFIH`). A fake game package
+/// and a homebrew app both start with it. Until 6.4.0 only the PS4 magic counted, so a link
+/// to a PS5 package was offered as a plain file download and could not be installed.
+pub const PKG_MAGIC_PS5: &[u8; 4] = b"\x7FFIH";
 
 /// How much of the body is read to decide: the magic needs 4 bytes, the HTML sniff a few
 /// hundred. Never more, so a 100 GB link costs one small request.
@@ -134,7 +139,7 @@ pub fn classify(input: &ProbeInput) -> LinkClass {
     }
 
     // The magic decides it: whatever the URL, the type header or the name say.
-    if input.head.starts_with(PKG_MAGIC) {
+    if input.head.starts_with(PKG_MAGIC) || input.head.starts_with(PKG_MAGIC_PS5) {
         return LinkClass {
             kind: LinkKind::Pkg,
             reason: None,
@@ -478,6 +483,19 @@ mod tests {
             final_url: "https://cdn.example.com/files/blob".into(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_ps5_package_is_a_package_too() {
+        // A PS5 package (a fake game package, a homebrew app) starts with the finalized-image
+        // signature, not the PS4 one. Read from a real PS5 homebrew package: 7F 46 49 48.
+        let c = classify(&input(
+            206,
+            "application/octet-stream",
+            b"\x7FFIH\x01\0\x03\0",
+        ));
+        assert_eq!(c.kind, LinkKind::Pkg);
+        assert!(c.ranges);
     }
 
     #[test]

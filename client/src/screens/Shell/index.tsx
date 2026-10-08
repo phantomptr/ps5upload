@@ -167,9 +167,9 @@ export default function ShellScreen() {
         icon={TerminalSquare}
         title={tr("shell_title", undefined, "Shell")}
         description={tr(
-          "shell_description",
+          "shell_description_v2",
           undefined,
-          "Stateful remote shell session. Commands run in the payload's process context; stdout and stderr are merged and capped at 256 KB. Use up/down arrows for command history.",
+          "Type commands that run on the PS5, in the helper's process. For advanced use. Output is limited to 256 KB per command; the up and down arrows recall earlier commands.",
         )}
         right={
           <Button

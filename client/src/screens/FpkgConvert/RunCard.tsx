@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { CheckCircle2, Circle, Loader2, XCircle } from "lucide-react";
 
 import { Button, Card, ProgressBar } from "../../components";
+import { makesImage } from "../../state/fpkgConversion";
 import type { InstallMethod, Pipeline, PipelineStage } from "../../state/fpkgConversion";
 import { useTr } from "../../state/lang";
 import type { Task } from "../../state/tasks";
@@ -68,6 +69,9 @@ export interface RunCardProps {
   onConvert: () => void;
   onConvertInstall: () => void;
   onCompress: () => void;
+  /** The source is a game folder on this computer: write it as an image (`compress`: then
+   *  compress it into a .ffpfsc). Absent when it cannot be made into one from here. */
+  onMakeImage?: (compress: boolean) => void;
   onCancel: () => void;
   /** Install the kept package: streamed from this computer, or uploaded to the PS5 first. */
   onInstall: (method: InstallMethod) => void;
@@ -163,6 +167,34 @@ export function RunCard(props: RunCardProps) {
               </Button>
             )}
           </div>
+          {/* A folder can also become a game image: the kind ShadowMount+ mounts from a
+              drive, instead of a package the PS5 installs. */}
+          {props.onMakeImage && (
+            <div className="mt-1 border-t border-[var(--color-border)] pt-2">
+              <div className="mb-1 text-xs text-[var(--color-muted)]">
+                {tr(
+                  "fpkg.image.lead",
+                  undefined,
+                  "Or make a game image instead of a package: one file you copy to a PS5 drive, which ShadowMount+ mounts and shows on the home screen. Nothing is installed.",
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={() => props.onMakeImage?.(false)} disabled={props.canConvert === false}>
+                  {tr("fpkg.image.exfat", undefined, "Make game image (.exfat)")}
+                </Button>
+                <Button onClick={() => props.onMakeImage?.(true)} disabled={props.canConvert === false}>
+                  {tr("fpkg.image.ffpfsc", undefined, "Make compressed image (.ffpfsc)")}
+                </Button>
+              </div>
+              <div className="mt-1 text-xs text-[var(--color-muted)]">
+                {tr(
+                  "fpkg.image.hint",
+                  undefined,
+                  "The .exfat is the same size as the folder and the most compatible. The .ffpfsc is usually 40–60% smaller and takes longer to make; it needs room for both while it is made.",
+                )}
+              </div>
+            </div>
+          )}
           {props.replaces && props.canInstall && (
             <div className="text-xs text-[var(--color-muted)]">
               {tr(
@@ -306,9 +338,15 @@ export function RunCard(props: RunCardProps) {
             ? props.title
               ? tr("fpkg.installedTitle", { title: props.title }, "Installed on PS5 — {title}")
               : tr("fpkg.installedOn", { host: p.host ?? "" }, "Installed on the PS5 ({host})")
-            : p.mode === "ffpfsc"
+            : p.mode === "ffpfsc" || (p.mode === "image" && p.packagePath.endsWith(".ffpfsc"))
               ? tr("fpkg.compressed", undefined, "Compressed image written and verified")
-              : tr("fpkg.done", undefined, "Package written")}
+              : p.mode === "image"
+                ? tr(
+                    "fpkg.image.done",
+                    undefined,
+                    "Game image written and read back. Copy it to a PS5 drive (Upload) and ShadowMount+ will mount it.",
+                  )
+                : tr("fpkg.done", undefined, "Package written")}
         </div>
         <div className="text-sm text-[var(--color-muted)]">
           {p.packageBytes > 0 && <span>{prettyBytes(p.packageBytes)}</span>}
@@ -360,7 +398,7 @@ export function RunCard(props: RunCardProps) {
             </div>
           </div>
         )}
-        {!p.deleted && p.mode !== "ffpfsc" && installChoice(!installed)}
+        {!p.deleted && !makesImage(p.mode) && installChoice(!installed)}
         <div className="flex flex-wrap gap-2">
           {installed && !p.deleted && p.host && (
             <Button variant="primary" onClick={props.onLaunch}>
@@ -370,10 +408,10 @@ export function RunCard(props: RunCardProps) {
           {!p.deleted && (
             <Button onClick={props.onShowFolder}>{tr("fpkg.showFolder", undefined, "Show in folder")}</Button>
           )}
-          {!p.deleted && p.mode !== "ffpfsc" && props.onViewPackage && (
+          {!p.deleted && !makesImage(p.mode) && props.onViewPackage && (
             <Button onClick={props.onViewPackage}>{tr("viewer_open", undefined, "View details")}</Button>
           )}
-          {!p.deleted && p.mode !== "ffpfsc" && (
+          {!p.deleted && !makesImage(p.mode) && (
             <Button variant="danger" onClick={props.onDelete}>
               {props.deleteArmed
                 ? tr("fpkg.confirmDelete", undefined, deleteLabel(true))

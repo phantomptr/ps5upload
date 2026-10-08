@@ -29,21 +29,21 @@ const html = (v: Volume, packageDrive: string | null) =>
 describe("StorageCard — default package drive", () => {
   it("marks internal storage as the package drive when none is chosen", () => {
     const out = html(vol("/data", { fs_type: "nullfs" }), null);
-    expect(out).toContain("Packages go here");
-    expect(out).not.toContain("Use for packages");
+    expect(out).toContain("Package copies are stored here");
+    expect(out).not.toContain("Store package copies here");
   });
 
   it("offers a writable USB drive as the package drive", () => {
     const out = html(vol("/mnt/usb0"), null);
-    expect(out).toContain("Use for packages");
-    expect(out).not.toContain("Packages go here");
+    expect(out).toContain("Store package copies here");
+    expect(out).not.toContain("Package copies are stored here");
   });
 
   it("marks the chosen drive and lets internal be picked again", () => {
-    expect(html(vol("/mnt/usb0"), "/mnt/usb0")).toContain("Packages go here");
+    expect(html(vol("/mnt/usb0"), "/mnt/usb0")).toContain("Package copies are stored here");
     const internal = html(vol("/data", { fs_type: "nullfs" }), "/mnt/usb0");
-    expect(internal).toContain("Use for packages");
-    expect(internal).not.toContain("Packages go here");
+    expect(internal).toContain("Store package copies here");
+    expect(internal).not.toContain("Package copies are stored here");
   });
 
   it("shows the console's reserved pool as a fact, and nothing when it is not reported", () => {
@@ -61,6 +61,6 @@ describe("StorageCard — default package drive", () => {
 
   it("offers nothing on a read-only drive", () => {
     const out = html(vol("/mnt/usb1", { writable: false }), null);
-    expect(out).not.toContain("Use for packages");
+    expect(out).not.toContain("Store package copies here");
   });
 });

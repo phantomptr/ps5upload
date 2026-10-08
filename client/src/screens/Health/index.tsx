@@ -22,15 +22,16 @@ import { useTr } from "../../state/lang";
 import { mgmtAddr } from "../../lib/addr";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import {
-  healthScan,
   healthJunk,
   healthFix,
-  type HealthReport,
   type HealthCheck,
   type HealthStatus,
   type HealthFixAction,
   type HealthJunkFile,
 } from "../../api/ps5";
+import { useConnectionStore } from "../../state/connection";
+import { healthFor, scanHealth, scanHealthIfStale, useHealthStore } from "../../state/health";
+import { SpeedTestCard } from "./SpeedTestCard";
 
 /** Visual treatment per status.
  *
@@ -66,6 +67,7 @@ const STATUS_UI: Record<
 
 const CATEGORY_ORDER = [
   "connectivity",
+  "network",
   "runtime",
   "storage",
   "system",
@@ -94,9 +96,14 @@ export default function HealthScreen() {
   // wrong console is worse than none.
   const guard = useStaleHostGuard();
 
-  const [report, setReport] = useState<HealthReport | null>(null);
-  const [scanning, setScanning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // The scan lives in a store shared with Home: one scan serves both, and the result is
+  // still here when this screen is opened again.
+  const host = useConnectionStore((s) => s.host);
+  const health = useHealthStore((s) => healthFor(s, host));
+  const report = health?.report ?? null;
+  const scanning = health?.scanning ?? false;
+  const [actionError, setError] = useState<string | null>(null);
+  const error = actionError ?? health?.error ?? null;
   const [fixing, setFixing] = useState<HealthFixAction | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
@@ -108,25 +115,15 @@ export default function HealthScreen() {
   const [junkTotal, setJunkTotal] = useState(0);
 
   const scan = useCallback(async () => {
-    setScanning(true);
     setError(null);
     setNote(null);
-    const probe = guard.capture();
-    try {
-      const r = await healthScan(probe.host ? mgmtAddr(probe.host) : undefined);
-      if (probe.isStale()) return;
-      setReport(r);
-    } catch (e) {
-      if (probe.isStale()) return;
-      setError(String(e));
-    } finally {
-      setScanning(false);
-    }
-  }, [guard]);
+    await scanHealth(host);
+  }, [host]);
 
+  // On opening: a report a few minutes old is shown as it is; "Scan again" forces one.
   useEffect(() => {
-    void scan();
-  }, [scan]);
+    void scanHealthIfStale(host, 2 * 60_000);
+  }, [host]);
 
   const runFix = useCallback(
     async (action: HealthFixAction) => {
@@ -202,9 +199,9 @@ export default function HealthScreen() {
         icon={Stethoscope}
         title={tr("health_title", undefined, "Health Check")}
         description={tr(
-          "health_subtitle",
+          "health_subtitle_v2",
           undefined,
-          "Check that your console and this app are set up and working correctly.",
+          "Checks that the PS5, this app and the network between them are working, says what to fix when something is not, and measures how fast files move between them.",
         )}
         right={
           <Button
@@ -283,6 +280,8 @@ export default function HealthScreen() {
           </Card>
         )}
 
+        {host && report && <SpeedTestCard host={host} />}
+
         {grouped.map((g) => (
           <section key={g.cat} className="mb-5">
             <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
@@ -309,9 +308,9 @@ export default function HealthScreen() {
         >
           <p className="text-sm text-[var(--color-muted)]">
             {tr(
-              "health_junk_explain",
+              "health_junk_explain_v2",
               undefined,
-              "These are unfinished files left behind by interrupted transfers. Only files ps5upload created are listed, and nothing outside its own folders is touched.",
+              "Things ps5upload made and no longer needs: unfinished files from interrupted transfers, package copies left in its temp folder for over an hour, and old speed-test files. Only ps5upload's own folders are looked at; your games, packages and saves are never touched.",
             )}
           </p>
           <div className="mt-3 max-h-64 overflow-auto rounded border border-[var(--color-border)]">

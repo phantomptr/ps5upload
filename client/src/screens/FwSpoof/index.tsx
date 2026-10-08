@@ -47,9 +47,9 @@ export default function FwSpoofScreen() {
           icon={ShieldAlert}
           title={tr("fw_spoof_title", undefined, "Firmware Spoof Detection")}
           description={tr(
-            "fw_spoof_subtitle",
+          "fw_spoof_subtitle_v2",
             undefined,
-            "Detect if the reported firmware version has been modified",
+            "Checks whether the firmware version this PS5 reports has been changed by a spoofing payload, so you know its real version before you install something that depends on it.",
           )}
           right={
             <Button variant="ghost" onClick={() => void refresh()} disabled={loading}>

@@ -29,6 +29,7 @@ import { useSensors } from "../../state/sensors";
 import { Badge, Card, ConsoleChip, Sparkline, Spinner } from "../../components";
 import { useTr } from "../../state/lang";
 import { ServersCard } from "./ServersCard";
+import { HealthCard } from "./HealthCard";
 import {
   evaluateOperationReadiness,
   type Operation,
@@ -159,6 +160,11 @@ export default function HomeScreen() {
           <PowerControl host={host} />
         </div>
       ) : null}
+
+      {/* What needs attention, before the things to do: a blocked port or a full drive is
+          the reason the next action would fail. Only once the helper answers; without it the
+          hero above already says what is wrong. */}
+      {host && connected ? <HealthCard host={host} /> : null}
 
       <div className="grid gap-4 xl:grid-cols-12">
         <Card className="xl:col-span-7">

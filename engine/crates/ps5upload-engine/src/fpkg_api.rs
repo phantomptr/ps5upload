@@ -703,6 +703,231 @@ pub(crate) async fn ffpfsc_compress_handler(
         .into_response()
 }
 
+#[derive(Deserialize)]
+pub(crate) struct ExfatBuildReq {
+    /// A game folder on this computer (one with `sce_sys` in it).
+    source: String,
+    /// Where the `.exfat` goes; the converter's output folder by default.
+    #[serde(default)]
+    output_dir: Option<String>,
+}
+
+/// The image's file name for a game folder: the folder's own name, made safe.
+fn exfat_name_for(source: &Path) -> String {
+    let stem: String = source
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+        .chars()
+        .map(|c| {
+            if c.is_control() || "\"*/:<>?\\|".contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let stem = stem.trim().trim_matches('.').to_string();
+    format!("{}.exfat", if stem.is_empty() { "game" } else { &stem })
+}
+
+/// POST /api/exfat/build — write a game folder as one `.exfat` image ShadowMountPlus mounts.
+/// Runs as a job like a package build: the ticker publishes bytes written, and the job's
+/// cancel stops it between chunks. The image is written as `.partial`, read back through the
+/// exFAT reader (every file's path and size must match the folder) and only then renamed.
+pub(crate) async fn exfat_build_handler(
+    State(state): State<AppState>,
+    Json(req): Json<ExfatBuildReq>,
+) -> impl IntoResponse {
+    use ps5upload_fpkg::source::{FolderSource, SourceTree};
+    let source = resolve_engine_path(&req.source);
+    if !source.is_dir() {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            format!("{} is not a folder", source.display()),
+        )
+        .into_response();
+    }
+    let out_dir = output_dir(req.output_dir.as_deref());
+    let output = out_dir.join(exfat_name_for(&source));
+    if output.exists() {
+        return json_err(
+            StatusCode::CONFLICT,
+            format!("{} already exists", output.display()),
+        )
+        .into_response();
+    }
+    if let Err(e) = std::fs::create_dir_all(&out_dir) {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            format!("{}: {e}", out_dir.display()),
+        )
+        .into_response();
+    }
+    let scan_source = source.clone();
+    let tree = match tokio::task::spawn_blocking(move || FolderSource::open(&scan_source)).await {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => return json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        Err(e) => {
+            return json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
+        }
+    };
+    let total: u64 = tree.files().iter().map(|f| f.size).sum();
+    if tree.files().is_empty() {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            format!("{} has no files in it", source.display()),
+        )
+        .into_response();
+    }
+
+    let job_id = Uuid::new_v4();
+    let cancel = register_transfer_cancel(job_id);
+    let bytes = Arc::new(AtomicU64::new(0));
+    let started_at_ms = now_ms();
+    set_job(
+        &state.jobs,
+        &state.events_tx,
+        job_id,
+        JobState::Running {
+            stage: None,
+            started_at_ms,
+            bytes_sent: 0,
+            total_bytes: total,
+            files: Vec::new(),
+            skipped_files: 0,
+            skipped_bytes: 0,
+            files_processing: 0,
+            files_finalized: 0,
+            files_finalizing_total: 0,
+            bytes_finalized: 0,
+        },
+    );
+    let jobs = state.jobs.clone();
+    let events_tx = state.events_tx.clone();
+    let tick_bytes = bytes.clone();
+    let ticker = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let mut g = jobs.lock().unwrap_or_else(|e| e.into_inner());
+            match g.get_mut(&job_id) {
+                Some(JobState::Running { bytes_sent, .. }) => {
+                    *bytes_sent = tick_bytes.load(Ordering::Relaxed);
+                    let state = g.get(&job_id).cloned();
+                    drop(g);
+                    if let Some(state) = state {
+                        let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": state });
+                        let _ = events_tx.send(msg.to_string());
+                    }
+                }
+                _ => break,
+            }
+        }
+    });
+
+    let state_for_job = state.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut tree = tree;
+        let partial = output.with_extension("exfat.partial");
+        let outcome = (|| -> Result<ps5upload_fpkg::exfat_write::ExfatBuilt, String> {
+            let built = ps5upload_fpkg::exfat_write::build_exfat(
+                &mut tree,
+                &partial,
+                None,
+                &mut |done, _| bytes.store(done, Ordering::Relaxed),
+                &|| cancel.load(Ordering::Relaxed),
+            )
+            .map_err(|e| e.to_string())?;
+            // Read it back: the image must list exactly the folder's files, at their sizes.
+            let mut want: Vec<(String, u64)> = tree
+                .files()
+                .iter()
+                .map(|f| (f.path.clone(), f.size))
+                .collect();
+            want.sort();
+            let got: Vec<(String, u64)> = ps5upload_fpkg::exfat::ExFat::open(&partial)
+                .and_then(|mut v| v.walk())
+                .map_err(|e| format!("the image could not be read back: {e}"))?
+                .into_iter()
+                .map(|f| (f.path, f.size))
+                .collect();
+            if got != want {
+                return Err(format!(
+                    "the image read back with {} files where the folder has {}",
+                    got.len(),
+                    want.len()
+                ));
+            }
+            std::fs::rename(&partial, &output).map_err(|e| e.to_string())?;
+            Ok(built)
+        })();
+        let completed_at_ms = now_ms();
+        ticker.abort();
+        match outcome {
+            Ok(built) => {
+                built_packages()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(output.clone());
+                crate::engine_log::record(
+                    "info",
+                    format!(
+                        "exfat: {} -> {} ({} files, {} bytes, {} byte clusters, read back)",
+                        source.display(),
+                        output.display(),
+                        built.files,
+                        built.image_bytes,
+                        built.cluster_size
+                    ),
+                );
+                set_job(
+                    &state_for_job.jobs,
+                    &state_for_job.events_tx,
+                    job_id,
+                    JobState::Done {
+                        started_at_ms,
+                        completed_at_ms,
+                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                        tx_id_hex: String::new(),
+                        bytes_sent: built.image_bytes,
+                        dest: output.display().to_string(),
+                        files_sent: built.files as u64,
+                        skipped_files: 0,
+                        skipped_bytes: 0,
+                        commit_ack: None,
+                    },
+                );
+            }
+            Err(error) => {
+                let _ = std::fs::remove_file(&partial);
+                crate::engine_log::record("warn", format!("exfat: image build failed: {error}"));
+                set_job(
+                    &state_for_job.jobs,
+                    &state_for_job.events_tx,
+                    job_id,
+                    JobState::Failed {
+                        started_at_ms,
+                        completed_at_ms,
+                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                        error,
+                        error_reason: None,
+                        error_detail: None,
+                        error_console: None,
+                    },
+                );
+            }
+        }
+    });
+
+    (
+        StatusCode::ACCEPTED,
+        Json(JobCreated {
+            job_id: job_id.to_string(),
+        }),
+    )
+        .into_response()
+}
+
 /// Package files being written by a build in this engine (`<stem>.pkg.partial`).
 fn active_partials() -> &'static std::sync::Mutex<std::collections::HashSet<PathBuf>> {
     static SET: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
@@ -996,6 +1221,19 @@ pub(crate) async fn fpkg_extract_cleanup_handler(
 #[cfg(test)]
 mod extract_tests {
     use super::*;
+
+    #[test]
+    fn an_image_is_named_after_its_game_folder() {
+        assert_eq!(
+            super::exfat_name_for(Path::new("/games/PPSA01234-app")),
+            "PPSA01234-app.exfat"
+        );
+        assert_eq!(
+            super::exfat_name_for(Path::new("/games/What: a game?")),
+            "What_ a game_.exfat"
+        );
+        assert_eq!(super::exfat_name_for(Path::new("/")), "game.exfat");
+    }
 
     #[test]
     fn a_leftover_partial_goes_but_one_being_written_stays() {

@@ -1,33 +1,12 @@
 # FAQ
 
-Answers to the questions that come up most often while using
-ps5upload. Organized by topic — use the search box in the FAQ tab to
-jump to what you need.
+Answers to the questions that come up most often while using ps5upload. In the app's FAQ
+screen, the tabs are the sections below, each topic lists its questions, and the search box
+finds a word or an error code (for example `0x80B2116F`) in any answer.
 
 ---
 
-## Disclaimer
-
-**Use this software entirely at your own risk.** Provided "as is",
-without warranty of any kind.
-
-- It interacts with a **modified PS5** — a jailbroken console with
-  kernel exploits already loaded by you. Modifying console state,
-  bypassing platform integrity checks, or running unsigned code can
-  void your manufacturer warranty, violate the platform's terms of
-  service, and, under certain operations, leave your console
-  unrecoverable without a reinstall.
-- It writes to your PS5 filesystem and can install / register
-  packages with Sony's installer. Mistakes can corrupt the app
-  database or leave Sony's mgmt service wedged. Back up important
-  saves before bulk operations.
-- It is intended only for content you legally own and hardware that
-  belongs to you. How you use it is your responsibility.
-- No support guaranteed — free volunteer-built tool.
-
-If those terms aren't acceptable, do not use this software.
-
----
+# Start here
 
 ## What ps5upload does (and doesn't)
 
@@ -43,7 +22,11 @@ the app over **AVA1**, one encrypted connection on port 9120.
 - **Install packages**: PS4 `.pkg` and PS5 fake packages (base, update, DLC) through ps5upload's
   own on-console installer, from your computer (**Stream & install** or **Upload & install**),
   a NAS, a USB drive or a link.
-- **Convert to FPKG**: build an installable package from a decrypted game folder or an image.
+- **Convert Games**: build an installable package from a decrypted game folder or an image, or
+  write a game folder as a game image (`.exfat`, or the smaller `.ffpfsc`) that ShadowMount+
+  mounts.
+- **Health check and speed test**: checks the PS5, the app and the network between them, says
+  what to fix, and measures how fast files move.
 - **Mount** `.exfat` / `.ffpkg` images, **register and launch** games, browse and manage files.
 - **Cheats, fan curve, hardware view, power and wake, payload sender, backport tools,** and an
   optional FTP server on the PS5.
@@ -105,6 +88,122 @@ is running.
 
 ---
 
+## Getting started
+
+**Q: Do I need the helper?**
+Yes. The PS5 has to be running `ps5upload.elf` before the app can do anything beyond the
+Connection tab. The app walks you through sending it on first run.
+
+**Q: How do I send the payload?**
+Open ps5upload → **Connection** tab → enter your PS5's IP → click
+**Check**, then **Send payload**. The app waits up to 20 seconds
+for the payload to come up, then unlocks the rest of the tabs.
+
+**Q: How do I send a different payload (kstuff, kernel patches,
+plugin scripts, etc)?**
+Open the **Send payload** tab, click **Choose**, pick any `.elf`,
+`.bin`, `.js`, `.lua`, or `.jar` file, set the port to whatever your
+loader listens on (the screen has a built-in cheat sheet — `.elf` →
+9021, `.js` → 50000, `.lua` → 9026, `.jar` → 9025 for BD-JB / BDJ),
+and click **Send**. The app probes
+the file, shows you whether it looks like a ps5upload payload or
+something else, and records the send in a history panel so you
+can replay it without re-picking the file.
+
+**Q: The Send button says "Waiting for payload…" for a long time.**
+That is the normal probe window, up to 20 seconds. If it times out, the payload likely crashed on
+load; send it again.
+
+**Q: Can I use a helper that is already running (loaded by another tool)?**
+Yes. Open **Connection** while it is up and the app skips the send step. If you loaded it another
+way, the console shows a 6-digit code to confirm once. If the helper is older than this app, the
+app shows **Update helper**, which replaces it in one click.
+
+**Q: Can multiple computers connect to the same PS5 at the same time?**
+Yes, up to 16 sessions; each computer pairs once. Browsing and the hardware view interleave
+cleanly. Two uploads to the same path will fight, since nothing locks a destination.
+
+**Q: What is the pairing code, and which ports does ps5upload use?**
+Outgoing from this computer to the PS5, two ports: **9120** (the helper, AVA1) and **9021** (the
+ELF loader). Stream & install also needs the PS5 to connect **in** to this computer on **19113**
+(the engine); on Windows allow ps5upload on both Private and Public networks, since a cable
+straight to the console is a Public network.
+
+| Port | On | Used for |
+|---|---|---|
+| 9120 TCP | PS5 | The helper: uploads, files, management (encrypted) |
+| 9021 TCP | PS5 | ELF loader: sending the helper |
+| 9115 TCP | PS5 | The installer the helper starts |
+| 8084 TCP | PS5 | Payload Manager, when there is no ELF loader |
+| 19113 TCP | this computer | The engine: the PS5 fetches packages from it during Stream & install |
+| 9295, 9302 | PS5 | Remote Play pairing and wake |
+
+Every connection is encrypted and each computer pairs with the console once. A helper
+the app launched pairs by itself; one loaded another way shows a 6-digit code on the console,
+which you enter in the app. If the console shows a different PS5 at an address you reuse, forget
+the old one and pair again.
+
+**Q: I updated to 6.0 and the app says the helper is old.**
+6.0 and v5.x cannot talk to each other. Click **Update helper** on the Connection screen (or
+reload `ps5upload.elf`) and the app replaces it. If the old helper will not exit, restart the
+console and try again.
+
+**Q: How do I cap the upload speed?**
+Set `PS5UPLOAD_BANDWIDTH_MBPS` (megabytes per second) before starting the app or engine. Unset or
+zero means no cap. The pre-6.0 name of this variable still works for one release.
+
+**Q: Can I run the engine on a different machine (self-hosted)?**
+Yes. Run it on a server or NAS and point the app at it in **Settings → Engine URL**. Images:
+`ghcr.io/phantomptr/ps5upload-engine` (engine only) and `ghcr.io/phantomptr/ps5upload-engine-webui`
+(full web UI), tagged `:latest` or `:<version>`.
+
+- The API has **no password**. Set `PS5UPLOAD_ALLOW_IP` to the IPs or ranges allowed to use it
+  (`192.168.1.0/24`); anything else gets a `403` naming the refused address. Trusted LAN only,
+  never the internet.
+- Start from [`engine/compose.yaml`](engine/compose.yaml) (set `PS5_ADDR`, `PS5UPLOAD_ALLOW_IP`
+  and your package folder). It uses **host networking**: a stream install makes the PS5 download
+  the package *from the engine*, and on Docker's bridge network the engine offers an address the
+  PS5 cannot reach. Docker Desktop (macOS/Windows) has no host networking: publish port 19113 and
+  set `PS5UPLOAD_PKG_HOST_IP` to the computer's LAN IP.
+- Keep a volume on `/data` (saved servers, install history, artwork cache).
+- With a remote engine the app's file pickers browse the **engine's** disk.
+
+**Q: Docker or a NAS says "Permission denied" when I save or upload.**
+The image runs as UID:GID 65532 and keeps its state in `/data`. If you bind-mount a folder someone
+else owns, the engine names the folder, its own UID:GID and the folder's owner. Either set `user:`
+in the compose file to the folder's owner (`ls -ln` shows the numbers), or run
+`chown -R 65532:65532 <host folder>`. `PS5UPLOAD_DATA_DIR` does not fix this.
+
+**Q: Can I use ps5upload from a web browser (no desktop app)?**
+Yes. The `webui` image (above) serves the full app over HTTP; open `http://<host>:19113` from an
+allowed IP. Same security rules: no password, trusted LAN only.
+
+- **Upload works**, but the file picker browses the **engine's** disk, not your browser machine's.
+  Mount your games into the container (`-v /host/games:/pkgs:ro`) and set
+  `PS5UPLOAD_BROWSE_ROOTS=/pkgs` (comma-separated for several) so the picker opens there.
+  **Install Package → From this device** uploads a package from your browser machine instead.
+- An upload keeps running when you close the tab; reopening shows it. Only one tab runs the queue.
+- Desktop-only and hidden in the browser: **archive uploads**, **Payloads** (sending a file from
+  disk), saving a save backup or downloading files to your computer, and attaching files to a bug
+  report. Everything that works on the PS5 itself is the same as on desktop.
+- The docker image can be built using `PS5UPLOAD_BASE_URL` to change the root path of the app.
+
+**Q: What is "Stream install"?**
+It installs a `.pkg` **straight from your computer**: the PS5 pulls the bytes over your network, so
+nothing is copied to the console first (no package plus installed game taking room). Keep the
+computer on and connected until it finishes. The PS5 must be able to reach your computer; if it
+cannot, see "Stream install fails before the PS5 downloads anything", or use **Upload & install**.
+
+**Q: Can I manage several PS5s at the same time?**
+Yes. Add each console from **Connection** or the **+** on the console tab strip. Each console has
+its own tab, status dot, upload queue and installs, which run independently and in parallel;
+switching tabs only changes what you see. On the console side, low-level operations are serialized,
+so overlapping work (a temperature read during an install) cannot crash the helper.
+
+---
+
+# Setup
+
 ## Supported platforms
 
 **Q: Which desktop OSes run ps5upload?**
@@ -139,33 +238,6 @@ the installer says so instead of reporting a false success.
 All models: original CFI-1xxx, Digital, Slim (CFI-2xxx), and Pro
 (CFI-7xxx). Transfer, mount, volume listing, and hardware info work
 on every one.
-
----
-
-## Android
-
-**Q: How do I install the Android app?**
-Download `PS5Upload-<ver>-android.apk` from the Releases page and open it. Android asks you to
-allow installs from your browser or file manager the first time. Updates install in place.
-
-**Q: The app's text or buttons are huge (or tiny) on my phone.**
-Your phone's Display size or Font size setting scales the whole app. Open **Settings → Text
-size** in ps5upload and pick a smaller percentage.
-
-**Q: I picked a folder, `.zip` or `.pkg` on Android but it fails ("could not read", "No such file").**
-Android needs **All files access** before the app can read your files. Tap **Choose folder**,
-**Choose file** or **Add .pkg**, tap **Open settings**, turn on **Allow access to manage all
-files** for PS5Upload, come back and tap **Retry**. You can also grant it in **Android Settings
-→ Apps → PS5Upload → Permissions → All files access**.
-
-**Q: How do I upload a big game from my phone?**
-**Upload → Choose folder** (or **Choose file** for a `.zip`), pick it in the in-app browser,
-choose the destination and **Start**. The file is read in place, nothing is copied first.
-
-**Q: The `helper` dot at the bottom of the app is red.**
-The dot is the PS5-side helper, not the app. Red means it is not running (or is an older version
-that needs **Update helper**). Run **Set up your PS5** or send it from the **Payloads** tab. The
-`engine` dot is the app's own service and is green whenever the app is open.
 
 ---
 
@@ -391,6 +463,40 @@ sudo chown -R "$USER:$USER" ~/.ps5upload
 
 ---
 
+## Android
+
+**Q: After updating the app, it says "This PS5 has not accepted this app yet" or "The PS5 is not
+accepting new pairings".**
+To the PS5, an app updated from 5.x is a new device, and the PS5 only takes new devices for a
+short while after its helper starts. Tap **Pair…**, then **Resend helper**: the app sends its
+helper again, the PS5 accepts the app that sent it, and the dialog closes by itself a few
+seconds later. This works the same in the desktop app.
+
+**Q: How do I install the Android app?**
+Download `PS5Upload-<ver>-android.apk` from the Releases page and open it. Android asks you to
+allow installs from your browser or file manager the first time. Updates install in place.
+
+**Q: The app's text or buttons are huge (or tiny) on my phone.**
+Your phone's Display size or Font size setting scales the whole app. Open **Settings → Text
+size** in ps5upload and pick a smaller percentage.
+
+**Q: I picked a folder, `.zip` or `.pkg` on Android but it fails ("could not read", "No such file").**
+Android needs **All files access** before the app can read your files. Tap **Choose folder**,
+**Choose file** or **Add .pkg**, tap **Open settings**, turn on **Allow access to manage all
+files** for PS5Upload, come back and tap **Retry**. You can also grant it in **Android Settings
+→ Apps → PS5Upload → Permissions → All files access**.
+
+**Q: How do I upload a big game from my phone?**
+**Upload → Choose folder** (or **Choose file** for a `.zip`), pick it in the in-app browser,
+choose the destination and **Start**. The file is read in place, nothing is copied first.
+
+**Q: The `helper` dot at the bottom of the app is red.**
+The dot is the PS5-side helper, not the app. Red means it is not running (or is an older version
+that needs **Update helper**). Run **Set up your PS5** or send it from the **Payloads** tab. The
+`engine` dot is the app's own service and is green whenever the app is open.
+
+---
+
 ## Network setup — direct Ethernet (optional, best stability + speed)
 
 **Q: Do I need anything special on my network?**
@@ -583,119 +689,7 @@ and every transfer afterwards goes over the direct cable.
 
 ---
 
-## Getting started
-
-**Q: Do I need the helper?**
-Yes. The PS5 has to be running `ps5upload.elf` before the app can do anything beyond the
-Connection tab. The app walks you through sending it on first run.
-
-**Q: How do I send the payload?**
-Open ps5upload → **Connection** tab → enter your PS5's IP → click
-**Check**, then **Send payload**. The app waits up to 20 seconds
-for the payload to come up, then unlocks the rest of the tabs.
-
-**Q: How do I send a different payload (kstuff, kernel patches,
-plugin scripts, etc)?**
-Open the **Send payload** tab, click **Choose**, pick any `.elf`,
-`.bin`, `.js`, `.lua`, or `.jar` file, set the port to whatever your
-loader listens on (the screen has a built-in cheat sheet — `.elf` →
-9021, `.js` → 50000, `.lua` → 9026, `.jar` → 9025 for BD-JB / BDJ),
-and click **Send**. The app probes
-the file, shows you whether it looks like a ps5upload payload or
-something else, and records the send in a history panel so you
-can replay it without re-picking the file.
-
-**Q: The Send button says "Waiting for payload…" for a long time.**
-That is the normal probe window, up to 20 seconds. If it times out, the payload likely crashed on
-load; send it again.
-
-**Q: Can I use a helper that is already running (loaded by another tool)?**
-Yes. Open **Connection** while it is up and the app skips the send step. If you loaded it another
-way, the console shows a 6-digit code to confirm once. If the helper is older than this app, the
-app shows **Update helper**, which replaces it in one click.
-
-**Q: Can multiple computers connect to the same PS5 at the same time?**
-Yes, up to 16 sessions; each computer pairs once. Browsing and the hardware view interleave
-cleanly. Two uploads to the same path will fight, since nothing locks a destination.
-
-**Q: What is the pairing code, and which ports does ps5upload use?**
-Outgoing from this computer to the PS5, two ports: **9120** (the helper, AVA1) and **9021** (the
-ELF loader). Stream & install also needs the PS5 to connect **in** to this computer on **19113**
-(the engine); on Windows allow ps5upload on both Private and Public networks, since a cable
-straight to the console is a Public network.
-
-| Port | On | Used for |
-|---|---|---|
-| 9120 TCP | PS5 | The helper: uploads, files, management (encrypted) |
-| 9021 TCP | PS5 | ELF loader: sending the helper |
-| 9115 TCP | PS5 | The installer the helper starts |
-| 8084 TCP | PS5 | Payload Manager, when there is no ELF loader |
-| 19113 TCP | this computer | The engine: the PS5 fetches packages from it during Stream & install |
-| 9295, 9302 | PS5 | Remote Play pairing and wake |
-
-Every connection is encrypted and each computer pairs with the console once. A helper
-the app launched pairs by itself; one loaded another way shows a 6-digit code on the console,
-which you enter in the app. If the console shows a different PS5 at an address you reuse, forget
-the old one and pair again.
-
-**Q: I updated to 6.0 and the app says the helper is old.**
-6.0 and v5.x cannot talk to each other. Click **Update helper** on the Connection screen (or
-reload `ps5upload.elf`) and the app replaces it. If the old helper will not exit, restart the
-console and try again.
-
-**Q: How do I cap the upload speed?**
-Set `PS5UPLOAD_BANDWIDTH_MBPS` (megabytes per second) before starting the app or engine. Unset or
-zero means no cap. The pre-6.0 name of this variable still works for one release.
-
-**Q: Can I run the engine on a different machine (self-hosted)?**
-Yes. Run it on a server or NAS and point the app at it in **Settings → Engine URL**. Images:
-`ghcr.io/phantomptr/ps5upload-engine` (engine only) and `ghcr.io/phantomptr/ps5upload-engine-webui`
-(full web UI), tagged `:latest` or `:<version>`.
-
-- The API has **no password**. Set `PS5UPLOAD_ALLOW_IP` to the IPs or ranges allowed to use it
-  (`192.168.1.0/24`); anything else gets a `403` naming the refused address. Trusted LAN only,
-  never the internet.
-- Start from [`engine/compose.yaml`](engine/compose.yaml) (set `PS5_ADDR`, `PS5UPLOAD_ALLOW_IP`
-  and your package folder). It uses **host networking**: a stream install makes the PS5 download
-  the package *from the engine*, and on Docker's bridge network the engine offers an address the
-  PS5 cannot reach. Docker Desktop (macOS/Windows) has no host networking: publish port 19113 and
-  set `PS5UPLOAD_PKG_HOST_IP` to the computer's LAN IP.
-- Keep a volume on `/data` (saved servers, install history, artwork cache).
-- With a remote engine the app's file pickers browse the **engine's** disk.
-
-**Q: Docker or a NAS says "Permission denied" when I save or upload.**
-The image runs as UID:GID 65532 and keeps its state in `/data`. If you bind-mount a folder someone
-else owns, the engine names the folder, its own UID:GID and the folder's owner. Either set `user:`
-in the compose file to the folder's owner (`ls -ln` shows the numbers), or run
-`chown -R 65532:65532 <host folder>`. `PS5UPLOAD_DATA_DIR` does not fix this.
-
-**Q: Can I use ps5upload from a web browser (no desktop app)?**
-Yes. The `webui` image (above) serves the full app over HTTP; open `http://<host>:19113` from an
-allowed IP. Same security rules: no password, trusted LAN only.
-
-- **Upload works**, but the file picker browses the **engine's** disk, not your browser machine's.
-  Mount your games into the container (`-v /host/games:/pkgs:ro`) and set
-  `PS5UPLOAD_BROWSE_ROOTS=/pkgs` (comma-separated for several) so the picker opens there.
-  **Install Package → From this device** uploads a package from your browser machine instead.
-- An upload keeps running when you close the tab; reopening shows it. Only one tab runs the queue.
-- Desktop-only and hidden in the browser: **archive uploads**, **Payloads** (sending a file from
-  disk), saving a save backup or downloading files to your computer, and attaching files to a bug
-  report. Everything that works on the PS5 itself is the same as on desktop.
-- The docker image can be built using `PS5UPLOAD_BASE_URL` to change the root path of the app.
-
-**Q: What is "Stream install"?**
-It installs a `.pkg` **straight from your computer**: the PS5 pulls the bytes over your network, so
-nothing is copied to the console first (no package plus installed game taking room). Keep the
-computer on and connected until it finishes. The PS5 must be able to reach your computer; if it
-cannot, see "Stream install fails before the PS5 downloads anything", or use **Upload & install**.
-
-**Q: Can I manage several PS5s at the same time?**
-Yes. Add each console from **Connection** or the **+** on the console tab strip. Each console has
-its own tab, status dot, upload queue and installs, which run independently and in parallel;
-switching tabs only changes what you see. On the console side, low-level operations are serialized,
-so overlapping work (a temperature read during an install) cannot crash the helper.
-
----
+# Files and games
 
 ## Transferring
 
@@ -970,13 +964,92 @@ you trigger Unmount from the Library tab or the Volumes tab.
 
 ---
 
+## My uploaded game won't launch
+
+This is almost never a bug in ps5upload: the transfer worked, and Sony's side
+refuses to start the title. Check these in order.
+
+1. **A PS5 fake game on firmware above 11.60.** The package installs, but PS5
+   fake game packages can't be played on firmware above 11.60. This is the case
+   for a PS5 game installed from a fake package on FW 11.61, 12.xx or 13.60.
+   PS4 packages are fine, and PS5 homebrew apps (Itemzflow and similar) launch.
+   The app shows a warning for this combination on Install, Convert and when a
+   launch fails. Use a PS4 package, or the folder-dump route below.
+2. **"View product" or "missing base entitlement".** Install the base game
+   before its update or DLC. A package that needs an entitlement the console
+   does not have will always show "View product".
+3. **kstuff or ShadowMount+ is not running.** Launching needs kernel access.
+   The Installed screen says when the helper has none; load kstuff and
+   reconnect. Disc-image titles need ShadowMount+ running.
+4. **Convert to exFAT + ShadowMount+ (reported working on FW 13.60).** Put the
+   decrypted game folder on the console's drive (or convert it to an `.exfat`
+   image with **Convert**), let ShadowMount+ mount it, and launch from the
+   console's home screen. This does not depend on the package installer.
+5. **A launch the app sent is not the same as a game that started.** The
+   console accepts a launch and may take a while on the first start. If the
+   game never appears, close it from the PS5 and start it from there.
+
+# Installing packages
+
 ## Install Package
 
 **Q: Can I install fake packages from the desktop?**
-Yes. **Install Package** is a package library: click **Add package** and pick a PS4 `.pkg` or PS5
-`.fpkg` (a PS4 fake package often keeps the ordinary `.pkg` extension). It uploads once to
-`/user/data/ps5upload/pkg_library/` and stays there, with cover art and size, and each row has
-**Install**, **Reinstall** and **Delete**. Or skip the upload with **Stream install**.
+Yes, with **Install Package**. It has two tabs, for the two ways a package can reach the PS5:
+
+- **Stream & install**: the PS5 installs straight from this computer or from a link. No copy is
+  put on the PS5 first, so it needs no spare space there. This is the most reliable way.
+- **Upload & install**: the package is copied to the PS5 first
+  (`/user/data/ps5upload/pkg_library/`), then installed from that copy. The copies stay listed
+  with cover art and size, and each has **Install**, **Reinstall** and **Delete**.
+
+Pick a PS4 `.pkg` or a PS5 `.fpkg` (a fake package often keeps the ordinary `.pkg` extension).
+What is installing or waiting shows in the queue at the top of the screen and in **Tasks**, and
+keeps going when you open another screen.
+
+**Q: Stream & install or Upload & install: which one?**
+Use **Stream & install** unless you have a reason not to. Use **Upload & install** when the PS5
+cannot reach this computer (Stream fails with a network error: see the next question), when you
+install from a phone, or when you want to keep packages on the PS5 to reinstall later without the
+computer. Upload needs free space on the PS5 for the copy as well as for the installed game.
+
+**Q: How do I install from a download link, and which of the three ways do I pick?**
+On the **Stream & install** tab, paste a direct link to a `.pkg` under **Install from a link**.
+A link that serves a package installs even without ".pkg" in its address. Then choose who fetches
+it:
+
+- **Stream through this computer** (the default): this computer downloads over several
+  connections and passes it straight to the PS5. Usually the fastest, nothing is saved to disk,
+  and it works when only this computer can reach the link (a private server, a VPN). Keep the
+  computer awake until it finishes.
+- **The PS5 downloads it**: the PS5 fetches the link by itself and you can close the app once it
+  has started. The PS5 must be able to reach the link, and its progress shows on the PS5, not in
+  the app. If the PS5 cannot fetch it, the app streams it through this computer instead.
+- **Download here first, then install**: this computer saves the whole package, then installs
+  it. The slowest and it needs disk space, but a link that expires or drops part-way only costs
+  a retry of the download.
+
+**Skip the certificate check** is offered for the two ways where this computer makes the
+connection (your own server, or a site with an out-of-date certificate). It cannot apply when
+the PS5 downloads the link itself.
+
+You can give a link a **name**. The name is shown in the queue, in Tasks and under **Recent
+links** instead of the address, so with several links in play you can tell them apart and retry
+the right one. Recent links are kept per console; use one again with **Use**, rename it or
+remove it.
+
+**Q: Can I install packages that are inside a ZIP, 7z or RAR?**
+Yes: **Upload & install → Install packages from an archive**. Only the `.pkg` files in the
+archive are unpacked, straight to the PS5 (nothing is extracted on your computer), and installed
+one by one: the base game first, then its update, then DLC. If an install fails, the unpacked
+files stay on the PS5 so you can retry.
+
+- A **multi-part RAR** (`.part1.rar`, `.part2.rar`, …) works: choose the first part and keep the
+  others in the same folder.
+- A **password** is asked for when a RAR needs one. Password-protected ZIP and 7z files are not
+  supported.
+- If the archive is **behind download links**, open "The archive is behind download links" in
+  the same card and paste the link, or one link per part. The files are downloaded to this
+  computer first (`Downloads/ps5upload`), which needs room for all of them.
 
 Every install runs through ps5upload's own on-console installer (port `:9115`). The app sends it
 when it is not already running, alongside the helper, so the connection does not drop. An install
@@ -991,13 +1064,28 @@ Settings → Set Up Internet Connection → your connection → Advanced Setting
 names the network adapter and whether Windows treats it as Public, with one-click fixes.
 **Upload & install** works without this connection.
 
-**Q: How do I turn a game folder into an installable package? (Convert to FPKG)**
-Open **Convert to FPKG**, pick a decrypted game folder or an `.exfat` / `.ffpkg` image. The app
+**Q: How do I turn a game folder into an installable package? (Convert Games)**
+Open **Convert Games**, pick a decrypted game folder or an `.exfat` / `.ffpkg` image. The app
 checks it has what a launchable package needs and builds a fake package on your computer,
 compressed the way Sony's packages are. It reads games from the console through the helper, so
 ftpsrv is not needed. Then choose **Stream install** or **Upload & install**, or keep the package.
 The console needs kstuff, `a53_ppr_install_fast.elf` and `shadowmountplus.elf` loaded first. Keep
 the game files you converted from.
+
+**Q: How do I turn a game folder into a game image (`.exfat` or `.ffpfsc`)?**
+Open **Convert Games**, pick the game folder on your computer, and under "Or make a game image
+instead of a package" choose:
+
+- **Make game image (.exfat)**: one file, the same size as the folder, and the most compatible.
+- **Make compressed image (.ffpfsc)**: usually 40–60% smaller. It takes longer and needs room
+  for both files while it is made; only the compressed one is kept.
+
+Nothing is installed. Copy the image to a folder ShadowMount+ watches on the PS5 (for example
+`/data/homebrew`, with **Upload**), and ShadowMount+ mounts it and puts the game on the home
+screen. The image is read back and checked against the folder before it is kept. The converter
+is part of the engine, so it is the same on every desktop platform; it was checked on macOS,
+and an image it made ran a game on a PS5 on firmware 13.60. A folder that is on the console or on a saved server cannot be made
+into an image from here; copy it to this computer first.
 
 **Q: Can I install a package that is already on a USB drive?**
 Yes. Plug the drive into the PS5; packages on it show in **Install Package → External Packages**
@@ -1101,6 +1189,18 @@ At `/user/data/ps5upload/pkg_library/<ContentID>.pkg`, and they stay so you can 
 one with **Delete** on its row, or turn on **Auto-delete each package from the PS5 after it
 installs**. A **Stream install** never leaves a copy on the PS5.
 
+To keep the copies on another drive (an M.2 or USB drive), open **Volumes** and press **Store
+package copies here** on that drive. This only moves where the copies are kept. It does not
+change where games are installed: the PS5 decides that in its own Storage settings.
+
+**Q: What is ps5upload keeping on my PS5, and how do I clean it up?**
+**Volumes → Kept by ps5upload** lists the folders the app writes on each drive (package copies,
+package temp files, save backups, test files) and how much each holds. **Clean up** empties the
+temp and test folders. Your package copies and save backups are only opened from there, never
+deleted. **Health Check → Leftover files** also removes unfinished files from interrupted
+transfers, package temp copies older than an hour and old speed-test files, and shows the list
+before deleting anything.
+
 ---
 
 ## Install routes: what works for what (support matrix)
@@ -1180,32 +1280,183 @@ Firmware notes:
   package (base first) with kstuff running, and see "My uploaded game won't
   launch" below.
 
-## My uploaded game won't launch
+# Console and tools
 
-This is almost never a bug in ps5upload: the transfer worked, and Sony's side
-refuses to start the title. Check these in order.
+## Console tools
 
-1. **A PS5 fake game on firmware above 11.60.** The package installs, but PS5
-   fake game packages can't be played on firmware above 11.60. This is the case
-   for a PS5 game installed from a fake package on FW 11.61, 12.xx or 13.60.
-   PS4 packages are fine, and PS5 homebrew apps (Itemzflow and similar) launch.
-   The app shows a warning for this combination on Install, Convert and when a
-   launch fails. Use a PS4 package, or the folder-dump route below.
-2. **"View product" or "missing base entitlement".** Install the base game
-   before its update or DLC. A package that needs an entitlement the console
-   does not have will always show "View product".
-3. **kstuff or ShadowMount+ is not running.** Launching needs kernel access.
-   The Installed screen says when the helper has none; load kstuff and
-   reconnect. Disc-image titles need ShadowMount+ running.
-4. **Convert to exFAT + ShadowMount+ (reported working on FW 13.60).** Put the
-   decrypted game folder on the console's drive (or convert it to an `.exfat`
-   image with **Convert**), let ShadowMount+ mount it, and launch from the
-   console's home screen. This does not depend on the package installer.
-5. **A launch the app sent is not the same as a game that started.** The
-   console accepts a launch and may take a while on the first start. If the
-   game never appears, close it from the PS5 and start it from there.
+**Q: Where are my PS5 screenshots and video clips?**
+In **Screenshots & clips**: one screen with a tab for each. Preview and download them to your
+computer; to delete one, use **Files**.
+
+**Q: What does the Game Activity Tracker actually track?**
+Any game you launch, however you launch it — with your controller, from
+the PS5 dashboard, or from this app. It works by watching the console's
+process list, so it has no idea *how* a game was started.
+
+Two things to know before you trust the numbers:
+
+* It only counts time **while the payload is loaded**. Reboot or rest
+  mode stops the payload, and play time during that window is never seen.
+* It polls every 30 seconds, so a very short session can be missed
+  entirely. Your history survives re-sending the payload.
+
+The **Recently Played** list is separate — it reads the console's own app
+database, so it shows titles regardless of whether the tracker was
+running. It is not Sony's play-time record; the console does not expose
+that to us.
+
+**Q: What is the Cheats screen?**
+It applies memory patches to a **running** game. A watcher polls every few seconds for a game
+process, applies always-on patches and re-applies the ones you toggled. Cheat files download from
+community repositories inside the screen. Native JSON, SHN trainer XML and encrypted MC4 files all
+work, with game names, filters and a notification when cheats load. Cheats change nothing on disk
+and stop when the game does.
+
+**Q: What is the Remote Play screen?**
+It requests a Remote Play registration from the console so you can pair a client without the PS5's
+own menus. It shows the pending PIN with a countdown, reads "waiting" until a device really pairs,
+and can be cancelled. It does not stream anything; use Sony's Remote Play app or Chiaki.
+
+**Q: What does the fan curve do?**
+It sends a custom temperature-to-fan curve to the console. **Restore default** returns to the
+stock behaviour.
+
+**Q: What is nanoDNS?**
+A small DNS server that runs **on the console** (from the Payloads
+catalogue, not built in). It blocks PSN and update domains by default and
+can redirect any domain to a machine on your LAN — useful for staying
+offline-friendly while jailbroken. This app's nanoDNS screen edits its
+config: it detects which version is running and preserves your existing
+rules, comments and custom resolvers rather than rewriting the file.
+
+Point the console's DNS at it once it's running.
+
+**Q: What is the Backup screen?**
+It snapshots console-side files to a tagged copy on the PS5 and restores
+them later. It is meant for the small, breakable things — app database
+state and configuration — before a bulk operation, not as a game backup.
+For save data specifically, use the Save data screen.
+
+---
+
+## FTP, SMB, metadata, and backport helpers
+
+**Q: My FTP client says "Cannot rename across devices". Why?**
+
+Because the alternative was crashing your console.
+
+On the PS5, renaming a file from one drive to another (say a USB drive to
+internal storage) doesn't fail cleanly the way it does on a PC — it panics
+the kernel and locks the console up hard. Many FTP clients implement
+"move" as a rename, so dragging a file between two folders on different
+drives would trigger it.
+
+The server now checks first and refuses with a 553 instead. To move a file
+between drives, copy it to the new location and delete the original —
+that's byte-level I/O and is perfectly safe. Renaming *within* one drive
+still works normally.
+
+The same protection applies to the File Manager and to `mv` in the Shell
+screen.
+
+**Q: What is the FTP Server screen for?**
+It starts a small **FTP server on the PS5** (like `ftpsrv.elf`), so
+FileZilla, curl, or another PC can connect **to the console**. Default
+port is **2122** so it does not fight with ftpsrv on **2121**. Use this
+for interop with other tools — for bulk game uploads, prefer the
+Upload tab (AVA1 is faster and resumes).
+
+**Q: What is the SMB Browser for?**
+It browses a **Windows share or Samba NAS from your computer** (not
+on the PS5). You can download a file to this PC, or **upload a file
+or whole folder straight to the PS5** in one step: the engine streams
+straight to the PS5 over AVA1, resuming if the link drops. Destination
+works like Upload — set a parent path such as `/data/homebrew` and the
+source name is appended.
+
+**Q: What is Game Metadata (was “TMDB”)?**
+Not The Movie Database. It looks up a title ID’s display name. Names
+come from the console’s app database when the title is installed;
+the old PlayStation Store scrape no longer works. Most users never
+need this screen — Library already shows titles.
+
+**Q: SDK Changer vs Fakelib / BackPork — is that “backport”?**
+Related halves of a workflow, not one magic button:
+
+1. **SDK Changer** — rewrites a folder dump’s declared firmware/SDK
+   when the files are **not** signed SELFs.
+2. **Fakelib** — put newer system libraries in `game/fakelib/`,
+   optionally apply a **BPS** patch first.
+3. **Runtime** — **BackPork** *or* **ShadowMount+** mounts that
+   `fakelib` when the game launches (don’t run both).
+
+We help prepare and ship files; we do **not** guarantee every high-FW
+title will boot on an older console.
+
+---
+
+## Advanced
+
+**Q: Can I run the engine standalone (without the desktop app)?**
+Yes — `ps5upload-engine` is a self-contained HTTP server listening
+on `localhost:19113`. The desktop app uses it under the hood; CLI
+users can hit the `/api/*` endpoints directly.
+
+**Q: Can I write my own client against the payload?**
+Yes. AVA1 is specified in [`protocol/ava1/SPEC.md`](protocol/ava1/SPEC.md); every message is
+defined once in `protocol/ava1/schema/ava1.toml`, and `protocol/ava1/vectors/` holds byte-exact test
+vectors. You must pair with the console: it shows a six-digit code your client must display too.
+
+**Q: How do I contribute a translation?**
+Edit `client/src/i18n/locales/` (English, `en.ts`, is the source of truth) or use
+`scripts/translate-i18n.py`. PRs welcome.
+
+**Q: Why is my anti-virus flagging the app?**
+Tauri apps often trigger false positives because they bundle a
+small web runtime. Release builds are unsigned (no paid certs), so
+Windows SmartScreen and macOS Gatekeeper will warn on first run
+until the binary accumulates reputation. Click "More info → Run
+anyway" (Windows) or right-click → Open (macOS) once. Grab the
+download straight from the
+[Releases page](https://github.com/phantomptr/ps5upload/releases)
+(not a mirror) and report any AV false positive to your vendor.
+
+**Q: How do updates work?**
+The app checks GitHub once per launch and shows a dot on the Settings entry when a newer version
+exists. **Settings → Updates → Download** saves the archive for your platform to your Downloads
+folder (the Windows installer updates itself). Quit, replace the old app, relaunch, then use
+**Update helper** if the app asks. Remember to update the app and the helper together.
+
+# Help
 
 ## Troubleshooting
+
+**Q: Something is not working. Where do I start?**
+Open **Health Check** (also on **Home**, which shows anything that needs attention). It checks,
+for the console you have selected:
+
+- **Connection and helper**: the helper answers, and its version matches the app.
+- **Network**: the PS5's payload loader port (9021) is open; the PS5 can connect back to this
+  computer (what **Stream & install** needs: a failure here is almost always a firewall); how
+  long the helper takes to answer; whether ps5upload's installer is running on the PS5 (it
+  starts with your first install).
+- **This computer**: its data folder can be written. In Docker, whether the engine is handing
+  the PS5 an address it can actually reach.
+- **Storage, clock, Remote Play**: free space, the folders the app needs, the console's clock.
+
+Every problem comes with what to do about it, and some have a one-click fix. The same checks
+run in the desktop app, on Android and in the Docker web UI, because the engine does them.
+
+**Q: My transfers are slow. How fast should they be?**
+Run the **Speed test** in **Health Check**. It sends a test file to the PS5 and reads it back
+the same way a real copy goes, then removes it from both machines. It measures your own network
+between the computer and the PS5, not your internet.
+
+- **90–115 MB/s**: a full gigabit link, as fast as the PS5's network port goes.
+- **Around 11 MB/s**: a 100 Mbit link somewhere in the path. Use a Cat5e or better cable and
+  check that every switch or router port in between is gigabit.
+- **Anything in between, or lower**: usually Wi-Fi on either side, a VPN, or other traffic. A
+  network cable to the PS5 is the fix.
 
 **Q: The payload isn't responding; ports appear open but connections
 get reset.**
@@ -1290,143 +1541,25 @@ Logs page to find them.
 
 ---
 
-## FTP, SMB, metadata, and backport helpers
+## Disclaimer
 
-**Q: My FTP client says "Cannot rename across devices". Why?**
+**Use this software entirely at your own risk.** Provided "as is",
+without warranty of any kind.
 
-Because the alternative was crashing your console.
+- It interacts with a **modified PS5** — a jailbroken console with
+  kernel exploits already loaded by you. Modifying console state,
+  bypassing platform integrity checks, or running unsigned code can
+  void your manufacturer warranty, violate the platform's terms of
+  service, and, under certain operations, leave your console
+  unrecoverable without a reinstall.
+- It writes to your PS5 filesystem and can install / register
+  packages with Sony's installer. Mistakes can corrupt the app
+  database or leave Sony's mgmt service wedged. Back up important
+  saves before bulk operations.
+- It is intended only for content you legally own and hardware that
+  belongs to you. How you use it is your responsibility.
+- No support guaranteed — free volunteer-built tool.
 
-On the PS5, renaming a file from one drive to another (say a USB drive to
-internal storage) doesn't fail cleanly the way it does on a PC — it panics
-the kernel and locks the console up hard. Many FTP clients implement
-"move" as a rename, so dragging a file between two folders on different
-drives would trigger it.
-
-The server now checks first and refuses with a 553 instead. To move a file
-between drives, copy it to the new location and delete the original —
-that's byte-level I/O and is perfectly safe. Renaming *within* one drive
-still works normally.
-
-The same protection applies to the File Manager and to `mv` in the Shell
-screen.
-
-**Q: What is the FTP Server screen for?**
-It starts a small **FTP server on the PS5** (like `ftpsrv.elf`), so
-FileZilla, curl, or another PC can connect **to the console**. Default
-port is **2122** so it does not fight with ftpsrv on **2121**. Use this
-for interop with other tools — for bulk game uploads, prefer the
-Upload tab (AVA1 is faster and resumes).
-
-**Q: What is the SMB Browser for?**
-It browses a **Windows share or Samba NAS from your computer** (not
-on the PS5). You can download a file to this PC, or **upload a file
-or whole folder straight to the PS5** in one step: the engine streams
-straight to the PS5 over AVA1, resuming if the link drops. Destination
-works like Upload — set a parent path such as `/data/homebrew` and the
-source name is appended.
-
-**Q: What is Game Metadata (was “TMDB”)?**
-Not The Movie Database. It looks up a title ID’s display name. Names
-come from the console’s app database when the title is installed;
-the old PlayStation Store scrape no longer works. Most users never
-need this screen — Library already shows titles.
-
-**Q: SDK Changer vs Fakelib / BackPork — is that “backport”?**
-Related halves of a workflow, not one magic button:
-
-1. **SDK Changer** — rewrites a folder dump’s declared firmware/SDK
-   when the files are **not** signed SELFs.
-2. **Fakelib** — put newer system libraries in `game/fakelib/`,
-   optionally apply a **BPS** patch first.
-3. **Runtime** — **BackPork** *or* **ShadowMount+** mounts that
-   `fakelib` when the game launches (don’t run both).
-
-We help prepare and ship files; we do **not** guarantee every high-FW
-title will boot on an older console.
+If those terms aren't acceptable, do not use this software.
 
 ---
-
-## Console tools
-
-**Q: What does the Game Activity Tracker actually track?**
-Any game you launch, however you launch it — with your controller, from
-the PS5 dashboard, or from this app. It works by watching the console's
-process list, so it has no idea *how* a game was started.
-
-Two things to know before you trust the numbers:
-
-* It only counts time **while the payload is loaded**. Reboot or rest
-  mode stops the payload, and play time during that window is never seen.
-* It polls every 30 seconds, so a very short session can be missed
-  entirely. Your history survives re-sending the payload.
-
-The **Recently Played** list is separate — it reads the console's own app
-database, so it shows titles regardless of whether the tracker was
-running. It is not Sony's play-time record; the console does not expose
-that to us.
-
-**Q: What is the Cheats screen?**
-It applies memory patches to a **running** game. A watcher polls every few seconds for a game
-process, applies always-on patches and re-applies the ones you toggled. Cheat files download from
-community repositories inside the screen. Native JSON, SHN trainer XML and encrypted MC4 files all
-work, with game names, filters and a notification when cheats load. Cheats change nothing on disk
-and stop when the game does.
-
-**Q: What is the Remote Play screen?**
-It requests a Remote Play registration from the console so you can pair a client without the PS5's
-own menus. It shows the pending PIN with a countdown, reads "waiting" until a device really pairs,
-and can be cancelled. It does not stream anything; use Sony's Remote Play app or Chiaki.
-
-**Q: What does the fan curve do?**
-It sends a custom temperature-to-fan curve to the console. **Restore default** returns to the
-stock behaviour.
-
-**Q: What is nanoDNS?**
-A small DNS server that runs **on the console** (from the Payloads
-catalogue, not built in). It blocks PSN and update domains by default and
-can redirect any domain to a machine on your LAN — useful for staying
-offline-friendly while jailbroken. This app's nanoDNS screen edits its
-config: it detects which version is running and preserves your existing
-rules, comments and custom resolvers rather than rewriting the file.
-
-Point the console's DNS at it once it's running.
-
-**Q: What is the Backup screen?**
-It snapshots console-side files to a tagged copy on the PS5 and restores
-them later. It is meant for the small, breakable things — app database
-state and configuration — before a bulk operation, not as a game backup.
-For save data specifically, use the Save data screen.
-
----
-
-## Advanced
-
-**Q: Can I run the engine standalone (without the desktop app)?**
-Yes — `ps5upload-engine` is a self-contained HTTP server listening
-on `localhost:19113`. The desktop app uses it under the hood; CLI
-users can hit the `/api/*` endpoints directly.
-
-**Q: Can I write my own client against the payload?**
-Yes. AVA1 is specified in [`protocol/ava1/SPEC.md`](protocol/ava1/SPEC.md); every message is
-defined once in `protocol/ava1/schema/ava1.toml`, and `protocol/ava1/vectors/` holds byte-exact test
-vectors. You must pair with the console: it shows a six-digit code your client must display too.
-
-**Q: How do I contribute a translation?**
-Edit `client/src/i18n/locales/` (English, `en.ts`, is the source of truth) or use
-`scripts/translate-i18n.py`. PRs welcome.
-
-**Q: Why is my anti-virus flagging the app?**
-Tauri apps often trigger false positives because they bundle a
-small web runtime. Release builds are unsigned (no paid certs), so
-Windows SmartScreen and macOS Gatekeeper will warn on first run
-until the binary accumulates reputation. Click "More info → Run
-anyway" (Windows) or right-click → Open (macOS) once. Grab the
-download straight from the
-[Releases page](https://github.com/phantomptr/ps5upload/releases)
-(not a mirror) and report any AV false positive to your vendor.
-
-**Q: How do updates work?**
-The app checks GitHub once per launch and shows a dot on the Settings entry when a newer version
-exists. **Settings → Updates → Download** saves the archive for your platform to your Downloads
-folder (the Windows installer updates itself). Quit, replace the old app, relaunch, then use
-**Update helper** if the app asks. Remember to update the app and the helper together.

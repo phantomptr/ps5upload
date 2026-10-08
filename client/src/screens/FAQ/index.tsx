@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
-import { loadBundledDoc } from "../../lib/bundledDoc";
-import { HelpCircle, Search, X } from "lucide-react";
+import { ChevronDown, HelpCircle, Link2, Search, X } from "lucide-react";
 
 import {
   PageHeader,
@@ -10,62 +9,135 @@ import {
   MarkdownView,
   Button,
 } from "../../components";
+import { Tabs } from "../../components/Tabs";
+import { loadBundledDoc } from "../../lib/bundledDoc";
+import {
+  parseFaq,
+  searchFaq,
+  slugOf,
+  type FaqDoc,
+  type FaqItem,
+  type FaqTopic,
+} from "../../lib/faqDoc";
 import { log } from "../../state/logs";
 import { useTr } from "../../state/lang";
 
 /**
- * FAQ screen — renders the bundled FAQ.md. Filter-as-you-type narrows
- * the markdown to sections whose heading OR body matches the query,
- * so a user hunting for "fan threshold" lands on the right section
- * without scrolling the whole doc.
+ * FAQ screen: the bundled FAQ.md as something to look things up in, not one long page.
  *
- * The filter operates at the H2 section level because that's the
- * natural "topic" grain in our FAQ (one H2 = one topic). H3 lives
- * inside a topic as a sub-question; H1 is the doc title.
+ *  - Its top-level headings are tabs, each tab's `##` headings a list of topics.
+ *  - A topic's questions are closed until asked for, so its list of questions is readable.
+ *  - Search returns questions (best match first, with an excerpt), not whole sections.
+ *  - `?q=` opens it searching (error messages link here, see lib/installErrorDoc), and
+ *    `?topic=` / `?item=` open one topic or one question, so an answer can be linked to.
  */
 
-interface Section {
-  title: string;
-  /** Body markdown below the H2, up to the next H2 or EOF. */
-  body: string;
+/** Wraps each query word found in `text` in <mark>. */
+function Marked({ text, words }: { text: string; words: string[] }) {
+  if (words.length === 0) return <>{text}</>;
+  const escaped = words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const parts = text.split(new RegExp(`(${escaped.join("|")})`, "gi"));
+  return (
+    <>
+      {parts.map((p, i) =>
+        words.includes(p.toLowerCase()) ? (
+          <mark key={i} className="rounded bg-[var(--color-accent-soft)] px-0.5 text-[var(--color-text)]">
+            {p}
+          </mark>
+        ) : (
+          <span key={i}>{p}</span>
+        ),
+      )}
+    </>
+  );
 }
 
-/** Split the markdown into H2-rooted sections. The prelude (any
- *  content before the first H2) is emitted as a nameless section so
- *  the title + tagline at the top of FAQ.md still render. */
-function splitByH2(md: string): { prelude: string; sections: Section[] } {
-  const lines = md.replace(/\r\n/g, "\n").split("\n");
-  const preludeLines: string[] = [];
-  const sections: Section[] = [];
-  let current: Section | null = null;
-  for (const line of lines) {
-    if (line.startsWith("## ")) {
-      if (current) sections.push(current);
-      current = { title: line.slice(3).trim(), body: `${line}\n` };
-      continue;
-    }
-    if (current) {
-      current.body += line + "\n";
-    } else {
-      preludeLines.push(line);
-    }
-  }
-  if (current) sections.push(current);
-  return { prelude: preludeLines.join("\n"), sections };
+function Question({
+  item,
+  open,
+  onToggle,
+  onCopyLink,
+  words,
+  topicLabel,
+  excerpt,
+}: {
+  item: FaqItem;
+  open: boolean;
+  onToggle: () => void;
+  onCopyLink: (() => void) | null;
+  /** Search words to mark in the question (search results only). */
+  words?: string[];
+  /** Shown above the question in search results. */
+  topicLabel?: string;
+  excerpt?: string;
+}) {
+  const tr = useTr();
+  return (
+    <li
+      id={item.id}
+      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]"
+      data-testid="faq-item"
+    >
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        className="flex w-full items-start gap-3 px-4 py-3 text-left"
+      >
+        <span className="min-w-0 flex-1">
+          {topicLabel && (
+            <span className="mb-0.5 block text-[11px] uppercase tracking-wide text-[var(--color-muted)]">
+              {topicLabel}
+            </span>
+          )}
+          <span className="block text-sm font-medium text-[var(--color-text)]">
+            <Marked text={item.question} words={words ?? []} />
+          </span>
+          {!open && excerpt && (
+            <span className="mt-1 block text-xs text-[var(--color-muted)]">
+              <Marked text={excerpt} words={words ?? []} />
+            </span>
+          )}
+        </span>
+        <ChevronDown
+          size={16}
+          aria-hidden
+          className={`mt-0.5 shrink-0 text-[var(--color-muted)] transition-transform ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open && (
+        <div className="border-t border-[var(--color-border)] px-4 pb-3 pt-1">
+          <MarkdownView source={item.answer} />
+          {onCopyLink && (
+            <button
+              type="button"
+              onClick={onCopyLink}
+              className="mt-1 inline-flex items-center gap-1 text-[11px] text-[var(--color-muted)] hover:text-[var(--color-text)]"
+            >
+              <Link2 size={11} aria-hidden />
+              {tr("faq_copy_link", undefined, "Copy a link to this answer")}
+            </button>
+          )}
+        </div>
+      )}
+    </li>
+  );
 }
+
+/** The group a topic is shown under: its own, or one tab for a document with none. */
+const groupOf = (t: FaqTopic) => t.group || "FAQ";
 
 export default function FAQScreen() {
   const tr = useTr();
   const [raw, setRaw] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // `/faq?q=…` opens the FAQ already filtered: error toasts link to the section
-  // that explains them (lib/installErrorDoc.ts).
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
   const linkedQuery = searchParams.get("q");
   useEffect(() => {
     if (linkedQuery !== null) setQuery(linkedQuery);
   }, [linkedQuery]);
+  const [open, setOpen] = useState<Set<string>>(() => new Set());
   // Bumping `loadAttempt` re-runs the load effect — used by the
   // retry button so we can recover without a full window reload
   // (which would dump every other tab's in-flight state too).
@@ -85,16 +157,67 @@ export default function FAQScreen() {
     })();
   }, [loadAttempt]);
 
-  const { prelude, sections } = useMemo(
-    () => (raw ? splitByH2(raw) : { prelude: "", sections: [] }),
-    [raw],
-  );
+  const doc: FaqDoc | null = useMemo(() => (raw ? parseFaq(raw) : null), [raw]);
+  const groups = useMemo(() => {
+    if (!doc) return [];
+    const names = doc.groups.length ? doc.groups : ["FAQ"];
+    return names.map((name) => ({
+      name,
+      id: slugOf(name),
+      topics: doc.topics.filter((t) => groupOf(t) === name),
+    }));
+  }, [doc]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return sections;
-    return sections.filter((s) => s.body.toLowerCase().includes(q));
-  }, [sections, query]);
+  // The topic on show: the linked one, else the linked question's, else the first.
+  const linkedItem = searchParams.get("item");
+  const topicParam = searchParams.get("topic");
+  const topic: FaqTopic | null = useMemo(() => {
+    if (!doc) return null;
+    const byItem = linkedItem
+      ? doc.topics.find((t) => t.items.some((i) => i.id === linkedItem))
+      : undefined;
+    return (
+      doc.topics.find((t) => t.id === topicParam) ?? byItem ?? groups[0]?.topics[0] ?? null
+    );
+  }, [doc, groups, topicParam, linkedItem]);
+  const group = groups.find((g) => topic && g.name === groupOf(topic)) ?? groups[0] ?? null;
+
+  // A linked question opens, once the document is there.
+  useEffect(() => {
+    if (!doc || !linkedItem) return;
+    setOpen((prev) => (prev.has(linkedItem) ? prev : new Set(prev).add(linkedItem)));
+    requestAnimationFrame(() =>
+      document.getElementById(linkedItem)?.scrollIntoView({ block: "start" }),
+    );
+  }, [doc, linkedItem]);
+
+  const words = useMemo(() => query.toLowerCase().split(/\s+/).filter(Boolean), [query]);
+  const hits = useMemo(() => (doc && words.length ? searchFaq(doc, query) : []), [doc, query, words]);
+
+  const toggle = (id: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const showTopic = (id: string) => setSearchParams({ topic: id }, { replace: true });
+  // Clipboard needs a secure context; the self-hosted web UI often has none. No button then.
+  const canCopy = typeof navigator !== "undefined" && !!navigator.clipboard?.writeText;
+  const copyLink = (item: FaqItem) => {
+    const url = `${window.location.origin}/faq?item=${encodeURIComponent(item.id)}`;
+    void navigator.clipboard.writeText(url).catch(() => {});
+  };
+  const allOpen = !!topic && topic.items.length > 0 && topic.items.every((i) => open.has(i.id));
+  const setTopicOpen = (on: boolean) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      for (const i of topic?.items ?? []) {
+        if (on) next.add(i.id);
+        else next.delete(i.id);
+      }
+      return next;
+    });
 
   return (
     <div className="app-page">
@@ -102,17 +225,14 @@ export default function FAQScreen() {
         icon={HelpCircle}
         title={tr("faq", undefined, "FAQ")}
         description={tr(
-          "faq_description",
+          "faq_description_v2",
           undefined,
-          "Everything that falls outside the basic happy path — firmware support, payload recovery, platform quirks, keyboard shortcuts.",
+          "How to set up, transfer, install and fix things. Search for a word or an error code, or pick a section.",
         )}
       />
 
-      <div className="mx-auto max-w-3xl">
-        {/* Search input — filters sections live. Kept sticky-ish
-            at the top of the content column so it's always reachable
-            no matter how far you've scrolled into the FAQ. */}
-        <div className="mb-5 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2">
+      <div className="mx-auto max-w-5xl">
+        <div className="mb-4 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2">
           <Search size={14} className="shrink-0 text-[var(--color-muted)]" />
           <input
             value={query}
@@ -120,6 +240,11 @@ export default function FAQScreen() {
             placeholder={tr("faq_search_placeholder", undefined, "Search the FAQ…")}
             className="max-md:min-h-11 flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--color-muted)]"
           />
+          {query && (
+            <span className="shrink-0 text-xs text-[var(--color-muted)]" data-testid="faq-hit-count">
+              {tr("faq_results", { count: hits.length }, "{count} answers")}
+            </span>
+          )}
           {query && (
             <button
               type="button"
@@ -129,11 +254,6 @@ export default function FAQScreen() {
             >
               <X size={12} />
             </button>
-          )}
-          {query && (
-            <span className="shrink-0 text-xs text-[var(--color-muted)]">
-              {filtered.length} / {sections.length}
-            </span>
           )}
         </div>
 
@@ -163,7 +283,8 @@ export default function FAQScreen() {
           <EmptyState message={tr("faq_loading", undefined, "Loading FAQ…")} />
         )}
 
-        {raw !== null && filtered.length === 0 && query && (
+        {/* Searching: answers from every section, best first. */}
+        {doc && words.length > 0 && hits.length === 0 && (
           <EmptyState
             icon={Search}
             size="hero"
@@ -175,14 +296,124 @@ export default function FAQScreen() {
             )}
           />
         )}
+        {doc && words.length > 0 && hits.length > 0 && (
+          <ul className="grid gap-2" data-testid="faq-results">
+            {hits.map((h) =>
+              h.item ? (
+                <Question
+                  key={h.item.id}
+                  item={h.item}
+                  open={open.has(h.item.id)}
+                  onToggle={() => toggle(h.item!.id)}
+                  onCopyLink={canCopy ? () => copyLink(h.item!) : null}
+                  words={words}
+                  topicLabel={h.topic.title}
+                  excerpt={h.excerpt}
+                />
+              ) : (
+                <li
+                  key={h.topic.id}
+                  className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]"
+                >
+                  <button
+                    type="button"
+                    className="block w-full px-4 py-3 text-left"
+                    onClick={() => {
+                      setQuery("");
+                      showTopic(h.topic.id);
+                    }}
+                  >
+                    <span className="mb-0.5 block text-[11px] uppercase tracking-wide text-[var(--color-muted)]">
+                      {tr("faq_section", undefined, "Section")}
+                    </span>
+                    <span className="block text-sm font-medium text-[var(--color-text)]">
+                      <Marked text={h.topic.title} words={words} />
+                    </span>
+                    <span className="mt-1 block text-xs text-[var(--color-muted)]">
+                      <Marked text={h.excerpt} words={words} />
+                    </span>
+                  </button>
+                </li>
+              ),
+            )}
+          </ul>
+        )}
 
-        {raw !== null && (!query || filtered.length > 0) && (
-          <article>
-            {!query && prelude.trim() && <MarkdownView source={prelude} />}
-            {filtered.map((s, i) => (
-              <MarkdownView key={`${s.title}-${i}`} source={s.body} />
-            ))}
-          </article>
+        {/* Browsing: a tab per group, its topics beside the one on show. */}
+        {doc && words.length === 0 && group && topic && (
+          <>
+            {doc.intro && groups[0]?.topics[0]?.id === topic.id && (
+              <div className="mb-2 text-sm text-[var(--color-muted)]">
+                <MarkdownView source={doc.intro.replace(/^-{3,}\s*$/gm, "")} />
+              </div>
+            )}
+            {groups.length > 1 && (
+              <Tabs
+                className="mb-4"
+                variant="underline"
+                ariaLabel={tr("faq", undefined, "FAQ")}
+                value={group.id}
+                onChange={(id) => {
+                  const g = groups.find((x) => x.id === id);
+                  if (g?.topics[0]) showTopic(g.topics[0].id);
+                }}
+                tabs={groups.map((g) => ({ id: g.id, label: g.name }))}
+              />
+            )}
+            <div className="grid gap-5 md:grid-cols-[14rem_minmax(0,1fr)]">
+              <nav
+                aria-label={tr("faq_topics", undefined, "Topics")}
+                className="flex gap-1 overflow-x-auto md:sticky md:top-2 md:flex-col md:self-start md:overflow-visible"
+              >
+                {group.topics.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    aria-current={t.id === topic.id ? "page" : undefined}
+                    onClick={() => showTopic(t.id)}
+                    className={`shrink-0 rounded-md px-3 py-2 text-left text-sm md:shrink ${
+                      t.id === topic.id
+                        ? "bg-[var(--color-accent-soft)] font-medium text-[var(--color-text)]"
+                        : "text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+                    }`}
+                  >
+                    {t.title}
+                    {t.items.length > 0 && (
+                      <span className="ml-1.5 text-[11px] tabular-nums opacity-70">{t.items.length}</span>
+                    )}
+                  </button>
+                ))}
+              </nav>
+              <article className="min-w-0">
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <h2 className="flex-1 text-lg font-semibold text-[var(--color-text)]">{topic.title}</h2>
+                  {topic.items.length > 1 && (
+                    <Button variant="ghost" size="sm" onClick={() => setTopicOpen(!allOpen)}>
+                      {allOpen
+                        ? tr("faq_collapse_all", undefined, "Close all")
+                        : tr("faq_expand_all", undefined, "Open all")}
+                    </Button>
+                  )}
+                </div>
+                {topic.intro && (
+                  <div className="mb-3">
+                    <MarkdownView source={topic.intro.replace(/^-{3,}\s*$/gm, "")} />
+                  </div>
+                )}
+                <ul className="grid gap-2">
+                  {topic.items.map((item) => (
+                    <Question
+                      key={item.id}
+                      item={item}
+                      open={open.has(item.id)}
+                      onToggle={() => toggle(item.id)}
+                      onCopyLink={canCopy ? () => copyLink(item) : null}
+                    />
+                  ))}
+                </ul>
+              </article>
+            </div>
+          </>
         )}
       </div>
     </div>

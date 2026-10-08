@@ -521,6 +521,16 @@ pub struct InstallOptions {
     /// see [`path_fallback_allowed`] for everything else that must hold.
     #[serde(default)]
     pub console_path_fallback: bool,
+    /// For a link: this engine downloads it and serves it to the console ("Stream through
+    /// this computer"), instead of handing the console the link to fetch by itself. Without
+    /// it the console is given the link first, and a link only this computer can reach (a
+    /// private server, a VPN, localhost) simply failed with a network error.
+    #[serde(default)]
+    pub proxy_link: bool,
+    /// Skip certificate checks when THIS engine fetches a link. Never applies to the
+    /// console's own fetch.
+    #[serde(default)]
+    pub insecure_tls: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -852,9 +862,18 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                 let was_short = short.is_some();
                 let final_url = short.unwrap_or(u);
                 let h = hint_name.clone();
-                let r = tokio::task::spawn_blocking(move || ic::install_url(&i, &final_url, &h))
-                    .await
-                    .unwrap_or_else(|e| Err(format!("install task failed: {e}")));
+                // "Stream through this computer": the console is never given the link.
+                let proxied = req.options.proxy_link;
+                let r = if proxied {
+                    Ok(ic::InstallReply::Sony {
+                        code: STAGED_ROUTE_REFUSALS[0],
+                        hint: None,
+                    })
+                } else {
+                    tokio::task::spawn_blocking(move || ic::install_url(&i, &final_url, &h))
+                        .await
+                        .unwrap_or_else(|e| Err(format!("install task failed: {e}")))
+                };
                 // The console refused the link as its own server serves it
                 // (once put down to a missing Last-Modified; on FW 13.60 the
                 // refusal was the daemon's own call, fixed in 1.3.9). This
@@ -863,9 +882,13 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                     Ok(ic::InstallReply::Sony { code, .. })
                         if STAGED_ROUTE_REFUSALS.contains(code) =>
                     {
-                        crate::log_info!(
-                            "{tag}: the console refused the link (0x{code:08X}); proxying it through this engine instead"
-                        );
+                        if proxied {
+                            crate::log_info!("{tag}: streaming the link through this engine");
+                        } else {
+                            crate::log_info!(
+                                "{tag}: the console refused the link (0x{code:08X}); proxying it through this engine instead"
+                            );
+                        }
                         match create_serve_session_for(&state, &req, url).await {
                             Ok((sid, purl)) => {
                                 served_from = origin_of(&purl);
@@ -881,7 +904,9 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                             }
                             Err(e) => {
                                 crate::log_warn!("{tag}: could not proxy the link: {e}");
-                                (r, None, was_short)
+                                // When the proxy was the only thing asked for, its own
+                                // failure is the answer, not a made-up refusal code.
+                                (if proxied { Err(e) } else { r }, None, was_short)
                             }
                         }
                     }
@@ -1303,20 +1328,18 @@ async fn create_serve_session(
 
 /// A serve session for an explicit source path — a local file, `remote://…`
 /// on a saved server, or `ps5://<console>/<path>` read back through the helper.
-async fn create_serve_session_for(
-    state: &PkgInstallStateHandle,
-    req: &InstallRequest,
-    path: &str,
-) -> Result<(String, String), String> {
-    // A link is proxied (its origin read over many connections); anything
-    // else is a path the engine reads — local, remote:// or ps5://.
+/// The serve-session request for `path`: a link is proxied (its origin read over many
+/// connections, with the caller's certificate choice); anything else is a path the engine
+/// reads, local, `remote://` or `ps5://`.
+fn serve_session_request(req: &InstallRequest, path: &str) -> serde_json::Value {
     let is_link = path.starts_with("http://") || path.starts_with("https://");
-    let start_req = if is_link {
+    if is_link {
         serde_json::json!({
             "ps5_addr": req.ps5_addr,
             "serve_only": true,
             "remote_url": path,
             "content_id": req.content_id,
+            "insecure_tls": req.options.insecure_tls,
         })
     } else {
         serde_json::json!({
@@ -1325,7 +1348,15 @@ async fn create_serve_session_for(
             "path": path,
             "content_id": req.content_id,
         })
-    };
+    }
+}
+
+async fn create_serve_session_for(
+    state: &PkgInstallStateHandle,
+    req: &InstallRequest,
+    path: &str,
+) -> Result<(String, String), String> {
+    let start_req = serve_session_request(req, path);
     let start_req: crate::pkg_install::InstallStartRequest =
         serde_json::from_value(start_req).map_err(|e| format!("build start request: {e}"))?;
     let resp =
@@ -1405,6 +1436,29 @@ mod tests {
             category: None,
             options: InstallOptions::default(),
         }
+    }
+
+    #[test]
+    fn a_proxied_link_carries_the_certificate_choice_and_a_path_does_not() {
+        let mut req = bare_req(Source::Url("https://h/x.pkg".into()));
+        req.options.insecure_tls = true;
+        let link = serve_session_request(&req, "https://h/x.pkg");
+        assert_eq!(link["remote_url"], "https://h/x.pkg");
+        assert_eq!(link["insecure_tls"], true);
+        assert_eq!(link["serve_only"], true);
+        let path = serve_session_request(&req, "ps5://10.0.0.5/data/a.pkg");
+        assert_eq!(path["path"], "ps5://10.0.0.5/data/a.pkg");
+        assert!(path.get("insecure_tls").is_none());
+        assert!(path.get("remote_url").is_none());
+    }
+
+    #[test]
+    fn the_link_options_default_to_off() {
+        let o: InstallOptions = serde_json::from_str("{}").expect("parse");
+        assert!(!o.proxy_link && !o.insecure_tls);
+        let o: InstallOptions =
+            serde_json::from_str(r#"{"proxy_link":true,"insecure_tls":true}"#).expect("parse");
+        assert!(o.proxy_link && o.insecure_tls);
     }
 
     #[test]

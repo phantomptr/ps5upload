@@ -1,4 +1,4 @@
-// A RAR that holds several .pkg files (R6, #370): unpack the packages straight to the
+// An archive (ZIP, 7z or RAR) that holds .pkg files (R6, #370): unpack the packages straight to the
 // console over AVA1 (the archive is read from this computer, nothing is extracted to its
 // disk), then queue one install per package from the console path.
 //
@@ -20,7 +20,9 @@ import {
   fetchVolumes,
   fsMkdir,
   jobStatus,
+  startTransfer7z,
   startTransferRar,
+  startTransferZip,
   type JobSnapshot,
 } from "../api/ps5";
 import { consoleAddr, transferAddr } from "../lib/addr";
@@ -40,17 +42,41 @@ export function isRarFirstVolume(path: string): boolean {
   return part ? Number(part[1]) === 1 : true;
 }
 
-/** Folder name for an archive's packages: `rar_<stem>`, deterministic so a resumed run
+export type ArchiveKind = "zip" | "7z" | "rar";
+
+/** Which reader an archive needs, from its name. A split 7z (`.7z.001`) is not readable by
+ *  the engine and is not claimed. */
+export function archiveKindOf(path: string): ArchiveKind | null {
+  const lower = (path.replace(/\\/g, "/").split("/").pop() ?? "").toLowerCase();
+  if (lower.endsWith(".zip")) return "zip";
+  if (lower.endsWith(".7z")) return "7z";
+  if (lower.endsWith(".rar")) return "rar";
+  return null;
+}
+
+/** True for a file an install can start from: any ZIP or 7z, and the first (or only) part
+ *  of a RAR set. */
+export function isArchiveFirstVolume(path: string): boolean {
+  const kind = archiveKindOf(path);
+  if (kind === "rar") return isRarFirstVolume(path);
+  return kind !== null;
+}
+
+/** Folder name for an archive's packages: `<kind>_<stem>`, deterministic so a resumed run
  *  lands in the same place. */
-export function rarFolderName(archivePath: string): string {
+export function archiveFolderName(archivePath: string): string {
   const name = archivePath.replace(/\\/g, "/").split("/").pop() ?? "archive";
+  const kind = archiveKindOf(archivePath) ?? "rar";
   const stem = name
     .replace(/\.part0*\d+\.rar$/i, "")
-    .replace(/\.rar$/i, "")
+    .replace(/\.(rar|zip|7z)$/i, "")
     .replace(/[^A-Za-z0-9._-]+/g, "_")
     .replace(/^[._]+|[._]+$/g, "");
-  return `rar_${stem || "archive"}`.slice(0, 80);
+  return `${kind}_${stem || "archive"}`.slice(0, 80);
 }
+
+/** The RAR spelling of [`archiveFolderName`], kept for its callers. */
+export const rarFolderName = archiveFolderName;
 
 /** Install tier: base (0) before patch (1) before DLC (2). */
 export function packageTier(category: string): number {
@@ -141,14 +167,23 @@ async function unpack(
 ): Promise<{ ok: true } | { ok: false; message: string; password?: RarPasswordProblem }> {
   let jobId: string;
   try {
-    jobId = await startTransferRar(
-      opts.archivePath,
-      dest,
-      consoleAddr(opts.host),
-      opts.password ?? null,
-      null,
-      [RAR_PKG_ALLOW],
-    );
+    const addr = consoleAddr(opts.host);
+    const kind = archiveKindOf(opts.archivePath);
+    // Each kind has its own reader in the engine; all three take the same allow-list. Only
+    // RAR can be opened with a password.
+    jobId =
+      kind === "zip"
+        ? await startTransferZip(opts.archivePath, dest, addr, null, [RAR_PKG_ALLOW])
+        : kind === "7z"
+          ? await startTransfer7z(opts.archivePath, dest, addr, null, [RAR_PKG_ALLOW])
+          : await startTransferRar(
+              opts.archivePath,
+              dest,
+              addr,
+              opts.password ?? null,
+              null,
+              [RAR_PKG_ALLOW],
+            );
   } catch (e) {
     const msg = messageOf(e);
     const pw = rarPasswordProblem(null, msg);
@@ -205,7 +240,7 @@ export async function installRarPackages(
   // installer can read, and the one the Library screen already lists.
   const volumes = await fetchVolumes(transferAddr(host)).catch(() => null);
   const storage = pkgStorageFor(host, volumes);
-  const dest = `${storage.dir}/${rarFolderName(archivePath)}`;
+  const dest = `${storage.dir}/${archiveFolderName(archivePath)}`;
   for (const dir of pkgMkdirChain(dest)) {
     await fsMkdir(transferAddr(host), dir).catch(() => {});
   }

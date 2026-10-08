@@ -3164,6 +3164,11 @@ async fn resolve_console_source(
 #[derive(Debug, Deserialize)]
 pub struct RemoteProbeRequest {
     pub url: String,
+    /// Skip the certificate check for this read, as the install it precedes will. A probe
+    /// that always verified made "Skip the certificate check" useless: the link was refused
+    /// here, before the install it was ticked for ever started.
+    #[serde(default)]
+    pub insecure_tls: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -3199,9 +3204,8 @@ async fn remote_probe_handler(Json(req): Json<RemoteProbeRequest>) -> Response<B
     let probe_req = InstallStartRequest {
         ps5_addr: String::new(),
         allow_destructive_reinstall: false,
-        // A probe only reads a byte range to identify the package; it always
-        // verifies certificates regardless of the install's own choice.
-        insecure_tls: false,
+        // The same certificate choice as the install this read is for.
+        insecure_tls: req.insecure_tls,
         path: None,
         split_root: None,
         remote_url: Some(url.clone()),
@@ -3675,7 +3679,7 @@ pub(crate) fn pkg_host_url_for(
 
 /// `http://<ip>:<port>` of this engine as the PS5 reaches it. See
 /// `pkg_host_url_for` for how the IP is chosen and when it must be pinned.
-fn engine_origin_for_ps5(ps5_addr: &str) -> std::io::Result<String> {
+pub(crate) fn engine_origin_for_ps5(ps5_addr: &str) -> std::io::Result<String> {
     let ps5_host_only = strip_host_port(ps5_addr);
     // PS5UPLOAD_PKG_HOST_IP lets a deployment pin the IP the console fetches
     // from, overriding the routing-table guess. Required whenever the engine

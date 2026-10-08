@@ -800,6 +800,12 @@ export async function browserInvoke<T>(
         level: args["level"],
       });
     }
+    case "exfat_build": {
+      return postJson<T>("/api/exfat/build", {
+        source: args["source"],
+        output_dir: args["outputDir"],
+      });
+    }
     case "job_status": {
       // TS caller: { jobId } (Tauri 2 camelCases job_id → jobId)
       const jobId = args["jobId"] as string;
@@ -836,7 +842,10 @@ export async function browserInvoke<T>(
 
     // Identify a package behind a link before committing to the install.
     case "pkg_remote_probe":
-      return postJson<T>("/api/pkg/remote/probe", { url: args["url"] });
+      return postJson<T>("/api/pkg/remote/probe", {
+        url: args["url"],
+        insecure_tls: args["insecureTls"] ?? false,
+      });
 
     // What a link actually serves (package / other file / not a download) and
     // download-only to a console folder (R4, #368).
@@ -872,6 +881,7 @@ export async function browserInvoke<T>(
         url: args["url"],
         insecure_tls: args["insecureTls"] ?? false,
         dest_dir: args["destDir"],
+        keep_name: args["keepName"] ?? false,
       });
 
     case "pkg_remote_download_status":
@@ -1190,6 +1200,12 @@ export async function browserInvoke<T>(
         addr: args["addr"],
         action: args["action"],
       });
+
+    case "speed_test_prepare":
+      return postJson<T>("/api/speed-test/prepare", { size_mib: args["sizeMib"] ?? null });
+
+    case "speed_test_cleanup":
+      return postJson<T>("/api/speed-test/cleanup", {});
 
     case "remoteplay_readiness":
       return getJson<T>(

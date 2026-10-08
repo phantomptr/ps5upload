@@ -121,9 +121,9 @@ export default function GameActivityScreen() {
           icon={Clock}
           title={tr("game_activity_title", undefined, "Game Activity Tracker")}
           description={tr(
-            "game_activity_subtitle",
+          "game_activity_subtitle_v2",
             undefined,
-            "Play-time tracking and recently played titles",
+            "What was played on this PS5 and for how long, read from the console's own records.",
           )}
           right={
             <div className="flex items-center gap-2">

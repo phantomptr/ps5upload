@@ -123,9 +123,9 @@ export default function NotificationsScreen() {
         icon={Bell}
         title={tr("ps5notif_title", undefined, "PS5 Notifications")}
         description={tr(
-          "ps5notif_description",
+          "ps5notif_description_v2",
           undefined,
-          "On-PS5 system notifications. Auto-refreshes every 5 seconds.",
+          "Notifications the PS5 has shown, read from the console. Refreshes every 5 seconds.",
         )}
         count={items.length}
         right={

@@ -774,9 +774,9 @@ export default function SavesScreen() {
         count={saves?.length}
         loading={loading}
         description={tr(
-          "saves_description",
+          "saves_description_v2",
           undefined,
-          "Per-game save folders on the PS5. PS5 saves under savedata_prospero/, PS4 legacy saves under savedata/. Backup writes a portable <title-id>.zip; restore expects the same shape.",
+          "Save data on the PS5, one entry per game. Back a game's saves up to a .zip on this computer and restore them later.",
         )}
         right={
           <div className="flex items-center gap-2">

@@ -1,5 +1,5 @@
 import { consoleAddr } from "../../lib/addr";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Image as ImageIcon,
   RefreshCw,
@@ -181,7 +181,7 @@ function ScreenshotThumb({
  *   • Convert  — download + decode + HDR→SDR tone-map to a `.png`
  *     (desktop only; the JPEG XR codec isn't bundled on mobile).
  */
-export default function ScreenshotsScreen() {
+export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
@@ -509,15 +509,17 @@ export default function ScreenshotsScreen() {
 
   return (
     <div className="app-page">
+      {/* The Captures screen puts its Screenshots / Video clips switch here. */}
+      {tabs}
       <PageHeader
         icon={ImageIcon}
         title={tr("screenshots_title", undefined, "Screenshots")}
         count={items?.length}
         loading={loading}
         description={tr(
-          "screenshots_description",
+          "screenshots_description_v2",
           undefined,
-          "Photos saved on the PS5 (Capture Gallery). Download to your computer or delete via the file system tab.",
+          "Screenshots saved on the PS5 (its Capture Gallery). Preview them and download them to this computer. To delete one, use Files.",
         )}
         right={
           <div className="flex items-center gap-2">

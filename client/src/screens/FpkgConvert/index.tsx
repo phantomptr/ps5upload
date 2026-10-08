@@ -64,6 +64,7 @@ export default function FpkgConvertScreen() {
   const pipeline = useFpkgConversion((s) => s.pipeline);
   const start = useFpkgConversion((s) => s.start);
   const compress = useFpkgConversion((s) => s.compress);
+  const buildImage = useFpkgConversion((s) => s.buildImage);
   const retryInstall = useFpkgConversion((s) => s.retryInstall);
   const cancel = useFpkgConversion((s) => s.cancel);
   const reset = useFpkgConversion((s) => s.reset);
@@ -284,17 +285,27 @@ export default function FpkgConvertScreen() {
   // converted in place only.
   const isImage = /\.(exfat|ffpkg)$/i.test(source.trim()) && !source.startsWith("ps5://");
   const noFiles = inspection !== null && inspection.files === 0;
+  // A game folder on this computer can be written as an image. One on the console or a
+  // saved server, an image, or an archive cannot from here (use Convert, or unpack first).
+  const src = source.trim();
+  const isLocalFolder =
+    inspection !== null &&
+    !noFiles &&
+    !isImage &&
+    !isArchiveSource(src) &&
+    !/^(ps5|remote):\/\//.test(src) &&
+    !/\.(exfat|ffpkg|ffpfs|ffpfsc)$/i.test(src);
 
   return (
     <div className="app-page flex flex-col gap-4">
       {makeWayDialog}
       <PageHeader
         icon={PackagePlus}
-        title={tr("fpkg_title", undefined, "Convert to FPKG")}
+        title={tr("convert_games_title", undefined, "Convert Games")}
         description={tr(
-          "fpkg.subtitle",
+          "convert_games.subtitle",
           undefined,
-          "Turn a game folder or mount image into an installable package. The work runs on this machine, not the console.",
+          "Turn a game folder or game image into an installable package (.pkg), or a game folder into a game image (.exfat, or the smaller .ffpfsc) that ShadowMount+ mounts. The work runs on this computer, not the console.",
         )}
       />
 
@@ -382,6 +393,11 @@ export default function FpkgConvertScreen() {
             onConvert={() => run(false)}
             onConvertInstall={() => run(true)}
             onCompress={() => void compress(source.trim(), outputDir.trim() || undefined)}
+            onMakeImage={
+              isLocalFolder
+                ? (thenCompress) => void buildImage(src, outputDir.trim() || undefined, thenCompress)
+                : undefined
+            }
             onCancel={() => void cancel()}
             onInstall={(method) => void retryInstall(host, method)}
             onLaunch={onLaunch}

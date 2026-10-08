@@ -67,7 +67,7 @@ function useCommands(close: () => void): Command[] {
       nav("/install-package", "install_package", "Install Package", ["pkg"]),
       nav("/games", "library", "Library", ["games", "apps"]),
       nav("/saves", "saves", "Save data"),
-      nav("/screenshots", "screenshots", "Screenshots"),
+      nav("/captures", "captures", "Screenshots & clips", ["screenshots", "videos", "clips", "captures"]),
       nav("/search", "search", "Search"),
       nav("/volumes", "volumes", "Volumes", ["disk", "drives"]),
       nav("/disk-usage", "disk_usage", "Disk usage"),

@@ -180,9 +180,9 @@ export default function DiskUsageScreen() {
         icon={PieChart}
         title={tr("disk_usage_title", undefined, "Disk usage")}
         description={tr(
-          "disk_usage_description",
+          "disk_usage_description_v2",
           undefined,
-          "Treemap of folder sizes on the PS5. Walks one level deep to compute sums; click a directory to drill in.",
+          "See what is taking up space on the PS5. Each block is a folder, sized by what it holds; click one to look inside it.",
         )}
         right={
           <Button

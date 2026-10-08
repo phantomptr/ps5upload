@@ -25,7 +25,6 @@ import {
   Boxes,
   Save,
   Image as ImageIcon,
-  Video as VideoIcon,
   Settings as SettingsIcon,
   Info,
   Sparkles,
@@ -95,6 +94,14 @@ export const NAV_ITEMS: NavItem[] = [
     section: { key: "nav_section_setup", fallback: "Setup" },
   },
   { to: "/connection", key: "connect", fallback: "Connection", icon: Cable },
+  // What gets loaded onto the console sits with connecting to it.
+  {
+    to: "/payloads",
+    key: "payloads",
+    fallback: "Payloads",
+    icon: Boxes,
+    hideInBrowser: true,
+  },
 
   // Move data and inspect storage.
   {
@@ -142,18 +149,18 @@ export const NAV_ITEMS: NavItem[] = [
   },
   {
     to: "/convert",
-    key: "fpkg_title",
-    fallback: "Convert to FPKG",
+    key: "convert_games_title",
+    fallback: "Convert Games",
     icon: PackagePlus,
   },
   { to: "/saves", key: "saves", fallback: "Save data", icon: Save },
+  // Screenshots and video clips: one screen, a tab each.
   {
-    to: "/screenshots",
-    key: "screenshots",
-    fallback: "Screenshots",
+    to: "/captures",
+    key: "captures",
+    fallback: "Screenshots & clips",
     icon: ImageIcon,
   },
-  { to: "/videos", key: "videos", fallback: "Video clips", icon: VideoIcon },
   {
     to: "/local-image",
     key: "local_image",
@@ -210,16 +217,6 @@ export const NAV_ITEMS: NavItem[] = [
     key: "notifications_screen",
     fallback: "Notifications",
     icon: Bell,
-  },
-
-  // Interfaces belonging to payloads, together in one workspace.
-  {
-    to: "/payloads",
-    key: "payloads",
-    fallback: "Payloads",
-    icon: Boxes,
-    section: { key: "nav_section_payload_tools", fallback: "Payload tools" },
-    hideInBrowser: true,
   },
 
   // Expert-only controls.

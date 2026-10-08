@@ -106,9 +106,9 @@ export default function LocalImageScreen() {
         icon={FilePen}
         title={tr("localimage_title", undefined, "Edit Game Image")}
         description={tr(
-          "localimage_subtitle",
+          "localimage_subtitle_v2",
           undefined,
-          "Open a game image on this computer to change the files inside it",
+          "Open a game image (.exfat or .ffpkg) that is on this computer and add, replace or remove files inside it, without unpacking the whole image.",
         )}
         right={
           <Button
