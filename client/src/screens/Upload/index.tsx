@@ -85,6 +85,7 @@ import { BrowseButton } from "../../components/BrowseButton";
 import { isRemotePath } from "../../lib/remotePath";
 import { useUploadSettingsStore } from "../../state/uploadSettings";
 import { useUploadQueueStore } from "../../state/uploadQueue";
+import { SendAsImageCard } from "./SendAsImageCard";
 import { pkgLibraryStore, usePkgLibrary } from "../../state/pkgLibrary";
 import { pkgStorageFor } from "../../lib/pkgStorage";
 import { useInstallSettingsStore } from "../../state/installSettings";
@@ -1462,6 +1463,14 @@ function Step2Options(props: {
             }
           />
         </section>
+      )}
+
+      {source.kind === "game-folder" && !isRemotePath(source.path) && (
+        <SendAsImageCard
+          sourcePath={source.path}
+          destinationVolume={destinationVolume}
+          destinationSubpath={destinationSubpath}
+        />
       )}
 
       {/* A .pkg has a fixed destination (the package library) and installs

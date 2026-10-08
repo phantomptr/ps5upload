@@ -86,6 +86,12 @@ fn center_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 #[cfg(mobile)]
 fn center_main_window<R: tauri::Runtime>(_app: &tauri::AppHandle<R>) {}
 
+/// Started as the one-shot screenshot decoder (a child of the app, see
+/// commands::screenshot_convert): converts, then exits the process. False for a normal launch.
+pub fn screenshot_decoder_child() -> bool {
+    commands::screenshot_convert::child_mode()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Linux WebKitGTK white-screen rescue, matched to the graphics stack.
@@ -209,6 +215,8 @@ pub fn run() {
             // FileSystem/Hardware surfaces.
             commands::engine_url_set,
             commands::engine_url_get,
+            commands::engine_diagnose,
+            commands::engine_restart,
             commands::ps5_volumes,
             commands::pkg_scan_external,
             commands::pkg_metadata_console,

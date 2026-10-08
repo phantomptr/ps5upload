@@ -12,13 +12,15 @@ members = [
   "crates/ps5upload-pkg",
   "crates/ps5upload-fpkg",
   "crates/ps5upload-tests",
+  "crates/ps5-dump-forge-ufs2",
+  "crates/ps5-dump-forge-pfs",
 ]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
 license = "GPL-3.0-or-later"
-version = "6.4.0"
+version = "6.5.0"
 
 [workspace.dependencies]
 anyhow = "1.0"

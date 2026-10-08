@@ -7,6 +7,9 @@ else
     $(error PS5_PAYLOAD_SDK is undefined)
 endif
 
+# Our own build of the SDK's startup code; see ../sdk-crt.mk for why.
+include ../sdk-crt.mk
+
 # The PS5Upload installer daemon. Loaded by the console's :9021 ELF loader as
 # a companion image; binds TCP :9115 and installs via sceAppInstUtilInstallByPackage.
 ELF := ps5upload-installer.elf
@@ -29,8 +32,8 @@ all: $(ELF) $(ELF).gz
 
 # The Makefile is a prerequisite: LIBS/CFLAGS live here, so a lib-order change
 # forces a relink (the stale-ELF trap the old dpi Makefile documented).
-$(ELF): $(SRCS) $(HEADERS) Makefile
-	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LIBS)
+$(ELF): $(SRCS) $(HEADERS) $(SDK_CRT1) Makefile
+	$(CC) $(CFLAGS) -nostartfiles -o $@ $(SRCS) $(SDK_CRT1) $(LIBS)
 
 $(ELF).gz: $(ELF)
 	gzip -kf $<

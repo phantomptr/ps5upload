@@ -26,6 +26,7 @@ import {
   Select,
 } from "../../components";
 import { useTr } from "../../state/lang";
+import { NpSignInSection } from "./NpSignInSection";
 import { useConnectionStore } from "../../state/connection";
 import { mgmtAddr } from "../../lib/addr";
 import { pickPath } from "../../lib/pickPath";
@@ -61,8 +62,8 @@ export default function ProfileScreen() {
         icon={CircleUserRound}
         title={tr("profile.title", "Profile")}
         description={tr(
-          "profile.description",
-          "Change the console's profile avatar and the offline-account username.",
+          "profile.description_v2",
+          "Change the console's profile avatar and the offline-account username, and sign an account in to PlayStation Network offline.",
         )}
       />
       <ConnectionGate require="payload">
@@ -108,6 +109,7 @@ function ProfileBody({ addr }: { addr: string }) {
         onApplied={refreshInfo}
       />
       <UsernameSection addr={addr} info={info} onChanged={refreshInfo} />
+      <NpSignInSection addr={addr} info={info} />
     </div>
   );
 }

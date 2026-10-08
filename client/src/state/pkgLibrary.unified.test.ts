@@ -91,7 +91,50 @@ describe("statusToOutcome — maps the unified verdict to the UI outcome", () =>
     const o = statusToOutcome(
       status({ phase: "failed", verdict: "failed", reason: "sony_refused", code: 0x80b21106 }),
     );
-    expect(o.errMessage).toBe("The PS5 declined the install. (0x80b21106)");
+    expect(o.errMessage).toBe(
+      "The PS5 declined the install.\nError 0x80B21106: the file name does not match the package inside it.",
+    );
+  });
+
+  it("a refusal with no code says so, and how far the console got", () => {
+    const metrics = (served: number) => ({
+      total_bytes: 1000,
+      served_bytes: served,
+      throughput_mbps: 0,
+      phase_ms: {},
+      retries: 0,
+      sony_rc: 0,
+    });
+    const at = (served: number) =>
+      statusToOutcome(
+        status({ phase: "failed", verdict: "failed", reason: "sony_refused", metrics: metrics(served) }),
+      ).errMessage;
+    expect(at(0)).toContain("gave no error code");
+    expect(at(0)).toContain("before downloading anything");
+    expect(at(1000)).toContain("downloaded all");
+    expect(at(400)).toContain("stopped after");
+  });
+
+  it("the installer's own reason leads, with the code under it", () => {
+    const o = statusToOutcome(
+      status({
+        phase: "failed",
+        verdict: "failed",
+        reason: "sony_refused",
+        code: 0x80a30002,
+        hint: "not enough free space",
+      }),
+    );
+    expect(o.errMessage.split("\n")[0]).toBe("not enough free space");
+    expect(o.errMessage).toContain("0x80A30002");
+  });
+
+  it("0x80B21104 says it is this package and what to do instead", () => {
+    const o = statusToOutcome(
+      status({ phase: "failed", verdict: "failed", reason: "sony_refused", code: 0x80b21104 }),
+    );
+    expect(o.errMessage).toMatch(/0x80B21104/);
+    expect(o.errMessage).toMatch(/other packages install/i);
   });
 
   it("a stream the PS5 never reached gets the app's guidance and the code, not the engine's English", () => {

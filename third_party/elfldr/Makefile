@@ -23,6 +23,10 @@ else
     $(error PS5_PAYLOAD_SDK is undefined)
 endif
 
+# ps5upload: link ps5upload's own build of the SDK's startup code (see
+# payload/sdk-crt.mk). The SDK v0.43 one stops before main() on FW 5.50.
+include ../../payload/sdk-crt.mk
+
 CFLAGS := -Wall -Werror -O1
 LDADD  := -lSceSsl -lSceHttp
 
@@ -31,16 +35,16 @@ all: elfldr-ps5.elf
 bootstrap.o: socksrv.elf
 main.o: bootstrap.elf
 
-bootstrap.elf: bootstrap.o elfldr.o pt.o notify.o
-	$(CC) -o $@ $^
+bootstrap.elf: bootstrap.o elfldr.o pt.o notify.o $(SDK_CRT1)
+	$(CC) -nostartfiles -o $@ $^
 	$(STRIP) $@
 
-socksrv.elf: socksrv.o selfldr.o elfldr.o pt.o notify.o uri.o
-	$(CC) -o $@ $^ $(LDADD)
+socksrv.elf: socksrv.o selfldr.o elfldr.o pt.o notify.o uri.o $(SDK_CRT1)
+	$(CC) -nostartfiles -o $@ $^ $(LDADD)
 	$(STRIP) $@
 
-elfldr-ps5.elf: main.o elfldr.o pt.o notify.o
-	$(CC) -o $@ $^
+elfldr-ps5.elf: main.o elfldr.o pt.o notify.o $(SDK_CRT1)
+	$(CC) -nostartfiles -o $@ $^
 	$(STRIP) $@
 
 clean:

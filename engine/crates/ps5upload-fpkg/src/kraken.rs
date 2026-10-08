@@ -1102,7 +1102,9 @@ fn decode_half(src: &[u8], out: &mut [u8], at: usize, len: usize, delta: bool) -
     let mut p = 0usize;
     let mut dst = at;
     if at == 0 {
-        if src.len() < SEED {
+        // The seed is the half's first eight bytes: a half shorter than that cannot be LZ, and
+        // a damaged descriptor saying it is must not make the copy below overrun the block.
+        if src.len() < SEED || len < SEED {
             return format_err("kraken: truncated seed");
         }
         out[..SEED].copy_from_slice(&src[..SEED]);

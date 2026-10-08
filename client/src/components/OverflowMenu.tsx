@@ -65,6 +65,7 @@ export function OverflowMenu({
   triggerLabel,
   triggerIcon,
   triggerVariant = "ghost",
+  triggerClassName,
 }: {
   items: OverflowMenuItem[];
   ariaLabel?: string;
@@ -78,6 +79,8 @@ export function OverflowMenu({
   triggerLabel?: string;
   triggerIcon?: ReactNode;
   triggerVariant?: ButtonVariant;
+  /** Extra classes for the trigger (a card makes the ⋯ a compact square beside its main button). */
+  triggerClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
   // Vertical flip + clamp: a menu anchored `top: 100%` can run off the bottom
@@ -159,6 +162,7 @@ export function OverflowMenu({
           variant={triggerVariant}
           size={size}
           leftIcon={<MoreHorizontal size={14} />}
+          className={triggerClassName}
           onClick={() => setOpen((v) => !v)}
           aria-haspopup="menu"
           aria-expanded={open}

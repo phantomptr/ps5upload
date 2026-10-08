@@ -14,7 +14,11 @@ pub struct SourceFile {
 /// The game files to convert, whatever they live in. Sizes are known up front, so the
 /// plan fixes every offset before the first byte is read. Images seek, so reading takes
 /// `&mut self`.
-pub trait SourceTree {
+///
+/// `Send`, so an opened tree (a `Box<dyn SourceTree>` from [`open`]) can move to the worker
+/// thread that builds from it. Every tree here already is: a folder, and images read through
+/// [`crate::ReadSeek`], which is `Send`.
+pub trait SourceTree: Send {
     fn files(&self) -> &[SourceFile];
 
     /// The whole file at `path`.
@@ -174,7 +178,17 @@ pub(crate) fn is_junk(name: &str) -> bool {
         || lower == "system volume information"
         || lower == ".fseventsd"
         || lower == ".spotlight-v100"
+        || lower == ".trashes"
         || name.starts_with("._")
+}
+
+/// How errors name the directory a walk is in, from its `prefix` (its path and a `/`, or
+/// nothing at the root).
+pub(crate) fn dir_label(prefix: &str) -> String {
+    match prefix.strip_suffix('/') {
+        Some(dir) => format!("directory {dir}"),
+        None => "the root directory".into(),
+    }
 }
 
 /// Walk `root` (a game folder) into its file list, sizes from the filesystem only.
@@ -1033,6 +1047,8 @@ mod tests {
         std::fs::write(dir.join("._eboot.bin"), [0u8; 3]).unwrap();
         std::fs::create_dir_all(dir.join(".Spotlight-V100")).unwrap();
         std::fs::write(dir.join(".Spotlight-V100/x"), [0u8; 3]).unwrap();
+        std::fs::create_dir_all(dir.join(".Trashes/501")).unwrap();
+        std::fs::write(dir.join(".Trashes/501/x"), [0u8; 3]).unwrap();
         let files = scan(&dir).unwrap();
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(
@@ -1192,6 +1208,26 @@ mod tests {
         let err = err.to_string();
         assert!(err.contains(".exfat"), "{err}");
         assert!(err.contains(".ffpkg"), "{err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Every tree, and the box `open` returns, moves to a worker thread.
+    #[test]
+    fn trees_are_send() {
+        fn send<T: Send + ?Sized>() {}
+        send::<FolderSource>();
+        send::<crate::exfat::ExFatSource>();
+        send::<crate::ufs2_source::Ufs2Source>();
+        send::<Box<dyn SourceTree>>();
+
+        let dir = std::env::temp_dir().join(format!("fpkg-send-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("eboot.bin"), b"moved").unwrap();
+        let mut tree = open(&dir).unwrap();
+        let read = std::thread::spawn(move || tree.read("eboot.bin").unwrap())
+            .join()
+            .unwrap();
+        assert_eq!(read, b"moved");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

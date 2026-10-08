@@ -51,6 +51,23 @@ const INODE_SIZE: u64 = 256;
 /// bad-block list (historic).
 pub const ROOT_INODE: u64 = 2;
 
+/// The most bytes [`Ufs2Image::list_dir`] reads for one directory. A game folder can hold
+/// thousands of long names in one directory (a 255-byte name takes a 264-byte record, so
+/// 1 MiB is only ~4,000 of them), so the budget is far above any real directory while still
+/// bounding what a corrupt inode's size can make the reader hold.
+// ponytail: 64 MiB per directory read whole (~250,000 maximal names), stream the entries block by block if a real image ever needs more
+pub const MAX_DIR_BYTES: u64 = 64 * 1024 * 1024;
+
+/// The most entries [`Ufs2Image::list_dir`] returns for one directory. The byte budget alone
+/// would allow five million twelve-byte records, each a [`DirEntry`] on the heap.
+pub const MAX_DIR_ENTRIES: usize = 1_000_000;
+
+/// The most inodes [`Ufs2Image::read_inodes`] reads in one call: 2 MiB of inode table. The
+/// count comes from directory entries on a possibly-hostile image, and a cylinder group may
+/// declare billions of inodes; real images have 512 or 2048 per group, so a caller splits a
+/// longer run.
+pub const MAX_INODE_RUN: u64 = 8192;
+
 /// Inode mode bit field constants. Mirrors POSIX `mode_t` layout —
 /// not platform-specific, defined by UFS spec.
 const IFMT: u16 = 0xF000;
@@ -93,6 +110,16 @@ pub enum Ufs2Error {
     FileTooLarge { size: u64, cap: u64 },
     #[error("path component not found: {component}")]
     NotFound { component: String },
+    #[error("a run of {count} inodes is more than the {max} read at once")]
+    InodeRunTooLong { count: u64, max: u64 },
+    #[error("directory inode {inode} has more than {max} entries")]
+    TooManyEntries { inode: u64, max: usize },
+    #[error("directory inode {inode} holds a name that {why} (bytes {hex})")]
+    BadName {
+        inode: u64,
+        why: &'static str,
+        hex: String,
+    },
 }
 
 /// Subset of the superblock we actually use for reading. The full
@@ -368,8 +395,14 @@ impl<R: Read + Seek> Ufs2Image<R> {
         if count == 0 {
             return Ok(Vec::new());
         }
+        if count > MAX_INODE_RUN {
+            return Err(Ufs2Error::InodeRunTooLong {
+                count,
+                max: MAX_INODE_RUN,
+            });
+        }
         let per_cg = u64::from(self.superblock.inodes_per_cg);
-        let last = first + count - 1;
+        let last = first.saturating_add(count - 1);
         self.check_inode_number(first)?;
         self.check_inode_number(last)?;
         if first / per_cg != last / per_cg {
@@ -436,7 +469,7 @@ impl<R: Read + Seek> Ufs2Image<R> {
         if !dir.is_dir() {
             return Ok(Vec::new());
         }
-        let bytes = self.read_file(dir, 1024 * 1024)?; // 1 MiB cap on dir size — huge by UFS standards
+        let bytes = self.read_file(dir, MAX_DIR_BYTES)?;
         let mut out: Vec<DirEntry> = Vec::new();
         let mut off: usize = 0;
         while off + 8 <= bytes.len() {
@@ -450,16 +483,41 @@ impl<R: Read + Seek> Ufs2Image<R> {
                     rec_len,
                 });
             }
-            if inode != 0
-                && name_len > 0
-                && name_len + 8 <= rec_len as usize
-                && off + 8 + name_len <= bytes.len()
-            {
-                let name = String::from_utf8_lossy(&bytes[off + 8..off + 8 + name_len])
-                    .trim_end_matches('\0')
-                    .to_string();
+            if inode != 0 && name_len + 8 > rec_len as usize {
+                return Err(Ufs2Error::BadDirEntry {
+                    offset: off as u64,
+                    rec_len,
+                });
+            }
+            if inode != 0 && name_len > 0 {
+                // Names are taken as they are: a lossy decode or a trimmed byte would rename
+                // the file, and a '/' would turn it into a path.
+                let raw = &bytes[off + 8..off + 8 + name_len];
+                let why = if raw.contains(&0) {
+                    Some("contains a NUL")
+                } else if raw.contains(&b'/') {
+                    Some("contains a '/'")
+                } else {
+                    None
+                };
+                let name = match (why, std::str::from_utf8(raw)) {
+                    (None, Ok(name)) => name.to_string(),
+                    (why, _) => {
+                        return Err(Ufs2Error::BadName {
+                            inode: dir.number,
+                            why: why.unwrap_or("is not UTF-8"),
+                            hex: raw.iter().map(|b| format!("{b:02x}")).collect(),
+                        })
+                    }
+                };
                 let kind = dirent_kind(kind_byte);
                 if name != "." && name != ".." {
+                    if out.len() == MAX_DIR_ENTRIES {
+                        return Err(Ufs2Error::TooManyEntries {
+                            inode: dir.number,
+                            max: MAX_DIR_ENTRIES,
+                        });
+                    }
                     out.push(DirEntry { inode, name, kind });
                 }
             }
@@ -998,5 +1056,165 @@ mod tests {
         // Past the end stops at the end.
         assert!(img.read_range(&inode, inode.size, 8).unwrap().is_empty());
         assert_eq!(img.read_range(&inode, inode.size - 4, 64).unwrap().len(), 4);
+    }
+
+    /// A 4 KiB-block image holding one directory of `count` entries, each named `name_len`
+    /// bytes long, in blocks from fragment 1 on (a single-indirect block after the twelfth).
+    fn big_dir(count: usize, name_len: usize) -> (Ufs2Image<std::io::Cursor<Vec<u8>>>, Inode) {
+        big_dir_in(count, name_len, 4096)
+    }
+
+    /// [`big_dir`] in blocks of `bs` bytes.
+    fn big_dir_in(
+        count: usize,
+        name_len: usize,
+        bs: usize,
+    ) -> (Ufs2Image<std::io::Cursor<Vec<u8>>>, Inode) {
+        use std::io::Cursor;
+        let block_size = bs;
+        let reclen = (8 + name_len + 1).next_multiple_of(4);
+        let per_block = block_size / reclen;
+        let blocks = count.div_ceil(per_block);
+        assert!(blocks <= NDADDR + block_size / 8);
+        let mut image = vec![0u8; (blocks + 2) * block_size];
+        let mut left = count;
+        for b in 0..blocks {
+            let n = left.min(per_block);
+            left -= n;
+            let at = (b + 1) * block_size;
+            for i in 0..n {
+                let e = at + i * reclen;
+                let len = if i + 1 == n {
+                    block_size - i * reclen
+                } else {
+                    reclen
+                };
+                image[e..e + 4].copy_from_slice(&3u32.to_le_bytes());
+                image[e + 4..e + 6].copy_from_slice(&(len as u16).to_le_bytes());
+                image[e + 6] = 8;
+                image[e + 7] = name_len as u8;
+                let name = format!("{:0width$}", b * per_block + i, width = name_len);
+                let name = &name.as_bytes()[name.len() - name_len..];
+                image[e + 8..e + 8 + name_len].copy_from_slice(name);
+            }
+        }
+        let mut direct = [0u64; NDADDR];
+        for (i, slot) in direct.iter_mut().enumerate().take(blocks) {
+            *slot = i as u64 + 1;
+        }
+        let mut indirect = [0u64; NIADDR];
+        if blocks > NDADDR {
+            let ptrs = (blocks + 1) * block_size;
+            indirect[0] = blocks as u64 + 1;
+            for i in NDADDR..blocks {
+                let at = ptrs + (i - NDADDR) * 8;
+                image[at..at + 8].copy_from_slice(&(i as u64 + 1).to_le_bytes());
+            }
+        }
+        let dir = Inode {
+            number: 2,
+            mode: IFDIR,
+            size: (blocks * block_size) as u64,
+            direct,
+            indirect,
+            mtime: 0,
+        };
+        let sb = Superblock {
+            block_size: block_size as u32,
+            fragment_size: block_size as u32,
+            size_fragments: blocks as u64 + 2,
+            cg_count: 1,
+            inodes_per_cg: 64,
+            fragments_per_cg: blocks as u32 + 2,
+            iblkno: 1,
+            volume_name: String::new(),
+        };
+        (
+            Ufs2Image {
+                reader: Cursor::new(image),
+                superblock: sb,
+            },
+            dir,
+        )
+    }
+
+    /// A game directory with thousands of long names is well past 1 MiB, the old limit.
+    #[test]
+    fn a_directory_past_a_mebibyte_lists_every_entry() {
+        let (mut img, dir) = big_dir(6000, 250);
+        assert!(dir.size > 1024 * 1024, "{} bytes", dir.size);
+        let entries = img.list_dir(&dir).unwrap();
+        assert_eq!(entries.len(), 6000);
+        assert_eq!(entries[0].name, format!("{:0250}", 0));
+        assert_eq!(entries[5999].name, format!("{:0250}", 5999));
+        assert!(entries.iter().all(|e| e.inode == 3));
+    }
+
+    /// A name is taken as it is on disk: bytes that are not UTF-8, a NUL or a '/' in it are
+    /// an error naming the directory and the raw bytes, never a renamed entry or a subfolder.
+    #[test]
+    fn a_bad_name_is_refused_with_its_bytes() {
+        for (name, why) in [
+            (b"ab\xffcdefg", "is not UTF-8"),
+            (b"abcdefg\0", "contains a NUL"),
+            (b"ab/cdefg", "contains a '/'"),
+        ] {
+            let (mut img, dir) = big_dir(3, 8);
+            // The first record's name, in the directory's first block.
+            img.reader.get_mut()[4096 + 8..4096 + 16].copy_from_slice(name);
+            let err = img.list_dir(&dir).unwrap_err();
+            let hex: String = name.iter().map(|b| format!("{b:02x}")).collect();
+            assert!(matches!(err, Ufs2Error::BadName { inode: 2, .. }), "{err}");
+            assert!(err.to_string().contains(why), "{err}");
+            assert!(err.to_string().contains(&hex), "{err}");
+        }
+        // A live entry whose name runs past its record is corrupt, not skipped.
+        let (mut img, dir) = big_dir(3, 8);
+        img.reader.get_mut()[4096 + 7] = 13;
+        assert!(matches!(
+            img.list_dir(&dir),
+            Err(Ufs2Error::BadDirEntry { offset: 0, .. })
+        ));
+    }
+
+    /// Short names fit five million records in the byte budget; the entry count stops first.
+    #[test]
+    fn a_directory_over_the_entry_count_is_refused() {
+        let (mut img, dir) = big_dir_in(MAX_DIR_ENTRIES + 1, 1, 32768);
+        assert!(dir.size < MAX_DIR_BYTES);
+        assert!(matches!(
+            img.list_dir(&dir),
+            Err(Ufs2Error::TooManyEntries { .. })
+        ));
+    }
+
+    /// A directory inode claiming more than the budget is refused before anything is read.
+    #[test]
+    fn a_directory_over_the_budget_is_refused() {
+        let (mut img, mut dir) = big_dir(1, 8);
+        dir.size = MAX_DIR_BYTES + 1;
+        assert!(matches!(
+            img.list_dir(&dir),
+            Err(Ufs2Error::FileTooLarge {
+                cap: MAX_DIR_BYTES,
+                ..
+            })
+        ));
+    }
+
+    /// The inode count of a run comes from directory entries; a group that declares a huge
+    /// inode count must not size one read from it.
+    #[test]
+    fn a_run_of_inodes_is_bounded() {
+        let (mut img, _) = big_dir(1, 8);
+        img.superblock.inodes_per_cg = u32::MAX;
+        assert!(matches!(
+            img.read_inodes(1, MAX_INODE_RUN + 1),
+            Err(Ufs2Error::InodeRunTooLong { .. })
+        ));
+        assert!(matches!(
+            img.read_inodes(u64::MAX - 1, MAX_INODE_RUN),
+            Err(Ufs2Error::InodeOutOfRange { .. })
+        ));
     }
 }

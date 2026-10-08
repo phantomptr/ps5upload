@@ -32,7 +32,11 @@ describe("the np-fake-signin guidance on Remote Play", () => {
 
   it("says what to download, what it unlocks, and how to undo it", () => {
     const html = renderToStaticMarkup(
-      <NpSignInCard onDownload={() => {}} onOpenPayloads={() => {}} />,
+      <NpSignInCard
+        onDownload={() => {}}
+        onOpenPayloads={() => {}}
+        onOpenProfile={() => {}}
+      />,
     );
     expect(html).toContain("np-fake-signin-ps5.elf");
     expect(html).toContain("v1.4");
@@ -44,5 +48,8 @@ describe("the np-fake-signin guidance on Remote Play", () => {
     expect(html).toContain("Sign out");
     expect(html).toContain("np-signin-download");
     expect(html).toContain("np-signin-open-payloads");
+    // The one-step route in Profile comes first.
+    expect(html).toContain("np-signin-open-profile");
+    expect(html).toContain("Profile");
   });
 });

@@ -222,7 +222,7 @@ fn apply_sfo(g: &mut GameInspection, params: &[(String, SfoValue)]) {
 }
 
 /// Fill identity/specs/params from a PS5 `param.json`.
-fn apply_param_json(g: &mut GameInspection, v: &serde_json::Value) {
+pub(crate) fn apply_param_json(g: &mut GameInspection, v: &serde_json::Value) {
     let Some(obj) = v.as_object() else { return };
     for (key, value) in obj {
         let shown = match value {
@@ -293,7 +293,7 @@ fn apply_param_json(g: &mut GameInspection, v: &serde_json::Value) {
     g.identity.platform = "ps5".to_string();
 }
 
-fn finish(g: &mut GameInspection) {
+pub(crate) fn finish(g: &mut GameInspection) {
     if g.identity.title_id.is_empty() {
         // `get`, not slicing: a malformed id may split a multi-byte character.
         if let Some(t) = g.identity.content_id.get(7..16) {

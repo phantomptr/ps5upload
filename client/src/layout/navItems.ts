@@ -15,6 +15,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   Cable,
+  Library,
   Upload,
   PackageOpen,
   Gamepad2,
@@ -140,6 +141,12 @@ export const NAV_ITEMS: NavItem[] = [
     fallback: "Games",
     icon: Gamepad2,
     section: { key: "nav_section_games_mods", fallback: "Games & content" },
+  },
+  {
+    to: "/collection",
+    key: "collection_nav",
+    fallback: "Collection",
+    icon: Library,
   },
   {
     to: "/install-package",

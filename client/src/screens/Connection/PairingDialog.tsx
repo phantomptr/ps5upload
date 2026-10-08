@@ -6,7 +6,6 @@ import { Modal } from "../../components/Modal";
 import { useTr } from "../../state/lang";
 import { usePairingStore } from "../../state/pairing";
 import { sendHelperTo } from "../../state/helperSendRuntime";
-import { isTauriEnv } from "../../lib/tauriEnv";
 import type { PairingView } from "../../api/ava1";
 
 export interface PairingPanelProps {
@@ -248,9 +247,10 @@ export function PairingDialog() {
   const host = usePairingStore((s) => s.host);
   const [sending, setSending] = useState(false);
   // The quickest way out of a closed pairing window: a helper this app sends pairs by itself,
-  // so send it and ask again. Only where the app can send one.
+  // so send it and ask again.
+  // The web UI sends it too: the engine sends its own bundled helper (#415).
   const resend =
-    isTauriEnv() && host
+    host
       ? async () => {
           setSending(true);
           try {

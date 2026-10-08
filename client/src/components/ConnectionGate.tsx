@@ -46,20 +46,17 @@ export function ConnectionGate({
   const engineStatus = useConnectionStore((s) => s.engineStatus);
 
   if (engineStatus === "down") {
+    // The cause and the Restart button are in the notice every screen shows at the top
+    // (EngineDownBanner); here only what it means for this screen.
     return (
       <EmptyState
         fill
         icon={ServerCrash}
         title={tr("gate_engine_down_title", "Transfer engine isn't running")}
         message={tr(
-          "gate_engine_down_body",
-          "The local engine that talks to your PS5 has stopped. Restarting the app brings it back; the Logs screen shows why it exited.",
+          "gate_engine_down_body_v2",
+          "This screen needs the app's engine, which is not answering. The notice at the top of the window says why and can restart it.",
         )}
-        action={
-          <Button variant="secondary" onClick={() => navigate("/logs")}>
-            {tr("gate_view_logs", "View logs")}
-          </Button>
-        }
       />
     );
   }

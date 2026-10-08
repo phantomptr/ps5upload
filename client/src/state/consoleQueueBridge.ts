@@ -3,6 +3,7 @@
 // import uploadQueue: each side registers its half here instead. Types only —
 // this module imports no store.
 import type { ExternalPkg } from "../api/ps5";
+import { hostOf } from "../lib/addr";
 import type { LinkInstallMode } from "./linkInstallPrefs";
 import type { AddQueueItem } from "./uploadQueue";
 
@@ -68,6 +69,45 @@ export interface EnqueuedInstall {
   id: string;
   /** Resolves when the item finishes, or is removed from the queue. */
   done: Promise<InstallResult>;
+}
+
+/** The engine job behind the install a console is running, reported when it starts, so the
+ *  queue can find the job again after the page reloads. One install runs per console, so the
+ *  console is the key. */
+const jobWatchers = new Map<string, (job: string) => void>();
+
+export function watchInstallJob(
+  host: string,
+  cb: (job: string) => void,
+): () => void {
+  const key = hostOf(host);
+  jobWatchers.set(key, cb);
+  return () => {
+    if (jobWatchers.get(key) === cb) jobWatchers.delete(key);
+  };
+}
+
+export function reportInstallJob(host: string, job: string): void {
+  jobWatchers.get(hostOf(host))?.(job);
+}
+
+/** What an engine install job is doing now: still installing, finished, or gone (the engine
+ *  restarted and forgot it, so whether the console finished is unknown). */
+export type InstallJobState =
+  | { state: "running"; pct: number }
+  | { state: "finished"; result: InstallResult }
+  | { state: "gone" };
+
+let jobResolver: ((job: string) => Promise<InstallJobState>) | null = null;
+
+export function registerInstallJobResolver(
+  fn: (job: string) => Promise<InstallJobState>,
+): void {
+  jobResolver = fn;
+}
+
+export function resolveInstallJob(job: string): Promise<InstallJobState> {
+  return jobResolver ? jobResolver(job) : Promise.resolve({ state: "gone" });
 }
 
 let executor: InstallExecutor | null = null;

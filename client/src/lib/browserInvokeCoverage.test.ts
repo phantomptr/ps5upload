@@ -77,6 +77,8 @@ const NATIVE_ONLY: Record<string, string> = {
   app_data_reset: "native: wipes the desktop app data dir",
   engine_url_get: "native: desktop sidecar URL",
   engine_url_set: "native: desktop sidecar URL",
+  engine_diagnose: "native: inspects the desktop sidecar process and port",
+  engine_restart: "native: restarts the desktop sidecar",
   toast_push: "native: OS notification",
   keep_awake_set: "native: OS power assertion",
   keep_awake_state: "native: OS power assertion",

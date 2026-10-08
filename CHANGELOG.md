@@ -4,6 +4,65 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.5.0
+
+**The Collection, Move to…, and a big round of fixes: Android connects again, the helper starts
+on FW 5.50, and the web UI can pair.** Update the app; it updates the helper by itself.
+
+### New
+
+- **Collection:** every game in the folders you add (packages, game folders, game images,
+  archives, PS3 packages), grouped by game with its updates and DLC, duplicates and their size.
+  Search, filters, grid or table, covers, exports, automatic rescan. Folders on a NAS (SMB, FTP,
+  FTPS, SFTP) are scanned in place without mounting. **Import from PS Game Library** brings its
+  index over; PS Game Library is now part of ps5upload.
+- **What this PS5 has:** each game shows whether the selected console has it and at which
+  version. Install a game with its update and DLC, just the update or the missing DLC, or
+  **Bring this PS5 up to date** in one go.
+- **Copy install link:** host a package for a console (or any device you allow) to fetch itself;
+  **Serving** lists the links and stops them.
+- **Organize packages** renames and files packages the way PS Game Library does, with a preview
+  and undo. **Move to Trash**, **Keep the largest copy** and **Clean up junk files** (`._`,
+  `.DS_Store` and friends) tidy the drives.
+- **Send a game folder as one image:** Upload builds a compressed `.ffpfsc` (or `.ffpkg` /
+  `.exfat`) and uploads it by itself. Convert writes `.ffpkg`, `.ffpfs` and `.exfat`, compresses
+  while writing and checks every image afterwards (writers from PS5 Dump Forge, thanks quer3q).
+- **Files: Move to…** picks a drive's homebrew folder, a recent folder or any folder and tells
+  you first whether it moves instantly or copies to another drive, and whether it fits.
+- **Files: Set permissions (777)** for any file or folder.
+- **Sign in to PlayStation Network (offline)** in Profile, for Remote Play.
+
+### Fixed
+
+- **Android:** 6.x could not connect on Android 17 ("Port 9021 is not open"). The app now asks
+  for local network access and shows a red bar until you allow it.
+- **Helper on FW 5.50:** every 6.x helper stopped before it started on some firmware (5.36
+  worked). Fixed for the helper, the installer and the patched elfldr.
+- **Web UI pairing:** the self-hosted web UI can now send the helper (which pairs it), and no
+  longer says "ready" while it isn't paired.
+- **Screenshots crash loop on Linux:** a damaged capture can no longer close the app; each one
+  is decoded on its own.
+- **Installs started your queued uploads:** an install now runs by itself; uploads you queued
+  wait for **Start**.
+- **Moves to another drive** check each copied file before removing the original (Cut and
+  Paste too), so a short copy never costs the original.
+- **An install that finished while the app was closed** shows as done instead of "interrupted".
+- **The app can't reach its engine:** every screen now says why and offers **Restart engine**.
+- **Health check** starts the package installer if it isn't running yet.
+
+### Better
+
+- **"The PS5 declined the install"** now shows Sony's error code with what it means, and how far
+  the console got (refused at once, part-way, or after downloading everything).
+- **`0x80B21104`** explains what to try. **Free space a big upload seems to lose** is explained
+  in the FAQ (it's the PS5's own reserve).
+- **Connection screen:** a failed step shows its full message, and **Load elfldr first** is hard
+  to miss.
+- **Keep awake** covers every upload and install, Stream installs included.
+- **Games cards** are larger, with Play and Close up front and the rest in one menu.
+
+---
+
 ## 6.4.0
 
 **Install is two tabs, links say what they ask of you, and Home tells you when something is

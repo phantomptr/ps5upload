@@ -1014,10 +1014,13 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         // is refused as "already running".
         // A Sony error on a stream the console never fetched from means it
         // could not reach this computer (or its proxy blocked it) — say so.
-        let never_fetched = session_id.as_ref().is_some_and(|sid| {
+        // How far the console got before it refused: the UI tells "refused at once" from
+        // "refused after fetching it all", which point at different causes.
+        let fetched = session_id.as_ref().and_then(|sid| {
             let s = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
-            s.get(sid).is_some_and(|x| x.bytes_served == 0)
+            s.get(sid).map(|x| (x.bytes_served, x.total_size))
         });
+        let never_fetched = fetched.is_some_and(|(served, _)| served == 0);
         let net_diag = if never_fetched && code != 0 {
             match served_from.as_deref() {
                 Some(o) => net_diag_for(&ip, o).await,
@@ -1057,6 +1060,10 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             s.net_diag = net_diag.clone();
             s.shortened = shortened;
             s.metrics.sony_rc = code;
+            if let Some((served, total)) = fetched {
+                s.metrics.served_bytes = served;
+                s.metrics.total_bytes = total;
+            }
             s.metrics.phase_ms.insert("deliver".into(), deliver_ms);
         });
         finalize(&state, &job, &req, started);

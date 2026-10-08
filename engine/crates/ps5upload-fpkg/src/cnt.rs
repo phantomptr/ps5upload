@@ -7,6 +7,12 @@ use crate::{be32, be64, format_err, PkgFile, Result};
 const MAGIC: u32 = 0x7F43_4E54;
 const ENTRY_LEN: usize = 0x20;
 const HEADER_REGION: usize = 0x1000;
+/// Container entries [`read`] accepts. Real packages carry a few dozen.
+pub const MAX_ENTRIES: usize = 4096;
+/// The most container bytes [`read`] holds. The container carries the image digests (32 bytes
+/// per 64 KiB outer block, ~100 MiB for a 200 GB image) and the packaged payloads, which the
+/// builder bounds to 256 MiB together; a corrupt header could otherwise ask for gigabytes.
+pub const MAX_BYTES: u64 = 1 << 30;
 
 pub mod ids {
     pub const DIGESTS: u32 = 0x0001;
@@ -81,18 +87,38 @@ pub fn read(file: &mut PkgFile, cnt_offset: u64) -> Result<Cnt> {
         return format_err("embedded CNT magic mismatch");
     }
     let count = be32(&head, 0x10) as usize;
-    let table = be32(&head, 0x18) as usize;
-    let table_bytes = file.read_at(cnt_offset + table as u64, count * ENTRY_LEN)?;
+    if count > MAX_ENTRIES {
+        return format_err(format!(
+            "CNT claims {count} entries (at most {MAX_ENTRIES} accepted)"
+        ));
+    }
+    // Every size below is an on-disk value: summed in u64, checked, and bounded before it
+    // sizes a read.
+    let table = u64::from(be32(&head, 0x18));
+    let table_at = cnt_offset
+        .checked_add(table)
+        .ok_or_else(|| crate::Error::Format("CNT entry table offset overflows".into()))?;
+    let table_bytes = file.read_at(table_at, count * ENTRY_LEN)?;
     // The body region can reach past the last entry (the body digest covers it), so
     // size the read by the header's body offset/size as well.
-    let mut end = (table + count * ENTRY_LEN).max((be64(&head, 0x20) + be64(&head, 0x28)) as usize);
+    let body_end = be64(&head, 0x20)
+        .checked_add(be64(&head, 0x28))
+        .ok_or_else(|| crate::Error::Format("CNT body region overflows".into()))?;
+    let mut end = (table + (count * ENTRY_LEN) as u64).max(body_end);
     for i in 0..count {
         let o = i * ENTRY_LEN;
-        let off = be32(&table_bytes, o + 16) as usize;
-        let size = be32(&table_bytes, o + 20) as usize;
+        let off = u64::from(be32(&table_bytes, o + 16));
+        let size = u64::from(be32(&table_bytes, o + 20));
         end = end.max(off + size);
     }
-    Cnt::from_bytes(file.read_at(cnt_offset, end.max(HEADER_REGION))?)
+    let end = end.max(HEADER_REGION as u64);
+    if end > MAX_BYTES {
+        return format_err(format!(
+            "CNT claims {end} bytes (at most {MAX_BYTES} accepted)"
+        ));
+    }
+    // `read_at` refuses a read past the package's end before allocating it.
+    Cnt::from_bytes(file.read_at(cnt_offset, end as usize)?)
 }
 
 impl Cnt {
@@ -159,7 +185,9 @@ impl Cnt {
     pub fn header_rollup_ok(&self) -> bool {
         let off = be64(&self.bytes, 0x20) as usize;
         let size = be32(&self.bytes, 0x1C) as usize;
-        let pre = self.bytes.get(off..off + size);
+        let pre = off
+            .checked_add(size)
+            .and_then(|end| self.bytes.get(off..end));
         pre.is_some_and(|p| sha3(p) == self.bytes[0x100..0x120])
     }
 
@@ -179,9 +207,10 @@ impl Cnt {
         let Some(metas) = self.entry(ids::METAS) else {
             return false;
         };
-        let rows = self
-            .bytes
-            .get(metas.offset as usize..(metas.offset + sc * ENTRY_LEN as u32) as usize);
+        let start = metas.offset as usize;
+        let rows = start
+            .checked_add(sc as usize * ENTRY_LEN)
+            .and_then(|end| self.bytes.get(start..end));
         let Some(rows) = rows else { return false };
         pre.extend_from_slice(rows);
         sha3(&pre) == self.bytes[0x120..0x140]
@@ -191,7 +220,9 @@ impl Cnt {
     pub fn body_digest_ok(&self) -> bool {
         let off = self.body_offset as usize;
         let size = self.body_size as usize;
-        let pre = self.bytes.get(off..off + size);
+        let pre = off
+            .checked_add(size)
+            .and_then(|end| self.bytes.get(off..end));
         pre.is_some_and(|p| sha3(p) == self.bytes[0x160..0x180])
     }
 
@@ -404,6 +435,55 @@ mod tests {
         let mut bytes = synthetic();
         bytes[0] = 0;
         assert!(Cnt::from_bytes(bytes).is_err());
+    }
+
+    /// `synthetic` behind 64 KiB of package, through [`read`].
+    fn read_patched(patch: impl Fn(&mut Vec<u8>)) -> Result<Cnt> {
+        let mut c = synthetic();
+        patch(&mut c);
+        let mut pkg = vec![0u8; 0x10000];
+        pkg.extend_from_slice(&c);
+        let len = pkg.len() as u64;
+        let mut file = PkgFile::from_reader(Box::new(std::io::Cursor::new(pkg)), len);
+        read(&mut file, 0x10000)
+    }
+
+    /// Header sizes are on-disk values: an overflowing sum, too many entries or a region
+    /// past the package or the bound are errors, never a panic or a huge allocation.
+    #[test]
+    fn hostile_header_sizes_are_errors() {
+        assert_eq!(read_patched(|_| {}).unwrap().entries.len(), 2);
+        let refused = |want: &str, patch: fn(&mut Vec<u8>)| {
+            let Err(e) = read_patched(patch) else {
+                panic!("{want}: must not read");
+            };
+            assert!(e.to_string().contains(want), "{want}: {e}");
+        };
+        refused("body region overflows", |c| {
+            c[0x20..0x28].copy_from_slice(&u64::MAX.to_be_bytes());
+            c[0x28..0x30].copy_from_slice(&1u64.to_be_bytes());
+        });
+        refused("entries (at most 4096", |c| {
+            c[0x10..0x14].copy_from_slice(&0x0100_0000u32.to_be_bytes())
+        });
+        refused("at most 1073741824 accepted", |c| {
+            c[0x28..0x30].copy_from_slice(&(1u64 << 40).to_be_bytes())
+        });
+        refused("past end", |c| {
+            c[0x28..0x30].copy_from_slice(&0x10_0000u64.to_be_bytes())
+        });
+    }
+
+    /// The digest checks slice by header fields too: an overflowing one is a mismatch.
+    #[test]
+    fn overflowing_digest_ranges_do_not_match() {
+        let mut bytes = synthetic();
+        bytes[0x20..0x28].copy_from_slice(&u64::MAX.to_be_bytes());
+        bytes[0x28..0x30].copy_from_slice(&1u64.to_be_bytes());
+        bytes[0x1C..0x20].copy_from_slice(&1u32.to_be_bytes());
+        let cnt = Cnt::from_bytes(bytes).unwrap();
+        assert!(!cnt.header_rollup_ok());
+        assert!(!cnt.body_digest_ok());
     }
 }
 

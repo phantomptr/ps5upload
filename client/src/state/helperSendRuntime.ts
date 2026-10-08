@@ -5,9 +5,20 @@ import { STUCK_LOADER_MESSAGE, waitForLoader } from "../lib/elfldrGuard";
 import { useConnectionStore } from "./connection";
 import { runHelperSend, type HelperSendResult } from "./helperSend";
 import type { Translator } from "./lang";
+import { invoke } from "../lib/invokeLogged";
+import { isTauriEnv } from "../lib/tauriEnv";
 
+/** The web UI has no helper file to send and no socket to the console: the engine sends its
+ *  own bundled helper, stamped with its key, so it is paired by the send (#415). */
+async function engineSendsHelper(ip: string): Promise<void> {
+  const r = (await invoke("payload_restore", { ip })) as { ok?: boolean; error?: string };
+  if (!r?.ok) throw new Error(r?.error ?? "the engine has no helper to send");
+}
+
+// Says what to do first; the probe's technical detail ({tail}) goes last, where it
+// doesn't push the advice out of view.
 const TIMEOUT_EN =
-  "Payload didn't come up within 20s.{tail} Just send it again — a fresh send now force-evicts any stuck previous instance on its own, so you usually don't need to restart the PS5. If it still fails: kstuff may not be loaded yet (run First Run, or send kstuff first), the ELF crashed on boot, or the PS5 is unreachable.";
+  "The helper didn't start within 20 seconds. Send it again. If it fails again, load elfldr and kstuff first, then send the helper.{tail}";
 
 /** Sends the bundled helper to `host` and waits for it to answer (see state/helperSend), wired
  *  to the real console. One implementation for every place that offers "Send helper".
@@ -24,8 +35,8 @@ export function sendHelperTo(
     target,
     {
       waitForLoader,
-      bundledPath: bundledPayloadPath,
-      send: sendPayload,
+      bundledPath: isTauriEnv() ? bundledPayloadPath : async () => "ps5upload.elf",
+      send: isTauriEnv() ? sendPayload : (ip) => engineSendsHelper(ip),
       check: payloadCheck,
       isNotPaired: isNotPairedError,
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -72,7 +83,13 @@ export function sendHelperTo(
         { host: target },
         `Helper is running on ${target}`,
       ),
-      timeout: (tail) => tr("connection_payload_timeout", { tail }, TIMEOUT_EN),
+      timeout: (tail) => tr("connection_payload_timeout_v2", { tail }, TIMEOUT_EN),
+      engineUnreachable: (error) =>
+        tr(
+          "connection_payload_engine_unreachable",
+          { error },
+          "The app could not reach its own engine on this computer, so it cannot tell whether the helper started on the PS5. This is not a PS5 problem: the notice at the top of the window says why and can restart the engine. Then press Send helper again. ({error})",
+        ),
       notPaired: (error) =>
         error.toLowerCase().includes("different device")
           ? tr(

@@ -330,6 +330,10 @@ pub(super) fn decode(src: &[u8], n: usize) -> Result<Vec<u8>> {
         for _ in 0..count {
             let s = r.get(8) as u8;
             let l = r.get(cb) as usize + 1;
+            // A 4-bit field reaches 16, past the longest code this table holds.
+            if l > MAX_LEN as usize {
+                return format_err("kraken: bad Huffman code length");
+            }
             by_len[l].push(s);
         }
     }
@@ -383,6 +387,27 @@ pub(super) fn decode(src: &[u8], n: usize) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A sparse table whose 4-bit length field says 16, past the longest code (11): an error,
+    /// not an index past the table.
+    #[test]
+    fn a_code_length_past_the_longest_is_refused() {
+        // MSB first: old form, sparse, two symbols, 4-bit lengths, 'A' at length 16.
+        let bits = ["0", "0", "00000010", "100", "01000001", "1111"].concat();
+        let mut bytes: Vec<u8> = bits
+            .as_bytes()
+            .chunks(8)
+            .map(|c| {
+                let mut b = 0u8;
+                for (i, bit) in c.iter().enumerate() {
+                    b |= (bit - b'0') << (7 - i);
+                }
+                b
+            })
+            .collect();
+        bytes.resize(16, 0);
+        assert!(decode(&bytes, 16).is_err());
+    }
 
     fn roundtrip(data: &[u8]) -> Option<usize> {
         let body = encode(data)?;

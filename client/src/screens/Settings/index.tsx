@@ -804,7 +804,7 @@ export default function SettingsScreen() {
                   { value: "off", label: tr("keep_awake_mode_off", "Off") },
                   {
                     value: "transfers",
-                    label: tr("keep_awake_mode_transfers", "During transfers"),
+                    label: tr("keep_awake_mode_transfers_v2", "During uploads and installs"),
                   },
                   {
                     value: "always",

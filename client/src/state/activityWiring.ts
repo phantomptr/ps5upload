@@ -12,6 +12,8 @@ import {
   type ActivityPhase,
 } from "./activityHistory";
 import { setTransferKeepAwake } from "../lib/keepAwakeHold";
+import { anyAwakeWork } from "../lib/awakeWork";
+import { useTaskStore } from "./tasks";
 
 /**
  * Subscribes to the per-feature stores (transfer, FS bulk, FS
@@ -62,9 +64,12 @@ export function installActivityWiring() {
       useUploadQueueStore.getState().items.some((it) => it.status === "running")
     )
       return true;
+    // Installs (stream, link, archive, upload), copies and builds: every one registers a task.
+    if (anyAwakeWork(useTaskStore.getState().tasks)) return true;
     return false;
   };
   const reconcileKeepAwake = () => setTransferKeepAwake(anyTransferActive());
+  useTaskStore.subscribe(reconcileKeepAwake);
   useTransferStore.subscribe(reconcileKeepAwake);
   useFsDownloadOpStore.subscribe(reconcileKeepAwake);
   useUploadQueueStore.subscribe(reconcileKeepAwake);

@@ -86,6 +86,8 @@ function releaseArchiveCopy(id: string) {
 }
 import {
   getInstallExecutor,
+  resolveInstallJob,
+  watchInstallJob,
   registerInstallEnqueuer,
   registerPkgQueueApi,
   type EnqueueInstallInput,
@@ -95,6 +97,7 @@ import {
   type InstallResult,
 } from "./consoleQueueBridge";
 import { trStatic } from "../lib/trStatic";
+import { fpkg } from "../api/fpkg";
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import {
   autoRecoverBackoffMs,
@@ -244,6 +247,12 @@ export interface QueueItem {
    *  (waiting for the console, verifying…) or, once done, the installer's
    *  closing message. Null when there is nothing to add. */
   installNote?: string | null;
+  /** Install-only: the engine job running this install, so a reload can ask the engine how it
+   *  went instead of calling it interrupted. */
+  installJobId?: string | null;
+  /** A game image Convert built on this computer: delete it here once it is on the PS5. The
+   *  engine refuses to delete any file it did not build itself. */
+  deleteSourceAfterUpload?: boolean;
   /** Pkg-only: the installed title (or content id) the finisher resolved,
    *  shown on the done row. Null otherwise. */
   installedTitle?: string | null;
@@ -353,6 +362,7 @@ export type AddQueueItem = Pick<
   | "installAfterUpload"
   | "deletePkgAfterInstall"
   | "install"
+  | "deleteSourceAfterUpload"
 >;
 
 interface QueueState {
@@ -427,7 +437,7 @@ interface QueueState {
   /** Stop every running console (== "Stop all"). */
   stop: () => void;
   /** Start (or no-op if already running) just one console's drain loop. */
-  startHost: (host: string) => Promise<void>;
+  startHost: (host: string, opts?: { installsOnly?: boolean }) => Promise<void>;
   /** Stop just one console; siblings keep running. */
   stopHost: (host: string) => void;
 }
@@ -632,11 +642,17 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
 
   /** The next pending item on `h` that the runner may take: not one whose engine job is still
    *  being looked up (see `reattaching`). */
+  /** Consoles whose current run was started by an install (Install, Collection, a link):
+   *  that run takes install items only, so uploads waiting for Start stay waiting (#410).
+   *  Pressing Start while it runs turns it into a full run. */
+  const installsOnlyRun = new Map<string, boolean>();
   const pickPending = (h: string) =>
     nextPendingForHost(
-      reattaching.size === 0
-        ? get().items
-        : get().items.filter((it) => !reattaching.has(it.id)),
+      get().items.filter(
+        (it) =>
+          !reattaching.has(it.id) &&
+          (!installsOnlyRun.get(h) || it.sourceKind === "install"),
+      ),
       h,
     );
 
@@ -772,6 +788,56 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
    *  drain loop waits for it before starting anything else on that console
    *  (the PS5 installs one package at a time). */
   const installInFlight = new Map<string, Promise<unknown>>();
+
+  /** An install that was running when the page went away: follow its engine job to the end
+   *  (holding the console's next install back meanwhile), or, when the engine no longer knows
+   *  it, say it was interrupted. Never re-run: Sony may already have it. */
+  const findInstallJob = (r: { id: string; jobId: string; addr: string }) => {
+    const h = hostOf(r.addr);
+    const tracked = (async () => {
+      for (;;) {
+        const s = await resolveInstallJob(r.jobId);
+        if (s.state === "running") {
+          set((st) => ({ items: patchItem(st.items, r.id, { installPct: s.pct }) }));
+          await sleep(2000);
+          continue;
+        }
+        const patch: Partial<QueueItem> =
+          s.state === "finished" && s.result.ok
+            ? {
+                status: "done",
+                installPhase: s.result.mayNotLaunch ? "warn" : "done",
+                installPct: 100,
+                error: null,
+                installNote: trStatic(
+                  "queue_install_finished_away",
+                  "Finished while the page was closed.",
+                ),
+              }
+            : {
+                status: "failed",
+                installPhase: "error",
+                error:
+                  s.state === "finished"
+                    ? (s.result.message ?? null)
+                    : trStatic(
+                        "queue_install_interrupted",
+                        "Interrupted when the app closed. Check the game on the PS5, then retry if it isn't installed.",
+                      ),
+                installNote: null,
+              };
+        set((st) => ({
+          items: patchItem(st.items, r.id, { ...patch, completedAt: Date.now() }),
+        }));
+        scheduleSave();
+        return;
+      }
+    })();
+    installInFlight.set(h, tracked);
+    void tracked.finally(() => {
+      if (installInFlight.get(h) === tracked) installInFlight.delete(h);
+    });
+  };
   const settle = (id: string, r: InstallResult) => {
     const list = waiters.get(id);
     if (list) {
@@ -796,6 +862,10 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
       }),
     }));
     const h = hostOf(item.addr);
+    const unwatch = watchInstallJob(h, (job) => {
+      set((s) => ({ items: patchItem(s.items, item.id, { installJobId: job }) }));
+      scheduleSave();
+    });
     const running = exec(item.install, h, {
       // Progress keeps flowing even after Stop: the install is still going.
       // Fresh numbers retire a status note: "waiting for the PS5" is no
@@ -819,6 +889,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
     try {
       r = await running;
     } finally {
+      unwatch();
       if (installInFlight.get(h) === tracked) installInFlight.delete(h);
     }
     if (!r.ok) throw new InstallItemError(r);
@@ -1553,6 +1624,9 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
           // with now. (Local paths are not copies and are left alone.)
           void releaseCopy(next.sourcePath);
           releaseArchiveCopy(next.id);
+          if (next.deleteSourceAfterUpload) {
+            void fpkg.deletePackage(next.sourcePath).catch(() => {});
+          }
           if (!isLive()) return;
           break; // success → next item
         } catch (e) {
@@ -1738,6 +1812,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
         //   resume continuity (acceptable since they pre-date the
         //   feature) but they won't crash.
         const wasRunning: Array<{ id: string; jobId: string; addr: string }> = [];
+        const installsToFind: Array<{ id: string; jobId: string; addr: string }> = [];
         const items = (doc.items ?? []).map((it) => {
           const next = { ...it };
           // Never carried across a reload: a stale id would adopt a job that is not this item's.
@@ -1745,7 +1820,15 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
           // An install that was running is never re-run by itself: Sony may
           // already have accepted it, and repeating a patch install can wipe
           // the base game.
-          if (next.sourceKind === "install" && next.status === "running") {
+          if (next.sourceKind === "install" && next.status === "running" && next.installJobId) {
+            // The engine may still know this job (the web UI's engine outlives the tab; a
+            // reloaded window keeps the desktop engine): ask it below before calling it lost.
+            installsToFind.push({ id: next.id, jobId: next.installJobId, addr: next.addr });
+            next.installNote = trStatic(
+              "queue_install_looking",
+              "Checking how this install went…",
+            );
+          } else if (next.sourceKind === "install" && next.status === "running") {
             next.status = "failed";
             next.installPhase = "error";
             next.error = trStatic(
@@ -1754,11 +1837,11 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
             );
             next.completedAt = Date.now();
           }
-          if (next.status === "running") {
+          if (next.status === "running" && next.sourceKind !== "install") {
             // The web UI's engine outlives the tab, so this item's job may still be going:
             // remember it so it can be re-attached below. (The desktop engine dies with the
             // app, so there the job is gone and the item simply re-runs.)
-            if (next.jobId && next.sourceKind !== "install") {
+            if (next.jobId) {
               wasRunning.push({ id: next.id, jobId: next.jobId, addr: next.addr });
               // Hold the runner off this item until its job has been looked up.
               if (!isTauriEnv()) reattaching.add(next.id);
@@ -1823,6 +1906,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
         });
         if (live.length > 0) scheduleSave();
         if (!isTauriEnv() && wasRunning.length > 0) void reattachRunning(wasRunning);
+        for (const r of installsToFind) findInstallJob(r);
       } catch (e) {
         // load_json_or_default returns {} on missing file, so this
         // catch only fires on real corruption (bad JSON, IO error,
@@ -1865,7 +1949,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
       const items = get().items;
       const added = items[items.length - 1];
       const done = wait(added.id);
-      void get().startHost(bare);
+      void get().startHost(bare, { installsOnly: true });
       return { id: added.id, done };
     },
 
@@ -2152,12 +2236,17 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
       scheduleSave();
     },
 
-    async startHost(host) {
+    async startHost(host, opts) {
       const h = hostOf(host);
+      const installsOnly = !!opts?.installsOnly;
       // Already draining this console → no-op (idempotent; a second Start
       // click or a re-loop must not spawn a duplicate loop that double-
-      // claims items).
-      if (get().runningHosts[h]) return;
+      // claims items). A Start during an install-only run widens it to everything.
+      if (get().runningHosts[h]) {
+        if (!installsOnly) installsOnlyRun.set(h, false);
+        return;
+      }
+      installsOnlyRun.set(h, installsOnly);
       const myGen = ++genCounter;
       hostGen.set(h, myGen);
       const isLive = () => hostGen.get(h) === myGen;

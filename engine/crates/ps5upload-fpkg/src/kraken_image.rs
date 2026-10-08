@@ -579,6 +579,11 @@ pub struct DescribedBlock {
 /// Walk a descriptor the way the console does: records in order, anchors moving the stored
 /// cursor, blocks tiling the mount from each file boundary. Used to check what [`layout`]
 /// writes, and able to read Sony's own packages.
+///
+/// The descriptor is untrusted input (a package being read back, or someone else's): every
+/// count and offset is checked against the blob before it sizes or slices anything, so a
+/// truncated or corrupt one is a [`crate::Error::Format`], never a panic. Each block it returns
+/// is at most 256 KiB long.
 pub fn describe(blob: &[u8]) -> Result<Vec<DescribedBlock>> {
     let word = |at: usize| u64::from_le_bytes(blob[at..at + 8].try_into().unwrap());
     if blob.len() < 16 {
@@ -590,6 +595,13 @@ pub fn describe(blob: &[u8]) -> Result<Vec<DescribedBlock>> {
     let outer = (w1 & 0xFF_FFFF) as usize;
     let records = ((w1 >> 24) & 0xFF_FFFF) as usize + 2;
     let fidx_at = 16 + outer * 8;
+    // Every count is a 24-bit field, so these sums cannot overflow; the tables they place must
+    // all lie inside the blob before the boundary table is sliced or a record read.
+    let u2c_end = fidx_at + files * 6 + (ublocks / 8 + 1) as usize * 10;
+    let rec_at = u2c_end.next_multiple_of(8) + 3;
+    if blob.len() < rec_at + records * 9 {
+        return format_err("descriptor shorter than its records");
+    }
     let mut bounds: Vec<u64> = (0..files)
         .map(|i| {
             let r = &blob[fidx_at + i * 6..fidx_at + i * 6 + 6];
@@ -599,11 +611,6 @@ pub fn describe(blob: &[u8]) -> Result<Vec<DescribedBlock>> {
     let mount = *bounds.last().unwrap_or(&0);
     bounds.sort_unstable();
     bounds.dedup();
-    let u2c_end = fidx_at + files * 6 + (ublocks / 8 + 1) as usize * 10;
-    let rec_at = u2c_end.next_multiple_of(8) + 3;
-    if blob.len() < rec_at + records * 9 {
-        return format_err("descriptor shorter than its records");
-    }
     let mut out = Vec::new();
     let (mut cursor, mut logical) = (0u64, 0u64);
     let mut next_is_anchor = true; // index 0 is the start anchor
@@ -635,8 +642,13 @@ pub fn describe(blob: &[u8]) -> Result<Vec<DescribedBlock>> {
                  block at the wrong offset)"
             ));
         }
+        if logical >= mount {
+            return format_err(format!(
+                "record {i}: a block starts at {logical:#x}, at or past the mount's end {mount:#x}"
+            ));
+        }
         let next_bound = *bounds.iter().find(|&&b| b > logical).unwrap_or(&mount);
-        let len = (next_bound - logical).min(UBLOCK);
+        let len = (next_bound.min(mount) - logical).min(UBLOCK);
         if (logical % WINDOW) >> 4 != f(0, 14) {
             return format_err(format!("record {i}: logical offset disagrees"));
         }
@@ -675,10 +687,29 @@ pub fn describe(blob: &[u8]) -> Result<Vec<DescribedBlock>> {
     Ok(out)
 }
 
-/// Decode block `b` of a stored image.
+/// Decode block `b` of a stored image. `b` comes from [`describe`]; one built by hand is
+/// checked the same way: a block longer than 256 KiB, or one running past the image, is an
+/// error rather than an allocation or a panic.
 pub fn decode_described(image: &[u8], b: &DescribedBlock) -> Result<Vec<u8>> {
-    let src = image
-        .get(b.stored_at as usize..(b.stored_at + b.stored_len) as usize)
+    if b.len == 0 || b.len > UBLOCK {
+        return format_err(format!(
+            "a block of {:#x} bytes is not a Kraken block",
+            b.len
+        ));
+    }
+    // `describe` never gives a stored span over two windows; a longer one would be copied
+    // before the decoder could refuse it.
+    if b.stored_len > 2 * WINDOW || b.even_len > b.stored_len {
+        return format_err(format!(
+            "a block stored in {:#x} bytes ({:#x} even) is not a Kraken block",
+            b.stored_len, b.even_len
+        ));
+    }
+    let src = b
+        .stored_at
+        .checked_add(b.stored_len)
+        .and_then(|end| Some(usize::try_from(b.stored_at).ok()?..usize::try_from(end).ok()?))
+        .and_then(|range| image.get(range))
         .ok_or_else(|| crate::Error::Format("a block runs past the image".into()))?;
     let even_logical = b.len.min(kraken::HALF as u64);
     let mut halves = Vec::new();
@@ -842,5 +873,137 @@ mod tests {
         let img = image_of(blocks.clone(), 40 * 0x40000, 40 * 0x40000, 40 * 0x40000);
         let blob = layout(&img, &[0]).unwrap();
         assert_eq!(describe(&blob).unwrap().len(), 40);
+    }
+
+    /// A descriptor to corrupt: two files and a metadata region.
+    fn sample_descriptor() -> Vec<u8> {
+        let blocks = vec![
+            b(
+                0,
+                0x40000,
+                0,
+                &[(0x100, true), (0x80, true)],
+                Owner::File(0),
+            ),
+            b(0x40000, 0x1234, 0x180, &[(0x1234, false)], Owner::File(0)),
+            b(0x41234, 0x1000, 0x13b4, &[(0x40, true)], Owner::File(1)),
+            b(
+                0x42234,
+                0x3ddcc,
+                0x13f4,
+                &[(0x30, true), (0x30, true)],
+                Owner::Gap,
+            ),
+            b(
+                0x80000,
+                0x40000,
+                0x10000,
+                &[(0x200, true), (0x200, true)],
+                Owner::Meta,
+            ),
+        ];
+        layout(&image_of(blocks, 0xc0000, 0x42234, 0x80000), &[0, 0x41234]).unwrap()
+    }
+
+    /// Every truncation of a good descriptor is an error, never a panic.
+    #[test]
+    fn a_truncated_descriptor_is_an_error() {
+        let blob = sample_descriptor();
+        assert!(describe(&blob).is_ok());
+        let records = describe(&blob).unwrap().len();
+        for cut in 0..blob.len() {
+            // The tail past the last record is padding; cutting only that still describes.
+            if let Ok(blocks) = describe(&blob[..cut]) {
+                assert_eq!(blocks.len(), records, "cut at {cut}");
+            }
+        }
+        assert!(describe(&blob[..blob.len() / 2]).is_err());
+    }
+
+    /// Counts that place the tables past the blob, and boundaries past the mount.
+    #[test]
+    fn corrupt_counts_and_bounds_are_errors() {
+        let blob = sample_descriptor();
+        let set = |at: usize, value: u64| {
+            let mut b = blob.clone();
+            b[at..at + 8].copy_from_slice(&value.to_le_bytes());
+            b
+        };
+        let (w0, w1) = (
+            u64::from_le_bytes(blob[0..8].try_into().unwrap()),
+            u64::from_le_bytes(blob[8..16].try_into().unwrap()),
+        );
+        // The most files, ublocks, outer blocks and records the fields can say.
+        for bad in [
+            set(0, w0 | 0xFF_FFFF),
+            set(0, w0 | 0xFF_FFFF << 32),
+            set(8, w1 | 0xFF_FFFF),
+            set(8, w1 | 0xFF_FFFF << 24),
+        ] {
+            assert!(describe(&bad).is_err());
+        }
+        // A file boundary (the second file's start) moved past the mount.
+        let outer = (w1 & 0xFF_FFFF) as usize;
+        let at = 16 + outer * 8 + 6;
+        let mut bad = blob.clone();
+        bad[at..at + 5].copy_from_slice(&[0, 0, 0, 0, 0x10]);
+        assert!(describe(&bad).is_err());
+    }
+
+    /// Random damage anywhere in a descriptor, and the blocks it then describes decoded
+    /// against an image too short for them: errors, never a panic or a huge allocation.
+    #[test]
+    fn damaged_descriptors_never_panic() {
+        let blob = sample_descriptor();
+        let image = vec![0x5Au8; 0x2000];
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for _ in 0..4000 {
+            let mut bad = blob.clone();
+            for _ in 0..1 + next() % 4 {
+                let at = (next() % bad.len() as u64) as usize;
+                bad[at] = next() as u8;
+            }
+            if let Ok(blocks) = describe(&bad) {
+                for block in blocks.iter().take(8) {
+                    assert!(block.len <= UBLOCK);
+                    let _ = decode_described(&image, block);
+                }
+            }
+        }
+    }
+
+    /// A block built by hand is held to what `describe` guarantees.
+    #[test]
+    fn a_hand_built_block_is_checked() {
+        let image = vec![0u8; 0x1000];
+        let block = |len: u64, stored_at: u64, stored_len: u64| DescribedBlock {
+            logical: 0,
+            len,
+            stored_at,
+            even_len: stored_len,
+            stored_len,
+            even_lz: false,
+            odd_lz: false,
+            mode_bits: 0,
+        };
+        assert!(decode_described(&image, &block(1 << 40, 0, 0x100)).is_err());
+        assert!(decode_described(&image, &block(0, 0, 0x100)).is_err());
+        assert!(decode_described(&image, &block(0x100, u64::MAX, 2)).is_err());
+        assert!(decode_described(&image, &block(0x100, 0xF00, 0x200)).is_err());
+        assert!(decode_described(&vec![0u8; 0x100000], &block(0x100, 0, 0x90000)).is_err());
+        // An LZ even half shorter than its eight-byte seed.
+        let mut tiny = block(1, 0, 8);
+        tiny.even_lz = true;
+        assert!(decode_described(&image, &tiny).is_err());
+        assert_eq!(
+            decode_described(&image, &block(0x100, 0, 0x100)).unwrap(),
+            vec![0u8; 0x100]
+        );
     }
 }

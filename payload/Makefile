@@ -7,6 +7,9 @@ else
     $(error PS5_PAYLOAD_SDK is undefined)
 endif
 
+# Our own build of the SDK's startup code; see sdk-crt.mk for why.
+include sdk-crt.mk
+
 ELF := ps5upload.elf
 
 BLAKE3_DIR := third_party/blake3
@@ -193,8 +196,8 @@ $(SQLITE_DIR)/sqlite3.c $(SQLITE_DIR)/sqlite3.h:
 # without this a change to either printed "Built" while leaving the previous
 # link in place. Adding -lSceIpmi did exactly that — the stale ELF had no
 # libSceIpmi in DT_NEEDED until the sources were touched.
-$(ELF): $(SRCS) $(HEADERS) $(SQLITE_OBJ) $(MONO_OBJ) $(BLAKE3_OBJS) $(AVA1_OBJS) Makefile
-	$(CC) $(CFLAGS) -o $@ $(SRCS) $(BLAKE3_OBJS) $(AVA1_OBJS) $(SQLITE_OBJ) $(MONO_OBJ) $(LIBS)
+$(ELF): $(SRCS) $(HEADERS) $(SQLITE_OBJ) $(MONO_OBJ) $(BLAKE3_OBJS) $(AVA1_OBJS) $(SDK_CRT1) Makefile
+	$(CC) $(CFLAGS) -nostartfiles -o $@ $(SRCS) $(BLAKE3_OBJS) $(AVA1_OBJS) $(SQLITE_OBJ) $(MONO_OBJ) $(SDK_CRT1) $(LIBS)
 
 build/$(BLAKE3_DIR)/%.o: $(BLAKE3_DIR)/%.c $(HEADERS) Makefile
 	@mkdir -p $(dir $@)
@@ -221,7 +224,7 @@ $(ELF).gz: $(ELF)
 
 clean:
 	rm -f $(ELF) $(ELF).gz $(SQLITE_OBJ) $(MONO_OBJ)
-	rm -rf build/ava1
+	rm -rf build/ava1 $(SDK_CRT_BUILD)
 
 send: $(ELF)
 	@echo "Sending $(ELF) to $(PS5_HOST):$(PS5_PORT) ..."

@@ -20,6 +20,7 @@ const text: HelperSendText = {
   running: "helper running",
   timeout: (tail) => `did not come up.${tail}`,
   notPaired: () => "pair with your PS5",
+  engineUnreachable: (e: string) => `engine unreachable: ${e}`,
 };
 
 function world(over: Partial<HelperSendDeps> = {}) {
@@ -125,6 +126,38 @@ describe("runHelperSend", () => {
       msg: "did not come up. Last probe: mgmt refused.",
     });
     expect(w.log[w.log.length - 1]).toBe(`probing ${A} false`);
+  });
+
+  it("says the app's own engine is unreachable instead of blaming the helper", async () => {
+    const engineErr =
+      "error sending request for url (http://127.0.0.1:19113/api/ps5/status?addr=192.168.0.54:9113)";
+    let probes = 0;
+    const w = world({
+      maxAttempts: 20,
+      check: async () => {
+        probes += 1;
+        throw new Error(engineErr);
+      },
+    });
+    expect(await runHelperSend(A, w.deps, text)).toBe("fail");
+    // Three misses in a row end the wait; the full 20 would only delay the same answer.
+    expect(probes).toBe(3);
+    expect(at(A)).toMatchObject({
+      state: "fail",
+      msg: `engine unreachable: ${engineErr}`,
+    });
+  });
+
+  it("names the engine when the send itself could not reach it", async () => {
+    const w = world({
+      send: async () => {
+        throw new Error(
+          "error sending request for url (http://127.0.0.1:19113/api/payload/send)",
+        );
+      },
+    });
+    expect(await runHelperSend(A, w.deps, text)).toBe("fail");
+    expect(at(A)?.msg).toMatch(/^engine unreachable: /);
   });
 
   it("stops polling and opens pairing when the helper answers but is not paired", async () => {

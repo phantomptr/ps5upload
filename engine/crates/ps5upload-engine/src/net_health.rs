@@ -48,21 +48,50 @@ pub(crate) fn loader_port_check(open: Result<(), String>) -> HealthCheck {
     }
 }
 
-/// ps5upload's installer on the console. It is started by the first install, so not running
-/// is normal and says nothing is wrong.
-pub(crate) fn installer_check(hello: Result<String, String>) -> HealthCheck {
-    match hello {
-        Ok(version) => check(
+/// What was found, or done, about ps5upload's installer on the console.
+pub(crate) enum InstallerState {
+    /// Already running, with its version.
+    Running(String),
+    /// Not running; the scan started it, and it answered with this state.
+    Started,
+    /// Not running, and starting it failed for this reason.
+    CouldNotStart(String),
+    /// Not running, and the scan did not try (the helper is not up, so nothing can install).
+    NotTried,
+}
+
+/// ps5upload's installer on the console. Every install needs it, so a scan that finds it
+/// missing starts it rather than leaving that to the first install, where a failure to
+/// start looks like a failed install.
+pub(crate) fn installer_check(state: InstallerState) -> HealthCheck {
+    const TITLE: &str = "Package installer on the PS5 (port 9115)";
+    match state {
+        InstallerState::Running(version) => check(
             "installer_running",
-            "Package installer on the PS5 (port 9115)",
+            TITLE,
             CheckStatus::Pass,
             format!("Running, version {version}."),
         ),
-        Err(_) => check(
+        InstallerState::Started => check(
             "installer_running",
-            "Package installer on the PS5 (port 9115)",
+            TITLE,
+            CheckStatus::Pass,
+            "It was not running, so it was started just now. Installs are ready.",
+        ),
+        InstallerState::CouldNotStart(why) => check(
+            "installer_running",
+            TITLE,
+            CheckStatus::Fail,
+            format!("It is not running and could not be started: {why}."),
+        )
+        .with_remedy(
+            "Installs will fail until it starts. It is sent through the PS5's ELF loader (port              9021) or Payload Manager (port 8084), so one of them must be running: load your              jailbreak's loader (elfldr) again, then press Scan again. kstuff must be loaded too.",
+        ),
+        InstallerState::NotTried => check(
+            "installer_running",
+            TITLE,
             CheckStatus::Skip,
-            "Not running yet. The app starts it with your first install.",
+            "Not running. It is started as soon as the helper is connected.",
         ),
     }
 }
@@ -309,10 +338,27 @@ pub(crate) fn network_checks(addr: &str, helper_up: bool) -> Vec<HealthCheck> {
         }
     }
 
-    out.push(installer_check(
-        probe_port(&host, INSTALLER_PORT, PORT_TIMEOUT)
-            .and_then(|()| ps5upload_core::installer_client::hello(&host).map(|h| h.version)),
-    ));
+    let running = probe_port(&host, INSTALLER_PORT, PORT_TIMEOUT)
+        .and_then(|()| ps5upload_core::installer_client::hello(&host).map(|h| h.version));
+    out.push(installer_check(match running {
+        Ok(version) => InstallerState::Running(version),
+        Err(_) if !helper_up => InstallerState::NotTried,
+        Err(_) => {
+            let elf =
+                crate::bundled_payload::image_bytes(crate::bundled_payload::Image::Installer).ok();
+            // protect_running: a daemon that is serving an install is never replaced here.
+            let e = ps5upload_core::installer_client::ensure(&host, elf.as_deref(), true);
+            if e.listening {
+                InstallerState::Started
+            } else {
+                InstallerState::CouldNotStart(
+                    e.error
+                        .or(e.reason.map(str::to_string))
+                        .unwrap_or_else(|| "no reason given".into()),
+                )
+            }
+        }
+    }));
 
     let dir = crate::remote::store::data_dir();
     let write = match &dir {
@@ -356,14 +402,25 @@ mod tests {
     }
 
     #[test]
-    fn an_installer_that_has_not_started_is_not_a_problem() {
-        assert_eq!(
-            installer_check(Err("refused".into())).status,
-            CheckStatus::Skip
-        );
-        let up = installer_check(Ok("1.3.9".into()));
+    fn an_installer_that_could_not_be_started_fails_and_says_why() {
+        let up = installer_check(InstallerState::Running("1.3.9".into()));
         assert_eq!(up.status, CheckStatus::Pass);
         assert!(up.detail.contains("1.3.9"));
+        assert_eq!(
+            installer_check(InstallerState::Started).status,
+            CheckStatus::Pass
+        );
+        let bad = installer_check(InstallerState::CouldNotStart(
+            "nothing answered on the ELF loader port :9021".into(),
+        ));
+        assert_eq!(bad.status, CheckStatus::Fail);
+        assert!(bad.detail.contains(":9021"));
+        assert!(bad.remedy.contains("elfldr"));
+        // Without the helper nothing can install, so the scan does not send anything.
+        assert_eq!(
+            installer_check(InstallerState::NotTried).status,
+            CheckStatus::Skip
+        );
     }
 
     #[test]

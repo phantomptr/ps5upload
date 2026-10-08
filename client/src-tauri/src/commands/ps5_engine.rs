@@ -165,6 +165,28 @@ pub async fn engine_url_get() -> Result<String, String> {
     Ok(engine::url().to_string())
 }
 
+/// What the shell can measure about an engine the app cannot reach: is it answering, is the
+/// sidecar process alive, is its port held, is its program on disk. Works when the engine is
+/// down, which is the one time the engine's own health scan cannot run.
+#[tauri::command]
+pub async fn engine_diagnose(app: tauri::AppHandle) -> Result<JsonValue, String> {
+    serde_json::to_value(engine::diagnose(&app).await).map_err(|e| e.to_string())
+}
+
+/// Stop and start the engine sidecar without restarting the app. Returns its URL.
+#[tauri::command]
+pub async fn engine_restart(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri::Emitter;
+    match engine::restart(&app).await {
+        Ok(url) => {
+            let url = url.to_string();
+            let _ = app.emit("ps5upload-engine-ready", &url);
+            Ok(url)
+        }
+        Err(e) => Err(format!("{e:#}")),
+    }
+}
+
 #[tauri::command]
 pub async fn ps5_volumes(addr: Option<String>) -> Result<JsonValue, String> {
     let base = engine::url();
@@ -2543,12 +2565,22 @@ pub async fn ffpfsc_compress(
 
 /// Write a game folder as one `.exfat` image for ShadowMountPlus; runs as an engine job.
 #[tauri::command]
-pub async fn exfat_build(source: String, output_dir: Option<String>) -> Result<JsonValue, String> {
+pub async fn exfat_build(
+    source: String,
+    output_dir: Option<String>,
+    format: Option<String>,
+    compress: Option<bool>,
+) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/exfat/build");
     post_json(
         &url,
-        &serde_json::json!({ "source": source, "output_dir": output_dir }),
+        &serde_json::json!({
+            "source": source,
+            "output_dir": output_dir,
+            "format": format,
+            "compress": compress.unwrap_or(false),
+        }),
     )
     .await
 }

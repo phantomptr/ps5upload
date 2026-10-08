@@ -363,6 +363,7 @@ export default function RemotePlayScreen() {
         <NpSignInCard
           onDownload={() => void openExternalUrl(NP_FAKE_SIGNIN_URL)}
           onOpenPayloads={() => navigate("/payloads")}
+          onOpenProfile={() => navigate("/profile")}
         />
 
         {/* Request form */}

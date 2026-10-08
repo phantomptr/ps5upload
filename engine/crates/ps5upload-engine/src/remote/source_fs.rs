@@ -16,8 +16,12 @@ use super::pool::{Backoff, Pool};
 use super::store::Store;
 use super::{RemoteError, RemoteFile, RemoteFs};
 
-/// How far ahead each server read goes.
+/// How far ahead a server read goes at most.
 const READ_AHEAD: u64 = 8 * 1024 * 1024;
+/// How far ahead the first read of a file (and a read after a jump) goes. A header probe (the
+/// Collection reading a package's identity) then costs this, not 8 MiB; a sequential reader
+/// doubles it on every refill, so an upload is at the full read-ahead within a few reads.
+const FIRST_READ: u64 = 256 * 1024;
 
 /// A listing's word on one path: (size, is_dir, mtime).
 type Known = (u64, bool, Option<i64>);
@@ -107,6 +111,7 @@ impl SourceFs for RemoteSourceFs {
             pos: 0,
             buf: Vec::new(),
             buf_start: 0,
+            ahead: FIRST_READ,
         }))
     }
 
@@ -202,6 +207,8 @@ struct Reader {
     pos: u64,
     buf: Vec<u8>,
     buf_start: u64,
+    /// The next refill's size: doubles while reads continue where the buffer ended.
+    ahead: u64,
 }
 
 impl Read for Reader {
@@ -211,7 +218,12 @@ impl Read for Reader {
         }
         let buf_end = self.buf_start + self.buf.len() as u64;
         if self.pos < self.buf_start || self.pos >= buf_end {
-            let len = READ_AHEAD.min(self.size - self.pos);
+            self.ahead = if !self.buf.is_empty() && self.pos == buf_end {
+                (self.ahead * 2).min(READ_AHEAD)
+            } else {
+                FIRST_READ
+            };
+            let len = self.ahead.max(out.len() as u64).min(self.size - self.pos);
             self.buf = self
                 .handle
                 .block_on(self.file.read_at(self.pos, len))

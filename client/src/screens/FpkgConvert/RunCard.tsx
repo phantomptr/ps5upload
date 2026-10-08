@@ -5,11 +5,12 @@ import { useEffect, useState } from "react";
 
 import { CheckCircle2, Circle, Loader2, XCircle } from "lucide-react";
 
-import { Button, Card, ProgressBar } from "../../components";
+import { Button, Card, Checkbox, ProgressBar } from "../../components";
 import { makesImage } from "../../state/fpkgConversion";
 import type { InstallMethod, Pipeline, PipelineStage } from "../../state/fpkgConversion";
 import { useTr } from "../../state/lang";
 import type { Task } from "../../state/tasks";
+import type { ImageFormat } from "../../api/fpkg";
 import { overallProgress, stageRows, type StageRow } from "./stages";
 
 export function prettyBytes(n: number): string {
@@ -71,7 +72,7 @@ export interface RunCardProps {
   onCompress: () => void;
   /** The source is a game folder on this computer: write it as an image (`compress`: then
    *  compress it into a .ffpfsc). Absent when it cannot be made into one from here. */
-  onMakeImage?: (compress: boolean) => void;
+  onMakeImage?: (compress: boolean, format: ImageFormat) => void;
   onCancel: () => void;
   /** Install the kept package: streamed from this computer, or uploaded to the PS5 first. */
   onInstall: (method: InstallMethod) => void;
@@ -85,6 +86,10 @@ export interface RunCardProps {
   onViewPackage?: () => void;
   /** After a swap: delete the set-aside dump, or keep it. */
   onFinishReplace?: (choice: "delete" | "keep") => void;
+  /** A finished image: put it in the Upload queue (`deleteAfter`: remove it here once sent). */
+  onUploadImage?: (deleteAfter: boolean) => void;
+  /** A finished image already in the Upload queue: open Upload to see it. */
+  onOpenUpload?: () => void;
 }
 
 function RowIcon({ state }: { state: StageRow["state"] }) {
@@ -178,21 +183,10 @@ export function RunCard(props: RunCardProps) {
                   "Or make a game image instead of a package: one file you copy to a PS5 drive, which ShadowMount+ mounts and shows on the home screen. Nothing is installed.",
                 )}
               </div>
-              <div className="flex flex-wrap gap-2">
-                <Button onClick={() => props.onMakeImage?.(false)} disabled={props.canConvert === false}>
-                  {tr("fpkg.image.exfat", undefined, "Make game image (.exfat)")}
-                </Button>
-                <Button onClick={() => props.onMakeImage?.(true)} disabled={props.canConvert === false}>
-                  {tr("fpkg.image.ffpfsc", undefined, "Make compressed image (.ffpfsc)")}
-                </Button>
-              </div>
-              <div className="mt-1 text-xs text-[var(--color-muted)]">
-                {tr(
-                  "fpkg.image.hint",
-                  undefined,
-                  "The .exfat is the same size as the folder and the most compatible. The .ffpfsc is usually 40–60% smaller and takes longer to make; it needs room for both while it is made.",
-                )}
-              </div>
+              <ImageChoice
+                disabled={props.canConvert === false}
+                onMake={(compress, format) => props.onMakeImage?.(compress, format)}
+              />
             </div>
           )}
           {props.replaces && props.canInstall && (
@@ -399,6 +393,14 @@ export function RunCard(props: RunCardProps) {
           </div>
         )}
         {!p.deleted && !makesImage(p.mode) && installChoice(!installed)}
+        {!p.deleted && makesImage(p.mode) && (
+          <ImageUpload
+            queued={!!p.uploadQueued}
+            canUpload={props.canInstall && !!props.onUploadImage}
+            onUpload={(deleteAfter) => props.onUploadImage?.(deleteAfter)}
+            onOpen={props.onOpenUpload}
+          />
+        )}
         <div className="flex flex-wrap gap-2">
           {installed && !p.deleted && p.host && (
             <Button variant="primary" onClick={props.onLaunch}>
@@ -424,5 +426,152 @@ export function RunCard(props: RunCardProps) {
         </div>
       </div>
     </Card>
+  );
+}
+
+/** A finished image: send it to the PS5 through the Upload queue. */
+function ImageUpload({
+  queued,
+  canUpload,
+  onUpload,
+  onOpen,
+}: {
+  queued: boolean;
+  canUpload: boolean;
+  onUpload: (deleteAfter: boolean) => void;
+  onOpen?: () => void;
+}) {
+  const tr = useTr();
+  const [deleteAfter, setDeleteAfter] = useState(false);
+  if (queued) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="text-[var(--color-good)]">
+          {tr(
+            "fpkg.imageQueued",
+            undefined,
+            "In the Upload queue: it goes to the PS5 next, into the folder ShadowMount+ watches.",
+          )}
+        </span>
+        {onOpen && (
+          <Button size="sm" onClick={onOpen}>
+            {tr("fpkg.openUpload", undefined, "Open Upload")}
+          </Button>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="primary" disabled={!canUpload} onClick={() => onUpload(deleteAfter)}>
+          {tr("fpkg.uploadImage", undefined, "Upload to PS5")}
+        </Button>
+        <Checkbox
+          checked={deleteAfter}
+          onChange={setDeleteAfter}
+          label={tr(
+            "fpkg.uploadImageDelete",
+            undefined,
+            "Delete it from this computer once it is on the PS5",
+          )}
+        />
+      </div>
+      {!canUpload && (
+        <span className="text-xs text-[var(--color-muted)]">
+          {tr("fpkg.uploadNeedsPs5", undefined, "Connect to a PS5 to upload it.")}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** Which image to make: the filesystem (UFS2 .ffpkg, what ShadowMount+ recommends, or exFAT),
+ *  and whether to compress it into a .ffpfsc. */
+function ImageChoice({
+  disabled,
+  onMake,
+}: {
+  disabled: boolean;
+  onMake: (compress: boolean, format: ImageFormat) => void;
+}) {
+  const tr = useTr();
+  const [format, setFormat] = useState<ImageFormat>("ffpkg");
+  const [compress, setCompress] = useState(false);
+  const options: { id: ImageFormat; label: string; body: string }[] = [
+    {
+      id: "ffpkg",
+      label: tr("fpkg.image.ffpkg", undefined, ".ffpkg (UFS2), recommended"),
+      body: tr(
+        "fpkg.image.ffpkg_body",
+        undefined,
+        "What ShadowMount+ recommends for most games.",
+      ),
+    },
+    {
+      id: "exfat",
+      label: tr("fpkg.image.exfat_choice", undefined, ".exfat"),
+      body: tr(
+        "fpkg.image.exfat_body",
+        undefined,
+        "For games that only work like content on an external drive.",
+      ),
+    },
+    {
+      id: "ffpfs",
+      label: tr("fpkg.image.ffpfs", undefined, ".ffpfs (PFS), experimental"),
+      body: tr(
+        "fpkg.image.ffpfs_body",
+        undefined,
+        "Experimental in ShadowMount+ 1.7. File names must be plain ASCII; the image's own name is kept to 63 characters.",
+      ),
+    },
+  ];
+  return (
+    <div className="mt-1 space-y-2" data-testid="image-choice">
+      <div className="grid gap-2 sm:grid-cols-3">
+        {options.map((o) => (
+          <button
+            key={o.id}
+            type="button"
+            aria-pressed={format === o.id}
+            onClick={() => setFormat(o.id)}
+            className={`rounded-lg border px-3 py-2 text-left text-xs ${
+              format === o.id
+                ? "border-[var(--color-accent)] bg-[var(--color-surface-3)]"
+                : "border-[var(--color-border)] hover:bg-[var(--color-surface-3)]"
+            }`}
+          >
+            <div className="font-semibold text-[var(--color-text)]">{o.label}</div>
+            <div className="mt-0.5 text-[var(--color-muted)]">{o.body}</div>
+          </button>
+        ))}
+      </div>
+      <label className="flex items-start gap-2 text-xs">
+        <input
+          type="checkbox"
+          checked={compress}
+          onChange={(e) => setCompress(e.target.checked)}
+          className="mt-0.5"
+        />
+        <span>
+          <span className="text-[var(--color-text)]">
+            {tr("fpkg.image.compress", undefined, "Compress it into a .ffpfsc")}
+          </span>{" "}
+          <span className="text-[var(--color-muted)]">
+            {tr(
+              "fpkg.image.compress_body_v2",
+              undefined,
+              "Usually 40–60% smaller, slower to make, and always mounted read-only. It is compressed as it is written, so only the compressed file is ever on disk.",
+            )}
+          </span>
+        </span>
+      </label>
+      <Button onClick={() => onMake(compress, format)} disabled={disabled}>
+        {compress
+          ? tr("fpkg.image.make_compressed", undefined, "Make compressed image")
+          : tr("fpkg.image.make", undefined, "Make game image")}
+      </Button>
+    </div>
   );
 }

@@ -89,6 +89,57 @@ pub fn url() -> &'static str {
     DEFAULT_ENGINE_URL
 }
 
+/// The mobile counterpart of the desktop diagnosis: the engine is in this process, so the
+/// only measurable facts are whether it answers and why not.
+#[derive(Debug, serde::Serialize)]
+pub struct Diagnosis {
+    pub url: String,
+    pub local: bool,
+    pub answering: bool,
+    pub probe_error: Option<String>,
+    pub child_running: Option<bool>,
+    pub port_taken: Option<bool>,
+    pub binary_found: Option<bool>,
+    pub binary_error: Option<String>,
+    pub log_path: Option<String>,
+    pub os: &'static str,
+}
+
+pub async fn diagnose(_app: &AppHandle) -> Diagnosis {
+    let probe = match crate::engine_http::engine_client_builder().build() {
+        Ok(client) => match client
+            .get(format!("{DEFAULT_ENGINE_URL}/api/version"))
+            .timeout(std::time::Duration::from_millis(800))
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => Ok(()),
+            Ok(r) => Err(format!("HTTP {}", r.status())),
+            Err(e) => Err(crate::engine_http::error_chain(&e)),
+        },
+        Err(e) => Err(e.to_string()),
+    };
+    Diagnosis {
+        url: DEFAULT_ENGINE_URL.to_string(),
+        local: true,
+        answering: probe.is_ok(),
+        probe_error: probe.err(),
+        child_running: None,
+        port_taken: None,
+        binary_found: None,
+        binary_error: None,
+        log_path: None,
+        os: std::env::consts::OS,
+    }
+}
+
+/// The in-process engine cannot be restarted without restarting the app.
+pub async fn restart(_app: &AppHandle) -> Result<String> {
+    Err(anyhow::anyhow!(
+        "on this device the engine runs inside the app; close the app fully and open it again"
+    ))
+}
+
 /// No-op on mobile. The desktop build made the engine URL runtime-configurable
 /// (point the app at a remote/self-hosted engine), but mobile links the engine
 /// in-process — there is no sidecar and no remote-engine story here, so the

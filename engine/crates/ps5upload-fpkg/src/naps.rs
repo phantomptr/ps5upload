@@ -135,6 +135,10 @@ pub fn parse(blob: &[u8]) -> Result<Layout> {
         Ok(slice)
     };
 
+    // The count is on-disk: hold it to the bytes there before it sizes an allocation.
+    if num_outer_blocks as usize * OUTER_DIGEST_LEN > blob.len() - at {
+        return format_err("naps layout ends inside its outer digests");
+    }
     let mut outer_digests = Vec::with_capacity(num_outer_blocks as usize);
     for _ in 0..num_outer_blocks {
         let raw = take(&mut at, OUTER_DIGEST_LEN, "outer digests")?;
@@ -994,5 +998,17 @@ mod tests {
                 assert!(!*reserved19, "only the terminator carries the marker");
             }
         }
+    }
+
+    /// The outer block count is held to the bytes present before it sizes anything: 16 million
+    /// claimed in a 24-byte blob is refused as it stands.
+    #[test]
+    fn an_outer_block_count_past_the_blob_is_refused() {
+        let mut blob = vec![0u8; 24];
+        blob[8..16].copy_from_slice(&0xFF_FFFFu64.to_le_bytes());
+        let Err(e) = parse(&blob) else {
+            panic!("a count past the blob must not parse");
+        };
+        assert!(e.to_string().contains("inside its outer digests"), "{e}");
     }
 }

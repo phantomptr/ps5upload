@@ -13,8 +13,14 @@
 //! ```
 //!
 //! Every allocation is contiguous AND has its FAT chain written, with `NoFatChain` left clear:
-//! a driver that follows chains and one that trusts contiguity both read it. The volume is
-//! exactly as large as what it holds (a game image is mounted, not grown).
+//! a driver that follows chains and one that trusts contiguity both read it.
+//!
+//! The volume keeps free space for a read-write mount (ShadowMountPlus `image_rw=`: saves,
+//! small patches): 0.5% of the data, at least 64 MiB and at most 512 MiB, plus whatever the
+//! caller asks for. Nothing is ever written behind the cursor, so the image can go straight
+//! into a stream (a `.ffpfsc` container) as well as a file: [`plan_exfat`] lays it out and
+//! checks every name without reading file data, [`write_exfat`] writes it in order. (Both ideas,
+//! the spare and the plan/stream split, are PS5 Dump Forge's.)
 //!
 //! What is deliberately not done: no timestamps from the source (a fixed one, so the same
 //! folder always gives the same image), no volume label, no `ampr_emu.index` generation (the
@@ -54,6 +60,14 @@ pub struct ExfatBuilt {
     pub files: usize,
     pub directories: usize,
     pub cluster_size: u32,
+}
+
+/// Free space a volume keeps for a read-write mount, beyond `extra`: 0.5% of the data, clamped
+/// to 64..=512 MiB.
+pub fn spare_bytes(data_bytes: u64, extra: u64) -> u64 {
+    (data_bytes / 200)
+        .clamp(64 << 20, 512 << 20)
+        .saturating_add(extra)
 }
 
 /// The cluster size images get: 64 KiB, what every game image in circulation uses and the
@@ -257,7 +271,7 @@ struct Layout {
     files: Vec<usize>,
 }
 
-fn layout(tree: &mut Tree, cluster_override: Option<u32>) -> Result<Layout> {
+fn layout(tree: &mut Tree, cluster_override: Option<u32>, spare: u64) -> Result<Layout> {
     let data_bytes: u64 = tree.nodes.iter().map(|n| n.size).sum();
     let cluster = u64::from(cluster_override.unwrap_or_else(|| cluster_size_for(data_bytes)));
     if !cluster.is_power_of_two() || !(SECTOR..=32 << 20).contains(&cluster) {
@@ -295,16 +309,17 @@ fn layout(tree: &mut Tree, cluster_override: Option<u32>) -> Result<Layout> {
         used += c;
     }
 
+    let free = clusters_for(spare, cluster);
     // The bitmap covers every cluster, its own included.
     let mut bitmap_clusters = 1u64;
     loop {
-        let need = clusters_for((used + bitmap_clusters).div_ceil(8), cluster).max(1);
+        let need = clusters_for((used + free + bitmap_clusters).div_ceil(8), cluster).max(1);
         if need == bitmap_clusters {
             break;
         }
         bitmap_clusters = need;
     }
-    let mut cluster_count = used + bitmap_clusters;
+    let mut cluster_count = used + free + bitmap_clusters;
     // The smallest volume the format allows is 1 MiB; free clusters make up the rest.
     let fat_sectors_for = |count: u64| ((count + 2) * 4).div_ceil(SECTOR);
     let heap_for = |count: u64| {
@@ -465,46 +480,84 @@ fn zeros(w: &mut impl Write, mut n: u64) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Writes `source` as an exFAT image at `out`.
-///
-/// `on_progress(done, total)` is called with file-data bytes as they are written, and
-/// `cancelled()` is asked between chunks; a cancelled or failed build removes the partial
-/// file. `cluster_size` overrides the size chosen from the data (tests use small ones).
-pub fn build_exfat(
-    source: &mut dyn SourceTree,
-    out: &Path,
+/// An exFAT image laid out and checked, before any file data is read.
+pub struct ExfatPlan {
+    tree: Tree,
+    l: Layout,
+    used: u64,
+    /// The image's exact size.
+    pub image_bytes: u64,
+    /// File-data bytes `write_exfat` copies (its progress total).
+    pub data_bytes: u64,
+    /// Free space in the image, for a read-write mount.
+    pub free_bytes: u64,
+    pub files: usize,
+    pub directories: usize,
+    pub cluster_size: u32,
+}
+
+/// The most names one error lists; the rest are counted.
+const NAME_ERRORS_SHOWN: usize = 50;
+
+/// Lays out `source` as an exFAT image and checks every name, without reading file data.
+/// Every name exFAT cannot hold is reported at once, not just the first. `extra_free` is free
+/// space wanted beyond the default spare; `cluster_size` overrides the size chosen from the
+/// data (tests use small ones).
+pub fn plan_exfat(
+    source: &dyn SourceTree,
     cluster_size: Option<u32>,
-    on_progress: &mut dyn FnMut(u64, u64),
-    cancelled: &dyn Fn() -> bool,
-) -> Result<ExfatBuilt> {
+    extra_free: u64,
+) -> Result<ExfatPlan> {
     let mut tree = Tree {
         nodes: vec![Node {
             is_dir: true,
             ..Node::default()
         }],
     };
-    let listed: Vec<(String, u64)> = source
-        .files()
-        .iter()
-        .map(|f| (f.path.clone(), f.size))
-        .collect();
-    for (path, size) in &listed {
-        let path = path.trim_matches('/');
+    let mut bad: Vec<String> = Vec::new();
+    for f in source.files() {
+        let path = f.path.trim_matches('/');
         let (dir, name) = match path.rsplit_once('/') {
             Some((d, n)) => (d, n),
             None => ("", path),
         };
-        let parent = tree.dir_for(dir)?;
-        let at = tree.child(parent, name, false)?;
-        tree.nodes[at].src = path.to_string();
-        tree.nodes[at].size = *size;
+        let placed = tree
+            .dir_for(dir)
+            .and_then(|parent| tree.child(parent, name, false));
+        match placed {
+            Ok(at) => {
+                tree.nodes[at].src = path.to_string();
+                tree.nodes[at].size = f.size;
+            }
+            Err(e) => bad.push(format!("{path}: {e}")),
+        }
     }
-    for dir in source.empty_dirs().to_vec() {
-        tree.dir_for(dir.trim_matches('/'))?;
+    for dir in source.empty_dirs() {
+        if let Err(e) = tree.dir_for(dir.trim_matches('/')) {
+            bad.push(format!("{dir}: {e}"));
+        }
+    }
+    if !bad.is_empty() {
+        let more = bad.len().saturating_sub(NAME_ERRORS_SHOWN);
+        let mut msg = format!(
+            "{} name{} cannot go into an exFAT image:\n{}",
+            bad.len(),
+            if bad.len() == 1 { "" } else { "s" },
+            bad[..bad.len().min(NAME_ERRORS_SHOWN)].join("\n")
+        );
+        if more > 0 {
+            msg.push_str(&format!("\n… and {more} more"));
+        }
+        return format_err(msg);
     }
 
-    let l = layout(&mut tree, cluster_size)?;
-    let total: u64 = l.files.iter().map(|&f| tree.nodes[f].size).sum();
+    let data_bytes: u64 = tree
+        .nodes
+        .iter()
+        .filter(|n| !n.is_dir)
+        .map(|n| n.size)
+        .sum();
+    let l = layout(&mut tree, cluster_size, spare_bytes(data_bytes, extra_free))?;
     let used: u64 = l.bitmap_clusters
         + clusters_for(l.upcase.len() as u64, l.cluster)
         + l.dirs
@@ -512,96 +565,134 @@ pub fn build_exfat(
             .chain(l.files.iter())
             .map(|&n| tree.nodes[n].clusters)
             .sum::<u64>();
+    Ok(ExfatPlan {
+        image_bytes: l.heap_sectors * SECTOR + l.cluster_count * l.cluster,
+        data_bytes: l.files.iter().map(|&f| tree.nodes[f].size).sum(),
+        free_bytes: (l.cluster_count - used) * l.cluster,
+        files: l.files.len(),
+        directories: l.dirs.len() - 1,
+        cluster_size: l.cluster as u32,
+        tree,
+        l,
+        used,
+    })
+}
 
+/// Writes the planned image into `w`, front to back (a file, or a `.ffpfsc` stream).
+///
+/// `on_progress(done, total)` is called with file-data bytes as they are written, and
+/// `cancelled()` is asked between chunks. Returns the image's size.
+pub fn write_exfat<W: Write>(
+    plan: &ExfatPlan,
+    source: &mut dyn SourceTree,
+    w: &mut W,
+    on_progress: &mut dyn FnMut(u64, u64),
+    cancelled: &dyn Fn() -> bool,
+) -> Result<u64> {
+    let (tree, l, used) = (&plan.tree, &plan.l, plan.used);
+    let total = plan.data_bytes;
+    let boot = boot_region(l, tree.nodes[0].first_cluster, used);
+    w.write_all(&boot)?;
+    w.write_all(&boot)?; // the backup region
+    zeros(w, (FAT_OFFSET_SECTORS - 24) * SECTOR)?;
+
+    // The FAT: two reserved entries, then a chain per allocation in cluster order.
+    let mut fat_written = 8u64;
+    w.write_all(&0xFFFF_FFF8u32.to_le_bytes())?;
+    w.write_all(&FAT_END.to_le_bytes())?;
+    let mut chain = |w: &mut W, first: u64, n: u64| {
+        for c in first..first + n {
+            let next = if c + 1 == first + n {
+                FAT_END
+            } else {
+                (c + 1) as u32
+            };
+            w.write_all(&next.to_le_bytes())?;
+        }
+        fat_written += n * 4;
+        Ok::<(), std::io::Error>(())
+    };
+    let mut next = u64::from(FIRST_CLUSTER);
+    chain(w, next, l.bitmap_clusters)?;
+    next += l.bitmap_clusters;
+    let upcase_clusters = clusters_for(l.upcase.len() as u64, l.cluster);
+    chain(w, next, upcase_clusters)?;
+    next += upcase_clusters;
+    for &n in l.dirs.iter().chain(l.files.iter()) {
+        let c = tree.nodes[n].clusters;
+        if c > 0 {
+            chain(w, next, c)?;
+            next += c;
+        }
+    }
+    // Free clusters (only the padding of a very small volume) and the tail of the FAT.
+    zeros(
+        w,
+        l.heap_sectors * SECTOR - FAT_OFFSET_SECTORS * SECTOR - fat_written,
+    )?;
+
+    // The heap. Bitmap first: one bit per cluster, set for everything allocated.
+    let mut bitmap = vec![0u8; (l.bitmap_clusters * l.cluster) as usize];
+    for bit in 0..used {
+        bitmap[(bit / 8) as usize] |= 1 << (bit % 8);
+    }
+    w.write_all(&bitmap)?;
+    w.write_all(&l.upcase)?;
+    zeros(w, upcase_clusters * l.cluster - l.upcase.len() as u64)?;
+    for &d in &l.dirs {
+        w.write_all(&directory_bytes(tree, d, l))?;
+    }
+
+    let mut done = 0u64;
+    on_progress(0, total);
+    for &f in &l.files {
+        let (src, size) = (tree.nodes[f].src.clone(), tree.nodes[f].size);
+        let mut at = 0u64;
+        while at < size {
+            if cancelled() {
+                return Err(Error::Cancelled);
+            }
+            let want = (size - at).min(COPY_CHUNK as u64) as usize;
+            let chunk = source.read_range(&src, at, want)?;
+            if chunk.len() != want {
+                return format_err(format!(
+                    "{src} ended at {} of its {size} bytes while it was being read",
+                    at + chunk.len() as u64
+                ));
+            }
+            w.write_all(&chunk)?;
+            at += want as u64;
+            done += want as u64;
+            on_progress(done, total);
+        }
+        zeros(w, tree.nodes[f].clusters * l.cluster - size)?;
+    }
+    zeros(w, (l.cluster_count - used) * l.cluster)?;
+    w.flush()?;
+    Ok(plan.image_bytes)
+}
+
+/// Writes `source` as an exFAT image at `out` ([`plan_exfat`] then [`write_exfat`]).
+///
+/// A cancelled or failed build removes the partial file.
+pub fn build_exfat(
+    source: &mut dyn SourceTree,
+    out: &Path,
+    cluster_size: Option<u32>,
+    on_progress: &mut dyn FnMut(u64, u64),
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ExfatBuilt> {
+    let plan = plan_exfat(source, cluster_size, 0)?;
     let result = (|| -> Result<u64> {
         let mut w = std::io::BufWriter::with_capacity(4 << 20, std::fs::File::create(out)?);
-        let boot = boot_region(&l, tree.nodes[0].first_cluster, used);
-        w.write_all(&boot)?;
-        w.write_all(&boot)?; // the backup region
-        zeros(&mut w, (FAT_OFFSET_SECTORS - 24) * SECTOR)?;
-
-        // The FAT: two reserved entries, then a chain per allocation in cluster order.
-        let mut fat_written = 8u64;
-        w.write_all(&0xFFFF_FFF8u32.to_le_bytes())?;
-        w.write_all(&FAT_END.to_le_bytes())?;
-        let mut chain = |w: &mut std::io::BufWriter<std::fs::File>, first: u64, n: u64| {
-            for c in first..first + n {
-                let next = if c + 1 == first + n {
-                    FAT_END
-                } else {
-                    (c + 1) as u32
-                };
-                w.write_all(&next.to_le_bytes())?;
-            }
-            fat_written += n * 4;
-            Ok::<(), std::io::Error>(())
-        };
-        let mut next = u64::from(FIRST_CLUSTER);
-        chain(&mut w, next, l.bitmap_clusters)?;
-        next += l.bitmap_clusters;
-        let upcase_clusters = clusters_for(l.upcase.len() as u64, l.cluster);
-        chain(&mut w, next, upcase_clusters)?;
-        next += upcase_clusters;
-        for &n in l.dirs.iter().chain(l.files.iter()) {
-            let c = tree.nodes[n].clusters;
-            if c > 0 {
-                chain(&mut w, next, c)?;
-                next += c;
-            }
-        }
-        // Free clusters (only the padding of a very small volume) and the tail of the FAT.
-        zeros(
-            &mut w,
-            l.heap_sectors * SECTOR - FAT_OFFSET_SECTORS * SECTOR - fat_written,
-        )?;
-
-        // The heap. Bitmap first: one bit per cluster, set for everything allocated.
-        let mut bitmap = vec![0u8; (l.bitmap_clusters * l.cluster) as usize];
-        for bit in 0..used {
-            bitmap[(bit / 8) as usize] |= 1 << (bit % 8);
-        }
-        w.write_all(&bitmap)?;
-        w.write_all(&l.upcase)?;
-        zeros(&mut w, upcase_clusters * l.cluster - l.upcase.len() as u64)?;
-        for &d in &l.dirs {
-            w.write_all(&directory_bytes(&tree, d, &l))?;
-        }
-
-        let mut done = 0u64;
-        on_progress(0, total);
-        for &f in &l.files {
-            let (src, size) = (tree.nodes[f].src.clone(), tree.nodes[f].size);
-            let mut at = 0u64;
-            while at < size {
-                if cancelled() {
-                    return Err(Error::Format("cancelled".into()));
-                }
-                let want = (size - at).min(COPY_CHUNK as u64) as usize;
-                let chunk = source.read_range(&src, at, want)?;
-                if chunk.len() != want {
-                    return format_err(format!(
-                        "{src} ended at {} of its {size} bytes while it was being read",
-                        at + chunk.len() as u64
-                    ));
-                }
-                w.write_all(&chunk)?;
-                at += want as u64;
-                done += want as u64;
-                on_progress(done, total);
-            }
-            zeros(&mut w, tree.nodes[f].clusters * l.cluster - size)?;
-        }
-        zeros(&mut w, (l.cluster_count - used) * l.cluster)?;
-        w.flush()?;
-        Ok(l.heap_sectors * SECTOR + l.cluster_count * l.cluster)
+        write_exfat(&plan, source, &mut w, on_progress, cancelled)
     })();
-
     match result {
         Ok(image_bytes) => Ok(ExfatBuilt {
             image_bytes,
-            files: l.files.len(),
-            directories: l.dirs.len() - 1,
-            cluster_size: l.cluster as u32,
+            files: plan.files,
+            directories: plan.directories,
+            cluster_size: plan.cluster_size,
         }),
         Err(e) => {
             let _ = std::fs::remove_file(out);
@@ -743,6 +834,83 @@ mod tests {
         let (out, _) = build(&mut src, "many.exfat", Some(4096));
         let mut vol = ExFat::open(&out).expect("open");
         assert_eq!(vol.walk().expect("walk").len(), 300);
+        let _ = std::fs::remove_file(out);
+    }
+
+    #[test]
+    fn the_image_keeps_free_space_for_a_read_write_mount() {
+        assert_eq!(
+            spare_bytes(1 << 30, 0),
+            64 << 20,
+            "small games get the 64 MiB floor"
+        );
+        assert_eq!(spare_bytes(40 << 30, 0), (40 << 30) / 200);
+        assert_eq!(
+            spare_bytes(500 << 30, 0),
+            512 << 20,
+            "and never more than 512 MiB"
+        );
+        assert_eq!(spare_bytes(1 << 30, 5), (64 << 20) + 5);
+        let src = Mem::new(&[("a.bin", pattern(100_000, 4))], &[]);
+        let plan = plan_exfat(&src, None, 0).expect("plan");
+        assert!(
+            plan.free_bytes >= 64 << 20,
+            "{} bytes free",
+            plan.free_bytes
+        );
+        assert!(plan.image_bytes >= plan.free_bytes + plan.data_bytes);
+    }
+
+    #[test]
+    fn every_bad_name_is_listed_before_anything_is_written() {
+        let src = Mem::new(
+            &[
+                ("ok.bin", vec![1]),
+                ("bad:one.bin", vec![1]),
+                ("dir/bad?two.bin", vec![1]),
+                ("Case.bin", vec![1]),
+                ("case.bin", vec![1]),
+            ],
+            &[],
+        );
+        let e = plan_exfat(&src, None, 0)
+            .err()
+            .expect("refused")
+            .to_string();
+        assert!(
+            e.starts_with("3 names cannot go into an exFAT image"),
+            "{e}"
+        );
+        assert!(
+            e.contains("bad:one.bin") && e.contains("bad?two.bin") && e.contains("case.bin"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn the_image_streams_into_any_writer_and_matches_the_file() {
+        let mut src = Mem::new(
+            &[
+                ("eboot.bin", pattern(70_000, 5)),
+                ("sce_sys/x", pattern(9, 6)),
+            ],
+            &["empty"],
+        );
+        let plan = plan_exfat(&src, None, 0).expect("plan");
+        let mut mem: Vec<u8> = Vec::new();
+        let n = write_exfat(&plan, &mut src, &mut mem, &mut |_, _| {}, &|| false).expect("write");
+        assert_eq!(n, plan.image_bytes);
+        assert_eq!(
+            mem.len() as u64,
+            plan.image_bytes,
+            "the stream got every byte, in order"
+        );
+        let (out, _) = build(&mut src, "stream.exfat", None);
+        assert_eq!(
+            std::fs::read(&out).expect("read"),
+            mem,
+            "a file and a stream get the same image"
+        );
         let _ = std::fs::remove_file(out);
     }
 

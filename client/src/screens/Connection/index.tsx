@@ -23,6 +23,7 @@ import {
 } from "../../state/helperSend";
 import { sendHelperTo } from "../../state/helperSendRuntime";
 import { looksLikeMacLocalNetworkBlock } from "../../lib/localNetworkHint";
+import { localNetworkBlocked } from "../../lib/androidLocalNetwork";
 import { parsePS5Firmware } from "../../lib/ps5Firmware";
 import { compareVersions } from "../../lib/semver";
 import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
@@ -119,6 +120,9 @@ function StepCard({
   stateText: string;
   children: React.ReactNode;
 }) {
+  const tr = useTr();
+  const failed = state === "fail" && !!stateText;
+  const failedLabel = tr("connection_step_failed", undefined, "Didn't work");
   const borderClass =
     state === "ok"
       ? "border-[var(--color-good)]"
@@ -139,12 +143,43 @@ function StepCard({
           <div className="text-sm font-semibold">{title}</div>
           <div className="mt-0.5 flex items-center gap-1.5 text-xs text-[var(--color-muted)]">
             <StepIcon state={state} />
-            <span className="truncate">{stateText}</span>
+            <span className="truncate">{failed ? failedLabel : stateText}</span>
           </div>
         </div>
       </header>
+      {/* A failure is the one message the user has to read, so it is never cut to one
+          line in the header: it gets the whole width, in full, above everything else. */}
+      {failed && (
+        <div
+          role="alert"
+          className="mb-4 flex items-start gap-2 rounded-md border border-[var(--color-bad)] bg-[var(--color-bad-soft)] p-3 text-sm"
+        >
+          <XCircle size={16} className="mt-0.5 shrink-0 text-[var(--color-bad)]" />
+          <p className="min-w-0 whitespace-pre-line break-words">{stateText}</p>
+        </div>
+      )}
       <div>{children}</div>
     </section>
+  );
+}
+
+/** "Load elfldr first", where it can't be missed. */
+function ElfldrFirstCallout() {
+  const tr = useTr();
+  return (
+    <div className="mb-4 flex items-start gap-2 rounded-md border border-[var(--color-warn)] bg-[var(--color-warn-soft)] p-3 text-sm">
+      <AlertTriangle size={16} className="mt-0.5 shrink-0 text-[var(--color-warn)]" />
+      <p className="min-w-0">
+        <span className="font-semibold">
+          {tr("connection_elfldr_first_title", undefined, "Load elfldr first.")}
+        </span>{" "}
+        {tr(
+          "connection_elfldr_first_short",
+          undefined,
+          "With an autoloader or PLDMGR, put elfldr before ps5upload.elf, or the helper drops after a few seconds.",
+        )}
+      </p>
+    </div>
   );
 }
 
@@ -217,7 +252,10 @@ export default function ConnectionScreen() {
   const step2: StepState =
     helperSend?.state ?? transientStep2 ?? storedStep2;
   const step2Msg = helperSend?.msg ?? transientStep2Msg ?? storedStep2Msg;
-  const step3: StepState = step2 === "ok" ? "ok" : "idle";
+  // Not "ready" while this app is not paired: the helper answers, but every upload would fail
+  // with "not paired" (#415). The pairing banner above says what to do.
+  const session = useConnectionStore((s) => s.session);
+  const step3: StepState = step2 === "ok" && session !== "needs_pairing" ? "ok" : "idle";
 
   // 250ms tick while send/probe is busy — gives a smooth counter
   // without hammering React re-renders. Clears on settle.
@@ -429,7 +467,13 @@ export default function ConnectionScreen() {
       const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
       settleStep1(
         "fail",
-        looksLikeMacLocalNetworkBlock(probe.error, ua)
+        localNetworkBlocked()
+          ? tr(
+              "connection_android_local_network_hint",
+              undefined,
+              "Android is blocking PS5Upload from your local network. Tap Allow at the top, then check again.",
+            )
+          : looksLikeMacLocalNetworkBlock(probe.error, ua)
           ? `${detail}. ${tr("connection_mac_local_network_hint", undefined, "macOS may be blocking this app from your local network. Open System Settings → Privacy & Security → Local Network, allow PS5Upload, then check again.")}`
           : detail,
       );
@@ -585,49 +629,34 @@ export default function ConnectionScreen() {
             state={step2}
             stateText={step2Msg}
           >
-            <p className="mb-4 text-sm text-[var(--color-muted)]">
+            <p className="mb-3 text-sm text-[var(--color-muted)]">
               {tr(
-                "connection_step2_hint",
-                { port: PS5_LOADER_PORT },
-                `The PS5Upload helper is a small program your PS5 runs in memory to accept uploads. Sent over port ${PS5_LOADER_PORT}; it takes a few seconds for the PS5 to respond once the bytes arrive.`,
-              )}
-            </p>
-            <p className="-mt-2 mb-4 text-xs text-[var(--color-muted)]">
-              {tr(
-                "connection_elfldr_first",
+                "connection_step2_hint_short",
                 undefined,
-                "Loading ps5upload with an autoloader or PLDMGR? Put elfldr first in its list, before ps5upload.elf. Without elfldr loaded first, ps5upload connects and then drops within seconds.",
+                "A small program the PS5 runs to accept uploads. It starts in a few seconds.",
               )}
             </p>
-            {isTauriEnv() ? (
-              <>
-                <BundledPayloadBanner />
-                <Button
-                  variant="primary"
-                  size="md"
-                  leftIcon={<Send size={14} />}
-                  onClick={() => void handleSend()}
-                  disabled={step2 === "busy"}
-                  loading={step2 === "busy"}
-                >
-                  {sendButtonLabel(step2, sendPhase, elapsedMs, tr)}
-                </Button>
-                {step2 === "busy" && (
-                  <p className="mt-3 text-xs text-[var(--color-muted)]">
-                    {tr(
-                      "connection_step2_busy_hint",
-                      undefined,
-                      "The PS5 typically boots the helper within 3-5 seconds. We keep polling for up to 20 seconds before giving up — if it times out, send it again.",
-                    )}
-                  </p>
-                )}
-              </>
-            ) : (
-              <p className="text-xs text-[var(--color-muted)]">
+            {/* The step users miss most (autoloader without elfldr: the helper connects,
+                then drops), so it is a callout, not a footnote. */}
+            <ElfldrFirstCallout />
+            {/* The web UI sends it too: the engine sends its own bundled helper (#415). */}
+            {isTauriEnv() && <BundledPayloadBanner />}
+            <Button
+              variant="primary"
+              size="md"
+              leftIcon={<Send size={14} />}
+              onClick={() => void handleSend()}
+              disabled={step2 === "busy"}
+              loading={step2 === "busy"}
+            >
+              {sendButtonLabel(step2, sendPhase, elapsedMs, tr)}
+            </Button>
+            {step2 === "busy" && (
+              <p className="mt-3 text-xs text-[var(--color-muted)]">
                 {tr(
-                  "connection_step2_browser_unsupported",
+                  "connection_step2_busy_hint",
                   undefined,
-                  "The browser can't read a local helper file to send. Load the helper from the desktop app or a USB autoloader first, then this page will detect it automatically.",
+                  "The PS5 typically boots the helper within 3-5 seconds. We keep polling for up to 20 seconds before giving up — if it times out, send it again.",
                 )}
               </p>
             )}
@@ -1511,11 +1540,14 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
                 "This can mean another payload on the console ended it, the system ran low on memory, or it crashed. stderr.log in a bug report says which. If you load ps5upload through an autoloader, try sending it from here instead.",
               )}
             </p>
-            <p className="mt-1 text-[var(--color-muted)]">
+            <p className="mt-1 text-[var(--color-text)]">
+              <span className="font-semibold">
+                {tr("connection_elfldr_first_title", undefined, "Load elfldr first.")}
+              </span>{" "}
               {tr(
-                "connection_elfldr_first",
+                "connection_elfldr_first_short",
                 undefined,
-                "Loading ps5upload with an autoloader or PLDMGR? Put elfldr first in its list, before ps5upload.elf. Without elfldr loaded first, ps5upload connects and then drops within seconds.",
+                "With an autoloader or PLDMGR, put elfldr before ps5upload.elf, or the helper drops after a few seconds.",
               )}
             </p>
           </div>

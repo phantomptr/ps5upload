@@ -265,10 +265,15 @@ describe("fpkg pipeline", () => {
     const buildImage = vi.fn().mockResolvedValue({ job_id: "i1" });
     const { fpkg } = await import("../api/fpkg");
     (fpkg as unknown as { buildImage: unknown }).buildImage = buildImage;
-    jobStatus.mockResolvedValueOnce({ status: "running", bytes_sent: 3, total_bytes: 9 });
+    jobStatus.mockResolvedValueOnce({
+      status: "running",
+      bytes_sent: 3,
+      total_bytes: 9,
+      stage: { id: "write", index: 1, count: 3, done: 3, total: 9 },
+    });
     await useFpkgConversion.getState().buildImage("/games/PPSA1-app", "/out", false);
     await tick();
-    expect(buildImage).toHaveBeenCalledWith("/games/PPSA1-app", "/out");
+    expect(buildImage).toHaveBeenCalledWith("/games/PPSA1-app", "/out", "exfat", false);
     expect(useFpkgConversion.getState().pipeline).toMatchObject({
       phase: "running",
       mode: "image",
@@ -285,19 +290,73 @@ describe("fpkg pipeline", () => {
     });
   });
 
-  it("can compress the image it made, and then keeps only the compressed one", async () => {
+  it("puts the finished image in the Upload queue when the run was asked to", async () => {
+    const buildImage = vi.fn().mockResolvedValue({ job_id: "i9" });
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { buildImage: unknown }).buildImage = buildImage;
+    const { useUploadQueueStore } = await import("./uploadQueue");
+    const added: unknown[] = [];
+    const started: string[] = [];
+    useUploadQueueStore.setState({
+      add: (i: unknown) => void added.push(i),
+      startHost: async (h: string) => void started.push(h),
+    } as never);
+    await useFpkgConversion.getState().buildImage("/games/W-app", "/out", true, "ffpkg", {
+      host: "10.0.0.2",
+      volume: null,
+      subpath: "homebrew",
+      deleteAfter: true,
+    });
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/W-app.ffpfsc", bytes_sent: 9 });
+    await tick();
+    expect(added).toEqual([
+      expect.objectContaining({
+        sourceKind: "image",
+        sourcePath: "/out/W-app.ffpfsc",
+        resolvedDest: "/data/homebrew/W-app.ffpfsc",
+        deleteSourceAfterUpload: true,
+      }),
+    ]);
+    expect(started).toEqual(["10.0.0.2"]);
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "done", uploadQueued: true });
+    // A plain image run after it queues nothing.
+    added.length = 0;
+    useFpkgConversion.setState({ pipeline: { phase: "idle" } });
+    await useFpkgConversion.getState().buildImage("/games/X-app", "/out", false);
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/X-app.exfat", bytes_sent: 9 });
+    await tick();
+    expect(added).toEqual([]);
+  });
+
+  it("asks the engine for the chosen image format", async () => {
+    const buildImage = vi.fn().mockResolvedValue({ job_id: "i2" });
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { buildImage: unknown }).buildImage = buildImage;
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/G.ffpkg", bytes_sent: 9 });
+    await useFpkgConversion.getState().buildImage("/games/G", "/out", false, "ffpkg");
+    await tick();
+    expect(buildImage).toHaveBeenCalledWith("/games/G", "/out", "ffpkg", false);
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "done",
+      packagePath: "/out/G.ffpkg",
+    });
+  });
+
+  it("compresses in the same engine job, with no second job or leftover image", async () => {
     const buildImage = vi.fn().mockResolvedValue({ job_id: "i1" });
     const compressJob = vi.fn().mockResolvedValue({ job_id: "c1" });
     const { fpkg } = await import("../api/fpkg");
     (fpkg as unknown as { buildImage: unknown }).buildImage = buildImage;
     (fpkg as unknown as { compress: unknown }).compress = compressJob;
-    jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/G.exfat", bytes_sent: 9 });
-    await useFpkgConversion.getState().buildImage("/games/G", "/out", true);
+    jobStatus.mockResolvedValueOnce({
+      status: "running",
+      bytes_sent: 4,
+      total_bytes: 9,
+      stage: { id: "compress", index: 1, count: 3, done: 4, total: 9 },
+    });
+    await useFpkgConversion.getState().buildImage("/games/G", "/out", true, "ffpkg");
     await tick();
-    // The image is done: the same run goes on to compress it.
-    expect(compressJob).toHaveBeenCalledWith("/out/G.exfat", "/out");
-    jobStatus.mockResolvedValueOnce({ status: "running", bytes_sent: 4, total_bytes: 9 });
-    await tick();
+    expect(buildImage).toHaveBeenCalledWith("/games/G", "/out", "ffpkg", true);
     expect(useFpkgConversion.getState().pipeline).toMatchObject({
       phase: "running",
       mode: "image",
@@ -310,7 +369,8 @@ describe("fpkg pipeline", () => {
       phase: "done",
       packagePath: "/out/G.ffpfsc",
     });
-    expect(deletePackage).toHaveBeenCalledWith("/out/G.exfat");
+    expect(compressJob).not.toHaveBeenCalled();
+    expect(deletePackage).not.toHaveBeenCalled();
   });
 
   it("without a console, Convert & install stops at send with the package kept", async () => {

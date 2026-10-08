@@ -65,6 +65,17 @@ const SHORTCUTS: Array<{
       },
     ],
   },
+  {
+    sectionKey: "shortcuts_sec_collection",
+    section: "Collection",
+    items: [
+      {
+        keys: "Cmd/Ctrl + R",
+        descKey: "shortcuts_collection_scan",
+        description: "Scan the Collection for changes",
+      },
+    ],
+  },
 ];
 
 export function ShortcutsOverlay() {

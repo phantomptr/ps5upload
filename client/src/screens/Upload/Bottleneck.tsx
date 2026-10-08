@@ -9,7 +9,7 @@ import type { BottleneckCause, JobLive } from "../../lib/jobLive";
 /** Catalog key and English fallback for each cause (written out so the i18n scripts see them). */
 const CAUSE: Record<BottleneckCause, { key: string; text: string }> = {
   network: { key: "bottleneck_network", text: "network" },
-  source: { key: "bottleneck_source", text: "source (archive decoding)" },
+  source: { key: "bottleneck_source_v2", text: "reading the source" },
   disk: { key: "bottleneck_disk", text: "console disk" },
   workers: { key: "bottleneck_workers", text: "console workers" },
   memory: { key: "bottleneck_memory", text: "console memory" },

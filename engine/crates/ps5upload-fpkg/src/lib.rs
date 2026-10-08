@@ -77,6 +77,9 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("{0}")]
     Format(String),
+    /// The caller asked to stop (the image writers vendored from PS5 Dump Forge return it).
+    #[error("cancelled")]
+    Cancelled,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

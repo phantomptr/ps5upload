@@ -1,4 +1,7 @@
-import { consoleAddr } from "../../lib/addr";
+import { consoleAddr, hostOf } from "../../lib/addr";
+import { trStatic } from "../../lib/trStatic";
+import { rememberDestination } from "../../lib/moveTo";
+import { MoveToDialog, type MoveItem } from "./MoveToDialog";
 import {
   useCallback,
   useEffect,
@@ -39,6 +42,8 @@ import {
   BadgeCheck,
   FolderOpen,
   Link2,
+  FolderInput,
+  KeyRound,
 } from "lucide-react";
 import { pickPath, pickPaths } from "../../lib/pickPath";
 import { useWebviewDropAll } from "../../lib/useWebviewDrop";
@@ -76,6 +81,7 @@ import { useConnectionStore } from "../../state/connection";
 import {
   fsDelete,
   fsMove,
+  fsChmod,
   fsMkdir,
   fsCopy,
   fsListDir,
@@ -186,6 +192,24 @@ function parent(p: string): string {
   const i = p.lastIndexOf("/");
   if (i <= 0) return "/";
   return p.slice(0, i);
+}
+
+/** Before a cross-drive move deletes an original: why the copy isn't whole, or null when it
+ *  is. Files are checked by size; a folder's copy reports its own errors. */
+async function copyIsShort(
+  addr: string,
+  item: ClipboardItem,
+  target: string,
+): Promise<string | null> {
+  if (item.kind !== "file" || !(item.size > 0)) return null;
+  const name = target.slice(target.lastIndexOf("/") + 1);
+  const entries = await fsListDir(addr, parent(target)).catch(() => null);
+  if (!entries) return trStatic("fs_move_check_failed", "it couldn't be checked");
+  const copy = entries.find((e) => e.name === name);
+  if (!copy) return trStatic("fs_move_check_missing", "it isn't there");
+  return copy.size === item.size
+    ? null
+    : `${formatBytes(copy.size)} / ${formatBytes(item.size)}`;
 }
 
 const isViewablePackage = (name: string) => /\.f?pkg$/i.test(name);
@@ -1412,6 +1436,63 @@ export default function FileSystemScreen() {
     () => (entries ? sortEntries(entries, sort) : []),
     [entries, sort],
   );
+  // "Move to…": the items waiting for a destination, or null when the dialog is closed.
+  const [moveItems, setMoveItems] = useState<MoveItem[] | null>(null);
+  const startMove = (list: DirEntry[] = selectedEntries) => {
+    if (list.length === 0) return;
+    setMoveItems(list.map((e) => ({ path: joinPath(path, e.name), name: e.name, size: e.size })));
+  };
+  const confirmMove = (dest: string) => {
+    const items = moveItems ?? [];
+    setMoveItems(null);
+    if (items.length === 0) return;
+    rememberDestination(hostOf(host), dest);
+    setSelected(new Set());
+    const byPath = new Map((entries ?? []).map((e) => [joinPath(path, e.name), e]));
+    void runPaste(dest, {
+      op: "cut",
+      items: items.map((i) => ({
+        ...i,
+        kind: byPath.get(i.path)?.kind === "dir" ? "dir" : "file",
+      })),
+      sourceLabel: path,
+    });
+  };
+  // Set permissions to 777 (folders recursively): what games and payload folders need to be
+  // readable and runnable, and what users reached for FileZilla to do (#411).
+  const [chmodBusy, setChmodBusy] = useState(false);
+  const runChmod777 = async (list: DirEntry[] = selectedEntries) => {
+    if (list.length === 0 || chmodBusy) return;
+    setChmodBusy(true);
+    setError(null);
+    const failed: string[] = [];
+    for (const e of list) {
+      try {
+        await fsChmod(consoleAddr(host), joinPath(path, e.name), "0777", e.kind === "dir");
+      } catch (err) {
+        failed.push(`${e.name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    setChmodBusy(false);
+    if (failed.length > 0) {
+      setError(failed.join(" · "));
+      pushNotification(
+        "error",
+        withConsolePrefix(host, tr("fs_chmod_failed", undefined, "Couldn't set permissions")),
+        { body: failed.join(" · ") },
+      );
+    } else {
+      pushNotification(
+        "success",
+        withConsolePrefix(
+          host,
+          tr("fs_chmod_done", { count: list.length }, `Permissions set to 777 on ${list.length} item(s)`),
+        ),
+      );
+      setSelected(new Set());
+    }
+    await refresh();
+  };
   const [rowMenu, setRowMenu] = useState<{
     x: number;
     y: number;
@@ -1466,12 +1547,17 @@ export default function FileSystemScreen() {
   // Clipboard clears only when every cut succeeded cleanly. Any
   // failure keeps the clipboard so the user can retry (maybe after
   // freeing space or fixing permissions).
-  const runPaste = async (into: string = path) => {
+  const runPaste = async (
+    into: string = path,
+    // Move to… hands its selection straight in, so it never touches the clipboard.
+    staged?: { op: "cut" | "copy"; items: ClipboardItem[]; sourceLabel: string },
+  ) => {
     // Single-flight guard PER CONSOLE: same rationale as runBulkDelete.
     if (fsBulk.op !== null) return;
-    if (clipboard.items.length === 0 || !clipboard.op) return;
-    const op = clipboard.op;
-    const items = clipboard.items;
+    const op = staged ? staged.op : clipboard.op;
+    const items = staged ? staged.items : clipboard.items;
+    const sourceLabel = staged ? staged.sourceLabel : clipboard.sourceLabel;
+    if (items.length === 0 || !op) return;
 
     // Name conflicts: the payload refuses to touch an existing destination
     // unless we explicitly ask it to merge, so find the collisions up front
@@ -1519,7 +1605,7 @@ export default function FileSystemScreen() {
     fsBulk.begin({
       op: op === "cut" ? "paste-move" : "paste-copy",
       total: items.length,
-      fromPath: clipboard.sourceLabel ?? "",
+      fromPath: sourceLabel ?? "",
       toPath: into,
     });
     const addr = consoleAddr(host);
@@ -1620,6 +1706,19 @@ export default function FileSystemScreen() {
               const msg = e instanceof Error ? e.message : String(e);
               if (msg.includes("cross_mount") || msg.includes("EXDEV")) {
                 await fsCopy(addr, item.path, target, opId, overwrite);
+                // The original goes only once the copy is known whole: a file's size must
+                // match before anything is deleted (a short copy used to cost the original).
+                const short = await copyIsShort(addr, item, target);
+                if (short) {
+                  duplicated.push(
+                    tr(
+                      "fs_move_copy_short",
+                      { name: item.name, detail: short },
+                      `${item.name}: the copy is incomplete (${short}), so the original was kept.`,
+                    ),
+                  );
+                  continue;
+                }
                 try {
                   await fsDelete(addr, item.path);
                 } catch (delErr) {
@@ -1684,7 +1783,7 @@ export default function FileSystemScreen() {
     // partial failure means the user might want to retry the leftover
     // items. Copies always keep the clipboard (same-items-many-places
     // is the usual copy workflow).
-    if (op === "cut" && problemMsgs.length === 0) clipboard.clear();
+    if (!staged && op === "cut" && problemMsgs.length === 0) clipboard.clear();
     await refresh();
   };
 
@@ -2094,6 +2193,18 @@ export default function FileSystemScreen() {
           </div>
         </div>
       )}
+      {moveItems && (
+        <MoveToDialog
+          open
+          host={hostOf(host)}
+          addr={consoleAddr(host)}
+          items={moveItems}
+          volumes={volumes ?? []}
+          startPath={parent(moveItems[0]?.path ?? path)}
+          onCancel={() => setMoveItems(null)}
+          onConfirm={confirmMove}
+        />
+      )}
       {rowMenu && (
         <RowMenu
           x={rowMenu.x}
@@ -2112,9 +2223,21 @@ export default function FileSystemScreen() {
               disabled: downloadOp.active,
             },
             {
+              icon: FolderInput,
+              label: tr("fs_move_to", undefined, "Move to…"),
+              run: () => startMove([rowMenu.entry]),
+              disabled: fsBulk.op !== null || !volumes?.length,
+            },
+            {
               icon: Scissors,
               label: tr("fs_cut", "Cut"),
               run: () => stageClipboard("cut", [rowMenu.entry]),
+            },
+            {
+              icon: KeyRound,
+              label: tr("fs_chmod_777", undefined, "Set permissions (777)"),
+              run: () => void runChmod777([rowMenu.entry]),
+              disabled: chmodBusy,
             },
             {
               icon: Copy,
@@ -2441,6 +2564,15 @@ export default function FileSystemScreen() {
             </span>
             <button
               type="button"
+              onClick={() => startMove()}
+              disabled={bulkOp.op !== null || !volumes?.length}
+              className="flex items-center gap-1 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] px-2 py-1 font-medium hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+            >
+              <FolderInput size={12} />
+              {tr("fs_move_to", undefined, "Move to…")}
+            </button>
+            <button
+              type="button"
               onClick={() => stageClipboard("cut")}
               disabled={bulkOp.op !== null}
               className="flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 hover:bg-[var(--color-surface-3)] disabled:opacity-50"
@@ -2456,6 +2588,15 @@ export default function FileSystemScreen() {
             >
               <Copy size={12} />
               {tr("copy", undefined, "Copy")}
+            </button>
+            <button
+              type="button"
+              onClick={() => void runChmod777()}
+              disabled={bulkOp.op !== null || chmodBusy}
+              className="flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+            >
+              <KeyRound size={12} />
+              {tr("fs_chmod_777", undefined, "Set permissions (777)")}
             </button>
             <button
               type="button"

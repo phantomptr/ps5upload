@@ -261,3 +261,6 @@ docs/
 third_party/elfldr/*.o
 third_party/elfldr/socksrv.elf
 third_party/elfldr/bootstrap.elf
+
+# Our build of the PS5 SDK startup code (payload/sdk-crt.mk)
+payload/third_party/sdk-crt/build/

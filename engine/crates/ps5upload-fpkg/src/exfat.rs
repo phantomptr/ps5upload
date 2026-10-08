@@ -12,7 +12,7 @@
 
 use std::path::Path;
 
-use crate::source::{is_junk, SourceFile, SourceTree};
+use crate::source::{dir_label, is_junk, SourceFile, SourceTree};
 use crate::{format_err, PkgFile, Result};
 
 const OEM: &[u8; 8] = b"EXFAT   ";
@@ -22,6 +22,9 @@ const FAT_EOC: u32 = 0xFFFF_FFF7;
 const MAX_DIR_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_ENTRIES: usize = 1_000_000;
 const MAX_DEPTH: u32 = 32;
+/// The most path bytes a walk keeps (every file's, every empty directory's). A real game's are
+/// a few tens of megabytes; deep trees of long names in a corrupt image would be gigabytes.
+const MAX_PATH_BYTES: usize = 256 << 20;
 
 /// The Microsoft basic-data GUID a GPT partition table gives an exFAT volume.
 const BASIC_DATA_GUID: [u8; 16] = [
@@ -73,9 +76,12 @@ impl ExFat {
         if !(9..=12).contains(&sector_shift) {
             return format_err(format!("exFAT sector shift {sector_shift} is out of range"));
         }
-        if cluster_shift > 25 {
+        // The specification caps a cluster at 32 MiB (the two shifts together at 25). A cluster
+        // is read whole, so a bigger one would size a buffer of up to 128 GiB from two bytes.
+        if cluster_shift > 25 || sector_shift + cluster_shift > 25 {
             return format_err(format!(
-                "exFAT cluster shift {cluster_shift} is out of range"
+                "exFAT cluster shift {cluster_shift} is out of range for {}-byte sectors",
+                1u64 << sector_shift
             ));
         }
         let sector_size = 1u64 << sector_shift;
@@ -120,12 +126,26 @@ impl ExFat {
 
     /// Every file of the volume, `/`-separated, junk skipped, sorted by path.
     pub fn walk(&mut self) -> Result<Vec<ExFatFile>> {
-        let mut files = Vec::new();
+        Ok(self.walk_tree()?.0)
+    }
+
+    /// [`ExFat::walk`], plus the directories left with nothing in them once junk is skipped
+    /// (sorted), as [`crate::source::scan_tree`] reports them for a folder.
+    pub fn walk_tree(&mut self) -> Result<(Vec<ExFatFile>, Vec<String>)> {
         let root = self.root_cluster;
         let bytes = self.chain_stream(root)?;
-        self.walk_dir(&bytes, "", 0, &mut files)?;
+        let mut w = Walked {
+            files: Vec::new(),
+            empty: Vec::new(),
+            dirs: std::collections::HashSet::from([root]),
+            path_bytes: 0,
+            listed: 0,
+        };
+        self.walk_dir(&bytes, "", 0, &mut w)?;
+        let (mut files, mut empty) = (w.files, w.empty);
         files.sort_by(|a, b| a.path.cmp(&b.path));
-        Ok(files)
+        empty.sort();
+        Ok((files, empty))
     }
 
     /// Up to `len` bytes at `offset` of a walked file.
@@ -137,26 +157,44 @@ impl ExFat {
         self.read_stream(f.first_cluster, f.no_fat_chain, &f.path, offset, want)
     }
 
-    fn walk_dir(
-        &mut self,
-        bytes: &[u8],
-        prefix: &str,
-        depth: u32,
-        out: &mut Vec<ExFatFile>,
-    ) -> Result<()> {
+    /// Walks one directory; returns whether anything under it was kept.
+    fn walk_dir(&mut self, bytes: &[u8], prefix: &str, depth: u32, w: &mut Walked) -> Result<bool> {
         if depth > MAX_DEPTH {
             return format_err(format!("{prefix} nests deeper than {MAX_DEPTH} levels"));
         }
-        for e in parse_dir(bytes)? {
+        let entries = parse_dir(bytes, prefix)?;
+        w.listed += entries.len();
+        if w.listed > MAX_ENTRIES {
+            return format_err("the volume holds more than a million files and directories");
+        }
+        let mut kept = false;
+        for e in entries {
+            kept = true;
             let path = format!("{prefix}{}", e.name);
             if e.is_dir {
-                if out.len() > MAX_ENTRIES {
-                    return format_err("the volume holds more than a million files");
+                if !w.dirs.insert(e.first_cluster) {
+                    return format_err(format!(
+                        "directory {path} starts at cluster {}, as another one does",
+                        e.first_cluster
+                    ));
                 }
                 let bytes = self.read_dir_stream(&e, &path)?;
-                self.walk_dir(&bytes, &format!("{path}/"), depth + 1, out)?;
+                if !self.walk_dir(&bytes, &format!("{path}/"), depth + 1, w)? {
+                    w.keep(&path)?;
+                    w.empty.push(path);
+                }
             } else {
-                out.push(ExFatFile {
+                // A file cannot hold more than the volume does. Bounding it here keeps a
+                // corrupt length from sizing a read buffer before the first cluster is checked.
+                let heap = u64::from(self.geom.cluster_count) * self.geom.cluster_size;
+                if e.size > heap {
+                    return format_err(format!(
+                        "{path} claims {} bytes, more than the volume's {heap}",
+                        e.size
+                    ));
+                }
+                w.keep(&path)?;
+                w.files.push(ExFatFile {
                     path,
                     size: e.size,
                     first_cluster: e.first_cluster,
@@ -164,7 +202,7 @@ impl ExFat {
                 });
             }
         }
-        Ok(())
+        Ok(kept)
     }
 
     /// A directory's bytes: its own stream length and its own chain flag, but at least
@@ -299,6 +337,32 @@ impl ExFat {
     }
 }
 
+/// What a walk collects, and what it has spent of its budgets.
+struct Walked {
+    files: Vec<ExFatFile>,
+    empty: Vec<String>,
+    /// The first cluster of every directory walked: two directories never share one, so a
+    /// repeat is a cycle (or a fan-out the depth limit alone would let grow exponentially).
+    dirs: std::collections::HashSet<u32>,
+    /// Bytes of the paths kept so far, against [`MAX_PATH_BYTES`].
+    path_bytes: usize,
+    /// Entries parsed so far, every directory's (each is walked once), against
+    /// [`MAX_ENTRIES`]: counted as they are parsed, so the entries of directories still being
+    /// walked further up count too.
+    listed: usize,
+}
+
+impl Walked {
+    /// Count one more kept path against the walk's budgets.
+    fn keep(&mut self, path: &str) -> Result<()> {
+        self.path_bytes += path.len();
+        if self.path_bytes > MAX_PATH_BYTES {
+            return format_err("the volume's paths are over 256 MiB");
+        }
+        Ok(())
+    }
+}
+
 /// What one FAT slot says.
 enum FatLink {
     Next(u32),
@@ -326,6 +390,7 @@ pub struct ExFatSource {
     volume: ExFat,
     files: Vec<SourceFile>,
     inner: Vec<ExFatFile>,
+    empty_dirs: Vec<String>,
 }
 
 impl ExFatSource {
@@ -337,7 +402,7 @@ impl ExFatSource {
 
     /// A volume already opened; `label` is what [`SourceTree::describe`] leads with.
     pub fn from_volume(mut volume: ExFat, label: String) -> Result<Self> {
-        let inner = volume.walk()?;
+        let (inner, empty_dirs) = volume.walk_tree()?;
         let files = inner
             .iter()
             .map(|f| SourceFile {
@@ -350,6 +415,7 @@ impl ExFatSource {
             volume,
             files,
             inner,
+            empty_dirs,
         })
     }
 
@@ -363,6 +429,12 @@ impl ExFatSource {
 impl SourceTree for ExFatSource {
     fn files(&self) -> &[SourceFile] {
         &self.files
+    }
+
+    /// A game image keeps its empty directories as a folder does: a build from the image
+    /// must lay out the same tree as a build from the folder it was made of.
+    fn empty_dirs(&self) -> &[String] {
+        &self.empty_dirs
     }
 
     fn read(&mut self, path: &str) -> Result<Vec<u8>> {
@@ -397,8 +469,9 @@ struct Parsed {
     is_dir: bool,
 }
 
-/// The 32-byte records of a directory stream, primary/stream/name groups assembled.
-fn parse_dir(bytes: &[u8]) -> Result<Vec<Parsed>> {
+/// The 32-byte records of a directory stream, primary/stream/name groups assembled; `dir`
+/// is the directory's walk prefix, for errors.
+fn parse_dir(bytes: &[u8], dir: &str) -> Result<Vec<Parsed>> {
     let mut out = Vec::new();
     let mut pending: Option<Pending> = None;
     for chunk in bytes.as_chunks::<32>().0 {
@@ -445,7 +518,28 @@ fn parse_dir(bytes: &[u8]) -> Result<Vec<Parsed>> {
                 }
                 if p.name.len() >= p.name_len {
                     let p = pending.take().unwrap();
-                    let name = String::from_utf16_lossy(&p.name);
+                    // Names are taken as they are: a lossy decode would rename the file, and
+                    // a '/' would turn it into a path.
+                    let why = if p.name.contains(&0) {
+                        Some("contains a NUL")
+                    } else if p.name.contains(&u16::from(b'/')) {
+                        Some("contains a '/'")
+                    } else {
+                        None
+                    };
+                    let name = match (why, String::from_utf16(&p.name)) {
+                        (None, Ok(name)) => name,
+                        (why, _) => {
+                            let units: Vec<String> =
+                                p.name.iter().map(|u| format!("{u:04x}")).collect();
+                            return format_err(format!(
+                                "{} holds a name that {} (UTF-16 units {})",
+                                dir_label(dir),
+                                why.unwrap_or("is not UTF-16 (an unpaired surrogate)"),
+                                units.join(" ")
+                            ));
+                        }
+                    };
                     if !name.is_empty() && name != "." && name != ".." && !is_junk(&name) {
                         out.push(Parsed {
                             name,
@@ -574,7 +668,7 @@ mod tests {
         records.extend(file_bytes("sce_sys", 9, 65536));
         // The directory's attribute word marks it as one.
         records[3][4..6].copy_from_slice(&0x10u16.to_le_bytes());
-        let entries = parse_dir(&flat(records)).unwrap();
+        let entries = parse_dir(&flat(records), "").unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].name, "eboot.bin");
         assert_eq!(entries[0].size, 1000);
@@ -608,7 +702,7 @@ mod tests {
         bytes.extend_from_slice(&flat(file_bytes("keep", 6, 20)));
         bytes.extend_from_slice(&flat(file_bytes(".DS_Store", 7, 30)));
 
-        let entries = parse_dir(&bytes).unwrap();
+        let entries = parse_dir(&bytes, "").unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "keep");
     }
@@ -619,7 +713,7 @@ mod tests {
         let mut bytes = file_bytes(&name[..15], 5, 1);
         bytes.push(name_entry(&name[15..]));
         bytes[1] = stream_entry(name.len(), 0x03, 5, 1);
-        let entries = parse_dir(&flat(bytes)).unwrap();
+        let entries = parse_dir(&flat(bytes), "").unwrap();
         assert_eq!(entries[0].name, name);
     }
 
@@ -628,14 +722,74 @@ mod tests {
         let mut bytes = file_bytes("short", 5, 1);
         bytes[1] = stream_entry(200, 0x03, 5, 1);
         // Without a complete name the entry is dropped, not half-named.
-        assert!(parse_dir(&flat(bytes)).unwrap().is_empty());
+        assert!(parse_dir(&flat(bytes), "").unwrap().is_empty());
     }
 
     #[test]
     fn the_valid_data_length_wins_when_it_is_shorter() {
         let mut bytes = file_bytes("a", 5, 65536);
         bytes[1][8..16].copy_from_slice(&100u64.to_le_bytes());
-        assert_eq!(parse_dir(&flat(bytes)).unwrap()[0].size, 100);
+        assert_eq!(parse_dir(&flat(bytes), "").unwrap()[0].size, 100);
+    }
+
+    /// A name is taken as it is on disk: an unpaired surrogate, a NUL or a '/' in it is an
+    /// error naming the directory and the raw units, never a renamed entry or a subfolder.
+    #[test]
+    fn a_bad_name_is_refused_with_its_units() {
+        for (units, why) in [
+            ([0x61, 0xD800, 0x62], "unpaired surrogate"),
+            ([0x61, 0xDC00, 0x62], "unpaired surrogate"),
+            ([0x61, 0x0000, 0x62], "a NUL"),
+            ([0x61, 0x002F, 0x62], "a '/'"),
+        ] {
+            let mut records = file_bytes("abc", 5, 1);
+            for (i, unit) in units.iter().enumerate() {
+                records[2][2 + 2 * i..4 + 2 * i].copy_from_slice(&u16::to_le_bytes(*unit));
+            }
+            let Err(e) = parse_dir(&flat(records), "sce_sys/") else {
+                panic!("{why}: the name must be refused");
+            };
+            let hex = units.map(|u| format!("{u:04x}")).join(" ");
+            let e = e.to_string();
+            assert!(e.contains("directory sce_sys holds"), "{e}");
+            assert!(e.contains(why) && e.contains(&hex), "{e}");
+        }
+        // `.` and `..` are still skipped, not refused.
+        let mut records = file_bytes(".", 5, 1);
+        records.extend(file_bytes("..", 6, 1));
+        assert!(parse_dir(&flat(records), "").unwrap().is_empty());
+    }
+
+    /// The same through a whole volume: a lone surrogate in `nest/deeper`, and a '/' in
+    /// `big.bin` at the root.
+    #[test]
+    fn a_volume_with_a_bad_name_is_refused() {
+        for (cluster, at, unit, want) in [
+            (
+                9u32,
+                2 + 2,
+                0xDC00u16,
+                "directory nest holds a name that is not UTF-16",
+            ),
+            (
+                4,
+                2 + 2 * 3,
+                0x002F,
+                "the root directory holds a name that contains a '/'",
+            ),
+        ] {
+            let mut img = image_with_dirs();
+            let at = 2 * 512 + (cluster as usize - 2) * 4096 + 64 + at;
+            img[at..at + 2].copy_from_slice(&unit.to_le_bytes());
+            let path = std::env::temp_dir().join(format!(
+                "fpkg-exfat-{}-bad-name-{cluster}",
+                std::process::id()
+            ));
+            std::fs::write(&path, img).unwrap();
+            let err = ExFatSource::open(&path).err().unwrap();
+            std::fs::remove_file(&path).ok();
+            assert!(err.to_string().contains(want), "{err}");
+        }
     }
 
     /// A 25 KiB image: 512-byte sectors, 4 KiB clusters, a root directory in cluster 4,
@@ -728,6 +882,81 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
+    /// [`synthetic_image`] with three more clusters and four directories in its root:
+    /// `empty` (cluster 6, no entries), `junk` (cluster 8, only a `.DS_Store`), `nest`
+    /// (cluster 9) holding `deeper` (cluster 10, no entries).
+    fn image_with_dirs() -> Vec<u8> {
+        const SECTOR: usize = 512;
+        const CLUSTER: usize = 4096;
+        const HEAP: usize = 2 * SECTOR;
+        const CLUSTERS: u32 = 9;
+        let mut img = synthetic_image();
+        img.resize(HEAP + CLUSTERS as usize * CLUSTER, 0);
+        let sectors = (img.len() / SECTOR) as u64;
+        img[72..80].copy_from_slice(&sectors.to_le_bytes());
+        img[92..96].copy_from_slice(&CLUSTERS.to_le_bytes());
+        let dir = |name: &str, first: u32| {
+            let mut records = file_bytes(name, first, CLUSTER as u64);
+            records[0][4..6].copy_from_slice(&0x10u16.to_le_bytes());
+            flat(records)
+        };
+        let mut put = |cluster: u32, at: usize, bytes: &[u8]| {
+            let at = HEAP + (cluster as usize - 2) * CLUSTER + at;
+            img[at..at + bytes.len()].copy_from_slice(bytes);
+        };
+        // The root already holds two file groups of three records each.
+        let mut root = dir("empty", 6);
+        root.extend(dir("junk", 8));
+        root.extend(dir("nest", 9));
+        put(4, 6 * 32, &root);
+        put(8, 0, &flat(file_bytes(".DS_Store", 7, 10)));
+        put(9, 0, &dir("deeper", 10));
+        img
+    }
+
+    #[test]
+    fn empty_directories_are_kept() {
+        let path =
+            std::env::temp_dir().join(format!("fpkg-exfat-{}-empty-dirs", std::process::id()));
+        std::fs::write(&path, image_with_dirs()).unwrap();
+        let source = ExFatSource::open(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        let files: Vec<&str> = source.files().iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(files, ["big.bin", "chain.bin"]);
+        // A directory holding only junk is empty; one holding an empty directory is not.
+        assert_eq!(source.empty_dirs(), ["empty", "junk", "nest/deeper"]);
+    }
+
+    /// A directory entry pointing back at the root would be walked again and again (to the
+    /// depth limit, doubling with every extra link): refused.
+    #[test]
+    fn a_directory_cycle_is_refused() {
+        let mut img = image_with_dirs();
+        // `nest/deeper` now starts where the root does.
+        let at = 2 * 512 + (9 - 2) * 4096 + 32 + 20;
+        img[at..at + 4].copy_from_slice(&4u32.to_le_bytes());
+        let path = std::env::temp_dir().join(format!("fpkg-exfat-{}-cycle", std::process::id()));
+        std::fs::write(&path, img).unwrap();
+        let err = ExFatSource::open(&path).err().unwrap();
+        std::fs::remove_file(&path).ok();
+        assert!(err.to_string().contains("as another one does"), "{err}");
+    }
+
+    /// A file claiming more bytes than the volume holds is refused at the walk, before any
+    /// read sizes a buffer from it.
+    #[test]
+    fn a_file_larger_than_the_volume_is_refused() {
+        let mut img = synthetic_image();
+        // `big.bin`'s stream record: the second record of the root, in cluster 4.
+        let at = 2 * 512 + (4 - 2) * 4096 + 32 + 24;
+        img[at..at + 8].copy_from_slice(&(1u64 << 60).to_le_bytes());
+        let path = std::env::temp_dir().join(format!("fpkg-exfat-{}-huge", std::process::id()));
+        std::fs::write(&path, img).unwrap();
+        let err = ExFatSource::open(&path).err().unwrap();
+        std::fs::remove_file(&path).ok();
+        assert!(err.to_string().contains("more than the volume"), "{err}");
+    }
+
     #[test]
     fn a_stream_that_runs_off_the_volume_is_an_error() {
         let (path, mut volume) = synthetic_at("short");
@@ -776,6 +1005,28 @@ mod tests {
         boot[3..11].copy_from_slice(OEM);
         boot[108] = 9;
         boot[109] = 40; // 1 TB clusters
+        boot[92..96].copy_from_slice(&16u32.to_le_bytes());
+        boot[96..100].copy_from_slice(&4u32.to_le_bytes());
+        std::fs::write(&img, &boot).unwrap();
+        let Err(err) = ExFat::open(&img) else {
+            panic!("{} must not open", img.display());
+        };
+        let err = err.to_string();
+        assert!(err.contains("cluster shift"), "{err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Two shifts each in range can still make a 128 GiB cluster; the specification's 32 MiB
+    /// cap holds.
+    #[test]
+    fn a_cluster_over_32_mib_is_refused() {
+        let dir = std::env::temp_dir().join(format!("fpkg-exfat-big-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("big.exfat");
+        let mut boot = vec![0u8; 8192];
+        boot[3..11].copy_from_slice(OEM);
+        boot[108] = 12;
+        boot[109] = 25;
         boot[92..96].copy_from_slice(&16u32.to_le_bytes());
         boot[96..100].copy_from_slice(&4u32.to_le_bytes());
         std::fs::write(&img, &boot).unwrap();

@@ -21,11 +21,10 @@ export default function AutoBackupCard() {
     if (picked) set({ dir: picked });
   }
 
-  // Sized like a settings card, not the full page: three short controls stretched across a
-  // wide window read as a mistake.
+  // Same centred column as the save list below it, so the two line up on a wide window.
   return (
     <section
-      className="mb-4 max-w-3xl rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
+      className="mx-auto mb-4 max-w-4xl rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
       data-testid="auto-save-backup"
     >
       <header className="mb-1 flex items-center gap-2">

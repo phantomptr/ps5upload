@@ -111,11 +111,12 @@ fn spool_for(partial: &Path) -> stream::KrakenSpool {
 /// The AMPR file index a libSceAmpr title reads from the image root.
 const AMPR_INDEX: &str = "ampr_emu.index";
 
-/// A file in a backport's `fakelib/` folder, which is packaged byte for byte.
+/// A file in a backport's `fakelib/` folder, or in `fakelib2/` (ShadowMountPlus 1.7's
+/// exclusive variant), which is packaged byte for byte.
 fn is_fakelib(path: &str) -> bool {
-    path.split('/')
-        .next()
-        .is_some_and(|top| top.eq_ignore_ascii_case("fakelib"))
+    path.split('/').next().is_some_and(|top| {
+        top.eq_ignore_ascii_case("fakelib") || top.eq_ignore_ascii_case("fakelib2")
+    })
 }
 
 fn chunks_from_env() -> u16 {
@@ -944,6 +945,10 @@ mod tests {
     fn fakelib_files_are_never_repaired() {
         assert!(super::is_fakelib("fakelib/libSceAmpr.sprx"));
         assert!(super::is_fakelib("FakeLib/libScePlayGo.sprx"));
+        assert!(super::is_fakelib("fakelib2/libSceAgc.sprx"));
+        assert!(super::is_fakelib("FAKELIB2/libSceAmpr.sprx"));
+        assert!(!super::is_fakelib("fakelib3/libSceAgc.sprx"));
+        assert!(!super::is_fakelib("data/fakelib2/x.sprx"));
         assert!(!super::is_fakelib("sce_module/libc.prx"));
         assert!(!super::is_fakelib("data/fakelib/x.sprx"));
         assert!(!super::is_fakelib("eboot.bin"));

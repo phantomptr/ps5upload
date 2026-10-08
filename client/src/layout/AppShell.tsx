@@ -1,9 +1,11 @@
 import { saveLastRoute } from "../lib/lastRoute";
 import { useLocation, useNavigate, useOutlet } from "react-router";
 import { Activity, useEffect, useRef, useState, type ReactNode } from "react";
-import { Lock, RefreshCw, X } from "lucide-react";
+import { Lock, RefreshCw, WifiOff, X } from "lucide-react";
+import { localNetworkBlocked, requestLocalNetwork } from "../lib/androidLocalNetwork";
 import StatusBar from "./StatusBar";
 import SessionBanner from "./SessionBanner";
+import EngineDownBanner from "./EngineDownBanner";
 import { PairingDialog } from "../screens/Connection/PairingDialog";
 import ConsoleTabs from "./ConsoleTabs";
 import ActivityBar from "./ActivityBar";
@@ -59,6 +61,8 @@ import {
 } from "../state/notifications";
 import { ensureOsNotificationPermission } from "../lib/osNotify";
 import { powerTick } from "../api/ps5";
+import { anyAwakeWork, awakeConsoles } from "../lib/awakeWork";
+import { useTaskStore } from "../state/tasks";
 import { transferScreenBusy } from "../lib/ps5Transfers";
 import {
   autoRedeployDecision,
@@ -876,7 +880,7 @@ function useUpdateCheckOnMount() {
  *  (sceSystemServicePowerTick — resets the IDLE timer only; manual rest
  *  from the controller still works). Three policies (Settings → Upload):
  *
- *    "transfers" (default) — tick every console with a running upload,
+ *    "transfers" (default) — tick every console with a running upload, install or copy,
  *      every few minutes. The PS5's shortest auto-standby setting
  *      (~20 min) would otherwise drop a long upload into rest mode
  *      mid-transfer — the `spool_apply_failed` failure.
@@ -905,9 +909,11 @@ function useKeepPs5Awake() {
     }
     return false;
   });
+  // Installs and copies count as transfers too (they register tasks).
+  const taskWork = useTaskStore((s) => anyAwakeWork(s.tasks));
   const active =
     mode === "always" ||
-    (mode === "transfers" && (queueRunning || transferActive));
+    (mode === "transfers" && (queueRunning || transferActive || taskWork));
   useEffect(() => {
     if (!active) return;
     const tickAll = () => {
@@ -928,6 +934,8 @@ function useKeepPs5Awake() {
       for (const it of useUploadQueueStore.getState().items) {
         if (it.status === "running") hosts.add(hostOf(it.addr));
       }
+      // Installs (stream, link, archive, upload) and console copies too, not only uploads.
+      for (const h of awakeConsoles(useTaskStore.getState().tasks)) hosts.add(hostOf(h));
       if (useUploadSettingsStore.getState().keepPs5AwakeMode === "always") {
         // Every console whose helper currently answers — read live at tick
         // time (not effect deps) so consoles joining/leaving are picked up
@@ -1247,6 +1255,61 @@ function AndroidStorageAccessBanner() {
   );
 }
 
+/** Android 17 blocks the app from the local network until the user allows it, and
+ *  then nothing can reach the PS5. Not dismissable: without it the app cannot work. */
+function AndroidLocalNetworkBanner() {
+  const tr = useTr();
+  const [blocked, setBlocked] = useState(() => localNetworkBlocked());
+
+  useEffect(() => {
+    const recheck = () => setBlocked(localNetworkBlocked());
+    recheck();
+    window.addEventListener("focus", recheck);
+    document.addEventListener("visibilitychange", recheck);
+    // Android's prompt returns no event to the page; poll while it is open.
+    const t = window.setInterval(recheck, 2000);
+    return () => {
+      window.removeEventListener("focus", recheck);
+      document.removeEventListener("visibilitychange", recheck);
+      window.clearInterval(t);
+    };
+  }, []);
+
+  if (!blocked) return null;
+
+  return (
+    <div
+      role="alert"
+      className="border-b border-[var(--color-bad)] bg-[var(--color-bad-soft)] px-3 py-3 text-[var(--color-text)]"
+    >
+      <div className="mx-auto flex max-w-6xl flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+          <WifiOff size={20} className="mt-0.5 shrink-0 text-[var(--color-bad)]" />
+          <div className="min-w-0">
+            <p className="text-sm font-semibold">
+              {tr(
+                "android_local_network_title",
+                undefined,
+                "Allow PS5Upload on your local network",
+              )}
+            </p>
+            <p className="text-xs text-[var(--color-muted)]">
+              {tr(
+                "android_local_network_body",
+                undefined,
+                "Android blocks the app from reaching your PS5 until you allow it.",
+              )}
+            </p>
+          </div>
+        </div>
+        <Button variant="primary" size="sm" onClick={() => requestLocalNetwork()}>
+          {tr("android_local_network_allow", undefined, "Allow")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export default function AppShell() {
   useStatusPolling();
   useAutoSaveBackup();
@@ -1360,6 +1423,8 @@ export default function AppShell() {
       </div>
       <HelperVersionBanner />
       <SessionBanner />
+      <EngineDownBanner />
+      <AndroidLocalNetworkBanner />
       <AndroidStorageAccessBanner />
 
       <div className="flex min-h-0 flex-1">

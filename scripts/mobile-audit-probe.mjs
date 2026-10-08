@@ -228,7 +228,7 @@ export function formatReport(report, routeCount) {
  * Only used when this file is executed directly AND playwright resolves.
  * Kept opt-in so the module stays dependency-free for injection use. */
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const base = process.env.AUDIT_BASE || "http://localhost:1420";
+  const base = process.env.AUDIT_BASE || "http://127.0.0.1:1420";
   let chromium;
   try {
     ({ chromium } = await import("playwright"));

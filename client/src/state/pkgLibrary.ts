@@ -2,6 +2,7 @@ import { installPathFallbackOptions } from "./installPathFallback";
 import { displayPath, isRemotePath } from "../lib/remotePath";
 import { useConnectionsStore } from "./connections";
 import { trStatic } from "../lib/trStatic";
+import { declineDetails } from "../lib/installDecline";
 import { isInstallPackagePath } from "../lib/pkgDropDedupe";
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
@@ -72,6 +73,8 @@ import {
   enqueueInstall,
   pkgQueue,
   registerInstallExecutor,
+  registerInstallJobResolver,
+  reportInstallJob,
   type InstallHooks,
   type InstallRequest,
   type InstallResult,
@@ -305,7 +308,21 @@ export function statusToOutcome(st: InstallStatus): PkgInstallOutcome {
         !engineNetDiag &&
         (st.reason ? REASON_GUIDANCE[st.reason]?.[2] : false);
       const guidance = reasonGuidance(st.reason);
-      errMessage = preferred
+      // 0x80B21104: Sony would not accept this particular package (other packages install on
+      // the same console). Not the package's required-firmware field: a package demanding FW
+      // 14.00 installed on a 13.60 console in testing. Seen with new PS5 games on FW 9.60.
+      const sony1104 = st.reason === "sony_refused" && st.code === 0x80b21104;
+      // A plain refusal said only "The PS5 declined the install." (#mkosta, 6.x): add what
+      // Sony's code means and how far the console got, which is what tells the causes apart.
+      const declined = st.reason === "sony_refused" && !sony1104;
+      errMessage = declined
+        ? `${(st.hint && st.hint.trim()) || guidance}\n${declineDetails(st)}`
+        : sony1104
+        ? trStatic(
+            "pkg.sony_80b21104",
+            "The PS5 would not accept this package (0x80B21104). When other packages install on this console, it is this file: most often a recent game whose package was made with tools newer than this console's firmware understands, or a package that is not a fake-signed (FPKG) build. Use a package made for your firmware (a backport), or install the game another way that skips the installer: copy its game folder, or a game image (.exfat or .ffpfsc) for ShadowMount+, with Upload.",
+          )
+        : preferred
         ? st.code
           ? `${guidance} (${hexCode(st.code)})`
           : guidance
@@ -2028,6 +2045,7 @@ async function driveUnifiedInstall(
     );
   }
   const job = start.job;
+  reportInstallJob(host, job);
   // Poll until the engine's state machine is terminal. There is NO client-side
   // deadline: a large install writes for as long as it needs, and the engine
   // reports "done" only when its own verify agrees (the size-blind client timer
@@ -4067,6 +4085,30 @@ function installRequestKey(r: InstallRequest): string {
 
 // The console queue runs installs through this executor, on the store of the
 // console the item belongs to.
+// An install the queue finds running after a reload: ask the engine how its job ended.
+registerInstallJobResolver(async (job) => {
+  let st: InstallStatus;
+  try {
+    st = await pkgInstallStatus(job);
+  } catch {
+    return { state: "gone" };
+  }
+  if (st.phase === "done" || st.phase === "failed") {
+    const o = statusToOutcome(st);
+    return {
+      state: "finished",
+      result: o.installed
+        ? { ok: true, mayNotLaunch: o.mayNotLaunch }
+        : { ok: false, message: o.errMessage || "The install didn't complete." },
+    };
+  }
+  const s = sampleFromStatus(st);
+  return {
+    state: "running",
+    pct: s.total > 0 ? Math.min(99, Math.round((s.installedBytes / s.total) * 100)) : 0,
+  };
+});
+
 registerInstallExecutor(async (req, host, hooks) => {
   const store = pkgLibraryStore(host).getState();
   switch (req.via) {

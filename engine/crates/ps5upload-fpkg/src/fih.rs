@@ -31,11 +31,16 @@ pub fn parse(head: &[u8]) -> Result<Fih> {
     }
     let mut game_digest = [0u8; 32];
     game_digest.copy_from_slice(&head[0x30..0x50]);
+    // Readers address blocks as `pfs_offset + i * BLOCK` with `i * BLOCK < pfs_size`.
+    let (pfs_offset, pfs_size) = (le64(head, 0x10), le64(head, 0x18));
+    if pfs_offset.checked_add(pfs_size).is_none() {
+        return format_err("FIH outer image range overflows");
+    }
     Ok(Fih {
         signed_byte: head[5],
         format_version: le16(head, 6),
-        pfs_offset: le64(head, 0x10),
-        pfs_size: le64(head, 0x18),
+        pfs_offset,
+        pfs_size,
         game_digest,
         cnt_offset: le64(head, 0x58),
     })
@@ -62,6 +67,18 @@ mod tests {
             (0x10000, 0x70000, 0x80000)
         );
         assert_eq!(f.game_digest[0], 0xAB);
+    }
+
+    #[test]
+    fn rejects_an_outer_image_range_that_overflows() {
+        let mut h = vec![0u8; HEADER_LEN];
+        h[0..4].copy_from_slice(&0x7F46_4948u32.to_be_bytes());
+        h[0x10..0x18].copy_from_slice(&0x10000u64.to_le_bytes());
+        h[0x18..0x20].copy_from_slice(&(u64::MAX - 0x8000).to_le_bytes());
+        let Err(e) = parse(&h) else {
+            panic!("an overflowing range must not parse");
+        };
+        assert!(e.to_string().contains("overflows"), "{e}");
     }
 
     #[test]

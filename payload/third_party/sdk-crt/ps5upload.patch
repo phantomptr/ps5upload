@@ -1,0 +1,49 @@
+--- a/crt/kernel.c
++++ b/crt/kernel.c
+@@ -573,11 +573,15 @@
+   KERNEL_ADDRESS_UTOKEN_FLAGS = KERNEL_ADDRESS_SECURITY_FLAGS + 0x8C;
+   KERNEL_ADDRESS_PRISON0      = kernel_get_ucred_prison(0);
+ 
+-  if(!(KERNEL_ADDRESS_DMAP_BASE=kernel_find_dmap_base())) {
+-    return -ENOSYS;
+-  }
+-  if(!(KERNEL_ADDRESS_IOMMU_SOFTC=kernel_find_iommu_softc())) {
+-    return -ENOSYS;
++  /* ps5upload: best-effort. Upstream v0.43 returns -ENOSYS here, which stops
++   * every payload before main() on a firmware where either search comes up
++   * empty (reported on FW 5.50). Only two fallbacks need these values, and
++   * both refuse without them: the IOMMU writes (kernel_iommu.c checks for a
++   * missing softc) and kernel_proc_copyin/out's physical-address path (see
++   * kernel_procio.c). Below FW 7.00 kernel_set_qaflags() uses no IOMMU. */
++  KERNEL_ADDRESS_DMAP_BASE = kernel_find_dmap_base();
++  if(KERNEL_ADDRESS_DMAP_BASE) {
++    KERNEL_ADDRESS_IOMMU_SOFTC = kernel_find_iommu_softc();
+   }
+ 
+   if(!KERNEL_DLSYM(0x1, __error)) {
+--- a/crt/kernel_procio.c
++++ b/crt/kernel_procio.c
+@@ -99,6 +99,11 @@
+     return 0;
+   }
+ 
++  /* ps5upload: no DMAP base was found (see kernel.c), so no physical-address fallback. */
++  if(!KERNEL_ADDRESS_DMAP_BASE) {
++    return -1;
++  }
++
+   for(unsigned long i=0; i<len; i+=plen) {
+     if(kernel_proc_getpaddr(pid, addr + i, &paddr, &plen)) {
+       return -1;
+@@ -129,6 +134,11 @@
+     return 0;
+   }
+ 
++  /* ps5upload: no DMAP base was found (see kernel.c), so no physical-address fallback. */
++  if(!KERNEL_ADDRESS_DMAP_BASE) {
++    return -1;
++  }
++
+   for(unsigned long i=0; i<len; i+=plen) {
+     if(kernel_proc_getpaddr(pid, addr + i, &paddr, &plen)) {
+       return -1;

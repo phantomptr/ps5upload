@@ -293,7 +293,12 @@ export default function FanCurveScreen() {
                   "fanCurve_target_note",
                   { temp: turboThresholdC(points) ?? 0 },
                   `The PS5 has one fan setting: the temperature its fan control works to hold (lower is louder). It cannot follow a curve. Applying these points sets it to ${turboThresholdC(points)} °C, the lowest point that asks for 100%, so the other points change nothing.`,
-                )}
+                )}{" "}
+            {tr(
+              "fanCurve_smp_note",
+              undefined,
+              "ShadowMount+ 1.7 can set the same value (fan_target_temperature in its config.ini). Use one or the other: if both are set, each overwrites the other.",
+            )}
           </span>
         </div>
 

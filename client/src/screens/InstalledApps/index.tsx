@@ -68,6 +68,7 @@ import {
   PlatformBadge,
   Spinner,
   Toggle,
+  OverflowMenu,
 } from "../../components";
 // Direct import to avoid the barrel's circular-dep warning at build.
 import { useConfirm } from "../../components/ConfirmDialog";
@@ -253,7 +254,7 @@ function NowPlayingBanner({
             <div className="w-14 shrink-0">
               <Cover host={host} title={t} />
             </div>
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 !px-2 sm:!px-4">
               <div className="truncate text-sm font-semibold" title={t.titleName}>
                 {t.titleName}
               </div>
@@ -302,7 +303,7 @@ class HomebrewRefused extends Error {
 
 // ── App card ─────────────────────────────────────────────────────────────────
 
-function AppCard({
+export function AppCard({
   host,
   title,
   busy,
@@ -352,10 +353,11 @@ function AppCard({
   // affordance only appears when there's actually a folder to open.
   const sourceFolder = title.source || null;
   return (
-    <div className="group flex flex-col overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)]">
+    <div className="group flex flex-col rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)]">
       {/* Cover with corner overlays: platform (top-left), SMP warning
-          (top-right) — keeps the body clean + every card the same height. */}
-      <div className="relative">
+          (top-right) — keeps the body clean + every card the same height. Only the cover
+          clips to the rounded corner, so the actions menu below can open past the card. */}
+      <div className="relative overflow-hidden rounded-t-xl">
         <Cover host={host} title={title} />
         <div className="absolute left-2 top-2 drop-shadow">
           <PlatformBadge platform={platformOf(title)} />
@@ -386,7 +388,7 @@ function AppCard({
 
       {/* Body: name → type + id → actions pinned to the bottom (mt-auto) so
           rows of cards line their buttons up regardless of name length. */}
-      <div className="flex flex-1 flex-col gap-2 p-3">
+      <div className="flex flex-1 flex-col gap-2 p-2.5 sm:p-3">
         <div className="min-w-0">
           {/* line-clamp-2 (not truncate): a 1-line clamp turned readable
               names like "Payload Manager" into "Payload Mana…". Two lines fit
@@ -442,18 +444,9 @@ function AppCard({
           </div>
         </div>
 
-        <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
-          {backportEligible ? (
-            <Button
-              variant="secondary"
-              size="md"
-              leftIcon={<Layers size={15} />}
-              className="basis-full min-w-0"
-              onClick={() => onBackport(title)}
-            >
-              {tr("backport_action", undefined, "Backport")}
-            </Button>
-          ) : null}
+        {/* Actions: the main one (Play, or Close game while it runs) and a ⋯ menu for the rest,
+            on one line. Uninstall lives in the menu, in red, instead of alone on its own row. */}
+        <div className="mt-auto flex items-center gap-1.5 pt-1 sm:gap-2">
           {canPlay ? (
             running && !launching ? (
               // The title is running → offer Stop (close the game) instead of
@@ -466,7 +459,7 @@ function AppCard({
                   size="md"
                   loading={stopping}
                   leftIcon={<Square size={15} />}
-                  className="basis-full min-w-0"
+                  className="min-w-0 flex-1 !px-2 sm:!px-4"
                   onClick={() => onStop(title)}
                   title={tr(
                     "installed_stop_tooltip",
@@ -474,9 +467,11 @@ function AppCard({
                     "Close this running game on the PS5",
                   )}
                 >
+                  {/* "Close", not "Close game": it shares the line with the ⋯ menu, and the
+                      tooltip says the rest. */}
                   {stopping
                     ? tr("installed_stopping", undefined, "Closing…")
-                    : tr("installed_stop", undefined, "Close game")}
+                    : tr("installed_stop_short", undefined, "Close")}
                 </Button>
               </>
             ) : (
@@ -504,7 +499,7 @@ function AppCard({
                 // (`min-w-0`) and letting Button ellipsize its label is what
                 // actually bounds it — verified at 0px overflow for every
                 // label including the longest translation.
-                className="basis-full min-w-0"
+                className="min-w-0 flex-1 !px-2 sm:!px-4"
                 onClick={() => onLaunch(title)}
                 // A disc-image title can't launch until ShadowMount+ mounts it.
                 // Also disabled while starting so a second click can't fire a
@@ -542,57 +537,57 @@ function AppCard({
               {tr("installed_badge_system", undefined, "System")}
             </span>
           )}
-          {/* Open this title's on-console folder in the File System browser
-              (only when the title has a source path — folder/disc kinds). */}
-          {sourceFolder && (
-            <button
-              type="button"
-              onClick={() => openInFileSystem(navigate, sourceFolder)}
-              title={tr(
-                "installed_open_folder",
-                undefined,
-                "Open this app's folder in the File System browser",
-              )}
-              aria-label={tr("installed_open_folder", undefined, "Open folder")}
-              className="shrink-0 rounded-md border border-[var(--color-border)] p-2.5 text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
-            >
-              <FolderOpen size={15} />
-            </button>
-          )}
-          {/* Fix permissions: a folder uploaded by 6.0-6.1.2 kept the computer's modes
-              (0644 from Windows) and the PS5 will not start a game without world-execute. */}
-          {sourceFolder && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => onFixPermissions(title)}
-              title={tr(
-                "installed_fix_permissions",
-                undefined,
-                "Fix permissions: make this game's folder readable and runnable by the PS5 (chmod 777)",
-              )}
-              aria-label={tr("installed_fix_permissions_short", undefined, "Fix permissions")}
-              className="shrink-0 rounded-md border border-[var(--color-border)] p-2.5 text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <ShieldCheck size={15} />
-            </button>
-          )}
-          {/* Uninstall — de-emphasized icon button (destructive action stays
-              out of the way; turns red on hover). */}
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => onUninstall(title)}
-            title={tr("installed_uninstall", undefined, "Uninstall")}
-            aria-label={tr("installed_uninstall", undefined, "Uninstall")}
-            className="shrink-0 rounded-md border border-[var(--color-border)] p-2.5 text-[var(--color-muted)] transition-colors hover:border-[var(--color-bad)] hover:text-[var(--color-bad)] disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {busy ? (
-              <Spinner size={16} />
-            ) : (
-              <Trash2 size={15} />
-            )}
-          </button>
+          <OverflowMenu
+            size="md"
+            triggerVariant="secondary"
+            triggerClassName="!w-10 !min-w-10 shrink-0 justify-center !px-0"
+            ariaLabel={tr("installed_more_actions", undefined, "More actions")}
+            buttonTitle={tr("installed_more_actions", undefined, "More actions")}
+            items={[
+              ...(backportEligible
+                ? [
+                    {
+                      label: tr("backport_action", undefined, "Backport"),
+                      icon: <Layers size={12} />,
+                      onSelect: () => onBackport(title),
+                    },
+                  ]
+                : []),
+              ...(sourceFolder
+                ? [
+                    {
+                      label: tr("installed_open_folder_short", undefined, "Open folder"),
+                      icon: <FolderOpen size={12} />,
+                      title: tr(
+                        "installed_open_folder",
+                        undefined,
+                        "Open this app's folder in the File System browser",
+                      ),
+                      onSelect: () => openInFileSystem(navigate, sourceFolder),
+                    },
+                    {
+                      label: tr("installed_fix_permissions_short", undefined, "Fix permissions"),
+                      icon: <ShieldCheck size={12} />,
+                      title: tr(
+                        "installed_fix_permissions",
+                        undefined,
+                        "Fix permissions: make this game's folder readable and runnable by the PS5 (chmod 777)",
+                      ),
+                      disabled: busy,
+                      onSelect: () => onFixPermissions(title),
+                    },
+                  ]
+                : []),
+              {
+                label: tr("installed_uninstall", undefined, "Uninstall"),
+                icon: <Trash2 size={12} />,
+                destructive: true,
+                disabled: busy,
+                loading: busy,
+                onSelect: () => onUninstall(title),
+              },
+            ]}
+          />
         </div>
       </div>
     </div>
@@ -635,7 +630,7 @@ function Section({
         </div>
         {controls}
       </div>
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(8rem,1fr))] gap-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] sm:gap-4">
         {children}
       </div>
     </section>
@@ -1398,7 +1393,7 @@ export default function InstalledAppsScreen({
             aria-hidden
             // Must match the real Section grid breakpoints exactly (line ~308)
             // or the cards visibly reflow the moment data arrives.
-            className="grid grid-cols-[repeat(auto-fill,minmax(8rem,1fr))] gap-3"
+            className="grid grid-cols-2 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] sm:gap-4"
           >
             {Array.from({ length: 10 }, (_, i) => (
               <Skeleton key={i} className="aspect-square" />

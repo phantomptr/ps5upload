@@ -32,6 +32,9 @@
 
 mod ava1_api;
 mod bundled_payload;
+mod collection;
+mod collection_api;
+mod collection_tidy_api;
 mod console_read;
 mod convert_source;
 mod elfldr_guard;
@@ -40,6 +43,7 @@ mod fakelibs_api;
 mod fpkg_api;
 mod fpkg_firmware;
 mod icon_cache;
+mod image_build;
 mod inspect;
 mod install;
 mod legacy_guard;
@@ -9766,6 +9770,9 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         events_tx,
     };
 
+    // The Collection's automatic refresh (a no-op until a folder is added).
+    collection_api::spawn_auto_refresh();
+
     let app = Router::new()
         .route("/", get(ui_handler))
         .route("/api/ps5/status", get(ps5_status))
@@ -9826,6 +9833,74 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             post(fpkg_api::ffpfsc_compress_handler),
         )
         .route("/api/exfat/build", post(fpkg_api::exfat_build_handler))
+        .route(
+            "/api/collection/settings",
+            get(collection_api::get_settings).put(collection_api::put_settings),
+        )
+        .route("/api/collection/library", get(collection_api::get_library))
+        .route("/api/collection/summary", get(collection_api::get_summary))
+        .route("/api/collection/games/{id}", get(collection_api::get_game))
+        .route(
+            "/api/collection/games/{id}/cover",
+            get(collection_api::get_cover),
+        )
+        .route(
+            "/api/collection/scan",
+            get(collection_api::get_scan).post(collection_api::post_scan),
+        )
+        .route(
+            "/api/collection/scan/cancel",
+            post(collection_api::post_scan_cancel),
+        )
+        .route("/api/collection/export", get(collection_api::get_export))
+        .route("/api/collection/import", post(collection_api::post_import))
+        .route("/api/collection/console", get(collection_api::get_console))
+        .route(
+            "/api/collection/trash/preview",
+            post(collection_tidy_api::post_trash_preview),
+        )
+        .route(
+            "/api/collection/trash/apply",
+            post(collection_tidy_api::post_trash_apply),
+        )
+        .route(
+            "/api/collection/organize/plan",
+            post(collection_tidy_api::post_organize_plan),
+        )
+        .route(
+            "/api/collection/organize/apply",
+            post(collection_tidy_api::post_organize_apply),
+        )
+        .route(
+            "/api/collection/organize/runs",
+            get(collection_tidy_api::get_organize_runs),
+        )
+        .route(
+            "/api/collection/organize/revert",
+            post(collection_tidy_api::post_organize_revert),
+        )
+        .route("/api/collection/junk", get(collection_tidy_api::get_junk))
+        .route(
+            "/api/collection/junk/scan",
+            post(collection_tidy_api::post_junk_scan),
+        )
+        .route(
+            "/api/collection/junk/cancel",
+            post(collection_tidy_api::post_junk_cancel),
+        )
+        .route(
+            "/api/collection/junk/clean",
+            post(collection_tidy_api::post_junk_clean),
+        )
+        .route("/api/collection/macos", get(collection_tidy_api::get_macos))
+        .route(
+            "/api/collection/macos/finder",
+            axum::routing::put(collection_tidy_api::put_macos_finder),
+        )
+        .route(
+            "/api/collection/macos/spotlight",
+            post(collection_tidy_api::post_macos_spotlight),
+        )
         .route("/api/local/list-dir", get(local_list_dir_handler))
         .route("/api/local/storage-roots", get(local_storage_roots_handler))
         .route("/api/ps5/fs/delete", post(ps5_fs_delete))

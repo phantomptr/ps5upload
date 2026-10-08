@@ -60,9 +60,7 @@ pub async fn screenshot_convert(
     delete_source: bool,
 ) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        let bytes = std::fs::read(&src_path).map_err(|e| format!("read {src_path}: {e}"))?;
-        let png = desktop::convert_jxr_to_png(&bytes)?;
-        std::fs::write(&dst_path, png).map_err(|e| format!("write {dst_path}: {e}"))?;
+        convert_in_child(&src_path, &dst_path)?;
         // Only remove the original after the PNG is safely written, and
         // never if it somehow resolves to the same path as the output.
         if delete_source && src_path != dst_path {
@@ -72,6 +70,86 @@ pub async fn screenshot_convert(
     })
     .await
     .map_err(|e| format!("convert task: {e}"))?
+}
+
+/// The argument that runs this executable as a one-shot decoder (see `child_mode`).
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "ios",
+    all(target_os = "windows", target_arch = "aarch64")
+)))]
+const CHILD_ARG: &str = "--ps5upload-jxr-to-png";
+
+/// Decode in a child process, never in the app's own. jxrlib is C, and a corrupt capture
+/// with a valid header made it segfault, which took the whole app down and, with Captures
+/// the last open tab, crash-looped it on every launch (#229, again in #413: the header
+/// check alone did not catch it). A crash in the child is one failed thumbnail.
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "ios",
+    all(target_os = "windows", target_arch = "aarch64")
+)))]
+fn convert_in_child(src_path: &str, dst_path: &str) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("locate the app: {e}"))?;
+    let out = std::process::Command::new(exe)
+        .arg(CHILD_ARG)
+        .arg(src_path)
+        .arg(dst_path)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("start the decoder: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    Err(if msg.is_empty() {
+        // Killed by a signal: the codec crashed on this file.
+        format!(
+            "this screenshot could not be decoded (the decoder stopped: {})",
+            out.status
+        )
+    } else {
+        msg
+    })
+}
+
+/// Run as the one-shot decoder when started with `CHILD_ARG <src> <dst>`: convert, report any
+/// error on stderr, and exit. Returns false (do nothing) for a normal launch. Called first
+/// thing in `main`, before Tauri starts.
+#[cfg(not(any(
+    target_os = "android",
+    target_os = "ios",
+    all(target_os = "windows", target_arch = "aarch64")
+)))]
+pub fn child_mode() -> bool {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) != Some(CHILD_ARG) || args.len() != 4 {
+        return false;
+    }
+    let result = std::fs::read(&args[2])
+        .map_err(|e| format!("read {}: {e}", args[2]))
+        .and_then(|bytes| desktop::convert_jxr_to_png(&bytes))
+        .and_then(|png| {
+            std::fs::write(&args[3], png).map_err(|e| format!("write {}: {e}", args[3]))
+        });
+    match result {
+        Ok(()) => std::process::exit(0),
+        Err(e) => {
+            use std::io::Write;
+            let _ = writeln!(std::io::stderr(), "{e}");
+            std::process::exit(1)
+        }
+    }
+}
+
+/// No decoder on these targets, so never a decoder child.
+#[cfg(any(
+    target_os = "android",
+    target_os = "ios",
+    all(target_os = "windows", target_arch = "aarch64")
+))]
+pub fn child_mode() -> bool {
+    false
 }
 
 /// Mobile fallback: the JPEG XR codec is a desktop-only dependency, so on

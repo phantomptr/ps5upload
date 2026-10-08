@@ -11,6 +11,9 @@
 //! container. Container shape is deliberately kept separate from signing:
 //! a CNT magic alone does not prove that a package is Sony-retail signed.
 
+pub mod kind;
+pub mod ps3;
+
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -534,6 +537,13 @@ pub struct PkgMetadata {
     /// Derived from the header magic (`\x7FFIH` = PS5) and the title-id
     /// prefix (CUSA = PS4, PPSA = PS5). See [`derive_platform`].
     pub platform: String,
+    /// The container header's `content_type` (0x74): 0x1A/0x20 an application, 0x1B/0x21
+    /// additional content (DLC), 0x26 a PS5 system application. 0 when not read.
+    #[serde(default)]
+    pub content_type: u32,
+    /// The container header's `content_flags` (0x78); the patch bits are 0x40100000.
+    #[serde(default)]
+    pub content_flags: u32,
     /// PNG bytes from ICON0.PNG entry, if present. None if the entry
     /// is missing or oversize. Base64-encoded for transport across
     /// the Tauri/HTTP boundary; the React side decodes for <img>.
@@ -606,6 +616,8 @@ pub fn parse_pkg_from<R: Read + Seek>(
         fingerprint,
         package_type: None,
         platform: String::new(),
+        content_type: 0,
+        content_flags: 0,
         icon_png_base64: None,
         warnings: Vec::new(),
     };
@@ -680,6 +692,13 @@ pub fn parse_pkg_from<R: Read + Seek>(
         container_head[0x7A],
         container_head[0x7B],
     ]);
+    meta.content_type = u32::from_be_bytes([
+        container_head[0x74],
+        container_head[0x75],
+        container_head[0x76],
+        container_head[0x77],
+    ]);
+    meta.content_flags = content_flags;
     // content_id is at 0x40, 36 bytes ASCII with trailing NULs.
     let cid_raw = &container_head[0x40..0x40 + 36];
     let cid_end = cid_raw.iter().position(|&b| b == 0).unwrap_or(36);
@@ -1819,6 +1838,8 @@ mod tests {
             fingerprint: String::new(),
             package_type: None,
             platform: String::new(),
+            content_type: 0,
+            content_flags: 0,
             icon_png_base64: None,
             warnings: Vec::new(),
         };
@@ -1842,6 +1863,8 @@ mod tests {
             fingerprint: String::new(),
             package_type: None,
             platform: String::new(),
+            content_type: 0,
+            content_flags: 0,
             icon_png_base64: None,
             warnings: Vec::new(),
         };

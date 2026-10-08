@@ -43,7 +43,11 @@ export default defineConfig({
   server: {
     port,
     strictPort: true,
-    host: host || false,
+    // An explicit IPv4 address, not "localhost": Vite 8 binds the first address localhost
+    // resolves to, which on macOS is ::1 alone. The desktop WebView then could not load
+    // devUrl and `make run-client` opened a blank dark window (Chromium fell back to ::1,
+    // so the page looked fine in a browser). devUrl and playwright.config use 127.0.0.1 too.
+    host: host || "127.0.0.1",
     hmr: host
       ? {
           protocol: "ws",

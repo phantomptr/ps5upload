@@ -5,6 +5,9 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+# PS3 NPDRM packages: SHA-1 keystream (debug) and AES-128 counter mode (retail).
+aes = "0.9"
+sha1 = "0.11"
 blake3.workspace = true
 serde.workspace = true
 serde_json.workspace = true

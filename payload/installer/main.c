@@ -26,7 +26,7 @@
 #include "authid.h"          /* ps5_detect_firmware_major */
 
 #define INST_PORT     9115
-#define INST_VERSION  "1.3.9"
+#define INST_VERSION  "1.4.0"
 #define BOOT_STEP_MS  500
 #define BOOT_STEPS    50     /* 50 * 500ms = 25s */
 

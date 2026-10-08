@@ -7,6 +7,10 @@
 
 import { invoke } from "../lib/invokeLogged";
 
+/** The game image filesystems the engine writes: UFS2 (`.ffpkg`, what ShadowMount+
+ *  recommends), exFAT, or PFS (`.ffpfs`, experimental in ShadowMount+ 1.7). */
+export type ImageFormat = "ffpkg" | "exfat" | "ffpfs";
+
 export interface FpkgCheck {
   name: string;
   ok: boolean;
@@ -95,6 +99,12 @@ export const fpkg = {
     invoke<{ job_id: string }>("ffpfsc_compress", { source, outputDir }),
   /** Write a game folder as one .exfat image for ShadowMountPlus. Starts a job; the image
    *  lands in the output folder, named after the game folder. */
-  buildImage: (source: string, outputDir?: string) =>
-    invoke<{ job_id: string }>("exfat_build", { source, outputDir }),
+  /** One job: the image is planned, written (straight into a .ffpfsc when `compress`), read
+   *  back and hash-checked. */
+  buildImage: (
+    source: string,
+    outputDir?: string,
+    format: ImageFormat = "exfat",
+    compress = false,
+  ) => invoke<{ job_id: string }>("exfat_build", { source, outputDir, format, compress }),
 };

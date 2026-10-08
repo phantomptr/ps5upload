@@ -72,7 +72,11 @@ import {
 } from "./uploadQueue";
 import { useUploadSettingsStore } from "./uploadSettings";
 import { runPkgInstall, pkgLibraryStore } from "./pkgLibrary";
-import { registerInstallExecutor, type InstallResult } from "./consoleQueueBridge";
+import {
+  registerInstallExecutor,
+  registerInstallJobResolver,
+  type InstallResult,
+} from "./consoleQueueBridge";
 import { isUploadItem, libraryInstallStates, sameInstall } from "./uploadQueue";
 
 // The store before any test stubs its actions (some blocks replace startHost).
@@ -1278,6 +1282,30 @@ describe("install items", () => {
     expect(calls).toEqual(["/hold.pkg", "/base.pkg", "/upd.pkg", "/dlc.pkg"]);
   });
 
+  it("an install leaves uploads waiting for Start alone (#410)", async () => {
+    const s = useUploadQueueStore.getState();
+    s.add({
+      sourceKind: "folder",
+      sourcePath: "/src/Game",
+      displayName: "Game",
+      resolvedDest: "/data/homebrew/Game",
+      addr: `${host}:9113`,
+      strategy: "overwrite",
+      reconcileMode: "fast",
+      excludes: [],
+      mountAfterUpload: false,
+      mountReadOnly: false,
+      registerAfterUpload: false,
+    });
+    const q = s.enqueueInstall({ host, request: { via: "stream", source: "/ps4.pkg" }, displayName: "P" });
+    await waitFor(() => calls.length === 1);
+    gate.get("/ps4.pkg")!({ ok: true });
+    await q.done;
+    await waitFor(() => !useUploadQueueStore.getState().runningHosts[host]);
+    const upload = useUploadQueueStore.getState().items.find((i) => i.sourcePath === "/src/Game");
+    expect(upload?.status).toBe("pending");
+  });
+
   it("a second identical install joins the first instead of failing", async () => {
     const s = useUploadQueueStore.getState();
     const a = s.enqueueInstall({ host, request: { via: "stream", source: "/x.pkg" }, displayName: "X" });
@@ -1414,6 +1442,67 @@ describe("install item lifecycle", () => {
     expect(items.map((i) => i.id)).toEqual(["i1"]);
     expect(items[0].status).toBe("failed");
     expect(items[0].error).toMatch(/interrupted/i);
+  });
+
+  describe("an install running when the page went away", () => {
+    const saved = (jobId: string) => ({
+      continueOnFailure: false,
+      items: [
+        {
+          addr: "10.0.0.2:9113", strategy: "overwrite", reconcileMode: "fast", excludes: [],
+          mountAfterUpload: false, mountReadOnly: true, registerAfterUpload: false,
+          txIdHex: "00", bytesSent: 0, totalBytes: 0, bytesPerSec: 0, filesFinalized: 0,
+          filesFinalizingTotal: 0, mountedAt: null, registeredAs: null, mountWarnings: [],
+          error: null, errorReason: null, errorDetail: null, addedAt: 1, startedAt: 1,
+          completedAt: null, resolvedDest: "", id: "i1", sourceKind: "install",
+          sourcePath: "stream:/p.pkg", displayName: "P",
+          install: { via: "stream", source: "/p.pkg" }, status: "running", installJobId: jobId,
+        },
+      ],
+    });
+    const hydrateWith = async (jobId: string) => {
+      vi.mocked(uploadQueueLoad).mockResolvedValueOnce(saved(jobId) as never);
+      vi.stubGlobal("window", { isTauri: true });
+      try {
+        await useUploadQueueStore.getState().hydrate();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+      await new Promise((r) => setTimeout(r, 10));
+      return useUploadQueueStore.getState().items[0];
+    };
+
+    it("shows as done when its engine job finished, and is never re-run", async () => {
+      const exec = vi.fn(async () => ({ ok: true }));
+      registerInstallExecutor(exec);
+      const asked: string[] = [];
+      registerInstallJobResolver(async (job) => {
+        asked.push(job);
+        return { state: "finished", result: { ok: true } };
+      });
+      const it1 = await hydrateWith("job-7");
+      expect(asked).toEqual(["job-7"]);
+      expect(it1.status).toBe("done");
+      expect(it1.installPhase).toBe("done");
+      expect(exec).not.toHaveBeenCalled();
+    });
+
+    it("says it was interrupted when the engine no longer knows the job", async () => {
+      registerInstallJobResolver(async () => ({ state: "gone" }));
+      const it1 = await hydrateWith("job-8");
+      expect(it1.status).toBe("failed");
+      expect(it1.error).toMatch(/interrupted/i);
+    });
+
+    it("carries the engine's reason when the job failed", async () => {
+      registerInstallJobResolver(async () => ({
+        state: "finished",
+        result: { ok: false, message: "The PS5 refused it." },
+      }));
+      const it1 = await hydrateWith("job-9");
+      expect(it1.status).toBe("failed");
+      expect(it1.error).toBe("The PS5 refused it.");
+    });
   });
 
   it("[RF 5] works without Tauri persistence (browser build)", async () => {

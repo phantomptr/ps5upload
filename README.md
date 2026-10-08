@@ -28,11 +28,15 @@
 - **Install any package.** PS4 `.pkg` and PS5 fake packages (base, update, DLC) from your
   computer (**Stream & install** or **Upload & install**), a NAS/SMB share, a USB drive or a
   link. If the PS5 refuses one route, the app offers another.
+- **Collection.** Every game in your folders (including folders on a NAS, scanned in place),
+  grouped with its updates and DLC, with what each PS5 already has and one click to install the
+  rest. Organize, de-duplicate and clean up the drives. Replaces PS Game Library.
 - **Convert Games.** Build an installable package from a decrypted game folder or an
-  image, or write a game folder as a game image (`.exfat`, or the smaller `.ffpfsc`) that
-  ShadowMount+ mounts.
+  image, or write a game folder as a game image (`.exfat`, `.ffpkg`, `.ffpfs`, or the smaller
+  `.ffpfsc`) that ShadowMount+ mounts, and upload it in one step.
 - **Browse and manage.** Files, games, disk images (mount, edit in place), saves, screenshots
-  and video clips; register, launch, stop and uninstall games; copy, move, delete.
+  and video clips; register, launch, stop and uninstall games; copy, move (Move to…),
+  delete, set permissions.
 - **Cheats, fan curve, hardware view,** Remote Play pairing, payload sender with a catalogue
   and playlists, backport tools, and an optional FTP server on the PS5.
 - **Power.** Rest mode, reboot, shut down, and wake over the network (optionally straight
@@ -63,7 +67,7 @@ Pre-built downloads land on the
 | Linux — Fedora / RHEL / Bazzite (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.rpm` | `sudo dnf install ./PS5Upload-<ver>-linux-<arch>.rpm` (Bazzite/Silverblue: `rpm-ostree install`) — menu entry + auto deps. |
 | Linux — any distro (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.zip` | Universal fallback (no install). Unzip, then `chmod +x PS5Upload.sh PS5Upload.AppImage` and run **`./PS5Upload.sh`** (the wrapper — handles the FUSE-less and WebKit white-screen cases for you). Running `./PS5Upload.AppImage` directly also works if your system has libfuse2 and a happy WebKitGTK. |
 | Linux — NixOS (x64 / ARM64) | no release artifact | Packaged in [NUR](https://github.com/GriefNorth/nur-packages) as `ps5upload` — see **NixOS** below. |
-| Android | `PS5Upload-<ver>-android.apk` | Enable "install unknown apps" for your browser/file manager, then open the `.apk`. Same interface, mobile-friendly; connects to and manages your PS5 over Wi-Fi. |
+| Android | `PS5Upload-<ver>-android.apk` | Enable "install unknown apps" for your browser/file manager, then open the `.apk`. Same interface, mobile-friendly; connects to and manages your PS5 over Wi-Fi. On Android 17, allow local network access ("nearby devices") when asked. |
 
 ### NixOS
 
@@ -391,7 +395,7 @@ This software builds on the following open-source projects:
 * [unrar / unrar_sys](https://crates.io/crates/unrar) — `.rar` extraction on **desktop** (bundles the **UnRAR** source by Alexander Roshal; used to *extract only*, never to compress). See the required notice and the GPLv3 §7 linking exception in [`LICENSES/`](LICENSES/). The `unrar` wrapper (MIT OR Apache-2.0) is **vendored** at [`third_party/unrar`](third_party/unrar) carrying one local fix for an out-of-bounds read on multi-volume archives — upstream 0.5.8 has no fix; see that directory's README.
 
 **Payload (PS5):**
-* [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) — Open-source SDK for PS5 payload development
+* [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) — Open-source SDK for PS5 payload development; its startup code is **vendored** at [`payload/third_party/sdk-crt`](payload/third_party/sdk-crt) with one fix so payloads start on firmware where two kernel lookups fail (FW 5.50)
 * [elfldr](https://github.com/ps5-payload-dev/elfldr) (GPLv3) — the ELF loader; a patched copy is **vendored** at [`third_party/elfldr`](third_party/elfldr) (fix for a loader that hangs on a silent client)
 * [Monocypher](https://github.com/LoupVaillant/Monocypher) (CC0 / BSD-2) — AVA1's cryptography on the console (X25519, ChaCha20-Poly1305, BLAKE2b)
 * [BLAKE3](https://github.com/BLAKE3-team/BLAKE3) (CC0 / Apache-2.0) — fast hashing for AVA1 file verification
@@ -401,6 +405,7 @@ This software builds on the following open-source projects:
 ## Thanks
 
 * [elf-arsenal](https://git.etawen.dev/soniciso/elf-arsenal) (soniciso, Sanad) — parts of the drive sensor, cheat and wake-watchdog code
+* [PS5 Dump Forge](https://github.com/quer3q/ps5-dump-forge) (quer3q) — the UFS2 (`.ffpkg`) and PFS (`.ffpfs`) image writers, the streaming `.ffpfsc` container, reader and safety fixes to the package crates, and the ideas behind hash-checked images and spare space for read-write mounts
 * [PROSPEROPatches](https://prosperopatches.com/), [ORBISPatches](https://orbispatches.com/) and [TMDB](https://www.themoviedb.org/) — game details and artwork
 * [etaHEN PS5_Cheats](https://github.com/etaHEN/PS5_Cheats) and GoldHEN — cheat files
 * Everyone who contributed code, translations and docs, and the Discord testers

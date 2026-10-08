@@ -729,6 +729,79 @@ pub async fn stop() {
     .await;
 }
 
+/// What the shell can see about the engine when the app cannot reach it. Every field is
+/// measured; nothing here is a guess at the cause (the renderer words the cause from these).
+#[derive(Debug, serde::Serialize)]
+pub struct Diagnosis {
+    /// Where the command proxies send engine requests.
+    pub url: String,
+    /// The engine is this app's own sidecar on this machine (not a remote engine).
+    pub local: bool,
+    /// It answered its readiness probe just now.
+    pub answering: bool,
+    /// Why the probe failed, with every underlying cause.
+    pub probe_error: Option<String>,
+    /// The shell still holds a live sidecar process. `None` for a remote engine.
+    pub child_running: Option<bool>,
+    /// Something is listening on the engine's port. `None` for a remote engine.
+    pub port_taken: Option<bool>,
+    /// The bundled engine program is on disk where the app expects it.
+    pub binary_found: Option<bool>,
+    pub binary_error: Option<String>,
+    pub log_path: Option<String>,
+    pub os: &'static str,
+}
+
+pub async fn diagnose(app: &AppHandle) -> Diagnosis {
+    let url = url();
+    let local = is_loopback_url(&url);
+    let probe = probe_detail(&url, &engine_probe_client()).await;
+    let (child_running, port_taken, binary_found, binary_error, log_path) = if local {
+        let child_running = {
+            let mut guard = child_lock().await.lock().await;
+            match guard.as_mut() {
+                Some(child) => matches!(child.try_wait(), Ok(None)),
+                None => false,
+            }
+        };
+        let binary = find_engine_binary(app);
+        let log_path = binary
+            .as_ref()
+            .ok()
+            .and_then(|b| b.parent())
+            .map(|d| d.join("engine.log").display().to_string());
+        (
+            Some(child_running),
+            Some(!loopback_port_free(port_of(&url))),
+            Some(binary.is_ok()),
+            binary.err().map(|e| format!("{e:#}")),
+            log_path,
+        )
+    } else {
+        (None, None, None, None, None)
+    };
+    Diagnosis {
+        url,
+        local,
+        answering: probe.is_ok(),
+        probe_error: probe.err(),
+        child_running,
+        port_taken,
+        binary_found,
+        binary_error,
+        log_path,
+        os: std::env::consts::OS,
+    }
+}
+
+/// Stop the sidecar (if any) and start it again. For a remote engine this only re-probes it.
+pub async fn restart(app: &AppHandle) -> Result<String> {
+    if is_loopback_url(&url()) {
+        stop().await;
+    }
+    start(app).await
+}
+
 /// Read lines from a child's stdio, forward to our stderr with a tag,
 /// AND tee to the engine log file (when one was opened — failure to
 /// open is silent, the stderr path keeps working).

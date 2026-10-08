@@ -804,6 +804,8 @@ export async function browserInvoke<T>(
       return postJson<T>("/api/exfat/build", {
         source: args["source"],
         output_dir: args["outputDir"],
+        format: args["format"],
+        compress: args["compress"] ?? false,
       });
     }
     case "job_status": {

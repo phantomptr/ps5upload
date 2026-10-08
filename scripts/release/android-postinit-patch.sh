@@ -5,7 +5,7 @@
 # run AFTER init and BEFORE `tauri android build`. Idempotent. Invoked
 # from publish.yml, engine-ci.yml, and the Makefile `android-init` target.
 #
-# Two patches:
+# Patches (each idempotent):
 #
 # 1) Loopback cleartext for the in-process engine.
 #    The mobile build links ps5upload-engine in-process and binds it to
@@ -250,6 +250,85 @@ brace = src.index("{", src.index("class MainActivity"))
 src = src[:brace + 1] + field + src[brace + 1:]
 open(path, "w", encoding="utf-8").write(src)
 print("patched MainActivity.kt to expose the navigation-bar inset")
+PY
+fi
+
+# --- (5) Android 17 local network permission -------------------------
+# From targetSdk 37 (which `tauri android init` now generates), Android 17
+# blocks an app's connections to devices on the local network unless it holds
+# ACCESS_LOCAL_NETWORK, a runtime permission. Without it every connection to the
+# PS5 failed and the app said "Port 9021 is not open" while the phone's own
+# shell reached the port (6.x on Android; 5.41.0 targeted 36 and was not
+# affected). Declare it, ask for it at launch, and let the page check it and ask
+# again through PS5UploadNet, so the Connection screen can name the real cause.
+python3 - "$manifest" <<'PY'
+import re, sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+perm = '<uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />'
+if "android.permission.ACCESS_LOCAL_NETWORK" in src:
+    print("ACCESS_LOCAL_NETWORK already declared — skipping")
+else:
+    new = re.sub(r"(<manifest\b[^>]*>)", r"\1\n    " + perm, src, count=1)
+    if new == src:
+        sys.exit("::error::could not find <manifest> tag to add ACCESS_LOCAL_NETWORK")
+    open(path, "w", encoding="utf-8").write(new)
+    print("declared ACCESS_LOCAL_NETWORK")
+PY
+
+if [ -n "$mainactivity" ]; then
+  python3 - "$mainactivity" <<'PY'
+import sys
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+if "PS5UploadNet" in src:
+    print("MainActivity.kt already exposes PS5UploadNet — skipping")
+    sys.exit(0)
+create_anchor = "    super.onCreate(savedInstanceState)\n"
+webview_anchor = "    super.onWebViewCreate(webView)\n"
+if create_anchor not in src or webview_anchor not in src:
+    sys.exit("::error::onCreate/onWebViewCreate not found in MainActivity.kt")
+src = src.replace(create_anchor, create_anchor + "    requestLocalNetwork()\n", 1)
+src = src.replace(webview_anchor, webview_anchor + '''    // The page asks whether it may reach the local network, and asks again
+    // (or opens the app's settings once Android stops showing the prompt).
+    webView.addJavascriptInterface(object {
+      @android.webkit.JavascriptInterface
+      fun granted(): Boolean = localNetworkGranted()
+      @android.webkit.JavascriptInterface
+      fun request() { runOnUiThread { requestLocalNetwork(openSettings = true) } }
+    }, "PS5UploadNet")
+''', 1)
+methods = '''
+  // Android 17+ (targetSdk 37): connections to the PS5 need ACCESS_LOCAL_NETWORK.
+  private fun localNetworkGranted(): Boolean =
+    android.os.Build.VERSION.SDK_INT < 37 ||
+      checkSelfPermission("android.permission.ACCESS_LOCAL_NETWORK") ==
+        android.content.pm.PackageManager.PERMISSION_GRANTED
+
+  private fun requestLocalNetwork(openSettings: Boolean = false) {
+    if (localNetworkGranted()) return
+    val perm = "android.permission.ACCESS_LOCAL_NETWORK"
+    // After a second "Don't allow" Android no longer shows the prompt, so a
+    // request from the page opens the app's settings instead.
+    if (openSettings && localNetworkAsked && !shouldShowRequestPermissionRationale(perm)) {
+      startActivity(
+        android.content.Intent(
+          android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+          android.net.Uri.fromParts("package", packageName, null),
+        ),
+      )
+      return
+    }
+    localNetworkAsked = true
+    requestPermissions(arrayOf(perm), 4217)
+  }
+
+  private var localNetworkAsked = false
+'''
+idx = src.rstrip().rfind("}")
+src = src[:idx] + methods + src[idx:]
+open(path, "w", encoding="utf-8").write(src)
+print("patched MainActivity.kt to request ACCESS_LOCAL_NETWORK (PS5UploadNet)")
 PY
 fi
 

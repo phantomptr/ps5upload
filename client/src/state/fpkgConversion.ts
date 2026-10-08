@@ -5,7 +5,10 @@
 import { installErrorLink } from "../lib/installErrorDoc";
 import { create } from "zustand";
 
-import { fpkg, type FpkgBuildRequest } from "../api/fpkg";
+import { imageUploadItem, type ImageUploadPlan } from "../lib/imageUpload";
+import { useUploadQueueStore } from "./uploadQueue";
+
+import { fpkg, type FpkgBuildRequest, type ImageFormat } from "../api/fpkg";
 import { jobCancel, jobStatus } from "../api/ps5";
 import { useConnectionStore } from "./connection";
 import { pushNotification } from "./notifications";
@@ -85,6 +88,8 @@ export type Pipeline =
       /** A console dump swapped for this package, awaiting Delete the old dump / Keep it
        *  parked; null once that is chosen (or when nothing was swapped). */
       swap?: SwapJournal | null;
+      /** An image put in the Upload queue (by the run's own plan, or Upload to PS5). */
+      uploadQueued?: boolean;
     }
   | {
       phase: "failed";
@@ -112,9 +117,18 @@ export interface ConversionState {
   ) => Promise<void>;
   /** Compress an .exfat / .ffpkg image into a .ffpfsc. */
   compress: (source: string, outputDir?: string) => Promise<void>;
-  /** Write a game folder as one .exfat image; with `thenCompress`, compress that into a
-   *  .ffpfsc and keep only the compressed one. */
-  buildImage: (source: string, outputDir: string | undefined, thenCompress: boolean) => Promise<void>;
+  /** Write a game folder as one game image (`format`, .exfat by default); with
+   *  `thenCompress`, straight into a .ffpfsc (no uncompressed copy is written). */
+  buildImage: (
+    source: string,
+    outputDir: string | undefined,
+    thenCompress: boolean,
+    format?: ImageFormat,
+    /** Once the image is built and checked, put it in the Upload queue. */
+    thenUpload?: ImageUploadPlan,
+  ) => Promise<void>;
+  /** Put the finished image in the Upload queue. */
+  uploadImage: (plan: ImageUploadPlan) => void;
   /** Install the kept package again: after a failed install, or Install again on a result. */
   retryInstall: (host: string, method?: InstallMethod) => Promise<void>;
   cancel: () => Promise<void>;
@@ -233,10 +247,23 @@ function fail(stage: PipelineStage, message: string, packagePath: string | null)
   });
 }
 
+/** The Upload plan of the image being built ("send this game folder as an image"). */
+let pendingImageUpload: ImageUploadPlan | null = null;
+
+/** Puts a finished image in the Upload queue and starts that console's queue. */
+function queueImage(imagePath: string, bytes: number, plan: ImageUploadPlan) {
+  const q = useUploadQueueStore.getState();
+  q.add(imageUploadItem(imagePath, plan, bytes));
+  void q.startHost(plan.host);
+}
+
 /** A build that ends the run (Convert only, or a .ffpfsc image). */
 function finish(packagePath: string, packageBytes: number, convertMs: number) {
   const p = running();
   if (!p) return;
+  const plan = makesImage(p.mode) ? pendingImageUpload : null;
+  pendingImageUpload = null;
+  if (plan) queueImage(packagePath, packageBytes, plan);
   if (p.taskId) useTaskStore.getState().finishTask(p.taskId, "done");
   dropCopy(p);
   const now = Date.now();
@@ -253,6 +280,7 @@ function finish(packagePath: string, packageBytes: number, convertMs: number) {
       stageMs: { ...p.stageMs, [p.stage]: now - p.stageStartedMs },
       deleted: false,
       titleId: p.titleId,
+      uploadQueued: !!plan,
     },
   });
 }
@@ -398,9 +426,6 @@ function poll(jobId: string, install: InstallMethod | null, failures = 0) {
       } else if (!s && p.mode === "ffpfsc") {
         // A compression job reports no stages, only its overall bytes.
         enterStage("compress", snapshot.bytes_sent ?? 0, snapshot.total_bytes ?? 0);
-      } else if (!s && p.mode === "image") {
-        // Nor does an image build: the stage is whichever of its two jobs this is.
-        enterStage(p.stage === "compress" ? "compress" : "write", snapshot.bytes_sent ?? 0, snapshot.total_bytes ?? 0);
       }
       poll(jobId, install);
       return;
@@ -410,25 +435,6 @@ function poll(jobId: string, install: InstallMethod | null, failures = 0) {
       const bytes = snapshot.bytes_sent ?? 0;
       packageSizes.set(path, bytes);
       const cur = running()!;
-      // A folder's image that is to be compressed too: the same run carries on, and only the
-      // compressed image is kept (the engine deletes only what it built itself).
-      if (cur.mode === "image" && imageThenCompress && cur.stage !== "compress") {
-        const outputDir = imageThenCompress.outputDir;
-        imageThenCompress = { ...imageThenCompress, image: path };
-        enterStage("compress");
-        try {
-          const { job_id } = await fpkg.compress(path, outputDir);
-          update({ jobId: job_id });
-          poll(job_id, null);
-        } catch (error) {
-          fail("compress", error instanceof Error ? error.message : String(error), null);
-        }
-        return;
-      }
-      if (cur.mode === "image" && imageThenCompress?.image) {
-        void fpkg.deletePackage(imageThenCompress.image).catch(() => {});
-        imageThenCompress = null;
-      }
       update({ packagePath: path, jobId: null, titleId: titleIdOf(snapshot.tx_id_hex) });
       if (install) {
         // The console of the moment the install starts: the user may have switched during an
@@ -454,9 +460,6 @@ function poll(jobId: string, install: InstallMethod | null, failures = 0) {
   }, POLL_MS);
 }
 
-/** Set while a folder's image is to be compressed afterwards: where the compressed image
- *  goes, and (once written) the intermediate image to remove at the end. */
-let imageThenCompress: { outputDir: string | undefined; image: string | null } | null = null;
 
 function beginRun(mode: PipelineMode, source: string, host: string | null, stage: PipelineStage) {
   const now = Date.now();
@@ -666,16 +669,17 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
     }
   },
 
-  buildImage: async (source, outputDir, thenCompress) => {
+  buildImage: async (source, outputDir, thenCompress, format = "exfat", thenUpload) => {
     if (get().pipeline.phase === "running") return;
-    imageThenCompress = thenCompress ? { outputDir, image: null } : null;
-    beginRun("image", source, null, "write");
+    pendingImageUpload = thenUpload ?? null;
+    // One engine job: compressing happens as the image is written, so no uncompressed copy
+    // is ever on disk.
+    beginRun("image", source, null, "plan");
     try {
-      const { job_id } = await fpkg.buildImage(source, outputDir);
+      const { job_id } = await fpkg.buildImage(source, outputDir, format, thenCompress);
       update({ jobId: job_id });
       poll(job_id, null);
     } catch (error) {
-      imageThenCompress = null;
       fail("write", error instanceof Error ? error.message : String(error), null);
     }
   },
@@ -707,6 +711,13 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
     await finishSwap(p.swap, choice, consoleSwapDeps(p.host));
     const now = get().pipeline;
     if (now.phase === "done") set({ pipeline: { ...now, swap: null } });
+  },
+
+  uploadImage: (plan) => {
+    const p = get().pipeline;
+    if (p.phase !== "done" || p.deleted || !makesImage(p.mode) || p.uploadQueued) return;
+    queueImage(p.packagePath, p.packageBytes, plan);
+    set({ pipeline: { ...p, uploadQueued: true } });
   },
 
   deletePackage: async () => {

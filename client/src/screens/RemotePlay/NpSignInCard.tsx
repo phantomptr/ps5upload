@@ -18,9 +18,12 @@ export const NP_FAKE_SIGNIN_URL =
 export function NpSignInCard({
   onDownload,
   onOpenPayloads,
+  onOpenProfile,
 }: {
   onDownload: () => void;
   onOpenPayloads: () => void;
+  /** Profile runs it in one step after checking the account. */
+  onOpenProfile: () => void;
 }) {
   const tr = useTr();
   return (
@@ -43,7 +46,17 @@ export function NpSignInCard({
           "The PS5 only lets you switch Remote Play on for an account that is signed in to PlayStation Network. np-fake-signin {version} makes the console treat your account as signed in, with no real PSN sign-in. After it has run, the switch under Settings → System → Remote Play can be turned on.",
         )}
       </p>
-      <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm text-[var(--color-muted)]">
+      <p className="mt-2 text-sm text-[var(--color-text)]">
+        {tr(
+          "remotePlay_np_profile_hint",
+          undefined,
+          "The easy way: Profile checks the account and runs it for you with one button.",
+        )}
+      </p>
+      <p className="mt-2 text-xs text-[var(--color-muted)]">
+        {tr("remotePlay_np_manual", undefined, "Or by hand:")}
+      </p>
+      <ol className="mt-1 list-decimal space-y-1 pl-5 text-sm text-[var(--color-muted)]">
         <li>
           {tr(
             "remotePlay_np_step_download",
@@ -74,6 +87,14 @@ export function NpSignInCard({
         )}
       </p>
       <div className="mt-3 flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          variant="primary"
+          onClick={onOpenProfile}
+          data-testid="np-signin-open-profile"
+        >
+          {tr("remotePlay_np_open_profile", undefined, "Sign in from Profile")}
+        </Button>
         <Button
           size="sm"
           variant="secondary"

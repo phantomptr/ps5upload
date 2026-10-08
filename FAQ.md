@@ -23,8 +23,8 @@ the app over **AVA1**, one encrypted connection on port 9120.
   own on-console installer, from your computer (**Stream & install** or **Upload & install**),
   a NAS, a USB drive or a link.
 - **Convert Games**: build an installable package from a decrypted game folder or an image, or
-  write a game folder as a game image (`.exfat`, or the smaller `.ffpfsc`) that ShadowMount+
-  mounts.
+  write a game folder as a game image (`.ffpkg`, `.exfat` or `.ffpfs`, optionally compressed to
+  the smaller `.ffpfsc`) that ShadowMount+ mounts.
 - **Health check and speed test**: checks the PS5, the app and the network between them, says
   what to fix, and measures how fast files move.
 - **Mount** `.exfat` / `.ffpkg` images, **register and launch** games, browse and manage files.
@@ -142,6 +142,12 @@ Every connection is encrypted and each computer pairs with the console once. A h
 the app launched pairs by itself; one loaded another way shows a 6-digit code on the console,
 which you enter in the app. If the console shows a different PS5 at an address you reuse, forget
 the old one and pair again.
+
+**Q: The web UI says it isn't paired, and no code shows on the console.**
+The console only shows a code to a new device for a short while after its helper starts, and
+not at all while another device is paired. On the Connection screen press **Send helper**: the
+engine sends its own helper, which pairs the web UI by itself (6.5.0 and later). Your desktop
+app stays paired.
 
 **Q: I updated to 6.0 and the app says the helper is old.**
 6.0 and v5.x cannot talk to each other. Click **Update helper** on the Connection screen (or
@@ -465,6 +471,13 @@ sudo chown -R "$USER:$USER" ~/.ps5upload
 
 ## Android
 
+**Q: The Android app says "Port 9021 is not open" (or can't connect at all) on 6.x, but 5.41 worked.**
+On Android 17, apps can't reach devices on your network until you allow it, and 6.x builds before
+6.5.0 never asked. Update to 6.5.0 or later: it asks at launch (Android calls it **nearby
+devices**), and a red **Allow PS5Upload on your local network** bar stays at the top until you
+allow it. If you tapped **Don't allow**, tap **Allow** on that bar, or turn it on in **Android
+Settings → Apps → PS5Upload → Permissions → Nearby devices**.
+
 **Q: After updating the app, it says "This PS5 has not accepted this app yet" or "The PS5 is not
 accepting new pairings".**
 To the PS5, an app updated from 5.x is a new device, and the PS5 only takes new devices for a
@@ -693,12 +706,41 @@ and every transfer afterwards goes over the direct cable.
 
 ## Transferring
 
+**Q: How do I move a game to another drive on the PS5?**
+In **Files**, select it and choose **Move to…**, then pick the drive's homebrew folder (or any
+folder). It says first whether the move is instant (same drive) or a copy to the other drive,
+and whether it fits; a copy removes the original only after checking it. **Set permissions
+(777)** in the same menu makes files and folders readable and runnable.
+
 **Q: How do I stop my PS5 from going into rest mode?**
-**Settings → Upload → Keep the PS5 awake** has three modes: **Off**; **During transfers**
-(default), which keeps resetting the console's auto-standby timer while an upload runs; and
+**Settings → Upload → Keep the PS5 awake** has three modes: **Off**; **During uploads and
+installs** (default), which keeps resetting the console's auto-standby timer while any upload or
+install runs, a Stream install included; and
 **Always while connected**, which keeps every console with a running helper out of auto-rest while
 the app is open (a ⚡ indicator shows). Resting the console by hand always works, and closing the
 app returns the console to its normal schedule.
+
+**Q: I uploaded an 81 GB file and the PS5 lost about 100 GB of free space. Does ps5upload
+keep hidden copies?**
+No. The extra is held by the PS5's own file system, not by anything ps5upload writes. On the
+console's **internal** storage, Sony's file system sets aside a reserve that grows with what you
+write: we measured about 16–20% of the bytes written on both of our consoles (a 10.4 GB file took
+12.1–12.5 GB of free space), and reports put a large single image nearer 25%. The file itself
+is exactly its own size. Deleting it gives back the file and the reserve within seconds. An
+**extended storage** drive (M.2 or USB formatted by the PS5) has no such reserve: a file there
+costs exactly its size. ps5upload's own extras are small: a game image carries 64–512 MiB of
+spare space, and a transfer that failed can leave a partial file, which **Home → Health check →
+Clean up** removes. **Volumes** shows what is likely to fit after the reserve, and
+**Kept by ps5upload** lists everything the app itself wrote.
+
+**Q: Can I send a game folder as one compressed image instead of thousands of files?**
+Yes. In **Upload**, pick the game folder: under its options, **Or send it as one game image**
+builds a compressed `.ffpfsc` (or a `.ffpkg` / `.exfat`) on this computer, checks it, and then
+puts it in the Upload queue by itself, into the destination folder you chose (`homebrew`, which
+ShadowMount+ watches, by default). One file is much quicker to send than many small ones, and
+compressed it takes less room on the PS5. It needs free space on this computer for the image
+while it is built; **Delete the image from this computer once it is on the PS5** cleans that up.
+In **Convert Games**, a finished image also has **Upload to PS5**.
 
 **Q: Can I wake the PS5 from standby, or turn it off, from the app?**
 Yes. The Connection screen has **Rest mode**, **Reboot**, and **Shut down**
@@ -846,8 +888,10 @@ mid-write can leave a file inconsistent; if a finished upload looks wrong, use *
 upload again.
 
 To avoid interruptions on long transfers:
-- **Your computer** is kept awake automatically while a transfer runs (**Settings → Keep Awake**
-  also keeps it awake while the app is idle; greyed out on non-systemd Linux).
+- **Your computer** is kept awake automatically while any upload or install runs, including a
+  Stream install (the console fetches the package from this computer, so it must not sleep).
+  **Settings → Keep Awake** also keeps it awake while the app is idle; greyed out on non-systemd
+  Linux.
 - **The PS5** has its own rest timer: raise it under **Settings → System → Power Saving → Set Time
   Until PS5 Turns Off**, or use **Settings → Upload → Keep the PS5 awake** in the app.
 - **Flaky Wi-Fi?** A direct Ethernet cable is the most stable and fastest path (see the direct
@@ -989,6 +1033,84 @@ refuses to start the title. Check these in order.
    console accepts a launch and may take a while on the first start. If the
    game never appears, close it from the PS5 and start it from there.
 
+## Collection
+
+**Q: What is the Collection?**
+Every game you keep on this computer's drives, grouped by game: its full copies, its updates and
+DLC, the duplicates and the space they take. Add the folder (or folders) that holds your games
+under **Collection → Folders**; anything inside, up to six folders deep, is found by what it is
+(packages, game folders, `.exfat` / `.ffpkg` / `.ffpfs` / `.ffpfsc` images, `.zip` / `.7z` /
+`.rar` archives), however the folders are named. Each item is read from the file itself, so
+nothing needs renaming first. A drive, an external disk or a mounted network share all work. It
+is PS Game Library, built into ps5upload: if you used it, **Import from PS Game Library** in the
+**⋯** menu brings its index over.
+
+**Q: Can the Collection read my NAS without mounting it?**
+Yes. Save the server under **Connections** (SMB, FTP, FTPS or SFTP), then in **Collection →
+Folders** press **Add a folder on <server>** and pick the folder. It is scanned where it is:
+packages, game folders and covers are read over the network, and nothing is copied to this
+computer. Its games install straight from the server, and **Convert…** reads them in place.
+Move to Trash, Organize, junk clean-up and Copy install link work on this computer's folders
+only. A mounted share also still works as an ordinary folder.
+
+**Q: Does it keep the computer awake or rescan all the time?**
+No. **Look for changes automatically** (in Folders) rescans only while the app is open, never
+keeps the computer awake, and after the computer wakes the wait starts over instead of scanning
+at once. A rescan reads only what changed, so it takes seconds. **Cmd/Ctrl + R** on the
+Collection screen scans now.
+
+**Q: What do "Duplicate" and "Reclaimable" mean?**
+A game is a duplicate when more than one **full copy** of it is on disk (updates and DLC never
+count). Reclaimable is the space held by every full copy but the largest. In a duplicate's
+details, **Keep the largest copy, free …** moves the others to the Trash.
+
+**Q: Can it install games on my PS5?**
+Yes. With a console connected, every card shows whether that PS5 has the game ("Installed ·
+1.04") or a newer update the collection holds, and the chips filter to games it lacks, can
+update or is missing DLC for. A game's details offer **Install on this PS5** (with its update
+and DLC), **Install update**, **Install DLC**, and **⋯ → Bring this PS5 up to date** queues every
+newer update and missing DLC at once. Installs go through the normal install queue (base, then
+update, then DLC), streamed from this computer. A game kept only as a folder, image or archive is
+copied with **Upload** or converted with **Convert…** instead.
+
+**Q: What is "Copy install link"?**
+A link a PS5 can install the package from by itself, for a package installer or browser running
+on the console. It works for the PS5 it was made for; in **Serving n** (Collection header) you can
+let any device on your network fetch it instead, for an installer on another console. The link
+carries a random code, there is no folder listing, and only the packages you share can be
+reached. A link lasts until you stop it (one at a time, or **Stop all**) or the app quits;
+nothing stays published after that. **Copy all links** copies every one at once.
+
+**Q: What does Organize packages do, and can I undo it?**
+It renames every package `Title - Game ID - vVersion - Region - KIND.pkg` and files it under
+`Platform / Game ID - Title`, inside the folder it already sits in. DLC is filed with its game,
+a second copy of the same release is filed beside it and marked `DUPLICATE`, split packages
+(`_0`, `_1`, …) move together, and a package whose kind had to be inferred is marked `_UNSURE`.
+You see every move first and can untick any. Nothing is overwritten or deleted and files are
+only renamed, never copied. Every run can be undone from **Earlier runs** in the same window.
+
+**Q: What are the junk files, and is cleaning them safe?**
+A Mac writes a hidden `._` file beside every file it copies to an exFAT drive (each one takes a
+whole cluster), plus `.DS_Store`, `.localized` and `Icon` files. No console reads them. **⋯ →
+Clean up junk files** finds them, shows what it found and removes them when you confirm. A `._`
+file is removed only when it carries the Mac's signature; a file that merely starts with `._`
+is left alone. **Remove new `._` files after each scan** keeps them from piling up. On a Mac the
+same window can stop Finder writing `.DS_Store` on network and USB drives, and turn Spotlight
+off for the drive your games are on (macOS asks for your password).
+
+**Q: Where does Move to Trash put files?**
+In the system Trash (Recycle Bin on Windows), so they can be put back until it is emptied. Only
+a copy the collection knows can be moved, and you confirm first. Docker, a server without a
+desktop and Android have no Trash: there the button is hidden unless you turn on **Allow
+deleting copies for good** in **Collection → Folders**. Then it reads **Delete…**, asks you to
+confirm every time, and the copy is gone for good.
+
+**Q: Does it work in the web UI, Docker and Android?**
+Yes. The Collection runs in the engine, so in the web UI or Docker it lists the games on the
+engine's disks (add the folder from the in-app browser). On Android the folder is picked with
+the in-app browser too; the online title lookup for a game that names nothing is not available
+there.
+
 # Installing packages
 
 ## Install Package
@@ -1072,20 +1194,33 @@ ftpsrv is not needed. Then choose **Stream install** or **Upload & install**, or
 The console needs kstuff, `a53_ppr_install_fast.elf` and `shadowmountplus.elf` loaded first. Keep
 the game files you converted from.
 
-**Q: How do I turn a game folder into a game image (`.exfat` or `.ffpfsc`)?**
+**Q: How do I turn a game folder into a game image (`.ffpkg`, `.exfat`, `.ffpfs` or `.ffpfsc`)?**
 Open **Convert Games**, pick the game folder on your computer, and under "Or make a game image
-instead of a package" choose:
+instead of a package" choose the format, then **Make game image**:
 
-- **Make game image (.exfat)**: one file, the same size as the folder, and the most compatible.
-- **Make compressed image (.ffpfsc)**: usually 40–60% smaller. It takes longer and needs room
-  for both files while it is made; only the compressed one is kept.
+- **.ffpkg (UFS2), recommended**: what ShadowMount+ recommends for most games.
+- **.exfat**: for the games that only work like content on an external drive.
+- **.ffpfs (PFS), experimental**: experimental in ShadowMount+ 1.7. File names inside must be
+  plain ASCII (the app lists any that are not before it starts), and the image's own name is
+  kept to 63 characters, the longest ShadowMount+ mounts.
+- **Compress it into a .ffpfsc** (any format): usually 40–60% smaller, slower to make, and
+  always mounted read-only. It is compressed as it is written, so only the compressed file is
+  ever on disk.
+
+`.ffpkg` and `.exfat` images keep some free space (0.5% of the game, between 64 and 512 MiB)
+so a read-write mount has room for saves or a small patch.
+
+Every image is checked twice: before writing (names and size), and after: it is read back
+through its own reader and every file's contents are compared with the folder (BLAKE3), not
+just the names and sizes. Only then does it get its name.
 
 Nothing is installed. Copy the image to a folder ShadowMount+ watches on the PS5 (for example
 `/data/homebrew`, with **Upload**), and ShadowMount+ mounts it and puts the game on the home
-screen. The image is read back and checked against the folder before it is kept. The converter
-is part of the engine, so it is the same on every desktop platform; it was checked on macOS,
-and an image it made ran a game on a PS5 on firmware 13.60. A folder that is on the console or on a saved server cannot be made
-into an image from here; copy it to this computer first.
+screen. The `.ffpkg` and `.ffpfs` writers and the streaming `.ffpfsc` container come from quer3q's
+PS5 Dump Forge; the `.exfat` writer is ps5upload's own. On a PS5 on firmware 13.60 with
+ShadowMount+ 1.7, a game image made by the app in each of `.exfat`, `.ffpkg`, `.ffpfs` and a
+compressed `.ffpfsc` mounted, registered and ran its game. A folder that is on the console or on
+a saved server cannot be made into an image from here; copy it to this computer first.
 
 **Q: Can I install a package that is already on a USB drive?**
 Yes. Plug the drive into the PS5; packages on it show in **Install Package → External Packages**
@@ -1260,6 +1395,19 @@ Firmware notes:
   request, not a problem with the file or the route: update to 6.3.1 or later
   and let the app send its helper again. If it still appears, use **Stream &
   install** from a computer and send us a bug report.
+- **"The PS5 declined the install."** Under it the app shows Sony's error code and what
+  it means, and how far the console got: refused before downloading anything (the package
+  itself), stopped part-way (the connection), or refused after downloading it all (free space,
+  or the content failed the PS5's checks). No code at all? Check the PS5's Notifications.
+- **`0x80B21104`.** The PS5's installer would not accept this particular
+  package; other packages install on the same console. Reported with recent
+  PS5 games on older firmware (a 2026 game on FW 9.60). It is not the
+  package's "required firmware" field: in our test a package demanding FW 14.00
+  installed on a 13.60 console. The likely causes are a package built with
+  tools newer than the console's firmware reads, or one that is not a
+  fake-signed (FPKG) build. Use a package made for your firmware (a backport),
+  or install the game without the installer: copy its game folder, or a game
+  image for ShadowMount+, with **Upload**.
 - **`E2-80B22410`.** An error code the PS5's own installer or system software
   shows; ps5upload does not generate it and we have no confirmed single cause.
   It has been reported on packages the console would not accept as built.
@@ -1317,9 +1465,21 @@ It requests a Remote Play registration from the console so you can pair a client
 own menus. It shows the pending PIN with a countdown, reads "waiting" until a device really pairs,
 and can be cancelled. It does not stream anything; use Sony's Remote Play app or Chiaki.
 
+**Q: The PS5 won't let me turn on its own Remote Play setting.**
+The PS5 offers Settings › System › Remote Play only to an account signed in to PlayStation
+Network. Open **Profile** › **Sign in to PlayStation Network (offline)**: it checks that the
+signed-in user has an activated account, then fetches earthonion's np-fake-signin and runs it on
+the PS5 with one button. Nothing is sent to Sony. Restart the PS5 afterwards. To undo it:
+Settings › Users and Accounts › Other › Sign out. In the web UI, send np-fake-signin from
+**Payloads** instead.
+
 **Q: What does the fan curve do?**
-It sends a custom temperature-to-fan curve to the console. **Restore default** returns to the
-stock behaviour.
+The PS5 has one fan setting: the temperature its fan control works to hold (lower is louder).
+The curve sets it to the lowest temperature at which you ask for 100%, up to 80 °C, and keeps it
+there across game launches and helper restarts. A curve that never asks for 100% at 80 °C or
+below (the default one) leaves the fan to the console's own setting (91 °C on firmware 13.60).
+**Restore default** does that. ShadowMount+ 1.7 can set the same value (`fan_target_temperature`
+in its `config.ini`); use one or the other, or each overwrites the other.
 
 **Q: What is nanoDNS?**
 A small DNS server that runs **on the console** (from the Payloads
@@ -1431,6 +1591,11 @@ folder (the Windows installer updates itself). Quit, replace the old app, relaun
 
 ## Troubleshooting
 
+**Q: On Windows the app window is completely black.**
+Usually an overlay hooking the app's WebView: MSI Afterburner / RivaTuner Statistics Server
+(RTSS) does this. Close RTSS, or in RTSS add `msedgewebview2.exe` (and `ps5upload-desktop.exe`)
+and set **Application detection level** to **None** for them, then reopen ps5upload.
+
 **Q: Something is not working. Where do I start?**
 Open **Health Check** (also on **Home**, which shows anything that needs attention). It checks,
 for the console you have selected:
@@ -1438,14 +1603,24 @@ for the console you have selected:
 - **Connection and helper**: the helper answers, and its version matches the app.
 - **Network**: the PS5's payload loader port (9021) is open; the PS5 can connect back to this
   computer (what **Stream & install** needs: a failure here is almost always a firewall); how
-  long the helper takes to answer; whether ps5upload's installer is running on the PS5 (it
-  starts with your first install).
+  long the helper takes to answer; whether ps5upload's installer is running on the PS5 (the
+  check starts it when it is not, and says why when it cannot).
 - **This computer**: its data folder can be written. In Docker, whether the engine is handing
   the PS5 an address it can actually reach.
 - **Storage, clock, Remote Play**: free space, the folders the app needs, the console's clock.
 
 Every problem comes with what to do about it, and some have a one-click fix. The same checks
 run in the desktop app, on Android and in the Docker web UI, because the engine does them.
+
+**Q: "The app cannot reach its engine on this computer". What now?**
+The engine is the part of the app that talks to the PS5; it runs in the background on your
+computer. When the app cannot reach it, a notice at the top of every screen says why, from what
+it can see: the engine stopped, its program is missing (security software quarantined it), its
+address is held by something that does not answer (another program, or a firewall or antivirus
+filtering local connections), or requests went to a proxy. Press **Restart engine**. If it keeps
+happening, allow `ps5upload-engine` in your firewall or antivirus. "Payload didn't come up" with
+`error sending request for url (http://127.0.0.1:…)` was this problem, not the PS5: the app now
+says so.
 
 **Q: My transfers are slow. How fast should they be?**
 Run the **Speed test** in **Health Check**. It sends a test file to the PS5 and reads it back

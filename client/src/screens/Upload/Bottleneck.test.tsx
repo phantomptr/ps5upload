@@ -18,7 +18,7 @@ const live = (over: Partial<JobLive>): JobLive => ({
 describe("bottleneck_line_renders_each_cause", () => {
   const cases: Array<[BottleneckCause, string]> = [
     ["network", "Limited by: network"],
-    ["source", "Limited by: source (archive decoding)"],
+    ["source", "Limited by: reading the source"],
     ["disk", "Limited by: console disk"],
     ["workers", "Limited by: console workers"],
     ["memory", "Limited by: console memory"],

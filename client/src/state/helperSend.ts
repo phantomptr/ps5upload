@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import { hostOf } from "../lib/addr";
+import { isEngineUnreachable } from "../lib/engineUnreachable";
 
 /**
  * Sending the helper to a console, kept outside the Connection screen.
@@ -87,6 +88,8 @@ export interface HelperSendText {
   /** `tail` is "" or " Last probe: <error>." */
   timeout: (tail: string) => string;
   notPaired: (error: string) => string;
+  /** The app could not reach its own engine, so whether the helper started is unknown. */
+  engineUnreachable: (error: string) => string;
 }
 
 export type HelperSendResult = "ok" | "fail" | "busy";
@@ -118,11 +121,15 @@ export async function runHelperSend<P extends HelperProbe>(
     await deps.send(host, elf);
   } catch (e) {
     // The send itself failed (loader unreachable, ELF missing): no new helper to wait for.
-    return fail(e instanceof Error ? e.message : String(e));
+    const msg = e instanceof Error ? e.message : String(e);
+    return fail(isEngineUnreachable(msg) ? text.engineUnreachable(msg) : msg);
   }
   busy("waiting", text.waiting);
   // The last raw probe error, so a timeout can say why the helper looks dead.
   let lastError = "";
+  // Probes that never reached this app's own engine say nothing about the console. Three in
+  // a row and the wait ends with that, not with "the helper did not come up".
+  let engineMisses = 0;
   await deps.sleep(1500);
   const attempts = deps.maxAttempts ?? 20;
   for (let i = 0; i < attempts; i++) {
@@ -146,8 +153,16 @@ export async function runHelperSend<P extends HelperProbe>(
       }
     } catch (e) {
       lastError = e instanceof Error ? e.message : String(e);
+      if (isEngineUnreachable(lastError)) {
+        engineMisses += 1;
+        if (engineMisses >= 3) return fail(text.engineUnreachable(lastError));
+        continue;
+      }
     }
+    engineMisses = 0;
   }
+  if (isEngineUnreachable(lastError))
+    return fail(text.engineUnreachable(lastError));
   return fail(text.timeout(lastError ? ` Last probe: ${lastError}.` : ""));
 }
 

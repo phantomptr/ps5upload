@@ -233,6 +233,12 @@ pub struct InstallSession {
     /// origin and `parts` is empty, so range reads are proxied through this
     /// instead of the local filesystem. `None` for every local/staged install.
     pub remote: Option<Arc<RemotePkg>>,
+    /// Hosted for a console that fetches the package itself ("Copy install link"), not for an
+    /// install this engine runs. Listed and stopped through `/api/pkg/links`.
+    pub shared_link: bool,
+    /// A shared link any device on the network may fetch, not only `ps5_mgmt_addr` (a remote
+    /// installer on another console). The random session id in the URL is what guards it.
+    pub shared_any: bool,
 }
 
 #[derive(Default)]
@@ -299,6 +305,8 @@ mod persist {
         staging_path: Option<String>,
         created_at_unix: u64,
         last_activity_unix: u64,
+        #[serde(default)]
+        shared_link: bool,
     }
 
     /// `PS5UPLOAD_STATE_DIR`, else `~/.ps5upload/state`. Tests use only an explicit directory.
@@ -327,7 +335,10 @@ mod persist {
         let saved: Vec<Saved> = sessions
             .values()
             .filter(|s| {
-                s.remote.is_none()
+                // A shared link does not outlive the engine: nothing stays published after the
+                // app quits.
+                !s.shared_link
+                    && s.remote.is_none()
                     && !s.parts.is_empty()
                     && !s.cancelled
                     && s.terminal_status.is_none()
@@ -346,6 +357,7 @@ mod persist {
                 staging_path: s.staging_path.clone(),
                 created_at_unix: s.created_at_unix,
                 last_activity_unix: s.last_activity_unix,
+                shared_link: s.shared_link,
             })
             .collect();
         let Ok(json) = serde_json::to_vec(&saved) else {
@@ -410,6 +422,8 @@ mod persist {
                     transfer_bytes: 0,
                     transfer: TransferCoverage::new(s.total_size),
                     remote: None,
+                    shared_link: s.shared_link,
+                    shared_any: false,
                 };
                 (s.id, session)
             })
@@ -762,6 +776,12 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         )
         .route("/api/pkg/install/sessions", get(install_sessions_handler))
         .route("/api/pkg/install/cancel", post(install_cancel_handler))
+        .route(
+            "/api/pkg/links",
+            get(links_list_handler).post(link_create_handler),
+        )
+        .route("/api/pkg/links/stop", post(link_stop_handler))
+        .route("/api/pkg/links/open", post(link_open_handler))
         // Windows: fixes for "the console cannot reach this computer" (F2.1). Neither is silent:
         // one only opens Settings, the other refuses a request the UI has not confirmed.
         .route("/api/host-net/open-settings", post(host_net_open_settings))
@@ -789,6 +809,175 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         // `shorten_for_installer`.
         .route("/pkg-host/link/{file}", get(link_redirect_handler))
         .with_state(state)
+}
+
+// ─── /api/pkg/links ──────────────────────────────────────────────────
+//
+// "Copy install link": one package hosted for a console that fetches it itself (a remote
+// installer, or a console without the helper loaded). It is the same pkg-host session a Stream
+// install serves from, with nothing sent to the console. It ends when stopped, or after
+// `pkg_session_max_age_sec` with no request, like every session.
+
+#[derive(Debug, Deserialize)]
+pub struct LinkCreateRequest {
+    /// The console the link is for: picks the address of this computer it can reach.
+    pub ps5_addr: String,
+    pub path: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SharedLink {
+    pub id: String,
+    pub url: String,
+    pub title: String,
+    pub content_id: String,
+    pub total_size: u64,
+    pub requests_served: u64,
+    pub transfer_bytes: u64,
+    pub created_at_unix: u64,
+    pub last_activity_unix: u64,
+    /// Any device on the network may fetch it, not only the console it was made for.
+    pub any_device: bool,
+}
+
+/// The link the console fetches, shortened when it is too long for its installer.
+fn link_url(s: &InstallSession) -> Option<String> {
+    let url = pkg_host_url_for(&s.ps5_mgmt_addr, &s.id, &s.content_id).ok()?;
+    match shorten_for_installer(&s.ps5_mgmt_addr, &url) {
+        Ok(Some(short)) => Some(short),
+        Ok(None) => Some(url),
+        Err(_) => None,
+    }
+}
+
+fn shared_link(s: &InstallSession) -> Option<SharedLink> {
+    Some(SharedLink {
+        id: s.id.clone(),
+        url: link_url(s)?,
+        title: s.title.clone(),
+        content_id: s.content_id.clone(),
+        total_size: s.total_size,
+        requests_served: s.requests_served,
+        transfer_bytes: s.transfer_bytes,
+        created_at_unix: s.created_at_unix,
+        last_activity_unix: s.last_activity_unix,
+        any_device: s.shared_any,
+    })
+}
+
+async fn link_create_handler(
+    State(state): State<PkgInstallStateHandle>,
+    Json(req): Json<LinkCreateRequest>,
+) -> Response<Body> {
+    // An existing link for the same file is handed back, not doubled.
+    {
+        let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        let same = sessions.values().find(|s| {
+            s.shared_link
+                && !s.cancelled
+                && s.ps5_mgmt_addr == normalize_mgmt_addr(&req.ps5_addr)
+                && s.parts
+                    .first()
+                    .is_some_and(|p| p == std::path::Path::new(&req.path))
+        });
+        if let Some(link) = same.and_then(shared_link) {
+            return json_ok(&link);
+        }
+    }
+    let mut start: InstallStartRequest = match serde_json::from_value(serde_json::json!({
+        "ps5_addr": req.ps5_addr,
+        "path": req.path,
+        "serve_only": true,
+    })) {
+        Ok(s) => s,
+        Err(e) => return json_err(StatusCode::BAD_REQUEST, &e.to_string()),
+    };
+    start.link_only = true;
+    let resp = install_start_handler(State(state.clone()), Json(start)).await;
+    if !resp.status().is_success() {
+        return resp;
+    }
+    let body = match axum::body::to_bytes(resp.into_body(), 1 << 20).await {
+        Ok(b) => b,
+        Err(e) => return json_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    let started: InstallStartResponse = match serde_json::from_slice(&body) {
+        Ok(s) => s,
+        Err(e) => return json_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(s) = sessions.get_mut(&started.session_id) else {
+        return json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "the link's session is gone",
+        );
+    };
+    s.shared_link = true;
+    let link = shared_link(s);
+    persist::save(&sessions);
+    match link {
+        Some(link) => json_ok(&link),
+        None => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "could not build a link the console can reach",
+        ),
+    }
+}
+
+async fn links_list_handler(State(state): State<PkgInstallStateHandle>) -> Response<Body> {
+    let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+    let mut links: Vec<SharedLink> = sessions
+        .values()
+        .filter(|s| s.shared_link && !s.cancelled)
+        .filter_map(shared_link)
+        .collect();
+    links.sort_by_key(|l| std::cmp::Reverse(l.created_at_unix));
+    json_ok(&links)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LinkOpenRequest {
+    pub id: String,
+    /// True: any device on the network may fetch it. False: only the console it was made for.
+    pub any: bool,
+}
+
+/// POST /api/pkg/links/open: who may fetch a shared link.
+async fn link_open_handler(
+    State(state): State<PkgInstallStateHandle>,
+    Json(req): Json<LinkOpenRequest>,
+) -> Response<Body> {
+    let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+    match sessions.get_mut(&req.id) {
+        Some(s) if s.shared_link && !s.cancelled => {
+            s.shared_any = req.any;
+            match shared_link(s) {
+                Some(link) => json_ok(&link),
+                None => json_err(StatusCode::INTERNAL_SERVER_ERROR, "the link is gone"),
+            }
+        }
+        _ => json_err(StatusCode::NOT_FOUND, &format!("no link {}", req.id)),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LinkStopRequest {
+    pub id: String,
+}
+
+async fn link_stop_handler(
+    State(state): State<PkgInstallStateHandle>,
+    Json(req): Json<LinkStopRequest>,
+) -> Response<Body> {
+    let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+    match sessions.get_mut(&req.id) {
+        Some(s) if s.shared_link => {
+            s.cancelled = true;
+            persist::save(&sessions);
+            json_ok(&serde_json::json!({ "ok": true }))
+        }
+        _ => json_err(StatusCode::NOT_FOUND, &format!("no link {}", req.id)),
+    }
 }
 
 // ─── /api/pkg/installed ──────────────────────────────────────────────
@@ -825,7 +1014,7 @@ fn valid_title_id(title_id: &str) -> bool {
         && b[4..].iter().all(u8::is_ascii_digit)
 }
 
-fn installed_storage_roots(addr: &str) -> Vec<String> {
+pub(crate) fn installed_storage_roots(addr: &str) -> Vec<String> {
     let mut roots = vec![String::new()];
     if let Ok(vols) = ps5upload_core::volumes::list_volumes(addr) {
         roots.extend(
@@ -1465,6 +1654,11 @@ pub struct InstallStartRequest {
     /// install path is completely unchanged.
     #[serde(default)]
     pub serve_only: bool,
+    /// Hosting for "Copy install link" only: this engine installs nothing, and the console
+    /// that fetches the link may not be `ps5_addr`, so the console-side preflight is skipped.
+    /// Set by `link_create_handler`, never by a request body.
+    #[serde(skip)]
+    pub link_only: bool,
 }
 
 fn default_true() -> bool {
@@ -1820,7 +2014,7 @@ pub(crate) async fn install_start_handler(
     } else {
         "gd"
     };
-    {
+    if !req.link_only {
         let addr = req.ps5_addr.clone();
         let content_id = head_meta.content_id.clone();
         let cat = category;
@@ -1953,6 +2147,8 @@ pub(crate) async fn install_start_handler(
         transfer_bytes: 0,
         transfer: TransferCoverage::new(expected_size),
         remote,
+        shared_link: false,
+        shared_any: false,
     };
 
     // Insert *before* sending the install frame so the HTTP listener
@@ -2008,6 +2204,11 @@ pub(crate) async fn install_start_handler(
         sessions.retain(|_, s| {
             // Measured from the last sign of life, so an install that is still
             // pulling bytes is never reaped no matter how long it runs.
+            // A shared link lasts until it is stopped (or the engine quits), however long no
+            // console fetches it, as PS Game Library's served packages did.
+            if s.shared_link && !s.cancelled {
+                return true;
+            }
             let idle_since = s.last_activity_unix.max(s.created_at_unix);
             if idle_since <= full_cutoff {
                 return false;
@@ -2672,7 +2873,7 @@ async fn serve_handler(
     // real console IP is visible and no allowlist entry is needed.
     let peer_trusted =
         peer.ip().is_loopback() || crate::allow_rules_contain(parse_allow_ips_env(), peer.ip());
-    if !peer_trusted && !expected_ip.is_empty() && peer_ip != expected_ip {
+    if !peer_trusted && !session.shared_any && !expected_ip.is_empty() && peer_ip != expected_ip {
         crate::log_warn!(
             "pkg-host fetch REJECTED: peer={} expected={} session={} \
              (set PS5UPLOAD_ALLOW_IP to this peer if the console is behind NAT)",
@@ -2997,6 +3198,8 @@ fn stream_metadata(
         category: head.category,
         app_ver: head.app_ver,
         platform: head.platform,
+        content_type: 0,
+        content_flags: 0,
         icon_png_base64: None,
         warnings: vec![],
     }
@@ -3216,6 +3419,7 @@ async fn remote_probe_handler(Json(req): Json<RemoteProbeRequest>) -> Response<B
         package_fingerprint: None,
         delete_staging: false,
         serve_only: true,
+        link_only: false,
     };
     match resolve_remote_source(&url, &probe_req).await {
         Ok((_, _, total_size, meta, _)) => {
@@ -3286,6 +3490,7 @@ async fn console_probe_handler(Json(req): Json<ConsoleProbeRequest>) -> Response
         package_fingerprint: None,
         delete_staging: false,
         serve_only: true,
+        link_only: false,
     };
     match resolve_console_source(&url, &probe_req).await {
         Ok((_, _, total_size, meta, _)) => {
@@ -3392,6 +3597,8 @@ async fn resolve_parts_and_meta(req: &InstallStartRequest) -> Result<ResolvedSou
                 req.content_id.as_deref().unwrap_or(""),
                 "",
             ),
+            content_type: 0,
+            content_flags: 0,
             icon_png_base64: None,
             warnings: vec![],
         };
@@ -4037,6 +4244,12 @@ mod persist_tests {
         assert_eq!(got.total_size, 4096);
         assert!(got.serve_only);
 
+        // A shared install link is not kept: nothing stays published after the engine quits.
+        map.get_mut("a").unwrap().shared_link = true;
+        persist::save_to(&file, &map);
+        assert!(persist::load_from(&file).is_empty());
+        map.get_mut("a").unwrap().shared_link = false;
+
         // A finished or cancelled session is not kept.
         map.get_mut("a").unwrap().cancelled = true;
         persist::save_to(&file, &map);
@@ -4560,6 +4773,8 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
             transfer_bytes: 0,
             transfer: TransferCoverage::new(total),
             remote: None,
+            shared_link: false,
+            shared_any: false,
         }
     }
 

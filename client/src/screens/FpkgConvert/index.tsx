@@ -24,7 +24,9 @@ import { useWebviewDrop } from "../../lib/useWebviewDrop";
 import { useConnectionStore } from "../../state/connection";
 import { useConvertPrefs } from "../../state/convertPrefs";
 import { isArchiveSource, useFpkgConversion } from "../../state/fpkgConversion";
-import { useLocation } from "react-router";
+import { useUploadStore } from "../../state/upload";
+import { DEFAULT_IMAGE_SUBPATH } from "../../lib/imageUpload";
+import { useLocation, useNavigate } from "react-router";
 import { useTr } from "../../state/lang";
 import { pickLocalPath } from "../../state/localPicker";
 import { useTaskStore } from "../../state/tasks";
@@ -61,6 +63,7 @@ export default function FpkgConvertScreen() {
   const compression = useConvertPrefs((s) => s.compression);
   const setCompression = useConvertPrefs((s) => s.setCompression);
 
+  const navigate = useNavigate();
   const pipeline = useFpkgConversion((s) => s.pipeline);
   const start = useFpkgConversion((s) => s.start);
   const compress = useFpkgConversion((s) => s.compress);
@@ -395,7 +398,8 @@ export default function FpkgConvertScreen() {
             onCompress={() => void compress(source.trim(), outputDir.trim() || undefined)}
             onMakeImage={
               isLocalFolder
-                ? (thenCompress) => void buildImage(src, outputDir.trim() || undefined, thenCompress)
+                ? (thenCompress, format) =>
+                    void buildImage(src, outputDir.trim() || undefined, thenCompress, format)
                 : undefined
             }
             onCancel={() => void cancel()}
@@ -410,6 +414,18 @@ export default function FpkgConvertScreen() {
             onViewPackage={() => {
               if (pipeline.phase === "done") usePackageViewer.getState().open(pipeline.packagePath);
             }}
+            onUploadImage={(deleteAfter) => {
+              if (!host) return;
+              const u = useUploadStore.getState();
+              useFpkgConversion.getState().uploadImage({
+                host,
+                volume: u.destinationVolume,
+                subpath: u.destinationSubpath || DEFAULT_IMAGE_SUBPATH,
+                deleteAfter,
+              });
+              navigate("/upload");
+            }}
+            onOpenUpload={() => navigate("/upload")}
             onFinishReplace={(choice) =>
               void finishReplace(choice).catch((e) => setError(e instanceof Error ? e.message : String(e)))
             }

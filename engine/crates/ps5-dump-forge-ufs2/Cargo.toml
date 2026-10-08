@@ -1,0 +1,14 @@
+[package]
+name = "ps5-dump-forge-ufs2"
+# From PS5 Dump Forge by quer3q (https://github.com/quer3q/ps5-dump-forge), GPL-3.0-or-later,
+# commit 2d65974. Edition 2024 as upstream, so the files stay as they are there.
+edition = "2024"
+license = "GPL-3.0-or-later"
+version.workspace = true
+
+[dependencies]
+ps5upload-fpkg = { path = "../ps5upload-fpkg" }
+unicode-normalization = "0.1"
+
+[dev-dependencies]
+ps5upload-pkg = { path = "../ps5upload-pkg" }

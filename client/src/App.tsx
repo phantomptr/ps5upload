@@ -40,6 +40,7 @@ const UploadScreen = lazyWithReload(() => import("./screens/Upload"));
 const InstallPackageScreen = lazyWithReload(() => import("./screens/InstallPackage"));
 const ConvertScreen = lazyWithReload(() => import("./screens/FpkgConvert"));
 const GamesScreen = lazyWithReload(() => import("./screens/Games"));
+const CollectionScreen = lazyWithReload(() => import("./screens/Collection"));
 const SearchScreen = lazyWithReload(() => import("./screens/Search"));
 const VolumesScreen = lazyWithReload(() => import("./screens/Volumes"));
 const FileSystemScreen = lazyWithReload(() => import("./screens/FileSystem"));
@@ -211,6 +212,14 @@ function AppRoutes({ location }: { location: Location }) {
           element={
             <Suspense fallback={<ScreenLoader />}>
               <GamesScreen />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/collection"
+          element={
+            <Suspense fallback={<ScreenLoader />}>
+              <CollectionScreen />
             </Suspense>
           }
         />

@@ -38,6 +38,8 @@ smb2 = "0.23"
 ps5upload-core = { path = "../ps5upload-core" }
 ps5upload-pkg = { path = "../ps5upload-pkg" }
 ps5upload-fpkg = { path = "../ps5upload-fpkg" }
+ps5-dump-forge-ufs2 = { path = "../ps5-dump-forge-ufs2" }
+ps5-dump-forge-pfs = { path = "../ps5-dump-forge-pfs" }
 rust-embed = { version = "8", optional = true }
 serde.workspace = true
 serde_json.workspace = true
@@ -45,6 +47,7 @@ tokio.workspace = true
 tokio-stream.workspace = true
 tower-http.workspace = true
 uuid.workspace = true
+unicode-normalization = "0.1.25"
 suppaftp = { version = "12", default-features = false, features = ["tokio-rustls-ring"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
@@ -57,6 +60,10 @@ russh-sftp = "3"
 # ps5upload-core gates it: the Android cross-compile stays pure Rust.
 [target.'cfg(not(target_os = "android"))'.dependencies]
 ureq = { version = "3", features = ["rustls"] }
+
+# The Collection's "Move to Trash": the OS trash on macOS, Windows and Linux desktops.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+trash = "5.2"
 
 [dev-dependencies]
 # Writes the tiny archives the no-helper tests plan against (the decode side is ps5upload-core's).
