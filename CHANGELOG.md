@@ -4,6 +4,37 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.5.1
+
+**Send games from the Collection in one click, and stop an install you no longer want.**
+
+### New
+
+- **Collection: Send to PS5.** A game kept as a folder, image or archive goes to the PS5 from its
+  details: pick the copy, send a game folder as it is or as one compressed image, choose the
+  drive and folder (it tells you if it won't fit), and it starts right away. The details and the
+  game's card show how it is going.
+- **Bring this PS5 up to date** is now a bar on the Collection whenever updates or DLC are
+  waiting, not hidden in a menu.
+
+### Fixed
+
+- **Stop an install that is running.** A running install now has Stop, and the queue lets it go
+  within seconds. Use it after cancelling the download on the PS5, which the app can't see: it
+  no longer stays stuck until you restart the app. After a minute with no data asked for, the
+  install says so and points to Stop.
+- **Starting one thing doesn't start everything.** Installing, sending from the Collection,
+  Upload's "add and start", retrying a task and uploading a built image start only what you
+  just added; other uploads waiting for Start keep waiting.
+- **Covers** show after a scan even when the first try came too early.
+- **Screens no longer freeze (can't scroll)** after a dialog closes on one console while you look
+  at another, for example with an upload running on one PS5 and the other PS5's Upload open.
+- **Pair another device from a paired one:** **Connection → Let another device pair** opens the
+  PS5 to a new device for five minutes, the way out when a web UI (or a new phone) is refused
+  with "not accepting new pairings". When the PS5's loader isn't running, Send helper now says
+  so instead of "Connection refused". For Docker: map `/data` to a host folder so the pairing
+  key survives a container update (FAQ).
+
 ## 6.5.0
 
 **The Collection, Move to…, and a big round of fixes: Android connects again, the helper starts

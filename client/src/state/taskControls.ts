@@ -99,6 +99,8 @@ export async function commandTask(task: Task, command: TaskCommand): Promise<boo
   }
   if (control.owner !== "upload-queue") return false;
   const retried = useUploadQueueStore.getState().retryItem(control.itemId);
-  if (retried) await useUploadQueueStore.getState().startHost(control.host);
+  if (retried) {
+    await useUploadQueueStore.getState().startHost(control.host, { onlyIds: [control.itemId] });
+  }
   return retried;
 }

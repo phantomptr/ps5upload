@@ -5593,6 +5593,11 @@ export async function pkgInstall(
   }>;
 }
 
+/** Stop a running install job; the engine ends it as `cancelled` within a few seconds. */
+export async function pkgInstallStop(job: string): Promise<void> {
+  await invoke("pkg_install_stop", { job });
+}
+
 /** Poll a unified install job by id. */
 export async function pkgInstallStatus(job: string): Promise<InstallStatus> {
   return invoke("pkg_install_status_v2", { job }) as Promise<InstallStatus>;

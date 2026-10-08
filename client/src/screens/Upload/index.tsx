@@ -452,9 +452,9 @@ export default function UploadScreen() {
   /** Snapshot the current source + destination + options into a queue
    *  item. Captured at click time, so subsequent edits to the form
    *  don't bleed into the queued item. */
-  const handleAddToQueue = (strategy: "overwrite" | "resume") => {
-    if (!source || !host?.trim()) return;
-    queueAdd(
+  const handleAddToQueue = (strategy: "overwrite" | "resume"): string | null => {
+    if (!source || !host?.trim()) return null;
+    return queueAdd(
       buildUploadQueueItem(
         source,
         rarPassword,
@@ -606,8 +606,8 @@ export default function UploadScreen() {
       return;
     }
     if (source.kind === "pkg") {
-      handleAddToQueue("overwrite");
-      void queueStartHost(host);
+      const id = handleAddToQueue("overwrite");
+      if (id) void queueStartHost(host, { onlyIds: [id] });
       return;
     }
     // Archives extract into a directory, so the pre-flight probe treats them
@@ -709,12 +709,14 @@ export default function UploadScreen() {
   const addBatch = (startNow: boolean) => {
     if (!batchReady) return;
     const now = Date.now();
+    const ids: string[] = [];
     toAdd.forEach((r, i) => {
       const item = batchItemFor(r, i === 0, `${r.id}${Math.random().toString(36).slice(2, 6)}`, now);
-      if (item) queueAdd(item);
+      if (item) ids.push(queueAdd(item));
     });
     batch.clear();
-    if (startNow && host) void queueStartHost(hostOf(host));
+    // Start these; anything else waiting in the queue keeps waiting for Start.
+    if (startNow && host) void queueStartHost(hostOf(host), { onlyIds: ids });
   };
   const batchKindLabel = (r: BatchRow) =>
     r.source ? detectedLabel(r.source, tr).label : r.isDir ? tr("upload_kind_folder", "Folder") : "";

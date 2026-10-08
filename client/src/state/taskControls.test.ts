@@ -74,7 +74,7 @@ describe("real task controls", () => {
     });
     expect(await commandTask(current, "retry")).toBe(true);
     expect(owners.queue.retryItem).toHaveBeenCalledWith("row");
-    expect(owners.queue.startHost).toHaveBeenCalledWith("ps5");
+    expect(owners.queue.startHost).toHaveBeenCalledWith("ps5", { onlyIds: ["row"] });
   });
 
   it("does not start a queue when retry was rejected by its owner", async () => {

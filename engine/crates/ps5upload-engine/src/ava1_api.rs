@@ -272,6 +272,30 @@ pub async fn pairing_cancel_handler(
     Json(serde_json::json!({ "ok": true, "was_pending": had })).into_response()
 }
 
+/// `POST /api/ava1/pairing/allow` `{addr}` — from a device that is paired, open the console's
+/// pairing window for five minutes (`pairing.open`, SPEC.md §5 item 6) so another device can
+/// pair with a code. The console opens its window by itself only while nothing is paired, so
+/// without this a second device (a web UI on a server whose identity was lost, a new phone)
+/// was refused until the helper restarted.
+pub async fn pairing_allow_handler(
+    State(state): State<crate::AppState>,
+    Json(req): Json<PairingAddr>,
+) -> Response {
+    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let opened = match ps5upload_ava1::pool().session(&addr).await {
+        Ok(session) => session.open_pairing(300).await.map_err(|e| e.to_string()),
+        Err(e) => Err(e.to_string()),
+    };
+    match opened {
+        Ok(()) => Json(serde_json::json!({ "ok": true, "seconds": 300 })).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "ok": false, "error": e })),
+        )
+            .into_response(),
+    }
+}
+
 /// `POST /api/ava1/pairing/forget` `{addr}` — "forget the old console": removes the key
 /// pinned for this address so a different PS5 there can be paired.
 pub async fn pairing_forget_handler(

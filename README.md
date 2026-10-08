@@ -295,6 +295,8 @@ with **Settings → Engine URL**.
   installs need the PS5 to reach the engine). Set `PS5_ADDR` and `PS5UPLOAD_ALLOW_IP`.
 - Open `http://<host>:19113`. The file picker browses the engine's disk; mount your games
   folder into the container and set `PS5UPLOAD_BROWSE_ROOTS`.
+- Map `/data` to a host folder (on Unraid, `/mnt/user/appdata/ps5upload`): it holds the pairing
+  key, so the PS5 keeps trusting the web UI after the container is recreated.
 - An upload keeps running when you close the tab.
 - **No password.** Anyone allowed can read, write and delete on your PS5. Keep it on a trusted
   LAN, never on the internet.

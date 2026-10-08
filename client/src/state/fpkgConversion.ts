@@ -253,8 +253,9 @@ let pendingImageUpload: ImageUploadPlan | null = null;
 /** Puts a finished image in the Upload queue and starts that console's queue. */
 function queueImage(imagePath: string, bytes: number, plan: ImageUploadPlan) {
   const q = useUploadQueueStore.getState();
-  q.add(imageUploadItem(imagePath, plan, bytes));
-  void q.startHost(plan.host);
+  const id = q.add(imageUploadItem(imagePath, plan, bytes));
+  // Run just this image: uploads someone queued for later still wait for Start.
+  void q.startHost(plan.host, { onlyIds: [id] });
 }
 
 /** A build that ends the run (Convert only, or a .ffpfsc image). */

@@ -5,6 +5,7 @@ import { Badge, PlatformBadge } from "../../components";
 import { addOnCount, formatCollectionBytes } from "../../lib/collectionView";
 import { useTr } from "../../state/lang";
 import { CollectionCover } from "./CollectionCover";
+import type { CopyActivity } from "../../state/copyActivity";
 
 /** "1 copy · 2 add-ons": copies are full copies of the game, add-ons its updates and DLC. */
 export function useCopiesLabel() {
@@ -63,14 +64,35 @@ export function ConsoleBadge({ state }: { state?: GameConsoleState }) {
   );
 }
 
+/** "Sending 34%", "Installing", "Queued", "Building": what is happening to the game right now. */
+function ActivityBadge({ activity }: { activity: CopyActivity }) {
+  const tr = useTr();
+  const pct = "pct" in activity && activity.pct !== null ? ` ${activity.pct}%` : "";
+  const label =
+    activity.phase === "building"
+      ? tr("collection.badge_building", undefined, "Building") + pct
+      : activity.phase === "queued"
+        ? tr("collection.badge_queued", undefined, "Queued")
+        : activity.phase === "sending" && activity.installing
+          ? tr("collection.badge_installing", undefined, "Installing") + pct
+          : tr("collection.badge_sending", undefined, "Sending") + pct;
+  return (
+    <Badge tone="accent" size="sm">
+      {label}
+    </Badge>
+  );
+}
+
 export function CollectionCard({
   game,
   onOpen,
   consoleState,
+  activity,
 }: {
   game: CollectionGame;
   onOpen: () => void;
   consoleState?: GameConsoleState;
+  activity?: CopyActivity | null;
 }) {
   const tr = useTr();
   const copiesLabel = useCopiesLabel();
@@ -89,6 +111,11 @@ export function CollectionCard({
         <div className="absolute bottom-2 left-2 drop-shadow">
           <ConsoleBadge state={consoleState} />
         </div>
+        {activity && (activity.phase === "building" || activity.phase === "queued" || activity.phase === "sending") && (
+          <div className="absolute bottom-2 right-2 drop-shadow">
+            <ActivityBadge activity={activity} />
+          </div>
+        )}
         {game.is_duplicate && (
           <span className="absolute right-2 top-2 drop-shadow">
             <Badge

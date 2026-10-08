@@ -24,6 +24,7 @@ import {
   uploadQueueSave,
   UploadJobError,
   powerStandby,
+  pkgInstallStop,
   resumeTxidForget,
   type ReconcileMode,
 } from "../api/ps5";
@@ -250,6 +251,8 @@ export interface QueueItem {
   /** Install-only: the engine job running this install, so a reload can ask the engine how it
    *  went instead of calling it interrupted. */
   installJobId?: string | null;
+  /** Install-only: the user asked to stop it; the row goes once the engine ends the job. */
+  stopping?: boolean;
   /** A game image Convert built on this computer: delete it here once it is on the PS5. The
    *  engine refuses to delete any file it did not build itself. */
   deleteSourceAfterUpload?: boolean;
@@ -391,7 +394,8 @@ interface QueueState {
   isLeader: boolean;
 
   hydrate: () => Promise<void>;
-  add: (item: AddQueueItem) => void;
+  /** Adds the item and returns its id. */
+  add: (item: AddQueueItem) => string;
   /** Queue an install on its console and start that console. `done` resolves
    *  when the item finishes or is removed; a duplicate resolves at once with
    *  ok:false. */
@@ -437,7 +441,12 @@ interface QueueState {
   /** Stop every running console (== "Stop all"). */
   stop: () => void;
   /** Start (or no-op if already running) just one console's drain loop. */
-  startHost: (host: string, opts?: { installsOnly?: boolean }) => Promise<void>;
+  /** `installsOnly` / `onlyIds` limit the run to what a click just added (installs, or
+   *  these items); uploads waiting for Start stay waiting. Start with neither runs everything. */
+  startHost: (
+    host: string,
+    opts?: { installsOnly?: boolean; onlyIds?: string[] },
+  ) => Promise<void>;
   /** Stop just one console; siblings keep running. */
   stopHost: (host: string) => void;
 }
@@ -645,14 +654,16 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
   /** Consoles whose current run was started by an install (Install, Collection, a link):
    *  that run takes install items only, so uploads waiting for Start stay waiting (#410).
    *  Pressing Start while it runs turns it into a full run. */
-  const installsOnlyRun = new Map<string, boolean>();
+  type RunScope = { installs: boolean; ids: Set<string> };
+  /** Per console: what the current run may take, or absent for everything. */
+  const runScope = new Map<string, RunScope>();
+  const inScope = (h: string, it: QueueItem) => {
+    const scope = runScope.get(h);
+    return !scope || (scope.installs && it.sourceKind === "install") || scope.ids.has(it.id);
+  };
   const pickPending = (h: string) =>
     nextPendingForHost(
-      get().items.filter(
-        (it) =>
-          !reattaching.has(it.id) &&
-          (!installsOnlyRun.get(h) || it.sourceKind === "install"),
-      ),
+      get().items.filter((it) => !reattaching.has(it.id) && inScope(h, it)),
       h,
     );
 
@@ -2051,6 +2062,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
       };
       set((s) => ({ items: s.items.concat(item) }));
       scheduleSave();
+      return item.id;
     },
 
     remove(id) {
@@ -2063,8 +2075,26 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
     cancelItem(id) {
       const item = get().items.find((it) => it.id === id);
       if (!item) return;
-      // Sony's install can't be stopped halfway; the row finishes on its own.
-      if (item.sourceKind === "install" && item.status === "running") return;
+      // A running install: ask the engine to stop it (it stops serving the package; the PS5's
+      // download then fails, and a download already cancelled on the PS5 is let go at once
+      // instead of after the 5-minute stall bound). The row goes once the job has ended. Before
+      // the engine has a job there is nothing on the wire yet: fall through to the plain cancel.
+      if (item.sourceKind === "install" && item.status === "running" && item.installJobId) {
+        if (item.stopping) return;
+        set((s) => ({ items: patchItem(s.items, id, { stopping: true }) }));
+        void pkgInstallStop(item.installJobId).catch(() => undefined);
+        void (async () => {
+          for (let i = 0; i < 60; i++) {
+            const now = get().items.find((it) => it.id === id);
+            if (!now || now.status !== "running") break;
+            await new Promise((r) => setTimeout(r, 500));
+          }
+          settle(id, { ok: false, message: "Stopped." });
+          set((s) => ({ items: removeItem(s.items, id) }));
+          scheduleSave();
+        })();
+        return;
+      }
       settle(id, { ok: false, message: "Removed from the queue." });
       const h = hostOf(item.addr);
       // A pending / done / failed item isn't touching the wire — just drop it.
@@ -2238,15 +2268,28 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
 
     async startHost(host, opts) {
       const h = hostOf(host);
-      const installsOnly = !!opts?.installsOnly;
+      const limited = !!opts?.installsOnly || (opts?.onlyIds?.length ?? 0) > 0;
+      const widen = (scope: RunScope) => {
+        if (opts?.installsOnly) scope.installs = true;
+        for (const id of opts?.onlyIds ?? []) scope.ids.add(id);
+      };
       // Already draining this console → no-op (idempotent; a second Start
       // click or a re-loop must not spawn a duplicate loop that double-
-      // claims items). A Start during an install-only run widens it to everything.
+      // claims items). A limited run takes the newly asked items too; a plain
+      // Start widens it to everything.
       if (get().runningHosts[h]) {
-        if (!installsOnly) installsOnlyRun.set(h, false);
+        const scope = runScope.get(h);
+        if (!limited) runScope.delete(h);
+        else if (scope) widen(scope);
         return;
       }
-      installsOnlyRun.set(h, installsOnly);
+      if (limited) {
+        const scope: RunScope = { installs: false, ids: new Set() };
+        widen(scope);
+        runScope.set(h, scope);
+      } else {
+        runScope.delete(h);
+      }
       const myGen = ++genCounter;
       hostGen.set(h, myGen);
       const isLive = () => hostGen.get(h) === myGen;

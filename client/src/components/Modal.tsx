@@ -74,7 +74,7 @@ export function Modal({
   // Lock background scroll while open so a wheel/touch over the scrim can't
   // scroll the page behind it (this modal renders inline, so its scrim's
   // ancestor is the scrollable screen container).
-  useScrollLock(open);
+  useScrollLock(open, panelRef);
 
   // Escape-to-close + focus capture/restore. Both gated on `open` so a
   // closed modal adds no listeners and doesn't fight for focus.

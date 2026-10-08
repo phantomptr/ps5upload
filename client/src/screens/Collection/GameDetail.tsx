@@ -34,6 +34,10 @@ import { engineIsOnThisDevice } from "../../state/engine";
 import { useCollectionStore } from "../../state/collection";
 import { useTr } from "../../state/lang";
 import { CollectionCover } from "./CollectionCover";
+import { SendToPs5 } from "./SendToPs5";
+import { ActivityLine } from "./ActivityLine";
+import { useCopyActivity } from "../../state/copyActivity";
+import { bestSendable, sendKind } from "../../lib/collectionSend";
 import { useCopiesLabel } from "./CollectionCard";
 
 function CopyButton({ text, label }: { text: string; label: string }) {
@@ -110,13 +114,18 @@ function LocationRow({
   loc,
   host,
   onTrash,
+  onSend,
 }: {
   loc: CollectionLocation;
   host: string;
   onTrash?: (paths: string[]) => void;
+  /** Opens the game's send panel with this copy picked. */
+  onSend: () => void;
 }) {
   const tr = useTr();
   const navigate = useNavigate();
+  const [activity] = useCopyActivity([loc.absolute_path]);
+  const sendable = !!sendKind(loc) && loc.pkg?.complete !== false && !loc.pkg?.error;
   const noTrash = useCollectionStore(
     (s) => s.settings?.trash_available === false,
   );
@@ -203,6 +212,16 @@ function LocationRow({
         )}
       </div>
       <div className="mt-2 flex flex-wrap gap-1.5">
+        {host && sendable && (
+          <button
+            type="button"
+            onClick={onSend}
+            className="inline-flex items-center gap-1 rounded-md border border-[var(--color-accent)] px-2 py-1 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-3)]"
+          >
+            <Upload size={12} />
+            {tr("collection.send_go", undefined, "Send to PS5")}
+          </button>
+        )}
         <CopyButton
           text={loc.absolute_path || loc.path}
           label={tr("collection.copy_path", undefined, "Copy path")}
@@ -255,6 +274,11 @@ function LocationRow({
           </button>
         )}
       </div>
+      {activity && (
+        <div className="mt-2">
+          <ActivityLine activity={activity} onOpen={() => navigate("installing" in activity && activity.installing ? "/install" : "/upload")} />
+        </div>
+      )}
     </li>
   );
 }
@@ -264,14 +288,35 @@ function ConsoleSection({
   game,
   host,
   state,
+  sendPath,
+  setSendPath,
 }: {
   game: CollectionGame;
   host: string;
   state?: GameConsoleState;
+  /** The copy the send panel is open for, or null when it is closed. */
+  sendPath: string | null;
+  setSendPath: (p: string | null) => void;
 }) {
   const tr = useTr();
   const navigate = useNavigate();
   const [queued, setQueued] = useState(false);
+  const sending = sendPath !== null;
+  const sendables = game.locations.filter(
+    (l) => sendKind(l) && l.pkg?.complete !== false && !l.pkg?.error,
+  );
+  const best = bestSendable(game.locations);
+  // What the console section's buttons started: the base, update or DLC packages.
+  const offerPaths = [
+    ...(state?.base ? [state.base.path] : []),
+    ...(state?.update ? [state.update.path] : []),
+    ...(state?.dlc_missing ?? []).map((d) => d.path),
+  ];
+  const activities = useCopyActivity(offerPaths);
+  const installActivity =
+    activities.find((a) => a && a.phase !== "done" && a.phase !== "failed") ??
+    activities.find((a) => a) ??
+    null;
   if (!host) {
     return (
       <p className="text-xs text-[var(--color-muted)]">
@@ -371,34 +416,48 @@ function ConsoleSection({
             )}
           </Button>
         )}
-        {uploadOnly && (
+        {uploadOnly && best && (
           <Button
             size="sm"
-            variant="secondary"
+            variant={sending ? "secondary" : "primary"}
             leftIcon={<Upload size={13} />}
-            onClick={() => navigate("/upload")}
+            onClick={() => setSendPath(sending ? null : best.absolute_path)}
+            aria-expanded={sending}
           >
-            {tr("collection.upload_instead", undefined, "Copy it with Upload")}
+            {tr("collection.send_go", undefined, "Send to PS5")}
           </Button>
         )}
       </div>
-      {uploadOnly && (
+      {uploadOnly && !sending && (
         <p className="mt-1 text-xs text-[var(--color-muted)]">
           {tr(
-            "collection.upload_hint",
+            "collection.send_hint",
             undefined,
-            "This game is kept as a folder, image or archive, not as a package: copy it to the PS5 with Upload (an image goes to a folder ShadowMount+ watches).",
+            "This game is a folder, image or archive, not a package: send it to the PS5, where ShadowMount+ picks it up.",
           )}
         </p>
       )}
-      {queued && (
-        <p className="mt-2 text-xs text-[var(--color-good)]">
-          {tr(
-            "collection.queued_hint",
-            undefined,
-            "Queued. Progress shows in Install Package and in Tasks; this computer and the PS5 stay awake until it is done.",
+      {sending && (
+        <div id={`send-${game.game_id}`}>
+          <SendToPs5
+            key={sendPath}
+            game={game}
+            host={host}
+            copies={sendables}
+            initial={sendables.find((l) => l.absolute_path === sendPath) ?? sendables[0]}
+          />
+        </div>
+      )}
+      {(queued || installActivity) && (
+        <div className="mt-2">
+          {installActivity ? (
+            <ActivityLine activity={installActivity} onOpen={() => navigate("/install")} />
+          ) : (
+            <p className="text-xs text-[var(--color-good)]">
+              {tr("collection.queued_short", undefined, "Queued. Progress shows in Install Package.")}
+            </p>
           )}
-        </p>
+        </div>
       )}
     </div>
   );
@@ -422,6 +481,16 @@ export function GameDetail({
 }) {
   const tr = useTr();
   const copiesLabel = useCopiesLabel();
+  const [sendPath, setSendPath] = useState<string | null>(null);
+  const openSend = (path: string) => {
+    setSendPath(path);
+    // The panel is up in "This PS5"; bring it into view from the copy that asked for it.
+    requestAnimationFrame(() =>
+      document
+        .getElementById(`send-${game.game_id}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
+    );
+  };
   const extra = extraCopies(game).filter((l) => !isRemotePath(l.absolute_path));
   const extraBytes = extra.reduce((n, l) => n + l.size_bytes, 0);
   return (
@@ -504,7 +573,13 @@ export function GameDetail({
         {tr("collection.this_console", undefined, "This PS5")}
       </h3>
       <div className="rounded-lg border border-[var(--color-border)] p-3">
-        <ConsoleSection game={game} host={host} state={consoleState} />
+        <ConsoleSection
+          game={game}
+          host={host}
+          state={consoleState}
+          sendPath={sendPath}
+          setSendPath={setSendPath}
+        />
       </div>
       <h3 className="mb-2 mt-5 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
         {tr(
@@ -520,6 +595,7 @@ export function GameDetail({
             loc={l}
             host={host}
             onTrash={onTrash}
+            onSend={() => openSend(l.absolute_path)}
           />
         ))}
       </ul>

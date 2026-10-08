@@ -919,6 +919,9 @@ export async function browserInvoke<T>(
     case "pkg_install":
       return postJson<T>("/api/pkg/install", args["req"]);
 
+    case "pkg_install_stop":
+      return postJson<T>("/api/pkg/install/stop", { job: args["job"] });
+
     case "pkg_install_status_v2":
       return getJson<T>(
         `/api/pkg/install/status?job=${uenc(args["job"] as string)}`,

@@ -77,6 +77,8 @@ pub enum FailReason {
     /// 0x80B2116F (FW 9.60, 13.60) or 0x80B2150F (FW 5.10). The same package
     /// streamed from a computer installs, so the fix is the route, not the file.
     StagedRefused,
+    /// The user stopped it.
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

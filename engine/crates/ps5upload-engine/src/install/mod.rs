@@ -22,6 +22,8 @@ pub struct JobStore {
     jobs: Mutex<HashMap<String, InstallStatus>>,
     active: Mutex<HashMap<String, String>>, // console_id -> job_id
     seq: Mutex<u64>,
+    /// Jobs the user asked to stop; the delivery wait checks this each round.
+    cancelled: Mutex<std::collections::HashSet<String>>,
 }
 
 impl Default for JobStore {
@@ -36,6 +38,7 @@ impl JobStore {
             jobs: Mutex::new(HashMap::new()),
             active: Mutex::new(HashMap::new()),
             seq: Mutex::new(0),
+            cancelled: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -76,6 +79,24 @@ impl JobStore {
                 active.remove(&cid);
             }
         }
+    }
+
+    /// Ask a running job to stop. False when there is no such job or it already ended.
+    pub fn request_cancel(&self, job: &str) -> bool {
+        let running = self
+            .jobs
+            .lock()
+            .unwrap()
+            .get(job)
+            .is_some_and(|st| !matches!(st.phase, Phase::Done | Phase::Failed));
+        if running {
+            self.cancelled.lock().unwrap().insert(job.to_string());
+        }
+        running
+    }
+
+    pub fn is_cancelled(&self, job: &str) -> bool {
+        self.cancelled.lock().unwrap().contains(job)
     }
 
     pub fn get(&self, job: &str) -> Option<InstallStatus> {
@@ -469,6 +490,8 @@ pub enum DeliveryProgress {
     Complete,
     /// No progress for the whole stall window.
     Stalled,
+    /// The user stopped the install (POST /api/pkg/install/stop).
+    Cancelled,
 }
 
 /// Pure: decide delivery progress from bytes served so far, the package
@@ -636,6 +659,23 @@ pub async fn install_handler(
 #[derive(Debug, Deserialize)]
 pub struct JobQuery {
     pub job: String,
+}
+
+/// `POST /api/pkg/install/stop {job}`: stop a running install. The delivery wait notices
+/// within about 2 s and ends the job as `cancelled`.
+pub async fn install_stop_handler(
+    State(state): State<PkgInstallStateHandle>,
+    Json(q): Json<JobQuery>,
+) -> Response {
+    if state.jobs.request_cancel(&q.job) {
+        Json(serde_json::json!({"ok":true})).into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"ok":false,"error":"no running install with that id"})),
+        )
+            .into_response()
+    }
 }
 
 pub async fn install_status_handler(
@@ -1125,6 +1165,9 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
             if p != DeliveryProgress::Pending {
                 break p;
             }
+            if state.jobs.is_cancelled(&job) {
+                break DeliveryProgress::Cancelled;
+            }
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
     };
@@ -1135,6 +1178,26 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         crate::pkg_install::release_serve_session(&state.sessions, sid);
     }
     let deliver_ms = deliver_started.elapsed().as_millis() as u64;
+    if delivery == DeliveryProgress::Cancelled {
+        // Stopped by the user, often after cancelling the download on the PS5, which this
+        // engine cannot see (the console just stops asking for data). The stream source is
+        // already released above; a daemon still serving a staged copy is recycled so the
+        // next install is not refused as busy.
+        crate::log_info!("{tag}: stopped by the user at {last_served} bytes");
+        if session_id.is_none() && install_job_id.is_some() {
+            recycle_daemon(&ip).await;
+        }
+        state.jobs.update(&job, |s| {
+            s.phase = Phase::Failed;
+            s.verdict = Some(Verdict::Failed);
+            s.reason = Some(FailReason::Cancelled);
+            s.hint = Some("stopped; if the PS5 still lists the download, delete it there".into());
+            s.shortened = shortened;
+            s.metrics.phase_ms.insert("deliver".into(), deliver_ms);
+        });
+        finalize(&state, &job, &req, started);
+        return;
+    }
     if delivery == DeliveryProgress::Stalled {
         crate::log_warn!(
             "{tag}: delivery stalled at {last_served} bytes — source kept, reporting failed"
@@ -1683,6 +1746,23 @@ mod tests {
             h.contains("Stream & install") && h.contains("Package Installer"),
             "{h}"
         );
+    }
+
+    #[test]
+    fn only_a_running_install_can_be_stopped() {
+        let jobs = JobStore::new();
+        let job = jobs.begin("192.0.2.7:9113").unwrap();
+        assert!(!jobs.is_cancelled(&job));
+        assert!(jobs.request_cancel(&job));
+        assert!(jobs.is_cancelled(&job));
+        // A finished job, or one that never existed, is not "stopped".
+        let done = {
+            jobs.finish(&job);
+            jobs.begin("192.0.2.7:9113").unwrap()
+        };
+        jobs.update(&done, |s| s.phase = Phase::Done);
+        assert!(!jobs.request_cancel(&done));
+        assert!(!jobs.request_cancel("no-such-job"));
     }
 
     #[test]

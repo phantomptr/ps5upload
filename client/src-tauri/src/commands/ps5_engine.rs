@@ -2831,6 +2831,13 @@ pub async fn pkg_install(req: JsonValue) -> Result<JsonValue, String> {
     post_json_long(&url, &req).await
 }
 
+/// Stop a running install (the user cancelled it here or on the PS5).
+#[tauri::command]
+pub async fn pkg_install_stop(job: String) -> Result<JsonValue, String> {
+    let url = format!("{}/api/pkg/install/stop", engine::url());
+    post_json(&url, &serde_json::json!({ "job": job })).await
+}
+
 /// Poll a unified install job by id. Cheap; called every 1-2s.
 #[tauri::command]
 pub async fn pkg_install_status_v2(job: String) -> Result<JsonValue, String> {

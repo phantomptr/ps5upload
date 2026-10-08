@@ -24,6 +24,7 @@ import {
 import { sendHelperTo } from "../../state/helperSendRuntime";
 import { looksLikeMacLocalNetworkBlock } from "../../lib/localNetworkHint";
 import { localNetworkBlocked } from "../../lib/androidLocalNetwork";
+import { pairingAllow } from "../../api/ava1";
 import { parsePS5Firmware } from "../../lib/ps5Firmware";
 import { compareVersions } from "../../lib/semver";
 import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
@@ -160,6 +161,45 @@ function StepCard({
       )}
       <div>{children}</div>
     </section>
+  );
+}
+
+/** From this paired app, let another device (a web UI, a phone) pair: the console takes a new
+ *  device for five minutes. */
+function AllowPairing({ host }: { host: string }) {
+  const tr = useTr();
+  const [state, setState] = useState<"idle" | "busy" | "open" | "failed">("idle");
+  const [error, setError] = useState("");
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
+      <Button
+        size="sm"
+        variant="secondary"
+        loading={state === "busy"}
+        onClick={async () => {
+          setState("busy");
+          try {
+            await pairingAllow(host);
+            setState("open");
+          } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+            setState("failed");
+          }
+        }}
+      >
+        {tr("connection_allow_pairing", undefined, "Let another device pair")}
+      </Button>
+      {state === "open" && (
+        <span className="text-[var(--color-good)]">
+          {tr(
+            "connection_allow_pairing_open",
+            undefined,
+            "For 5 minutes the PS5 takes a new device: on it, press Pair… and type the code the PS5 shows.",
+          )}
+        </span>
+      )}
+      {state === "failed" && <span className="text-[var(--color-bad)]">{error}</span>}
+    </div>
   );
 }
 
@@ -671,6 +711,7 @@ export default function ConnectionScreen() {
             stateText={tr("connection_step3_ready", undefined, "PS5 is ready")}
           >
             <VersionBlock onResend={handleSend} />
+            <AllowPairing host={host.trim()} />
             <p className="mb-4 text-sm leading-relaxed text-[var(--color-muted)]">
               {tr(
                 "connection_step3_hint",

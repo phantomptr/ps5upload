@@ -58,6 +58,7 @@ import { GameDetail } from "./GameDetail";
 import { ServingLinks } from "./ServingLinks";
 import { trashCopies } from "./trashCopies";
 import { exportCollection } from "./exportCollection";
+import { useActiveCopies } from "../../state/copyActivity";
 
 /** The games kept on this computer's drives: PS Game Library, inside ps5upload. */
 export default function CollectionScreen() {
@@ -131,6 +132,15 @@ export default function CollectionScreen() {
     () => consoleCounts(games, consoleStates),
     [games, consoleStates],
   );
+  // What is being sent or installed right now, by copy: one lookup for the whole grid.
+  const active = useActiveCopies();
+  const activityOf = (g: (typeof games)[number]) => {
+    for (const l of g.locations) {
+      const a = active.get(l.absolute_path);
+      if (a) return a;
+    }
+    return null;
+  };
 
   /** Every newer update and missing DLC for installed games, for one queue run. */
   async function bringUpToDate() {
@@ -657,6 +667,21 @@ export default function CollectionScreen() {
               ))}
             </div>
           )}
+          {consoleStates && cCounts.update + cCounts.dlc > 0 && (
+            // The one-click catch-up, where it can be seen rather than in the ⋯ menu.
+            <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-[var(--color-accent)] bg-[var(--color-surface-2)] px-3 py-2 text-sm">
+              <span className="min-w-0 flex-1">
+                {tr(
+                  "collection.uptodate_banner",
+                  { u: cCounts.update, d: cCounts.dlc },
+                  "This PS5 can take {u} update(s) and DLC for {d} game(s) from your collection.",
+                )}
+              </span>
+              <Button size="sm" variant="primary" onClick={() => void bringUpToDate()}>
+                {tr("collection.update_all", undefined, "Bring this PS5 up to date")}
+              </Button>
+            </div>
+          )}
           {consoleEntry?.error && helperUp && (
             <p className="mb-3 text-xs text-[var(--color-warn)]">
               {tr(
@@ -688,6 +713,7 @@ export default function CollectionScreen() {
                 <CollectionCard
                   key={g.game_id}
                   game={g}
+                  activity={activityOf(g)}
                   consoleState={consoleStates?.get(g.game_id)}
                   onOpen={() => s.set({ openGameId: g.game_id })}
                 />

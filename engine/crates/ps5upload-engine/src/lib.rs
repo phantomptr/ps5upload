@@ -9807,6 +9807,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             post(ava1_api::pairing_cancel_handler),
         )
         .route(
+            "/api/ava1/pairing/allow",
+            post(ava1_api::pairing_allow_handler),
+        )
+        .route(
             "/api/ava1/pairing/forget",
             post(ava1_api::pairing_forget_handler),
         )

@@ -87,6 +87,18 @@ export async function pairingCancel(host: string): Promise<void> {
   }).catch(() => undefined);
 }
 
+/** From this (paired) app, open the console's pairing window for five minutes so another
+ *  device can pair with a code. */
+export async function pairingAllow(host: string): Promise<void> {
+  const res = await fetch(`${getEngineUrl()}/api/ava1/pairing/allow`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ addr: consoleAddr(host) }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  await readWire(res);
+}
+
 /** "Forget the old console": removes the key pinned for this address so a different PS5
  *  there can be paired. */
 export async function pairingForget(host: string): Promise<void> {

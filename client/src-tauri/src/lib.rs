@@ -359,6 +359,7 @@ pub fn run() {
             commands::pkg_console_probe,
             commands::pkg_install,
             commands::pkg_install_status_v2,
+            commands::pkg_install_stop,
             commands::pkg_install_history,
             commands::pkg_install_cancel,
             commands::host_net_open_settings,

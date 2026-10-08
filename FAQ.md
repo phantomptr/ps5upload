@@ -171,8 +171,19 @@ Yes. Run it on a server or NAS and point the app at it in **Settings → Engine 
   the package *from the engine*, and on Docker's bridge network the engine offers an address the
   PS5 cannot reach. Docker Desktop (macOS/Windows) has no host networking: publish port 19113 and
   set `PS5UPLOAD_PKG_HOST_IP` to the computer's LAN IP.
-- Keep a volume on `/data` (saved servers, install history, artwork cache).
+- **Map `/data` to a folder on the host** (on Unraid: `/mnt/user/appdata/ps5upload`). It holds
+  the engine's pairing key as well as saved servers, install history and the artwork cache.
+  Without it, recreating the container (an Unraid update or edit does) makes a new key the PS5
+  has never seen, and it stops accepting the web UI.
 - With a remote engine the app's file pickers browse the **engine's** disk.
+
+**Q: After restarting or updating the Docker container, the web UI says "This PS5 is not accepting new pairings".**
+The container lost its pairing key: `/data` was not mapped to a host folder (see above), so it
+came back as a new device, and the PS5 only takes a new device while nothing else is paired. Map
+`/data` to a host folder first, then either press **Send helper** in the web UI (the helper it
+sends pairs it), or open the desktop app (still paired) → **Connection → Let another device
+pair** and pair the web UI with the code. If Send helper says the loader (port 9021) isn't
+running, load elfldr on the PS5 again first.
 
 **Q: Docker or a NAS says "Permission denied" when I save or upload.**
 The image runs as UID:GID 65532 and keeps its state in `/data`. If you bind-mount a folder someone
@@ -711,6 +722,16 @@ In **Files**, select it and choose **Move to…**, then pick the drive's homebre
 folder). It says first whether the move is instant (same drive) or a copy to the other drive,
 and whether it fits; a copy removes the original only after checking it. **Set permissions
 (777)** in the same menu makes files and folders readable and runnable.
+
+**Q: I cancelled a download on the PS5, but the app still shows the install running.**
+The app can't see the PS5's download list; it only notices the console stopped asking for data.
+Press **Stop** (⊘) on the install in the queue: ps5upload stops sending the package and the
+row goes within a few seconds. After a minute with no data asked for, the row says so.
+
+**Q: How do I send a game from the Collection?**
+Open the game and press **Send to PS5**. Pick the copy, how to send a game folder (as it is, or
+as one compressed image that is faster to send and smaller on the PS5), the drive and folder,
+then **Send**. It starts right away; other uploads waiting in the queue keep waiting.
 
 **Q: How do I stop my PS5 from going into rest mode?**
 **Settings → Upload → Keep the PS5 awake** has three modes: **Off**; **During uploads and

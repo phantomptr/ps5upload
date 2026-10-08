@@ -774,6 +774,10 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
             "/api/pkg/install/history",
             get(crate::install::install_history_handler),
         )
+        .route(
+            "/api/pkg/install/stop",
+            post(crate::install::install_stop_handler),
+        )
         .route("/api/pkg/install/sessions", get(install_sessions_handler))
         .route("/api/pkg/install/cancel", post(install_cancel_handler))
         .route(

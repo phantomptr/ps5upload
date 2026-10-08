@@ -173,9 +173,9 @@ export function PairingPanel({
           </p>
           <p className="text-[var(--color-muted)]">
             {tr(
-              "pairing_closed_body",
+              "pairing_closed_body_v2",
               undefined,
-              "Its pairing window is closed. On a device that is already paired, open pairing for this console. If no device is paired yet, restart the helper on the console to reopen the window. Then try again.",
+              "On a device that is already paired (your desktop app, say), open Connection and press Let another device pair, then try again here. Or press Resend helper, which pairs this app by itself. If neither works, restart the helper on the console.",
             )}
           </p>
         </div>

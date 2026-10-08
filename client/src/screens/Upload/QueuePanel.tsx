@@ -40,6 +40,8 @@ import { useTitleInfo } from "../../lib/useTitleInfo";
 import { formatBytes, formatDuration } from "../../lib/format";
 import { MAX_AUTO_RECOVER_ATTEMPTS } from "../../lib/uploadRecovery";
 import { useTr } from "../../state/lang";
+// Direct import to avoid the barrel's circular-dep warning at build.
+import { useConfirm } from "../../components/ConfirmDialog";
 import { useConsoleLabel } from "../../state/roster";
 import {
   installOrderPriority,
@@ -667,8 +669,24 @@ export function QueueRow({
   onRetryViaUpload: () => void;
 }) {
   const tr = useTr();
+  const { confirm, dialog: confirmNode } = useConfirm();
   const isInstall = item.sourceKind === "install";
   const viewPath = queueItemViewPath(item);
+  // A running install can be stopped (here, or after cancelling it on the PS5, which the app
+  // cannot see): the PS5 just stops getting the package.
+  const stopInstall = async () => {
+    const ok = await confirm({
+      title: tr("queue_stop_install_title", undefined, "Stop this install?"),
+      message: tr(
+        "queue_stop_install_body",
+        undefined,
+        "ps5upload stops sending the package and removes it from the queue. If the PS5 still lists the download, delete it in the PS5's Downloads.",
+      ),
+      confirmLabel: tr("queue_stop_install_ok", undefined, "Stop install"),
+      destructive: true,
+    });
+    if (ok) onCancel();
+  };
   // Game identity for the row — so you can tell what's what at a glance.
   // pkg: title id parsed out of the ContentID drives the cover (appmeta/CDN)
   // and the PS4/PS5 badge. game-folder: the folder's own sce_sys/icon0.png.
@@ -731,6 +749,7 @@ export function QueueRow({
             : "border-[var(--color-border)] bg-[var(--color-surface)]"
       }`}
     >
+      {confirmNode}
       <div className="flex items-center gap-3">
         {isPending && position != null ? (
           <span
@@ -911,9 +930,23 @@ export function QueueRow({
               <ScanSearch size={14} />
             </button>
           )}
-          {isActive && isInstall ? null : isActive ? (
-            // An install can't be stopped halfway (Sony's installer owns it
-            // once it starts), so a running install row has no Cancel.
+          {isActive && isInstall ? (
+            item.stopping ? (
+              <span className="px-1 text-xs text-[var(--color-muted)]">
+                {tr("queue_stopping", undefined, "Stopping…")}
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void stopInstall()}
+                title={tr("queue_stop_install", undefined, "Stop this install")}
+                aria-label={tr("queue_stop_install", undefined, "Stop this install")}
+                className="rounded p-1 text-[var(--color-bad)] hover:bg-[var(--color-bad)] hover:text-[var(--color-accent-contrast)]"
+              >
+                <Ban size={14} />
+              </button>
+            )
+          ) : isActive ? (
             // The actively-uploading row: move/remove are locked (mutating the
             // array under the runner is unsafe), so Cancel is the only per-item
             // control here. It aborts THIS upload (partial transfer stays
@@ -1145,9 +1178,28 @@ function packageKindLabel(
  *
  *  Before the first numbers arrive the bar sweeps and the label says it is
  *  getting ready, so a slow start never reads as a frozen 0%. */
+/** Seconds since a running install's byte count last moved, ticking once a second. */
+function useQuietSeconds(current: number | null, active: boolean): number {
+  const [since, setSince] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => setSince(Date.now()), [current]);
+  useEffect(() => {
+    if (!active) return;
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [active]);
+  return active ? Math.max(0, Math.floor((now - since) / 1000)) : 0;
+}
+
+/** After this long without a byte asked for, say so: a download cancelled on the PS5 looks
+ *  exactly like this to the app, which cannot see the console's download list. */
+const QUIET_HINT_SECS = 60;
+
 export function InstallProgressBlock({ item }: { item: QueueItem }) {
   const tr = useTr();
   const p = item.installProgress ?? null;
+  const pulling = item.status === "running" && !!p && p.total > 0 && p.current < p.total;
+  const quiet = useQuietSeconds(p?.current ?? null, pulling);
   const phaseLabel = !p
     ? tr("queue_phase_preparing", undefined, "Getting ready…")
     : p.phase === "stage"
@@ -1212,6 +1264,18 @@ export function InstallProgressBlock({ item }: { item: QueueItem }) {
         <div className="mt-2 flex items-start gap-1.5 text-xs text-[var(--color-muted)]">
           <Info size={12} className="mt-px shrink-0" />
           <span className="min-w-0 break-words">{item.installNote}</span>
+        </div>
+      )}
+      {pulling && quiet >= QUIET_HINT_SECS && !item.stopping && (
+        <div className="mt-2 flex items-start gap-1.5 text-xs text-[var(--color-warn)]">
+          <Info size={12} className="mt-px shrink-0" />
+          <span className="min-w-0 break-words">
+            {tr(
+              "queue_install_quiet",
+              { min: Math.floor(quiet / 60) },
+              "The PS5 hasn't asked for data for {min} min. Cancelled it on the PS5? Stop it here (⊘).",
+            )}
+          </span>
         </div>
       )}
     </div>

@@ -319,6 +319,9 @@ export const collection = {
       method: "POST",
       body: JSON.stringify({ volume, action }),
     }),
-  coverUrl: (gameId: string) =>
-    `${getEngineUrl()}/api/collection/games/${encodeURIComponent(gameId)}/cover`,
+  /** `version` (the library's scan time) makes a cover read again after a rescan. */
+  coverUrl: (gameId: string, version?: string) =>
+    `${getEngineUrl()}/api/collection/games/${encodeURIComponent(gameId)}/cover${
+      version ? `?v=${encodeURIComponent(version)}` : ""
+    }`,
 };

@@ -35,6 +35,7 @@ vi.mock("../api/ps5", async (importOriginal) => {
     smpStatus: vi.fn(async () => ({ running: false })),
     smpManualInstall: vi.fn(async () => ({ added: true })),
     powerStandby: vi.fn(async () => ({ ok: true })),
+    pkgInstallStop: vi.fn(async () => {}),
   };
 });
 vi.mock("./pkgLibrary", async (importOriginal) => {
@@ -1280,6 +1281,23 @@ describe("install items", () => {
     }
     await Promise.all([dlc.done, upd.done, base.done]);
     expect(calls).toEqual(["/hold.pkg", "/base.pkg", "/upd.pkg", "/dlc.pkg"]);
+  });
+
+  it("a running install can be stopped, and its row goes once the job ends", async () => {
+    const api = await import("../api/ps5");
+    const q = useUploadQueueStore.getState().enqueueInstall({
+      host, request: { via: "stream", source: "/stop.pkg" }, displayName: "S",
+    });
+    await waitFor(() => calls.length === 1);
+    useUploadQueueStore.setState((st) => ({
+      items: st.items.map((i) => (i.id === q.id ? { ...i, installJobId: "job-7" } : i)),
+    }));
+    useUploadQueueStore.getState().cancelItem(q.id);
+    expect(vi.mocked(api.pkgInstallStop)).toHaveBeenCalledWith("job-7");
+    expect(useUploadQueueStore.getState().items.find((i) => i.id === q.id)?.stopping).toBe(true);
+    // The engine ends the job as stopped; the row then leaves the queue.
+    gate.get("/stop.pkg")!({ ok: false, message: "stopped" });
+    await waitFor(() => !useUploadQueueStore.getState().items.some((i) => i.id === q.id));
   });
 
   it("an install leaves uploads waiting for Start alone (#410)", async () => {

@@ -18,7 +18,10 @@ export const usePkgLinksStore = create<PkgLinksState>((set) => ({
 
 export async function loadPkgLinks(): Promise<void> {
   try {
-    usePkgLinksStore.getState().set({ links: await pkgLinks.list() });
+    // Only a list counts: anything else (an older engine, an error body) means none, never a
+    // crash of the screens that show them.
+    const list: unknown = await pkgLinks.list();
+    usePkgLinksStore.getState().set({ links: Array.isArray(list) ? (list as SharedLink[]) : [] });
   } catch {
     /* the indicator keeps what it last knew */
   }

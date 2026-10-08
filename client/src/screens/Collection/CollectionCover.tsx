@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { collection, type CollectionGame } from "../../api/collection";
+import { useCollectionStore } from "../../state/collection";
 
 /** A game's cover: the one read out of the game, then the online one, then its initials. A
  *  cover that fails to load moves to the next, never to a broken image. */
@@ -11,11 +12,16 @@ export function CollectionCover({
   game: CollectionGame;
   className?: string;
 }) {
+  const scannedAt = useCollectionStore((s) => s.library?.generated_at);
   const sources = [
-    game.local_cover ? collection.coverUrl(game.game_id) : null,
+    game.local_cover ? collection.coverUrl(game.game_id, scannedAt) : null,
     game.cover_url ?? null,
   ].filter((s): s is string => !!s);
   const [at, setAt] = useState(0);
+  // A cover that failed once (asked for before the scan had saved it) is tried again when the
+  // game's covers change, instead of staying on the initials for good.
+  const key = sources.join("|");
+  useEffect(() => setAt(0), [key]);
   const src = sources[at];
   if (!src) {
     const initials = game.title

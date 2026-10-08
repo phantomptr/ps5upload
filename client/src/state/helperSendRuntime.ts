@@ -7,12 +7,23 @@ import { runHelperSend, type HelperSendResult } from "./helperSend";
 import type { Translator } from "./lang";
 import { invoke } from "../lib/invokeLogged";
 import { isTauriEnv } from "../lib/tauriEnv";
+import { trStatic } from "../lib/trStatic";
 
 /** The web UI has no helper file to send and no socket to the console: the engine sends its
  *  own bundled helper, stamped with its key, so it is paired by the send (#415). */
+/** "connect …:9021: Connection refused" says only that the send failed; say what to do. */
+export function loaderHint(error: string): string {
+  return /:9021\b.*(refused|reset|unreachable|timed out)/i.test(error)
+    ? trStatic(
+        "connection_loader_down",
+        "The PS5's loader (port 9021) isn't running. Load elfldr on the PS5 (your jailbreak or autoloader does it), then send the helper again. ({error})",
+      ).replace("{error}", error)
+    : error;
+}
+
 async function engineSendsHelper(ip: string): Promise<void> {
   const r = (await invoke("payload_restore", { ip })) as { ok?: boolean; error?: string };
-  if (!r?.ok) throw new Error(r?.error ?? "the engine has no helper to send");
+  if (!r?.ok) throw new Error(loaderHint(r?.error ?? "the engine has no helper to send"));
 }
 
 // Says what to do first; the probe's technical detail ({tail}) goes last, where it
