@@ -470,6 +470,8 @@ pub fn run() {
             // The renderer batches its unified log to ~/.ps5upload/logs/
             // so "package the last N minutes" survives a crash. See
             // commands/diag_log.rs + src/state/logs.ts.
+            commands::app_events::app_events_append,
+            commands::app_events::app_events_read,
             commands::diag_log::diag_log_append,
             commands::diag_log::diag_log_read_window,
             commands::diag_log::diag_log_stats,

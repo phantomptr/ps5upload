@@ -13,6 +13,7 @@
 //!   companions  — TCP probe of known scene-tool ports
 //!   title_meta  — HTML scrape of public title-info site (cover art)
 
+pub mod app_events;
 pub mod app_info;
 pub mod app_lifecycle;
 pub mod bug_report;
