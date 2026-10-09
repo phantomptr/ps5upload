@@ -6,6 +6,7 @@ body:
     attributes:
       value: |
         Thanks for taking the time to file a bug report!
+        The app's **More → Bug report** fills this in for you and saves a zip with the logs: drag that zip into this issue.
   - type: textarea
     id: what-happened
     attributes:
@@ -42,6 +43,11 @@ body:
       label: PS5 firmware
       placeholder: "e.g. 9.60, 5.10"
   - type: textarea
+    id: payloads
+    attributes:
+      label: Other payloads loaded
+      description: Anything else running on the console (kstuff, ShadowMount+, etaHEN, ftpsrv, Payload Manager, ...), with versions if you know them.
+  - type: textarea
     id: logs
     attributes:
       label: Relevant logs
@@ -53,3 +59,11 @@ body:
       label: Steps to reproduce
       description: If the bug is reproducible, list the exact steps.
       placeholder: "1. ...\n2. ...\n3. ..."
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: How often does it happen?
+      options:
+        - Once
+        - Sometimes
+        - Every time
