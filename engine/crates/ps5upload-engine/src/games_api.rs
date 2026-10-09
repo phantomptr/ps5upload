@@ -353,7 +353,7 @@ mod tests {
             merge_detailed(s, "10.9.9.9", "PPSA05555", &installed("01.000"), "", 1)
         });
         let r = keep(Json(KeepBody {
-            hosts: vec!["10.9.9.9:9114".into()],
+            hosts: vec!["10.9.9.9:5000".into()],
         }))
         .await;
         assert_eq!(r.status(), StatusCode::OK);

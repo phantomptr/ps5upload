@@ -49,7 +49,7 @@ impl TitleFacts {
 /// Host (bare IP) → title ID (upper case) → facts.
 pub type Snapshots = BTreeMap<String, BTreeMap<String, TitleFacts>>;
 
-/// The console's IP without the port: `1.2.3.4:9114` → `1.2.3.4`, `[::1]:9114` → `::1`.
+/// The console's IP without the port: `1.2.3.4:5000` → `1.2.3.4`, `[::1]:5000` → `::1`.
 pub fn host_key(addr: &str) -> String {
     let a = addr.trim();
     if let Some(rest) = a.strip_prefix('[') {
@@ -228,7 +228,7 @@ mod tests {
         let mut s = Snapshots::new();
         merge_detailed(
             &mut s,
-            "1.2.3.4:9114",
+            "1.2.3.4:5000",
             "ppsa01234",
             &detailed(true, "01.004", true, &["DLC1"]),
             "Astro",
@@ -368,9 +368,9 @@ mod tests {
 
     #[test]
     fn hosts_are_kept_by_ip_without_port() {
-        assert_eq!(host_key("1.2.3.4:9114"), "1.2.3.4");
+        assert_eq!(host_key("1.2.3.4:5000"), "1.2.3.4");
         assert_eq!(host_key("1.2.3.4"), "1.2.3.4");
-        assert_eq!(host_key("[::1]:9114"), "::1");
+        assert_eq!(host_key("[::1]:5000"), "::1");
         assert_eq!(host_key("fe80::1"), "fe80::1");
     }
 
@@ -393,7 +393,7 @@ mod tests {
             "",
             1,
         );
-        keep_hosts(&mut s, &["1.1.1.1:9114".to_string()]);
+        keep_hosts(&mut s, &["1.1.1.1:5000".to_string()]);
         assert_eq!(s.keys().collect::<Vec<_>>(), vec!["1.1.1.1"]);
     }
 

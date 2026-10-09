@@ -105,7 +105,7 @@ describe("ids", () => {
 describe("queueLinkFor", () => {
   it("opens the screen that shows the job on the connected console", () => {
     expect(queueLinkFor("1.1.1.1", "1.1.1.1", true)).toBe("/install-package");
-    expect(queueLinkFor("1.1.1.1", "1.1.1.1:9114", false)).toBe("/upload");
+    expect(queueLinkFor("1.1.1.1", "1.1.1.1:5000", false)).toBe("/upload");
   });
   it("opens that console's activity for another console", () => {
     expect(queueLinkFor("2.2.2.2", "1.1.1.1", true)).toBe("/activity?console=2.2.2.2");
