@@ -176,6 +176,22 @@ fn remove_stale_engines(dir: &Path, bin_name: &str, keep: Option<&Path>) {
     }
 }
 
+/// cmd.exe does not understand the backslash-escaped quotes Rust's argument quoting writes,
+/// which mangled the netstat | findstr line: it gets the line as written.
+#[cfg(target_os = "windows")]
+fn add_reaper_args(cmd: &mut tokio::process::Command, program: &str, args: &[&str]) {
+    if program == "cmd.exe" {
+        cmd.raw_arg(args.join(" "));
+    } else {
+        cmd.args(args);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn add_reaper_args(cmd: &mut tokio::process::Command, _program: &str, args: &[&str]) {
+    cmd.args(args);
+}
+
 /// Recover from a leftover engine that some prior crashed launch left
 /// holding port 19113. The new (2.2.22+) engine has a stdin-EOF parent
 /// watcher that prevents this scenario going forward — but a user
@@ -252,10 +268,12 @@ async fn reap_orphan_listener_on(port: u16) {
     ];
     for (program, args) in attempts {
         let mut cmd = TokioCommand::new(program);
-        cmd.args(*args).env("PORT", port.to_string());
-        // 2 s ceiling — the kill should be near-instant; if it hangs
-        // (e.g. a wedged shell host), don't block engine startup.
-        let res = tokio::time::timeout(Duration::from_secs(2), cmd.status()).await;
+        cmd.env("PORT", port.to_string()).kill_on_drop(true);
+        add_reaper_args(&mut cmd, program, args);
+        // A cold PowerShell that loads the NetTCPIP module can take several seconds,
+        // more with an antivirus scanning it; a wedged shell host still can't hold up
+        // engine startup for long.
+        let res = tokio::time::timeout(Duration::from_secs(8), cmd.status()).await;
         match res {
             Ok(Ok(status)) if status.success() => {
                 eprintln!("[engine] orphan reaper ({program}) exited {status}");
@@ -693,6 +711,13 @@ pub async fn start(app: &AppHandle) -> Result<String> {
                         log_path.display()
                     ));
                 }
+            } else if !LOCAL_CHILD_RUNNING.load(Ordering::SeqCst) {
+                // The stderr watcher saw it exit first and took it from the slot: still a
+                // crash, not a slow start to wait out.
+                return Err(anyhow!(
+                    "engine exited during startup\n  log: {}",
+                    log_path.display()
+                ));
             }
         }
         sleep(READINESS_POLL).await;
