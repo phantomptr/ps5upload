@@ -95,8 +95,9 @@ function stamp(d: Date): string {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
-function consoleDir(host: string): string {
-  return `console-${host.replace(/[^A-Za-z0-9._-]/g, "_")}`;
+/** The console's folder in the zip. Not named after its address: zip paths are not redacted. */
+function consoleDir(_host: string): string {
+  return "console";
 }
 
 function settingsSnapshot(): Record<string, string> {
@@ -120,7 +121,7 @@ report.json       The same, machine-readable, plus engine and console state.
 timeline.txt      App, engine and PS5 helper events for the chosen time range, oldest first.
 timeline.jsonl    The same events, one JSON object per line.
 MISSING.txt       Everything that was asked for but could not be read, and why.
-console-<ip>/     Logs read from the PS5: the helper's stderr.log, klog, syslog.
+console/          Logs read from the PS5: the helper's stderr.log, klog, syslog.
 logs/             The app's and the engine's own logs.
 screenshots/      Pictures the reporter attached.
 

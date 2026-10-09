@@ -1,6 +1,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { log } from "../state/logs";
+import { isTauriEnv } from "./tauriEnv";
 
 /**
  * Open an external URL in the system browser / default handler.
@@ -17,6 +18,14 @@ import { log } from "../state/logs";
  * simple while callers that care (the updater) can branch on the result.
  */
 export async function openExternalUrl(url: string): Promise<boolean> {
+  // The self-hosted web UI has no Tauri opener: a new tab is the same thing there.
+  if (!isTauriEnv()) {
+    if (typeof window === "undefined") return false;
+    // With "noopener" the browser returns null even when the tab opened, so there is nothing
+    // to check: asking is all a page can do.
+    window.open(url, "_blank", "noopener");
+    return true;
+  }
   try {
     await openUrl(url);
     return true;

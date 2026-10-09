@@ -88,6 +88,7 @@ function useCommands(close: () => void): Command[] {
       nav("/tasks", "transfer_log_title", "Transfer Log"),
       nav("/stats", "stats", "Stats"),
       nav("/logs", "logs", "Logs"),
+      nav("/bug-report", "bug_report", "Bug report", ["report", "problem", "issue", "discord", "github"]),
       nav("/logs?tab=kernel", "logs_tab_kernel", "Kernel log", [
         "dmesg",
         "klog",
