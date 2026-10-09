@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { CollectionLocation, CollectionOffer } from "../api/collection";
 import type { ConsoleEntry, GameView } from "../api/games";
-import { ageLabel, hasTitleId, needsReread, REREAD_MS, rowActions, summaryLine, titleIdFromContentId } from "./gamePage";
+import { ageLabel, driveOffers, hasTitleId, needsReread, queueLinkFor, REREAD_MS, rowActions, summaryLine, titleIdFromContentId } from "./gamePage";
 
 const tr = (_k: string, vars?: Record<string, string | number>, fallback?: string) =>
   (fallback ?? "").replace(/\{(\w+)\}/g, (_, k) => String(vars?.[k] ?? ""));
@@ -99,5 +99,36 @@ describe("ids", () => {
     expect(titleIdFromContentId("UP0000-PPSA01234_00-ASTRO0000000000")).toBe("PPSA01234");
     expect(titleIdFromContentId("")).toBeNull();
     expect(titleIdFromContentId("garbage")).toBeNull();
+  });
+});
+
+describe("queueLinkFor", () => {
+  it("opens the screen that shows the job on the connected console", () => {
+    expect(queueLinkFor("1.1.1.1", "1.1.1.1", true)).toBe("/install-package");
+    expect(queueLinkFor("1.1.1.1", "1.1.1.1:9114", false)).toBe("/upload");
+  });
+  it("opens that console's activity for another console", () => {
+    expect(queueLinkFor("2.2.2.2", "1.1.1.1", true)).toBe("/activity?console=2.2.2.2");
+  });
+});
+
+describe("driveOffers", () => {
+  const view: GameView = {
+    title_id: "PPSA01234",
+    title: "Astro",
+    platform: "PS5",
+    cover: null,
+    copies: [],
+    consoles: [
+      entry({ host: "1.1.1.1", installed: true, update: offer("gp", "/u", "01.004"), dlc_missing: [offer("ac", "/d")] }),
+    ],
+  };
+  it("lists the newer update, or the missing DLC, the drives have for this console", () => {
+    expect(driveOffers(view, "1.1.1.1", "updates").map((o) => o.path)).toEqual(["/u"]);
+    expect(driveOffers(view, "1.1.1.1", "addons").map((o) => o.path)).toEqual(["/d"]);
+  });
+  it("lists nothing for a console the engine has not read", () => {
+    expect(driveOffers(view, "2.2.2.2", "updates")).toEqual([]);
+    expect(driveOffers(null, "1.1.1.1", "updates")).toEqual([]);
   });
 });

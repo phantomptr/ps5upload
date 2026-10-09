@@ -61,7 +61,9 @@ import {
   type SaveEntry,
 } from "../../api/ps5";
 import { transferAddr, mgmtAddr, hostOf } from "../../lib/addr";
-import { summaryLine } from "../../lib/gamePage";
+import { driveOffers, gamePath, summaryLine } from "../../lib/gamePage";
+import type { GameView } from "../../api/games";
+import { installOffers } from "./collectionInstall";
 import { getEngineUrl } from "../../state/engine";
 import { useRosterStore } from "../../state/roster";
 import { useGameView } from "./useGameView";
@@ -426,8 +428,18 @@ export default function GameHubScreen() {
         </div>
       )}
 
+      {/* The other tabs are about the connected console: say which, and when it lacks the game. */}
+      {activeTab !== "overview" && activeTab !== "updates" && activeTab !== "addons" && connectedHost && (
+        <div className="mb-3 text-xs text-[var(--color-muted)]" data-testid="game-tab-console">
+          {connectedEntry && !connectedEntry.installed
+            ? tr("game_tab_not_on", { name: names[connectedHost] ?? connectedHost }, "Not on {name}")
+            : tr("game_tab_on", { name: names[connectedHost] ?? connectedHost }, "On {name}")}
+        </div>
+      )}
+
       {/* Tab content */}
       <GameTabContent
+        view={gv.view}
         game={game}
         host={host}
         playSeconds={playSeconds}
@@ -441,12 +453,14 @@ export default function GameHubScreen() {
 /** Render the content for the active tab. */
 function GameTabContent({
   tab,
+  view,
   game,
   host,
   playSeconds,
   lastSeenMs,
 }: {
   tab: TabId;
+  view: GameView | null;
   game: GameInfo;
   host: string | null;
   playSeconds: number | undefined;
@@ -462,9 +476,9 @@ function GameTabContent({
     case "media":
       return <MediaTab />;
     case "addons":
-      return <PackagesTab titleId={game.titleId} host={host} kind="addons" />;
+      return <PackagesTab titleId={game.titleId} title={game.name} host={host} view={view} kind="addons" />;
     case "updates":
-      return <PackagesTab titleId={game.titleId} host={host} kind="updates" />;
+      return <PackagesTab titleId={game.titleId} title={game.name} host={host} view={view} kind="updates" />;
     case "storage":
       return <StorageTab game={game} />;
     case "playtime":
@@ -780,11 +794,15 @@ function MediaTab() {
  */
 function PackagesTab({
   titleId,
+  title,
   host,
+  view,
   kind,
 }: {
   titleId: string;
+  title: string;
   host: string | null;
+  view: GameView | null;
   kind: "addons" | "updates";
 }) {
   const tr = useTr();
@@ -855,6 +873,39 @@ function PackagesTab({
           {tr("game_hub_open_install", undefined, "Open Install Package")}
         </Button>
       </div>
+      {connected && driveOffers(view, host ?? "", kind).length > 0 && (
+        <div className="mt-4 border-t border-[var(--color-border)] pt-3" data-testid="game-drive-offers">
+          <h3 className="mb-2 text-xs font-semibold text-[var(--color-muted)]">
+            {tr("game_drive_offers", undefined, "On your drives")}
+          </h3>
+          <ul className="divide-y divide-[var(--color-border)]">
+            {driveOffers(view, host ?? "", kind).map((o) => (
+              <li key={o.path} className="flex items-center justify-between gap-4 py-2">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">{o.title || o.name}</div>
+                  <div className="mt-0.5 flex items-center gap-2 text-xs text-[var(--color-muted)]">
+                    {o.version && <span className="font-mono">v{o.version}</span>}
+                    {o.size_bytes > 0 && <span>· {formatBytes(o.size_bytes)}</span>}
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  leftIcon={<Download size={13} />}
+                  onClick={() => {
+                    installOffers(hostOf(host ?? ""), [{ game: { title }, offer: o }]);
+                    pushNotification("info", tr("collection.queued", { n: 1 }, "{n} packages queued for install"), {
+                      link: gamePath(titleId),
+                    });
+                  }}
+                >
+                  {tr("game_install", undefined, "Install")}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </TabCard>
   );
 }

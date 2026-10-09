@@ -4222,6 +4222,9 @@ game_refresh_failed: "Couldn't reach {name}: {why}",
 game_drives_title: "On your drives ({n})",
 game_drives_none: "No copy on this computer's drives. Add the folder it is in to the Collection to see it here.",
 game_hub_back_games: "Back",
+game_tab_on: "On {name}",
+game_tab_not_on: "Not on {name}",
+game_drive_offers: "On your drives",
 };
 
 export default en;

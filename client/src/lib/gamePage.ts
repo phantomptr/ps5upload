@@ -3,6 +3,7 @@
 
 import type { CollectionLocation, CollectionOffer } from "../api/collection";
 import type { ConsoleEntry, GameView } from "../api/games";
+import { hostOf } from "./addr";
 import { sendKind } from "./collectionSend";
 
 type Tr = (key: string, vars: Record<string, string | number> | undefined, fallback: string) => string;
@@ -87,3 +88,22 @@ export function titleIdFromContentId(contentId: string | null | undefined): stri
 
 /** The game page's URL. */
 export const gamePath = (titleId: string): string => `/games/${encodeURIComponent(titleId)}`;
+
+/** Where "Open queue" goes for a job on `host`: the screen that shows it when that is the
+ *  connected console, else that console's Activity. */
+export function queueLinkFor(host: string, connectedHost: string, installing: boolean): string {
+  if (hostOf(host) === hostOf(connectedHost)) return installing ? "/install-package" : "/upload";
+  return `/activity?console=${encodeURIComponent(hostOf(host))}`;
+}
+
+/** The packages on the drives that `host` could take for this game: its newer update, or the
+ *  DLC it lacks. */
+export function driveOffers(
+  view: GameView | null,
+  host: string,
+  kind: "updates" | "addons",
+): CollectionOffer[] {
+  const e = view?.consoles.find((c) => c.host === hostOf(host));
+  if (!e?.installed) return [];
+  return kind === "updates" ? (e.update ? [e.update] : []) : e.dlc_missing;
+}
