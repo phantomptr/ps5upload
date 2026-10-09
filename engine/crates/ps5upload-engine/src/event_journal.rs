@@ -241,7 +241,7 @@ pub(crate) fn parse_cats(s: &str) -> Vec<Cat> {
         .collect()
 }
 
-/// `GET /api/events?since=<ms>&until=<ms>&cat=a,b` -> `{"events":[...],"dropped":N}`, oldest first.
+/// `GET /api/event-journal?since=<ms>&until=<ms>&cat=a,b` -> `{"events":[...],"dropped":N}`, oldest first.
 pub async fn events_handler(Query(q): Query<EventsQuery>) -> Response {
     let Some(j) = JOURNAL.get() else {
         return Json(serde_json::json!({ "events": [], "dropped": 0 })).into_response();

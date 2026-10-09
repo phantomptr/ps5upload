@@ -178,6 +178,13 @@ impl Churn {
         if ours {
             return;
         }
+        ps5upload_core::events::emit(
+            ps5upload_core::events::Cat::Connection,
+            ps5upload_core::events::Level::Warn,
+            "session_died",
+            Some(host),
+            why.to_string(),
+        );
         let n = {
             let mut d = self.deaths.lock().unwrap_or_else(|e| e.into_inner());
             let q = d.entry(host.to_string()).or_default();

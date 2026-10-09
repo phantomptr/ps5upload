@@ -26,6 +26,7 @@
 //!   GET  /api/jobs/{id}               → poll job status/result
 //!   GET  /api/jobs                    → list all jobs (summary)
 //!   GET  /api/events                  → SSE stream of job state changes
+//!   GET  /api/event-journal           → bug-report event journal (since/until/cat)
 //!   POST /api/ps5/cleanup             → recursively remove a path under PS5 allowlist
 //!   GET  /api/ps5/volumes             → list storage volumes detected by the payload
 //!   GET  /api/ps5/list-dir?path=...   → list immediate children of a directory on PS5
@@ -70,6 +71,8 @@ mod win_net;
 
 #[cfg(test)]
 mod ava1_only_tests;
+#[cfg(test)]
+mod event_hooks_tests;
 
 use axum::http::HeaderMap;
 use axum::{
@@ -551,6 +554,12 @@ const ARCHIVE_STAGE_ENV: (&str, &str) = (
 async fn log_requests(req: Request, next: Next) -> axum::response::Response {
     let method = req.method().clone();
     let path = req.uri().path().to_string();
+    // The console a call was about (`?addr=`), for the event journal.
+    let console = req.uri().query().and_then(|q| {
+        q.split('&')
+            .find_map(|kv| kv.strip_prefix("addr="))
+            .map(|v| v.replace("%3A", ":").replace("%3a", ":"))
+    });
     let start = std::time::Instant::now();
     let resp = next.run(req).await;
     let ms = start.elapsed().as_millis();
@@ -586,6 +595,26 @@ async fn log_requests(req: Request, next: Next) -> axum::response::Response {
             }
         }
     };
+    {
+        use ps5upload_core::events::{emit, Cat, Level};
+        match &action {
+            log_dedup::LogAction::Warn { .. } => emit(
+                Cat::Api,
+                Level::Warn,
+                "api_failing",
+                console.as_deref(),
+                format!("{method} {path} -> {status} ({ms}ms)"),
+            ),
+            log_dedup::LogAction::Recovered { failures } => emit(
+                Cat::Api,
+                Level::Info,
+                "api_recovered",
+                console.as_deref(),
+                format!("{method} {path} recovered after {failures} failure(s)"),
+            ),
+            log_dedup::LogAction::Quiet => {}
+        }
+    }
     match action {
         log_dedup::LogAction::Warn { suppressed: 0 } => {
             log_warn!("{method} {path} -> {status} ({ms}ms)");
@@ -1416,10 +1445,52 @@ pub(crate) fn set_job(
         g.insert(job_id, state.clone());
     }
     if matches!(state, JobState::Done { .. } | JobState::Failed { .. }) {
-        telemetry::on_state(job_id, &serde_json::json!(state));
+        let json = serde_json::json!(state);
+        telemetry::on_state(job_id, &json);
+        if let Some(e) = job_event(&job_id.to_string(), &json) {
+            ps5upload_core::events::emit_event(e);
+        }
     }
     let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": with_live_notes(job_id, serde_json::json!(state)) });
     let _ = events_tx.send(msg.to_string());
+}
+
+/// The journal event for a job that reached a terminal state (bug-report spec §1.2); `None`
+/// for any other state.
+pub(crate) fn job_event(
+    job_id: &str,
+    st: &serde_json::Value,
+) -> Option<ps5upload_core::events::Event> {
+    use ps5upload_core::events::{Cat, Event, Level};
+    let console = st.get("error_console").and_then(|v| v.as_str());
+    match st.get("status")?.as_str()? {
+        "done" => Some(Event::new(
+            Cat::Transfer,
+            Level::Info,
+            "job_done",
+            console,
+            format!("job {job_id} done"),
+            None,
+        )),
+        "failed" => {
+            let err = st
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            Some(Event::new(
+                Cat::Transfer,
+                Level::Error,
+                "job_failed",
+                console,
+                format!("job {job_id} failed: {err}"),
+                Some(serde_json::json!({
+                    "reason": st.get("error_reason"),
+                    "elapsed_ms": st.get("elapsed_ms"),
+                })),
+            ))
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn now_ms() -> u64 {
@@ -5096,6 +5167,7 @@ async fn ps5_status(
     Query(q): Query<AddrQuery>,
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+    let console = addr.clone();
     // `node.status` through the management seam: the typed AVA1 NodeStatus is rebuilt into the
     // legacy JSON (`ucred_elevated` a bool, `prior_instance` only when present). The old
     // transaction fields (runtime_port, shutdown, takeover_requested, active_transactions,
@@ -5116,9 +5188,29 @@ async fn ps5_status(
     })
     .await;
 
+    use ps5upload_core::events::{emit, Cat, Level};
     match result {
-        Ok(Ok(json)) => (StatusCode::OK, Json(json)).into_response(),
-        Ok(Err(e)) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+        Ok(Ok(json)) => {
+            // Collapsed by the journal: one line (with a count) per minute of polling.
+            emit(
+                Cat::Connection,
+                Level::Info,
+                "status_ok",
+                Some(&console),
+                "status ok",
+            );
+            (StatusCode::OK, Json(json)).into_response()
+        }
+        Ok(Err(e)) => {
+            emit(
+                Cat::Connection,
+                Level::Warn,
+                "status_failed",
+                Some(&console),
+                format!("{e:#}"),
+            );
+            json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response()
+        }
         Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
 }
@@ -10172,7 +10264,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/jobs/{id}/cancel", post(cancel_job))
         .route("/api/events", get(events_stream))
         .route("/api/engine-logs", get(engine_logs_tail))
-        .route("/api/events", get(event_journal::events_handler))
+        .route("/api/event-journal", get(event_journal::events_handler))
         .route("/api/debug/crash", get(debug_crash))
         .with_state(state);
 
