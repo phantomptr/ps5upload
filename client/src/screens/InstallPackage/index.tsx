@@ -822,7 +822,7 @@ export default function InstallPackageScreen() {
           setPickError(
             tr(
               "install.error.notPkg",
-              "Only .pkg or .fpkg install packages can be installed here. .ffpkg / .ffpfs are mountable images — open them from the File System tab instead.",
+              "Only .pkg or .fpkg install packages can be installed here. .ffpkg / .ffpfs are mountable images — open them from the File System screen instead.",
             ),
           );
           return;
@@ -848,7 +848,7 @@ export default function InstallPackageScreen() {
       setPickError(
         tr(
           "install.error.noHost",
-          "Set a PS5 host on the Connection tab first.",
+          "Set a PS5 host on the Connection screen first.",
         ),
       );
       return;
@@ -921,7 +921,7 @@ export default function InstallPackageScreen() {
   async function streamFromServer(path: string) {
     setPickError(null);
     if (!host?.trim()) {
-      setPickError(tr("install.error.noHost", "Set a PS5 host on the Connection tab first."));
+      setPickError(tr("install.error.noHost", "Set a PS5 host on the Connection screen first."));
       return;
     }
     if (!isInstallPackagePath(path)) {
@@ -941,7 +941,7 @@ export default function InstallPackageScreen() {
       setPickError(
         tr(
           "install.error.noHost",
-          "Set a PS5 host on the Connection tab first.",
+          "Set a PS5 host on the Connection screen first.",
         ),
       );
       return;
@@ -1538,7 +1538,7 @@ export default function InstallPackageScreen() {
                     !hostReady
                       ? tr(
                           "install.add.disabledHint",
-                          "Set a PS5 host on the Connection tab first",
+                          "Set a PS5 host on the Connection screen first",
                         )
                       : tr(
                           "pkglib.stream.hint",
@@ -1640,7 +1640,7 @@ export default function InstallPackageScreen() {
                       !hostReady
                         ? tr(
                             "install.add.disabledHint",
-                            "Set a PS5 host on the Connection tab first",
+                            "Set a PS5 host on the Connection screen first",
                           )
                         : tr(
                             "install.uploadInstall.hint",
@@ -1705,7 +1705,7 @@ export default function InstallPackageScreen() {
                         !hostReady
                           ? tr(
                               "install.add.disabledHint",
-                              "Set a PS5 host on the Connection tab first",
+                              "Set a PS5 host on the Connection screen first",
                             )
                           : tr(
                               "pkglib.installAll.hint",

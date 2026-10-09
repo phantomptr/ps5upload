@@ -1276,7 +1276,7 @@ function CompanionSuggestion() {
         rightIcon={<ArrowRight size={11} />}
         onClick={() => navigate("/payloads")}
       >
-        {tr("companion_suggest_open", undefined, "Open library")}
+        {tr("companion_suggest_open", undefined, "Open Games")}
       </Button>
       <button
         type="button"

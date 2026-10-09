@@ -36,7 +36,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<{ status: numb
     headers: init?.body ? { "content-type": "application/json" } : undefined,
   });
   const text = await res.text();
-  let body: unknown = null;
+  let body: unknown;
   try {
     body = text ? JSON.parse(text) : null;
   } catch {

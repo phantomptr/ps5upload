@@ -562,7 +562,7 @@ export default function FirstRunScreen() {
                 rightIcon={<ArrowRight size={14} />}
                 onClick={() => navigate("/games")}
               >
-                {tr("first_run_go_library", undefined, "Open Library")}
+                {tr("first_run_go_library", undefined, "Open Games")}
               </Button>
               <Button
                 variant="secondary"

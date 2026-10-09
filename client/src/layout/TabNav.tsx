@@ -70,6 +70,7 @@ const TABS: TabDef[] = [
       "/captures",
       "/game-activity",
       "/search",
+      "/collection",
     ],
   },
   {

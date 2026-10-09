@@ -197,7 +197,7 @@ export default function HomeScreen() {
             <QuickAction to="/upload" icon={Upload} label={tr("v5_qa_upload", "Upload files")} readiness={readinessFor("upload")} />
             <QuickAction to="/install-package" icon={PackageOpen} label={tr("v5_qa_install", "Install package")} readiness={readinessFor("install-package")} />
             <QuickAction to="/files" icon={FolderTree} label={tr("v5_qa_files", "Browse files")} readiness={readinessFor("browse-console")} />
-            <QuickAction to="/games" icon={Gamepad2} label={tr("v5_qa_games", "Open library")} readiness={readinessFor("browse-console")} />
+            <QuickAction to="/games" icon={Gamepad2} label={tr("v5_qa_games", "Open Games")} readiness={readinessFor("browse-console")} />
             <QuickAction to="/saves" icon={Save} label={tr("v5_qa_saves", "Back up saves")} readiness={readinessFor("browse-console")} />
             <QuickAction to="/connections?add=1" icon={Network} label={tr("v5_qa_connect_server", "Connect a server")} readiness={{ ready: true, blockers: [], warnings: [] }} />
           </div>

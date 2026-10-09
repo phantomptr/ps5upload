@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router";
 import {
   Activity as ActivityIcon,
   CheckCircle2,
@@ -55,7 +56,12 @@ export default function ActivityScreen() {
   // The selected console's activity only (a PS5 tab is that console's workspace); entries
   // with no console (local-only work) show under every console.
   const activeHost = useConnectionStore((s) => s.host);
-  const entries = activityForHost(allEntries, activeHost);
+  // `?console=<ip>`: another console's activity, opened from a job running there.
+  const [params, setParams] = useSearchParams();
+  const otherConsole = params.get("console");
+  const scopeHost = otherConsole || activeHost;
+  const entries = activityForHost(allEntries, scopeHost);
+  const profiles = useRosterStore((s) => s.profiles);
   const clear = useActivityHistoryStore((s) => s.clear);
   const clearRunning = useActivityHistoryStore((s) => s.clearRunning);
   const taskCount = useTaskStore((s) => s.tasks.length);
@@ -166,6 +172,26 @@ export default function ActivityScreen() {
           </div>
         }
       />
+
+      {otherConsole && hostOf(otherConsole) !== hostOf(activeHost ?? "") && (
+        <div
+          className="mb-3 flex flex-wrap items-center gap-2 text-xs text-[var(--color-muted)]"
+          data-testid="activity-console"
+        >
+          {tr(
+            "activity_showing_console",
+            { name: profileNameForAddr(otherConsole, profiles) || otherConsole },
+            "Showing {name}",
+          )}
+          <button
+            type="button"
+            className="underline hover:text-[var(--color-text)]"
+            onClick={() => setParams({})}
+          >
+            {tr("activity_show_this_console", undefined, "Show this console")}
+          </button>
+        </div>
+      )}
 
       {view === "timeline" && entries.length > 0 && (
         <ActivityTimeline entries={entries} />
