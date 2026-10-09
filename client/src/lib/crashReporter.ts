@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { buildDiagnosticBundle } from "./diagnosticBundle";
 import { useNotificationsStore } from "../state/notifications";
+import { recordAppEvent } from "./appJournal";
 
 /**
  * Automatic crash/error report collection.
@@ -57,6 +58,7 @@ export async function captureCrashReport(
     }
     lastCaptureMs = now;
     capturesThisSession += 1;
+    recordAppEvent({ cat: "app", level: "error", code: "crash", msg: trigger });
 
     const bundle = buildDiagnosticBundle({
       appVersion: await appVersion(),

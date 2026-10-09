@@ -22,8 +22,8 @@ import {
  *   phase "waiting"   — poll until the helper reports ready.
  *   (then the AUTO-LOADER fires the post-helper playlist on the ready edge.)
  *
- * One console at a time — bring-up is a deliberate, foreground action driven
- * from the Connection screen, so a single global status is enough.
+ * Status is kept per console (by bare host): each console's Connection screen shows its own, and
+ * bringing up one console neither shows on nor blocks another's.
  */
 
 export type BringUpPhase = "prehelper" | "helper" | "waiting";
@@ -35,10 +35,18 @@ export type BringUpStatus =
   | { kind: "failed"; host: string; phase: BringUpPhase; error: string };
 
 interface BringUpState {
-  status: BringUpStatus;
+  /** Keyed by bare host. A console with no entry is idle. */
+  byHost: Record<string, BringUpStatus>;
   /** Run the full bring-up chain against `host` (a bare ip or ip:port). */
   run: (host: string) => Promise<void>;
-  reset: () => void;
+  reset: (host: string) => void;
+}
+
+const IDLE: BringUpStatus = { kind: "idle" };
+
+/** `host`'s bring-up status (bare ip or ip:port). */
+export function bringUpStatusFor(s: Pick<BringUpState, "byHost">, host: string): BringUpStatus {
+  return s.byHost[hostOf(host.trim())] ?? IDLE;
 }
 
 /** Helper-ready poll: ~25s total (the helper's ucred elevation + bind can take
@@ -47,14 +55,20 @@ const READY_POLL_ATTEMPTS = 25;
 const READY_POLL_INTERVAL_MS = 1000;
 
 export const useBringUpStore = create<BringUpState>((set, get) => ({
-  status: { kind: "idle" },
-  reset: () => set({ status: { kind: "idle" } }),
+  byHost: {},
+  reset: (host) =>
+    set((s) => {
+      const next = { ...s.byHost };
+      delete next[hostOf(host.trim())];
+      return { byHost: next };
+    }),
 
   async run(host) {
     const h = host.trim();
     if (!h) return;
-    if (get().status.kind === "running") return; // already bringing one up
     const bare = hostOf(h);
+    if (bringUpStatusFor(get(), bare).kind === "running") return; // already bringing this one up
+    const put = (status: BringUpStatus) => set((s) => ({ byHost: { ...s.byHost, [bare]: status } }));
     let phase: BringUpPhase = "prehelper";
     try {
       // ── Phase 1: pre-helper bring-up playlist (kstuff / SMP / …) ──────────
@@ -62,9 +76,7 @@ export const useBringUpStore = create<BringUpState>((set, get) => ({
       const id = pl.autoLoader.bringUpPlaylistId;
       const playlist = id ? pl.playlists.find((p) => p.id === id) : undefined;
       if (playlist && playlist.steps.length > 0) {
-        set({
-          status: { kind: "running", host: bare, phase, detail: playlist.name },
-        });
+        put({ kind: "running", host: bare, phase, detail: playlist.name });
         // run() resolves when the whole playlist (incl. sleeps) finishes; it
         // records failure in per-host run status rather than throwing.
         await pl.run(playlist.id, h, PS5_LOADER_PORT);
@@ -78,13 +90,13 @@ export const useBringUpStore = create<BringUpState>((set, get) => ({
 
       // ── Phase 2: send the bundled helper to the loader ───────────────────
       phase = "helper";
-      set({ status: { kind: "running", host: bare, phase, detail: "" } });
+      put({ kind: "running", host: bare, phase, detail: "" });
       const elf = await bundledPayloadPath();
       await sendPayload(h, elf);
 
       // ── Phase 3: wait for the helper to come up ──────────────────────────
       phase = "waiting";
-      set({ status: { kind: "running", host: bare, phase, detail: "" } });
+      put({ kind: "running", host: bare, phase, detail: "" });
       let ready = false;
       for (let i = 0; i < READY_POLL_ATTEMPTS; i++) {
         const s = await payloadCheck(h);
@@ -117,11 +129,11 @@ export const useBringUpStore = create<BringUpState>((set, get) => ({
         void plg.run(post.id, h, PS5_LOADER_PORT);
       }
 
-      set({ status: { kind: "done", host: bare } });
+      put({ kind: "done", host: bare });
       log.info("connection", `bring-up complete on ${h}`);
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
-      set({ status: { kind: "failed", host: bare, phase, error } });
+      put({ kind: "failed", host: bare, phase, error });
       log.warn("connection", `bring-up failed on ${h} (${phase}): ${error}`);
     }
   },

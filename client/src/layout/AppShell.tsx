@@ -103,6 +103,7 @@ import { getAppVersion } from "../lib/appVersion";
 import { GlobalPackageViewer } from "../components/GlobalPackageViewer";
 import { dropTarget, usePackageViewer } from "../state/packageViewer";
 import { installConvertRunner } from "../lib/convertQueueRunner";
+import { recordAppEvent } from "../lib/appJournal";
 
 // The Convert queue builds through the Convert pipeline wherever the user is in the app.
 installConvertRunner();
@@ -280,6 +281,12 @@ function useStatusPolling() {
     const tick = async () => {
       const up = await engineApi.ping();
       if (!cancelled) {
+        // Only the changes go to the journal: "unreachable" and "reachable again".
+        const before = useConnectionStore.getState().engineStatus;
+        if (up && before === "down")
+          recordAppEvent({ cat: "app", level: "info", code: "engine_up", msg: "engine reachable again" });
+        if (!up && before !== "down")
+          recordAppEvent({ cat: "app", level: "error", code: "engine_down", msg: "engine unreachable" });
         setStatus({
           engineStatus: up ? "up" : "down",
           ...(up ? { engineError: null } : {}),

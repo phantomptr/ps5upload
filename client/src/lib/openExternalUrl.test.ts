@@ -4,6 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
 // Mock the logs store so the failure path's log.warn doesn't touch real state.
 vi.mock("../state/logs", () => ({ log: { warn: vi.fn(), info: vi.fn() } }));
+// The opener tests run as the app; the browser test flips this.
+let tauri = true;
+vi.mock("./tauriEnv", () => ({ isTauriEnv: () => tauri }));
 
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { log } from "../state/logs";
@@ -15,6 +18,8 @@ const mockedWarn = vi.mocked(log.warn);
 afterEach(() => {
   mockedOpen.mockReset();
   mockedWarn.mockReset();
+  tauri = true;
+  vi.unstubAllGlobals();
 });
 
 describe("openExternalUrl", () => {
@@ -41,5 +46,14 @@ describe("openExternalUrl", () => {
     const [category, message] = mockedWarn.mock.calls[0];
     expect(category).toBe("ui");
     expect(message).toContain("https://example.com/app.apk");
+  });
+
+  it("opens a new tab in the self-hosted web UI, which has no opener", async () => {
+    tauri = false;
+    const open = vi.fn(() => ({}) as Window);
+    vi.stubGlobal("window", { open });
+    expect(await openExternalUrl("https://discord.com/channels/1/2")).toBe(true);
+    expect(open).toHaveBeenCalledWith("https://discord.com/channels/1/2", "_blank", "noopener");
+    expect(mockedOpen).not.toHaveBeenCalled();
   });
 });

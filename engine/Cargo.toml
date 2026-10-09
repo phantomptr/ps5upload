@@ -20,7 +20,7 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "GPL-3.0-or-later"
-version = "6.5.2"
+version = "6.6.0"
 
 [workspace.dependencies]
 anyhow = "1.0"
@@ -39,6 +39,24 @@ uuid = { version = "1", features = ["v4"] }
 # Speed up debug builds: thinner debug info on macOS, more parallelism.
 [profile.dev]
 split-debuginfo = "unpacked"
+# Line tables are enough for backtraces; full variable info made 76+ test binaries slow to link.
+debug = "line-tables-only"
+
+# Dependencies carry no debug info (smaller, faster links) but stay unoptimized: optimized
+# crypto let a whole test upload sit in Linux's loopback buffers before the AVA1 cancel and
+# space tests could act on it. The CPU-heavy image builders run optimized (the fpkg scale
+# tests took 526 s in CI unoptimized).
+[profile.dev.package."*"]
+debug = false
+
+[profile.dev.package.ps5upload-fpkg]
+opt-level = 2
+
+[profile.dev.package.ps5-dump-forge-ufs2]
+opt-level = 2
+
+[profile.dev.package.ps5-dump-forge-pfs]
+opt-level = 2
 
 # Same for the release engine binary — not a shipped bundle, so trade a
 # little size for faster link times.

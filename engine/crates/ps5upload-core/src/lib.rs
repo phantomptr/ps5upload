@@ -9,6 +9,7 @@ pub mod cleanup;
 pub mod ddp;
 pub mod diagnostics;
 pub mod download;
+pub mod events;
 pub mod excludes;
 pub mod fakelibs;
 pub mod fan_curve;

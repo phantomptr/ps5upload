@@ -35,6 +35,28 @@ pub struct PayloadLogFile {
     pub text: String,
 }
 
+/// A file the report builder assembled itself (timeline, MISSING.txt, report.md, screenshots):
+/// the same shape as the engine's bundle entries. `text` is redacted; `base64` is written as is.
+#[derive(Deserialize)]
+pub struct ExtraEntry {
+    pub path: String,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub base64: Option<String>,
+}
+
+/// A zip path the builder may use: relative, no `..`, no backslashes, at most 200 characters.
+fn extra_path_ok(p: &str) -> bool {
+    !p.is_empty()
+        && p.len() <= 200
+        && !p.starts_with('/')
+        && !p.contains('\\')
+        && !p.contains(':')
+        && p.split('/')
+            .all(|seg| !seg.is_empty() && seg != "." && seg != "..")
+}
+
 #[derive(Deserialize)]
 pub struct BugReportArgs {
     /// User-picked destination `.zip` path. On Android the save dialog returns
@@ -53,8 +75,12 @@ pub struct BugReportArgs {
     /// raw app/engine/payload logs (not just structured report fields).
     #[serde(default)]
     pub redact: bool,
-    /// How many minutes of app log to include (filters `app.jsonl`).
+    /// How many minutes of app log to include (filters `app.jsonl`). Superseded by `since_ms`.
+    #[serde(default)]
     pub window_minutes: u64,
+    /// The report's start time: app log lines from here on are included. 0 = use `window_minutes`.
+    #[serde(default)]
+    pub since_ms: u64,
     /// Raw PS5 kernel logs, if a console was connected (written as .txt).
     pub klog_text: Option<String>,
     pub syslog_text: Option<String>,
@@ -65,6 +91,9 @@ pub struct BugReportArgs {
     /// Absolute paths of user-attached screenshots.
     pub image_paths: Vec<String>,
     pub include: BugReportInclude,
+    /// Files the report builder assembled (see [`ExtraEntry`]).
+    #[serde(default)]
+    pub extra_entries: Vec<ExtraEntry>,
 }
 
 #[derive(Serialize)]
@@ -87,74 +116,354 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Redact complete IPv4 addresses embedded in arbitrary diagnostic text,
-/// preserving punctuation and ports around the address.
-fn redact_diagnostic_text(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = String::with_capacity(text.len());
-    let mut cursor = 0usize;
-    let mut i = 0usize;
+/// Report redaction (spec §3.4), the same rules as client/src/lib/redaction.ts and tested against
+/// the same vectors (redaction.vectors.json). One per report: an address gets the same
+/// placeholder (`<ip-1>`, `<ip-2>`) in every file. Secrets are removed whatever `redact` says.
+pub(crate) struct Redactor {
+    redact: bool,
+    ips: Vec<String>,
+}
 
-    while i < bytes.len() {
-        if !bytes[i].is_ascii_digit() {
+const SECRET_KEYS: &[&str] = &[
+    "pairing_key",
+    "psk",
+    "token",
+    "access_token",
+    "refresh_token",
+    "rp_key",
+    "regist_key",
+    "account_id",
+    "psn_account_id",
+    "secret",
+    "password",
+    "wake_credential",
+    "wake_regist_key",
+    "wake_rp_key",
+];
+
+fn is_word(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// `"key": "value"` with `key` in `keys` (case-insensitive): the value becomes `with`.
+fn replace_json_values(s: &str, keys: &[&str], with: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut cursor = 0;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] != b'"' {
             i += 1;
             continue;
         }
-        let start = i;
-        while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
-            i += 1;
-        }
-        let candidate = &text[start..i];
-        let parts: Vec<&str> = candidate.split('.').collect();
-        let is_ipv4 = parts.len() == 4
-            && parts
-                .iter()
-                .all(|p| !p.is_empty() && p.len() <= 3 && p.bytes().all(|b| b.is_ascii_digit()));
-        if is_ipv4 {
-            out.push_str(&text[cursor..start]);
-            out.push_str("<IPv4>");
-            cursor = i;
-        }
-    }
-    out.push_str(&text[cursor..]);
-
-    // Socket errors conventionally bracket IPv6 hosts. Preserve the brackets
-    // and following port while hiding the address itself.
-    let ipv4_redacted = out;
-    let bytes = ipv4_redacted.as_bytes();
-    let mut ipv6_redacted = String::with_capacity(ipv4_redacted.len());
-    let mut cursor = 0usize;
-    let mut i = 0usize;
-    while i < bytes.len() {
-        if bytes[i] != b'[' {
-            i += 1;
-            continue;
-        }
-        let Some(close_rel) = bytes[i + 1..].iter().position(|b| *b == b']') else {
+        let Some(close) = b[i + 1..]
+            .iter()
+            .position(|c| *c == b'"')
+            .map(|p| i + 1 + p)
+        else {
             break;
         };
-        let close = i + 1 + close_rel;
-        let inner = &bytes[i + 1..close];
-        let is_ipv6 = inner.contains(&b':')
-            && inner
-                .iter()
-                .all(|b| b.is_ascii_hexdigit() || *b == b':' || *b == b'.');
-        if is_ipv6 {
-            ipv6_redacted.push_str(&ipv4_redacted[cursor..i]);
-            ipv6_redacted.push_str("[<IPv6>]");
-            cursor = close + 1;
+        let key = &s[i + 1..close];
+        let mut j = close + 1;
+        if keys.iter().any(|k| k.eq_ignore_ascii_case(key)) {
+            while j < b.len() && b[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j < b.len() && b[j] == b':' {
+                j += 1;
+                while j < b.len() && b[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if j < b.len() && b[j] == b'"' {
+                    if let Some(vend) = b[j + 1..].iter().position(|c| *c == b'"') {
+                        out.push_str(&s[cursor..j + 1]);
+                        out.push_str(with);
+                        cursor = j + 1 + vend;
+                        i = cursor + 1;
+                        continue;
+                    }
+                }
+            }
         }
         i = close + 1;
     }
-    ipv6_redacted.push_str(&ipv4_redacted[cursor..]);
-    ipv6_redacted
+    out.push_str(&s[cursor..]);
+    out
 }
 
-fn maybe_redact_text(text: &str, redact: bool) -> String {
-    if redact {
-        redact_diagnostic_text(text)
-    } else {
-        text.to_string()
+/// The same as [`replace_json_values`] for JSON stored inside a JSON string (localStorage
+/// values): `\"key\": \"value\"`.
+fn replace_escaped_json_values(s: &str, keys: &[&str], with: &str) -> String {
+    let lower = s.to_ascii_lowercase();
+    let mut out = String::with_capacity(s.len());
+    let mut cursor = 0;
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find("\\\"") {
+        let at = from + rel;
+        let key_start = at + 2;
+        let Some(key_len) = lower[key_start..].find("\\\"") else {
+            break;
+        };
+        let key = &lower[key_start..key_start + key_len];
+        let mut j = key_start + key_len + 2;
+        if keys.contains(&key) {
+            while j < s.len() && s.as_bytes()[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if s[j..].starts_with(':') {
+                j += 1;
+                while j < s.len() && s.as_bytes()[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if s[j..].starts_with("\\\"") {
+                    let vstart = j + 2;
+                    if let Some(vlen) = s[vstart..].find("\\\"") {
+                        out.push_str(&s[cursor..vstart]);
+                        out.push_str(with);
+                        cursor = vstart + vlen;
+                        from = cursor + 2;
+                        continue;
+                    }
+                }
+            }
+        }
+        from = key_start + key_len + 2;
+    }
+    out.push_str(&s[cursor..]);
+    out
+}
+
+/// `key=value` (key not inside a longer word): the value, up to whitespace, `&` or `"`, goes.
+fn replace_kv_values(s: &str, keys: &[&str], with: &str) -> String {
+    let b = s.as_bytes();
+    let lower = s.to_ascii_lowercase();
+    let mut out = String::with_capacity(s.len());
+    let mut cursor = 0;
+    let mut i = 0;
+    'scan: while i < b.len() {
+        // A key starts with an ASCII letter, so `i` is a char boundary whenever it can match.
+        if b[i].is_ascii_alphabetic() && (i == 0 || !is_word(b[i - 1])) {
+            for k in keys {
+                let pat = format!("{k}=");
+                if lower[i..].starts_with(&pat) {
+                    let vstart = i + pat.len();
+                    let mut vend = vstart;
+                    while vend < b.len()
+                        && !b[vend].is_ascii_whitespace()
+                        && b[vend] != b'&'
+                        && b[vend] != b'"'
+                    {
+                        vend += 1;
+                    }
+                    if vend > vstart {
+                        out.push_str(&s[cursor..vstart]);
+                        out.push_str(with);
+                        cursor = vend;
+                        i = vend;
+                        continue 'scan;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    out.push_str(&s[cursor..]);
+    out
+}
+
+/// `/Users/<name>`, `/home/<name>` and `X:\Users\<name>` become `~`.
+fn replace_home_dirs(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut cursor = 0;
+    let mut i = 0;
+    let end_of_name = |mut j: usize, sep: u8| {
+        while j < b.len()
+            && b[j] != sep
+            && !b[j].is_ascii_whitespace()
+            && b[j] != b'"'
+            && b[j] != b'/'
+            && b[j] != b'\\'
+        {
+            j += 1;
+        }
+        j
+    };
+    while i < b.len() {
+        // Both patterns start with an ASCII byte, so only those positions (char boundaries) are tried.
+        if !b[i].is_ascii() {
+            i += 1;
+            continue;
+        }
+        let rest = &s[i..];
+        let posix = ["/Users/", "/home/"].iter().find(|p| rest.starts_with(**p));
+        if let Some(p) = posix {
+            let name_end = end_of_name(i + p.len(), b'/');
+            if name_end > i + p.len() {
+                out.push_str(&s[cursor..i]);
+                out.push('~');
+                cursor = name_end;
+                i = name_end;
+                continue;
+            }
+        }
+        if i + 2 < b.len()
+            && b[i].is_ascii_alphabetic()
+            && b[i + 1] == b':'
+            && s[i + 2..].starts_with("\\Users\\")
+        {
+            let name_start = i + 2 + "\\Users\\".len();
+            let name_end = end_of_name(name_start, b'\\');
+            if name_end > name_start {
+                out.push_str(&s[cursor..i]);
+                out.push('~');
+                cursor = name_end;
+                i = name_end;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out.push_str(&s[cursor..]);
+    out
+}
+
+/// `aa:bb:cc:dd:ee:ff` (not inside a longer word) becomes `<mac>`.
+fn replace_macs(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut cursor = 0;
+    let mut i = 0;
+    while i + 17 <= b.len() {
+        let w = &b[i..i + 17];
+        let is_mac = (0..6)
+            .all(|k| w[k * 3].is_ascii_hexdigit() && w[k * 3 + 1].is_ascii_hexdigit())
+            && (0..5).all(|k| w[k * 3 + 2] == b':');
+        let bounded = (i == 0 || !is_word(b[i - 1])) && (i + 17 == b.len() || !is_word(b[i + 17]));
+        if is_mac && bounded {
+            out.push_str(&s[cursor..i]);
+            out.push_str("<mac>");
+            cursor = i + 17;
+            i += 17;
+        } else {
+            i += 1;
+        }
+    }
+    out.push_str(&s[cursor..]);
+    out
+}
+
+impl Redactor {
+    pub(crate) fn new(redact: bool) -> Self {
+        Redactor {
+            redact,
+            ips: Vec::new(),
+        }
+    }
+
+    fn ip(&mut self, addr: &str) -> String {
+        let n = match self.ips.iter().position(|a| a == addr) {
+            Some(i) => i + 1,
+            None => {
+                self.ips.push(addr.to_string());
+                self.ips.len()
+            }
+        };
+        format!("<ip-{n}>")
+    }
+
+    fn replace_ipv6(&mut self, s: &str) -> String {
+        let b = s.as_bytes();
+        let mut out = String::with_capacity(s.len());
+        let mut cursor = 0;
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] != b'[' {
+                i += 1;
+                continue;
+            }
+            let Some(close) = b[i + 1..]
+                .iter()
+                .position(|c| *c == b']')
+                .map(|p| i + 1 + p)
+            else {
+                break;
+            };
+            let inner = &s[i + 1..close];
+            let is_ipv6 =
+                inner.contains(':') && inner.bytes().all(|c| c.is_ascii_hexdigit() || c == b':');
+            if is_ipv6 {
+                out.push_str(&s[cursor..i]);
+                out.push('[');
+                let p = self.ip(inner);
+                out.push_str(&p);
+                out.push(']');
+                cursor = close + 1;
+            }
+            i = close + 1;
+        }
+        out.push_str(&s[cursor..]);
+        out
+    }
+
+    /// A run of digits and dots with exactly four 1-3 digit parts is an address; longer dotted
+    /// runs (versions, timestamps) are not.
+    fn replace_ipv4(&mut self, s: &str) -> String {
+        let b = s.as_bytes();
+        let mut out = String::with_capacity(s.len());
+        let mut cursor = 0;
+        let mut i = 0;
+        while i < b.len() {
+            // Not inside a longer dotted number: a preceding dot only counts as a boundary after a
+            // word ("Draft.192.168.0.5"), never after a digit ("1.2.3.4.5").
+            let prev_ok = i == 0
+                || (!b[i - 1].is_ascii_digit()
+                    && (b[i - 1] != b'.'
+                        || (i >= 2
+                            && (b[i - 2].is_ascii_alphabetic()
+                                || b[i - 2] == b'_'
+                                || b[i - 2] == b'-'))));
+            if !b[i].is_ascii_digit() || !prev_ok {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < b.len() && (b[i].is_ascii_digit() || b[i] == b'.') {
+                i += 1;
+            }
+            // A trailing dot ends a sentence or starts an extension ("100.json"), not the number.
+            if i > start && b[i - 1] == b'.' {
+                i -= 1;
+            }
+            let candidate = &s[start..i];
+            let parts: Vec<&str> = candidate.split('.').collect();
+            let is_ipv4 = parts.len() == 4
+                && parts.iter().all(|p| {
+                    !p.is_empty() && p.len() <= 3 && p.bytes().all(|c| c.is_ascii_digit())
+                });
+            if is_ipv4 {
+                out.push_str(&s[cursor..start]);
+                let p = self.ip(candidate);
+                out.push_str(&p);
+                cursor = i;
+            }
+        }
+        out.push_str(&s[cursor..]);
+        out
+    }
+
+    pub(crate) fn text(&mut self, s: &str) -> String {
+        let out = replace_json_values(s, SECRET_KEYS, "<removed>");
+        let out = replace_escaped_json_values(&out, SECRET_KEYS, "<removed>");
+        let out = replace_kv_values(&out, SECRET_KEYS, "<removed>");
+        if !self.redact {
+            return out;
+        }
+        let out = replace_json_values(&out, &["serial"], "<serial>");
+        let out = replace_home_dirs(&out);
+        let out = replace_macs(&out);
+        let out = self.replace_ipv6(&out);
+        self.replace_ipv4(&out)
     }
 }
 
@@ -239,8 +548,11 @@ fn assemble_zip(
             Ok(())
         };
 
+    // One redactor for the whole report: an address is <ip-N> with the same N in every file.
+    let mut red = Redactor::new(args.redact);
+
     // 1. Manifest — always.
-    let report_json = maybe_redact_text(&args.report_json, args.redact);
+    let report_json = red.text(&args.report_json);
     write_entry(&mut zw, "report.json", report_json.as_bytes())?;
     entries += 1;
 
@@ -250,12 +562,16 @@ fn assemble_zip(
 
     // 3. Windowed app log.
     if args.include.app_logs {
-        let since = now_ms.saturating_sub(args.window_minutes.saturating_mul(60_000));
+        let since = if args.since_ms > 0 {
+            args.since_ms
+        } else {
+            now_ms.saturating_sub(args.window_minutes.saturating_mul(60_000))
+        };
         let lines = super::diag_log::window_lines(&dirs.logs, since);
         log_lines = lines.len();
         let mut body = lines.join("\n");
         body.push('\n');
-        let body = maybe_redact_text(&body, args.redact);
+        let body = red.text(&body);
         write_entry(&mut zw, "logs/app.jsonl", body.as_bytes())?;
         entries += 1;
     }
@@ -268,12 +584,8 @@ fn assemble_zip(
             (dirs.engine.join("engine.log.old"), "logs/engine.log.old"),
         ] {
             if let Ok(data) = std::fs::read(&src) {
-                if args.redact {
-                    let text = redact_diagnostic_text(&String::from_utf8_lossy(&data));
-                    write_entry(&mut zw, name, text.as_bytes())?;
-                } else {
-                    write_entry(&mut zw, name, &data)?;
-                }
+                let text = red.text(&String::from_utf8_lossy(&data));
+                write_entry(&mut zw, name, text.as_bytes())?;
                 entries += 1;
             }
         }
@@ -287,14 +599,10 @@ fn assemble_zip(
                 .and_then(|s| s.to_str())
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| format!("report-{crash_reports}.json"));
-            let leaf = maybe_redact_text(&leaf, args.redact);
+            let leaf = red.text(&leaf);
             if let Ok(data) = std::fs::read(&p) {
-                if args.redact {
-                    let text = redact_diagnostic_text(&String::from_utf8_lossy(&data));
-                    write_entry(&mut zw, &format!("crash-reports/{leaf}"), text.as_bytes())?;
-                } else {
-                    write_entry(&mut zw, &format!("crash-reports/{leaf}"), &data)?;
-                }
+                let text = red.text(&String::from_utf8_lossy(&data));
+                write_entry(&mut zw, &format!("crash-reports/{leaf}"), text.as_bytes())?;
                 entries += 1;
                 crash_reports += 1;
             }
@@ -305,14 +613,14 @@ fn assemble_zip(
     if args.include.ps5_logs {
         if let Some(t) = &args.klog_text {
             if !t.is_empty() {
-                let text = maybe_redact_text(t, args.redact);
+                let text = red.text(t);
                 write_entry(&mut zw, "ps5/klog.txt", text.as_bytes())?;
                 entries += 1;
             }
         }
         if let Some(t) = &args.syslog_text {
             if !t.is_empty() {
-                let text = maybe_redact_text(t, args.redact);
+                let text = red.text(t);
                 write_entry(&mut zw, "ps5/syslog.txt", text.as_bytes())?;
                 entries += 1;
             }
@@ -323,8 +631,8 @@ fn assemble_zip(
             if pl.text.is_empty() {
                 continue;
             }
-            let leaf = maybe_redact_text(&safe_leaf(&pl.name, "log"), args.redact);
-            let text = maybe_redact_text(&pl.text, args.redact);
+            let leaf = red.text(&safe_leaf(&pl.name, "log"));
+            let text = red.text(&pl.text);
             write_entry(
                 &mut zw,
                 &format!("ps5/payload-logs/{:02}_{leaf}", i + 1),
@@ -337,13 +645,49 @@ fn assemble_zip(
     // 7. User-attached screenshots — index-prefixed to avoid collisions.
     if args.include.images {
         for (i, p) in args.image_paths.iter().enumerate() {
-            let leaf = maybe_redact_text(&safe_leaf(p, "image"), args.redact);
+            let leaf = red.text(&safe_leaf(p, "image"));
             if let Ok(data) = std::fs::read(p) {
                 write_entry(&mut zw, &format!("images/{:02}_{leaf}", i + 1), &data)?;
                 entries += 1;
                 images += 1;
             }
             // unreadable attachment → skip
+        }
+    }
+
+    // 8. What the report builder assembled. A path that could leave the archive is refused and
+    //    named in MISSING.txt, which the builder itself usually sends (then it is appended to).
+    {
+        use base64::Engine as _;
+        let rejected: Vec<String> = args
+            .extra_entries
+            .iter()
+            .filter(|e| !extra_path_ok(&e.path))
+            .map(|e| format!("{}: invalid path", e.path))
+            .collect();
+        let mut missing_written = false;
+        for e in args.extra_entries.iter().filter(|e| extra_path_ok(&e.path)) {
+            let body: Vec<u8> = if let Some(t) = &e.text {
+                let mut t = red.text(t);
+                if e.path == "MISSING.txt" && !rejected.is_empty() {
+                    t.push_str(&format!("\n{}\n", rejected.join("\n")));
+                    missing_written = true;
+                }
+                t.into_bytes()
+            } else if let Some(b) = &e.base64 {
+                match base64::engine::general_purpose::STANDARD.decode(b) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                }
+            } else {
+                continue;
+            };
+            write_entry(&mut zw, &e.path, &body)?;
+            entries += 1;
+        }
+        if !rejected.is_empty() && !missing_written {
+            write_entry(&mut zw, "MISSING.txt", rejected.join("\n").as_bytes())?;
+            entries += 1;
         }
     }
 
@@ -395,8 +739,9 @@ diagnostics to help debug an issue — no games or app data.\n\
                        it stopped answering on.\n\
   images/              Screenshots you attached.\n\
 \n\
-Textual IPv4 and bracketed IPv6 addresses and the console serial are redacted\n\
-by default. Review screenshots and personal details before sharing.\n";
+IP addresses (numbered, the same number in every file), MAC addresses, home\n\
+folders and the console serial are redacted by default; pairing keys, tokens\n\
+and account ids are always removed. Review screenshots before sharing.\n";
 
 #[cfg(test)]
 mod tests {
@@ -472,6 +817,8 @@ mod tests {
                 .to_string(),
             redact: true,
             window_minutes: 30,
+            since_ms: 0,
+            extra_entries: vec![],
             // Real kernel logs contain non-UTF8 / control bytes after lossy
             // decode; make sure they survive into the zip unmangled.
             klog_text: Some("klog line ⚠ 0x80f40030\nsecond\n".to_string()),
@@ -540,7 +887,7 @@ mod tests {
             .unwrap()
             .read_to_string(&mut engine_log)
             .unwrap();
-        assert!(engine_log.contains("<IPv4>:9021"));
+        assert!(engine_log.contains("<ip-1>:9021"));
         assert!(!engine_log.contains("192.168.86.99"));
         let mut report = String::new();
         zip.by_name("report.json")
@@ -565,6 +912,8 @@ mod tests {
             report_json: "{}".to_string(),
             redact: false,
             window_minutes: 30,
+            since_ms: 0,
+            extra_entries: vec![],
             klog_text: Some("x".to_string()),
             syslog_text: None,
             payload_logs: vec![],
@@ -591,24 +940,90 @@ mod tests {
     }
 
     #[test]
-    fn redaction_covers_addresses_inside_free_form_logs() {
-        assert_eq!(
-            redact_diagnostic_text("connect 192.168.86.99:9021 refused"),
-            "connect <IPv4>:9021 refused"
-        );
-        assert_eq!(
-            redact_diagnostic_text("peer=10.0.0.5 local=172.16.4.20"),
-            "peer=<IPv4> local=<IPv4>"
-        );
-        // Dotted timestamps are not addresses; IP-shaped values are redacted
-        // even when an octet is invalid, matching the renderer's policy.
-        assert_eq!(
-            redact_diagnostic_text("ts=1780601834.879 bad=999.1.2.3"),
-            "ts=1780601834.879 bad=<IPv4>"
-        );
-        assert_eq!(
-            redact_diagnostic_text("connect [fe80::1234]:9120 refused"),
-            "connect [<IPv6>]:9120 refused"
-        );
+    fn extra_entries_are_redacted_and_bad_paths_listed_as_missing() {
+        let root = std::env::temp_dir().join(format!("ps5up-bugreport3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let dest = root.join("out.zip");
+        let args = BugReportArgs {
+            dest: dest.to_string_lossy().into_owned(),
+            dest_filename: None,
+            report_json: "{}".to_string(),
+            redact: true,
+            window_minutes: 0,
+            since_ms: 0,
+            klog_text: None,
+            syslog_text: None,
+            payload_logs: vec![],
+            image_paths: vec![],
+            include: BugReportInclude {
+                app_logs: false,
+                engine_log: false,
+                crash_reports: false,
+                ps5_logs: false,
+                images: false,
+            },
+            extra_entries: vec![
+                ExtraEntry {
+                    path: "timeline.txt".into(),
+                    text: Some("18:27 [engine] 192.168.86.100 lost".into()),
+                    base64: None,
+                },
+                ExtraEntry {
+                    path: "screenshots/a.png".into(),
+                    text: None,
+                    base64: Some("iVBORw==".into()),
+                },
+                ExtraEntry {
+                    path: "../escape.txt".into(),
+                    text: Some("x".into()),
+                    base64: None,
+                },
+            ],
+        };
+        let dirs = BundleDirs {
+            logs: root.join("l"),
+            engine: root.join("e"),
+            reports: root.join("r"),
+        };
+        assemble_zip(&args, &dirs, 1_780_000_000_000).unwrap();
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&dest).unwrap()).unwrap();
+        let mut read = |name: &str| {
+            let mut s = String::new();
+            std::io::Read::read_to_string(&mut zip.by_name(name).unwrap(), &mut s).unwrap();
+            s
+        };
+        assert_eq!(read("timeline.txt"), "18:27 [engine] <ip-1> lost");
+        assert!(read("MISSING.txt").contains("../escape.txt: invalid path"));
+        assert!(zip.by_name("screenshots/a.png").is_ok());
+        assert!(zip.by_name("../escape.txt").is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Vector {
+        name: String,
+        redact: bool,
+        #[serde(rename = "in")]
+        input: String,
+        out: String,
+    }
+
+    /// The same vectors as client/src/lib/redaction.test.ts: web and desktop redact alike.
+    #[test]
+    fn shared_vectors() {
+        let vectors: Vec<Vector> =
+            serde_json::from_str(include_str!("../../../src/lib/redaction.vectors.json")).unwrap();
+        for v in vectors {
+            assert_eq!(Redactor::new(v.redact).text(&v.input), v.out, "{}", v.name);
+        }
+    }
+
+    #[test]
+    fn addresses_keep_their_number_across_files() {
+        let mut r = Redactor::new(true);
+        assert_eq!(r.text("a 10.0.0.1"), "a <ip-1>");
+        assert_eq!(r.text("b 10.0.0.2 c 10.0.0.1"), "b <ip-2> c <ip-1>");
+        assert_eq!(r.text("ts=1780601834.879"), "ts=1780601834.879");
     }
 }

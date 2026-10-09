@@ -450,6 +450,8 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   },
 
   async pickFolder(path) {
+    // The console this pick belongs to: the inspection can finish after a console switch.
+    const pickedFor = draftKey(useConnectionStore.getState().host);
     // Optimistic set so the UI can render "Inspecting <path>…" immediately.
     set({
       source: {
@@ -478,27 +480,35 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       // the OLD file/folder name even though the user already moved
       // on, and the upload at that preview path would land the
       // wrong source entirely if they hit Upload before noticing.
-      if (get().source?.path !== path) return;
       const isGame = inspection.result.meta_source !== "none";
-      set({
-        source: {
-          kind: isGame ? "game-folder" : "folder",
-          path,
-          meta: inspection.result,
-          wrappedHint: inspection.wrapped_hint,
-          zipInfo: null,
-        },
-        detecting: false,
-        detectError: null,
-      });
+      const inspected: PickedSource = {
+        kind: isGame ? "game-folder" : "folder",
+        path,
+        meta: inspection.result,
+        wrappedHint: inspection.wrapped_hint,
+        zipInfo: null,
+      };
+      // Switched consoles meanwhile: the result belongs to the console it was picked on, whose
+      // draft is stashed, not to the one now on screen.
+      if (draftKey(useConnectionStore.getState().host) !== pickedFor) {
+        const stashed = draftStash.get(pickedFor);
+        if (stashed?.source?.path === path) draftStash.set(pickedFor, { ...stashed, source: inspected, detectError: null });
+        return;
+      }
+      if (get().source?.path !== path) return;
+      set({ source: inspected, detecting: false, detectError: null });
     } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      // Switched consoles meanwhile: the error belongs to the console it was picked on.
+      if (draftKey(useConnectionStore.getState().host) !== pickedFor) {
+        const stashed = draftStash.get(pickedFor);
+        if (stashed?.source?.path === path) draftStash.set(pickedFor, { ...stashed, detectError: message });
+        return;
+      }
       // Same race window for the failure branch — don't surface an
       // error for an inspect the user already abandoned.
       if (get().source?.path !== path) return;
-      set({
-        detecting: false,
-        detectError: e instanceof Error ? e.message : String(e),
-      });
+      set({ detecting: false, detectError: message });
     }
   },
 

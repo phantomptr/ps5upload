@@ -147,6 +147,7 @@ playwright-report/
 test-results/
 /output/playwright/
 /output/research-*/
+/output/validate/
 /.playwright-cli/
 
 # ─── Dev screenshots / debug captures ────────────────────────────────────

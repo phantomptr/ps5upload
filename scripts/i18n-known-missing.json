@@ -138,6 +138,9 @@
     ],
     "stale": [],
     "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord",
       "ffpkg_inspect_sce_sys",
       "smp_meta_json"
     ]
@@ -281,6 +284,9 @@
     ],
     "stale": [],
     "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord",
       "ffpkg_inspect_sce_sys",
       "processes_pid",
       "smp_meta_json"
@@ -425,6 +431,9 @@
     ],
     "stale": [],
     "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord",
       "console_tab_name",
       "ffpkg_inspect_sce_sys",
       "game_hub_addons",
@@ -575,6 +584,9 @@
     ],
     "stale": [],
     "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord",
       "ffpkg_inspect_sce_sys",
       "power_wake_signin_rpkey",
       "processes_pid",
@@ -686,7 +698,11 @@
       "volumes_kept_by_console"
     ],
     "stale": [],
-    "untranslated": []
+    "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord"
+    ]
   },
   "fr": {
     "missing": [
@@ -827,6 +843,9 @@
     ],
     "stale": [],
     "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord",
       "ffpkg_inspect_sce_sys",
       "hardware_systime_via",
       "power_wake_signin_rpkey",
@@ -976,6 +995,9 @@
     ],
     "stale": [],
     "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord",
       "ffpkg_inspect_sce_sys",
       "processes_pid",
       "smp_meta_json"
@@ -1120,6 +1142,9 @@
     ],
     "stale": [],
     "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord",
       "engine_url_label",
       "ffpkg_inspect_sce_sys",
       "health_cat_remoteplay",
@@ -1272,6 +1297,9 @@
     ],
     "stale": [],
     "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord",
       "ffpkg_inspect_sce_sys",
       "fs_item_one",
       "hardware_systime_via",
@@ -1421,6 +1449,9 @@
     ],
     "stale": [],
     "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord",
       "ffpkg_inspect_sce_sys",
       "processes_pid",
       "remotePlay",
@@ -1569,6 +1600,9 @@
     ],
     "stale": [],
     "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord",
       "ffpkg_inspect_sce_sys",
       "processes_pid",
       "smp_meta_json"
@@ -1713,6 +1747,9 @@
     ],
     "stale": [],
     "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord",
       "ffpkg_inspect_sce_sys",
       "processes_pid",
       "smp_meta_json"
@@ -1857,6 +1894,9 @@
     ],
     "stale": [],
     "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord",
       "ffpkg_inspect_sce_sys",
       "power_wake_signin_rpkey",
       "processes_pid",
@@ -2002,6 +2042,9 @@
     ],
     "stale": [],
     "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord",
       "ffpkg_inspect_sce_sys",
       "fs_item_one",
       "hardware_systime_via",
@@ -2152,6 +2195,9 @@
     ],
     "stale": [],
     "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord",
       "ffpkg_inspect_sce_sys",
       "power_wake_signin_rpkey",
       "processes_pid",
@@ -2297,6 +2343,9 @@
     ],
     "stale": [],
     "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord",
       "ffpkg_inspect_sce_sys",
       "processes_pid",
       "smp_meta_json"
@@ -2441,6 +2490,9 @@
     ],
     "stale": [],
     "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord",
       "ffpkg_inspect_sce_sys",
       "power_wake_signin_rpkey",
       "processes_pid",
@@ -2587,6 +2639,9 @@
     ],
     "stale": [],
     "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord",
       "ffpkg_inspect_sce_sys",
       "power_wake_signin_rpkey",
       "processes_pid",
@@ -2734,6 +2789,9 @@
     ],
     "stale": [],
     "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord",
       "ffpkg_inspect_sce_sys",
       "processes_pid",
       "smp_meta_json"
@@ -2878,6 +2936,9 @@
     ],
     "stale": [],
     "untranslated": [
+      "br_issue_link_placeholder",
+      "br_payloads_placeholder",
+      "br_where_discord",
       "ffpkg_inspect_sce_sys",
       "processes_pid",
       "smp_meta_json"

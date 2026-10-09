@@ -1,0 +1,17 @@
+# cargo-nextest settings for `scripts/validate-repo.mjs` and CI. nextest runs every test as its
+# own process and many at once; the tests below measure time or process-wide limits, so they run
+# one at a time to stay meaningful on a loaded machine.
+[test-groups]
+timing = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = "binary(governor) | binary(apply_perf) | binary(frame_budget) | binary(fdlimit)"
+test-group = "timing"
+
+[profile.default]
+# A hung test is a failure, not a stalled gate.
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[profile.ci]
+fail-fast = false
+slow-timeout = { period = "60s", terminate-after = 5 }

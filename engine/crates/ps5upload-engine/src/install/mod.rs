@@ -81,6 +81,15 @@ impl JobStore {
         }
     }
 
+    /// Whether any console has an install running.
+    pub fn any_active(&self) -> bool {
+        !self
+            .active
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
+    }
+
     /// Ask a running job to stop. False when there is no such job or it already ended.
     pub fn request_cancel(&self, job: &str) -> bool {
         let running = self
@@ -740,6 +749,14 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
         req.content_id,
         req.category.as_deref().unwrap_or("?"),
         req.package_app_ver.as_deref().unwrap_or("?")
+    );
+    ps5upload_core::events::emit_detail(
+        ps5upload_core::events::Cat::Install,
+        ps5upload_core::events::Level::Info,
+        "install_start",
+        Some(&req.ps5_addr),
+        format!("install start {} ({})", req.content_id, req.source.kind()),
+        serde_json::json!({ "category": req.category, "app_ver": req.package_app_ver }),
     );
     let category = req.category.clone().unwrap_or_default();
     let patch_ver = patch_check_version(&category, req.package_app_ver.as_deref());
@@ -1476,6 +1493,18 @@ fn finalize(
             metrics: st.metrics.clone(),
         };
         let _ = history::append(&history_dir(), &req.ps5_addr, &entry, history::HISTORY_CAP);
+        ps5upload_core::events::emit_detail(
+            ps5upload_core::events::Cat::Install,
+            if entry.code == 0 {
+                ps5upload_core::events::Level::Info
+            } else {
+                ps5upload_core::events::Level::Error
+            },
+            "install_result",
+            Some(&req.ps5_addr),
+            format!("install {} code=0x{:08x}", entry.content_id, entry.code),
+            serde_json::json!({ "verdict": entry.verdict, "route": entry.route }),
+        );
 
         // Optional cleanup of an engine-side working copy (e.g. a Convert
         // output) after a successful install. Never touches a file the user

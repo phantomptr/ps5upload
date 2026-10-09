@@ -3,6 +3,8 @@ import {
   profileNameForAddr,
   profileNameForHost,
   reorderProfiles,
+  selectConsoleByAddress,
+  useRosterStore,
   type PS5Profile,
 } from "./roster";
 
@@ -96,5 +98,39 @@ describe("reorderProfiles", () => {
   it("does not mutate the input", () => {
     reorderProfiles(abc, 2, 0);
     expect(names(abc.slice())).toEqual(["A", "B", "C"]);
+  });
+});
+
+describe("selectConsoleByAddress", () => {
+  const reset = (profiles: PS5Profile[], active: string | null) =>
+    useRosterStore.setState({ profiles, active_id: active });
+
+  it("selects a console already in the roster instead of re-pointing the active one", () => {
+    reset([profile({ id: "a", host: "192.168.0.5" }), profile({ id: "b", host: "192.168.0.6" })], "a");
+    selectConsoleByAddress("192.168.0.6");
+    const s = useRosterStore.getState();
+    expect(s.active_id).toBe("b");
+    expect(s.profiles.find((p) => p.id === "a")?.host).toBe("192.168.0.5");
+  });
+
+  it("re-points the active console at a new address", () => {
+    reset([profile({ id: "a", host: "192.168.0.5" })], "a");
+    selectConsoleByAddress(" 10.0.0.9 ");
+    expect(useRosterStore.getState().profiles[0].host).toBe("10.0.0.9");
+  });
+
+  it("adds and selects a console on a fresh install", () => {
+    reset([], null);
+    selectConsoleByAddress("10.0.0.9");
+    const s = useRosterStore.getState();
+    expect(s.profiles).toHaveLength(1);
+    expect(s.active_id).toBe(s.profiles[0].id);
+    expect(s.profiles[0].host).toBe("10.0.0.9");
+  });
+
+  it("ignores an empty address", () => {
+    reset([profile({ id: "a", host: "192.168.0.5" })], "a");
+    selectConsoleByAddress("   ");
+    expect(useRosterStore.getState().profiles[0].host).toBe("192.168.0.5");
   });
 });

@@ -38,6 +38,13 @@ installEngineStartupEvents();
 // tree crashes. Wired right after console capture so the very first errors
 // are covered. Best-effort + debounced; see lib/crashReporter.ts.
 import("./lib/crashReporter").then((m) => m.initCrashReporter());
+void import("./lib/appJournal").then(({ recordAppEvent }) =>
+  import("./lib/appVersion").then(({ getAppVersion }) =>
+    getAppVersion()
+      .catch(() => "?")
+      .then((v) => recordAppEvent({ cat: "system", level: "info", code: "app_start", msg: `app ${v} started` })),
+  ),
+);
 
 // Mirror engine sidecar log lines into the Log tab. Without this, the
 // engine's diagnostic output (reconcile progress, transfer retries,

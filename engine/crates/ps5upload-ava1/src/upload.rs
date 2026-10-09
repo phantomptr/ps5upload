@@ -843,6 +843,13 @@ pub(crate) async fn wait(backoff: &mut Duration, why: &str) {
     let jitter = Duration::from_millis((u64::from(nanos) ^ u64::from(std::process::id())) % spread);
     let sleep = *backoff + jitter;
     let _ = writeln!(std::io::stderr(), "ava1: reconnecting in {sleep:?}: {why}");
+    ps5upload_core::events::emit(
+        ps5upload_core::events::Cat::Connection,
+        ps5upload_core::events::Level::Warn,
+        "reconnecting",
+        None,
+        format!("reconnecting in {sleep:?}: {why}"),
+    );
     tokio::time::sleep(sleep).await;
     *backoff = (*backoff * 2).min(Duration::from_secs(5));
 }

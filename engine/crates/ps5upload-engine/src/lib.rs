@@ -26,6 +26,7 @@
 //!   GET  /api/jobs/{id}               → poll job status/result
 //!   GET  /api/jobs                    → list all jobs (summary)
 //!   GET  /api/events                  → SSE stream of job state changes
+//!   GET  /api/event-journal           → bug-report event journal (since/until/cat)
 //!   POST /api/ps5/cleanup             → recursively remove a path under PS5 allowlist
 //!   GET  /api/ps5/volumes             → list storage volumes detected by the payload
 //!   GET  /api/ps5/list-dir?path=...   → list immediate children of a directory on PS5
@@ -39,9 +40,11 @@ mod console_read;
 mod convert_source;
 mod elfldr_guard;
 mod engine_log;
+mod event_journal;
 mod fakelibs_api;
 mod fpkg_api;
 mod fpkg_firmware;
+mod helper_mirror;
 mod icon_cache;
 mod image_build;
 mod inspect;
@@ -69,6 +72,8 @@ mod win_net;
 
 #[cfg(test)]
 mod ava1_only_tests;
+#[cfg(test)]
+mod event_hooks_tests;
 
 use axum::http::HeaderMap;
 use axum::{
@@ -550,6 +555,12 @@ const ARCHIVE_STAGE_ENV: (&str, &str) = (
 async fn log_requests(req: Request, next: Next) -> axum::response::Response {
     let method = req.method().clone();
     let path = req.uri().path().to_string();
+    // The console a call was about (`?addr=`), for the event journal.
+    let console = req.uri().query().and_then(|q| {
+        q.split('&')
+            .find_map(|kv| kv.strip_prefix("addr="))
+            .map(|v| v.replace("%3A", ":").replace("%3a", ":"))
+    });
     let start = std::time::Instant::now();
     let resp = next.run(req).await;
     let ms = start.elapsed().as_millis();
@@ -585,6 +596,26 @@ async fn log_requests(req: Request, next: Next) -> axum::response::Response {
             }
         }
     };
+    {
+        use ps5upload_core::events::{emit, Cat, Level};
+        match &action {
+            log_dedup::LogAction::Warn { .. } => emit(
+                Cat::Api,
+                Level::Warn,
+                "api_failing",
+                console.as_deref(),
+                format!("{method} {path} -> {status} ({ms}ms)"),
+            ),
+            log_dedup::LogAction::Recovered { failures } => emit(
+                Cat::Api,
+                Level::Info,
+                "api_recovered",
+                console.as_deref(),
+                format!("{method} {path} recovered after {failures} failure(s)"),
+            ),
+            log_dedup::LogAction::Quiet => {}
+        }
+    }
     match action {
         log_dedup::LogAction::Warn { suppressed: 0 } => {
             log_warn!("{method} {path} -> {status} ({ms}ms)");
@@ -1415,10 +1446,52 @@ pub(crate) fn set_job(
         g.insert(job_id, state.clone());
     }
     if matches!(state, JobState::Done { .. } | JobState::Failed { .. }) {
-        telemetry::on_state(job_id, &serde_json::json!(state));
+        let json = serde_json::json!(state);
+        telemetry::on_state(job_id, &json);
+        if let Some(e) = job_event(&job_id.to_string(), &json) {
+            ps5upload_core::events::emit_event(e);
+        }
     }
     let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": with_live_notes(job_id, serde_json::json!(state)) });
     let _ = events_tx.send(msg.to_string());
+}
+
+/// The journal event for a job that reached a terminal state (bug-report spec §1.2); `None`
+/// for any other state.
+pub(crate) fn job_event(
+    job_id: &str,
+    st: &serde_json::Value,
+) -> Option<ps5upload_core::events::Event> {
+    use ps5upload_core::events::{Cat, Event, Level};
+    let console = st.get("error_console").and_then(|v| v.as_str());
+    match st.get("status")?.as_str()? {
+        "done" => Some(Event::new(
+            Cat::Transfer,
+            Level::Info,
+            "job_done",
+            console,
+            format!("job {job_id} done"),
+            None,
+        )),
+        "failed" => {
+            let err = st
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            Some(Event::new(
+                Cat::Transfer,
+                Level::Error,
+                "job_failed",
+                console,
+                format!("job {job_id} failed: {err}"),
+                Some(serde_json::json!({
+                    "reason": st.get("error_reason"),
+                    "elapsed_ms": st.get("elapsed_ms"),
+                })),
+            ))
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn now_ms() -> u64 {
@@ -5095,6 +5168,7 @@ async fn ps5_status(
     Query(q): Query<AddrQuery>,
 ) -> impl IntoResponse {
     let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+    let console = addr.clone();
     // `node.status` through the management seam: the typed AVA1 NodeStatus is rebuilt into the
     // legacy JSON (`ucred_elevated` a bool, `prior_instance` only when present). The old
     // transaction fields (runtime_port, shutdown, takeover_requested, active_transactions,
@@ -5115,9 +5189,30 @@ async fn ps5_status(
     })
     .await;
 
+    use ps5upload_core::events::{emit, Cat, Level};
     match result {
-        Ok(Ok(json)) => (StatusCode::OK, Json(json)).into_response(),
-        Ok(Err(e)) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+        Ok(Ok(json)) => {
+            // Collapsed by the journal: one line (with a count) per minute of polling.
+            emit(
+                Cat::Connection,
+                Level::Info,
+                "status_ok",
+                Some(&console),
+                "status ok",
+            );
+            helper_mirror::note_console(&console);
+            (StatusCode::OK, Json(json)).into_response()
+        }
+        Ok(Err(e)) => {
+            emit(
+                Cat::Connection,
+                Level::Warn,
+                "status_failed",
+                Some(&console),
+                format!("{e:#}"),
+            );
+            json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response()
+        }
         Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
 }
@@ -9752,6 +9847,15 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // (reconcile per-parent progress, transfer retries, etc.) without
     // having to install a separate pipe for core diagnostics.
     ps5upload_core::log::set_sink(|msg| engine_log::record("info", msg.to_string()));
+    // The bug-report journal: every crate's events (ps5upload_core::events) land on disk here.
+    event_journal::install();
+    ps5upload_core::events::emit(
+        ps5upload_core::events::Cat::System,
+        ps5upload_core::events::Level::Info,
+        "engine_start",
+        None,
+        format!("engine {} started", env!("CARGO_PKG_VERSION")),
+    );
 
     let ps5_addr = cfg.ps5_addr.clone();
     let guard_cfg = LoopbackGuardConfig {
@@ -9772,6 +9876,21 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
 
     // The Collection's automatic refresh (a no-op until a folder is added).
     collection_api::spawn_auto_refresh();
+    // Install sessions live in their own state (served by pkg_install::router below); the helper
+    // log mirror also reads it, to stay off a console while an install runs.
+    let pkg_state = std::sync::Arc::new(pkg_install::PkgInstallState::restored());
+    // Copies each connected console's helper log into the event journal.
+    {
+        let jobs = state.jobs.clone();
+        let installs = pkg_state.clone();
+        helper_mirror::spawn(std::sync::Arc::new(move || {
+            installs.jobs.any_active()
+                || jobs
+                    .lock()
+                    .map(|g| g.values().any(|s| matches!(s, JobState::Running { .. })))
+                    .unwrap_or(true)
+        }));
+    }
 
     let app = Router::new()
         .route("/", get(ui_handler))
@@ -10162,6 +10281,11 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/jobs/{id}/cancel", post(cancel_job))
         .route("/api/events", get(events_stream))
         .route("/api/engine-logs", get(engine_logs_tail))
+        .route("/api/event-journal", get(event_journal::events_handler))
+        .route(
+            "/api/ps5/helper-log-ftp",
+            get(helper_mirror::ftp_log_handler),
+        )
         .route("/api/debug/crash", get(debug_crash))
         .with_state(state);
 
@@ -10214,9 +10338,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         // HTTP-host serving handler needs Mutex-guarded session lookup
         // independent of the main engine state. Merged at this point
         // so the pkg routes share the same listener + CORS + body limit.
-        .merge(pkg_install::router(std::sync::Arc::new(
-            pkg_install::PkgInstallState::restored(),
-        )))
+        .merge(pkg_install::router(pkg_state))
         // Downloading a link to disk before installing it. Separate state for
         // the same reason as the install sessions: its progress is polled
         // independently of everything else the engine is doing.
@@ -10333,13 +10455,21 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // middleware. Without this, axum hands handlers a generic ConnectInfo
     // and the middleware would have to fall back to header-based source
     // detection (less reliable, easier to spoof from a hostile LAN peer).
-    if let Err(e) = axum::serve(
+    let served = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_signal())
-    .await
-    {
+    .await;
+    ps5upload_core::events::emit(
+        ps5upload_core::events::Cat::System,
+        ps5upload_core::events::Level::Info,
+        "engine_stop",
+        None,
+        "engine stopped",
+    );
+    event_journal::flush_now();
+    if let Err(e) = served {
         eprintln!("[ps5upload-engine] axum serve terminated: {e}");
         if cfg.exit_on_error {
             std::process::exit(3);

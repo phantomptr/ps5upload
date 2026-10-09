@@ -5,6 +5,7 @@ import { isTauriEnv } from "../../lib/tauriEnv";
 import {
   useConnectionStore,
   PS5_LOADER_PORT,
+  type ConnStep,
 } from "../../state/connection";
 import {
   portProbe,
@@ -30,8 +31,7 @@ import { compareVersions } from "../../lib/semver";
 import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
 import { AlertTriangle, CheckCircle2, CircleDashed, XCircle, Send, ArrowRight, Radar, Sparkles, Cable } from "lucide-react";
 import { PageHeader, Button, Spinner, ErrorCard } from "../../components";
-import { useRosterStore } from "../../state/roster";
-import { hostOf } from "../../lib/addr";
+import { selectConsoleByAddress } from "../../state/roster";
 import { useTr } from "../../state/lang";
 import PowerControl from "./PowerControl";
 import { BringUpPanel } from "./BringUpPanel";
@@ -246,6 +246,8 @@ export default function ConnectionScreen() {
   const storedStep2Msg = useConnectionStore((s) => s.step2Msg);
   const setStoredStep1 = useConnectionStore((s) => s.setStep1);
   const setStoredStep2 = useConnectionStore((s) => s.setStep2);
+  const setStep1For = useConnectionStore((s) => s.setStep1For);
+  const setStep2For = useConnectionStore((s) => s.setStep2For);
   const navigate = useNavigate();
 
   /** Local copy of the address field.
@@ -378,21 +380,7 @@ export default function ConnectionScreen() {
     // Worse, `setHost` also mirrors that host's last-known runtime, so the
     // reverted OLD console could still be showing "helper ok" and the check
     // appeared to pass against an address the PS5 no longer has. (#276)
-    const roster = useRosterStore.getState();
-    const existing = roster.profiles.find(
-      (p) => hostOf(p.host) === hostOf(value),
-    );
-    if (existing && existing.id !== roster.active_id) {
-      // The typed address is a console we already know about — select it
-      // rather than pointing two profiles at the same host.
-      roster.setActive(existing.id);
-    } else if (roster.active_id) {
-      roster.updateHost(roster.active_id, value);
-    } else {
-      // No roster yet (fresh install): seed a profile so the reconcile has
-      // something to agree with. setHost alone would be undone on mount.
-      roster.setActive(roster.add({ name: `PS5 (${value})`, host: value }));
-    }
+    selectConsoleByAddress(value);
     settleStep1(
       "idle",
       tr("connection_step1_idle", undefined, "Enter your PS5's address and check"),
@@ -417,24 +405,28 @@ export default function ConnectionScreen() {
     setTransientStep1(s);
     setTransientStep1Msg(msg);
   };
-  const settleStep1 = (s: "ok" | "fail" | "idle", msg: string) => {
+  // `target`: the console a check was started for. Its answer can arrive after a tab switch, and
+  // then it must only reach this (now hidden) screen, never the selected console's.
+  const settleStep1 = (s: "ok" | "fail" | "idle", msg: string, target?: string) => {
+    const store = target ? (st: ConnStep, m: string) => setStep1For(target, st, m) : setStoredStep1;
     if (s === "ok") {
-      setStoredStep1("ok", msg);
+      store("ok", msg);
       setTransientStep1(null);
       setTransientStep1Msg(null);
     } else {
-      setStoredStep1("idle", tr("connection_step1_idle", undefined, "Enter your PS5's address and check"));
+      store("idle", tr("connection_step1_idle", undefined, "Enter your PS5's address and check"));
       setTransientStep1(s);
       setTransientStep1Msg(msg);
     }
   };
-  const settleStep2 = (s: "ok" | "fail" | "idle", msg: string) => {
+  const settleStep2 = (s: "ok" | "fail" | "idle", msg: string, target?: string) => {
+    const store = target ? (st: ConnStep, m: string) => setStep2For(target, st, m) : setStoredStep2;
     if (s === "ok") {
-      setStoredStep2("ok", msg);
+      store("ok", msg);
       setTransientStep2(null);
       setTransientStep2Msg(null);
     } else {
-      setStoredStep2("idle", tr("connection_payload_not_loaded", undefined, "Helper not loaded yet"));
+      store("idle", tr("connection_payload_not_loaded", undefined, "Helper not loaded yet"));
       setTransientStep2(s);
       setTransientStep2Msg(msg);
     }
@@ -467,7 +459,7 @@ export default function ConnectionScreen() {
       ),
     );
     clearHelperSend(target);
-    settleStep2("idle", tr("connection_payload_not_loaded", undefined, "Helper not loaded yet"));
+    settleStep2("idle", tr("connection_payload_not_loaded", undefined, "Helper not loaded yet"), target);
     setTransientStep2(null);
     setTransientStep2Msg(null);
     const probe = await portProbe(target, PS5_LOADER_PORT);
@@ -476,7 +468,7 @@ export default function ConnectionScreen() {
           "connection_port_open",
           { port: PS5_LOADER_PORT, host: target },
           `Port ${PS5_LOADER_PORT} is open on ${target}`,
-        ));
+        ), target);
     } else {
       // A closed loader port is not a problem when our helper is already
       // running: some loaders (pldmgr, for one) don't keep :9021 open after
@@ -489,8 +481,8 @@ export default function ConnectionScreen() {
           { host: target },
           `Helper is running on ${target}`,
         );
-        settleStep1("ok", running);
-        settleStep2("ok", running);
+        settleStep1("ok", running, target);
+        settleStep2("ok", running, target);
         return;
       }
       // Append the probe's own reason. Without it a name that simply didn't
@@ -516,6 +508,7 @@ export default function ConnectionScreen() {
           : looksLikeMacLocalNetworkBlock(probe.error, ua)
           ? `${detail}. ${tr("connection_mac_local_network_hint", undefined, "macOS may be blocking this app from your local network. Open System Settings → Privacy & Security → Local Network, allow PS5Upload, then check again.")}`
           : detail,
+        target,
       );
     }
   }

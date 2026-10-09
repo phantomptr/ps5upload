@@ -1,0 +1,80 @@
+[
+  {
+    "name": "same IP same placeholder",
+    "redact": true,
+    "in": "connect 192.168.86.100:9120 then 192.168.86.99 then 192.168.86.100",
+    "out": "connect <ip-1>:9120 then <ip-2> then <ip-1>"
+  },
+  {
+    "name": "bracketed IPv6 keeps its port",
+    "redact": true,
+    "in": "peer [fe80::1]:9120",
+    "out": "peer [<ip-1>]:9120"
+  },
+  {
+    "name": "MAC address",
+    "redact": true,
+    "in": "mac 0c:fe:45:aa:bb:cc up",
+    "out": "mac <mac> up"
+  },
+  {
+    "name": "console serial",
+    "redact": true,
+    "in": "{\"serial\":\"AJ123456789012\"}",
+    "out": "{\"serial\":\"<serial>\"}"
+  },
+  {
+    "name": "home folders",
+    "redact": true,
+    "in": "/Users/yunpengl/Library/x and C:\\Users\\bob\\x and /home/amy/y",
+    "out": "~/Library/x and ~\\x and ~/y"
+  },
+  {
+    "name": "secrets go even with redaction off",
+    "redact": false,
+    "in": "{\"pairing_key\":\"abcd\",\"ip\":\"10.0.0.9\"}",
+    "out": "{\"pairing_key\":\"<removed>\",\"ip\":\"10.0.0.9\"}"
+  },
+  {
+    "name": "key=value secrets",
+    "redact": false,
+    "in": "token=abc123 next",
+    "out": "token=<removed> next"
+  },
+  {
+    "name": "account id",
+    "redact": false,
+    "in": "\"account_id\": \"0x1234abcd\"",
+    "out": "\"account_id\": \"<removed>\""
+  },
+  {
+    "name": "versions and long dotted runs are not IPs",
+    "redact": true,
+    "in": "version 6.5.2 and 1.2.3.4.5",
+    "out": "version 6.5.2 and 1.2.3.4.5"
+  },
+  {
+    "name": "redaction off leaves addresses",
+    "redact": false,
+    "in": "192.168.86.100 at /Users/me/x",
+    "out": "192.168.86.100 at /Users/me/x"
+  },
+  {
+    "name": "multibyte text around everything",
+    "redact": true,
+    "in": "⚠ token=x 多 /Users/a/b ✓ 192.168.0.1 é",
+    "out": "⚠ token=<removed> 多 ~/b ✓ <ip-1> é"
+  },
+  {
+    "name": "an address after a word and a dot",
+    "redact": true,
+    "in": "ps5upload.bugReportDraft.192.168.86.100 and v1.2.3.4.5",
+    "out": "ps5upload.bugReportDraft.<ip-1> and v1.2.3.4.5"
+  },
+  {
+    "name": "wake keys inside escaped JSON go even with redaction off",
+    "redact": false,
+    "in": "\"ps5upload.roster.v1\": \"{\\\"wake_credential\\\":\\\"c-123\\\",\\\"wake_regist_key\\\":\\\"rk\\\",\\\"wake_rp_key\\\":\\\"rp\\\",\\\"name\\\":\\\"Pro\\\"}\"",
+    "out": "\"ps5upload.roster.v1\": \"{\\\"wake_credential\\\":\\\"<removed>\\\",\\\"wake_regist_key\\\":\\\"<removed>\\\",\\\"wake_rp_key\\\":\\\"<removed>\\\",\\\"name\\\":\\\"Pro\\\"}\""
+  }
+]

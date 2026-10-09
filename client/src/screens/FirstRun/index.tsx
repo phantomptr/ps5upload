@@ -28,7 +28,7 @@ import { useConnectionStore, PS5_LOADER_PORT } from "../../state/connection";
 import { PageHeader, Button, Spinner } from "../../components";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
-import { withConsolePrefix } from "../../state/roster";
+import { selectConsoleByAddress, withConsolePrefix } from "../../state/roster";
 
 /**
  * First-run setup wizard.
@@ -67,11 +67,17 @@ function isBundledPs5UploadAvailable(path: string | null): boolean {
   return !!path && path.length > 0;
 }
 
+/** A check asked for just before committing a new address; the commit remounts this screen
+ *  (each console has its own screens), so the new mount runs it. */
+let pendingFirstRunCheck = false;
+
 export default function FirstRunScreen() {
   const tr = useTr();
   const navigate = useNavigate();
   const host = useConnectionStore((s) => s.host);
-  const setHost = useConnectionStore((s) => s.setHost);
+  // The field edits a draft: committing an address selects that console, which remounts this
+  // screen, so it happens on blur / Enter / Check, never per keystroke.
+  const [hostDraft, setHostDraft] = useState(host);
   const setStatus = useConnectionStore((s) => s.setStatus);
 
   const [step1, setStep1] = useState<StepState>("idle");
@@ -92,6 +98,23 @@ export default function FirstRunScreen() {
     return () => {
       cancelled.current = true;
     };
+  }, []);
+
+  /** Select the typed console, then check it (after the remount, if the address changed). */
+  const commitAndCheck = (thenCheck: boolean) => {
+    const value = hostDraft.trim();
+    if (value === host.trim()) {
+      if (thenCheck) void handleCheck();
+      return;
+    }
+    if (thenCheck) pendingFirstRunCheck = true;
+    selectConsoleByAddress(value);
+  };
+  useEffect(() => {
+    if (!pendingFirstRunCheck) return;
+    pendingFirstRunCheck = false;
+    void handleCheck();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleCheck() {
@@ -389,9 +412,10 @@ export default function FirstRunScreen() {
         >
           <div className="flex items-center gap-2">
             <input
-              value={host}
+              value={hostDraft}
+              onBlur={() => commitAndCheck(false)}
               onChange={(e) => {
-                setHost(e.target.value);
+                setHostDraft(e.target.value);
                 setStep1("idle");
                 setStep1Msg(
                   tr(
@@ -402,7 +426,7 @@ export default function FirstRunScreen() {
                 );
               }}
               onKeyDown={(e) => {
-                if (e.key === "Enter") void handleCheck();
+                if (e.key === "Enter") commitAndCheck(true);
               }}
               placeholder="192.168.1.50"
               inputMode="decimal"
@@ -412,8 +436,8 @@ export default function FirstRunScreen() {
             <Button
               variant="secondary"
               size="md"
-              onClick={() => void handleCheck()}
-              disabled={!host.trim() || step1 === "busy" || step3 === "busy"}
+              onClick={() => commitAndCheck(true)}
+              disabled={!hostDraft.trim() || step1 === "busy" || step3 === "busy"}
               loading={step1 === "busy"}
             >
               {tr("first_run_check", undefined, "Check")}

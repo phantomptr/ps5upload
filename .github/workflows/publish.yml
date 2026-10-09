@@ -188,16 +188,9 @@ jobs:
         with:
           targets: ${{ matrix.rust_target }}
 
-      - name: Cache cargo target
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            client/src-tauri/target
-          key: ${{ runner.os }}-${{ matrix.arch }}-tauri-${{ hashFiles('client/src-tauri/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.arch }}-tauri-
+      # No cargo cache here: release runs are tag runs, and a cache a tag run saves is visible to
+      # that tag only, so saving never helped a later release (it filled the shared 10 GiB and
+      # evicted CI's caches); and CI's debug clippy/test caches don't match this release build.
 
       # Bounded and retried on purpose. During the v5.3.3 publish this step
       # stalled inside apt for 45 minutes, ate the whole job budget, and took

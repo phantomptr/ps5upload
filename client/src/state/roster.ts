@@ -574,3 +574,27 @@ export function ensureRosterMigrated() {
 
 // Tasks record which console they ran on by roster identity (see `Task.consoleKey`).
 setConsoleKeyResolver((host) => profileIdForHost(host, useRosterStore.getState().profiles));
+
+/**
+ * Make the console at `address` the selected one, the way typing an address and committing it
+ * should: a console already in the roster is selected (never two profiles on one host), otherwise
+ * the active profile is re-pointed at it, and on a fresh install a profile is added.
+ *
+ * Never call `setHost` for this: the active roster profile is the source of truth, and
+ * `ensureRosterMigrated()` reconciles `connection.host` back to it on the next mount, so a bare
+ * `setHost` snapped straight back (#276). Changing the selected console remounts its screens, so
+ * callers do this on commit (blur, Enter, Check), never per keystroke.
+ */
+export function selectConsoleByAddress(address: string): void {
+  const value = address.trim();
+  if (!value) return;
+  const roster = useRosterStore.getState();
+  const existing = roster.profiles.find((p) => hostOf(p.host) === hostOf(value));
+  if (existing) {
+    if (existing.id !== roster.active_id) roster.setActive(existing.id);
+  } else if (roster.active_id) {
+    roster.updateHost(roster.active_id, value);
+  } else {
+    roster.setActive(roster.add({ name: `PS5 (${value})`, host: value }));
+  }
+}

@@ -11,6 +11,7 @@ function deps(start = 1_000_000) {
     get: (k: string) => store.get(k) ?? null,
     set: (k: string, v: string) => void store.set(k, v),
     reload: vi.fn(),
+    note: vi.fn(),
   };
 }
 
@@ -75,5 +76,16 @@ describe("loading a screen on demand", () => {
       }, d),
     ).rejects.toThrow("render bug");
     expect(d.reload).not.toHaveBeenCalled();
+  });
+});
+
+describe("a reload leaves a trace", () => {
+  it("records why the page reloaded before reloading (#418)", async () => {
+    const d = deps();
+    void importWithReload(() => Promise.reject(chunkError()), d);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(d.note).toHaveBeenCalledWith(expect.stringContaining("Importing a module script failed"));
+    expect(d.note.mock.invocationCallOrder[0]).toBeLessThan(d.reload.mock.invocationCallOrder[0]);
   });
 });
