@@ -4,23 +4,27 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## 6.6.0
+## 6.6.1
 
-**A new Bug report wizard that gathers everything we need, and two or more consoles no longer
+**A new Bug report page that gathers everything we need, and two or more consoles no longer
 step on each other.**
 
 ### New
 
-- **Bug report wizard.** Open it from the command palette, or from the link on any error. Four
-  short steps: what went wrong, the details (app version, platform, firmware and payloads are
-  filled in for you), what to include and from how long ago (the last 15 minutes up to the
-  last 7 days, or a start time you pick), then send it. Post it as a GitHub issue, copy it for
-  the Discord help channel, or download the zip. IP addresses, serials, MAC addresses, home folders and keys are removed before
-  anything leaves your computer.
+- **Bug report.** Open it from the command palette, or from the link on any error. One page:
+  say what went wrong, add screenshots, check your setup (filled in for you), and pick how far
+  back the logs go (the last 15 minutes up to the last 7 days, or a time you choose). Everything
+  the app, the engine and the PS5 recorded in that time goes in. Then post it as a GitHub issue,
+  copy it for the Discord #bugs-report channel, or download the zip. IP addresses, serials, MAC
+  addresses, home folders and keys are removed before anything leaves your computer.
+- **Screenshots for reports.** The Capture button at the bottom right of the desktop app takes a
+  picture of any screen. The Bug report lists your captures to pick from and adds one you take
+  while writing it. You can also add, drop or paste any image.
 - **The app now keeps a timeline.** Connection drops, reconnects, helper crashes, failed installs
   and engine restarts are noted as they happen, along with the helper's own log from each PS5,
   so a report shows what happened even when the console has since restarted. It also notes when
   the web UI reloads itself and why (#418).
+- **Buy me a coffee** is now on Home too, under the connection badge.
 
 ### Fixed
 
