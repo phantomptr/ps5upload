@@ -78,7 +78,7 @@ jobs:
           load: true
           tags: ps5upload-engine:smoke
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=min
 
       # Building proved nothing about whether the image works: 5.40.0 built
       # fine and refused every request, had no /tmp for uploads and no
@@ -117,7 +117,7 @@ jobs:
           load: true
           tags: ps5upload-engine-webui:smoke
           cache-from: type=gha,scope=webui
-          cache-to: type=gha,mode=max,scope=webui
+          cache-to: type=gha,mode=min,scope=webui
 
       - name: Smoke-test the image
         run: scripts/docker-smoke.sh ps5upload-engine-webui:smoke --webui
@@ -295,7 +295,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           load: true
           tags: ps5upload-smoke:local
-          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ env.PLATFORM_PAIR }}
 
       - name: Smoke-test the image
         run: scripts/docker-smoke.sh ps5upload-smoke:local
@@ -309,8 +309,8 @@ jobs:
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
-          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ env.PLATFORM_PAIR }}
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ env.PLATFORM_PAIR }},mode=max
 
       - name: Export digest
         env:
@@ -398,7 +398,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           load: true
           tags: ps5upload-smoke:local
-          cache-from: type=gha,scope=webui-${{ env.PLATFORM_PAIR }}
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ env.PLATFORM_PAIR }}
 
       - name: Smoke-test the image
         run: scripts/docker-smoke.sh ps5upload-smoke:local --webui
@@ -412,8 +412,8 @@ jobs:
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=webui-${{ env.PLATFORM_PAIR }}
-          cache-to: type=gha,mode=max,scope=webui-${{ env.PLATFORM_PAIR }}
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ env.PLATFORM_PAIR }}
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ env.PLATFORM_PAIR }},mode=max
 
       - name: Export digest
         env:

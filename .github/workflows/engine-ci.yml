@@ -66,15 +66,14 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache cargo registry + target
-        uses: actions/cache@v6
+      # Registry + dependency builds only (our own crates are left out, so the entry stays small
+      # and current); saved from main only, where every later run can restore it.
+      - name: Cache cargo (rust-cache)
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            engine/target
-          key: ${{ runner.os }}-engine-cargo-${{ hashFiles('engine/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-engine-cargo-
+          workspaces: engine
+          shared-key: engine-lint
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo fmt
         working-directory: engine
@@ -126,25 +125,35 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo registry + target
-        uses: actions/cache@v6
+      # Registry + dependency builds only (our own crates are left out, so the entry stays small
+      # and current); saved from main only, where every later run can restore it.
+      - name: Cache cargo (rust-cache)
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            engine/target
-          key: ${{ runner.os }}-engine-test-${{ matrix.part }}-${{ hashFiles('engine/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-engine-test-${{ matrix.part }}-
-            ${{ runner.os }}-engine-cargo-
+          workspaces: engine
+          shared-key: engine-test-${{ matrix.part }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      # nextest runs the test binaries side by side (cargo test runs them one at a time, and most
+      # of these sit in network sleeps); doctests, which nextest does not run, follow separately.
+      # Timing-sensitive binaries are serialized by engine/.config/nextest.toml.
       # Bounded per step: a hung test fails here in minutes instead of holding the job.
-      - name: cargo test
+      - name: cargo nextest
         working-directory: engine
         timeout-minutes: 25
         env:
           RUST_BACKTRACE: 1
-        run: cargo test ${{ matrix.select }} -- --nocapture
+        run: cargo nextest run --profile ci ${{ matrix.select }}
+
+      - name: cargo test --doc
+        working-directory: engine
+        timeout-minutes: 10
+        run: cargo test --doc ${{ matrix.select }}
 
   # The C interop suite. The C server and the data layer are process-wide singletons, so the
   # suite runs one test at a time: a test that holds the server cannot starve the others. That
@@ -164,17 +173,14 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo registry + target
-        uses: actions/cache@v6
+      # Registry + dependency builds only (our own crates are left out, so the entry stays small
+      # and current); saved from main only, where every later run can restore it.
+      - name: Cache cargo (rust-cache)
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            engine/target
-          key: ${{ runner.os }}-engine-ctest-${{ hashFiles('engine/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-engine-ctest-
-            ${{ runner.os }}-engine-cargo-
+          workspaces: engine
+          shared-key: engine-ctest
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo test (ava1 C interop, serial)
         working-directory: engine
@@ -243,7 +249,13 @@ jobs:
   ava1-ctest-sanitize:
     name: ava1-ctest (ASan + UBSan)
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 60
+    # Four shards, test files dealt round-robin exactly like rust-ctest: the serial sanitized run
+    # was ~15 min on one runner.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
 
@@ -253,16 +265,14 @@ jobs:
       - name: Install clang + sanitizer runtimes
         run: sudo apt-get update && sudo apt-get install -y clang libclang-rt-18-dev
 
-      - name: Cache cargo registry + sanitized target
-        uses: actions/cache@v6
+      # Registry + dependency builds only (our own crates are left out, so the entry stays small
+      # and current); saved from main only, where every later run can restore it.
+      - name: Cache cargo (rust-cache)
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            engine/target
-          key: ${{ runner.os }}-cargo-ava1-san-${{ hashFiles('engine/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-ava1-san-
+          workspaces: engine
+          shared-key: ava1-san
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo test -p ava1-ctest (sanitized, serial)
         working-directory: engine
@@ -273,7 +283,18 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1
           LSAN_OPTIONS: suppressions=${{ github.workspace }}/engine/crates/ava1-ctest/lsan.supp:print_suppressions=0
           RUST_BACKTRACE: 1
-        run: cargo test -p ava1-ctest -- --test-threads=1
+          SHARD: ${{ matrix.shard }}
+        run: |
+          mapfile -t all < <(ls crates/ava1-ctest/tests/*.rs | sort)
+          args=()
+          for i in "${!all[@]}"; do
+            if [ $(( i % 4 + 1 )) -eq "$SHARD" ]; then
+              args+=(--test "$(basename "${all[$i]}" .rs)")
+            fi
+          done
+          [ "${#args[@]}" -gt 0 ] || { echo "::error::shard $SHARD got no test files"; exit 1; }
+          echo "sanitized shard $SHARD of 4: ${#args[@]} of ${#all[@]} test files"
+          cargo test -p ava1-ctest "${args[@]}" -- --test-threads=1
 
   # ─────────────────────────────────────────────────────────────────────
   # Engine/core target portability. This is intentionally separate from
@@ -396,22 +417,20 @@ jobs:
             clang \
             libclang-dev
 
-      - name: Cache cargo target
-        uses: actions/cache@v6
+      # Registry + dependency builds only (our own crates are left out, so the entry stays small
+      # and current); saved from main only, where every later run can restore it.
+      - name: Cache cargo (rust-cache)
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            client/src-tauri/target
-          key: ${{ matrix.os }}-desktop-cargo-${{ hashFiles('client/src-tauri/Cargo.lock') }}
-          restore-keys: ${{ matrix.os }}-desktop-cargo-
+          workspaces: client/src-tauri
+          shared-key: desktop-${{ matrix.os }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # tauri.conf.json bundles two out-of-tree resources: the PS5
       # payload (ps5upload.elf.gz) and the engine sidecar binary.
       # cargo check parses those resource paths and errors out if
       # anything is missing, long before any code compiles. Stub the
-      # payload .gz and build the engine binary for real so its target
-      # path exists.
+      # payload .gz and the engine binary (see the next step).
       #
       # The stub is a *fake ELF* (ELF magic + 200 KB of zeros, gzipped),
       # not an empty gzip: `cargo test` runs probes.rs::
@@ -428,14 +447,19 @@ jobs:
           { printf '\x7fELF'; head -c 204800 /dev/zero; } > payload/ps5upload.elf
           gzip -nf payload/ps5upload.elf   # -> payload/ps5upload.elf.gz
 
-      - name: Build engine sidecar (needed as a Tauri resource)
-        working-directory: engine
-        run: cargo build --release -p ps5upload-engine
+      # The desktop shell only include_bytes! the engine binary (it is extracted and started at
+      # run time, which no test here does), so a placeholder at the same path is enough. The real
+      # engine is built and checked by the rust-engine jobs; releases build it in publish.yml.
+      # Building it here cost 4-9 min per OS.
+      - name: Stub engine sidecar (needed as a Tauri resource)
+        shell: bash
+        run: |
+          mkdir -p engine/target/release
+          exe=engine/target/release/ps5upload-engine
+          [ "$RUNNER_OS" = "Windows" ] && exe="$exe.exe"
+          printf 'engine stub for CI\n' > "$exe"
 
-      - name: cargo check
-        working-directory: client/src-tauri
-        run: cargo check --all-targets
-
+      # No separate `cargo check --all-targets`: clippy --all-targets type-checks the same code.
       - name: cargo clippy
         working-directory: client/src-tauri
         run: cargo clippy --all-targets -- -D warnings
@@ -533,6 +557,9 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   coverage:
     name: coverage reports
+    # A report, not a gate (pr-gate does not need it): ~35 min of instrumented tests is not worth
+    # holding a runner on every PR. Pushes to main and manual runs still produce it.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     # `continue-on-error` below does NOT cover the timeout: a job that hits
     # `timeout-minutes` is reported as *cancelled*, which cancels the whole
@@ -701,15 +728,14 @@ jobs:
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi
 
-      - name: Cache cargo target
-        uses: actions/cache@v6
+      # Registry + dependency builds only (our own crates are left out, so the entry stays small
+      # and current); saved from main only, where every later run can restore it.
+      - name: Cache cargo (rust-cache)
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            client/src-tauri/target
-          key: ${{ runner.os }}-android-cargo-${{ hashFiles('client/src-tauri/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-android-cargo-
+          workspaces: client/src-tauri
+          shared-key: android
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Gradle's dependency cache.
       #

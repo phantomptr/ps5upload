@@ -188,16 +188,15 @@ jobs:
         with:
           targets: ${{ matrix.rust_target }}
 
-      - name: Cache cargo target
-        uses: actions/cache@v6
+      # Release runs are tag runs, and a cache a tag run saves is visible to that tag only: saving
+      # here never helped a later release and filled the shared 10 GiB, evicting CI's caches.
+      # Restore what main's CI saved for the desktop shell; never save.
+      - name: Cache cargo (restore only)
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            client/src-tauri/target
-          key: ${{ runner.os }}-${{ matrix.arch }}-tauri-${{ hashFiles('client/src-tauri/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.arch }}-tauri-
+          workspaces: client/src-tauri
+          shared-key: desktop-${{ matrix.os }}
+          save-if: false
 
       # Bounded and retried on purpose. During the v5.3.3 publish this step
       # stalled inside apt for 45 minutes, ate the whole job budget, and took
