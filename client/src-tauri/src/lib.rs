@@ -197,7 +197,7 @@ pub fn run() {
                         let _ = handle.emit("ps5upload-engine-ready", &url);
                     }
                     Err(e) => {
-                        let message = format!("engine failed to start: {e}");
+                        let message = format!("engine failed to start: {e:#}");
                         {
                             use tauri::Emitter;
                             let _ = handle.emit("ps5upload-engine-startup-error", &message);

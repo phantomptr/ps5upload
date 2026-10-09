@@ -124,7 +124,7 @@ function LocationRow({
 }) {
   const tr = useTr();
   const navigate = useNavigate();
-  const [activity] = useCopyActivity([loc.absolute_path]);
+  const [activity] = useCopyActivity([loc.absolute_path], host);
   const sendable = !!sendKind(loc) && loc.pkg?.complete !== false && !loc.pkg?.error;
   const noTrash = useCollectionStore(
     (s) => s.settings?.trash_available === false,
@@ -312,7 +312,7 @@ function ConsoleSection({
     ...(state?.update ? [state.update.path] : []),
     ...(state?.dlc_missing ?? []).map((d) => d.path),
   ];
-  const activities = useCopyActivity(offerPaths);
+  const activities = useCopyActivity(offerPaths, host);
   const installActivity =
     activities.find((a) => a && a.phase !== "done" && a.phase !== "failed") ??
     activities.find((a) => a) ??
@@ -574,6 +574,8 @@ export function GameDetail({
       </h3>
       <div className="rounded-lg border border-[var(--color-border)] p-3">
         <ConsoleSection
+          // Per console: "Queued" and the send panel's drive belong to the console they were for.
+          key={host}
           game={game}
           host={host}
           state={consoleState}

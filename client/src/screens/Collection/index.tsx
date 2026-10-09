@@ -133,7 +133,7 @@ export default function CollectionScreen() {
     [games, consoleStates],
   );
   // What is being sent or installed right now, by copy: one lookup for the whole grid.
-  const active = useActiveCopies();
+  const active = useActiveCopies(host);
   const activityOf = (g: (typeof games)[number]) => {
     for (const l of g.locations) {
       const a = active.get(l.absolute_path);

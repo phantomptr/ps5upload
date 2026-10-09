@@ -84,63 +84,96 @@ fn find_engine_binary(app: &AppHandle) -> Result<PathBuf> {
         .context("resolving app_local_data_dir")?;
     let out_dir = cache_root.join("engine");
     std::fs::create_dir_all(&out_dir).with_context(|| format!("mkdir {}", out_dir.display()))?;
-    let out_path = out_dir.join(bin_name);
-    let stamp_path = out_dir.join(format!("{bin_name}.blake3"));
-
     // Hash the embedded bytes once. blake3 is fast enough that this
-    // is cheaper than ANY disk IO we'd otherwise do — even the small
-    // stamp-file read happens after this so a stamp-file-corruption
-    // path can re-extract without an extra hash recomputation.
+    // is cheaper than ANY disk IO we'd otherwise do.
     let embedded_hex = {
         let mut hasher = blake3::Hasher::new();
         hasher.update(EMBEDDED_ENGINE);
         hasher.finalize().to_hex().to_string()
     };
+    extract_engine(&out_dir, bin_name, EMBEDDED_ENGINE, &embedded_hex)
+}
 
-    // Re-extract if the stamp is missing/stale OR the binary itself is gone.
-    // Checking only the stamp leaves a permanent-failure hole: if the binary
-    // is removed but the tiny text stamp survives (Windows SmartScreen/AV
-    // quarantines the freshly-extracted .exe, a disk-cleaner reaps the ~14 MiB
-    // binary but keeps the stamp), `stored == embedded_hex` makes needs_extract
-    // false and we hand back a path to a nonexistent file — spawn then fails on
-    // every launch with no self-heal. Requiring the binary to exist restores
-    // the cross-restart recovery (re-extract rewrites the binary, re-applies
-    // the exec bit, and rewrites the stamp).
-    let needs_extract = !out_path.exists()
-        || match std::fs::read_to_string(&stamp_path) {
-            Ok(stored) => stored.trim() != embedded_hex,
-            // Stamp missing OR unreadable → assume cache is stale and
-            // re-extract. Worst case is one extra extract; correctness
-            // wins over avoiding the IO.
-            Err(_) => true,
-        };
-
-    if needs_extract {
-        std::fs::write(&out_path, EMBEDDED_ENGINE)
-            .with_context(|| format!("write engine binary to {}", out_path.display()))?;
-        // On Unix, set the executable bit — without it, `spawn`
-        // returns EACCES. Windows inherits .exe execution from the
-        // extension, no chmod needed.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&out_path)
-                .with_context(|| format!("stat {} for chmod", out_path.display()))?
-                .permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&out_path, perms)
-                .with_context(|| format!("chmod {}", out_path.display()))?;
+/// Writes `bytes` (BLAKE3 `hex`) into `dir` as `bin_name` and returns its path.
+///
+/// The usual name is tried first (a firewall rule the user allowed names that path). When it
+/// cannot be written — on Windows an older engine still running, or an antivirus scan, holds
+/// the file (#427) — the engine goes next to it under a name carrying its hash instead, so
+/// the app still starts. Engines left over from older versions are removed when nothing holds
+/// them.
+fn extract_engine(dir: &Path, bin_name: &str, bytes: &[u8], hex: &str) -> Result<PathBuf> {
+    let usual = dir.join(bin_name);
+    let err = match extract_at(&usual, bytes, hex) {
+        Ok(()) => {
+            remove_stale_engines(dir, bin_name, None);
+            return Ok(usual);
         }
-        // Stamp last so a crash mid-extract leaves a missing /
-        // outdated stamp; next launch correctly re-extracts.
-        if let Err(e) = std::fs::write(&stamp_path, &embedded_hex) {
-            eprintln!(
-                "[engine] could not write stamp {}: {e} (engine still extracted, just re-extracts next launch)",
-                stamp_path.display()
-            );
+        Err(e) => e,
+    };
+    let (stem, ext) = bin_name.split_once('.').unwrap_or((bin_name, ""));
+    let dot = if ext.is_empty() { "" } else { "." };
+    let versioned = dir.join(format!("{stem}-{}{dot}{ext}", &hex[..hex.len().min(16)]));
+    eprintln!(
+        "[engine] could not write {}: {err:#}; using {} instead",
+        usual.display(),
+        versioned.display()
+    );
+    extract_at(&versioned, bytes, hex).with_context(|| {
+        format!(
+            "could not write the engine to {} ({err:#}) or to {}",
+            usual.display(),
+            versioned.display()
+        )
+    })?;
+    remove_stale_engines(dir, bin_name, Some(&versioned));
+    Ok(versioned)
+}
+
+/// Writes the engine at `path` unless the copy there already is this one. A BLAKE3 stamp
+/// (`<path>.blake3`) next to it says which engine it is; the binary must exist too (an
+/// antivirus or disk cleaner may remove it and keep the stamp).
+fn extract_at(path: &Path, bytes: &[u8], hex: &str) -> Result<()> {
+    let stamp = PathBuf::from(format!("{}.blake3", path.display()));
+    let current = path.is_file() && std::fs::read_to_string(&stamp).is_ok_and(|s| s.trim() == hex);
+    if current {
+        return Ok(());
+    }
+    std::fs::write(path, bytes)
+        .with_context(|| format!("write engine binary to {}", path.display()))?;
+    // On Unix, set the executable bit — without it, `spawn` returns EACCES. Windows
+    // runs .exe files by extension.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+            .with_context(|| format!("chmod {}", path.display()))?;
+    }
+    // Stamp last so a crash mid-extract leaves a missing or outdated stamp; the next
+    // launch re-extracts.
+    if let Err(e) = std::fs::write(&stamp, hex) {
+        eprintln!(
+            "[engine] could not write stamp {}: {e} (engine still extracted, just re-extracts next launch)",
+            stamp.display()
+        );
+    }
+    Ok(())
+}
+
+/// Removes hash-named engines (and their stamps) other than `keep`. One still running stays
+/// locked and is skipped; a later launch removes it.
+fn remove_stale_engines(dir: &Path, bin_name: &str, keep: Option<&Path>) {
+    let prefix = format!("{}-", bin_name.split_once('.').map_or(bin_name, |(s, _)| s));
+    let keep_stamp = keep.map(|k| PathBuf::from(format!("{}.blake3", k.display())));
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        let kept = keep == Some(path.as_path()) || keep_stamp.as_ref() == Some(&path);
+        if !kept && e.file_name().to_string_lossy().starts_with(&prefix) {
+            let _ = std::fs::remove_file(&path);
         }
     }
-    Ok(out_path)
 }
 
 /// Recover from a leftover engine that some prior crashed launch left
@@ -1014,5 +1047,46 @@ mod probe_error_tests {
             lower.contains("refused") || lower.contains("timed out"),
             "{err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod extract_tests {
+    use super::extract_engine;
+    use std::path::PathBuf;
+
+    fn scratch(name: &str) -> PathBuf {
+        let d =
+            std::env::temp_dir().join(format!("ps5upload-extract-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn extracts_to_the_usual_name() {
+        let dir = scratch("usual");
+        let p =
+            extract_engine(&dir, "ps5upload-engine", b"new engine", "aaaa1111bbbb2222").unwrap();
+        assert_eq!(p, dir.join("ps5upload-engine"));
+        assert_eq!(std::fs::read(&p).unwrap(), b"new engine");
+        // A second launch reuses it.
+        assert_eq!(
+            extract_engine(&dir, "ps5upload-engine", b"new engine", "aaaa1111bbbb2222").unwrap(),
+            p
+        );
+    }
+
+    #[test]
+    fn a_locked_old_engine_does_not_stop_the_new_one() {
+        // #427: on Windows an older engine still running (or an antivirus scan) holds
+        // ps5upload-engine.exe, so writing the new one over it fails and the app never starts.
+        // A path that cannot be written stands in for the locked file.
+        let dir = scratch("locked");
+        std::fs::create_dir_all(dir.join("ps5upload-engine")).unwrap();
+        let p =
+            extract_engine(&dir, "ps5upload-engine", b"new engine", "aaaa1111bbbb2222").unwrap();
+        assert_ne!(p, dir.join("ps5upload-engine"));
+        assert_eq!(std::fs::read(&p).unwrap(), b"new engine");
     }
 }

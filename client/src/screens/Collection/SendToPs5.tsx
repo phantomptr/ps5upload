@@ -60,7 +60,7 @@ export function SendToPs5({
   const [subpath, setSubpath] = useState(DEFAULT_SEND_SUBPATH);
   const [register, setRegister] = useState(true);
   const pipelineBusy = useFpkgConversion((s) => s.pipeline.phase === "running");
-  const [activity] = useCopyActivity([loc.absolute_path]);
+  const [activity] = useCopyActivity([loc.absolute_path], host);
 
   useEffect(() => {
     let live = true;

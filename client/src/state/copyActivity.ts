@@ -1,9 +1,11 @@
 // What is happening to a copy on this computer right now: being built into a game image, waiting
 // in the queue, being sent or installed, or done. One answer for the Collection's game details
-// and cards, read from the queue and from Convert's pipeline.
+// and cards, read from the queue and from Convert's pipeline. Asked about one console: a game
+// on its way to one PS5 is still free to send to another.
 
 import { useShallow } from "zustand/react/shallow";
 
+import { hostOf } from "../lib/addr";
 import { useFpkgConversion } from "./fpkgConversion";
 import { useUploadQueueStore, type QueueItem } from "./uploadQueue";
 
@@ -34,12 +36,21 @@ function fromItem(it: QueueItem): CopyActivity {
   };
 }
 
-/** Pure, for tests: the activity for `path`, newest first. */
+type Pipeline = ReturnType<typeof useFpkgConversion.getState>["pipeline"];
+
+/** Whether `addr` is the console `host` (any console when `host` is empty). */
+function onConsole(addr: string | null | undefined, host: string): boolean {
+  return !host || !addr || hostOf(addr) === hostOf(host);
+}
+
+/** Pure, for tests: the activity for `path` on console `host`, newest first. */
 export function activityFor(
   path: string,
   items: QueueItem[],
-  pipeline: ReturnType<typeof useFpkgConversion.getState>["pipeline"],
+  pipeline: Pipeline,
+  host: string,
 ): CopyActivity | null {
+  if (pipeline.phase !== "idle" && !onConsole(pipeline.host, host)) pipeline = { phase: "idle" };
   if (pipeline.phase === "running" && pipeline.source === path) {
     return {
       phase: "building",
@@ -55,6 +66,7 @@ export function activityFor(
       ? pipeline.packagePath
       : null;
   for (let i = items.length - 1; i >= 0; i--) {
+    if (!onConsole(items[i].addr, host)) continue;
     const src = itemSource(items[i]);
     if (src === path || (viaImage && src === viaImage)) return fromItem(items[i]);
   }
@@ -64,22 +76,25 @@ export function activityFor(
   return null;
 }
 
-/** Live activity for each of `paths` (same order). */
-export function useCopyActivity(paths: string[]): (CopyActivity | null)[] {
+/** Live activity on console `host` for each of `paths` (same order). */
+export function useCopyActivity(paths: string[], host: string): (CopyActivity | null)[] {
   const items = useUploadQueueStore(useShallow((s) => s.items));
   const pipeline = useFpkgConversion((s) => s.pipeline);
-  return paths.map((p) => activityFor(p, items, pipeline));
+  return paths.map((p) => activityFor(p, items, pipeline, host));
 }
 
-/** Activity for every copy something is happening to right now (waiting, building, sending,
- *  installing), by path. One subscription for a whole grid instead of one per card. */
-export function useActiveCopies(): Map<string, CopyActivity> {
+/** Activity on console `host` for every copy something is happening to right now (waiting,
+ *  building, sending, installing), by path. One subscription for a whole grid instead of one
+ *  per card. */
+export function useActiveCopies(host: string): Map<string, CopyActivity> {
   const items = useUploadQueueStore(useShallow((s) => s.items));
   const pipeline = useFpkgConversion((s) => s.pipeline);
   const map = new Map<string, CopyActivity>();
-  if (pipeline.phase === "running") map.set(pipeline.source, activityFor(pipeline.source, [], pipeline)!);
+  if (pipeline.phase === "running" && onConsole(pipeline.host, host))
+    map.set(pipeline.source, activityFor(pipeline.source, [], pipeline, host)!);
   for (const it of items) {
     if (it.status !== "pending" && it.status !== "running") continue;
+    if (!onConsole(it.addr, host)) continue;
     const src = itemSource(it);
     if (src) map.set(src, fromItem(it));
   }
