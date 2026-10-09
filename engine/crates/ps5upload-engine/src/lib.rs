@@ -39,6 +39,7 @@ mod console_read;
 mod convert_source;
 mod elfldr_guard;
 mod engine_log;
+mod event_journal;
 mod fakelibs_api;
 mod fpkg_api;
 mod fpkg_firmware;
@@ -9752,6 +9753,15 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // (reconcile per-parent progress, transfer retries, etc.) without
     // having to install a separate pipe for core diagnostics.
     ps5upload_core::log::set_sink(|msg| engine_log::record("info", msg.to_string()));
+    // The bug-report journal: every crate's events (ps5upload_core::events) land on disk here.
+    event_journal::install();
+    ps5upload_core::events::emit(
+        ps5upload_core::events::Cat::System,
+        ps5upload_core::events::Level::Info,
+        "engine_start",
+        None,
+        format!("engine {} started", env!("CARGO_PKG_VERSION")),
+    );
 
     let ps5_addr = cfg.ps5_addr.clone();
     let guard_cfg = LoopbackGuardConfig {
@@ -10162,6 +10172,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/jobs/{id}/cancel", post(cancel_job))
         .route("/api/events", get(events_stream))
         .route("/api/engine-logs", get(engine_logs_tail))
+        .route("/api/events", get(event_journal::events_handler))
         .route("/api/debug/crash", get(debug_crash))
         .with_state(state);
 
