@@ -5,6 +5,7 @@ import { useFsClipboardStore, evictFsClipboard } from "./fsClipboard";
 import { useUploadStore, evictUploadDraft } from "./upload";
 import { evictPkgLibraryStore } from "./pkgLibrary";
 import { hostOf } from "../lib/addr";
+import { gamesApi } from "../api/games";
 import { setConsoleKeyResolver } from "./tasks";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
@@ -598,3 +599,14 @@ export function selectConsoleByAddress(address: string): void {
     roster.setActive(roster.add({ name: `PS5 (${value})`, host: value }));
   }
 }
+
+/** The engine keeps what it last read from each console for the game page: a console removed
+ *  from the roster, or now at another IP, is forgotten there too. */
+function rosterHosts(profiles: PS5Profile[]): string[] {
+  return [...new Set(profiles.map((p) => hostOf(p.host)).filter(Boolean))].sort();
+}
+useRosterStore.subscribe((s, prev) => {
+  const now = rosterHosts(s.profiles);
+  if (now.length === 0 || now.join(",") === rosterHosts(prev.profiles).join(",")) return;
+  void gamesApi.keep(now).catch(() => {});
+});

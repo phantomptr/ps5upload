@@ -134,3 +134,32 @@ describe("selectConsoleByAddress", () => {
     expect(useRosterStore.getState().profiles[0].host).toBe("192.168.0.5");
   });
 });
+
+describe("the engine's saved console state follows the roster", () => {
+  it("forgets a console when it is removed or moves to a new IP", async () => {
+    const calls: { url: string; body: string }[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), body: String(init?.body ?? "") });
+      return new Response("{}");
+    }) as typeof fetch;
+    try {
+      useRosterStore.setState({ profiles: [], active_id: null });
+      calls.length = 0;
+      const a = useRosterStore.getState().add({ name: "Pro", host: "192.168.1.10" });
+      useRosterStore.getState().add({ name: "Phat", host: "192.168.1.20" });
+      useRosterStore.getState().remove(a);
+      await Promise.resolve();
+      const keeps = calls.filter((c) => c.url.endsWith("/api/console-snapshots/keep"));
+      expect(JSON.parse(keeps[keeps.length - 1].body)).toEqual({ hosts: ["192.168.1.20"] });
+      // A rename changes no host: nothing is sent.
+      const before = keeps.length;
+      const id = useRosterStore.getState().profiles[0].id;
+      useRosterStore.getState().rename(id, "Old Phat");
+      await Promise.resolve();
+      expect(calls.filter((c) => c.url.endsWith("/api/console-snapshots/keep")).length).toBe(before);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
