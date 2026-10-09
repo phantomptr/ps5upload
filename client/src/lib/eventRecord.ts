@@ -28,14 +28,23 @@ export interface EventRecord {
 
 export const COLLAPSE_MS = 60_000;
 
-/** Two records are "the same event" for folding; helper log lines never are. */
+/** One-off events: each keeps its own line and time (a notification's "Report this" link points at it). */
+const NEVER_FOLD = new Set(["notification", "crash", "app_start", "install_start", "install_result", "job_done", "job_failed", "engine_start"]);
+
+/** The message with every run of digits made one `#`: "unreachable (3 s)" and "(17 s)" match. */
+const shape = (msg: string) => msg.replace(/\d+/g, "#");
+
+/** Whether `b` repeats `a` (so it folds into a count); the engine journal uses the same rule. */
 export function sameKey(a: EventRecord, b: EventRecord): boolean {
   return (
     a.src !== "helper" &&
+    !NEVER_FOLD.has(a.code ?? "") &&
     a.src === b.src &&
     a.cat === b.cat &&
     a.code === b.code &&
-    a.console === b.console
+    a.console === b.console &&
+    a.level === b.level &&
+    shape(a.msg) === shape(b.msg)
   );
 }
 

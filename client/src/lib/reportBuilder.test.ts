@@ -115,4 +115,34 @@ describe("buildReport", () => {
     const r = await buildReport(opts());
     expect(r.missing).toContainEqual({ source: "engine_journal", reason: "HTTP 502" });
   });
+
+  it("settings.json leaves out the console list, which holds the wake keys", async () => {
+    const mem = new Map([
+      ["ps5upload.roster.v1", '{"profiles":[{"wake_rp_key":"rp"}]}'],
+      ["ps5upload.theme", "dark"],
+    ]);
+    vi.stubGlobal("localStorage", {
+      get length() {
+        return mem.size;
+      },
+      key: (i: number) => [...mem.keys()][i] ?? null,
+      getItem: (k: string) => mem.get(k) ?? null,
+    });
+    const r = await buildReport(opts({ sources: new Set<SourceId>(["settings"]) }));
+    const settings = r.entries.find((e) => e.path === "settings.json")?.text ?? "";
+    expect(settings).toContain("ps5upload.theme");
+    expect(settings).not.toContain("roster");
+    expect(settings).not.toContain("wake_rp_key");
+  });
+
+  it("reads the console the report is about, not the selected tab", async () => {
+    await buildReport(opts({ consoles: ["192.168.86.99"], sources: new Set<SourceId>(["console_logs"]) }));
+    expect(snapshot).toHaveBeenCalledWith(expect.objectContaining({ host: "192.168.86.99" }));
+  });
+
+  it("an unreachable console's missing kernel and system logs are named in MISSING.txt", async () => {
+    snapshot.mockResolvedValue({ snapshot: { errors: { connect: "refused" } }, klog: null, syslog: null, payload_logs: [] });
+    const r = await buildReport(opts({ sources: new Set<SourceId>(["console_logs"]) }));
+    expect(r.missing).toContainEqual({ source: "console_logs", reason: expect.stringContaining("refused") });
+  });
 });

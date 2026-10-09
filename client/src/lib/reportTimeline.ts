@@ -62,7 +62,9 @@ export async function fetchTimeline(since: number, until: number): Promise<Timel
   let engineDropped = 0;
   let engineError: string | null = null;
   try {
-    const r = await fetch(`${getEngineUrl()}/api/event-journal?since=${since}&until=${until}`, {
+    // No end time: the engine's clock may run ahead of this one (a Docker host), and cutting at
+    // this machine's "now" would drop the engine's newest events, the ones that matter most.
+    const r = await fetch(`${getEngineUrl()}/api/event-journal?since=${since}`, {
       signal: AbortSignal.timeout(5000),
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);

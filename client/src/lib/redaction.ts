@@ -21,8 +21,13 @@ const SECRET_KEYS = [
   "psn_account_id",
   "secret",
   "password",
+  "wake_credential",
+  "wake_regist_key",
+  "wake_rp_key",
 ].join("|");
 const SECRET_JSON = new RegExp(`("(?:${SECRET_KEYS})"\\s*:\\s*")([^"]*)(")`, "gi");
+// The same, inside JSON stored as a string (localStorage values): `\"key\":\"value\"`.
+const SECRET_JSON_ESCAPED = new RegExp(`(\\\\"(?:${SECRET_KEYS})\\\\"\\s*:\\s*\\\\")((?:(?!\\\\").)*)(\\\\")`, "gi");
 const SECRET_KV = new RegExp(`\\b((?:${SECRET_KEYS})=)([^\\s&"]+)`, "gi");
 const SERIAL_JSON = /("serial"\s*:\s*")([^"]*)(")/gi;
 const HOME_POSIX = /\/(?:Users|home)\/[^/\s"\\]+/g;
@@ -45,7 +50,10 @@ export function createRedactor(opts: { redact: boolean }): Redactor {
   };
   return {
     text(s: string): string {
-      let out = s.replace(SECRET_JSON, "$1<removed>$3").replace(SECRET_KV, "$1<removed>");
+      let out = s
+        .replace(SECRET_JSON, "$1<removed>$3")
+        .replace(SECRET_JSON_ESCAPED, "$1<removed>$3")
+        .replace(SECRET_KV, "$1<removed>");
       if (!opts.redact) return out;
       out = out
         .replace(SERIAL_JSON, "$1<serial>$3")

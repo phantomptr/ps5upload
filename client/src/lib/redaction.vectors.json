@@ -70,5 +70,11 @@
     "redact": true,
     "in": "ps5upload.bugReportDraft.192.168.86.100 and v1.2.3.4.5",
     "out": "ps5upload.bugReportDraft.<ip-1> and v1.2.3.4.5"
+  },
+  {
+    "name": "wake keys inside escaped JSON go even with redaction off",
+    "redact": false,
+    "in": "\"ps5upload.roster.v1\": \"{\\\"wake_credential\\\":\\\"c-123\\\",\\\"wake_regist_key\\\":\\\"rk\\\",\\\"wake_rp_key\\\":\\\"rp\\\",\\\"name\\\":\\\"Pro\\\"}\"",
+    "out": "\"ps5upload.roster.v1\": \"{\\\"wake_credential\\\":\\\"<removed>\\\",\\\"wake_regist_key\\\":\\\"<removed>\\\",\\\"wake_rp_key\\\":\\\"<removed>\\\",\\\"name\\\":\\\"Pro\\\"}\""
   }
 ]

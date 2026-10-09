@@ -40,22 +40,58 @@ pub(crate) fn day_file_name(ts: u64) -> String {
     format!("events-{y:04}{m:02}{d:02}.jsonl")
 }
 
-/// Helper stderr lines are never folded: two identical-looking lines are two log lines.
+/// One-off results: each is its own line, however close together they come.
+const NEVER_FOLD: &[&str] = &[
+    "install_start",
+    "install_result",
+    "job_done",
+    "job_failed",
+    "engine_start",
+];
+
+/// The message with every run of digits made one `#`: "reconnecting in 5.2s" and "… 5.97s" match.
+fn shape(msg: &str) -> String {
+    let mut out = String::with_capacity(msg.len());
+    let mut in_digits = false;
+    for c in msg.chars() {
+        if c.is_ascii_digit() {
+            if !in_digits {
+                out.push('#');
+            }
+            in_digits = true;
+        } else {
+            out.push(c);
+            in_digits = false;
+        }
+    }
+    out
+}
+
+/// Whether `b` repeats `a` (so it folds into a count): same source, kind, code, console and level,
+/// and the same message but for its numbers. Helper log lines and one-off results never fold.
 fn same_key(a: &Event, b: &Event) -> bool {
     a.src != Src::Helper
+        && !a.code.as_deref().is_some_and(|c| NEVER_FOLD.contains(&c))
         && a.src == b.src
         && a.cat == b.cat
         && a.code == b.code
         && a.console == b.console
+        && a.level == b.level
+        && shape(&a.msg) == shape(&b.msg)
 }
 
 pub struct Journal {
     dir: PathBuf,
     max_total: u64,
     max_age_ms: u64,
-    pending: Option<Event>,
+    /// Open entries still collecting repeats, one per kind of event (two consoles polled in
+    /// turn would otherwise never fold).
+    pending: Vec<Event>,
     dropped: u64,
 }
+
+/// More open entries than this and the oldest is written out.
+const MAX_PENDING: usize = 64;
 
 impl Journal {
     pub fn open(dir: PathBuf, max_total: u64, max_age_ms: u64) -> Self {
@@ -64,7 +100,7 @@ impl Journal {
             dir,
             max_total,
             max_age_ms,
-            pending: None,
+            pending: Vec::new(),
             dropped: 0,
         }
     }
@@ -74,31 +110,45 @@ impl Journal {
     }
 
     pub fn push(&mut self, e: Event) {
-        if let Some(p) = self.pending.as_mut() {
-            let last = p.last_ts.unwrap_or(p.ts);
-            if same_key(p, &e) && e.ts.saturating_sub(last) <= COLLAPSE_MS {
-                p.count = Some(p.count.unwrap_or(1) + 1);
-                p.last_ts = Some(e.ts);
-                return;
-            }
+        let open = self.pending.iter().position(|p| {
+            same_key(p, &e) && e.ts.saturating_sub(p.last_ts.unwrap_or(p.ts)) <= COLLAPSE_MS
+        });
+        if let Some(i) = open {
+            let p = &mut self.pending[i];
+            p.count = Some(p.count.unwrap_or(1) + 1);
+            p.last_ts = Some(e.ts);
+            return;
         }
-        if let Some(prev) = self.pending.replace(e) {
-            self.write(&prev);
+        // An entry whose repeats have stopped (a gap over a minute) is done.
+        let stale: Vec<Event> = {
+            let (done, keep): (Vec<Event>, Vec<Event>) = std::mem::take(&mut self.pending)
+                .into_iter()
+                .partition(|p| {
+                    same_key(p, &e) || e.ts.saturating_sub(p.last_ts.unwrap_or(p.ts)) > COLLAPSE_MS
+                });
+            self.pending = keep;
+            done
+        };
+        for p in stale {
+            self.write(&p);
+        }
+        self.pending.push(e);
+        if self.pending.len() > MAX_PENDING {
+            let oldest = self.pending.remove(0);
+            self.write(&oldest);
         }
     }
 
     /// Writes the pending entry once its collapse window has closed (or now, with `force`),
     /// then prunes.
     pub fn flush_due(&mut self, force: bool) {
-        let due = self
-            .pending
-            .as_ref()
-            .map(|p| force || now_ms().saturating_sub(p.last_ts.unwrap_or(p.ts)) > COLLAPSE_MS)
-            .unwrap_or(false);
-        if due {
-            if let Some(p) = self.pending.take() {
-                self.write(&p);
-            }
+        let now = now_ms();
+        let (due, keep): (Vec<Event>, Vec<Event>) = std::mem::take(&mut self.pending)
+            .into_iter()
+            .partition(|p| force || now.saturating_sub(p.last_ts.unwrap_or(p.ts)) > COLLAPSE_MS);
+        self.pending = keep;
+        for p in due {
+            self.write(&p);
         }
         self.prune();
     }
@@ -184,9 +234,7 @@ impl Journal {
                     .filter(|e| keep(e)),
             );
         }
-        if let Some(p) = self.pending.as_ref().filter(|p| keep(p)) {
-            out.push(p.clone());
-        }
+        out.extend(self.pending.iter().filter(|p| keep(p)).cloned());
         out.sort_by_key(|e| e.ts); // stable: equal ts keep file order
         out
     }
@@ -314,6 +362,117 @@ mod tests {
         assert_eq!(got[0].count, Some(37));
         assert_eq!(got[0].last_ts, Some(base + 36 * 5_000));
         assert_eq!(got[1].code.as_deref(), Some("conn_ok"));
+    }
+
+    fn evl(ts: u64, cat: Cat, level: Level, code: &str, msg: &str) -> Event {
+        let mut e = Event::new(cat, level, code, Some("10.0.0.9"), msg.into(), None);
+        e.ts = ts;
+        e
+    }
+
+    #[test]
+    fn a_failure_is_never_folded_into_a_success() {
+        let t = TmpDir::new("levels");
+        let mut j = Journal::open(t.0.clone(), 32 << 20, 7 * 86_400_000);
+        let base = now_ms() - 3_600_000;
+        j.push(evl(
+            base,
+            Cat::Install,
+            Level::Info,
+            "install_result",
+            "install A code=0x00000000",
+        ));
+        j.push(evl(
+            base + 5_000,
+            Cat::Install,
+            Level::Error,
+            "install_result",
+            "install B code=0x80b21104",
+        ));
+        j.flush();
+        let got = j.read_range(0, u64::MAX, None);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[1].level, Level::Error);
+    }
+
+    #[test]
+    fn one_off_results_are_never_folded() {
+        let t = TmpDir::new("oneoff");
+        let mut j = Journal::open(t.0.clone(), 32 << 20, 7 * 86_400_000);
+        let base = now_ms() - 3_600_000;
+        j.push(evl(
+            base,
+            Cat::Transfer,
+            Level::Error,
+            "job_failed",
+            "job a failed: x",
+        ));
+        j.push(evl(
+            base + 1_000,
+            Cat::Transfer,
+            Level::Error,
+            "job_failed",
+            "job a failed: x",
+        ));
+        j.flush();
+        assert_eq!(j.read_range(0, u64::MAX, None).len(), 2);
+    }
+
+    #[test]
+    fn repeats_that_differ_only_in_numbers_fold() {
+        let t = TmpDir::new("digits");
+        let mut j = Journal::open(t.0.clone(), 32 << 20, 7 * 86_400_000);
+        let base = now_ms() - 3_600_000;
+        j.push(evl(
+            base,
+            Cat::Connection,
+            Level::Warn,
+            "reconnecting",
+            "reconnecting in 5.2s: refused",
+        ));
+        j.push(evl(
+            base + 5_000,
+            Cat::Connection,
+            Level::Warn,
+            "reconnecting",
+            "reconnecting in 5.97s: refused",
+        ));
+        j.push(evl(
+            base + 10_000,
+            Cat::Connection,
+            Level::Warn,
+            "reconnecting",
+            "reconnecting in 5.1s: timed out",
+        ));
+        j.flush();
+        let got = j.read_range(0, u64::MAX, None);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].count, Some(2));
+    }
+
+    #[test]
+    fn two_consoles_polled_in_turn_still_fold() {
+        let t = TmpDir::new("twoconsoles");
+        let mut j = Journal::open(t.0.clone(), 32 << 20, 7 * 86_400_000);
+        let base = now_ms() - 3_600_000;
+        for i in 0..10u64 {
+            for host in ["10.0.0.1", "10.0.0.2"] {
+                let mut e = Event::new(
+                    Cat::Connection,
+                    Level::Info,
+                    "status_ok",
+                    Some(host),
+                    "status ok".into(),
+                    None,
+                );
+                e.ts = base + i * 5_000;
+                j.push(e);
+            }
+        }
+        j.flush();
+        let got = j.read_range(0, u64::MAX, None);
+        assert_eq!(got.len(), 2);
+        assert!(got.iter().all(|e| e.count == Some(10)));
     }
 
     #[test]

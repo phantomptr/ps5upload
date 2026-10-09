@@ -5,7 +5,7 @@ import { Button, ErrorCard, Input } from "../../components";
 import { useTr } from "../../state/lang";
 import { buildReport, type BuiltReport, type SourceId } from "../../lib/reportBuilder";
 import { saveReport, type SavedReport } from "../../lib/saveReport";
-import { discordText, githubIssueUrl } from "../../lib/reportOutputs";
+import { publicOutputs } from "../../lib/reportOutputs";
 import { DISCORD_REPORT_URL, GITHUB_ISSUES_URL } from "../../lib/reportProblem";
 import { openExternalUrl } from "../../lib/openExternalUrl";
 import { writeClipboard } from "../../lib/clipboard";
@@ -71,9 +71,11 @@ export default function StepSend({
     }
   };
 
-  const postGithub = () => void openExternalUrl(githubIssueUrl(draft.form, built?.problemLines ?? []));
+  // Redacted like the zip: an issue is public.
+  const outputs = () => publicOutputs(draft.form, built?.problemLines ?? [], draft.redact);
+  const postGithub = () => void openExternalUrl(outputs().githubUrl);
   const postDiscord = async () => {
-    const text = discordText(draft.form);
+    const text = outputs().discordText;
     if (await writeClipboard(text)) setDiscordFallback(null);
     else setDiscordFallback(text);
     void openExternalUrl(DISCORD_REPORT_URL);

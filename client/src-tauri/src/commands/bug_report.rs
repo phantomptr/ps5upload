@@ -136,6 +136,9 @@ const SECRET_KEYS: &[&str] = &[
     "psn_account_id",
     "secret",
     "password",
+    "wake_credential",
+    "wake_regist_key",
+    "wake_rp_key",
 ];
 
 fn is_word(b: u8) -> bool {
@@ -183,6 +186,48 @@ fn replace_json_values(s: &str, keys: &[&str], with: &str) -> String {
             }
         }
         i = close + 1;
+    }
+    out.push_str(&s[cursor..]);
+    out
+}
+
+/// The same as [`replace_json_values`] for JSON stored inside a JSON string (localStorage
+/// values): `\"key\": \"value\"`.
+fn replace_escaped_json_values(s: &str, keys: &[&str], with: &str) -> String {
+    let lower = s.to_ascii_lowercase();
+    let mut out = String::with_capacity(s.len());
+    let mut cursor = 0;
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find("\\\"") {
+        let at = from + rel;
+        let key_start = at + 2;
+        let Some(key_len) = lower[key_start..].find("\\\"") else {
+            break;
+        };
+        let key = &lower[key_start..key_start + key_len];
+        let mut j = key_start + key_len + 2;
+        if keys.contains(&key) {
+            while j < s.len() && s.as_bytes()[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if s[j..].starts_with(':') {
+                j += 1;
+                while j < s.len() && s.as_bytes()[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if s[j..].starts_with("\\\"") {
+                    let vstart = j + 2;
+                    if let Some(vlen) = s[vstart..].find("\\\"") {
+                        out.push_str(&s[cursor..vstart]);
+                        out.push_str(with);
+                        cursor = vstart + vlen;
+                        from = cursor + 2;
+                        continue;
+                    }
+                }
+            }
+        }
+        from = key_start + key_len + 2;
     }
     out.push_str(&s[cursor..]);
     out
@@ -409,6 +454,7 @@ impl Redactor {
 
     pub(crate) fn text(&mut self, s: &str) -> String {
         let out = replace_json_values(s, SECRET_KEYS, "<removed>");
+        let out = replace_escaped_json_values(&out, SECRET_KEYS, "<removed>");
         let out = replace_kv_values(&out, SECRET_KEYS, "<removed>");
         if !self.redact {
             return out;

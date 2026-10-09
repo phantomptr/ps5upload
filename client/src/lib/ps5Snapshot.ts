@@ -319,9 +319,23 @@ function fillFromBlackBox(
 
 export async function buildPs5Snapshot(opts: {
   redact: boolean;
+  /** The console to read; the selected one when not given. Another console's status comes
+   *  from its own runtime record, not the selected tab's. */
+  host?: string;
 }): Promise<Ps5SnapshotResult> {
-  const conn = useConnectionStore.getState();
-  const host = conn.host?.trim() ?? "";
+  const live = useConnectionStore.getState();
+  const host = (opts.host ?? live.host)?.trim() ?? "";
+  const rt = opts.host && hostOf(opts.host) !== hostOf(live.host) ? live.runtimeByHost[hostOf(opts.host)] : undefined;
+  const conn = rt
+    ? {
+        ...live,
+        payloadVersion: rt.payloadVersion,
+        ps5Kernel: rt.ps5Kernel,
+        ucredElevated: rt.ucredElevated,
+        priorInstance: rt.priorInstance,
+        payloadStatus: rt.payloadStatus,
+      }
+    : live;
   const captured_at = new Date().toISOString();
 
   const base: Ps5Snapshot = {

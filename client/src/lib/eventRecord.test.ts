@@ -33,4 +33,18 @@ describe("collapseInto", () => {
     const a = collapseInto(null, ev(0, "helper_log", "helper")).merged;
     expect(collapseInto(a, ev(1, "helper_log", "helper")).flushed).toEqual(a);
   });
+
+  it("never folds a notification or a crash, so a later error keeps its own line and time", () => {
+    const warn: EventRecord = { ts: 0, src: "app", cat: "app", level: "warn", code: "notification", msg: "Slow" };
+    const err: EventRecord = { ts: 1, src: "app", cat: "app", level: "error", code: "notification", msg: "Upload failed" };
+    expect(collapseInto(warn, err).flushed).toEqual(warn);
+    expect(collapseInto(err, { ...err, ts: 2 }).flushed).toEqual(err);
+  });
+
+  it("folds repeats that differ only in their numbers, not in their words", () => {
+    const a: EventRecord = { ts: 0, src: "app", cat: "app", level: "error", code: "engine_down", msg: "engine unreachable (3 s)" };
+    expect(collapseInto(a, { ...a, ts: 1, msg: "engine unreachable (17 s)" }).flushed).toBeNull();
+    expect(collapseInto(a, { ...a, ts: 1, msg: "engine refused" }).flushed).toEqual(a);
+    expect(collapseInto(a, { ...a, ts: 1, level: "warn" }).flushed).toEqual(a);
+  });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  publicOutputs,
   DISCORD_MAX,
   GITHUB_URL_MAX,
   discordText,
@@ -50,6 +51,11 @@ describe("githubIssueUrl", () => {
     expect(p.get("logs")).toContain("(truncated — see zip)");
   });
 
+  it("stays under the limit when the steps and payloads are long too", () => {
+    const u = githubIssueUrl(form({ steps: "s".repeat(9000), payloads: "p".repeat(4000), whatHappened: "w".repeat(3000) }), []);
+    expect(u.length).toBeLessThanOrEqual(GITHUB_URL_MAX);
+  });
+
   it("keeps the description whole when cutting the logs is enough", () => {
     const u = githubIssueUrl(form(), Array(500).fill("y".repeat(80)));
     expect(new URL(u).searchParams.get("what-happened")).toContain("It disconnected");
@@ -92,5 +98,25 @@ describe("reportMarkdown", () => {
     expect(md).toContain("z".repeat(9000));
     expect(md).toContain("1. open Hardware");
     expect(md).toContain("CFI-7019");
+  });
+});
+
+describe("publicOutputs", () => {
+  const leaky = form({
+    console: "192.168.86.100",
+    whatHappened: "It lost 192.168.86.100 again at /Users/me/x",
+    pinned: [{ ts: 0, src: "engine", cat: "connection", level: "warn", code: "status_failed", console: "192.168.86.100", msg: "connect 192.168.86.100:9120 refused" }],
+  });
+
+  it("redacts what goes to GitHub and Discord when redaction is on", () => {
+    const o = publicOutputs(leaky, ["status_failed connect 192.168.86.99:9120"], true);
+    expect(decodeURIComponent(o.githubUrl)).not.toMatch(/192\.168/);
+    expect(o.discordText).not.toMatch(/192\.168/);
+    expect(decodeURIComponent(o.githubUrl)).toContain("<ip-1>");
+    expect(o.discordText).not.toContain("/Users/me");
+  });
+
+  it("leaves addresses when redaction is off", () => {
+    expect(decodeURIComponent(publicOutputs(leaky, [], false).githubUrl)).toContain("192.168.86.100");
   });
 });

@@ -105,8 +105,9 @@ function settingsSnapshot(): Record<string, string> {
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      // Report drafts are the form itself, already in report.json.
-      if (k && k.startsWith("ps5upload.") && !k.startsWith("ps5upload.bugReportDraft."))
+      // Report drafts are the form itself, already in report.json; the console list holds the
+      // Remote Play wake keys (report.json's diagnostic carries it without them).
+      if (k && k.startsWith("ps5upload.") && !k.startsWith("ps5upload.bugReportDraft.") && !k.startsWith("ps5upload.roster."))
         out[k] = localStorage.getItem(k) ?? "";
     }
   } catch {
@@ -181,11 +182,17 @@ export async function buildReport(o: BuildOptions): Promise<BuiltReport> {
   let ps5: unknown = null;
   if (want("helper_log") || want("console_logs")) {
     const snap = await run(want("console_logs") ? "console_logs" : "helper_log", TIMEOUTS.snapshot, () =>
-      buildPs5Snapshot({ redact: false }),
+      buildPs5Snapshot({ redact: false, host: o.consoles[0] }),
     );
     const host = o.consoles[0] ?? "console";
     if (snap) {
       ps5 = snap.snapshot;
+      if (want("console_logs") && !snap.klog && !snap.syslog) {
+        // An unreachable console is not an error from the snapshot: it just has nothing to read.
+        const errs = (snap.snapshot as { errors?: Record<string, string> }).errors ?? {};
+        const why = Object.entries(errs).map(([k, v]) => `${k}: ${v}`).join("; ");
+        missing.push({ source: "console_logs", reason: why || "the console was not connected" });
+      }
       if (want("console_logs")) {
         if (snap.klog) entries.push({ path: `${consoleDir(host)}/klog.txt`, text: snap.klog });
         if (snap.syslog) entries.push({ path: `${consoleDir(host)}/syslog.txt`, text: snap.syslog });

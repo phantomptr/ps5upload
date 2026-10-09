@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { filterCats, formatLine, mergeEvents, recentProblems } from "./reportTimeline";
+import { describe, expect, it, vi } from "vitest";
+vi.mock("../state/engine", () => ({ getEngineUrl: () => "http://engine" }));
+vi.mock("./appJournal", () => ({ readAppEvents: async () => [], appJournalDropped: () => 0 }));
+import { fetchTimeline, filterCats, formatLine, mergeEvents, recentProblems } from "./reportTimeline";
 import type { EventRecord } from "./eventRecord";
 
 const e = (ts: number, src: EventRecord["src"], code: string, level: EventRecord["level"] = "info"): EventRecord => ({
@@ -49,5 +51,19 @@ describe("formatLine", () => {
     expect(formatLine({ ts: 0, src: "app", cat: "app", level: "info", msg: "started" }, "UTC")).toBe(
       "1970-01-01 00:00:00 [app] app INFO started",
     );
+  });
+});
+
+describe("fetchTimeline", () => {
+  it("does not cut the engine's events at this machine's clock", async () => {
+    // A Docker host whose clock runs ahead would otherwise lose its newest events: the ones
+    // right before the user pressed Report.
+    const ahead = Date.now() + 120_000;
+    const f = vi.fn(async (_url: string) => new Response(JSON.stringify({ events: [{ ts: ahead, src: "engine", cat: "connection", level: "error", msg: "lost" }], dropped: 0 })));
+    vi.stubGlobal("fetch", f);
+    const t = await fetchTimeline(0, Date.now());
+    expect(String(f.mock.calls[0][0])).not.toContain("until=");
+    expect(t.events).toHaveLength(1);
+    vi.unstubAllGlobals();
   });
 });

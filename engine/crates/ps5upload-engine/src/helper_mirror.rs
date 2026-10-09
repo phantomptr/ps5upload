@@ -7,7 +7,6 @@
 //! Also `GET /api/ps5/helper-log-ftp`: the same log read through the console's FTP server
 //! (:2121), the report's fallback when the helper itself is not answering.
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -112,47 +111,6 @@ pub fn line_event(console: &str, line: &str) -> Event {
     e
 }
 
-fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
-}
-
-fn unhex(s: &str) -> Vec<u8> {
-    (0..s.len() / 2)
-        .filter_map(|i| u8::from_str_radix(s.get(i * 2..i * 2 + 2)?, 16).ok())
-        .collect()
-}
-
-fn cursor_path(dir: &Path, host: &str) -> PathBuf {
-    let safe: String = host
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '.' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    dir.join(format!("mirror-{safe}.json"))
-}
-
-pub fn load_cursor(dir: &Path, host: &str) -> Cursor {
-    std::fs::read(cursor_path(dir, host))
-        .ok()
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-        .map(|v| Cursor {
-            offset: v.get("offset").and_then(|x| x.as_u64()).unwrap_or(0),
-            head: unhex(v.get("head").and_then(|x| x.as_str()).unwrap_or("")),
-        })
-        .unwrap_or_default()
-}
-
-pub fn save_cursor(dir: &Path, host: &str, c: &Cursor) {
-    let _ = std::fs::create_dir_all(dir);
-    let body = serde_json::json!({ "offset": c.offset, "head": hex(&c.head) });
-    let _ = std::fs::write(cursor_path(dir, host), body.to_string());
-}
-
 fn consoles() -> &'static Mutex<HashSet<String>> {
     static C: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
     C.get_or_init(Mutex::default)
@@ -236,7 +194,9 @@ fn mirror_once(host: &str, cur: &Cursor, carry: &mut Vec<u8>) -> anyhow::Result<
 /// Starts the mirror loop. Called once from `run()`.
 pub fn spawn(jobs: Arc<Mutex<HashMap<Uuid, JobState>>>) {
     tokio::spawn(async move {
-        let dir = crate::event_journal::journal_dir();
+        // Positions live in memory only: after an engine restart every console starts at the end
+        // of its log again, so lines written while the engine was closed are not stamped "now".
+        let mut cursors: HashMap<String, Cursor> = HashMap::new();
         let mut carries: HashMap<String, Vec<u8>> = HashMap::new();
         loop {
             tokio::time::sleep(TICK).await;
@@ -254,7 +214,7 @@ pub fn spawn(jobs: Arc<Mutex<HashMap<Uuid, JobState>>>) {
                 .cloned()
                 .collect();
             for host in hosts {
-                let cur = load_cursor(&dir, &host);
+                let cur = cursors.get(&host).cloned().unwrap_or_default();
                 let mut carry = carries.remove(&host).unwrap_or_default();
                 let h = host.clone();
                 let res = tokio::task::spawn_blocking(move || {
@@ -267,7 +227,7 @@ pub fn spawn(jobs: Arc<Mutex<HashMap<Uuid, JobState>>>) {
                 // A console that did not answer keeps its cursor: the next tick that reaches it
                 // copies everything written since, the lines before a crash included.
                 if let Ok(next) = res {
-                    save_cursor(&dir, &host, &next);
+                    cursors.insert(host, next);
                 }
             }
         }
@@ -430,21 +390,5 @@ mod tests {
         assert_eq!(t.code.as_deref(), Some("helper_takeover_failed"));
         let other = line_event("h", "[ava1] rpc method 33 -> status 12");
         assert_eq!(other.code.as_deref(), Some("helper_log"));
-    }
-
-    #[test]
-    fn cursors_round_trip_through_their_file() {
-        let dir = std::env::temp_dir().join(format!("mirror-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let c = Cursor {
-            offset: 42,
-            head: b"=== x".to_vec(),
-        };
-        save_cursor(&dir, "192.168.86.99", &c);
-        let back = load_cursor(&dir, "192.168.86.99");
-        assert_eq!((back.offset, back.head), (42, b"=== x".to_vec()));
-        assert_eq!(load_cursor(&dir, "10.0.0.1").offset, 0);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
