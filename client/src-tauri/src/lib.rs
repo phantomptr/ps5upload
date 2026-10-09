@@ -472,6 +472,7 @@ pub fn run() {
             // commands/diag_log.rs + src/state/logs.ts.
             commands::app_events::app_events_append,
             commands::app_events::app_events_read,
+            commands::host_platform::host_platform,
             commands::diag_log::diag_log_append,
             commands::diag_log::diag_log_read_window,
             commands::diag_log::diag_log_stats,

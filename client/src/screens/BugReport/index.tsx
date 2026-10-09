@@ -7,12 +7,14 @@ import { useTr } from "../../state/lang";
 import { useConnectionStore } from "../../state/connection";
 import { hostOf } from "../../lib/addr";
 import { isTauriEnv } from "../../lib/tauriEnv";
+import { invoke } from "../../lib/invokeLogged";
 import {
   canAdvance,
   clearDraft,
   defaultDraft,
   detectPlatform,
   loadDraft,
+  platformFromHost,
   saveDraft,
   type Step,
   type WizardDraft,
@@ -53,6 +55,20 @@ export default function BugReportScreen() {
       setDraft((d) => ({ ...d, form: { ...d.form, appVersion } }));
   }, [appVersion, draft.form.appVersion]);
   useEffect(() => saveDraft(consoleKey, draft), [consoleKey, draft]);
+  // The desktop app knows its real OS and CPU (an Intel Mac reads as Apple Silicon to the web
+  // view); it replaces the guess, unless the user has already chosen.
+  useEffect(() => {
+    if (!isTauriEnv()) return;
+    void invoke<{ os: string; arch: string }>("host_platform")
+      .then((h) => {
+        const real = platformFromHost(h);
+        if (real)
+          setDraft((d) =>
+            d.form.platform === detectPlatform(true) ? { ...d, form: { ...d.form, platform: real } } : d,
+          );
+      })
+      .catch(() => {});
+  }, []);
 
   const update = (patch: Partial<WizardDraft>) => setDraft((d) => ({ ...d, ...patch }));
   const updateForm = (patch: Partial<WizardDraft["form"]>) =>

@@ -18,9 +18,6 @@ use axum::{
 };
 use ps5upload_core::events::{console_host, emit_event, Cat, Event, Level, Src};
 use serde::Deserialize;
-use uuid::Uuid;
-
-use crate::JobState;
 
 pub const LOG: &str = "/data/ps5upload/stderr.log";
 pub const LOG_OLD: &str = "/data/ps5upload/stderr.log.old";
@@ -127,8 +124,35 @@ pub fn note_console(addr: &str) {
     }
 }
 
+/// Where the mirror reads a console's log files from: the console, or a fake in tests.
+pub trait LogSource {
+    fn size(&self, path: &str) -> anyhow::Result<u64>;
+    fn read(&self, path: &str, from: u64, len: u64) -> anyhow::Result<Vec<u8>>;
+}
+
+/// A console's helper logs over the management connection, every call bounded to READ_TIMEOUT.
+struct ConsoleLog {
+    mgmt: String,
+}
+
+impl LogSource for ConsoleLog {
+    fn size(&self, path: &str) -> anyhow::Result<u64> {
+        Ok(ps5upload_core::fs_ops::fs_stat_with_timeout(&self.mgmt, path, READ_TIMEOUT)?.size)
+    }
+    fn read(&self, path: &str, from: u64, len: u64) -> anyhow::Result<Vec<u8>> {
+        ps5upload_core::fs_ops::fs_read_with_timeout(
+            &self.mgmt,
+            path,
+            from,
+            len,
+            Some(READ_TIMEOUT),
+            false,
+        )
+    }
+}
+
 /// Reads `path` from `from` to its end (at most `cap` bytes), in chunks.
-fn read_from(mgmt: &str, path: &str, from: u64, cap: u64) -> anyhow::Result<Vec<u8>> {
+fn read_from(src: &impl LogSource, path: &str, from: u64, cap: u64) -> anyhow::Result<Vec<u8>> {
     let mut out = Vec::new();
     let mut at = from;
     loop {
@@ -136,14 +160,7 @@ fn read_from(mgmt: &str, path: &str, from: u64, cap: u64) -> anyhow::Result<Vec<
         if want == 0 {
             break;
         }
-        let got = ps5upload_core::fs_ops::fs_read_with_timeout(
-            mgmt,
-            path,
-            at,
-            want,
-            Some(READ_TIMEOUT),
-            false,
-        )?;
+        let got = src.read(path, at, want)?;
         at += got.len() as u64;
         let short = (got.len() as u64) < want;
         out.extend_from_slice(&got);
@@ -154,57 +171,97 @@ fn read_from(mgmt: &str, path: &str, from: u64, cap: u64) -> anyhow::Result<Vec<
     Ok(out)
 }
 
-/// One pass over one console. Returns the new cursor, or an error when the console did not
-/// answer (the cursor is then left as it was).
-fn mirror_once(host: &str, cur: &Cursor, carry: &mut Vec<u8>) -> anyhow::Result<Cursor> {
-    let mgmt = crate::pkg_install::normalize_mgmt_addr(host);
-    let size = ps5upload_core::fs_ops::fs_stat(&mgmt, LOG)?.size;
-    let head_now = read_from(&mgmt, LOG, 0, HEAD as u64)?;
-    let emit_all = |bytes: &[u8], carry: &mut Vec<u8>| {
+/// One pass over one console: emits each new complete line and moves `cur` past it. `cur` moves
+/// after every stage that succeeded, so a pass that fails half way (the console stopped
+/// answering after the `.old` tail was copied) never copies those lines again.
+pub fn mirror_pass(
+    src: &impl LogSource,
+    host: &str,
+    cur: &mut Cursor,
+    carry: &mut Vec<u8>,
+    emit: &mut dyn FnMut(Event),
+) -> anyhow::Result<()> {
+    let size = src.size(LOG)?;
+    let head_now = read_from(src, LOG, 0, HEAD as u64)?;
+    let mut emit_all = |bytes: &[u8], carry: &mut Vec<u8>| {
         for line in split_lines(bytes, carry) {
-            emit_event(line_event(host, &line));
+            emit(line_event(host, &line));
         }
     };
     let start = match plan(cur, size, &head_now) {
         Plan::StartAt { at } => {
-            return Ok(Cursor {
+            *cur = Cursor {
                 offset: at,
                 head: head_now,
-            })
+            };
+            return Ok(());
         }
         Plan::Read { from } => from,
         Plan::Rotated { old_from } => {
-            if let Ok(old) = read_from(&mgmt, LOG_OLD, old_from, FIRST_READ_TAIL) {
+            if let Ok(old) = read_from(src, LOG_OLD, old_from, FIRST_READ_TAIL) {
                 emit_all(&old, carry);
             }
             carry.clear();
+            // The old file is done: from here the new one is read from its start.
+            *cur = Cursor {
+                offset: 0,
+                head: head_now.clone(),
+            };
             0
         }
     };
     // More than one tick's worth written since (a long gap): copy the most recent part.
     let start = start.max(size.saturating_sub(FIRST_READ_TAIL));
-    let bytes = read_from(&mgmt, LOG, start, FIRST_READ_TAIL)?;
+    let bytes = read_from(src, LOG, start, FIRST_READ_TAIL)?;
     emit_all(&bytes, carry);
-    Ok(Cursor {
+    *cur = Cursor {
         offset: start + bytes.len() as u64,
         head: head_now,
-    })
+    };
+    Ok(())
 }
 
-/// Starts the mirror loop. Called once from `run()`.
-pub fn spawn(jobs: Arc<Mutex<HashMap<Uuid, JobState>>>) {
+/// A console that has not answered this many ticks in a row (5 minutes) stops being read; its
+/// next successful status call ([`note_console`]) brings it back.
+pub const FORGET_AFTER_MISSES: u32 = 30;
+
+/// Consecutive unanswered reads per console.
+#[derive(Default)]
+pub struct Misses(HashMap<String, u32>);
+
+impl Misses {
+    /// Records one tick's outcome; true when the console should be forgotten.
+    pub fn record(&mut self, host: &str, answered: bool) -> bool {
+        if answered {
+            self.0.remove(host);
+            return false;
+        }
+        let n = self.0.entry(host.to_string()).or_insert(0);
+        *n += 1;
+        if *n >= FORGET_AFTER_MISSES {
+            self.0.remove(host);
+            return true;
+        }
+        false
+    }
+}
+
+/// Whether the engine is using a console's management port for real work right now.
+pub type BusyCheck = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// Starts the mirror loop. Called once from `run()`. Every tick reads all known consoles at
+/// once (a slow or dead one cannot hold up the others), unless `busy` says a transfer or an
+/// install is running.
+pub fn spawn(busy: BusyCheck) {
     tokio::spawn(async move {
         // Positions live in memory only: after an engine restart every console starts at the end
         // of its log again, so lines written while the engine was closed are not stamped "now".
         let mut cursors: HashMap<String, Cursor> = HashMap::new();
         let mut carries: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut misses = Misses::default();
         loop {
             tokio::time::sleep(TICK).await;
-            let busy = jobs
-                .lock()
-                .map(|g| g.values().any(|s| matches!(s, JobState::Running { .. })))
-                .unwrap_or(true);
-            if busy {
+            if busy() {
                 continue;
             }
             let hosts: Vec<String> = consoles()
@@ -213,21 +270,36 @@ pub fn spawn(jobs: Arc<Mutex<HashMap<Uuid, JobState>>>) {
                 .iter()
                 .cloned()
                 .collect();
-            for host in hosts {
-                let cur = cursors.get(&host).cloned().unwrap_or_default();
-                let mut carry = carries.remove(&host).unwrap_or_default();
-                let h = host.clone();
-                let res = tokio::task::spawn_blocking(move || {
-                    let r = mirror_once(&h, &cur, &mut carry);
-                    (r, carry)
+            let passes: Vec<_> = hosts
+                .into_iter()
+                .map(|host| {
+                    let mut cur = cursors.get(&host).cloned().unwrap_or_default();
+                    let mut carry = carries.remove(&host).unwrap_or_default();
+                    tokio::task::spawn_blocking(move || {
+                        let src = ConsoleLog {
+                            mgmt: crate::pkg_install::normalize_mgmt_addr(&host),
+                        };
+                        let r =
+                            mirror_pass(&src, &host, &mut cur, &mut carry, &mut |e| emit_event(e));
+                        (host, r.is_ok(), cur, carry)
+                    })
                 })
-                .await;
-                let Ok((res, carry)) = res else { continue };
+                .collect();
+            for pass in passes {
+                let Ok((host, answered, cur, carry)) = pass.await else {
+                    continue;
+                };
+                // The cursor moves only past what was copied, so a console that stopped
+                // answering half way picks up exactly there on its next answer.
+                cursors.insert(host.clone(), cur);
                 carries.insert(host.clone(), carry);
-                // A console that did not answer keeps its cursor: the next tick that reaches it
-                // copies everything written since, the lines before a crash included.
-                if let Ok(next) = res {
-                    cursors.insert(host, next);
+                if misses.record(&host, answered) {
+                    consoles()
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&host);
+                    cursors.remove(&host);
+                    carries.remove(&host);
                 }
             }
         }
@@ -308,7 +380,94 @@ pub async fn ftp_log_handler(Query(q): Query<FtpLogQuery>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A console's two log files in memory; `fail_log` makes reads of the live log fail.
+    struct Fake {
+        log: Vec<u8>,
+        old: Vec<u8>,
+        fail_log: std::cell::Cell<bool>,
+    }
+    impl LogSource for Fake {
+        fn size(&self, path: &str) -> anyhow::Result<u64> {
+            Ok(if path == LOG {
+                self.log.len()
+            } else {
+                self.old.len()
+            } as u64)
+        }
+        fn read(&self, path: &str, from: u64, len: u64) -> anyhow::Result<Vec<u8>> {
+            if path == LOG && self.fail_log.get() && len > HEAD as u64 {
+                anyhow::bail!("console stopped answering");
+            }
+            let b = if path == LOG { &self.log } else { &self.old };
+            let from = (from as usize).min(b.len());
+            let to = (from + len as usize).min(b.len());
+            Ok(b[from..to].to_vec())
+        }
+    }
+
+    fn texts(lines: &[Event]) -> Vec<&str> {
+        lines.iter().map(|e| e.msg.as_str()).collect()
+    }
+
+    #[test]
+    fn a_rotation_whose_new_file_fails_does_not_repeat_the_old_tail() {
+        // Last seen: "=== A" log at offset 12. The helper restarted: A moved to .old with one
+        // more line, a new log began. The new log's read fails this tick, then works.
+        let fake = Fake {
+            log: b"=== B\nb1\nb2\n".to_vec(),
+            old: b"=== A\na1\na2\na3\n".to_vec(),
+            fail_log: std::cell::Cell::new(true),
+        };
+        let mut cur = Cursor {
+            offset: 12,
+            head: b"=== A\na1\n".to_vec(),
+        };
+        let mut carry = Vec::new();
+        let mut got = Vec::new();
+        let first = mirror_pass(&fake, "h", &mut cur, &mut carry, &mut |e| got.push(e));
+        assert!(first.is_err());
+        fake.fail_log.set(false);
+        mirror_pass(&fake, "h", &mut cur, &mut carry, &mut |e| got.push(e)).unwrap();
+        assert_eq!(texts(&got), vec!["a3", "=== B", "b1", "b2"]);
+    }
+
+    #[test]
+    fn a_growing_log_is_copied_once() {
+        let fake = Fake {
+            log: b"=== A\nx1\n".to_vec(),
+            old: vec![],
+            fail_log: std::cell::Cell::new(false),
+        };
+        let mut cur = Cursor::default();
+        let (mut carry, mut got) = (Vec::new(), Vec::new());
+        mirror_pass(&fake, "h", &mut cur, &mut carry, &mut |e| got.push(e)).unwrap(); // first contact: end
+        assert!(got.is_empty());
+        let fake = Fake {
+            log: b"=== A\nx1\nx2\nx3\n".to_vec(),
+            ..fake
+        };
+        mirror_pass(&fake, "h", &mut cur, &mut carry, &mut |e| got.push(e)).unwrap();
+        mirror_pass(&fake, "h", &mut cur, &mut carry, &mut |e| got.push(e)).unwrap();
+        assert_eq!(texts(&got), vec!["x2", "x3"]);
+    }
     use ps5upload_core::events::{Level, Src};
+
+    #[test]
+    fn a_console_that_stops_answering_is_forgotten_after_five_minutes() {
+        let mut misses = Misses::default();
+        for _ in 0..FORGET_AFTER_MISSES - 1 {
+            assert!(!misses.record("10.0.0.9", false));
+        }
+        assert!(misses.record("10.0.0.9", false));
+        // One answer resets the count.
+        let mut m2 = Misses::default();
+        m2.record("h", false);
+        m2.record("h", true);
+        for _ in 0..FORGET_AFTER_MISSES - 1 {
+            assert!(!m2.record("h", false));
+        }
+    }
 
     #[test]
     fn grows_reads_from_offset() {

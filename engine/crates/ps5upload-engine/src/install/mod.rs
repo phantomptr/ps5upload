@@ -81,6 +81,15 @@ impl JobStore {
         }
     }
 
+    /// Whether any console has an install running.
+    pub fn any_active(&self) -> bool {
+        !self
+            .active
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
+    }
+
     /// Ask a running job to stop. False when there is no such job or it already ended.
     pub fn request_cancel(&self, job: &str) -> bool {
         let running = self

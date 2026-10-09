@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { canAdvance, clearDraft, defaultDraft, loadDraft, rangeStart, RANGE_MS, saveDraft } from "./draft";
+import { canAdvance, clearDraft, defaultDraft, loadDraft, platformFromHost, rangeStart, RANGE_MS, saveDraft } from "./draft";
 
 const mem = new Map<string, string>();
 beforeEach(() => {
@@ -79,5 +79,17 @@ describe("canAdvance", () => {
 
   it("step 2 is always fine", () => {
     expect(canAdvance(2, defaultDraft("1", "Android"))).toBe(true);
+  });
+});
+
+describe("platformFromHost", () => {
+  it("names the issue form's option from the OS and CPU the desktop app reports", () => {
+    expect(platformFromHost({ os: "macos", arch: "aarch64" })).toBe("macOS (Apple Silicon)");
+    expect(platformFromHost({ os: "macos", arch: "x86_64" })).toBe("macOS (Intel)");
+    expect(platformFromHost({ os: "windows", arch: "x86_64" })).toBe("Windows (x64)");
+    expect(platformFromHost({ os: "windows", arch: "aarch64" })).toBe("Windows (ARM64)");
+    expect(platformFromHost({ os: "linux", arch: "aarch64" })).toBe("Linux (ARM64)");
+    expect(platformFromHost({ os: "android", arch: "aarch64" })).toBe("Android");
+    expect(platformFromHost({ os: "freebsd", arch: "x86_64" })).toBeNull();
   });
 });

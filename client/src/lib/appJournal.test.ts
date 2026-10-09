@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createJournal } from "./appJournal";
+import { createJournal, flushWhenHidden } from "./appJournal";
 
 describe("app journal buffer", () => {
   it("writes collapsed records once the window closes, and on flush", async () => {
@@ -51,5 +51,22 @@ describe("app journal buffer", () => {
     const got = await j.read(0);
     expect(got).toHaveLength(1);
     expect(got[0]).toMatchObject({ msg: "hello", src: "app", ts: 5 });
+  });
+
+  it("writes what is pending when the page is hidden or closed", async () => {
+    const written: string[] = [];
+    const j = createJournal({ append: async (l) => void written.push(...l), read: async () => [], now: () => 1 });
+    const target = new EventTarget();
+    const doc = Object.assign(new EventTarget(), { visibilityState: "visible" as DocumentVisibilityState });
+    flushWhenHidden(j, target, doc);
+    j.record({ cat: "app", level: "error", code: "engine_down", msg: "engine unreachable" });
+    target.dispatchEvent(new Event("pagehide"));
+    await Promise.resolve();
+    expect(written).toHaveLength(1);
+    j.record({ cat: "system", level: "info", code: "x", msg: "y" });
+    doc.visibilityState = "hidden";
+    doc.dispatchEvent(new Event("visibilitychange"));
+    await Promise.resolve();
+    expect(written).toHaveLength(2);
   });
 });

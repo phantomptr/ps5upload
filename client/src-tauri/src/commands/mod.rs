@@ -25,6 +25,7 @@ pub mod diagnostics;
 pub mod discover;
 pub mod folder_inspect;
 pub mod heal_appmeta;
+pub mod host_platform;
 pub mod keep_awake;
 pub mod local_fs;
 pub mod payloads;

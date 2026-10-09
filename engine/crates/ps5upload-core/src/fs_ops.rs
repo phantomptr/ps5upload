@@ -130,6 +130,24 @@ pub fn fs_stat(addr: &str, path: &str) -> Result<PathStat> {
     }
 }
 
+/// [`fs_stat`] with its own deadline, for background readers that must not wait out the default.
+pub fn fs_stat_with_timeout(
+    addr: &str,
+    path: &str,
+    timeout: std::time::Duration,
+) -> Result<PathStat> {
+    let body = serde_json::to_vec(&serde_json::json!({ "path": path }))
+        .context("serialize fs_stat body")?;
+    let resp = mgmt::call_with(
+        addr,
+        m::FS_STAT,
+        &format!("FS_STAT({path})"),
+        &body,
+        Some(timeout),
+    )?;
+    serde_json::from_slice(&resp).context("decode FS_STAT reply as JSON")
+}
+
 /// True when an error from [`fs_stat`], [`fs_read`] or [`list_dir`] means "no such path".
 pub fn is_not_found(message: &str) -> bool {
     message.contains("ENOENT")

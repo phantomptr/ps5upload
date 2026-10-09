@@ -102,6 +102,7 @@ const NATIVE_ONLY: Record<string, string> = {
   diag_log_append: "native: writes the host diag log",
   app_events_append: "native: the app event journal file; the browser keeps it in IndexedDB",
   app_events_read: "native: the app event journal file; the browser keeps it in IndexedDB",
+  host_platform: "native: the OS and CPU the desktop app was built for; the browser reports the web UI",
   diag_log_clear: "native: writes the host diag log",
   diag_log_read_window: "native: reads the host diag log",
   diag_log_stats: "native: reads the host diag log",

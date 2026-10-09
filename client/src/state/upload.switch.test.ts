@@ -3,9 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // A game folder picked on console A whose inspection finishes after the user switched to B
 // belongs to A's draft: back on A, the game info is there; B's draft is untouched.
 let finishInspect: (v: unknown) => void = () => {};
+let failInspect: (e: Error) => void = () => {};
 vi.mock("../api/ps5", async (orig) => ({
   ...(await orig<typeof import("../api/ps5")>()),
-  inspectFolder: vi.fn(() => new Promise((r) => (finishInspect = r))),
+  inspectFolder: vi.fn(() => new Promise((r, j) => ((finishInspect = r), (failInspect = j)))),
 }));
 vi.mock("../lib/tauriEnv", () => ({ isTauriEnv: () => true }));
 
@@ -48,5 +49,15 @@ describe("an Upload folder pick across a console switch", () => {
     finishInspect({ result: game, wrapped_hint: null });
     await pick;
     expect(useUploadStore.getState().source?.path).toBe("/games/Other");
+  });
+
+  it("a failed inspection lands as that console's error, not nowhere", async () => {
+    const pick = useUploadStore.getState().pickFolder("/games/Test");
+    switchTo(B);
+    failInspect(new Error("permission denied"));
+    await pick;
+    expect(useUploadStore.getState().detectError).toBeNull();
+    switchTo(A);
+    expect(useUploadStore.getState().detectError).toContain("permission denied");
   });
 });

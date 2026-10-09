@@ -498,13 +498,17 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       if (get().source?.path !== path) return;
       set({ source: inspected, detecting: false, detectError: null });
     } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      // Switched consoles meanwhile: the error belongs to the console it was picked on.
+      if (draftKey(useConnectionStore.getState().host) !== pickedFor) {
+        const stashed = draftStash.get(pickedFor);
+        if (stashed?.source?.path === path) draftStash.set(pickedFor, { ...stashed, detectError: message });
+        return;
+      }
       // Same race window for the failure branch — don't surface an
       // error for an inspect the user already abandoned.
       if (get().source?.path !== path) return;
-      set({
-        detecting: false,
-        detectError: e instanceof Error ? e.message : String(e),
-      });
+      set({ detecting: false, detectError: message });
     }
   },
 

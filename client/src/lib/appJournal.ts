@@ -78,6 +78,19 @@ export function createJournal(b: JournalBackend) {
   };
 }
 
+/** Writes pending events when the page is hidden or closed (the app quitting, a tab closing),
+ *  so the last thing that happened is not lost with it. */
+export function flushWhenHidden(
+  j: { flush(): Promise<void> },
+  win: Pick<EventTarget, "addEventListener">,
+  doc: Pick<EventTarget, "addEventListener"> & { visibilityState: DocumentVisibilityState },
+): void {
+  win.addEventListener("pagehide", () => void j.flush());
+  doc.addEventListener("visibilitychange", () => {
+    if (doc.visibilityState === "hidden") void j.flush();
+  });
+}
+
 function idbBackend(): JournalBackend {
   const open = () =>
     new Promise<IDBDatabase>((res, rej) => {
@@ -160,7 +173,11 @@ const noBackend: JournalBackend = { now: () => Date.now(), append: async () => {
 const journal = createJournal(
   isTauriEnv() ? tauriBackend() : typeof indexedDB !== "undefined" ? idbBackend() : noBackend,
 );
-if (typeof window !== "undefined") globalThis.setInterval(() => void journal.tick(), 1000);
+if (typeof window !== "undefined") {
+  globalThis.setInterval(() => void journal.tick(), 1000);
+  if (typeof window.addEventListener === "function" && typeof document !== "undefined")
+    flushWhenHidden(journal, window, document);
+}
 
 /** Records an app event; returns its time. Never throws. */
 export const recordAppEvent = (e: NewAppEvent): number => journal.record(e);

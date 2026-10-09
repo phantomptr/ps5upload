@@ -9876,8 +9876,21 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
 
     // The Collection's automatic refresh (a no-op until a folder is added).
     collection_api::spawn_auto_refresh();
+    // Install sessions live in their own state (served by pkg_install::router below); the helper
+    // log mirror also reads it, to stay off a console while an install runs.
+    let pkg_state = std::sync::Arc::new(pkg_install::PkgInstallState::restored());
     // Copies each connected console's helper log into the event journal.
-    helper_mirror::spawn(state.jobs.clone());
+    {
+        let jobs = state.jobs.clone();
+        let installs = pkg_state.clone();
+        helper_mirror::spawn(std::sync::Arc::new(move || {
+            installs.jobs.any_active()
+                || jobs
+                    .lock()
+                    .map(|g| g.values().any(|s| matches!(s, JobState::Running { .. })))
+                    .unwrap_or(true)
+        }));
+    }
 
     let app = Router::new()
         .route("/", get(ui_handler))
@@ -10325,9 +10338,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         // HTTP-host serving handler needs Mutex-guarded session lookup
         // independent of the main engine state. Merged at this point
         // so the pkg routes share the same listener + CORS + body limit.
-        .merge(pkg_install::router(std::sync::Arc::new(
-            pkg_install::PkgInstallState::restored(),
-        )))
+        .merge(pkg_install::router(pkg_state))
         // Downloading a link to disk before installing it. Separate state for
         // the same reason as the install sessions: its progress is polled
         // independently of everything else the engine is doing.
@@ -10444,13 +10455,21 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     // middleware. Without this, axum hands handlers a generic ConnectInfo
     // and the middleware would have to fall back to header-based source
     // detection (less reliable, easier to spoof from a hostile LAN peer).
-    if let Err(e) = axum::serve(
+    let served = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_signal())
-    .await
-    {
+    .await;
+    ps5upload_core::events::emit(
+        ps5upload_core::events::Cat::System,
+        ps5upload_core::events::Level::Info,
+        "engine_stop",
+        None,
+        "engine stopped",
+    );
+    event_journal::flush_now();
+    if let Err(e) = served {
         eprintln!("[ps5upload-engine] axum serve terminated: {e}");
         if cfg.exit_on_error {
             std::process::exit(3);

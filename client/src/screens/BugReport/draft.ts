@@ -121,3 +121,21 @@ export function detectPlatform(isTauri: boolean): string {
   if (/Linux/i.test(ua)) return /aarch64|arm64/i.test(ua) ? "Linux (ARM64)" : "Linux (x64)";
   return PLATFORMS[0];
 }
+
+/** The issue form's platform for the OS and CPU the desktop app reports (`host_platform`);
+ *  null when it isn't one of the options. The web view alone can't tell Intel from Apple Silicon. */
+export function platformFromHost(h: { os: string; arch: string }): string | null {
+  const arm = h.arch === "aarch64" || h.arch === "arm";
+  switch (h.os) {
+    case "macos":
+      return arm ? "macOS (Apple Silicon)" : "macOS (Intel)";
+    case "windows":
+      return arm ? "Windows (ARM64)" : "Windows (x64)";
+    case "linux":
+      return arm ? "Linux (ARM64)" : "Linux (x64)";
+    case "android":
+      return "Android";
+    default:
+      return null;
+  }
+}

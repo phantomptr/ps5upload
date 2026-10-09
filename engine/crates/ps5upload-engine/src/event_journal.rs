@@ -153,7 +153,6 @@ impl Journal {
         self.prune();
     }
 
-    #[cfg(test)]
     pub fn flush(&mut self) {
         self.flush_due(true)
     }
@@ -272,6 +271,19 @@ pub fn install() {
                 Err(_) => break,
             }
         });
+}
+
+/// Writes everything still collecting repeats. Called when the engine stops, so a quit does not
+/// lose the last events (the ones a report about that quit needs). Events still in the channel
+/// are drained first.
+pub fn flush_now() {
+    if let Some(j) = JOURNAL.get() {
+        // Give the writer thread a moment to take what was just sent.
+        std::thread::sleep(Duration::from_millis(50));
+        if let Ok(mut g) = j.lock() {
+            g.flush();
+        }
+    }
 }
 
 #[derive(Deserialize)]
