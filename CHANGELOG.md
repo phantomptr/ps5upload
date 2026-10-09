@@ -4,6 +4,13 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.6.3
+
+**Housekeeping.** No changes to the app. The engine's own tests now clean up their temporary
+files when they finish.
+
+---
+
 ## 6.6.2
 
 **Fixes: the Windows app connects again, one game goes to two consoles, and bug reports work on
