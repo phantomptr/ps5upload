@@ -44,6 +44,7 @@ mod event_journal;
 mod fakelibs_api;
 mod fpkg_api;
 mod fpkg_firmware;
+mod helper_mirror;
 mod icon_cache;
 mod image_build;
 mod inspect;
@@ -5199,6 +5200,7 @@ async fn ps5_status(
                 Some(&console),
                 "status ok",
             );
+            helper_mirror::note_console(&console);
             (StatusCode::OK, Json(json)).into_response()
         }
         Ok(Err(e)) => {
@@ -9874,6 +9876,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
 
     // The Collection's automatic refresh (a no-op until a folder is added).
     collection_api::spawn_auto_refresh();
+    // Copies each connected console's helper log into the event journal.
+    helper_mirror::spawn(state.jobs.clone());
 
     let app = Router::new()
         .route("/", get(ui_handler))
@@ -10265,6 +10269,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/events", get(events_stream))
         .route("/api/engine-logs", get(engine_logs_tail))
         .route("/api/event-journal", get(event_journal::events_handler))
+        .route(
+            "/api/ps5/helper-log-ftp",
+            get(helper_mirror::ftp_log_handler),
+        )
         .route("/api/debug/crash", get(debug_crash))
         .with_state(state);
 
