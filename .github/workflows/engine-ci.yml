@@ -66,14 +66,19 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      # Registry + dependency builds only (our own crates are left out, so the entry stays small
-      # and current); saved from main only, where every later run can restore it.
-      - name: Cache cargo (rust-cache)
-        uses: Swatinem/rust-cache@v2
+      # Restored on every run; saved (under a new key per run, so it stays current) only from
+      # main, where later runs can restore it. A PR's own cache would be visible to that PR only.
+      - name: Restore cargo cache
+        uses: actions/cache/restore@v6
         with:
-          workspaces: engine
-          shared-key: engine-lint
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: ${{ runner.os }}-engine-lint-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-engine-lint-${{ hashFiles('engine/Cargo.lock') }}-
+            ${{ runner.os }}-engine-lint-
 
       - name: cargo fmt
         working-directory: engine
@@ -103,6 +108,16 @@ jobs:
         working-directory: engine
         run: cargo check -p ps5upload-engine --features webui
 
+      - name: Save cargo cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: ${{ runner.os }}-engine-lint-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
+
   # The workspace's tests, in two legs that run side by side: the engine crate (and the
   # integration suite built on it) is about half of the time, everything else the other half.
   # Together they are `cargo test --workspace --exclude ava1-ctest`; a crate added later lands
@@ -125,14 +140,19 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      # Registry + dependency builds only (our own crates are left out, so the entry stays small
-      # and current); saved from main only, where every later run can restore it.
-      - name: Cache cargo (rust-cache)
-        uses: Swatinem/rust-cache@v2
+      # Restored on every run; saved (under a new key per run, so it stays current) only from
+      # main, where later runs can restore it. A PR's own cache would be visible to that PR only.
+      - name: Restore cargo cache
+        uses: actions/cache/restore@v6
         with:
-          workspaces: engine
-          shared-key: engine-test-${{ matrix.part }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: ${{ runner.os }}-engine-test-${{ matrix.part }}-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-engine-test-${{ matrix.part }}-${{ hashFiles('engine/Cargo.lock') }}-
+            ${{ runner.os }}-engine-test-${{ matrix.part }}-
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
@@ -155,6 +175,16 @@ jobs:
         timeout-minutes: 10
         run: cargo test --doc ${{ matrix.select }}
 
+      - name: Save cargo cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: ${{ runner.os }}-engine-test-${{ matrix.part }}-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
+
   # The C interop suite. The C server and the data layer are process-wide singletons, so the
   # suite runs one test at a time: a test that holds the server cannot starve the others. That
   # rule holds inside one machine, so the test files are dealt across four machines, each still
@@ -173,14 +203,19 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      # Registry + dependency builds only (our own crates are left out, so the entry stays small
-      # and current); saved from main only, where every later run can restore it.
-      - name: Cache cargo (rust-cache)
-        uses: Swatinem/rust-cache@v2
+      # Restored on every run; saved (under a new key per run, so it stays current) only from
+      # main, where later runs can restore it. A PR's own cache would be visible to that PR only.
+      - name: Restore cargo cache
+        uses: actions/cache/restore@v6
         with:
-          workspaces: engine
-          shared-key: engine-ctest
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: ${{ runner.os }}-engine-ctest-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-engine-ctest-${{ hashFiles('engine/Cargo.lock') }}-
+            ${{ runner.os }}-engine-ctest-
 
       - name: cargo test (ava1 C interop, serial)
         working-directory: engine
@@ -201,6 +236,16 @@ jobs:
           [ "${#args[@]}" -gt 0 ] || { echo "::error::shard $SHARD got no test files"; exit 1; }
           echo "shard $SHARD of 4: ${#args[@]} of ${#all[@]} test files"
           cargo test -p ava1-ctest "${args[@]}" -- --test-threads=1
+
+      - name: Save cargo cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: ${{ runner.os }}-engine-ctest-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
 
   # ─────────────────────────────────────────────────────────────────────
   # AVA1: C/Rust conformance + interop runs in rust-engine-tests and rust-ctest
@@ -265,14 +310,19 @@ jobs:
       - name: Install clang + sanitizer runtimes
         run: sudo apt-get update && sudo apt-get install -y clang libclang-rt-18-dev
 
-      # Registry + dependency builds only (our own crates are left out, so the entry stays small
-      # and current); saved from main only, where every later run can restore it.
-      - name: Cache cargo (rust-cache)
-        uses: Swatinem/rust-cache@v2
+      # Restored on every run; saved (under a new key per run, so it stays current) only from
+      # main, where later runs can restore it. A PR's own cache would be visible to that PR only.
+      - name: Restore cargo cache
+        uses: actions/cache/restore@v6
         with:
-          workspaces: engine
-          shared-key: ava1-san
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: ${{ runner.os }}-ava1-san-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-ava1-san-${{ hashFiles('engine/Cargo.lock') }}-
+            ${{ runner.os }}-ava1-san-
 
       - name: cargo test -p ava1-ctest (sanitized, serial)
         working-directory: engine
@@ -295,6 +345,16 @@ jobs:
           [ "${#args[@]}" -gt 0 ] || { echo "::error::shard $SHARD got no test files"; exit 1; }
           echo "sanitized shard $SHARD of 4: ${#args[@]} of ${#all[@]} test files"
           cargo test -p ava1-ctest "${args[@]}" -- --test-threads=1
+
+      - name: Save cargo cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: ${{ runner.os }}-ava1-san-${{ hashFiles('engine/Cargo.lock') }}-${{ github.run_id }}
 
   # ─────────────────────────────────────────────────────────────────────
   # Engine/core target portability. This is intentionally separate from
@@ -417,14 +477,19 @@ jobs:
             clang \
             libclang-dev
 
-      # Registry + dependency builds only (our own crates are left out, so the entry stays small
-      # and current); saved from main only, where every later run can restore it.
-      - name: Cache cargo (rust-cache)
-        uses: Swatinem/rust-cache@v2
+      # Restored on every run; saved (under a new key per run, so it stays current) only from
+      # main, where later runs can restore it. A PR's own cache would be visible to that PR only.
+      - name: Restore cargo cache
+        uses: actions/cache/restore@v6
         with:
-          workspaces: client/src-tauri
-          shared-key: desktop-${{ matrix.os }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            client/src-tauri/target
+          key: ${{ runner.os }}-desktop-${{ matrix.os }}-${{ hashFiles('client/src-tauri/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-desktop-${{ matrix.os }}-${{ hashFiles('client/src-tauri/Cargo.lock') }}-
+            ${{ runner.os }}-desktop-${{ matrix.os }}-
 
       # tauri.conf.json bundles two out-of-tree resources: the PS5
       # payload (ps5upload.elf.gz) and the engine sidecar binary.
@@ -469,6 +534,16 @@ jobs:
         env:
           RUST_BACKTRACE: 1
         run: cargo test
+
+      - name: Save cargo cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            client/src-tauri/target
+          key: ${{ runner.os }}-desktop-${{ matrix.os }}-${{ hashFiles('client/src-tauri/Cargo.lock') }}-${{ github.run_id }}
 
   # ─────────────────────────────────────────────────────────────────────
   # Client frontend — TypeScript typecheck, ESLint, Vitest, Vite build.
@@ -728,14 +803,19 @@ jobs:
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi
 
-      # Registry + dependency builds only (our own crates are left out, so the entry stays small
-      # and current); saved from main only, where every later run can restore it.
-      - name: Cache cargo (rust-cache)
-        uses: Swatinem/rust-cache@v2
+      # Restored on every run; saved (under a new key per run, so it stays current) only from
+      # main, where later runs can restore it. A PR's own cache would be visible to that PR only.
+      - name: Restore cargo cache
+        uses: actions/cache/restore@v6
         with:
-          workspaces: client/src-tauri
-          shared-key: android
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            client/src-tauri/target
+          key: ${{ runner.os }}-android-${{ hashFiles('client/src-tauri/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-android-${{ hashFiles('client/src-tauri/Cargo.lock') }}-
+            ${{ runner.os }}-android-
 
       # Gradle's dependency cache.
       #
@@ -834,6 +914,16 @@ jobs:
           path: client/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
           retention-days: 7
+
+      - name: Save cargo cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            client/src-tauri/target
+          key: ${{ runner.os }}-android-${{ hashFiles('client/src-tauri/Cargo.lock') }}-${{ github.run_id }}
 
   # ─────────────────────────────────────────────────────────────────────
   # Aggregate gate. One stable check that turns green only when every

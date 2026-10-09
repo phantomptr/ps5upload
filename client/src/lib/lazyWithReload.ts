@@ -7,6 +7,7 @@
 
 import { lazy } from "react";
 
+import { flushAppJournal, recordAppEvent } from "./appJournal";
 import { safeGetItem, safeSetItem } from "./safeStorage";
 
 const KEY = "ps5upload.chunk-reload-at";
@@ -26,6 +27,8 @@ interface Deps {
   get: (key: string) => string | null;
   set: (key: string, value: string) => void;
   reload: () => void;
+  /** Records why the page is about to reload: it is otherwise invisible (#418). */
+  note: (message: string) => void | Promise<void>;
 }
 
 const realDeps: Deps = {
@@ -33,6 +36,17 @@ const realDeps: Deps = {
   get: safeGetItem,
   set: safeSetItem,
   reload: () => window.location.reload(),
+  note: async (message) => {
+    // The journal survives the reload (IndexedDB / the desktop file): write it out first, but
+    // never hold the reload up for more than half a second.
+    recordAppEvent({
+      cat: "app",
+      level: "warn",
+      code: "chunk_reload",
+      msg: `reloaded: a screen's code could not be loaded (${message})`,
+    });
+    await Promise.race([flushAppJournal().catch(() => {}), new Promise((r) => setTimeout(r, 500))]);
+  },
 };
 
 export async function importWithReload<T>(load: () => Promise<T>, deps: Deps = realDeps): Promise<T> {
@@ -43,6 +57,7 @@ export async function importWithReload<T>(load: () => Promise<T>, deps: Deps = r
     const last = Number(deps.get(KEY) ?? 0);
     if (deps.now() - last < WINDOW_MS) throw e;
     deps.set(KEY, String(deps.now()));
+    await deps.note(e instanceof Error ? e.message : String(e));
     deps.reload();
     // The page is going away; never settle into the error screen meanwhile.
     return new Promise<T>(() => {});
