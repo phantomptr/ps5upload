@@ -716,7 +716,7 @@ export default function ConnectionScreen() {
               {tr(
                 "connection_step3_hint",
                 undefined,
-                "Go to the Upload tab and drop in a game folder, a .exfat image, or a .ffpkg image. For disk images, hit Mount in the Library tab. To register installed apps on your PS5 home screen, use a PS5-side installer (send it via the Payloads → Send file tab).",
+                "Go to the Upload tab and drop in a game folder, a .exfat image, or a .ffpkg image. For disk images, hit Mount in the Library tab. To register installed apps on your PS5 home screen, use a PS5-side installer (send it via the Payloads → Send payload tab).",
               )}
             </p>
             <Button
@@ -1516,7 +1516,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
           </code>{" "}
           {tr(
             "connection_firmware_from_send_tab",
-            "from the Payloads → Send file tab.",
+            "from the Payloads → Send payload tab.",
           )}
         </p>
       )}

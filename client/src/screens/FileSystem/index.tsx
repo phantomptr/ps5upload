@@ -1493,10 +1493,12 @@ export default function FileSystemScreen() {
     }
     await refresh();
   };
+  // `entry` is null for a right-click on the list's empty space: the folder
+  // itself, so the menu offers what applies to it (New folder, Paste, Refresh).
   const [rowMenu, setRowMenu] = useState<{
     x: number;
     y: number;
-    entry: DirEntry;
+    entry: DirEntry | null;
   } | null>(null);
   const [pathDraft, setPathDraft] = useState<string | null>(null);
 
@@ -2181,6 +2183,9 @@ export default function FileSystemScreen() {
     return best;
   }, [volumes, path]);
 
+  // A const, so the menu items' closures keep the non-null narrowing.
+  const menuEntry = rowMenu?.entry ?? null;
+
   return (
     <div className="app-page">
       {dropActive && (
@@ -2205,46 +2210,46 @@ export default function FileSystemScreen() {
           onConfirm={confirmMove}
         />
       )}
-      {rowMenu && (
+      {rowMenu && menuEntry && (
         <RowMenu
           x={rowMenu.x}
           y={rowMenu.y}
           onClose={() => setRowMenu(null)}
           items={[
             {
-              icon: rowMenu.entry.kind === "dir" ? FolderOpen : Eye,
+              icon: menuEntry.kind === "dir" ? FolderOpen : Eye,
               label: tr("fs_menu_open", undefined, "Open"),
-              run: () => openEntry(rowMenu.entry),
+              run: () => openEntry(menuEntry),
             },
             {
               icon: Download,
               label: tr("fs_menu_download", undefined, "Download"),
-              run: () => void runDownload(rowMenu.entry),
+              run: () => void runDownload(menuEntry),
               disabled: downloadOp.active,
             },
             {
               icon: FolderInput,
               label: tr("fs_move_to", undefined, "Move to…"),
-              run: () => startMove([rowMenu.entry]),
+              run: () => startMove([menuEntry]),
               disabled: fsBulk.op !== null || !volumes?.length,
             },
             {
               icon: Scissors,
               label: tr("fs_cut", "Cut"),
-              run: () => stageClipboard("cut", [rowMenu.entry]),
+              run: () => stageClipboard("cut", [menuEntry]),
             },
             {
               icon: KeyRound,
               label: tr("fs_chmod_777", undefined, "Set permissions (777)"),
-              run: () => void runChmod777([rowMenu.entry]),
+              run: () => void runChmod777([menuEntry]),
               disabled: chmodBusy,
             },
             {
               icon: Copy,
               label: tr("fs_menu_copy", undefined, "Copy"),
-              run: () => stageClipboard("copy", [rowMenu.entry]),
+              run: () => stageClipboard("copy", [menuEntry]),
             },
-            ...(rowMenu.entry.kind === "dir" && clipboard.items.length > 0
+            ...(menuEntry.kind === "dir" && clipboard.items.length > 0
               ? [
                   {
                     icon: ClipboardPaste,
@@ -2254,7 +2259,7 @@ export default function FileSystemScreen() {
                       "Paste into this folder",
                     ),
                     run: () =>
-                      void runPaste(joinPath(path, rowMenu.entry.name)),
+                      void runPaste(joinPath(path, menuEntry.name)),
                     disabled: fsBulk.op !== null,
                   },
                 ]
@@ -2262,19 +2267,56 @@ export default function FileSystemScreen() {
             {
               icon: Pencil,
               label: tr("fs_rename", "Rename"),
-              run: () => startRename(rowMenu.entry.name),
+              run: () => startRename(menuEntry.name),
             },
             {
               icon: Link2,
               label: tr("fs_menu_copy_path", undefined, "Copy path"),
-              run: () => void copyEntryPath(rowMenu.entry),
+              run: () => void copyEntryPath(menuEntry),
+            },
+            {
+              icon: FolderPlus,
+              label: tr("fs_new_folder", "New folder"),
+              run: () => setMkdirDraft(""),
+              disabled: loading || !host?.trim(),
             },
             {
               icon: Trash2,
               label: tr("delete", undefined, "Delete"),
-              run: () => void runDelete(rowMenu.entry.name),
+              run: () => void runDelete(menuEntry.name),
               destructive: true,
               disabled: busyEntry !== null,
+            },
+          ]}
+        />
+      )}
+      {rowMenu && !menuEntry && (
+        <RowMenu
+          x={rowMenu.x}
+          y={rowMenu.y}
+          onClose={() => setRowMenu(null)}
+          items={[
+            {
+              icon: FolderPlus,
+              label: tr("fs_new_folder", "New folder"),
+              run: () => setMkdirDraft(""),
+              disabled: loading || !host?.trim(),
+            },
+            ...(clipboard.items.length > 0
+              ? [
+                  {
+                    icon: ClipboardPaste,
+                    label: tr("fs_paste_here", undefined, "Paste here"),
+                    run: () => void runPaste(),
+                    disabled: fsBulk.op !== null,
+                  },
+                ]
+              : []),
+            {
+              icon: RefreshCw,
+              label: tr("fs_refresh", "Refresh"),
+              run: () => void refresh(),
+              disabled: loading || !host?.trim(),
             },
           ]}
         />
@@ -2839,280 +2881,293 @@ export default function FileSystemScreen() {
           </div>
         )}
 
-        {entries && entries.length === 0 && (
-          <div className="rounded-md border border-dashed border-[var(--color-border)] p-4 text-center text-xs text-[var(--color-muted)]">
-            {tr("fs_empty_folder", "Empty folder.")}
-          </div>
-        )}
+        {/* Right-click on the list's empty space opens the folder menu (New folder,
+            Paste, Refresh); a row's own handler stops the event first. */}
+        <div
+          data-testid="fs-list-area"
+          className="min-h-[12rem]"
+          onContextMenu={(ev) => {
+            if (!entries) return;
+            ev.preventDefault();
+            setRowMenu({ x: ev.clientX, y: ev.clientY, entry: null });
+          }}
+        >
+          {entries && entries.length === 0 && (
+            <div className="rounded-md border border-dashed border-[var(--color-border)] p-4 text-center text-xs text-[var(--color-muted)]">
+              {tr("fs_empty_folder", "Empty folder.")}
+            </div>
+          )}
 
-        {entries && entries.length > 0 && (
-          <div className="mb-1 flex items-center gap-2 px-2 text-xs text-[var(--color-muted)]">
-            <input
-              type="checkbox"
-              checked={selected.size > 0 && selected.size === entries.length}
-              ref={(el) => {
-                if (el)
-                  el.indeterminate =
-                    selected.size > 0 && selected.size < entries.length;
-              }}
-              onChange={toggleAll}
-              className="h-3.5 w-3.5 rounded border-[var(--color-border)]"
-              title={tr("fs_select_all", undefined, "Select all")}
-            />
-            <span>
-              {tr(
-                entries.length === 1 ? "fs_item_one" : "fs_item_many",
-                { count: entries.length },
-                `${entries.length} item${entries.length === 1 ? "" : "s"}`,
-              )}
-            </span>
-            <span className="ml-auto flex items-center gap-1">
-              {(
-                [
-                  ["name", tr("fs_sort_name", undefined, "Name")],
-                  ["size", tr("fs_sort_size", undefined, "Size")],
-                  ["mtime", tr("fs_sort_modified", undefined, "Modified")],
-                ] as [SortKey, string][]
-              ).map(([k, label]) => (
-                <button
-                  key={k}
-                  type="button"
-                  onClick={() => setSort((cur) => nextSort(cur, k))}
-                  className={
-                    "rounded px-1.5 py-0.5 hover:bg-[var(--color-surface-3)] " +
-                    (sort.key === k
-                      ? "font-medium text-[var(--color-text)]"
-                      : "")
-                  }
-                  aria-pressed={sort.key === k}
-                >
-                  {label}
-                  {sort.key === k ? (sort.desc ? " ↓" : " ↑") : ""}
-                </button>
-              ))}
-            </span>
-          </div>
-        )}
-
-        <ul className="grid gap-1">
-          {sortedEntries.map((e) => {
-            const isDir = e.kind === "dir";
-            const Icon = isDir ? Folder : FileIcon;
-            const isRenaming = renaming === e.name;
-            const isSelected = selected.has(e.name);
-            return (
-              <li
-                key={e.name}
-                onDoubleClick={(ev) => {
-                  if ((ev.target as HTMLElement).closest("input,button"))
-                    return;
-                  openEntry(e);
+          {entries && entries.length > 0 && (
+            <div className="mb-1 flex items-center gap-2 px-2 text-xs text-[var(--color-muted)]">
+              <input
+                type="checkbox"
+                checked={selected.size > 0 && selected.size === entries.length}
+                ref={(el) => {
+                  if (el)
+                    el.indeterminate =
+                      selected.size > 0 && selected.size < entries.length;
                 }}
-                onContextMenu={(ev) => {
-                  ev.preventDefault();
-                  setRowMenu({ x: ev.clientX, y: ev.clientY, entry: e });
-                }}
-                className={
-                  "list-row-contain-sm flex items-center gap-3 rounded-md border p-2 text-sm " +
-                  (isSelected
-                    ? "border-[var(--color-accent)] bg-[var(--color-surface-2)]"
-                    : "border-[var(--color-border)] bg-[var(--color-surface-2)]")
-                }
-              >
-                <input
-                  type="checkbox"
-                  checked={isSelected}
-                  onChange={() => toggleSelected(e.name)}
-                  className="h-3.5 w-3.5 shrink-0 rounded border-[var(--color-border)]"
-                />
-                <Icon
-                  size={16}
-                  className={
-                    isDir
-                      ? "shrink-0 text-[var(--color-accent)]"
-                      : "shrink-0 text-[var(--color-muted)]"
-                  }
-                />
-                {isRenaming ? (
-                  <input
-                    autoFocus
-                    value={renameDraft}
-                    onChange={(ev) => setRenameDraft(ev.target.value)}
-                    onKeyDown={(ev) => {
-                      if (ev.key === "Enter") runRename(e.name);
-                      if (ev.key === "Escape") setRenaming(null);
-                    }}
-                    onBlur={() => setRenaming(null)}
-                    className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-sm"
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (isDir) setPath(joinPath(path, e.name));
-                    }}
-                    className={
-                      "flex-1 truncate text-left font-mono text-sm " +
-                      (isDir ? "hover:text-[var(--color-accent)]" : "")
-                    }
-                    disabled={!isDir}
-                  >
-                    {e.name}
-                  </button>
+                onChange={toggleAll}
+                className="h-3.5 w-3.5 rounded border-[var(--color-border)]"
+                title={tr("fs_select_all", undefined, "Select all")}
+              />
+              <span>
+                {tr(
+                  entries.length === 1 ? "fs_item_one" : "fs_item_many",
+                  { count: entries.length },
+                  `${entries.length} item${entries.length === 1 ? "" : "s"}`,
                 )}
-                <span className="shrink-0 text-xs text-[var(--color-muted)] tabular-nums">
-                  {isDir ? "—" : formatBytes(e.size)}
-                </span>
-                <div className="ml-2 flex shrink-0 items-center gap-1">
-                  {isTauriEnv() && (
-                    <>
+              </span>
+              <span className="ml-auto flex items-center gap-1">
+                {(
+                  [
+                    ["name", tr("fs_sort_name", undefined, "Name")],
+                    ["size", tr("fs_sort_size", undefined, "Size")],
+                    ["mtime", tr("fs_sort_modified", undefined, "Modified")],
+                  ] as [SortKey, string][]
+                ).map(([k, label]) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setSort((cur) => nextSort(cur, k))}
+                    className={
+                      "rounded px-1.5 py-0.5 hover:bg-[var(--color-surface-3)] " +
+                      (sort.key === k
+                        ? "font-medium text-[var(--color-text)]"
+                        : "")
+                    }
+                    aria-pressed={sort.key === k}
+                  >
+                    {label}
+                    {sort.key === k ? (sort.desc ? " ↓" : " ↑") : ""}
+                  </button>
+                ))}
+              </span>
+            </div>
+          )}
+
+          <ul className="grid gap-1">
+            {sortedEntries.map((e) => {
+              const isDir = e.kind === "dir";
+              const Icon = isDir ? Folder : FileIcon;
+              const isRenaming = renaming === e.name;
+              const isSelected = selected.has(e.name);
+              return (
+                <li
+                  key={e.name}
+                  onDoubleClick={(ev) => {
+                    if ((ev.target as HTMLElement).closest("input,button"))
+                      return;
+                    openEntry(e);
+                  }}
+                  onContextMenu={(ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    setRowMenu({ x: ev.clientX, y: ev.clientY, entry: e });
+                  }}
+                  className={
+                    "list-row-contain-sm flex items-center gap-3 rounded-md border p-2 text-sm " +
+                    (isSelected
+                      ? "border-[var(--color-accent)] bg-[var(--color-surface-2)]"
+                      : "border-[var(--color-border)] bg-[var(--color-surface-2)]")
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleSelected(e.name)}
+                    className="h-3.5 w-3.5 shrink-0 rounded border-[var(--color-border)]"
+                  />
+                  <Icon
+                    size={16}
+                    className={
+                      isDir
+                        ? "shrink-0 text-[var(--color-accent)]"
+                        : "shrink-0 text-[var(--color-muted)]"
+                    }
+                  />
+                  {isRenaming ? (
+                    <input
+                      autoFocus
+                      value={renameDraft}
+                      onChange={(ev) => setRenameDraft(ev.target.value)}
+                      onKeyDown={(ev) => {
+                        if (ev.key === "Enter") runRename(e.name);
+                        if (ev.key === "Escape") setRenaming(null);
+                      }}
+                      onBlur={() => setRenaming(null)}
+                      className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-sm"
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isDir) setPath(joinPath(path, e.name));
+                      }}
+                      className={
+                        "flex-1 truncate text-left font-mono text-sm " +
+                        (isDir ? "hover:text-[var(--color-accent)]" : "")
+                      }
+                      disabled={!isDir}
+                    >
+                      {e.name}
+                    </button>
+                  )}
+                  <span className="shrink-0 text-xs text-[var(--color-muted)] tabular-nums">
+                    {isDir ? "—" : formatBytes(e.size)}
+                  </span>
+                  <div className="ml-2 flex shrink-0 items-center gap-1">
+                    {isTauriEnv() && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => runDownload(e)}
+                          disabled={downloadOp.active}
+                          title={tr(
+                            "fs_download_tooltip",
+                            undefined,
+                            "Save a copy of this entry to a folder on this computer",
+                          )}
+                          className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+                        >
+                          {downloadHere && downloadOp.rootName === e.name ? (
+                            <Spinner size={12} tone="accent" />
+                          ) : (
+                            <Download size={12} />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => runDownload(e, true)}
+                          disabled={downloadOp.active}
+                          title={tr(
+                            "fs_download_zip_tooltip",
+                            undefined,
+                            "Download to this computer as a .zip (streamed — no temp copy)",
+                          )}
+                          className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+                        >
+                          <FileArchive size={12} />
+                        </button>
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRenaming(e.name);
+                        setRenameDraft(e.name);
+                      }}
+                      title={tr("fs_rename", undefined, "Rename")}
+                      className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
+                    >
+                      <Pencil size={12} />
+                    </button>
+                    {!isDir && (
                       <button
                         type="button"
-                        onClick={() => runDownload(e)}
-                        disabled={downloadOp.active}
+                        onClick={() => replaceEntry(e)}
+                        disabled={busyEntry !== null}
+                        aria-label={tr("fs_replace", undefined, "Replace file")}
                         title={tr(
-                          "fs_download_tooltip",
+                          "fs_replace_tooltip",
                           undefined,
-                          "Save a copy of this entry to a folder on this computer",
+                          "Overwrite this file with one from your computer — how you patch a file inside a mounted game image",
                         )}
-                        className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+                        className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)] disabled:opacity-40"
                       >
-                        {downloadHere && downloadOp.rootName === e.name ? (
-                          <Spinner size={12} tone="accent" />
+                        <Upload size={12} />
+                      </button>
+                    )}
+                    {viewableEntry(e.name, isDir) && host && (
+                      <button
+                        type="button"
+                        onClick={() => viewEntry(e)}
+                        aria-label={tr("viewer_open", undefined, "View details")}
+                        title={tr("viewer_open", undefined, "View details")}
+                        className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
+                      >
+                        <ScanSearch size={12} />
+                      </button>
+                    )}
+                    {!isDir && e.size <= 256 * 1024 && (
+                      <button
+                        type="button"
+                        onClick={() => runPreview(e)}
+                        aria-label={tr("fs_preview", undefined, "Preview")}
+                        title={tr(
+                          "fs_preview_tooltip",
+                          undefined,
+                          "Preview small file inline (text or image)",
+                        )}
+                        className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
+                      >
+                        <Eye size={12} />
+                      </button>
+                    )}
+                    {!isDir && (
+                      <button
+                        type="button"
+                        onClick={() => runCrc32(e)}
+                        aria-label={tr("fs_crc32", undefined, "CRC32 checksum")}
+                        title={tr(
+                          "fs_crc32_tooltip",
+                          undefined,
+                          "Compute CRC32 of this file (cheap integrity check)",
+                        )}
+                        className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
+                      >
+                        <Hash size={12} />
+                      </button>
+                    )}
+                    {!isDir && (
+                      <button
+                        type="button"
+                        onClick={() => runVerify(e)}
+                        aria-label={tr("fs_verify", undefined, "Verify (BLAKE3)")}
+                        title={tr(
+                          "fs_verify_tooltip",
+                          undefined,
+                          "BLAKE3 + CRC32 verification (slower, crypto-strength)",
+                        )}
+                        className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
+                      >
+                        <BadgeCheck size={12} />
+                      </button>
+                    )}
+                    {!isDir && isInstallPackagePath(e.name) && (
+                      <button
+                        type="button"
+                        onClick={() => void runInstallPkg(e)}
+                        disabled={pkgInstalling}
+                        title={tr(
+                          "fs_install_pkg_tooltip",
+                          undefined,
+                          "Install this package on your PS5",
+                        )}
+                        className="rounded-md border border-[var(--color-accent)] p-1 text-[var(--color-accent)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+                      >
+                        {installingPkgName === e.name ? (
+                          <Spinner size={12} tone="inherit" />
                         ) : (
-                          <Download size={12} />
+                          <PackagePlus size={12} />
                         )}
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => runDownload(e, true)}
-                        disabled={downloadOp.active}
-                        title={tr(
-                          "fs_download_zip_tooltip",
-                          undefined,
-                          "Download to this computer as a .zip (streamed — no temp copy)",
-                        )}
-                        className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)] disabled:opacity-30"
-                      >
-                        <FileArchive size={12} />
-                      </button>
-                    </>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRenaming(e.name);
-                      setRenameDraft(e.name);
-                    }}
-                    title={tr("fs_rename", undefined, "Rename")}
-                    className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
-                  >
-                    <Pencil size={12} />
-                  </button>
-                  {!isDir && (
+                    )}
                     <button
                       type="button"
-                      onClick={() => replaceEntry(e)}
-                      disabled={busyEntry !== null}
-                      aria-label={tr("fs_replace", undefined, "Replace file")}
-                      title={tr(
-                        "fs_replace_tooltip",
-                        undefined,
-                        "Overwrite this file with one from your computer — how you patch a file inside a mounted game image",
-                      )}
-                      className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)] disabled:opacity-40"
+                      onClick={() => runDelete(e.name)}
+                      title={tr("library_delete", undefined, "Delete")}
+                      className="rounded-md border border-[var(--color-bad)] p-1 text-[var(--color-bad)] hover:bg-[var(--color-surface-3)]"
                     >
-                      <Upload size={12} />
+                      <Trash2 size={12} />
                     </button>
-                  )}
-                  {viewableEntry(e.name, isDir) && host && (
-                    <button
-                      type="button"
-                      onClick={() => viewEntry(e)}
-                      aria-label={tr("viewer_open", undefined, "View details")}
-                      title={tr("viewer_open", undefined, "View details")}
-                      className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
-                    >
-                      <ScanSearch size={12} />
-                    </button>
-                  )}
-                  {!isDir && e.size <= 256 * 1024 && (
-                    <button
-                      type="button"
-                      onClick={() => runPreview(e)}
-                      aria-label={tr("fs_preview", undefined, "Preview")}
-                      title={tr(
-                        "fs_preview_tooltip",
-                        undefined,
-                        "Preview small file inline (text or image)",
-                      )}
-                      className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
-                    >
-                      <Eye size={12} />
-                    </button>
-                  )}
-                  {!isDir && (
-                    <button
-                      type="button"
-                      onClick={() => runCrc32(e)}
-                      aria-label={tr("fs_crc32", undefined, "CRC32 checksum")}
-                      title={tr(
-                        "fs_crc32_tooltip",
-                        undefined,
-                        "Compute CRC32 of this file (cheap integrity check)",
-                      )}
-                      className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
-                    >
-                      <Hash size={12} />
-                    </button>
-                  )}
-                  {!isDir && (
-                    <button
-                      type="button"
-                      onClick={() => runVerify(e)}
-                      aria-label={tr("fs_verify", undefined, "Verify (BLAKE3)")}
-                      title={tr(
-                        "fs_verify_tooltip",
-                        undefined,
-                        "BLAKE3 + CRC32 verification (slower, crypto-strength)",
-                      )}
-                      className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
-                    >
-                      <BadgeCheck size={12} />
-                    </button>
-                  )}
-                  {!isDir && isInstallPackagePath(e.name) && (
-                    <button
-                      type="button"
-                      onClick={() => void runInstallPkg(e)}
-                      disabled={pkgInstalling}
-                      title={tr(
-                        "fs_install_pkg_tooltip",
-                        undefined,
-                        "Install this package on your PS5",
-                      )}
-                      className="rounded-md border border-[var(--color-accent)] p-1 text-[var(--color-accent)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
-                    >
-                      {installingPkgName === e.name ? (
-                        <Spinner size={12} tone="inherit" />
-                      ) : (
-                        <PackagePlus size={12} />
-                      )}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => runDelete(e.name)}
-                    title={tr("library_delete", undefined, "Delete")}
-                    className="rounded-md border border-[var(--color-bad)] p-1 text-[var(--color-bad)] hover:bg-[var(--color-surface-3)]"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
         {preview && (
           <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-4"

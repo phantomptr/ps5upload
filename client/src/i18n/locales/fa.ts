@@ -1180,7 +1180,7 @@ payloads_description_nanodns: "پیکربندی payload nanoDNS، تأیید ن�
 navigation_history: "مشاهده تاریخچه",
 navigation_back: "عقب",
 navigation_forward: "جلو",
-payloads_tab_send: "ارسال فایل",
+payloads_tab_send: "ارسال پی‌لود",
 payloads_download: "دانلود {version}",
 payloads_load_failed: "بارگذاری کاتالوگ ناموفق بود",
 payloads_inventory_failed: "خواندن کش payload محلی ناموفق بود",

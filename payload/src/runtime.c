@@ -39,6 +39,7 @@
 #include "register.h"
 #include "indicator.h"
 #include "hw_info.h"
+#include "hw_guard.h"
 #include "drive_sensors.h"
 #include "backup.h"
 #include "fs_jobs.h"
@@ -4160,24 +4161,25 @@ extern int sceSystemServicePowerTick(void);
  * a future Sony firmware change (removing more) doesn't repeat the
  * outage. The Control* power-state functions are dlsym'd for the same
  * reason in their own block. */
-typedef int (*sce_icc_u32_fn)(unsigned int *out);
-typedef int (*sce_icc_u16_fn)(unsigned short *out);
-typedef int (*sce_icc_u8_fn)(unsigned char *out);
-static sce_icc_u32_fn p_sceKernelIccGetPowerOperatingTime = NULL;
-static sce_icc_u32_fn p_sceKernelIccGetPowerNumberOfBootShutdown = NULL;
-static sce_icc_u16_fn p_sceKernelIccGetThermalAlert = NULL;
-static sce_icc_u8_fn  p_sceKernelIccGetPowerUpCause = NULL;
+/* Declared with an untyped out pointer: the real out widths are undocumented,
+ * so handle_power_telemetry hands each one an oversized buffer through
+ * hw_guard_call_out (#417) and reads back only the bytes it reports. */
+typedef int (*sce_icc_get_fn)(void *out);
+static sce_icc_get_fn p_sceKernelIccGetPowerOperatingTime = NULL;
+static sce_icc_get_fn p_sceKernelIccGetPowerNumberOfBootShutdown = NULL;
+static sce_icc_get_fn p_sceKernelIccGetThermalAlert = NULL;
+static sce_icc_get_fn p_sceKernelIccGetPowerUpCause = NULL;
 static int            sce_icc_get_resolve_attempted = 0;
 static void resolve_sce_icc_get(void) {
     if (sce_icc_get_resolve_attempted) return;
     sce_icc_get_resolve_attempted = 1;
-    p_sceKernelIccGetPowerOperatingTime = (sce_icc_u32_fn)
+    p_sceKernelIccGetPowerOperatingTime = (sce_icc_get_fn)
         dlsym(RTLD_DEFAULT, "sceKernelIccGetPowerOperatingTime");
-    p_sceKernelIccGetPowerNumberOfBootShutdown = (sce_icc_u32_fn)
+    p_sceKernelIccGetPowerNumberOfBootShutdown = (sce_icc_get_fn)
         dlsym(RTLD_DEFAULT, "sceKernelIccGetPowerNumberOfBootShutdown");
-    p_sceKernelIccGetThermalAlert = (sce_icc_u16_fn)
+    p_sceKernelIccGetThermalAlert = (sce_icc_get_fn)
         dlsym(RTLD_DEFAULT, "sceKernelIccGetThermalAlert");
-    p_sceKernelIccGetPowerUpCause = (sce_icc_u8_fn)
+    p_sceKernelIccGetPowerUpCause = (sce_icc_get_fn)
         dlsym(RTLD_DEFAULT, "sceKernelIccGetPowerUpCause");
 }
 /* User service — libSceUserService. Initialise/Terminate are
@@ -4581,15 +4583,29 @@ static int handle_power_telemetry(runtime_state_t *state) {
     unsigned int boot_cycles = 0;
     unsigned short thermal_flags = 0;
     unsigned char power_up_cause = 0;
+    /* One oversized, zeroed buffer per getter, each call under the hw guard
+     * (#417): FW 13.60 crashed this frame with SIGSEGV, consistent with a
+     * getter writing past the 1-4 bytes we used to hand it. The values are
+     * little-endian, so the low bytes are the value whatever its real width. */
+    _Alignas(16) unsigned char out[4][256];
+    memset(out, 0, sizeof out);
     resolve_sce_icc_get();
     int rc_op   = p_sceKernelIccGetPowerOperatingTime
-                    ? p_sceKernelIccGetPowerOperatingTime(&op_secs) : -1;
+                    ? hw_guard_call_out("sceKernelIccGetPowerOperatingTime",
+                                        p_sceKernelIccGetPowerOperatingTime, out[0]) : -1;
     int rc_boot = p_sceKernelIccGetPowerNumberOfBootShutdown
-                    ? p_sceKernelIccGetPowerNumberOfBootShutdown(&boot_cycles) : -1;
+                    ? hw_guard_call_out("sceKernelIccGetPowerNumberOfBootShutdown",
+                                        p_sceKernelIccGetPowerNumberOfBootShutdown, out[1]) : -1;
     int rc_therm = p_sceKernelIccGetThermalAlert
-                    ? p_sceKernelIccGetThermalAlert(&thermal_flags) : -1;
+                    ? hw_guard_call_out("sceKernelIccGetThermalAlert",
+                                        p_sceKernelIccGetThermalAlert, out[2]) : -1;
     int rc_pwc  = p_sceKernelIccGetPowerUpCause
-                    ? p_sceKernelIccGetPowerUpCause(&power_up_cause) : -1;
+                    ? hw_guard_call_out("sceKernelIccGetPowerUpCause",
+                                        p_sceKernelIccGetPowerUpCause, out[3]) : -1;
+    memcpy(&op_secs, out[0], sizeof op_secs);
+    memcpy(&boot_cycles, out[1], sizeof boot_cycles);
+    memcpy(&thermal_flags, out[2], sizeof thermal_flags);
+    memcpy(&power_up_cause, out[3], sizeof power_up_cause);
     if (rc_op == 0) {
         int w = snprintf(body + n, sizeof(body) > (size_t)n ? sizeof(body) - n : 0,
                          "operating_seconds=%u\n", op_secs);

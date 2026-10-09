@@ -4,6 +4,26 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.5.2
+
+**The helper no longer crashes on the Hardware screen, and a crash no longer locks it out until
+you restart the PS5.**
+
+### Fixed
+
+- **Helper crash on FW 13.60 (#417).** Opening Hardware could crash the helper ("signal 11 while
+  serving frame 88"). The console health readout now reads its values safely, and a reading the
+  firmware doesn't support shows as unavailable instead of taking the helper down.
+- **After a crash the helper can be sent again right away.** A crashed helper used to keep its
+  port, so the next one failed with "ports still held" until the PS5 was restarted. It now exits
+  cleanly and frees the port.
+
+### New
+
+- **Files: New folder in the right-click menu.** Right-click a file or folder, or the empty space
+  in the list, to create a folder there. The empty-space menu also has Paste here and Refresh.
+- **Payloads: "Send file" is now "Send payload".**
+
 ## 6.5.1
 
 **Send games from the Collection in one click, and stop an install you no longer want.**

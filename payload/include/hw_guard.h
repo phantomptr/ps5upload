@@ -33,4 +33,15 @@
  */
 int hw_guard_try_recover(int sig);
 
+/*
+ * Run a Sony getter of shape `int fn(void *out)` under the guard. `out` must
+ * be zeroed by the caller and sized well beyond what the value needs: the
+ * real out-parameter widths of the ICC getters are undocumented, and a getter
+ * that writes more than we declared smashes the caller's stack, which faults
+ * only later, outside any guard (#417: "signal 11 while serving frame 88").
+ * Returns the getter's rc, or -1 if it faulted. `label` names the getter in
+ * the breadcrumb.
+ */
+int hw_guard_call_out(const char *label, int (*fn)(void *), void *out);
+
 #endif /* HW_GUARD_H */

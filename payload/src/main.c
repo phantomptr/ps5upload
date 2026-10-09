@@ -202,9 +202,12 @@ static void handle_fatal(int sig) {
          * an external kill for what was actually our own crash. */
         unlink(g_state->ownership_path);
     }
-    /* Re-raise so the default handler runs (core dump, proper exit code). */
-    signal(sig, SIG_DFL);
-    raise(sig);
+    /* Exit, don't re-raise. Re-raising with SIG_DFL hands the process to the
+     * console's core dump, and on FW 13.60 that left it wedged for good (#417,
+     * reproduced on a CFI-7019): ~125 MB resident, SIGKILL ignored, AVA1 port 9120
+     * still accepting and resetting, so no new helper could take over until a
+     * reboot. _exit is async-signal-safe and closes our sockets now. */
+    _exit(128 + sig);
 }
 
 /* Full ucred jailbreak — Sony's caller-context check rejects

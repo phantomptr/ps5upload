@@ -93,6 +93,23 @@ int hw_guard_try_recover(int sig) {
         }                                                                  \
     } while (0)
 
+int hw_guard_call_out(const char *label, int (*fn)(void *), void *out) {
+    volatile int rc = -1;
+    fprintf(stderr, "[hw_info] -> %s\n", label);
+    fflush(stderr);
+    g_hwg_call = label;
+    g_hwg_call_len = strlen(label);
+    if (sigsetjmp(g_hwg_jmp, 1) == 0) {
+        g_hwg_armed = 1;
+        rc = fn(out);
+        g_hwg_armed = 0;
+    } else {
+        g_hwg_armed = 0;
+        rc = -1;
+    }
+    return rc;
+}
+
 /* ── Fan control (/dev/icc_fan) ──────────────────────────────────
  *
  * The /dev/icc_fan ioctl 0xC01C8F07 is the canonical fan-threshold

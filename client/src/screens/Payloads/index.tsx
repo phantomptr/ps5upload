@@ -47,7 +47,7 @@ export default function PayloadsScreen() {
       id: "send",
       icon: Rocket,
       key: "payloads_tab_send",
-      fallback: "Send file",
+      fallback: "Send payload",
       description: tr(
         "payloads_description_send",
         undefined,

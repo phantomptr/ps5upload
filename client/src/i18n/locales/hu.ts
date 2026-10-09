@@ -313,7 +313,7 @@ connection_step1_hint: "Ezt a PS5 hálózati beállításai között, vagy a rou
 connection_step2_hint: "A PS5Upload segédprogram egy kis program, amit a PS5-öd memóriában futtat a feltöltések fogadásához. A(z) {port} porton keresztül küldve; a PS5-nek pár másodpercbe telik, mire válaszol, miután a bájtok megérkeztek.",
 connection_step2_busy_hint: "A PS5 jellemzően 3-5 másodperc alatt elindítja a segédprogramot. Akár 20 másodpercig is folyamatosan lekérdezzük, mielőtt feladnánk — ha időtúllépés lesz, küldd el újra.",
 connection_step3_ready: "A PS5 készen áll",
-connection_step3_hint: "Menj a Feltöltés fülre, és ejts rá egy játékmappát, egy .exfat képet, vagy egy .ffpkg képet. Lemezképekhez nyomd meg a Csatolást a Könyvtár fülön. A PS5 kezdőképernyőjén telepített appok regisztrálásához használj PS5-oldali telepítőt (küldd el a Payloadok → Fájl küldése fülről).",
+connection_step3_hint: "Menj a Feltöltés fülre, és ejts rá egy játékmappát, egy .exfat képet, vagy egy .ffpkg képet. Lemezképekhez nyomd meg a Csatolást a Könyvtár fülön. A PS5 kezdőképernyőjén telepített appok regisztrálásához használj PS5-oldali telepítőt (küldd el a Payloadok → Payload küldése fülről).",
 connection_go_upload: "Ugrás a Feltöltéshez",
 
 // Hardver képernyő — szenzorsorok címkéi és tippek
@@ -1129,7 +1129,7 @@ payloads_description_nanodns: "A nanoDNS payload konfigurálása, futó verziój
 navigation_history: "Előzmények megtekintése",
 navigation_back: "Vissza",
 navigation_forward: "Előre",
-payloads_tab_send: "Fájl küldése",
+payloads_tab_send: "Payload küldése",
 payloads_download: "Letöltés: {version}",
 payloads_load_failed: "Nem sikerült betölteni a katalógust",
 payloads_inventory_failed: "Nem sikerült beolvasni a helyi payload gyorsítótárat",

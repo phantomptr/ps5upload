@@ -83,7 +83,7 @@ function useCommands(close: () => void): Command[] {
         "shadowmount",
         "etahen",
       ]),
-      nav("/payloads?tab=send", "payloads_tab_send", "Send file", [
+      nav("/payloads?tab=send", "payloads_tab_send", "Send payload", [
         "send payload",
       ]),
       nav("/tasks", "transfer_log_title", "Transfer Log"),
