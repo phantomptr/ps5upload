@@ -59,8 +59,7 @@ fn c_manifest_refuses_escaping_paths() {
 
 #[test]
 fn c_and_rust_walk_a_tree_identically() {
-    let d = std::env::temp_dir().join(format!("ava1-cwalk-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
+    let d = TempDir::new(format!("ava1-cwalk-{}", std::process::id()));
     for p in ["a/b/c", "a2", "a/b2", "z"] {
         std::fs::create_dir_all(d.join(p)).unwrap();
     }
@@ -73,7 +72,7 @@ fn c_and_rust_walk_a_tree_identically() {
     ] {
         std::fs::write(d.join(p), vec![1u8; n]).unwrap();
     }
-    let m = walk(&LocalSource::new(d.clone()), &|_: &str| false).unwrap();
+    let m = walk(&LocalSource::new(d.to_path_buf()), &|_: &str| false).unwrap();
     let (rc, hash, n) = c_mstore_walk(&d);
     assert_eq!(rc, 0);
     assert_eq!((hash, n), (m.hash(), m.entries.len() as u32));
@@ -83,14 +82,13 @@ fn c_and_rust_walk_a_tree_identically() {
 #[test]
 fn c_follow_and_rust_agree_on_a_tree_with_a_directory_symlink() {
     use std::os::unix::fs::symlink;
-    let d = std::env::temp_dir().join(format!("ava1-cwalk-sym-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
+    let d = TempDir::new(format!("ava1-cwalk-sym-{}", std::process::id()));
     std::fs::create_dir_all(d.join("a2")).unwrap();
     std::fs::write(d.join("a2/f"), b"abc").unwrap();
     std::fs::write(d.join("top"), b"x").unwrap();
     symlink(d.join("a2"), d.join("a")).unwrap();
     // Rust follows the link: a (dir), a/f, a2, a2/f, top.
-    let m = walk(&LocalSource::new(d.clone()), &|_: &str| false).unwrap();
+    let m = walk(&LocalSource::new(d.to_path_buf()), &|_: &str| false).unwrap();
     assert_eq!(m.entries.len(), 5);
     // AVA1_WALK_FOLLOW (the download sender's mode) is the parity contract.
     let (rc, hash, n) = c_mstore_walk_ex(&d, 1);
@@ -105,12 +103,11 @@ fn c_follow_and_rust_agree_on_a_tree_with_a_directory_symlink() {
 #[test]
 fn a_dangling_symlink_fails_both_c_modes_and_rust() {
     use std::os::unix::fs::symlink;
-    let d = std::env::temp_dir().join(format!("ava1-cwalk-dangle-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
+    let d = TempDir::new(format!("ava1-cwalk-dangle-{}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
     symlink(d.join("gone"), d.join("dead")).unwrap();
     // Rust's walk fails on a dangling link; the C walk must too, in both modes (C1).
-    assert!(walk(&LocalSource::new(d.clone()), &|_: &str| false).is_err());
+    assert!(walk(&LocalSource::new(d.to_path_buf()), &|_: &str| false).is_err());
     let (rc, ..) = c_mstore_walk(&d);
     assert_ne!(
         rc, 0,
@@ -127,11 +124,10 @@ fn a_dangling_symlink_fails_both_c_modes_and_rust() {
 #[test]
 fn a_symlink_cycle_fails_the_c_follow_walk_and_rust() {
     use std::os::unix::fs::symlink;
-    let d = std::env::temp_dir().join(format!("ava1-cwalk-cycle-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
+    let d = TempDir::new(format!("ava1-cwalk-cycle-{}", std::process::id()));
     std::fs::create_dir_all(d.join("sub")).unwrap();
     symlink(&d, d.join("sub/loop")).unwrap();
-    assert!(walk(&LocalSource::new(d.clone()), &|_: &str| false).is_err());
+    assert!(walk(&LocalSource::new(d.to_path_buf()), &|_: &str| false).is_err());
     // ELOOP or a path-length error — an error, never a spin (C1).
     let (rc, ..) = c_mstore_walk_ex(&d, 1);
     assert_ne!(rc, 0, "a cycle must end the follow walk, never spin");

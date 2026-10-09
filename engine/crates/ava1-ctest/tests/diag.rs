@@ -40,11 +40,8 @@ fn fast() -> Timing {
     }
 }
 
-fn dir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ava1-diag-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn dir(tag: &str) -> TempDir {
+    TempDir::new(format!("ava1-diag-{tag}-{}", std::process::id()))
 }
 
 /// The stub's log: lines of 49 bytes, numbered, `n` bytes in all (test_shim.c `numbered_log`).
@@ -65,6 +62,8 @@ struct Rig {
     me: Arc<Identity>,
     mine: Arc<Mutex<PeerStore>>,
     ava: PathBuf,
+    // The scratch dir: declared after the server so the server stops before it goes away.
+    _d: TempDir,
     // Declared last so it drops last: the server stops before the next test may start one.
     _one_at_a_time: std::sync::MutexGuard<'static, ()>,
 }
@@ -97,6 +96,7 @@ fn start(tag: &str) -> Rig {
         me,
         mine: Arc::new(Mutex::new(mine)),
         ava,
+        _d: d,
         _one_at_a_time: one_at_a_time,
     }
 }
@@ -616,7 +616,7 @@ async fn a_bug_report_bundle_collects_logs_probes_and_job_events_from_the_c_serv
 
     let routed = Arc::new(Routed {
         ava: transport(&r),
-        root: console.clone(),
+        root: console.to_path_buf(),
     });
     let bundle: Vec<(String, String)> = tokio::task::block_in_place(|| {
         let _g = cmgmt::scoped_transport(routed.clone());

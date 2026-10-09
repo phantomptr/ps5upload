@@ -15,7 +15,7 @@ use ava1::manifest::{Entry, Manifest};
 use ava1::router::{Inbound, JobLink};
 use ava1::session::{connect, Session};
 use ava1::wire::{FrameMessage, Message};
-use ava1_ctest::CServer;
+use ava1_ctest::{CServer, TempDir};
 use common::*;
 
 async fn next_control(link: &mut JobLink) -> Frame {
@@ -107,7 +107,7 @@ type Ids = (
     std::sync::Arc<std::sync::Mutex<ava1::peers::PeerStore>>,
 );
 
-fn server(tag: &str, delay_us: u32) -> (CServer, std::path::PathBuf, Ids) {
+fn server(tag: &str, delay_us: u32) -> (CServer, TempDir, Ids) {
     let d = dir(tag);
     let ids = paired_client(&d.join("peers"));
     let srv = CServer::start_data(

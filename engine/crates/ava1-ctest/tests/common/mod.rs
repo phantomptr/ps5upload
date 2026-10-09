@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -9,6 +9,7 @@ use ava1::peers::PeerStore;
 use ava1::send::{send_job, SendError, SendOptions, SendReport};
 use ava1::session::{connect, Timing};
 use ava1::source::{LocalSource, Source};
+use ava1_ctest::TempDir;
 
 pub const SECRET: [u8; 32] = [0x42; 32];
 
@@ -31,11 +32,8 @@ pub fn calm() -> Timing {
     }
 }
 
-pub fn dir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ava1-c-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+pub fn dir(tag: &str) -> TempDir {
+    TempDir::new(format!("ava1-c-{tag}-{}", std::process::id()))
 }
 
 /// A client the C server already knows, and that knows the C server.

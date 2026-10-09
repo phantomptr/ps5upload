@@ -2,13 +2,9 @@
 use ava1::gen::{FileRange, FileRun, JnlBatch, JnlOpen, RootItem};
 use ava1::journal::{Journal, Record, State};
 use ava1_ctest::*;
-use std::path::PathBuf;
 
-fn tmp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ava1-cjnl-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn tmp(tag: &str) -> TempDir {
+    TempDir::new(format!("ava1-cjnl-{tag}-{}", std::process::id()))
 }
 
 /// The exact text `ava1_test_journal_dump` produces for the same state.

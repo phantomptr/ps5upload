@@ -3,6 +3,7 @@
 //! files from the C sender through `LocalSink` with the pack log on — the journal records pack batches and
 //! sweeps, the job ends settled with no pack file left, and the per-file path (log off) still works.
 mod common;
+use ava1_ctest::TempDir;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -27,11 +28,7 @@ fn ro(jobs: &std::path::Path) -> RecvOptions {
     }
 }
 
-async fn run(
-    tag: &str,
-    id: u8,
-    log: bool,
-) -> (std::path::PathBuf, std::path::PathBuf, Vec<Record>) {
+async fn run(tag: &str, id: u8, log: bool) -> (TempDir, std::path::PathBuf, Vec<Record>) {
     ava1_ctest::c_set_read_allowed(true);
     let d = dir(tag);
     let src = d.join("console/game");

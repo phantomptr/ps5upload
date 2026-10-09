@@ -8,7 +8,7 @@ use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 
 // Links against ava1c (build.rs), which compiles payload/src/state_migrate.c.
-use ava1_ctest as _;
+use ava1_ctest::TempDir;
 
 extern "C" {
     fn payload_remove_retired_dirs(root: *const c_char) -> c_int;
@@ -44,11 +44,8 @@ fn sources() -> Vec<(PathBuf, String)> {
     out
 }
 
-fn tmp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ava1-cutover-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn tmp(tag: &str) -> TempDir {
+    TempDir::new(format!("ava1-cutover-{tag}-{}", std::process::id()))
 }
 
 #[test]

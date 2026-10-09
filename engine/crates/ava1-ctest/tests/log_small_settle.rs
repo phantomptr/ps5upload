@@ -2,6 +2,7 @@
 //! The sender's wait for a console to settle (review dbl): it can be cancelled, it fails when the console reports
 //! it cannot make files durable, and on timeout it does not report a clean success.
 mod common;
+use ava1_ctest::TempDir;
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -21,6 +22,7 @@ async fn send_once(
     Result<SendReport, SendError>,
     Arc<Progress>,
     std::path::PathBuf,
+    TempDir,
 ) {
     let d = dir(tag);
     let src = d.join("src");
@@ -57,13 +59,13 @@ async fn send_once(
     .await
     .expect("send_job did not finish");
     sweep_failures(0);
-    (r, pg, root)
+    (r, pg, root, d)
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_console_that_cannot_settle_fails_the_upload_with_its_reason() {
     let t = Instant::now();
-    let (r, _pg, _root) = send_once("settle-fail", 0x81, |_| {}).await;
+    let (r, _pg, _root, _d) = send_once("settle-fail", 0x81, |_| {}).await;
     match r {
         Err(SendError::Refused { status, message }) => {
             assert_eq!(status, ava1::gen::ERR_IO, "{message}");
@@ -81,7 +83,7 @@ async fn a_console_that_cannot_settle_fails_the_upload_with_its_reason() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_settle_wait_that_times_out_is_a_warning_not_a_clean_success() {
     // the console reports its failure only after ~3 s of retries; the sender stops waiting at 700 ms
-    let (r, pg, root) = send_once("settle-timeout", 0x82, |o| {
+    let (r, pg, root, _d) = send_once("settle-timeout", 0x82, |o| {
         o.settle_max = Some(Duration::from_millis(700))
     })
     .await;
@@ -95,7 +97,7 @@ async fn a_settle_wait_that_times_out_is_a_warning_not_a_clean_success() {
 #[tokio::test(flavor = "multi_thread")]
 async fn cancelling_ends_the_settle_wait_at_once_with_a_warning() {
     let t = Instant::now();
-    let (r, _pg, _root) = send_once("settle-cancel", 0x83, |o| {
+    let (r, _pg, _root, _d) = send_once("settle-cancel", 0x83, |o| {
         let c = o.cancel.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(500)).await;

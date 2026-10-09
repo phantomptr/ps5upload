@@ -1,7 +1,6 @@
 //! perf-apply (review 003 §2.1, §3.3, §6): the receive/apply path's latency fixes, each proved
 //! through the C engine's test hooks rather than by timing.
 #![cfg(unix)]
-use std::path::PathBuf;
 
 use ava1::gen::{self, ENTRY_DIR, ENTRY_FILE};
 use ava1::journal::{job_dir, Journal, Record};
@@ -9,11 +8,8 @@ use ava1::manifest::{Entry, Manifest};
 use ava1::verify::GROUP;
 use ava1_ctest::*;
 
-fn tmp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ava1-perf-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn tmp(tag: &str) -> TempDir {
+    TempDir::new(format!("ava1-perf-{tag}-{}", std::process::id()))
 }
 
 fn file(path: &str, size: u64) -> Entry {
@@ -387,7 +383,7 @@ fn a_fast_drive_keeps_the_batch_fsync() {
 
 // ---- fix round (review perf-apply) ----
 
-fn six_large(tag: &str) -> (PathBuf, Vec<Vec<u8>>, Manifest) {
+fn six_large(tag: &str) -> (TempDir, Vec<Vec<u8>>, Manifest) {
     let t = tmp(tag);
     std::fs::create_dir_all(t.join("dest")).unwrap();
     let files: Vec<Vec<u8>> = (0..6)

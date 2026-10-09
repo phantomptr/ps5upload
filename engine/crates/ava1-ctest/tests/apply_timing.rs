@@ -21,8 +21,7 @@ fn manifest() -> Manifest {
 }
 
 fn run_one(tag: &str) -> (bool, String) {
-    let t = std::env::temp_dir().join(format!("ava1-timing-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&t);
+    let t = TempDir::new(format!("ava1-timing-{tag}-{}", std::process::id()));
     let root = t.join("dest");
     std::fs::create_dir_all(&root).unwrap();
     let job = CApplyJob::begin(&t.join("jobs"), &root, 0, &manifest(), 0);

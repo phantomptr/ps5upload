@@ -1626,6 +1626,7 @@ impl CApplyJob {
         std::fs::create_dir_all(&dir).unwrap();
         ava1::journal::write_manifest(&dir, m).unwrap();
         let blob = std::fs::read(dir.join("manifest")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
         let (j, r) = (
             CString::new(jobs.to_str().unwrap()).unwrap(),
             CString::new(root.to_str().unwrap()).unwrap(),
@@ -2413,5 +2414,57 @@ pub mod rp_pair {
                 .to_string_lossy()
                 .into_owned()
         }
+    }
+}
+
+/// A scratch directory under the system temp dir that removes itself when dropped, so a
+/// test run leaves nothing behind in `$TMPDIR` whether it passed, failed or panicked.
+/// Any previous directory of the same name is removed first (a stale run of this pid).
+/// Set `AVA1_KEEP_TMP=1` to keep the directories for a post-mortem.
+pub struct TempDir(std::path::PathBuf);
+
+impl TempDir {
+    pub fn new(name: impl AsRef<str>) -> TempDir {
+        let d = std::env::temp_dir().join(name.as_ref());
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        TempDir(d)
+    }
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+    /// Gives up ownership: the directory is NOT removed on drop.
+    pub fn keep(self) -> std::path::PathBuf {
+        let p = self.0.clone();
+        std::mem::forget(self);
+        p
+    }
+}
+
+impl std::ops::Deref for TempDir {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for TempDir {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for TempDir {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        if std::env::var_os("AVA1_KEEP_TMP").is_some() {
+            return;
+        }
+        let _ = std::fs::remove_dir_all(&self.0);
     }
 }

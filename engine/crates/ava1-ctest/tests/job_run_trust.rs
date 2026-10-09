@@ -92,7 +92,7 @@ async fn finished(s: &Session, job: [u8; 16]) -> Status {
 struct Rig {
     srv: CServer,
     me: Session,
-    d: std::path::PathBuf,
+    d: TempDir,
 }
 
 async fn rig(tag: &str) -> Rig {

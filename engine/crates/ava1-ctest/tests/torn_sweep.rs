@@ -2,18 +2,15 @@
 //! pack log are cut at EVERY byte length (and the last record flipped at every offset), and the
 //! C replay and the C `ava1_pack_recover` must do what the Rust receivers do.
 #![cfg(unix)]
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use ava1::gen::{self, FileRange, FileRun, JnlBatch, JnlOpen, RootItem, ENTRY_DIR, ENTRY_FILE};
 use ava1::journal::{job_dir, Journal, Record, State};
 use ava1::manifest::{Entry, Manifest};
 use ava1_ctest::*;
 
-fn tmp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ava1-torn-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn tmp(tag: &str) -> TempDir {
+    TempDir::new(format!("ava1-torn-{tag}-{}", std::process::id()))
 }
 
 fn c_style_dump(st: &State) -> String {

@@ -67,11 +67,8 @@ fn nas(with_mtime: bool) -> Nas {
     Nas { files, with_mtime }
 }
 
-fn tmp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ava1-nas-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn tmp(tag: &str) -> TempDir {
+    TempDir::new(format!("ava1-nas-{tag}-{}", std::process::id()))
 }
 
 fn manifest_of(with_mtime: bool) -> (Arc<FsSource>, manifest::Manifest, SendOptions) {

@@ -1,5 +1,4 @@
 #![cfg(unix)]
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -67,11 +66,8 @@ fn is_pairing_closed<T>(r: &Result<T, Ava1Error>) -> bool {
     matches!(r, Err(Ava1Error::Refused { code, .. }) if *code == gen::ERR_PAIRING_CLOSED)
 }
 
-fn dir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ava1-c-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn dir(tag: &str) -> TempDir {
+    TempDir::new(format!("ava1-c-{tag}-{}", std::process::id()))
 }
 
 /// A client the C server already knows, and that knows the C server.

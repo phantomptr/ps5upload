@@ -9,11 +9,8 @@ use ava1::journal::{job_dir, Journal, Record, State};
 use ava1::manifest::{Entry, Manifest};
 use ava1_ctest::*;
 
-fn tmp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ava1-logfail-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn tmp(tag: &str) -> TempDir {
+    TempDir::new(format!("ava1-logfail-{tag}-{}", std::process::id()))
 }
 
 fn small(n: usize, extra_unsent: bool) -> Manifest {
@@ -651,7 +648,7 @@ fn crash_then<F: Fn(&Path)>(
     staged: bool,
     n: usize,
     damage: F,
-) -> (CRecv, PathBuf, Manifest) {
+) -> (CRecv, TempDir, Manifest) {
     let t = tmp(tag);
     if !staged {
         std::fs::create_dir_all(t.join("dest")).unwrap();

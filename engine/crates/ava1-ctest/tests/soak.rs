@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use ava1::keys::Identity;
 use ava1::peers::PeerStore;
 use ava1_chaos::{ChaosConfig, ChaosProxy};
+use ava1_ctest::TempDir;
 use ava1_ctest::{c_job_count, c_reap_far, c_set_read_allowed, c_unswept_global, CServer, LogOpts};
 use common::{dir, same_tree, write_tree, SECRET};
 use ps5upload_ava1::download::{to_zip_in, Counters};
@@ -82,13 +83,14 @@ fn pack_files(jobs: &Path) -> usize {
 }
 
 struct Env {
-    t: PathBuf,
     ava: PathBuf,
     src: PathBuf,
     jobs: PathBuf,
     srv: CServer,
     proxy: ChaosProxy,
     total: u64,
+    // last: the scratch dir outlives the server and proxy that use it
+    t: TempDir,
 }
 
 impl Env {

@@ -36,6 +36,7 @@ fn fast() -> Timing {
 /// shared C_SERVER lock in `CServer::start`, so this file is safe beside every other ctest suite.
 struct Rig {
     _srv: CServer,
+    _dir: TempDir,
     _lock: MutexGuard<'static, ()>,
 }
 
@@ -47,9 +48,7 @@ fn rig_lock() -> MutexGuard<'static, ()> {
 async fn rig(tag: &str) -> (Rig, Session) {
     let lock = rig_lock();
     assert_eq!(t7::install(), 0);
-    let d = std::env::temp_dir().join(format!("ava1-t7-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
+    let d = TempDir::new(format!("ava1-t7-{tag}-{}", std::process::id()));
     let me = Arc::new(Identity::generate().unwrap());
     PeerStore::load(&d.join("peers"))
         .unwrap()
@@ -71,6 +70,7 @@ async fn rig(tag: &str) -> (Rig, Session) {
     (
         Rig {
             _srv: srv,
+            _dir: d,
             _lock: lock,
         },
         s,

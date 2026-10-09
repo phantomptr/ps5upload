@@ -32,6 +32,7 @@ struct Rig {
     _srv: CServer,
     s: Session,
     root: PathBuf,
+    _base: TempDir,
 }
 
 fn fast() -> Timing {
@@ -47,8 +48,7 @@ fn fast() -> Timing {
 #[allow(clippy::await_holding_lock)]
 async fn rig(tag: &str) -> Rig {
     let one = one();
-    let base = std::env::temp_dir().join(format!("ava1-mfs-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&base);
+    let base = TempDir::new(format!("ava1-mfs-{tag}-{}", std::process::id()));
     let root = base.join("root");
     std::fs::create_dir_all(&root).unwrap();
     // The policy compares against the path as the C code sees it: the canonical one.
@@ -78,6 +78,7 @@ async fn rig(tag: &str) -> Rig {
         _srv: srv,
         s,
         root,
+        _base: base,
     }
 }
 
@@ -864,13 +865,13 @@ mod transport {
         pub transport: Arc<AvaTransport>,
         pub console: String,
         pub root: PathBuf,
+        _base: TempDir,
     }
 
     /// `install`: the server's management table is installed (CAP_MGMT is advertised).
     pub fn rig(tag: &str, install: bool) -> T {
         let one = one();
-        let base = std::env::temp_dir().join(format!("ava1-mfst-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
+        let base = TempDir::new(format!("ava1-mfst-{tag}-{}", std::process::id()));
         let root = base.join("root");
         std::fs::create_dir_all(&root).unwrap();
         let root = root.canonicalize().unwrap();
@@ -902,6 +903,7 @@ mod transport {
             transport,
             console: "c-console:9120".into(),
             root,
+            _base: base,
         }
     }
 
@@ -1560,10 +1562,9 @@ fn s2_lint_recursive_entry_points_use_the_shared_refusal() {
 #[test]
 fn s2_tree_op_refusal_covers_ancestors_and_the_store() {
     let _g = one();
-    let base = std::env::temp_dir().join(format!("ava1-s2-tree-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&base);
-    std::fs::create_dir_all(base.join("d/ava")).unwrap();
-    let base = base.canonicalize().unwrap();
+    let tmp = TempDir::new(format!("ava1-s2-tree-{}", std::process::id()));
+    std::fs::create_dir_all(tmp.join("d/ava")).unwrap();
+    let base = tmp.canonicalize().unwrap();
     assert_eq!(mgmt_fs::install(&base), 0);
     let p = |s: &str| format!("{}/{s}", base.display());
     for refused in ["d/ava", "d/ava/peers", "d", "", "d/ava/new/deeper"] {
@@ -1582,7 +1583,8 @@ fn s2_tree_op_refusal_covers_ancestors_and_the_store() {
 #[test]
 fn s2_ftp_selftest_passes() {
     let payload = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../payload");
-    let exe = std::env::temp_dir().join(format!("ava1-ftp-s2-{}", std::process::id()));
+    let tmp = TempDir::new(format!("ava1-ftp-s2-{}", std::process::id()));
+    let exe = tmp.join("selftest");
     let cc = std::process::Command::new("cc")
         .args(["-O2", "-Wall", "-Wextra", "-Werror", "-pthread", "-I"])
         .arg(payload.join("include"))
@@ -1611,10 +1613,9 @@ fn s2_ftp_selftest_passes() {
 #[test]
 fn s2_a_dotdot_path_fails_closed() {
     let _g = one();
-    let base = std::env::temp_dir().join(format!("ava1-s2-dotdot-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&base);
-    std::fs::create_dir_all(base.join("d/ava")).unwrap();
-    let base = base.canonicalize().unwrap();
+    let tmp = TempDir::new(format!("ava1-s2-dotdot-{}", std::process::id()));
+    std::fs::create_dir_all(tmp.join("d/ava")).unwrap();
+    let base = tmp.canonicalize().unwrap();
     assert_eq!(mgmt_fs::install(&base), 0);
     for p in [
         format!("{}/elsewhere/../d/ava/peers", base.display()),

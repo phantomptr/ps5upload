@@ -25,11 +25,8 @@ fn fast() -> Timing {
     }
 }
 
-fn dir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ava1-mgmt-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn dir(tag: &str) -> TempDir {
+    TempDir::new(format!("ava1-mgmt-{tag}-{}", std::process::id()))
 }
 
 /// A started C server with the stub table installed and a paired client.
@@ -37,6 +34,7 @@ fn dir(tag: &str) -> PathBuf {
 /// time (the lock is held for the rig's life; the server drops first).
 struct Rig {
     _srv: CServer,
+    _dir: TempDir,
     _lock: std::sync::MutexGuard<'static, ()>,
 }
 
@@ -81,6 +79,7 @@ async fn rig_with(tag: &str, install: bool) -> (Rig, Session) {
     (
         Rig {
             _srv: srv,
+            _dir: d,
             _lock: lock,
         },
         s,

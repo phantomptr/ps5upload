@@ -5,6 +5,7 @@
 //! strategy makes it.
 #![cfg(unix)]
 mod common;
+use ava1_ctest::TempDir;
 
 use std::collections::BTreeMap;
 use std::io::Cursor;
@@ -27,7 +28,7 @@ const MTIME: u64 = 1_650_000_000;
 struct Rig {
     pool: Pool,
     srv: CServer,
-    t: PathBuf,
+    t: TempDir,
 }
 
 fn rig(tag: &str) -> Rig {

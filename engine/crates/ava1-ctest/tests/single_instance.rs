@@ -100,11 +100,8 @@ fn an_old_format_record_without_a_start_time_is_incomplete() {
     assert_eq!((r.pid, r.started), (250, 0));
 }
 
-fn tmp(tag: &str) -> std::path::PathBuf {
-    let d = std::env::temp_dir().join(format!("ava1-t10-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn tmp(tag: &str) -> TempDir {
+    TempDir::new(format!("ava1-t10-{tag}-{}", std::process::id()))
 }
 
 fn read_path(p: &std::path::Path, retry_ms: c_int) -> (bool, Rec) {

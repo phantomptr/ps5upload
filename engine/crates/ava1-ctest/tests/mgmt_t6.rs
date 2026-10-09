@@ -46,14 +46,11 @@ fn fast() -> Timing {
     }
 }
 
-fn dir(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ava1-t6-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn dir(tag: &str) -> TempDir {
+    TempDir::new(format!("ava1-t6-{tag}-{}", std::process::id()))
 }
 
-async fn rig(tag: &str) -> (CServer, Session) {
+async fn rig(tag: &str) -> (CServer, Session, TempDir) {
     assert_eq!(unsafe { ava1_t6_install() }, 0);
     unsafe {
         ava1_t6_set_sony(1, 30);
@@ -79,7 +76,7 @@ async fn rig(tag: &str) -> (CServer, Session) {
     )
     .await
     .unwrap();
-    (srv, s)
+    (srv, s, d)
 }
 
 fn text(s: &str) -> Vec<u8> {
@@ -221,7 +218,7 @@ fn c_t6_audits_lock_stack_recv_and_flags_are_clean() {
 #[tokio::test(flavor = "multi_thread")]
 async fn c_t6_app_register_unregister_launch_and_browser() {
     let _g = ONE.lock().unwrap_or_else(|e| e.into_inner());
-    let (_srv, s) = rig("apps").await;
+    let (_srv, s, _d) = rig("apps").await;
     // register: the reply body is the legacy JSON, request reaches the handler unchanged
     let (st, body, more) = call(
         &s,
@@ -282,7 +279,7 @@ async fn c_t6_app_register_unregister_launch_and_browser() {
 #[tokio::test(flavor = "multi_thread")]
 async fn c_t6_failure_bodies_with_data_keep_their_fields_in_the_cause() {
     let _g = ONE.lock().unwrap_or_else(|e| e.into_inner());
-    let (_srv, s) = rig("kept").await;
+    let (_srv, s, _d) = rig("kept").await;
     // proc.kill: errno and strerror text survive (the caller prints "No such process")
     let (st, cause, _) = call(&s, KILL, r#"{"pid":99999}"#).await;
     assert_eq!(st, gen::ERR_INTERNAL);
@@ -337,7 +334,7 @@ async fn c_t6_failure_bodies_with_data_keep_their_fields_in_the_cause() {
 #[tokio::test(flavor = "multi_thread")]
 async fn c_t6_processes_focus_database_and_modules() {
     let _g = ONE.lock().unwrap_or_else(|e| e.into_inner());
-    let (_srv, s) = rig("procs").await;
+    let (_srv, s, _d) = rig("procs").await;
     for (m, key) in [
         (PROC_LIST, "procs"),
         (PROCESS_LIST, "procs"),
@@ -356,7 +353,7 @@ async fn c_t6_processes_focus_database_and_modules() {
 #[tokio::test(flavor = "multi_thread")]
 async fn c_t6_index_start_status_search_cancel() {
     let _g = ONE.lock().unwrap_or_else(|e| e.into_inner());
-    let (_srv, s) = rig("index").await;
+    let (_srv, s, _d) = rig("index").await;
     let (st, body, _) = call(&s, INDEX_STATUS, "").await;
     assert_eq!(st, OK);
     assert!(body.contains(r#""phase":"idle""#));
@@ -382,7 +379,7 @@ async fn c_t6_index_start_status_search_cancel() {
 #[tokio::test(flavor = "multi_thread")]
 async fn c_t6_a_search_reply_of_a_quarter_mebibyte_fits_and_one_byte_more_is_refused() {
     let _g = ONE.lock().unwrap_or_else(|e| e.into_inner());
-    let (_srv, s) = rig("search").await;
+    let (_srv, s, _d) = rig("search").await;
     // the real handler's buffer is 256 KiB and it stops 2.3 KiB short of it: such a reply passes whole
     let big = 256 * 1024 - 2300;
     unsafe { ava1_t6_set_search_bytes(big as u32) };
@@ -439,7 +436,7 @@ async fn pages(
 #[tokio::test(flavor = "multi_thread")]
 async fn c_t6_saves_shots_videos_and_app_list_page_cover_every_entry_once() {
     let _g = ONE.lock().unwrap_or_else(|e| e.into_inner());
-    let (_srv, s) = rig("paging").await;
+    let (_srv, s, _d) = rig("paging").await;
     // 6,000 entries do not fit one 256 KiB reply: the default (no limit) window fills a reply, `more` says so
     unsafe { ava1_t6_set_list(6000, 0) };
     for (m, key, field) in [
@@ -527,7 +524,7 @@ async fn storm(s: &Arc<Session>, n: usize) -> i32 {
 #[tokio::test(flavor = "multi_thread")]
 async fn c_sony_methods_serialize_under_the_lock() {
     let _g = ONE.lock().unwrap_or_else(|e| e.into_inner());
-    let (_srv, s) = rig("serial").await;
+    let (_srv, s, _d) = rig("serial").await;
     let s = Arc::new(s);
     // two concurrent app.launch calls never overlap in the Sony section...
     unsafe { ava1_t6_set_sony(1, 60) };
@@ -558,7 +555,7 @@ async fn c_sony_methods_serialize_under_the_lock() {
 #[tokio::test(flavor = "multi_thread")]
 async fn c_t6_a_long_sony_call_does_not_block_other_methods() {
     let _g = ONE.lock().unwrap_or_else(|e| e.into_inner());
-    let (_srv, s) = rig("nonblock").await;
+    let (_srv, s, _d) = rig("nonblock").await;
     let s = Arc::new(s);
     unsafe { ava1_t6_set_sony(1, 600) };
     let slow = {
@@ -589,7 +586,7 @@ const PROGRESS: u16 = gen::METHOD_FS_MOUNT;
 #[tokio::test(flavor = "multi_thread")]
 async fn c_t6_legacy_ok_false_is_found_wherever_the_top_level_key_sits() {
     let _g = ONE.lock().unwrap_or_else(|e| e.into_inner());
-    let (_srv, s) = rig("okfalse").await;
+    let (_srv, s, _d) = rig("okfalse").await;
     // (body, expected status, expected cause when an error)
     let cases: &[(&str, u16, &str)] = &[
         // ok first, ok last, ok in the middle: all failures, the whole body is the cause
@@ -662,7 +659,7 @@ async fn c_t6_legacy_ok_false_is_found_wherever_the_top_level_key_sits() {
 #[tokio::test(flavor = "multi_thread")]
 async fn c_t6_a_progress_frame_then_a_result_reports_the_final_frame() {
     let _g = ONE.lock().unwrap_or_else(|e| e.into_inner());
-    let (_srv, s) = rig("multiframe").await;
+    let (_srv, s, _d) = rig("multiframe").await;
     // the last frame is the answer: the success...
     let (st, body, _) = call(&s, PROGRESS, "{}").await;
     assert_eq!((st, body.as_str()), (OK, r#"{"result":1,"ok":true}"#));
@@ -675,7 +672,7 @@ async fn c_t6_a_progress_frame_then_a_result_reports_the_final_frame() {
 #[tokio::test(flavor = "multi_thread")]
 async fn c_t6_a_failure_body_too_long_for_a_cause_travels_as_its_token() {
     let _g = ONE.lock().unwrap_or_else(|e| e.into_inner());
-    let (_srv, s) = rig("longfail").await;
+    let (_srv, s, _d) = rig("longfail").await;
     let long = format!(
         r#"{{"ok":false,"err":"no_space","pad":"{}"}}"#,
         "x".repeat(300)
@@ -687,7 +684,7 @@ async fn c_t6_a_failure_body_too_long_for_a_cause_travels_as_its_token() {
 #[tokio::test(flavor = "multi_thread")]
 async fn c_t6_a_request_with_an_embedded_nul_is_refused_not_truncated() {
     let _g = ONE.lock().unwrap_or_else(|e| e.into_inner());
-    let (_srv, s) = rig("nul").await;
+    let (_srv, s, _d) = rig("nul").await;
     let r = s
         .rpc(ECHO, &text("{\"a\":1}\0{\"ok\":false}"))
         .await

@@ -1,16 +1,13 @@
 #![cfg(unix)]
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use ava1::gen::{ENTRY_DIR, ENTRY_FILE};
 use ava1::manifest::{Entry, Manifest};
 use ava1::verify::GROUP;
 use ava1_ctest::*;
 
-fn tmp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ava1-apply-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn tmp(tag: &str) -> TempDir {
+    TempDir::new(format!("ava1-apply-{tag}-{}", std::process::id()))
 }
 
 fn file(path: &str, size: u64) -> Entry {

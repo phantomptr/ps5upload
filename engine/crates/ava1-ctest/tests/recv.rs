@@ -1,5 +1,4 @@
 #![cfg(unix)]
-use std::path::PathBuf;
 
 use ava1::gen::{self, ENTRY_DIR, ENTRY_FILE};
 use ava1::journal::{job_dir, Journal, Record};
@@ -7,11 +6,8 @@ use ava1::manifest::{Entry, Manifest};
 use ava1::verify::GROUP;
 use ava1_ctest::*;
 
-fn tmp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ava1-recv-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn tmp(tag: &str) -> TempDir {
+    TempDir::new(format!("ava1-recv-{tag}-{}", std::process::id()))
 }
 
 fn f(path: &str, size: u64, mtime: u64) -> Entry {

@@ -8,11 +8,8 @@ use ava1::journal::{job_dir, Journal, State};
 use ava1::manifest::{Entry, Manifest};
 use ava1_ctest::*;
 
-fn tmp(tag: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ava1-logsmall-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn tmp(tag: &str) -> TempDir {
+    TempDir::new(format!("ava1-logsmall-{tag}-{}", std::process::id()))
 }
 
 fn small(n: usize, extra_unsent: bool) -> Manifest {
@@ -221,7 +218,7 @@ fn crash_and_resume(
     crash_at: i32,
     n: usize,
     damage: impl Fn(&std::path::Path),
-) -> (CRecv, PathBuf, Vec<u32>) {
+) -> (CRecv, TempDir, Vec<u32>) {
     let t = tmp(tag);
     std::fs::create_dir_all(t.join("dest")).unwrap(); // merge: the files are in place at dest/d
     let m = small(n, false);
@@ -272,6 +269,7 @@ fn a_crash_after_the_pack_fsync_before_the_journal_resends_the_batch() {
     assert!(done.is_empty(), "{done:?}");
     assert_eq!(r.wait(15_000), 0, "{}", r.events());
     all_there(&t, 30);
+    settled(&r);
 }
 
 #[test]
@@ -315,6 +313,7 @@ fn a_torn_log_tail_resends_only_the_files_whose_record_is_unreadable() {
     );
     assert_eq!(r.wait(15_000), 0, "{}", r.events());
     all_there(&t, 40);
+    settled(&r);
 }
 
 #[test]
@@ -325,6 +324,7 @@ fn a_missing_segment_resends_its_files_and_nothing_else_breaks() {
     assert!(done.is_empty(), "{done:?}");
     assert_eq!(r.wait(15_000), 0, "{}", r.events());
     all_there(&t, 25);
+    settled(&r);
 }
 
 #[test]
