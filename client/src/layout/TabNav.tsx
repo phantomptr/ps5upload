@@ -1,4 +1,6 @@
-import { NavLink, useLocation } from "react-router";
+// Tabs are Links, not NavLinks: a NavLink sets aria-current from its own path alone, so the
+// Games tab told screen readers nothing while Collection, Saves or Captures was open.
+import { Link, NavLink, useLocation } from "react-router";
 import {
   LayoutDashboard,
   Gamepad2,
@@ -189,7 +191,7 @@ export function TabRail() {
             : base;
           const desc = tr(`v5_tab_${tab.id}_desc`, undefined, "");
           return (
-            <NavLink
+            <Link
               key={tab.id}
               to={tab.to}
               aria-label={label}
@@ -227,7 +229,7 @@ export function TabRail() {
                   {`Alt+${i + 1}`}
                 </span>
               </span>
-            </NavLink>
+            </Link>
           );
         })}
 
@@ -286,7 +288,7 @@ export function TabBottomNav() {
             ? `${base} — ${tr("installed_now_playing", undefined, "Now playing")}`
             : base;
           return (
-            <NavLink
+            <Link
               key={tab.id}
               to={tab.to}
               aria-label={label}
@@ -308,7 +310,7 @@ export function TabBottomNav() {
                 {showPlaying && <PlayingDot />}
               </span>
               <span>{base}</span>
-            </NavLink>
+            </Link>
           );
         })}
         {/* More — a real route, not a sheet. That makes the Android

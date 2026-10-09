@@ -328,6 +328,7 @@ export default function GameHubScreen() {
         <div className="mb-3 flex items-center gap-2">
           <button
             type="button"
+            data-testid="game-back"
             onClick={goBack}
             className="flex items-center gap-1 text-sm text-[var(--color-muted)] hover:text-[var(--color-text)]"
           >

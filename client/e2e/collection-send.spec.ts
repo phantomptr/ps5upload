@@ -1,8 +1,9 @@
 import { expect, test, type Route } from "@playwright/test";
 
 // A game kept as a folder used to offer "Copy it with Upload", which only opened the Upload
-// screen. Send to PS5 now queues the copy and starts it from the Collection, and the details
-// say how it is going. The engine here is a fake that answers the same routes.
+// screen. Send to PS5 now queues the copy and starts it from the game's page (opened from the
+// Collection), and the console's row says how it is going. The engine here is a fake that
+// answers the same routes.
 
 const HOST = "192.168.0.5";
 const FOLDER = "/games/app/PPSA11386-app";
@@ -86,6 +87,17 @@ test("Send to PS5 queues a game folder from the Collection and shows its progres
         return json(route, {
           games: [{ game_id: game.game_id, installed: false, dlc_missing: [], non_package_copy: true }],
         });
+      if (p === `/api/games/${game.game_id}`)
+        return json(route, {
+          title_id: game.game_id,
+          title: game.title,
+          platform: "PS5",
+          cover: null,
+          copies: game.locations,
+          consoles: [{ host: HOST, read_at: Math.floor(Date.now() / 1000), installed: false, dlc_missing: [] }],
+        });
+      if (p === `/api/games/${game.game_id}/refresh`)
+        return json(route, { host: HOST, read_at: Math.floor(Date.now() / 1000), installed: false, dlc_missing: [] });
       if (p === "/api/transfer/dir" || p === "/api/transfer/dir-reconcile") {
         const body = req.postDataJSON() as { src_dir?: string; dest_root?: string; src?: string; dest?: string };
         started.path = body.src_dir ?? body.src;
@@ -112,16 +124,16 @@ test("Send to PS5 queues a game folder from the Collection and shows its progres
 
   await page.goto("/collection", { waitUntil: "domcontentloaded" });
   await page.getByTestId("collection-card").first().click();
-  const dialog = page.getByRole("dialog");
-  await expect(dialog.getByText("Not on this PS5")).toBeVisible({ timeout: 30_000 });
-  // The old button only navigated away; the new one opens the send panel in place.
-  await dialog.getByRole("button", { name: "Send to PS5" }).first().click();
-  await expect(dialog.getByText(/To \/data\/homebrew\/PPSA11386-app/)).toBeVisible();
+  await expect(page).toHaveURL(/\/games\/PPSA11386$/);
+  const row = page.getByTestId(`game-console-${HOST}`);
+  await expect(row).toContainText("Not installed", { timeout: 30_000 });
+  // The old button only navigated away; this one opens the send panel in place.
+  await row.getByRole("button", { name: "Send to PS5" }).click();
+  await expect(row.getByText(/To \/data\/homebrew\/PPSA11386-app/)).toBeVisible();
   // Folder as is: the default for a game folder.
-  await expect(dialog.getByRole("radio", { name: "As the folder" })).toBeChecked();
-  await dialog.getByRole("button", { name: "Send", exact: true }).click();
-  // Queued and started from here; the details follow it.
+  await expect(row.getByRole("radio", { name: "As the folder" })).toBeChecked();
+  await row.getByRole("button", { name: "Send", exact: true }).click();
+  // Queued and started from here; the console's row follows it.
   await expect.poll(() => started.path, { timeout: 20_000 }).toBe(FOLDER);
-  await expect(dialog.getByText(/Sending|Waiting in the queue/).first()).toBeVisible({ timeout: 20_000 });
-  await expect(page).toHaveURL(/\/collection/);
+  await expect(row.getByText(/Sending|Waiting in the queue/).first()).toBeVisible({ timeout: 20_000 });
 });
