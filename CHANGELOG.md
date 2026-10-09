@@ -4,6 +4,30 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.6.2
+
+**Fixes: the Windows app connects again, one game goes to two consoles, and bug reports work on
+desktop.**
+
+### Fixed
+
+- **Windows: "engine failed to start" and no connection (#427).** An older engine still running
+  in the background, or an antivirus scan, kept the app from writing its new engine, so it never
+  connected. The app now starts its engine anyway, and the error says why if it still fails. An
+  engine that crashes while starting is reported straight away instead of after 30 seconds, and
+  a leftover engine from an older version is shut down more reliably.
+- **The same game to two consoles.** A game being sent or installed on one PS5 showed as busy on
+  every PS5, so it could not go to a second one; the engine also refused to stream a package that
+  another console was still installing, and Convert refused the same game for a second console.
+  Each console is now separate.
+- **Bug reports on desktop.** Creating a report failed every time with "Duplicate filename:
+  README.txt". Two screenshots with the same name no longer fail it either. Switching consoles
+  keeps each console's draft, and a failed Download zip now says so.
+- **Leftover files.** A browser upload that stops halfway no longer leaves the partial package on
+  this computer for a week, and a link download that fails can be retried.
+
+---
+
 ## 6.6.1
 
 **A new Bug report page that gathers everything we need, and two or more consoles no longer
