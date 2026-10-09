@@ -107,6 +107,7 @@ export default function GameHubScreen() {
   const [installedTitles, setInstalledTitles] = useState<InstalledTitle[]>([]);
   const gv = useGameView(title_id ?? "");
   const [sendHost, setSendHost] = useState<string | null>(null);
+  const [coverFailed, setCoverFailed] = useState(false);
   const profiles = useRosterStore((s) => s.profiles);
   const names = useMemo(
     () => Object.fromEntries(profiles.map((p) => [hostOf(p.host), p.name || hostOf(p.host)])),
@@ -339,12 +340,14 @@ export default function GameHubScreen() {
 
         <div className="flex items-start gap-4">
           {/* Game icon */}
-          {game.source === "collection" && gv.view?.cover ? (
+          {game.source === "collection" && gv.view?.cover && !coverFailed ? (
             <img
               src={gv.view.cover.startsWith("/") ? `${getEngineUrl()}${gv.view.cover}` : gv.view.cover}
               alt={game.name}
               width={80}
               height={80}
+              // A cover that does not load gives way to the console's icon, never a broken image.
+              onError={() => setCoverFailed(true)}
               className="h-20 w-20 shrink-0 rounded-xl object-cover"
             />
           ) : (

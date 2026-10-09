@@ -809,6 +809,13 @@ fn browser_origin_allows(origin: &str, host: &str) -> bool {
     tauri_renderer || (loopback_name(origin_authority) && loopback_name(host))
 }
 
+/// `/api/collection/games/<id>/cover`, one id segment: the Collection's read-only cover image.
+fn is_collection_cover_path(path: &str) -> bool {
+    path.strip_prefix("/api/collection/games/")
+        .and_then(|rest| rest.strip_suffix("/cover"))
+        .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+}
+
 fn browser_request_allows(headers: &axum::http::HeaderMap, path: &str) -> bool {
     if path.starts_with("/pkg-host/") {
         return true;
@@ -827,8 +834,10 @@ fn browser_request_allows(headers: &axum::http::HeaderMap, path: &str) -> bool {
         // Referer. Permit that shape only for the two read-only cover routes;
         // keeping the path + destination checks narrow prevents a foreign
         // page from turning an embedded GET into access to another API route.
+        // The Collection's covers are the same kind of read-only image.
         if cross_site
-            && matches!(path, "/api/ps5/app-icon" | "/api/ps5/game-icon")
+            && (matches!(path, "/api/ps5/app-icon" | "/api/ps5/game-icon")
+                || is_collection_cover_path(path))
             && headers
                 .get("sec-fetch-dest")
                 .and_then(|v| v.to_str().ok())
@@ -10848,6 +10857,20 @@ mod loopback_guard_tests {
 
         assert!(browser_request_allows(&headers, "/api/ps5/app-icon"));
         assert!(browser_request_allows(&headers, "/api/ps5/game-icon"));
+        // The Collection's covers: refused before, so a game with no online cover showed its
+        // initials and the game page a broken image.
+        assert!(browser_request_allows(
+            &headers,
+            "/api/collection/games/PPSA11386/cover"
+        ));
+        assert!(!browser_request_allows(
+            &headers,
+            "/api/collection/games/PPSA11386"
+        ));
+        assert!(!browser_request_allows(
+            &headers,
+            "/api/collection/games/a/b/cover"
+        ));
     }
 
     #[test]

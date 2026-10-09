@@ -5146,9 +5146,21 @@ export async function cheatsGet(
   titleId: string,
   addr?: string,
 ): Promise<CheatsGetResponse> {
-  return invoke("cheats_get", {
-    req: { addr: addr ?? null, title_id: titleId },
-  });
+  return withoutNoCheatsError(
+    await invoke<CheatsGetResponse>("cheats_get", {
+      req: { addr: addr ?? null, title_id: titleId },
+    }),
+  );
+}
+
+/** The helper answers "no cheat files found" for a title that has none: that is an empty list,
+ *  not a failure to show in red. */
+export function withoutNoCheatsError(r: CheatsGetResponse): CheatsGetResponse {
+  if (r.error && /^no cheat files found\b/i.test(r.error) && r.mods.length === 0) {
+    const { error: _none, ...rest } = r;
+    return rest;
+  }
+  return r;
 }
 
 /** ok-checked-by-caller: Cheats screen reflects the toggle's real state. */
