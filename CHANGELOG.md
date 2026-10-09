@@ -4,6 +4,19 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.7.3
+
+### Fixed
+
+- **A failed or interrupted conversion no longer leaves files behind (#432).** Making a game image
+  wrote a temporary `.partial` file the size of the image into the output folder. If the build
+  failed (on Windows the cleanup often lost to an antivirus still reading the file) or was cut
+  short, it stayed there, taking up the drive with nothing showing where. Each conversion now
+  clears those leftovers and unpacked archives that no running job is using, before it starts and
+  after it fails. Only the app's own temporary files are touched.
+
+---
+
 ## 6.7.2
 
 ### Fixed
