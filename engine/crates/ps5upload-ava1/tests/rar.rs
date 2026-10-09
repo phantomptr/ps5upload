@@ -120,6 +120,63 @@ fn rar5(entries: &[Ent], solid: bool) -> Vec<u8> {
     out
 }
 
+/// A two-volume, non-solid RAR5 set: `files` in order, the file at `split` cut after
+/// `cut` bytes, its rest at the start of the second volume (`*.part1.rar`, `*.part2.rar`).
+fn rar5_two_volumes(files: &[(&str, &[u8])], split: usize, cut: usize) -> (Vec<u8>, Vec<u8>) {
+    fn main_header(second: bool) -> Vec<u8> {
+        let mut main = Vec::new();
+        vint(1, &mut main); // main header
+        vint(0, &mut main);
+        vint(if second { 1 | 2 } else { 1 }, &mut main); // volume (+ number present)
+        if second {
+            vint(1, &mut main); // volume number: the second
+        }
+        block(&main)
+    }
+    fn file(name: &str, part: &[u8], whole: &[u8], flags: u64) -> Vec<u8> {
+        let mut h = Vec::new();
+        vint(2, &mut h);
+        vint(2 | flags, &mut h); // data area follows (+ split before/after)
+        vint(part.len() as u64, &mut h);
+        vint(4, &mut h); // data CRC32 present
+        vint(whole.len() as u64, &mut h);
+        vint(0o644, &mut h);
+        h.extend_from_slice(&crc32(whole).to_le_bytes());
+        vint(0, &mut h); // stored
+        vint(1, &mut h);
+        vint(name.len() as u64, &mut h);
+        h.extend_from_slice(name.as_bytes());
+        let mut out = block(&h);
+        out.extend_from_slice(part);
+        out
+    }
+    fn end(more: bool) -> Vec<u8> {
+        let mut e = Vec::new();
+        vint(5, &mut e);
+        vint(0, &mut e);
+        vint(u64::from(more), &mut e); // not the last volume
+        block(&e)
+    }
+    let sig = b"Rar!\x1a\x07\x01\x00".to_vec();
+    let mut one = sig.clone();
+    one.extend(main_header(false));
+    let mut two = sig;
+    two.extend(main_header(true));
+    for (i, (name, data)) in files.iter().enumerate() {
+        if i < split {
+            one.extend(file(name, data, data, 0));
+        } else if i == split {
+            one.extend(file(name, &data[..cut], data, 0x10)); // continues in the next volume
+            two.extend(file(name, &data[cut..], data, 0x08)); // continues from the previous
+        } else {
+            two.extend(file(name, data, data, 0));
+        }
+    }
+    one.extend(end(true));
+    two.extend(end(false));
+    (one, two)
+}
+
 fn write(path: &Path, b: &[u8]) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, b).unwrap();
@@ -388,6 +445,48 @@ fn rar_reordered_listing_only_matters_when_entries_are_skipped_by_ordinal() {
         rec.got.is_empty(),
         "nothing was delivered from a wrong position"
     );
+}
+
+fn split_set(tag: &str) -> (PathBuf, Files) {
+    let d = temp(tag);
+    let f = Files(vec![
+        ("g/a.bin".into(), pattern(1, 0, 4000)),
+        ("g/movie.bk2".into(), pattern(2, 0, 9000)),
+        ("g/c.bin".into(), pattern(3, 0, 3000)),
+    ]);
+    let refs: Vec<(&str, &[u8])> =
+        f.0.iter()
+            .map(|(n, b)| (n.as_str(), b.as_slice()))
+            .collect();
+    let (one, two) = rar5_two_volumes(&refs, 1, 5000);
+    write(&d.join("set.part1.rar"), &one);
+    write(&d.join("set.part2.rar"), &two);
+    (d, f)
+}
+
+#[test]
+fn a_multi_volume_rar_with_a_file_across_volumes_reads_whole() {
+    let (d, f) = split_set("rar-volumes");
+    let (_m, src) = RarSource::open(&d.join("set.part1.rar"), None, &[]).unwrap();
+    let mut want = |_: &str, _: u64| Keep::All;
+    let mut rec = Rec::default();
+    src.pass(Restart(0), &mut want, &mut rec, &AtomicBool::new(false))
+        .unwrap();
+    assert_eq!(rec.got, f.0.to_vec());
+}
+
+#[test]
+fn resuming_past_a_file_split_across_volumes_is_not_a_reorder() {
+    // #429: a resume skips the uploaded entries; skipping one that continues in the next
+    // volume left its continuation to be read as one more entry, and the upload failed
+    // with "the archive lists its entries in a different order than it extracts them".
+    let (d, f) = split_set("rar-volumes-resume");
+    let (_m, src) = RarSource::open(&d.join("set.part1.rar"), None, &[]).unwrap();
+    let mut want = |_: &str, _: u64| Keep::All;
+    let mut rec = Rec::default();
+    src.pass(Restart(2), &mut want, &mut rec, &AtomicBool::new(false))
+        .unwrap();
+    assert_eq!(rec.got, f.0[2..].to_vec());
 }
 
 #[test]

@@ -1486,6 +1486,16 @@ mod rar_support {
                 Ok(None) => return Ok(()),
                 Err(e) => return Err(walk_fail(&path_str, "read rar header", e, false)),
             };
+            // The rest of a file that continues from the previous volume. Reading a file
+            // takes its continuation with it, so this shows up only after the walk skipped
+            // that file: it is skipped too, and is not another entry (#429: a resume past a
+            // file split across volumes counted it, and failed as a reordered archive).
+            if header.entry().is_split_before() {
+                open = header
+                    .skip()
+                    .map_err(|e| walk_fail(&path_str, "skip rar entry", e, false))?;
+                continue;
+            }
             let name = header.entry().filename.clone();
             let declared = header.entry().unpacked_size;
             // An unknown-size entry is read to its end; the sender checks the
