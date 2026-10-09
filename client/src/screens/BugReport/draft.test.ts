@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { canAdvance, clearDraft, defaultDraft, loadDraft, platformFromHost, rangeStart, RANGE_MS, saveDraft } from "./draft";
+import { clearDraft, defaultDraft, loadDraft, MIN_DESCRIPTION, platformFromHost, rangeStart, RANGE_MS, saveDraft, whatIsMissing } from "./draft";
 
 const mem = new Map<string, string>();
 beforeEach(() => {
@@ -36,11 +36,17 @@ describe("bug report drafts", () => {
     expect(() => saveDraft("x", defaultDraft("1", "Android"))).not.toThrow();
   });
 
-  it("starts from Everything", () => {
-    const d = defaultDraft("6.5.2", "Android");
-    expect(d.everything).toBe(true);
-    expect(d.sources.length).toBeGreaterThan(5);
-    expect(d.rangeKey).toBe("24h");
+  it("starts from the last 24 hours", () => {
+    expect(defaultDraft("6.5.2", "Android").rangeKey).toBe("24h");
+  });
+
+  it("a draft saved by the old four-step wizard still loads, without its old fields", () => {
+    const old = { ...defaultDraft("6.5.2", "Android"), step: 3, sources: ["app_log"], cats: [], everything: false, redact: false };
+    old.form.whatHappened = "kept";
+    mem.set("ps5upload.bugReportDraft.x", JSON.stringify(old));
+    const d = loadDraft("x");
+    expect(d?.form.whatHappened).toBe("kept");
+    expect(Object.keys(d ?? {}).sort()).toEqual(["customStart", "form", "rangeKey"]);
   });
 });
 
@@ -57,28 +63,24 @@ describe("rangeStart", () => {
   });
 });
 
-describe("canAdvance", () => {
-  it("step 1 needs 20 characters and an Other description", () => {
+describe("whatIsMissing", () => {
+  it("names what still blocks the report, and nothing once it's there", () => {
     const d = defaultDraft("1", "Android");
-    d.form.whatHappened = "x".repeat(19);
-    expect(canAdvance(1, d)).toBe(false);
-    d.form.whatHappened = "x".repeat(20);
-    expect(canAdvance(1, d)).toBe(true);
+    expect(whatIsMissing(d)).toBe("description");
+    d.form.whatHappened = "x".repeat(MIN_DESCRIPTION - 1);
+    expect(whatIsMissing(d)).toBe("description");
+    d.form.whatHappened = "It disconnects";
+    expect(whatIsMissing(d)).toBeNull();
     d.form.doing = "other";
-    expect(canAdvance(1, d)).toBe(false);
-    d.form.doingOther = "Cheats";
-    expect(canAdvance(1, d)).toBe(true);
+    expect(whatIsMissing(d)).toBe("doing_other");
+    d.form.doingOther = "Backporting";
+    expect(whatIsMissing(d)).toBeNull();
   });
 
-  it("step 3 needs something to include", () => {
+  it("a short but real sentence is enough", () => {
     const d = defaultDraft("1", "Android");
-    expect(canAdvance(3, d)).toBe(true);
-    d.sources = [];
-    expect(canAdvance(3, d)).toBe(false);
-  });
-
-  it("step 2 is always fine", () => {
-    expect(canAdvance(2, defaultDraft("1", "Android"))).toBe(true);
+    d.form.whatHappened = "App froze";
+    expect(whatIsMissing(d)).toBeNull();
   });
 });
 

@@ -18,6 +18,10 @@ import { log } from "../state/logs";
  * any other attachment.
  */
 
+/** Fired on `window` with the SavedShot as `detail` after each capture, so an open Bug report
+ *  can add it without a reload. */
+export const SCREENSHOT_EVENT = "ps5upload:screenshot";
+
 export interface SavedShot {
   name: string;
   path: string;
@@ -84,6 +88,7 @@ export async function captureAppScreenshot(): Promise<SavedShot> {
       "screenshot",
       `captured ${name} (${Math.round(shot.bytes / 1024)} KB)`,
     );
+    window.dispatchEvent(new CustomEvent<SavedShot>(SCREENSHOT_EVENT, { detail: shot }));
     return shot;
   } catch (e) {
     log.error(

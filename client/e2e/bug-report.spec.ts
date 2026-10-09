@@ -1,11 +1,11 @@
 import { expect, test, type Route } from "@playwright/test";
 
-// The bug report wizard end to end in the web UI: pick the problem the app recorded, build the
-// report (redacted, with the timeline and MISSING.txt), then Post to GitHub / Discord.
+// The bug report page end to end in the web UI: describe it, pick how far back, create the report
+// (everything recorded in that window, redacted, with MISSING.txt), then Post to GitHub / Discord.
 
 const HOST = "192.168.86.100";
 
-test("the wizard builds a redacted report and pre-fills GitHub", async ({ page }) => {
+test("one page builds a redacted report of the whole time frame and pre-fills GitHub", async ({ page }) => {
   await page.addInitScript((host) => {
     window.localStorage.setItem("ps5upload.host", host);
     // Record what the page asks the browser to open instead of opening it.
@@ -47,26 +47,17 @@ test("the wizard builds a redacted report and pre-fills GitHub", async ({ page }
   await page.goto("/bug-report", { waitUntil: "domcontentloaded" });
   const main = page.getByRole("main");
 
-  // Step 1
-  await expect(main.getByTestId("br-step-1")).toHaveAttribute("aria-current", "step", { timeout: 30_000 });
+  // Nothing to build until there's a description; the bar says why.
+  const create = main.getByRole("button", { name: "Create report" });
+  await expect(create).toBeVisible({ timeout: 30_000 });
+  await expect(create).toBeDisabled();
+  await expect(main.getByTestId("br-blocked")).toContainText("Describe what went wrong");
   await main.getByLabel("What went wrong?").fill("The helper crashed while I had the Hardware screen open.");
-  const problems = main.getByTestId("br-problems");
-  await expect(problems).toContainText("signal 11");
-  await problems.getByText(/signal 11/).click();
-  await main.getByRole("button", { name: "Next" }).click();
-
-  // Step 2
-  await expect(main.getByTestId("br-step-2")).toHaveAttribute("aria-current", "step");
-  await main.getByRole("button", { name: "Next" }).click();
-
-  // Step 3: Everything is the default
-  await expect(main.getByTestId("br-step-3")).toHaveAttribute("aria-current", "step");
-  await expect(main.getByRole("checkbox", { name: "Everything" })).toBeChecked();
-  await main.getByLabel("Time range (until now)").selectOption("6h");
-  await main.getByRole("button", { name: "Next" }).click();
-
-  // Step 4: build
-  await main.getByRole("button", { name: "Build report" }).click();
+  // No log checkboxes: only how far back.
+  await expect(main.getByRole("checkbox")).toHaveCount(0);
+  await main.getByRole("radio", { name: "Last 6 hours" }).click();
+  await expect(main.getByTestId("br-blocked")).toHaveCount(0);
+  await create.click();
   await expect(main.getByTestId("br-saved")).toBeVisible({ timeout: 30_000 });
   expect(bundle).not.toBeNull();
   const b = bundle as unknown as { filename: string; entries: { path: string; text?: string }[] };
@@ -91,7 +82,9 @@ test("the wizard builds a redacted report and pre-fills GitHub", async ({ page }
   expect(gh.pathname).toBe("/phantomptr/ps5upload/issues/new");
   expect(gh.searchParams.get("template")).toBe("bug_report.yml");
   expect(gh.searchParams.get("title")).toContain("The helper crashed");
-  expect(gh.searchParams.get("what-happened")).toContain("signal 11");
+  expect(gh.searchParams.get("what-happened")).toContain("The helper crashed");
+  // Everything recorded in the window, no picking: the crash reaches the issue's logs field.
+  expect(gh.searchParams.get("logs")).toContain("signal 11");
   expect(gh.searchParams.get("platform")).toBe("Browser / self-hosted web UI");
   expect(opened[1]).toBe("https://discord.com/channels/1464735724434624524/1465533832953462794");
 });

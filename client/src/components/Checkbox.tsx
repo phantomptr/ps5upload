@@ -50,7 +50,7 @@ export function Checkbox({
           }}
           id={cbId}
           type="checkbox"
-          className="checkbox mt-0.5 h-5 w-5 max-md:mt-0"
+          className="checkbox mt-0.5 h-5 w-5 shrink-0 max-md:mt-0"
           checked={checked}
           disabled={disabled}
           aria-invalid={error ? "true" : undefined}

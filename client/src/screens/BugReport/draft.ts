@@ -1,12 +1,10 @@
 /**
- * The bug report wizard's state, kept per console until the report is built or discarded, so
- * closing the app mid-report loses nothing (spec §2).
+ * The bug report form's state, kept per console until the report is built or discarded, so
+ * closing the app mid-report loses nothing. Everything recorded in the time frame goes in: the
+ * only choice about the logs is how far back.
  */
-import { EVENT_CATS, type EventCat } from "../../lib/eventRecord";
-import { SOURCE_IDS, type SourceId } from "../../lib/reportBuilder";
 import type { ReportForm } from "../../lib/reportOutputs";
 
-export type Step = 1 | 2 | 3 | 4;
 export type RangeKey = "15m" | "1h" | "6h" | "24h" | "3d" | "7d" | "custom";
 export const RANGE_KEYS: readonly RangeKey[] = ["15m", "1h", "6h", "24h", "3d", "7d", "custom"];
 export const RANGE_MS: Record<Exclude<RangeKey, "custom">, number> = {
@@ -30,23 +28,18 @@ export const PLATFORMS = [
   "Browser / self-hosted web UI",
 ] as const;
 
-export interface WizardDraft {
-  step: Step;
+export interface ReportDraft {
   form: ReportForm;
   rangeKey: RangeKey;
   customStart: number | null;
-  cats: EventCat[];
-  sources: SourceId[];
-  everything: boolean;
-  redact: boolean;
 }
 
-export const MIN_DESCRIPTION = 20;
+/** Enough for "App froze": the logs carry the rest. */
+export const MIN_DESCRIPTION = 8;
 const KEY = "ps5upload.bugReportDraft.";
 
-export function defaultDraft(appVersion: string, platform: string): WizardDraft {
+export function defaultDraft(appVersion: string, platform: string): ReportDraft {
   return {
-    step: 1,
     form: {
       console: null,
       doing: "connecting",
@@ -65,23 +58,22 @@ export function defaultDraft(appVersion: string, platform: string): WizardDraft 
     },
     rangeKey: "24h",
     customStart: null,
-    cats: [...EVENT_CATS],
-    sources: [...SOURCE_IDS],
-    everything: true,
-    redact: true,
   };
 }
 
-export function loadDraft(consoleKey: string): WizardDraft | null {
+export function loadDraft(consoleKey: string): ReportDraft | null {
   try {
     const raw = localStorage.getItem(KEY + consoleKey);
-    return raw ? (JSON.parse(raw) as WizardDraft) : null;
+    if (!raw) return null;
+    // Only the fields this form has: a draft from the old four-step wizard carries more.
+    const { form, rangeKey, customStart } = JSON.parse(raw) as ReportDraft;
+    return form ? { form, rangeKey: rangeKey ?? "24h", customStart: customStart ?? null } : null;
   } catch {
     return null;
   }
 }
 
-export function saveDraft(consoleKey: string, d: WizardDraft): void {
+export function saveDraft(consoleKey: string, d: ReportDraft): void {
   try {
     localStorage.setItem(KEY + consoleKey, JSON.stringify(d));
   } catch {
@@ -98,20 +90,19 @@ export function clearDraft(consoleKey: string): void {
 }
 
 /** Where the report's time range starts; it always ends now. */
-export function rangeStart(d: WizardDraft, now: number): number {
+export function rangeStart(d: ReportDraft, now: number): number {
   if (d.rangeKey === "custom") return d.customStart ?? now - RANGE_MS["24h"];
   return now - RANGE_MS[d.rangeKey];
 }
 
-/** Whether the wizard may leave `step`. */
-export function canAdvance(step: Step, d: WizardDraft): boolean {
-  if (step === 1)
-    return d.form.whatHappened.trim().length >= MIN_DESCRIPTION && (d.form.doing !== "other" || d.form.doingOther.trim().length > 0);
-  if (step === 3) return d.sources.length > 0;
-  return true;
+/** What still stops the report from being built, or null when it's ready. */
+export function whatIsMissing(d: ReportDraft): "description" | "doing_other" | null {
+  if (d.form.whatHappened.trim().length < MIN_DESCRIPTION) return "description";
+  if (d.form.doing === "other" && !d.form.doingOther.trim()) return "doing_other";
+  return null;
 }
 
-/** A best guess at the issue form's platform; the user can change it in step 2. */
+/** A best guess at the issue form's platform; the user can change it. */
 export function detectPlatform(isTauri: boolean): string {
   if (!isTauri) return "Browser / self-hosted web UI";
   const ua = typeof navigator !== "undefined" ? navigator.userAgent : "";
