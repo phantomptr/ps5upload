@@ -3754,6 +3754,12 @@ activity_showing_console: "{name} gösteriliyor",
 activity_show_this_console: "Bu konsolu göster",
 game_open_page: "Oyun sayfasını aç",
 game_already_on: "{name} üzerinde zaten var",
+queue_partial_kept: "Gönderilen kısım PS5'te {path} olarak tutulur, böylece Yeniden dene kaldığı yerden devam eder. Yer kaplar: yeniden denemeyeceksen sil.",
+queue_partial_delete: "Kısmi dosyayı sil",
+queue_partial_delete_title: "Kısmi dosya silinsin mi?",
+queue_partial_delete_body: "{path} PS5'ten silinecek. Yükleme baştan başlar.",
+queue_partial_deleted: "Kısmi dosya silindi. Yeniden dene yüklemeyi baştan başlatır.",
+connection_vpn_hint: "Bir VPN açıksa kapat (ya da içinde yerel ağ erişimine izin ver), sonra yeniden kontrol et.",
 };
 
 export default tr;

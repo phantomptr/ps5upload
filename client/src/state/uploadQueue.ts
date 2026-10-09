@@ -63,6 +63,7 @@ import { withConsolePrefix } from "./roster";
 import { hostOf, mgmtAddr } from "../lib/addr";
 import { log } from "./logs";
 import { isRemotePath } from "../lib/remotePath";
+import { partialUploadPath } from "../lib/partialUpload";
 import { materializeRemote, releaseCopy } from "../lib/materialize";
 
 /** Local copies of server archives, by queue item: made when the item's turn comes (not at
@@ -423,6 +424,9 @@ interface QueueState {
    *  the person just typed. The password lives on the in-memory item only (the save redacts
    *  it) and is never logged. False when the password is empty or the row is not a failed one. */
   retryWithPassword: (id: string, password: string) => boolean;
+  /** Deletes the partial file a single-file upload left when the drive filled up, and gives
+   *  the row a new job id so its next attempt starts fresh. Throws with the console's reason. */
+  discardPartial: (id: string) => Promise<void>;
   /** Re-drive one console's uploads that FAILED on a recoverable
    *  (connection-class) error, then restart that console's drain loop.
    *  This is the "slept past the in-loop recovery budget" case: a standby
@@ -2077,13 +2081,23 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
       if (!item) return;
       // A running install: ask the engine to stop it (it stops serving the package; the PS5's
       // download then fails, and a download already cancelled on the PS5 is let go at once
-      // instead of after the 5-minute stall bound). The row goes once the job has ended. Before
-      // the engine has a job there is nothing on the wire yet: fall through to the plain cancel.
-      if (item.sourceKind === "install" && item.status === "running" && item.installJobId) {
+      // instead of after the 5-minute stall bound). The row goes once the job has ended.
+      if (item.sourceKind === "install" && item.status === "running") {
         if (item.stopping) return;
         set((s) => ({ items: patchItem(s.items, id, { stopping: true }) }));
-        void pkgInstallStop(item.installJobId).catch(() => undefined);
         void (async () => {
+          // Stopped while the engine was still starting the install: its job id comes in a
+          // moment, and only that stops it. Dropping the row alone left the install running
+          // on the engine with nothing showing it.
+          let job = item.installJobId ?? null;
+          for (let i = 0; !job && i < 30; i++) {
+            await new Promise((r) => setTimeout(r, 500));
+            const now = get().items.find((it) => it.id === id);
+            if (!now || now.status !== "running") break;
+            job = now.installJobId ?? null;
+          }
+          if (job) await pkgInstallStop(job).catch(() => undefined);
+          else get().stopHost(hostOf(item.addr));
           for (let i = 0; i < 60; i++) {
             const now = get().items.find((it) => it.id === id);
             if (!now || now.status !== "running") break;
@@ -2092,6 +2106,9 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
           settle(id, { ok: false, message: "Stopped." });
           set((s) => ({ items: removeItem(s.items, id) }));
           scheduleSave();
+          // Stopping the loop held the console's other waiting items: let them go on.
+          const h = hostOf(item.addr);
+          if (!job && nextPendingForHost(get().items, h)) void get().startHost(h);
         })();
         return;
       }
@@ -2234,6 +2251,19 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
       if (!get().retryItem(id)) return false;
       void get().startHost(hostOf(item.addr));
       return true;
+    },
+
+    async discardPartial(id) {
+      const item = get().items.find((candidate) => candidate.id === id);
+      const path = item ? partialUploadPath(item) : null;
+      if (!item || !path) return;
+      await fsDelete(mgmtAddr(hostOf(item.addr)), path);
+      set((s) => ({
+        items: s.items.map((candidate) =>
+          candidate.id === id ? { ...candidate, txIdHex: generateTxIdHex() } : candidate,
+        ),
+      }));
+      scheduleSave();
     },
 
     async resumeFailedRecoverable(host) {
@@ -2447,6 +2477,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
     retryFailed: () => undefined,
     retryItem: () => false,
     retryWithPassword: () => false,
+    discardPartial: () => Promise.resolve(),
     resumeFailedRecoverable: () => Promise.resolve(0),
     setContinueOnFailure: () => undefined,
     start: () => Promise.resolve(),

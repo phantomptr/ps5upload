@@ -420,6 +420,11 @@ export function humanizePs5Error(
   if (/0x80B22101/i.test(raw)) {
     return te("err_install_2101");
   }
+  // ─── 0x80B2_1104 — the installer would not take this package ──────
+  // Before the wildcard: it is the package, not PlayGo (FAQ "0x80B21104").
+  if (/0x80B2_?1104/i.test(raw)) {
+    return te("pkg.sony_80b21104");
+  }
   if (/\b0x80B2[0-9A-Fa-f]{4}\b/i.test(raw)) {
     // Other 0x80B2_xxxx — PlayGo errors, not pkg-format errors.
     // Don't blame the file.

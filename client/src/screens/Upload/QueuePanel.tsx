@@ -55,6 +55,7 @@ import { BottleneckLine, JobLiveNotes, UnsettledLine } from "./Bottleneck";
 import { WhySlowPanel } from "./WhySlow";
 import { RarPasswordPrompt } from "./RarPasswordPrompt";
 import { rarPasswordProblem } from "../../lib/rarPassword";
+import { partialUploadPath } from "../../lib/partialUpload";
 import { isStreamUnreachableError } from "../../lib/networkFix";
 import { NetworkFixActions } from "../InstallPackage/NetworkFixActions";
 
@@ -1111,6 +1112,7 @@ export function QueueRow({
           detail={item.errorDetail}
         />
       )}
+      {partialUploadPath(item) && <PartialFileNote id={item.id} path={partialUploadPath(item)!} />}
       {item.status === "failed" && isStreamUnreachableError(item.error) && (
         <NetworkFixActions diag={null} />
       )}
@@ -1392,6 +1394,67 @@ function FailedRowErrorCard({
           )
         }
       />
+    </div>
+  );
+}
+
+/** A single-file upload that filled the drive keeps what it sent as `<file>.ava-part`, so
+ *  Retry continues it; that file holds the space, so it is named here with a way to delete it. */
+function PartialFileNote({ id, path }: { id: string; path: string }) {
+  const tr = useTr();
+  const { confirm, dialog } = useConfirm();
+  const [state, setState] = useState<"idle" | "busy" | "gone">("idle");
+  const [failed, setFailed] = useState<string | null>(null);
+  if (state === "gone") {
+    return (
+      <p className="mt-2 text-xs text-[var(--color-good)]">
+        {tr("queue_partial_deleted", undefined, "Partial file deleted. Retry starts the upload over.")}
+      </p>
+    );
+  }
+  const remove = async () => {
+    const ok = await confirm({
+      title: tr("queue_partial_delete_title", undefined, "Delete the partial file?"),
+      message: tr(
+        "queue_partial_delete_body",
+        { path },
+        "{path} will be deleted from the PS5. The upload then starts over from the beginning.",
+      ),
+      confirmLabel: tr("queue_partial_delete", undefined, "Delete partial file"),
+      destructive: true,
+    });
+    if (!ok) return;
+    setState("busy");
+    setFailed(null);
+    try {
+      await useUploadQueueStore.getState().discardPartial(id);
+      setState("gone");
+    } catch (e) {
+      setState("idle");
+      setFailed(e instanceof Error ? e.message : String(e));
+    }
+  };
+  return (
+    <div className="mt-2 text-xs text-[var(--color-muted)]" data-testid="queue-partial-file">
+      {dialog}
+      <p>
+        {tr(
+          "queue_partial_kept",
+          { path },
+          "What was sent is kept on the PS5 as {path}, so Retry continues where it stopped. It takes up space: delete it if you won't retry.",
+        )}
+      </p>
+      <Button
+        className="mt-1.5"
+        variant="secondary"
+        size="sm"
+        leftIcon={<Trash2 size={12} />}
+        loading={state === "busy"}
+        onClick={() => void remove()}
+      >
+        {tr("queue_partial_delete", undefined, "Delete partial file")}
+      </Button>
+      {failed && <p className="mt-1 text-[var(--color-bad)]">{failed}</p>}
     </div>
   );
 }

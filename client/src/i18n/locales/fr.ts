@@ -3781,6 +3781,12 @@ activity_showing_console: "Affichage de {name}",
 activity_show_this_console: "Afficher cette console",
 game_open_page: "Ouvrir la page du jeu",
 game_already_on: "{name} l'a déjà",
+queue_partial_kept: "Ce qui a été envoyé est gardé sur la PS5 sous {path}, pour que Réessayer reprenne là où ça s'est arrêté. Il prend de la place : supprimez-le si vous ne réessayez pas.",
+queue_partial_delete: "Supprimer le fichier partiel",
+queue_partial_delete_title: "Supprimer le fichier partiel ?",
+queue_partial_delete_body: "{path} sera supprimé de la PS5. L'envoi reprendra alors depuis le début.",
+queue_partial_deleted: "Fichier partiel supprimé. Réessayer recommence l'envoi.",
+connection_vpn_hint: "Si un VPN est actif, désactivez-le (ou autorisez-y l'accès au réseau local), puis vérifiez à nouveau.",
 };
 
 export default fr;

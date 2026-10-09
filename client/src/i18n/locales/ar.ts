@@ -3747,6 +3747,12 @@ activity_showing_console: "يُعرض {name}",
 activity_show_this_console: "اعرض هذا الجهاز",
 game_open_page: "افتح صفحة اللعبة",
 game_already_on: "{name} لديه هذا بالفعل",
+queue_partial_kept: "يُحتفظ بما أُرسل على PS5 باسم {path}، لكي تُكمل إعادة المحاولة من حيث توقفت. يشغل مساحة: احذفه إن لم تعد المحاولة.",
+queue_partial_delete: "احذف الملف الجزئي",
+queue_partial_delete_title: "حذف الملف الجزئي؟",
+queue_partial_delete_body: "سيُحذف {path} من PS5، ثم يبدأ الرفع من البداية.",
+queue_partial_deleted: "حُذف الملف الجزئي. إعادة المحاولة تبدأ الرفع من جديد.",
+connection_vpn_hint: "إن كانت شبكة VPN تعمل، أوقفها (أو اسمح فيها بالوصول إلى الشبكة المحلية) ثم تحقق مجددًا.",
 };
 
 export default ar;

@@ -1300,6 +1300,25 @@ describe("install items", () => {
     await waitFor(() => !useUploadQueueStore.getState().items.some((i) => i.id === q.id));
   });
 
+  it("an install stopped before the engine has its job is stopped once the job comes", async () => {
+    const api = await import("../api/ps5");
+    vi.mocked(api.pkgInstallStop).mockClear();
+    const q = useUploadQueueStore.getState().enqueueInstall({
+      host, request: { via: "stream", source: "/early.pkg" }, displayName: "E",
+    });
+    await waitFor(() => calls.length === 1);
+    useUploadQueueStore.getState().cancelItem(q.id);
+    expect(vi.mocked(api.pkgInstallStop)).not.toHaveBeenCalled();
+    // The engine answers with its job a moment later: that job is the one stopped.
+    useUploadQueueStore.setState((st) => ({
+      items: st.items.map((i) => (i.id === q.id ? { ...i, installJobId: "job-late" } : i)),
+    }));
+    await waitFor(() => vi.mocked(api.pkgInstallStop).mock.calls.length > 0);
+    expect(vi.mocked(api.pkgInstallStop)).toHaveBeenCalledWith("job-late");
+    gate.get("/early.pkg")!({ ok: false, message: "stopped" });
+    await waitFor(() => !useUploadQueueStore.getState().items.some((i) => i.id === q.id));
+  });
+
   it("an install leaves uploads waiting for Start alone (#410)", async () => {
     const s = useUploadQueueStore.getState();
     s.add({

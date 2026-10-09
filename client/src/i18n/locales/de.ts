@@ -3755,6 +3755,12 @@ activity_showing_console: "{name} wird angezeigt",
 activity_show_this_console: "Diese Konsole anzeigen",
 game_open_page: "Spielseite öffnen",
 game_already_on: "{name} hat es bereits",
+queue_partial_kept: "Das bereits Gesendete bleibt auf der PS5 als {path}, damit „Erneut versuchen“ dort weitermacht. Es belegt Speicher: Lösche es, wenn du es nicht erneut versuchst.",
+queue_partial_delete: "Teildatei löschen",
+queue_partial_delete_title: "Teildatei löschen?",
+queue_partial_delete_body: "{path} wird von der PS5 gelöscht. Der Upload beginnt dann von vorn.",
+queue_partial_deleted: "Teildatei gelöscht. „Erneut versuchen“ beginnt den Upload von vorn.",
+connection_vpn_hint: "Wenn ein VPN aktiv ist, schalte es aus (oder erlaube darin den Zugriff aufs lokale Netzwerk) und prüfe erneut.",
 };
 
 export default de;

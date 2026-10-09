@@ -4123,6 +4123,12 @@ activity_showing_console: "نمایش {name}",
 activity_show_this_console: "نمایش این کنسول",
 game_open_page: "باز کردن صفحه بازی",
 game_already_on: "{name} این را از قبل دارد",
+queue_partial_kept: "بخشِ ارسال‌شده روی PS5 با نام {path} نگه داشته می‌شود تا «تلاش دوباره» از همان‌جا ادامه دهد. فضا می‌گیرد؛ اگر دوباره تلاش نمی‌کنید حذفش کنید.",
+queue_partial_delete: "حذف فایل ناقص",
+queue_partial_delete_title: "فایل ناقص حذف شود؟",
+queue_partial_delete_body: "{path} از PS5 حذف می‌شود و آپلود از ابتدا شروع می‌شود.",
+queue_partial_deleted: "فایل ناقص حذف شد. «تلاش دوباره» آپلود را از ابتدا شروع می‌کند.",
+connection_vpn_hint: "اگر VPN روشن است، آن را خاموش کنید (یا در آن دسترسی به شبکه محلی را مجاز کنید) و دوباره بررسی کنید.",
 };
 
 export default fa;

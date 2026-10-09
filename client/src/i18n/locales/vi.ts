@@ -3749,6 +3749,12 @@ activity_showing_console: "Đang hiển thị {name}",
 activity_show_this_console: "Hiển thị máy này",
 game_open_page: "Mở trang trò chơi",
 game_already_on: "{name} đã có rồi",
+queue_partial_kept: "Phần đã gửi được giữ trên PS5 dưới tên {path}, để Thử lại tiếp tục từ chỗ dừng. Nó chiếm dung lượng: hãy xóa nếu bạn không thử lại.",
+queue_partial_delete: "Xóa tệp dở dang",
+queue_partial_delete_title: "Xóa tệp dở dang?",
+queue_partial_delete_body: "{path} sẽ bị xóa khỏi PS5. Việc tải lên sẽ bắt đầu lại từ đầu.",
+queue_partial_deleted: "Đã xóa tệp dở dang. Thử lại sẽ tải lên lại từ đầu.",
+connection_vpn_hint: "Nếu đang bật VPN, hãy tắt nó (hoặc cho phép truy cập mạng cục bộ trong VPN), rồi kiểm tra lại.",
 };
 
 export default vi;

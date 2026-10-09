@@ -349,3 +349,9 @@ describe("humanizePs5Error", () => {
     });
   });
 });
+
+describe("0x80B21104", () => {
+  it("says the console would not take this package, not a generic PlayGo error", () => {
+    expect(humanizePs5Error("The PS5 declined the install. (0x80b21104)")).toContain("would not accept this package");
+  });
+});

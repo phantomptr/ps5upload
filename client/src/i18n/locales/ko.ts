@@ -3782,6 +3782,12 @@ activity_showing_console: "{name} 표시 중",
 activity_show_this_console: "이 콘솔 표시",
 game_open_page: "게임 페이지 열기",
 game_already_on: "{name}에 이미 있습니다",
+queue_partial_kept: "보낸 부분은 PS5에 {path}(으)로 남아 있어 다시 시도하면 멈춘 곳부터 이어집니다. 공간을 차지하니 다시 시도하지 않을 거라면 삭제하세요.",
+queue_partial_delete: "부분 파일 삭제",
+queue_partial_delete_title: "부분 파일을 삭제할까요?",
+queue_partial_delete_body: "{path}이(가) PS5에서 삭제됩니다. 업로드는 처음부터 다시 시작됩니다.",
+queue_partial_deleted: "부분 파일을 삭제했습니다. 다시 시도하면 처음부터 업로드합니다.",
+connection_vpn_hint: "VPN이 켜져 있다면 끄거나(또는 VPN에서 로컬 네트워크 접근을 허용하고) 다시 확인하세요.",
 };
 
 export default ko;

@@ -24,6 +24,8 @@ describe("installErrorDoc", () => {
       ["missing base entitlement", undefined, DOC_ANCHORS.entitlement],
       ["shows View product instead of Play", undefined, DOC_ANCHORS.viewProduct],
       ["This PS4 game isn't playable on PS5", undefined, DOC_ANCHORS.ps4OnPs5],
+      ["The PS5 declined the install. (0x80b21104)", undefined, DOC_ANCHORS.declined1104],
+      ["x", 0x80b21104, DOC_ANCHORS.declined1104],
     ];
     for (const [raw, code, query] of cases) {
       expect(installErrorDoc(raw, code)?.query, `${raw} / ${code}`).toBe(query);

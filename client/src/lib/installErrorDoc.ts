@@ -25,9 +25,11 @@ export const DOC_ANCHORS = {
   ce: "CE-108255-1",
   wontLaunch: "won't launch",
   matrix: "support matrix",
+  declined1104: "0x80B21104",
 } as const;
 
 const RULES: Array<[RegExp, string]> = [
+  [/0x80b21104/i, DOC_ANCHORS.declined1104],
   [/0x80b2116f|0x80b2150f|staged route|refused this package from its own storage/i, DOC_ANCHORS.stagedRefused],
   [/0x80431084|proxy server|proxy setting/i, DOC_ANCHORS.proxy],
   [

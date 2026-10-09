@@ -3747,6 +3747,12 @@ activity_showing_console: "{name} দেখানো হচ্ছে",
 activity_show_this_console: "এই কনসোল দেখান",
 game_open_page: "গেম পেজ খুলুন",
 game_already_on: "{name}-এ এটি আগে থেকেই আছে",
+queue_partial_kept: "যা পাঠানো হয়েছে তা PS5-এ {path} হিসেবে রাখা আছে, যাতে আবার চেষ্টা থামার জায়গা থেকে চালিয়ে যায়। এটি জায়গা নেয়: আবার চেষ্টা না করলে মুছে ফেলুন।",
+queue_partial_delete: "অসম্পূর্ণ ফাইল মুছুন",
+queue_partial_delete_title: "অসম্পূর্ণ ফাইল মুছবেন?",
+queue_partial_delete_body: "{path} PS5 থেকে মুছে ফেলা হবে। তারপর আপলোড শুরু থেকে হবে।",
+queue_partial_deleted: "অসম্পূর্ণ ফাইল মুছে ফেলা হয়েছে। আবার চেষ্টা শুরু থেকে আপলোড করবে।",
+connection_vpn_hint: "VPN চালু থাকলে বন্ধ করুন (বা এতে লোকাল নেটওয়ার্ক অ্যাক্সেস দিন), তারপর আবার যাচাই করুন।",
 };
 
 export default bn;

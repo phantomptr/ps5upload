@@ -507,7 +507,9 @@ export default function ConnectionScreen() {
             )
           : looksLikeMacLocalNetworkBlock(probe.error, ua)
           ? `${detail}. ${tr("connection_mac_local_network_hint", undefined, "macOS may be blocking this app from your local network. Open System Settings → Privacy & Security → Local Network, allow PS5Upload, then check again.")}`
-          : detail,
+          : // A VPN on this computer sends the console's address out through the tunnel: the
+            // likeliest cause when everything else is right (reported twice on Discord).
+            `${detail}. ${tr("connection_vpn_hint", undefined, "If a VPN is on, turn it off (or allow local network access in it), then check again.")}`,
         target,
       );
     }

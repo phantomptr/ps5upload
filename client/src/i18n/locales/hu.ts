@@ -4100,6 +4100,12 @@ activity_showing_console: "{name} látható",
 activity_show_this_console: "Ennek a konzolnak a megjelenítése",
 game_open_page: "Játékoldal megnyitása",
 game_already_on: "A(z) {name} már tartalmazza",
+queue_partial_kept: "Az elküldött rész a PS5-ön marad {path} néven, így az Újra onnan folytatja, ahol abbamaradt. Helyet foglal: töröld, ha nem próbálod újra.",
+queue_partial_delete: "Részleges fájl törlése",
+queue_partial_delete_title: "Törlöd a részleges fájlt?",
+queue_partial_delete_body: "A(z) {path} törlődik a PS5-ről. A feltöltés ezután elölről kezdődik.",
+queue_partial_deleted: "Részleges fájl törölve. Az Újra elölről kezdi a feltöltést.",
+connection_vpn_hint: "Ha VPN van bekapcsolva, kapcsold ki (vagy engedélyezd benne a helyi hálózat elérését), majd ellenőrizd újra.",
 };
 
 export default hu;

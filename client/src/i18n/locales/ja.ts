@@ -3785,6 +3785,12 @@ activity_showing_console: "{name} を表示中",
 activity_show_this_console: "この本体を表示",
 game_open_page: "ゲームページを開く",
 game_already_on: "{name} にはすでにあります",
+queue_partial_kept: "送信済みの部分は PS5 上に {path} として残り、再試行で続きから送れます。容量を使うので、再試行しない場合は削除してください。",
+queue_partial_delete: "途中のファイルを削除",
+queue_partial_delete_title: "途中のファイルを削除しますか？",
+queue_partial_delete_body: "{path} を PS5 から削除します。アップロードは最初からやり直しになります。",
+queue_partial_deleted: "途中のファイルを削除しました。再試行すると最初からアップロードします。",
+connection_vpn_hint: "VPN がオンならオフにして (または VPN でローカルネットワークへのアクセスを許可して)、もう一度確認してください。",
 };
 
 export default ja;

@@ -3694,6 +3694,12 @@ activity_showing_console: "Mostrando {name}",
 activity_show_this_console: "Mostrar esta consola",
 game_open_page: "Abrir la página del juego",
 game_already_on: "{name} ya lo tiene",
+queue_partial_kept: "Lo enviado se guarda en la PS5 como {path}, para que Reintentar continúe donde se detuvo. Ocupa espacio: bórralo si no vas a reintentar.",
+queue_partial_delete: "Borrar archivo parcial",
+queue_partial_delete_title: "¿Borrar el archivo parcial?",
+queue_partial_delete_body: "{path} se borrará de la PS5. La subida empezará de nuevo desde el principio.",
+queue_partial_deleted: "Archivo parcial borrado. Reintentar empieza la subida de nuevo.",
+connection_vpn_hint: "Si hay una VPN activa, desactívala (o permite en ella el acceso a la red local) y vuelve a comprobar.",
 };
 
 export default es;

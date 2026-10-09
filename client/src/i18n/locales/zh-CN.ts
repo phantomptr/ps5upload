@@ -3700,6 +3700,12 @@ activity_showing_console: "正在显示 {name}",
 activity_show_this_console: "显示此主机",
 game_open_page: "打开游戏页面",
 game_already_on: "{name} 上已经有了",
+queue_partial_kept: "已发送的部分以 {path} 保留在 PS5 上，重试时会从中断处继续。它会占用空间：如果不打算重试，请删除它。",
+queue_partial_delete: "删除未完成的文件",
+queue_partial_delete_title: "删除未完成的文件？",
+queue_partial_delete_body: "将从 PS5 删除 {path}。之后上传会从头开始。",
+queue_partial_deleted: "已删除未完成的文件。重试会从头开始上传。",
+connection_vpn_hint: "如果开着 VPN，请关闭它（或在 VPN 中允许访问本地网络），然后再检查一次。",
 };
 
 export default zh_CN;

@@ -3694,6 +3694,12 @@ activity_showing_console: "正在顯示 {name}",
 activity_show_this_console: "顯示此主機",
 game_open_page: "開啟遊戲頁面",
 game_already_on: "{name} 上已經有了",
+queue_partial_kept: "已傳送的部分以 {path} 保留在 PS5 上，重試時會從中斷處繼續。它會佔用空間：如果不打算重試，請刪除它。",
+queue_partial_delete: "刪除未完成的檔案",
+queue_partial_delete_title: "刪除未完成的檔案？",
+queue_partial_delete_body: "將從 PS5 刪除 {path}。之後上傳會從頭開始。",
+queue_partial_deleted: "已刪除未完成的檔案。重試會從頭開始上傳。",
+connection_vpn_hint: "如果開著 VPN，請關閉它（或在 VPN 中允許存取本地網路），然後再檢查一次。",
 };
 
 export default zh_TW;

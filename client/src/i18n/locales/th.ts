@@ -3771,6 +3771,12 @@ activity_showing_console: "กำลังแสดง {name}",
 activity_show_this_console: "แสดงคอนโซลนี้",
 game_open_page: "เปิดหน้าเกม",
 game_already_on: "{name} มีอยู่แล้ว",
+queue_partial_kept: "ส่วนที่ส่งไปแล้วถูกเก็บไว้บน PS5 เป็น {path} เพื่อให้ลองอีกครั้งทำต่อจากจุดที่หยุด ไฟล์นี้ใช้พื้นที่ ลบได้หากจะไม่ลองอีก",
+queue_partial_delete: "ลบไฟล์ที่ยังไม่ครบ",
+queue_partial_delete_title: "ลบไฟล์ที่ยังไม่ครบหรือไม่?",
+queue_partial_delete_body: "{path} จะถูกลบจาก PS5 แล้วการอัปโหลดจะเริ่มใหม่ตั้งแต่ต้น",
+queue_partial_deleted: "ลบไฟล์ที่ยังไม่ครบแล้ว ลองอีกครั้งจะเริ่มอัปโหลดใหม่",
+connection_vpn_hint: "หากเปิด VPN อยู่ ให้ปิด (หรืออนุญาตการเข้าถึงเครือข่ายภายในใน VPN) แล้วตรวจอีกครั้ง",
 };
 
 export default th;

@@ -3780,6 +3780,12 @@ activity_showing_console: "{name} दिखाया जा रहा है",
 activity_show_this_console: "यह कंसोल दिखाएँ",
 game_open_page: "गेम पेज खोलें",
 game_already_on: "{name} पर यह पहले से है",
+queue_partial_kept: "भेजा गया हिस्सा PS5 पर {path} के रूप में रखा गया है, ताकि फिर से कोशिश वहीं से जारी रखे। यह जगह घेरता है: अगर फिर से कोशिश नहीं करनी तो इसे हटा दें।",
+queue_partial_delete: "अधूरी फ़ाइल हटाएँ",
+queue_partial_delete_title: "अधूरी फ़ाइल हटाएँ?",
+queue_partial_delete_body: "{path} PS5 से हटा दी जाएगी। फिर अपलोड शुरू से होगा।",
+queue_partial_deleted: "अधूरी फ़ाइल हटा दी गई। फिर से कोशिश अपलोड शुरू से करेगा।",
+connection_vpn_hint: "अगर VPN चालू है तो उसे बंद करें (या उसमें लोकल नेटवर्क की अनुमति दें), फिर दोबारा जाँचें।",
 };
 
 export default hi;

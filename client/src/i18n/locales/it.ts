@@ -3694,6 +3694,12 @@ activity_showing_console: "Mostra {name}",
 activity_show_this_console: "Mostra questa console",
 game_open_page: "Apri la pagina del gioco",
 game_already_on: "{name} ce l'ha già",
+queue_partial_kept: "Quanto inviato resta sulla PS5 come {path}, così Riprova continua da dove si era fermato. Occupa spazio: eliminalo se non riproverai.",
+queue_partial_delete: "Elimina file parziale",
+queue_partial_delete_title: "Eliminare il file parziale?",
+queue_partial_delete_body: "{path} verrà eliminato dalla PS5. Il caricamento ripartirà dall'inizio.",
+queue_partial_deleted: "File parziale eliminato. Riprova ricomincia il caricamento.",
+connection_vpn_hint: "Se è attiva una VPN, disattivala (o consenti in essa l'accesso alla rete locale), poi controlla di nuovo.",
 };
 
 export default it;

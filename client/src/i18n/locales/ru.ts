@@ -3694,6 +3694,12 @@ activity_showing_console: "Показано: {name}",
 activity_show_this_console: "Показать эту консоль",
 game_open_page: "Открыть страницу игры",
 game_already_on: "На {name} это уже есть",
+queue_partial_kept: "Отправленное сохранено на PS5 как {path}, чтобы «Повторить» продолжило с места остановки. Оно занимает место: удалите его, если не будете повторять.",
+queue_partial_delete: "Удалить частичный файл",
+queue_partial_delete_title: "Удалить частичный файл?",
+queue_partial_delete_body: "{path} будет удалён с PS5. Загрузка начнётся заново.",
+queue_partial_deleted: "Частичный файл удалён. «Повторить» начнёт загрузку заново.",
+connection_vpn_hint: "Если включён VPN, выключите его (или разрешите в нём доступ к локальной сети) и проверьте снова.",
 };
 
 export default ru;

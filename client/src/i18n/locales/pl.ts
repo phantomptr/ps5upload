@@ -4033,6 +4033,12 @@ activity_showing_console: "Wyświetlono: {name}",
 activity_show_this_console: "Pokaż tę konsolę",
 game_open_page: "Otwórz stronę gry",
 game_already_on: "{name} już to ma",
+queue_partial_kept: "Wysłana część zostaje na PS5 jako {path}, aby Ponów kontynuowało od miejsca przerwania. Zajmuje miejsce: usuń ją, jeśli nie ponowisz.",
+queue_partial_delete: "Usuń częściowy plik",
+queue_partial_delete_title: "Usunąć częściowy plik?",
+queue_partial_delete_body: "{path} zostanie usunięty z PS5. Przesyłanie zacznie się od początku.",
+queue_partial_deleted: "Częściowy plik usunięty. Ponów zaczyna przesyłanie od nowa.",
+connection_vpn_hint: "Jeśli VPN jest włączony, wyłącz go (lub zezwól w nim na dostęp do sieci lokalnej) i sprawdź ponownie.",
 };
 
 export default pl;

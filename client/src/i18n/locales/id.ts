@@ -3756,6 +3756,12 @@ activity_showing_console: "Menampilkan {name}",
 activity_show_this_console: "Tampilkan konsol ini",
 game_open_page: "Buka halaman game",
 game_already_on: "{name} sudah memilikinya",
+queue_partial_kept: "Yang sudah terkirim disimpan di PS5 sebagai {path}, agar Coba lagi melanjutkan dari titik berhenti. File ini memakan ruang: hapus jika tidak akan mencoba lagi.",
+queue_partial_delete: "Hapus file parsial",
+queue_partial_delete_title: "Hapus file parsial?",
+queue_partial_delete_body: "{path} akan dihapus dari PS5. Unggahan lalu dimulai dari awal.",
+queue_partial_deleted: "File parsial dihapus. Coba lagi memulai unggahan dari awal.",
+connection_vpn_hint: "Jika VPN aktif, matikan (atau izinkan akses jaringan lokal di dalamnya), lalu periksa lagi.",
 };
 
 export default id;

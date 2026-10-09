@@ -4229,6 +4229,12 @@ activity_showing_console: "Showing {name}",
 activity_show_this_console: "Show this console",
 game_open_page: "Open game page",
 game_already_on: "{name} has it already",
+queue_partial_kept: "What was sent is kept on the PS5 as {path}, so Retry continues where it stopped. It takes up space: delete it if you won't retry.",
+queue_partial_delete: "Delete partial file",
+queue_partial_delete_title: "Delete the partial file?",
+queue_partial_delete_body: "{path} will be deleted from the PS5. The upload then starts over from the beginning.",
+queue_partial_deleted: "Partial file deleted. Retry starts the upload over.",
+connection_vpn_hint: "If a VPN is on, turn it off (or allow local network access in it), then check again.",
 };
 
 export default en;
