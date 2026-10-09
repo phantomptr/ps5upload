@@ -465,6 +465,45 @@ pub struct ConsoleQuery {
 
 /// A title's installed version, normalized like the collection's: `APP_VER` (PS4) or
 /// `CONTENT_VERSION` (PS5). `None` when it could not be read.
+/// The console's titles: upper-case title ID → the path it was registered from, if any.
+pub(crate) fn installed_titles(
+    addr: &str,
+) -> Result<std::collections::HashMap<String, Option<String>>, String> {
+    let registered = ps5upload_core::fs_ops::app_list_registered(addr)
+        .map_err(|e| format!("the console's titles could not be read: {e:#}"))?;
+    Ok(registered
+        .apps
+        .into_iter()
+        .map(|a| {
+            let from = (!a.src.is_empty()).then_some(a.src);
+            (a.title_id.to_ascii_uppercase(), from)
+        })
+        .collect())
+}
+
+/// What the console has of one title: installed, its version, an update, its DLC.
+pub(crate) fn read_title(
+    addr: &str,
+    id: &str,
+    roots: &[String],
+    installed: &std::collections::HashMap<String, Option<String>>,
+) -> crate::collection::console::ConsoleTitle {
+    let mut t = crate::collection::console::ConsoleTitle::default();
+    if let Some(from) = installed.get(id) {
+        t.installed = true;
+        t.registered_from = from.clone();
+        t.version = installed_version(addr, id);
+        for root in roots {
+            if !console_names(addr, &format!("{root}/user/patch/{id}")).is_empty() {
+                t.patch_installed = true;
+            }
+            t.dlc_labels
+                .extend(console_names(addr, &format!("{root}/user/addcont/{id}")));
+        }
+    }
+    t
+}
+
 fn installed_version(addr: &str, title_id: &str) -> Option<String> {
     let rows = ps5upload_core::diagnostics::appinfo_query(addr, title_id, None).ok()?;
     let get = |k: &str| {
@@ -502,20 +541,12 @@ pub async fn get_console(Query(q): Query<ConsoleQuery>) -> Response {
     let addr = q.addr;
     let result = tokio::task::spawn_blocking(
         move || -> Result<Vec<crate::collection::console::GameConsoleState>, String> {
-            use crate::collection::console::{state_for, ConsoleTitle};
-            let registered = ps5upload_core::fs_ops::app_list_registered(&addr)
-                .map_err(|e| format!("the console's titles could not be read: {e:#}"))?;
-            let installed: std::collections::HashMap<String, Option<String>> = registered
-                .apps
-                .into_iter()
-                .map(|a| {
-                    let from = (!a.src.is_empty()).then_some(a.src);
-                    (a.title_id.to_ascii_uppercase(), from)
-                })
-                .collect();
+            use crate::collection::console::state_for;
+            let installed = installed_titles(&addr)?;
             let roots = crate::pkg_install::installed_storage_roots(&addr);
             let games: Vec<&crate::collection::Game> = lib.games.values().collect();
             let mut out = Vec::with_capacity(games.len());
+            let mut read = Vec::with_capacity(games.len());
             // A few titles at a time: each is a handful of small reads.
             for chunk in games.chunks(6) {
                 let states: Vec<_> = std::thread::scope(|scope| {
@@ -524,32 +555,30 @@ pub async fn get_console(Query(q): Query<ConsoleQuery>) -> Response {
                         .map(|g| {
                             let (addr, roots, installed) = (&addr, &roots, &installed);
                             scope.spawn(move || {
-                                let id = g.game_id.as_str();
-                                let mut t = ConsoleTitle::default();
-                                if let Some(from) = installed.get(id) {
-                                    t.installed = true;
-                                    t.registered_from = from.clone();
-                                    t.version = installed_version(addr, id);
-                                    for root in roots {
-                                        if !console_names(addr, &format!("{root}/user/patch/{id}"))
-                                            .is_empty()
-                                        {
-                                            t.patch_installed = true;
-                                        }
-                                        t.dlc_labels.extend(console_names(
-                                            addr,
-                                            &format!("{root}/user/addcont/{id}"),
-                                        ));
-                                    }
-                                }
-                                state_for(g, &t)
+                                let t = read_title(addr, &g.game_id, roots, installed);
+                                (state_for(g, &t), t, g.title.clone())
                             })
                         })
                         .collect();
                     handles.into_iter().filter_map(|h| h.join().ok()).collect()
                 });
-                out.extend(states);
+                read.extend(states);
             }
+            // Kept for the game page, which shows consoles other than the connected one.
+            let now = crate::console_snapshot::now_unix();
+            crate::console_snapshot::with(|snaps| {
+                for (st, t, title) in &read {
+                    crate::console_snapshot::merge_detailed(
+                        snaps,
+                        &addr,
+                        &st.game_id,
+                        t,
+                        title,
+                        now,
+                    );
+                }
+            });
+            out.extend(read.into_iter().map(|(st, _, _)| st));
             Ok(out)
         },
     )

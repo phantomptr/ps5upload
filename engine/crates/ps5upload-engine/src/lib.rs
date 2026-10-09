@@ -37,6 +37,7 @@ mod collection;
 mod collection_api;
 mod collection_tidy_api;
 mod console_read;
+mod console_snapshot;
 mod convert_source;
 mod elfldr_guard;
 mod engine_log;
@@ -44,6 +45,7 @@ mod event_journal;
 mod fakelibs_api;
 mod fpkg_api;
 mod fpkg_firmware;
+mod games_api;
 mod helper_mirror;
 mod icon_cache;
 mod image_build;
@@ -4745,6 +4747,8 @@ async fn ps5_apps_installed(
                 },
             )?;
 
+            // A full page may have more behind it: then the list is not the whole set.
+            let listing_whole = listing.entries.len() < 512;
             let mut titles: Vec<InstalledApp> = Vec::new();
             for e in listing.entries {
                 if !looks_like_title_id(&e.name) {
@@ -4798,6 +4802,8 @@ async fn ps5_apps_installed(
             // counts only when its app folder really exists, on internal or
             // extended storage. Best-effort: if app.db or the folders can't
             // be read, the appmeta scan alone is what we had before.
+            // Whether the list below is the console's whole installed set.
+            let mut complete = listing_whole;
             let mut app_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
             for root in ["/user/app", "/mnt/ext0/user/app", "/mnt/ext1/user/app"] {
                 if let Ok(l) = list_dir(
@@ -4842,8 +4848,27 @@ async fn ps5_apps_installed(
                             });
                         }
                     }
-                    Err(e) => crate::log_warn!("apps/installed: app.db query failed: {e:#}"),
+                    Err(e) => {
+                        crate::log_warn!("apps/installed: app.db query failed: {e:#}");
+                        complete = false;
+                    }
                 }
+            }
+            // Kept for the game page. System apps are not games.
+            {
+                let list: Vec<(String, String, Option<String>)> = titles
+                    .iter()
+                    .filter(|t| !t.system)
+                    .map(|t| {
+                        let from = (t.origin == "registered" && !t.source.is_empty())
+                            .then(|| t.source.clone());
+                        (t.title_id.clone(), t.title_name.clone(), from)
+                    })
+                    .collect();
+                let now = crate::console_snapshot::now_unix();
+                crate::console_snapshot::with(|snaps| {
+                    crate::console_snapshot::merge_full_list(snaps, &addr, &list, complete, now)
+                });
             }
 
             // Stable order: registered first, then package installs; within
@@ -9978,6 +10003,9 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/collection/export", get(collection_api::get_export))
         .route("/api/collection/import", post(collection_api::post_import))
         .route("/api/collection/console", get(collection_api::get_console))
+        .route("/api/games/{id}", get(games_api::get_game))
+        .route("/api/games/{id}/refresh", post(games_api::refresh))
+        .route("/api/console-snapshots/keep", post(games_api::keep))
         .route(
             "/api/collection/trash/preview",
             post(collection_tidy_api::post_trash_preview),
