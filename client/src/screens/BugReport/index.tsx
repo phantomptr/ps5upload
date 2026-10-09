@@ -41,8 +41,13 @@ const noImages: Attached = { shots: [], files: [] };
  * The answers are kept per console until the report is created or discarded.
  */
 export default function BugReportScreen() {
-  const tr = useTr();
   const host = useConnectionStore((s) => s.host);
+  // Each console keeps its own draft: switching consoles loads that console's.
+  return <BugReportPage key={hostOf(host) || "none"} host={host} />;
+}
+
+function BugReportPage({ host }: { host: string }) {
+  const tr = useTr();
   const consoleKey = hostOf(host) || "none";
   const [params] = useSearchParams();
   const pinTs = Number(params.get("event")) || null;
@@ -68,7 +73,11 @@ export default function BugReportScreen() {
   useEffect(() => {
     if (appVersion && !draft.form.appVersion) setDraft((d) => ({ ...d, form: { ...d.form, appVersion } }));
   }, [appVersion, draft.form.appVersion]);
-  useEffect(() => saveDraft(consoleKey, draft), [consoleKey, draft]);
+  // Once created, the report is done: editing its issue link must not bring the draft back.
+  const created = result !== null;
+  useEffect(() => {
+    if (!created) saveDraft(consoleKey, draft);
+  }, [consoleKey, draft, created]);
   // The desktop app knows its real OS and CPU (an Intel Mac reads as Apple Silicon to the web
   // view); it replaces the guess, unless the user has already chosen.
   useEffect(() => {
@@ -190,7 +199,11 @@ export default function BugReportScreen() {
                 updateForm={updateForm}
                 built={result.built}
                 saved={result.saved}
-                onDownload={() => void save(result.built, result.since)}
+                onDownload={() =>
+                  void save(result.built, result.since).catch((e) =>
+                    setError(e instanceof Error ? e.message : String(e)),
+                  )
+                }
               />
             </Card>
           )}

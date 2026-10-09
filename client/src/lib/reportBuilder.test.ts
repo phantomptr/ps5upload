@@ -69,6 +69,16 @@ describe("buildReport", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ stderr: "from ftp", stderr_old: "" }))));
   });
 
+  it("keeps two screenshots with the same name apart", async () => {
+    // Two "Screenshot.png" from different folders made one path twice, and the zip refused it.
+    const r = await buildReport(
+      opts({ images: [{ name: "Screenshot.png", base64: "AA==" }, { name: "Screenshot.png", base64: "AQ==" }] }),
+    );
+    const shots = paths(r).filter((p) => p.startsWith("screenshots/"));
+    expect(shots).toHaveLength(2);
+    expect(new Set(shots).size).toBe(2);
+  });
+
   it("always writes the report files, and only the chosen sources", async () => {
     const r = await buildReport(opts());
     expect(paths(r)).toEqual(

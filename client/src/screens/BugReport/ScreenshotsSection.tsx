@@ -58,7 +58,12 @@ export default function ScreenshotsSection({
         return { name, base64, preview: `data:${file.type};base64,${base64}` };
       }),
     );
-    if (files.length) setAttached((a) => ({ ...a, files: [...a.files, ...files] }));
+    // The same image twice is kept once.
+    if (files.length)
+      setAttached((a) => ({
+        ...a,
+        files: [...a.files, ...files.filter((f) => !a.files.some((x) => x.name === f.name && x.base64 === f.base64))],
+      }));
   };
   // A pasted image anywhere on the page is added (text pastes carry no files).
   const addRef = useRef(add);
@@ -142,8 +147,8 @@ export default function ScreenshotsSection({
 
       {attached.files.length > 0 && (
         <ul className="grid grid-cols-[repeat(auto-fill,minmax(8rem,1fr))] gap-3" data-testid="br-attached">
-          {attached.files.map((f) => (
-            <li key={f.name} className="relative">
+          {attached.files.map((f, i) => (
+            <li key={`${i}-${f.name}`} className="relative">
               <img src={f.preview} alt={f.name} className={`${thumb} border border-[var(--color-border)]`} />
               <button
                 type="button"

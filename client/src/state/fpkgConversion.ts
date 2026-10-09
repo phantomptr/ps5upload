@@ -675,7 +675,9 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
     pendingImageUpload = thenUpload ?? null;
     // One engine job: compressing happens as the image is written, so no uncompressed copy
     // is ever on disk.
-    beginRun("image", source, null, "plan");
+    // The console it goes to, when it is sent once built: another console's view of this
+    // game is not busy with it.
+    beginRun("image", source, thenUpload?.host ?? null, "plan");
     try {
       const { job_id } = await fpkg.buildImage(source, outputDir, format, thenCompress);
       update({ jobId: job_id });

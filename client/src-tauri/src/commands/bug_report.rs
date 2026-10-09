@@ -539,14 +539,22 @@ fn assemble_zip(
     let mut crash_reports = 0usize;
     let mut images = 0usize;
 
-    let write_entry =
-        |zw: &mut zip::ZipWriter<std::fs::File>, name: &str, bytes: &[u8]| -> Result<(), String> {
-            zw.start_file(name, opts)
-                .map_err(|e| format!("zip start_file {name}: {e}"))?;
-            zw.write_all(bytes)
-                .map_err(|e| format!("zip write {name}: {e}"))?;
-            Ok(())
-        };
+    // A name already in the zip is skipped, not an error: the report builder sends files of
+    // its own (its README.txt, its MISSING.txt) and one duplicate must not lose the report.
+    let written = std::cell::RefCell::new(std::collections::HashSet::<String>::new());
+    let write_entry = |zw: &mut zip::ZipWriter<std::fs::File>,
+                       name: &str,
+                       bytes: &[u8]|
+     -> Result<bool, String> {
+        if !written.borrow_mut().insert(name.to_string()) {
+            return Ok(false);
+        }
+        zw.start_file(name, opts)
+            .map_err(|e| format!("zip start_file {name}: {e}"))?;
+        zw.write_all(bytes)
+            .map_err(|e| format!("zip write {name}: {e}"))?;
+        Ok(true)
+    };
 
     // One redactor for the whole report: an address is <ip-N> with the same N in every file.
     let mut red = Redactor::new(args.redact);
@@ -682,8 +690,9 @@ fn assemble_zip(
             } else {
                 continue;
             };
-            write_entry(&mut zw, &e.path, &body)?;
-            entries += 1;
+            if write_entry(&mut zw, &e.path, &body)? {
+                entries += 1;
+            }
         }
         if !rejected.is_empty() && !missing_written {
             write_entry(&mut zw, "MISSING.txt", rejected.join("\n").as_bytes())?;
@@ -936,6 +945,57 @@ mod tests {
             res.entries, 2,
             "only report.json + README when all unticked"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn extras_the_bundle_already_has_do_not_fail_it() {
+        // Every desktop report failed with "Duplicate filename: README.txt": the report
+        // builder sends its own README.txt, and the bundle had already written one.
+        let root = std::env::temp_dir().join(format!("ps5up-bugreport4-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let dest = root.join("out.zip");
+        let text = |path: &str, t: &str| ExtraEntry {
+            path: path.into(),
+            text: Some(t.into()),
+            base64: None,
+        };
+        let args = BugReportArgs {
+            dest: dest.to_string_lossy().into_owned(),
+            dest_filename: None,
+            report_json: "{}".to_string(),
+            redact: true,
+            window_minutes: 0,
+            since_ms: 0,
+            klog_text: None,
+            syslog_text: None,
+            payload_logs: vec![],
+            image_paths: vec![],
+            include: BugReportInclude {
+                app_logs: false,
+                engine_log: false,
+                crash_reports: false,
+                ps5_logs: false,
+                images: false,
+            },
+            extra_entries: vec![
+                text("README.txt", "the builder's readme"),
+                text("report.md", "what happened"),
+                text("report.md", "again"),
+            ],
+        };
+        let dirs = BundleDirs {
+            logs: root.join("l"),
+            engine: root.join("e"),
+            reports: root.join("r"),
+        };
+        assemble_zip(&args, &dirs, 1_780_000_000_000).unwrap();
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&dest).unwrap()).unwrap();
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("report.md").unwrap(), &mut s).unwrap();
+        assert_eq!(s, "what happened");
+        assert!(zip.by_name("README.txt").is_ok());
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -3,6 +3,7 @@
 // package is handed to the console queue and the next build starts — game 2 converts while game
 // 1 installs. The running build is shown by the Convert screen's own stage view.
 
+import { hostOf } from "../lib/addr";
 import { create } from "zustand";
 
 import type { FpkgCompression } from "../api/fpkg";
@@ -100,8 +101,12 @@ export const useConvertQueue = create<ConvertQueueState>((set, get) => {
     items: typeof window === "undefined" ? [] : load(),
     running: false,
     add: (item) => {
+      // The same game for the same console once; another console may have it too.
       const busy = get().items.some(
-        (i) => i.source === item.source && (i.status === "pending" || i.status === "running"),
+        (i) =>
+          i.source === item.source &&
+          hostOf(i.host ?? "") === hostOf(item.host ?? "") &&
+          (i.status === "pending" || i.status === "running"),
       );
       if (busy) return false;
       set({ items: [...get().items, { ...item, id: `c${Date.now().toString(36)}${++seq}`, status: "pending" }] });

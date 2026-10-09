@@ -242,8 +242,13 @@ export async function buildReport(o: BuildOptions): Promise<BuiltReport> {
   }
 
   if (want("settings")) entries.push({ path: "settings.json", text: JSON.stringify(settingsSnapshot(), null, 2) });
-  for (const img of o.images)
-    entries.push({ path: `screenshots/${img.name.replace(/[^A-Za-z0-9._-]/g, "_")}`, base64: img.base64 });
+  // Numbered: two images may share a name (the same file twice, or from two folders).
+  o.images.forEach((img, i) =>
+    entries.push({
+      path: `screenshots/${String(i + 1).padStart(2, "0")}_${img.name.replace(/[^A-Za-z0-9._-]/g, "_")}`,
+      base64: img.base64,
+    }),
+  );
 
   const manifest = {
     schema: 2,

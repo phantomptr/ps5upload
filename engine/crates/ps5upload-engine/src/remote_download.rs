@@ -274,11 +274,17 @@ async fn start_handler(
     let total = probe.total_size;
     let dest = path.clone();
     let worker = dl.clone();
+    let existed = path.exists();
     tokio::task::spawn_blocking(move || {
         let dl = worker;
         let src = crate::remote_pkg::RemoteSource::new_with_options(url, total, insecure);
         if let Err(e) = copy_to_file(&src, &dl, &dest) {
             crate::log_warn!("link-download failed: host={} err={}", dl.url_host, e);
+            // A partial file this download made would refuse the retry as "already exists
+            // with a different size": remove it, as Cancel does.
+            if !existed {
+                let _ = std::fs::remove_file(&dest);
+            }
             *dl.error.lock().unwrap_or_else(|x| x.into_inner()) = Some(e.to_string());
         } else if !dl.cancelled.load(Ordering::Relaxed) {
             dl.done.store(true, Ordering::Relaxed);

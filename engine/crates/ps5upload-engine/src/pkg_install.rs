@@ -500,6 +500,17 @@ fn is_install_package_filename(name: &str) -> bool {
 ///
 /// Streamed to disk field-by-field, never buffered whole: packages run to tens
 /// of gigabytes.
+/// Removes a directory when dropped, unless it has been taken (set to `None`).
+struct RemoveOnDrop(Option<PathBuf>);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        if let Some(dir) = self.0.take() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
 async fn pkg_upload_handler(mut form: axum::extract::Multipart) -> Response<Body> {
     use tokio::io::AsyncWriteExt;
 
@@ -512,6 +523,9 @@ async fn pkg_upload_handler(mut form: axum::extract::Multipart) -> Response<Body
             serde_json::json!({ "error": format!("could not create upload dir: {e}") }),
         );
     }
+    // A browser that goes away mid-upload drops this handler at an await, past every cleanup
+    // below: the partial package (tens of GB) would sit in the temp dir for a week.
+    let mut partial = RemoveOnDrop(Some(dir.clone()));
 
     loop {
         let field = match form.next_field().await {
@@ -575,6 +589,7 @@ async fn pkg_upload_handler(mut form: axum::extract::Multipart) -> Response<Body
                 serde_json::json!({ "error": format!("flush failed: {e}") }),
             );
         }
+        partial.0 = None;
         return json_response(
             StatusCode::OK,
             serde_json::json!({
@@ -2237,26 +2252,7 @@ pub(crate) async fn install_start_handler(
         // is recognised as the rival it is.
         let rival_info = sessions
             .values()
-            .find(|s| {
-                s.id != session_id
-                    && !s.cancelled
-                    && s.terminal_status.is_none()
-                    && !s.package_fingerprint.is_empty()
-                    && s.package_fingerprint == session.package_fingerprint
-                    // ...and the console is ACTUALLY still pulling it.
-                    //
-                    // `terminal_status` is only set by the status handler, so a
-                    // session nobody polls never reaches a terminal state and
-                    // would block its own package forever. Hit immediately when
-                    // dogfooding this guard: a session that had transferred
-                    // 20,625,752,064 of 20,624,703,488 bytes — past 100% — still
-                    // refused the next install. Recent serving activity is the
-                    // signal that matters; a session no console has fetched from
-                    // in RIVAL_ACTIVE_WINDOW_SEC is not a rival, whatever its
-                    // bookkeeping says.
-                    && now_unix().saturating_sub(s.last_activity_unix)
-                        < RIVAL_ACTIVE_WINDOW_SEC
-            })
+            .find(|s| s.id != session_id && is_rival(s, &session, now_unix()))
             .map(|r| {
                 (
                     r.id.clone(),
@@ -4206,6 +4202,27 @@ mod loader_route_tests {
     }
 }
 
+/// Whether `other` is a live install of the same package to the same console as `new`.
+fn is_rival(other: &InstallSession, new: &InstallSession, now: u64) -> bool {
+    !other.cancelled
+        && other.terminal_status.is_none()
+        && !other.package_fingerprint.is_empty()
+        && other.package_fingerprint == new.package_fingerprint
+        // Another console installing the same package is not a rival: each pulls its own
+        // URL, and refusing it made one game impossible to send to two consoles at once.
+        && other.ps5_mgmt_addr == new.ps5_mgmt_addr
+        // ...and the console is ACTUALLY still pulling it.
+        //
+        // `terminal_status` is only set by the status handler, so a session nobody polls
+        // never reaches a terminal state and would block its own package forever. Hit
+        // immediately when dogfooding this guard: a session that had transferred
+        // 20,625,752,064 of 20,624,703,488 bytes — past 100% — still refused the next
+        // install. Recent serving activity is the signal that matters; a session no console
+        // has fetched from in RIVAL_ACTIVE_WINDOW_SEC is not a rival, whatever its
+        // bookkeeping says.
+        && now.saturating_sub(other.last_activity_unix) < RIVAL_ACTIVE_WINDOW_SEC
+}
+
 #[cfg(test)]
 mod persist_tests {
     use super::*;
@@ -4226,6 +4243,21 @@ mod persist_tests {
         std::fs::write(&file, saved.to_string()).unwrap();
         sessions = persist::load_from(&file);
         sessions.remove(id).expect("restored")
+    }
+
+    /// The same package going to two consoles is two installs, not a retry to refuse.
+    #[test]
+    fn a_rival_is_the_same_package_for_the_same_console() {
+        let dir = std::env::temp_dir().join(format!("ps5u-rival-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pkg = dir.join("game.pkg");
+        std::fs::write(&pkg, vec![7u8; 64]).unwrap();
+        let first = session("rival-a", pkg.clone(), 64);
+        let mut again = session("rival-b", pkg.clone(), 64);
+        assert!(is_rival(&first, &again, now_unix()));
+        again.ps5_mgmt_addr = "1.2.3.5:9120".into();
+        assert!(!is_rival(&first, &again, now_unix()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A restarted engine serves the sessions it was serving, and only while their files are

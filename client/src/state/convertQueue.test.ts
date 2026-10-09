@@ -26,6 +26,14 @@ describe("the Convert queue", () => {
   const add = (source: string, then: "keep" | "stream" = "stream") =>
     useConvertQueue.getState().add({ source, outputDir: "/out", compression: "balanced", then, host: "10.0.0.2" });
 
+  it("takes the same game for a second console, but not twice for one", () => {
+    const q = useConvertQueue.getState();
+    const item = { source: "/g/A", outputDir: "/out", compression: "balanced", then: "stream" } as const;
+    expect(q.add({ ...item, host: "10.0.0.2" })).toBe(true);
+    expect(q.add({ ...item, host: "10.0.0.2" })).toBe(false);
+    expect(q.add({ ...item, host: "10.0.0.3" })).toBe(true);
+  });
+
   it("builds one at a time, and starts the next while the first installs", async () => {
     add("/g/A");
     add("/g/B");
