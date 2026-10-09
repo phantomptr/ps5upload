@@ -3,7 +3,7 @@
 use ava1::hex;
 use ava1::keys::{self, MAC_LEN};
 use ava1::wire::SplitMix;
-use chacha20poly1305::aead::AeadInPlace;
+use chacha20poly1305::aead::AeadInOut;
 use chacha20poly1305::{ChaCha20Poly1305, Key, KeyInit, Nonce};
 
 fn h(s: &str) -> Vec<u8> {
@@ -36,8 +36,8 @@ fn rfc8439_aead_vector() {
 fn reference_seal(key: &[u8; 32], n: u64, ad: &[u8], buf: &mut Vec<u8>) {
     let mut nonce = [0u8; 12];
     nonce[4..].copy_from_slice(&n.to_le_bytes());
-    let tag = ChaCha20Poly1305::new(Key::from_slice(key))
-        .encrypt_in_place_detached(Nonce::from_slice(&nonce), ad, buf)
+    let tag = ChaCha20Poly1305::new(&Key::from(*key))
+        .encrypt_inout_detached(&Nonce::from(nonce), ad, buf.as_mut_slice().into())
         .unwrap();
     buf.extend_from_slice(&tag);
 }

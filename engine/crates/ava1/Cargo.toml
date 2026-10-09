@@ -20,7 +20,7 @@ zeroize = "1"
 
 [dev-dependencies]
 # The frame AEAD before ring: the differential oracle in tests/aead.rs.
-chacha20poly1305 = "0.10"
+chacha20poly1305 = "0.11"
 serde_json.workspace = true
 tokio = { workspace = true, features = ["net", "time", "sync", "io-util", "macros", "rt-multi-thread", "test-util"] }
 ava1-chaos = { path = "../ava1-chaos" }
