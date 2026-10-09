@@ -4,6 +4,17 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.7.2
+
+### Fixed
+
+- **Collection covers, for real this time.** 6.7.1 let the covers through the engine's guard only
+  in a form the desktop app's window never uses, so they stayed blank there. The app now fetches
+  them the same way it already fetches console icons when the window can't load them directly,
+  so every game read from your drives shows its cover in the Collection and on its page.
+
+---
+
 ## 6.7.1
 
 **Fixes: Collection covers, multi-part RAR uploads, and a full drive's leftover file.**
