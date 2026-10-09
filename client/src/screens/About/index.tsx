@@ -11,6 +11,7 @@ import {
   ShieldAlert,
 } from "lucide-react";
 import { openExternalUrl as openExternal } from "../../lib/openExternalUrl";
+import { COFFEE_URL } from "../../lib/supportLinks";
 import { getAppVersion } from "../../lib/appVersion";
 
 import { useTr } from "../../state/lang";
@@ -26,7 +27,7 @@ const URLS = {
   disclaimer: "https://github.com/phantomptr/ps5upload/blob/main/DISCLAIMER.md",
   author: "https://x.com/phantomptr",
   discord: "https://discord.gg/fzK3xddtrM",
-  coffee: "https://ko-fi.com/B0B81S0WUA",
+  coffee: COFFEE_URL,
   email: `mailto:${AUTHOR_EMAIL}`,
 };
 

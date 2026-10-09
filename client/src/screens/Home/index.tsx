@@ -6,6 +6,7 @@ import {
   ArrowRight,
   Bell,
   Cable,
+  Coffee,
   CheckCircle2,
   Cpu,
   FolderTree,
@@ -28,6 +29,8 @@ import { useRunningAppsStore } from "../../state/runningApps";
 import { useSensors } from "../../state/sensors";
 import { Badge, Card, ConsoleChip, Sparkline, Spinner } from "../../components";
 import { useTr } from "../../state/lang";
+import { openExternalUrl } from "../../lib/openExternalUrl";
+import { COFFEE_URL } from "../../lib/supportLinks";
 import { ServersCard } from "./ServersCard";
 import { HealthCard } from "./HealthCard";
 import {
@@ -102,11 +105,25 @@ export default function HomeScreen() {
               )}
             </p>
           </div>
-          <Badge tone={connected ? "good" : "warn"} size="md" dot className="self-start">
-            {connected
-              ? tr("v5_home_connected", "Connected")
-              : tr("v5_home_setup_required", "Setup required")}
-          </Badge>
+          {/* The connection badge, and Buy me a coffee right under it: right-aligned on a wide
+              window, under the title on a phone. */}
+          <div className="flex flex-col items-start gap-2 sm:items-end">
+            <span data-testid="home-connection-badge">
+              <Badge tone={connected ? "good" : "warn"} size="md" dot>
+                {connected
+                  ? tr("v5_home_connected", "Connected")
+                  : tr("v5_home_setup_required", "Setup required")}
+              </Badge>
+            </span>
+            <button
+              type="button"
+              onClick={() => void openExternalUrl(COFFEE_URL)}
+              className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-[var(--color-border)] px-3 text-xs font-medium text-[var(--color-muted)] transition-colors hover:border-[var(--color-border-strong)] hover:text-[var(--color-text)]"
+            >
+              <Coffee size={13} aria-hidden className="text-[var(--color-warn)]" />
+              {tr("buy_coffee", "Buy me a coffee")}
+            </button>
+          </div>
         </div>
       </header>
 
