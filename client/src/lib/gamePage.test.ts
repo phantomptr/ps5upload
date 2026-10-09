@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { CollectionLocation, CollectionOffer } from "../api/collection";
 import type { ConsoleEntry, GameView } from "../api/games";
-import { ageLabel, driveOffers, hasTitleId, needsReread, queueLinkFor, REREAD_MS, rowActions, summaryLine, titleIdFromContentId } from "./gamePage";
+import { ageLabel, driveOffers, hasTitleId, offersAfterReread, rosterOnly, needsReread, queueLinkFor, REREAD_MS, rowActions, summaryLine, titleIdFromContentId } from "./gamePage";
 
 const tr = (_k: string, vars?: Record<string, string | number>, fallback?: string) =>
   (fallback ?? "").replace(/\{(\w+)\}/g, (_, k) => String(vars?.[k] ?? ""));
@@ -130,5 +130,35 @@ describe("driveOffers", () => {
   it("lists nothing for a console the engine has not read", () => {
     expect(driveOffers(view, "2.2.2.2", "updates")).toEqual([]);
     expect(driveOffers(null, "1.1.1.1", "updates")).toEqual([]);
+  });
+});
+
+describe("offersAfterReread", () => {
+  it("installs what the console still lacks after reading it again", () => {
+    const fresh = entry({ installed: true, update: offer("gp", "/u2", "01.006"), dlc_missing: [] });
+    expect(offersAfterReread("update", fresh, []).map((o) => o.path)).toEqual(["/u2"]);
+  });
+  it("installs nothing when the console has it by now", () => {
+    expect(offersAfterReread("update", entry({ installed: true }), [])).toEqual([]);
+    expect(offersAfterReread("dlc", entry({ installed: true, dlc_missing: [] }), [])).toEqual([]);
+  });
+  it("installs the base only while the game is still missing", () => {
+    const missing = entry({ base: offer("gd", "/b"), dlc_missing: [] });
+    expect(offersAfterReread("install", missing, []).map((o) => o.path)).toEqual(["/b"]);
+    expect(offersAfterReread("install", entry({ installed: true }), [])).toEqual([]);
+  });
+});
+
+describe("rosterOnly", () => {
+  it("drops consoles the app no longer has", () => {
+    const view: GameView = {
+      title_id: "PPSA01234",
+      title: "Astro",
+      platform: "PS5",
+      cover: null,
+      copies: [],
+      consoles: [entry({ host: "1.1.1.1" }), entry({ host: "9.9.9.9" })],
+    };
+    expect(rosterOnly(view, ["1.1.1.1"]).consoles.map((c) => c.host)).toEqual(["1.1.1.1"]);
   });
 });

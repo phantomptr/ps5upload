@@ -3746,6 +3746,7 @@ game_drive_offers: "আপনার ড্রাইভে",
 activity_showing_console: "{name} দেখানো হচ্ছে",
 activity_show_this_console: "এই কনসোল দেখান",
 game_open_page: "গেম পেজ খুলুন",
+game_already_on: "{name}-এ এটি আগে থেকেই আছে",
 };
 
 export default bn;

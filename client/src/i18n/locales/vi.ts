@@ -3748,6 +3748,7 @@ game_drive_offers: "Trên ổ của bạn",
 activity_showing_console: "Đang hiển thị {name}",
 activity_show_this_console: "Hiển thị máy này",
 game_open_page: "Mở trang trò chơi",
+game_already_on: "{name} đã có rồi",
 };
 
 export default vi;

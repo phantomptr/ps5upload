@@ -3693,6 +3693,7 @@ game_drive_offers: "你的磁碟上",
 activity_showing_console: "正在顯示 {name}",
 activity_show_this_console: "顯示此主機",
 game_open_page: "開啟遊戲頁面",
+game_already_on: "{name} 上已經有了",
 };
 
 export default zh_TW;

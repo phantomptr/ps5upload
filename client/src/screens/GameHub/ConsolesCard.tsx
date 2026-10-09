@@ -6,7 +6,16 @@ import type { CollectionLocation } from "../../api/collection";
 import type { ConsoleEntry, GameView } from "../../api/games";
 import { Badge, Button, Card, Spinner } from "../../components";
 import { bestSendable, sendKind } from "../../lib/collectionSend";
-import { ageLabel, gamePath, hasTitleId, needsReread, queueLinkFor, rowActions, type RowAction } from "../../lib/gamePage";
+import {
+  ageLabel,
+  gamePath,
+  hasTitleId,
+  needsReread,
+  offersAfterReread,
+  queueLinkFor,
+  rowActions,
+  type RowAction,
+} from "../../lib/gamePage";
 import { useConnectionStore } from "../../state/connection";
 import { useCopyActivity } from "../../state/copyActivity";
 import { useTr } from "../../state/lang";
@@ -36,7 +45,7 @@ export function ConsolesCard({
   /** The connected console's IP when its helper answers; "" otherwise. */
   connected: string;
   view: GameView | null;
-  refresh: (host: string) => Promise<void>;
+  refresh: (host: string) => Promise<ConsoleEntry>;
   onPlay: () => void;
   launching: boolean;
   /** The console whose send panel is open, or null. */
@@ -113,7 +122,7 @@ function ConsoleRow({
   titleId: string;
   entry: ConsoleEntry | undefined;
   copies: CollectionLocation[];
-  refresh: (host: string) => Promise<void>;
+  refresh: (host: string) => Promise<ConsoleEntry>;
   onPlay: () => void;
   launching: boolean;
   sending: boolean;
@@ -154,10 +163,17 @@ function ConsoleRow({
     }
   };
 
-  const install = async (offers: NonNullable<ConsoleEntry["base"]>[]) => {
-    // A saved state can be old: what the console has decides what goes in.
+  const install = async (kind: "install" | "update" | "dlc", chosen: NonNullable<ConsoleEntry["base"]>[]) => {
+    // A saved state can be old: what the console has now decides what goes in. When it cannot
+    // be read, the choice stands (the queue still refuses to erase an installed game).
+    let offers = chosen;
     if (entry && needsReread(entry.read_at, now)) {
-      await refresh(host).catch(() => {});
+      const fresh = await refresh(host).catch(() => null);
+      if (fresh) offers = offersAfterReread(kind, fresh, copies);
+    }
+    if (offers.length === 0) {
+      pushNotification("info", tr("game_already_on", { name }, "{name} has it already"));
+      return;
     }
     const n = installOffers(
       host,
@@ -198,7 +214,7 @@ function ConsoleRow({
         );
       case "install":
         return (
-          <Button key="install" size="sm" variant="primary" leftIcon={<Download size={13} />} onClick={() => void install(a.offers)}>
+          <Button key="install" size="sm" variant="primary" leftIcon={<Download size={13} />} onClick={() => void install("install", a.offers)}>
             {a.offers.length > 1
               ? tr("collection.install_with", { n: a.offers.length - 1 }, "Install with its {n} add-ons")
               : tr("game_install", undefined, "Install")}
@@ -206,13 +222,13 @@ function ConsoleRow({
         );
       case "update":
         return (
-          <Button key="update" size="sm" variant="primary" leftIcon={<Download size={13} />} onClick={() => void install([a.offer])}>
+          <Button key="update" size="sm" variant="primary" leftIcon={<Download size={13} />} onClick={() => void install("update", [a.offer])}>
             {tr("collection.install_update", { v: a.offer.version }, "Install update {v}")}
           </Button>
         );
       case "dlc":
         return (
-          <Button key="dlc" size="sm" variant="secondary" leftIcon={<Download size={13} />} onClick={() => void install(a.offers)}>
+          <Button key="dlc" size="sm" variant="secondary" leftIcon={<Download size={13} />} onClick={() => void install("dlc", a.offers)}>
             {tr("collection.install_dlc", { n: a.offers.length }, "Install DLC ({n})")}
           </Button>
         );

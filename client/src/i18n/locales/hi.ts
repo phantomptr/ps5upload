@@ -3779,6 +3779,7 @@ game_drive_offers: "आपकी ड्राइव पर",
 activity_showing_console: "{name} दिखाया जा रहा है",
 activity_show_this_console: "यह कंसोल दिखाएँ",
 game_open_page: "गेम पेज खोलें",
+game_already_on: "{name} पर यह पहले से है",
 };
 
 export default hi;

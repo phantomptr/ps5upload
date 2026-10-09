@@ -4122,6 +4122,7 @@ game_drive_offers: "روی درایوهای شما",
 activity_showing_console: "نمایش {name}",
 activity_show_this_console: "نمایش این کنسول",
 game_open_page: "باز کردن صفحه بازی",
+game_already_on: "{name} این را از قبل دارد",
 };
 
 export default fa;

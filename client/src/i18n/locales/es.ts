@@ -3693,6 +3693,7 @@ game_drive_offers: "En tus unidades",
 activity_showing_console: "Mostrando {name}",
 activity_show_this_console: "Mostrar esta consola",
 game_open_page: "Abrir la página del juego",
+game_already_on: "{name} ya lo tiene",
 };
 
 export default es;

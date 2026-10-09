@@ -3699,6 +3699,7 @@ game_drive_offers: "你的驱动器上",
 activity_showing_console: "正在显示 {name}",
 activity_show_this_console: "显示此主机",
 game_open_page: "打开游戏页面",
+game_already_on: "{name} 上已经有了",
 };
 
 export default zh_CN;

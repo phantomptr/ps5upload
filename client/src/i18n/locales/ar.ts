@@ -3746,6 +3746,7 @@ game_drive_offers: "على أقراصك",
 activity_showing_console: "يُعرض {name}",
 activity_show_this_console: "اعرض هذا الجهاز",
 game_open_page: "افتح صفحة اللعبة",
+game_already_on: "{name} لديه هذا بالفعل",
 };
 
 export default ar;

@@ -158,6 +158,11 @@ describe("the engine's saved console state follows the roster", () => {
       useRosterStore.getState().rename(id, "Old Phat");
       await Promise.resolve();
       expect(calls.filter((c) => c.url.endsWith("/api/console-snapshots/keep")).length).toBe(before);
+      // The last console removed is forgotten too.
+      useRosterStore.getState().remove(id);
+      await Promise.resolve();
+      const last = calls.filter((c) => c.url.endsWith("/api/console-snapshots/keep")).pop();
+      expect(JSON.parse(last!.body)).toEqual({ hosts: [] });
     } finally {
       globalThis.fetch = realFetch;
     }

@@ -4805,6 +4805,8 @@ async fn ps5_apps_installed(
             // Whether the list below is the console's whole installed set.
             let mut complete = listing_whole;
             let mut app_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+            // The internal drive's listing: None when it could not be read.
+            let mut internal_listing: Option<usize> = None;
             for root in ["/user/app", "/mnt/ext0/user/app", "/mnt/ext1/user/app"] {
                 if let Ok(l) = list_dir(
                     &addr,
@@ -4814,9 +4816,14 @@ async fn ps5_apps_installed(
                         limit: 512,
                     },
                 ) {
+                    if root == "/user/app" {
+                        internal_listing = Some(l.entries.len());
+                    }
                     app_dirs.extend(l.entries.into_iter().map(|e| e.name));
                 }
             }
+            complete = complete
+                && crate::console_snapshot::app_folders_whole(internal_listing, app_dirs.len());
             if !app_dirs.is_empty() {
                 match appdb_query(&addr) {
                     Ok(appdb) => {

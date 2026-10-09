@@ -107,3 +107,24 @@ export function driveOffers(
   if (!e?.installed) return [];
   return kind === "updates" ? (e.update ? [e.update] : []) : e.dlc_missing;
 }
+
+/** What an Install / Install update / Install DLC button queues once the console was read again:
+ *  the same kind of action from the fresh state, or nothing when the console has it by now. */
+export function offersAfterReread(
+  kind: "install" | "update" | "dlc",
+  fresh: ConsoleEntry,
+  copies: CollectionLocation[],
+): CollectionOffer[] {
+  for (const a of rowActions(fresh, copies, false)) {
+    if (a.kind !== kind) continue;
+    if (a.kind === "update") return [a.offer];
+    if (a.kind === "install" || a.kind === "dlc") return a.offers;
+  }
+  return [];
+}
+
+/** The view with only the consoles the app still has (the engine may know older ones). */
+export function rosterOnly(view: GameView, hosts: string[]): GameView {
+  const keep = new Set(hosts.map(hostOf));
+  return { ...view, consoles: view.consoles.filter((c) => keep.has(c.host)) };
+}

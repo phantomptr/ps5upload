@@ -148,10 +148,21 @@ pub async fn refresh(Path(id): Path<String>, Query(q): Query<RefreshQuery>) -> R
     let game = collection_game(&id);
     let title = game.as_ref().map(|g| g.title.clone()).unwrap_or_default();
     let now = console_snapshot::now_unix();
-    let snaps = console_snapshot::with(|s| {
-        console_snapshot::merge_detailed(s, &addr, &id, &t, &title, now);
-        s.clone()
-    });
+    let snaps = {
+        let (addr, id) = (addr.clone(), id.clone());
+        // The save writes the file: off the async workers.
+        match tokio::task::spawn_blocking(move || {
+            console_snapshot::with(|s| {
+                console_snapshot::merge_detailed(s, &addr, &id, &t, &title, now);
+                s.clone()
+            })
+        })
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        }
+    };
     let host = host_key(&addr);
     match game_view(&id, game.as_ref(), &snaps)
         .and_then(|v| v.consoles.into_iter().find(|c| c.host == host))
@@ -168,11 +179,17 @@ pub struct KeepBody {
 
 /// `POST /api/console-snapshots/keep` — forgets consoles the app no longer has.
 pub async fn keep(Json(body): Json<KeepBody>) -> Response {
-    let kept = console_snapshot::with(|s| {
-        console_snapshot::keep_hosts(s, &body.hosts);
-        s.len()
-    });
-    Json(serde_json::json!({ "kept": kept })).into_response()
+    let kept = tokio::task::spawn_blocking(move || {
+        console_snapshot::with(|s| {
+            console_snapshot::keep_hosts(s, &body.hosts);
+            s.len()
+        })
+    })
+    .await;
+    match kept {
+        Ok(kept) => Json(serde_json::json!({ "kept": kept })).into_response(),
+        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
 
 #[cfg(test)]

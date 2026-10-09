@@ -61,7 +61,7 @@ import {
   type SaveEntry,
 } from "../../api/ps5";
 import { transferAddr, mgmtAddr, hostOf } from "../../lib/addr";
-import { driveOffers, gamePath, summaryLine } from "../../lib/gamePage";
+import { driveOffers, gamePath, rosterOnly, summaryLine } from "../../lib/gamePage";
 import type { GameView } from "../../api/games";
 import { installOffers } from "./collectionInstall";
 import { getEngineUrl } from "../../state/engine";
@@ -373,7 +373,7 @@ export default function GameHubScreen() {
             </div>
             {gv.view && (gv.view.consoles.length > 0 || gv.view.copies.length > 0) && (
               <p className="mt-1 text-sm text-[var(--color-muted)]" data-testid="game-summary">
-                {summaryLine(gv.view, names, tr)}
+                {summaryLine(rosterOnly(gv.view, Object.keys(names)), names, tr)}
               </p>
             )}
           </div>

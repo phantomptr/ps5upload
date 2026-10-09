@@ -465,20 +465,47 @@ pub struct ConsoleQuery {
 
 /// A title's installed version, normalized like the collection's: `APP_VER` (PS4) or
 /// `CONTENT_VERSION` (PS5). `None` when it could not be read.
-/// The console's titles: upper-case title ID → the path it was registered from, if any.
+/// The console's titles: upper-case title ID → the path it was registered from, if any. A title
+/// whose app folder is on the internal or an extended drive counts too: the installed-apps list
+/// counts those, and two reads that disagreed made a game on the M.2 drive flip between
+/// installed and not.
 pub(crate) fn installed_titles(
     addr: &str,
 ) -> Result<std::collections::HashMap<String, Option<String>>, String> {
     let registered = ps5upload_core::fs_ops::app_list_registered(addr)
         .map_err(|e| format!("the console's titles could not be read: {e:#}"))?;
-    Ok(registered
-        .apps
+    let mut folders = Vec::new();
+    for root in ["/user/app", "/mnt/ext0/user/app", "/mnt/ext1/user/app"] {
+        folders.extend(console_names(addr, root));
+    }
+    Ok(with_app_folders(
+        registered
+            .apps
+            .into_iter()
+            .map(|a| (a.title_id, (!a.src.is_empty()).then_some(a.src))),
+        folders,
+    ))
+}
+
+/// Registered titles plus the title-ID-shaped app folders, keys upper case.
+fn with_app_folders(
+    registered: impl IntoIterator<Item = (String, Option<String>)>,
+    folders: impl IntoIterator<Item = String>,
+) -> std::collections::HashMap<String, Option<String>> {
+    let mut out: std::collections::HashMap<String, Option<String>> = registered
         .into_iter()
-        .map(|a| {
-            let from = (!a.src.is_empty()).then_some(a.src);
-            (a.title_id.to_ascii_uppercase(), from)
-        })
-        .collect())
+        .map(|(id, from)| (id.to_ascii_uppercase(), from))
+        .collect();
+    for f in folders {
+        let id = f.to_ascii_uppercase();
+        let shaped = id.len() == 9
+            && id[..4].bytes().all(|b| b.is_ascii_uppercase())
+            && id[4..].bytes().all(|b| b.is_ascii_digit());
+        if shaped {
+            out.entry(id).or_insert(None);
+        }
+    }
+    out
 }
 
 /// What the console has of one title: installed, its version, an update, its DLC.
@@ -587,5 +614,25 @@ pub async fn get_console(Query(q): Query<ConsoleQuery>) -> Response {
         Ok(Ok(games)) => Json(serde_json::json!({ "games": games })).into_response(),
         Ok(Err(e)) => err(StatusCode::BAD_GATEWAY, e),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod installed_titles_tests {
+    use super::with_app_folders;
+
+    #[test]
+    fn an_app_folder_counts_as_installed_and_keeps_the_registered_source() {
+        let m = with_app_folders(
+            [("ppsa00001".to_string(), Some("/data/a".to_string()))],
+            [
+                "PPSA00001".to_string(),
+                "PPSA00002".to_string(),
+                "not-a-title".to_string(),
+            ],
+        );
+        assert_eq!(m.len(), 2);
+        assert_eq!(m["PPSA00001"].as_deref(), Some("/data/a"));
+        assert_eq!(m["PPSA00002"], None);
     }
 }

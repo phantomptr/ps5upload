@@ -4032,6 +4032,7 @@ game_drive_offers: "Na twoich dyskach",
 activity_showing_console: "Wyświetlono: {name}",
 activity_show_this_console: "Pokaż tę konsolę",
 game_open_page: "Otwórz stronę gry",
+game_already_on: "{name} już to ma",
 };
 
 export default pl;

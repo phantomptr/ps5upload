@@ -4228,6 +4228,7 @@ game_drive_offers: "On your drives",
 activity_showing_console: "Showing {name}",
 activity_show_this_console: "Show this console",
 game_open_page: "Open game page",
+game_already_on: "{name} has it already",
 };
 
 export default en;

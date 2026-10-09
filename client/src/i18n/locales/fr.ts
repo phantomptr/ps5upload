@@ -3780,6 +3780,7 @@ game_drive_offers: "Sur vos disques",
 activity_showing_console: "Affichage de {name}",
 activity_show_this_console: "Afficher cette console",
 game_open_page: "Ouvrir la page du jeu",
+game_already_on: "{name} l'a déjà",
 };
 
 export default fr;

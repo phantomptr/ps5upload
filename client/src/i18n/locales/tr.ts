@@ -3753,6 +3753,7 @@ game_drive_offers: "Sürücülerinde",
 activity_showing_console: "{name} gösteriliyor",
 activity_show_this_console: "Bu konsolu göster",
 game_open_page: "Oyun sayfasını aç",
+game_already_on: "{name} üzerinde zaten var",
 };
 
 export default tr;

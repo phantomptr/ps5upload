@@ -607,6 +607,7 @@ function rosterHosts(profiles: PS5Profile[]): string[] {
 }
 useRosterStore.subscribe((s, prev) => {
   const now = rosterHosts(s.profiles);
-  if (now.length === 0 || now.join(",") === rosterHosts(prev.profiles).join(",")) return;
+  // An empty roster is sent too: the last console removed is forgotten as well.
+  if (now.join(",") === rosterHosts(prev.profiles).join(",")) return;
   void gamesApi.keep(now).catch(() => {});
 });

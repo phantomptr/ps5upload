@@ -3770,6 +3770,7 @@ game_drive_offers: "ในไดรฟ์ของคุณ",
 activity_showing_console: "กำลังแสดง {name}",
 activity_show_this_console: "แสดงคอนโซลนี้",
 game_open_page: "เปิดหน้าเกม",
+game_already_on: "{name} มีอยู่แล้ว",
 };
 
 export default th;

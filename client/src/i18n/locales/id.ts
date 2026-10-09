@@ -3755,6 +3755,7 @@ game_drive_offers: "Di drive kamu",
 activity_showing_console: "Menampilkan {name}",
 activity_show_this_console: "Tampilkan konsol ini",
 game_open_page: "Buka halaman game",
+game_already_on: "{name} sudah memilikinya",
 };
 
 export default id;

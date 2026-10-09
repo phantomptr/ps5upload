@@ -28,7 +28,7 @@ function render(view: GameView | null, titleId = "PPSA01234") {
         ]}
         connected="192.168.1.100"
         view={view}
-        refresh={async () => {}}
+        refresh={async (host) => ({ host, read_at: 0, installed: false, dlc_missing: [] })}
         onPlay={() => {}}
         launching={false}
         sendHost={null}

@@ -3693,6 +3693,7 @@ game_drive_offers: "Sulle tue unità",
 activity_showing_console: "Mostra {name}",
 activity_show_this_console: "Mostra questa console",
 game_open_page: "Apri la pagina del gioco",
+game_already_on: "{name} ce l'ha già",
 };
 
 export default it;

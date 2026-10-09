@@ -3781,6 +3781,7 @@ game_drive_offers: "내 드라이브",
 activity_showing_console: "{name} 표시 중",
 activity_show_this_console: "이 콘솔 표시",
 game_open_page: "게임 페이지 열기",
+game_already_on: "{name}에 이미 있습니다",
 };
 
 export default ko;

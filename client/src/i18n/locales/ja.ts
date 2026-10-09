@@ -3784,6 +3784,7 @@ game_drive_offers: "ドライブ上",
 activity_showing_console: "{name} を表示中",
 activity_show_this_console: "この本体を表示",
 game_open_page: "ゲームページを開く",
+game_already_on: "{name} にはすでにあります",
 };
 
 export default ja;

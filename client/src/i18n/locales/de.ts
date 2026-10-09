@@ -3754,6 +3754,7 @@ game_drive_offers: "Auf deinen Laufwerken",
 activity_showing_console: "{name} wird angezeigt",
 activity_show_this_console: "Diese Konsole anzeigen",
 game_open_page: "Spielseite öffnen",
+game_already_on: "{name} hat es bereits",
 };
 
 export default de;

@@ -4099,6 +4099,7 @@ game_drive_offers: "A meghajtóidon",
 activity_showing_console: "{name} látható",
 activity_show_this_console: "Ennek a konzolnak a megjelenítése",
 game_open_page: "Játékoldal megnyitása",
+game_already_on: "A(z) {name} már tartalmazza",
 };
 
 export default hu;

@@ -3693,6 +3693,7 @@ game_drive_offers: "На ваших дисках",
 activity_showing_console: "Показано: {name}",
 activity_show_this_console: "Показать эту консоль",
 game_open_page: "Открыть страницу игры",
+game_already_on: "На {name} это уже есть",
 };
 
 export default ru;
