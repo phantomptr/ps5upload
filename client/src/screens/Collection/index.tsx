@@ -171,7 +171,7 @@ export default function CollectionScreen() {
     pushNotification(
       "info",
       tr("collection.queued", { n }, "{n} packages queued for install"),
-      { link: "/install" },
+      { link: "/install-package" },
     );
   }
   const roots = s.settings?.roots ?? [];

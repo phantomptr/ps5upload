@@ -276,7 +276,7 @@ function LocationRow({
       </div>
       {activity && (
         <div className="mt-2">
-          <ActivityLine activity={activity} onOpen={() => navigate("installing" in activity && activity.installing ? "/install" : "/upload")} />
+          <ActivityLine activity={activity} onOpen={() => navigate("installing" in activity && activity.installing ? "/install-package" : "/upload")} />
         </div>
       )}
     </li>
@@ -344,7 +344,7 @@ function ConsoleSection({
     pushNotification(
       "info",
       tr("collection.queued", { n }, "{n} packages queued for install"),
-      { link: "/install" },
+      { link: "/install-package" },
     );
   };
   const all = [
@@ -451,7 +451,7 @@ function ConsoleSection({
       {(queued || installActivity) && (
         <div className="mt-2">
           {installActivity ? (
-            <ActivityLine activity={installActivity} onOpen={() => navigate("/install")} />
+            <ActivityLine activity={installActivity} onOpen={() => navigate("/install-package")} />
           ) : (
             <p className="text-xs text-[var(--color-good)]">
               {tr("collection.queued_short", undefined, "Queued. Progress shows in Install Package.")}
