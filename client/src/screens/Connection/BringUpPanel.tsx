@@ -2,7 +2,11 @@ import { CheckCircle2, Zap } from "lucide-react";
 
 import { Button, Spinner, ErrorCard } from "../../components";
 import { useConnectionStore } from "../../state/connection";
-import { useBringUpStore, type BringUpStatus } from "../../state/bringUp";
+import {
+  bringUpStatusFor,
+  useBringUpStore,
+  type BringUpStatus,
+} from "../../state/bringUp";
 import { usePayloadPlaylistsStore } from "../../state/payloadPlaylists";
 import { useTr } from "../../state/lang";
 
@@ -15,7 +19,8 @@ import { useTr } from "../../state/lang";
 export function BringUpPanel() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
-  const status = useBringUpStore((s) => s.status);
+  // This console's status only: another console's bring-up neither shows here nor blocks Run.
+  const status = useBringUpStore((s) => bringUpStatusFor(s, host));
   const run = useBringUpStore((s) => s.run);
   const bringUpId = usePayloadPlaylistsStore(
     (s) => s.autoLoader.bringUpPlaylistId,

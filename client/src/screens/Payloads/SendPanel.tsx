@@ -124,8 +124,12 @@ function fileNameFrom(path: string): string {
 
 export default function SendPanel() {
   const tr = useTr();
-  const host = useConnectionStore((s) => s.host);
-  const setHost = useConnectionStore((s) => s.setHost);
+  const selectedHost = useConnectionStore((s) => s.host);
+  // Where this send goes: the selected console until the user types another address here. It
+  // never changes the selected console (that switched consoles on every keystroke, threw away the
+  // other consoles' kept screens and snapped the box back to the old address).
+  const [hostDraft, setHostDraft] = useState<string | null>(null);
+  const host = hostDraft ?? selectedHost;
   const [elfPath, setElfPath] = useState<string | null>(null);
   // Mirror of `elfPath` used by the editable text input so the user can
   // paste/type a path instead of being forced through the file picker.
@@ -348,7 +352,7 @@ export default function SendPanel() {
     // The record's port is a deliberate choice — pin it so a later file
     // pick doesn't auto-derive a different port over it.
     setPortManuallyEdited(true);
-    if (rec.host && !host) setHost(rec.host);
+    if (rec.host && !host) setHostDraft(rec.host);
     await probeFile(rec.path);
   };
 
@@ -407,7 +411,7 @@ export default function SendPanel() {
               label={tr("sendpayload_ps5_ip_address", undefined, "PS5 IP address")}
               value={host}
               onChange={(e) => {
-                setHost(e.target.value);
+                setHostDraft(e.target.value);
                 clearSendBannerOnEdit();
               }}
               placeholder="192.168.1.50"

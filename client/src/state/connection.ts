@@ -189,6 +189,10 @@ export interface ConnectionState {
   ) => void;
   setStep1: (step: ConnStep, msg: string) => void;
   setStep2: (step: ConnStep, msg: string) => void;
+  /** Set a check step for `host` only while it is the selected console: a check that answers
+   *  after a tab switch must not land on the other console's screen. */
+  setStep1For: (host: string, step: ConnStep, msg: string) => void;
+  setStep2For: (host: string, step: ConnStep, msg: string) => void;
   /** Write one console's live runtime (keyed by host). When `host` is the
    *  active console, the flat top-level fields are mirrored so the screens
    *  (which read the active tab) update too. Used by the fan-out poller. */
@@ -247,6 +251,10 @@ const useLiveConnectionStore = create<ConnectionState>((set) => ({
   setStatus: (patch) => set(patch),
   setStep1: (step1, step1Msg) => set({ step1, step1Msg }),
   setStep2: (step2, step2Msg) => set({ step2, step2Msg }),
+  setStep1For: (host, step1, step1Msg) =>
+    set((s) => (hostOf(s.host) === hostOf(host) ? { step1, step1Msg } : {})),
+  setStep2For: (host, step2, step2Msg) =>
+    set((s) => (hostOf(s.host) === hostOf(host) ? { step2, step2Msg } : {})),
   setHostStatus: (host, patch) =>
     set((s) => {
       const key = hostOf(host) || "_";

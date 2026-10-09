@@ -3,7 +3,7 @@ import { useNavigate } from "react-router";
 import { ArrowRight, Search } from "lucide-react";
 
 import { useThemeStore } from "../state/theme";
-import { useConnectionStore } from "../state/connection";
+import { selectConsoleByAddress } from "../state/roster";
 import { pushNotification } from "../state/notifications";
 import { useTr } from "../state/lang";
 
@@ -34,7 +34,6 @@ interface Command {
 function useCommands(close: () => void): Command[] {
   const navigate = useNavigate();
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
-  const setHost = useConnectionStore((s) => s.setHost);
   const tr = useTr();
 
   return useMemo<Command[]>(() => {
@@ -126,7 +125,7 @@ function useCommands(close: () => void): Command[] {
             const text = await navigator.clipboard.readText();
             const match = text.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/);
             if (match) {
-              setHost(match[1]);
+              selectConsoleByAddress(match[1]);
               pushNotification(
                 "info",
                 tr("cmdpalette_host_updated", undefined, "Host updated"),
@@ -172,7 +171,7 @@ function useCommands(close: () => void): Command[] {
         },
       },
     ];
-  }, [navigate, toggleTheme, setHost, close, tr]);
+  }, [navigate, toggleTheme, close, tr]);
 }
 
 export function CommandPalette() {
