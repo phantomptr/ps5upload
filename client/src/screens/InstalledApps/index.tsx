@@ -26,7 +26,8 @@ import {
   Layers,
 } from "lucide-react";
 
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
+import { gamePath } from "../../lib/gamePage";
 import { openInFileSystem } from "../../state/fsNavigation";
 import { useConnectionStore } from "../../state/connection";
 import { useRunningAppsStore } from "../../state/runningApps";
@@ -256,7 +257,9 @@ function NowPlayingBanner({
             </div>
             <div className="min-w-0 flex-1 !px-2 sm:!px-4">
               <div className="truncate text-sm font-semibold" title={t.titleName}>
-                {t.titleName}
+                <Link to={gamePath(t.titleId)} className="hover:underline">
+                  {t.titleName}
+                </Link>
               </div>
               <div className="truncate font-mono text-xs text-[var(--color-muted)]">
                 {secs && secs > 0 ? formatPlayTime(secs) : t.titleId}
@@ -401,7 +404,14 @@ export function AppCard({
             className="line-clamp-2 min-h-[2.5rem] text-sm font-semibold"
             title={title.titleName}
           >
-            {title.titleName}
+            {title.system ? (
+              title.titleName
+            ) : (
+              // The game's page: every console and every copy of it.
+              <Link to={gamePath(title.titleId)} className="hover:underline">
+                {title.titleName}
+              </Link>
+            )}
           </div>
           <div
             className="mt-1 flex min-w-0 items-center gap-2"

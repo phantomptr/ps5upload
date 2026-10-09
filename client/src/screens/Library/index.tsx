@@ -1,3 +1,5 @@
+import { Link } from "react-router";
+import { gamePath } from "../../lib/gamePage";
 import { useMakeWay } from "../../lib/useMakeWay";
 import { smpHandoffNote } from "../../lib/smpHandoffNote";
 import {
@@ -2260,7 +2262,14 @@ function LibraryRowImpl({
         />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">
-            {meta?.title ?? registeredTitle?.titleName ?? entry.name}
+            {entry.titleId ? (
+              // The game's page: every console and every copy of it.
+              <Link to={gamePath(entry.titleId)} className="hover:underline">
+                {meta?.title ?? registeredTitle?.titleName ?? entry.name}
+              </Link>
+            ) : (
+              (meta?.title ?? registeredTitle?.titleName ?? entry.name)
+            )}
           </div>
           <div className="mt-0.5 truncate font-mono text-xs text-[var(--color-muted)]">
             {(meta?.title_id ?? registeredTitle?.titleId) ? (

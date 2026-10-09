@@ -9,6 +9,7 @@ import { PackagePanel } from "../../components/PackagePanel";
 import { QueuePanel, queueItemsForHost } from "../Upload/QueuePanel";
 import { volumeOfPkgPath } from "../../lib/pkgStorage";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
+import { gamePath, hasTitleId } from "../../lib/gamePage";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
@@ -28,6 +29,7 @@ import {
   Clock3,
   MapPin,
   ChevronDown,
+  Gamepad2,
 } from "lucide-react";
 
 import { isAndroid } from "../../lib/platform";
@@ -185,6 +187,15 @@ function PkgRow({
             .join("\n"),
         ),
     },
+    ...(entry.titleId && hasTitleId(entry.titleId)
+      ? [
+          {
+            label: tr("game_open_page", undefined, "Open game page"),
+            icon: <Gamepad2 size={12} />,
+            onSelect: () => navigate(gamePath(entry.titleId as string)),
+          },
+        ]
+      : []),
   ];
   const pct =
     uploading && entry.totalBytes

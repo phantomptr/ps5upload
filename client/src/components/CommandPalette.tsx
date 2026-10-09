@@ -1,3 +1,5 @@
+import { useCollectionStore } from "../state/collection";
+import { gamePath } from "../lib/gamePage";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { ArrowRight, Search } from "lucide-react";
@@ -27,7 +29,7 @@ interface Command {
   /** Optional secondary line for context. */
   hint?: string;
   /** Group label for visual sectioning. */
-  group: "Navigation" | "Theme" | "Connection" | "Window";
+  group: "Navigation" | "Theme" | "Connection" | "Window" | "Games";
   run: () => void | Promise<void>;
 }
 
@@ -35,6 +37,8 @@ function useCommands(close: () => void): Command[] {
   const navigate = useNavigate();
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
   const tr = useTr();
+  const library = useCollectionStore((s) => s.library);
+  const games = useMemo(() => (library ? Object.values(library.games) : []), [library]);
 
   return useMemo<Command[]>(() => {
     // Nav labels reuse the same i18n keys as Sidebar (which already
@@ -171,8 +175,22 @@ function useCommands(close: () => void): Command[] {
           close();
         },
       },
+      // The Collection's games, each to its page. Listed only when searching.
+      ...games.map(
+        (g): Command => ({
+          id: `game:${g.game_id}`,
+          label: g.title,
+          keywords: [g.game_id],
+          group: "Games",
+          hint: g.game_id,
+          run: () => {
+            navigate(gamePath(g.game_id));
+            close();
+          },
+        }),
+      ),
     ];
-  }, [navigate, toggleTheme, close, tr]);
+  }, [navigate, toggleTheme, close, tr, games]);
 }
 
 export function CommandPalette() {
@@ -238,7 +256,7 @@ export function CommandPalette() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return commands;
+    if (!q) return commands.filter((c) => c.group !== "Games");
     return commands.filter((c) => {
       if (c.label.toLowerCase().includes(q)) return true;
       if (c.keywords?.some((k) => k.toLowerCase().includes(q))) return true;

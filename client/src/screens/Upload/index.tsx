@@ -59,7 +59,8 @@ import { hostOf } from "../../lib/addr";
 import { useScrollLock } from "../../lib/useScrollLock";
 import { pushNotification } from "../../state/notifications";
 import { useRosterStore } from "../../state/roster";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
+import { gamePath, hasTitleId } from "../../lib/gamePage";
 import {
   PageHeader,
   WarningCard,
@@ -2557,7 +2558,7 @@ function GameMetaCard({
             {meta.content_id ? <> · {meta.content_id}</> : null}
           </div>
           <div className="truncate text-lg font-semibold">
-            {meta.title ?? "(untitled)"}
+            <GameTitleLink id={meta.title_id} title={meta.title ?? "(untitled)"} />
           </div>
           <div className="mt-0.5 text-xs text-[var(--color-muted)]">
             {meta.content_version ? `v${meta.content_version} · ` : ""}
@@ -2982,7 +2983,7 @@ function ZipArchiveCard({ info }: { info: ZipInspect }) {
                 {info.content_id ? <> · {info.content_id}</> : null}
               </div>
               <div className="truncate text-lg font-semibold">
-                {info.title ?? "(untitled)"}
+                <GameTitleLink id={info.title_id} title={info.title ?? "(untitled)"} />
               </div>
             </>
           )}
@@ -3670,5 +3671,15 @@ function PayloadReadinessBanner() {
         }
       />
     </div>
+  );
+}
+
+/** A picked game's title, linked to its game page when it carries a title ID. */
+function GameTitleLink({ id, title }: { id: string | null; title: string }) {
+  if (!id || !hasTitleId(id)) return <>{title}</>;
+  return (
+    <Link to={gamePath(id)} className="hover:underline">
+      {title}
+    </Link>
   );
 }
