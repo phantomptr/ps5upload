@@ -4,6 +4,30 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.6.0
+
+**A new Bug report wizard that gathers everything we need, and two or more consoles no longer
+step on each other.**
+
+### New
+
+- **Bug report wizard.** Open it from the command palette, or from the link on any error. Four
+  short steps: what went wrong, the details (app version, platform, firmware and payloads are
+  filled in for you), what to include and from how long ago (the last 15 minutes up to the
+  last 7 days, or a start time you pick), then send it. Post it as a GitHub issue, copy it for
+  the Discord help channel, or download the zip. IP addresses, serials, MAC addresses, home folders and keys are removed before
+  anything leaves your computer.
+- **The app now keeps a timeline.** Connection drops, reconnects, helper crashes, failed installs
+  and engine restarts are noted as they happen, along with the helper's own log from each PS5,
+  so a report shows what happened even when the console has since restarted. It also notes when
+  the web UI reloads itself and why (#418).
+
+### Fixed
+
+- **Switching consoles mid-task.** A check, a payload send, a bring-up or a folder pick that
+  finishes after you switched to another PS5 now lands on the console it started on, not the
+  one on screen.
+
 ## 6.5.2
 
 **The helper no longer crashes on the Hardware screen, and a crash no longer locks it out until
