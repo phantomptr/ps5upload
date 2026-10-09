@@ -64,9 +64,9 @@ import { transferAddr, mgmtAddr, hostOf } from "../../lib/addr";
 import { driveOffers, gamePath, rosterOnly, summaryLine } from "../../lib/gamePage";
 import type { GameView } from "../../api/games";
 import { installOffers } from "./collectionInstall";
-import { getEngineUrl } from "../../state/engine";
 import { useRosterStore } from "../../state/roster";
 import { useGameView } from "./useGameView";
+import { CollectionCover } from "../Collection/CollectionCover";
 import { ConsolesCard } from "./ConsolesCard";
 import { DrivesCard } from "./DrivesCard";
 import { fetchRunningGames } from "../../lib/runningGames";
@@ -107,7 +107,6 @@ export default function GameHubScreen() {
   const [installedTitles, setInstalledTitles] = useState<InstalledTitle[]>([]);
   const gv = useGameView(title_id ?? "");
   const [sendHost, setSendHost] = useState<string | null>(null);
-  const [coverFailed, setCoverFailed] = useState(false);
   const profiles = useRosterStore((s) => s.profiles);
   const names = useMemo(
     () => Object.fromEntries(profiles.map((p) => [hostOf(p.host), p.name || hostOf(p.host)])),
@@ -340,16 +339,19 @@ export default function GameHubScreen() {
 
         <div className="flex items-start gap-4">
           {/* Game icon */}
-          {game.source === "collection" && gv.view?.cover && !coverFailed ? (
-            <img
-              src={gv.view.cover.startsWith("/") ? `${getEngineUrl()}${gv.view.cover}` : gv.view.cover}
-              alt={game.name}
-              width={80}
-              height={80}
-              // A cover that does not load gives way to the console's icon, never a broken image.
-              onError={() => setCoverFailed(true)}
-              className="h-20 w-20 shrink-0 rounded-xl object-cover"
-            />
+          {game.source === "collection" && gv.view?.cover ? (
+            // The Collection's cover, with the same fallbacks as its cards (the IPC when the
+            // window's own load is refused, then the initials): never a broken image.
+            <div className="h-20 w-20 shrink-0 overflow-hidden rounded-xl">
+              <CollectionCover
+                game={{
+                  game_id: gv.view.title_id,
+                  title: game.name,
+                  local_cover: gv.view.cover.startsWith("/api/collection/") ? "cover" : undefined,
+                  cover_url: gv.view.cover.startsWith("http") ? gv.view.cover : undefined,
+                }}
+              />
+            </div>
           ) : (
             <GameIcon
               host={host ?? ""}

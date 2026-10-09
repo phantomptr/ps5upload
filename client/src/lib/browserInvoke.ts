@@ -603,6 +603,20 @@ export async function browserInvoke<T>(
       })) as T;
     }
 
+    case "collection_cover_data": {
+      const res = await fetch(
+        `/api/collection/games/${encodeURIComponent(String(args["gameId"] ?? ""))}/cover`,
+      );
+      if (!res.ok) throw new Error(`cover HTTP ${res.status}`);
+      const blob = await res.blob();
+      return (await new Promise<string>((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result));
+        fr.onerror = () => reject(new Error("cover read failed"));
+        fr.readAsDataURL(blob);
+      })) as T;
+    }
+
     case "cache_artwork_stats":
       return getJson<T>("/api/cache/artwork");
 

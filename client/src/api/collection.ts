@@ -2,6 +2,33 @@
 // (engine/crates/ps5upload-engine/src/collection). Same field names as PS Game Library's index.
 
 import { getEngineUrl } from "../state/engine";
+import { invoke } from "../lib/invokeLogged";
+import { getCachedIcon, setCachedIcon } from "../lib/iconMemoryCache";
+
+const coverKey = (gameId: string) => `collection|${gameId}`;
+
+/** A Collection cover this session already holds, as a `data:` URL. */
+export function cachedCollectionCover(gameId: string): string | undefined {
+  return getCachedIcon(coverKey(gameId));
+}
+
+/** A Collection cover over the IPC, as a `data:` URL, or null. The desktop window's own load
+ *  of the cover URL is refused by the engine's cross-site guard (WebKit sends neither Origin
+ *  nor Referer for it), so this is the fallback `useImageRetry` turns to. */
+export async function collectionCoverDataUrl(gameId: string): Promise<string | null> {
+  const hit = getCachedIcon(coverKey(gameId));
+  if (hit) return hit;
+  try {
+    const url = await invoke<string>("collection_cover_data", { gameId });
+    if (typeof url === "string" && url.startsWith("data:")) {
+      setCachedIcon(coverKey(gameId), url);
+      return url;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 export interface CollectionPkg {
   platform?: string;

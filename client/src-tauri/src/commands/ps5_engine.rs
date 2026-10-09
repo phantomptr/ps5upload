@@ -2116,6 +2116,20 @@ pub async fn ps5_game_icon_data(addr: Option<String>, path: String) -> Result<St
     engine_icon_data_url(url).await
 }
 
+/// A Collection game's cover, as a `data:` URL. The webview's own `<img>` load of
+/// `/api/collection/games/<id>/cover` is refused by the engine's cross-site guard (WebKit sends
+/// it with no Origin and no Referer), so the bytes come over the IPC. See
+/// [`engine_icon_data_url`].
+#[tauri::command]
+pub async fn collection_cover_data(game_id: String) -> Result<String, String> {
+    engine_icon_data_url(format!(
+        "{}/api/collection/games/{}/cover",
+        engine::url(),
+        urlencoding(&game_id)
+    ))
+    .await
+}
+
 /// How much disk the engine's artwork cache is using.
 #[tauri::command]
 pub async fn cache_artwork_stats() -> Result<JsonValue, String> {

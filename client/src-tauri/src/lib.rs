@@ -304,6 +304,7 @@ pub fn run() {
             commands::cache_artwork_clear,
             commands::ps5_app_icon_data,
             commands::ps5_game_icon_data,
+            commands::collection_cover_data,
             commands::ps5_appinfo_query,
             commands::ps5_appinfo_set,
             commands::ps5_syslog_tail,
