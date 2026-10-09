@@ -34,8 +34,6 @@ interface CollectionState {
   scan: CollectionScanStatus | null;
   loading: boolean;
   error: string | null;
-  /** The game whose details are open. */
-  openGameId: string | null;
   search: string;
   filter: CollectionFilter;
   platform: CollectionPlatform;
@@ -53,7 +51,6 @@ export const useCollectionStore = create<CollectionState>((set) => ({
   scan: null,
   loading: false,
   error: null,
-  openGameId: null,
   search: "",
   filter: "all",
   platform: "all",

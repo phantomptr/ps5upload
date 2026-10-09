@@ -178,7 +178,7 @@ export function addOnCount(g: CollectionGame): number {
 }
 
 /** A game's full copies beyond its largest: what "Reclaimable" counts (never an add-on). */
-export function extraCopies(g: CollectionGame): CollectionLocation[] {
+export function extraCopies(g: Pick<CollectionGame, "locations">): CollectionLocation[] {
   const copies = g.locations
     .filter((l) => l.pkg?.kind !== "patch" && l.pkg?.kind !== "dlc")
     .sort((a, b) => b.size_bytes - a.size_bytes);

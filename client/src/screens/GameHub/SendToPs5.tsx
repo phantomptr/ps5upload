@@ -26,6 +26,8 @@ import { useUploadQueueStore } from "../../state/uploadQueue";
 import { useUploadStore } from "../../state/upload";
 import { ActivityLine } from "./ActivityLine";
 import { useCopyActivity } from "../../state/copyActivity";
+import { useConnectionStore } from "../../state/connection";
+import { queueLinkFor } from "../../lib/gamePage";
 
 type How = "as-is" | "image";
 
@@ -37,7 +39,7 @@ export function SendToPs5({
   copies,
   initial,
 }: {
-  game: CollectionGame;
+  game: Pick<CollectionGame, "title">;
   host: string;
   /** The copies that can be sent (folders, images, archives). */
   copies: CollectionLocation[];
@@ -61,6 +63,7 @@ export function SendToPs5({
   const [register, setRegister] = useState(true);
   const pipelineBusy = useFpkgConversion((s) => s.pipeline.phase === "running");
   const [activity] = useCopyActivity([loc.absolute_path], host);
+  const connectedHost = useConnectionStore((s) => s.host ?? "");
 
   useEffect(() => {
     let live = true;
@@ -224,7 +227,16 @@ export function SendToPs5({
             ? tr("collection.send_go_image", undefined, "Build and send")
             : tr("collection.send_submit", undefined, "Send")}
         </Button>
-        <ActivityLine activity={activity} onOpen={() => navigate(how === "image" && activity?.phase === "building" ? "/convert" : "/upload")} />
+        <ActivityLine
+          activity={activity}
+          onOpen={() =>
+            navigate(
+              how === "image" && activity?.phase === "building"
+                ? "/convert"
+                : queueLinkFor(host, connectedHost, false),
+            )
+          }
+        />
       </div>
     </div>
   );

@@ -12,7 +12,7 @@
  */
 import { useMakeWay } from "../../lib/useMakeWay";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useParams, useNavigate, Link, useSearchParams } from "react-router";
+import { useParams, useNavigate, useSearchParams } from "react-router";
 import {
   ArrowLeft,
   Gamepad2,
@@ -60,7 +60,13 @@ import {
   type CheatMod,
   type SaveEntry,
 } from "../../api/ps5";
-import { transferAddr, mgmtAddr } from "../../lib/addr";
+import { transferAddr, mgmtAddr, hostOf } from "../../lib/addr";
+import { summaryLine } from "../../lib/gamePage";
+import { getEngineUrl } from "../../state/engine";
+import { useRosterStore } from "../../state/roster";
+import { useGameView } from "./useGameView";
+import { ConsolesCard } from "./ConsolesCard";
+import { DrivesCard } from "./DrivesCard";
 import { fetchRunningGames } from "../../lib/runningGames";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { formatBytes, formatDuration } from "../../lib/format";
@@ -97,6 +103,21 @@ export default function GameHubScreen() {
   const entries = useLibraryStore((s) => libraryForHost(s, host).entries);
   const playTimeState = usePlayTimeStore();
   const [installedTitles, setInstalledTitles] = useState<InstalledTitle[]>([]);
+  const gv = useGameView(title_id ?? "");
+  const [sendHost, setSendHost] = useState<string | null>(null);
+  const profiles = useRosterStore((s) => s.profiles);
+  const names = useMemo(
+    () => Object.fromEntries(profiles.map((p) => [hostOf(p.host), p.name || hostOf(p.host)])),
+    [profiles],
+  );
+  const connectedHost = payloadStatus === "up" ? hostOf(host ?? "") : "";
+  const connectedEntry = gv.view?.consoles.find((c) => c.host === connectedHost);
+  // Back to wherever the page was opened from; Games when it was opened directly.
+  const goBack = () => {
+    const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
+    if (idx > 0) navigate(-1);
+    else navigate("/games");
+  };
 
   // Fetch installed apps when connected, so we can resolve title_id → name
   // for games not in the library scan (e.g. system apps).
@@ -145,8 +166,18 @@ export default function GameHubScreen() {
         source: "installed" as const,
       };
     }
+    // On another console, or only on the drives: the engine knows it.
+    if (gv.view) {
+      return {
+        titleId: gv.view.title_id,
+        name: gv.view.title,
+        path: "",
+        size: 0,
+        source: "collection" as const,
+      };
+    }
     return null;
-  }, [title_id, entries, installedTitles]);
+  }, [title_id, entries, installedTitles, gv.view]);
 
   const playSeconds = playSecondsFor(playTimeState, host, title_id ?? null);
   const lastSeenMs = lastSeenPlayingFor(playTimeState, host, title_id ?? null);
@@ -243,6 +274,14 @@ export default function GameHubScreen() {
     );
   }
 
+  if (!game && gv.loading) {
+    return (
+      <div className="app-page flex justify-center py-12">
+        <Spinner size={20} />
+      </div>
+    );
+  }
+
   if (!game) {
     const connected = payloadStatus === "up";
     return (
@@ -256,9 +295,9 @@ export default function GameHubScreen() {
               variant="ghost"
               size="sm"
               leftIcon={<ArrowLeft size={16} />}
-              onClick={() => navigate("/games")}
+              onClick={goBack}
             >
-              {tr("game_hub_back", undefined, "Back to library")}
+              {tr("game_hub_back_games", undefined, "Back")}
             </Button>
           }
         />
@@ -285,26 +324,37 @@ export default function GameHubScreen() {
       {/* Header */}
       <header className="mb-6">
         <div className="mb-3 flex items-center gap-2">
-          <Link
-            to="/games"
+          <button
+            type="button"
+            onClick={goBack}
             className="flex items-center gap-1 text-sm text-[var(--color-muted)] hover:text-[var(--color-text)]"
           >
             <ArrowLeft size={14} />
-            {tr("game_hub_back", undefined, "Back to library")}
-          </Link>
+            {tr("game_hub_back_games", undefined, "Back")}
+          </button>
         </div>
 
         <div className="flex items-start gap-4">
           {/* Game icon */}
-          <GameIcon
-            host={host ?? ""}
-            titleId={game.titleId}
-            gamePath={game.path}
-            alt={game.name}
-            size={80}
-            rounded="rounded-xl"
-            className="shrink-0"
-          />
+          {game.source === "collection" && gv.view?.cover ? (
+            <img
+              src={gv.view.cover.startsWith("/") ? `${getEngineUrl()}${gv.view.cover}` : gv.view.cover}
+              alt={game.name}
+              width={80}
+              height={80}
+              className="h-20 w-20 shrink-0 rounded-xl object-cover"
+            />
+          ) : (
+            <GameIcon
+              host={host ?? ""}
+              titleId={game.titleId}
+              gamePath={game.path}
+              alt={game.name}
+              size={80}
+              rounded="rounded-xl"
+              className="shrink-0"
+            />
+          )}
 
           {/* Title + meta */}
           <div className="min-w-0 flex-1">
@@ -317,13 +367,16 @@ export default function GameHubScreen() {
               {playSeconds !== undefined && playSeconds > 0 && (
                 <span>· {formatDuration(playSeconds)}</span>
               )}
-              <Badge tone="neutral" variant="soft">
-                {game.source === "library" ? "Library" : "Installed"}
-              </Badge>
             </div>
+            {gv.view && (gv.view.consoles.length > 0 || gv.view.copies.length > 0) && (
+              <p className="mt-1 text-sm text-[var(--color-muted)]" data-testid="game-summary">
+                {summaryLine(gv.view, names, tr)}
+              </p>
+            )}
           </div>
 
           {/* Launch actions */}
+          {(game.source !== "collection" || connectedEntry?.installed) && (
           <div className="flex shrink-0 items-center gap-2">
             <Button
               variant="primary"
@@ -337,6 +390,7 @@ export default function GameHubScreen() {
                 : tr("game_hub_launch", undefined, "Launch")}
             </Button>
           </div>
+          )}
         </div>
       </header>
 
@@ -349,6 +403,28 @@ export default function GameHubScreen() {
         ariaLabel={tr("game_hub_overview", undefined, "Game tabs")}
         className="mb-6"
       />
+
+      {activeTab === "overview" && (
+        <div className="mb-4 grid gap-4">
+          <ConsolesCard
+            titleId={game.titleId}
+            consoles={profiles.map((p) => ({ host: hostOf(p.host), name: p.name || hostOf(p.host) }))}
+            connected={connectedHost}
+            view={gv.view}
+            refresh={gv.refresh}
+            onPlay={() => void handleLaunch()}
+            launching={launching}
+            sendHost={sendHost}
+            setSendHost={setSendHost}
+          />
+          <DrivesCard
+            view={gv.view}
+            connectedHost={connectedHost}
+            onSend={() => setSendHost(connectedHost || null)}
+            onChanged={() => void gv.reload()}
+          />
+        </div>
+      )}
 
       {/* Tab content */}
       <GameTabContent
@@ -788,7 +864,7 @@ interface GameInfo {
   name: string;
   path: string;
   size: number;
-  source: "library" | "installed";
+  source: "library" | "installed" | "collection";
 }
 
 /** Overview tab — game info, description, play time, last played. */

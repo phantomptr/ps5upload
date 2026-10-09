@@ -3,7 +3,7 @@ import { enqueueInstall } from "../../state/consoleQueueBridge";
 import { loadConsoleStates } from "../../state/collection";
 
 /** What a queue row is called: the game, then what the package is. */
-export function offerLabel(game: CollectionGame, o: CollectionOffer): string {
+export function offerLabel(game: Pick<CollectionGame, "title">, o: CollectionOffer): string {
   if (o.category === "gp") return `${game.title} · Update ${o.version}`;
   if (o.category === "ac")
     return o.title ? `${game.title} · ${o.title}` : `${game.title} · DLC`;
@@ -16,7 +16,7 @@ export function offerLabel(game: CollectionGame, o: CollectionOffer): string {
  *  have all finished. Returns how many were queued. */
 export function installOffers(
   host: string,
-  items: { game: CollectionGame; offer: CollectionOffer }[],
+  items: { game: Pick<CollectionGame, "title">; offer: CollectionOffer }[],
 ): number {
   const done = items.map(
     ({ game, offer }) =>

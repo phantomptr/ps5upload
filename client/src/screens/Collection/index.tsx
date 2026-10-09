@@ -44,19 +44,19 @@ import {
 } from "../../state/collection";
 import { useConnectionStore } from "../../state/connection";
 import { pushNotification } from "../../state/notifications";
+import { useNavigate } from "react-router";
 import { useConfirm } from "../../components/ConfirmDialog";
 import type { GameConsoleState } from "../../api/collection";
 import { consoleCounts, type ConsoleFilter } from "../../lib/collectionView";
-import { installOffers } from "./collectionInstall";
+import { installOffers } from "../GameHub/collectionInstall";
 import { useTr } from "../../state/lang";
 import { CollectionCard } from "./CollectionCard";
 import { CollectionTable } from "./CollectionTable";
 import { CleanupModal } from "./CleanupModal";
 import { FoldersModal } from "./FoldersModal";
 import { OrganizeModal } from "./OrganizeModal";
-import { GameDetail } from "./GameDetail";
 import { ServingLinks } from "./ServingLinks";
-import { trashCopies } from "./trashCopies";
+import { gamePath } from "../../lib/gamePage";
 import { exportCollection } from "./exportCollection";
 import { useActiveCopies } from "../../state/copyActivity";
 
@@ -68,6 +68,7 @@ export default function CollectionScreen() {
   const [organizeOpen, setOrganizeOpen] = useState(false);
   const [cleanupOpen, setCleanupOpen] = useState(false);
   const { confirm, dialog } = useConfirm();
+  const navigate = useNavigate();
   const host = useConnectionStore((c) => c.host?.trim() ?? "");
   const helperUp = useConnectionStore((c) => c.payloadStatus === "up");
 
@@ -177,7 +178,6 @@ export default function CollectionScreen() {
   const roots = s.settings?.roots ?? [];
   const scanning = !!s.scan?.running;
   const summary = s.library?.summary;
-  const openGame = s.openGameId ? s.library?.games[s.openGameId] : undefined;
 
   async function addFolder() {
     const path = await pickPath({
@@ -715,33 +715,19 @@ export default function CollectionScreen() {
                   game={g}
                   activity={activityOf(g)}
                   consoleState={consoleStates?.get(g.game_id)}
-                  onOpen={() => s.set({ openGameId: g.game_id })}
+                  onOpen={() => navigate(gamePath(g.game_id))}
                 />
               ))}
             </div>
           ) : (
             <CollectionTable
               games={shown}
-              onOpen={(id) => s.set({ openGameId: id })}
+              onOpen={(id) => navigate(gamePath(id))}
             />
           )}
         </>
       )}
 
-      {openGame && (
-        <GameDetail
-          game={openGame}
-          host={helperUp ? host : ""}
-          consoleState={consoleStates?.get(openGame.game_id)}
-          onTrash={
-            s.settings?.trash_available !== false ||
-            s.settings?.allow_permanent_delete
-              ? (paths) => void trashCopies(paths, confirm, tr)
-              : undefined
-          }
-          onClose={() => s.set({ openGameId: null })}
-        />
-      )}
       {dialog}
       <OrganizeModal
         open={organizeOpen}
