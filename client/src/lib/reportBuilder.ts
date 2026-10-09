@@ -105,7 +105,9 @@ function settingsSnapshot(): Record<string, string> {
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && k.startsWith("ps5upload.")) out[k] = localStorage.getItem(k) ?? "";
+      // Report drafts are the form itself, already in report.json.
+      if (k && k.startsWith("ps5upload.") && !k.startsWith("ps5upload.bugReportDraft."))
+        out[k] = localStorage.getItem(k) ?? "";
     }
   } catch {
     // storage unavailable: an empty settings file says so

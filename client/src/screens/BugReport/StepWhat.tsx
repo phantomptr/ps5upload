@@ -68,7 +68,12 @@ export default function StepWhat({
         value={f.console ?? ""}
         onChange={(e) => updateForm({ console: e.target.value || null })}
         options={[
-          ...profiles.map((p) => ({ value: hostOf(p.host), label: p.name ? `${p.name} (${hostOf(p.host)})` : hostOf(p.host) })),
+          ...profiles.map((p) => {
+            const h = hostOf(p.host);
+            // A name that already says the address ("PS5 (192.168.0.5)") is not repeated.
+            const label = !p.name ? h : p.name.includes(h) ? p.name : `${p.name} (${h})`;
+            return { value: h, label };
+          }),
           { value: "", label: tr("br_console_none", undefined, "Not console-related") },
         ]}
       />

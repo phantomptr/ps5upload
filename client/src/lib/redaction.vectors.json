@@ -64,5 +64,11 @@
     "redact": true,
     "in": "⚠ token=x 多 /Users/a/b ✓ 192.168.0.1 é",
     "out": "⚠ token=<removed> 多 ~/b ✓ <ip-1> é"
+  },
+  {
+    "name": "an address after a word and a dot",
+    "redact": true,
+    "in": "ps5upload.bugReportDraft.192.168.86.100 and v1.2.3.4.5",
+    "out": "ps5upload.bugReportDraft.<ip-1> and v1.2.3.4.5"
   }
 ]

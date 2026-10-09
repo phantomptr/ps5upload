@@ -117,7 +117,8 @@ export default function BugReportScreen() {
         {draft.step === 4 && <StepSend draft={draft} updateForm={updateForm} attached={attached} onSent={() => clearDraft(consoleKey)} />}
       </div>
 
-      <div className="flex shrink-0 items-center gap-2 border-t border-[var(--color-border)] pt-3">
+      {/* Back / Next stay in reach on a long step. */}
+      <div className="sticky bottom-0 flex shrink-0 items-center gap-2 border-t border-[var(--color-border)] bg-[var(--color-surface)] py-3">
         <Button variant="ghost" size="sm" onClick={discard}>
           {tr("br_discard", undefined, "Start over")}
         </Button>

@@ -369,14 +369,26 @@ impl Redactor {
         let mut cursor = 0;
         let mut i = 0;
         while i < b.len() {
-            if !b[i].is_ascii_digit() || (i > 0 && (b[i - 1].is_ascii_digit() || b[i - 1] == b'.'))
-            {
+            // Not inside a longer dotted number: a preceding dot only counts as a boundary after a
+            // word ("Draft.192.168.0.5"), never after a digit ("1.2.3.4.5").
+            let prev_ok = i == 0
+                || (!b[i - 1].is_ascii_digit()
+                    && (b[i - 1] != b'.'
+                        || (i >= 2
+                            && (b[i - 2].is_ascii_alphabetic()
+                                || b[i - 2] == b'_'
+                                || b[i - 2] == b'-'))));
+            if !b[i].is_ascii_digit() || !prev_ok {
                 i += 1;
                 continue;
             }
             let start = i;
             while i < b.len() && (b[i].is_ascii_digit() || b[i] == b'.') {
                 i += 1;
+            }
+            // A trailing dot ends a sentence or starts an extension ("100.json"), not the number.
+            if i > start && b[i - 1] == b'.' {
+                i -= 1;
             }
             let candidate = &s[start..i];
             let parts: Vec<&str> = candidate.split('.').collect();

@@ -29,7 +29,9 @@ const HOME_POSIX = /\/(?:Users|home)\/[^/\s"\\]+/g;
 const HOME_WIN = /[A-Za-z]:\\Users\\[^\\\s"]+/g;
 const MAC = /\b[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}\b/g;
 const IPV6_BRACKETED = /\[([0-9a-fA-F]*:[0-9a-fA-F:]*)\]/g;
-const IPV4 = /(^|[^0-9.])(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?=$|[^0-9.])/g;
+// An address is four 1-3 digit parts not inside a longer dotted number ("1.2.3.4.5", "6.5.2.1.0"):
+// it may follow a word and a dot ("Draft.192.168.0.5") or end before one ("…100.json").
+const IPV4 = /(^|[^0-9.]|[A-Za-z_-]\.)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?=$|[^0-9.]|\.(?![0-9]))/g;
 
 export function createRedactor(opts: { redact: boolean }): Redactor {
   const ips = new Map<string, number>();
