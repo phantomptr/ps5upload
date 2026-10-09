@@ -42,10 +42,11 @@ split-debuginfo = "unpacked"
 # Line tables are enough for backtraces; full variable info made 76+ test binaries slow to link.
 debug = "line-tables-only"
 
-# Dependencies (and the CPU-heavy image builders) run optimized in test builds: the fpkg
-# scale tests took 526 s in CI unoptimized. Our own crates stay at opt-level 0 for fast rebuilds.
+# Dependencies carry no debug info (smaller, faster links) but stay unoptimized: optimized
+# crypto let a whole test upload sit in Linux's loopback buffers before the AVA1 cancel and
+# space tests could act on it. The CPU-heavy image builders run optimized (the fpkg scale
+# tests took 526 s in CI unoptimized).
 [profile.dev.package."*"]
-opt-level = 2
 debug = false
 
 [profile.dev.package.ps5upload-fpkg]
