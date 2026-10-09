@@ -354,6 +354,7 @@ pub(crate) async fn fpkg_build_handler(
     let state_for_job = state.clone();
     let request_source = source_path.clone();
     tokio::task::spawn_blocking(move || {
+        sweep_output_leftovers(&out);
         let mut request = BuildRequest::new(&request_source, &out);
         request.content_id = req.content_id.filter(|id| !id.trim().is_empty());
         request.file_name = req.name.filter(|name| !name.trim().is_empty());
@@ -394,6 +395,9 @@ pub(crate) async fn fpkg_build_handler(
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .remove(p);
+        }
+        if outcome.is_err() {
+            sweep_output_leftovers(&out);
         }
         let completed_at_ms = now_ms();
         ticker.abort();
@@ -629,7 +633,10 @@ pub(crate) async fn ffpfsc_compress_handler(
     });
 
     let state_for_job = state.clone();
+    let partial_out = PathBuf::from(format!("{}.partial", output.display()));
     tokio::task::spawn_blocking(move || {
+        let writing = Writing::new(partial_out);
+        sweep_output_leftovers(&out_dir);
         let mut options = ffpfsc::WrapOptions::default();
         if let Some(level) = req.level {
             options.level = level;
@@ -640,6 +647,10 @@ pub(crate) async fn ffpfsc_compress_handler(
             cancel: Some(&cancel),
         };
         let outcome = ffpfsc::wrap(&source, &output, &options, &mut control);
+        drop(writing);
+        if outcome.is_err() {
+            sweep_output_leftovers(&out_dir);
+        }
         let completed_at_ms = now_ms();
         ticker.abort();
         match outcome {
@@ -826,7 +837,10 @@ pub(crate) async fn exfat_build_handler(
     });
 
     let state_for_job = state.clone();
+    let partial_out = PathBuf::from(format!("{}.partial", output.display()));
     tokio::task::spawn_blocking(move || {
+        let writing = Writing::new(partial_out);
+        sweep_output_leftovers(&out_dir);
         let mut tree = tree;
         const IMAGE_STAGES: [&str; 3] = ["plan", "write", "verify"];
         let outcome = crate::image_build::build(
@@ -852,6 +866,10 @@ pub(crate) async fn exfat_build_handler(
                 });
             },
         );
+        drop(writing);
+        if outcome.is_err() {
+            sweep_output_leftovers(&out_dir);
+        }
         let completed_at_ms = now_ms();
         ticker.abort();
         match outcome {
@@ -938,6 +956,85 @@ fn clear_stale_partial(out: &Path, stem: &str) -> PathBuf {
         let _ = std::fs::remove_file(&partial);
     }
     partial
+}
+
+/// Marks a file as being written by a running build, for as long as it lives: the sweep below
+/// leaves it alone.
+pub(crate) struct Writing(PathBuf);
+
+impl Writing {
+    pub(crate) fn new(path: PathBuf) -> Writing {
+        active_partials()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(path.clone());
+        Writing(path)
+    }
+}
+
+impl Drop for Writing {
+    fn drop(&mut self) {
+        active_partials()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.0);
+    }
+}
+
+/// The in-progress files our builds write: `<name>.<kind>.partial`. Nothing else is touched,
+/// since a compression writes next to the user's own image (a browser's `.partial` stays).
+fn is_our_partial(name: &str) -> bool {
+    [
+        ".pkg.partial",
+        ".ffpfsc.partial",
+        ".ffpfs.partial",
+        ".exfat.partial",
+        ".ffpkg.partial",
+    ]
+    .iter()
+    .any(|ext| name.to_ascii_lowercase().ends_with(ext))
+}
+
+/// Removes a file, trying again for a few seconds while something holds it: on Windows an
+/// antivirus or the indexer often has a just-written file open, and one failed attempt left a
+/// failed build's whole image on the drive (#432).
+fn remove_file_retrying(path: &Path) {
+    for attempt in 0..20 {
+        match std::fs::remove_file(path) {
+            Ok(()) => return,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) if attempt == 19 => {
+                crate::engine_log::record(
+                    "warn",
+                    format!("could not remove {}: {e}", path.display()),
+                );
+            }
+            Err(_) => std::thread::sleep(Duration::from_millis(250)),
+        }
+    }
+}
+
+/// What failed or interrupted conversions left in `out` and no running one is using: build
+/// `.partial` files and archive unpack folders. Run before a conversion writes there, and
+/// after one fails (#432: they took up the system drive with nothing to show where).
+pub(crate) fn sweep_output_leftovers(out: &Path) {
+    remove_stale_extracts(out);
+    let Ok(entries) = std::fs::read_dir(out) else {
+        return;
+    };
+    let stale: Vec<PathBuf> = {
+        let active = active_partials().lock().unwrap_or_else(|e| e.into_inner());
+        entries
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+            .filter(|e| e.file_name().to_str().is_some_and(is_our_partial))
+            .map(|e| e.path())
+            .filter(|p| !active.contains(p))
+            .collect()
+    };
+    for p in stale {
+        remove_file_retrying(&p);
+    }
 }
 
 /// Prefix of the folders archives are unpacked into, inside the output folder.
@@ -1031,7 +1128,7 @@ pub(crate) async fn fpkg_extract_handler(
     let size = {
         let (source, password, out) = (source.clone(), password.clone(), out.clone());
         tokio::task::spawn_blocking(move || {
-            remove_stale_extracts(&out);
+            sweep_output_leftovers(&out);
             archive_extract::unpacked_size(&source, password.as_deref())
         })
         .await
@@ -1251,6 +1348,44 @@ mod extract_tests {
         assert_eq!(extract_root_of(root).as_deref(), Some(root));
         assert!(extract_root_of(Path::new("/out/games/x")).is_none());
         assert!(extract_root_of(Path::new("/out/.ps5upload-extract-")).is_none());
+    }
+
+    #[test]
+    fn a_failed_or_interrupted_conversion_leaves_nothing_behind() {
+        // #432: a failed image build kept its `.partial` (as large as the image) in the output
+        // folder, and an interrupted one was never cleared.
+        let out = std::env::temp_dir().join(format!("ps5upload-leftovers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(out.join(format!("{EXTRACT_PREFIX}old"))).unwrap();
+        for n in [
+            "A.ffpfsc.partial",
+            "B.exfat.partial",
+            "C.pkg.partial",
+            "D.ffpkg.partial",
+        ] {
+            std::fs::write(out.join(n), b"x").unwrap();
+        }
+        // Not ours: a browser download and the user's own files stay.
+        std::fs::write(out.join("movie.mkv.partial"), b"x").unwrap();
+        std::fs::write(out.join("Game.ffpfsc"), b"x").unwrap();
+        // One a running build is writing stays too.
+        let writing = Writing::new(out.join("D.ffpkg.partial"));
+        sweep_output_leftovers(&out);
+        let left: std::collections::BTreeSet<String> = std::fs::read_dir(&out)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            left,
+            ["D.ffpkg.partial", "Game.ffpfsc", "movie.mkv.partial"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        );
+        drop(writing);
+        sweep_output_leftovers(&out);
+        assert!(!out.join("D.ffpkg.partial").exists());
+        let _ = std::fs::remove_dir_all(&out);
     }
 
     #[test]
