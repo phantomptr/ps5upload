@@ -97,6 +97,32 @@ void pop_notification(const char *message) {
  */
 static runtime_state_t *g_state = NULL;
 
+/* A predecessor that handed over cleanly may still be finishing its exit (flushing upload
+ * journals, up to its 60 s watchdog ceiling); it must not be killed mid-flush. Past that, every
+ * other process of ours is a stray copy: sweep it. */
+#define LATE_SWEEP_DELAY_S 65
+
+static void *late_sweep_main(void *arg) {
+    (void)arg;
+    proc_name_set_self(PS5UPLOAD2_PROC_NAME);
+    sleep(LATE_SWEEP_DELAY_S);
+    /* Asked to exit meanwhile (a newer helper took over): that one is the instance to keep. */
+    if (g_state && *(volatile int *)&g_state->shutdown_requested) return NULL;
+    int n = runtime_sweep_our_instances();
+    if (n > 0) fprintf(stderr, "[payload2] late sweep: ended %d stray instance(s) of ours\n", n);
+    return NULL;
+}
+
+static void start_late_sweep(void) {
+    pthread_t t;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    if (pthread_create(&t, &attr, late_sweep_main, NULL) != 0)
+        fprintf(stderr, "[payload2] late sweep: thread did not start\n");
+    pthread_attr_destroy(&attr);
+}
+
 /* Called from the takeover flag poll thread when a newer instance asked us to exit. */
 static void on_takeover_flag(void) {
     fprintf(stderr, "[payload2] a newer instance asked us to exit (takeover flag)\n");
@@ -609,6 +635,10 @@ int main(void) {
          * instance lingered with a stale pid record (the "duplicate
          * payload.elf" case) — harmless no-op when the pid is already gone. */
         runtime_reap_prior_instance(&state);
+        /* And once the predecessor has had its full exit window, any copy of ours still
+         * running is a stray (one with no ownership record, or one that kept no port): a new
+         * helper leaves exactly one running. */
+        start_late_sweep();
     }
     startup_trace("REAP_PRIOR_DONE");
 

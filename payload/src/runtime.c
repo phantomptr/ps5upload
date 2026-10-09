@@ -1328,8 +1328,7 @@ int runtime_sweep_our_instances(void) {
         if (!proc_name_is_ours(name)) continue;
 
         fprintf(stderr,
-                "[payload2] sweep: SIGKILL pid=%d name=%s (ports still held after "
-                "handshake and reap both failed)\n",
+                "[payload2] sweep: SIGKILL pid=%d name=%s (another instance of ours)\n",
                 (int)pid, name);
         if (kill(pid, SIGKILL) == 0) {
             killed++;
