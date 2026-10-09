@@ -35,6 +35,28 @@ pub struct PayloadLogFile {
     pub text: String,
 }
 
+/// A file the report builder assembled itself (timeline, MISSING.txt, report.md, screenshots):
+/// the same shape as the engine's bundle entries. `text` is redacted; `base64` is written as is.
+#[derive(Deserialize)]
+pub struct ExtraEntry {
+    pub path: String,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub base64: Option<String>,
+}
+
+/// A zip path the builder may use: relative, no `..`, no backslashes, at most 200 characters.
+fn extra_path_ok(p: &str) -> bool {
+    !p.is_empty()
+        && p.len() <= 200
+        && !p.starts_with('/')
+        && !p.contains('\\')
+        && !p.contains(':')
+        && p.split('/')
+            .all(|seg| !seg.is_empty() && seg != "." && seg != "..")
+}
+
 #[derive(Deserialize)]
 pub struct BugReportArgs {
     /// User-picked destination `.zip` path. On Android the save dialog returns
@@ -53,8 +75,12 @@ pub struct BugReportArgs {
     /// raw app/engine/payload logs (not just structured report fields).
     #[serde(default)]
     pub redact: bool,
-    /// How many minutes of app log to include (filters `app.jsonl`).
+    /// How many minutes of app log to include (filters `app.jsonl`). Superseded by `since_ms`.
+    #[serde(default)]
     pub window_minutes: u64,
+    /// The report's start time: app log lines from here on are included. 0 = use `window_minutes`.
+    #[serde(default)]
+    pub since_ms: u64,
     /// Raw PS5 kernel logs, if a console was connected (written as .txt).
     pub klog_text: Option<String>,
     pub syslog_text: Option<String>,
@@ -65,6 +91,9 @@ pub struct BugReportArgs {
     /// Absolute paths of user-attached screenshots.
     pub image_paths: Vec<String>,
     pub include: BugReportInclude,
+    /// Files the report builder assembled (see [`ExtraEntry`]).
+    #[serde(default)]
+    pub extra_entries: Vec<ExtraEntry>,
 }
 
 #[derive(Serialize)]
@@ -475,7 +504,11 @@ fn assemble_zip(
 
     // 3. Windowed app log.
     if args.include.app_logs {
-        let since = now_ms.saturating_sub(args.window_minutes.saturating_mul(60_000));
+        let since = if args.since_ms > 0 {
+            args.since_ms
+        } else {
+            now_ms.saturating_sub(args.window_minutes.saturating_mul(60_000))
+        };
         let lines = super::diag_log::window_lines(&dirs.logs, since);
         log_lines = lines.len();
         let mut body = lines.join("\n");
@@ -561,6 +594,42 @@ fn assemble_zip(
                 images += 1;
             }
             // unreadable attachment → skip
+        }
+    }
+
+    // 8. What the report builder assembled. A path that could leave the archive is refused and
+    //    named in MISSING.txt, which the builder itself usually sends (then it is appended to).
+    {
+        use base64::Engine as _;
+        let rejected: Vec<String> = args
+            .extra_entries
+            .iter()
+            .filter(|e| !extra_path_ok(&e.path))
+            .map(|e| format!("{}: invalid path", e.path))
+            .collect();
+        let mut missing_written = false;
+        for e in args.extra_entries.iter().filter(|e| extra_path_ok(&e.path)) {
+            let body: Vec<u8> = if let Some(t) = &e.text {
+                let mut t = red.text(t);
+                if e.path == "MISSING.txt" && !rejected.is_empty() {
+                    t.push_str(&format!("\n{}\n", rejected.join("\n")));
+                    missing_written = true;
+                }
+                t.into_bytes()
+            } else if let Some(b) = &e.base64 {
+                match base64::engine::general_purpose::STANDARD.decode(b) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                }
+            } else {
+                continue;
+            };
+            write_entry(&mut zw, &e.path, &body)?;
+            entries += 1;
+        }
+        if !rejected.is_empty() && !missing_written {
+            write_entry(&mut zw, "MISSING.txt", rejected.join("\n").as_bytes())?;
+            entries += 1;
         }
     }
 
@@ -690,6 +759,8 @@ mod tests {
                 .to_string(),
             redact: true,
             window_minutes: 30,
+            since_ms: 0,
+            extra_entries: vec![],
             // Real kernel logs contain non-UTF8 / control bytes after lossy
             // decode; make sure they survive into the zip unmangled.
             klog_text: Some("klog line ⚠ 0x80f40030\nsecond\n".to_string()),
@@ -783,6 +854,8 @@ mod tests {
             report_json: "{}".to_string(),
             redact: false,
             window_minutes: 30,
+            since_ms: 0,
+            extra_entries: vec![],
             klog_text: Some("x".to_string()),
             syslog_text: None,
             payload_logs: vec![],
@@ -805,6 +878,67 @@ mod tests {
             res.entries, 2,
             "only report.json + README when all unticked"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn extra_entries_are_redacted_and_bad_paths_listed_as_missing() {
+        let root = std::env::temp_dir().join(format!("ps5up-bugreport3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let dest = root.join("out.zip");
+        let args = BugReportArgs {
+            dest: dest.to_string_lossy().into_owned(),
+            dest_filename: None,
+            report_json: "{}".to_string(),
+            redact: true,
+            window_minutes: 0,
+            since_ms: 0,
+            klog_text: None,
+            syslog_text: None,
+            payload_logs: vec![],
+            image_paths: vec![],
+            include: BugReportInclude {
+                app_logs: false,
+                engine_log: false,
+                crash_reports: false,
+                ps5_logs: false,
+                images: false,
+            },
+            extra_entries: vec![
+                ExtraEntry {
+                    path: "timeline.txt".into(),
+                    text: Some("18:27 [engine] 192.168.86.100 lost".into()),
+                    base64: None,
+                },
+                ExtraEntry {
+                    path: "screenshots/a.png".into(),
+                    text: None,
+                    base64: Some("iVBORw==".into()),
+                },
+                ExtraEntry {
+                    path: "../escape.txt".into(),
+                    text: Some("x".into()),
+                    base64: None,
+                },
+            ],
+        };
+        let dirs = BundleDirs {
+            logs: root.join("l"),
+            engine: root.join("e"),
+            reports: root.join("r"),
+        };
+        assemble_zip(&args, &dirs, 1_780_000_000_000).unwrap();
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&dest).unwrap()).unwrap();
+        let mut read = |name: &str| {
+            let mut s = String::new();
+            std::io::Read::read_to_string(&mut zip.by_name(name).unwrap(), &mut s).unwrap();
+            s
+        };
+        assert_eq!(read("timeline.txt"), "18:27 [engine] <ip-1> lost");
+        assert!(read("MISSING.txt").contains("../escape.txt: invalid path"));
+        assert!(zip.by_name("screenshots/a.png").is_ok());
+        assert!(zip.by_name("../escape.txt").is_err());
         let _ = std::fs::remove_dir_all(&root);
     }
 
