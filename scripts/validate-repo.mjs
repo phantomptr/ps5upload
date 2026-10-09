@@ -76,6 +76,26 @@ function lane(name, steps) {
 
 const step = (label, command, args, cwd, env) => ({ label, command, args, cwd, env });
 
+/** CC/AR for aarch64-linux-android from the newest NDK under ANDROID_HOME or the default SDK path. */
+function androidNdkEnv() {
+  if (process.env.CC_aarch64_linux_android) return {};
+  const sdk = process.env.ANDROID_HOME || path.join(os.homedir(), "Library", "Android", "sdk");
+  const ndkRoot = path.join(sdk, "ndk");
+  let versions = [];
+  try {
+    versions = fs.readdirSync(ndkRoot).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  } catch {
+    return {};
+  }
+  const host = os.platform() === "darwin" ? "darwin-x86_64" : os.platform() === "win32" ? "windows-x86_64" : "linux-x86_64";
+  const bin = path.join(ndkRoot, versions[versions.length - 1] ?? "", "toolchains", "llvm", "prebuilt", host, "bin");
+  if (!fs.existsSync(bin)) return {};
+  return {
+    CC_aarch64_linux_android: path.join(bin, "aarch64-linux-android24-clang"),
+    AR_aarch64_linux_android: path.join(bin, "llvm-ar"),
+  };
+}
+
 runInline("version sync", "node", ["scripts/update-version.js", "--check"]);
 runInline("script syntax", "node", ["scripts/check-scripts.mjs"]);
 runInline("linux launcher", "sh", ["scripts/release/linux-launcher-selftest.sh"]);
@@ -148,7 +168,11 @@ if (full) {
   // The rest of `make test` is the three lanes above; only its root script checks are new here.
   runInline("root script checks", "make", ["test-root"]);
   if (spawnSync("rustup", ["target", "list", "--installed"], { encoding: "utf8" }).stdout?.includes("aarch64-linux-android")) {
-    runInline("engine compiles for Android", "cargo", ["check", "-p", "ps5upload-engine", "--target", "aarch64-linux-android"], { cwd: engineDir });
+    // ring's C code needs the NDK's clang for this target; point at the newest NDK found.
+    runInline("engine compiles for Android", "cargo", ["check", "-p", "ps5upload-engine", "--target", "aarch64-linux-android"], {
+      cwd: engineDir,
+      env: androidNdkEnv(),
+    });
   } else {
     process.stdout.write("\n==> engine Android check — skipped (rustup target add aarch64-linux-android)\n");
   }
