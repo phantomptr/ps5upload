@@ -4,6 +4,40 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.7.0
+
+**One page per game: every console and every copy, wherever you open it from.**
+
+### New
+
+- **A page for every game.** Open a game from Ready to play, Game files, the Collection,
+  Upload, Install Package's package menu, or the command palette, and you get one page that shows:
+  - **Each of your consoles:** installed or not, which version, and how old that is ("now" for
+    the one you're connected to, "as of 2 h ago" for the others). A refresh button checks a
+    console again.
+  - **Every copy on your drives,** with Send, Convert, Copy install link and Move to Trash.
+  - **What each console could take from your drives:** the game with its update and DLC, a
+    newer update, or missing DLC. Install it on any console, not only the connected one. The
+    console's row shows how it's going, and Open goes to that console's activity.
+- **The app remembers what each console has,** so the page works while a console is asleep. It
+  forgets a console you remove or move to a new address.
+- **Updates and Add-ons** on a game's page now also list newer packages from your drives.
+- **The command palette** finds games in your Collection by name or title ID.
+
+### Changed
+
+- Clicking a game in the Collection opens its page instead of a pop-up.
+- "Open library" now says "Open Games". Install Package says "screen" (not "tab") for the
+  Connection and File System screens.
+- On a phone, the Games tab stays highlighted while you're in the Collection, and screen readers
+  are told which section is open.
+
+### Fixed
+
+- The Collection's "Progress shows in Install Package" link went to Home.
+
+---
+
 ## 6.6.3
 
 **Housekeeping.** No changes to the app. The engine's own tests now clean up their temporary
