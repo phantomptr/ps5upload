@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import { appIsForeground, sendOsNotification } from "../lib/osNotify";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
+import { recordAppEvent } from "../lib/appJournal";
 
 /**
  * Persistent notification inbox.
@@ -169,6 +170,17 @@ export function pushNotification(
   title: string,
   extras?: { body?: string; link?: string },
 ): string {
+  // What the user was told went wrong is in the bug-report journal, and an error's "Jump to"
+  // opens the report with that event pinned (unless the caller links somewhere already).
+  if (level === "error" || level === "warning") {
+    const ts = recordAppEvent({
+      cat: "app",
+      level: level === "error" ? "error" : "warn",
+      code: "notification",
+      msg: extras?.body ? `${title}: ${extras.body}` : title,
+    });
+    if (level === "error" && !extras?.link) extras = { ...extras, link: `/bug-report?event=${ts}` };
+  }
   return useNotificationsStore.getState().push(level, title, extras);
 }
 
