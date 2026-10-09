@@ -4,6 +4,32 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.7.1
+
+**Fixes: Collection covers, multi-part RAR uploads, and a full drive's leftover file.**
+
+### Fixed
+
+- **Collection covers.** The engine refused the app's requests for the covers it had read out of
+  your games, so a game with no online cover showed its initials and the game's page showed a
+  broken image. They show now.
+- **Cheats on a game's page** no longer shows "no cheat files found" as an error when a game simply
+  has none.
+- **Multi-part RAR uploads (#429).** Resuming an upload from a `.part1.rar`/`.r00` set failed with
+  "the archive lists its entries in a different order than it extracts them" whenever a file
+  already sent was split across two parts. Resuming works now.
+- **When the PS5's drive fills up during an upload,** what was sent is kept so Retry continues it,
+  but nothing said so and it holds its whole size. The failed upload now names that partial file
+  and offers to delete it.
+- **Stopping a stream install right after it started** removed it from the list but left it
+  running; it is stopped now.
+- **0x80B21104** explains that this console will not take this package, and links to the FAQ.
+- **Can't reach the PS5?** The Connection screen now suggests turning a VPN off.
+- **Sending a new helper** now also ends any stray copy of the old one still running on the PS5,
+  once the old one has had time to finish exiting.
+
+---
+
 ## 6.7.0
 
 **One page per game: every console and every copy, wherever you open it from.**
