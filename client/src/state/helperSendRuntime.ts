@@ -6,6 +6,7 @@ import { useConnectionStore } from "./connection";
 import { runHelperSend, type HelperSendResult } from "./helperSend";
 import type { Translator } from "./lang";
 import { invoke } from "../lib/invokeLogged";
+import { sendHelperOnce, sendInFlight, sentAgoMs } from "../lib/helperSendGate";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { trStatic } from "../lib/trStatic";
 
@@ -24,6 +25,15 @@ export function loaderHint(error: string): string {
 async function engineSendsHelper(ip: string): Promise<void> {
   const r = (await invoke("payload_restore", { ip })) as { ok?: boolean; error?: string };
   if (!r?.ok) throw new Error(loaderHint(r?.error ?? "the engine has no helper to send"));
+}
+
+/** A helper sent to this console moments ago is still starting: a button press in this window
+ *  waits for it rather than sending another (a retry after a failed start, later, sends). */
+const JOIN_RECENT_MS = 15_000;
+
+function joinsRecentSend(host: string): boolean {
+  const ago = sentAgoMs(host);
+  return sendInFlight(host) || (ago !== null && ago < JOIN_RECENT_MS);
 }
 
 // Says what to do first; the probe's technical detail ({tail}) goes last, where it
@@ -45,9 +55,22 @@ export function sendHelperTo(
   return runHelperSend(
     target,
     {
-      waitForLoader,
+      // A send to this console already under way (the automatic redeploy, or this button a
+      // moment ago) is not raced: this one waits for that helper to come up instead of
+      // starting a second, which made the two fight over the takeover for 20-40 s.
+      waitForLoader: (h) =>
+        joinsRecentSend(h) ? Promise.resolve("healthy" as const) : waitForLoader(h),
       bundledPath: isTauriEnv() ? bundledPayloadPath : async () => "ps5upload.elf",
-      send: isTauriEnv() ? sendPayload : (ip) => engineSendsHelper(ip),
+      send: async (ip, elf) => {
+        if (joinsRecentSend(ip)) {
+          // Wait out the send still running, if any; one already done needs nothing more.
+          if (sendInFlight(ip)) await sendHelperOnce(ip, async () => {}).catch(() => {});
+          return;
+        }
+        await sendHelperOnce(ip, () =>
+          isTauriEnv() ? sendPayload(ip, elf) : engineSendsHelper(ip),
+        );
+      },
       check: payloadCheck,
       isNotPaired: isNotPairedError,
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),

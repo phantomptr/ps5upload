@@ -3,6 +3,7 @@ import { getAppVersion } from "./appVersion";
 import { isTauriEnv } from "./tauriEnv";
 import { restoreMainPayload } from "./restoreMainPayload";
 import { guardElfldr, STUCK_LOADER_MESSAGE, waitForLoader } from "./elfldrGuard";
+import { resetHelperSendGate, sendHelperOnce, sentAgoMs } from "./helperSendGate";
 import { compareVersions } from "./semver";
 import { log } from "../state/logs";
 
@@ -69,9 +70,6 @@ export function ensurePayloadCurrent(
 
 const inFlight = new Map<string, Promise<EnsurePayloadResult>>();
 
-/** When each console was last sent a helper by this module (ms). */
-const lastSentAt = new Map<string, number>();
-
 /** A helper just sent is still starting — taking over, arming listeners — for
  *  several seconds, and answers nothing meanwhile. A second send inside this
  *  window is what starts a duplicate instance, so it waits for the first
@@ -82,7 +80,7 @@ export const RESEND_COOLDOWN_MS = 45_000;
 /** Test seam. */
 export function resetEnsurePayloadState(): void {
   inFlight.clear();
-  lastSentAt.clear();
+  resetHelperSendGate();
 }
 
 async function ensurePayloadCurrentOnce(
@@ -125,8 +123,8 @@ async function ensurePayloadCurrentOnce(
   }
   // Need to push — unless we already did, moments ago, and that helper is
   // still starting.
-  const key = host.trim().toLowerCase();
-  const sentAgo = Date.now() - (lastSentAt.get(key) ?? 0);
+  // The Send helper button counts too (lib/helperSendGate): one send per console at a time.
+  const sentAgo = sentAgoMs(host) ?? Infinity;
   if (sentAgo < RESEND_COOLDOWN_MS) {
     log.info(
       "payload",
@@ -150,8 +148,7 @@ async function ensurePayloadCurrentOnce(
     // engine does the send. `bundledPayloadPath`/`sendPayload` are
     // desktop-only commands and throw here — which is why the web UI could
     // never redeploy a helper it had just found stale or dead.
-    await restoreMainPayload(host);
-    lastSentAt.set(key, Date.now());
+    await sendHelperOnce(host, () => restoreMainPayload(host));
   } else {
     let elfPath: string;
     try {
@@ -161,8 +158,7 @@ async function ensurePayloadCurrentOnce(
       return "no-push";
     }
     try {
-      await sendPayload(host, elfPath);
-      lastSentAt.set(key, Date.now());
+      await sendHelperOnce(host, () => sendPayload(host, elfPath));
     } catch (e) {
       log.warn("payload", `payload send to ${host} failed: ${e instanceof Error ? e.message : String(e)}`);
       return "no-push";
