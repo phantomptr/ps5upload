@@ -22,6 +22,7 @@ import { useTr } from "../state/lang";
 import { useConfirm } from "../components/ConfirmDialog";
 import { Modal } from "../components/Modal";
 import { parsePS5Firmware } from "../lib/ps5Firmware";
+import { formatDate } from "../lib/formatDate";
 
 /**
  * Sidebar dropdown for switching between known PS5s.
@@ -299,11 +300,9 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
                           {tr(
                             "roster_last_seen",
                             {
-                              when: new Date(
-                                p.last_seen_at * 1000,
-                              ).toLocaleString(),
+                              when: formatDate(p.last_seen_at * 1000),
                             },
-                            `last seen: ${new Date(p.last_seen_at * 1000).toLocaleString()}`,
+                            `last seen: ${formatDate(p.last_seen_at * 1000)}`,
                           )}
                           {p.last_seen_payload &&
                             ` · ps5upload v${p.last_seen_payload}`}

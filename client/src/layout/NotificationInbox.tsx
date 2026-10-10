@@ -16,6 +16,7 @@ import {
   type NotificationLevel,
 } from "../state/notifications";
 import { useTr } from "../state/lang";
+import { formatDate } from "../lib/formatDate";
 
 /**
  * Which Tailwind anchor class the panel gets for a given alignment.
@@ -290,7 +291,7 @@ function NotificationRow({
             </div>
           )}
           <div className="mt-1 flex items-center gap-2 text-xs text-[var(--color-muted)]">
-            <span>{ts.toLocaleString()}</span>
+            <span>{formatDate(ts)}</span>
             {entry.link && (
               <button
                 type="button"

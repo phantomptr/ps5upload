@@ -55,9 +55,7 @@ export default function MoreScreen() {
       .catch(() => setVersion(""));
   }, []);
 
-  const errorCount = useLogsStore(
-    (s) => s.entries.filter((e) => e.level === "error").length,
-  );
+  const errorCount = useLogsStore((s) => s.errorCount);
   const updateAvailable = useUpdateStore((s) => s.phase.kind === "available");
   const betaEnabled = useBetaFeaturesStore((s) => s.enabled);
 

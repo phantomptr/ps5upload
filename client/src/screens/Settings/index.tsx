@@ -76,6 +76,7 @@ import {
   getNotifPruneDays,
   setNotifPruneDays,
 } from "../../state/notifications";
+import { formatDate } from "../../lib/formatDate";
 // useAuditLogStore + AuditEntry moved to screens/AuditLog/index.tsx
 // (2.12.0 — promoted out of Settings junk drawer).
 
@@ -1031,8 +1032,8 @@ function SchedulesPanel() {
                         s.oneShotMs &&
                         tr(
                           "schedule_once_at",
-                          { time: new Date(s.oneShotMs).toLocaleString() },
-                          `once at ${new Date(s.oneShotMs).toLocaleString()}`,
+                          { time: formatDate(s.oneShotMs) },
+                          `once at ${formatDate(s.oneShotMs)}`,
                         )}
                     </span>
                   </>

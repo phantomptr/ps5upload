@@ -40,6 +40,7 @@ import { useConnectionStore } from "../../state/connection";
 import { activityForHost } from "../../lib/activityScope";
 import { profileNameForAddr, useRosterStore } from "../../state/roster";
 import { ConsoleChip } from "../../components/ConsoleChip";
+import { formatDate } from "../../lib/formatDate";
 
 /**
  * Tasks screen. Three tabs (`?tab=`):
@@ -671,7 +672,7 @@ function ActivityDetailModal({
         : entry.phase === "uploading"
           ? tr("activity_phase_uploading", undefined, "Uploading")
           : null;
-  const fmtTime = (ms: number) => new Date(ms).toLocaleString();
+  const fmtTime = (ms: number) => formatDate(ms);
   const rows: Array<[string, string | null]> = [
     [tr("activity_detail_kind", undefined, "Type"), entry.kind],
     [tr("activity_detail_console", undefined, "Console"), consoleName],
@@ -778,8 +779,7 @@ function formatRelative(
     const h = Math.floor(diff / 3_600_000);
     return tr("activity_hours_ago", { count: h }, `${h}h ago`);
   }
-  const d = new Date(ms);
-  return d.toLocaleString();
+  return formatDate(ms);
 }
 
 /**
@@ -881,8 +881,8 @@ function ActivityTimeline({ entries }: { entries: ActivityEntry[] }) {
                   e.addr && profiles.length > 1
                     ? `${profileNameForAddr(e.addr, profiles)} · `
                     : ""
-                }${e.label} · ${e.outcome} · ${start.toLocaleTimeString()}${
-                  e.endedAtMs ? ` → ${end.toLocaleTimeString()}` : ""
+                }${e.label} · ${e.outcome} · ${formatDate(start, "time")}${
+                  e.endedAtMs ? ` → ${formatDate(end, "time")}` : ""
                 }`;
                 return (
                   <button

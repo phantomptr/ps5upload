@@ -70,6 +70,12 @@ export function Modal({
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  // Callers usually pass an inline arrow; reading it through a ref keeps the
+  // effect below from re-running (and re-grabbing focus) on every render.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
   // Lock background scroll while open so a wheel/touch over the scrim can't
   // scroll the page behind it (this modal renders inline, so its scrim's
@@ -97,7 +103,7 @@ export function Modal({
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        onCloseRef.current();
       }
     };
     window.addEventListener("keydown", handler);
@@ -109,7 +115,7 @@ export function Modal({
         queueMicrotask(() => prev.focus({ preventScroll: true }));
       }
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   Bell,
   RefreshCw,
@@ -17,17 +17,18 @@ import {
 } from "../../components";
 import { useTr } from "../../state/lang";
 import { useConnectionStore } from "../../state/connection";
-import { useDocumentVisible } from "../../lib/visibility";
+import { usePoll } from "../../lib/usePoll";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { transferAddr } from "../../lib/addr";
 import { notifList, notifClear, type Notification } from "../../api/ps5";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { hostOf } from "../../lib/addr";
 import { isNotifRead, usePs5NotifRead } from "../../state/ps5NotifRead";
+import { formatDate } from "../../lib/formatDate";
 
 function formatTs(ts: number): string {
   if (!ts) return "—";
-  return new Date(ts * 1000).toLocaleString();
+  return formatDate(ts * 1000);
 }
 
 function levelColor(level: string): string {
@@ -45,7 +46,6 @@ export default function NotificationsScreen() {
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const addr = host ? transferAddr(host) : "";
-  const visible = useDocumentVisible();
   const guard = useStaleHostGuard();
 
   const [items, setItems] = useState<Notification[]>([]);
@@ -102,12 +102,8 @@ export default function NotificationsScreen() {
     }
   }, [addr, payloadStatus, guard]);
 
-  useEffect(() => {
-    void refresh();
-    if (!visible) return;
-    const id = window.setInterval(() => void refresh(), POLL_MS);
-    return () => window.clearInterval(id);
-  }, [refresh, visible]);
+  // Paused while hidden or while a transfer to this console runs.
+  usePoll(refresh, POLL_MS, { host, enabled: !!addr && payloadStatus === "up" });
 
   // The payload has no read state, so it is kept here, per console.
   const readState = usePs5NotifRead((s) => (host ? s.byHost[hostOf(host)] : undefined));

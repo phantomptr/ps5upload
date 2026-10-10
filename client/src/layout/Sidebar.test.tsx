@@ -17,8 +17,8 @@ vi.mock("../state/lang", () => ({
 }));
 vi.mock("../state/logs", () => ({
   useLogsStore: (
-    selector: (state: { entries: Array<{ level: string }> }) => unknown,
-  ) => selector({ entries: [] }),
+    selector: (state: { errorCount: number }) => unknown,
+  ) => selector({ errorCount: 0 }),
 }));
 vi.mock("../state/update", () => ({
   useUpdateStore: (

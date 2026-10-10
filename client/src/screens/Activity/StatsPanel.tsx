@@ -10,6 +10,7 @@ import { formatBytes } from "../../lib/format";
 import { pushNotification } from "../../state/notifications";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { activityToCsv, computeStats, type ComputedStats } from "./stats";
+import { formatDate } from "../../lib/formatDate";
 
 /**
  * Stats tab of the Tasks screen: aggregates of the activity history the
@@ -267,7 +268,7 @@ function TopTransfers({
                 {t.mbps.toFixed(1)} MiB/s
               </td>
               <td className="px-1 py-0.5 text-right text-[var(--color-muted)]">
-                {new Date(t.whenMs).toLocaleDateString()}
+                {formatDate(t.whenMs, "date")}
               </td>
             </tr>
           ))}

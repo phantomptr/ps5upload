@@ -11,6 +11,7 @@ import { mgmtAddr } from "../../lib/addr";
 import { PageHeader, Button, ConnectionGate, Spinner } from "../../components";
 import { useTr } from "../../state/lang";
 import { splitShellSequence } from "./shellSequence";
+import { formatDate } from "../../lib/formatDate";
 
 interface HistoryEntry {
   id: string;
@@ -262,7 +263,7 @@ function ShellHistoryRow({ entry }: { entry: HistoryEntry }) {
   return (
     <li>
       <div className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
-        <span>{ts.toLocaleTimeString()}</span>
+        <span>{formatDate(ts, "time")}</span>
         {entry.durationMs !== undefined && (
           <span>· {Math.round(entry.durationMs)}ms</span>
         )}

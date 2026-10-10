@@ -39,6 +39,7 @@ import { isAndroid } from "../../lib/platform";
 import { isTauriEnv, safeUnlisten } from "../../lib/tauriEnv";
 import { log } from "../../state/logs";
 import { physicalPointInRect } from "./dropZone";
+import { formatDate } from "../../lib/formatDate";
 
 /**
  * Playlist editor + runner panel for the SendPayload screen.
@@ -1212,8 +1213,5 @@ function formatAgo(ms: number): string {
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
   if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)}d ago`;
-  return new Date(ms).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
+  return formatDate(ms, "date");
 }

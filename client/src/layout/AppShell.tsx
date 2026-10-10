@@ -49,7 +49,7 @@ import { isTauriEnv, safeUnlisten } from "../lib/tauriEnv";
 import { engineIsOnThisDevice } from "../state/engine";
 import { trStatic } from "../lib/trStatic";
 import { useDocumentVisible } from "../lib/visibility";
-import { useScheduleRunner } from "../state/schedules";
+import { runScheduleAction, useScheduleRunner } from "../state/schedules";
 import {
   pushNotification,
   runNotificationAutoPrune,
@@ -1326,13 +1326,7 @@ export default function AppShell() {
   usePkgAutoRoute();
   // Schedule runner — fires while window open. Browser-side; for
   // true cron behaviour the user needs an external scheduler.
-  useScheduleRunner((sch) => {
-    if (sch.action === "notif") {
-      pushNotification("info", `Scheduled: ${sch.label}`, {
-        body: sch.body ?? "Schedule fired.",
-      });
-    }
-  });
+  useScheduleRunner(runScheduleAction);
   // Subscribe-once: wires the per-feature stores (transfer, FS bulk
   // op, FS download) into the cross-screen activity history. Safe to
   // call on every render because installActivityWiring is idempotent.

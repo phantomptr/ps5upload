@@ -31,7 +31,7 @@ import PowerTelemetryPanel from "./PowerTelemetryPanel";
 import NetworkPanel from "./NetworkPanel";
 import PeripheralPanel from "./PeripheralPanel";
 import { FAN_PRESETS } from "./fanPresets";
-import { useDocumentVisible } from "../../lib/visibility";
+import { usePoll } from "../../lib/usePoll";
 import { mgmtAddr, transferAddr } from "../../lib/addr";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 
@@ -64,6 +64,7 @@ import {
   type DriveSensorList,
   type SmpMetaStats,
 } from "../../api/ps5";
+import { formatDate } from "../../lib/formatDate";
 
 /** Hardware Monitor tab — live sensor + uptime view.
  *  The payload side is in payload/src/hw_info.c with
@@ -348,22 +349,17 @@ export default function HardwareScreen() {
     }
   }, [host, payloadStatus, guard, sensorReadAt]);
 
-  // Mount + auto-poll every POLL_INTERVAL_MS while payload is up AND
-  // the window is visible. Pausing on minimize keeps idle laptops
-  // from spamming the PS5's mgmt port. Resumes on visibility-change
-  // with a fresh immediate refresh so the panel is up-to-date when the
-  // user looks at it again.
-  const visible = useDocumentVisible();
+  // Mount + auto-poll every POLL_INTERVAL_MS while payload is up. usePoll
+  // pauses while the window is hidden or a transfer to this console runs
+  // (each poll is a mgmt frame competing with the upload), and refreshes
+  // as soon as either ends.
   useEffect(() => {
-    if (payloadStatus !== "up") {
-      setError(null);
-      return;
-    }
-    if (!visible) return;
-    refresh();
-    const id = window.setInterval(refresh, POLL_INTERVAL_MS);
-    return () => window.clearInterval(id);
-  }, [payloadStatus, refresh, visible]);
+    if (payloadStatus !== "up") setError(null);
+  }, [payloadStatus]);
+  usePoll(refresh, POLL_INTERVAL_MS, {
+    host,
+    enabled: payloadStatus === "up",
+  });
 
   // The live-sensor read (temps / clock) is ON-DEMAND ONLY — it is
   // deliberately NEVER armed on a timer and never auto-fires on mount.
@@ -1212,12 +1208,7 @@ function SystemTimeCard({
     }
   }, [host, payloadUp, guardSys]);
 
-  useEffect(() => {
-    if (!payloadUp) return;
-    refreshPs5();
-    const id = window.setInterval(refreshPs5, 30_000);
-    return () => window.clearInterval(id);
-  }, [payloadUp, refreshPs5]);
+  usePoll(refreshPs5, 30_000, { host, enabled: payloadUp });
 
   /* Tick the PC clock every second so drift updates live. Light enough
    * that gating it on document visibility is not worth the code. */
@@ -1426,7 +1417,6 @@ function SmpMetaCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pollDraft, setPollDraft] = useState<number>(30);
-  const visible = useDocumentVisible();
   const guard = useStaleHostGuard();
 
   const canTalk = payloadUp && !!host.trim();
@@ -1448,14 +1438,8 @@ function SmpMetaCard({
 
   /* Initial fetch + slow poll. 15s cadence is well inside the 30s
    * default sweep interval, so the user sees a fresh row within one
-   * sweep of any healing activity. Pauses when the tab is hidden so
-   * a background window doesn't generate idle traffic. */
-  useEffect(() => {
-    if (!canTalk || !visible) return;
-    void refresh();
-    const id = setInterval(() => void refresh(), 15_000);
-    return () => clearInterval(id);
-  }, [canTalk, visible, refresh]);
+   * sweep of any healing activity. Paused while hidden or transferring. */
+  usePoll(refresh, 15_000, { host, enabled: canTalk });
 
   const start = useCallback(async () => {
     if (!canTalk || busy) return;
@@ -1552,7 +1536,7 @@ function SmpMetaCard({
 
   const running = stats?.running === true;
   const lastRunLabel = stats?.last_run_unix
-    ? new Date(stats.last_run_unix * 1000).toLocaleTimeString()
+    ? formatDate(stats.last_run_unix * 1000, "time")
     : tr("smp_meta_never_run", "never");
 
   return (

@@ -4,6 +4,7 @@ import { ShieldCheck } from "lucide-react";
 import { PageHeader } from "../../components";
 import { useTr } from "../../state/lang";
 import { useAuditLogStore, type AuditEntry } from "../../state/auditLog";
+import { formatDate } from "../../lib/formatDate";
 
 /**
  * Top-level Audit log screen (promoted from a Settings card in 2.12.0).
@@ -81,7 +82,7 @@ export default function AuditLogScreen() {
                   }`}
                 >
                   <td className="px-2 py-1 tabular-nums text-xs">
-                    {new Date(e.ts).toLocaleString()}
+                    {formatDate(e.ts)}
                   </td>
                   <td className="px-2 py-1 font-mono text-xs">{e.kind}</td>
                   <td className="px-2 py-1">{e.what}</td>

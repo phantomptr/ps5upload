@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { useEffect, useRef } from "react";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
+import { pushNotification } from "./notifications";
 
 /**
  * Browser-side scheduled operations.
@@ -15,6 +16,12 @@ import { safeGetItem, safeSetItem } from "../lib/safeStorage";
  *   - daily: fires at HH:MM every day
  *   - weekly: fires at HH:MM on the named weekday(s)
  *   - once: fires on a specific timestamp; one-shot then disabled
+ *
+ * The runner ticks every 30 s and fires whatever came due since the last
+ * tick, so a tick landing a minute late (a busy or throttled window) no
+ * longer skips the day. A run that came due more than CATCH_UP_MS ago (the
+ * app was closed or the computer asleep) is not fired late; it is recorded
+ * as missed and shown in Activity, where it can be run by hand.
  *
  * Action kinds:
  *   - notif: just push a notification (lets users build "remind me
@@ -43,8 +50,14 @@ export interface Schedule {
   label: string;
   /** Optional payload for the action. */
   body?: string;
-  /** Last fire ms (debounce — don't double-fire within 1 minute). */
+  /** Last fire ms. A run due at or before this has been handled. */
   lastFiredMs?: number;
+  /** When the schedule was added or last switched on. Runs due before this
+   *  are not reported as missed. Absent on schedules stored by older
+   *  versions. */
+  armedMs?: number;
+  /** The most recent run that came due while the app couldn't fire it. */
+  missedAtMs?: number;
 }
 
 const STORAGE_KEY = "ps5upload.schedules.v1";
@@ -56,6 +69,10 @@ interface ScheduleState {
   remove: (id: string) => void;
   /** Called by the runner; updates lastFiredMs in place. */
   markFired: (id: string, ms: number) => void;
+  /** Called by the runner for a run it was too late to fire. */
+  markMissed: (id: string, atMs: number) => void;
+  /** Forget a missed run (dismissed, or run by hand). */
+  clearMissed: (id: string) => void;
 }
 
 function loadInitial(): Schedule[] {
@@ -98,15 +115,19 @@ function genId(): string {
 export const useScheduleStore = create<ScheduleState>((set, get) => ({
   schedules: loadInitial(),
   add: (s) => {
-    const sch: Schedule = { ...s, id: genId() };
+    const sch: Schedule = { ...s, id: genId(), armedMs: Date.now() };
     const next = [...get().schedules, sch];
     set({ schedules: next });
     persist(next);
   },
   update: (id, patch) => {
-    const next = get().schedules.map((s) =>
-      s.id === id ? { ...s, ...patch } : s,
-    );
+    const next = get().schedules.map((s) => {
+      if (s.id !== id) return s;
+      const merged = { ...s, ...patch };
+      // Switching on re-arms: runs due while it was off aren't "missed".
+      if (patch.enabled && !s.enabled) merged.armedMs = Date.now();
+      return merged;
+    });
     set({ schedules: next });
     persist(next);
   },
@@ -128,30 +149,101 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
     set({ schedules: next });
     persist(next);
   },
+  markMissed: (id, atMs) => {
+    const next = get().schedules.map((s) =>
+      s.id === id
+        ? {
+            ...s,
+            missedAtMs: atMs,
+            // A missed one-shot is over; it can still be run from Activity.
+            enabled: s.kind === "once" ? false : s.enabled,
+          }
+        : s,
+    );
+    set({ schedules: next });
+    persist(next);
+  },
+  clearMissed: (id) => {
+    const next = get().schedules.map((s) => {
+      if (s.id !== id) return s;
+      const rest = { ...s };
+      delete rest.missedAtMs;
+      return rest;
+    });
+    set({ schedules: next });
+    persist(next);
+  },
 }));
 
-/** Returns true when the schedule should fire at the given moment. */
-export function shouldFire(s: Schedule, now: Date): boolean {
-  if (!s.enabled) return false;
-  // Debounce: don't fire twice within 60s.
-  if (s.lastFiredMs && Date.now() - s.lastFiredMs < 60_000) return false;
+/** How late a run may still fire. Later than this it is reported as missed. */
+export const CATCH_UP_MS = 15 * 60_000;
+
+/** The latest time at or before `nowMs` this schedule was due, or null. */
+export function latestDue(s: Schedule, nowMs: number): number | null {
   if (s.kind === "once") {
-    if (!s.oneShotMs) return false;
-    return now.getTime() >= s.oneShotMs;
+    return s.oneShotMs && s.oneShotMs <= nowMs ? s.oneShotMs : null;
   }
-  if (!s.hhmm) return false;
+  if (!s.hhmm) return null;
   const [hh, mm] = s.hhmm.split(":").map((x) => parseInt(x, 10));
-  if (isNaN(hh) || isNaN(mm)) return false;
-  if (now.getHours() !== hh || now.getMinutes() !== mm) return false;
-  if (s.kind === "weekly") {
-    if (!s.weekdays || !s.weekdays.includes(now.getDay())) return false;
+  if (isNaN(hh) || isNaN(mm) || hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  if (s.kind === "weekly" && (!s.weekdays || s.weekdays.length === 0)) return null;
+  // Walk back day by day (a week covers every weekly schedule).
+  for (let back = 0; back <= 7; back++) {
+    const d = new Date(nowMs);
+    d.setDate(d.getDate() - back);
+    d.setHours(hh, mm, 0, 0);
+    const t = d.getTime();
+    if (t > nowMs) continue;
+    if (s.kind === "weekly" && !s.weekdays!.includes(d.getDay())) continue;
+    return t;
   }
-  return true;
+  return null;
+}
+
+export type ScheduleVerdict =
+  | { kind: "fire"; dueMs: number }
+  | { kind: "missed"; dueMs: number }
+  | null;
+
+/** What the runner should do with a schedule at `nowMs`: fire it, record a
+ *  missed run, or nothing (not due, or that run was already handled). */
+export function evaluateSchedule(
+  s: Schedule,
+  nowMs: number,
+  catchUpMs: number = CATCH_UP_MS,
+): ScheduleVerdict {
+  if (!s.enabled) return null;
+  const due = latestDue(s, nowMs);
+  if (due === null) return null;
+  if ((s.lastFiredMs ?? 0) >= due) return null;
+  if ((s.missedAtMs ?? 0) >= due) return null;
+  if (nowMs - due <= catchUpMs) {
+    // Never fire a run that was due before the schedule existed or was
+    // switched on (adding a 09:00 reminder at 09:05 shouldn't ring).
+    if (s.armedMs !== undefined && due < s.armedMs) return null;
+    return { kind: "fire", dueMs: due };
+  }
+  // Too late to fire. Only call it missed when we know the schedule was
+  // live then; older stored schedules without armedMs just wait for the
+  // next run.
+  const since = Math.max(s.armedMs ?? 0, s.lastFiredMs ?? 0);
+  if (since === 0 || due < since) return null;
+  return { kind: "missed", dueMs: due };
+}
+
+/** Run a schedule's action now. The runner's fire path and Activity's
+ *  "Run now" for a missed run both go through here. */
+export function runScheduleAction(s: Schedule): void {
+  if (s.action === "notif") {
+    pushNotification("info", `Scheduled: ${s.label}`, {
+      body: s.body ?? "Schedule fired.",
+    });
+  }
 }
 
 /** Subscribe-once runner. Mount this hook in AppShell to enable
- *  schedule firing. Ticks every 30 s; the per-minute resolution is
- *  fine for cron-like UX.
+ *  schedule firing. Ticks every 30 s and fires whatever came due since
+ *  (see evaluateSchedule).
  *
  *  Stable-callback pattern: callers (AppShell) usually pass an inline
  *  arrow whose identity changes on every render, so naming `onFire`
@@ -169,12 +261,15 @@ export function useScheduleRunner(onFire: (s: Schedule) => void) {
   }, [onFire]);
   useEffect(() => {
     const tick = () => {
-      const now = new Date();
-      const schedules = useScheduleStore.getState().schedules;
-      for (const s of schedules) {
-        if (shouldFire(s, now)) {
-          useScheduleStore.getState().markFired(s.id, Date.now());
+      const now = Date.now();
+      const store = useScheduleStore.getState();
+      for (const s of store.schedules) {
+        const v = evaluateSchedule(s, now);
+        if (v?.kind === "fire") {
+          store.markFired(s.id, now);
           onFireRef.current(s);
+        } else if (v?.kind === "missed") {
+          store.markMissed(s.id, v.dueMs);
         }
       }
     };

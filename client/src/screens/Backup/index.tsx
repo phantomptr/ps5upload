@@ -34,10 +34,10 @@ import {
 import { trackTask } from "../../state/trackTask";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { SNAPSHOT_MAX_DEPTH, SNAPSHOTS_KEPT_PER_NAME } from "./snapshotLimits";
+import { formatDate } from "../../lib/formatDate";
 
 function formatTimestamp(ts: number): string {
-  const d = new Date(ts * 1000);
-  return d.toLocaleString();
+  return formatDate(ts * 1000);
 }
 
 /** Things people actually want to keep a copy of.

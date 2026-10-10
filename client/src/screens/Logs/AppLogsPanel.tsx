@@ -16,7 +16,7 @@ import {
   type LogLevel,
 } from "../../state/logs";
 import { useDiagSettingsStore, LOG_LEVELS } from "../../state/diagSettings";
-import { EmptyState, Button } from "../../components";
+import { EmptyState, Button, Callout } from "../../components";
 import { useTr } from "../../state/lang";
 import { writeClipboard } from "../../lib/clipboard";
 import { isTauriEnv } from "../../lib/tauriEnv";
@@ -83,6 +83,15 @@ export default function AppLogsPanel() {
   // failure, which is why Copy/Download read as "not working".
   const [copyState, setCopyState] = useState<"idle" | "done" | "fail">("idle");
   const [saveState, setSaveState] = useState<"idle" | "done" | "fail">("idle");
+  const [openDirError, setOpenDirError] = useState<string | null>(null);
+  const openLogsDir = async () => {
+    setOpenDirError(null);
+    try {
+      await invoke("diag_log_open_dir");
+    } catch (e) {
+      setOpenDirError(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   // Track the reset timers so we can clear them on unmount. Without
   // this, a Copy/Download click followed by a quick tab switch fires
@@ -234,7 +243,7 @@ export default function AppLogsPanel() {
           above). The browser build has no disk log (diag_log_append is
           desktop-only), so the level would change nothing there. */}
       {isTauriEnv() && (
-      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-xs">
+      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-4 py-2.5 text-xs shadow-[var(--edge-highlight)]">
         <span className="text-[var(--color-muted)]">
           {tr(
             "logs_disk_hint",
@@ -245,7 +254,7 @@ export default function AppLogsPanel() {
         <select
           value={logLevel}
           onChange={(e) => setLogLevel(e.target.value as LogLevel)}
-          className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs max-md:min-h-11"
+          className="select !w-auto !py-1 text-xs max-md:min-h-11"
         >
           {LOG_LEVELS.map((l) => (
             <option key={l} value={l}>
@@ -253,17 +262,28 @@ export default function AppLogsPanel() {
             </option>
           ))}
         </select>
-        <button
-          type="button"
-          onClick={() => void invoke("diag_log_open_dir").catch(() => {})}
-          className="ml-auto text-[var(--color-accent)] hover:underline"
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ml-auto"
+          onClick={() => void openLogsDir()}
         >
           {tr("logs_open_folder", undefined, "Open logs folder")}
-        </button>
+        </Button>
       </div>
       )}
+      {openDirError && (
+        <Callout
+          className="mb-3"
+          tone="error"
+          title={tr("logs_open_folder_failed", undefined, "Couldn't open the logs folder")}
+          onDismiss={() => setOpenDirError(null)}
+        >
+          {openDirError}
+        </Callout>
+      )}
 
-      <div className="mb-4 flex flex-wrap items-center gap-1.5 text-xs">
+      <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
         <FilterPill
           label={tr("logs_filter_all", undefined, "All")}
           count={entries.length}
@@ -305,7 +325,7 @@ export default function AppLogsPanel() {
           }
         />
       ) : (
-        <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]">
+        <div className="surface-panel min-h-0 flex-1 overflow-hidden !rounded-[var(--radius-card)]">
           <ul className="h-full divide-y divide-[var(--color-border)] overflow-y-auto">
             {visible
               .slice()
@@ -337,12 +357,8 @@ function FilterPill({
     <button
       type="button"
       onClick={onClick}
-      className={
-        "flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-colors max-md:min-h-11 max-md:px-4 " +
-        (active
-          ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-          : "border-[var(--color-border)] hover:bg-[var(--color-surface-3)]")
-      }
+      aria-pressed={active}
+      className="chip min-h-8 gap-1.5 px-3 max-md:min-h-11 max-md:px-4"
     >
       <span className={tone ?? ""}>{label}</span>
       <span className="tabular-nums text-[var(--color-muted)]">{count}</span>
@@ -355,7 +371,7 @@ function LogRow({ entry }: { entry: LogEntry }) {
   const meta = LEVEL_META[entry.level];
   const hasDetail = !!entry.detail;
   return (
-    <li className="px-3 py-2 text-xs">
+    <li className="px-4 py-2 text-xs">
       <button
         type="button"
         onClick={() => hasDetail && setExpanded((v) => !v)}
@@ -385,7 +401,7 @@ function LogRow({ entry }: { entry: LogEntry }) {
         </span>
       </button>
       {expanded && entry.detail && (
-        <pre className="mt-2 ml-[54px] max-h-64 overflow-auto rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-2 font-mono text-xs text-[var(--color-muted)]">
+        <pre className="mt-2 ml-[54px] max-h-64 overflow-auto rounded-[var(--radius-field)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 font-mono text-xs text-[var(--color-muted)]">
           {entry.detail}
         </pre>
       )}

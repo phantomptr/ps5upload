@@ -25,6 +25,7 @@ import { isRemotePath } from "../../lib/remotePath";
 import { PlaylistsPanel } from "./PlaylistsPanel";
 import { dropIsOwnedElsewhere } from "./dropZone";
 import { probeVerdict } from "./probeVerdict";
+import { formatDate } from "../../lib/formatDate";
 
 /**
  * Send tab of the Payloads screen — send any custom ELF (or BIN/JS/
@@ -99,10 +100,7 @@ function formatAgo(ms: number): string {
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
   if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
   if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)}d ago`;
-  return new Date(ms).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
+  return formatDate(ms, "date");
 }
 
 function fileNameFrom(path: string): string {

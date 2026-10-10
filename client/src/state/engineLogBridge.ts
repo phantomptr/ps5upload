@@ -15,7 +15,7 @@
  */
 
 import { engineLogsTail, type EngineLogEntry } from "../api/ps5";
-import { log } from "./logs";
+import { log, useLogsStore, type LogInput, type LogLevel } from "./logs";
 
 const POLL_INTERVAL_MS = 1000;
 
@@ -36,28 +36,18 @@ const ESCALATE_AFTER_FAILURES = 10;
 let consecutiveFailures = 0;
 let escalationLogged = false;
 
-function routeToLogStore(entry: EngineLogEntry) {
-  // Strip the `[engine:<level>]` prefix the sidecar's stderr tagging
-  // adds — we're already rendering the level as a badge in the Log UI,
-  // so duplicating it in the message text is noise.
-  const msg = entry.msg.replace(/^\[engine:[a-z]+\]\s*/, "");
-  switch (entry.level) {
-    case "error":
-      log.error("engine", msg);
-      break;
-    case "warn":
-      log.warn("engine", msg);
-      break;
-    case "debug":
-      log.debug("engine", msg);
-      break;
-    case "trace":
-      log.trace("engine", msg);
-      break;
-    default:
-      log.info("engine", msg);
-      break;
-  }
+const LEVELS: ReadonlySet<string> = new Set(["error", "warn", "debug", "trace"]);
+
+/** Engine entries as log-store lines. */
+export function toLogInputs(entries: EngineLogEntry[]): LogInput[] {
+  return entries.map((entry) => ({
+    level: (LEVELS.has(entry.level) ? entry.level : "info") as LogLevel,
+    source: "engine",
+    // Strip the `[engine:<level>]` prefix the sidecar's stderr tagging
+    // adds — we're already rendering the level as a badge in the Log UI,
+    // so duplicating it in the message text is noise.
+    message: entry.msg.replace(/^\[engine:[a-z]+\]\s*/, ""),
+  }));
 }
 
 async function tick() {
@@ -72,7 +62,8 @@ async function tick() {
   }
   try {
     const res = await engineLogsTail(nextSince);
-    for (const e of res.entries) routeToLogStore(e);
+    // One store update per tick, however many lines arrived.
+    useLogsStore.getState().appendMany(toLogInputs(res.entries));
     if (res.entries.length > 0) {
       // Advance to the last seq we saw. Guard: `next_seq` is the server's
       // claim, but use the entry-derived value so a buggy server can't

@@ -57,6 +57,7 @@ import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import AutoBackupCard from "./AutoBackupCard";
+import { formatDate } from "../../lib/formatDate";
 
 /**
  * Save data manager.
@@ -919,7 +920,7 @@ export default function SavesScreen() {
                       <div className="text-xs text-[var(--color-muted)]">
                         {tr("saves_user", undefined, "user")} {e.user_id} ·{" "}
                         {formatBytes(e.size)} ·{" "}
-                        {new Date(e.mtime * 1000).toLocaleDateString()}
+                        {formatDate(e.mtime * 1000, "date")}
                       </div>
                     </div>
                     {isTauriEnv() && (
