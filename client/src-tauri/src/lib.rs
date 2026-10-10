@@ -462,11 +462,7 @@ pub fn run() {
             // ── Automatic crash/error report collection ─────────────
             // See commands/crash_reports.rs + src/lib/crashReporter.ts.
             commands::crash_reports::crash_report_save,
-            commands::crash_reports::crash_reports_stats,
-            commands::crash_reports::crash_reports_dir_resolved,
             commands::crash_reports::crash_reports_zip,
-            commands::crash_reports::crash_reports_clear,
-            commands::crash_reports::crash_reports_open_dir,
             // ── Persistent on-disk app log (bug-report time windows) ─
             // The renderer batches its unified log to ~/.ps5upload/logs/
             // so "package the last N minutes" survives a crash. See
@@ -475,9 +471,6 @@ pub fn run() {
             commands::app_events::app_events_read,
             commands::host_platform::host_platform,
             commands::diag_log::diag_log_append,
-            commands::diag_log::diag_log_read_window,
-            commands::diag_log::diag_log_stats,
-            commands::diag_log::diag_log_clear,
             commands::diag_log::diag_log_open_dir,
             // ── Bug-report bundle (zip: logs + ps5 snapshot + images) ─
             // Assembles the one-click bug report. See commands/bug_report.rs
@@ -486,9 +479,6 @@ pub fn run() {
             // ── In-app screenshot capture (bug-report gallery) ──────
             commands::bug_screenshots::screenshot_save,
             commands::bug_screenshots::screenshot_list,
-            commands::bug_screenshots::screenshot_delete,
-            commands::bug_screenshots::screenshot_clear,
-            commands::bug_screenshots::screenshot_open_dir,
             // ── Filesystem search index (payload-side) ──────────────
             commands::fs_index_start,
             commands::fs_index_status,

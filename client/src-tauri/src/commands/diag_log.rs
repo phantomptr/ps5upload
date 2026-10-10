@@ -19,7 +19,6 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 /// Drop log files older than this many days.
@@ -173,16 +172,8 @@ pub async fn diag_log_append(app: AppHandle, lines: Vec<String>) -> Result<(), S
     Ok(())
 }
 
-/// Read back every line whose `ts` field is ≥ `since_ms`. Lines that don't
-/// parse (or lack `ts`) are kept — we'd rather over-include than silently drop
-/// context from a bug report. Bounded by the retention cap above.
-#[tauri::command]
-pub async fn diag_log_read_window(app: AppHandle, since_ms: u64) -> Result<Vec<String>, String> {
-    Ok(window_lines(&logs_dir(&app)?, since_ms))
-}
-
 /// Every retained line whose `ts` ≥ `since_ms` (unparseable lines kept).
-/// Shared by the read command and the bug-report bundler.
+/// Read by the bug-report bundler.
 pub(crate) fn window_lines(dir: &Path, since_ms: u64) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for p in list_log_files(dir) {
@@ -214,52 +205,6 @@ fn line_ts(line: &str) -> Option<u64> {
         .find(|c: char| !c.is_ascii_digit())
         .unwrap_or(after.len());
     after[..end].parse().ok()
-}
-
-#[derive(Serialize)]
-pub struct DiagLogStats {
-    pub count: usize,
-    pub bytes: u64,
-    pub dir: String,
-    /// Timestamp of the oldest retained line, for "logs since …" in the UI.
-    pub oldest_ts: Option<u64>,
-}
-
-/// File count + total bytes + directory + oldest retained timestamp.
-#[tauri::command]
-pub async fn diag_log_stats(app: AppHandle) -> Result<DiagLogStats, String> {
-    let dir = logs_dir(&app)?;
-    let files = list_log_files(&dir);
-    let bytes: u64 = files
-        .iter()
-        .filter_map(|p| std::fs::metadata(p).ok())
-        .map(|m| m.len())
-        .sum();
-    // oldest_ts: first parseable ts in the lexically-oldest file.
-    let oldest_ts = files.first().and_then(|p| {
-        std::fs::read_to_string(p)
-            .ok()
-            .and_then(|c| c.lines().find_map(line_ts))
-    });
-    Ok(DiagLogStats {
-        count: files.len(),
-        bytes,
-        dir: dir.to_string_lossy().into_owned(),
-        oldest_ts,
-    })
-}
-
-/// Delete all persisted log files. Returns how many were removed.
-#[tauri::command]
-pub async fn diag_log_clear(app: AppHandle) -> Result<usize, String> {
-    let dir = logs_dir(&app)?;
-    let mut n = 0usize;
-    for p in list_log_files(&dir) {
-        if std::fs::remove_file(&p).is_ok() {
-            n += 1;
-        }
-    }
-    Ok(n)
 }
 
 /// Reveal the logs directory in the OS file manager.

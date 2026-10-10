@@ -13,7 +13,6 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 /// Keep at most this many reports on disk (newest win). One report is a few
@@ -53,13 +52,6 @@ pub(crate) fn list_report_files(dir: &Path) -> Vec<PathBuf> {
     v
 }
 
-#[derive(Serialize)]
-pub struct CrashReportStats {
-    pub count: usize,
-    pub bytes: u64,
-    pub dir: String,
-}
-
 /// Persist one report. `contents` is the JSON the renderer already built.
 /// Prunes the oldest reports so the directory stays a bounded ring buffer.
 #[tauri::command]
@@ -84,29 +76,6 @@ pub async fn crash_report_save(app: AppHandle, contents: String) -> Result<Strin
     let path = dir.join(format!("ps5upload-report-{ts}-{}.json", std::process::id()));
     std::fs::write(&path, contents.as_bytes()).map_err(|e| format!("write {path:?}: {e}"))?;
     Ok(path.to_string_lossy().into_owned())
-}
-
-/// Count + total bytes of kept reports, for the Settings UI.
-#[tauri::command]
-pub async fn crash_reports_stats(app: AppHandle) -> Result<CrashReportStats, String> {
-    let dir = reports_dir(&app)?;
-    let files = list_report_files(&dir);
-    let bytes: u64 = files
-        .iter()
-        .filter_map(|p| std::fs::metadata(p).ok())
-        .map(|m| m.len())
-        .sum();
-    Ok(CrashReportStats {
-        count: files.len(),
-        bytes,
-        dir: dir.to_string_lossy().into_owned(),
-    })
-}
-
-/// Absolute path of the reports directory (for "open folder" / display).
-#[tauri::command]
-pub async fn crash_reports_dir_resolved(app: AppHandle) -> Result<String, String> {
-    Ok(reports_dir(&app)?.to_string_lossy().into_owned())
 }
 
 /// Bundle every kept report into `dest` (a user-picked `.zip` path). Returns
@@ -140,28 +109,4 @@ pub async fn crash_reports_zip(app: AppHandle, dest: String) -> Result<usize, St
     }
     zw.finish().map_err(|e| format!("zip finish: {e}"))?;
     Ok(n)
-}
-
-/// Delete all kept reports (after the user has shared them, if they want a
-/// clean slate). Returns how many were removed.
-#[tauri::command]
-pub async fn crash_reports_clear(app: AppHandle) -> Result<usize, String> {
-    let dir = reports_dir(&app)?;
-    let files = list_report_files(&dir);
-    let mut n = 0usize;
-    for p in &files {
-        if std::fs::remove_file(p).is_ok() {
-            n += 1;
-        }
-    }
-    Ok(n)
-}
-
-/// Reveal the reports directory in the OS file manager. Delegates to the
-/// shared `reveal` helper (see commands/reveal.rs) so the per-platform spawn
-/// logic lives in one place.
-#[tauri::command]
-pub async fn crash_reports_open_dir(app: AppHandle) -> Result<(), String> {
-    let dir = reports_dir(&app)?;
-    super::reveal::reveal(&dir)
 }
