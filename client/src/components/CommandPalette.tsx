@@ -332,8 +332,8 @@ export function CommandPalette() {
       }}
     >
       <div className="anim-pop glass-float elev-3 w-[560px] max-w-[90vw] overflow-hidden rounded-[var(--radius-panel)]">
-        <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-3 py-2">
-          <Search size={14} className="text-[var(--color-muted)]" />
+        <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-5 py-3.5">
+          <Search size={17} className="text-[var(--color-muted)]" />
           <input
             ref={inputRef}
             type="text"
@@ -346,11 +346,11 @@ export function CommandPalette() {
             )}
             className="flex-1 bg-transparent text-sm outline-none"
           />
-          <span className="rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-xs text-[var(--color-muted)]">
+          <span className="rounded-full border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-muted)]">
             {tr("cmdpalette_esc", "Esc")}
           </span>
         </div>
-        <div className="max-h-[50vh] overflow-y-auto py-1">
+        <div className="max-h-[50vh] overflow-y-auto p-2">
           {filtered.length === 0 ? (
             <div className="px-4 py-8 text-center text-xs text-[var(--color-muted)]">
               {tr(
@@ -362,7 +362,7 @@ export function CommandPalette() {
           ) : (
             grouped.map(({ group, items }) => (
               <div key={group}>
-                <div className="px-3 pb-1 pt-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+                <div className="px-4 pb-1 pt-2 text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]">
                   {tr(`cmdpalette_group_${group.toLowerCase()}`, group)}
                 </div>
                 {items.map((c) => {
@@ -375,9 +375,9 @@ export function CommandPalette() {
                       type="button"
                       onMouseEnter={() => setActiveIdx(flatIdx)}
                       onClick={() => void c.run()}
-                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${
+                      className={`flex w-full items-center gap-2 rounded-full px-4 py-2 text-left text-sm ${
                         isActive
-                          ? "bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
+                          ? "bg-[var(--color-accent-soft)] font-medium text-[var(--color-text)]"
                           : "hover:bg-[var(--color-surface-3)]"
                       }`}
                     >
@@ -395,7 +395,7 @@ export function CommandPalette() {
             ))
           )}
         </div>
-        <div className="border-t border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-muted)]">
+        <div className="border-t border-[var(--color-border)] px-5 py-2 text-xs text-[var(--color-muted)]">
           {tr(
             "cmdpalette_footer_hint",
             "↑↓ navigate · Enter run · Esc close · Cmd/Ctrl+K toggle",

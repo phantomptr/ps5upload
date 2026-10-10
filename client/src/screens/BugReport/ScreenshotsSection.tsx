@@ -129,7 +129,7 @@ export default function ScreenshotsSection({
                           className={
                             "absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full border " +
                             (on
-                              ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-white"
+                              ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
                               : "border-white/70 bg-black/40")
                           }
                         >

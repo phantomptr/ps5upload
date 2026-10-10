@@ -42,7 +42,7 @@ export function UpdateToast() {
   const failed = phase.kind === "download-failed";
 
   return (
-    <div className="flex items-center gap-3 border-b border-[var(--color-accent)] bg-[var(--color-accent-soft,var(--color-surface-2))] px-4 py-2 text-sm">
+    <div className="mx-3 mt-2 flex items-center gap-3 rounded-full border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] px-4 py-2 text-sm md:mx-6">
       <Sparkles size={15} className="shrink-0 text-[var(--color-accent)]" />
       <span className="min-w-0 flex-1 truncate">
         <span className="font-medium text-[var(--color-text)]">

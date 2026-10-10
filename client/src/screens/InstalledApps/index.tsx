@@ -366,7 +366,7 @@ export function AppCard({
         </div>
         {discNeedsSmp ? (
           <span
-            className="absolute right-2 top-2 inline-flex items-center gap-1 rounded bg-[var(--color-warn)] px-1.5 py-0.5 text-xs font-semibold text-black drop-shadow"
+            className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full bg-[var(--color-warn)] px-2 py-0.5 text-xs font-semibold text-[var(--color-accent-contrast)] drop-shadow"
             title={tr(
               "installed_disc_needs_smp_row",
               undefined,
@@ -379,7 +379,7 @@ export function AppCard({
         ) : null}
         {running ? (
           <span
-            className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded bg-[var(--color-good)] px-1.5 py-0.5 text-xs font-semibold text-black drop-shadow"
+            className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-full bg-[var(--color-good)] px-2 py-0.5 text-xs font-semibold text-[var(--color-accent-contrast)] drop-shadow"
             title={tr("installed_now_playing", undefined, "Now playing")}
           >
             <CircleDot size={11} className="animate-pulse" />

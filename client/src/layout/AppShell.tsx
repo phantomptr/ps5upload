@@ -1094,7 +1094,7 @@ function HelperVersionBanner() {
   if (!mismatch || dismissed === pair) return null;
 
   return (
-    <div className="border-b border-[var(--color-border)] bg-[var(--color-warn-soft)] px-3 py-2 text-[var(--color-text)]">
+    <div className="mx-3 mt-3 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-warn)_35%,transparent)] bg-[var(--color-warn-soft)] px-4 py-2.5 backdrop-blur-xl md:mx-5 text-[var(--color-text)]">
       <div className="mx-auto flex max-w-6xl flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
         <div className="flex min-w-0 flex-1 items-start gap-3">
           <RefreshCw
@@ -1195,7 +1195,7 @@ function AndroidStorageAccessBanner() {
   if (!visible) return null;
 
   return (
-    <div className="border-b border-[var(--color-border)] bg-[var(--color-warn-soft)] px-3 py-2 text-[var(--color-text)]">
+    <div className="mx-3 mt-3 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-warn)_35%,transparent)] bg-[var(--color-warn-soft)] px-4 py-2.5 backdrop-blur-xl md:mx-5 text-[var(--color-text)]">
       {/* Stack on phones (text block over buttons); single row on sm+. The
           old single-row layout squished the text into a narrow column on a
           phone because the button group is shrink-0. */}
@@ -1285,7 +1285,7 @@ function AndroidLocalNetworkBanner() {
   return (
     <div
       role="alert"
-      className="border-b border-[var(--color-bad)] bg-[var(--color-bad-soft)] px-3 py-3 text-[var(--color-text)]"
+      className="mx-3 mt-3 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-bad)_45%,transparent)] bg-[var(--color-bad-soft)] px-4 py-3 text-[var(--color-text)] backdrop-blur-xl md:mx-5"
     >
       <div className="mx-auto flex max-w-6xl flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
         <div className="flex min-w-0 flex-1 items-start gap-3">

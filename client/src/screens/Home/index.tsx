@@ -218,7 +218,9 @@ export default function HomeScreen() {
 
           <section>
             <div className="mb-3 flex flex-wrap items-center gap-3">
-              <h2 className="flex-1 text-[1.125rem] font-semibold tracking-[-0.01em]">
+              {/* A floor on its width: on a phone the chips wrap under it instead
+                  of squeezing it to a letter per line. */}
+              <h2 className="min-w-[10rem] flex-1 text-[1.125rem] font-semibold tracking-[-0.01em]">
                 {tr("v5_home_recent_activity", "Recent activity")}
               </h2>
               <div

@@ -288,18 +288,6 @@ body {
   padding: 1.75rem 2rem 2.5rem;
 }
 
-.page-kicker {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.45rem;
-  color: var(--color-muted);
-  font-size: 0.6875rem;
-  font-weight: 500;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 /* ── Glass ────────────────────────────────────────────────────────────────
  * Frosted panels. `.glass` is the heavy one (backdrop blur) for the few big
  * or floating surfaces; `.surface-panel` is the card treatment without blur,

@@ -18,7 +18,7 @@ export function SessionBannerView({ session, onPair }: SessionBannerViewProps) {
   const tr = useTr();
   if (session === "needs_pairing") {
     return (
-      <div className="border-b border-[var(--color-border)] bg-[var(--color-warn-soft)] px-3 py-2 text-[var(--color-text)]">
+      <div className="mx-3 mt-3 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-warn)_35%,transparent)] bg-[var(--color-warn-soft)] px-4 py-2.5 backdrop-blur-xl md:mx-5 text-[var(--color-text)]">
         <div className="mx-auto flex max-w-6xl flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
           <div className="flex min-w-0 flex-1 items-start gap-3">
             <KeyRound size={18} className="mt-0.5 shrink-0 text-[var(--color-warn)]" />

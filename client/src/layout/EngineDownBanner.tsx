@@ -7,7 +7,7 @@ export default function EngineDownBanner() {
   if (engineStatus !== "down") return null;
   return (
     <div
-      className="border-b border-[var(--color-border)] bg-[var(--color-bad-soft)] px-3 py-2 text-[var(--color-text)]"
+      className="mx-3 mt-3 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-bad)_35%,transparent)] bg-[var(--color-bad-soft)] px-4 py-2.5 backdrop-blur-xl md:mx-5 text-[var(--color-text)]"
       role="alert"
     >
       <div className="mx-auto max-w-6xl">
