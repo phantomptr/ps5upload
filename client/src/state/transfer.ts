@@ -23,7 +23,6 @@ import {
   type PlannedFile,
   type ReconcileMode,
 } from "../api/ps5";
-import { startPs5ToPs5 } from "../api/ava1";
 import { fileResumeTxId } from "../lib/fileResumeTx";
 import { createRunGen } from "../lib/runGen";
 import { log } from "./logs";
@@ -165,10 +164,6 @@ interface StartArgs {
    *  safely on the console); it surfaces as `registerWarning` on the
    *  done phase instead. */
   registerAfterUpload?: boolean;
-  /** PS5 to PS5: the bytes come from another console through this engine instead of from a
-   *  local path. `srcPath` is then a path on that console (`fromAddr`), `addr` the destination
-   *  console. The rest of the lifecycle (job card, poll, done/failed) is the ordinary one. */
-  ps5Source?: { fromAddr: string };
 }
 
 /** Stable idle reference — returned by `phaseForHost`/selectors when a console
@@ -258,7 +253,6 @@ export const useTransferStore = create<TransferState>((set) => {
       mountAfterUpload = false,
       mountReadOnly = true,
       registerAfterUpload = false,
-      ps5Source,
     }) {
       // Per-console key: everything below (gen, poll timer, phase write) is
       // scoped to this host so a concurrent one-shot on another console runs
@@ -348,7 +342,7 @@ export const useTransferStore = create<TransferState>((set) => {
         }
       }
 
-      if (!isFolder && !isArchive && !ps5Source) {
+      if (!isFolder && !isArchive) {
         txId = await fileResumeTxId(host, srcPath, dest, generateTxIdHex());
       }
 
@@ -365,9 +359,7 @@ export const useTransferStore = create<TransferState>((set) => {
       const bandwidthCap = useUploadSettingsStore.getState().bandwidthCapMbps;
       let jobId: string;
       try {
-        if (ps5Source) {
-          jobId = await startPs5ToPs5(ps5Source.fromAddr, srcPath, addr, dest);
-        } else if (isFolder && strategy === "resume") {
+        if (isFolder && strategy === "resume") {
           jobId = await startTransferDirReconcile(
             srcPath,
             dest,
@@ -793,10 +785,7 @@ export const useTransferStore = create<TransferState>((set) => {
 
     reset(host) {
       // Bump the generation(s) so any in-flight poll's next state write
-      // becomes a no-op. Engine job keeps running in the background —
-      // the payload's single-client transfer port (per console) means a
-      // brand-new upload to that console waits until this one finishes.
-      // Wiring a real ABORT_TX cancel is a separate follow-up.
+      // becomes a no-op. The engine job keeps running; `cancel` stops it.
       if (host !== undefined) {
         // Reset just this console's one-shot.
         const key = hostFromAddr(host);
