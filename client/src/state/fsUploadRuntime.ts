@@ -23,8 +23,12 @@ const mayRetry = (reason: string | null | undefined, error: string) =>
 /** The Files screen's upload runner, wired to the real engine (see state/fsUpload). */
 export const fsUploadDeps: FsUploadDeps = {
   pathKind,
-  startFile: startTransferFile,
-  startDir: startTransferDir,
+  startFile: (src, dest, addr, cap) =>
+    startTransferFile(src, dest, addr, null, cap),
+  startDir: (src, dest, addr, cap) =>
+    startTransferDir(src, dest, addr, null, undefined, cap),
+  // The same limit the upload queue passes (set in Settings or on the Upload screen).
+  bandwidthCapMbps: () => useUploadSettingsStore.getState().bandwidthCapMbps,
   jobStatus: (id) => jobStatus(id),
   jobCancel,
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),

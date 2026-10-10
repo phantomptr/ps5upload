@@ -94,13 +94,6 @@
   --radius-control: 0.625rem;
   --radius-panel: 0.875rem;
   --content-max: 76rem;
-
-  /* ── Density tokens (v5 §17) ─────────────────────────────────────────
-   * Default = "comfortable". The data-density attribute overrides these
-   * (see below). Components reference var(--row-min) / var(--card-pad)
-   * instead of hard-coded padding so density modes work uniformly. */
-  --row-min: 40px;
-  --card-pad: 1rem;
 }
 
 /* PS5 Light — the console's white-plastic outer panels: a clean, cool
@@ -676,7 +669,7 @@ body {
 
 /* ── v5 Accessibility data-attribute modes (§7, §6.3, §8.2, §17) ────────
  * Driven by the accessibility store (state/accessibility.ts), which sets
- * data-motion / data-contrast / data-density / data-dyslexia on <html>.
+ * data-motion / data-contrast / data-dyslexia on <html>.
  * These are progressive overrides on top of the theme + reduced-motion
  * media query above. */
 
@@ -714,16 +707,6 @@ body {
 :root[data-contrast="high"] :where(a, button, [role="button"], [role="menuitem"], [role="tab"], [tabindex]):focus-visible {
   outline-width: 3px;
   outline-offset: 4px;
-}
-
-/* Density: compact (desktop power) vs spacious (a11y / motor). */
-:root[data-density="compact"] {
-  --row-min: 32px;
-  --card-pad: 0.75rem;
-}
-:root[data-density="spacious"] {
-  --row-min: 52px;
-  --card-pad: 1.5rem;
 }
 
 /* Dyslexia-friendly font: swap to Atkinson Hyperlegible / OpenDyslexic

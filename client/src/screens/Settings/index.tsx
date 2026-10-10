@@ -16,17 +16,14 @@ import {
   Flower2,
   Gauge,
   Bell,
-  Bug,
   Zap,
   Trash2,
   ExternalLink,
   ALargeSmall,
-  Eye,
   Type,
   Vibrate,
   Waves,
 } from "lucide-react";
-import { Link } from "react-router";
 import { useThemeStore, type Theme } from "../../state/theme";
 import {
   useUiScaleStore,
@@ -46,8 +43,6 @@ import { SegmentedControl } from "../../components/SegmentedControl";
 import {
   useAccessibilityStore,
   type MotionMode,
-  type DensityMode,
-  type ColorBlindPalette,
 } from "../../state/accessibility";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import { Button, ErrorCard } from "../../components";
@@ -61,7 +56,6 @@ import { useKeepAwakeStore } from "../../state/keepAwake";
 import { useNotificationsStore } from "../../state/notifications";
 import { useLangStore, useTr, LANGUAGES } from "../../state/lang";
 import { useUploadSettingsStore } from "../../state/uploadSettings";
-import { useConnectionStore } from "../../state/connection";
 import { useEngineStore, DEFAULT_ENGINE_URL } from "../../state/engine";
 import { useSaveSettingsStore, DEFAULT_SAVE_PATH } from "../../state/saveSettings";
 import { useBetaFeaturesStore } from "../../state/betaFeatures";
@@ -71,6 +65,7 @@ import { useRestAfterUploadStore } from "../../state/restAfterUpload";
 import { userConfigPath, resetAllAppData } from "../../state/userConfig";
 import { useUpdateStore, type UpdatePhase } from "../../state/update";
 import { isMobile } from "../../lib/platform";
+import { settingsVisibility } from "./visibility";
 import type { LanguageCode } from "../../i18n";
 // Static imports for stores already pulled into the main bundle by
 // AppShell / Connection — the prior dynamic `import()` form here
@@ -129,11 +124,8 @@ function Section({
  *  Wires the existing `useAccessibilityStore` to UI primitives:
  *    - Motion (SegmentedControl: Auto / Full / Reduced / None)
  *    - High contrast (Toggle)
- *    - Color blind palette (Select)
  *    - Dyslexia-friendly font (Toggle)
- *    - Density (SegmentedControl: Comfortable / Compact / Spacious)
  *    - Haptic feedback (Toggle, mobile only)
- *    - Screen reader hints (Toggle)
  *
  *  The store already persists + applies `data-*` attributes to <html>
  *  on mount, so this panel just calls the setters. Text-size is already
@@ -144,26 +136,12 @@ function AccessibilitySection() {
 
   const motion = useAccessibilityStore((s) => s.motion);
   const setMotion = useAccessibilityStore((s) => s.setMotion);
-  const density = useAccessibilityStore((s) => s.density);
-  const setDensity = useAccessibilityStore((s) => s.setDensity);
   const contrast = useAccessibilityStore((s) => s.contrast);
   const setContrast = useAccessibilityStore((s) => s.setContrast);
   const dyslexia = useAccessibilityStore((s) => s.dyslexia);
   const setDyslexia = useAccessibilityStore((s) => s.setDyslexia);
   const hapticsEnabled = useAccessibilityStore((s) => s.hapticsEnabled);
   const setHapticsEnabled = useAccessibilityStore((s) => s.setHapticsEnabled);
-  const screenReaderHints = useAccessibilityStore(
-    (s) => s.screenReaderHints,
-  );
-  const setScreenReaderHints = useAccessibilityStore(
-    (s) => s.setScreenReaderHints,
-  );
-  const colorBlindPalette = useAccessibilityStore(
-    (s) => s.colorBlindPalette,
-  );
-  const setColorBlindPalette = useAccessibilityStore(
-    (s) => s.setColorBlindPalette,
-  );
 
   return (
     <Section
@@ -197,49 +175,9 @@ function AccessibilitySection() {
           />
           <p className="text-xs text-[var(--color-muted)]">
             {tr(
-              "a11y_motion_hint",
+              "a11y_motion_hint_v2",
               undefined,
-              "Auto follows your OS setting. Reduced plays transitions at 0.4× speed; None disables them entirely.",
-            )}
-          </p>
-        </div>
-
-        <div className="border-t border-[var(--color-border)]" />
-
-        {/* Density — Comfortable / Compact / Spacious. */}
-        <div className="grid gap-1.5">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <ALargeSmall size={14} className="text-[var(--color-muted)]" />
-            {tr("a11y_density", undefined, "Density")}
-          </div>
-          <SegmentedControl
-            ariaLabel={tr(
-              "a11y_density_label",
-              undefined,
-              "Layout density mode",
-            )}
-            segments={[
-              {
-                value: "comfortable",
-                label: tr("a11y_density_comfortable", undefined, "Comfortable"),
-              },
-              {
-                value: "compact",
-                label: tr("a11y_density_compact", undefined, "Compact"),
-              },
-              {
-                value: "spacious",
-                label: tr("a11y_density_spacious", undefined, "Spacious"),
-              },
-            ]}
-            value={density}
-            onChange={(v) => setDensity(v as DensityMode)}
-          />
-          <p className="text-xs text-[var(--color-muted)]">
-            {tr(
-              "a11y_density_hint",
-              undefined,
-              "Controls spacing and padding across the app. Spacious adds extra room for touch input; Compact fits more on screen.",
+              "Auto follows your OS setting. Reduced turns off the screen-change animation and shortens pop-up animations; None turns off all animations and transitions.",
             )}
           </p>
         </div>
@@ -258,53 +196,6 @@ function AccessibilitySection() {
           )}
         />
 
-        {/* Color blind palette. */}
-        <div className="grid gap-1.5">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <Eye size={14} className="text-[var(--color-muted)]" />
-            {tr("a11y_color_blind", undefined, "Color blind palette")}
-          </div>
-          <Select
-            aria-label={tr(
-              "a11y_color_blind_label",
-              undefined,
-              "Color blind palette adjustment",
-            )}
-            options={[
-              {
-                value: "default",
-                label: tr("a11y_cb_default", undefined, "Default"),
-              },
-              {
-                value: "deuteranopia",
-                label: tr("a11y_cb_deuteranopia", undefined, "Deuteranopia (red-green)"),
-              },
-              {
-                value: "protanopia",
-                label: tr("a11y_cb_protanopia", undefined, "Protanopia (red-green)"),
-              },
-              {
-                value: "tritanopia",
-                label: tr("a11y_cb_tritanopia", undefined, "Tritanopia (blue-yellow)"),
-              },
-            ]}
-            value={colorBlindPalette}
-            block={false}
-            onChange={(e) =>
-              setColorBlindPalette(e.target.value as ColorBlindPalette)
-            }
-          />
-          <p className="text-xs text-[var(--color-muted)]">
-            {tr(
-              "a11y_color_blind_hint",
-              undefined,
-              "Adjusts status colors (success/warn/error) to be distinguishable for the selected color vision type.",
-            )}
-          </p>
-        </div>
-
-        <div className="border-t border-[var(--color-border)]" />
-
         {/* Dyslexia-friendly font. */}
         <Toggle
           checked={dyslexia}
@@ -316,25 +207,9 @@ function AccessibilitySection() {
             </span>
           }
           hint={tr(
-            "a11y_dyslexia_hint",
+            "a11y_dyslexia_hint_v2",
             undefined,
-            "Swaps to a dyslexia-friendly font stack with wider letter spacing.",
-          )}
-        />
-
-        {/* Screen reader hints. */}
-        <Toggle
-          checked={screenReaderHints}
-          onChange={setScreenReaderHints}
-          label={tr(
-            "a11y_sr_hints",
-            undefined,
-            "Screen reader hints",
-          )}
-          hint={tr(
-            "a11y_sr_hints_hint",
-            undefined,
-            "Adds verbose aria-labels that announce extra context (e.g. “Refresh connection” instead of just “Button”).",
+            "Uses Atkinson Hyperlegible or OpenDyslexic if one is installed on this device (neither comes with the app), with slightly wider letter and line spacing. Without either, only the spacing changes.",
           )}
         />
 
@@ -410,11 +285,6 @@ function EngineUrlSection() {
   );
 }
 
-/** Save-to-USB base path field. Where the Saves screen's "Save to USB
- *  storage" button writes backups on the PS5 itself (e.g. a USB stick
- *  plugged into the console) — full layout is `<path>/<title_id>/
- *  <timestamp>/<title_id>.zip`. Edits commit on blur, same as the
- *  Engine URL field above. */
 /** The backport library corpus.
  *
  *  Sony system libraries, which we cannot ship, so the user builds this from
@@ -426,14 +296,28 @@ function FakelibCorpusSection() {
   const [corpus, setCorpus] = useState<FakelibCorpus>(EMPTY_CORPUS);
   const refresh = useCallback(() => loadFakelibCorpus().then(setCorpus), []);
   useEffect(() => { void refresh(); }, [refresh]);
+  const { confirm, dialog } = useConfirm();
 
-  const remove = async (id: string) => {
+  // A removed set is gone for good: getting it back means finding the game
+  // or pack it came from again, so ask first.
+  const remove = async (id: string, label: string) => {
+    const ok = await confirm({
+      title: tr("fakelibs_set_remove_confirm_title", undefined, "Remove this library set?"),
+      message: tr(
+        "fakelibs_set_remove_confirm_body",
+        { label },
+        `“${label}” is deleted from the library corpus. Games already backported keep their libraries, but backporting a game that needs this set will need it added again.`,
+      ),
+      confirmLabel: tr("fakelibs_set_remove_confirm_action", undefined, "Remove"),
+      destructive: true,
+    });
+    if (!ok) return;
     await deleteFakelibSet(id);
     await refresh();
   };
 
   return (
-    <Section title={tr("settings_card_fakelibs", undefined, "Backport libraries")}>
+    <Section title={tr("settings_card_fakelibs", undefined, "Backport libraries")} full>
       {corpus.error ? (
         <Callout tone="warn" title={tr("fakelibs_unavailable", undefined, "Library corpus unavailable")}>
           {corpus.error}
@@ -461,7 +345,7 @@ function FakelibCorpusSection() {
               <button
                 type="button"
                 className="text-[var(--color-muted)] hover:text-[var(--color-danger)]"
-                onClick={() => void remove(set.id)}
+                onClick={() => void remove(set.id, set.label)}
               >
                 {tr("fakelibs_set_remove", undefined, "Remove")}
               </button>
@@ -476,10 +360,16 @@ function FakelibCorpusSection() {
           {tr("fakelibs_root", { path: corpus.root }, `Kept in ${corpus.root}`)}
         </p>
       ) : null}
+      {dialog}
     </Section>
   );
 }
 
+/** Save-to-USB base path field. Where the Saves screen's "Save to USB
+ *  storage" button writes backups on the PS5 itself (e.g. a USB stick
+ *  plugged into the console) — full layout is `<path>/<title_id>/
+ *  <timestamp>/<title_id>.zip`. Edits commit on blur, same as the
+ *  Engine URL field. */
 function SavePathSection() {
   const tr = useTr();
   const savePath = useSaveSettingsStore((s) => s.savePath);
@@ -554,18 +444,25 @@ export default function SettingsScreen() {
   const setInstallPathFallback = useInstallPathFallbackStore((s) => s.setEnabled);
   // UA-based, stable for the whole session — safe to read during render.
   const mobile = isMobile();
+  const tauri = isTauriEnv();
+  const show = settingsVisibility({ tauri, mobile });
 
   const [cfgPath, setCfgPath] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!show.keepDeviceAwake) return;
     syncFromBackend();
-    // Resolve the settings-mirror path so the Settings → Storage card
-    // can show the user where their settings.json lives. One-shot per
-    // mount — the path is stable once the OS tells us the home dir.
+  }, [syncFromBackend, show.keepDeviceAwake]);
+
+  useEffect(() => {
+    if (!show.settingsFile) return;
+    // Resolve the settings-mirror path so the Storage card can show the
+    // user where their settings.json lives. One-shot per mount — the path
+    // is stable once the OS tells us the home dir.
     userConfigPath()
       .then(setCfgPath)
       .catch(() => setCfgPath(null));
-  }, [syncFromBackend]);
+  }, [show.settingsFile]);
 
   return (
     <div className="app-page">
@@ -623,6 +520,7 @@ export default function SettingsScreen() {
             wake-lock API, not the desktop inhibitor — so the
             "not supported" warning only shows when the wake lock is
             genuinely unavailable. */}
+        {show.keepDeviceAwake && (
         <Section
           title={
             mobile
@@ -687,11 +585,9 @@ export default function SettingsScreen() {
             )}
           </div>
         </Section>
+        )}
 
-        <EngineUrlSection />
-
-        <SavePathSection />
-        <FakelibCorpusSection />
+        {show.engineUrl && <EngineUrlSection />}
 
         <GroupHeading>
           {tr("settings_group_a11y", undefined, "Accessibility")}
@@ -700,92 +596,30 @@ export default function SettingsScreen() {
         <AccessibilitySection />
 
         <GroupHeading>
-          {tr("settings_group_uploads", undefined, "Uploads")}
+          {tr("settings_group_console", undefined, "Console")}
         </GroupHeading>
 
         <Section
-          title={tr("settings_card_upload_behavior", undefined, "Behavior")}
+          title={tr("settings_card_console_rest", undefined, "Rest mode")}
+          full
         >
           <div className="grid gap-3">
-            <Toggle
-              checked={alwaysOverwrite}
-              onChange={(checked) => setAlwaysOverwrite(checked)}
-              label={
-                <span className="inline-flex items-center gap-2 font-medium">
-                  <UploadIcon size={14} />
-                  {tr(
-                    "always_overwrite",
-                    undefined,
-                    "Always overwrite without asking",
-                  )}
-                </span>
-              }
-              hint={tr(
-                "always_overwrite_hint",
-                undefined,
-                "Skip the confirmation dialog when a destination already has files. Leave off to see the Override / Resume / Cancel prompt.",
-              )}
-            />
-
-            <Toggle
-              checked={showTransferFiles}
-              onChange={(checked) => setShowTransferFiles(checked)}
-              label={tr(
-                "show_file_list",
-                undefined,
-                "Show file list during transfer",
-              )}
-              hint={tr(
-                "show_file_list_hint",
-                undefined,
-                "Display the scrollable list of files being transferred beneath the progress bar. Turn off if the list feels noisy on folders with thousands of files — you'll still see overall progress, speed, and ETA.",
-              )}
-            />
-
-            <Toggle
-              checked={autoResume}
-              onChange={(checked) => setAutoResume(checked)}
-              label={tr(
-                "upload_auto_resume",
-                undefined,
-                "Auto-resume uploads after a failure",
-              )}
-              hint={tr(
-                "upload_auto_resume_hint",
-                undefined,
-                "If an upload drops mid-transfer — most often because the PS5 payload crashed — automatically re-send the payload and resume from where it left off, retrying a few times before giving up. Fatal problems like the PS5 running out of space still stop right away. On by default.",
-              )}
-            />
-
-            <Toggle
-              checked={autoRedeployOnWake}
-              onChange={(checked) => setAutoRedeployOnWake(checked)}
-              label={tr(
-                "upload_auto_redeploy_on_wake",
-                undefined,
-                "Reconnect automatically after rest mode / network drops",
-              )}
-              hint={tr(
-                "upload_auto_redeploy_on_wake_hint",
-                undefined,
-                "When the PS5's helper goes offline (rest mode, a WiFi switch, or a payload crash), keep trying to re-send it in the background — so the helper, your fan threshold, and the upload port come back by themselves once the console is reachable again, without clicking Connect. On by default.",
-              )}
-            />
-
-            <Toggle
-              checked={systemFileRead}
-              onChange={(checked) => setSystemFileRead(checked)}
-              label={tr(
-                "upload_system_file_read",
-                undefined,
-                "Allow downloading system files (/system, /system_data)",
-              )}
-              hint={tr(
-                "upload_system_file_read_hint",
-                undefined,
-                "Lets the FileSystem browser download files from read-only system partitions that are normally blocked (e.g. /system/common/lib, /system_data/priv). Read-only — never affects delete, move, or write. Off by default; turn on only if you know what you're doing.",
-              )}
-            />
+            {show.reconnectAfterRest && (
+              <Toggle
+                checked={autoRedeployOnWake}
+                onChange={(checked) => setAutoRedeployOnWake(checked)}
+                label={tr(
+                  "upload_auto_redeploy_on_wake",
+                  undefined,
+                  "Reconnect automatically after rest mode / network drops",
+                )}
+                hint={tr(
+                  "upload_auto_redeploy_on_wake_hint",
+                  undefined,
+                  "When the PS5's helper goes offline (rest mode, a WiFi switch, or a payload crash), keep trying to re-send it in the background — so the helper, your fan threshold, and the upload port come back by themselves once the console is reachable again, without clicking Connect. On by default.",
+                )}
+              />
+            )}
 
             <div className="text-sm">
               <div className="flex items-center gap-2 font-medium">
@@ -819,8 +653,8 @@ export default function SettingsScreen() {
               />
               <div className="mt-0.5 text-xs text-[var(--color-muted)]">
                 {tr(
-                  "keep_ps5_awake_mode_hint",
-                  "Periodically resets the PS5's auto-standby timer so it can't drop into rest mode. “During transfers” protects long uploads (a common cause of failed uploads; default). “Always while connected” keeps every console with a running helper out of rest mode for as long as the app is open. Putting the PS5 to rest manually still works in every mode.",
+                  "keep_ps5_awake_mode_hint_v2",
+                  "Periodically resets the PS5's auto-standby timer so it can't drop into rest mode. “During uploads and installs” protects long uploads (a common cause of failed uploads; default). “Always while connected” keeps every console with a running helper out of rest mode for as long as the app is open. Putting the PS5 to rest manually still works in every mode.",
                 )}
               </div>
             </div>
@@ -842,6 +676,74 @@ export default function SettingsScreen() {
           </div>
         </Section>
 
+        <GroupHeading>
+          {tr("settings_group_uploads", undefined, "Uploads")}
+        </GroupHeading>
+
+        <Section
+          title={tr("settings_card_upload_behavior", undefined, "Behavior")}
+        >
+          <div className="grid gap-3">
+            <Toggle
+              checked={alwaysOverwrite}
+              onChange={(checked) => setAlwaysOverwrite(checked)}
+              label={
+                <span className="inline-flex items-center gap-2 font-medium">
+                  <UploadIcon size={14} />
+                  {tr(
+                    "always_overwrite",
+                    undefined,
+                    "Always overwrite without asking",
+                  )}
+                </span>
+              }
+              hint={tr(
+                "always_overwrite_hint_v2",
+                undefined,
+                "On the Upload screen, skip the confirmation when the destination already has files. Leave off to see the Override / Resume / Cancel prompt.",
+              )}
+            />
+
+            <Toggle
+              checked={showTransferFiles}
+              onChange={(checked) => setShowTransferFiles(checked)}
+              label={tr(
+                "show_file_list_v2",
+                undefined,
+                "Show the file list during uploads",
+              )}
+              hint={tr(
+                "show_file_list_hint_v2",
+                undefined,
+                "On the Upload screen, list the files being sent beneath the progress bar. Turn off if the list feels noisy on folders with thousands of files — you'll still see overall progress, speed, and ETA.",
+              )}
+            />
+
+            <Toggle
+              checked={autoResume}
+              onChange={(checked) => setAutoResume(checked)}
+              label={tr(
+                "upload_auto_resume",
+                undefined,
+                "Auto-resume uploads after a failure",
+              )}
+              hint={
+                tauri
+                  ? tr(
+                      "upload_auto_resume_hint",
+                      undefined,
+                      "If an upload drops mid-transfer — most often because the PS5 payload crashed — automatically re-send the payload and resume from where it left off, retrying a few times before giving up. Fatal problems like the PS5 running out of space still stop right away. On by default.",
+                    )
+                  : tr(
+                      "upload_auto_resume_hint_browser",
+                      undefined,
+                      "If an upload drops mid-transfer, resume it from where it left off once the PS5's helper answers again, retrying a few times before giving up. This page cannot re-send the helper itself: if the PS5 restarted, send it again first. Fatal problems like the PS5 running out of space still stop right away. On by default.",
+                    )
+              }
+            />
+          </div>
+        </Section>
+
         <Section title={tr("settings_card_upload_speed", undefined, "Speed")}>
           <div className="grid gap-3">
             <BandwidthControl
@@ -852,26 +754,89 @@ export default function SettingsScreen() {
         </Section>
 
         <GroupHeading>
+          {tr("settings_group_installs", undefined, "Installs")}
+        </GroupHeading>
+
+        <Section
+          title={tr(
+            "settings_card_install_fallback",
+            undefined,
+            "When the PS5 cannot fetch a package",
+          )}
+          full
+        >
+          <Toggle
+            checked={installPathFallback}
+            onChange={(on) => setInstallPathFallback(on)}
+            label={tr(
+              "install_path_fallback_label",
+              undefined,
+              "Install by file path when the PS5 cannot reach this computer",
+            )}
+            hint={tr(
+              "install_path_fallback_hint",
+              undefined,
+              "A last resort for a package that is already on the PS5, when the PS5 refuses it from its own storage and cannot fetch it from this computer either. Only used for a base game that is not installed, so it cannot remove anything. Unproven: it has worked on firmware 11.20 and is refused on 13.60. If you try it, please report whether it worked.",
+            )}
+          />
+        </Section>
+
+        <GroupHeading>
+          {tr("settings_group_files_saves", undefined, "Files & saves")}
+        </GroupHeading>
+
+        <Section
+          title={tr("settings_card_system_files", undefined, "System files")}
+        >
+          <Toggle
+            checked={systemFileRead}
+            onChange={(checked) => setSystemFileRead(checked)}
+            label={tr(
+              "upload_system_file_read",
+              undefined,
+              "Allow downloading system files (/system, /system_data)",
+            )}
+            hint={tr(
+              "upload_system_file_read_hint",
+              undefined,
+              "Lets the FileSystem browser download files from read-only system partitions that are normally blocked (e.g. /system/common/lib, /system_data/priv). Read-only — never affects delete, move, or write. Off by default; turn on only if you know what you're doing.",
+            )}
+          />
+        </Section>
+
+        <SavePathSection />
+
+        <GroupHeading>
+          {tr("settings_group_fakelibs", undefined, "Backporting")}
+        </GroupHeading>
+
+        <FakelibCorpusSection />
+
+        <GroupHeading>
           {tr("settings_section_notifications", undefined, "Notifications")}
         </GroupHeading>
 
         <Section title={tr("notifications", undefined, "Notifications")}>
-          <Toggle
-            checked={osNotifyEnabled}
-            onChange={(checked) => setOsNotifyEnabled(checked)}
-            label={
-              <span className="inline-flex items-center gap-2 font-medium">
-                <Bell size={14} />
-                {tr("os_notify_label", undefined, "Show system notifications")}
-              </span>
-            }
-            hint={tr(
-              "os_notify_hint",
-              undefined,
-              "Mirror in-app notifications (transfer done, errors, etc.) to your operating system's notification center — but only when the app is in the background, so you're not notified twice. You may be asked to grant notification permission.",
-            )}
-          />
-          <div className="my-3 border-t border-[var(--color-border)]" />
+          {show.osNotifications && (
+            <>
+              <Toggle
+                checked={osNotifyEnabled}
+                onChange={(checked) => setOsNotifyEnabled(checked)}
+                label={
+                  <span className="inline-flex items-center gap-2 font-medium">
+                    <Bell size={14} />
+                    {tr("os_notify_label", undefined, "Show system notifications")}
+                  </span>
+                }
+                hint={tr(
+                  "os_notify_hint",
+                  undefined,
+                  "Mirror in-app notifications (transfer done, errors, etc.) to your operating system's notification center — but only when the app is in the background, so you're not notified twice. You may be asked to grant notification permission.",
+                )}
+              />
+              <div className="my-3 border-t border-[var(--color-border)]" />
+            </>
+          )}
           <NotifPrunePanel />
         </Section>
 
@@ -880,11 +845,21 @@ export default function SettingsScreen() {
         </GroupHeading>
 
         {/* Updates takes the full row — the release-notes blob can
-            be multiple paragraphs and deserves reading space. The
-            "updates" i18n key already exists across every locale in
-            i18n.ts; inner strings fall back to English for now. */}
+            be multiple paragraphs and deserves reading space. The web
+            page has nothing to download: it updates with the engine
+            that serves it. */}
         <Section title={tr("updates", undefined, "Updates")} full>
-          <UpdatesPanel />
+          {show.appUpdates ? (
+            <UpdatesPanel />
+          ) : (
+            <p className="text-sm text-[var(--color-muted)]">
+              {tr(
+                "settings_updates_browser_note",
+                undefined,
+                "This web page is served by the ps5upload engine and updates with it: pull the new Docker image (or update the engine on your server) and restart it.",
+              )}
+            </p>
+          )}
         </Section>
 
         <GroupHeading>
@@ -893,6 +868,7 @@ export default function SettingsScreen() {
 
         {/* Storage is the long row — path text is wide, so it takes
             the whole grid width. */}
+        {show.settingsFile && (
         <Section title={tr("storage", undefined, "Storage")} full>
           <div className="flex items-start gap-3 text-sm">
             <FileJson
@@ -905,9 +881,9 @@ export default function SettingsScreen() {
               </div>
               <div className="mt-0.5 text-xs text-[var(--color-muted)]">
                 {tr(
-                  "settings_file_hint",
+                  "settings_file_hint_v2",
                   undefined,
-                  "Your preferences live in this JSON file — safe to back up, copy to another machine, or edit by hand (edits take effect next time you launch the app).",
+                  "The main preferences (theme, language, engine, save path, upload defaults, accessibility, sidebar) are mirrored to this JSON file. You can edit it by hand; edits take effect the next time you launch the app. It does not hold everything: use Backup / restore to carry all your preferences.",
                 )}
               </div>
               <div className="mt-2 truncate rounded-md bg-[var(--color-surface)] px-2 py-1 font-mono text-xs">
@@ -916,6 +892,7 @@ export default function SettingsScreen() {
             </div>
           </div>
         </Section>
+        )}
 
         <Section
           title={tr("settings_section_backup", undefined, "Backup / restore")}
@@ -940,66 +917,9 @@ export default function SettingsScreen() {
         </Section>
 
         <GroupHeading>
-          {tr("settings_section_diagnostic", undefined, "Diagnostics")}
-        </GroupHeading>
-
-        {/* The band heading already says "Diagnostics"; the single card
-            inside it gets its own specific title so the screen doesn't
-            stack the same word twice. */}
-        <Section title={tr("bug_report", undefined, "Bug report")} full>
-          <BugReportLink />
-        </Section>
-
-        {/* Only while something is in beta: a switch that reveals nothing
-            reads as broken. */}
-        {
-          <>
-            <GroupHeading>
-              {tr("settings_group_beta", undefined, "Beta features")}
-            </GroupHeading>
-
-            <Section title={tr("settings_card_beta", undefined, "Beta features")} full>
-              <Toggle
-                checked={installPathFallback}
-                onChange={(on) => setInstallPathFallback(on)}
-                label={tr(
-                  "install_path_fallback_label",
-                  undefined,
-                  "Install by file path when the PS5 cannot reach this computer",
-                )}
-                hint={tr(
-                  "install_path_fallback_hint",
-                  undefined,
-                  "A last resort for a package that is already on the PS5, when the PS5 refuses it from its own storage and cannot fetch it from this computer either. Only used for a base game that is not installed, so it cannot remove anything. Unproven: it has worked on firmware 11.20 and is refused on 13.60. If you try it, please report whether it worked.",
-                )}
-              />
-              {hasBetaItems() && (
-              <Toggle
-                checked={betaFeatures}
-                onChange={(on) => setBetaFeatures(on)}
-                label={tr(
-                  "beta_features_label",
-                  undefined,
-                  "Show features that are still being finished",
-                )}
-                hint={tr(
-                  "beta_features_hint",
-                  undefined,
-                  "Adds work-in-progress screens to the sidebar when there are any. These are usable but not yet reliable, and may change or be removed.",
-                )}
-              />
-              )}
-            </Section>
-          </>
-        }
-
-        <GroupHeading>
           {tr("settings_group_automation", undefined, "Automation")}
         </GroupHeading>
 
-        {/* 2.12.0: Audit log promoted out of Settings to its own
-            top-level route (/audit-log) under Diagnostics. AuditLogPanel
-            removed too. */}
         <Section
           title={tr(
             "settings_section_schedules",
@@ -1010,15 +930,41 @@ export default function SettingsScreen() {
         >
           <SchedulesPanel />
         </Section>
+
+        {/* Only while something is in beta: a switch that reveals nothing
+            reads as broken. */}
+        {hasBetaItems() && (
+          <>
+            <GroupHeading>
+              {tr("settings_group_beta", undefined, "Beta features")}
+            </GroupHeading>
+
+            <Section title={tr("settings_card_beta", undefined, "Beta features")} full>
+              <Toggle
+                checked={betaFeatures}
+                onChange={(on) => setBetaFeatures(on)}
+                label={tr(
+                  "beta_features_label",
+                  undefined,
+                  "Show features that are still being finished",
+                )}
+                hint={tr(
+                  "beta_features_hint_v2",
+                  undefined,
+                  "Adds work-in-progress screens to the sidebar when there are any. These are usable but not yet reliable, and may change or be removed.",
+                )}
+              />
+            </Section>
+          </>
+        )}
       </div>
     </div>
   );
 }
 
-/** Scheduler UI. Add/remove daily/weekly/once schedules that fire
- *  while the app is open. Limited to power_tick (keep PS5 awake) and
- *  notif (reminders) actions for now — extending to "trigger this
- *  upload at 3am" would need queue plumbing. */
+/** Scheduler UI. Add/remove daily reminders that fire while the app is
+ *  open. Reminders only — "trigger this upload at 3am" would need queue
+ *  plumbing, and keeping a console awake is Keep the PS5 awake's job. */
 function SchedulesPanel() {
   const tr = useTr();
   // Subscribe directly via the hook — selecting `s.schedules` keeps
@@ -1026,25 +972,15 @@ function SchedulesPanel() {
   const schedules = useScheduleStore((s) => s.schedules);
   const [labelDraft, setLabelDraft] = useState("");
   const [hhmmDraft, setHhmmDraft] = useState("03:00");
-  const [actionDraft, setActionDraft] = useState<"power_tick" | "notif">(
-    "notif",
-  );
 
   function add() {
     if (!labelDraft.trim() || !/^\d\d:\d\d$/.test(hhmmDraft)) return;
     useScheduleStore.getState().add({
       enabled: true,
       kind: "daily",
-      action: actionDraft,
+      action: "notif",
       hhmm: hhmmDraft,
       label: labelDraft.trim(),
-      // power_tick targets a specific console — capture the active one now
-      // so the tick fires against the PS5 this schedule was made for, not
-      // whatever tab happens to be active when it triggers.
-      host:
-        actionDraft === "power_tick"
-          ? useConnectionStore.getState().host?.trim() || undefined
-          : undefined,
     });
     setLabelDraft("");
   }
@@ -1100,14 +1036,6 @@ function SchedulesPanel() {
                           { time: new Date(s.oneShotMs).toLocaleString() },
                           `once at ${new Date(s.oneShotMs).toLocaleString()}`,
                         )}
-                      {" · "}
-                      {/* Friendly action name — reuse the same labels as the
-                          add-dropdown below, instead of the raw store id
-                          (notif / power_tick) that meant nothing to the user. */}
-                      {s.action === "power_tick"
-                        ? tr("settings_ps5_power_tick", "PS5 power tick")
-                        : tr("settings_notify_only", "Notify only")}
-                      {s.action === "power_tick" && s.host && ` → ${s.host}`}
                     </span>
                   </>
                 }
@@ -1129,8 +1057,8 @@ function SchedulesPanel() {
           value={labelDraft}
           onChange={(e) => setLabelDraft(e.target.value)}
           placeholder={tr(
-            "settings_schedule_label_placeholder",
-            "Label (e.g. nightly tick)",
+            "settings_schedule_label_placeholder_v2",
+            "Label (e.g. back up saves)",
           )}
           block={false}
           className="flex-1 text-xs"
@@ -1141,26 +1069,6 @@ function SchedulesPanel() {
           onChange={(e) => setHhmmDraft(e.target.value)}
           block={false}
           className="text-xs"
-        />
-        <Select
-          value={actionDraft}
-          onChange={(e) =>
-            setActionDraft(e.target.value as "notif" | "power_tick")
-          }
-          options={[
-            { value: "notif", label: tr("settings_notify_only", "Notify only") },
-            {
-              value: "power_tick",
-              label: tr("settings_ps5_power_tick", "PS5 power tick"),
-            },
-          ]}
-          block={false}
-          className="text-xs"
-          aria-label={tr(
-            "settings_section_schedules",
-            undefined,
-            "In-app reminders",
-          )}
         />
         <button
           type="button"
@@ -1260,6 +1168,13 @@ function BackupRestorePanel() {
   // a `ps5upload.`-prefixed key is captured automatically.
   const NS_PREFIX = "ps5upload.";
 
+  const restoredMessage = (count: number) =>
+    tr(
+      "settings_backup_restored",
+      { count },
+      `Restored ${count} setting(s). Restart the app for all changes to take effect.`,
+    );
+
   async function exportBundle() {
     setBusy(true);
     setError(null);
@@ -1284,7 +1199,9 @@ function BackupRestorePanel() {
       if (!isTauriEnv()) {
         const { browserDownloadText } = await import("../../lib/browserDownload");
         browserDownloadText(fileName, json, "application/json");
-        setInfo(`Downloaded ${fileName}`);
+        setInfo(
+          tr("settings_backup_downloaded", { name: fileName }, `Downloaded ${fileName}`),
+        );
         return;
       }
       const { save } = await import("@tauri-apps/plugin-dialog");
@@ -1295,7 +1212,7 @@ function BackupRestorePanel() {
       });
       if (!dest || typeof dest !== "string") return;
       await writeTextFileToPath(dest, json, fileName);
-      setInfo(`Saved to ${dest}`);
+      setInfo(tr("settings_backup_saved", { path: dest }, `Saved to ${dest}`));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1355,9 +1272,7 @@ function BackupRestorePanel() {
       if (!src || typeof src !== "string") return;
       const text = await readTextFileFromPath(src);
       const restored = applyBundleText(text);
-      setInfo(
-        `Restored ${restored} key${restored === 1 ? "" : "s"}. Restart the app for all changes to take effect.`,
-      );
+      setInfo(restoredMessage(restored));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1377,9 +1292,7 @@ function BackupRestorePanel() {
     try {
       const text = await file.text();
       const restored = applyBundleText(text);
-      setInfo(
-        `Restored ${restored} key${restored === 1 ? "" : "s"}. Restart the app for all changes to take effect.`,
-      );
+      setInfo(restoredMessage(restored));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1391,9 +1304,9 @@ function BackupRestorePanel() {
     <div className="space-y-3 text-sm">
       <p className="text-xs text-[var(--color-muted)]">
         {tr(
-          "settings_backup_hint",
+          "settings_backup_hint_v2",
           undefined,
-          "Bundle theme, PS5 roster, notification history, activity log, and other preferences into one JSON file. Useful for moving to a new machine or recovering after wiping the app's storage.",
+          "Bundle theme, PS5 roster, notification history, activity log, and other preferences into one JSON file, to restore after wiping the app's storage or on another machine. Console pairings, the Collection, saved servers' passwords and backport libraries are not included.",
         )}
       </p>
       <div className="flex flex-wrap items-center gap-2">
@@ -1579,10 +1492,9 @@ function TextSizePicker() {
   );
 }
 
-/** Upload speed limit (bandwidth cap). A real control now — the old version
- *  was just a blurb pointing at the Upload screen + an env var. 0 = no limit.
- *  Shares the same `bandwidthCapMbps` store the Upload screen reads, so a cap
- *  set here applies to the next started transfer. */
+/** Upload speed limit (bandwidth cap). 0 = no limit. The same stored
+ *  `bandwidthCapMbps` as the Upload screen's card, with the same wording and
+ *  half-MB/s steps; the engine holds every lane of a job to it together. */
 function BandwidthControl({
   value,
   onChange,
@@ -1602,13 +1514,14 @@ function BandwidthControl({
           id="bw-cap"
           type="number"
           min={0}
-          step={1}
+          step={0.5}
           value={value || ""}
           placeholder="0"
-          inputMode="numeric"
-          onChange={(e) =>
-            onChange(Math.max(0, Math.floor(Number(e.target.value) || 0)))
-          }
+          inputMode="decimal"
+          onChange={(e) => {
+            const n = parseFloat(e.target.value);
+            onChange(Number.isFinite(n) && n > 0 ? n : 0);
+          }}
           block={false}
           className="w-20 tabular-nums"
         />
@@ -1617,14 +1530,14 @@ function BandwidthControl({
       <div className="mt-0.5 text-xs text-[var(--color-muted)]">
         {value > 0
           ? tr(
-              "bandwidth_cap_on_hint",
+              "bandwidth_cap_on_hint_v2",
               { n: value },
-              `Uploads are capped at ${value} MB/s. Set to 0 to remove the limit.`,
+              `All uploads together are held to about ${value} MB/s, from the next upload started. Set to 0 to remove the limit.`,
             )
           : tr(
-              "bandwidth_cap_off_hint",
+              "bandwidth_cap_off_hint_v2",
               undefined,
-              "No limit. Set a cap if uploads saturate your Wi-Fi/LAN and make other devices laggy — it throttles the upload to leave headroom. Applies to the next started transfer.",
+              "No limit. Set one if uploads saturate your Wi-Fi/LAN and make other devices lag. It applies to every upload from the Upload screen, the queue and Files, from the next one started.",
             )}
       </div>
     </div>
@@ -1685,9 +1598,9 @@ function ArtworkCachePanel() {
     <div className="space-y-3">
       <p className="text-sm text-[var(--color-muted)]">
         {tr(
-          "settings_artwork_cache_explain",
+          "settings_artwork_cache_explain_v2",
           undefined,
-          "Game covers are kept on this computer so they load instantly instead of being read from your PS5 every time. They are refreshed automatically, and removed for a console when you install or uninstall a game there.",
+          "Game covers are kept where the engine runs (this computer, or the server for the web version) so they load instantly instead of being read from your PS5 every time. They are refreshed automatically, and removed for a console when you install or uninstall a game there.",
         )}
       </p>
       <div className="flex flex-wrap items-center gap-3">
@@ -1706,24 +1619,35 @@ function ArtworkCachePanel() {
 }
 
 /**
- * Danger zone: factory-reset. Deletes ALL local data + metadata (settings,
- * roster, history, queues, caches, crash reports) and reloads the app fresh.
- * Nothing on the PS5 is touched. Gated behind a destructive confirm dialog.
+ * Danger zone: factory-reset. On desktop and Android this deletes the whole
+ * app data folder (~/.ps5upload: settings, pairings, the Collection, saved
+ * servers and their passwords, backport libraries, install history, jobs,
+ * events, logs, caches, crash reports) plus localStorage, and reloads fresh.
+ * The browser build can only clear its own localStorage; the engine's data
+ * on the server stays. Nothing on the PS5 is touched. Gated behind a
+ * destructive confirm dialog that names all of it.
  */
 function ResetPanel() {
   const tr = useTr();
   const { confirm, dialog } = useConfirm();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const tauri = isTauriEnv();
 
   async function doReset() {
     const ok = await confirm({
       title: tr("reset_confirm_title", undefined, "Reset PS5Upload?"),
-      message: tr(
-        "reset_confirm_body",
-        undefined,
-        "This permanently deletes ALL local PS5Upload data — settings, your saved PS5s, activity/queue history, payload caches, and crash reports. It does NOT touch anything on your PS5. The app reloads to a fresh state. This can't be undone.",
-      ),
+      message: tauri
+        ? tr(
+            "reset_confirm_body_v2",
+            undefined,
+            "This permanently deletes ALL local PS5Upload data: settings, your saved PS5s and their pairings, the Collection, saved servers and their passwords, backport libraries, install history, jobs and events, activity/queue history, logs, payload caches, and crash reports. It does NOT touch anything on your PS5. The app reloads to a fresh state. This can't be undone.",
+          )
+        : tr(
+            "reset_confirm_body_browser",
+            undefined,
+            "This clears every setting and saved state this browser keeps for PS5Upload, and the page reloads fresh. The engine's own data on the server (console pairings, the Collection, saved servers, backport libraries, install history, logs) is not touched, and nothing on your PS5 is. This can't be undone.",
+          ),
       confirmLabel: tr("reset_confirm_action", undefined, "Delete everything"),
       destructive: true,
     });
@@ -1743,11 +1667,17 @@ function ResetPanel() {
   return (
     <div className="space-y-3 text-sm">
       <p className="text-xs text-[var(--color-muted)]">
-        {tr(
-          "reset_hint",
-          undefined,
-          "Wipe every local trace of PS5Upload and start over: settings, saved PS5s, activity/queue history, payload caches, and crash reports. Nothing on your PS5 is affected. Export a backup above first if you might want it back.",
-        )}
+        {tauri
+          ? tr(
+              "reset_hint_v2",
+              undefined,
+              "Wipe every local trace of PS5Upload and start over: settings, saved PS5s and their pairings, the Collection, saved servers and their passwords, backport libraries, install history, jobs and events, activity/queue history, logs, payload caches, and crash reports. Nothing on your PS5 is affected. Backup / restore above does not cover pairings, the Collection, server passwords or backport libraries.",
+            )
+          : tr(
+              "reset_hint_browser",
+              undefined,
+              "Clear every setting and saved state this browser keeps for PS5Upload and start over. What the engine keeps on its server (console pairings, the Collection, saved servers, backport libraries, install history, logs) is not touched, and nothing on your PS5 is affected.",
+            )}
       </p>
       <button
         type="button"
@@ -1769,47 +1699,6 @@ function ResetPanel() {
         </div>
       )}
       {dialog}
-    </div>
-  );
-}
-
-/**
- * One-click bug report bundle. Pulls together everything a maintainer
- * usually asks for in an issue: app version, OS info, recent log
- * entries, payload status, last 50 activity entries, last 20
- * notifications, redacted user config (no IPs / hostnames). Writes
- * to a user-picked .json path.
- *
- * Lives entirely in the renderer — every store this needs is already
- * in the renderer state. No new payload calls.
- */
-/**
- * Diagnostics moved to a dedicated Bug Report page (sidebar → Diagnostics →
- * Bug report). It owns the richer flow — description, screenshots, log time
- * window + level, PS5 snapshot, and the one-click `.zip`. Settings just points
- * there so there's a single place to file a report.
- */
-function BugReportLink() {
-  const tr = useTr();
-  return (
-    <div className="text-sm">
-      <div className="font-medium">
-        {tr("settings_bug_report_title", undefined, "Report a bug")}
-      </div>
-      <div className="mt-0.5 text-xs text-[var(--color-muted)]">
-        {tr(
-          "settings_bug_report_hint",
-          undefined,
-          "Describe the issue, attach screenshots, and package logs + a PS5 snapshot into one .zip to post on Discord.",
-        )}
-      </div>
-      <Link
-        to="/bug-report"
-        className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs text-[var(--color-accent-contrast)] max-md:min-h-11 max-md:px-4"
-      >
-        <Bug size={11} />
-        {tr("settings_bug_report_open", undefined, "Open Bug Report")}
-      </Link>
     </div>
   );
 }
@@ -2057,9 +1946,9 @@ function StatusRow({ phase }: { phase: UpdatePhase }) {
     return (
       <div className="text-xs text-[var(--color-muted)]">
         {tr(
-          "update_idle",
+          "update_idle_v2",
           undefined,
-          "Haven't checked yet — the app checks once per launch in the background.",
+          "Not checked yet. With automatic checks on, the app looks in the background at launch, at most once a day.",
         )}
       </div>
     );

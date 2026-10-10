@@ -104,7 +104,8 @@ pub struct SendOptions {
     pub persist: Option<PathBuf>,
     pub progress: Arc<Progress>,
     pub cancel: Arc<AtomicBool>,
-    /// Bytes/s the sender paces its lanes to, when the link itself is not the limit.
+    /// Bytes/s the whole job is paced to (all lanes together), when the link itself is not
+    /// the limit.
     pub bandwidth_cap: Option<u64>,
     /// A forward-only source (7z, solid RAR; SPEC.md §17). When set, one decode thread
     /// replaces the random-access readers and `run_upload`'s `Source` is used only for
@@ -1120,11 +1121,54 @@ fn pick_for_lane(sh: &Shared, lane: u16, stop: &AtomicBool) -> Pick {
     }
 }
 
+/// The job's upload speed cap: one limiter every lane draws from, so the cap holds for
+/// the whole job however many lanes the governor opens (a per-lane pace gave N lanes N
+/// times the cap).
+pub(crate) struct Pacer {
+    bps: f64,
+    /// When the bytes reserved so far are due to have gone out.
+    next: Mutex<Option<tokio::time::Instant>>,
+}
+
+impl Pacer {
+    /// `None` for no cap (absent or 0).
+    pub(crate) fn new(cap_bps: Option<u64>) -> Option<Arc<Self>> {
+        match cap_bps {
+            Some(bps) if bps > 0 => Some(Arc::new(Self {
+                bps: bps as f64,
+                next: Mutex::new(None),
+            })),
+            _ => None,
+        }
+    }
+
+    /// Reserve `len` bytes of the job's budget and return when they are due. Reservations
+    /// queue back to back across every lane, and never start before now: an idle stretch
+    /// does not bank a burst for later.
+    fn reserve(&self, len: u64) -> tokio::time::Instant {
+        let now = tokio::time::Instant::now();
+        let mut next = self.next.lock().unwrap();
+        let start = next.map_or(now, |n| n.max(now));
+        let due = start + Duration::from_secs_f64(len as f64 / self.bps);
+        *next = Some(due);
+        due
+    }
+
+    /// Wait until `len` more bytes fit under the cap.
+    pub(crate) async fn pace(&self, len: u64) {
+        let due = self.reserve(len);
+        tokio::time::sleep_until(due).await;
+    }
+}
+
 /// One per lane: take the next frame the window allows, send it, repeat. Exits when the
 /// lane's send fails (the control loop sees LaneDown and requeues) or `stop` is set.
-async fn lane_task(lane: LaneTx, sh: Arc<Shared>, cap_bps: Option<u64>, stop: Arc<AtomicBool>) {
-    let started = Instant::now();
-    let mut sent_bytes = 0u64;
+async fn lane_task(
+    lane: LaneTx,
+    sh: Arc<Shared>,
+    pacer: Option<Arc<Pacer>>,
+    stop: Arc<AtomicBool>,
+) {
     let mut wake = sh.wake_tx.subscribe();
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -1144,12 +1188,8 @@ async fn lane_task(lane: LaneTx, sh: Arc<Shared>, cap_bps: Option<u64>, stop: Ar
             }
             continue;
         };
-        if let Some(bps) = cap_bps {
-            sent_bytes += body.len() as u64; // plaintext bytes, as before
-            let due = Duration::from_secs_f64(sent_bytes as f64 / bps as f64);
-            if let Some(wait) = due.checked_sub(started.elapsed()) {
-                tokio::time::sleep(wait).await;
-            }
+        if let Some(p) = &pacer {
+            p.pace(body.len() as u64).await; // plaintext bytes, as before
         }
         // Queued whole or not at all (the outbox), so this task may be cancelled here
         // without leaving half a sealed frame on the lane. A failed send is not
@@ -1410,6 +1450,7 @@ pub async fn run_upload(
     // exit (I1); tasks adopt any already up. Each lane has its own stop flag (a lane
     // death stops only its own task) and keeps its outbox clone so the control loop
     // can learn when the dead lane's writer has ended (I3's precise form).
+    let pacer = Pacer::new(opts.bandwidth_cap);
     let mut lane_tasks: HashMap<u16, tokio::task::JoinHandle<()>> = HashMap::new();
     let mut lane_links: HashMap<u16, (Arc<AtomicBool>, ConnTx)> = HashMap::new();
     let spawn_lane = |id: u16,
@@ -1424,7 +1465,7 @@ pub async fn run_upload(
             let h = tokio::spawn(lane_task(
                 l.clone(),
                 sh.clone(),
-                opts.bandwidth_cap,
+                pacer.clone(),
                 stop.clone(),
             ));
             tasks.insert(id, h);
@@ -2540,6 +2581,58 @@ mod tests {
             "the reader got a permit instead of seeing the budget closed"
         );
         drop(held);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_speed_cap_holds_for_the_whole_job_not_for_each_lane() {
+        // Four lanes sending as fast as the pacer lets them: together they stay at the
+        // cap. A pace per lane let N lanes send N times the cap.
+        const LANES: usize = 4;
+        const FRAME: u64 = 64 << 10;
+        let cap = 8u64 << 20;
+        let pacer = Pacer::new(Some(cap)).unwrap();
+        let sent = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let t0 = tokio::time::Instant::now();
+        let lanes: Vec<_> = (0..LANES)
+            .map(|_| {
+                let (pacer, sent, stop) = (pacer.clone(), sent.clone(), stop.clone());
+                tokio::spawn(async move {
+                    while !stop.load(Ordering::Relaxed) {
+                        pacer.pace(FRAME).await;
+                        sent.fetch_add(FRAME, Ordering::Relaxed);
+                    }
+                })
+            })
+            .collect();
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        stop.store(true, Ordering::Relaxed);
+        let rate = sent.load(Ordering::Relaxed) as f64 / t0.elapsed().as_secs_f64();
+        for l in lanes {
+            l.await.unwrap();
+        }
+        let cap = cap as f64;
+        assert!(
+            rate > cap * 0.95 && rate <= cap * 1.01,
+            "{LANES} lanes sent {rate:.0} B/s against a {cap:.0} B/s cap"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_idle_stretch_does_not_bank_a_burst_past_the_cap() {
+        let pacer = Pacer::new(Some(1 << 20)).unwrap();
+        pacer.pace(1 << 20).await;
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        // After 10 s idle the next MiB still takes a second, not zero.
+        let t = tokio::time::Instant::now();
+        pacer.pace(1 << 20).await;
+        assert!(t.elapsed() >= Duration::from_millis(990));
+    }
+
+    #[test]
+    fn no_cap_or_a_zero_cap_means_no_pacer() {
+        assert!(Pacer::new(None).is_none());
+        assert!(Pacer::new(Some(0)).is_none());
     }
 
     fn test_shared(chunk: u32, budget_kib: usize) -> Arc<Shared> {

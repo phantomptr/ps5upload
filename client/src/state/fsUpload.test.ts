@@ -31,17 +31,20 @@ const HOST = "192.168.0.5";
 /** A fake engine: each started job answers the snapshots queued for it, then "done". */
 function fakeEngine(script: Record<string, Snap[]> = {}) {
   const started: { kind: "file" | "dir"; src: string; dest: string }[] = [];
+  const caps: number[] = [];
   const cancelled: string[] = [];
   let gate: Promise<void> | null = null;
   const deps: Deps = {
     pathKind: async (p) =>
       p.endsWith("/") || p.includes("folder") ? "folder" : "file",
-    startFile: async (src, dest) => {
+    startFile: async (src, dest, _addr, cap) => {
       started.push({ kind: "file", src, dest });
+      caps.push(cap);
       return `job-${started.length}`;
     },
-    startDir: async (src, dest) => {
+    startDir: async (src, dest, _addr, cap) => {
       started.push({ kind: "dir", src, dest });
+      caps.push(cap);
       return `job-${started.length}`;
     },
     jobStatus: async (id) => {
@@ -58,6 +61,7 @@ function fakeEngine(script: Record<string, Snap[]> = {}) {
   return {
     deps,
     started,
+    caps,
     cancelled,
     /** Holds every status poll until the returned function is called. */
     hold() {
@@ -122,6 +126,21 @@ describe("runFsUpload", () => {
       { kind: "dir", src: "/pc/folder1", dest: "/data/x/folder1" },
       { kind: "file", src: "/pc/b.bin", dest: "/data/x/b.bin" },
     ]);
+  });
+
+  it("passes the upload speed limit to every job it starts, files and folders", async () => {
+    const e = fakeEngine();
+    // Read as each job starts, so a limit changed mid-batch applies to the next item.
+    let reads = 0;
+    e.deps.bandwidthCapMbps = () => ++reads * 10;
+    await run(e, ["/pc/a.bin", "/pc/folder1"]);
+    expect(e.caps).toEqual([10, 20]);
+  });
+
+  it("starts jobs with no limit when none is configured", async () => {
+    const e = fakeEngine();
+    await run(e, ["/pc/a.bin"]);
+    expect(e.caps).toEqual([0]);
   });
 
   it("writes a replacement over the named file and never treats it as a folder", async () => {

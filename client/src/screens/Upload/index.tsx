@@ -3196,10 +3196,9 @@ function FolderDiffSlot({
   );
 }
 
-/** Per-job bandwidth-cap input. Persists to localStorage via the
- *  upload settings store so the user's preferred cap survives app
- *  restarts. 0 = no cap. The actual transport-layer pacing happens
- *  inside the engine's PipelinedSender (Phase 29's BandwidthThrottle). */
+/** The upload speed limit, the same stored value and wording as the
+ *  control in Settings → Uploads. 0 = no limit. The engine holds every lane
+ *  of a job to it together. */
 function BandwidthCard() {
   const tr = useTr();
   const cap = useUploadSettingsStore((s) => s.bandwidthCapMbps);
@@ -3208,7 +3207,7 @@ function BandwidthCard() {
     <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
       <div className="flex items-center gap-2">
         <label className="text-sm font-medium">
-          {tr("upload_bandwidth_label", undefined, "Upload speed cap")}
+          {tr("bandwidth_cap_label", undefined, "Upload speed limit")}
         </label>
         <Input
           type="number"
@@ -3231,21 +3230,21 @@ function BandwidthCard() {
             onClick={() => setCap(0)}
             className="text-xs text-[var(--color-muted)] underline-offset-2 hover:underline"
           >
-            {tr("upload_bandwidth_clear", undefined, "remove cap")}
+            {tr("bandwidth_cap_clear", undefined, "remove limit")}
           </button>
         )}
       </div>
       <p className="mt-1 text-xs text-[var(--color-muted)]">
         {cap > 0
           ? tr(
-              "upload_bandwidth_active",
-              { cap },
-              `Outbound shards paced to ~${cap} MB/s. Useful when sharing the LAN with video calls or game streaming.`,
+              "bandwidth_cap_on_hint_v2",
+              { n: cap },
+              `All uploads together are held to about ${cap} MB/s, from the next upload started. Set to 0 to remove the limit.`,
             )
           : tr(
-              "upload_bandwidth_off",
+              "bandwidth_cap_off_hint_v2",
               undefined,
-              "0 = no cap (default). Set a positive value to throttle uploads when sharing bandwidth.",
+              "No limit. Set one if uploads saturate your Wi-Fi/LAN and make other devices lag. It applies to every upload from the Upload screen, the queue and Files, from the next one started.",
             )}
       </p>
     </section>

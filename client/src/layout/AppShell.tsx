@@ -46,7 +46,6 @@ import {
   ensureRosterMigrated,
   useRosterStore,
   useActiveProfile,
-  withConsolePrefix,
 } from "../state/roster";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { isTauriEnv, safeUnlisten } from "../lib/tauriEnv";
@@ -1333,24 +1332,6 @@ export default function AppShell() {
       pushNotification("info", `Scheduled: ${sch.label}`, {
         body: sch.body ?? "Schedule fired.",
       });
-    } else if (sch.action === "power_tick") {
-      // Target the console the schedule was created for (captured at
-      // creation). Fall back to the active console for legacy schedules
-      // that predate the host field.
-      const host =
-        sch.host?.trim() || useConnectionStore.getState().host?.trim() || "";
-      if (host) {
-        void powerTick(mgmtAddr(host)).catch(() => {
-          // best-effort
-        });
-        pushNotification(
-          "info",
-          withConsolePrefix(host, `Scheduled: ${sch.label}`),
-          {
-            body: `Sent powerTick to ${host}.`,
-          },
-        );
-      }
     }
   });
   // Subscribe-once: wires the per-feature stores (transfer, FS bulk

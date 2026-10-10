@@ -1086,6 +1086,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
         item.resolvedDest,
         item.addr,
         txIdHex,
+        useUploadSettingsStore.getState().bandwidthCapMbps,
       );
     }
 

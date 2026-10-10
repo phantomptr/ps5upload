@@ -202,8 +202,8 @@ function KeepAwakeIndicator() {
     <span
       className="flex items-center gap-1 text-[var(--color-warn)]"
       title={tr(
-        "status_keep_awake_tooltip",
-        "Keep-awake is set to “Always while connected” — connected consoles won't auto-enter rest mode while the app is open. Change in Settings → Upload.",
+        "status_keep_awake_tooltip_v2",
+        "Keep-awake is set to “Always while connected” — connected consoles won't auto-enter rest mode while the app is open. Change in Settings → Console.",
       )}
     >
       <Zap size={11} aria-hidden />

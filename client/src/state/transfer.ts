@@ -408,7 +408,7 @@ export const useTransferStore = create<TransferState>((set) => {
             jobId = await start(srcPath, dest, addr, txId, excludes, bandwidthCap);
           }
         } else {
-          jobId = await startTransferFile(srcPath, dest, addr, txId);
+          jobId = await startTransferFile(srcPath, dest, addr, txId, bandwidthCap);
         }
       } catch (e) {
         if (!isLive()) return;
