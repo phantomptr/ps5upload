@@ -2,6 +2,10 @@ import { consoleAddr, hostOf } from "../../lib/addr";
 import { trStatic } from "../../lib/trStatic";
 import { rememberDestination } from "../../lib/moveTo";
 import { MoveToDialog, type MoveItem } from "./MoveToDialog";
+import { SendToConsoleDialog } from "./SendToConsoleDialog";
+import { useUploadQueueStore } from "../../state/uploadQueue";
+import type { SendItem } from "../../lib/consoleSend";
+import { queueLinkFor } from "../../lib/gamePage";
 import {
   useCallback,
   useEffect,
@@ -44,6 +48,7 @@ import {
   Link2,
   FolderInput,
   KeyRound,
+  Send,
 } from "lucide-react";
 import { pickPath, pickPaths } from "../../lib/pickPath";
 import { useWebviewDropAll } from "../../lib/useWebviewDrop";
@@ -183,6 +188,7 @@ import { mgmtAddr as toMgmtAddr } from "../../lib/addr";
 import {
   profileNameForHost,
   useRosterStore,
+  profileNameForAddr,
   withConsolePrefix,
 } from "../../state/roster";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
@@ -1436,6 +1442,53 @@ export default function FileSystemScreen() {
     () => (entries ? sortEntries(entries, sort) : []),
     [entries, sort],
   );
+  // "Send to another console…" (#433): the items waiting for a console and folder.
+  const [sendItems, setSendItems] = useState<SendItem[] | null>(null);
+  const otherConsoles = useRosterStore(
+    (s) => s.profiles.filter((p) => hostOf(p.host) !== hostOf(host)).length,
+  );
+  const startSend = (list: DirEntry[] = selectedEntries) => {
+    if (list.length === 0) return;
+    setSendItems(
+      list.map((e) => ({
+        path: joinPath(path, e.name),
+        name: e.name,
+        size: e.kind === "dir" ? 0 : e.size,
+        isDir: e.kind === "dir",
+      })),
+    );
+  };
+  const confirmSend = (target: string, _destDir: string, dests: string[]) => {
+    const items = sendItems ?? [];
+    setSendItems(null);
+    if (items.length === 0) return;
+    setSelected(new Set());
+    const q = useUploadQueueStore.getState();
+    const ids = items.map((it, i) =>
+      q.add({
+        sourceKind: "ps5",
+        fromConsole: hostOf(host),
+        sourcePath: it.path,
+        displayName: it.name,
+        resolvedDest: dests[i],
+        addr: target,
+        strategy: "overwrite",
+        reconcileMode: "fast",
+        excludes: [],
+        mountAfterUpload: false,
+        mountReadOnly: true,
+        registerAfterUpload: false,
+        estimatedBytes: it.size,
+      }),
+    );
+    void q.startHost(target, { onlyIds: ids });
+    const name = profileNameForAddr(target, useRosterStore.getState().profiles) || target;
+    pushNotification(
+      "info",
+      tr("fs_send_queued", { n: items.length, name }, `${items.length} queued for ${name}`),
+      { link: queueLinkFor(target, host, false) },
+    );
+  };
   // "Move to…": the items waiting for a destination, or null when the dialog is closed.
   const [moveItems, setMoveItems] = useState<MoveItem[] | null>(null);
   const startMove = (list: DirEntry[] = selectedEntries) => {
@@ -2198,6 +2251,15 @@ export default function FileSystemScreen() {
           </div>
         </div>
       )}
+      {sendItems && (
+        <SendToConsoleDialog
+          fromHost={hostOf(host)}
+          items={sendItems}
+          startDir={parent(sendItems[0]?.path ?? path)}
+          onCancel={() => setSendItems(null)}
+          onConfirm={confirmSend}
+        />
+      )}
       {moveItems && (
         <MoveToDialog
           open
@@ -2233,6 +2295,15 @@ export default function FileSystemScreen() {
               run: () => startMove([menuEntry]),
               disabled: fsBulk.op !== null || !volumes?.length,
             },
+            ...(otherConsoles > 0
+              ? [
+                  {
+                    icon: Send,
+                    label: tr("fs_send_action", undefined, "Send to another console…"),
+                    run: () => startSend([menuEntry]),
+                  },
+                ]
+              : []),
             {
               icon: Scissors,
               label: tr("fs_cut", "Cut"),
@@ -2613,6 +2684,17 @@ export default function FileSystemScreen() {
               <FolderInput size={12} />
               {tr("fs_move_to", undefined, "Move to…")}
             </button>
+            {otherConsoles > 0 && (
+              <button
+                type="button"
+                onClick={() => startSend()}
+                data-testid="fs-send-console"
+                className="flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 hover:bg-[var(--color-surface-3)]"
+              >
+                <Send size={12} />
+                {tr("fs_send_action", undefined, "Send to another console…")}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => stageClipboard("cut")}

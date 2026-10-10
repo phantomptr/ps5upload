@@ -109,7 +109,7 @@ import {
   refineHelperReason,
   shouldAutoRecover,
 } from "../lib/uploadRecovery";
-import { helperState } from "../api/ava1";
+import { helperState, startPs5ToPs5 } from "../api/ava1";
 import { isTauriEnv } from "../lib/tauriEnv";
 import { createQueueLeader } from "../lib/queueLeader";
 import { useConnectionStore } from "./connection";
@@ -171,8 +171,9 @@ const INTER_JOB_SETTLE_MS = 1500;
 
 export type QueueItemStatus = "pending" | "running" | "done" | "failed";
 
-/** What a queue item does: an upload of some source kind, or an install. */
-export type QueueSourceKind = SourceKind | "install";
+/** What a queue item does: an upload of some source kind, an install, or a copy from another
+ *  console in the roster (`ps5`: `sourcePath` is on `fromConsole`). */
+export type QueueSourceKind = SourceKind | "install" | "ps5";
 
 /** One queued upload. The shape is whatever the Upload screen
  *  captures at "Add to queue" time — source path, destination,
@@ -191,6 +192,8 @@ export interface QueueItem {
   resolvedDest: string;
   /** Console address (a bare host such as `192.168.1.2`). */
   addr: string;
+  /** `ps5` items only: the console the file or folder is copied from (#433). */
+  fromConsole?: string | null;
   strategy: UploadStrategy;
   reconcileMode: ReconcileMode;
   excludes: string[];
@@ -353,6 +356,7 @@ export type AddQueueItem = Pick<
   | "displayName"
   | "resolvedDest"
   | "addr"
+  | "fromConsole"
   | "strategy"
   | "reconcileMode"
   | "excludes"
@@ -984,6 +988,16 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
     let jobId: string;
     if (adoptId) {
       jobId = adoptId;
+    } else if (item.sourceKind === "ps5") {
+      // From another console: the engine copies console to console (directly, or through this
+      // computer when they cannot reach each other). The persisted tx id resumes it.
+      jobId = await startPs5ToPs5(
+        item.fromConsole ?? "",
+        item.sourcePath,
+        item.addr,
+        item.resolvedDest,
+        item.txIdHex,
+      );
     } else if (isArchive) {
       // A .zip/.7z is decompressed host-side and streamed in (lands
       // extracted). Carry the persisted tx_id for cross-session shard resume,

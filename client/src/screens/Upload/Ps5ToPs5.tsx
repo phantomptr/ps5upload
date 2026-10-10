@@ -63,9 +63,9 @@ export function Ps5ToPs5Card({
       </h3>
       <p className="mb-3 text-xs text-[var(--color-muted)]">
         {tr(
-          "ps5src_hint",
+          "ps5src_hint_v2",
           undefined,
-          "Copies a file or folder from another console to this one over your network. The data passes through this computer; nothing is stored on it.",
+          "Copies a file or folder from another console to this one: straight between the consoles when they can reach each other, otherwise through this computer (nothing is stored on it). Easier: select the files in Files and choose Send to another console.",
         )}
       </p>
       <div className="grid gap-3 sm:grid-cols-3">

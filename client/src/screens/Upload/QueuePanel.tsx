@@ -806,7 +806,12 @@ export function QueueRow({
             {isInstall ? (
               <span>{installSourceLabel(item, tr)}</span>
             ) : (
-              <span className="truncate font-mono">→ {item.resolvedDest}</span>
+              <>
+                {item.sourceKind === "ps5" && item.fromConsole && (
+                  <FromConsole addr={item.fromConsole} path={item.sourcePath} />
+                )}
+                <span className="truncate font-mono">→ {item.resolvedDest}</span>
+              </>
             )}
             {!isInstall && !finished && (
               <span>
@@ -1456,6 +1461,18 @@ function PartialFileNote({ id, path }: { id: string; path: string }) {
       </Button>
       {failed && <p className="mt-1 text-[var(--color-bad)]">{failed}</p>}
     </div>
+  );
+}
+
+/** Where a copy from another console comes from: "From Pro /data/homebrew/X". */
+function FromConsole({ addr, path }: { addr: string; path: string }) {
+  const tr = useTr();
+  const name = useConsoleLabel(addr);
+  return (
+    <span className="min-w-0 truncate" data-testid="queue-from-console">
+      {tr("queue_from_console", { name }, "From {name}")}{" "}
+      <span className="font-mono">{path}</span>
+    </span>
   );
 }
 

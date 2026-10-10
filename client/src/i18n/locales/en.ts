@@ -4235,6 +4235,23 @@ queue_partial_delete_title: "Delete the partial file?",
 queue_partial_delete_body: "{path} will be deleted from the PS5. The upload then starts over from the beginning.",
 queue_partial_deleted: "Partial file deleted. Retry starts the upload over.",
 connection_vpn_hint: "If a VPN is on, turn it off (or allow local network access in it), then check again.",
+
+// Send to another console (#433)
+fs_send_action: "Send to another console…",
+fs_send_title: "Send {what} to another console",
+fs_send_to: "Send to {name}",
+fs_send_console: "To",
+fs_send_unreachable: "{name} isn't answering. Check that it is on and its helper is running.",
+fs_send_drives: "Drives on {name}",
+fs_send_new_folder: "This folder isn't there yet: the send creates it.",
+fs_send_no_room: "{size} won't fit there on {name}.",
+fs_send_summary: "Copies {size} to {name}. The originals stay here.",
+fs_send_summary_folders: "Copies to {name}. The originals stay here.",
+fs_send_replacing: "Already there and replaced: {names}.",
+fs_send_route: "Goes straight between the consoles when they can reach each other, otherwise through this computer.",
+fs_send_queued: "{n} queued for {name}",
+queue_from_console: "From {name}",
+ps5src_hint_v2: "Copies a file or folder from another console to this one: straight between the consoles when they can reach each other, otherwise through this computer (nothing is stored on it). Easier: select the files in Files and choose Send to another console.",
 };
 
 export default en;

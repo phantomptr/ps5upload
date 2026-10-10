@@ -38,6 +38,10 @@ vi.mock("../api/ps5", async (importOriginal) => {
     pkgInstallStop: vi.fn(async () => {}),
   };
 });
+vi.mock("../api/ava1", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api/ava1")>();
+  return { ...actual, startPs5ToPs5: vi.fn(async () => "c2c-job") };
+});
 vi.mock("./pkgLibrary", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./pkgLibrary")>();
   return {
@@ -413,6 +417,58 @@ describe("upload runner concurrency (per-console, parallel)", () => {
     await vi.advanceTimersByTimeAsync(5000);
     await p;
     expect(itemsByStatus("done")[0].jobId).toBe("job-for-summary");
+  });
+});
+
+// ── From another console (#433) ──────────────────────────────────────────────
+
+describe("an item from another console", () => {
+  beforeEach(() => {
+    installLocalStorageStub();
+    vi.useFakeTimers();
+    useUploadQueueStore.setState({ items: [], running: false, runningHosts: {}, loaded: true });
+  });
+
+  it("is copied from that console to this one, resuming under its own job id", async () => {
+    const { startPs5ToPs5 } = await import("../api/ava1");
+    vi.mocked(startPs5ToPs5).mockClear();
+    useUploadQueueStore.getState().add({
+      sourceKind: "ps5",
+      fromConsole: "192.168.1.100",
+      sourcePath: "/data/homebrew/PPSA11386-app",
+      displayName: "PPSA11386-app",
+      resolvedDest: "/data/homebrew/PPSA11386-app",
+      addr: "192.168.1.99",
+      strategy: "overwrite",
+      reconcileMode: "fast",
+      excludes: [],
+      mountAfterUpload: false,
+      mountReadOnly: false,
+      registerAfterUpload: false,
+    });
+    mockedJobStatus.mockResolvedValue({
+      status: "done",
+      bytes_sent: 100,
+      elapsed_ms: 10,
+    } as Awaited<ReturnType<typeof jobStatus>>);
+    const p = useUploadQueueStore.getState().start();
+    await vi.advanceTimersByTimeAsync(5000);
+    await p;
+    const item = useUploadQueueStore.getState().items[0];
+    expect(vi.mocked(startPs5ToPs5)).toHaveBeenCalledWith(
+      "192.168.1.100",
+      "/data/homebrew/PPSA11386-app",
+      "192.168.1.99",
+      "/data/homebrew/PPSA11386-app",
+      item.txIdHex,
+    );
+    expect(item.status).toBe("done");
+    expect(mockedStartFile).not.toHaveBeenCalledWith(
+      "/data/homebrew/PPSA11386-app",
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
   });
 });
 
