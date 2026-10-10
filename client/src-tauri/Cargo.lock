@@ -4218,6 +4218,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hmac",
  "libc",
+ "lz4_flex",
  "num-bigint",
  "ps5upload-pkg",
  "serde",
@@ -4225,6 +4226,7 @@ dependencies = [
  "sha2 0.11.0",
  "sha3 0.12.0",
  "thiserror 2.0.21",
+ "toml 1.1.4+spec-1.1.0",
 ]
 
 [[package]]

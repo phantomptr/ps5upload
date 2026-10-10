@@ -786,6 +786,7 @@ export async function browserInvoke<T>(
         output_dir: args["outputDir"],
         format: args["format"],
         compress: args["compress"] ?? false,
+        ampr_lz4: args["amprLz4"],
       });
     }
     case "job_status": {

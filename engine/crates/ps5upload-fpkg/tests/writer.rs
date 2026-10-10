@@ -50,7 +50,7 @@ fn write_tree(root: &Path) -> Vec<(String, Vec<u8>)> {
     put(
         "sce_sys/param.json",
         format!(
-            "{{\"contentId\":\"{CONTENT_ID}\",\"contentVersion\":\"01.001.000\",\"titleId\":\"PPSA01234\"}}"
+            "{{\"contentId\":\"{CONTENT_ID}\",\"contentVersion\":\"01.001.000\",\"titleId\":\"PPSA01234\",\"applicationCategoryType\":0,\"attributePub\":0}}"
         )
         .into_bytes(),
     );
@@ -354,6 +354,33 @@ fn a_kraken_package_decodes_back_to_its_source() {
     }
 }
 
+/// The in-memory writer only has the flat layout. Asked for the block layout (the default),
+/// it hands the build to the streaming writer instead of writing a block plan flat, and the
+/// package decodes block by block like any other.
+#[test]
+fn an_in_memory_build_of_the_block_layout_is_written_by_the_streaming_writer() {
+    use ps5upload_fpkg::kraken_image;
+    let source_dir = TempDir::new("mem-kraken-src");
+    let out = TempDir::new("mem-kraken-out");
+    write_tree(source_dir.path());
+    let mut request = BuildRequest::new(source_dir.path(), out.path());
+    request.kraken = true;
+    request.time = Some((1_700_000_000, 0));
+    let report = build::build_in_memory(&request, &mut |_| {}).unwrap();
+    assert!(report.verify.ok(), "{}", report.verify);
+    let naps = outer_file(&report.path, "naps_pkg_layout.dat");
+    let image = outer_file(&report.path, "pfs_image.dat");
+    let blocks = kraken_image::describe(&naps).unwrap();
+    assert!(!blocks.is_empty());
+    for b in &blocks {
+        kraken_image::decode_described(&image, b).unwrap();
+    }
+    assert!(!out
+        .path()
+        .join(format!("{CONTENT_ID}.pkg.partial"))
+        .exists());
+}
+
 /// A title whose module imports libSceAmpr gets an `ampr_emu.index` generated into its image
 /// root when the dump has none, listing every packaged file at its packaged size; a title that
 /// does not import it gets none.
@@ -411,6 +438,140 @@ fn a_libsceampr_title_gets_an_ampr_index() {
     assert!(listed.contains(&("/app0/data/large.bin".to_string(), 600 * 1024)));
     // The icons the container carries instead of the image are not listed.
     assert!(!listed.iter().any(|(p, _)| p == "/app0/sce_sys/icon0.png"));
+}
+
+/// A dump's own `ampr_emu.index` describes the folder as it was dumped. The package carries
+/// one regenerated from what it actually holds: param.json after its rewrite, an executable
+/// after its repair, without the files left out — so every listed size is the packaged one.
+#[test]
+fn a_dumps_stale_ampr_index_is_regenerated_from_the_packaged_files() {
+    use ps5upload_fpkg::{ampr_index, kraken_image};
+    let src = TempDir::new("stale-index-src");
+    write_tree(src.path());
+    // "free" DRM is rewritten to "standard", which changes param.json's size.
+    std::fs::write(
+        src.path().join("sce_sys/param.json"),
+        format!(
+            "{{\"contentId\":\"{CONTENT_ID}\",\"contentVersion\":\"01.001.000\",\
+             \"titleId\":\"PPSA01234\",\"applicationDrmType\":\"free\"}}"
+        ),
+    )
+    .unwrap();
+    let mut eboot: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
+    eboot[1000..1014].copy_from_slice(b"libSceAmpr.prx");
+    std::fs::write(src.path().join("eboot.bin"), &eboot).unwrap();
+    // A module whose version records start 3 bytes before its header's marker: the repair
+    // inserts 3 bytes.
+    let record = |name: &str| {
+        let mut r = vec![0, 0];
+        r.extend_from_slice(&((name.len() + 17) as u16).to_le_bytes());
+        r.push(8);
+        r.extend_from_slice(name.as_bytes());
+        r.extend_from_slice(&0x0100_0000u64.to_le_bytes());
+        r.extend_from_slice(&0x0100_0000u64.to_le_bytes());
+        r
+    };
+    let mut module = vec![0x54, 0x14, 0xF5, 0xEE];
+    module.resize(0x200, 0x22);
+    let records_at = module.len();
+    module.extend_from_slice(&record("libc:"));
+    module[0x10..0x18].copy_from_slice(&((records_at + 3) as u64).to_le_bytes());
+    std::fs::write(src.path().join("data/mod.sprx"), &module).unwrap();
+    // Left out of every package as a stale packaging sidecar.
+    std::fs::write(src.path().join("sce_sys/ext_info.dat"), [1u8; 40]).unwrap();
+    // The dump's index, made from the folder as it is on disk.
+    let on_disk: Vec<(String, u64)> = source::scan(src.path())
+        .unwrap()
+        .into_iter()
+        .map(|f| (f.path, f.size))
+        .collect();
+    std::fs::write(
+        src.path().join("ampr_emu.index"),
+        ampr_index::build(&on_disk, 0).unwrap(),
+    )
+    .unwrap();
+
+    let out = TempDir::new("stale-index-out");
+    let mut request = BuildRequest::new(src.path(), out.path());
+    request.time = Some((1_700_000_000, 0));
+    let mut phases = Vec::new();
+    let report = build::build(&request, &mut |p| phases.push(p.to_string())).unwrap();
+    assert!(report.verify.ok(), "{}", report.verify);
+    assert!(
+        phases
+            .iter()
+            .any(|p| p.starts_with("regenerating ampr_emu.index")),
+        "{phases:?}"
+    );
+
+    let naps = outer_file(&report.path, "naps_pkg_layout.dat");
+    let image = outer_file(&report.path, "pfs_image.dat");
+    let blocks = kraken_image::describe(&naps).unwrap();
+    let size = blocks.last().map(|b| b.logical + b.len).unwrap();
+    let mut mount = vec![0u8; size as usize];
+    for b in &blocks {
+        let bytes = kraken_image::decode_described(&image, b).unwrap();
+        mount[b.logical as usize..(b.logical + b.len) as usize].copy_from_slice(&bytes);
+    }
+    // The inner superblock opens the metadata region, on a block boundary after the data.
+    let meta_base = (0..mount.len() / 0x10000)
+        .rev()
+        .map(|b| b * 0x10000)
+        .find(|&at| {
+            mount[at..at + 8] == 2u64.to_le_bytes()
+                && mount[at + 8..at + 16] == 20_130_315u64.to_le_bytes()
+        })
+        .unwrap() as u64;
+    let walked = inner::read(&mount, meta_base).unwrap();
+    let file = |path: &str| walked.files.iter().find(|f| f.path == path).unwrap();
+    let index_file = file("ampr_emu.index");
+    let index = &mount[index_file.offset as usize..(index_file.offset + index_file.size) as usize];
+    let mut listed = ampr_index::parse(index).expect("a well-formed index");
+    let mut packaged: Vec<(String, u64)> = walked
+        .files
+        .iter()
+        .filter(|f| f.path != "ampr_emu.index")
+        .map(|f| (f.path.clone(), f.size))
+        .collect();
+    let mut listed_pairs: Vec<(String, u64)> = listed.drain(..).map(|e| (e.path, e.size)).collect();
+    packaged.sort();
+    listed_pairs.sort();
+    assert_eq!(listed_pairs, packaged, "the index lists exactly the image");
+    assert_eq!(file("data/mod.sprx").size, module.len() as u64 + 3);
+    assert!(!listed_pairs
+        .iter()
+        .any(|(p, _)| p == "sce_sys/ext_info.dat"));
+    assert_ne!(
+        file("sce_sys/param.json").size,
+        std::fs::metadata(src.path().join("sce_sys/param.json"))
+            .unwrap()
+            .len()
+    );
+}
+
+/// Two paths an `ampr_emu.index` cannot tell apart stop the build with a message naming them.
+#[test]
+fn a_case_collision_in_an_ampr_title_is_refused() {
+    let src = TempDir::new("case-src");
+    write_tree(src.path());
+    let mut eboot: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
+    eboot[1000..1014].copy_from_slice(b"libSceAmpr.prx");
+    std::fs::write(src.path().join("eboot.bin"), &eboot).unwrap();
+    std::fs::write(src.path().join("data/Case.bin"), b"a").unwrap();
+    std::fs::write(src.path().join("data/case.bin"), b"b").unwrap();
+    if source::scan(src.path()).unwrap().len() < 9 {
+        // A case-insensitive file system kept one file: nothing to test here.
+        return;
+    }
+    let out = TempDir::new("case-out");
+    let err = match build::build(&BuildRequest::new(src.path(), out.path()), &mut |_| {}) {
+        Ok(_) => panic!("built a package whose index cannot tell two files apart"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        err.contains("data/Case.bin") && err.contains("data/case.bin"),
+        "{err}"
+    );
 }
 
 /// A build reports its stages in order, each once: what the Convert screen's stage list shows.

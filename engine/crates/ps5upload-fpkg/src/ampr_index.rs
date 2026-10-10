@@ -50,23 +50,50 @@ pub fn hash(path: &str) -> u64 {
     h.max(1)
 }
 
+/// The index's name at the image root.
+pub const NAME: &str = "ampr_emu.index";
+
+/// One record: a path inside the image (no `/app0/` prefix), its size and mtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub path: String,
+    pub size: u64,
+    pub mtime: i64,
+}
+
 /// The index for `files`, as `(path inside the image, size)`; every entry gets `mtime`.
-/// Returns `None` when two paths differ only in case, which the index cannot tell apart.
-pub fn build(files: &[(String, u64)], mtime: i64) -> Option<Vec<u8>> {
-    let mut rows: Vec<(Vec<u8>, String, u64)> = files
+/// Fails, naming both, when two paths differ only in case, which the index cannot tell apart.
+pub fn build(files: &[(String, u64)], mtime: i64) -> Result<Vec<u8>, String> {
+    let entries: Vec<Entry> = files
         .iter()
-        .map(|(p, size)| {
-            let path = format!("/app0/{}", p.trim_start_matches('/'));
-            (key(&path), path, *size)
+        .map(|(path, size)| Entry {
+            path: path.clone(),
+            size: *size,
+            mtime,
+        })
+        .collect();
+    build_entries(&entries)
+}
+
+/// The index for `entries`, each with its own mtime.
+pub fn build_entries(entries: &[Entry]) -> Result<Vec<u8>, String> {
+    let mut rows: Vec<(Vec<u8>, String, u64, i64)> = entries
+        .iter()
+        .map(|e| {
+            let path = format!("/app0/{}", e.path.trim_start_matches('/'));
+            (key(&path), path, e.size, e.mtime)
         })
         .collect();
     rows.sort_by(|a, b| a.0.cmp(&b.0));
-    if rows.windows(2).any(|w| w[0].0 == w[1].0) {
-        return None;
+    if let Some(w) = rows.windows(2).find(|w| w[0].0 == w[1].0) {
+        return Err(format!(
+            "{} and {} differ only in case, which {NAME} cannot tell apart; rename one",
+            w[0].1, w[1].1
+        ));
     }
     let mut records = Vec::with_capacity(rows.len() * RECORD);
     let mut paths = Vec::new();
-    for (_, path, size) in &rows {
+    for (_, path, size, mtime) in &rows {
         records.extend_from_slice(&(paths.len() as u32).to_le_bytes());
         records.extend_from_slice(&(path.len() as u32).to_le_bytes());
         records.extend_from_slice(&size.to_le_bytes());
@@ -77,7 +104,7 @@ pub fn build(files: &[(String, u64)], mtime: i64) -> Option<Vec<u8>> {
     let count = (rows.len() * 2).next_power_of_two().max(2);
     let mask = count - 1;
     let mut slots = vec![(0u64, 0u32, 0u32); count];
-    for (i, (_, path, _)) in rows.iter().enumerate() {
+    for (i, (_, path, _, _)) in rows.iter().enumerate() {
         let h = hash(path);
         let mut at = h as usize & mask;
         let mut shared = false;
@@ -107,6 +134,39 @@ pub fn build(files: &[(String, u64)], mtime: i64) -> Option<Vec<u8>> {
         out.extend_from_slice(&h.to_le_bytes());
         out.extend_from_slice(&index.to_le_bytes());
         out.extend_from_slice(&flags.to_le_bytes());
+    }
+    Ok(out)
+}
+
+/// The records of an index in file-id order (record `i` is file id `i + 1`), each path with
+/// its `/app0/` taken off. `None` when the bytes are not a well-formed `AMPRIDX3`.
+pub fn parse(d: &[u8]) -> Option<Vec<Entry>> {
+    let u32_at = |at: usize| Some(u32::from_le_bytes(d.get(at..at + 4)?.try_into().ok()?));
+    let u64_at = |at: usize| Some(u64::from_le_bytes(d.get(at..at + 8)?.try_into().ok()?));
+    if d.get(..8)? != MAGIC || u32_at(8)? != 3 || u32_at(12)? as usize != RECORD {
+        return None;
+    }
+    let n = usize::try_from(u64_at(0x10)?).ok()?;
+    let path_bytes = usize::try_from(u64_at(0x18)?).ok()?;
+    let paths_at = HEADER.checked_add(n.checked_mul(RECORD)?)?;
+    let paths = d.get(paths_at..paths_at.checked_add(path_bytes)?)?;
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let r = HEADER + i * RECORD;
+        let (off, len) = (u32_at(r)? as usize, u32_at(r + 4)? as usize);
+        if off.checked_add(len)? >= paths.len() || paths[off + len] != 0 {
+            return None;
+        }
+        let path = std::str::from_utf8(&paths[off..off + len]).ok()?;
+        let path = path.replace('\\', "/");
+        let rel = path
+            .get(6..)
+            .filter(|_| path[..6].eq_ignore_ascii_case("/app0/"))?;
+        out.push(Entry {
+            path: rel.to_string(),
+            size: u64_at(r + 8)?,
+            mtime: u64_at(r + 16)? as i64,
+        });
     }
     Some(out)
 }
@@ -188,11 +248,33 @@ mod tests {
             .find(|&i| path_of(i) == "/app0/eboot.bin")
             .map(|i| u64_at(&d, HEADER + i * RECORD + 8));
         assert_eq!(size_of_eboot, Some(99));
+
+        // The reader gives the records back in file-id order, prefix off.
+        let parsed = parse(&d).unwrap();
+        assert_eq!(parsed.len(), n);
+        for (i, e) in parsed.iter().enumerate() {
+            assert_eq!(format!("/app0/{}", e.path), path_of(i));
+            assert_eq!(e.mtime, 1_777_000_000);
+        }
     }
 
     #[test]
     fn paths_differing_only_in_case_are_refused() {
         let files = vec![("A.bin".to_string(), 1), ("a.bin".to_string(), 2)];
-        assert!(build(&files, 0).is_none());
+        let e = build(&files, 0).unwrap_err();
+        assert!(
+            e.contains("/app0/A.bin") && e.contains("/app0/a.bin"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn a_damaged_index_does_not_parse() {
+        let d = build(&[("a.bin".to_string(), 1)], 0).unwrap();
+        assert!(parse(&d).is_some());
+        assert!(parse(&d[..0x30]).is_none());
+        let mut bad = d.clone();
+        bad[7] = b'2';
+        assert!(parse(&bad).is_none());
     }
 }

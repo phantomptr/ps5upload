@@ -149,7 +149,13 @@ pub enum KrakenSpool {
 fn spool_file(out: &File, spool: &KrakenSpool) -> Result<File> {
     Ok(match spool {
         KrakenSpool::InPlace => out.try_clone()?,
-        KrakenSpool::File(path) => File::create(path)?,
+        // Never truncate a spool another build is writing.
+        KrakenSpool::File(path) => std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|e| crate::Error::Format(format!("{}: {e}", path.display())))?,
     })
 }
 

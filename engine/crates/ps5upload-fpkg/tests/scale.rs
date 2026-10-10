@@ -52,7 +52,7 @@ fn write_tree(root: &Path) {
         "sce_sys/param.json",
         format!(
             "{{\"contentId\":\"{CONTENT_ID}\",\"contentVersion\":\"01.002.003\",\
-             \"titleName\":\"Scale Test\",\"titleId\":\"{title_id}\",\
+             \"applicationCategoryType\":0,\"attributePub\":0,\"titleName\":\"Scale Test\",\"titleId\":\"{title_id}\",\
              \"requiredSystemSoftwareVersion\":\"0x1160000000000000\"}}"
         )
         .into_bytes(),
@@ -248,14 +248,17 @@ fn a_tree_with_blocks_of_inodes_round_trips() {
     let out = TempDir::new("deep-out");
     let out_memory = TempDir::new("deep-memory");
     write_tree(source.path());
-    // One flat directory whose dirents alone fill more than a 64 KiB block, and whose files
-    // push the inode table past one too.
+    // One flat directory whose dirents alone fill more than a 64 KiB block (long names), and
+    // whose files push the inode table past one too. Each file is 32 KiB: thousands of tiny
+    // files in one 256 KiB ublock are more records than the flat layout descriptor can index
+    // (a one-byte delta), which it now refuses instead of writing a wrong index.
     let many = source.path().join("data/many");
     std::fs::create_dir_all(&many).unwrap();
-    for i in 0..3000u32 {
+    let padding = "n".repeat(170);
+    for i in 0..450u32 {
         std::fs::write(
-            many.join(format!("entry{i:05}.bin")),
-            (0..64u32).map(|b| (b + i) as u8).collect::<Vec<u8>>(),
+            many.join(format!("entry{i:05}{padding}.bin")),
+            (0..0x8000u32).map(|b| (b + i) as u8).collect::<Vec<u8>>(),
         )
         .unwrap();
     }
@@ -271,7 +274,7 @@ fn a_tree_with_blocks_of_inodes_round_trips() {
     // The point of the test: this tree does not fit the region's first block, and the plan
     // says so with an explicit region rather than by failing.
     let inodes = plan.files.len() as u64 + plan.dirs.len() as u64;
-    assert!(inodes > 3000, "the tree must carry {inodes} inodes");
+    assert!(inodes > 450, "the tree must carry {inodes} inodes");
     assert!(
         plan.metadata.blocks > 2,
         "a {inodes}-inode tree needs a multi-block metadata region, got {}",
@@ -288,7 +291,7 @@ fn a_tree_with_blocks_of_inodes_round_trips() {
         .find(|d| d.path == "data/many")
         .expect("the flat directory is in the plan");
     assert!(
-        ps5upload_fpkg::plan::dirent_size("entry00000.bin") as u64
+        ps5upload_fpkg::plan::dirent_size(&format!("entry00000{padding}.bin")) as u64
             * (flat.dirents.len() as u64 - 2)
             > ps5upload_fpkg::BLOCK,
         "the flat directory's dirents must outgrow a block"
@@ -354,9 +357,9 @@ fn a_tree_with_blocks_of_inodes_round_trips() {
 /// dropping descriptor records until it fits, was measured on hardware to break the mount,
 /// so the descriptor has to be addressed rather than shrunk.
 ///
-/// Ignored by default: it writes ~36,000 files.
+/// Ignored by default: it writes ~56,000 files.
 #[test]
-#[ignore = "writes ~36,000 files to the temp directory"]
+#[ignore = "writes ~56,000 files to the temp directory"]
 fn a_descriptor_past_the_direct_slots_round_trips() {
     let source = TempDir::new("descriptor-source");
     let out = TempDir::new("descriptor-out");
@@ -366,9 +369,16 @@ fn a_descriptor_past_the_direct_slots_round_trips() {
     // flat directory of them is the cheapest way to inflate it past the direct slots.
     let many = source.path().join("data/many");
     std::fs::create_dir_all(&many).unwrap();
-    for i in 0..36_000u32 {
-        std::fs::write(many.join(format!("f{i:05}.bin")), [i as u8; 8]).unwrap();
+    for i in 0..56_000u32 {
+        std::fs::write(many.join(format!("f{i:06}.bin")), [i as u8; 8]).unwrap();
     }
+    // So many tiny files are more records per ublock than the flat layout can index, which it
+    // refuses; the block layout spreads them (see `plan::build_with`). The in-memory writer
+    // hands a block-layout request to the streaming writer, so the two still agree.
+    let request = |source: &Path, out: &Path| BuildRequest {
+        kraken: true,
+        ..request(source, out)
+    };
 
     let report = build::build(&request(source.path(), out.path()), &mut |_| {}).unwrap();
     assert!(report.verify.ok(), "{}", report.verify);

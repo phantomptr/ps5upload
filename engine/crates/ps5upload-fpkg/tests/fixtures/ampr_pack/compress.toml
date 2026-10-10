@@ -1,0 +1,26 @@
+# drakmor's ampr_pack.py packed tests/fixtures/ampr_pack/compress with this profile.
+[pack]
+default_action = "loose"
+compression_mode = "hc"
+compression_level = 9
+workers = 1
+[[rule]]
+action = "compress"
+include = ["d/**"]
+layout = "mixed"
+[[rule]]
+action = "compress"
+include = ["d/hot/**"]
+block_size = "16KiB"
+layout = "random"
+hot = true
+[[rule]]
+action = "store"
+include = ["movies/**"]
+block_size = "256KiB"
+layout = "streaming"
+[runtime]
+decoded_cache_bytes = "64MiB"
+physical_cache_bytes = "16MiB"
+workers = 2
+latency_reserve_workers = 1

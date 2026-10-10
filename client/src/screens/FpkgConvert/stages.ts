@@ -19,6 +19,8 @@ export interface StageRow {
 }
 
 const BUILD: readonly PipelineStage[] = ["check", "plan", "compress", "write", "verify"];
+/** An image whose files are packed into AMPR LZ4 asset packs first. */
+const PACKED_BUILD: readonly PipelineStage[] = ["check", "pack", "plan", "compress", "write", "verify"];
 const INSTALL: readonly PipelineStage[] = ["send", "install"];
 /** A console dump is set aside, then its package installs (see lib/dumpSwap.ts). */
 const SWAP: readonly PipelineStage[] = ["park", "install"];
@@ -28,6 +30,7 @@ const WEIGHT: Record<PipelineStage, number> = {
   copy: 25,
   extract: 20,
   check: 2,
+  pack: 40,
   plan: 2,
   compress: 55,
   write: 20,
@@ -37,7 +40,7 @@ const WEIGHT: Record<PipelineStage, number> = {
   install: 5,
 };
 
-function stagesFor(mode: PipelineMode, source: string): readonly PipelineStage[] {
+function stagesFor(mode: PipelineMode, source: string, packs: boolean): readonly PipelineStage[] {
   const copy: PipelineStage[] = [];
   // A build reads a server folder or image in place; a server archive, or an image being
   // compressed (which reads local disk), is copied first.
@@ -51,7 +54,7 @@ function stagesFor(mode: PipelineMode, source: string): readonly PipelineStage[]
     case "install":
       return source.startsWith("ps5://") ? SWAP : INSTALL;
     default:
-      return [...copy, ...BUILD];
+      return [...copy, ...(packs ? PACKED_BUILD : BUILD)];
   }
 }
 
@@ -63,7 +66,9 @@ function installStage(task: Task | null): PipelineStage {
 
 export function stageRows(p: Pipeline, installTask: Task | null): StageRow[] {
   if (p.phase === "idle") return [];
-  const stages = stagesFor(p.mode, p.source);
+  // Only an LZ4 image build packs; it shows the row once it has entered that stage.
+  const packs = ("stage" in p && p.stage === "pack") || p.stageMs.pack !== undefined;
+  const stages = stagesFor(p.mode, p.source, packs);
   const withMs = (stage: PipelineStage, state: RowState): StageRow =>
     p.stageMs[stage] !== undefined ? { stage, state, ms: p.stageMs[stage] } : { stage, state };
   if (p.phase === "done") return stages.map((s) => withMs(s, "done"));

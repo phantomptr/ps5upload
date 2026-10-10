@@ -537,17 +537,25 @@ pub fn build_with_meta(
             terminator
         });
     }
-    let u2c: Vec<(u32, [u8; 7])> = (0..Layout::u2c_count(num_ublocks))
-        .map(|g| {
-            let base = *first.get(g * 8).unwrap_or(&terminator);
-            let mut deltas = [0u8; 7];
-            for (j, d) in deltas.iter_mut().enumerate() {
-                let v = *first.get(g * 8 + 1 + j).unwrap_or(&terminator);
-                *d = v.saturating_sub(base).min(u32::from(u8::MAX)) as u8;
-            }
-            (base, deltas)
-        })
-        .collect();
+    let mut u2c: Vec<(u32, [u8; 7])> = Vec::with_capacity(Layout::u2c_count(num_ublocks));
+    for g in 0..Layout::u2c_count(num_ublocks) {
+        let base = *first.get(g * 8).unwrap_or(&terminator);
+        let mut deltas = [0u8; 7];
+        for (j, d) in deltas.iter_mut().enumerate() {
+            let v = *first.get(g * 8 + 1 + j).unwrap_or(&terminator);
+            // A clamped delta would send the console to the wrong record (as in the Kraken
+            // layout), so a group this dense is refused rather than written wrong.
+            *d = u8::try_from(v.saturating_sub(base)).map_err(|_| {
+                crate::Error::Format(format!(
+                    "ublocks {}..{} hold too many records for the flat layout descriptor; \
+                     build with the block layout (the default) instead",
+                    g * 8,
+                    g * 8 + 8
+                ))
+            })?;
+        }
+        u2c.push((base, deltas));
+    }
 
     // fidx: the afid offsets, then the data end, the metadata base and the mount size.
     let mut fidx: Vec<(u64, u8)> = files
@@ -743,6 +751,32 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A ublock whose records outrun a one-byte delta is refused, not clamped: a clamped delta
+    /// sends the console's read to the wrong record.
+    #[test]
+    fn a_ublock_too_dense_for_its_deltas_is_refused() {
+        // 400 tiny files packed into the first ublock, each opening its own run.
+        let files: Vec<(u64, u64, u64)> = (0..400u64)
+            .map(|i| (i * 16, i * crate::plan::FILE_ALIGN, 16))
+            .collect();
+        let image_len = 401 * crate::plan::FILE_ALIGN;
+        let err =
+            build(image_len, 2 * UBLOCK / BLOCK, &files, 400 * 16, UBLOCK).expect_err("refused");
+        assert!(err.to_string().contains("too many records"), "{err}");
+        // The same files spread one per ublock fit.
+        let spread: Vec<(u64, u64, u64)> = (0..4u64)
+            .map(|i| (i * UBLOCK, i * crate::plan::FILE_ALIGN, 16))
+            .collect();
+        assert!(build(
+            image_len,
+            6 * UBLOCK / BLOCK,
+            &spread,
+            4 * UBLOCK,
+            4 * UBLOCK
+        )
+        .is_ok());
     }
 
     /// The run schedule is the part of a stored image this writer used to omit entirely: without

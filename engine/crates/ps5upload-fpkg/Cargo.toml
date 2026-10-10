@@ -11,6 +11,10 @@ getrandom = "0.4"
 aes = "0.9"
 flate2 = "1"
 crc32fast = "1"
+# Raw LZ4 blocks for AMPR asset packs (already in the tree through smb2).
+lz4_flex = { version = "0.13", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
+# AMPR pack profiles (drakmor's TOML format).
+toml = "1"
 hmac = "0.13"
 sha2 = "0.11"
 # Big-integer modular exponentiation for the debug license signature (pure Rust, every target).

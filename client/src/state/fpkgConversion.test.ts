@@ -273,7 +273,7 @@ describe("fpkg pipeline", () => {
     });
     await useFpkgConversion.getState().buildImage("/games/PPSA1-app", "/out", false);
     await tick();
-    expect(buildImage).toHaveBeenCalledWith("/games/PPSA1-app", "/out", "exfat", false);
+    expect(buildImage).toHaveBeenCalledWith("/games/PPSA1-app", "/out", "exfat", false, undefined);
     expect(useFpkgConversion.getState().pipeline).toMatchObject({
       phase: "running",
       mode: "image",
@@ -335,10 +335,45 @@ describe("fpkg pipeline", () => {
     jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/G.ffpkg", bytes_sent: 9 });
     await useFpkgConversion.getState().buildImage("/games/G", "/out", false, "ffpkg");
     await tick();
-    expect(buildImage).toHaveBeenCalledWith("/games/G", "/out", "ffpkg", false);
+    expect(buildImage).toHaveBeenCalledWith("/games/G", "/out", "ffpkg", false, undefined);
     expect(useFpkgConversion.getState().pipeline).toMatchObject({
       phase: "done",
       packagePath: "/out/G.ffpkg",
+    });
+  });
+
+  it("packs LZ4 assets first when asked, and follows the engine's pack stage", async () => {
+    const buildImage = vi.fn().mockResolvedValue({ job_id: "i3" });
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { buildImage: unknown }).buildImage = buildImage;
+    jobStatus.mockResolvedValueOnce({
+      status: "running",
+      stage: { id: "pack", index: 0, count: 4, done: 5, total: 10 },
+    });
+    const lz4 = { profileToml: "[pack]\n" };
+    await useFpkgConversion.getState().buildImage("/games/A", "/out", false, "exfat", undefined, lz4);
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "running", stage: "pack" });
+    await tick();
+    expect(buildImage).toHaveBeenCalledWith("/games/A", "/out", "exfat", false, lz4);
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      stage: "pack",
+      stageDone: 5,
+      stageTotal: 10,
+    });
+    jobStatus.mockResolvedValueOnce({ status: "done", dest: "/out/A.exfat", bytes_sent: 9 });
+    await tick();
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({ phase: "done", packagePath: "/out/A.exfat" });
+  });
+
+  it("fails at the pack stage when the engine refuses the packs", async () => {
+    const buildImage = vi.fn().mockRejectedValue(new Error("the game's fakelib/libSceAmpr.sprx does not serve asset packs"));
+    const { fpkg } = await import("../api/fpkg");
+    (fpkg as unknown as { buildImage: unknown }).buildImage = buildImage;
+    await useFpkgConversion.getState().buildImage("/games/B", "/out", false, "exfat", undefined, {});
+    expect(useFpkgConversion.getState().pipeline).toMatchObject({
+      phase: "failed",
+      stage: "pack",
+      message: expect.stringContaining("does not serve asset packs"),
     });
   });
 
@@ -356,7 +391,7 @@ describe("fpkg pipeline", () => {
     });
     await useFpkgConversion.getState().buildImage("/games/G", "/out", true, "ffpkg");
     await tick();
-    expect(buildImage).toHaveBeenCalledWith("/games/G", "/out", "ffpkg", true);
+    expect(buildImage).toHaveBeenCalledWith("/games/G", "/out", "ffpkg", true, undefined);
     expect(useFpkgConversion.getState().pipeline).toMatchObject({
       phase: "running",
       mode: "image",

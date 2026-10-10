@@ -1,0 +1,16 @@
+# drakmor's ampr_pack.py packed tests/fixtures/ampr_pack/store with this profile; ours
+# must give byte-identical output.
+[pack]
+default_action = "loose"
+workers = 1
+[groups.assets]
+pack_count = 2
+[[rule]]
+action = "store"
+include = ["d/**"]
+group = "assets"
+[[rule]]
+action = "store"
+include = ["movies/**"]
+block_size = "256KiB"
+layout = "streaming"

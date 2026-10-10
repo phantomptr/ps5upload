@@ -124,5 +124,30 @@ describe("stageRows", () => {
     );
     expect(rows[0]).toMatchObject({ stage: "copy", state: "active" });
   });
-});
 
+  it("shows the pack row only for an image build that packs LZ4 assets", () => {
+    const packing = stageRows(
+      { phase: "running", ...base, mode: "image", stage: "pack", stageDone: 1, stageTotal: 4, stageMs: {} },
+      null,
+    );
+    expect(packing.map((r) => [r.stage, r.state])).toEqual([
+      ["check", "done"],
+      ["pack", "active"],
+      ["plan", "pending"],
+      ["compress", "pending"],
+      ["write", "pending"],
+      ["verify", "pending"],
+    ]);
+    // Past the pack stage it stays listed (and done), into the result.
+    const writing = stageRows(
+      { phase: "running", ...base, mode: "image", stage: "write", stageDone: 0, stageTotal: 0, stageMs: { pack: 5 } },
+      null,
+    );
+    expect(writing[1]).toMatchObject({ stage: "pack", state: "done", ms: 5 });
+    const plain = stageRows(
+      { phase: "running", ...base, mode: "image", stage: "write", stageDone: 0, stageTotal: 0, stageMs: {} },
+      null,
+    );
+    expect(plain.map((r) => r.stage)).not.toContain("pack");
+  });
+});

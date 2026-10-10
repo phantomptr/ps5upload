@@ -10,7 +10,7 @@ import { makesImage } from "../../state/fpkgConversion";
 import type { InstallMethod, Pipeline, PipelineStage } from "../../state/fpkgConversion";
 import { useTr } from "../../state/lang";
 import type { Task } from "../../state/tasks";
-import type { ImageFormat } from "../../api/fpkg";
+import type { AmprPacksReadiness, ImageFormat } from "../../api/fpkg";
 import { overallProgress, stageRows, type StageRow } from "./stages";
 
 export function prettyBytes(n: number): string {
@@ -42,6 +42,7 @@ const LABEL: Record<PipelineStage, [string, string]> = {
   copy: ["fpkg.stage.copy", "Copy from server"],
   extract: ["fpkg.stage.extract", "Unpack archive"],
   check: ["fpkg.stage.check", "Check source"],
+  pack: ["fpkg.stage.pack", "Pack LZ4 assets"],
   plan: ["fpkg.stage.plan", "Plan package"],
   compress: ["fpkg.stage.compress", "Compress"],
   write: ["fpkg.stage.write", "Write package"],
@@ -77,6 +78,8 @@ export interface RunCardProps {
   imageFormat?: ImageFormat;
   imageCompress?: boolean;
   onImageChoice?: (format: ImageFormat, compress: boolean) => void;
+  /** For a libSceAmpr game: the AMPR LZ4 asset-pack option of an .exfat image. */
+  lz4?: Lz4Choice;
   onCancel: () => void;
   /** Install the kept package: streamed from this computer, or uploaded to the PS5 first. */
   onInstall: (method: InstallMethod) => void;
@@ -193,6 +196,7 @@ export function RunCard(props: RunCardProps) {
                 compress={props.imageCompress ?? false}
                 onChoice={(f, c) => props.onImageChoice?.(f, c)}
                 onMake={(compress, format) => props.onMakeImage?.(compress, format)}
+                lz4={props.lz4}
               />
             </div>
           )}
@@ -493,6 +497,96 @@ function ImageUpload({
   );
 }
 
+/** The AMPR LZ4 asset-pack option for a libSceAmpr game's .exfat image. */
+export interface Lz4Choice {
+  /** What the check found about the game's own ampr_emu. */
+  readiness: AmprPacksReadiness;
+  on: boolean;
+  onToggle: (on: boolean) => void;
+  /** A profile read from a .toml file (its name); null packs with the built-in one. */
+  profileName: string | null;
+  onProfile: (profile: { name: string; text: string } | null) => void;
+}
+
+/** Packing replaces .ffpfsc compression: the packs are already compressed, and the engine
+ *  writes them into a plain exFAT image only. */
+export function lz4Active(format: ImageFormat, lz4: Lz4Choice | undefined): boolean {
+  return format === "exfat" && !!lz4?.on && !lz4.readiness.refusal;
+}
+
+function Lz4Option({ lz4 }: { lz4: Lz4Choice }) {
+  const tr = useTr();
+  const refusal = lz4.readiness.refusal;
+  return (
+    <div className="space-y-1" data-testid="lz4-option">
+      <label className="flex items-start gap-2 text-xs">
+        <input
+          type="checkbox"
+          checked={lz4.on && !refusal}
+          disabled={!!refusal}
+          onChange={(e) => lz4.onToggle(e.target.checked)}
+          className="mt-0.5"
+        />
+        <span>
+          <span className="text-[var(--color-text)]">
+            {tr("fpkg.image.lz4", undefined, "AMPR LZ4 asset packs (smaller, for ShadowMount+)")}
+          </span>{" "}
+          <span className="text-[var(--color-muted)]">
+            {tr(
+              "fpkg.image.lz4_body",
+              undefined,
+              "Packs the game's data into LZ4 asset packs that the game's own ampr_emu (fakelib/libSceAmpr.sprx) reads back, so the image is smaller. Executables, system files and already-compressed media stay as they are. Plain .exfat only, without .ffpfsc compression.",
+            )}
+          </span>
+        </span>
+      </label>
+      {refusal ? (
+        <div className="text-xs text-[var(--color-warn)]">
+          {tr("fpkg.image.lz4_unavailable", { reason: refusal }, "Not available for this game: {reason}")}
+        </div>
+      ) : (
+        lz4.readiness.runtime_version && (
+          <div className="text-xs text-[var(--color-muted)]">
+            {tr(
+              "fpkg.image.lz4_runtime",
+              { version: lz4.readiness.runtime_version },
+              "The game's ampr_emu: {version}",
+            )}
+          </div>
+        )
+      )}
+      {lz4.on && !refusal && (
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          {lz4.profileName ? (
+            <>
+              <span className="text-[var(--color-muted)]">
+                {tr("fpkg.image.lz4_profile_named", { name: lz4.profileName }, "Profile: {name}")}
+              </span>
+              <Button variant="ghost" onClick={() => lz4.onProfile(null)}>
+                {tr("fpkg.image.lz4_profile_clear", undefined, "Use the built-in profile")}
+              </Button>
+            </>
+          ) : (
+            <label className="cursor-pointer text-[var(--color-accent)] underline">
+              {tr("fpkg.image.lz4_profile", undefined, "Use a profile (.toml)…")}
+              <input
+                type="file"
+                accept=".toml"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (file) void file.text().then((text) => lz4.onProfile({ name: file.name, text }));
+                }}
+              />
+            </label>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Which image to make: the filesystem (UFS2 .ffpkg, what ShadowMount+ recommends, or exFAT),
  *  and whether to compress it into a .ffpfsc. */
 function ImageChoice({
@@ -501,16 +595,19 @@ function ImageChoice({
   compress,
   onChoice,
   onMake,
+  lz4,
 }: {
   disabled: boolean;
   format: ImageFormat;
   compress: boolean;
   onChoice: (format: ImageFormat, compress: boolean) => void;
   onMake: (compress: boolean, format: ImageFormat) => void;
+  lz4?: Lz4Choice;
 }) {
   const tr = useTr();
   const setFormat = (f: ImageFormat) => onChoice(f, compress);
   const setCompress = (c: boolean) => onChoice(format, c);
+  const packing = lz4Active(format, lz4);
   const options: { id: ImageFormat; label: string; body: string }[] = [
     {
       id: "ffpkg",
@@ -563,7 +660,8 @@ function ImageChoice({
       <label className="flex items-start gap-2 text-xs">
         <input
           type="checkbox"
-          checked={compress}
+          checked={compress && !packing}
+          disabled={packing}
           onChange={(e) => setCompress(e.target.checked)}
           className="mt-0.5"
         />
@@ -580,8 +678,9 @@ function ImageChoice({
           </span>
         </span>
       </label>
-      <Button onClick={() => onMake(compress, format)} disabled={disabled}>
-        {compress
+      {lz4 && format === "exfat" && <Lz4Option lz4={lz4} />}
+      <Button onClick={() => onMake(compress && !packing, format)} disabled={disabled}>
+        {compress && !packing
           ? tr("fpkg.image.make_compressed", undefined, "Make compressed image")
           : tr("fpkg.image.make", undefined, "Make game image")}
       </Button>

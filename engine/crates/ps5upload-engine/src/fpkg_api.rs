@@ -728,6 +728,47 @@ pub(crate) struct ExfatBuildReq {
     /// Write the image straight into a `.ffpfsc` container (no uncompressed copy on disk).
     #[serde(default)]
     compress: bool,
+    /// Pack the game's files into AMPR LZ4 asset packs first (exFAT only, not with `compress`).
+    #[serde(default)]
+    ampr_lz4: Option<AmprLz4Req>,
+}
+
+#[derive(Deserialize, Default)]
+pub(crate) struct AmprLz4Req {
+    /// 1 (fastest) to 12 (smallest); 9 when absent.
+    #[serde(default)]
+    level: Option<u8>,
+    /// The block size in KiB, a power of two from 16 to 1024; 64 when absent.
+    #[serde(default)]
+    block_kib: Option<u32>,
+    /// A profile in drakmor's `ampr_pack` TOML format, used in place of the built-in one.
+    #[serde(default)]
+    profile_toml: Option<String>,
+}
+
+impl AmprLz4Req {
+    /// The packing options, or why they are unusable.
+    fn options(&self) -> Result<crate::image_build::Lz4Packs, String> {
+        let level = self.level.unwrap_or(9);
+        if !(1..=12).contains(&level) {
+            return Err(format!("LZ4 level {level} is not 1 to 12"));
+        }
+        let block = u64::from(self.block_kib.unwrap_or(64)) * 1024;
+        let block_shift =
+            ps5upload_fpkg::ampr_pack::config::block_shift(block).map_err(|e| e.to_string())?;
+        let profile = match self.profile_toml.as_deref() {
+            Some(text) if !text.trim().is_empty() => Some(
+                ps5upload_fpkg::ampr_pack::Config::from_toml(text, None)
+                    .map_err(|e| format!("the LZ4 profile: {e}"))?,
+            ),
+            _ => None,
+        };
+        Ok(crate::image_build::Lz4Packs {
+            profile,
+            level,
+            block_shift,
+        })
+    }
 }
 
 /// POST /api/exfat/build — write a game folder as one `.exfat` or `.ffpkg` image ShadowMountPlus
@@ -752,6 +793,21 @@ pub(crate) async fn exfat_build_handler(
         Ok(f) => f,
         Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
     };
+    let packs = match &req.ampr_lz4 {
+        None => None,
+        Some(_) if format != crate::image_build::ImageFormat::Exfat || req.compress => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                "LZ4 asset packs go into a plain exFAT image: choose exFAT and turn off .ffpfsc \
+                 compression",
+            )
+            .into_response()
+        }
+        Some(r) => match r.options() {
+            Ok(p) => Some(p),
+            Err(e) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
+        },
+    };
     let out_dir = output_dir(req.output_dir.as_deref());
     let (out_name, inner_name) = crate::image_build::output_names(&source, format, req.compress);
     let output = out_dir.join(out_name);
@@ -770,9 +826,21 @@ pub(crate) async fn exfat_build_handler(
         .into_response();
     }
     let scan_source = source.clone();
-    let tree = match tokio::task::spawn_blocking(move || FolderSource::open(&scan_source)).await {
+    let check_packs = packs.is_some();
+    let scanned = tokio::task::spawn_blocking(move || {
+        let mut tree = FolderSource::open(&scan_source).map_err(|e| e.to_string())?;
+        // Refused here, before a job exists, when the game cannot use the packs.
+        if check_packs {
+            if let Some(why) = ps5upload_fpkg::ampr_pack::image::refusal(&mut tree) {
+                return Err(why);
+            }
+        }
+        Ok(tree)
+    })
+    .await;
+    let tree = match scanned {
         Ok(Ok(t)) => t,
-        Ok(Err(e)) => return json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        Ok(Err(e)) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
         Err(e) => {
             return json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
         }
@@ -840,33 +908,51 @@ pub(crate) async fn exfat_build_handler(
     let partial_out = PathBuf::from(format!("{}.partial", output.display()));
     tokio::task::spawn_blocking(move || {
         let writing = Writing::new(partial_out);
+        let spooling = Writing::new(crate::image_build::lz4_spool(&output));
         sweep_output_leftovers(&out_dir);
         let mut tree = tree;
-        const IMAGE_STAGES: [&str; 3] = ["plan", "write", "verify"];
-        let outcome = crate::image_build::build(
-            format,
-            inner_name.as_deref(),
-            &mut tree,
-            &output,
-            &cancel,
-            &mut |id, done, total| {
-                if id != "verify" {
-                    bytes.store(done, Ordering::Relaxed);
-                }
-                let index = IMAGE_STAGES
-                    .iter()
-                    .position(|s| *s == id || (id == "compress" && *s == "write"))
-                    .unwrap_or(0) as u32;
-                *current.lock().unwrap_or_else(|e| e.into_inner()) = Some(JobStage {
-                    id: id.to_string(),
-                    index,
-                    count: IMAGE_STAGES.len() as u32,
-                    done,
-                    total,
-                });
-            },
-        );
+        // With LZ4 packs the build packs first; the stage list says so.
+        let stages: &[&str] = if packs.is_some() {
+            &["pack", "plan", "write", "verify"]
+        } else {
+            &["plan", "write", "verify"]
+        };
+        let mut report = |id: &str, done: u64, total: u64| {
+            if id != "verify" {
+                bytes.store(done, Ordering::Relaxed);
+            }
+            let index = stages
+                .iter()
+                .position(|s| *s == id || (id == "compress" && *s == "write"))
+                .unwrap_or(0) as u32;
+            *current.lock().unwrap_or_else(|e| e.into_inner()) = Some(JobStage {
+                id: id.to_string(),
+                index,
+                count: stages.len() as u32,
+                done,
+                total,
+            });
+        };
+        let outcome = match &packs {
+            Some(packs) => crate::image_build::build_packed(
+                format,
+                &mut tree,
+                &output,
+                packs,
+                &cancel,
+                &mut report,
+            ),
+            None => crate::image_build::build(
+                format,
+                inner_name.as_deref(),
+                &mut tree,
+                &output,
+                &cancel,
+                &mut report,
+            ),
+        };
         drop(writing);
+        drop(spooling);
         if outcome.is_err() {
             sweep_output_leftovers(&out_dir);
         }
@@ -1022,18 +1108,28 @@ pub(crate) fn sweep_output_leftovers(out: &Path) {
     let Ok(entries) = std::fs::read_dir(out) else {
         return;
     };
-    let stale: Vec<PathBuf> = {
+    let (stale, spools): (Vec<PathBuf>, Vec<PathBuf>) = {
         let active = active_partials().lock().unwrap_or_else(|e| e.into_inner());
         entries
             .flatten()
-            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
-            .filter(|e| e.file_name().to_str().is_some_and(is_our_partial))
+            .filter(|e| {
+                let name = e.file_name().to_string_lossy().to_ascii_lowercase();
+                match e.file_type() {
+                    Ok(t) if t.is_file() => is_our_partial(&name),
+                    // An LZ4 image build's pack volumes, `<name>.exfat.lz4spool/`.
+                    Ok(t) if t.is_dir() => name.ends_with(".exfat.lz4spool"),
+                    _ => false,
+                }
+            })
             .map(|e| e.path())
             .filter(|p| !active.contains(p))
-            .collect()
+            .partition(|p| p.is_file())
     };
     for p in stale {
         remove_file_retrying(&p);
+    }
+    for p in spools {
+        let _ = std::fs::remove_dir_all(&p);
     }
 }
 
@@ -1385,7 +1481,47 @@ mod extract_tests {
         drop(writing);
         sweep_output_leftovers(&out);
         assert!(!out.join("D.ffpkg.partial").exists());
+
+        // An LZ4 build's pack spool goes too, unless its build is running.
+        std::fs::create_dir_all(out.join("E.exfat.lz4spool")).unwrap();
+        std::fs::write(out.join("E.exfat.lz4spool/ampr_assets-000.pak"), b"x").unwrap();
+        std::fs::create_dir_all(out.join("F.exfat.lz4spool")).unwrap();
+        let spooling = Writing::new(out.join("F.exfat.lz4spool"));
+        sweep_output_leftovers(&out);
+        assert!(!out.join("E.exfat.lz4spool").exists());
+        assert!(out.join("F.exfat.lz4spool").exists());
+        drop(spooling);
         let _ = std::fs::remove_dir_all(&out);
+    }
+
+    #[test]
+    fn lz4_options_are_checked_before_a_job_starts() {
+        let ok = AmprLz4Req::default().options().unwrap();
+        assert_eq!((ok.level, ok.block_shift), (9, 16));
+        assert!(ok.profile.is_none());
+        let bad = |r: AmprLz4Req| r.options().err().unwrap();
+        assert!(bad(AmprLz4Req {
+            level: Some(13),
+            ..Default::default()
+        })
+        .contains("13"));
+        assert!(bad(AmprLz4Req {
+            block_kib: Some(48),
+            ..Default::default()
+        })
+        .contains("power of two"));
+        assert!(bad(AmprLz4Req {
+            profile_toml: Some("[pack]\ncompression_level = 0".into()),
+            ..Default::default()
+        })
+        .starts_with("the LZ4 profile"));
+        let custom = AmprLz4Req {
+            profile_toml: Some("[[rule]]\naction = \"store\"\ninclude = [\"d/**\"]".into()),
+            ..Default::default()
+        }
+        .options()
+        .unwrap();
+        assert_eq!(custom.profile.unwrap().rules.len(), 1);
     }
 
     #[test]

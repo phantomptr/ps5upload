@@ -272,15 +272,23 @@ pub fn drm_type_override() -> Option<u32> {
     u32::from_str_radix(v.trim_start_matches("0x"), 16).ok()
 }
 
-/// The container's `(content_type, content_flags)` for an application package, from its
-/// `param.json`'s `applicationCategoryType`.
+/// The container's `(content_type, content_flags)` for a package, from its `param.json`.
 ///
-/// Measured on Publishing Tools packages: a game (category 0, Spider-Man 2) is `0x20` /
-/// `0x0202_0000`, an app (category 65536: the Web Browser, YouTube) `0x26` / `0x0602_0000`.
-/// Every package here used the app pair, copied from the Web Browser, so games went out
-/// labelled as apps. A param.json that names no category is a game: 0 is the default.
+/// Measured on Publishing Tools packages: a game (`applicationCategoryType` 0: Spider-Man 2,
+/// Stellar Blade, Black Myth Wukong) is `0x20` / `0x0202_0000`, an app (category 65536: the Web
+/// Browser, YouTube) `0x26` / `0x0602_0000`, and additional content `0x21` / `0x0a02_0000`
+/// (all seven DLC packages read, from four publishers). A DLC's param.json names neither an
+/// `applicationCategoryType` nor an `applicationDrmType`, which every game's and app's does;
+/// that is how one is told apart. A param.json with a category but no DRM type, or a DRM type
+/// but no category, is still a game.
 pub fn content_class(param_json: &[u8]) -> (u32, u32) {
-    let category = crate::source::parse_param_json(param_json)
+    let json = crate::source::parse_param_json(param_json);
+    let has = |key: &str| json.as_ref().is_some_and(|j| j.get(key).is_some());
+    if json.is_some() && !has("applicationCategoryType") && !has("applicationDrmType") {
+        return (0x21, 0x0a02_0000);
+    }
+    let category = json
+        .as_ref()
         .and_then(|j| j.get("applicationCategoryType").and_then(|v| v.as_u64()))
         .unwrap_or(0);
     if category == 0 {
@@ -765,6 +773,29 @@ pub fn write(p: &CntParams) -> Result<Container> {
 mod tests {
     use super::*;
     use crate::crypto::DEFAULT_PASSCODE;
+
+    /// The pairs read from Publishing Tools packages: a game, an app, and a DLC, whose
+    /// param.json (trimmed from Clair Obscur's Deluxe Edition Upgrade) names no category or
+    /// DRM type.
+    #[test]
+    fn the_content_class_follows_the_param_json() {
+        let game = br#"{"applicationCategoryType": 0, "applicationDrmType": "standard"}"#;
+        let app = br#"{"applicationCategoryType": 65536, "applicationDrmType": "free"}"#;
+        let dlc = br#"{"contentId": "EP7579-PPSA17599_00-EXP33DLC10000PS5", "contentVersion":
+            "01.000.000", "masterVersion": "01.00", "titleId": "PPSA17599",
+            "requiredSystemSoftwareVersion": "0x0000000000000000", "localizedParameters":
+            {"defaultLanguage": "en-US", "en-US": {"titleName": "Deluxe Edition Upgrade"}}}"#;
+        assert_eq!(content_class(game), (0x20, 0x0202_0000));
+        assert_eq!(content_class(app), (0x26, 0x0602_0000));
+        assert_eq!(content_class(dlc), (0x21, 0x0a02_0000));
+        // Either key alone keeps it an application; an unreadable file stays a game.
+        assert_eq!(
+            content_class(br#"{"applicationDrmType": "standard"}"#).0,
+            0x20
+        );
+        assert_eq!(content_class(br#"{"applicationCategoryType": 0}"#).0, 0x20);
+        assert_eq!(content_class(b"not json").0, 0x20);
+    }
 
     // A test fixture: every field of the parameters with defaults for the fixed ones.
     #[allow(clippy::too_many_arguments)]
