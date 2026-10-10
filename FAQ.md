@@ -28,8 +28,7 @@ the app over **AVA1**, one encrypted connection on port 9120.
 - **Health check and speed test**: checks the PS5, the app and the network between them, says
   what to fix, and measures how fast files move.
 - **Mount** `.exfat` / `.ffpkg` images, **register and launch** games, browse and manage files.
-- **Cheats, fan curve, hardware view, power and wake, payload sender, backport tools,** and an
-  optional FTP server on the PS5.
+- **Cheats, fan curve, hardware view, power and wake, payload sender and backport tools.**
 
 **Q: What does it NOT do?**
 Install **system packages** (NPXS Store or Settings updates): the PS5 freezes its installer
@@ -61,10 +60,12 @@ connection. After a reboot or rest mode the payloads are gone, so load them
 again.
 
 **Q: Which payloads must be running before I install a package?**
-**nanoDNS**, **kstuff**, **ftpsrv-ps5** and **ShadowMount+**, plus the ps5upload helper. nanoDNS
-and ftpsrv-ps5 are not in the Setup wizard; send them from **Payloads**. ps5upload's own
-transfers and Convert do not use ftpsrv-ps5. If an install is refused, first check that kstuff
-is running.
+In this order: **kstuff** (the build with PS5 fake-package support), **a53_ppr_install_fast.elf**
+(needed for PS5 fake packages) and **ShadowMount+**, plus the ps5upload helper. **Install
+Package** shows the same list next to its Install button. Many setups also run **nanoDNS** (keeps
+the console away from PSN and update servers) and **ftpsrv-ps5**; send those from **Payloads**.
+ps5upload itself does not use ftpsrv-ps5. If an install is refused, first check that kstuff is
+running.
 
 **Q: Which firmware limits apply to what I install?**
 - **PS5 fake *game* packages install above firmware 11.60 (including 13.60) but are not
@@ -83,8 +84,8 @@ is running.
    loaded by another tool), enter it in the app once to pair.
 6. Open **Upload**, choose your game, pick the drive and click **Start**. The free-space check
    runs before anything is sent.
-7. Open **Library** to see it. For a `.pkg`, use **Install Package → Stream & install**. If it
-   will not launch, see "My uploaded game won't launch".
+7. Open **Games → Game files** to see it. For a `.pkg`, use **Install Package → Stream &
+   install**. If it will not launch, see "My uploaded game won't launch".
 
 ---
 
@@ -792,7 +793,7 @@ Not anymore. When you upload a game folder, **"Add to PS5 home screen
 when done"** is on by default — the game is registered automatically the
 moment the transfer finishes (also from the upload queue), ready to
 launch. If that step ever fails the upload itself is unaffected; open
-the **Library** and choose **"Add to home screen"** on the row (this is
+**Games → Game files** and choose **"Add to home screen"** on the row (this is
 the action formerly called "Register").
 
 **Q: Where do uploads go by default?**
@@ -843,8 +844,8 @@ The app asks: **Override**, **Resume**, or **Cancel**.
 Set **Settings → Always overwrite** if you want to skip the prompt.
 
 **Q: Can I upload a disk image?**
-Yes. Drop any `.exfat` or `.ffpkg` image. After upload, open the
-**Library** tab and hit **Mount** on the row — the payload attaches
+Yes. Drop any `.exfat` or `.ffpkg` image. After upload, open
+**Games → Game files** and hit **Mount** on the row — the payload attaches
 the image via `/dev/lvd*` and mounts it at `/mnt/ps5upload/<name>/`.
 The Volumes tab shows the result with a progress bar and Unmount
 button.
@@ -873,9 +874,9 @@ No. The archive is decompressed and sent at the same time, so you only need room
 you already have. The `PS5UPLOAD_ARCHIVE_STAGE_MB` and `PS5UPLOAD_ZIP_RAM_THRESHOLD_MB` variables
 are accepted for old setups but do nothing.
 
-**Q: Why does the Library sometimes show a game twice?**
+**Q: Why does Games → Game files sometimes show a game twice?**
 If the same title is present both as a folder on disk and inside a
-mounted disk image, both paths appear — but Library dedupes by
+mounted disk image, both paths appear — but the list dedupes by
 `title_id` and prefers the mount-backed path. Refresh the tab if
 something still looks off.
 
@@ -888,18 +889,19 @@ queued item interrupted by a crash picks up cleanly when you
 press Start again. Tick **Continue on failure** to keep going
 when one item fails instead of stopping the whole batch.
 
-**Q: How do I jump between volumes in the File System tab?**
+**Q: How do I jump between volumes in the File System screen?**
 The **Volume** dropdown above the breadcrumb lists every writable volume with its free space.
 Pick one to jump to its root.
 
-**Q: Does the File System tab remember where I was last?**
+**Q: Does the File System screen remember where I was last?**
 Yes, per console. The PS5 IP is remembered too.
 
 **Q: Where can I see what is running across screens?**
 The strip at the bottom of the window shows every in-flight operation (uploads, downloads, copy,
-paste, delete, Library actions) with elapsed time, progress and speed. Copy and paste, Add files
+paste, delete, game actions) with elapsed time, progress and speed. Copy and paste, Add files
 and "Finishing on the console" show progress and an ETA, and **Cancel copy** stops a console copy
-and cleans up only what it created. Click the strip for the full Activity tab.
+and cleans up only what it created. Click the strip for the full **Tasks** screen; its **History**
+and **Stats** tabs cover the last 100 operations.
 
 **Q: My big upload stopped partway through. What now?**
 A dropped connection, a helper restart or rest mode no longer ends the job: the app waits for the
@@ -926,20 +928,20 @@ To avoid interruptions on long transfers:
 ShadowMount+ mounts game **image files** (`.ffpkg` / `.exfat` / `.ffpfs`), not loose folders. Two
 ways forward:
 
-- **Register the folder in ps5upload.** In **Library**, on a folder with `eboot.bin` and
+- **Register the folder in ps5upload.** In **Games → Game files**, on a folder with `eboot.bin` and
   `sce_sys/param.json` at its root, click **Register**, then **Launch**. If a PSN- or
   disc-extracted dump fails with a DRM error, use **Register (patch DRM)**. If the home-screen tile
   is blank, enable the ShadowMount+ metadata healer in ps5upload.
 - **Give ShadowMount+ an image.** Upload the game as an `.exfat` or `.ffpkg` image.
 
-**Library → ShadowMount+ panel → debug log** shows why a given item did not mount.
+**Games → Game files → ShadowMount+ panel → debug log** shows why a given item did not mount.
 
 **Q: How do I find one game in a long library?**
-Use the search bar in **Library**: a name fragment, a title ID prefix (`PPSA…`, `CUSA…`) or a path
+Use the search bar in **Games → Game files**: a name fragment, a title ID prefix (`PPSA…`, `CUSA…`) or a path
 fragment. Several words must all match.
 
 **Q: Can I pick where a `.exfat` / `.ffpkg` mounts?**
-Yes. The Library **Mount** button opens a dialog with a volume, a subpath and a name (taken from
+Yes. The **Mount** button in **Games → Game files** opens a dialog with a volume, a subpath and a name (taken from
 the image filename). Your last choice is remembered per console. Some PS5 game scanners only look
 in `/mnt/ps5upload/`, so the dialog warns when you mount elsewhere.
 
@@ -947,7 +949,7 @@ in `/mnt/ps5upload/`, so the dialog warns when you mount elsewhere.
 Expected: mounts are held by the PS5 kernel and survive helper restarts. Only a PS5 reboot clears
 them. On startup the helper unmounts any mount whose backing device is gone.
 
-**Q: The Library has a `MOUNTED` badge on a `.exfat` file. What does
+**Q: Games → Game files has a `MOUNTED` badge on a `.exfat` file. What does
 that mean?**
 The file is currently attached at `/mnt/ps5upload/<name>/`, and the
 Mount button has flipped to Unmount. The Volumes tab shows the
@@ -961,7 +963,7 @@ or apply a backport patch?**
 Yes. Mount the image **read-write**, then edit it in the **File System**
 tab like any other folder on the console.
 
-- **Library → the image → Mount**, and leave **"Mount read-only"**
+- **Games → Game files → the image → Mount**, and leave **"Mount read-only"**
   unchecked. (In the upload flow the same choice is the *"Mount
   read-only"* sub-option under *Mount after upload*.)
 - Browse to the mount — it appears under `/mnt/ps5upload/<name>`.
@@ -991,7 +993,7 @@ the app tells you the mount came back read-only, and writes will fail
 until you convert or re-create the image.
 
 **Q: ShadowMount+ mounts my game read-only — how do I edit it?**
-Use **Library → the image → ⋯ → Edit files…**. That is a *checkout*: the
+Use **Games → Game files → the image → ⋯ → Edit files…**. That is a *checkout*: the
 app moves the image out of ShadowMount+'s scan folder, waits for
 ShadowMount+ to let go of it, and mounts it read-write where you choose.
 When you press **Finish editing** it unmounts (which is what flushes your
@@ -1025,7 +1027,7 @@ No — the kernel refuses with `EBUSY` because a process inside the
 mount has files open. The UI surfaces this as: *"the game inside
 this image is currently running on the PS5. Exit it (PS Home →
 close the game) and try again."* Same protection applies whether
-you trigger Unmount from the Library tab or the Volumes tab.
+you trigger Unmount from Games → Game files or the Volumes screen.
 
 ---
 
@@ -1044,7 +1046,7 @@ refuses to start the title. Check these in order.
    before its update or DLC. A package that needs an entitlement the console
    does not have will always show "View product".
 3. **kstuff or ShadowMount+ is not running.** Launching needs kernel access.
-   The Installed screen says when the helper has none; load kstuff and
+   **Games → Ready to play** says when the helper has none; load kstuff and
    reconnect. Disc-image titles need ShadowMount+ running.
 4. **Convert to exFAT + ShadowMount+ (reported working on FW 13.60).** Put the
    decrypted game folder on the console's drive (or convert it to an `.exfat`
@@ -1212,8 +1214,8 @@ Open **Convert Games**, pick a decrypted game folder or an `.exfat` / `.ffpkg` i
 checks it has what a launchable package needs and builds a fake package on your computer,
 compressed the way Sony's packages are. It reads games from the console through the helper, so
 ftpsrv is not needed. Then choose **Stream install** or **Upload & install**, or keep the package.
-The console needs kstuff, `a53_ppr_install_fast.elf` and `shadowmountplus.elf` loaded first. Keep
-the game files you converted from.
+Before installing it, load the payloads under "Which payloads must be running before I install a
+package?". Keep the game files you converted from.
 
 **Q: How do I turn a game folder into a game image (`.ffpkg`, `.exfat`, `.ffpfs` or `.ffpfsc`)?**
 Open **Convert Games**, pick the game folder on your computer, and under "Or make a game image
@@ -1520,46 +1522,26 @@ For save data specifically, use the Save data screen.
 
 ---
 
-## FTP, SMB, metadata, and backport helpers
+## Servers, safe moves, and backport helpers
 
-**Q: My FTP client says "Cannot rename across devices". Why?**
+**Q: Why can't I rename a file from one PS5 drive to another?**
 
 Because the alternative was crashing your console.
 
 On the PS5, renaming a file from one drive to another (say a USB drive to
 internal storage) doesn't fail cleanly the way it does on a PC — it panics
-the kernel and locks the console up hard. Many FTP clients implement
-"move" as a rename, so dragging a file between two folders on different
-drives would trigger it.
+the kernel and locks the console up hard.
 
-The server now checks first and refuses with a 553 instead. To move a file
-between drives, copy it to the new location and delete the original —
-that's byte-level I/O and is perfectly safe. Renaming *within* one drive
-still works normally.
+So ps5upload never does it. **Move to…** in File System and the game
+screens copies the file to the other drive, checks the copy is whole, then
+deletes the original; `mv` in the Shell screen refuses a cross-drive rename.
+Renaming *within* one drive works normally.
 
-The same protection applies to the File Manager and to `mv` in the Shell
-screen.
-
-**Q: What is the FTP Server screen for?**
-It starts a small **FTP server on the PS5** (like `ftpsrv.elf`), so
-FileZilla, curl, or another PC can connect **to the console**. Default
-port is **2122** so it does not fight with ftpsrv on **2121**. Use this
-for interop with other tools — for bulk game uploads, prefer the
-Upload tab (AVA1 is faster and resumes).
-
-**Q: What is the SMB Browser for?**
-It browses a **Windows share or Samba NAS from your computer** (not
-on the PS5). You can download a file to this PC, or **upload a file
-or whole folder straight to the PS5** in one step: the engine streams
-straight to the PS5 over AVA1, resuming if the link drops. Destination
-works like Upload — set a parent path such as `/data/homebrew` and the
-source name is appended.
-
-**Q: What is Game Metadata (was “TMDB”)?**
-Not The Movie Database. It looks up a title ID’s display name. Names
-come from the console’s app database when the title is installed;
-the old PlayStation Store scrape no longer works. Most users never
-need this screen — Library already shows titles.
+**Q: What is the Connections screen for?**
+It keeps your **NAS and servers** (SMB, FTP, FTPS, SFTP) in one place. Anywhere you browse for a
+game or file, pick from them with the ▾ next to **Browse**: upload a file or folder from a share
+straight to the PS5, or install a package from it, without copying it to this computer first.
+The Collection can also scan a saved server in place.
 
 **Q: SDK Changer vs Fakelib / BackPork — is that “backport”?**
 Related halves of a workflow, not one magic button:
@@ -1668,7 +1650,7 @@ The payload may have wedged on a Sony API call. Recovery:
   `ps5upload.elf`; otherwise it connects and drops after a few seconds.
 - Your computer and the PS5 need a route to each other but not the same subnet.
 
-**Q: Launch from the Library did nothing.**
+**Q: Launch from Games did nothing.**
 Launch starts the game; the first start can take a while. If it never appears, close it from the
 PS5 and start it there. See "My uploaded game won't launch".
 

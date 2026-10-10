@@ -38,7 +38,7 @@
   and video clips; register, launch, stop and uninstall games; copy, move (Move to…),
   delete, set permissions.
 - **Cheats, fan curve, hardware view,** Remote Play pairing, payload sender with a catalogue
-  and playlists, backport tools, and an optional FTP server on the PS5.
+  and playlists, and backport tools.
 - **Power.** Rest mode, reboot, shut down, and wake over the network (optionally straight
   into your signed-in user).
 - **Runs everywhere:** macOS, Windows, Linux, Android, or any browser through the self-hosted
