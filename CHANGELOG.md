@@ -4,6 +4,24 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.8.0
+
+### New
+
+- **Send files from one console to another (#433).** In Files, select files or folders and choose
+  **Send to another console…** (in the toolbar or a row's menu). Pick the console and the folder
+  on it; before anything runs you see whether it fits and which names already there get replaced.
+  Each item is queued on that console as a copy, and the originals stay where they are. The queue
+  row says where it came from.
+- **Straight between the consoles (Beta).** When the two consoles can reach each other, the copy
+  now goes directly from one to the other instead of through this computer, so the computer's
+  network and disk no longer slow it down. When they can't (different networks, an older helper,
+  a firewall), it goes through this computer as before, and the queue row says which way it went
+  and why. Both routes pick up where the other left off. Both consoles need the 6.8.0 helper for
+  the direct route.
+
+---
+
 ## 6.7.4
 
 ### Fixed
