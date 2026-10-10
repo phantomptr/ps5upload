@@ -4,12 +4,15 @@
 import { ArrowDown, ArrowUp, ListPlus, X } from "lucide-react";
 
 import { Button, Card, Toggle } from "../../components";
-import type { ConvertItem, ConvertThen } from "../../state/convertQueue";
+import { buildExtension, type ConvertBuild, type ConvertItem, type ConvertThen } from "../../state/convertQueue";
 import { useTr } from "../../state/lang";
 
 export interface QueueCardProps {
   items: ConvertItem[];
   running: boolean;
+  /** What the next games added become: a package, or the image picked under ③. */
+  build: ConvertBuild;
+  onBuild: (kind: "pkg" | "image") => void;
   then: ConvertThen;
   onThen: (t: ConvertThen) => void;
   deleteAfter: boolean;
@@ -44,6 +47,8 @@ export function QueueCard(p: QueueCardProps) {
     failed: tr("cq_failed", undefined, "Failed"),
   };
   const pending = p.items.filter((i) => i.status === "pending").length;
+  const isImage = p.build.kind === "image";
+  const image = isImage ? p.build : null;
   const finished = p.items.some((i) => i.status === "done" || i.status === "failed" || i.status === "handed");
   return (
     <Card>
@@ -70,29 +75,75 @@ export function QueueCard(p: QueueCardProps) {
 
         <div className="flex flex-wrap items-center gap-3 text-sm">
           <label className="flex items-center gap-2">
+            {tr("cq_build", undefined, "Make")}
+            <select
+              value={p.build.kind}
+              onChange={(e) => {
+                const kind = e.target.value as "pkg" | "image";
+                p.onBuild(kind);
+                if (kind === "image" && p.then === "stream") p.onThen("upload");
+              }}
+              className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-sm"
+              data-testid="cq-build"
+            >
+              <option value="pkg">{tr("cq_build_pkg", undefined, "A package (.pkg)")}</option>
+              <option value="image">
+                {tr(
+                  "cq_build_image",
+                  { ext: buildExtension(image ?? { kind: "image", format: "ffpkg", compress: false }) },
+                  "A game image ({ext})",
+                )}
+              </option>
+            </select>
+          </label>
+          <label className="flex items-center gap-2">
             {tr("cq_after", undefined, "After converting")}
             <select
               value={p.then}
               onChange={(e) => p.onThen(e.target.value as ConvertThen)}
               className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-sm"
             >
-              <option value="keep">{tr("cq_then_keep", undefined, "Keep the package")}</option>
-              <option value="stream" disabled={!p.canInstall}>
-                {tr("cq_then_stream", undefined, "Stream & install")}
-              </option>
-              <option value="upload" disabled={!p.canInstall}>
-                {tr("cq_then_upload", undefined, "Upload & install")}
-              </option>
+              {isImage ? (
+                <>
+                  <option value="keep">{tr("cq_then_keep_image", undefined, "Keep the image")}</option>
+                  <option value="upload" disabled={!p.canInstall}>
+                    {tr("cq_then_upload_image", undefined, "Upload it to the PS5")}
+                  </option>
+                </>
+              ) : (
+                <>
+                  <option value="keep">{tr("cq_then_keep", undefined, "Keep the package")}</option>
+                  <option value="stream" disabled={!p.canInstall}>
+                    {tr("cq_then_stream", undefined, "Stream & install")}
+                  </option>
+                  <option value="upload" disabled={!p.canInstall}>
+                    {tr("cq_then_upload", undefined, "Upload & install")}
+                  </option>
+                </>
+              )}
             </select>
           </label>
           {p.then !== "keep" && (
             <Toggle
               checked={p.deleteAfter}
               onChange={p.onDeleteAfter}
-              label={tr("cq_delete_after", undefined, "Delete the package once installed")}
+              label={
+                isImage
+                  ? tr("cq_delete_after_image", undefined, "Delete the image once it is on the PS5")
+                  : tr("cq_delete_after", undefined, "Delete the package once installed")
+              }
             />
           )}
         </div>
+        {isImage && (
+          <div className="-mt-1 text-xs text-[var(--color-muted)]">
+            {tr(
+              "cq_image_hint",
+              undefined,
+              "The image is the one picked under ③. Only game folders on this computer can become images.",
+            )}
+          </div>
+        )}
 
         <div className="flex flex-wrap gap-2">
           <Button size="sm" disabled={!p.canAddCurrent} onClick={p.onAddCurrent}>
@@ -113,8 +164,16 @@ export function QueueCard(p: QueueCardProps) {
             {p.items.map((i, idx) => (
               <li key={i.id} className="flex items-center gap-2 px-3 py-2 text-sm">
                 <div className="min-w-0 flex-1">
-                  <div className="truncate font-medium" title={i.source}>
-                    {nameOf(i.source)}
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <span className="truncate font-medium" title={i.source}>
+                      {nameOf(i.source)}
+                    </span>
+                    <span
+                      className="shrink-0 rounded bg-[var(--color-surface-3)] px-1.5 py-px font-mono text-[10px] text-[var(--color-muted)]"
+                      data-testid="cq-ext"
+                    >
+                      {buildExtension(i.build)}
+                    </span>
                   </div>
                   <div
                     className={`truncate text-xs ${i.status === "failed" ? "text-[var(--color-bad)]" : "text-[var(--color-muted)]"}`}

@@ -73,6 +73,10 @@ export interface RunCardProps {
   /** The source is a game folder on this computer: write it as an image (`compress`: then
    *  compress it into a .ffpfsc). Absent when it cannot be made into one from here. */
   onMakeImage?: (compress: boolean, format: ImageFormat) => void;
+  /** The image picked (format, compressed): also what the queue makes when it makes images. */
+  imageFormat?: ImageFormat;
+  imageCompress?: boolean;
+  onImageChoice?: (format: ImageFormat, compress: boolean) => void;
   onCancel: () => void;
   /** Install the kept package: streamed from this computer, or uploaded to the PS5 first. */
   onInstall: (method: InstallMethod) => void;
@@ -185,6 +189,9 @@ export function RunCard(props: RunCardProps) {
               </div>
               <ImageChoice
                 disabled={props.canConvert === false}
+                format={props.imageFormat ?? "ffpkg"}
+                compress={props.imageCompress ?? false}
+                onChoice={(f, c) => props.onImageChoice?.(f, c)}
                 onMake={(compress, format) => props.onMakeImage?.(compress, format)}
               />
             </div>
@@ -490,14 +497,20 @@ function ImageUpload({
  *  and whether to compress it into a .ffpfsc. */
 function ImageChoice({
   disabled,
+  format,
+  compress,
+  onChoice,
   onMake,
 }: {
   disabled: boolean;
+  format: ImageFormat;
+  compress: boolean;
+  onChoice: (format: ImageFormat, compress: boolean) => void;
   onMake: (compress: boolean, format: ImageFormat) => void;
 }) {
   const tr = useTr();
-  const [format, setFormat] = useState<ImageFormat>("ffpkg");
-  const [compress, setCompress] = useState(false);
+  const setFormat = (f: ImageFormat) => onChoice(f, compress);
+  const setCompress = (c: boolean) => onChoice(format, c);
   const options: { id: ImageFormat; label: string; body: string }[] = [
     {
       id: "ffpkg",

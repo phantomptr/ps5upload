@@ -10,7 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { PackagePlus } from "lucide-react";
 
-import { fpkg, type FpkgEstimates, type FpkgInspection } from "../../api/fpkg";
+import { fpkg, type FpkgEstimates, type FpkgInspection, type ImageFormat } from "../../api/fpkg";
 import { appLaunch } from "../../api/ps5";
 import { Callout, Card, PageHeader } from "../../components";
 import { FakeGameFirmwareNotice } from "../../components/FakeGameFirmwareNotice";
@@ -35,7 +35,7 @@ import { OptionsCard } from "./OptionsCard";
 import { RunCard } from "./RunCard";
 import { SwapJournals } from "./SwapJournals";
 import { QueueCard } from "./QueueCard";
-import { useConvertQueue, type ConvertThen } from "../../state/convertQueue";
+import { useConvertQueue, type ConvertBuild, type ConvertThen } from "../../state/convertQueue";
 import { scanChildren } from "../../lib/folderScan";
 import { classifyScanEntry } from "../../lib/uploadBatch";
 import { usePackageViewer } from "../../state/packageViewer";
@@ -79,16 +79,40 @@ export default function FpkgConvertScreen() {
   const [queueDeleteAfter, setQueueDeleteAfter] = useState(false);
   // Per game, not remembered: the wrong language carried into the next game would be a surprise.
   const [language, setLanguage] = useState("");
-  const queueAdd = (src: string) =>
-    useConvertQueue.getState().add({
+  // The image picked under ③ (format, compressed), and whether the queue makes packages or images.
+  // Touching the image options means an image is wanted: the queue follows (#433 report).
+  const [imageFormat, setImageFormat] = useState<ImageFormat>("ffpkg");
+  const [imageCompress, setImageCompress] = useState(false);
+  const [queueBuild, setQueueBuild] = useState<"pkg" | "image">("pkg");
+  const build: ConvertBuild =
+    queueBuild === "image" ? { kind: "image", format: imageFormat, compress: imageCompress } : { kind: "pkg" };
+  /** "skipped": an image was asked for a source that is not a game folder here. */
+  const queueAdd = (src: string, isFolder: boolean): boolean | "skipped" => {
+    if (build.kind === "image" && !isFolder) return "skipped";
+    const u = useUploadStore.getState();
+    return useConvertQueue.getState().add({
       source: src,
       outputDir: outputDir.trim() || undefined,
       compression,
+      build,
+      imageDest:
+        build.kind === "image"
+          ? { volume: u.destinationVolume, subpath: u.destinationSubpath || DEFAULT_IMAGE_SUBPATH }
+          : undefined,
       language: language || undefined,
       then: queueThen,
       host: queueThen !== "keep" && canInstall ? host : null,
       deleteAfterInstall: queueThen !== "keep" && queueDeleteAfter,
     });
+  };
+  const skippedNote = (n: number) =>
+    setError(
+      tr(
+        "cq_image_folders_only",
+        { count: n },
+        "Only a game folder on this computer can become a game image: {count} skipped.",
+      ),
+    );
   // The console's swap journals are read through these; one set per console.
   const swapDeps = useMemo(() => (canInstall ? consoleSwapDeps(host) : null), [canInstall, host]);
   const installTaskId = pipeline.phase === "running" ? pipeline.installTaskId : null;
@@ -161,7 +185,7 @@ export default function FpkgConvertScreen() {
       setLanguage("");
       void check(path);
     },
-    [check, reset],
+    [check, reset, setSource, setPassword],
   );
 
   const dropActive = useWebviewDrop(chooseSource, !locked);
@@ -396,6 +420,13 @@ export default function FpkgConvertScreen() {
             onConvert={() => run(false)}
             onConvertInstall={() => run(true)}
             onCompress={() => void compress(source.trim(), outputDir.trim() || undefined)}
+            imageFormat={imageFormat}
+            imageCompress={imageCompress}
+            onImageChoice={(f, c) => {
+              setImageFormat(f);
+              setImageCompress(c);
+              setQueueBuild("image");
+            }}
             onMakeImage={
               isLocalFolder
                 ? (thenCompress, format) =>
@@ -439,11 +470,13 @@ export default function FpkgConvertScreen() {
             deleteAfter={queueDeleteAfter}
             onDeleteAfter={setQueueDeleteAfter}
             canInstall={canInstall}
+            build={build}
+            onBuild={setQueueBuild}
             canAddCurrent={!!source.trim() && !noFiles}
             onAddCurrent={() => {
-              if (!queueAdd(source.trim())) {
-                setError(tr("cq_already", undefined, "This game is already in the queue."));
-              }
+              const r = queueAdd(source.trim(), isLocalFolder);
+              if (r === "skipped") skippedNote(1);
+              else if (!r) setError(tr("cq_already", undefined, "This game is already in the queue."));
             }}
             onScanFolder={() =>
               void (async () => {
@@ -452,11 +485,14 @@ export default function FpkgConvertScreen() {
                   : await pickPath({ mode: "folder", title: tr("batch_scan_pick", undefined, "Choose the folder that holds your games") });
                 if (!folder) return;
                 try {
+                  let skipped = 0;
                   for (const e of await scanChildren(folder)) {
                     const name = e.path.split(/[\\/]/).pop() ?? e.path;
                     const kind = classifyScanEntry(name, e.isDir);
-                    if (kind === "folder" || kind === "image" || kind === "archive") queueAdd(e.path);
+                    if (kind === "folder" || kind === "image" || kind === "archive")
+                      if (queueAdd(e.path, kind === "folder") === "skipped") skipped++;
                   }
+                  if (skipped) skippedNote(skipped);
                 } catch (err) {
                   setError(err instanceof Error ? err.message : String(err));
                 }
@@ -468,8 +504,10 @@ export default function FpkgConvertScreen() {
                   title: tr("fpkg.pickImage", undefined, "Choose a game image or archive"),
                   filters: [{ name: "Game image or archive", extensions: ["exfat", "ffpkg", "ffpfs", "ffpfsc", "zip", "7z", "rar"] }],
                 }).catch(() => [] as string[]);
-                const dupes = picked.filter((p) => !queueAdd(p)).length;
-                if (dupes) setError(tr("cq_already", undefined, "This game is already in the queue."));
+                const results = picked.map((p) => queueAdd(p, false));
+                const skipped = results.filter((r) => r === "skipped").length;
+                if (skipped) skippedNote(skipped);
+                else if (results.some((r) => !r)) setError(tr("cq_already", undefined, "This game is already in the queue."));
               })()
             }
             onStart={() => void useConvertQueue.getState().start()}

@@ -17,6 +17,7 @@ import { firmwareLine, GameCard, type GameCardProps } from "./GameCard";
 import { MemoryRouter } from "react-router";
 import { OptionsCard } from "./OptionsCard";
 import { pendingJournals, SwapJournalsView } from "./SwapJournals";
+import type { ConvertBuild, ConvertItem } from "../../state/convertQueue";
 import { QueueCard } from "./QueueCard";
 
 const estimates = {
@@ -186,10 +187,16 @@ describe("unfinished swaps", () => {
 
 describe("QueueCard adding", () => {
   const noop = () => {};
-  const card = (onPickSeveral?: () => void) =>
+  const card = (
+    onPickSeveral?: () => void,
+    build: ConvertBuild = { kind: "pkg" },
+    items: ConvertItem[] = [],
+  ) =>
     renderToStaticMarkup(
       <QueueCard
-        items={[]}
+        items={items}
+        build={build}
+        onBuild={noop}
         running={false}
         then="keep"
         onThen={noop}
@@ -211,5 +218,31 @@ describe("QueueCard adding", () => {
   it("offers picking several images or archives at once", () => {
     expect(card(noop)).toContain("Pick several…");
     expect(card()).not.toContain("Pick several…");
+  });
+  it("says which file each queued game becomes", () => {
+    const item = (id: string, build?: ConvertBuild): ConvertItem => ({
+      id,
+      source: `/games/${id}`,
+      compression: "balanced",
+      then: "keep",
+      host: null,
+      status: "pending",
+      build,
+    });
+    const html = card(undefined, { kind: "pkg" }, [
+      item("old"),
+      item("small", { kind: "image", format: "ffpfs", compress: true }),
+      item("plain", { kind: "image", format: "exfat", compress: false }),
+    ]);
+    expect(html).toContain(".pkg");
+    expect(html).toContain(".ffpfsc");
+    expect(html).toContain(".exfat");
+  });
+
+  it("making images offers keeping or uploading the image, not installing a package", () => {
+    const html = card(undefined, { kind: "image", format: "ffpfs", compress: true });
+    expect(html).toContain("A game image (.ffpfsc)");
+    expect(html).toContain("Keep the image");
+    expect(html).not.toContain("Stream &amp; install");
   });
 });

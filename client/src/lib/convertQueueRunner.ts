@@ -22,6 +22,30 @@ function whenIdle(): Promise<void> {
 async function build(item: ConvertItem) {
   await whenIdle();
   const conv = useFpkgConversion.getState();
+  if (item.build?.kind === "image") {
+    // A game image, in the format picked; sent on to the Upload queue when asked.
+    const send = item.then !== "keep" && !!item.host && !!item.imageDest;
+    await conv.buildImage(
+      item.source,
+      item.outputDir,
+      item.build.compress,
+      item.build.format,
+      send
+        ? {
+            host: item.host!,
+            volume: item.imageDest!.volume,
+            subpath: item.imageDest!.subpath,
+            deleteAfter: !!item.deleteAfterInstall,
+          }
+        : undefined,
+    );
+    await whenIdle();
+    const p = useFpkgConversion.getState().pipeline;
+    // Handed to the Upload queue (or kept): nothing more for this queue to do.
+    if (p.phase === "done") return { ok: true, packagePath: p.packagePath, installed: true };
+    if (p.phase === "failed") return { ok: false, message: p.message };
+    return { ok: false, message: "The build did not start." };
+  }
   // A console dump is swapped for its package inside the build (never installed beside it).
   const swap = item.source.startsWith("ps5://") && item.then !== "keep" && !!item.host;
   await conv.start(

@@ -6,11 +6,21 @@
 import { hostOf } from "../lib/addr";
 import { create } from "zustand";
 
-import type { FpkgCompression } from "../api/fpkg";
+import type { FpkgCompression, ImageFormat } from "../api/fpkg";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 export type ConvertThen = "keep" | "stream" | "upload";
 export type ConvertStatus = "pending" | "running" | "installing" | "handed" | "done" | "failed";
+
+/** What a queued game becomes: an installable package, or a game image (compressed into a
+ *  .ffpfsc when `compress`). Only a game folder can become an image. */
+export type ConvertBuild = { kind: "pkg" } | { kind: "image"; format: ImageFormat; compress: boolean };
+
+/** The file a build makes, by its extension: what the queue row and the add button say. */
+export function buildExtension(build: ConvertBuild | undefined): string {
+  if (!build || build.kind === "pkg") return ".pkg";
+  return build.compress ? ".ffpfsc" : `.${build.format}`;
+}
 
 export interface ConvertItem {
   id: string;
@@ -18,10 +28,15 @@ export interface ConvertItem {
   source: string;
   outputDir?: string;
   compression: FpkgCompression;
+  /** Absent: a package (items queued before images could be). */
+  build?: ConvertBuild;
+  /** An image sent to the PS5 once built (then = "upload"): where it goes. */
+  imageDest?: { volume: string | null; subpath: string };
   firmware?: string;
   /** The one PlayGo language the package declares; every language when absent. */
   language?: string;
-  /** What to do with the package: keep it, or install it (streamed / uploaded first). */
+  /** What to do with the package: keep it, or install it (streamed / uploaded first). An image
+   *  is kept, or ("upload") put in the Upload queue for the PS5. */
   then: ConvertThen;
   /** The console to install on. */
   host: string | null;
