@@ -3,7 +3,12 @@ import { PS5_LOADER_PORT } from "../lib/addr";
 import { isNotPairedError, reportIfNotPaired } from "../lib/consoleSession";
 import { STUCK_LOADER_MESSAGE, waitForLoader } from "../lib/elfldrGuard";
 import { useConnectionStore } from "./connection";
-import { runHelperSend, type HelperSendResult } from "./helperSend";
+import {
+  helperSendFor,
+  runHelperSend,
+  useHelperSendStore,
+  type HelperSendResult,
+} from "./helperSend";
 import type { Translator } from "./lang";
 import { invoke } from "../lib/invokeLogged";
 import { sendHelperOnce, sendInFlight, sentAgoMs } from "../lib/helperSendGate";
@@ -134,4 +139,24 @@ export function sendHelperTo(
           : tr("pairing_title", undefined, "Pair with your PS5"),
     },
   );
+}
+
+/** sendHelperTo for a flow that goes on once the helper is up (Quick bring-up, the setup
+ *  wizard): a send to this console already running is waited out rather than reported as
+ *  "busy". Resolves null when the helper answered, otherwise what the send ended with (an
+ *  unpaired console has had pairing opened by then). */
+export async function sendHelperAndWait(
+  host: string,
+  tr: Translator,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+): Promise<string | null> {
+  const target = host.trim();
+  const result = await sendHelperTo(target, tr);
+  const entry = () => helperSendFor(useHelperSendStore.getState(), target);
+  if (result === "busy") {
+    while (entry()?.state === "busy") await sleep(500);
+  }
+  if (result === "ok") return null;
+  const end = entry();
+  return end?.state === "fail" ? end.msg : null;
 }

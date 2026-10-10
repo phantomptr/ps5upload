@@ -1,8 +1,9 @@
 import { create } from "zustand";
 
 import { hostOf } from "../lib/addr";
-import { bundledPayloadPath, payloadCheck, sendPayload } from "../api/ps5";
 import { PS5_LOADER_PORT } from "./connection";
+import { sendHelperAndWait } from "./helperSendRuntime";
+import type { Translator } from "./lang";
 import { log } from "./logs";
 import {
   runStatusForHost,
@@ -18,15 +19,16 @@ import {
  *
  *   phase "prehelper" — run the configured BRING-UP PLAYLIST (kstuff, SMP, …)
  *                       against the loader (:9021). Optional; skipped if none.
- *   phase "helper"    — send the app's bundled ps5upload helper to the loader.
- *   phase "waiting"   — poll until the helper reports ready.
- *   (then the AUTO-LOADER fires the post-helper playlist on the ready edge.)
+ *   phase "helper"    — send the helper and wait for it to answer, through the same
+ *                       sendHelperTo as Connection's Send helper: it joins a send already
+ *                       under way and opens pairing for an unpaired console.
+ *   (then the post-helper AUTO-LOADER playlist runs.)
  *
  * Status is kept per console (by bare host): each console's Connection screen shows its own, and
  * bringing up one console neither shows on nor blocks another's.
  */
 
-export type BringUpPhase = "prehelper" | "helper" | "waiting";
+export type BringUpPhase = "prehelper" | "helper";
 
 export type BringUpStatus =
   | { kind: "idle" }
@@ -38,7 +40,7 @@ interface BringUpState {
   /** Keyed by bare host. A console with no entry is idle. */
   byHost: Record<string, BringUpStatus>;
   /** Run the full bring-up chain against `host` (a bare ip or ip:port). */
-  run: (host: string) => Promise<void>;
+  run: (host: string, tr: Translator) => Promise<void>;
   reset: (host: string) => void;
 }
 
@@ -49,11 +51,6 @@ export function bringUpStatusFor(s: Pick<BringUpState, "byHost">, host: string):
   return s.byHost[hostOf(host.trim())] ?? IDLE;
 }
 
-/** Helper-ready poll: ~25s total (the helper's ucred elevation + bind can take
- *  a few seconds after a fresh send, especially right after kstuff). */
-const READY_POLL_ATTEMPTS = 25;
-const READY_POLL_INTERVAL_MS = 1000;
-
 export const useBringUpStore = create<BringUpState>((set, get) => ({
   byHost: {},
   reset: (host) =>
@@ -63,7 +60,7 @@ export const useBringUpStore = create<BringUpState>((set, get) => ({
       return { byHost: next };
     }),
 
-  async run(host) {
+  async run(host, tr) {
     const h = host.trim();
     if (!h) return;
     const bare = hostOf(h);
@@ -88,27 +85,11 @@ export const useBringUpStore = create<BringUpState>((set, get) => ({
         }
       }
 
-      // ── Phase 2: send the bundled helper to the loader ───────────────────
+      // ── Phase 2: send the helper and wait for it to answer ───────────────
       phase = "helper";
       put({ kind: "running", host: bare, phase, detail: "" });
-      const elf = await bundledPayloadPath();
-      await sendPayload(h, elf);
-
-      // ── Phase 3: wait for the helper to come up ──────────────────────────
-      phase = "waiting";
-      put({ kind: "running", host: bare, phase, detail: "" });
-      let ready = false;
-      for (let i = 0; i < READY_POLL_ATTEMPTS; i++) {
-        const s = await payloadCheck(h);
-        if (s.reachable) {
-          ready = true;
-          break;
-        }
-        await new Promise<void>((r) =>
-          window.setTimeout(r, READY_POLL_INTERVAL_MS),
-        );
-      }
-      if (!ready) throw new Error("helper did not report ready in time");
+      const failure = await sendHelperAndWait(h, tr);
+      if (failure !== null) throw new Error(failure);
 
       // Run the post-helper auto-loader playlist OURSELVES. We can't rely on
       // AppShell's auto-loader edge here: it only fires on a down→up

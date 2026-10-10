@@ -15,7 +15,6 @@ import {
   payloadsRelease,
   payloadsDownload,
   payloadsLocalPath,
-  bundledPayloadPath,
   sendPayload,
   payloadCheck,
   portCheck,
@@ -25,6 +24,8 @@ import {
 import { mgmtAddr } from "../../lib/addr";
 import { runningChainPayloads, type ChainPayload } from "../../lib/runningChain";
 import { useConnectionStore, PS5_LOADER_PORT } from "../../state/connection";
+import { helperSendFor, useHelperSendStore } from "../../state/helperSend";
+import { sendHelperAndWait } from "../../state/helperSendRuntime";
 import { PageHeader, Button, Spinner } from "../../components";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
@@ -39,10 +40,10 @@ import { selectConsoleByAddress, withConsolePrefix } from "../../state/roster";
  *
  * Sections (each gates the next):
  *   1. Connect       — ip + reachability (uses existing portCheck)
- *   2. Install combo — download + send kstuff → SMP → ps5upload,
- *                      sequenced with the catalogue's autoload delays
- *                      (re-uses payloadsRelease + payloadsDownload +
- *                      sendPayload + payloadCheck primitives)
+ *   2. Install combo — download + send kstuff → SMP, sequenced with the
+ *                      catalogue's autoload delays, then the helper through
+ *                      sendHelperTo (the one send that joins a send under
+ *                      way and opens pairing for an unpaired console)
  *   3. Done          — link to Upload
  *
  * Why no new Tauri commands: the wizard is pure orchestration over
@@ -51,21 +52,15 @@ import { selectConsoleByAddress, withConsolePrefix } from "../../state/roster";
  * the Rust layer with no benefit; the renderer can sequence them
  * with much better progress UX and per-step error recovery.
  *
- * Re-runnable: nothing here is once-only. Users can re-open the
- * wizard from Settings (or just navigate to /first-run) to refresh
- * a stuck setup, e.g. after a PS5 reboot.
+ * Re-runnable: nothing here is once-only. Connection offers the wizard
+ * whenever the helper is not loaded (e.g. after a PS5 reboot), which is
+ * when re-running it is useful.
  */
 
 type StepState = "idle" | "busy" | "ok" | "fail";
 
 const KSTUFF_CURRENT = "kstuff-echostretch";
 const SMP_ID = "shadowmountplus";
-
-/** When the bundled-ps5upload extraction populated cache, this is
- *  the conventional filename `probes.rs::find_bundled_payload` writes. */
-function isBundledPs5UploadAvailable(path: string | null): boolean {
-  return !!path && path.length > 0;
-}
 
 /** A check asked for just before committing a new address; the commit remounts this screen
  *  (each console has its own screens), so the new mount runs it. */
@@ -79,6 +74,8 @@ export default function FirstRunScreen() {
   // screen, so it happens on blur / Enter / Check, never per keystroke.
   const [hostDraft, setHostDraft] = useState(host);
   const setStatus = useConnectionStore((s) => s.setStatus);
+  // The shared helper send's current step (checking elfldr, sending, waiting), for its row.
+  const helperNote = useHelperSendStore((s) => helperSendFor(s, host.trim())?.msg);
 
   const [step1, setStep1] = useState<StepState>("idle");
   const [step1Msg, setStep1Msg] = useState<string>(
@@ -245,20 +242,32 @@ export default function FirstRunScreen() {
           });
           continue;
         }
-        updateStep(id, { state: "busy", note: "fetching latest release…" });
+        updateStep(id, {
+          state: "busy",
+          note: tr("first_run_note_fetching", undefined, "fetching latest release…"),
+        });
         let release: PayloadReleaseInfo;
         try {
           release = await payloadsRelease(id, false);
         } catch (e) {
-          updateStep(id, { state: "fail", note: `release fetch: ${e}` });
+          updateStep(id, {
+            state: "fail",
+            note: tr(
+              "first_run_note_release_failed",
+              { error: String(e) },
+              "release fetch: {error}",
+            ),
+          });
           throw e;
         }
         if (!release.picked_asset_url) {
-          updateStep(id, {
-            state: "fail",
-            note: "no compatible asset in latest release",
-          });
-          throw new Error(`no asset for ${id}`);
+          const note = tr(
+            "first_run_note_no_asset",
+            undefined,
+            "no compatible asset in latest release",
+          );
+          updateStep(id, { state: "fail", note });
+          throw new Error(`${id}: ${note}`);
         }
 
         // Skip the download if a same-version copy is already in the
@@ -269,7 +278,11 @@ export default function FirstRunScreen() {
           if (cancelled.current) return;
           updateStep(id, {
             state: "busy",
-            note: `downloading ${release.tag} (${(release.picked_asset_size / 1024).toFixed(0)} KB)…`,
+            note: tr(
+              "first_run_note_downloading",
+              { tag: release.tag, kb: (release.picked_asset_size / 1024).toFixed(0) },
+              "downloading {tag} ({kb} KB)…",
+            ),
           });
           const local = await payloadsDownload(
             id,
@@ -279,20 +292,27 @@ export default function FirstRunScreen() {
           elfPath = local.path;
         }
         if (!elfPath) {
-          updateStep(id, {
-            state: "fail",
-            note: "no local ELF after download",
-          });
-          throw new Error(`no path for ${id}`);
+          const note = tr(
+            "first_run_note_no_elf",
+            undefined,
+            "no local ELF after download",
+          );
+          updateStep(id, { state: "fail", note });
+          throw new Error(`${id}: ${note}`);
         }
 
         if (cancelled.current) return;
         updateStep(id, {
           state: "busy",
-          note: `sending to ${host}:${PS5_LOADER_PORT}…`,
+          note: tr(
+            "first_run_note_sending",
+            { host, port: PS5_LOADER_PORT },
+            "sending to {host}:{port}…",
+          ),
         });
         await sendPayload(host, elfPath);
-        updateStep(id, { state: "ok", note: `sent ${release.tag}` });
+        const sent = tr("first_run_note_sent", { tag: release.tag }, "sent {tag}");
+        updateStep(id, { state: "ok", note: sent });
 
         // Wait the catalogue-recommended delay before the next
         // payload. kstuff needs ~3s to settle the kernel patches;
@@ -302,53 +322,36 @@ export default function FirstRunScreen() {
         if (delay > 0) {
           updateStep(id, {
             state: "busy",
-            note: `waiting ${delay / 1000}s before next payload…`,
+            note: tr(
+              "first_run_note_waiting",
+              { n: delay / 1000 },
+              "waiting {n}s before the next payload…",
+            ),
           });
           await new Promise((r) => setTimeout(r, delay));
-          updateStep(id, { state: "ok", note: `sent ${release.tag}` });
+          updateStep(id, { state: "ok", note: sent });
         }
       }
 
-      // ── ps5upload: bundled, no GitHub fetch needed ────────────
+      // ── The helper: the same send as Connection's Send helper ────
+      // It records the helper up in the connection store, joins a send already running, and
+      // opens pairing when the console answers but this app is not paired with it yet. While
+      // it runs, the row shows the send's own step (see helperNote below).
       if (cancelled.current) return;
-      updateStep("ps5upload", { state: "busy", note: "locating bundled ELF…" });
-      const ourPath = await bundledPayloadPath();
-      if (!isBundledPs5UploadAvailable(ourPath)) {
-        updateStep("ps5upload", {
-          state: "fail",
-          note: "bundled ps5upload.elf not found",
-        });
-        throw new Error("ps5upload bundled missing");
+      updateStep("ps5upload", { state: "busy", note: undefined });
+      const failure = await sendHelperAndWait(host, tr);
+      if (failure !== null) {
+        updateStep("ps5upload", { state: "fail", note: failure });
+        throw new Error(failure);
       }
-      updateStep("ps5upload", {
-        state: "busy",
-        note: `sending to ${host}:${PS5_LOADER_PORT}…`,
-      });
-      await sendPayload(host, ourPath);
-      updateStep("ps5upload", { state: "ok", note: "sent" });
-
-      // Probe verifies our payload booted and answers on the mgmt port.
-      if (cancelled.current) return;
-      updateStep("ps5upload", { state: "busy", note: "verifying boot…" });
-      const status = await pollPayloadReady(host, 15);
-      if (!status.reachable) {
-        updateStep("ps5upload", {
-          state: "fail",
-          note: "ps5upload didn't answer within 15s",
-        });
-        throw new Error("ps5upload boot timeout");
-      }
-      setStatus({
-        payloadStatus: "up",
-        payloadStatusHost: host,
-        payloadVersion: status.payloadVersion,
-        ps5Kernel: status.ps5Kernel,
-        ucredElevated: status.ucredElevated,
-        payloadProbing: false,
-      });
+      const version = useConnectionStore.getState().payloadVersion;
       updateStep("ps5upload", {
         state: "ok",
-        note: `verified — v${status.payloadVersion ?? "?"}`,
+        note: tr(
+          "first_run_note_verified",
+          { version: version ?? "?" },
+          "verified — v{version}",
+        ),
       });
 
       setStep3("ok");
@@ -371,7 +374,7 @@ export default function FirstRunScreen() {
             { host },
             `ps5upload is running on ${host}.`,
           ),
-          link: "/library",
+          link: "/games",
         },
       );
     } catch (e) {
@@ -397,9 +400,9 @@ export default function FirstRunScreen() {
         icon={Sparkles}
         title={tr("first_run_title", undefined, "Set up your PS5")}
         description={tr(
-          "first_run_description_v2",
+          "first_run_description_v3",
           undefined,
-          "Loads what most set-ups need, in the right order: kstuff (lets fake packages install and run), ShadowMount+ (puts game images and folders on the PS5's home screen) and ps5upload's own helper. You can run it again any time from Settings.",
+          "Loads what most set-ups need, in the right order: kstuff (lets fake packages install and run), ShadowMount+ (puts game images and folders on the PS5's home screen) and ps5upload's own helper. After the PS5 restarts, Connection offers this wizard again.",
         )}
       />
       <div className="mx-auto max-w-3xl space-y-4">
@@ -528,11 +531,13 @@ export default function FirstRunScreen() {
                   <li key={s.id} className="flex items-center gap-2 text-xs">
                     <StepIcon state={s.state} />
                     <span className="font-medium">{s.label}</span>
-                    {s.note && (
-                      <span className="text-[var(--color-muted)]">
-                        — {s.note}
-                      </span>
-                    )}
+                    {(() => {
+                      const note =
+                        s.id === "ps5upload" && s.state === "busy" ? (helperNote ?? s.note) : s.note;
+                      return note ? (
+                        <span className="text-[var(--color-muted)]">— {note}</span>
+                      ) : null;
+                    })()}
                   </li>
                 ))}
               </ul>
@@ -550,9 +555,9 @@ export default function FirstRunScreen() {
           >
             <p className="mb-3 text-xs text-[var(--color-muted)]">
               {tr(
-                "first_run_step4_body",
+                "first_run_step4_body_v2",
                 undefined,
-                "Drop a USB stick into your PS5 with .ffpkg game images and ShadowMount+ will auto-mount them — they'll appear in the Library tab. To upload arbitrary files or install .pkg packages, use the Upload and Install Package tabs.",
+                "Drop a USB stick into your PS5 with .ffpkg game images and ShadowMount+ will auto-mount them — they'll appear in Games. To upload other files or install .pkg packages, use Upload and Install Package.",
               )}
             </p>
             <div className="flex flex-wrap gap-2">
@@ -641,33 +646,4 @@ function SetupCard({
       <div>{children}</div>
     </section>
   );
-}
-
-/** Poll payloadCheck until reachable or timeout. Mirrors the
- *  Connection screen's pollUntilReady but local to this wizard so
- *  failures here don't block the dedicated screen's poller. */
-async function pollPayloadReady(
-  host: string,
-  maxAttempts: number,
-): Promise<{
-  reachable: boolean;
-  payloadVersion: string | null;
-  ps5Kernel: string | null;
-  ucredElevated: boolean | null;
-}> {
-  for (let i = 0; i < maxAttempts; i++) {
-    await new Promise((r) => setTimeout(r, 1000));
-    try {
-      const r = await payloadCheck(host);
-      if (r.reachable) return r;
-    } catch {
-      // ignore, keep polling
-    }
-  }
-  return {
-    reachable: false,
-    payloadVersion: null,
-    ps5Kernel: null,
-    ucredElevated: null,
-  };
 }

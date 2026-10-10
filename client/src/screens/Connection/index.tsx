@@ -567,9 +567,9 @@ export default function ConnectionScreen() {
               </div>
               <div className="text-[var(--color-muted)]">
                 {tr(
-                  "connection_first_run_nudge_body",
+                  "connection_first_run_nudge_body_v2",
                   undefined,
-                  "The setup wizard installs kstuff + ShadowMount+ + ps5upload in one click. Or just step through the manual flow below.",
+                  "The setup wizard downloads kstuff and ShadowMount+ and sends them, then the helper, in the right order. If your console already loads kstuff itself (an autoloader, etaHEN), step 2 below sends just the helper.",
                 )}
               </div>
             </div>
@@ -671,6 +671,17 @@ export default function ConnectionScreen() {
                 "A small program the PS5 runs to accept uploads. It starts in a few seconds.",
               )}
             </p>
+            {/* Three buttons send the helper (this one, the setup wizard, Quick bring-up), all
+                through the same send; say what sets them apart. The browser has only this one. */}
+            {isTauriEnv() && (
+              <p className="mb-3 text-xs text-[var(--color-muted)]">
+                {tr(
+                  "connection_step2_which",
+                  undefined,
+                  "This sends only the helper. To load kstuff and ShadowMount+ as well, use the setup wizard the first time, or Quick bring-up below on every boot once your playlists are set.",
+                )}
+              </p>
+            )}
             {/* The step users miss most (autoloader without elfldr: the helper connects,
                 then drops), so it is a callout, not a footnote. */}
             <ElfldrFirstCallout />
@@ -709,9 +720,9 @@ export default function ConnectionScreen() {
             <AllowPairing host={host.trim()} />
             <p className="mb-4 text-sm leading-relaxed text-[var(--color-muted)]">
               {tr(
-                "connection_step3_hint",
+                "connection_step3_hint_v2",
                 undefined,
-                "Go to the Upload tab and drop in a game folder, a .exfat image, or a .ffpkg image. For disk images, hit Mount in the Library tab. To register installed apps on your PS5 home screen, use a PS5-side installer (send it via the Payloads → Send payload tab).",
+                "Go to Upload and drop in a game folder, a .exfat image or a .ffpkg image. Uploaded images and folders are listed in Games → Game files, where Mount puts them on the PS5's home screen. To install .pkg packages, use Install Package.",
               )}
             </p>
             <Button
@@ -729,13 +740,16 @@ export default function ConnectionScreen() {
 
         {/* Quick bring-up — the one-tap fast path that chains the bring-up
             playlist → helper → auto-loader. Shown once an address is set so a
-            cold boot is one button instead of the manual step sequence above. */}
-        {host.trim() && <BringUpPanel />}
+            cold boot is one button instead of the manual step sequence above.
+            Not in the browser: its playlists send ELFs from this machine, which
+            the web UI cannot; step 2 sends the helper there. */}
+        {host.trim() && isTauriEnv() && <BringUpPanel />}
 
-        {/* Power control — only render once payload is up since the
-            destructive actions need a working mgmt-port connection. */}
-        {step2 === "ok" && <PowerControl host={host.trim()} />}
-        {step2 === "ok" && <CompanionSuggestion />}
+        {/* Power control whenever an address is set, as on Home: Wake is the
+            action needed exactly when the console does not answer. */}
+        {host.trim() && <PowerControl host={host.trim()} />}
+        {/* Points at Payloads, which the browser build does not have. */}
+        {step2 === "ok" && isTauriEnv() && <CompanionSuggestion />}
       </div>
     </div>
   );
@@ -1226,9 +1240,8 @@ function CompanionStrip({ host }: { host: string }) {
  * additional homebrew (kstuff, ShadowMount+, etc.). Dismissible —
  * remembers the user's "don't show again" choice via localStorage.
  *
- * Doesn't try to detect what's already installed (that would require
- * cross-coupling with the SMP detection panel, which lives on the
- * Library tab); just a discoverability nudge.
+ * Doesn't try to detect what's already installed; just a discoverability
+ * nudge.
  */
 function CompanionSuggestion() {
   const tr = useTr();
@@ -1266,9 +1279,9 @@ function CompanionSuggestion() {
         </div>
         <div className="text-[var(--color-muted)]">
           {tr(
-            "companion_suggest_body",
+            "companion_suggest_body_v2",
             undefined,
-            "ps5upload pairs with kstuff (kernel exploit), ShadowMount+ (auto-mount game backups), and a dozen other homebrew payloads. The Homebrew catalog tab installs them in one click.",
+            "ps5upload pairs with kstuff (kernel exploit), ShadowMount+ (auto-mount game backups), and a dozen other homebrew payloads. Payloads → Catalog sends them in one click.",
           )}
         </div>
       </div>
@@ -1276,9 +1289,9 @@ function CompanionSuggestion() {
         variant="primary"
         size="sm"
         rightIcon={<ArrowRight size={11} />}
-        onClick={() => navigate("/payloads")}
+        onClick={() => navigate("/payloads?tab=catalog")}
       >
-        {tr("companion_suggest_open", undefined, "Open Games")}
+        {tr("companion_suggest_open_payloads", undefined, "Open Payloads")}
       </Button>
       <button
         type="button"

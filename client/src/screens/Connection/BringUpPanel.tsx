@@ -7,6 +7,7 @@ import {
   useBringUpStore,
   type BringUpStatus,
 } from "../../state/bringUp";
+import { helperSendFor, useHelperSendStore } from "../../state/helperSend";
 import { usePayloadPlaylistsStore } from "../../state/payloadPlaylists";
 import { useTr } from "../../state/lang";
 
@@ -44,9 +45,9 @@ export function BringUpPanel() {
             </h2>
             <p className="mt-0.5 text-xs text-[var(--color-muted)]">
               {tr(
-                "bringup_desc",
+                "bringup_desc_v2",
                 undefined,
-                "One tap: load your bring-up payloads, send the helper, then wait until the PS5 is ready.",
+                "For every boot, once your playlists are set up in Payloads: runs your bring-up playlist (kstuff, ShadowMount+…), sends the helper the same way step 2 does, then runs your auto-loader playlist.",
               )}
             </p>
             <p className="mt-1 text-xs text-[var(--color-muted)]">
@@ -70,7 +71,7 @@ export function BringUpPanel() {
           leftIcon={
             running ? <Spinner size={12} tone="inherit" /> : <Zap size={12} />
           }
-          onClick={() => void run(host)}
+          onClick={() => void run(host, tr)}
           disabled={!canRun}
           title={
             !host.trim()
@@ -82,13 +83,15 @@ export function BringUpPanel() {
         </Button>
       </header>
 
-      {status.kind !== "idle" && <BringUpStatusLine status={status} />}
+      {status.kind !== "idle" && <BringUpStatusLine status={status} host={host} />}
     </section>
   );
 }
 
-function BringUpStatusLine({ status }: { status: BringUpStatus }) {
+function BringUpStatusLine({ status, host }: { status: BringUpStatus; host: string }) {
   const tr = useTr();
+  // The helper phase is the shared send: show its own step (checking elfldr, sending, waiting).
+  const sendMsg = useHelperSendStore((s) => helperSendFor(s, host.trim())?.msg);
 
   if (status.kind === "idle") return null;
   if (status.kind === "running") {
@@ -99,13 +102,7 @@ function BringUpStatusLine({ status }: { status: BringUpStatus }) {
             { name: status.detail },
             "Loading bring-up payloads ({name})…",
           )
-        : status.phase === "helper"
-          ? tr("bringup_phase_helper", undefined, "Sending the helper…")
-          : tr(
-              "bringup_phase_waiting",
-              undefined,
-              "Waiting for the helper to come up…",
-            );
+        : sendMsg || tr("bringup_phase_helper", undefined, "Sending the helper…");
     return (
       <div className="flex items-center gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] p-2 text-xs">
         <Spinner size={14} tone="accent" />
