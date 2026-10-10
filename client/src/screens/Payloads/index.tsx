@@ -9,13 +9,17 @@ import SmpPanel from "../Library/SmpPanel";
 import { ConnectionGate } from "../../components";
 import { useConnectionStore } from "../../state/connection";
 import { mgmtAddr } from "../../lib/addr";
+import { isTauriEnv } from "../../lib/tauriEnv";
+import { payloadTabsFor, type PayloadTabId } from "./payloadTabs";
 
 /**
- * Payloads screen — two URL-routed tabs:
+ * Payloads screen — URL-routed tabs:
  *
  *   - **catalog**: curated GitHub-released third-party homebrew.
  *   - **send**: arbitrary ELF/BIN/JS/LUA/JAR picker. Includes
  *     playlists and recent-sends history.
+ *   - **shadowmount** / **nanodns**: those payloads' status and config on
+ *     the console. The only two the browser build shows (payloadTabsFor).
  *
  * (Historically split across /payloads and the old /send-payload route;
  * merged under ?tab=send for a cleaner sidebar. Legacy redirects remain
@@ -26,12 +30,13 @@ import { mgmtAddr } from "../../lib/addr";
  * metadata and a panel switch.
  */
 
-type TabId = "catalog" | "send" | "shadowmount" | "nanodns";
+type TabId = PayloadTabId;
 
 export default function PayloadsScreen() {
   const tr = useTr();
   const host = useConnectionStore((state) => state.host);
-  const tabs: ReadonlyArray<TabbedShellTab<TabId>> = [
+  const available = payloadTabsFor(isTauriEnv());
+  const allTabs: ReadonlyArray<TabbedShellTab<TabId>> = [
     {
       id: "catalog",
       icon: Boxes,
@@ -77,17 +82,15 @@ export default function PayloadsScreen() {
       ),
     },
   ];
+  const tabs = allTabs.filter((t) => available.includes(t.id));
 
   const renderPanel = (id: TabId) => {
     if (id === "send") return <SendPanel />;
-    if (id === "nanodns") return <NanoDnsScreen embedded />;
+    if (id === "nanodns") return <NanoDnsScreen />;
     if (id === "shadowmount") {
       return (
         <ConnectionGate require="payload">
-          <SmpPanel
-            mgmtAddr={host?.trim() ? mgmtAddr(host.trim()) : null}
-            hideWhenUnavailable={false}
-          />
+          <SmpPanel mgmtAddr={host?.trim() ? mgmtAddr(host.trim()) : null} />
         </ConnectionGate>
       );
     }

@@ -124,7 +124,7 @@ const NATIVE_ONLY: Record<string, string> = {
   resume_txid_forget: "native: desktop resume-state file",
 
   // Payload catalogue: downloads ELFs to host disk, then sends them over a
-  // raw socket. The whole /payloads nav entry is hideInBrowser.
+  // raw socket. The browser build's Payloads screen has no Catalog or Send tab.
   payloads_catalog: "native: caches the catalogue on host disk",
   payloads_releases: "native: talks to the GitHub API from the client",
   payloads_release: "native: talks to the GitHub API from the client",

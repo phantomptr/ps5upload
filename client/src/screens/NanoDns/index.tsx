@@ -4,7 +4,6 @@ import { Globe, RefreshCw, Save, RotateCcw } from "lucide-react";
 import { useConnectionStore } from "../../state/connection";
 import { fsReadPreview, fsWriteText } from "../../api/ps5";
 import {
-  PageHeader,
   EmptyState,
   ConnectionGate,
   ErrorCard,
@@ -45,7 +44,7 @@ function decodeBase64Text(base64: string): string {
 /** nanoDNS config editor — reads/writes the on-console nanodns.ini and shows
  *  how to point the PS5's DNS at it. nanoDNS reads its config at startup, so a
  *  save only takes effect after the payload is re-loaded (re-sent). */
-export default function NanoDnsScreen({ embedded = false }: { embedded?: boolean }) {
+export default function NanoDnsScreen() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const guard = useStaleHostGuard();
@@ -184,43 +183,19 @@ export default function NanoDnsScreen({ embedded = false }: { embedded?: boolean
   }, [host, text, guard, tr]);
 
   return (
-    <div className={`flex flex-col gap-5 ${embedded ? "" : "p-6"}`}>
-      {!embedded && <PageHeader
-        icon={Globe}
-        title={tr("nanodns_title", undefined, "nanoDNS")}
-        loading={loading}
-        description={tr(
-          "nanodns_subtitle",
-          undefined,
-          "On-console DNS server. Blocks PlayStation Network / update domains by default, and can redirect any domain to a LAN IP. Edit its config here, then re-load it from Payloads to apply.",
-        )}
-        right={
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={<RefreshCw size={12} />}
-            onClick={() => void refresh()}
-            disabled={loading || !host?.trim()}
-            loading={loading}
-          >
-            {tr("refresh", undefined, "Refresh")}
-          </Button>
-        }
-      />}
-      {embedded && (
-        <div className="flex justify-end">
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={<RefreshCw size={12} />}
-            onClick={() => void refresh()}
-            disabled={loading || !host?.trim()}
-            loading={loading}
-          >
-            {tr("refresh", undefined, "Refresh")}
-          </Button>
-        </div>
-      )}
+    <div className="flex flex-col gap-5">
+      <div className="flex justify-end">
+        <Button
+          variant="secondary"
+          size="sm"
+          leftIcon={<RefreshCw size={12} />}
+          onClick={() => void refresh()}
+          disabled={loading || !host?.trim()}
+          loading={loading}
+        >
+          {tr("refresh", undefined, "Refresh")}
+        </Button>
+      </div>
 
       <ConnectionGate require="payload">
         {notFound ? (

@@ -100,7 +100,6 @@ export const NAV_ITEMS: NavItem[] = [
     key: "payloads",
     fallback: "Payloads",
     icon: Boxes,
-    hideInBrowser: true,
   },
 
   // Move data and inspect storage.

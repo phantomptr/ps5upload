@@ -25,15 +25,7 @@ import { useTr } from "../../state/lang";
  * actions go through the same Send-payload flow the user could
  * trigger themselves on the Payloads tab.
  */
-export default function SmpPanel({
-  mgmtAddr,
-  hideWhenUnavailable = true,
-}: {
-  mgmtAddr: string | null;
-  /** Contextual consumers can stay silent when SMP is absent. The dedicated
-   * Payloads tab sets this false so setup/status remains discoverable. */
-  hideWhenUnavailable?: boolean;
-}) {
+export default function SmpPanel({ mgmtAddr }: { mgmtAddr: string | null }) {
   const tr = useTr();
   const [status, setStatus] = useState<SmpStatus | null>(null);
   const [loading, setLoading] = useState(false);
@@ -79,19 +71,6 @@ export default function SmpPanel({
   // Don't render anything until first probe lands. Avoids a "loading"
   // flash on every Library tab visit.
   if (!mgmtAddr || (status === null && !error)) return null;
-
-  // Compact "not installed" — single chip the user can click to
-  // expand if they want details (e.g. seeing the error). Doesn't
-  // take meaningful screen space when SMP isn't set up.
-  if (
-    hideWhenUnavailable &&
-    status &&
-    !status.installed &&
-    !status.running &&
-    !expanded
-  ) {
-    return null;
-  }
 
   return (
     <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]">
