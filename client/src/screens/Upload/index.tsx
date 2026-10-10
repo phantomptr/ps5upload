@@ -2168,7 +2168,7 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
         )}
         {/* The #1 post-upload question is "why isn't it on my home
             screen?" — either it already IS (register-after-upload ran),
-            or we point at the Library to finish the job. */}
+            or we point at Games → Game files to finish the job. */}
         <div className="mt-3 flex items-center gap-2 border-t border-[var(--color-border)] pt-3">
           <span className="text-xs text-[var(--color-muted)]">
             {phase.registeredAs
@@ -2188,9 +2188,9 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
                 variant="primary"
                 size="sm"
                 className="shrink-0"
-                onClick={() => navigate("/games")}
+                onClick={() => navigate("/games?tab=files")}
               >
-                {tr("upload_done_open_library", "Open Library")}
+                {tr("upload_done_open_library", "Open Game files")}
               </Button>
             )}
             <Button

@@ -355,3 +355,25 @@ describe("0x80B21104", () => {
     expect(humanizePs5Error("The PS5 declined the install. (0x80b21104)")).toContain("would not accept this package");
   });
 });
+
+describe("install and launch advice names today's app", () => {
+  // These used to send people to FTP and to the retired Library screen.
+  const cases: [string, string][] = [
+    ["launch, unknown code", "launch_sony_error_0x80941234"],
+    ["installer not initialised", "0x80A30000"],
+    ["DRM type", "0x80A2FF06"],
+    ["BGFT not loadable", "BGFT symbol missing: sceBgftServiceIntDownloadRegisterTaskByStorageEx"],
+    ["ENOENT, not a DLC", "sceKernelOpen failed 0x80020002"],
+  ];
+  for (const [what, raw] of cases) {
+    it(what, () => {
+      const out = humanizePs5Error(raw);
+      expect(out).not.toMatch(/FTP|Library/);
+      expect(out).not.toBe(raw);
+    });
+  }
+  it("points at Games → Game files where a folder or image can be registered", () => {
+    expect(humanizePs5Error("launch_sony_error_0x80941234")).toContain("Games → Game files");
+    expect(humanizePs5Error("0x80A2FF06")).toContain("Games → Game files");
+  });
+});

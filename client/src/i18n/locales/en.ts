@@ -2101,7 +2101,7 @@ err_launch_corrupt:
 err_launch_homebrew_refused:
   "The PS5 refused to start this title (0x80940033). The console isn't starting homebrew or fake-package games right now: load kstuff (or reboot and run the jailbreak again), then try again.",
 err_launch_unknown:
-  "PS5 launcher returned 0x{code}. The title may have been removed, or the install isn't complete — try Re-register from the Library tab.",
+  "PS5 launcher returned 0x{code}. The title may have been removed, or the install isn't complete. For a game folder or disk image, add it to the home screen again from Games → Game files.",
 err_launch_title_id_invalid:
   "Title ID doesn't look valid. Make sure the game's PARAM.SFO has a title_id like CUSA12345 or PPSA01234.",
 err_mount_not_a_file:
@@ -2124,11 +2124,11 @@ err_mount_nmount_other:
   "PS5 kernel rejected the mount: {reason}. Try a different mount point (e.g. under /data or /mnt/ps5upload) — the image itself is fine.",
 err_unknown_reason: "unknown reason",
 err_appinst_not_initialized:
-  "Sony's installer subsystem isn't initialised yet — push the latest bundled payload (Connection → Send payload) so the lazy-init in 2.2.46+ runs. If the error persists, the install API isn't reachable from our process context on this firmware; FTP-upload + Library → Register is the workaround.",
+  "Sony's installer subsystem isn't initialised yet. Make sure the PS5 runs the current helper (Update helper in the banner, or send it again from the Connection screen), then retry. If it still fails, install the package on the PS5 itself: Settings → System → Debug Settings → Game → Package Installer.",
 err_appinst_nospace:
   "Your PS5 doesn't have enough free space for this install. Settings → Storage → Free up space, then retry.",
 err_appinst_drm_type:
-  "Sony's installer rejected this PKG's DRM type. Try the Library → Register flow with 'Patch DRM' instead — it rewrites applicationDrmType to 'standard' before installing.",
+  "Sony's installer rejected this PKG's DRM type. If you have the game as a folder or disk image on the console, use Add to home screen (patch DRM) in Games → Game files instead: it rewrites applicationDrmType to 'standard' before registering.",
 err_appinst_content_type:
   "Sony's installer doesn't accept this PKG's content type on the current firmware (e.g. some patch-pkgs / DLC formats). The base game's PKG should still install if you have it.",
 err_appinst_busy:
@@ -2154,11 +2154,11 @@ err_install_2101:
 err_install_80b2_generic:
   "PS5's PlayGo subsystem rejected the install with a 0x80B2_xxxx error. This is the install fetch path, not the pkg parser — your file likely is fine. Try pushing the latest payload (Connection → Send payload); the new ShellUI-RPC install path bypasses the most common 0x80B2 reject class.",
 err_bgft_not_loadable:
-  "Your PS5 firmware doesn't expose Sony's BGFT installer in a way ps5upload can use. Push the latest bundled payload (Connection → Send payload) — it tries more library paths and symbol variants. If it still fails, install via FTP + Library → Register instead; .pkg-via-BGFT isn't available on this firmware.",
+  "Your PS5 firmware doesn't expose Sony's BGFT installer in a way ps5upload can use. Make sure the PS5 runs the current helper (Update helper in the banner, or send it again from the Connection screen), then retry. If it still fails, this firmware can't install a .pkg that way: install it on the PS5 itself (Settings → System → Debug Settings → Game → Package Installer), or, for a game folder or disk image, use Add to home screen in Games → Game files.",
 err_install_enoent_dlc:
   "This looks like a DLC pkg (content_id {contentId}). Sony's installer needs the base game ({baseTitle}) to be installed BEFORE the DLC, because the install reads metadata from the base game's app_home. Install {baseTitle} first, then retry this DLC. The 0x80020002 is the kernel reporting \"no such file\" when it tried to follow the base-game reference — not a problem with your DLC pkg.",
 err_install_enoent_generic:
-  "Sony's installer couldn't open a file it needed during install (kernel error 0x80020002 = ENOENT). If this is a DLC pkg, the base game isn't installed yet — install the base first. Otherwise the staging file may have been deleted between upload and install; retry the install once. If it keeps failing, FTP-upload the pkg to /user/data/ps5upload/pkg_temp/ manually and use Library → Register to install.",
+  "Sony's installer couldn't open a file it needed during install (kernel error 0x80020002 = ENOENT). If this is a DLC pkg, the base game isn't installed yet — install the base first. Otherwise the staged package may have been deleted between upload and install; retry the install once. If it keeps failing, install it with Stream & install on the Install Package screen, which sends the package straight from this computer instead of copying it to the console first.",
 err_install_defrag:
   "Your PS5 needs defragmented free space. Settings → Storage → Free up space, then retry.",
 err_install_leftover_download:
@@ -2306,7 +2306,7 @@ upload_pick_here_mobile: "Pick a file or folder to upload",
 upload_register_after_title: "Add to PS5 home screen when done",
 upload_register_after_desc: "Registers the game with the PS5 right after the upload finishes, so it's ready to launch. If this step fails the upload itself is unaffected and you can still register it from Games → Game files.",
 upload_done_next_hint: "Next: open Games → Game files to register or mount it so it shows up on the PS5 home screen.",
-upload_done_open_library: "Open Library",
+upload_done_open_library: "Open Game files",
 
 // Profile (avatar + offline-account username)
 profile: "Profile",
