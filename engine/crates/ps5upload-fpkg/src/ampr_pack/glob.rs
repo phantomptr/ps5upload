@@ -136,7 +136,10 @@ mod tests {
         assert!(m("ab", "a[!0-9]"));
         assert!(m("a]", "a[]]"));
         assert!(m("a[", "a["), "an unterminated set is literal");
-        assert!(m("a-", "a[a-]") && !m("b", "a[a-]"), "a trailing - is a member");
+        assert!(
+            m("a-", "a[a-]") && !m("b", "a[a-]"),
+            "a trailing - is a member"
+        );
         assert!(m("", "*"));
         assert!(m("abc", "a*b*c"));
         assert!(m("aXbYbc", "a*b*c"));
