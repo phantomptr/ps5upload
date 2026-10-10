@@ -108,7 +108,7 @@ describe("queueLinkFor", () => {
     expect(queueLinkFor("1.1.1.1", "1.1.1.1:5000", false)).toBe("/upload");
   });
   it("opens that console's activity for another console", () => {
-    expect(queueLinkFor("2.2.2.2", "1.1.1.1", true)).toBe("/activity?console=2.2.2.2");
+    expect(queueLinkFor("2.2.2.2", "1.1.1.1", true)).toBe("/tasks?console=2.2.2.2");
   });
 });
 

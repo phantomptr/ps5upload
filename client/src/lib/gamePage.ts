@@ -90,10 +90,10 @@ export function titleIdFromContentId(contentId: string | null | undefined): stri
 export const gamePath = (titleId: string): string => `/games/${encodeURIComponent(titleId)}`;
 
 /** Where "Open queue" goes for a job on `host`: the screen that shows it when that is the
- *  connected console, else that console's Activity. */
+ *  connected console, else that console's Activity (/tasks, which /activity redirects to). */
 export function queueLinkFor(host: string, connectedHost: string, installing: boolean): string {
   if (hostOf(host) === hostOf(connectedHost)) return installing ? "/install-package" : "/upload";
-  return `/activity?console=${encodeURIComponent(hostOf(host))}`;
+  return `/tasks?console=${encodeURIComponent(hostOf(host))}`;
 }
 
 /** The packages on the drives that `host` could take for this game: its newer update, or the

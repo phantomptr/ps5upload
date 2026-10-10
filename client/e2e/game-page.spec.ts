@@ -116,7 +116,7 @@ test("installing on a console that is not the connected one shows on its row and
   const open = phat.getByRole("button", { name: "Open", exact: true });
   await expect(open).toBeVisible({ timeout: 30_000 });
   await open.click();
-  await expect(page).toHaveURL(/\/activity\?console=192\.168\.1\.99$/);
+  await expect(page).toHaveURL(/\/tasks\?console=192\.168\.1\.99$/);
   await expect(page.getByTestId("activity-console")).toContainText("Showing Phat");
 });
 
