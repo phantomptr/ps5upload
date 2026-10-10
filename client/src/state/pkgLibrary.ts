@@ -34,6 +34,11 @@ import {
 } from "../api/ps5";
 import { formatBytes } from "../lib/format";
 import {
+  startLinkDownload,
+  type ExistingChoice,
+  type LinkDownloadStart,
+} from "../lib/linkDownload";
+import {
   computeRate,
   pushRateSample,
   type RateSample,
@@ -1072,6 +1077,9 @@ interface PkgLibraryState {
     /** True when the same package should be retried through staged/file mode,
      * which bypasses Sony's HTTP/proxy path. */
     stagedFallbackRecommended?: boolean;
+    /** Download-first only: a different file already has the download's name. The caller
+     *  asks Resume or Replace and starts again with `existing`. */
+    existingFile?: { path: string; existingBytes: number; total: number };
   }>;
   /** Install a package straight from an HTTP(S) link. The engine fetches it
    * from the origin over several connections at once and re-serves it to the
@@ -1082,7 +1090,7 @@ interface PkgLibraryState {
   installUrl: (
     url: string,
     host: string,
-    opts?: { mode?: LinkInstallMode; displayName?: string },
+    opts?: { mode?: LinkInstallMode; displayName?: string; existing?: ExistingChoice },
   ) => ReturnType<PkgLibraryState["installStream"]>;
   /** Download a link to this computer's disk, then install the local file.
    *
@@ -1097,6 +1105,8 @@ interface PkgLibraryState {
     insecureTls: boolean,
     /** The user's name for the link: on the download's task and the install's queue row. */
     displayName?: string,
+    /** What to do with a different file already under the download's name. */
+    existing?: ExistingChoice,
   ) => ReturnType<PkgLibraryState["installStream"]>;
   /** Install every staged, not-yet-installed, idle row sequentially, in
    *  base → update → DLC order (`pkgEntryInstallOrder`). Each item runs the
@@ -2976,7 +2986,7 @@ const makePkgLibraryStore = () =>
       );
     },
 
-    async installDownloadedLink(url, host, insecureTls, displayName) {
+    async installDownloadedLink(url, host, insecureTls, displayName, existing) {
       // Two legs, reported separately: people need to know which one is slow.
       // The download is the fragile one; once it finishes, the install is an
       // ordinary local-file install at LAN speed.
@@ -3016,27 +3026,40 @@ const makePkgLibraryStore = () =>
         return { ok: false, message };
       };
 
-      let started: { download_id?: string; path?: string; total?: number };
+      let started: LinkDownloadStart;
       try {
-        started = (await invoke("pkg_remote_download_start", {
-          url,
-          insecureTls,
-          destDir: null,
-        })) as { download_id?: string; path?: string; total?: number };
+        started = await startLinkDownload({ url, insecureTls, destDir: null, existing });
       } catch (e) {
         return fail(pkgError(e));
       }
-      const id = started.download_id;
-      const path = started.path;
-      if (!id || !path) {
-        return fail("The engine did not start a download for that link.");
+      if (started.kind === "exists") {
+        // Not a failure of the link: the user decides what happens to the file in the way.
+        set({ downloadNotice: null });
+        useTaskStore.getState().finishTask(taskId, "cancelled", {
+          detail: "A different file already has this name.",
+        });
+        return {
+          ok: false,
+          message: started.message,
+          existingFile: {
+            path: started.path,
+            existingBytes: started.existingBytes,
+            total: started.total,
+          },
+        };
+      }
+      // Already downloading (a second click, another tab): watch that download.
+      const id = started.id;
+      let path = started.kind === "started" ? started.path : "";
+      if (started.kind === "attached") {
+        log.info("install", "that link is already downloading; following it");
       }
       useTaskStore.getState().updateTask(taskId, {
         engineJobId: id,
         control: { owner: "link-download", downloadId: id },
       });
 
-      const total = started.total ?? 0;
+      const total = started.kind === "started" ? started.total : 0;
       log.info(
         "install",
         `downloading the link to this computer first (${fmtBytes(total)})`,
@@ -3049,6 +3072,7 @@ const makePkgLibraryStore = () =>
       for (;;) {
         await new Promise((r) => setTimeout(r, 1000));
         let st: {
+          path?: string;
           written?: number;
           total?: number;
           done?: boolean;
@@ -3063,6 +3087,7 @@ const makePkgLibraryStore = () =>
         if (st.error) {
           return fail(`The download failed: ${st.error}`);
         }
+        if (!path && st.path) path = st.path;
         if (st.cancelled) {
           return fail("The download was cancelled.", true);
         }
@@ -3113,6 +3138,7 @@ const makePkgLibraryStore = () =>
           host,
           useLinkInstallPrefs.getState().insecureFor(host),
           opts?.displayName,
+          opts?.existing,
         );
       }
       let name = "package";

@@ -5,6 +5,7 @@ import { Button, Spinner } from "../../components";
 import { ProgressBar } from "../../components/ProgressBar";
 import { formatBytes } from "../../lib/format";
 import { invoke } from "../../lib/invokeLogged";
+import { startLinkDownload } from "../../lib/linkDownload";
 import { pickPath } from "../../lib/pickPath";
 import { useLinkInstallPrefs } from "../../state/linkInstallPrefs";
 import {
@@ -25,13 +26,19 @@ import { RarPasswordPrompt } from "../Upload/RarPasswordPrompt";
 /** Downloads a link to this computer under the file's own name (parts of a set find each
  *  other by name), with the engine's ordinary link downloader. */
 const linkDeps: ArchiveLinkDeps = {
-  start: (url, insecureTls) =>
-    invoke("pkg_remote_download_start", {
-      url,
-      insecureTls,
-      destDir: null,
-      keepName: true,
-    }),
+  start: async (url, insecureTls) => {
+    const r = await startLinkDownload({ url, insecureTls, destDir: null, keepName: true });
+    if (r.kind === "started") return { download_id: r.id, path: r.path, total: r.total };
+    // Already downloading (a second click, another tab): follow that download.
+    if (r.kind === "attached") {
+      const st = (await invoke("pkg_remote_download_status", { id: r.id })) as {
+        path?: string;
+        total?: number;
+      };
+      return { download_id: r.id, path: st.path, total: st.total };
+    }
+    throw new Error(`${r.message} Move or rename that file, then try again.`);
+  },
   status: (id) => invoke("pkg_remote_download_status", { id }),
   cancel: (id) => invoke("pkg_remote_download_cancel", { id }),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),

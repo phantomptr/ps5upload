@@ -72,6 +72,59 @@ const done = {
 };
 
 describe("RunCard", () => {
+  it("names the console a Convert & install run will install on", () => {
+    const running = {
+      phase: "running" as const,
+      mode: "convert-install" as const,
+      source: "/g",
+      host: "10.0.0.2",
+      stage: "compress" as const,
+      stageDone: 1,
+      stageTotal: 2,
+      startedMs: 0,
+      stageStartedMs: 0,
+      stageMs: {},
+      jobId: "j",
+      installTaskId: null,
+      taskId: null,
+      packagePath: null,
+      titleId: null,
+      copiedSource: null,
+      extractedSource: null,
+    };
+    const out = renderToStaticMarkup(
+      <RunCard
+        pipeline={running}
+        installTask={null}
+        host="10.0.0.9"
+        canInstall
+        isImage={false}
+        deleteArmed={false}
+        targetLabel="PS5 Pro"
+        {...actions}
+      />,
+    );
+    expect(out).toContain("Will install on PS5 Pro");
+  });
+
+  it("hides Show in folder when no file manager can open it", () => {
+    const { onShowFolder: _drop, ...rest } = actions;
+    void _drop;
+    const out = renderToStaticMarkup(
+      <RunCard
+        pipeline={{ ...done, mode: "convert" }}
+        installTask={null}
+        host="10.0.0.2"
+        canInstall
+        isImage={false}
+        deleteArmed={false}
+        {...rest}
+      />,
+    );
+    expect(button(out, "Show in folder")).toBeNull();
+    expect(button(html({ ...done, mode: "convert" }), "Show in folder")).not.toBeNull();
+  });
+
   it("offers only Convert when no console is connected", () => {
     const out = html({ phase: "idle" }, { canInstall: false });
     expect(button(out, "Convert only")?.disabled).toBe(false);

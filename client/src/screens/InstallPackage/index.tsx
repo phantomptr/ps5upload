@@ -96,6 +96,7 @@ import { linkModeFacts } from "../../lib/linkModes";
 import { useRecentLinksStore } from "../../state/recentLinks";
 import type { LinkInstallMode } from "../../state/linkInstallPrefs";
 import { formatBytes, formatDuration } from "../../lib/format";
+import { canResumeExisting, type ExistingChoice } from "../../lib/linkDownload";
 import { remainingSeconds } from "../../lib/rollingRate";
 import { acceptPkgDrop, isInstallPackagePath } from "../../lib/pkgDropDedupe";
 import { writeClipboard } from "../../lib/clipboard";
@@ -596,6 +597,7 @@ export default function InstallPackageScreen() {
   const installing = usePkgLibrary(host, (s) => s.installing);
   const installingAll = usePkgLibrary(host, (s) => s.installingAll);
   const busyNotice = usePkgLibrary(host, (s) => s.busyNotice);
+  const refreshDeferred = usePkgLibrary(host, (s) => s.refreshDeferred);
   const downloadNotice = usePkgLibrary(host, (s) => s.downloadNotice);
   // Whether this console's queue is running something — its row then carries
   // the live status, and the page-level line would only repeat it.
@@ -635,6 +637,13 @@ export default function InstallPackageScreen() {
     Map<string, InstalledPkgArtifact[]>
   >(() => new Map());
   const [pickError, setPickError] = useState<string | null>(null);
+  // A download-first link whose file name is taken by a different file: Resume or Replace.
+  const [existingPrompt, setExistingPrompt] = useState<{
+    link: string;
+    mode: LinkInstallMode;
+    displayName: string | undefined;
+    file: { path: string; existingBytes: number; total: number };
+  } | null>(null);
   // Library rows' queue state, as a string key so this screen re-renders only
   // when a row's state changes, not on every progress tick.
   const libStateKey = useUploadQueueStore((s) =>
@@ -1049,14 +1058,27 @@ export default function InstallPackageScreen() {
     if (!approved) return;
     // Remembered once it is really started, with its name, so it can be found and retried.
     useRecentLinksStore.getState().remember(host, { url: link, name: req.name, mode: req.mode });
+    // The user's name for it; else the name the link ended up with (a redirect or
+    // Content-Disposition).
+    await runUrlInstall(link, req.mode, req.name || info?.filename);
+  }
+
+  /** Start a link install that was approved. `existing`: the user's answer to a different
+   *  file already under the download's name (asked below, instead of a dead-end error). */
+  async function runUrlInstall(
+    link: string,
+    mode: LinkInstallMode,
+    displayName: string | undefined,
+    existing?: ExistingChoice,
+  ) {
+    setExistingPrompt(null);
     const startedAt = Date.now();
     try {
-      const result = await installUrl(link, host, {
-        mode: req.mode,
-        // The user's name for it; else the name the link ended up with (a redirect or
-        // Content-Disposition).
-        displayName: req.name || info?.filename,
-      });
+      const result = await installUrl(link, host, { mode, displayName, existing });
+      if (result.existingFile) {
+        setExistingPrompt({ link, mode, displayName, file: result.existingFile });
+        return;
+      }
       // A link that reached the queue (as itself, or as the file a
       // download-first produced) reports on its row. One that never got there
       // — a malformed link, a failed download — has only this line.
@@ -1429,6 +1451,49 @@ export default function InstallPackageScreen() {
             />
           </div>
         )}
+        {existingPrompt && (
+          <div className="mb-4">
+            <WarningCard
+              title={tr("linkdl.exists.title", undefined, "A different file already has this name")}
+              detail={tr(
+                "linkdl.exists.body",
+                {
+                  path: existingPrompt.file.path,
+                  have: formatBytes(existingPrompt.file.existingBytes),
+                  size: formatBytes(existingPrompt.file.total),
+                },
+                "{path} is {have}; the link is {size}. Resume keeps the bytes that match the link and downloads the rest; Replace deletes that file and downloads it again.",
+              )}
+              action={
+                <div className="flex flex-wrap gap-2">
+                  {canResumeExisting(existingPrompt.file.existingBytes, existingPrompt.file.total) && (
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() =>
+                        void runUrlInstall(existingPrompt.link, existingPrompt.mode, existingPrompt.displayName, "resume")
+                      }
+                    >
+                      {tr("linkdl.exists.resume", undefined, "Resume")}
+                    </Button>
+                  )}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() =>
+                      void runUrlInstall(existingPrompt.link, existingPrompt.mode, existingPrompt.displayName, "replace")
+                    }
+                  >
+                    {tr("linkdl.exists.replace", undefined, "Replace")}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setExistingPrompt(null)}>
+                    {tr("linkdl.exists.cancel", undefined, "Not now")}
+                  </Button>
+                </div>
+              }
+            />
+          </div>
+        )}
         {error && (
           <div className="mb-4">
             <WarningCard
@@ -1447,6 +1512,15 @@ export default function InstallPackageScreen() {
               <span>{busyNotice}</span>
             </div>
           </div>
+        )}
+        {refreshDeferred && (
+          <p role="status" className="mb-4 text-xs text-[var(--color-muted)]">
+            {tr(
+              "pkglib.refreshDeferred",
+              undefined,
+              "The package list refreshes when the install that is running ends.",
+            )}
+          </p>
         )}
         {/* "Download through this computer" runs before its install joins
             the queue, so it reports here, next to the queue it will join. */}
