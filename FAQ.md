@@ -245,7 +245,7 @@ so overlapping work (a temperature read during an install) cannot crash the help
 There is no 32-bit x86 (i386 / i686) build for any desktop OS.
 
 **Q: Which PS5 firmware works?**
-The helper is built against PS5 Payload SDK v0.43 and the same binary runs on **1.00 to 13.60**.
+The helper is built against PS5 Payload SDK v0.44 and the same binary runs on **1.00 to 13.60**.
 Tested on 5.10, 9.60 and 13.60 (and confirmed by users on 12.20). In practice the limit is the
 **ELF loader** on port 9021, a third-party component; loader coverage is roughly 4.x to 12.x.
 

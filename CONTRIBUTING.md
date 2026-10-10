@@ -29,6 +29,10 @@ make run-client  # launch the Tauri dev app
 See the [README](README.md) and [TESTING.md](TESTING.md) for the full
 toolchain (PS5 Payload SDK, Rust, Node 22, Tauri prerequisites).
 
+The PS5 Payload SDK release is pinned in `scripts/ps5-sdk.env`. `make update-sdk`
+moves the pin to the latest upstream release and installs it (`SDK_TAG=vX.Y` for a
+specific one, `SDK_CHECK=1` to only check); see TESTING.md, Layer 2.
+
 ## Quality gate: run before opening a PR
 
 CI runs the same checks; running them locally first saves a round-trip.
