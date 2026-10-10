@@ -36,11 +36,6 @@
 int hw_info_get_text(char *out, size_t out_cap, size_t *out_written,
                      const char **err_reason_out);
 
-/* BASIC reading (CPU/SoC temp + CPU clock) — the only sensors safe to
- * fire on an auto-poll. This is what the Dashboard's 5 s tick uses. */
-int hw_temps_get_text(char *out, size_t out_cap, size_t *out_written,
-                      const char **err_reason_out);
-
 /* Per-call selectors for the EXTENDED telemetry. Each newer/risky Sony
  * getter is independently gated so a firmware that wedges on ONE of them
  * (e.g. FW 9.60 Pro hangs on SoC power) can still serve the others. The
@@ -52,8 +47,8 @@ int hw_temps_get_text(char *out, size_t out_cap, size_t *out_written,
 #define HW_EXT_SHAPE  0x8   /* 's' sceKernelGetBasicProductShape    */
 #define HW_EXT_ALL    (HW_EXT_POWER | HW_EXT_USAGE | HW_EXT_FAN | HW_EXT_SHAPE)
 
-/* `flags` form. flags=0 is identical to hw_temps_get_text (basic). Each
- * HW_EXT_* bit additionally reads that one getter — caller decides which,
+/* flags=0 is the BASIC reading (CPU/SoC temp + CPU clock), the only
+ * sensors safe to fire on an auto-poll. Each HW_EXT_* bit additionally reads that one getter — caller decides which,
  * so a known-wedging call can be excluded per firmware. MUST only carry
  * non-zero flags for an explicit user "Read sensors" request, never on an
  * auto-poll, so a wedge stays a recoverable, user-triggered event. */

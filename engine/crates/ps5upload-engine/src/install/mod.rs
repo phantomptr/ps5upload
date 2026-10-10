@@ -12,6 +12,9 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use ps5upload_core::installer_client as ic;
+use ps5upload_core::payload_lifecycle::{
+    DPI_REASON_LOADER_UNREACHABLE, DPI_REASON_NO_BRINGUP, DPI_REASON_NO_IMAGE,
+};
 
 use status::{FailReason, InstallStatus, Phase, Verdict};
 
@@ -212,8 +215,8 @@ pub fn status_from_ensure(e: &ic::Ensure) -> InstallStatus {
     s.phase = Phase::Failed;
     s.verdict = Some(Verdict::Failed);
     s.reason = Some(match e.reason {
-        Some("loader_unreachable") => FailReason::LoaderUnreachable,
-        Some("no_image") => FailReason::NoImage,
+        Some(DPI_REASON_LOADER_UNREACHABLE) => FailReason::LoaderUnreachable,
+        Some(DPI_REASON_NO_IMAGE) => FailReason::NoImage,
         _ => FailReason::NoBringup,
     });
     s.hint = e.error.clone();
@@ -831,7 +834,7 @@ async fn run_install(state: PkgInstallStateHandle, job: String, mut req: Install
                 listening: false,
                 sent: false,
                 state: None,
-                reason: Some("no_bringup"),
+                reason: Some(DPI_REASON_NO_BRINGUP),
                 error: Some("ensure task failed".into()),
             });
     if !ens.listening {
@@ -2063,7 +2066,7 @@ mod tests {
             listening: false,
             sent: false,
             state: None,
-            reason: Some("loader_unreachable"),
+            reason: Some(DPI_REASON_LOADER_UNREACHABLE),
             error: Some("nothing on :9021".into()),
         });
         assert!(matches!(st.phase, Phase::Failed));

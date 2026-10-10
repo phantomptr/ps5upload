@@ -5,7 +5,6 @@ import {
   isAutoRecoverable,
   MAX_AUTO_RECOVER_ATTEMPTS,
   PostUploadStepError,
-  refineHelperReason,
   shouldAutoRecover,
 } from "./uploadRecovery";
 
@@ -258,7 +257,7 @@ describe("helper reasons", () => {
     ).toBe(false);
   });
 
-  it.each(["helper_old", "ava1_failed", "helper_not_running"])(
+  it.each(["ava1_failed", "helper_not_running"])(
     "never retries %s blindly (a person has to act, or it fails the same way)",
     (r) => {
       expect(isAutoRecoverable(r, "")).toBe(false);
@@ -267,15 +266,5 @@ describe("helper reasons", () => {
 
   it("helper_starting is worth a retry", () => {
     expect(isAutoRecoverable("helper_starting", "")).toBe(true);
-  });
-
-  it("refineHelperReason turns helper_not_ava1 into helper_old once the console runs one", () => {
-    expect(refineHelperReason("helper_not_ava1", "helper_old")).toBe("helper_old");
-    expect(refineHelperReason("helper_not_ava1", "ava1_failed")).toBe("ava1_failed");
-    expect(refineHelperReason("helper_not_ava1", "starting")).toBe("helper_starting");
-    expect(refineHelperReason("helper_not_ava1", "not_running")).toBe("helper_not_ava1");
-    expect(refineHelperReason("helper_not_ava1", null)).toBe("helper_not_ava1");
-    expect(refineHelperReason("ava1_busy", "helper_old")).toBe("ava1_busy");
-    expect(refineHelperReason(null, "helper_old")).toBeNull();
   });
 });

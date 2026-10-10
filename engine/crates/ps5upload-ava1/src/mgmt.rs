@@ -102,7 +102,6 @@ fn is_read_only(method: u16) -> bool {
             | gen::METHOD_CHEATS_STATUS
             | gen::METHOD_SMP_META_STATS
             | gen::METHOD_SDK_SCAN
-            | gen::METHOD_FTP_STATUS
             | gen::METHOD_FWSPOOF_STATUS
             | gen::METHOD_NOTIF_LIST
             | gen::METHOD_ACTIVITY_GET

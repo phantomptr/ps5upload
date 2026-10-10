@@ -116,10 +116,6 @@ export function humanizePs5Error(
     return te("err_network_drop");
   }
 
-  // ─── Replacing an older helper (engine's replace flow) ─────────────
-  if (/replace_in_progress/i.test(raw)) return te("err_replace_in_progress");
-  if (/replace_cooldown/i.test(raw)) return te("err_replace_cooldown");
-
   // ─── PS5 unreachable at connect time ───────────────────────────────
   // :9120 is the helper's single AVA1 port; :9114/:9113 still appear in older engine messages.
   if (/connect to .+:(9114|9120)/i.test(raw)) {

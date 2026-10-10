@@ -24,18 +24,6 @@ const REGION_PREFIXES: &[&str] = &[
 #[cfg(not(target_os = "android"))]
 const TRAILING_LABELS: &[&str] = &["PREINMASTER00000", "0000000000000000"];
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TmdbFetchRequest {
-    pub title_id: String,
-    #[serde(default)]
-    pub refresh: bool,
-    /// Optional region prefix to narrow the PS Store URL search
-    /// (e.g. "UP9000" for US Sony, "EP1018" for EU). When provided,
-    /// only that prefix is tried instead of all 24 known prefixes.
-    #[serde(default)]
-    pub region: Option<String>,
-}
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TmdbFetchResponse {
     #[serde(default)]
@@ -494,30 +482,6 @@ mod tests {
         let json = r#"{"ok":true}"#;
         let resp: TmdbFetchResponse = serde_json::from_str(json).unwrap();
         assert!(resp.ok);
-    }
-
-    #[test]
-    fn request_serialization() {
-        let req = TmdbFetchRequest {
-            title_id: "CUSA00001".to_string(),
-            refresh: true,
-            region: None,
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains("CUSA00001"));
-        assert!(json.contains("\"refresh\":true"));
-    }
-
-    #[test]
-    fn request_serialization_with_region() {
-        let req = TmdbFetchRequest {
-            title_id: "CUSA00001".to_string(),
-            refresh: false,
-            region: Some("UP9000".to_string()),
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains("UP9000"));
-        assert!(json.contains("\"refresh\":false"));
     }
 
     #[test]

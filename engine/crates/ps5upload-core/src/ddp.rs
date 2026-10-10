@@ -46,17 +46,6 @@ pub struct DdpStatus {
     pub running_app_titleid: String,
 }
 
-impl DdpStatus {
-    pub fn is_awake(&self) -> bool {
-        self.code == 200
-    }
-    /// In standby and therefore wakeable. This is the state that decides
-    /// whether offering a Wake button means anything.
-    pub fn is_standby(&self) -> bool {
-        self.code == 620
-    }
-}
-
 /// Parse a DDP reply. Unknown keys are ignored: Sony adds fields between
 /// firmware versions, and a strict parser would reject a healthy console.
 pub fn parse_reply(text: &str) -> Result<DdpStatus> {
@@ -179,7 +168,6 @@ device-discovery-protocol-version:00030010\nsystem-version:09600004\n";
         let s = parse_reply(AWAKE).unwrap();
         assert_eq!(s.code, 200);
         assert_eq!(s.status_text, "Ok");
-        assert!(s.is_awake() && !s.is_standby());
         assert_eq!(s.host_name, "Living Room PS5");
         assert_eq!(s.host_type, "PS5");
         assert_eq!(s.system_version, "09600004");
@@ -201,7 +189,7 @@ device-discovery-protocol-version:00030010\nsystem-version:09600004\n";
              running-app-name:Black Myth: Wukong\nrunning-app-titleid:PPSA23226\n",
         )
         .unwrap();
-        assert!(s.is_standby() && !s.is_awake());
+        assert_eq!(s.code, 620);
         assert_eq!(s.status_text, "Server Standby");
         // A colon inside the value must survive: split on the FIRST colon only.
         assert_eq!(s.running_app_name, "Black Myth: Wukong");
@@ -212,7 +200,6 @@ device-discovery-protocol-version:00030010\nsystem-version:09600004\n";
     fn an_unknown_code_is_reported_rather_than_guessed() {
         let s = parse_reply("HTTP/1.1 500 Kaboom\n").unwrap();
         assert_eq!(s.code, 500);
-        assert!(!s.is_awake() && !s.is_standby());
     }
 
     #[test]

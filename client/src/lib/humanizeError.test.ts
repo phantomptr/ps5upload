@@ -53,15 +53,6 @@ describe("humanizePs5Error", () => {
     });
   });
 
-  describe("replacing an older helper", () => {
-    it("maps replace_in_progress and replace_cooldown to their own messages", () => {
-      expect(humanizePs5Error("replace_in_progress: another replace is running")).toMatch(
-        /already being replaced/i,
-      );
-      expect(humanizePs5Error("replace_cooldown: wait 42 s")).toMatch(/wait a minute/i);
-    });
-  });
-
   describe("RAR archive errors", () => {
     it("maps rar_password_required → password-protected prompt", () => {
       expect(humanizePs5Error("rar_password_required")).toMatch(

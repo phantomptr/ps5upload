@@ -51,8 +51,6 @@ mod icon_cache;
 mod image_build;
 mod inspect;
 mod install;
-mod legacy_guard;
-mod legacy_helper;
 #[cfg(not(target_os = "android"))]
 mod link;
 mod local_fs;
@@ -97,9 +95,9 @@ use ps5upload_core::{
     download::DownloadKind,
     focus::{focus_probe, FocusProbe},
     fs_ops::{
-        app_launch, app_list_registered, app_register, app_unregister, backup_content_databases,
-        fs_delete_with_op_id, fs_mkdir, fs_mount, fs_move_with_timeout, fs_op_cancel, fs_op_status,
-        fs_read, fs_read_with_timeout, fs_unmount, list_dir, reconcile, DirListing, ListDirOptions,
+        app_launch, app_list_registered, app_register, app_unregister, fs_delete_with_op_id,
+        fs_mkdir, fs_mount, fs_move_with_timeout, fs_op_cancel, fs_op_status, fs_read,
+        fs_read_with_timeout, fs_unmount, list_dir, reconcile, DirListing, ListDirOptions,
         MountResult, ReconcileMode, RegisterResult,
     },
     game_meta::{parse_param_json_bytes, parse_param_sfo_bytes},
@@ -2544,52 +2542,6 @@ struct AppUnregisterReq {
     title_id: String,
 }
 
-#[derive(Deserialize)]
-struct ContentDbBackupReq {
-    addr: Option<String>,
-    /// Local directory to write the snapshot into. A timestamped
-    /// subdirectory is created underneath.
-    dest_dir: String,
-}
-
-/// POST /api/ps5/content-db/backup — snapshot `app.db` + `appinfo.db`.
-///
-/// These two files are the console's record of what is installed, and they
-/// can drift from what is actually on disk — a title whose files are gone
-/// but whose row survives shows in Settings -> Storage and refuses to
-/// delete. Repairing that means editing the databases, so having a
-/// known-good copy first is the difference between a recoverable mistake
-/// and a broken content index.
-async fn ps5_content_db_backup(
-    State(state): State<AppState>,
-    Json(req): Json<ContentDbBackupReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
-    let stamp = now_ms() / 1000;
-    let dest = std::path::PathBuf::from(&req.dest_dir).join(format!("appdb-{stamp}"));
-    crate::log_info!("content_db_backup: addr={addr} dest={}", dest.display());
-    let dest_for_task = dest.clone();
-    match tokio::task::spawn_blocking(move || backup_content_databases(&addr, &dest_for_task))
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r)
-    {
-        Ok(paths) => {
-            let files: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
-            crate::log_info!("content_db_backup ok: {} file(s)", files.len());
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({ "ok": true, "dir": dest, "files": files })),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            crate::log_warn!("content_db_backup failed: {e:#}");
-            json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response()
-        }
-    }
-}
-
 async fn ps5_app_unregister(
     State(state): State<AppState>,
     Json(req): Json<AppUnregisterReq>,
@@ -3277,7 +3229,7 @@ async fn ps5_elfldr_ensure(Json(q): Json<HostQuery>) -> impl IntoResponse {
 
 /// The first time a console answers with the 6.0 helper, delete the pre-6.0 helper's folders (once per
 /// console, remembered on disk; a failed attempt is retried on a later answer). Background and
-/// best-effort: it never delays or fails the state answer.
+/// best-effort: it never delays or fails the status answer.
 fn spawn_console_upgrade_cleanup(console: String) {
     static RUNNING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
     let Some(dir) = crate::remote::store::data_dir() else {
@@ -3308,94 +3260,6 @@ fn spawn_console_upgrade_cleanup(console: String) {
             .unwrap_or_else(|e| e.into_inner())
             .retain(|h| h != &host);
     });
-}
-
-/// GET /api/ps5/helper/state?host= — `{"state": "ava1" | "helper_old" | "starting" | "ava1_failed" | "not_running"}`: whether the
-/// console runs an AVA1 helper, an older helper that only speaks the old protocol (the UI offers
-/// the one-click update), or nothing (the usual send-payload flow). A TCP-level answer: pairing is
-/// a session matter.
-async fn ps5_helper_state(Query(q): Query<HostQuery>) -> impl IntoResponse {
-    // The client sends `[v6]:port` for an IPv6 console; the probes add their own ports.
-    let host = legacy_guard::key(&q.host);
-    let console = host.clone();
-    let r = tokio::task::spawn_blocking(move || {
-        legacy_helper::state(&host, legacy_helper::Ports::default())
-    })
-    .await;
-    if matches!(r, Ok(legacy_helper::AVA1)) {
-        spawn_console_upgrade_cleanup(console);
-    }
-    match r {
-        Ok(s) => (StatusCode::OK, Json(serde_json::json!({ "state": s }))).into_response(),
-        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
-    }
-}
-
-/// POST /api/ps5/helper/replace {host} — replaces an older helper: its shutdown request, a wait for
-/// the retired transfer and management ports to close, the stamped helper to :9021 (the trust slot and launch token mean no
-/// pairing code), a wait for :9120. Replies `{"state","replaced"}`. Errors carry a stable token at
-/// the start of `error`: `legacy_helper_wedged` (409: the old helper did not exit; offer the
-/// console restart), `helper_not_running` (409: nothing to replace). Anything else is a 502 with
-/// the send failure. A console that already runs AVA1 answers `replaced:false` and is not touched.
-async fn ps5_helper_replace(Json(q): Json<HostQuery>) -> impl IntoResponse {
-    let host = legacy_guard::key(&q.host);
-    let r =
-        tokio::task::spawn_blocking(move || -> Result<serde_json::Value, (StatusCode, String)> {
-            let ports = legacy_helper::Ports::default();
-            match legacy_helper::state(&host, ports) {
-                legacy_helper::AVA1 => {
-                    Ok(serde_json::json!({ "state": "ava1", "replaced": false }))
-                }
-                legacy_helper::HELPER_OLD => {
-                    // One replace per console at a time, and 60 s between restarts.
-                    // Read the bundle BEFORE claiming the console: a bundle that cannot be read
-                    // must not burn the 60 s cooldown for a replace that never started.
-                    let elf = bundled_payload::image_bytes(bundled_payload::Image::Payload)
-                        .map_err(|e| (StatusCode::BAD_GATEWAY, e))?;
-                    let _permit = legacy_guard::global()
-                        .begin(&host, std::time::Instant::now())
-                        .map_err(|t| (StatusCode::CONFLICT, legacy_guard::message(t)))?;
-                    let stamped = ava1_api::stamped_helper(&elf);
-                    let h2 = host.clone();
-                    legacy_helper::replace(
-                        &host,
-                        ports,
-                        legacy_helper::WAIT_CLOSE,
-                        legacy_helper::WAIT_AVA1,
-                        // Companion: replace() already shut the old helper down; the sender's own
-                        // eviction would only repeat the request.
-                        move || {
-                            ps5upload_core::payload_lifecycle::send_elf_to_loader(
-                                &h2,
-                                ps5upload_core::payload_lifecycle::PS5_LOADER_PORT,
-                                &stamped,
-                                ps5upload_core::payload_lifecycle::LoaderImage::Companion,
-                            )
-                            .map(|_| ())
-                        },
-                    )
-                    .map(|r| {
-                        serde_json::json!({
-                            "state": if r.ava1_up { "ava1" } else { "starting" },
-                            "replaced": true,
-                        })
-                    })
-                    .map_err(|e| match e {
-                        legacy_helper::ReplaceError::Wedged => {
-                            (StatusCode::CONFLICT, e.to_string())
-                        }
-                        legacy_helper::ReplaceError::Send(m) => (StatusCode::BAD_GATEWAY, m),
-                    })
-                }
-                other => Err((StatusCode::CONFLICT, legacy_guard::not_replaceable(other))),
-            }
-        })
-        .await;
-    match r {
-        Ok(Ok(v)) => (StatusCode::OK, Json(v)).into_response(),
-        Ok(Err((code, msg))) => json_err(code, msg).into_response(),
-        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
-    }
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -3675,45 +3539,6 @@ async fn ps5_fs_read_preview(
                 .into_response()
         }
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
-    }
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct FakelibManifestReq {
-    /// Host directory holding `manifest.json` and `profiles/<titleId>/`.
-    path: String,
-}
-
-/// GET /api/fakelibs/manifest — read the local fakelib corpus manifest.
-///
-/// The corpus lives on the USER'S machine, not the console: profiles are
-/// gathered from their own games by the app's Backport scan. The desktop
-/// build could read it through Tauri, but the browser build cannot touch the
-/// filesystem at all, so it goes through the engine — the same missing-half
-/// problem as fs_read_preview and fs_write_bytes.
-///
-/// Read-only, and confined to the single file the caller names a directory
-/// for: a caller cannot walk it into an arbitrary read, because only
-/// `<path>/manifest.json` is ever opened.
-async fn fakelibs_manifest(
-    axum::extract::Query(req): axum::extract::Query<FakelibManifestReq>,
-) -> impl IntoResponse {
-    let manifest = std::path::Path::new(&req.path).join("manifest.json");
-    match tokio::task::spawn_blocking(move || std::fs::read_to_string(&manifest)).await {
-        Ok(Ok(text)) => match serde_json::from_str::<serde_json::Value>(&text) {
-            Ok(json) => (StatusCode::OK, Json(json)).into_response(),
-            Err(e) => json_err(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                format!("manifest.json is not valid JSON: {e}"),
-            )
-            .into_response(),
-        },
-        Ok(Err(e)) => json_err(
-            StatusCode::NOT_FOUND,
-            format!("no fakelib corpus at {}: {e}", req.path),
-        )
-        .into_response(),
-        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
     }
 }
 
@@ -5258,16 +5083,7 @@ async fn ps5_status(
     // transaction fields (runtime_port, shutdown, takeover_requested, active_transactions,
     // last_tx_seq, recovered_transactions) no longer exist; nothing reads them.
     let result = tokio::task::spawn_blocking(move || {
-        let body = ps5upload_core::mgmt::call(&addr, ps5upload_core::mgmt::m::NODE_STATUS, b"")
-            .map_err(|e| {
-                // No AVA1 listener: tell an older helper (Update) from nothing running.
-                let host = legacy_guard::key(&addr);
-                anyhow::anyhow!(legacy_helper::fold_status_error(
-                    format!("{e:#}"),
-                    &host,
-                    legacy_helper::Ports::default()
-                ))
-            })?;
+        let body = ps5upload_core::mgmt::call(&addr, ps5upload_core::mgmt::m::NODE_STATUS, b"")?;
         let json: serde_json::Value = serde_json::from_slice(&body)?;
         Ok::<_, anyhow::Error>(json)
     })
@@ -5285,6 +5101,7 @@ async fn ps5_status(
                 "status ok",
             );
             helper_mirror::note_console(&console);
+            spawn_console_upgrade_cleanup(console);
             (StatusCode::OK, Json(json)).into_response()
         }
         Ok(Err(e)) => {
@@ -10075,7 +9892,6 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             get(collection_api::get_settings).put(collection_api::put_settings),
         )
         .route("/api/collection/library", get(collection_api::get_library))
-        .route("/api/collection/summary", get(collection_api::get_summary))
         .route("/api/collection/games/{id}", get(collection_api::get_game))
         .route(
             "/api/collection/games/{id}/cover",
@@ -10153,7 +9969,6 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/app/launch", post(ps5_app_launch))
         .route("/api/ps5/app/register", post(ps5_app_register))
         .route("/api/ps5/app/unregister", post(ps5_app_unregister))
-        .route("/api/ps5/content-db/backup", post(ps5_content_db_backup))
         .route("/api/ps5/hw/info", get(ps5_hw_info))
         .route("/api/ps5/hw/temps", get(ps5_hw_temps))
         .route("/api/ps5/syslog/tail", get(ps5_syslog_tail))
@@ -10172,7 +9987,6 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/proc/list", get(ps5_proc_list))
         .route("/api/ps5/app/lifecycle", post(ps5_app_lifecycle))
         .route("/api/ps5/klog", get(ps5_klog))
-        .route("/api/fakelibs/manifest", get(fakelibs_manifest))
         // The app-managed corpus: the user builds it by importing a pack or
         // scanning a console, and every later backport reuses it.
         .route("/api/fakelibs/corpus", get(fakelibs_api::get_corpus))
@@ -10201,8 +10015,6 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/process/list", get(ps5_process_list))
         .route("/api/ps5/elfldr/health", get(ps5_elfldr_health))
         .route("/api/ps5/elfldr/ensure", post(ps5_elfldr_ensure))
-        .route("/api/ps5/helper/state", get(ps5_helper_state))
-        .route("/api/ps5/helper/replace", post(ps5_helper_replace))
         .route("/api/ps5/process/kill", post(ps5_process_kill))
         .route("/api/ps5/power/control", post(ps5_power_control))
         .route("/api/ps5/power/telemetry", get(ps5_power_telemetry))

@@ -226,7 +226,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(FailReason::LoaderUnreachable).unwrap(),
-            "loader_unreachable"
+            ps5upload_core::payload_lifecycle::DPI_REASON_LOADER_UNREACHABLE
         );
     }
 

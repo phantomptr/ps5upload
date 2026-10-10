@@ -6,7 +6,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ava1::gen::{self, FsMkdir, MgmtText};
+use ava1::gen::{self, MgmtText};
 use ava1::keys::Identity;
 use ava1::peers::PeerStore;
 use ava1::session::{connect, Session, Timing};
@@ -99,14 +99,9 @@ fn untext(b: &[u8]) -> MgmtText {
     MgmtText::decode(b).expect("a MgmtText reply")
 }
 
+/// The stub behind the fs.mkdir slot reads the legacy `{"path":...}` body.
 fn mkdir(path: &str) -> Vec<u8> {
-    FsMkdir {
-        path: path.into(),
-        mode: 0o755,
-        parents: 1,
-    }
-    .to_bytes()
-    .unwrap()
+    text(&serde_json::json!({ "path": path }).to_string())
 }
 
 const VOLUMES: u16 = gen::METHOD_FS_VOLUMES;
@@ -218,9 +213,10 @@ async fn c_mgmt_text_method_answers_a_mgmt_text() {
 #[tokio::test(flavor = "multi_thread")]
 async fn c_mgmt_error_frame_becomes_status_and_cause() {
     let (_srv, s) = rig("errors").await;
-    // typed fs method: ok, and the path reaches the legacy handler JSON-escaped
+    // an empty ack: ok, and the path reaches the legacy handler JSON-escaped
     let r = s.rpc(MKDIR, &mkdir("/data/a")).await.unwrap();
-    assert_eq!((r.status, r.body.len()), (OK, 0));
+    assert_eq!(r.status, OK);
+    assert!(untext(&r.body).body.is_empty());
     assert_eq!(mgmt::last_path(), "/data/a");
     let r = s.rpc(MKDIR, &mkdir("/data/q\"uote")).await.unwrap();
     assert_eq!(r.status, OK);

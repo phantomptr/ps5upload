@@ -5,7 +5,6 @@
 // TCP send) stay in-process.
 
 import { trStatic } from "../lib/trStatic";
-import { humanizePs5Error } from "../lib/humanizeError";
 import {
   classifySession,
   reportIfNotPaired,
@@ -487,12 +486,7 @@ export async function sendPayload(
     { ip, path: elfPath, port: port ?? null },
   );
   if (resp && resp.ok === false) {
-    const msg = resp.error ?? resp.status ?? "payload_send failed";
-    // The engine's replace guard tokens get their own localized text; every other
-    // failure keeps its raw message.
-    throw new Error(
-      /replace_(in_progress|cooldown)/i.test(msg) ? humanizePs5Error(msg) : msg,
-    );
+    throw new Error(resp.error ?? resp.status ?? "payload_send failed");
   }
   return { viaPayloadManager: sentViaPayloadManager(resp?.status) };
 }
@@ -4480,17 +4474,12 @@ export function humanizeJobErrorReason(
       return isTauriEnv()
         ? trStatic(
             "joberr.helper_not_ava1",
-            "The PS5 helper is not running. Send it from the Connection screen (or use Update helper if the banner offers it), then retry.",
+            "The PS5 helper is not running. Send it from the Connection screen, then retry.",
           )
         : trStatic(
             "joberr.helper_not_ava1_web",
-            "The PS5 helper is not running. This web UI cannot send it: start the ps5upload payload on the console with your usual payload loader (or use Update helper if the banner offers it), then retry.",
+            "The PS5 helper is not running. This web UI cannot send it: start the ps5upload payload on the console with your usual payload loader, then retry.",
           );
-    case "helper_old":
-      return trStatic(
-        "joberr.helper_old",
-        "The PS5 is running an older helper. Click Update helper in the banner at the top, then retry.",
-      );
     case "ava1_not_paired":
     case "not_paired":
       return trStatic(
@@ -4784,7 +4773,7 @@ export async function payloadCheck(ip: string): Promise<{
    *  Defaults to true when absent so an older engine degrades to the old
    *  interpretation rather than claiming a console outage it can't see. */
   engineReachable: boolean;
-  /** The ONE status verdict (connected / needs_pairing / helper_old / down),
+  /** The ONE status verdict (connected / needs_pairing / down),
    *  classified from the same reply. See lib/consoleSession.ts. */
   session: SessionState;
   /** Raw error string from the engine when reachable=false. Lets the

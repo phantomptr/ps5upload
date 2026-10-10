@@ -60,10 +60,8 @@ const FATAL_REASON_SUBSTRINGS = [
   // here: no AVA1 listener means the helper is not running, and re-sending it is the fix.
   "not_paired",
   "password_needed",
-  // The console runs an older helper (the banner's Update helper is the fix), its new helper's
-  // transfer server did not start, or nothing is running to replace: a retry changes nothing.
+  // The helper's transfer server did not start, or nothing is running: a retry changes nothing.
   // `helper_starting` is NOT here: it clears by waiting.
-  "helper_old",
   "ava1_failed",
   "helper_not_running",
   // An archive the uploader cannot stream fails the same way every time (the engine's
@@ -150,29 +148,6 @@ export class PostUploadStepError extends Error {
 export interface RecoverOptions {
   /** True where the app can send the helper itself (desktop). Default true. */
   canSendHelper?: boolean;
-}
-
-/**
- * Sharpens a `helper_not_ava1` failure with what the console actually runs (the engine's
- * `GET /api/ps5/helper/state` token): an older helper reads `helper_old` (the banner offers
- * Update), a failed one `ava1_failed`, a booting one `helper_starting`. Any other reason, or a
- * state that adds nothing, comes back unchanged.
- */
-export function refineHelperReason(
-  reason: string | null,
-  helperState: string | null | undefined,
-): string | null {
-  if (reason !== "helper_not_ava1") return reason;
-  switch (helperState) {
-    case "helper_old":
-      return "helper_old";
-    case "ava1_failed":
-      return "ava1_failed";
-    case "starting":
-      return "helper_starting";
-    default:
-      return reason;
-  }
 }
 
 /**

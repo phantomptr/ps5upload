@@ -172,11 +172,8 @@ const EXPECTED: &[&str] = &[
     "sdk.restore",
     "tmdb.fetch",
     "tmdb.store",
-    "ftp.start",
-    "ftp.status",
     "fwspoof.status",
     "notif.list",
-    "notif.send",
     "notif.clear",
     "toast.send",
     "activity.get",
@@ -214,7 +211,6 @@ const SONY: &[&str] = &[
     "cheats.toggle",
     "cheats.reload",
     "notif.list",
-    "notif.send",
     "notif.clear",
     "toast.send",
     "rp.request",
@@ -251,7 +247,7 @@ fn audit(check: &str) {
 fn the_task_7_block_names_every_method_of_the_group_once() {
     let b = block();
     let got: BTreeSet<String> = b.iter().map(|(n, _)| dotted(n)).collect();
-    // fwspoof has no group separator in its constant name; ftp/tmdb/etc. do
+    // fwspoof has no group separator in its constant name; tmdb/etc. do
     let want: BTreeSet<String> = EXPECTED.iter().map(|s| s.to_string()).collect();
     assert_eq!(b.len(), got.len(), "duplicate method in the block");
     assert_eq!(got, want);
@@ -306,15 +302,10 @@ fn the_real_handlers_pass_every_audit() {
 fn the_notice_and_power_adapters_keep_their_request_caps_and_the_destructive_actions_are_deferred()
 {
     let rt = std::fs::read_to_string(payload().join("src/runtime.c")).unwrap();
-    // toast.send / notif.send: a body over 4 KiB is refused before the handler (-> ERR_PROTOCOL)
-    for f in ["mgmt_w_toast_send", "mgmt_w_notif_send"] {
-        let i = rt.find(&format!("static int {f}(")).unwrap();
-        let body = &rt[i..i + 400];
-        assert!(
-            body.contains("l > 4096") && body.contains("body_too_large"),
-            "{f}"
-        );
-    }
+    // toast.send: a body over 4 KiB is refused before the handler (-> ERR_PROTOCOL)
+    let i = rt.find("static int mgmt_w_toast_send(").unwrap();
+    let body = &rt[i..i + 400];
+    assert!(body.contains("l > 4096") && body.contains("body_too_large"));
     // power.control: reboot/shutdown/standby run after the reply under the capture sink
     let i = rt.find("static int handle_system_control(").unwrap();
     let h = &rt[i..i + 6000];

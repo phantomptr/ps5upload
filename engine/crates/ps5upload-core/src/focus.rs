@@ -103,23 +103,6 @@ pub struct FocusProbe {
 }
 
 impl FocusProbe {
-    /// True when `app_id` is the full-screen app currently on screen.
-    ///
-    /// Returns `None` — not `Some(false)` — when the console could not
-    /// answer, so callers never report "backgrounded" on missing data.
-    pub fn is_foreground(&self, app_id: u32) -> Option<bool> {
-        // The event flag is the real answer; the BigApp getter does not even
-        // exist on FW 9.60. Fall back to it only if some other firmware has
-        // it but lacks the flag.
-        if self.focus_available && self.focus_app_id >= 0 {
-            return Some(self.focus_app_id as u64 == app_id as u64);
-        }
-        if self.apis.get(BIG_APP_SYMBOL).copied() != Some(true) {
-            return None;
-        }
-        Some(self.big_app_id > 0 && self.big_app_id as u32 == app_id)
-    }
-
     /// Candidate symbols that resolved on this console, sorted.
     ///
     /// This is the actual deliverable of the probe right now: it tells us
@@ -146,69 +129,6 @@ pub fn focus_probe(addr: &str) -> Result<FocusProbe> {
 mod tests {
     use super::*;
 
-    fn probe(big_app: bool, id: i32) -> FocusProbe {
-        let mut apis = BTreeMap::new();
-        apis.insert(BIG_APP_SYMBOL.to_string(), big_app);
-        FocusProbe {
-            ok: true,
-            apis,
-            big_app_id: id,
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn foreground_when_ids_match() {
-        assert_eq!(probe(true, 24600).is_foreground(24600), Some(true));
-    }
-
-    #[test]
-    fn background_when_another_app_owns_the_screen() {
-        assert_eq!(probe(true, 32775).is_foreground(24600), Some(false));
-    }
-
-    #[test]
-    fn background_when_nothing_is_full_screen() {
-        assert_eq!(probe(true, 0).is_foreground(24600), Some(false));
-    }
-
-    /// The distinction that matters: an unavailable API must never be
-    /// reported as "the game is backgrounded".
-    #[test]
-    fn unknown_when_api_unavailable() {
-        assert_eq!(probe(false, 0).is_foreground(24600), None);
-    }
-
-    #[test]
-    fn negative_id_is_not_foreground() {
-        assert_eq!(probe(true, -1).is_foreground(24600), Some(false));
-    }
-
-    #[test]
-    fn focus_flag_beats_the_missing_big_app_getter() {
-        // FW 9.60 has no BigApp getter at all, so the event flag must be the
-        // deciding input — otherwise is_foreground() is permanently None.
-        let p = FocusProbe {
-            ok: true,
-            focus_available: true,
-            focus_app_id: 24600,
-            ..Default::default()
-        };
-        assert_eq!(p.is_foreground(24600), Some(true));
-        assert_eq!(p.is_foreground(7), Some(false));
-    }
-
-    #[test]
-    fn unreadable_flag_with_no_getter_is_unknown_not_false() {
-        let p = FocusProbe {
-            ok: true,
-            focus_available: false,
-            focus_app_id: -1,
-            ..Default::default()
-        };
-        assert_eq!(p.is_foreground(24600), None);
-    }
-
     #[test]
     fn parses_payload_json() {
         let raw = br#"{"ok":true,"apis":{
@@ -221,7 +141,6 @@ mod tests {
         assert_eq!(p.available(), vec![BIG_APP_SYMBOL]);
         assert_eq!(p.big_app_id, 24600);
         assert_eq!(p.monotonic_ms, 123456);
-        assert_eq!(p.is_foreground(24600), Some(true));
     }
 
     #[test]
@@ -236,7 +155,6 @@ mod tests {
         assert_eq!(p.focus_app_id, 24600);
         assert_eq!(p.apps.len(), 1);
         assert_eq!(p.apps[0].title_id, "PPSA23226");
-        assert_eq!(p.is_foreground(24600), Some(true));
     }
 
     /// A probe from an OLD payload carries none of the focus fields; it must
@@ -246,6 +164,5 @@ mod tests {
         let p: FocusProbe = serde_json::from_slice(br#"{"ok":true}"#).unwrap();
         assert!(!p.focus_available);
         assert_eq!(p.focus_app_id, -1);
-        assert_eq!(p.is_foreground(24600), None);
     }
 }

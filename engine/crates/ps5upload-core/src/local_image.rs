@@ -115,19 +115,6 @@ pub fn parse_udisks_mount_point(output: &str) -> Option<String> {
     }
 }
 
-/// Does this look like a raw disk image we can attach?
-///
-/// Conservative on purpose: attaching an arbitrary file is at best a
-/// confusing no-op, and this is a user-facing action on a file they
-/// picked.
-pub fn looks_like_image(path: &str) -> bool {
-    let lower = path.to_ascii_lowercase();
-    lower.ends_with(".exfat")
-        || lower.ends_with(".img")
-        || lower.ends_with(".image")
-        || lower.ends_with(".raw")
-}
-
 // ── Operations ──────────────────────────────────────────────────────
 
 use std::process::Command;
@@ -320,16 +307,6 @@ mod tests {
         for bad in ["", "error: no such file", "Mapped file x as nothing"] {
             assert_eq!(parse_udisks_loop_device(bad), None, "{bad}");
             assert_eq!(parse_hdiutil_device(bad), None, "{bad}");
-        }
-    }
-
-    #[test]
-    fn image_extensions_are_recognised_case_insensitively() {
-        for ok in ["a.exfat", "B.IMG", "c.Image", "d.raw"] {
-            assert!(looks_like_image(ok), "{ok}");
-        }
-        for no in ["game.pkg", "notes.txt", "archive.zip", "noext"] {
-            assert!(!looks_like_image(no), "{no}");
         }
     }
 

@@ -51,7 +51,6 @@
 #include "sdk_changer.h"
 #include "tmdb.h"
 #include "fw_spoof.h"
-#include "ftp_server.h"
 #include "sys_time.h"
 #include "sys_registry.h"
 #include "profile.h"
@@ -233,8 +232,6 @@
 #define MGMT_FRAME_HW_FAN_CURVE_GET_ACK 247u
 #define MGMT_FRAME_NOTIF_LIST 198u
 #define MGMT_FRAME_NOTIF_LIST_ACK 199u
-#define MGMT_FRAME_NOTIF_SEND 240u
-#define MGMT_FRAME_NOTIF_SEND_ACK 241u
 #define MGMT_FRAME_NOTIF_CLEAR 251u
 #define MGMT_FRAME_NOTIF_CLEAR_ACK 252u
 #define MGMT_FRAME_CHEATS_LIST 200u
@@ -267,10 +264,6 @@
 #define MGMT_FRAME_TMDB_FETCH_ACK 223u
 #define MGMT_FRAME_TMDB_STORE 228u
 #define MGMT_FRAME_TMDB_STORE_ACK 229u
-#define MGMT_FRAME_FTP_START 224u
-#define MGMT_FRAME_FTP_START_ACK 225u
-#define MGMT_FRAME_FTP_STATUS 226u
-#define MGMT_FRAME_FTP_STATUS_ACK 227u
 #define MGMT_FRAME_FWSPOOF_STATUS 232u
 #define MGMT_FRAME_FWSPOOF_STATUS_ACK 233u
 #define MGMT_FRAME_APPINFO_QUERY 234u
@@ -348,17 +341,17 @@
 /* Source-stability gate. When non-zero, refuses to mount an image
  * whose mtime is newer than this many seconds. Originally a defense
  * against "user mounts mid-upload" but in practice it bites every
- * normal user: ps5upload's COMMIT_TX_ACK already proves the file is
- * whole + fsync'd, and the user clicking Mount right after upload
- * is the *expected* flow. The gate as a 3-second wall produced
+ * normal user: an AVA1 upload only renames the file into place once
+ * it is whole and fsync'd, and the user clicking Mount right after
+ * upload is the *expected* flow. The gate as a 3-second wall produced
  * `fs_mount_source_unstable: image modified 1 s ago` failures on
  * legitimate mounts and forced the user to wait + retry.
  *
- * Set to 0 (disabled) since the COMMIT_TX_ACK is the real
- * stability signal we trust. Other ingest paths (FTP, manual cp,
- * etc.) that lack a clean "I'm done" signal will surface as
- * natural mount errors during the LVD attach / nmount step
- * instead of a misleading "modified 1 s ago" rejection.
+ * Set to 0 (disabled) since the upload's commit is the real
+ * stability signal we trust. Other ingest paths (a third-party FTP
+ * server, manual cp, etc.) that lack a clean "I'm done" signal will
+ * surface as natural mount errors during the LVD attach / nmount
+ * step instead of a misleading "modified 1 s ago" rejection.
  *
  * The constant is kept (vs ripping the whole if-block) so a
  * future build that needs to re-enable a stability heuristic for
@@ -452,8 +445,8 @@ static int json_copy_unescaped_string(const char *start, const char *end,
                                       char *out, size_t out_len);
 static const char *find_bounded(const char *hay, size_t hay_len,
                                 const char *needle);
-/* Forward declarations — runtime_reconcile_mounts uses fs_mount and
- * mount_tracker helpers defined further down in the file. */
+/* Forward declarations — fs_mount and mount_tracker helpers defined
+ * further down in the file. */
 static int fs_mount_try_unmount(const char *mount_point);
 static int fs_mount_detach_md(int unit_id);
 static int fs_mount_detach_lvd(int unit_id);
@@ -684,92 +677,6 @@ int mntinfo_snapshot(struct statfs **out) {
     pthread_mutex_unlock(&mtx);
     *out = copy;
     return n;
-}
-
-void runtime_reconcile_mounts(void) {
-    struct statfs *mnts = NULL;
-    int nmnts = mntinfo_snapshot(&mnts);
-    if (nmnts <= 0 || mnts == NULL) return;
-
-    int cleaned = 0;
-    int kept    = 0;
-    for (int i = 0; i < nmnts; i++) {
-        const char *mnt_on   = mnts[i].f_mntonname;
-        const char *mnt_from = mnts[i].f_mntfromname;
-        /* Reconcile our own mounts only. Two cases:
-         *   - Legacy: anything under /mnt/ps5upload/<name>. We always
-         *     own these (the namespace is reserved by handle_fs_mount).
-         *   - User-chosen mount paths: identified by tracker presence.
-         *     A user-mounted /mnt/ext1/games/foo has a tracker at
-         *     /data/ps5upload/mounts/mnt_ext1_games_foo.src; system
-         *     mounts at /mnt/ext1 itself do not.
-         * Skip everything else so we never accidentally unmount a
-         * Sony-managed mount or the user's own filesystem. */
-        const int legacy_ours =
-            strncmp(mnt_on, "/mnt/ps5upload/", 15) == 0 && mnt_on[15] != '\0';
-        if (!legacy_ours && !mount_tracker_exists(mnt_on)) continue;
-
-        int orphaned = 0;
-        const char *reason = "unknown";
-
-        /* Check the dev node. If it's a /dev/md* or /dev/lvd* that
-         * no longer stats, the MDIOCATTACH/LVD entry is gone and
-         * the mount can't do anything useful. */
-        struct stat dev_st;
-        if (stat(mnt_from, &dev_st) != 0) {
-            orphaned = 1;
-            reason = "dev_node_gone";
-        }
-
-        /* Check the source image file. If it was deleted/moved since
-         * the mount was created, keep the mount — users may have
-         * intentionally moved the file and we don't own cleanup of
-         * that. Log only; don't clean up. */
-        char src[512];
-        int have_src = mount_tracker_read(mnt_on, src, sizeof(src));
-        if (have_src) {
-            struct stat src_st;
-            if (stat(src, &src_st) != 0) {
-                /* Source file gone — flag for info, but DON'T unmount.
-                 * Filesystem on /dev/lvd* is self-contained; the
-                 * source file being missing is a diagnostic, not a
-                 * correctness problem. Leaving this mount alive lets
-                 * the user finish whatever they were doing. */
-                fprintf(stderr,
-                    "[payload2] mount %s: source %s missing (keeping mount)\n",
-                    mnt_on, src);
-            }
-        }
-
-        if (orphaned) {
-            fprintf(stderr,
-                "[payload2] reconcile: unmounting orphan %s (%s)\n",
-                mnt_on, reason);
-            /* Extract the unit number so we can release the attachment. */
-            int lvd_unit = -1, md_unit = -1;
-            if (strncmp(mnt_from, "/dev/lvd", 8) == 0 &&
-                mnt_from[8] >= '0' && mnt_from[8] <= '9') {
-                lvd_unit = atoi(mnt_from + 8);
-            } else if (strncmp(mnt_from, "/dev/md", 7) == 0 &&
-                       mnt_from[7] >= '0' && mnt_from[7] <= '9') {
-                md_unit = atoi(mnt_from + 7);
-            }
-            (void)fs_mount_try_unmount(mnt_on);
-            if (lvd_unit >= 0) (void)fs_mount_detach_lvd(lvd_unit);
-            if (md_unit  >= 0) (void)fs_mount_detach_md(md_unit);
-            (void)rmdir(mnt_on);
-            mount_tracker_remove(mnt_on);
-            cleaned += 1;
-        } else {
-            kept += 1;
-        }
-    }
-    if (cleaned > 0 || kept > 0) {
-        fprintf(stderr,
-            "[payload2] reconcile: kept %d mount(s), cleaned %d orphan(s)\n",
-            kept, cleaned);
-    }
-    free(mnts);
 }
 
 /* Encode a mount_point to a filesystem-safe tracker filename (no
@@ -1019,7 +926,6 @@ int runtime_init(runtime_state_t *state) {
     sdk_changer_init();
     tmdb_init();
     fw_spoof_init();
-    ftp_server_init();
     return 0;
 }
 
@@ -5093,30 +4999,6 @@ static int handle_notif_clear(runtime_state_t *state) {
     return mgmt_reply(MGMT_FRAME_NOTIF_CLEAR_ACK, body, (uint64_t)n);
 }
 
-/* ── Notification send handler ──────────────────────────────────────── */
-static int handle_notif_send(runtime_state_t *state, const char *body) {
-    if (!state) return -1;
-    if (!body) {
-        const char *err = "{\"ok\":false,\"err\":\"body_required\"}";
-        return mgmt_reply(MGMT_FRAME_NOTIF_SEND_ACK, err, strlen(err));
-    }
-    char msg[512] = {0};
-    extract_json_string_field(body, "msg", msg, sizeof(msg));
-    if (msg[0] == '\0') {
-        const char *err = "{\"ok\":false,\"err\":\"msg_required\"}";
-        return mgmt_reply(MGMT_FRAME_NOTIF_SEND_ACK, err, strlen(err));
-    }
-    int level = (int)extract_json_uint64_field(body, "level");
-    int rc = notif_send_serialised(msg, level); /* sceNotificationSend needs sony_api_lock */
-    pthread_mutex_lock(&state->state_mtx);
-    state->command_count += 1;
-    pthread_mutex_unlock(&state->state_mtx);
-    const char *resp = (rc == 0)
-        ? "{\"ok\":true}"
-        : "{\"ok\":false,\"err\":\"send_failed\"}";
-    return mgmt_reply(MGMT_FRAME_NOTIF_SEND_ACK, resp, strlen(resp));
-}
-
 /* ── Cheat engine handlers ──────────────────────────────────────────── */
 
 #define CHEATS_TITLE_ID_LEN 32u
@@ -5470,42 +5352,6 @@ static int handle_fw_spoof_status(runtime_state_t *state) {
     fw_spoof_status(buf, sizeof(buf), &written);
     cheat_inc_cmd_count(state);
     return mgmt_reply(MGMT_FRAME_FWSPOOF_STATUS_ACK, buf, (uint64_t)written);
-}
-
-/* ── FTP Server handlers ──────────────────────────────────────────── */
-static int handle_ftp_start(runtime_state_t *state, const char *body) {
-    if (!state) return -1;
-    int port = 2122;
-    char root[256] = "/";
-    int readonly = 0;
-    char user[64] = {0};
-    char pass[64] = {0};
-    if (body) {
-        char needle[32];
-        snprintf(needle, sizeof(needle), "\"port\":");
-        if (strstr(body, needle)) {
-            port = (int)extract_json_uint64_field(body, "port");
-        }
-        extract_json_string_field(body, "root", root, sizeof(root));
-        extract_json_bool_field(body, "readonly", &readonly);
-        extract_json_string_field(body, "user", user, sizeof(user));
-        extract_json_string_field(body, "pass", pass, sizeof(pass));
-    }
-    char resp[512];
-    size_t written = 0;
-    ftp_server_start(port, root, readonly, user[0] ? user : NULL,
-                     pass[0] ? pass : NULL, resp, sizeof(resp), &written);
-    cheat_inc_cmd_count(state);
-    return mgmt_reply(MGMT_FRAME_FTP_START_ACK, resp, (uint64_t)written);
-}
-
-static int handle_ftp_status(runtime_state_t *state) {
-    if (!state) return -1;
-    char resp[256];
-    size_t written = 0;
-    ftp_server_status(resp, sizeof(resp), &written);
-    cheat_inc_cmd_count(state);
-    return mgmt_reply(MGMT_FRAME_FTP_STATUS_ACK, resp, (uint64_t)written);
 }
 
 /* ── Fan curve get handler ───────────────────────────────────────────── */
@@ -8320,10 +8166,6 @@ static int mgmt_w_tmdb_store(runtime_state_t *st, const char *b, uint64_t l) {
     (void)l;
     return handle_tmdb_store(st, b);
 }
-static int mgmt_w_ftp_start(runtime_state_t *st, const char *b, uint64_t l) {
-    (void)l;
-    return handle_ftp_start(st, b);
-}
 static int mgmt_w_profile_set_username(runtime_state_t *st, const char *b, uint64_t l) {
     (void)st;
     (void)l;
@@ -8352,12 +8194,6 @@ static int mgmt_w_profile_set_local_username(runtime_state_t *st, const char *b,
 static int mgmt_w_profile_info(runtime_state_t *st) {
     (void)st;
     return handle_profile_info();
-}
-
-/* notif.send shares toast.send's 4 KiB request cap over AVA1. */
-static int mgmt_w_notif_send(runtime_state_t *st, const char *b, uint64_t l) {
-    if (l > 4096) return mgmt_reply(MGMT_FRAME_ERROR, "body_too_large", 14);
-    return handle_notif_send(st, b);
 }
 
 /* toast.send: the old dispatcher refused a body over 4 KiB before the handler ran (and the handler

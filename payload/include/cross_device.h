@@ -15,9 +15,9 @@
  * rather than let the kernel find out.
  *
  * Callers that hold a user-supplied destination path MUST consult this.
- * The call sites are fs.rename (mgmt_fs.c), the shell's `mv`
- * (shell_builtin.c), and FTP RNFR/RNTO (ftp_server.c) — anywhere a
- * remote client picks both paths — and AVA1's commit of an uploaded file
+ * The call sites are fs.rename (mgmt_fs.c) and the shell's `mv`
+ * (shell_builtin.c) — anywhere a remote client picks both paths — and
+ * AVA1's commit of an uploaded file
  * or folder (ava1_apply.c, through the same_device hook). Renames of our
  * own tmp files into their final name in the SAME directory are safe by
  * construction and do not need it.
@@ -32,7 +32,6 @@
  *   src/cheats.c          1  dir    cheat state: tmp -> final
  *   src/main.c            1  dir    stderr.log -> stderr.log.old
  *   src/notif.c           1  dir    notification store: tmp -> final
- *   src/ftp_server.c      1  guard  RNFR/RNTO (xdev_rename_crosses_l, refuses UNKNOWN)
  *   src/mgmt_fs.c         2  1 guard (fs.rename), 1 dir (fs.write tmp -> final)
  *   src/sdk_changer.c     3  dir    backup copy, patched file, restore (suffix stripped from the same name)
  *   src/takeover_flag.c   1  dir    takeover flag: tmp -> final

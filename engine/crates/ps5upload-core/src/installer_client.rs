@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::payload_lifecycle::{
-    join_host_port, port_is_open, send_elf_to_loader, LoaderImage, INSTALLER_PORT, PS5_LOADER_PORT,
+    join_host_port, port_is_open, send_elf_to_loader, LoaderImage, DPI_REASON_LOADER_SEND_FAILED,
+    DPI_REASON_LOADER_UNREACHABLE, DPI_REASON_NO_BRINGUP, DPI_REASON_NO_IMAGE, INSTALLER_PORT,
+    PS5_LOADER_PORT,
 };
 
 /// The name the installer is stored under when Payload Manager launches it.
@@ -286,7 +288,7 @@ fn ensure_with(
             listening: false,
             sent: false,
             state: None,
-            reason: Some("no_image"),
+            reason: Some(DPI_REASON_NO_IMAGE),
             error: Some("this engine build carries no installer daemon".into()),
         };
     };
@@ -311,9 +313,9 @@ fn ensure_with(
                     sent: loader_open,
                     state: None,
                     reason: Some(if loader_open {
-                        "loader_send_failed"
+                        DPI_REASON_LOADER_SEND_FAILED
                     } else {
-                        "loader_unreachable"
+                        DPI_REASON_LOADER_UNREACHABLE
                     }),
                     error: Some(format!(
                         "{loader_err}, and {pm_err} to launch it instead. Load elfldr (or Payload Manager) on the PS5 and retry"
@@ -351,7 +353,7 @@ fn ensure_with(
         listening: false,
         sent: true,
         state: None,
-        reason: Some("no_bringup"),
+        reason: Some(DPI_REASON_NO_BRINGUP),
         error: Some("installer delivered but :9115 never came up".into()),
     }
 }
@@ -541,7 +543,7 @@ mod tests {
             s2.store(true, std::sync::atomic::Ordering::Relaxed);
         });
         let e = ensure_with(&ip, port, None, false, Duration::from_secs(5));
-        assert_eq!(e.reason, Some("no_image"), "{e:?}");
+        assert_eq!(e.reason, Some(DPI_REASON_NO_IMAGE), "{e:?}");
     }
 
     #[test]

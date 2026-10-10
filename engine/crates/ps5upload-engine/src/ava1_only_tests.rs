@@ -498,14 +498,11 @@ fn the_startup_line_names_the_directory_the_key_and_the_paired_count() {
     );
 }
 
-/// No retired-protocol symbol survives in this crate (the one named exception is the
-/// migration shim that shuts an older helper down; it is deleted a release later).
+/// No retired-protocol symbol survives in this crate.
 #[test]
 fn engine_has_no_ftx2_symbol() {
     let needle = ["ft", "x2"].concat();
     let allowed = [
-        "legacy_helper.rs",
-        "legacy_helper_tests.rs",
         // this file names the retired variables to prove they are renamed
         "ava1_only_tests.rs",
     ];

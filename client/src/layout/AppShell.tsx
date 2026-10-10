@@ -36,10 +36,7 @@ import {
 import { useUpdateStore } from "../state/update";
 import { engineApi } from "../api/engine";
 import { fetchHwPower, payloadCheck, portCheck, procListGet } from "../api/ps5";
-import {
-  isLegacyHelperWedged,
-  sessionNeedsAttention,
-} from "../lib/consoleSession";
+import { sessionNeedsAttention } from "../lib/consoleSession";
 import { installActivityWiring } from "../state/activityWiring";
 import { installTaskWiring } from "../state/taskWiring";
 import {
@@ -424,7 +421,7 @@ function useStatusPolling() {
         // unreachable one only flips to "down" after MISS_THRESHOLD misses in
         // a row, so one busy/jittery poll holds the last-known "up".
         let newStatus: "up" | "down";
-        // A console that answers but wants pairing, or runs an older helper, HAS a helper
+        // A console that answers but wants pairing HAS a helper
         // running: calling it down would arm the auto-redeploy loop below against a live
         // console. Only the session state says what the person has to do about it.
         if (s.reachable || sessionNeedsAttention(s.session)) {
@@ -574,9 +571,8 @@ function useStatusPolling() {
           ucredElevated: carryOver ? prev.ucredElevated : s.ucredElevated,
           priorInstance: carryOver ? prev.priorInstance : s.priorInstance,
           // The one probe's verdict. Never carried over: a stale "connected" would
-          // hide a console that needs pairing or an update.
+          // hide a console that needs pairing.
           session: s.session,
-          helperWedged: isLegacyHelperWedged(s.error),
         });
         // Clear the active console's "rechecking…" flag once its probe lands.
         if (isActive(key)) setStatus({ payloadProbing: false });

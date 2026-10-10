@@ -525,7 +525,7 @@ def selftest():
 def report():
     md = open("../protocol/ava1/MGMT_METHODS.md").read()
     skip = {"handle_begin_tx_frame", "handle_query_tx_frame", "handle_commit_tx_frame", "handle_abort_tx_frame", "handle_stream_shard", "handle_status_frame"}
-    for h in re.findall(r"`src/runtime.c:\d+` `(\w+)`", md):
+    for h in re.findall(r"`src/runtime.c` `(\w+)`", md):
         if h in skip:
             continue
         for (fn, f, n, expr, sz) in findings(h, REPORT_MIN):

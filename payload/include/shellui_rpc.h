@@ -1,10 +1,10 @@
 /*
  * shellui_rpc — call Sony APIs *from inside SceShellUI's process*
  * via ptrace remote-call. This is the mechanism that lets us
- * launch games and read sensors on FW 9.60 without our caller-pid
+ * launch games on FW 9.60 without our caller-pid
  * being rejected by Sony's per-API caller-context check.
  *
- * Why ShellUI specifically: Sony's launcher and sensor stubs check
+ * Why ShellUI specifically: Sony's launcher stub checks
  * `getpid() == SceShellUI.pid` (or a small allow-list of system
  * processes). Running the call via ptrace inside ShellUI satisfies
  * that check natively because the kernel sees ShellUI as the caller.
@@ -14,8 +14,7 @@
  *      Sony API addresses inside ShellUI via kernel_dynlib_resolve.
  *      Cached for subsequent calls. Idempotent.
  *   2. shellui_rpc_launch_app(title_id, user_id) — the launcher.
- *   3. shellui_rpc_get_*temp() — the sensors.
- *   4. shellui_rpc_shutdown() — release any cached state.
+ *   3. shellui_rpc_emergency_detach() — crash-time cleanup.
  *
  * Concurrency: every RPC call serialises on a single mutex because
  * a target process can only be ptrace-attached by one tracer at a
@@ -37,9 +36,6 @@ int shellui_rpc_init(void);
 
 /* True if init succeeded and the RPC surface is usable. */
 int shellui_rpc_ready(void);
-
-/* PID of the resolved SceShellUI process. 0 if not initialized. */
-int shellui_rpc_pid(void);
 
 /* Launch a registered title via ShellUI's
  * `sceLncUtilLaunchApp(title_id, NULL, &param)` where param is a
@@ -70,61 +66,6 @@ int shellui_rpc_pid(void);
  * ShellUI — slightly slower and historically unreliable on the very
  * first launch after a fresh register. */
 int shellui_rpc_launch_app(const char *title_id, int user_id_hint);
-
-
-
-/* Sensor reads. Each returns 0 on success, -1 on RPC failure or
- * when the underlying Sony stub returned non-zero. The output is
- * written to *out only on success. */
-int shellui_rpc_get_cpu_temp(int *out_celsius);
-int shellui_rpc_get_soc_temp(int *out_celsius);
-int shellui_rpc_get_cpu_freq_hz(long *out_hz);
-int shellui_rpc_get_soc_power_mw(uint32_t *out_mw);
-
-/* Install a `.pkg` via ShellUI's `sceAppInstUtilInstallByPackage`,
- * invoked through ptrace remote-call so the caller-pid that Sony's
- * PlayGo subsystem sees is SceShellUI's — same context the system's
- * own Settings → Debug Settings → Install Package menu uses. This
- * is the path that works on FW 9.60+ where direct AppInstUtil calls
- * from our payload's process get rejected with 0x80B22404
- * (SCE_PLAYGO_ERROR_CORE_HTTP_STATUS_CODE_404_NOT_FOUND) at URL
- * pre-flight regardless of cred-forge.
- *
- * Mechanism per remote call:
- *   1. pt_attach to ShellUI.
- *   2. pt_mmap a ~16 KiB scratch region in ShellUI's address space.
- *   3. Build MetaInfo + AppInstPkgInfo + PlayGoInfo + their string
- *      payloads in a local buffer with all pointer fields fixed up
- *      to point at the corresponding offsets WITHIN the scratch
- *      region's eventual address.
- *   4. pt_copyin the local buffer to scratch.
- *   5. pt_call sceAppInstUtilInitialize() — idempotent; treats
- *      "already initialised" returns as success.
- *   6. pt_call sceAppInstUtilInstallByPackage(scratch+meta_off,
- *      scratch+pkginfo_off, scratch+playgo_off).
- *   7. Read rax — install accept (0) or Sony error code.
- *   8. pt_munmap, pt_detach.
- *
- * `url`           HTTP URL or absolute PS5 file path Sony's PlayGo
- *                 should fetch. http://desktop:port/...pkg works in
- *                 ShellUI's process context where it doesn't in ours.
- * `content_id`    36-byte content_id from the PKG header (or empty
- *                 — Sony fills it in the pkg_info struct on return,
- *                 we don't seed it).
- * `title`         Display name shown in PS5 install notifications.
- * `out_err_code`  On return: 0 on accept, or Sony's error code
- *                 (0x80A2FFxx for AppInstaller errors, 0x80B2xxxx
- *                 for PlayGo, 0xE000000x for our own machinery).
- *
- * Returns 0 if ShellUI accepted the install request. Negative on
- * RPC machinery failure (couldn't attach, mmap, copyin, or
- * AppInstUtil isn't loaded into ShellUI's address space). Sony's
- * own non-zero return goes through the `out_err_code` channel with
- * a positive return value as documented in launch_app. */
-int shellui_rpc_install_pkg(const char *url,
-                             const char *content_id,
-                             const char *title,
-                             uint32_t *out_err_code);
 
 /* Crash-time recovery: best-effort PT_DETACH any target we have an
  * active attach on. Called from main.c's fatal-signal handler so

@@ -1267,11 +1267,6 @@ fn derive_package_type(category: &str) -> Option<String> {
     }
 }
 
-/// Public wrapper over the category → BGFT `package_type` map.
-pub fn package_type_for_category(category: &str) -> Option<String> {
-    package_type_for_category_and_platform(category, "ps4")
-}
-
 /// Map a metadata category to the platform-specific BGFT package type.
 /// Unknown platforms retain the established PS4 default for compatibility.
 pub fn package_type_for_category_and_platform(category: &str, platform: &str) -> Option<String> {
@@ -1816,7 +1811,10 @@ mod tests {
             package_type_for_category_and_platform("gp", "ps5").as_deref(),
             Some("PS5DP")
         );
-        assert_eq!(package_type_for_category("gp").as_deref(), Some("PS4DP"));
+        assert_eq!(
+            package_type_for_category_and_platform("gp", "ps4").as_deref(),
+            Some("PS4DP")
+        );
     }
 
     #[test]
@@ -1892,7 +1890,7 @@ mod tests {
             let got = category_from_reader(read(build_pkg(cat)));
             assert_eq!(got.as_deref(), Some(cat), "category for {cat}");
             assert_eq!(
-                package_type_for_category(got.as_deref().unwrap()).as_deref(),
+                package_type_for_category_and_platform(got.as_deref().unwrap(), "ps4").as_deref(),
                 Some(want)
             );
         }

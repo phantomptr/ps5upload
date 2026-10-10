@@ -122,13 +122,6 @@ pub struct Volume {
 }
 
 impl Volume {
-    /// Quick filter for "would a user call this a usable drive": present,
-    /// not a placeholder, and has at least some free space. UIs building
-    /// drive-picker dropdowns want this.
-    pub fn is_usable(&self) -> bool {
-        !self.is_placeholder && self.writable && self.free_bytes > 0
-    }
-
     pub fn is_internal_user_storage(&self) -> bool {
         self.path == "/data" || self.path == "/user" || self.mount_from.contains("ssd0.user")
     }
@@ -155,17 +148,6 @@ impl Volume {
             return self.safety_reserve_bytes.min(local);
         }
         self.safety_reserve_bytes
-    }
-
-    /// Free space adjusted by the *estimated* hidden allocator pool, for
-    /// diagnosis only. Never use this to decide whether to start a transfer.
-    pub fn diagnostic_allocatable_bytes(&self) -> u64 {
-        if self.is_internal_user_storage() {
-            self.free_bytes
-                .saturating_sub(INTERNAL_STORAGE_HIDDEN_RESERVE_ESTIMATE_BYTES)
-        } else {
-            self.allocatable_bytes()
-        }
     }
 
     /// How much new data is likely to fit: all of `allocatable_bytes()` on an external or
@@ -292,13 +274,10 @@ mod tests {
         let data = parsed.find("/data").expect("/data present");
         assert_eq!(data.mount_from, "/dev/ssd0.user");
         assert!(!data.is_placeholder);
-        assert!(data.is_usable());
         let ext1 = parsed.find("/mnt/ext1").expect("/mnt/ext1 present");
         assert_eq!(ext1.mount_from, "/dev/nvme1");
-        assert!(ext1.is_usable());
         let placeholder = parsed.find("/mnt/ext0").expect("placeholder present");
         assert!(placeholder.is_placeholder);
-        assert!(!placeholder.is_usable(), "placeholder should not be usable");
     }
 
     #[test]
@@ -516,17 +495,13 @@ mod tests {
         assert_eq!(ext.likely_fits_bytes(), ext.allocatable_bytes());
     }
 
-    /// The estimate survives, but only where it cannot block anything.
+    /// The hidden-pool estimate must never block a transfer up front.
     #[test]
-    fn hidden_reserve_estimate_is_diagnosis_only() {
+    fn a_full_internal_drive_is_not_blocked_up_front() {
         let full: Volume = serde_json::from_str(
             r#"{"path":"/data","mount_from":"/user/data","fs_type":"nullfs","total_bytes":947229556736,"free_bytes":85962588160,"writable":true}"#,
         )
         .unwrap();
-        assert!(
-            full.diagnostic_allocatable_bytes() < 1024 * 1024 * 1024,
-            "the FW 12.00 console must still be diagnosable as full"
-        );
         assert_eq!(
             full.allocatable_bytes(),
             85_962_588_160 - EXTERNAL_STORAGE_SAFETY_RESERVE_BYTES,

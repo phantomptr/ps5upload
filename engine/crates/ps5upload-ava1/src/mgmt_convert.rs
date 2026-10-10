@@ -404,8 +404,8 @@ mod tests {
     }
 
     /// `/api/ps5/status` is the legacy JSON rebuilt from `NodeStatus`: the keys that scripts and
-    /// the client read are all there (`bench/resume-test.mjs` and `tests/install-fallback-hw.mjs`
-    /// read `version` and `command_count`), and the six old transaction fields are not.
+    /// the client read are all there (`bench/resume-test.mjs` reads `version` and
+    /// `command_count`), and the six old transaction fields are not.
     #[test]
     fn the_status_json_keeps_the_keys_callers_read_and_drops_the_transaction_ones() {
         let v = node_status_json(&NodeStatus::default());

@@ -57,9 +57,6 @@ const NATIVE_ONLY: Record<string, string> = {
   save_archive_restore_prepare: "native: host temp-dir staging",
   screenshot_save: "native: writes to the app's screenshot dir",
   screenshot_list: "native: reads the app's screenshot dir",
-  screenshot_delete: "native: deletes from the app's screenshot dir",
-  screenshot_clear: "native: clears the app's screenshot dir",
-  screenshot_open_dir: "native: opens a host file manager",
   screenshot_convert: "native: host image transcode into a temp dir",
   usb_list_removable: "native: enumerates host block devices",
   usb_autoloader_install: "native: writes to a host USB volume",
@@ -93,19 +90,12 @@ const NATIVE_ONLY: Record<string, string> = {
 
   // Diagnostics / crash reporting (all host-side files)
   crash_report_save: "native: writes the crash-report dir",
-  crash_reports_clear: "native: writes the crash-report dir",
-  crash_reports_dir_resolved: "native: host path",
-  crash_reports_open_dir: "native: opens a host file manager",
-  crash_reports_stats: "native: reads the crash-report dir",
   crash_reports_zip: "native: zips the crash-report dir",
   bug_report_build: "native: assembles a host-side bundle",
   diag_log_append: "native: writes the host diag log",
   app_events_append: "native: the app event journal file; the browser keeps it in IndexedDB",
   app_events_read: "native: the app event journal file; the browser keeps it in IndexedDB",
   host_platform: "native: the OS and CPU the desktop app was built for; the browser reports the web UI",
-  diag_log_clear: "native: writes the host diag log",
-  diag_log_read_window: "native: reads the host diag log",
-  diag_log_stats: "native: reads the host diag log",
   diag_log_open_dir: "native: opens a host file manager",
 
   // Desktop-side persistence (browser uses localStorage)

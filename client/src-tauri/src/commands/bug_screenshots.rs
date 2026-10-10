@@ -139,30 +139,6 @@ pub async fn screenshot_list(
     Ok(out)
 }
 
-#[tauri::command]
-pub async fn screenshot_delete(app: AppHandle, name: String) -> Result<(), String> {
-    let leaf = safe_png_name(&name)?;
-    let path = shots_dir(&app)?.join(leaf);
-    std::fs::remove_file(&path).map_err(|e| format!("remove {path:?}: {e}"))
-}
-
-#[tauri::command]
-pub async fn screenshot_clear(app: AppHandle) -> Result<usize, String> {
-    let dir = shots_dir(&app)?;
-    let mut n = 0usize;
-    for p in list_png_files(&dir) {
-        if std::fs::remove_file(&p).is_ok() {
-            n += 1;
-        }
-    }
-    Ok(n)
-}
-
-#[tauri::command]
-pub async fn screenshot_open_dir(app: AppHandle) -> Result<(), String> {
-    super::reveal::reveal(&shots_dir(&app)?)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

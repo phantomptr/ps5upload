@@ -23,7 +23,6 @@
 #include "fakelib_overlay.h"
 #include "ava1_glue.h"
 #include "takeover_flag.h"
-#include "state_migrate.h"
 #include "ava1_stop.h"
 #include "ava1_data.h"
 #include "ava1_gen.h"
@@ -211,7 +210,7 @@ static void handle_fatal(int sig) {
      * Cooperative exits (node.shutdown, the takeover flag) run ava1_payload_stop first and leave durable
      * jobs resumable. On a fatal we rely on:
      *   - the 8-second runtime_shutdown_watchdog (armed on clean paths)
-     *   - startup reconciliation (runtime_reconcile_mounts, sweep of stale pkg_temp, ownership record)
+     *   - startup reconciliation (sweep of stale pkg_temp, ownership record)
      *   - the AVA1 job journals, which resume a durable job after any exit
      *   - explicit takeover from a fresh payload (which forces the previous instance out)
      *   - desktop "replace payload" + re-send flow.
@@ -561,10 +560,9 @@ int main(void) {
     startup_trace("NEIGHBOUR_CENSUS_DONE");
 
     /* No eager Sony-service init at startup. Both `register_module_init`
-     * (dlopen + dlsym for libSceAppInstUtil/Lnc/UserService) and
-     * `register_services_init` (sceUserServiceInitialize +
-     * sceAppInstUtilInitialize + sceLncUtilInitialize) have been
-     * observed to hang on some firmware/loader combinations,
+     * (dlopen + dlsym for libSceAppInstUtil/Lnc/UserService) and an eager
+     * sceUserServiceInitialize + sceAppInstUtilInitialize +
+     * sceLncUtilInitialize have been observed to hang on some firmware/loader combinations,
      * preventing the payload from ever reaching
      * `runtime_try_takeover` and starting the AVA1 server. With the
      * payload listener never up, the desktop times out waiting for
@@ -575,8 +573,8 @@ int main(void) {
      * `sceAppInstUtilInitialize` before invoking the installer, and
      * `launch_title` calls `sceUserServiceInitialize` +
      * `sceLncUtilInitialize` before launching. The serialization
-     * mutex `g_sony_api_mtx` covers the kernel-lock concern that
-     * `register_services_init` was originally added to address. */
+     * mutex `g_sony_api_mtx` covers the kernel-lock concern the eager
+     * init was originally added to address. */
 
     startup_trace("BEFORE_TAKEOVER");
     if (runtime_try_takeover(&state) != 0) {
@@ -650,12 +648,6 @@ int main(void) {
     }
     startup_trace("WRITE_OWNERSHIP_DONE");
 
-    /* First start of the AVA1-only payload: the retired transfer protocol's transaction journal and
-     * shard spool are removed (state_migrate.c). It runs after the takeover, so an older helper that was
-     * still using them has exited; AVA1's own state (<root>/ava) is never touched. */
-    (void)payload_remove_retired_dirs(PS5UPLOAD2_RUNTIME_ROOT);
-    startup_trace("RETIRED_DIRS_REMOVED");
-
     /* Restore persisted fan threshold. The runtime root now exists
      * (created by runtime_ensure_directories above), so the persist
      * file is readable if a previous session wrote one. A non-zero
@@ -707,13 +699,6 @@ int main(void) {
         fprintf(stderr, "takeover flag poll did not start\n");
     (void)fakelib_overlay_start();
     startup_trace("FAKELIB_OVERLAY_STARTED");
-
-    /* `runtime_reconcile_mounts` is also deliberately not called at
-     * startup. It walks `getmntinfo` on potentially-stale entries
-     * which has been observed to hang on some firmware/loader
-     * combinations. It is available on-demand from a future Volumes
-     * → Refresh action. Trades a ~100ms per-request delay on first
-     * use for a payload that actually comes up reliably. */
 
     /* Probe the real descriptor ceiling before the server threads exist: the probe opens descriptors
      * until the kernel refuses, and a thread that opens or accepts meanwhile fails. */

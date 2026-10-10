@@ -1,27 +1,16 @@
 #![cfg(unix)]
-//! P3 Task 8: the payload's side of takeover. The old binary protocol lives only in
-//! payload/src/legacy_takeover.c (a migration shim); between AVA1-era instances the new one
-//! writes a flag file the old one polls (payload/src/takeover_flag.c).
+//! P3 Task 8: the payload's side of takeover. The new instance writes a flag file the old one
+//! polls (payload/src/takeover_flag.c).
 use std::ffi::CString;
-use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::raw::{c_char, c_int};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 // Links against ava1c (build.rs), which compiles the two payload files.
 use ava1_ctest as _;
 
 extern "C" {
-    fn legacy_takeover_frame(hdr: *mut u8);
-    fn legacy_takeover(
-        mgmt: c_int,
-        xfer: c_int,
-        ack_s: c_int,
-        attempts: c_int,
-        interval_us: c_int,
-    ) -> c_int;
     fn takeover_flag_write(dir: *const c_char, nonce: u64) -> c_int;
     fn takeover_flag_read(dir: *const c_char, nonce: *mut u64) -> c_int;
     fn takeover_flag_unlink(dir: *const c_char);
@@ -54,10 +43,6 @@ struct Id {
     ino: u64,
     mtime_ns: i64,
 }
-
-const NONE: c_int = 0;
-const FREED: c_int = 1;
-const STUCK: c_int = -1;
 
 fn dir() -> (tempdir::Dir, CString) {
     let d = tempdir::Dir::new();
@@ -98,80 +83,6 @@ fn free_port() -> u16 {
         .local_addr()
         .unwrap()
         .port()
-}
-
-#[test]
-fn c_legacy_takeover_frame_bytes_match_the_ftx2_header() {
-    // payload/src/takeover.c before the cutover: 28 bytes (the plan said 24; the code is the
-    // authority): magic "FTX2" LE, version 1, frame type 18, flags 0, body_len 0, trace_id 0.
-    let mut h = [0xEEu8; 28];
-    unsafe { legacy_takeover_frame(h.as_mut_ptr()) };
-    let mut want = [0u8; 28];
-    want[0..4].copy_from_slice(&0x3258_5446u32.to_le_bytes());
-    want[4..6].copy_from_slice(&1u16.to_le_bytes());
-    want[6..8].copy_from_slice(&18u16.to_le_bytes());
-    assert_eq!(h, want);
-}
-
-/// An "old helper": reads the request, checks it, answers with a 28-byte reply and exits (the
-/// listener closes with the thread).
-fn old_helper(l: TcpListener, got: Arc<AtomicBool>, answer: bool) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        let (mut s, _) = l.accept().unwrap();
-        let mut b = [0u8; 28];
-        s.read_exact(&mut b).unwrap();
-        let mut want = [0u8; 28];
-        unsafe { legacy_takeover_frame(want.as_mut_ptr()) };
-        assert_eq!(b, want);
-        got.store(true, Ordering::SeqCst);
-        if answer {
-            s.write_all(&[0u8; 28]).unwrap();
-        }
-        // dropping `l` and `s` frees the port
-    })
-}
-
-#[test]
-fn legacy_takeover_asks_the_old_helper_and_waits_for_its_ports() {
-    let l = TcpListener::bind("127.0.0.1:0").unwrap();
-    let mgmt = l.local_addr().unwrap().port();
-    let got = Arc::new(AtomicBool::new(false));
-    let h = old_helper(l, got.clone(), true);
-    let rc = unsafe { legacy_takeover(mgmt as c_int, free_port() as c_int, 2, 50, 20_000) };
-    h.join().unwrap();
-    assert!(got.load(Ordering::SeqCst));
-    assert_eq!(rc, FREED);
-}
-
-#[test]
-fn legacy_takeover_with_no_old_helper_is_none() {
-    let rc = unsafe { legacy_takeover(free_port() as c_int, free_port() as c_int, 1, 5, 1000) };
-    assert_eq!(rc, NONE);
-}
-
-#[test]
-fn legacy_takeover_reports_a_helper_that_does_not_exit() {
-    // Accepts and answers, but never lets go of its port.
-    let l = TcpListener::bind("127.0.0.1:0").unwrap();
-    let mgmt = l.local_addr().unwrap().port();
-    let stop = Arc::new(AtomicBool::new(false));
-    let s2 = stop.clone();
-    let t = std::thread::spawn(move || {
-        l.set_nonblocking(true).unwrap();
-        while !s2.load(Ordering::SeqCst) {
-            if let Ok((mut s, _)) = l.accept() {
-                s.set_nonblocking(false).ok();
-                let mut b = [0u8; 28];
-                let _ = s.read(&mut b);
-                let _ = s.write_all(&[0u8; 28]);
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-    });
-    let rc = unsafe { legacy_takeover(mgmt as c_int, free_port() as c_int, 1, 5, 10_000) };
-    stop.store(true, Ordering::SeqCst);
-    t.join().unwrap();
-    assert_eq!(rc, STUCK);
 }
 
 fn flag_path(c: &CString) -> std::path::PathBuf {

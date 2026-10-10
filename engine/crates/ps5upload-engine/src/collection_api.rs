@@ -294,16 +294,6 @@ pub async fn get_library() -> Response {
     }
 }
 
-pub async fn get_summary() -> Response {
-    let lib = library();
-    Json(serde_json::json!({
-        "summary": lib.as_ref().map(|l| l.summary.clone()).unwrap_or_default(),
-        "generated_at": lib.as_ref().map(|l| l.generated_at.clone()),
-        "roots": lib.as_ref().map(|l| l.roots.clone()).unwrap_or_default(),
-    }))
-    .into_response()
-}
-
 pub async fn get_game(Path(id): Path<String>) -> Response {
     let id = id.to_ascii_uppercase();
     match library().and_then(|l| l.games.get(&id).cloned()) {
