@@ -142,7 +142,7 @@ export function useConfirm(): {
         {pending.message && (
           <p
             id={bodyId}
-            className="mb-4 text-xs text-[var(--color-muted)]"
+            className="mb-4 whitespace-pre-line text-xs text-[var(--color-muted)]"
           >
             {pending.message}
           </p>

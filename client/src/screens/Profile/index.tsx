@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { confirm } from "@tauri-apps/plugin-dialog";
 import {
   CircleUserRound,
   ImageIcon,
@@ -26,6 +25,7 @@ import {
   Select,
 } from "../../components";
 import { useTr } from "../../state/lang";
+import { useConfirm } from "../../components/ConfirmDialog";
 import { NpSignInSection } from "./NpSignInSection";
 import { useConnectionStore } from "../../state/connection";
 import { mgmtAddr } from "../../lib/addr";
@@ -128,6 +128,7 @@ function AvatarSection({
   onApplied: () => void;
 }) {
   const tr = useTr();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [imagePath, setImagePath] = useState<string | null>(null);
   const [mode, setMode] = useState<SquareMode>("crop");
   const [preview, setPreview] = useState<string | null>(null);
@@ -226,14 +227,14 @@ function AvatarSection({
     const label = u
       ? userLabel(u.uid_hex, u.username)
       : `0x${targetUid.toString(16).toUpperCase().padStart(8, "0")}`;
-    const ok = await confirm(
-      tr(
+    const ok = await confirm({
+      title: tr("profile.avatar.confirmTitle", undefined, "Change avatar?"),
+      message: tr(
         "profile.avatar.confirmBody",
         { user: label },
         `Replace the profile avatar for ${label}? The current avatar is overwritten.`,
       ),
-      { title: tr("profile.avatar.confirmTitle", "Change avatar?") },
-    );
+    });
     if (!ok) return;
     setApplying(true);
     setApplyError(null);
@@ -269,6 +270,7 @@ function AvatarSection({
 
   return (
     <Card>
+      {confirmDialog}
       <div className="mb-4 flex items-center gap-2">
         <ImageIcon size={16} className="text-[var(--color-accent)]" />
         <h2 className="text-sm font-semibold">
@@ -567,6 +569,7 @@ function UserRow({
   onChanged: () => void;
 }) {
   const tr = useTr();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [draft, setDraft] = useState(name);
   const [saved, setSaved] = useState(name);
   const [saving, setSaving] = useState(false);
@@ -599,17 +602,15 @@ function UserRow({
   }
 
   async function doDelete() {
-    const confirmed = await confirm(
-      tr(
+    const confirmed = await confirm({
+      title: tr("profile.username.deleteTitle", undefined, "Delete User"),
+      message: tr(
         "profile.username.deleteConfirm",
         { name, uid },
         `Delete user "${name}" (uid ${uid})? This cannot be undone.`,
       ),
-      {
-        title: tr("profile.username.deleteTitle", "Delete User"),
-        kind: "warning",
-      },
-    );
+      destructive: true,
+    });
     if (!confirmed) return;
     setDeleting(true);
     setError(null);
@@ -625,6 +626,7 @@ function UserRow({
 
   return (
     <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2">
+      {confirmDialog}
       <div className="flex items-center gap-2">
         <span
           className="shrink-0 font-mono text-xs text-[var(--color-muted)]"
@@ -895,6 +897,7 @@ function SlotRow({
   onChanged: () => void;
 }) {
   const tr = useTr();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [draft, setDraft] = useState(name);
   const [saved, setSaved] = useState(name);
   const [saving, setSaving] = useState(false);
@@ -942,8 +945,9 @@ function SlotRow({
     if (next === null) return;
     const current = formatAccountId(accountId);
     const hadId = current !== "—";
-    const ok = await confirm(
-      hadId
+    const ok = await confirm({
+      title: tr("profile.accountId.confirm_title", undefined, "Change account ID?"),
+      message: hadId
         ? tr(
             "profile.accountId.confirm_replace",
             { slot: String(slot), old: current, next },
@@ -954,11 +958,8 @@ function SlotRow({
             { slot: String(slot), next },
             `Set slot ${slot}'s account ID to ${next}?\n\nThis activates the offline account. Saves made from now on are tied to this ID — if you change it later they will stop being recognised until you set it back.`,
           ),
-      {
-        title: tr("profile.accountId.confirm_title", "Change account ID?"),
-        kind: "warning",
-      },
-    );
+      destructive: hadId,
+    });
     if (!ok) return;
     setIdBusy(true);
     setError(null);
@@ -980,6 +981,7 @@ function SlotRow({
 
   return (
     <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2">
+      {confirmDialog}
       <div className="flex items-center gap-2">
         <span className="w-12 shrink-0 text-xs tabular-nums text-[var(--color-muted)]">
           {tr("profile.username.slot", { n: slot }, `Slot ${slot}`)}
