@@ -163,7 +163,7 @@ export default function NotificationInbox({
         <Bell size={variant === "orb" ? 18 : 14} />
         {unread > 0 && (
           <span
-            className="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--color-bad)] px-1 text-[10px] font-semibold tabular-nums text-white"
+            className="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--color-bad)] px-1 text-[10px] font-semibold tabular-nums text-[var(--color-accent-contrast)]"
             title={tr(
               unread === 1
                 ? "notifications_unread_one"
@@ -214,7 +214,7 @@ export default function NotificationInbox({
                   type="button"
                   onClick={clear}
                   aria-label={tr("notifications_clear", undefined, "Clear all")}
-                  className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+                  className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
                   title={tr("notifications_clear", undefined, "Clear all")}
                 >
                   <Trash2 size={12} />
@@ -225,7 +225,7 @@ export default function NotificationInbox({
                 onClick={() => setOpen(false)}
                 aria-label={tr("close", undefined, "Close")}
                 title={tr("close", undefined, "Close")}
-                className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+                className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
               >
                 <X size={12} />
               </button>

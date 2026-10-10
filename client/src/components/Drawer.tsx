@@ -115,7 +115,7 @@ export function Drawer({
               type="button"
               onClick={onClose}
               aria-label={tr("close", "Close")}
-              className="shrink-0 rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+              className="shrink-0 rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
             >
               <X size={16} aria-hidden="true" />
             </button>

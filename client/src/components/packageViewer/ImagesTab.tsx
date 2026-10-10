@@ -22,7 +22,7 @@ function ImageCard({ token, name, size }: { token: string; name: string; size: n
     };
   }, [token, name]);
   return (
-    <figure className="grid gap-1.5 rounded-md border border-[var(--color-border)] p-2">
+    <figure className="grid gap-1.5 rounded-[var(--radius-card)] border border-[var(--color-border)] p-3">
       <div className="flex aspect-video items-center justify-center overflow-hidden rounded bg-[var(--color-surface-2)]">
         {url ? (
           <img src={url} alt={name} loading="lazy" className="max-h-full max-w-full object-contain" />

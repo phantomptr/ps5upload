@@ -388,7 +388,7 @@ export default function SendPanel() {
           instead. `min(100%,24rem)` keeps a lone column from overflowing a
           narrow viewport. */}
       <div className="grid gap-6 grid-cols-[repeat(auto-fit,minmax(min(100%,24rem),1fr))]">
-        <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+        <section className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
           {/* IP + port. Stacks vertically by default and only goes
               side-by-side at sm+, with a FLOORED IP column (minmax 10rem) and
               an elastic port column. The old fixed `1fr_7rem` collapsed the IP
@@ -575,7 +575,7 @@ export default function SendPanel() {
           </div>
 
           {status.kind === "sent" && (
-            <div className="mt-4 flex items-start gap-2 rounded-md border border-[var(--color-good)] bg-[var(--color-surface-3)] p-3 text-xs">
+            <div className="mt-4 flex items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-good)] bg-[var(--color-surface-3)] p-3 text-xs">
               <CheckCircle2
                 size={14}
                 className="mt-0.5 text-[var(--color-good)]"
@@ -601,7 +601,7 @@ export default function SendPanel() {
           )}
 
           {status.kind === "failed" && (
-            <div className="mt-4 flex items-start gap-2 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface-3)] p-3 text-xs">
+            <div className="mt-4 flex items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-bad)] bg-[var(--color-surface-3)] p-3 text-xs">
               <XCircle size={14} className="mt-0.5 text-[var(--color-bad)]" />
               <div>
                 <div className="font-medium text-[var(--color-bad)]">
@@ -649,7 +649,7 @@ function HistoryPanel({
 }) {
   const tr = useTr();
   return (
-    <aside className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+    <aside className="surface-panel p-5">
       <header className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <History size={14} />
@@ -662,7 +662,7 @@ function HistoryPanel({
           onClick={onClear}
           disabled={records.length === 0}
           title={tr("sendpayload_clear_history", undefined, "Clear history")}
-          className="flex items-center gap-1 rounded-md border border-[var(--color-border)] px-2 py-1 text-xs hover:bg-[var(--color-surface-3)] disabled:opacity-40"
+          className="flex items-center gap-1 rounded-full border border-[var(--color-border)] px-2 py-1 text-xs hover:bg-[var(--color-surface-3)] disabled:opacity-40"
         >
           <Trash2 size={11} />
           {tr("sendpayload_clear", undefined, "Clear")}
@@ -670,7 +670,7 @@ function HistoryPanel({
       </header>
 
       {records.length === 0 ? (
-        <div className="rounded-md border border-dashed border-[var(--color-border)] p-4 text-center text-xs text-[var(--color-muted)]">
+        <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--color-border)] p-4 text-center text-xs text-[var(--color-muted)]">
           {tr(
             "sendpayload_no_sends_yet",
             undefined,
@@ -685,7 +685,7 @@ function HistoryPanel({
                 type="button"
                 onClick={() => onReplay(rec)}
                 title={rec.path}
-                className="group flex w-full items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-left text-xs hover:border-[var(--color-accent)] hover:bg-[var(--color-surface-3)]"
+                className="group flex w-full items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-left text-xs hover:border-[var(--color-accent)] hover:bg-[var(--color-surface-3)]"
               >
                 <StatusDot ok={rec.status === "success"} />
                 <div className="min-w-0 flex-1">

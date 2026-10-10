@@ -236,7 +236,7 @@ export default function NanoDnsScreen() {
               />
             ) : null}
 
-            <div className="flex flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+            <div className="surface-panel flex flex-col gap-2 p-5">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge
                   tone={
@@ -305,7 +305,7 @@ export default function NanoDnsScreen() {
             ) : null}
 
             {version.generation === "modern" && text !== null ? (
-              <div className="grid gap-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 md:grid-cols-2">
+              <div className="grid gap-4 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 md:grid-cols-2">
                 <Toggle
                   checked={quietEnabled}
                   disabled={saving}
@@ -340,7 +340,7 @@ export default function NanoDnsScreen() {
               </div>
             ) : null}
 
-            <div className="flex flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+            <div className="surface-panel flex flex-col gap-2 p-5">
               <div className="flex items-center justify-between">
                 <code className="text-xs text-[var(--color-muted)]">
                   {NANODNS_INI_PATH}
@@ -371,7 +371,7 @@ export default function NanoDnsScreen() {
                 value={text ?? ""}
                 onChange={(e) => setText(e.target.value)}
                 spellCheck={false}
-                className="h-[28rem] w-full resize-y rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3 font-mono text-xs leading-relaxed outline-none focus:border-[var(--color-accent)]"
+                className="h-[28rem] w-full resize-y rounded-[var(--radius-field)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-3 font-mono text-xs leading-relaxed outline-none focus:border-[var(--color-accent)]"
               />
               <p className="text-xs text-[var(--color-muted)]">
                 {tr(

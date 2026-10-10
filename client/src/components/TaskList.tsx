@@ -411,7 +411,7 @@ export function TaskList({ maxFinished = 20 }: { maxFinished?: number }) {
             <button
               type="button"
               onClick={clearFinished}
-              className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs normal-case tracking-normal hover:bg-[var(--color-surface-3)]"
+              className="ml-auto rounded-full border border-[var(--color-border)] px-2 py-0.5 text-xs normal-case tracking-normal hover:bg-[var(--color-surface-3)]"
             >
               {tr("task_clear_finished", undefined, "Clear finished")}
             </button>

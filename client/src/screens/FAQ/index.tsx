@@ -77,7 +77,7 @@ function Question({
   return (
     <li
       id={item.id}
-      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]"
+      className="surface-panel"
       data-testid="faq-item"
     >
       <button
@@ -237,7 +237,7 @@ export default function FAQScreen() {
       />
 
       <div className="mx-auto max-w-5xl">
-        <div className="mb-4 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2">
+        <div className="mb-4 flex items-center gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2">
           <Search size={14} className="shrink-0 text-[var(--color-muted)]" />
           <input
             value={query}
@@ -254,7 +254,7 @@ export default function FAQScreen() {
             <button
               type="button"
               onClick={() => setQuery("")}
-              className="rounded p-0.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
+              className="rounded-full p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
               aria-label={tr("faq_clear_search", "Clear search")}
             >
               <X size={12} />
@@ -318,7 +318,7 @@ export default function FAQScreen() {
               ) : (
                 <li
                   key={h.topic.id}
-                  className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]"
+                  className="surface-panel"
                 >
                   <button
                     type="button"

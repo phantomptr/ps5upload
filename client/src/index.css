@@ -463,6 +463,19 @@ body {
   border-bottom: 0;
 }
 
+/* A panel header's icon: a small coral-on-blush disc, the same language as
+ * the Home tiles' icon buttons. */
+.icon-disc {
+  display: inline-grid;
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  place-items: center;
+  border-radius: 9999px;
+  background: var(--color-accent-soft);
+  color: var(--color-accent-bright);
+}
+
 /* Chip: a pill filter. Active = white filled, inactive = hairline outline.
  * Colour and shape only: size comes from the caller's utilities (this sheet
  * is unlayered, so anything set here would beat them). */

@@ -51,9 +51,9 @@ export default function PowerTelemetryPanel({ mgmtAddr }: { mgmtAddr: string }) 
   }, [mgmtAddr]);
 
   return (
-    <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
-      <header className="mb-3 flex items-center gap-2">
-        <Battery size={14} />
+    <section className="surface-panel min-w-0 p-5 sm:p-6">
+      <header className="mb-4 flex items-center gap-2.5">
+        <span className="icon-disc" aria-hidden><Battery size={14} /></span>
         <h3 className="flex-1 text-sm font-semibold">
           {tr("power_telemetry_title_v2", undefined, "Lifetime counters")}
         </h3>
@@ -100,7 +100,7 @@ export default function PowerTelemetryPanel({ mgmtAddr }: { mgmtAddr: string }) 
           which of the four ICC symbols resolved, so use it rather than
           guessing from the nulls. */}
       {data && unavailableNote(data) && (
-        <p className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-muted)]">
+        <p className="mt-3 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs text-[var(--color-muted)]">
           {tr(
             `power_telemetry_note_${data.status}`,
             undefined,

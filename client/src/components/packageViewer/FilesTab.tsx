@@ -32,7 +32,7 @@ export function FilesListView(props: {
         value={props.query}
         onChange={(e) => props.onQuery(e.target.value)}
         placeholder={tr("viewer_files_search", undefined, "Search files")}
-        className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-sm"
+        className="rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3 py-1.5 text-sm"
       />
       <div className="text-xs text-[var(--color-muted)]">
         {tr(

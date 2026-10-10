@@ -222,7 +222,7 @@ export function PackagePanelView({
 
   return (
     <div className="grid gap-4 p-4">
-      <header className="relative overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+      <header className="relative overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
         {backdropUrl && (
           <img
             src={backdropUrl}
@@ -335,7 +335,7 @@ export function PackagePanelView({
           {notes && (
             <div className="text-sm">
               <div className="mb-1 text-[var(--color-muted)]">{tr("viewer_whats_new", undefined, "What's new")}</div>
-              <p className="whitespace-pre-wrap rounded-md bg-[var(--color-surface-2)] p-3 text-xs">
+              <p className="whitespace-pre-wrap rounded-[var(--radius-field)] bg-[var(--color-surface-2)] p-3 text-xs">
                 {notes}
               </p>
             </div>

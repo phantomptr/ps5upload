@@ -78,7 +78,7 @@ export function UpdateToast() {
           type="button"
           disabled={downloading}
           onClick={() => void download()}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent)] disabled:opacity-60"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent)] disabled:opacity-60"
         >
           {downloading ? (
             <Spinner size={14} />
@@ -96,7 +96,7 @@ export function UpdateToast() {
         type="button"
         aria-label={tr("update_toast_dismiss", undefined, "Dismiss")}
         onClick={() => setDismissedVersion(version)}
-        className="shrink-0 rounded p-1 text-[var(--color-muted)] hover:text-[var(--color-text)]"
+        className="shrink-0 rounded-full p-1.5 text-[var(--color-muted)] hover:text-[var(--color-text)]"
       >
         <X size={14} />
       </button>

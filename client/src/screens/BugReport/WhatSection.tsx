@@ -38,14 +38,14 @@ export default function WhatSection({
           {f.pinned.map((e) => (
             <div
               key={`${e.src}-${e.ts}-${e.code}`}
-              className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2"
+              className="flex items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2"
             >
               <span className="min-w-0 flex-1 break-words font-mono text-xs">{formatLine(e)}</span>
               <button
                 type="button"
                 aria-label={tr("br_remove", undefined, "Remove")}
                 onClick={() => updateForm({ pinned: f.pinned.filter((p) => p !== e) })}
-                className="shrink-0 rounded p-0.5 text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                className="shrink-0 rounded-full p-1 text-[var(--color-muted)] hover:text-[var(--color-text)]"
               >
                 <X size={14} />
               </button>

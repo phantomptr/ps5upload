@@ -46,7 +46,7 @@ export default function LogsSection({
             value={draft.customStart ? toLocalInput(draft.customStart) : ""}
             max={latest}
             onChange={(e) => update({ customStart: e.target.value ? new Date(e.target.value).getTime() : null })}
-            className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm font-normal text-[var(--color-text)]"
+            className="rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3 py-2 text-sm font-normal text-[var(--color-text)]"
           />
         </label>
       )}

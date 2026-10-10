@@ -437,7 +437,7 @@ export default function HardwareScreen() {
       )}
 
       <ConnectionGate require="payload">
-        <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-5 lg:grid-cols-2 xl:grid-cols-3">
           <SensorCard
             icon={<Thermometer size={14} />}
             title={tr("hardware_temperatures", undefined, "Temperatures")}
@@ -770,14 +770,14 @@ function SensorCard({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
-      <header className="mb-2 flex items-center gap-2 text-xs uppercase tracking-wide text-[var(--color-muted)]">
-        {icon}
-        <span className="font-semibold">{title}</span>
+    <section className="surface-panel min-w-0 p-5 sm:p-6">
+      <header className="mb-3 flex items-center gap-2.5 text-sm font-semibold">
+        <span className="icon-disc" aria-hidden>
+          {icon}
+        </span>
+        <span>{title}</span>
       </header>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-        {children}
-      </dl>
+      <dl className="flex flex-col">{children}</dl>
     </section>
   );
 }
@@ -791,18 +791,20 @@ function StatRow({
   value: string;
   hint?: string;
 }) {
+  // One metric row: label left, value right, the hint (if any) under the
+  // value in small muted type rather than squeezed in beside it.
   return (
-    <>
-      <dt className="text-[var(--color-muted)]">{label}</dt>
-      <dd className="font-mono tabular-nums" title={hint}>
-        {value}
+    <div className="metric-row min-w-0 py-2">
+      <dt className="shrink-0 text-[var(--color-muted)]">{label}</dt>
+      <dd className="min-w-0 text-right" title={hint}>
+        <div className="font-mono tabular-nums">{value}</div>
         {hint && (
-          <span className="ml-2 text-xs text-[var(--color-muted)] font-sans">
-            · {hint}
-          </span>
+          <div className="mt-0.5 text-xs leading-snug text-[var(--color-muted)]">
+            {hint}
+          </div>
         )}
       </dd>
-    </>
+    </div>
   );
 }
 
@@ -903,10 +905,10 @@ function FanThresholdCard({
   );
 
   return (
-    <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+    <section className="surface-panel min-w-0 p-5 sm:p-6">
       {confirmDialog}
-      <header className="mb-3 flex items-center gap-2 text-xs uppercase tracking-wide text-[var(--color-muted)]">
-        <Fan size={14} />
+      <header className="mb-4 flex items-center gap-2.5 text-sm font-semibold text-[var(--color-text)]">
+        <span className="icon-disc" aria-hidden><Fan size={14} /></span>
         <span className="font-semibold">
           {tr("hardware_fan_threshold", "Fan threshold")}
         </span>
@@ -962,7 +964,7 @@ function FanThresholdCard({
           type="button"
           onClick={() => applyThreshold(draftC)}
           disabled={!canSet || lastSetC === draftC}
-          className="rounded-md border border-[var(--color-border)] px-3 py-1 text-xs hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+          className="chip min-h-8 px-3.5 text-xs disabled:opacity-50"
         >
           {tr("hardware_apply", "Apply")}
         </button>
@@ -994,7 +996,7 @@ function FanThresholdCard({
           type="button"
           onClick={restoreConsole}
           disabled={!canSet || (pinnedC === 0 && lastSetC === null)}
-          className="rounded-md border border-[var(--color-border)] px-3 py-1 text-xs hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+          className="chip min-h-8 px-3.5 text-xs disabled:opacity-50"
         >
           {tr("hardware_fan_restore", undefined, "Use the console's own setting")}
         </button>
@@ -1074,7 +1076,7 @@ function FanCurvePreview({ thresholdC }: { thresholdC: number }) {
     .map(([t, p]) => `${xFor(t).toFixed(1)},${yFor(p).toFixed(1)}`)
     .join(" ");
   return (
-    <div className="mb-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2">
+    <div className="mb-3 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
       <div className="mb-1 flex items-center justify-between text-xs text-[var(--color-muted)]">
         <span>
           {tr("hardware_fan_curve_preview", "Fan curve preview (approximate)")}
@@ -1266,9 +1268,9 @@ function SystemTimeCard({
   const outcome = lastResult ? classifySyncResult(lastResult) : null;
 
   return (
-    <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
-      <header className="mb-3 flex items-center gap-2 text-xs uppercase tracking-wide text-[var(--color-muted)]">
-        <CalendarClock size={14} />
+    <section className="surface-panel min-w-0 p-5 sm:p-6">
+      <header className="mb-4 flex items-center gap-2.5 text-sm font-semibold text-[var(--color-text)]">
+        <span className="icon-disc" aria-hidden><CalendarClock size={14} /></span>
         <span>{tr("hardware_systime_title", "System time")}</span>
       </header>
 
@@ -1347,7 +1349,7 @@ function SystemTimeCard({
 
       {/* Result — success / success-via-fallback / no-op / failure */}
       {lastResult && !busy && (
-        <div className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-[11px]">
+        <div className="mt-3 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-[11px]">
           {outcome === "stub_no_op" ? (
             <div className="text-[var(--color-bad)]">
               {tr(
@@ -1541,9 +1543,9 @@ function SmpMetaCard({
     : tr("smp_meta_never_run", "never");
 
   return (
-    <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
-      <header className="mb-3 flex items-center gap-2 text-xs uppercase tracking-wide text-[var(--color-muted)]">
-        <ImageIcon size={14} />
+    <section className="surface-panel min-w-0 p-5 sm:p-6">
+      <header className="mb-4 flex items-center gap-2.5 text-sm font-semibold text-[var(--color-text)]">
+        <span className="icon-disc" aria-hidden><ImageIcon size={14} /></span>
         <span className="font-semibold">
           {tr("smp_meta_title", "SMP appmeta heal")}
         </span>

@@ -70,7 +70,7 @@ function ToastItem({ toast }: { toast: Toast }) {
         type="button"
         onClick={() => dismiss(toast.id)}
         aria-label={tr("dismiss", "Dismiss")}
-        className="shrink-0 rounded p-0.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
+        className="shrink-0 rounded-full p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
       >
         <X size={14} aria-hidden="true" />
       </button>

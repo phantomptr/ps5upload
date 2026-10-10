@@ -192,7 +192,7 @@ export function PlaylistsPanel({ host, port }: { host: string; port: number }) {
     .slice(0, 5);
 
   return (
-    <section className="mt-8 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+    <section className="mt-8 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
       <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="flex items-center gap-2 text-sm font-semibold">
@@ -341,7 +341,7 @@ export function PlaylistsPanel({ host, port }: { host: string; port: number }) {
       )}
 
       {playlists.length === 0 && (
-        <div className="rounded-md border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] p-4 text-center text-xs text-[var(--color-muted)]">
+        <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] p-4 text-center text-xs text-[var(--color-muted)]">
           {tr(
             "playlists_empty",
             undefined,
@@ -389,7 +389,7 @@ function AutoLoaderCard() {
   const warn = autoLoader.enabled && (!selected || selected.steps.length === 0);
 
   return (
-    <div className="mb-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
+    <div className="mb-4 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-start gap-2">
           <Zap
@@ -511,7 +511,7 @@ function RunStatusBanner({ host }: { host: string }) {
   if (runStatus.kind === "running") {
     const step = playlist?.steps[runStatus.stepIndex];
     return (
-      <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] p-2 text-xs">
+      <div className="mb-3 flex items-center gap-2 rounded-[var(--radius-card)] border border-[var(--color-accent)] bg-[var(--color-surface)] p-3 text-xs">
         <Spinner size={14} tone="accent" />
         <span className="font-medium">{name}</span>
         <ConsoleChip addr={runStatus.host} />
@@ -534,7 +534,7 @@ function RunStatusBanner({ host }: { host: string }) {
     const elapsed = now - runStatus.sleepStartedAtMs;
     const remaining = Math.max(0, runStatus.sleepDurationMs - elapsed);
     return (
-      <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] p-2 text-xs">
+      <div className="mb-3 flex items-center gap-2 rounded-[var(--radius-card)] border border-[var(--color-accent)] bg-[var(--color-surface)] p-3 text-xs">
         <Clock size={14} className="text-[var(--color-accent)]" />
         <span className="font-medium">{name}</span>
         <ConsoleChip addr={runStatus.host} />
@@ -715,7 +715,7 @@ function PlaylistCard({
   const canRun = playlist.steps.length > 0 && !!host?.trim() && !anyRunning;
 
   return (
-    <article className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+    <article className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
       <header className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           {/* Reorder this playlist within the list. Mirrors the per-step
@@ -726,7 +726,7 @@ function PlaylistCard({
               onClick={() => movePlaylistUp(playlist.id)}
               disabled={anyRunning || index === 0}
               aria-label={tr("playlist_move_up", undefined, "Move playlist up")}
-              className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+              className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
               title={tr("playlist_move_up", undefined, "Move playlist up")}
             >
               <ArrowUp size={12} />
@@ -736,7 +736,7 @@ function PlaylistCard({
               onClick={() => movePlaylistDown(playlist.id)}
               disabled={anyRunning || index === total - 1}
               aria-label={tr("playlist_move_down", undefined, "Move playlist down")}
-              className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+              className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
               title={tr("playlist_move_down", undefined, "Move playlist down")}
             >
               <ArrowDown size={12} />
@@ -757,7 +757,7 @@ function PlaylistCard({
                   setRenaming(false);
                 }
               }}
-              className="rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] px-2 py-0.5 text-sm font-semibold outline-none"
+              className="rounded-full border border-[var(--color-accent)] bg-[var(--color-surface)] px-2 py-0.5 text-sm font-semibold outline-none"
             />
           ) : (
             <button
@@ -974,7 +974,7 @@ function PlaylistCard({
                       })
                     }
                     disabled={anyRunning}
-                    className="w-28 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-1 py-0.5 text-xs"
+                    className="w-28 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-1 py-0.5 text-xs"
                   />
                 </label>
                 {/* Per-step port override. Empty / 0 = use the
@@ -1019,7 +1019,7 @@ function PlaylistCard({
                       })
                     }
                     disabled={anyRunning}
-                    className="w-16 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-1 py-0.5 text-right text-xs tabular-nums"
+                    className="w-16 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-1 py-0.5 text-right text-xs tabular-nums"
                   />
                   <span>ms</span>
                 </label>
@@ -1029,7 +1029,7 @@ function PlaylistCard({
                     onClick={() => moveStepUp(playlist.id, i)}
                     disabled={anyRunning || i === 0}
                     aria-label={tr("playlist_step_up", undefined, "Move up")}
-                    className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+                    className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
                     title={tr("playlist_step_up", undefined, "Move up")}
                   >
                     <ArrowUp size={12} />
@@ -1039,7 +1039,7 @@ function PlaylistCard({
                     onClick={() => moveStepDown(playlist.id, i)}
                     disabled={anyRunning || i === playlist.steps.length - 1}
                     aria-label={tr("playlist_step_down", undefined, "Move down")}
-                    className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+                    className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
                     title={tr("playlist_step_down", undefined, "Move down")}
                   >
                     <ArrowDown size={12} />
@@ -1049,7 +1049,7 @@ function PlaylistCard({
                     onClick={() => removeStep(playlist.id, i)}
                     disabled={anyRunning}
                     aria-label={tr("playlist_step_remove", undefined, "Remove step")}
-                    className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-bad)] hover:text-[var(--color-accent-contrast)] disabled:opacity-30"
+                    className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-bad)] hover:text-[var(--color-accent-contrast)] disabled:opacity-30"
                     title={tr("playlist_step_remove", undefined, "Remove step")}
                   >
                     <X size={12} />
@@ -1134,7 +1134,7 @@ function PlaylistCard({
                         <button
                           type="button"
                           onClick={() => handleAddRepoStep(p)}
-                          className="flex w-full items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-left text-xs hover:border-[var(--color-accent)]"
+                          className="flex w-full items-center gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-left text-xs hover:border-[var(--color-accent)]"
                         >
                           <PackageIcon
                             size={14}

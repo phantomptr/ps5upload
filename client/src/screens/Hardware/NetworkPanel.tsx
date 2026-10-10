@@ -46,9 +46,9 @@ export default function NetworkPanel({ mgmtAddr }: { mgmtAddr: string }) {
   }, [mgmtAddr]);
 
   return (
-    <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
-      <header className="mb-3 flex items-center gap-2">
-        <Network size={14} />
+    <section className="surface-panel min-w-0 p-5 sm:p-6">
+      <header className="mb-4 flex items-center gap-2.5">
+        <span className="icon-disc" aria-hidden><Network size={14} /></span>
         <h3 className="flex-1 text-sm font-semibold">
           {tr("network_panel_title", undefined, "Network interfaces")}
         </h3>

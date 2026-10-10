@@ -883,7 +883,7 @@ export default function SavesScreen() {
 
         <div className="mx-auto max-w-4xl space-y-3">
           {saves?.some((e) => e.kind === "ps4") && (
-            <div className="rounded-lg border border-[var(--color-warn)]/40 bg-[var(--color-warn)]/10 p-3 text-xs text-[var(--color-warn)]">
+            <div className="rounded-[var(--radius-card)] border border-[var(--color-warn)]/40 bg-[var(--color-warn)]/10 p-3 text-xs text-[var(--color-warn)]">
               <strong>
                 {tr("saves_ps4_warning_title", undefined, "PS4-format saves:")}
               </strong>{" "}
@@ -897,7 +897,7 @@ export default function SavesScreen() {
           {grouped.map(({ title_id, entries }) => (
             <section
               key={title_id}
-              className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
+              className="surface-panel p-5"
             >
               <SaveGroupHeader
                 host={host}
@@ -909,7 +909,7 @@ export default function SavesScreen() {
                 {entries.map((e) => (
                   <li
                     key={e.path}
-                    className="flex items-center gap-3 rounded-md bg-[var(--color-surface)] px-2 py-1.5 text-xs"
+                    className="flex items-center gap-3 rounded-[var(--radius-field)] bg-[var(--color-surface)] px-2 py-1.5 text-xs"
                   >
                     <span className="rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-xs uppercase">
                       {e.kind}

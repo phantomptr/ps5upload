@@ -96,7 +96,7 @@ export default function SendPanel({
             value={discordFallback}
             rows={8}
             onFocus={(e) => e.currentTarget.select()}
-            className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 font-mono text-xs"
+            className="w-full rounded-[var(--radius-field)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-2 font-mono text-xs"
           />
           <div>
             <Button size="sm" variant="secondary" leftIcon={<Copy size={12} />} onClick={() => void writeClipboard(discordFallback)}>

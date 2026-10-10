@@ -419,7 +419,7 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
         <button
           type="button"
           onClick={() => setDetailOpen(true)}
-          className="rounded-md border border-[var(--color-border)] p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+          className="rounded-full border border-[var(--color-border)] p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
           title={tr("activity_view_tooltip", undefined, "View details")}
         >
           <Eye size={13} />
@@ -429,7 +429,7 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
             <button
               type="button"
               onClick={() => void handleStop()}
-              className="rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs hover:bg-[var(--color-surface-3)]"
+              className="chip min-h-7 px-3 text-xs"
               title={
                 stopAction === "cancel"
                   ? tr(
@@ -453,7 +453,7 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
           <button
             type="button"
             onClick={() => remove(entry.id)}
-            className="rounded-md border border-[var(--color-border)] p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-bad)]"
+            className="rounded-full border border-[var(--color-border)] p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-bad)]"
             title={tr(
               "activity_delete_tooltip",
               undefined,
@@ -697,7 +697,7 @@ function ActivityDetailModal({
             ))}
         </dl>
         {entry.error && (
-          <div className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-xs">
+          <div className="mt-3 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs">
             <div className="mb-1 font-medium text-[var(--color-bad)]">
               {tr("activity_detail_error", undefined, "Error")}
             </div>
@@ -793,7 +793,7 @@ function ActivityTimeline({ entries }: { entries: ActivityEntry[] }) {
   }
 
   return (
-    <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+    <section className="surface-panel p-5">
       <header className="mb-3 flex items-center gap-2">
         <h3 className="text-sm font-semibold">
           {tr(

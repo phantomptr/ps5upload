@@ -258,7 +258,7 @@ export default function CheatsScreen() {
             ].map((text, i) => (
               <li
                 key={i}
-                className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
+                className="flex items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
               >
                 <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-accent)] text-[11px] font-semibold text-[var(--color-accent-contrast)]">
                   {i + 1}

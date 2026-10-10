@@ -189,7 +189,7 @@ export default function ShellScreen() {
         <div className="flex min-h-0 flex-1 flex-col gap-3">
           <div
             ref={outputRef}
-            className="flex-1 overflow-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 font-mono text-xs"
+            className="flex-1 overflow-auto rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 font-mono text-xs"
           >
             {history.length === 0 ? (
               <div className="text-[var(--color-muted)]">
@@ -226,7 +226,7 @@ export default function ShellScreen() {
                 undefined,
                 "Enter shell command…",
               )}
-              className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 font-mono text-xs outline-none focus:border-[var(--color-accent)] disabled:opacity-50"
+              className="flex-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3 py-2 font-mono text-xs outline-none focus:border-[var(--color-accent)] disabled:opacity-50"
               autoFocus
             />
             <Button

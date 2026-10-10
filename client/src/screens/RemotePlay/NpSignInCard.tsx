@@ -17,7 +17,7 @@ export function NpSignInCard({ onOpenProfile }: { onOpenProfile: () => void }) {
   const tr = useTr();
   return (
     <div
-      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
+      className="surface-panel p-5"
       data-testid="np-signin-card"
     >
       <div className="mb-2 flex items-center gap-2 text-sm font-medium">
