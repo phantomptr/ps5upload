@@ -14,10 +14,8 @@
 //! ask the running helper to exit with `node.shutdown` over the paired
 //! AVA1 session. The payload's shutdown handler sets a flag the main loop
 //! honours; the old process exits, its port goes free, the new payload's
-//! bind succeeds. A helper from before the cutover speaks only the old
-//! protocol; the engine's `legacy_helper` shim (replace route) handles
-//! it. A new payload that starts while an old one is alive takes over
-//! by itself (the payload's takeover, flag file).
+//! bind succeeds. A new payload that starts while an old one is alive
+//! takes over by itself (the payload's takeover, flag file).
 //!
 //! Best-effort by design — every error path returns Ok(false) because
 //! "no old payload running" is the common case (first session boot,

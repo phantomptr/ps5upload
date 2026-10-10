@@ -121,7 +121,7 @@ export interface Ps5Snapshot {
    *  ours, so a bundle should always state whether it was up. */
   ports: PortState[] | null;
   /** The status pill's verdict when the report was taken (connected, needs_pairing,
-   *  helper_old, down; null = never probed): the one probe's answer, which says WHY the
+   *  down; null = never probed): the one probe's answer, which says WHY the
    *  helper port is or is not usable where a TCP connect cannot. */
   session: string | null;
   /** Per-probe failures, keyed by probe name, so a maintainer can see what

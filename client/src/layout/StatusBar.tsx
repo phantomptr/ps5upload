@@ -83,17 +83,15 @@ export default function StatusBar() {
   // Pack the connection state, kernel build and helper version into one
   // hover string. Reads top-to-bottom: are we connected, what firmware,
   // what helper build.
-  // The one probe's verdict: a console that answers but needs pairing, or an
-  // update, is not "connected" and not "down" either.
+  // The one probe's verdict: a console that answers but needs pairing is not
+  // "connected" and not "down" either.
   const sessionWarn = sessionNeedsAttention(session);
   const ps5Tooltip = [
-    sessionWarn && session === "needs_pairing"
+    sessionWarn
       ? tr("status_ps5_needs_pairing", undefined, "Needs pairing")
-      : sessionWarn
-        ? tr("status_ps5_helper_old", undefined, "Older helper, update it")
-        : ps5Connected
-          ? tr("status_ps5_connected", undefined, "Connected")
-          : tr("status_ps5_disconnected", undefined, "Not connected"),
+      : ps5Connected
+        ? tr("status_ps5_connected", undefined, "Connected")
+        : tr("status_ps5_disconnected", undefined, "Not connected"),
     ps5Kernel || null,
     payloadVersion
       ? tr(

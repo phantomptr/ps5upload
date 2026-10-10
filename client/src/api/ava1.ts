@@ -140,37 +140,3 @@ export async function startPs5ToPs5(
   }
   return body.job_id;
 }
-
-/** Replaces an older helper through the engine (`POST /api/ps5/helper/replace`): its shutdown
- *  request, the stamped helper, a wait for the AVA1 port. Resolves `{replaced}`; throws an
- *  Error whose message carries the engine's token (`legacy_helper_wedged`, `helper_not_running`). */
-export async function replaceHelper(host: string): Promise<{ replaced: boolean }> {
-  const res = await fetch(`${getEngineUrl()}/api/ps5/helper/replace`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ host: consoleAddr(host) }),
-  });
-  const body = (await res.json().catch(() => ({}))) as {
-    replaced?: boolean;
-    error?: string;
-  };
-  if (!res.ok) throw new Error(body.error || `helper replace failed (${res.status})`);
-  return { replaced: !!body.replaced };
-}
-
-/** The engine's view of the console's helper (`GET /api/ps5/helper/state`): `ava1`,
- *  `helper_old`, `starting`, `ava1_failed` or `not_running`. Null when the engine could not
- *  say (it never throws: a probe must not turn a failure into another one). */
-export async function helperState(host: string): Promise<string | null> {
-  try {
-    const res = await fetch(
-      `${getEngineUrl()}/api/ps5/helper/state?host=${encodeURIComponent(consoleAddr(host))}`,
-      { signal: AbortSignal.timeout(8_000) },
-    );
-    if (!res.ok) return null;
-    const body = (await res.json().catch(() => ({}))) as { state?: string };
-    return typeof body.state === "string" ? body.state : null;
-  } catch {
-    return null;
-  }
-}

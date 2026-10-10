@@ -1199,41 +1199,29 @@ fn lint_the_guard_header_judges_a_source_link_by_lstat() {
         src.contains("xdev_lstat_dev"),
         "the lstat device lookup exists"
     );
-    // Every caller that renames a user-chosen source passes the lstat lookup for it.
-    for f in ["src/ftp_server.c", "src/mgmt_fs.c"] {
-        let c = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../payload")
-                .join(f),
-        )
-        .unwrap();
-        assert!(
-            c.contains("xdev_rename_crosses_l("),
-            "{f} uses the two-lookup guard"
-        );
-        assert!(
-            !c.contains("xdev_rename_crosses("),
-            "{f} still uses the one-lookup (stat) guard"
-        );
-    }
+    // fs.rename, the caller that renames a user-chosen source, passes the lstat lookup for it.
+    let fs = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../payload/src/mgmt_fs.c"),
+    )
+    .unwrap();
+    assert!(
+        fs.contains("xdev_rename_crosses_l("),
+        "mgmt_fs.c uses the two-lookup guard"
+    );
+    assert!(
+        !fs.contains("xdev_rename_crosses("),
+        "mgmt_fs.c still uses the one-lookup (stat) guard"
+    );
     let sh = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../payload/src/shell_builtin.c"),
     )
     .unwrap();
     assert!(sh.contains("mv_same_dev = (lstat(argv[i]"));
-    // Fail closed (review 007 #4): every guard caller refuses anything but a definite SAME.
-    for f in ["src/ftp_server.c", "src/mgmt_fs.c"] {
-        let c = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../payload")
-                .join(f),
-        )
-        .unwrap();
-        assert!(
-            c.contains("xdev_rename_is_safe("),
-            "{f} must refuse UNKNOWN"
-        );
-    }
+    // Fail closed (review 007 #4): the guard caller refuses anything but a definite SAME.
+    assert!(
+        fs.contains("xdev_rename_is_safe("),
+        "mgmt_fs.c must refuse UNKNOWN"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1526,9 +1514,7 @@ async fn s2_the_trust_store_is_found_through_every_spelling() {
 
 /// LINT (a source check, not a behavioural test: ava1_glue.c is SDK-only and cannot be built on the host). Every entry point that walks a tree, or that moves/replaces one, refuses a path that
 /// is the trust store or an ancestor of it through the shared `path_tree_op_refused`. The behaviour of that
-/// function itself is pinned by `s2_tree_op_refusal_covers_ancestors_and_the_store`, the FTP handlers by
-/// payload/tests/ftp_trust_store_selftest.c (run by the root Makefile's payload selftests and by
-/// `s2_ftp_selftest_passes` below).
+/// function itself is pinned by `s2_tree_op_refusal_covers_ancestors_and_the_store`.
 #[test]
 fn s2_lint_recursive_entry_points_use_the_shared_refusal() {
     let payload = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../payload");
@@ -1578,33 +1564,6 @@ fn s2_tree_op_refusal_covers_ancestors_and_the_store() {
         assert!(!mgmt_fs::tree_op_refused(&p(ok)), "{ok} is fine");
     }
     mgmt_fs::uninstall();
-}
-
-#[test]
-fn s2_ftp_selftest_passes() {
-    let payload = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../payload");
-    let tmp = TempDir::new(format!("ava1-ftp-s2-{}", std::process::id()));
-    let exe = tmp.join("selftest");
-    let cc = std::process::Command::new("cc")
-        .args(["-O2", "-Wall", "-Wextra", "-Werror", "-pthread", "-I"])
-        .arg(payload.join("include"))
-        .arg("-o")
-        .arg(&exe)
-        .arg(payload.join("tests/ftp_trust_store_selftest.c"))
-        .output()
-        .unwrap();
-    assert!(
-        cc.status.success(),
-        "{}",
-        String::from_utf8_lossy(&cc.stderr)
-    );
-    let run = std::process::Command::new(&exe).output().unwrap();
-    assert!(
-        run.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&run.stdout),
-        String::from_utf8_lossy(&run.stderr)
-    );
 }
 
 /// Review S2 round 3, item 3: `is_safe_unsafe_read_path` already rejects `..` (runtime.c, checked), and the

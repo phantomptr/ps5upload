@@ -746,14 +746,6 @@ int hw_temps_get_text_ex(int flags, char *out, size_t out_cap,
     return 0;
 }
 
-/* Back-compat wrapper: the 4-arg form used by the generic
- * handle_hw_text_op and any other caller reads BASIC sensors only
- * (flags=0), so it can never fire the on-demand-only getters. */
-int hw_temps_get_text(char *out, size_t out_cap, size_t *out_written,
-                      const char **err_reason_out) {
-    return hw_temps_get_text_ex(0, out, out_cap, out_written, err_reason_out);
-}
-
 /* ── HW_POWER: uptime via kern.boottime (no Sony APIs) ──────────── */
 
 int hw_power_get_text(char *out, size_t out_cap, size_t *out_written,

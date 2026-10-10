@@ -1,24 +1,14 @@
 #![cfg(unix)]
 //! P3 Task 19: the old transfer and management servers, the transaction table, the spool and ports
 //! 9113/9114 are gone from the payload. runtime.c is not compiled on the host, so these are checks
-//! of the payload's own sources (and of the built ELF when one is newer than every source), plus
-//! the one new piece of C that runs on the host: the first-start removal of the retired folders.
-use std::ffi::CString;
-use std::os::raw::{c_char, c_int};
+//! of the payload's own sources (and of the built ELF when one is newer than every source).
 use std::path::{Path, PathBuf};
-
-// Links against ava1c (build.rs), which compiles payload/src/state_migrate.c.
-use ava1_ctest::TempDir;
-
-extern "C" {
-    fn payload_remove_retired_dirs(root: *const c_char) -> c_int;
-}
 
 fn payload() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../payload")
 }
 
-/// Every C/H source of the payload except the migration shim (and the vendored third party code).
+/// Every C/H source of the payload (except the vendored third party code).
 fn sources() -> Vec<(PathBuf, String)> {
     let mut out = Vec::new();
     let mut stack = vec![payload()];
@@ -34,18 +24,13 @@ fn sources() -> Vec<(PathBuf, String)> {
             } else if matches!(
                 p.extension().and_then(|e| e.to_str()),
                 Some("c") | Some("h") | Some("inc") | Some("def") | Some("py")
-            ) && name != "legacy_takeover.c"
-            {
+            ) {
                 let t = std::fs::read_to_string(&p).unwrap_or_default();
                 out.push((p, t));
             }
         }
     }
     out
-}
-
-fn tmp(tag: &str) -> TempDir {
-    TempDir::new(format!("ava1-cutover-{tag}-{}", std::process::id()))
 }
 
 #[test]
@@ -70,8 +55,8 @@ fn c_payload_binds_only_9120() {
     for banned in ["bind(", "listen(", "accept("] {
         assert!(!rt.contains(banned), "runtime.c still calls {banned}");
     }
-    // The helper's default listener is the AVA1 server; the only other `bind(` sites are the
-    // user-started FTP server (its own port) and the installer daemon (a separate process).
+    // The helper's only listener is the AVA1 server; the installer daemon (a separate process)
+    // has its own.
     let mut binders: Vec<String> = files
         .iter()
         .filter(|(_, t)| t.contains("bind(") || t.contains("listen("))
@@ -88,8 +73,8 @@ fn c_payload_binds_only_9120() {
     binders.sort();
     assert_eq!(
         binders,
-        vec!["ava1/ava1_server.c", "src/ftp_server.c"],
-        "only the AVA1 server (9120) and the user-started FTP server open a listener"
+        vec!["ava1/ava1_server.c"],
+        "only the AVA1 server (9120) opens a listener"
     );
     // The AVA1 server binds AVA1_DEFAULT_PORT and the config carries no other helper port.
     let cfg = std::fs::read_to_string(payload().join("include/config.h")).unwrap();
@@ -99,61 +84,11 @@ fn c_payload_binds_only_9120() {
 }
 
 #[test]
-fn c_first_start_removes_the_ftx2_directories() {
-    let root = tmp("firststart");
-    for sub in ["tx", "spool/spool_ab/1", "ava/send", "runtime", "mounts"] {
-        std::fs::create_dir_all(root.join(sub)).unwrap();
-    }
-    std::fs::write(root.join("tx/tx_1.json"), b"{}").unwrap();
-    std::fs::write(root.join("tx/events.log"), b"x").unwrap();
-    std::fs::write(root.join("spool/spool_ab/1/0"), vec![0u8; 4096]).unwrap();
-    std::fs::write(root.join("ava/send/job.ob"), b"keep").unwrap();
-    std::fs::write(root.join("ava/events.log"), b"keep").unwrap();
-    std::fs::write(root.join("runtime/active_instance.txt"), b"keep").unwrap();
-    // a symlink inside the retired folder must be unlinked, never followed
-    let outside = tmp("firststart-outside");
-    std::fs::write(outside.join("precious"), b"do not delete").unwrap();
-    std::os::unix::fs::symlink(&outside, root.join("tx/link")).unwrap();
-
-    let c = CString::new(root.to_str().unwrap()).unwrap();
-    assert_eq!(unsafe { payload_remove_retired_dirs(c.as_ptr()) }, 0);
-    assert!(!root.join("tx").exists(), "tx removed");
-    assert!(!root.join("spool").exists(), "spool removed");
-    assert_eq!(
-        std::fs::read(root.join("ava/send/job.ob")).unwrap(),
-        b"keep"
-    );
-    assert_eq!(std::fs::read(root.join("ava/events.log")).unwrap(), b"keep");
-    assert!(root.join("runtime/active_instance.txt").exists());
-    assert!(root.join("mounts").is_dir());
-    assert_eq!(
-        std::fs::read(outside.join("precious")).unwrap(),
-        b"do not delete",
-        "a link out of the folder is not followed"
-    );
-    // idempotent: the second start finds nothing and says so with 0
-    assert_eq!(unsafe { payload_remove_retired_dirs(c.as_ptr()) }, 0);
-    // a regular file named like a retired folder is removed too (it is ours either way)
-    std::fs::write(root.join("tx"), b"file").unwrap();
-    assert_eq!(unsafe { payload_remove_retired_dirs(c.as_ptr()) }, 0);
-    assert!(!root.join("tx").exists());
-    let _ = std::fs::remove_dir_all(&root);
-    let _ = std::fs::remove_dir_all(&outside);
-}
-
-#[test]
 fn c_first_start_never_creates_the_retired_directories() {
     let cfg = std::fs::read_to_string(payload().join("include/config.h")).unwrap();
     assert!(!cfg.contains("PS5UPLOAD2_TX_DIR") && !cfg.contains("PS5UPLOAD2_SPOOL_DIR"));
     let rt = std::fs::read_to_string(payload().join("src/runtime.c")).unwrap();
     assert!(!rt.contains("ps5upload/tx") && !rt.contains("ps5upload/spool"));
-    // main.c runs the removal, and only after the takeover (an old helper may still be using them).
-    let main = std::fs::read_to_string(payload().join("src/main.c")).unwrap();
-    let take = main.find("runtime_try_takeover").expect("takeover in main");
-    let rm = main
-        .find("payload_remove_retired_dirs")
-        .expect("main removes the retired folders");
-    assert!(rm > take, "the removal runs after the takeover");
 }
 
 #[test]
@@ -161,11 +96,7 @@ fn c_no_frame_magic_ftx2_in_the_binary() {
     // Sources: no "FTX2" text, no magic constant, no 9113/9114 outside the migration shim.
     for (p, t) in sources() {
         let lower = t.to_lowercase();
-        assert!(
-            !lower.contains("ftx2"),
-            "{} still says FTX2 (only legacy_takeover.c may)",
-            p.display()
-        );
+        assert!(!lower.contains("ftx2"), "{} still says FTX2", p.display());
         assert!(
             !lower.contains("0x32585446"),
             "{} has the magic",
@@ -188,8 +119,7 @@ fn c_no_frame_magic_ftx2_in_the_binary() {
             }
         }
     }
-    // The ELF, when one is built and newer than every source: only the shim's immediate may spell
-    // the magic (the 4 bytes "FTX2" once), and no frame-name or port text is left.
+    // The ELF, when one is built and newer than every source: no magic, frame-name or port text is left.
     let elf = payload().join("ps5upload.elf");
     let Ok(meta) = std::fs::metadata(&elf) else {
         eprintln!("no ps5upload.elf: binary check skipped (build it with the SDK)");
@@ -218,7 +148,7 @@ fn c_no_frame_magic_ftx2_in_the_binary() {
     }
     let bin = std::fs::read(&elf).unwrap();
     let count = |needle: &[u8]| bin.windows(needle.len()).filter(|w| *w == needle).count();
-    assert!(count(b"FTX2") <= 1, "FTX2 appears {} times", count(b"FTX2"));
+    assert_eq!(count(b"FTX2"), 0, "FTX2 appears in the ELF");
     for s in [
         &b"transfer_listener"[..],
         b"mgmt listener",

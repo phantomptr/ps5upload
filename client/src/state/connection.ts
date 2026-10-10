@@ -92,13 +92,10 @@ export interface HostRuntime {
   ucredElevated: boolean | null;
   priorInstance: string | null;
   /** The AVA1 session verdict from the same single probe that sets
-   *  `payloadStatus`: connected, needs_pairing, helper_old or down. There
+   *  `payloadStatus`: connected, needs_pairing or down. There
    *  is one listener, so there is no second liveness flag to disagree
    *  with it. null = host not yet probed. */
   session: SessionState | null;
-  /** With `session === "helper_old"`: the old helper would not exit when asked
-   *  (`legacy_helper_wedged`), so the console must be restarted before the update. */
-  helperWedged: boolean;
 }
 
 export const EMPTY_HOST_RUNTIME: HostRuntime = {
@@ -108,7 +105,6 @@ export const EMPTY_HOST_RUNTIME: HostRuntime = {
   ucredElevated: null,
   priorInstance: null,
   session: null,
-  helperWedged: false,
 };
 
 export interface ConnectionState {

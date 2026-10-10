@@ -21,8 +21,8 @@ use ps5upload_ava1::mgmt::AvaTransport;
 use ps5upload_ava1::Pool;
 use ps5upload_core::mgmt::{scoped_transport, MgmtError};
 use ps5upload_core::{
-    activity, backup, cheats, diagnostics, fan_curve, ftp, fw_spoof, hw, notif, profile,
-    remoteplay, sdk_changer, smp_meta, sys_time, system_control, users,
+    activity, backup, cheats, diagnostics, fan_curve, fw_spoof, hw, notif, profile, remoteplay,
+    sdk_changer, smp_meta, sys_time, system_control, users,
 };
 
 fn temp(tag: &str) -> PathBuf {
@@ -276,13 +276,6 @@ async fn a_failure_that_carries_data_comes_back_as_the_body_the_module_parses() 
             Reply::Err(gen::ERR_INTERNAL, r#"{"ok":false,"err_code":7}"#),
         ),
         (
-            gen::METHOD_FTP_START,
-            Reply::Err(
-                gen::ERR_BUSY,
-                r#"{"ok":false,"error":"already_running","port":2122}"#,
-            ),
-        ),
-        (
             gen::METHOD_CHEATS_RELOAD,
             Reply::Err(gen::ERR_INTERNAL, r#"{"ok":false}"#),
         ),
@@ -299,22 +292,6 @@ async fn a_failure_that_carries_data_comes_back_as_the_body_the_module_parses() 
     assert_eq!(r.err_code, 3758104577);
     let g = run(&t, &c, |a| sys_time::ps5_time_get(a)).await.unwrap();
     assert_eq!(g.err_code, 7);
-    let f = run(&t, &c, |a| {
-        ftp::ftp_start(
-            a,
-            &ftp::FtpStartRequest {
-                port: 2122,
-                root: "/".into(),
-                readonly: false,
-                user: String::new(),
-                pass: String::new(),
-            },
-        )
-    })
-    .await
-    .unwrap();
-    assert!(!f.ok);
-    assert_eq!(f.port, 2122);
     assert!(!run(&t, &c, |a| cheats::cheats_reload(a)).await.unwrap());
     // toast: the failure body's code reaches the error text the caller shows
     let e = run(&t, &c, |a| {
@@ -512,14 +489,6 @@ async fn account_backup_cheat_mod_notice_activity_and_remote_play_calls_round_tr
             Reply::Text(r#"{"ok":true,"title_id":"CUSA00001","restored":3,"error":""}"#),
         ),
         (
-            gen::METHOD_FTP_START,
-            Reply::Text(r#"{"ok":true,"port":2122}"#),
-        ),
-        (
-            gen::METHOD_FTP_STATUS,
-            Reply::Text(r#"{"running":true,"port":2122}"#),
-        ),
-        (
             gen::METHOD_FWSPOOF_STATUS,
             Reply::Text(r#"{"spoofed":false}"#),
         ),
@@ -617,7 +586,6 @@ async fn account_backup_cheat_mod_notice_activity_and_remote_play_calls_round_tr
         .await
         .unwrap();
     assert_eq!(sr.restored, 3);
-    run(&t, &c, |a| ftp::ftp_status(a)).await.unwrap();
     run(&t, &c, |a| fw_spoof::fw_spoof_status(a)).await.unwrap();
     run(&t, &c, |a| notif::notif_list(a, 0)).await.unwrap();
     assert_eq!(
@@ -718,7 +686,6 @@ fn no_core_module_of_this_group_dials_a_console_directly() {
         "smp_meta.rs",
         "sdk_changer.rs",
         "tmdb.rs",
-        "ftp.rs",
         "fw_spoof.rs",
         "remoteplay.rs",
     ] {

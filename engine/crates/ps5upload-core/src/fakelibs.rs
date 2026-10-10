@@ -714,11 +714,6 @@ impl Corpus {
         self.manifest.sets.iter().find(|s| s.id == id)
     }
 
-    /// Absolute path of a build, for copying to a console.
-    pub fn build_path(&self, rel: &str) -> PathBuf {
-        self.root.join(rel)
-    }
-
     /// Add one set. Content-addressed, so bytes already present are not
     /// rewritten and a re-scan or a repeated import is a no-op.
     ///
@@ -1153,10 +1148,6 @@ mod tests {
             !dir.join(&psml_path).exists(),
             "its file must be removed too"
         );
-        assert!(c
-            .build_path(&psml_path)
-            .to_string_lossy()
-            .contains("builds/"));
     }
 
     #[test]

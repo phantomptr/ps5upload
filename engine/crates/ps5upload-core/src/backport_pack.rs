@@ -45,13 +45,6 @@ pub enum PackRole {
     Other,
 }
 
-impl PackRole {
-    /// Does installing a pack write this file to the console?
-    pub fn is_installable(self) -> bool {
-        !matches!(self, PackRole::Other)
-    }
-}
-
 /// Classify one pack-relative path.
 ///
 /// Rejects anything that tries to escape the pack root: a pack is a folder the
@@ -244,7 +237,6 @@ mod tests {
         // dropped as unrecognised.
         assert_eq!(classify("prx/akdelay.prx"), PackRole::GamePrx);
         assert_eq!(classify("prx/masteringsuite.prx"), PackRole::GamePrx);
-        assert!(PackRole::GamePrx.is_installable());
         // Still not corpus material — title-specific, not a shared library.
         assert_ne!(classify("prx/akdelay.prx"), PackRole::Library);
     }
@@ -252,7 +244,6 @@ mod tests {
     #[test]
     fn sce_sys_about_is_reached_two_levels_down() {
         assert_eq!(classify("sce_sys/about/right.sprx"), PackRole::SceSys);
-        assert!(PackRole::SceSys.is_installable());
     }
 
     #[test]
@@ -276,7 +267,6 @@ mod tests {
         assert_eq!(classify("/fakelib/libSceAgc.sprx"), PackRole::Other);
         assert_eq!(classify("fakelib/sub/libSceAgc.sprx"), PackRole::Other);
         assert_eq!(classify("prx/../../etc/passwd"), PackRole::Other);
-        assert!(!PackRole::Other.is_installable());
     }
 
     #[test]

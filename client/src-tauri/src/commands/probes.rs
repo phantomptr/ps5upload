@@ -262,26 +262,6 @@ async fn do_payload_send(ip: &str, path: &str, target_port: u16) -> Result<u64, 
     // connection. (On a single-payload loader the loader itself may still
     // clobber ps5upload; that's outside our control, and the post-install
     // payload restore — which IS a ps5upload send — cleans up the ports.)
-    // An OLDER helper is replaced by the engine's replace flow (the old protocol's shutdown,
-    // the stamped helper, the AVA1 wait) instead of the shutdown below, which only speaks AVA1.
-    // The replace sends the BUNDLED helper, so it is taken only when the chosen file IS the
-    // bundled helper; any other ELF (a downgrade, a test build) is the person's deliberate
-    // choice and goes through the shutdown-then-send path, and THEIR file is what gets sent.
-    if target_port == PS5_LOADER_PORT && sending_ps5upload {
-        let state = engine_helper_state(ip).await;
-        if state.as_deref() == Some("helper_old") {
-            let bytes = tokio::fs::read(path)
-                .await
-                .map_err(|e| format!("read {path}: {e}"))?;
-            let bundled = tokio::task::spawn_blocking(move || file_is_bundled(&bytes))
-                .await
-                .unwrap_or(false);
-            if old_helper_path(state.as_deref(), bundled) == OldHelperPath::Replace {
-                engine_replace_helper(ip).await?;
-                return Ok(size);
-            }
-        }
-    }
     if target_port == PS5_LOADER_PORT && sending_ps5upload {
         let host = ip.to_string();
         // Off the async runtime — the management call is blocking I/O.
@@ -442,107 +422,6 @@ async fn stamp_ava1_trust(bytes: &mut [u8]) {
     if let Err(why) = ava1::trust::stamp_helper(bytes, key, || token) {
         eprintln!("[payload_send] {why}");
     }
-}
-
-/// What the engine says about the console's running helper (`GET /api/ps5/helper/state`):
-/// `ava1`, `helper_old`, `starting`, `ava1_failed` or `not_running`. `None` when the engine
-/// does not answer (an older engine without the route): the caller then keeps the plain flow.
-async fn engine_helper_state(ip: &str) -> Option<String> {
-    let url = format!(
-        "{}/api/ps5/helper/state?host={}",
-        crate::engine::url(),
-        crate::commands::ps5_engine::urlencoding(ip)
-    );
-    tokio::time::timeout(Duration::from_secs(4), async {
-        let client = crate::engine_http::engine_client_builder().build().ok()?;
-        let r = client.get(&url).send().await.ok()?;
-        if !r.status().is_success() {
-            return None;
-        }
-        let v: serde_json::Value = r.json().await.ok()?;
-        v.get("state")?.as_str().map(str::to_string)
-    })
-    .await
-    .ok()
-    .flatten()
-}
-
-/// An older helper (one that only speaks the old protocol) is replaced by the ENGINE, not shut
-/// down from here: `POST /api/ps5/helper/replace` asks it to exit, waits for its ports to close,
-/// sends the stamped helper (so no pairing code appears) and waits for the AVA1 port. Returns
-/// `Err` with the engine's token at the start (`legacy_helper_wedged`: the old helper did not
-/// exit, the console must be restarted; `helper_not_running`) so the UI can say what to do.
-async fn engine_replace_helper(ip: &str) -> Result<(), String> {
-    let url = format!("{}/api/ps5/helper/replace", crate::engine::url());
-    let client = crate::engine_http::engine_client_builder()
-        .timeout(Duration::from_secs(90))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let r = client
-        .post(&url)
-        .json(&serde_json::json!({ "host": ip }))
-        .send()
-        .await
-        .map_err(|e| format!("replace helper: {e}"))?;
-    if r.status().is_success() {
-        return Ok(());
-    }
-    let status = r.status();
-    let body = r.text().await.unwrap_or_default();
-    Err(replace_failure(status.as_u16(), &body))
-}
-
-/// How an older helper is dealt with when a ps5upload ELF is sent to the loader.
-#[derive(Debug, PartialEq, Eq)]
-enum OldHelperPath {
-    /// The engine's replace flow (it sends the bundled helper).
-    Replace,
-    /// The shutdown-then-send path: the person's own file is what gets sent.
-    ShutdownThenSend,
-}
-
-/// The replace flow only for an older helper AND the bundled helper file.
-fn old_helper_path(engine_state: Option<&str>, file_is_bundled: bool) -> OldHelperPath {
-    if engine_state == Some("helper_old") && file_is_bundled {
-        OldHelperPath::Replace
-    } else {
-        OldHelperPath::ShutdownThenSend
-    }
-}
-
-/// True when `file` is byte-for-byte the helper this app embeds.
-fn file_is_bundled(file: &[u8]) -> bool {
-    same_as_gz(file, EMBEDDED_PAYLOAD_GZ)
-}
-
-fn same_as_gz(file: &[u8], gz: &[u8]) -> bool {
-    let mut out = Vec::with_capacity(file.len());
-    let decoder = flate2::read::GzDecoder::new(gz);
-    if std::io::Read::read_to_end(
-        &mut std::io::Read::take(decoder, EMBEDDED_PAYLOAD_MAX_BYTES),
-        &mut out,
-    )
-    .is_err()
-    {
-        return false;
-    }
-    blake3::hash(&out) == blake3::hash(file)
-}
-
-/// The error text for a refused replace: the engine's `error` (which starts with its token)
-/// when the body has one, else the raw body or the status.
-fn replace_failure(status: u16, body: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
-        .filter(|e| !e.is_empty())
-        .unwrap_or_else(|| {
-            if body.trim().is_empty() {
-                format!("helper replace failed (HTTP {status})")
-            } else {
-                body.trim().to_string()
-            }
-        })
 }
 
 /// Launch the ELF at `path` through Payload Manager (:8084). The stored copy
@@ -913,55 +792,6 @@ mod payload_send_tests {
     /// `&[]`, which surfaced to users as a gunzip failure on send. Since
     /// every target now `include_bytes!`s the same file, this one test
     /// covers desktop and mobile alike.
-    #[test]
-    fn only_the_bundled_helper_takes_the_replace_flow() {
-        // The older helper and the bundled file: the engine replaces it.
-        assert_eq!(
-            old_helper_path(Some("helper_old"), true),
-            OldHelperPath::Replace
-        );
-        // A custom ELF keeps the person's choice: shutdown, then send THEIR file.
-        assert_eq!(
-            old_helper_path(Some("helper_old"), false),
-            OldHelperPath::ShutdownThenSend
-        );
-        // Anything but an older helper is the plain flow, bundled or not.
-        for st in [Some("ava1"), Some("not_running"), None] {
-            assert_eq!(old_helper_path(st, true), OldHelperPath::ShutdownThenSend);
-        }
-    }
-
-    #[test]
-    fn a_file_is_the_bundled_helper_only_when_every_byte_matches() {
-        use std::io::Write;
-        let elf = b"\x7FELF the bundled helper".to_vec();
-        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-        gz.write_all(&elf).unwrap();
-        let gz = gz.finish().unwrap();
-        assert!(same_as_gz(&elf, &gz));
-        let mut other = elf.clone();
-        *other.last_mut().unwrap() ^= 1;
-        assert!(
-            !same_as_gz(&other, &gz),
-            "a one-byte difference is a custom build"
-        );
-        assert!(!same_as_gz(&elf[..4], &gz));
-        assert!(!same_as_gz(&elf, b"not gzip"));
-    }
-
-    #[test]
-    fn a_refused_replace_keeps_the_engines_token_first() {
-        assert_eq!(
-            replace_failure(
-                409,
-                r#"{"error":"legacy_helper_wedged: the older helper did not exit"}"#
-            ),
-            "legacy_helper_wedged: the older helper did not exit"
-        );
-        assert_eq!(replace_failure(502, "plain text"), "plain text");
-        assert_eq!(replace_failure(500, ""), "helper replace failed (HTTP 500)");
-    }
-
     #[test]
     fn embedded_payload_decompresses_to_elf() {
         use std::io::Read;

@@ -15,7 +15,6 @@ pub mod fakelibs;
 pub mod fan_curve;
 pub mod focus;
 pub mod fs_ops;
-pub mod ftp;
 pub mod fw_spoof;
 pub mod game_meta;
 pub mod health;

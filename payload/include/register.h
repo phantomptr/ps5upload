@@ -149,22 +149,4 @@ int register_browser_launch(void);
  * a specific err_reason when invoked, not at init. */
 void register_module_init(void);
 
-/* Call once at payload startup FROM THE MAIN THREAD, before the mgmt
- * HTTP listener starts spawning handler threads. Invokes
- * sceUserServiceInitialize + sceAppInstUtilInitialize + sceLncUtilInitialize
- * so Sony's services are established in main-thread context.
- *
- * Earlier versions lazy-initialized these from spawned HTTP handler
- * threads, which on firmware 9.60 causes
- * sceAppInstUtilAppInstallTitleDir to deadlock inside Sony's kernel
- * stub (suspected: per-process lock expects main-thread ownership).
- *
- * Idempotent and failure-tolerant — if a Sony init returns non-zero
- * or the symbol isn't present, we log and continue so the rest of
- * the payload (transfer, mount, fs ops) still comes up. The register
- * / launch / uninstall paths themselves still guard on symbol
- * availability, so a missing init is surfaced as a clean error
- * rather than a hang. */
-void register_services_init(void);
-
 #endif /* PS5UPLOAD2_REGISTER_H */

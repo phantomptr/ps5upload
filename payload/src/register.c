@@ -237,12 +237,6 @@ static void register_module_init_impl(void) {
      *     blocks the path where Sony brings a renamed API back, or
      *     where a patched kernel/sprx restores the old names.
      *
-     *   - The long-standing "dlopen hangs the mgmt thread on some
-     *     firmwares" concern is handled by the eager-init pattern
-     *     (see `register_services_init` below) which resolves these
-     *     symbols on the main thread at startup, not inside a mgmt
-     *     handler.
-     *
      * Net: this runs on every firmware the SDK supports (1.00–13.60).
      * Install requests fail cleanly on any firmware where the API
      * isn't actually exported. */
@@ -306,49 +300,6 @@ static void register_module_init_impl(void) {
 
 void register_module_init(void) {
     pthread_once(&g_reg_once, register_module_init_impl);
-}
-
-/* Eager Sony-service init — intended to be called from main() on the
- * main thread, BEFORE the HTTP listener starts. See register.h for
- * the full rationale. Idempotent: pthread_once guarantees the impl
- * runs exactly once; the Sony API calls themselves are documented
- * idempotent by Sony, so re-entry (e.g., if a caller accidentally
- * invokes this from a handler) is safe.
- *
- * Not instrumented with a timeout because these Sony init functions
- * are observed to complete promptly (<100ms) when called from the
- * main thread at startup. If they ever hang at startup, the payload
- * won't come up at all — which is a louder and more recoverable
- * failure mode than the silent "install wedges 30s after user clicks
- * Install" we saw pre-fix. */
-void register_services_init(void) {
-    /* Resolve symbols first (lazy init path also does this; calling
-     * it here just pulls the work to main-thread context so every
-     * Sony symbol is already bound before any handler touches it). */
-    register_module_init();
-
-    /* Lock the serialization mutex so this first-ever init is
-     * guaranteed to run before any HTTP handler enters the install
-     * path. Not strictly required if main.c calls us before the
-     * listener spawns, but defense-in-depth for anyone who refactors
-     * main.c later. */
-    pthread_mutex_lock(&sony_api_lock);
-
-    if (g_reg.user_service_initialize) {
-        /* sceUserServiceInitialize takes an optional pointer to init
-         * parameters; NULL = defaults. */
-        (void)g_reg.user_service_initialize(NULL);
-    }
-    if (g_reg.app_inst_util_initialize) {
-        (void)g_reg.app_inst_util_initialize();
-    }
-    if (g_reg.lnc_util_initialize) {
-        /* Eagerly init LncUtil from main-thread context so
-         * launch_title sees a ready-to-use service. */
-        (void)g_reg.lnc_util_initialize();
-    }
-
-    pthread_mutex_unlock(&sony_api_lock);
 }
 
 /* -- Filesystem helpers ------------------------------------------------ */
@@ -1412,10 +1363,9 @@ int register_title_from_path(const char *src_path,
      * post-sleep gives Sony's stub time to release internal locks
      * before the next caller. */
     pthread_mutex_lock(&sony_api_lock);
-    /* Lazy init of Sony's installer service — main.c does NOT call
-     * `register_services_init` at startup (it has been observed to
-     * hang on some firmware/loader combinations), so the first
-     * `sceAppInstUtilInitialize` call lives here. Sony's init is
+    /* Lazy init of Sony's installer service — there is no eager init at
+     * startup (it has been observed to hang on some firmware/loader
+     * combinations), so the first `sceAppInstUtilInitialize` call lives here. Sony's init is
      * idempotent so on subsequent registers this is a near no-op. */
     if (g_reg.app_inst_util_initialize) {
         (void)g_reg.app_inst_util_initialize();

@@ -325,11 +325,6 @@ pub fn write(payload: &[u8], codec: Codec) -> crate::Result<Written> {
     })
 }
 
-/// Wrap `payload` in a stored-profile container: every block is its own logical bytes.
-pub fn write_stored(payload: &[u8]) -> crate::Result<Written> {
-    write(payload, Codec::Stored)
-}
-
 /// Wrap `payload` in a zlib-profile container.
 pub fn write_zlib(payload: &[u8]) -> crate::Result<Written> {
     write(payload, Codec::Zlib)
@@ -479,7 +474,7 @@ mod tests {
     #[test]
     fn a_stored_container_round_trips_through_its_own_tables() {
         let payload: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
-        let written = write_stored(&payload).unwrap();
+        let written = write(&payload, Codec::Stored).unwrap();
         let parsed = parse(&written.container).unwrap();
         assert_eq!(parsed.version, 3);
         assert_eq!(parsed.algorithm, ALG_KRAKEN as u8);
@@ -507,7 +502,7 @@ mod tests {
     #[test]
     fn a_multi_block_container_numbers_its_blocks() {
         let payload = vec![0xABu8; BLOCK * 2 + 17];
-        let parsed = parse(&write_stored(&payload).unwrap().container).unwrap();
+        let parsed = parse(&write(&payload, Codec::Stored).unwrap().container).unwrap();
         assert_eq!(parsed.blocks.len(), 3);
         assert!(parsed.digest_ok);
         // Every block is the logical block over a 256 KiB stride; only the last is short.
@@ -524,7 +519,7 @@ mod tests {
 
     #[test]
     fn a_small_payload_still_gets_one_block() {
-        let parsed = parse(&write_stored(b"hello").unwrap().container).unwrap();
+        let parsed = parse(&write(b"hello", Codec::Stored).unwrap().container).unwrap();
         assert_eq!(parsed.blocks.len(), 1);
         assert_eq!(parsed.logical_size, 5);
         assert!(parsed.digest_ok);

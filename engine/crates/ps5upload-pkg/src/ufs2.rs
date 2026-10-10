@@ -313,15 +313,6 @@ impl Inode {
     pub fn is_symlink(&self) -> bool {
         self.mode & IFMT == IFLNK
     }
-    /// File-type one-letter tag for UI ("d" / "f" / "l" / "?").
-    pub fn type_tag(&self) -> &'static str {
-        match self.mode & IFMT {
-            IFDIR => "d",
-            IFREG => "f",
-            IFLNK => "l",
-            _ => "?",
-        }
-    }
 }
 
 /// One directory entry (inode + name).
@@ -953,7 +944,7 @@ mod tests {
             mtime: 0,
         };
         assert!(i.is_dir());
-        assert_eq!(i.type_tag(), "d");
+        assert!(!i.is_file() && !i.is_symlink());
     }
 
     /// A 4096-byte-block image whose file data lives in frags 1..13 (direct) and

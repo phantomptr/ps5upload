@@ -35,7 +35,7 @@ const REQUIRED = [
   "ava1_wrong_console", "ava1_no_identity", "ava1_zip_corrupt", "ava1_7z_corrupt",
   "ava1_7z_encrypted", "ava1_7z_unsafe_path", "ava1_copy_lost", "ava1_copy_failed",
   "ava1_local_io", "ava1_bad_manifest", "zip_read_error", "helper_not_ava1", "not_paired",
-  "helper_starting", "ava1_failed", "helper_not_running", "helper_old",
+  "helper_starting", "ava1_failed", "helper_not_running",
 ];
 
 describe("every engine reason is humanized", () => {

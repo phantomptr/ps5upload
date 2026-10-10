@@ -613,11 +613,6 @@ fn padded(mut bytes: Vec<u8>) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// The superblock's absolute offset inside the finalized image, for the FIH.
-pub fn superblock_absolute(outer: &OuterImage) -> u64 {
-    BLOCK + outer.superblock_block * BLOCK
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -744,7 +739,6 @@ mod tests {
         assert_eq!(outer.image.len() as u64, 9 * BLOCK);
         assert_eq!(outer.superblock_block, 4);
         assert_eq!(outer.plaintext_digests.len(), 9);
-        assert_eq!(superblock_absolute(&outer), 5 * BLOCK);
 
         // Round-trip through the reader.
         let path = std::env::temp_dir().join(format!("outer-write-{}.bin", std::process::id()));

@@ -993,14 +993,8 @@ value = 117
 name = "METHOD_TMDB_STORE"
 ty = "u16"
 value = 118
-[[const]]
-name = "METHOD_FTP_START"
-ty = "u16"
-value = 119
-[[const]]
-name = "METHOD_FTP_STATUS"
-ty = "u16"
-value = 120
+# 119 and 120 (ftp.start / ftp.status) and 123 (notif.send) are retired: never reuse them,
+# an older helper would still answer them.
 [[const]]
 name = "METHOD_FWSPOOF_STATUS"
 ty = "u16"
@@ -1009,10 +1003,6 @@ value = 121
 name = "METHOD_NOTIF_LIST"
 ty = "u16"
 value = 122
-[[const]]
-name = "METHOD_NOTIF_SEND"
-ty = "u16"
-value = 123
 [[const]]
 name = "METHOD_NOTIF_CLEAR"
 ty = "u16"

@@ -108,37 +108,6 @@ pub fn with_rw_images(config_ini: &str, images: &[String]) -> String {
     out
 }
 
-/// What a stale edit session (an `image_rw=` block still in `config.ini` from a
-/// run that never finished) should cause us to do at startup.
-#[derive(Debug, PartialEq, Eq)]
-pub enum StaleSessionAction {
-    /// Nothing to do — no marker block present.
-    None,
-    /// Strip the block and remount the affected image read-only now.
-    RevertNow,
-    /// Leave it, and tell the user. Remounting the affected image would kill a
-    /// running game.
-    WarnOnly,
-}
-
-/// Decide what to do when we find our marker block left over from a previous
-/// run. `game_running` is true when any image-backed title currently has a
-/// process.
-///
-/// The trade-off: leaving an image mounted read-write is a silent corruption
-/// risk — Sony's own code can write to a 165 GB exfat image and nothing looks
-/// wrong until it does. But reverting remounts the affected image and would
-/// kill a game in progress. There is also a
-/// third consideration: a user who quit mid-backport may well be about to
-/// resume it, and reverting costs them two more SMP restarts.
-pub fn stale_session_action(has_marker_block: bool, game_running: bool) -> StaleSessionAction {
-    match (has_marker_block, game_running) {
-        (false, _) => StaleSessionAction::None,
-        (true, true) => StaleSessionAction::WarnOnly,
-        (true, false) => StaleSessionAction::RevertNow,
-    }
-}
-
 pub fn read_state(addr: &str) -> Result<Option<ImageRwSession>> {
     let bytes = match fs_read(addr, SESSION_PATH, 0, 256 * 1024) {
         Ok(bytes) => bytes,
@@ -385,19 +354,5 @@ mod tests {
     fn several_images_can_be_writable_at_once() {
         let out = with_rw_images(USER_CONFIG, &["A.exfat".into(), "B.ffpkg".into()]);
         assert!(out.contains("image_rw=A.exfat") && out.contains("image_rw=B.ffpkg"));
-    }
-
-    #[test]
-    fn stale_sessions_revert_when_idle_but_never_interrupt_a_running_game() {
-        assert_eq!(stale_session_action(false, false), StaleSessionAction::None);
-        assert_eq!(stale_session_action(false, true), StaleSessionAction::None);
-        assert_eq!(
-            stale_session_action(true, false),
-            StaleSessionAction::RevertNow
-        );
-        assert_eq!(
-            stale_session_action(true, true),
-            StaleSessionAction::WarnOnly
-        );
     }
 }

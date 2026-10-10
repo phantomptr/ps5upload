@@ -24,8 +24,7 @@ use std::fmt;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
-use serde::de::DeserializeOwned;
+use anyhow::Result;
 
 /// One management operation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -146,11 +145,8 @@ methods! {
     (SDK_RESTORE, 116, "SDK_RESTORE"),
     (TMDB_FETCH, 117, "TMDB_FETCH"),
     (TMDB_STORE, 118, "TMDB_STORE"),
-    (FTP_START, 119, "FTP_START"),
-    (FTP_STATUS, 120, "FTP_STATUS"),
     (FWSPOOF_STATUS, 121, "FW_SPOOF_STATUS"),
     (NOTIF_LIST, 122, "NOTIF_LIST"),
-    (NOTIF_SEND, 123, "NOTIF_SEND"),
     (NOTIF_CLEAR, 124, "NOTIF_CLEAR"),
     (TOAST_SEND, 125, "TOAST_SEND"),
     (ACTIVITY_GET, 126, "ACTIVITY_GET"),
@@ -379,18 +375,6 @@ pub fn call_with(
     }
     // No transport registered: a command-line tool forgot `ps5upload_ava1::mgmt::install()`.
     Err(helper_not_ava1(label))
-}
-
-/// A call whose request is a JSON value and whose reply is decoded as `T`.
-pub fn call_json<T: DeserializeOwned>(
-    addr: &str,
-    method: Method,
-    label: &str,
-    body: &serde_json::Value,
-) -> Result<T> {
-    let body = serde_json::to_vec(body).with_context(|| format!("serialize {label} body"))?;
-    let resp = call_as(addr, method, label, &body)?;
-    serde_json::from_slice(&resp).with_context(|| format!("decode {label} reply as JSON"))
 }
 
 /// For handlers that used to answer a failure as a successful frame with
@@ -650,18 +634,6 @@ mod tests {
             "payload rejected FS_MOVE: fs_move_cross_mount"
         );
         assert_eq!(e.downcast_ref::<MgmtError>().unwrap().status, 16);
-    }
-
-    #[test]
-    fn call_json_decodes_the_reply() {
-        let t = fake(|_, _| Ok(Some(br#"{"n":7}"#.to_vec())));
-        let _g = scoped_transport(t);
-        #[derive(serde::Deserialize)]
-        struct R {
-            n: u32,
-        }
-        let r: R = call_json("a:1", m::HW_INFO, "HW_INFO", &serde_json::json!({})).unwrap();
-        assert_eq!(r.n, 7);
     }
 
     #[test]

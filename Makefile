@@ -8,11 +8,6 @@
 #   tests/     — root integration smoke + tests/lab/ (real-hardware shell scripts)
 #   bench/     — hardware sweep, golden workloads and profiles
 #   scripts/   — install + dev helpers (one per OS, plus shared mjs utilities)
-#
-# Retired pre-2.1: app/ (browser server), shared/ (legacy JS modules),
-# ui/ (empty scaffold), client/electron/ (Tauri replaces Electron),
-# specs/ (consolidated into in-tree doc comments + CHANGELOG), tools/
-# (folded into scripts/). The 1.x C payload was already gone pre-rename.
 
 JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 4)
 # `npm ci` — NOT `npm install`. The lockfile carries `libc` fields that select
@@ -528,19 +523,13 @@ _wait-payload-ready:
 #
 # Exceptions (each is a path excluded from the search; keep this list to files that must name
 # the legacy protocol, and reword anything else to AVA1 terms):
-#   payload/src/legacy_takeover.c    the migration shim that asks an old helper to exit.
 #   CHANGELOG.md                     history keeps FTX2 by design.
 #   protocol/ava1/                   the spec, the cutover checklist and the method
 #                                    checklist describe the migration from FTX2.
 #   Makefile, .github/workflows/engine-ci.yml
 #                                    name this check and its pattern.
-#   .../ava1-ctest/tests/lifecycle.rs
-#                                    pins the legacy takeover frame bytes (the shim's header).
 #   .../ava1-ctest/tests/payload_cutover.rs
 #                                    asserts the payload no longer says FTX2 or 9113/9114.
-#   .../ps5upload-engine/src/legacy_helper.rs, legacy_helper_tests.rs, legacy_guard.rs
-#                                    the migration shim: shuts an old helper down and
-#                                    shows the old-helper banner.
 #   .../ps5upload-engine/src/ava1_only_tests.rs
 #                                    the tests that pin the engine free of the retired symbols.
 #   client/src/lib/addr.ts,
@@ -552,8 +541,6 @@ _wait-payload-ready:
 CHECK_NO_FTX2_PATTERN := ftx2|(^|[^0-9])911[34]([^0-9]|$$)
 CHECK_NO_FTX2_SCOPE := .
 CHECK_NO_FTX2_EXCEPT := \
-	':!payload/src/legacy_takeover.c' \
-	':!engine/crates/ava1-ctest/tests/lifecycle.rs' \
 	':!engine/crates/ava1-ctest/tests/payload_cutover.rs' \
 	':!CHANGELOG.md' \
 	':!CONTRIBUTING.md' ':!TESTING.md' \
@@ -561,9 +548,6 @@ CHECK_NO_FTX2_EXCEPT := \
 	':!Makefile' \
 	':!.github/workflows/engine-ci.yml' \
 	':!*Cargo.lock' ':!*package-lock.json' \
-	':!engine/crates/ps5upload-engine/src/legacy_helper.rs' \
-	':!engine/crates/ps5upload-engine/src/legacy_helper_tests.rs' \
-	':!engine/crates/ps5upload-engine/src/legacy_guard.rs' \
 	':!engine/crates/ps5upload-engine/src/ava1_only_tests.rs' \
 	':!engine/crates/ps5upload-engine/src/install' \
 	':!engine/crates/ps5upload-engine/src/fakelibs_api.rs' \
@@ -970,23 +954,6 @@ test-payload: payload
 		/tmp/ps5upload-cdb/sqlite3.o
 	@/tmp/ps5upload-actjson/selftest
 	@echo "✓ every Game Activity tab names its titles, in the keys the engine reads"
-	@echo "Running FTP wire-format self-test (host build)..."
-	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-ftp-format-selftest \
-		$(PAYLOAD_DIR)/tests/ftp_format_selftest.c
-	@/tmp/ps5upload-ftp-format-selftest
-	@echo "✓ FTP PASV/EPSV/LIST replies match the shapes clients parse"
-	@echo "Running FTP lifecycle self-test (host build)..."
-	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
-		-o /tmp/ps5upload-ftp-lifecycle-selftest \
-		$(PAYLOAD_DIR)/tests/ftp_lifecycle_selftest.c $(PAYLOAD_DIR)/src/path_policy.c
-	@/tmp/ps5upload-ftp-lifecycle-selftest
-	@echo "✓ FTP stop/start drains sessions without stale listeners or fd reuse"
-	@echo "Running FTP trust-store self-test (host build)..."
-	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
-		-o /tmp/ps5upload-ftp-trust-selftest \
-		$(PAYLOAD_DIR)/tests/ftp_trust_store_selftest.c
-	@/tmp/ps5upload-ftp-trust-selftest
-	@echo "✓ FTP cannot reach the AVA1 trust store directly or through an ancestor"
 	@echo "Running timed initializer serialization self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
 		-o /tmp/ps5upload-timed-init-selftest \

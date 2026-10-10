@@ -9,7 +9,7 @@
  * sys_registry.c, remoteplay.c, notif.c or a Sony API; the code takes sony_api_lock /
  * g_register_lock itself, the table only records it and tools/mgmt_audit.py sony checks it), and `runner` is a
  * helper from mgmt_rpc.h: mgmt_call_text (MgmtText in and out), mgmt_call_paged (a
- * MgmtText method that pages with offset/limit/more) or a typed one (mgmt_call_fs_mkdir).
+ * MgmtText method that pages with offset/limit/more) or a typed one (mgmt_call_node_status).
  *
  * The handler is the one in runtime.c, unchanged; this file is included twice by
  * runtime.c (wrappers, then the table) and parsed by the ava1-ctest table tests, so keep
@@ -70,8 +70,8 @@ MGMT_H1(AVA1_METHOD_INDEX_SEARCH, MGMT_FRAME_SEARCH_INDEX, MGMT_FRAME_SEARCH_IND
 MGMT_H0(AVA1_METHOD_INDEX_CANCEL, MGMT_FRAME_INDEX_CANCEL, MGMT_FRAME_INDEX_CANCEL_ACK, 0, handle_index_cancel, mgmt_call_text)
 /* ---- P3 Task 7: hardware, system, accounts, cheats, mods, notices, Remote Play ----
  * Every method is a MgmtText with the legacy JSON body, and all use mgmt_call_text_keep: a legacy
- * {"ok":false,...} reply travels as the error cause WITH its fields (time.set err_code, ftp.start port,
- * toast code, ...) and the engine turns it back into the body the module parses (call_legacy_ok).
+ * {"ok":false,...} reply travels as the error cause WITH its fields (time.set err_code, toast
+ * code, ...) and the engine turns it back into the body the module parses (call_legacy_ok).
  * MGMT_SONY marks handlers that reach sceUserService/sceRegMgr/Remote Play/notifications; each takes
  * sony_api_lock itself (mgmt_audit.py sonylock checks it) and the dispatcher adds no lock. */
 MGMT_H0(AVA1_METHOD_HW_INFO, MGMT_FRAME_HW_INFO, MGMT_FRAME_HW_INFO_ACK, 0, handle_hw_info, mgmt_call_text_keep)
@@ -115,11 +115,8 @@ MGMT_H1(AVA1_METHOD_SDK_PATCH, MGMT_FRAME_SDK_PATCH, MGMT_FRAME_SDK_PATCH_ACK, 0
 MGMT_H1(AVA1_METHOD_SDK_RESTORE, MGMT_FRAME_SDK_RESTORE, MGMT_FRAME_SDK_RESTORE_ACK, 0, mgmt_w_sdk_restore, mgmt_call_text_keep)
 MGMT_H1(AVA1_METHOD_TMDB_FETCH, MGMT_FRAME_TMDB_FETCH, MGMT_FRAME_TMDB_FETCH_ACK, 0, mgmt_w_tmdb_fetch, mgmt_call_text_keep)
 MGMT_H1(AVA1_METHOD_TMDB_STORE, MGMT_FRAME_TMDB_STORE, MGMT_FRAME_TMDB_STORE_ACK, 0, mgmt_w_tmdb_store, mgmt_call_text_keep)
-MGMT_H1(AVA1_METHOD_FTP_START, MGMT_FRAME_FTP_START, MGMT_FRAME_FTP_START_ACK, 0, mgmt_w_ftp_start, mgmt_call_text_keep)
-MGMT_H0(AVA1_METHOD_FTP_STATUS, MGMT_FRAME_FTP_STATUS, MGMT_FRAME_FTP_STATUS_ACK, 0, handle_ftp_status, mgmt_call_text_keep)
 MGMT_H0(AVA1_METHOD_FWSPOOF_STATUS, MGMT_FRAME_FWSPOOF_STATUS, MGMT_FRAME_FWSPOOF_STATUS_ACK, 0, handle_fw_spoof_status, mgmt_call_text_keep)
 MGMT_H1(AVA1_METHOD_NOTIF_LIST, MGMT_FRAME_NOTIF_LIST, MGMT_FRAME_NOTIF_LIST_ACK, MGMT_SONY, mgmt_w_notif_list, mgmt_call_text_keep)
-MGMT_H1(AVA1_METHOD_NOTIF_SEND, MGMT_FRAME_NOTIF_SEND, MGMT_FRAME_NOTIF_SEND_ACK, MGMT_SONY, mgmt_w_notif_send, mgmt_call_text_keep)
 MGMT_H0(AVA1_METHOD_NOTIF_CLEAR, MGMT_FRAME_NOTIF_CLEAR, MGMT_FRAME_NOTIF_CLEAR_ACK, MGMT_SONY, handle_notif_clear, mgmt_call_text_keep)
 MGMT_H1(AVA1_METHOD_TOAST_SEND, MGMT_FRAME_TOAST_SEND, MGMT_FRAME_TOAST_SEND_ACK, MGMT_SONY, mgmt_w_toast_send, mgmt_call_text_keep)
 MGMT_H0(AVA1_METHOD_ACTIVITY_GET, MGMT_FRAME_ACTIVITY_GET, MGMT_FRAME_ACTIVITY_GET_ACK, 0, handle_activity_get, mgmt_call_text_keep)

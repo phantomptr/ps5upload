@@ -106,7 +106,7 @@ static int stub_volumes(void *st, int fd, uint64_t t, const char *b, uint64_t l)
     return stub_send_frame(35, body, sizeof body - 1);
 }
 
-/* fs.mkdir: the legacy {"path":...} request, the legacy tokens. */
+/* A legacy handler that answers an empty ack or an ERROR frame, by the {"path":...} it gets. */
 static int stub_mkdir(void *st, int fd, uint64_t t, const char *b, uint64_t l) {
     const char *p = strstr(b, "\"path\":\"");
     size_t n = 0;
@@ -328,7 +328,7 @@ void ava1_test_events_log(const char *line) { ava1_log_event(line); }
 #define STUB_RUN(name, helper) \
     static int run_##name(const uint8_t *q, uint32_t n, mgmt_ctx_t *cx) { return helper(q, n, cx, name); }
 STUB_RUN(stub_volumes, mgmt_call_text)
-STUB_RUN(stub_mkdir, mgmt_call_fs_mkdir)
+STUB_RUN(stub_mkdir, mgmt_call_text)
 STUB_RUN(stub_launch, mgmt_call_text)
 STUB_RUN(stub_app_list, mgmt_call_paged)
 STUB_RUN(stub_big, mgmt_call_text)

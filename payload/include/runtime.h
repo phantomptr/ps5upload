@@ -84,12 +84,6 @@ int runtime_sweep_our_instances(void);
  * NULL to skip that step. */
 void runtime_arm_shutdown_watchdog(const runtime_state_t *state, int exit_code);
 int runtime_ensure_directories(void);
-/* Post-startup cleanup: unmount `/mnt/ps5upload/` mounts whose backing
- * dev node is gone (orphans from a previous session). Called once at
- * startup from main.c, after runtime_init completes. Failure-tolerant —
- * any single reconcile error logs + continues so payload still starts. */
-void runtime_reconcile_mounts(void);
-
 /* 2.2.52 Tier-1 staging sweep. Removes *.pkg files in
  * PS5UPLOAD2_PKG_TEMP_DIR with mtime older than 24 h — orphans
  * left by desktop crashes mid-install. Call once at payload init,

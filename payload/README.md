@@ -12,8 +12,7 @@ calls all travel over one encrypted session with up to 8 data lanes.
 ## Layout
 
 `src/main.c` handles startup: credential elevation, runtime ownership,
-the takeover, the one-time removal of the retired transfer folders
-(`src/state_migrate.c`), starting the AVA1 server, and cleanup. It binds no
+the takeover, starting the AVA1 server, and cleanup. It binds no
 socket of its own. `src/runtime.c` holds the management handlers the AVA1
 table (`src/mgmt_table.def`, dispatched by `src/mgmt_rpc.c`) calls, and the
 instance lifecycle (ownership record, reap, shutdown). `ava1/` is the AVA1 protocol in C (frames,
@@ -23,7 +22,7 @@ asks an older resident payload to stand down before binding.
 
 The rest of `src/` is one module per capability: registration and launch,
 package install, hardware and sensors, processes, profiles, saves and
-backup, cheats, FTP, remote play, fan curve, notifications, system
+backup, cheats, remote play, fan curve, notifications, system
 registry and time, firmware spoofing, and the SDK version changer.
 
 `installer/` builds our own standalone install daemon
@@ -58,7 +57,7 @@ Logic that can be separated from the console lives in a header under
 `make test-payload` with the same warning flags.
 
 See `tests/*_selftest.c` for the full list (hardware guards, ptrace recovery, `app.db`
-reading, FTP, SDK param rewriting, installer, cheats, wake watchdog and more). AVA1 itself is
+reading, SDK param rewriting, installer, cheats, wake watchdog and more). AVA1 itself is
 tested from Rust: `cargo test -p ava1-ctest -- --test-threads=1` in `engine/` compiles
 `ava1/` on the host and checks it against the Rust side.
 

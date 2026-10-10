@@ -63,11 +63,6 @@ impl RemotePlayStatus {
             _ => PairingPhase::Unknown,
         }
     }
-
-    /// The PIN can still be entered on a device.
-    pub fn pin_is_live(&self) -> bool {
-        self.phase() == PairingPhase::Waiting && !self.pin.is_empty() && self.seconds_left > 0
-    }
 }
 
 pub fn remoteplay_request(addr: &str, manual_account_id: Option<&str>) -> Result<PinSnapshot> {
@@ -202,19 +197,6 @@ impl RemotePlayReadiness {
     pub fn activated(&self) -> bool {
         self.account_id_raw != 0 && self.account_type == "np"
     }
-    /// Everything Remote Play needs is in place.
-    ///
-    /// Gated on `account_uid`, not `foreground_uid`: a console with a
-    /// signed-in user but nobody in the foreground can pair perfectly
-    /// well, and gating on the foreground reported those as unusable.
-    pub fn ready_to_pair(&self) -> bool {
-        self.registry_ok()
-            && self.symbols_ok != 0
-            && self.account_uid > 0
-            && self.activated()
-            && self.service_on()
-            && (!self.needs_per_user() || self.user_on())
-    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -322,7 +304,6 @@ mod status_tests {
                 "confirm_status":0,"confirm_err":0}"#,
         );
         assert_eq!(s.phase(), PairingPhase::Waiting);
-        assert!(s.pin_is_live());
         assert_eq!(s.seconds_left, 297);
         assert_eq!(s.probes, 1);
     }
@@ -348,7 +329,6 @@ mod status_tests {
     fn paired_timeout_and_failed_carry_no_live_pin() {
         let paired = parse(r#"{"state":"paired","pin":"","seconds_left":0,"confirm_status":2}"#);
         assert_eq!(paired.phase(), PairingPhase::Paired);
-        assert!(!paired.pin_is_live());
         assert_eq!(paired.confirm_status, 2);
 
         let timeout = parse(
@@ -364,13 +344,6 @@ mod status_tests {
         );
         assert_eq!(failed.phase(), PairingPhase::Failed);
         assert_eq!(failed.confirm_err, 0x80FC1047);
-        assert!(!failed.pin_is_live());
-    }
-
-    #[test]
-    fn a_waiting_state_with_no_time_left_is_not_a_live_pin() {
-        let s = parse(r#"{"state":"waiting","pin":"12345678","seconds_left":0}"#);
-        assert!(!s.pin_is_live());
     }
 
     #[test]

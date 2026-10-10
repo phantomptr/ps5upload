@@ -493,34 +493,6 @@ int mgmt_call_paged(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx, mgmt_legacy_
     return rc;
 }
 
-/* fs.mkdir: FsMkdir{path, mode, parents}. The legacy handler always creates the missing
- * parents (mkdir -p) with 0777 and ignores `mode`/`parents`; Task 4 decides whether to honour
- * them. The reply is empty. */
-int mgmt_call_fs_mkdir(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx, mgmt_legacy_fn fn) {
-    ava1_fs_mkdir_t q;
-    mgmt_reply_t rep;
-    char *json;
-    size_t cap;
-    int w, rc;
-    if (ava1_fs_mkdir_decode(req, n, &q) != 0) return mgmt_reply_error(cx, AVA1_ERR_PROTOCOL, "bad FsMkdir request");
-    cap = (size_t)q.path_len * 6 + 16;
-    json = malloc(cap);
-    if (!json) return mgmt_reply_error(cx, AVA1_ERR_INTERNAL, "out of memory");
-    memcpy(json, "{\"path\":\"", 9);
-    w = mgmt_json_escape((const char *)q.path, q.path_len, json + 9, cap - 9);
-    if (w < 0) {
-        free(json);
-        return mgmt_reply_error(cx, AVA1_ERR_INTERNAL, "out of memory");
-    }
-    memcpy(json + 9 + w, "\"}", 3);
-    rc = mgmt_legacy_call(cx, fn, json, 9 + (size_t)w + 2, 4096, &rep);
-    free(json);
-    if (rc != AVA1_STATUS_OK) return rc;
-    mgmt_reply_free(&rep);
-    cx->out_len = 0;
-    return AVA1_STATUS_OK;
-}
-
 /* node.status: NodeStatus (SPEC.md section 7.3) built from the legacy handler's JSON. The legacy
  * keys the typed body drops (runtime_port, shutdown, takeover_requested and the old transaction
  * counters) are ignored. An absent number is 0, as an older payload's missing field was to the client. */
@@ -585,33 +557,6 @@ int mgmt_call_node_status(const uint8_t *req, uint32_t n, mgmt_ctx_t *cx, mgmt_l
 }
 
 /* ---- JSON helpers ---- */
-
-int mgmt_json_escape(const char *s, size_t n, char *out, size_t cap) {
-    static const char hex[] = "0123456789abcdef";
-    size_t i, o = 0;
-    for (i = 0; i < n; i++) {
-        unsigned char c = (unsigned char)s[i];
-        if (c == '"' || c == '\\') {
-            if (o + 2 >= cap) return -1;
-            out[o++] = '\\';
-            out[o++] = (char)c;
-        } else if (c < 0x20) {
-            if (o + 6 >= cap) return -1;
-            out[o++] = '\\';
-            out[o++] = 'u';
-            out[o++] = '0';
-            out[o++] = '0';
-            out[o++] = hex[c >> 4];
-            out[o++] = hex[c & 15];
-        } else {
-            if (o + 1 >= cap) return -1;
-            out[o++] = (char)c;
-        }
-    }
-    if (o >= cap) return -1;
-    out[o] = '\0';
-    return (int)o;
-}
 
 int mgmt_json_u64(const char *json, const char *key, uint64_t *out) {
     char needle[40];
