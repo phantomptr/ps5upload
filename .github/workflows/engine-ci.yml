@@ -266,7 +266,7 @@ jobs:
       - name: C frame AEAD (RFC 8439 + Monocypher differential, AVX2 and portable paths)
         run: scripts/ava1-aead-test.sh
 
-      - name: No FTX2 or ports 9113/9114 outside the payload
+      - name: No FTX2 or ports 9113/9114 in the repository
         run: make check-no-ftx2
 
       - name: Fuzz C decoders + data-plane parsers (60 s each)

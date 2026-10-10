@@ -73,7 +73,6 @@ tests/lab/elev_probe/*.elf
 # ─── Bench artefacts (generated on demand) ───────────────────────────────
 bench/fixtures/
 bench/reports/
-bench/baselines/*.tmp
 
 # ─── Logs / debug dumps ──────────────────────────────────────────────────
 # Anchor `logs/` and `debug/` to the repo root so the patterns don't
@@ -160,7 +159,7 @@ test-results/
 #
 # So ignore image/video files AT THE ROOT by default and name the
 # exceptions. Anchored with a leading slash, so real assets under
-# client/icons/, client/public/ and client/src-tauri/icons/ are untouched.
+# client/public/ and client/src-tauri/icons/ are untouched.
 /*.png
 /*.jpg
 /*.jpeg

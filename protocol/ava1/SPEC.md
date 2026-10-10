@@ -374,7 +374,7 @@ normative table; the second column names the constant in the generated code.
 | 19 | `ERR_PAIRING_CODE` | a client-side refusal of the pairing: the console refused the typed code, or could not prove it knows it (§5.5) |
 
 7.3 Management methods (the console operations FTX2 carried on :9114). Numbers are assigned by
-block; the tracked list, one row per FTX2 frame with its payload handler and engine caller, is
+block; the tracked list, one row per method with its payload handler and engine caller, is
 `MGMT_METHODS.md`. The generated constants `METHOD_*` in `schema/ava1.toml` are normative.
 
 | numbers | block | bodies |
@@ -605,11 +605,6 @@ Not in version 1, each with its reason:
 - Engine ↔ engine sharing: `host::FolderHost` exists as the receiving half, the sharing
   policy and the feature are deferred.
 - Zstd bundles and small-file deduplication: ruled out of project 2.
-- Zip entries larger than 256 MiB (`ZIP_MAX_ENTRY`) as AVA1 sources: entries are inflated
-  on demand and there is no streaming entry reader yet, so an archive with a larger entry stays
-  on FTX2.
-- 7z and RAR sources: their decoders are forward-only, so there is no random-access `Source`
-  for them; they stay on FTX2 until project 3.
 - Full re-verification of durable groups on resume: §13.4 re-hashes only the last durable
   batch of each partial file and trusts older groups to the journal.
 - Sources of unknown length: every file's size must be known when the manifest is built.
@@ -1177,9 +1172,8 @@ non-Unix hosts carry none). 0 means the archive has none. Directory mtimes are 0
 and `0755` for directories: archives' Unix permission bits are not carried (zip's `unix_mode` excepted).
 
 17.6 Refusals. A duplicate name, a path that is both a file and a directory (and, for RAR, two names that differ
-only in case) fail the job terminally (`ava1_7z_unsupported`, `ava1_rar_unsupported`); only an unsupported 7z
-coder method falls back to FTX2, since FTX2 has the same problem with the others (it writes both duplicates, or
-hits the same decoder memory limit). A RAR's listing order is compared with its extraction order only when a
+only in case) fail the job terminally (`ava1_7z_unsupported`, `ava1_rar_unsupported`), and so does an
+unsupported 7z coder method (`7z_unsupported`). A RAR's listing order is compared with its extraction order only when a
 non-solid resume skips entries by position; any other pass binds entries by path.
 
 ## 18. Console to console
