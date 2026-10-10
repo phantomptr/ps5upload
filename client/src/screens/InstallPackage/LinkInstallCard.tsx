@@ -190,7 +190,7 @@ export function LinkInstallCard({
                   aria-hidden
                   className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
                     on
-                      ? "border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
+                      ? "border-transparent bg-[image:var(--accent-fill)] text-[var(--color-accent-contrast)]"
                       : "border-[var(--color-muted)]"
                   }`}
                 >
