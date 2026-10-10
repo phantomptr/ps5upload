@@ -44,13 +44,13 @@ ones (`ava1-ctest/tests/mgmt*.rs`, `ps5upload-ava1/tests/mgmt*.rs`). Methods 119
 | HwStorage 80 | 75 `hw.storage` | `MgmtText` | `src/runtime.c` `handle_hw_storage` | `ps5upload-core/src/hw.rs` |  |
 | SystemControl 86 | 80 `power.control` | `MgmtText` | `src/runtime.c` `handle_system_control` | `ps5upload-core/src/system_control.rs` |  |
 | PowerTelemetry 88 | 81 `power.telemetry` | `MgmtText` | `src/runtime.c` `handle_power_telemetry` | `ps5upload-core/src/system_control.rs` |  |
-| UserList 90 | 94 `user.list` | `MgmtText` | `src/runtime.c` `handle_user_list` | `ps5upload-core/src/users.rs` |  |
+| UserList 90 | 94 `user.list` | `MgmtText` | `src/runtime.c` `handle_user_list` | none |  |
 | ListSaves 92 | 64 `saves.list` | `MgmtText` | `src/runtime.c` `handle_list_saves` | `ps5upload-core/src/saves.rs` |  |
 | ListScreenshots 94 | 65 `shots.list` | `MgmtText` | `src/runtime.c` `handle_list_screenshots` | `ps5upload-core/src/saves.rs` |  |
-| IndexStart 96 | 67 `index.start` | `MgmtText` | `src/runtime.c` `handle_index_start` | `ps5upload-core/src/search_index.rs` |  |
-| IndexStatus 98 | 68 `index.status` | `MgmtText` | `src/runtime.c` `handle_index_status` | `ps5upload-core/src/search_index.rs` |  |
-| SearchIndex 100 | 69 `index.search` | `MgmtText` | `src/runtime.c` `handle_search_index` | `ps5upload-core/src/search_index.rs` |  |
-| IndexCancel 102 | 70 `index.cancel` | `MgmtText` | `src/runtime.c` `handle_index_cancel` | `ps5upload-core/src/search_index.rs` |  |
+| IndexStart 96 | 67 `index.start` | `MgmtText` | `src/runtime.c` `handle_index_start` | none |  |
+| IndexStatus 98 | 68 `index.status` | `MgmtText` | `src/runtime.c` `handle_index_status` | none |  |
+| SearchIndex 100 | 69 `index.search` | `MgmtText` | `src/runtime.c` `handle_search_index` | none |  |
+| IndexCancel 102 | 70 `index.cancel` | `MgmtText` | `src/runtime.c` `handle_index_cancel` | none |  |
 | AppLifecycle 104 | 53 `app.lifecycle` | `MgmtText` | `src/runtime.c` `handle_app_lifecycle` | `ps5upload-core/src/app_lifecycle.rs` |  |
 | ToastSend 106 | 125 `toast.send` | `MgmtText` | `src/runtime.c` `mgmt_w_toast_send` | `ps5upload-core/src/app_lifecycle.rs` |  |
 | KlogRead 108 | 7 `log.klog` | `MgmtText` {max_bytes} -> text | `src/runtime.c` `handle_klog_read` | `ps5upload-core/src/diagnostics.rs` |  |
@@ -67,8 +67,8 @@ ones (`ava1-ctest/tests/mgmt*.rs`, `ps5upload-ava1/tests/mgmt*.rs`). Methods 119
 | FsWriteBytes 130 | 39 `fs.write` | `FsWrite` -> empty (chunks <= FSW_CHUNK_MAX, SPEC §7.5) | native `src/mgmt_fs.c` `mgmt_run_fs_write` | `ps5upload-core/src/diagnostics.rs` | host-tested |
 | TimeGet 132 | 82 `time.get` | `MgmtText` | `src/runtime.c` `handle_time_get` | `ps5upload-core/src/sys_time.rs` |  |
 | TimeSet 134 | 83 `time.set` | `MgmtText` | `src/runtime.c` `handle_time_set` | `ps5upload-core/src/sys_time.rs` |  |
-| TimeStateGet 136 | 84 `time.state_get` | `MgmtText` | `src/runtime.c` `handle_time_state_get` | `ps5upload-core/src/sys_time.rs` |  |
-| TimeStateSet 138 | 85 `time.state_set` | `MgmtText` | `src/runtime.c` `handle_time_state_set` | `ps5upload-core/src/sys_time.rs` |  |
+| TimeStateGet 136 | 84 `time.state_get` | `MgmtText` | `src/runtime.c` `handle_time_state_get` | none |  |
+| TimeStateSet 138 | 85 `time.state_set` | `MgmtText` | `src/runtime.c` `handle_time_state_set` | none |  |
 | SmpMetaControl 140 | 112 `smp.meta_control` | `MgmtText` | `src/runtime.c` `handle_smp_meta_control` | `ps5upload-core/src/smp_meta.rs` |  |
 | SmpMetaStats 142 | 113 `smp.meta_stats` | `MgmtText` | `src/runtime.c` `handle_smp_meta_stats` | `ps5upload-core/src/smp_meta.rs` |  |
 | SyslogTail 144 | 8 `log.syslog` | `MgmtText` {max_bytes} -> text | `src/runtime.c` `handle_syslog_tail` | `ps5upload-core/src/hw.rs` |  |
@@ -95,7 +95,7 @@ ones (`ava1-ctest/tests/mgmt*.rs`, `ps5upload-ava1/tests/mgmt*.rs`). Methods 119
 | RemotePlayCancel 190 | 138 `rp.cancel` | `MgmtText` | `src/runtime.c` `handle_remoteplay_cancel` | `ps5upload-core/src/remoteplay.rs` |  |
 | ActivityGet 192 | 126 `activity.get` | `MgmtText` | `src/runtime.c` `handle_activity_get` | `ps5upload-core/src/activity.rs` |  |
 | ActivityDbQuery 194 | 127 `activity.db_query` | `MgmtText` | `src/runtime.c` `mgmt_w_activity_db_query` | `ps5upload-core/src/activity.rs` |  |
-| HwFanCurveSet 196 | 77 `hw.fan_curve_set` | `MgmtText` | `src/runtime.c` `mgmt_w_fan_curve_set` | `ps5upload-core/src/fan_curve.rs` |  |
+| HwFanCurveSet 196 | 77 `hw.fan_curve_set` | `MgmtText` | `src/runtime.c` `mgmt_w_fan_curve_set` | none |  |
 | NotifList 198 | 122 `notif.list` | `MgmtText` | `src/runtime.c` `mgmt_w_notif_list` | `ps5upload-core/src/notif.rs` |  |
 | CheatsList 200 | 104 `cheats.list` | `MgmtText` | `src/runtime.c` `handle_cheats_list` | `ps5upload-core/src/cheats.rs` |  |
 | CheatsGet 202 | 105 `cheats.get` | `MgmtText` | `src/runtime.c` `mgmt_w_cheats_get` | `ps5upload-core/src/cheats.rs` |  |
@@ -107,15 +107,15 @@ ones (`ava1-ctest/tests/mgmt*.rs`, `ps5upload-ava1/tests/mgmt*.rs`). Methods 119
 | SdkScan 214 | 114 `sdk.scan` | `MgmtText`; also `job.run (op SDK_SCAN)` (payload op, Task 5) | `src/runtime.c` `handle_sdk_scan` | `ps5upload-core/src/sdk_changer.rs` |  |
 | SdkPatch 216 | 115 `sdk.patch` | `MgmtText` | `src/runtime.c` `mgmt_w_sdk_patch` | `ps5upload-core/src/sdk_changer.rs` |  |
 | SdkRestore 218 | 116 `sdk.restore` | `MgmtText` | `src/runtime.c` `mgmt_w_sdk_restore` | `ps5upload-core/src/sdk_changer.rs` |  |
-| TmdbFetch 222 | 117 `tmdb.fetch` | `MgmtText` | `src/runtime.c` `mgmt_w_tmdb_fetch` | `ps5upload-core/src/tmdb.rs` |  |
-| TmdbStore 228 | 118 `tmdb.store` | `MgmtText` | `src/runtime.c` `mgmt_w_tmdb_store` | `ps5upload-core/src/tmdb.rs` |  |
+| TmdbFetch 222 | 117 `tmdb.fetch` | `MgmtText` | `src/runtime.c` `mgmt_w_tmdb_fetch` | none |  |
+| TmdbStore 228 | 118 `tmdb.store` | `MgmtText` | `src/runtime.c` `mgmt_w_tmdb_store` | none |  |
 | FwSpoofStatus 232 | 121 `fwspoof.status` | `MgmtText` | `src/runtime.c` `handle_fw_spoof_status` | `ps5upload-core/src/fw_spoof.rs` |  |
 | AppInfoQuery 234 | 54 `app.info_query` | `MgmtText` | `src/runtime.c` `handle_appinfo_query` | `ps5upload-core/src/diagnostics.rs` |  |
-| AppInfoSet 236 | 55 `app.info_set` | `MgmtText` | `src/runtime.c` `handle_appinfo_set` | `ps5upload-core/src/diagnostics.rs` |  |
-| HwFanCurveGet 246 | 78 `hw.fan_curve_get` | `MgmtText` | `src/runtime.c` `handle_fan_curve_get` | `ps5upload-core/src/fan_curve.rs` |  |
+| AppInfoSet 236 | 55 `app.info_set` | `MgmtText` | `src/runtime.c` `handle_appinfo_set` | none |  |
+| HwFanCurveGet 246 | 78 `hw.fan_curve_get` | `MgmtText` | `src/runtime.c` `handle_fan_curve_get` | none |  |
 | RemotePlayReadiness 248 | 139 `rp.readiness` | `MgmtText` | `src/runtime.c` `handle_remoteplay_readiness` | `ps5upload-core/src/remoteplay.rs` |  |
 | RemotePlayEnable 249 | 140 `rp.enable` | `MgmtText` | `src/runtime.c` `mgmt_w_remoteplay_enable` | `ps5upload-core/src/remoteplay.rs` |  |
-| RemotePlayDevices 250 | 141 `rp.devices` | `MgmtText` | `src/runtime.c` `handle_remoteplay_devices` | `ps5upload-core/src/remoteplay.rs` |  |
+| RemotePlayDevices 250 | 141 `rp.devices` | `MgmtText` | `src/runtime.c` `handle_remoteplay_devices` | none |  |
 | NotifClear 251 | 124 `notif.clear` | `MgmtText` | `src/runtime.c` `handle_notif_clear` | `ps5upload-core/src/notif.rs` |  |
 | ActivityReset 253 | 128 `activity.reset` | `MgmtText` | `src/runtime.c` `handle_activity_reset` | `ps5upload-core/src/activity.rs` |  |
 | — | 21 `job.list` | empty -> `JobListResult` | `ava1/ava1_data.c` (the data plane) | none | `ava1-ctest/tests/job_run.rs` `repeat_job_run_is_idempotent`, `at_most_eight_operations_run_at_once_and_an_unknown_op_is_refused` (listing); no engine caller yet |

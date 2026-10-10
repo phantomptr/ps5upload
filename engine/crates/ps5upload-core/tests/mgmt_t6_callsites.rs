@@ -215,14 +215,9 @@ fn appinfo_failures_decode_as_results_not_as_errors() {
     let r = ps5upload_core::diagnostics::appinfo_query(A, "", None).unwrap();
     assert!(!r.ok);
     assert_eq!(r.error.as_deref(), Some("title_id is required"));
-    let (_t, _g2) =
-        fake(|_, _| refuse("APPINFO_SET", 7, r#"{"ok":false,"err":"title is running"}"#));
-    let s = ps5upload_core::diagnostics::appinfo_set(A, "X", "k", "v").unwrap();
-    assert!(!s.ok);
-    assert_eq!(s.err.as_deref(), Some("title is running"));
     // an error that is only a token (an ERROR frame) is still an error
-    let (_t, _g3) = fake(|_, _| refuse("APPINFO_SET", 4, "appinfo_oom"));
-    assert!(ps5upload_core::diagnostics::appinfo_set(A, "X", "k", "v").is_err());
+    let (_t, _g2) = fake(|_, _| refuse("APPINFO_QUERY", 4, "appinfo_oom"));
+    assert!(ps5upload_core::diagnostics::appinfo_query(A, "X", None).is_err());
 }
 
 #[test]
@@ -279,55 +274,6 @@ fn saves_screenshots_and_videos_decode_and_surface_truncation() {
         seen.iter().map(|s| s.0).collect::<Vec<_>>(),
         vec![64, 65, 66]
     );
-}
-
-#[test]
-fn the_search_index_methods_keep_their_bodies_and_the_truncated_mark() {
-    let (t, _g) = fake(|method, _| match method.id {
-        67 => reply(br#"{"started":false,"err":"already_building"}"#),
-        68 => reply(
-            br#"{"phase":"building","files":12,"truncated":false,"started_at":1,"completed_at":0}"#,
-        ),
-        69 => reply(br#"{"results":[{"path":"/a.pkg","size":5}],"truncated":true}"#),
-        _ => reply(br#"{"cancelled":true}"#),
-    });
-    let st = ps5upload_core::search_index::index_start(A, &["/data", "/user"]).unwrap();
-    assert!(!st.started && st.err.as_deref() == Some("already_building"));
-    assert_eq!(
-        ps5upload_core::search_index::index_status(A).unwrap().files,
-        12
-    );
-    let r = ps5upload_core::search_index::search_index(
-        A,
-        &ps5upload_core::search_index::SearchQuery {
-            query: "*.pkg".into(),
-            size_min: 0,
-            size_max: 0,
-            limit: 5,
-        },
-    )
-    .unwrap();
-    assert!(r.truncated && r.results.len() == 1);
-    ps5upload_core::search_index::index_cancel(A).unwrap();
-    let seen = t.seen.lock().unwrap();
-    assert_eq!(seen[0].2, br#"{"roots":["/data","/user"]}"#);
-    assert_eq!(
-        seen.iter().map(|s| s.0).collect::<Vec<_>>(),
-        vec![67, 68, 69, 70]
-    );
-    // an older payload's reply has no `truncated`: it reads false
-    let (_t, _g2) = fake(|_, _| reply(br#"{"results":[]}"#));
-    let r = ps5upload_core::search_index::search_index(
-        A,
-        &ps5upload_core::search_index::SearchQuery {
-            query: "*".into(),
-            size_min: 0,
-            size_max: 0,
-            limit: 0,
-        },
-    )
-    .unwrap();
-    assert!(!r.truncated);
 }
 
 #[test]

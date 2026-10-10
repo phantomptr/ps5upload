@@ -21,8 +21,8 @@ use ps5upload_ava1::mgmt::AvaTransport;
 use ps5upload_ava1::Pool;
 use ps5upload_core::mgmt::{scoped_transport, MgmtError};
 use ps5upload_core::{
-    activity, backup, cheats, diagnostics, fan_curve, fw_spoof, hw, notif, profile, remoteplay,
-    sdk_changer, smp_meta, sys_time, system_control, users,
+    activity, backup, cheats, diagnostics, fw_spoof, hw, notif, profile, remoteplay, sdk_changer,
+    smp_meta, sys_time, system_control, users,
 };
 
 fn temp(tag: &str) -> PathBuf {
@@ -136,14 +136,6 @@ fn json(s: &str) -> serde_json::Value {
 #[tokio::test(flavor = "multi_thread")]
 async fn hardware_power_and_time_calls_reach_their_methods_and_parse_the_legacy_replies() {
     let (h, seen) = scripted(vec![
-        (
-            gen::METHOD_HW_FAN_CURVE_GET,
-            Reply::Text(r#"{"points":[{"temp_c":50,"duty_pct":30},{"temp_c":80,"duty_pct":90}]}"#),
-        ),
-        (
-            gen::METHOD_HW_FAN_CURVE_SET,
-            Reply::Text(r#"{"ok":true,"err":""}"#),
-        ),
         (gen::METHOD_HW_FAN_THRESHOLD, Reply::Text("ok\n")),
         (
             gen::METHOD_HW_DRIVE_SENSORS,
@@ -174,16 +166,6 @@ async fn hardware_power_and_time_calls_reach_their_methods_and_parse_the_legacy_
             ),
         ),
         (
-            gen::METHOD_TIME_STATE_GET,
-            Reply::Text(r#"{"ok":true,"tz_index":5,"tz_index_avail":true,"tz_index_err":0}"#),
-        ),
-        (
-            gen::METHOD_TIME_STATE_SET,
-            Reply::Text(
-                r#"{"ok":true,"any_attempted":true,"set_auto_attempted":true,"set_auto_rc":0,"set_auto_err":0}"#,
-            ),
-        ),
-        (
             gen::METHOD_PERIPH_CONTROL,
             Reply::Text(r#"{"ok":true,"action":"eject_disc","port":0,"code":0}"#),
         ),
@@ -196,21 +178,6 @@ async fn hardware_power_and_time_calls_reach_their_methods_and_parse_the_legacy_
         (gen::METHOD_HW_INFO, Reply::Text("")),
     ]);
     let (t, c) = console("hw", h).await;
-    let pts = run(&t, &c, |a| fan_curve::fan_curve_get(a)).await.unwrap();
-    assert_eq!(pts.len(), 2);
-    assert_eq!(pts[1].duty_pct, 90);
-    run(&t, &c, |a| {
-        fan_curve::fan_curve_set(
-            a,
-            &[fan_curve::FanCurvePoint {
-                temp_c: 60,
-                duty_pct: 40,
-            }],
-        )
-    })
-    .await
-    .unwrap();
-    assert!(last(&seen, gen::METHOD_HW_FAN_CURVE_SET).contains("\"temp_c\":60"));
     run(&t, &c, |a| hw::hw_set_fan_threshold(a, 65))
         .await
         .unwrap();
@@ -233,17 +200,6 @@ async fn hardware_power_and_time_calls_reach_their_methods_and_parse_the_legacy_
         .await
         .unwrap();
     assert!(set.ok && set.used_fallback);
-    run(&t, &c, |a| sys_time::ps5_time_state_get(a))
-        .await
-        .unwrap();
-    let req = sys_time::PsTimeStateSetRequest {
-        set_auto: Some(1),
-        ..Default::default()
-    };
-    let r = run(&t, &c, move |a| sys_time::ps5_time_state_set(a, &req))
-        .await
-        .unwrap();
-    assert!(r.ok);
     let pa = run(&t, &c, |a| {
         diagnostics::peripheral_control(a, diagnostics::PeripheralAction::EjectDisc, 0)
     })
@@ -322,8 +278,8 @@ async fn a_refusal_that_is_a_plain_token_stays_an_error_with_the_old_text() {
             Reply::Err(gen::ERR_INTERNAL, "rp_enable_no_user"),
         ),
         (
-            gen::METHOD_HW_FAN_CURVE_GET,
-            Reply::Err(gen::ERR_INTERNAL, "fan_failed"),
+            gen::METHOD_HW_DRIVE_SENSORS,
+            Reply::Err(gen::ERR_INTERNAL, "drive_sensors_failed"),
         ),
     ]);
     let (t, c) = console("refuse", h).await;
@@ -336,7 +292,7 @@ async fn a_refusal_that_is_a_plain_token_stays_an_error_with_the_old_text() {
     );
     let m = e.downcast_ref::<MgmtError>().unwrap();
     assert_eq!(m.status, gen::ERR_INTERNAL);
-    assert!(run(&t, &c, |a| fan_curve::fan_curve_get(a)).await.is_err());
+    assert!(run(&t, &c, |a| hw::drive_sensors(a)).await.is_err());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -436,12 +392,6 @@ async fn account_backup_cheat_mod_notice_activity_and_remote_play_calls_round_tr
             Reply::Text(r#"{"ok":true,"err_code":0}"#),
         ),
         (
-            gen::METHOD_USER_LIST,
-            Reply::Text(
-                r#"{"foreground":268435456,"err_fg":0,"err_list":0,"users":[{"id":268435456,"name":"Neo","foreground":true,"err_name":0}]}"#,
-            ),
-        ),
-        (
             gen::METHOD_USER_CREATE,
             Reply::Text(r#"{"ok":true,"uid":2,"name":"Kid","err":""}"#),
         ),
@@ -517,7 +467,6 @@ async fn account_backup_cheat_mod_notice_activity_and_remote_play_calls_round_tr
         (gen::METHOD_RP_CANCEL, Reply::Text(r#"{"ok":true}"#)),
         (gen::METHOD_RP_READINESS, Reply::Text(r#"{"fw_magic":0}"#)),
         (gen::METHOD_RP_ENABLE, Reply::Text(r#"{"fw_magic":0}"#)),
-        (gen::METHOD_RP_DEVICES, Reply::Text(r#"{"devices":[]}"#)),
     ]);
     let (t, c) = console("misc", h).await;
     let i = run(&t, &c, |a| profile::profile_info(a)).await.unwrap();
@@ -537,14 +486,6 @@ async fn account_backup_cheat_mod_notice_activity_and_remote_play_calls_round_tr
     run(&t, &c, |a| profile::profile_clear_slot(a, 1))
         .await
         .unwrap();
-    assert_eq!(
-        run(&t, &c, |a| users::user_list(a))
-            .await
-            .unwrap()
-            .users
-            .len(),
-        1
-    );
     run(&t, &c, |a| users::user_create(a, "Kid")).await.unwrap();
     run(&t, &c, |a| users::user_delete(a, 2, true))
         .await
@@ -623,9 +564,6 @@ async fn account_backup_cheat_mod_notice_activity_and_remote_play_calls_round_tr
         .await
         .unwrap();
     assert!(json(&last(&seen, gen::METHOD_RP_ENABLE))["scope"] == "service");
-    run(&t, &c, |a| remoteplay::remoteplay_devices(a))
-        .await
-        .unwrap();
     // every one of the group's methods was reached
     let called: std::collections::BTreeSet<u16> =
         seen.lock().unwrap().iter().map(|(m, _)| *m).collect();
@@ -675,7 +613,6 @@ fn no_core_module_of_this_group_dials_a_console_directly() {
     // volumes, lifecycle); this group's modules must be done.
     for f in [
         "hw.rs",
-        "fan_curve.rs",
         "system_control.rs",
         "sys_time.rs",
         "profile.rs",
@@ -685,7 +622,6 @@ fn no_core_module_of_this_group_dials_a_console_directly() {
         "activity.rs",
         "smp_meta.rs",
         "sdk_changer.rs",
-        "tmdb.rs",
         "fw_spoof.rs",
         "remoteplay.rs",
     ] {

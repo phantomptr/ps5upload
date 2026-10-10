@@ -297,36 +297,6 @@ pub fn appinfo_query(addr: &str, title_id: &str, keys: Option<&str>) -> Result<A
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AppInfoSetResult {
-    #[serde(default)]
-    pub ok: bool,
-    #[serde(default)]
-    pub err: Option<String>,
-}
-
-/// Change one appinfo.db value on the console.
-///
-/// This writes to a live system database. The payload enforces the
-/// preconditions (title not running, row must already exist, exactly one
-/// row changed or roll back), but the caller is responsible for taking a
-/// snapshot first — see [`crate::fs_ops::backup_content_databases`].
-pub fn appinfo_set(addr: &str, title_id: &str, key: &str, val: &str) -> Result<AppInfoSetResult> {
-    let body = serde_json::json!({
-        "title_id": title_id,
-        "key": key,
-        "val": val,
-    });
-    // A refused edit is `{"ok":false,"err":..}`, a result the caller reports (AppInfoSetResult.err).
-    let resp = mgmt::call_legacy_body(
-        addr,
-        m::APP_INFO_SET,
-        "APPINFO_SET",
-        body.to_string().as_bytes(),
-    )?;
-    Ok(serde_json::from_slice(&resp)?)
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetSpeedTestResult {
     pub round_trips: u32,
     pub elapsed_ms: u64,
@@ -653,14 +623,6 @@ mod tests {
         assert!(rows.ok);
         assert_eq!(rows.rows[0].key, "CONTENT_VERSION");
         assert_eq!(rows.rows[0].val, "01.00");
-    }
-
-    #[test]
-    fn a_refused_appinfo_write_carries_its_reason() {
-        let r: AppInfoSetResult =
-            serde_json::from_str(r#"{"ok":false,"err":"PPSA01650 is running"}"#).unwrap();
-        assert!(!r.ok);
-        assert!(r.err.unwrap().contains("running"));
     }
 }
 

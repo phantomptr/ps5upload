@@ -764,7 +764,6 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
             post(pkg_upload_handler).layer(DefaultBodyLimit::disable()),
         )
         .route("/api/pkg/upload/{id}", delete(pkg_upload_delete_handler))
-        .route("/api/pkg/parse", post(parse_handler))
         .route("/api/pkg/parse-split", post(parse_split_handler))
         // Read-only UFS2 image inspector for .ffpkg / .ufs files.
         // Lets the renderer surface "what's in this image?" before
@@ -794,7 +793,6 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
             post(crate::install::install_stop_handler),
         )
         .route("/api/pkg/install/sessions", get(install_sessions_handler))
-        .route("/api/pkg/install/cancel", post(install_cancel_handler))
         .route(
             "/api/pkg/links",
             get(links_list_handler).post(link_create_handler),
@@ -1517,27 +1515,11 @@ async fn inspect_handler(Json(req): Json<ParseRequest>) -> Response<Body> {
     }
 }
 
-// ─── /api/pkg/parse ──────────────────────────────────────────────────
+// ─── /api/pkg/parse-split ────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 pub struct ParseRequest {
     pub path: String,
-}
-
-async fn parse_handler(Json(req): Json<ParseRequest>) -> Response<Body> {
-    // spawn_blocking: parse_pkg is synchronous disk I/O (reads the pkg
-    // header); a slow/remote path would otherwise stall the async reactor.
-    // Mirrors inspect_handler / extract_handler below — parse_handler was
-    // the lone holdout still blocking inline.
-    let res = tokio::task::spawn_blocking(move || parse_pkg(std::path::Path::new(&req.path))).await;
-    match res {
-        Ok(Ok(meta)) => json_ok(&meta),
-        Ok(Err(e)) => json_err(StatusCode::BAD_REQUEST, &format!("parse failed: {e}")),
-        Err(e) => json_err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("parse task panicked: {e}"),
-        ),
-    }
 }
 
 async fn parse_split_handler(Json(req): Json<ParseRequest>) -> Response<Body> {
@@ -1696,98 +1678,6 @@ fn staging_path_for(local_ps5_path: &Option<String>, delete_staging: bool) -> Op
     } else {
         None
     }
-}
-
-/// Maximum number of attempts when retrying a staging cleanup that the
-/// payload rejected with `fs_delete_failed`. Sony's in-process installer
-/// briefly holds the staged `.pkg` file open (EBUSY / EBUSY-equivalent)
-/// right after `terminal_complete` or cancellation; a single-shot
-/// `fs_delete` races that window and surfaces as a scary "staging cleanup
-/// failed" log even though the file would vanish a second later. We retry
-/// a bounded number of times with a short backoff so the common case
-/// (installer releasing the handle) succeeds without burning a slot.
-const STAGING_DELETE_MAX_ATTEMPTS: u32 = 3;
-
-/// Per-attempt sleep between staging-delete retries. Long enough for
-/// Sony's installer to release its file handle on the staged pkg, short
-/// enough that the spawn_blocking worker doesn't park the pool.
-const STAGING_DELETE_BACKOFF: std::time::Duration = std::time::Duration::from_secs(2);
-
-/// Whether a staging-delete error is worth retrying. Only the bare
-/// `fs_delete_failed` token (Sony's installer still holding the file
-/// open) qualifies — path-not-allowed, too-many-inflight, socket
-/// timeout, or cancellation won't resolve on retry and should surface
-/// immediately so the user sees the real cause. Exported as a pure fn
-/// so the decision can be unit-tested without a live PS5 socket.
-fn is_retryable_delete_error(err_str: &str) -> bool {
-    err_str.contains("fs_delete_failed")
-}
-
-/// Delete a staged `.pkg` with a bounded retry on `fs_delete_failed`.
-/// The payload sends that bare token when `rm_rf` returns non-zero — on
-/// FW 10.40+ this is almost always Sony's installer still holding the
-/// file open moments after the install completed (or was rejected), not
-/// a genuine filesystem error. Retrying mirrors elf-arsenal's
-/// `wait_for_install_row` settle window.
-///
-/// Returns Ok(()) if the file is gone (either deleted or already absent)
-/// or the last error if all attempts failed. Logs each retry at warn so
-/// a wedged console is still visible. The `label` is included in logs to
-/// distinguish the terminal and cancellation call sites.
-fn delete_staging_with_retry(addr: &str, path: &str, label: &str) -> Result<(), String> {
-    let mut last_err: Option<String> = None;
-    for attempt in 1..=STAGING_DELETE_MAX_ATTEMPTS {
-        match ps5upload_core::fs_ops::fs_delete_with_timeout(
-            addr,
-            path,
-            Some(std::time::Duration::from_secs(10)),
-        ) {
-            Ok(()) => {
-                if attempt > 1 {
-                    crate::log_info!(
-                        "staging cleaned after retry: label={} addr={} path={} attempts={}",
-                        label,
-                        addr,
-                        path,
-                        attempt
-                    );
-                }
-                return Ok(());
-            }
-            Err(e) => {
-                let err_str = format!("{e:#}");
-                // Only retry on the bare `fs_delete_failed` token — a
-                // genuine path-not-allowed, too-many-inflight, or socket
-                // timeout won't resolve on retry and should surface
-                // immediately so the user sees the real cause.
-                let retryable = is_retryable_delete_error(&err_str);
-                last_err = Some(err_str);
-                if !retryable || attempt == STAGING_DELETE_MAX_ATTEMPTS {
-                    crate::log_warn!(
-                        "staging cleanup failed: label={} addr={} path={} attempt={}/{} err={}",
-                        label,
-                        addr,
-                        path,
-                        attempt,
-                        STAGING_DELETE_MAX_ATTEMPTS,
-                        e
-                    );
-                    break;
-                }
-                crate::log_warn!(
-                    "staging cleanup retrying: label={} addr={} path={} attempt={}/{} (installer may still hold the file) err={}",
-                    label,
-                    addr,
-                    path,
-                    attempt,
-                    STAGING_DELETE_MAX_ATTEMPTS,
-                    e
-                );
-                std::thread::sleep(STAGING_DELETE_BACKOFF);
-            }
-        }
-    }
-    Err(last_err.unwrap_or_else(|| "unknown error".to_string()))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -2538,22 +2428,6 @@ async fn host_net_allow_firewall(Json(req): Json<AllowFirewallRequest>) -> Respo
     }
 }
 
-// ─── /api/pkg/install/cancel ─────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-pub struct CancelRequest {
-    pub session: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CancelResponse {
-    pub session_id: String,
-    /// True if the cancel reached the host-side serving listener.
-    /// BGFT continues running on the PS5; once it sees the HTTP stream
-    /// drop it surfaces a download error in PS5 notifications.
-    pub host_stopped: bool,
-}
-
 /// GET /api/pkg/install/sessions — summarise every live install session.
 ///
 /// Read-only diagnostics. `install/status` needs a session id, so a bug
@@ -2602,66 +2476,6 @@ async fn install_sessions_handler(State(state): State<PkgInstallStateHandle>) ->
         })
         .collect();
     json_ok(&summary)
-}
-
-async fn install_cancel_handler(
-    State(state): State<PkgInstallStateHandle>,
-    Json(req): Json<CancelRequest>,
-) -> Response<Body> {
-    // 2.2.55: also take() the staging path so we can delete it after
-    // releasing the lock. Pre-fix the cancel path left the file on
-    // PS5 disk forever and polluted Sony's installer queue. Pull both fields
-    // under a single
-    // lock acquisition so we never race with status_handler taking
-    // the path first.
-    let (cancel_ack, path_to_clean, ps5_addr) = {
-        let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
-        match sessions.get_mut(&req.session) {
-            Some(s) => {
-                s.cancelled = true;
-                let path = s.staging_path.take();
-                let addr = s.ps5_mgmt_addr.clone();
-                // Persist, or the cancelled session is restored as live on the
-                // next engine restart.
-                persist::save(&sessions);
-                (true, path, addr)
-            }
-            None => {
-                return json_err(
-                    StatusCode::NOT_FOUND,
-                    &format!("no install session {}", req.session),
-                )
-            }
-        }
-    };
-    if let Some(path) = path_to_clean {
-        let sid = req.session.clone();
-        tokio::task::spawn_blocking(move || {
-            // Retry on `fs_delete_failed` — Sony's installer may briefly
-            // hold the staged pkg open when a cancel lands mid-install;
-            // see delete_staging_with_retry.
-            match delete_staging_with_retry(&ps5_addr, &path, "cancel") {
-                Ok(()) => crate::log_info!(
-                    "cancel staging cleaned: session={} addr={} path={}",
-                    sid,
-                    ps5_addr,
-                    path
-                ),
-                Err(e) => crate::log_warn!(
-                    "cancel staging cleanup failed: session={} addr={} path={} err={}",
-                    sid,
-                    ps5_addr,
-                    path,
-                    e
-                ),
-            }
-        });
-    }
-    let _ = cancel_ack;
-    json_ok(&CancelResponse {
-        session_id: req.session,
-        host_stopped: true,
-    })
 }
 
 /// Normalize whatever address the caller gave into the console's address as the engine uses
@@ -4566,53 +4380,6 @@ Marvel's%20Spider-Man%202%20-%20PPSA03016%20-%20v1.4.3%20-%20US%20-%20BASE.pkg";
         assert_eq!(staging_path_for(&Some(String::new()), true), None);
         assert_eq!(staging_path_for(&None, true), None);
         assert_eq!(staging_path_for(&None, false), None);
-    }
-
-    // ── is_retryable_delete_error (the fs_delete_failed retry decision) ──
-
-    #[test]
-    fn retryable_delete_error_on_fs_delete_failed_token() {
-        // The bare token the payload sends when rm_rf returns non-zero
-        // (Sony's installer still holding the staged pkg open). This is
-        // the ONLY case we retry — it resolves on its own in ~1-2s.
-        assert!(is_retryable_delete_error(
-            "payload rejected FS_DELETE: fs_delete_failed"
-        ));
-    }
-
-    #[test]
-    fn retryable_delete_error_not_on_path_not_allowed() {
-        // A genuine allowlist rejection — won't resolve on retry.
-        assert!(!is_retryable_delete_error(
-            "payload rejected FS_DELETE: fs_delete_path_not_allowed"
-        ));
-    }
-
-    #[test]
-    fn retryable_delete_error_not_on_too_many_inflight() {
-        // All MAX_FS_OPS slots busy — retrying immediately won't help.
-        assert!(!is_retryable_delete_error(
-            "payload rejected FS_DELETE: fs_delete_too_many_inflight"
-        ));
-    }
-
-    #[test]
-    fn retryable_delete_error_not_on_socket_timeout() {
-        // A wedged console / network error — surfacing immediately is
-        // more useful than silently retrying for 6s.
-        assert!(!is_retryable_delete_error(
-            "read frame header: Resource temporarily unavailable (os error 11)"
-        ));
-        assert!(!is_retryable_delete_error("connection reset by peer"));
-    }
-
-    #[test]
-    fn retryable_delete_error_not_on_cancellation() {
-        // User hit Stop — cancellation is intentional, not retryable.
-        assert!(!is_retryable_delete_error("cancelled"));
-        assert!(!is_retryable_delete_error(
-            "payload rejected FS_DELETE: fs_delete_cancelled"
-        ));
     }
 
     #[test]

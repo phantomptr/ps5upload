@@ -119,7 +119,8 @@ fn a_list_refusal_reads_exactly_as_it_did() {
 #[test]
 fn fs_read_returns_the_raw_bytes_and_passes_the_unsafe_flag() {
     let (t, _g) = fake(|_, _| reply(&[1, 2, 3]));
-    let r = ps5upload_core::fs_ops::fs_read_unsafe("a:1", "/system/x", 10, 3).unwrap();
+    let r = ps5upload_core::fs_ops::fs_read_with_timeout("a:1", "/system/x", 10, 3, None, true)
+        .unwrap();
     assert_eq!(r, [1, 2, 3]);
     let seen = t.seen.lock().unwrap();
     assert_eq!((seen[0].0, seen[0].1.as_str()), (38, "FS_READ(/system/x)"));

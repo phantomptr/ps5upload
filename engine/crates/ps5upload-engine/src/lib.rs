@@ -118,7 +118,6 @@ use ps5upload_core::{
         inspect_7z, inspect_zip, sevenz_plan_preview, zip_plan_preview, FileListEntry,
         TransferConfig,
     },
-    users::{user_list, UserList},
     volumes::{list_volumes, VolumeList},
 };
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
@@ -3016,58 +3015,6 @@ async fn ps5_time_sync_route(
     }
 }
 
-/// Read the full PS5 Date & Time state (timezone, DST, NTP flag,
-/// date/time format, tzdata version, NTP-error counter, cached NTP
-/// tick, wall clock) in one round-trip. Best-effort: per-field
-/// availability lets the UI degrade gracefully when the payload
-/// can't read some keys on this firmware.
-async fn ps5_time_state_get_route(
-    State(state): State<AppState>,
-    Query(q): Query<AddrQuery>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
-    let r: Result<ps5upload_core::sys_time::PsTimeState, anyhow::Error> =
-        tokio::task::spawn_blocking(move || ps5upload_core::sys_time::ps5_time_state_get(&addr))
-            .await
-            .map_err(anyhow::Error::from)
-            .and_then(|r| r);
-    match r {
-        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
-    }
-}
-
-/// Write a partial subset of PS5 Date & Time state. Mirrors the
-/// payload's partial-update semantics — only fields explicitly
-/// present in the request JSON are written; everything else is
-/// untouched. Returns per-field results so the UI can render which
-/// writes took and which were rejected.
-#[derive(serde::Deserialize)]
-struct TimeStateSetReq {
-    addr: Option<String>,
-    #[serde(flatten)]
-    fields: ps5upload_core::sys_time::PsTimeStateSetRequest,
-}
-
-async fn ps5_time_state_set_route(
-    State(state): State<AppState>,
-    Json(req): Json<TimeStateSetReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
-    let fields = req.fields;
-    let r: Result<ps5upload_core::sys_time::PsTimeStateSetResult, anyhow::Error> =
-        tokio::task::spawn_blocking(move || {
-            ps5upload_core::sys_time::ps5_time_state_set(&addr, &fields)
-        })
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r);
-    match r {
-        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
-    }
-}
-
 /// SMP-meta worker control. Wraps `smp_meta_control` in spawn_blocking
 /// because the underlying Connection is sync TCP. The `addr` field on
 /// the request body is optional — falls back to the engine's default
@@ -3341,86 +3288,6 @@ async fn ps5_appinfo_query(
     .and_then(|r| r);
     match r {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
-    }
-}
-
-#[derive(Deserialize)]
-struct AppInfoSetReq {
-    addr: Option<String>,
-    title_id: String,
-    key: String,
-    val: String,
-    /// Where to put the pre-change snapshot of both content databases.
-    /// Omit to let the engine choose a directory under its data dir.
-    backup_dir: Option<String>,
-}
-
-/// POST /api/ps5/appinfo/set — change one appinfo.db value.
-///
-/// The only route in the engine that writes to a console system database.
-/// Both content databases are snapshotted first and the response says
-/// where, because the failure mode here is a title whose Settings entry
-/// stops rendering and there is otherwise nothing to restore from. If the
-/// snapshot cannot be taken the write does not happen at all — an
-/// unrecoverable edit is worse than a refused one.
-///
-/// The payload holds the rest of the preconditions (title not running, the
-/// row must already exist, exactly one row changed or roll back).
-async fn ps5_appinfo_set(
-    State(state): State<AppState>,
-    Json(req): Json<AppInfoSetReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
-    let stamp = now_ms() / 1000;
-    let backup_dir = match req.backup_dir {
-        Some(d) => std::path::PathBuf::from(d),
-        None => std::env::temp_dir().join(format!("ps5upload-appinfo-{stamp}")),
-    };
-
-    let addr2 = addr.clone();
-    let backup = tokio::task::spawn_blocking(move || {
-        ps5upload_core::fs_ops::backup_content_databases(&addr2, &backup_dir)
-    })
-    .await
-    .map_err(anyhow::Error::from)
-    .and_then(|r| r);
-
-    let saved = match backup {
-        Ok(paths) => paths,
-        Err(e) => {
-            return json_err(
-                StatusCode::BAD_GATEWAY,
-                format!("refusing to edit appinfo.db: could not snapshot it first: {e:#}"),
-            )
-            .into_response();
-        }
-    };
-
-    let (title_id, key, val) = (req.title_id, req.key, req.val);
-    let r = tokio::task::spawn_blocking(move || {
-        ps5upload_core::diagnostics::appinfo_set(&addr, &title_id, &key, &val)
-    })
-    .await
-    .map_err(anyhow::Error::from)
-    .and_then(|r| r);
-
-    let backup_paths: Vec<String> = saved.iter().map(|p| p.display().to_string()).collect();
-    match r {
-        Ok(v) if v.ok => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "ok": true, "backup": backup_paths })),
-        )
-            .into_response(),
-        Ok(v) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "ok": false,
-                "error": v.err.unwrap_or_else(|| "appinfo.db update refused".into()),
-                "backup": backup_paths,
-            })),
-        )
-            .into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
@@ -3800,24 +3667,6 @@ async fn ps5_power_telemetry(
             .await
             .map_err(anyhow::Error::from)
             .and_then(|r| r);
-    match r {
-        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
-    }
-}
-
-// ── User accounts ────────────────────────────────────────────────────────
-
-/// GET /api/ps5/users/list — enumerate logged-in user accounts.
-async fn ps5_users_list(
-    State(state): State<AppState>,
-    Query(q): Query<AddrQuery>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
-    let r: Result<UserList, anyhow::Error> = tokio::task::spawn_blocking(move || user_list(&addr))
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r);
     match r {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
@@ -5965,90 +5814,6 @@ async fn local_inspect_folder_handler(Query(q): Query<LocalPathQuery>) -> impl I
     }
 }
 
-#[derive(Deserialize)]
-struct BpsInspectReq {
-    patch_path: String,
-}
-
-#[derive(Deserialize)]
-struct BpsApplyReq {
-    /// The library to patch, on the engine's filesystem.
-    source_path: String,
-    /// The `.bps` file to apply.
-    patch_path: String,
-    /// Where to write the patched result.
-    dest_path: String,
-}
-
-/// POST /api/bps/inspect — read a BPS patch's header without applying it.
-///
-/// Lets the UI show what a patch expects before anything is written,
-/// which matters because these patches target one exact build of one
-/// library.
-async fn bps_inspect_handler(Json(req): Json<BpsInspectReq>) -> impl IntoResponse {
-    let path = req.patch_path;
-    let r = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let patch = std::fs::read(&path).map_err(|e| anyhow::anyhow!("read {path}: {e}"))?;
-        ps5upload_core::bps::bps_info(&patch)
-    })
-    .await;
-    match r {
-        Ok(Ok(info)) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "ok": true,
-                "source_size": info.source_size,
-                "target_size": info.target_size,
-                "metadata": info.metadata,
-                "source_crc": format!("{:08x}", info.source_crc),
-                "target_crc": format!("{:08x}", info.target_crc),
-            })),
-        )
-            .into_response(),
-        Ok(Err(e)) => json_err(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
-        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
-    }
-}
-
-/// POST /api/bps/apply — patch a library on the engine's filesystem.
-///
-/// Backporting needs system libraries from a newer firmware with their
-/// unavailable imports patched out; upstream ships those edits as BPS
-/// files. Doing it here means a library can be patched on its way to the
-/// console instead of through a browser-based patcher.
-async fn bps_apply_handler(Json(req): Json<BpsApplyReq>) -> impl IntoResponse {
-    let (src, patch_path, dest) = (req.source_path, req.patch_path, req.dest_path);
-    crate::log_info!("bps_apply: src={src} patch={patch_path} dest={dest}");
-    let dest_for_log = dest.clone();
-    let r = tokio::task::spawn_blocking(move || -> anyhow::Result<u64> {
-        let patch =
-            std::fs::read(&patch_path).map_err(|e| anyhow::anyhow!("read {patch_path}: {e}"))?;
-        let source = std::fs::read(&src).map_err(|e| anyhow::anyhow!("read {src}: {e}"))?;
-        let out = ps5upload_core::bps::bps_apply(&patch, &source)?;
-        if let Some(parent) = std::path::Path::new(&dest).parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
-        std::fs::write(&dest, &out).map_err(|e| anyhow::anyhow!("write {dest}: {e}"))?;
-        Ok(out.len() as u64)
-    })
-    .await;
-    match r {
-        Ok(Ok(bytes)) => {
-            crate::log_info!("bps_apply ok: dest={dest_for_log} bytes={bytes}");
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({ "ok": true, "bytes": bytes, "dest": dest_for_log })),
-            )
-                .into_response()
-        }
-        // A checksum mismatch is the expected failure — the patch was
-        // built for a different library or a different firmware — so it
-        // is a bad request, not a server fault.
-        Ok(Err(e)) => json_err(StatusCode::BAD_REQUEST, format!("{e:#}")).into_response(),
-        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
-    }
-}
-
 async fn zip_inspect_handler(Json(req): Json<ZipInspectReq>) -> impl IntoResponse {
     let zip_path = req.zip_path;
     crate::log_info!("zip_inspect: zip={zip_path}");
@@ -6584,12 +6349,6 @@ impl AccountIdInput {
 }
 
 #[derive(Deserialize)]
-struct ProfileSlotReq {
-    addr: Option<String>,
-    slot: i32,
-}
-
-#[derive(Deserialize)]
 struct ProfileAvatarReq {
     addr: Option<String>,
     /// Host-side path to the source image the user picked (same model as
@@ -6662,13 +6421,6 @@ struct RemotePlayReq {
     addr: Option<String>,
     #[serde(default)]
     manual_account_id: Option<String>,
-}
-
-// ── v4.1: Fan curve ───────────────────────────────────────────────────
-#[derive(Deserialize)]
-struct FanCurveSetReq {
-    addr: Option<String>,
-    points: Vec<ps5upload_core::fan_curve::FanCurvePoint>,
 }
 
 // ── v4.1: Notifications ───────────────────────────────────────────────
@@ -6753,24 +6505,6 @@ async fn profile_activate_handler(
             Json(serde_json::json!({ "ok": true, "id": id })),
         )
             .into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
-    }
-}
-
-async fn profile_clear_slot_handler(
-    State(state): State<AppState>,
-    Json(req): Json<ProfileSlotReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
-    let slot = req.slot;
-    let r = tokio::task::spawn_blocking(move || {
-        ps5upload_core::profile::profile_clear_slot(&addr, slot)
-    })
-    .await
-    .map_err(anyhow::Error::from)
-    .and_then(|r| r);
-    match r {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
@@ -7024,22 +6758,6 @@ async fn remoteplay_enable_handler(
     }
 }
 
-async fn remoteplay_devices_handler(
-    State(state): State<AppState>,
-    Query(q): Query<AddrQuery>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
-    let r =
-        tokio::task::spawn_blocking(move || ps5upload_core::remoteplay::remoteplay_devices(&addr))
-            .await
-            .map_err(anyhow::Error::from)
-            .and_then(|r| r);
-    match r {
-        Ok(result) => (StatusCode::OK, Json(result)).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
-    }
-}
-
 /// The console a POST is about: `?addr=` (the desktop app) or a JSON body's `addr` (the browser
 /// build, `postJson(..., { addr })`). The query wins when both are given.
 ///
@@ -7073,42 +6791,6 @@ async fn remoteplay_cancel_handler(
             .and_then(|r| r);
     match r {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
-    }
-}
-
-// ── v4.1: Fan curve handler ───────────────────────────────────────────
-async fn fan_curve_set_handler(
-    State(state): State<AppState>,
-    Json(req): Json<FanCurveSetReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
-    let points = req.points;
-    crate::log_info!("fan_curve_set: addr={addr} points={}", points.len());
-    let r = tokio::task::spawn_blocking(move || {
-        ps5upload_core::fan_curve::fan_curve_set(&addr, &points)
-    })
-    .await
-    .map_err(anyhow::Error::from)
-    .and_then(|r| r);
-    match r {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
-    }
-}
-
-// ── v5.1: Fan curve get handler ───────────────────────────────────────
-async fn fan_curve_get_handler(
-    State(state): State<AppState>,
-    Query(q): Query<AddrQuery>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
-    let r = tokio::task::spawn_blocking(move || ps5upload_core::fan_curve::fan_curve_get(&addr))
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r);
-    match r {
-        Ok(points) => (StatusCode::OK, Json(serde_json::json!({"points": points}))).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
@@ -7543,40 +7225,6 @@ async fn sdk_restore_handler(
     let title_id = req.title_id;
     let r = tokio::task::spawn_blocking(move || {
         ps5upload_core::sdk_changer::sdk_restore(&addr, &title_id)
-    })
-    .await
-    .map_err(anyhow::Error::from)
-    .and_then(|r| r);
-    match r {
-        Ok(result) => (StatusCode::OK, Json(result)).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
-    }
-}
-
-/* ── TMDB / PlayStation Store metadata ────────────────────────────── */
-
-#[derive(Deserialize)]
-struct TmdbFetchReq {
-    addr: Option<String>,
-    title_id: String,
-    #[serde(default)]
-    refresh: bool,
-    /// Optional region prefix (e.g. "UP9000" for US) to narrow the
-    /// PS Store search instead of brute-forcing all 24 known prefixes.
-    #[serde(default)]
-    region: Option<String>,
-}
-
-async fn tmdb_fetch_handler(
-    State(state): State<AppState>,
-    Query(q): Query<TmdbFetchReq>,
-) -> impl IntoResponse {
-    let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
-    let title_id = q.title_id;
-    let refresh = q.refresh;
-    let region = q.region;
-    let r = tokio::task::spawn_blocking(move || {
-        ps5upload_core::tmdb::tmdb_fetch(&addr, &title_id, refresh, region.as_deref())
     })
     .await
     .map_err(anyhow::Error::from)
@@ -9974,8 +9622,6 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/syslog/tail", get(ps5_syslog_tail))
         .route("/api/ps5/time/get", get(ps5_time_get_route))
         .route("/api/ps5/time/sync", post(ps5_time_sync_route))
-        .route("/api/ps5/time/state/get", get(ps5_time_state_get_route))
-        .route("/api/ps5/time/state/set", post(ps5_time_state_set_route))
         .route(
             "/api/ps5/smp-meta/control",
             post(ps5_smp_meta_control_route),
@@ -10009,7 +9655,6 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             get(cache_artwork_stats).delete(cache_artwork_clear),
         )
         .route("/api/ps5/appinfo", get(ps5_appinfo_query))
-        .route("/api/ps5/appinfo/set", post(ps5_appinfo_set))
         .route("/api/ps5/focus", get(ps5_focus))
         .route("/api/ps5/fs/read-preview", post(ps5_fs_read_preview))
         .route("/api/ps5/process/list", get(ps5_process_list))
@@ -10022,7 +9667,6 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/power/wake-login", post(ps5_power_wake_login))
         .route("/api/ps5/power/ddp-status", get(ps5_power_ddp_status))
         .route("/api/ps5/power/pair", post(ps5_power_pair))
-        .route("/api/ps5/users/list", get(ps5_users_list))
         .route("/api/ps5/users/create", post(user_create_handler))
         .route("/api/ps5/users/delete", post(user_delete_handler))
         .route("/api/ps5/backup/snapshot", post(backup_snapshot_handler))
@@ -10043,15 +9687,9 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             post(remoteplay_enable_handler),
         )
         .route(
-            "/api/ps5/remoteplay/devices",
-            get(remoteplay_devices_handler),
-        )
-        .route(
             "/api/ps5/remoteplay/cancel",
             post(remoteplay_cancel_handler),
         )
-        .route("/api/ps5/hw/fan-curve", post(fan_curve_set_handler))
-        .route("/api/ps5/hw/fan-curve/get", get(fan_curve_get_handler))
         .route("/api/ps5/notif/list", get(notif_list_handler))
         .route("/api/ps5/notif/clear", post(notif_clear_handler))
         .route("/api/ps5/activity/reset", post(activity_reset_handler))
@@ -10082,7 +9720,6 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/sdk/scan", get(sdk_scan_handler))
         .route("/api/ps5/sdk/patch", post(sdk_patch_handler))
         .route("/api/ps5/sdk/restore", post(sdk_restore_handler))
-        .route("/api/ps5/tmdb/fetch", get(tmdb_fetch_handler))
         .route("/api/ps5/fw-spoof/status", get(fw_spoof_status_handler))
         .route(
             "/api/remote/connections",
@@ -10150,8 +9787,6 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             "/api/local/inspect-folder",
             get(local_inspect_folder_handler),
         )
-        .route("/api/bps/inspect", post(bps_inspect_handler))
-        .route("/api/bps/apply", post(bps_apply_handler))
         .route("/api/zip/inspect", post(zip_inspect_handler))
         .route("/api/zip/inspect/stream", post(zip_inspect_stream_handler))
         .route("/api/transfer/7z", post(transfer_7z_handler))
@@ -10178,7 +9813,6 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
             post(profile_local_username_handler),
         )
         .route("/api/profile/activate", post(profile_activate_handler))
-        .route("/api/profile/clear-slot", post(profile_clear_slot_handler))
         .route("/api/profile/avatar", post(profile_avatar_handler))
         .route(
             "/api/profile/avatar/current",

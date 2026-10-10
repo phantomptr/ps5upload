@@ -232,14 +232,6 @@ pub fn fs_read(addr: &str, path: &str, offset: u64, limit: u64) -> Result<Vec<u8
     fs_read_with_timeout(addr, path, offset, limit, None, false)
 }
 
-/// Like [`fs_read`] but with `unsafe_read = true`, which tells the payload
-/// to bypass the writable-root allowlist so system files (under `/system/`,
-/// `/system_data/`, `/system_ex/`) can be read. Read-only — the payload
-/// ignores the flag for all destructive ops.
-pub fn fs_read_unsafe(addr: &str, path: &str, offset: u64, limit: u64) -> Result<Vec<u8>> {
-    fs_read_with_timeout(addr, path, offset, limit, None, true)
-}
-
 /// Like [`fs_read`] but with a caller-supplied per-socket I/O timeout.
 /// Same rationale as `fs_hash_with_timeout` — read loops over many
 /// metadata blobs need to fail fast on a stuck PS5 instead of inheriting
@@ -1292,77 +1284,6 @@ fn blake3_file(path: &std::path::Path) -> Result<String> {
         hasher.update(&buf[..n]);
     }
     Ok(hasher.finalize().to_hex().to_string())
-}
-
-// ── Content-database snapshot ────────────────────────────────────────────
-
-/// The console's two content databases. `app.db` drives the home-screen
-/// tiles; `appinfo.db` drives Settings → Storage. They are the authority on
-/// what the console believes is installed, and they can disagree with what
-/// is actually on disk.
-pub const CONTENT_DB_DIR: &str = "/system_data/priv/mms";
-pub const CONTENT_DB_FILES: [&str; 2] = ["app.db", "appinfo.db"];
-
-/// Snapshot the console's content databases to `dest_dir`.
-///
-/// Why this exists: a user hit a title that Settings → Storage listed but
-/// refused to delete (CE-118883-9). Diagnosing it meant reading these two
-/// files, and *repairing* it meant editing them — with no safety net if the
-/// edit went wrong. Taking a snapshot before any destructive title
-/// operation turns an unrecoverable mistake into a restore.
-///
-/// Read-only, and deliberately NOT a general "read any system path" API:
-/// the directory and both filenames are fixed constants, so this cannot be
-/// pointed at arbitrary console files. It reads through `fs_read_unsafe`,
-/// which the payload already permits for `/system_data/` (with a
-/// symlink-escape guard) while continuing to refuse writes and deletes
-/// there.
-///
-/// Returns the paths written, in `CONTENT_DB_FILES` order.
-pub fn backup_content_databases(
-    addr: &str,
-    dest_dir: &std::path::Path,
-) -> Result<Vec<std::path::PathBuf>> {
-    std::fs::create_dir_all(dest_dir)
-        .with_context(|| format!("create backup dir {}", dest_dir.display()))?;
-    let mut written = Vec::new();
-    for name in CONTENT_DB_FILES {
-        let remote = format!("{CONTENT_DB_DIR}/{name}");
-        let bytes = read_whole_system_file(addr, &remote)
-            .with_context(|| format!("read {remote} from PS5"))?;
-        if bytes.is_empty() {
-            bail!("{remote} read back empty — refusing to write a useless backup");
-        }
-        let out = dest_dir.join(name);
-        std::fs::write(&out, &bytes).with_context(|| format!("write {}", out.display()))?;
-        written.push(out);
-    }
-    Ok(written)
-}
-
-/// Read a whole system file by chunking `fs_read_unsafe`.
-///
-/// FS_READ caps every response at 2 MiB, so a single call can silently
-/// truncate. `appinfo.db` is already past 1 MiB on a well-used console and
-/// will cross that cap; a truncated database is worse than none at all
-/// because it still looks like a valid backup. Loop until short read.
-fn read_whole_system_file(addr: &str, path: &str) -> Result<Vec<u8>> {
-    const CHUNK: u64 = 1024 * 1024;
-    let mut out: Vec<u8> = Vec::new();
-    loop {
-        let chunk = fs_read_unsafe(addr, path, out.len() as u64, CHUNK)?;
-        let n = chunk.len();
-        out.extend_from_slice(&chunk);
-        if (n as u64) < CHUNK {
-            break;
-        }
-        // Guard against a payload that ignores `offset` and re-serves the
-        // same bytes forever.
-        if out.len() > 256 * 1024 * 1024 {
-            bail!("{path} exceeded 256 MiB — aborting (payload not honouring offset?)");
-        }
-    }
-    Ok(out)
 }
 
 #[cfg(test)]

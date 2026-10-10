@@ -199,22 +199,6 @@ impl RemotePlayReadiness {
     }
 }
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-pub struct RemotePlayDevice {
-    #[serde(default)]
-    pub slot: u32,
-    #[serde(default)]
-    pub user_id: i64,
-    #[serde(default)]
-    pub client_type: i32,
-}
-
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-pub struct RemotePlayDevices {
-    #[serde(default)]
-    pub devices: Vec<RemotePlayDevice>,
-}
-
 /// Read the readiness snapshot. Performs no writes on the console.
 pub fn remoteplay_readiness(addr: &str) -> Result<RemotePlayReadiness> {
     let resp = mgmt::call_keep(addr, m::RP_READINESS, "RemotePlayReadiness", &[])?;
@@ -233,12 +217,6 @@ pub fn remoteplay_enable(addr: &str, scope: &str) -> Result<RemotePlayReadiness>
         "RemotePlayEnable",
         &serde_json::to_vec(&body)?,
     )?;
-    Ok(serde_json::from_slice(&resp)?)
-}
-
-/// Devices this console has been paired with.
-pub fn remoteplay_devices(addr: &str) -> Result<RemotePlayDevices> {
-    let resp = mgmt::call_keep(addr, m::RP_DEVICES, "RemotePlayDevices", &[])?;
     Ok(serde_json::from_slice(&resp)?)
 }
 
