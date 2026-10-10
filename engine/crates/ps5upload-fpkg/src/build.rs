@@ -95,16 +95,42 @@ impl BuildRequest {
 /// `PS5UPLOAD_FPKG_SPOOL_DIR` when set (a separate file, copied in once the image is done).
 fn spool_for(partial: &Path) -> stream::KrakenSpool {
     match std::env::var_os("PS5UPLOAD_FPKG_SPOOL_DIR") {
-        Some(dir) if !dir.is_empty() => {
-            let name = format!(
-                "{}.kraken",
-                partial
-                    .file_name()
-                    .map_or_else(Default::default, |n| n.to_string_lossy())
-            );
-            stream::KrakenSpool::File(PathBuf::from(dir).join(name))
-        }
+        Some(dir) if !dir.is_empty() => stream::KrakenSpool::File(spool_path(&dir, partial)),
         _ => stream::KrakenSpool::InPlace,
+    }
+}
+
+/// A spool file in the shared `dir` that no other build uses: two builds of the same content
+/// id into different output folders have the same `.partial` name, so the name also carries
+/// this process and a per-process count.
+fn spool_path(dir: &std::ffi::OsStr, partial: &Path) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = format!(
+        "{}.{}-{n}.kraken",
+        partial
+            .file_name()
+            .map_or_else(Default::default, |n| n.to_string_lossy()),
+        std::process::id()
+    );
+    PathBuf::from(dir).join(name)
+}
+
+/// A file a build made, removed when this is dropped — on an error, a cancel or a panic —
+/// unless [`Leftover::keep`] was called once the file is done with.
+struct Leftover(Option<PathBuf>);
+
+impl Leftover {
+    fn keep(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for Leftover {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            std::fs::remove_file(path).ok();
+        }
     }
 }
 
@@ -230,16 +256,20 @@ pub fn build_controlled(
 
 /// The writer that holds the whole image in memory. Gate G2 verified this one, and
 /// `tests/scale.rs` still compares the streaming writer against it byte for byte.
+///
+/// It writes the flat layout only. A request for the block (Kraken) layout, the default, goes
+/// to the streaming writer, the only one that has it: planning a block layout and then writing
+/// it flat would give a package whose layout descriptor does not match its image.
 pub fn build_in_memory(
     request: &BuildRequest,
     progress: &mut dyn FnMut(&str),
 ) -> Result<BuildReport> {
-    build_mode(
-        request,
-        progress,
-        &mut BuildControl::default(),
-        Mode::InMemory,
-    )
+    let mode = if request.kraken {
+        Mode::Streaming
+    } else {
+        Mode::InMemory
+    };
+    build_mode(request, progress, &mut BuildControl::default(), mode)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -504,10 +534,9 @@ fn build_mode(
             partial.display()
         ));
     }
-    let cleanup = |e: crate::Error| -> crate::Error {
-        std::fs::remove_file(&partial).ok();
-        e
-    };
+    // The `.partial` goes on every way out but success: a write or verify error, a failed
+    // rename, a cancel, a panic. It is armed only once this build has created it.
+    let mut leftover = Leftover(None);
 
     let written = match mode {
         Mode::Streaming => {
@@ -517,6 +546,7 @@ fn build_mode(
                 .write(true)
                 .create_new(true)
                 .open(&partial)?;
+            leftover.0 = Some(partial.clone());
             let mut read_range = |path: &str, offset: u64, len: usize| -> Result<Vec<u8>> {
                 if !sizes.contains_key(path) {
                     return format_err(format!(
@@ -575,21 +605,16 @@ fn build_mode(
                 level: request.level,
                 metadata_codec: request.metadata_codec,
             };
-            let written =
-                stream::write_package(&mut file, &stream_request, &mut read_range, &mut p, cancel);
-            if let Some(stream::KrakenSpool::File(spool)) = &stream_request.kraken_spool {
-                std::fs::remove_file(spool).ok();
-            }
-            match written {
-                Ok(package) => package.size,
-                Err(e) => return Err(cleanup(e)),
-            }
+            // A separate spool is only ever scratch, whatever happens to the build.
+            let _spool = Leftover(match &stream_request.kraken_spool {
+                Some(stream::KrakenSpool::File(spool)) => Some(spool.clone()),
+                _ => None,
+            });
+            stream::write_package(&mut file, &stream_request, &mut read_range, &mut p, cancel)?.size
         }
         Mode::InMemory => {
             if cancelled() {
-                return Err(cleanup(crate::Error::Format(
-                    "the build was cancelled".to_string(),
-                )));
+                return format_err("the build was cancelled");
             }
             let mut read = |path: &str| -> Result<Vec<u8>> {
                 match sizes.get(path) {
@@ -752,6 +777,7 @@ fn build_mode(
                     .write(true)
                     .create_new(true)
                     .open(&partial)?;
+                leftover.0 = Some(partial.clone());
                 out.write_all(&fih)?;
                 out.write_all(&outer.image)?;
                 out.write_all(&cnt.bytes)?;
@@ -771,22 +797,18 @@ fn build_mode(
             f(done, total);
         }
     };
-    let report = match verify::verify_streaming(&partial, &request.passcode, &mut verify_bytes) {
-        Ok(report) if report.ok() => report,
-        Ok(report) => {
-            return Err(cleanup(crate::Error::Format(format!(
-                "the built package failed verification:\n{report}"
-            ))))
-        }
-        Err(e) => return Err(cleanup(e)),
-    };
+    let report = verify::verify_streaming(&partial, &request.passcode, &mut verify_bytes)?;
+    if !report.ok() {
+        return format_err(format!("the built package failed verification:\n{report}"));
+    }
     if final_path.exists() {
-        return Err(cleanup(crate::Error::Format(format!(
+        return format_err(format!(
             "output appeared during conversion: {}",
             final_path.display()
-        ))));
+        ));
     }
     std::fs::rename(&partial, &final_path)?;
+    leftover.keep();
     let size = std::fs::metadata(&final_path)?.len();
     debug_assert_eq!(size, written);
     progress("done");
@@ -926,6 +948,55 @@ pub fn package_digest(path: &Path) -> Result<[u8; 32]> {
 
 #[cfg(test)]
 mod tests {
+
+    /// A build's `.partial` goes on every way out but success, a panic included; kept, it stays.
+    #[test]
+    fn a_leftover_is_removed_unless_kept() {
+        let dir = std::env::temp_dir().join(format!("fpkg-leftover-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b, c) = (
+            dir.join("a.partial"),
+            dir.join("b.partial"),
+            dir.join("c.partial"),
+        );
+        for p in [&a, &b, &c] {
+            std::fs::write(p, b"x").unwrap();
+        }
+        drop(super::Leftover(Some(a.clone())));
+        assert!(!a.exists());
+        let mut kept = super::Leftover(Some(b.clone()));
+        kept.keep();
+        drop(kept);
+        assert!(b.exists());
+        let c2 = c.clone();
+        let unwound = std::panic::catch_unwind(move || {
+            let _guard = super::Leftover(Some(c2));
+            panic!("the writer panicked");
+        });
+        assert!(unwound.is_err());
+        assert!(!c.exists(), "removed while unwinding");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two builds of one content id share a `.partial` name; their spools in a shared folder
+    /// must not.
+    #[test]
+    fn spool_names_never_repeat() {
+        let partial = std::path::Path::new("/out/UP0000-PPSA01234_00-X.pkg.partial");
+        let dir = std::ffi::OsStr::new("/spool");
+        let (one, two) = (
+            super::spool_path(dir, partial),
+            super::spool_path(dir, partial),
+        );
+        assert_ne!(one, two);
+        let name = one.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.starts_with("UP0000-PPSA01234_00-X.pkg.partial."),
+            "{name}"
+        );
+        assert!(name.ends_with(".kraken"), "{name}");
+        assert!(one.starts_with("/spool"));
+    }
 
     /// A real Battlefield 6 build (Windows, Balanced): compress 50 min 47 s, write 12 min 11 s,
     /// verify 8 min 31 s — 71 min in all, for 234 GiB into 113.33 GiB. One thread both reads the

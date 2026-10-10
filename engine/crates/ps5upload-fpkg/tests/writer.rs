@@ -50,7 +50,7 @@ fn write_tree(root: &Path) -> Vec<(String, Vec<u8>)> {
     put(
         "sce_sys/param.json",
         format!(
-            "{{\"contentId\":\"{CONTENT_ID}\",\"contentVersion\":\"01.001.000\",\"titleId\":\"PPSA01234\"}}"
+            "{{\"contentId\":\"{CONTENT_ID}\",\"contentVersion\":\"01.001.000\",\"titleId\":\"PPSA01234\",\"applicationCategoryType\":0,\"attributePub\":0}}"
         )
         .into_bytes(),
     );
@@ -352,6 +352,33 @@ fn a_kraken_package_decodes_back_to_its_source() {
             "{path}"
         );
     }
+}
+
+/// The in-memory writer only has the flat layout. Asked for the block layout (the default),
+/// it hands the build to the streaming writer instead of writing a block plan flat, and the
+/// package decodes block by block like any other.
+#[test]
+fn an_in_memory_build_of_the_block_layout_is_written_by_the_streaming_writer() {
+    use ps5upload_fpkg::kraken_image;
+    let source_dir = TempDir::new("mem-kraken-src");
+    let out = TempDir::new("mem-kraken-out");
+    write_tree(source_dir.path());
+    let mut request = BuildRequest::new(source_dir.path(), out.path());
+    request.kraken = true;
+    request.time = Some((1_700_000_000, 0));
+    let report = build::build_in_memory(&request, &mut |_| {}).unwrap();
+    assert!(report.verify.ok(), "{}", report.verify);
+    let naps = outer_file(&report.path, "naps_pkg_layout.dat");
+    let image = outer_file(&report.path, "pfs_image.dat");
+    let blocks = kraken_image::describe(&naps).unwrap();
+    assert!(!blocks.is_empty());
+    for b in &blocks {
+        kraken_image::decode_described(&image, b).unwrap();
+    }
+    assert!(!out
+        .path()
+        .join(format!("{CONTENT_ID}.pkg.partial"))
+        .exists());
 }
 
 /// A title whose module imports libSceAmpr gets an `ampr_emu.index` generated into its image
