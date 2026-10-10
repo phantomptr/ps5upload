@@ -76,7 +76,7 @@ const TAB_DEFS: TabDef[] = [
     icon: Cpu,
     to: "/console",
     sections: ["nav_section_console", "nav_section_advanced"],
-    extra: ["/hardware", "/nanodns", "/nano-dns", "/send-payload", "/shadowmount"],
+    extra: ["/hardware", "/fan-curve", "/nanodns", "/nano-dns", "/send-payload", "/shadowmount"],
   },
   {
     id: "tasks",

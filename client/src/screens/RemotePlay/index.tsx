@@ -33,8 +33,7 @@ import {
   type RemotePlayReadiness,
 } from "../../api/ps5";
 import { humanizePs5Error } from "../../lib/humanizeError";
-import { openExternalUrl } from "../../lib/openExternalUrl";
-import { NP_FAKE_SIGNIN_URL, NpSignInCard } from "./NpSignInCard";
+import { NpSignInCard } from "./NpSignInCard";
 import { useNavigate } from "react-router";
 
 /** Firmware magic to a human version, e.g. 0x09600004 -> "9.60".
@@ -59,11 +58,13 @@ export function formatFirmware(magic: number): string {
 function ReadinessPanel({
   readiness,
   onEnable,
+  onOpenProfile,
   busy,
   tr,
 }: {
   readiness: RemotePlayReadiness | null;
   onEnable: (scope: "service" | "user") => void;
+  onOpenProfile: () => void;
   busy: boolean;
   tr: ReturnType<typeof useTr>;
 }) {
@@ -119,10 +120,12 @@ function ReadinessPanel({
       ok: activated,
       label: tr("remotePlay_check_account", undefined, "Account is activated"),
       hint: tr(
-        "remotePlay_check_account_hint",
+        "remotePlay_check_account_hint_v2",
         undefined,
-        "This account has never been activated, so it cannot pair. Activating changes account data and can affect save games, so ps5upload does not do it for you yet.",
+        "This account has never been activated, so it cannot pair. Profile can activate it by giving it an account ID; that changes account data, and saves made afterwards are tied to that ID.",
       ),
+      fix: onOpenProfile,
+      fixLabel: tr("remotePlay_open_profile", undefined, "Open Profile"),
     },
     {
       key: "service",
@@ -356,15 +359,12 @@ export default function RemotePlayScreen() {
         <ReadinessPanel
           readiness={readiness}
           onEnable={handleEnable}
+          onOpenProfile={() => navigate("/profile")}
           busy={busy}
           tr={tr}
         />
 
-        <NpSignInCard
-          onDownload={() => void openExternalUrl(NP_FAKE_SIGNIN_URL)}
-          onOpenPayloads={() => navigate("/payloads")}
-          onOpenProfile={() => navigate("/profile")}
-        />
+        <NpSignInCard onOpenProfile={() => navigate("/profile")} />
 
         {/* Request form */}
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">

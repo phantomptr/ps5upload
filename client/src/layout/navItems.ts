@@ -39,7 +39,6 @@ import {
   Bug,
   Archive,
   MonitorPlay,
-  Fan,
   Bell,
   Clock,
   ShieldAlert,
@@ -103,7 +102,6 @@ export const NAV_ITEMS: NavItem[] = [
     key: "payloads",
     fallback: "Payloads",
     icon: Boxes,
-    hideInBrowser: true,
   },
 
   // Move data and inspect storage.
@@ -134,7 +132,12 @@ export const NAV_ITEMS: NavItem[] = [
     fallback: "Servers",
     icon: Network,
   },
-  { to: "/backup", key: "backup", fallback: "Backup", icon: Archive },
+  {
+    to: "/backup",
+    key: "console_snapshots",
+    fallback: "Console snapshots",
+    icon: Archive,
+  },
 
   // Play, install, and manage game-related content.
   {
@@ -212,7 +215,6 @@ export const NAV_ITEMS: NavItem[] = [
     fallback: "Profile",
     icon: CircleUserRound,
   },
-  { to: "/fan-curve", key: "fan_curve", fallback: "Fan Curve", icon: Fan },
   {
     to: "/health",
     key: "health",
@@ -235,12 +237,18 @@ export const NAV_ITEMS: NavItem[] = [
   // Expert-only controls.
   {
     to: "/fw-spoof",
-    key: "fw_spoof_title",
-    fallback: "FW Spoof",
+    key: "fw_spoof_title_v2",
+    fallback: "Firmware spoof check",
     icon: ShieldAlert,
     section: { key: "nav_section_advanced", fallback: "Advanced" },
   },
-  { to: "/shell", key: "shell", fallback: "Shell", icon: TerminalSquare },
+  {
+    to: "/shell",
+    key: "shell",
+    fallback: "Shell",
+    icon: TerminalSquare,
+    hideInBrowser: true,
+  },
 
   // ─ Diagnostics: history, logs, debugging ─
   {

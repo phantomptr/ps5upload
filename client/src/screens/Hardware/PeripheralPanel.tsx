@@ -20,6 +20,7 @@ import { Button, Spinner } from "../../components";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
+import { discDriveOf } from "./discDrive";
 
 /**
  * Peripheral control: BD drive eject / power.
@@ -29,8 +30,16 @@ import { withConsolePrefix } from "../../state/roster";
  * `port` argument needs a port-picker. We expose them via the API
  * for advanced workflows but the panel keeps to BD only.
  */
-export default function PeripheralPanel({ mgmtAddr }: { mgmtAddr: string }) {
+export default function PeripheralPanel({
+  mgmtAddr,
+  model,
+}: {
+  mgmtAddr: string;
+  /** HW_INFO's model code; a Digital Edition gets no disc-drive controls. */
+  model?: string | null;
+}) {
   const tr = useTr();
+  const drive = discDriveOf(model);
   const [busy, setBusy] = useState<null | "eject" | "off" | "on" | "indicator">(null);
   const [last, setLast] = useState<PeripheralAck | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -100,60 +109,80 @@ export default function PeripheralPanel({ mgmtAddr }: { mgmtAddr: string }) {
 
   return (
     <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
-      <header className="mb-3 flex items-center gap-2">
-        <Disc3 size={14} />
-        <h3 className="text-sm font-semibold">
-          {tr("peripheral_title", undefined, "Disc drive")}
-        </h3>
-      </header>
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          variant="secondary"
-          size="sm"
-          leftIcon={
-            busy === "eject" ? (
-              <Spinner size={12} tone="inherit" />
-            ) : (
-              <Disc3 size={11} />
-            )
-          }
-          onClick={() => run("eject", peripheralEject)}
-          disabled={busy !== null}
-        >
-          {tr("peripheral_eject", undefined, "Eject disc")}
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          leftIcon={
-            busy === "off" ? (
-              <Spinner size={12} tone="inherit" />
-            ) : (
-              <Power size={11} />
-            )
-          }
-          onClick={() => run("off", peripheralBdOff)}
-          disabled={busy !== null}
-        >
-          {tr("peripheral_bd_off", undefined, "BD power off")}
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          leftIcon={
-            busy === "on" ? (
-              <Spinner size={12} tone="inherit" />
-            ) : (
-              <Power size={11} />
-            )
-          }
-          onClick={() => run("on", peripheralBdOn)}
-          disabled={busy !== null}
-        >
-          {tr("peripheral_bd_on", undefined, "BD power on")}
-        </Button>
-      </div>
-      <header className="mb-2 mt-4 flex items-center gap-2">
+      {drive !== "no" && (
+        <div data-testid="disc-controls" className="mb-4">
+          <header className="mb-3 flex items-center gap-2">
+            <Disc3 size={14} />
+            <h3 className="text-sm font-semibold">
+              {tr("peripheral_title", undefined, "Disc drive")}
+            </h3>
+          </header>
+          {drive === "attachable" && (
+            <p className="mb-2 text-xs text-[var(--color-muted)]">
+              {tr(
+                "peripheral_drive_attachable",
+                undefined,
+                "This model has no built-in disc drive; these only do something with the add-on drive attached.",
+              )}
+            </p>
+          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={
+                busy === "eject" ? (
+                  <Spinner size={12} tone="inherit" />
+                ) : (
+                  <Disc3 size={11} />
+                )
+              }
+              onClick={() => run("eject", peripheralEject)}
+              disabled={busy !== null}
+            >
+              {tr("peripheral_eject", undefined, "Eject disc")}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              leftIcon={
+                busy === "off" ? (
+                  <Spinner size={12} tone="inherit" />
+                ) : (
+                  <Power size={11} />
+                )
+              }
+              onClick={() => run("off", peripheralBdOff)}
+              disabled={busy !== null}
+            >
+              {tr("peripheral_bd_off", undefined, "BD power off")}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              leftIcon={
+                busy === "on" ? (
+                  <Spinner size={12} tone="inherit" />
+                ) : (
+                  <Power size={11} />
+                )
+              }
+              onClick={() => run("on", peripheralBdOn)}
+              disabled={busy !== null}
+            >
+              {tr("peripheral_bd_on", undefined, "BD power on")}
+            </Button>
+          </div>
+          <p className="mt-2 text-xs text-[var(--color-muted)]">
+            {tr(
+              "peripheral_explainer",
+              undefined,
+              "BD power-off can save 2-3W when you only play digital titles. Eject works whether the drive has a disc or not.",
+            )}
+          </p>
+        </div>
+      )}
+      <header className="mb-2 flex items-center gap-2">
         <Lightbulb size={14} />
         <h3 className="text-sm font-semibold">
           {tr("peripheral_indicator_title", undefined, "Front light and beeper")}
@@ -222,13 +251,6 @@ export default function PeripheralPanel({ mgmtAddr }: { mgmtAddr: string }) {
           <span>{error}</span>
         </div>
       )}
-      <p className="mt-3 text-xs text-[var(--color-muted)]">
-        {tr(
-          "peripheral_explainer",
-          undefined,
-          "BD power-off can save 2-3W when you only play digital titles. Eject works whether the drive has a disc or not.",
-        )}
-      </p>
     </section>
   );
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Gamepad2, Globe, Power, RefreshCw, WandSparkles, Zap } from "lucide-react";
+import { Gamepad2, Globe, Power, RefreshCw, RotateCcw, WandSparkles, Zap } from "lucide-react";
 import {
   PageHeader,
   Button,
@@ -39,6 +39,7 @@ import {
   type CheatListFilters,
 } from "../../lib/cheatGames";
 import { useToast } from "../../state/toasts";
+import { reapplyToast } from "./reapplyToast";
 
 /** The cheat collection's index, for the session.
  *
@@ -178,13 +179,14 @@ export default function CheatsScreen() {
     }
   }
 
-  async function reload() {
+  // Re-reads the cheat files on the console and applies them again to the
+  // running game (the console says so on the TV), so it is its own button, not
+  // what Refresh does. The toast follows what the console reports afterwards.
+  async function reapply() {
     try {
       await cheatsReload(addr);
-      toast({
-        tone: "success",
-        message: tr("cheats_toast_reloaded", undefined, "Cheats reloaded for the running game."),
-      });
+      const st = await cheatsStatus(addr).catch(() => null);
+      toast(reapplyToast(st, tr));
     } catch (e) {
       setError(humanizePs5Error(String(e)));
     }
@@ -222,7 +224,7 @@ export default function CheatsScreen() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => void reload()}
+              onClick={() => void refresh()}
               disabled={loading || !up}
               aria-label={tr("cheats_refresh", undefined, "Refresh")}
               title={tr("cheats_refresh", undefined, "Refresh")}
@@ -242,6 +244,7 @@ export default function CheatsScreen() {
             status={status}
             runningName={games.find((g) => g.running)?.name ?? null}
             onToggle={() => void setEngine(!status.enabled)}
+            onReapply={() => void reapply()}
             onOpenRunning={() => status.game_title_id && setSelectedId(status.game_title_id.toUpperCase())}
           />
         )}
@@ -343,12 +346,14 @@ function EngineBar({
   status,
   runningName,
   onToggle,
+  onReapply,
   onOpenRunning,
 }: {
   host: string;
   status: CheatsStatusResponse;
   runningName: string | null;
   onToggle: () => void;
+  onReapply: () => void;
   onOpenRunning: () => void;
 }) {
   const tr = useTr();
@@ -398,6 +403,21 @@ function EngineBar({
           <Zap size={12} />
           {tr("cheats_patches_count", { n: status.patches_total }, `${status.patches_total} patches applied`)}
         </span>
+      )}
+      {status.enabled && status.game_running && (
+        <Button
+          variant="ghost"
+          size="sm"
+          leftIcon={<RotateCcw size={13} />}
+          onClick={onReapply}
+          title={tr(
+            "cheats_reapply_hint",
+            undefined,
+            "Read the cheat files on the PS5 again and re-apply the ones switched on. The console shows a notice on the TV.",
+          )}
+        >
+          {tr("cheats_reapply", undefined, "Re-apply to running game")}
+        </Button>
       )}
       <Button
         variant={status.enabled ? "secondary" : "primary"}

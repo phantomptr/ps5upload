@@ -186,15 +186,18 @@ export function NpSignInSection({
         ) : (
           <p className="text-xs text-[var(--color-muted)]">
             {tr(
-              "profile.np.browser",
+              "profile.np.browser_v2",
               undefined,
-              "In the web UI, send np-fake-signin from Payloads.",
+              "Signing in needs the desktop app: it fetches np-fake-signin and sends it to the PS5, which the web UI cannot do.",
             )}
           </p>
         )}
-        <Button size="sm" variant="ghost" onClick={() => navigate("/payloads")}>
-          {tr("remotePlay_np_open_payloads", undefined, "Open Payloads")}
-        </Button>
+        {/* Payloads is desktop-only: in the web UI this button led to the Connection screen. */}
+        {desktop && (
+          <Button size="sm" variant="ghost" onClick={() => navigate("/payloads")}>
+            {tr("remotePlay_np_open_payloads", undefined, "Open Payloads")}
+          </Button>
+        )}
       </div>
     </Card>
   );

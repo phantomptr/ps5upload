@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 import { invoke } from "../../lib/invokeLogged";
 import {
   Cpu,
@@ -13,6 +14,7 @@ import {
   CalendarClock,
   Globe,
   Loader2,
+  ScrollText,
 } from "lucide-react";
 
 import { AlertTriangle } from "lucide-react";
@@ -24,10 +26,11 @@ import {
   Spinner,
 } from "../../components";
 import { useTr } from "../../state/lang";
+import { useConfirm } from "../../components/ConfirmDialog";
 import PowerTelemetryPanel from "./PowerTelemetryPanel";
 import NetworkPanel from "./NetworkPanel";
 import PeripheralPanel from "./PeripheralPanel";
-import SpeedTestPanel from "./SpeedTestPanel";
+import { FAN_PRESETS } from "./fanPresets";
 import { useDocumentVisible } from "../../lib/visibility";
 import { mgmtAddr, transferAddr } from "../../lib/addr";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
@@ -385,9 +388,9 @@ export default function HardwareScreen() {
         title={tr("hardware_title", undefined, "Hardware")}
         loading={loading}
         description={tr(
-          "hardware_description",
+          "hardware_description_v2",
           undefined,
-          "System info, uptime and storage auto-refresh every 5 seconds while the helper is connected. Live temperatures and CPU clock are read on demand — click Read sensors. Some firmware doesn't expose every sensor; any unavailable reading shows as a dash.",
+          "System info, uptime and storage auto-refresh every 5 seconds while the helper is connected. Live temperatures and CPU clock are read on demand — click Read sensors. Retail firmware doesn't expose every reading (CPU usage, for one); those show as a dash.",
         )}
         right={
           <div className="flex items-center gap-2">
@@ -454,9 +457,9 @@ export default function HardwareScreen() {
                     )
                   : temps.cpu_temp === 0
                     ? tr(
-                        "hw_sensor_unavailable",
+                        "hw_sensor_no_reading",
                         undefined,
-                        "Sensor reading unavailable right now",
+                        "The console returned no reading for this sensor",
                       )
                     : undefined
               }
@@ -467,9 +470,9 @@ export default function HardwareScreen() {
               hint={
                 temps && temps.soc_temp === 0
                   ? tr(
-                      "hw_sensor_unavailable",
+                      "hw_sensor_no_reading",
                       undefined,
-                      "Sensor reading unavailable right now",
+                      "The console returned no reading for this sensor",
                     )
                   : undefined
               }
@@ -512,7 +515,13 @@ export default function HardwareScreen() {
                       undefined,
                       "Click Read sensors for a live reading",
                     )
-                  : undefined
+                  : temps.cpu_usage_pct < 0
+                    ? tr(
+                        "hw_cpu_usage_retail",
+                        undefined,
+                        "Not readable on retail firmware",
+                      )
+                    : undefined
               }
             />
             {/* SoC power draw is intentionally not shown: the only Sony
@@ -734,22 +743,22 @@ export default function HardwareScreen() {
                   GATEWAY, leaving the panel silently broken. */}
               <PowerTelemetryPanel mgmtAddr={mgmtAddr(host)} />
               <NetworkPanel mgmtAddr={mgmtAddr(host)} />
-              <SpeedTestPanel mgmtAddr={mgmtAddr(host)} />
-              <PeripheralPanel mgmtAddr={mgmtAddr(host)} />
+              <PeripheralPanel mgmtAddr={mgmtAddr(host)} model={info?.model} />
             </>
           )}
         </div>
       </ConnectionGate>
 
-      {/* Kernel log lives OUTSIDE the sensor grid: the <pre> renders
-       * hundreds of monospace lines and would get squeezed into a 1/3-
-       * width column at xl breakpoint (the grid container above is
-       * `lg:grid-cols-2 xl:grid-cols-3`), making the log unreadable.
-       * Full-width section below the grid gives it the horizontal room
-       * it needs without disturbing the responsive sensor layout. */}
-      {host?.trim() && payloadStatus === "up" && (
-        <SystemLogSection host={host} payloadStatus={payloadStatus} />
-      )}
+      {/* The kernel log has its own tab under Logs. */}
+      <p className="mt-6 text-sm text-[var(--color-muted)]">
+        <Link
+          to="/logs?tab=kernel"
+          className="inline-flex items-center gap-1 text-[var(--color-accent)] hover:underline"
+        >
+          <ScrollText size={13} />
+          {tr("hw_kernel_log_link", undefined, "PS5 system log (kernel): open Logs → Kernel")}
+        </Link>
+      </p>
     </div>
   );
 }
@@ -800,22 +809,6 @@ function StatRow({
   );
 }
 
-/* Presets are named for what the user is optimizing for, not raw
- * numbers. 55 °C = fan always running quietly but never at turbo;
- * 65 °C ~ Sony's default behavior; 75 °C = only turbo under real
- * load. Values must be inside [FAN_THRESHOLD_MIN_C, _MAX_C]. */
-const FAN_PRESETS: ReadonlyArray<{ labelKey: string; labelFallback: string; c: number; hintKey: string; hintFallback: string }> = [
-  { labelKey: "hw_fan_preset_quiet", labelFallback: "Quiet", c: 55, hintKey: "hw_fan_preset_quiet_hint", hintFallback: "Fan engages earlier — cooler, louder" },
-  { labelKey: "hw_fan_preset_balanced", labelFallback: "Balanced", c: 65, hintKey: "hw_fan_preset_balanced_hint", hintFallback: "Close to Sony's default" },
-  {
-    labelKey: "hw_fan_preset_performance",
-    labelFallback: "Performance",
-    c: 75,
-    hintKey: "hw_fan_preset_performance_hint",
-    hintFallback: "Fan ramps only under load — quieter idle",
-  },
-];
-
 function FanThresholdCard({
   host,
   payloadUp,
@@ -844,6 +837,7 @@ function FanThresholdCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [restored, setRestored] = useState<"done" | "restart" | null>(null);
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   const canSet = payloadUp && !!host.trim() && !busy;
 
@@ -879,6 +873,21 @@ function FanThresholdCard({
         FAN_THRESHOLD_MIN_C,
         Math.min(FAN_THRESHOLD_MAX_C, Math.round(targetC)),
       );
+      // It changes how hard the fans work and is re-applied on every helper load, so
+      // it is not a click to make by accident.
+      const ok = await confirm({
+        title: tr(
+          "hw_fan_confirm_title",
+          { c: clamped },
+          `Set the fan target to ${clamped} °C?`,
+        ),
+        message: tr(
+          "hw_fan_confirm_msg",
+          undefined,
+          "The console's fan control will work to hold this temperature, and ps5upload sets it again every time the helper loads. Lower is louder; higher lets the console run hotter.",
+        ),
+      });
+      if (!ok) return;
       setBusy(true);
       setError(null);
       setRestored(null);
@@ -893,11 +902,12 @@ function FanThresholdCard({
         setBusy(false);
       }
     },
-    [canSet, host],
+    [canSet, host, confirm, tr],
   );
 
   return (
     <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+      {confirmDialog}
       <header className="mb-3 flex items-center gap-2 text-xs uppercase tracking-wide text-[var(--color-muted)]">
         <Fan size={14} />
         <span className="font-semibold">
@@ -913,11 +923,11 @@ function FanThresholdCard({
           const active = lastSetC === p.c;
           return (
             <button
-              key={p.labelKey}
+              key={p.id}
               type="button"
               onClick={() => applyThreshold(p.c)}
               disabled={!canSet}
-              title={tr(p.hintKey, p.hintFallback)}
+              title={tr(p.hintKey, undefined, p.hintFallback)}
               className={`flex flex-col items-center gap-0.5 rounded-md border px-2 py-2 text-xs transition ${
                 active
                   ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
@@ -926,7 +936,7 @@ function FanThresholdCard({
             >
               <span className="flex items-center gap-1 font-medium">
                 {active && <Check size={10} />}
-                {tr(p.labelKey, p.labelFallback)}
+                {tr(p.labelKey, undefined, p.labelFallback)}
               </span>
               <span className="font-mono tabular-nums">{p.c}°C</span>
             </button>
@@ -1670,116 +1680,6 @@ function SmpMetaCard({
         <div className="mt-2 flex items-start gap-1 text-xs text-[var(--color-bad)]">
           <AlertTriangle size={11} className="mt-0.5 shrink-0" />
           <span className="font-mono break-all">{error}</span>
-        </div>
-      )}
-    </section>
-  );
-}
-
-/* ─── PS5 system log (kern.msgbuf) ──────────────────────────────────────
- * Collapsible diagnostic surface. Off by default — fetching ~128 KiB of
- * raw kernel log every render is wasteful AND most users never need it.
- * When expanded: one fetch on mount + a Refresh button. Auto-scrolled
- * to the bottom so the newest output is visible immediately.
- *
- * Powered by sysctl kern.msgbuf on the PS5 (the same source userland
- * `dmesg` reads). Useful for "the payload sent but no port" / "an app
- * crash I can't see in the UI" / "why did Sony reject my register".
- */
-type SystemLogSectionProps = {
-  host: string | null | undefined;
-  payloadStatus: ReturnType<
-    typeof useConnectionStore.getState
-  >["payloadStatus"];
-};
-
-function SystemLogSection({ host, payloadStatus }: SystemLogSectionProps) {
-  const tr = useTr();
-  const [open, setOpen] = useState(false);
-  const [text, setText] = useState<string>("");
-  const [busy, setBusy] = useState(false);
-  const [logErr, setLogErr] = useState<string | null>(null);
-  const fetchLog = useCallback(async () => {
-    if (!host?.trim() || payloadStatus !== "up") return;
-    setBusy(true);
-    setLogErr(null);
-    try {
-      const r = await invoke<{ text?: string }>("ps5_syslog_tail", {
-        addr: transferAddr(host),
-      });
-      setText(r.text ?? "");
-    } catch (e) {
-      setLogErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }, [host, payloadStatus]);
-  useEffect(() => {
-    if (!open) return;
-    void fetchLog();
-  }, [open, fetchLog]);
-  const lineCount = text ? text.split("\n").length : 0;
-  return (
-    <section className="mt-6 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-[var(--color-surface-2)]"
-        aria-expanded={open}
-      >
-        <span className="font-medium">
-          {tr("hw_syslog_title", undefined, "PS5 system log (kernel)")}
-        </span>
-        <span className="text-xs text-[var(--color-muted)]">
-          {open
-            ? tr("hw_syslog_collapse", undefined, "hide")
-            : tr(
-                "hw_syslog_expand",
-                undefined,
-                "show — read kern.msgbuf for diagnostics",
-              )}
-        </span>
-      </button>
-      {open && (
-        <div className="border-t border-[var(--color-border)] p-3">
-          <div className="mb-2 flex items-center gap-2 text-xs text-[var(--color-muted)]">
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={<RefreshCw size={12} />}
-              onClick={() => void fetchLog()}
-              disabled={busy || !host?.trim() || payloadStatus !== "up"}
-            >
-              {busy
-                ? tr("hw_syslog_loading", undefined, "Loading…")
-                : tr("refresh", undefined, "Refresh")}
-            </Button>
-            <span>
-              {tr(
-                "hw_syslog_meta",
-                { lines: lineCount.toLocaleString() },
-                "{lines} lines",
-              )}
-            </span>
-          </div>
-          {logErr && (
-            <div className="mb-2 text-xs text-[var(--color-bad)]">{logErr}</div>
-          )}
-          {text ? (
-            <pre className="max-h-[480px] overflow-auto rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-xs font-mono leading-snug whitespace-pre-wrap break-words">
-              {text}
-            </pre>
-          ) : (
-            <div className="text-xs text-[var(--color-muted)]">
-              {busy
-                ? tr("hw_syslog_loading", undefined, "Loading…")
-                : tr(
-                    "hw_syslog_empty",
-                    undefined,
-                    "No data yet — click Refresh.",
-                  )}
-            </div>
-          )}
         </div>
       )}
     </section>

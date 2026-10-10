@@ -38,6 +38,7 @@ import { payloadsCatalog, type PayloadInfo } from "../../api/ps5";
 import { isAndroid } from "../../lib/platform";
 import { isTauriEnv, safeUnlisten } from "../../lib/tauriEnv";
 import { log } from "../../state/logs";
+import { physicalPointInRect } from "./dropZone";
 
 /**
  * Playlist editor + runner panel for the SendPayload screen.
@@ -115,11 +116,7 @@ export function PlaylistsPanel({ host, port }: { host: string; port: number }) {
     const inZone = (pos: { x: number; y: number }): boolean => {
       const zone = dropZoneRef.current;
       if (!zone) return false;
-      const r = zone.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      const x = pos.x / dpr;
-      const y = pos.y / dpr;
-      return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+      return physicalPointInRect(pos, zone.getBoundingClientRect(), window.devicePixelRatio);
     };
     const p = getCurrentWebview().onDragDropEvent((e) => {
       if (cancelled) return;
@@ -268,6 +265,7 @@ export function PlaylistsPanel({ host, port }: { host: string; port: number }) {
       {!isAndroid() && (
         <div
           ref={dropZoneRef}
+          data-own-drop=""
           className={`mb-4 rounded-md border-2 border-dashed p-3 text-center text-xs transition-colors ${
             dropActive
               ? "border-[var(--color-accent)] bg-[var(--color-surface-3)]"
@@ -401,7 +399,7 @@ function AutoLoaderCard() {
           />
           <div className="min-w-0">
             <div className="text-xs font-semibold">
-              {tr("autoloader_title", undefined, "Auto-loader")}
+              {tr("autoloader_title_v2", undefined, "Playlist on connect")}
             </div>
             <p className="mt-0.5 text-xs text-[var(--color-muted)]">
               {tr(
@@ -471,9 +469,9 @@ function AutoLoaderCard() {
         <div className="mt-2 text-xs text-[var(--color-warn)]">
           {!selected
             ? tr(
-                "autoloader_warn_none",
+                "autoloader_warn_none_v2",
                 undefined,
-                "Pick a playlist for the auto-loader to run.",
+                "Pick a playlist to run on connect.",
               )
             : tr(
                 "autoloader_warn_empty",

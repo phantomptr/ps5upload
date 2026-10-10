@@ -95,7 +95,10 @@ function useCommands(close: () => void): Command[] {
     return [
       ...screens.map((i) => nav(i.to, i.key, i.fallback, NAV_KEYWORDS[i.to])),
       // Tabs worth jumping to directly.
-      nav("/payloads?tab=send", "payloads_tab_send", "Send payload", ["send payload"]),
+      // Send is desktop-only (the browser's Payloads screen has no Send tab).
+      ...(isTauriEnv()
+        ? [nav("/payloads?tab=send", "payloads_tab_send", "Send payload", ["send payload"])]
+        : []),
       nav("/logs?tab=kernel", "logs_tab_kernel", "Kernel log", ["dmesg", "klog"]),
       {
         id: "theme:toggle",

@@ -39,6 +39,7 @@ import {
   ErrorCard,
   ConnectionGate,
   GameIcon,
+  OverflowMenu,
   Spinner,
 } from "../../components";
 // Direct import to avoid the barrel's circular-dep warning at build.
@@ -773,11 +774,19 @@ export default function SavesScreen() {
         title={tr("saves_title", undefined, "Save data")}
         count={saves?.length}
         loading={loading}
-        description={tr(
-          "saves_description_v2",
-          undefined,
-          "Save data on the PS5, one entry per game. Back a game's saves up to a .zip on this computer and restore them later.",
-        )}
+        description={
+          isTauriEnv()
+            ? tr(
+                "saves_description_v2",
+                undefined,
+                "Save data on the PS5, one entry per game. Back a game's saves up to a .zip on this computer and restore them later.",
+              )
+            : tr(
+                "saves_description_browser",
+                undefined,
+                "Save data on the PS5, one entry per game. Backing saves up to a .zip and restoring them needs the desktop app; here you can see them and open their folders.",
+              )
+        }
         right={
           <div className="flex items-center gap-2">
             {isTauriEnv() && (
@@ -924,20 +933,6 @@ export default function SavesScreen() {
                         >
                           {tr("saves_download", undefined, "Backup")}
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          leftIcon={<HardDrive size={11} />}
-                          onClick={() => handleBackupToUsb(e)}
-                          disabled={isBusy(e.path) || bulkBackupBusy}
-                          title={tr(
-                            "saves_backup_usb_tooltip",
-                            undefined,
-                            "Back this save up to the USB save path configured in Settings, without leaving the PS5.",
-                          )}
-                        >
-                          {tr("saves_backup_usb", undefined, "Save to USB")}
-                        </Button>
                         {/* danger (red-bordered), NOT ghost like Backup: Restore
                             overwrites — wipes — the live PS5 save. It sat visually
                             identical to the harmless Backup button next to it,
@@ -957,20 +952,38 @@ export default function SavesScreen() {
                         >
                           {tr("saves_restore", undefined, "Restore")}
                         </Button>
-                        <Button
-                          variant="danger"
-                          size="sm"
-                          leftIcon={<HardDrive size={11} />}
-                          onClick={() => handleRestoreFromUsb(e)}
-                          disabled={isBusy(e.path) || bulkRestoreBusy}
-                          title={tr(
-                            "saves_restore_usb_tooltip",
-                            undefined,
-                            "Restore this save from its latest USB backup at the path configured in Settings, without leaving the PS5. Overwrites the live save.",
-                          )}
-                        >
-                          {tr("saves_restore_usb", undefined, "Restore from USB")}
-                        </Button>
+                        {/* Both USB actions in one menu: four buttons a row was too many. */}
+                        <OverflowMenu
+                          triggerLabel={tr("saves_usb_menu", undefined, "USB")}
+                          triggerIcon={<HardDrive size={11} />}
+                          ariaLabel={tr("saves_usb_menu_aria", undefined, "USB backup actions")}
+                          buttonTitle={tr("saves_usb_menu_aria", undefined, "USB backup actions")}
+                          items={[
+                            {
+                              label: tr("saves_backup_usb", undefined, "Save to USB"),
+                              icon: <HardDrive size={12} />,
+                              onSelect: () => handleBackupToUsb(e),
+                              disabled: isBusy(e.path) || bulkBackupBusy,
+                              title: tr(
+                                "saves_backup_usb_tooltip_v2",
+                                undefined,
+                                "Zip this save onto the drive at the save path set in Settings (a USB drive on the PS5). It is copied to this computer, zipped and sent back, so keep the app open; the copy here is deleted afterwards.",
+                              ),
+                            },
+                            {
+                              label: tr("saves_restore_usb", undefined, "Restore from USB"),
+                              icon: <UploadIcon size={12} />,
+                              onSelect: () => handleRestoreFromUsb(e),
+                              disabled: isBusy(e.path) || bulkRestoreBusy,
+                              destructive: true,
+                              title: tr(
+                                "saves_restore_usb_tooltip_v2",
+                                undefined,
+                                "Restore this save from its latest backup at the save path set in Settings. The zip is copied to this computer, unpacked and sent back to the PS5, so keep the app open. Overwrites the live save.",
+                              ),
+                            },
+                          ]}
+                        />
                       </>
                     )}
                   </li>

@@ -22,7 +22,8 @@ import { useConnectionStore } from "../../state/connection";
 import { mgmtAddr } from "../../lib/addr";
 import { useScrollLock } from "../../lib/useScrollLock";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
-import { PageHeader, Button, EmptyState, ErrorCard, Spinner, ConnectionGate } from "../../components";
+import { Button, EmptyState, ErrorCard, Spinner, ConnectionGate } from "../../components";
+import { CaptureToolbar } from "../Captures/CaptureToolbar";
 import { useTr } from "../../state/lang";
 import { pickPath } from "../../lib/pickPath";
 import { formatBytes } from "../../lib/format";
@@ -273,19 +274,25 @@ export default function VideosScreen({ tabs }: { tabs?: ReactNode } = {}) {
     <div className="app-page">
       {/* The Captures screen puts its Screenshots / Video clips switch here. */}
       {tabs}
-      <PageHeader
-        icon={VideoIcon}
-        title={tr("videos_title", undefined, "Video clips")}
+      <CaptureToolbar
         count={items?.length}
         loading={loading}
-        description={tr(
-          "videos_description_v2",
-          undefined,
-          "Video clips saved on the PS5 (its Capture Gallery). Download them to this computer as they are; no conversion is needed. To delete one, use Files.",
-        )}
+        description={
+          isTauriEnv()
+            ? tr(
+                "videos_description_v2",
+                undefined,
+                "Video clips saved on the PS5 (its Capture Gallery). Download them to this computer as they are; no conversion is needed. To delete one, use Files.",
+              )
+            : tr(
+                "videos_description_browser",
+                undefined,
+                "Video clips saved on the PS5 (its Capture Gallery). Download them as they are to a folder on the computer running ps5upload; no conversion is needed. To delete one, use Files.",
+              )
+        }
         right={
-          <div className="flex items-center gap-2">
-            {selected.size > 0 && isTauriEnv() && (
+          <>
+            {selected.size > 0 && (
               <Button
                 variant="primary"
                 size="sm"
@@ -311,7 +318,7 @@ export default function VideosScreen({ tabs }: { tabs?: ReactNode } = {}) {
             >
               {tr("refresh", undefined, "Refresh")}
             </Button>
-          </div>
+          </>
         }
       />
 
@@ -392,21 +399,20 @@ export default function VideosScreen({ tabs }: { tabs?: ReactNode } = {}) {
                       <Eye size={13} />
                     </button>
                   )}
-                  {isTauriEnv() && (
-                    <button
-                      type="button"
-                      onClick={() => void downloadOne(item)}
-                      disabled={rowBusy}
-                      className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
-                      aria-label={tr("videos_download", undefined, "Download")}
-                    >
-                      {rowBusy ? (
-                        <Spinner size={14} tone="inherit" />
-                      ) : (
-                        <Download size={13} />
-                      )}
-                    </button>
-                  )}
+                  {/* The browser build downloads too, into a folder on the engine's machine. */}
+                  <button
+                    type="button"
+                    onClick={() => void downloadOne(item)}
+                    disabled={rowBusy}
+                    className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
+                    aria-label={tr("videos_download", undefined, "Download")}
+                  >
+                    {rowBusy ? (
+                      <Spinner size={14} tone="inherit" />
+                    ) : (
+                      <Download size={13} />
+                    )}
+                  </button>
                 </li>
               );
             })}

@@ -51,7 +51,6 @@ const BackupScreen = lazyWithReload(() => import("./screens/Backup"));
 const LocalImageScreen = lazyWithReload(() => import("./screens/LocalImage"));
 const HealthScreen = lazyWithReload(() => import("./screens/Health"));
 const RemotePlayScreen = lazyWithReload(() => import("./screens/RemotePlay"));
-const FanCurveScreen = lazyWithReload(() => import("./screens/FanCurve"));
 const NotificationsScreen = lazyWithReload(() => import("./screens/Notifications"));
 const CheatsScreen = lazyWithReload(() => import("./screens/Cheats"));
 const GameActivityScreen = lazyWithReload(() => import("./screens/GameActivity"));
@@ -334,14 +333,9 @@ function AppRoutes({ location }: { location: Location }) {
             </Suspense>
           }
         />
-        <Route
-          path="/fan-curve"
-          element={
-            <Suspense fallback={<ScreenLoader />}>
-              <FanCurveScreen />
-            </Suspense>
-          }
-        />
+        {/* The console takes one fan target temperature, set on the Console
+            screen's fan card; a multi-point curve had nothing to drive. */}
+        <Route path="/fan-curve" element={<Navigate to="/console" replace />} />
         <Route
           path="/notifications"
           element={
@@ -395,11 +389,11 @@ function AppRoutes({ location }: { location: Location }) {
         <Route
           path="/payloads"
           element={
-            <NativeOnlyRoute>
-              <Suspense fallback={<ScreenLoader />}>
-                <PayloadsScreen />
-              </Suspense>
-            </NativeOnlyRoute>
+            // The browser build gets the ShadowMount+ and nanoDNS tabs only
+            // (screens/Payloads/payloadTabs.ts).
+            <Suspense fallback={<ScreenLoader />}>
+              <PayloadsScreen />
+            </Suspense>
           }
         />
         <Route path="/nanodns" element={<Navigate to="/payloads?tab=nanodns" replace />} />
@@ -407,10 +401,9 @@ function AppRoutes({ location }: { location: Location }) {
         <Route path="/shadowmount" element={<Navigate to="/payloads?tab=shadowmount" replace />} />
         {/* The wizard's whole point is step 2: download the payload ELFs to
             this machine and send them to the console over a raw socket.
-            Neither is possible from a browser, and the /payloads entry it
-            builds on is already hideInBrowser — so guard it the same way
-            rather than stranding self-hosted users on a wizard that dies
-            at step 2. */}
+            Neither is possible from a browser (the Payloads screen there has
+            no Catalog or Send tab), so guard it rather than stranding
+            self-hosted users on a wizard that dies at step 2. */}
         <Route
           path="/first-run"
           element={
@@ -471,9 +464,11 @@ function AppRoutes({ location }: { location: Location }) {
         <Route
           path="/shell"
           element={
-            <Suspense fallback={<ScreenLoader />}>
-              <ShellScreen />
-            </Suspense>
+            <NativeOnlyRoute>
+              <Suspense fallback={<ScreenLoader />}>
+                <ShellScreen />
+              </Suspense>
+            </NativeOnlyRoute>
           }
         />
         <Route

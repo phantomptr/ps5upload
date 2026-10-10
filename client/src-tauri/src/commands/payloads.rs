@@ -375,9 +375,11 @@ const CATALOGUE: &[CatalogueEntry] = &[
         // hint deliberately stops before the version — a pinned hint
         // would stop matching at the next release.
         id: "webkit-autoloader",
-        display_name: "WebKit Autoloader (installer)",
+        // Named for what it gives the user; the upstream name stays in brackets. Not
+        // to be confused with the USB payload stick or the playlist on connect.
+        display_name: "Browser payload menu (WebKit Autoloader installer)",
         role: "Loads payloads from the console's browser",
-        description: "Installs an autoloader reachable from the PS5's own web browser, so payloads can be launched from the console without sending them from a PC every time. One-shot installer ELF: send it, it installs, it exits. Run it after your kernel exploit, like any other payload.",
+        description: "Installs a payload menu in the PS5's own web browser, so payloads can be launched from the console without sending them from a PC every time. One-shot installer ELF: send it, it installs, it exits. Run it after your kernel exploit, like any other payload.",
         repo_host: "github.com",
         repo_owner: "itsPLK",
         repo_name: "ps5-webkit-autoloader",

@@ -55,7 +55,7 @@ export default function PowerTelemetryPanel({ mgmtAddr }: { mgmtAddr: string }) 
       <header className="mb-3 flex items-center gap-2">
         <Battery size={14} />
         <h3 className="flex-1 text-sm font-semibold">
-          {tr("power_telemetry_title", undefined, "Console health")}
+          {tr("power_telemetry_title_v2", undefined, "Lifetime counters")}
         </h3>
         <Button
           variant="ghost"
