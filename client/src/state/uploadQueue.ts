@@ -1870,7 +1870,8 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
       // The browser build reads the queue from localStorage (uploadQueueLoad has that branch),
       // so it hydrates too: without this a self-hosted UI forgot its whole queue on reload.
       try {
-        const doc = await uploadQueueLoad<Partial<QueueDocument>>();
+        // Nothing saved yet (a first run) loads as null.
+        const doc = (await uploadQueueLoad<Partial<QueueDocument>>()) ?? {};
         // Sanitise on load:
         // - any item "running" when the app closed is stranded
         //   (engine restarted with no memory of the job) — reset to

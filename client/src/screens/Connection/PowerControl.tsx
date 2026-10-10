@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { usePoll } from "../../lib/usePoll";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Power,
   RotateCw,
@@ -17,7 +18,6 @@ import { Button, Spinner } from "../../components";
 // Direct import to avoid the barrel's circular-dep warning at build.
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useTr } from "../../state/lang";
-import { useEffect } from "react";
 import { ddpStatus, powerWake, wakeAndSignIn, type DdpStatus } from "../../api/ps5";
 import { useRosterStore } from "../../state/roster";
 import { pushNotification } from "../../state/notifications";
@@ -60,21 +60,23 @@ export default function PowerControl({ host }: { host: string }) {
   const hasSessionKeys = !!registKey && !!rpKey;
   const [ddp, setDdp] = useState<DdpStatus | null>(null);
 
-  useEffect(() => {
+  // Shared poller: no overlap, nothing while hidden or while a transfer runs to this console.
+  const tickDdp = useCallback(async () => {
     if (!host) return;
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const s = await ddpStatus(host);
-        if (!cancelled) setDdp(s);
-      } catch {
-        if (!cancelled) setDdp(null);
-      }
-    };
-    void tick();
-    const id = setInterval(() => void tick(), 15000);
-    return () => { cancelled = true; clearInterval(id); };
+    const asked = host;
+    try {
+      const s = await ddpStatus(asked);
+      if (asked === hostRef.current) setDdp(s);
+    } catch {
+      if (asked === hostRef.current) setDdp(null);
+    }
   }, [host]);
+  const hostRef = useRef(host);
+  useEffect(() => {
+    hostRef.current = host;
+    setDdp(null);
+  }, [host]);
+  usePoll(tickDdp, 15000, { host, enabled: !!host });
 
   /* The console state and the stored credential together decide what the UI
      may offer — kept in one testable place rather than as scattered JSX

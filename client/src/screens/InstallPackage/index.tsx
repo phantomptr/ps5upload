@@ -1,3 +1,4 @@
+import { formatDate } from "../../lib/formatDate";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   failedStreamInstallIds,
@@ -176,7 +177,7 @@ function PkgRow({
             entry.originalName,
             entry.sourcePath,
             entry.uploadedAt
-              ? new Date(entry.uploadedAt).toLocaleString()
+              ? formatDate(new Date(entry.uploadedAt))
               : undefined,
             entry.contentId,
             entry.titleId,
@@ -363,7 +364,7 @@ function PkgRow({
                     {tr("pkglib.meta.uploaded", undefined, "Uploaded:")}
                   </span>
                   <span className="truncate tabular-nums">
-                    {new Date(entry.uploadedAt).toLocaleString()}
+                    {formatDate(new Date(entry.uploadedAt))}
                   </span>
                 </div>
               )}

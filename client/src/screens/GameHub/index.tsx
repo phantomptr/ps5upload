@@ -10,6 +10,7 @@
  * several consoles it is always clear which one a game starts or stops on.
  * Each tab fetches its own data when opened.
  */
+import { formatDate } from "../../lib/formatDate";
 import { useMakeWay } from "../../lib/useMakeWay";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router";
@@ -805,7 +806,7 @@ function SavesTab({ titleId, host }: { titleId: string; host: string | null }) {
                     </span>
                     {s.size > 0 && <span>· {formatBytes(s.size)}</span>}
                     {s.mtime > 0 && (
-                      <span>· {new Date(s.mtime * 1000).toLocaleString()}</span>
+                      <span>· {formatDate(new Date(s.mtime * 1000))}</span>
                     )}
                   </div>
                 </div>
@@ -1052,7 +1053,7 @@ function OverviewTab({
           {lastSeenMs && (
             <div className="flex justify-between">
               <dt className="text-[var(--color-muted)]">{tr("game_hub_last_played", undefined, "Last played")}</dt>
-              <dd>{new Date(lastSeenMs).toLocaleDateString()}</dd>
+              <dd>{formatDate(new Date(lastSeenMs), "date")}</dd>
             </div>
           )}
         </dl>

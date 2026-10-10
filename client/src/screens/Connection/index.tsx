@@ -1,3 +1,4 @@
+import { formatDate } from "../../lib/formatDate";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { getAppVersion } from "../../lib/appVersion";
@@ -1077,7 +1078,7 @@ function BundledPayloadBanner() {
   if (!info) return null;
   const built =
     info.mtime > 0
-      ? new Date(info.mtime * 1000).toLocaleString()
+      ? formatDate(new Date(info.mtime * 1000))
       : "unknown";
   // Last path segment for compactness — the full path goes in the tooltip.
   const basename = info.path.split(/[\\/]/).pop() ?? info.path;

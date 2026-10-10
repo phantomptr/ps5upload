@@ -1,3 +1,4 @@
+import { usePoll } from "../../lib/usePoll";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Cpu, RefreshCw, RotateCw, Skull, TriangleAlert, Layers } from "lucide-react";
 
@@ -127,13 +128,8 @@ export default function ProcessesScreen() {
   // Initial load + auto-refresh poll. Gated on window visibility (don't poll a
   // hidden window) and the auto-refresh toggle. Pausing keeps the last
   // snapshot; the manual button still works regardless.
-  useEffect(() => {
-    if (!online || !windowVisible) return;
-    void refresh();
-    if (!autoRefresh) return;
-    const id = window.setInterval(() => void refresh(), REFRESH_MS);
-    return () => window.clearInterval(id);
-  }, [refresh, autoRefresh, online, windowVisible]);
+  // The shared poller also stands aside while a transfer runs to this console.
+  usePoll(refresh, autoRefresh ? REFRESH_MS : null, { host: addr, enabled: online && windowVisible });
 
   const doKill = useCallback(
     async (p: ProcessInfo) => {

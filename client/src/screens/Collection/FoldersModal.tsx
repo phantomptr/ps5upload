@@ -1,3 +1,4 @@
+import { formatDate } from "../../lib/formatDate";
 import { useEffect, useState } from "react";
 import { FolderPlus, Server, Trash2 } from "lucide-react";
 
@@ -214,7 +215,7 @@ export function FoldersModal({
         <p className="mt-3 text-xs text-[var(--color-muted)]">
           {tr(
             "collection.last_scan",
-            { date: new Date(library.generated_at).toLocaleString() },
+            { date: formatDate(new Date(library.generated_at)) },
             "Last scanned {date}",
           )}
         </p>

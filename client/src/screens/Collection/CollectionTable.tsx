@@ -1,3 +1,4 @@
+import { formatDate } from "../../lib/formatDate";
 import type { CollectionGame } from "../../api/collection";
 import { PlatformBadge, Table } from "../../components";
 import { addOnCount, formatCollectionBytes } from "../../lib/collectionView";
@@ -66,7 +67,7 @@ export function CollectionTable({
           key: "added",
           header: tr("collection.col.added", undefined, "Added"),
           cell: (g) =>
-            g.added_at ? new Date(g.added_at).toLocaleDateString() : "—",
+            g.added_at ? formatDate(new Date(g.added_at), "date") : "—",
         },
       ]}
     />

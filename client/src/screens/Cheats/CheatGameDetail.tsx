@@ -1,3 +1,4 @@
+import { formatDate } from "../../lib/formatDate";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, CheckCircle2, Download, Trash2 } from "lucide-react";
 
@@ -40,7 +41,7 @@ function sourceName(repoId: string): string {
 function formatDbDate(v: string | null): string | null {
   if (!v) return null;
   const d = new Date(v.replace(" ", "T").replace(/\.\d+$/, "") + "Z");
-  return Number.isNaN(d.getTime()) ? v : d.toLocaleDateString();
+  return Number.isNaN(d.getTime()) ? v : formatDate(d, "date");
 }
 
 /** One game: who it is, the cheats on the console to switch on, and the

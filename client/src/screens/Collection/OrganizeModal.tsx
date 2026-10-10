@@ -1,3 +1,4 @@
+import { formatDate } from "../../lib/formatDate";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, Undo2 } from "lucide-react";
 
@@ -372,7 +373,7 @@ export function OrganizeModal({
                 className="flex flex-wrap items-center gap-2 rounded-2xl border border-[var(--glass-edge)] bg-[var(--color-surface)] p-2 text-xs"
               >
                 <span className="text-[var(--color-text)]">
-                  {new Date(r.created_at).toLocaleString()}
+                  {formatDate(new Date(r.created_at))}
                 </span>
                 <span className="text-[var(--color-muted)]">
                   {tr("collection.org_run_moved", { n: r.moved }, "{n} moved")}

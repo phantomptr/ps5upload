@@ -1,3 +1,4 @@
+import { formatDate } from "../../lib/formatDate";
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { Check, Copy, FolderOpen, Link2, PackageOpen, Trash2, Upload } from "lucide-react";
@@ -181,12 +182,12 @@ export function CopyRow({
           ? loc.date_source === "created"
             ? tr(
                 "collection.added_on",
-                { date: new Date(loc.added_at).toLocaleString() },
+                { date: formatDate(new Date(loc.added_at)) },
                 "Added {date}",
               )
             : tr(
                 "collection.modified_on",
-                { date: new Date(loc.added_at).toLocaleString() },
+                { date: formatDate(new Date(loc.added_at)) },
                 "Last changed {date}",
               )
           : null}
