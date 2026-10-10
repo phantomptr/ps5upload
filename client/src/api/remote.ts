@@ -87,7 +87,7 @@ const idPath = (id: string) => `/connections/${encodeURIComponent(id)}`;
 
 export const remoteApi = {
   async list(): Promise<Connection[]> {
-    return (await call<{ connections: Connection[] }>("GET", "/connections")).connections;
+    return (await call<{ connections?: Connection[] }>("GET", "/connections")).connections ?? [];
   },
   add(c: ConnectionInput, s: SecretInput = {}): Promise<Connection> {
     return call("POST", "/connections", { connection: c, ...s });
