@@ -3469,6 +3469,14 @@ remotePlay_check_account_hint_v2: "Эта учётная запись ни ра�
 remotePlay_open_profile: "Открыть «Профиль»",
 v5_qa_ready: "Готово",
 v5_qa_unavailable: "Недоступно",
+"fpkg.stage.pack": "Упаковка ресурсов LZ4",
+"fpkg.image.lz4": "Пакеты ресурсов AMPR LZ4 (меньше, для ShadowMount+)",
+"fpkg.image.lz4_body": "Упаковывает данные игры в пакеты ресурсов LZ4, которые считывает собственный ampr_emu игры (fakelib/libSceAmpr.sprx), поэтому образ получается меньше. Исполняемые файлы, системные файлы и уже сжатые медиафайлы остаются как есть. Только обычный .exfat, без сжатия .ffpfsc.",
+"fpkg.image.lz4_unavailable": "Недоступно для этой игры: {reason}",
+"fpkg.image.lz4_runtime": "ampr_emu игры: {version}",
+"fpkg.image.lz4_profile": "Использовать профиль (.toml)…",
+"fpkg.image.lz4_profile_named": "Профиль: {name}",
+"fpkg.image.lz4_profile_clear": "Использовать встроенный профиль",
 };
 
 export default ru;

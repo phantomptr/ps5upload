@@ -3535,6 +3535,14 @@ usb_wizard_title_v2: "USB पेलोड स्टिक",
 v5_qa_ready: "तैयार",
 v5_qa_unavailable: "उपलब्ध नहीं",
 videos_description_browser: "PS5 पर सेव किए वीडियो क्लिप (इसकी कैप्चर गैलरी)। इन्हें जैसे हैं वैसे ही ps5upload चला रहे कंप्यूटर के किसी फ़ोल्डर में डाउनलोड करें; कोई कन्वर्ज़न ज़रूरी नहीं। किसी को हटाने के लिए फ़ाइलें इस्तेमाल करें।",
+"fpkg.stage.pack": "LZ4 एसेट पैक करें",
+"fpkg.image.lz4": "AMPR LZ4 एसेट पैक (छोटा, ShadowMount+ के लिए)",
+"fpkg.image.lz4_body": "गेम का डेटा LZ4 एसेट पैक में भरता है, जिन्हें गेम का अपना ampr_emu (fakelib/libSceAmpr.sprx) वापस पढ़ता है, इसलिए इमेज छोटी बनती है। एक्ज़िक्यूटेबल, सिस्टम फ़ाइलें और पहले से संपीड़ित मीडिया जैसे हैं वैसे ही रहते हैं। केवल सादा .exfat, .ffpfsc संपीड़न के बिना।",
+"fpkg.image.lz4_unavailable": "इस गेम के लिए उपलब्ध नहीं: {reason}",
+"fpkg.image.lz4_runtime": "गेम का ampr_emu: {version}",
+"fpkg.image.lz4_profile": "प्रोफ़ाइल (.toml) इस्तेमाल करें…",
+"fpkg.image.lz4_profile_named": "प्रोफ़ाइल: {name}",
+"fpkg.image.lz4_profile_clear": "बिल्ट-इन प्रोफ़ाइल इस्तेमाल करें",
 };
 
 export default hi;

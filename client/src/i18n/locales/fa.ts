@@ -3852,6 +3852,14 @@ usb_wizard_title_v2: "فلش USB payload",
 v5_qa_ready: "آماده",
 v5_qa_unavailable: "در دسترس نیست",
 videos_description_browser: "کلیپ‌های ویدیویی ذخیره‌شده روی PS5 (گالری ضبط آن). آن‌ها را همان‌طور که هستند در پوشه‌ای روی کامپیوتری که ps5upload را اجرا می‌کند دانلود کنید؛ نیازی به تبدیل نیست. برای حذف یکی، از فایل‌ها استفاده کنید.",
+"fpkg.stage.pack": "بسته‌بندی دارایی‌های LZ4",
+"fpkg.image.lz4": "بسته‌های دارایی AMPR LZ4 (کوچک‌تر، برای ShadowMount+)",
+"fpkg.image.lz4_body": "داده‌های بازی را در بسته‌های دارایی LZ4 می‌گذارد که ampr_emu خود بازی (fakelib/libSceAmpr.sprx) دوباره آن‌ها را می‌خواند، بنابراین ایمیج کوچک‌تر می‌شود. فایل‌های اجرایی، فایل‌های سیستمی و رسانه‌هایی که از قبل فشرده شده‌اند دست‌نخورده می‌مانند. فقط برای .exfat ساده، بدون فشرده‌سازی .ffpfsc.",
+"fpkg.image.lz4_unavailable": "برای این بازی در دسترس نیست: {reason}",
+"fpkg.image.lz4_runtime": "ampr_emu بازی: {version}",
+"fpkg.image.lz4_profile": "استفاده از یک پروفایل (.toml)…",
+"fpkg.image.lz4_profile_named": "پروفایل: {name}",
+"fpkg.image.lz4_profile_clear": "استفاده از پروفایل داخلی",
 };
 
 export default fa;

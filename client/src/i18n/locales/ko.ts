@@ -3538,6 +3538,14 @@ usb_wizard_title_v2: "USB 페이로드 스틱",
 v5_qa_ready: "준비됨",
 v5_qa_unavailable: "사용할 수 없음",
 videos_description_browser: "PS5에 저장된 비디오 클립(캡처 갤러리)입니다. ps5upload를 실행 중인 컴퓨터의 폴더로 그대로 다운로드하세요. 변환은 필요 없습니다. 삭제하려면 파일을 사용하세요.",
+"fpkg.stage.pack": "LZ4 에셋 패킹",
+"fpkg.image.lz4": "AMPR LZ4 에셋 팩 (더 작음, ShadowMount+용)",
+"fpkg.image.lz4_body": "게임 데이터를 LZ4 에셋 팩으로 묶고, 게임 자체의 ampr_emu(fakelib/libSceAmpr.sprx)가 이를 다시 읽어 들이므로 이미지가 더 작아집니다. 실행 파일, 시스템 파일, 이미 압축된 미디어는 그대로 둡니다. .ffpfsc 압축 없이 일반 .exfat에서만 사용할 수 있습니다.",
+"fpkg.image.lz4_unavailable": "이 게임에서는 사용할 수 없음: {reason}",
+"fpkg.image.lz4_runtime": "게임의 ampr_emu: {version}",
+"fpkg.image.lz4_profile": "프로필(.toml) 사용…",
+"fpkg.image.lz4_profile_named": "프로필: {name}",
+"fpkg.image.lz4_profile_clear": "기본 제공 프로필 사용",
 };
 
 export default ko;

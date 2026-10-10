@@ -3519,6 +3519,14 @@ usb_wizard_title_v2: "ذاكرة USB للحمولات",
 v5_qa_ready: "جاهز",
 v5_qa_unavailable: "غير متاح",
 videos_description_browser: "مقاطع الفيديو المحفوظة على PS5 (معرض الالتقاط). نزّلها كما هي إلى مجلد على الكمبيوتر الذي يشغّل ps5upload؛ لا حاجة لأي تحويل. لحذف أحدها، استخدم «الملفات».",
+"fpkg.stage.pack": "حزم أصول LZ4",
+"fpkg.image.lz4": "حزم أصول AMPR LZ4 (أصغر، لـ ShadowMount+)",
+"fpkg.image.lz4_body": "يحزم بيانات اللعبة في حزم أصول LZ4 يقرؤها ampr_emu الخاص باللعبة (fakelib/libSceAmpr.sprx)، فتصبح الصورة أصغر. تبقى الملفات التنفيذية وملفات النظام والوسائط المضغوطة مسبقًا كما هي. لصيغة .exfat العادية فقط، دون ضغط .ffpfsc.",
+"fpkg.image.lz4_unavailable": "غير متاح لهذه اللعبة: {reason}",
+"fpkg.image.lz4_runtime": "ampr_emu الخاص باللعبة: {version}",
+"fpkg.image.lz4_profile": "استخدام ملف تعريف (.toml)…",
+"fpkg.image.lz4_profile_named": "ملف التعريف: {name}",
+"fpkg.image.lz4_profile_clear": "استخدام ملف التعريف المدمج",
 };
 
 export default ar;

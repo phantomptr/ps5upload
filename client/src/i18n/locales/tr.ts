@@ -3526,6 +3526,14 @@ usb_wizard_title_v2: "USB yük belleği",
 v5_qa_ready: "Hazır",
 v5_qa_unavailable: "Kullanılamıyor",
 videos_description_browser: "PS5'te kaydedilen video klipler (Yakalama Galerisi). Bunları olduğu gibi ps5upload'ı çalıştıran bilgisayardaki bir klasöre indirin; dönüştürme gerekmez. Birini silmek için Dosyalar'ı kullanın.",
+"fpkg.stage.pack": "LZ4 varlıklarını paketle",
+"fpkg.image.lz4": "AMPR LZ4 varlık paketleri (daha küçük, ShadowMount+ için)",
+"fpkg.image.lz4_body": "Oyunun verilerini, oyunun kendi ampr_emu'sunun (fakelib/libSceAmpr.sprx) geri okuduğu LZ4 varlık paketlerine yerleştirir; böylece imaj küçülür. Çalıştırılabilir dosyalar, sistem dosyaları ve zaten sıkıştırılmış medya olduğu gibi kalır. Yalnızca düz .exfat, .ffpfsc sıkıştırması olmadan.",
+"fpkg.image.lz4_unavailable": "Bu oyun için kullanılamıyor: {reason}",
+"fpkg.image.lz4_runtime": "Oyunun ampr_emu'su: {version}",
+"fpkg.image.lz4_profile": "Profil kullan (.toml)…",
+"fpkg.image.lz4_profile_named": "Profil: {name}",
+"fpkg.image.lz4_profile_clear": "Yerleşik profili kullan",
 };
 
 export default tr;

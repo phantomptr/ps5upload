@@ -3469,6 +3469,14 @@ usb_wizard_title_v2: "USB payload 隨身碟",
 v5_qa_ready: "就緒",
 v5_qa_unavailable: "無法使用",
 videos_description_browser: "儲存在 PS5 上的影片片段（其媒體庫）。將它們原樣下載到執行 ps5upload 的電腦上的資料夾；不需要轉換。要刪除，請使用「檔案」。",
+"fpkg.stage.pack": "打包 LZ4 資源",
+"fpkg.image.lz4": "AMPR LZ4 資源包（更小，用於 ShadowMount+）",
+"fpkg.image.lz4_body": "把遊戲資料打包成 LZ4 資源包，由遊戲自帶的 ampr_emu（fakelib/libSceAmpr.sprx）讀回，讓映像更小。執行檔、系統檔案和已壓縮的媒體保持原樣。僅適用於一般 .exfat，不能與 .ffpfsc 壓縮同時使用。",
+"fpkg.image.lz4_unavailable": "此遊戲無法使用：{reason}",
+"fpkg.image.lz4_runtime": "遊戲的 ampr_emu：{version}",
+"fpkg.image.lz4_profile": "使用設定檔（.toml）…",
+"fpkg.image.lz4_profile_named": "設定檔：{name}",
+"fpkg.image.lz4_profile_clear": "使用內建設定檔",
 };
 
 export default zh_TW;

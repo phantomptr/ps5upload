@@ -3536,6 +3536,14 @@ usb_wizard_title_v2: "Pendrive de payloads",
 v5_qa_ready: "Pronto",
 v5_qa_unavailable: "Indisponível",
 videos_description_browser: "Clipes de vídeo salvos no PS5 (a Galeria de capturas). Baixe-os como estão para uma pasta no computador que executa o ps5upload; nenhuma conversão é necessária. Para excluir um, use Arquivos.",
+"fpkg.stage.pack": "Empacotar recursos LZ4",
+"fpkg.image.lz4": "Pacotes de recursos AMPR LZ4 (menor, para ShadowMount+)",
+"fpkg.image.lz4_body": "Empacota os dados do jogo em pacotes de recursos LZ4 que o próprio ampr_emu do jogo (fakelib/libSceAmpr.sprx) lê de volta, deixando a imagem menor. Executáveis, arquivos de sistema e mídias já compactadas ficam como estão. Somente .exfat simples, sem compactação .ffpfsc.",
+"fpkg.image.lz4_unavailable": "Indisponível para este jogo: {reason}",
+"fpkg.image.lz4_runtime": "ampr_emu do jogo: {version}",
+"fpkg.image.lz4_profile": "Usar um perfil (.toml)…",
+"fpkg.image.lz4_profile_named": "Perfil: {name}",
+"fpkg.image.lz4_profile_clear": "Usar o perfil integrado",
 };
 
 export default pt_BR;

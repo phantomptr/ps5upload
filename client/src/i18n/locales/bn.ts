@@ -3519,6 +3519,14 @@ usb_wizard_title_v2: "USB পেলোড স্টিক",
 v5_qa_ready: "প্রস্তুত",
 v5_qa_unavailable: "অনুপলব্ধ",
 videos_description_browser: "PS5-এ সংরক্ষিত ভিডিও ক্লিপ (এর ক্যাপচার গ্যালারি)। ps5upload চালানো কম্পিউটারের একটি ফোল্ডারে যেমন আছে তেমনই ডাউনলোড করুন; কোনো রূপান্তর দরকার নেই। একটি মুছতে ফাইল ব্যবহার করুন।",
+"fpkg.stage.pack": "LZ4 অ্যাসেট প্যাক করুন",
+"fpkg.image.lz4": "AMPR LZ4 অ্যাসেট প্যাক (ছোট, ShadowMount+-এর জন্য)",
+"fpkg.image.lz4_body": "গেমের ডেটা LZ4 অ্যাসেট প্যাকে ভরে, যা গেমের নিজস্ব ampr_emu (fakelib/libSceAmpr.sprx) আবার পড়ে নেয়, তাই ইমেজ ছোট হয়। এক্সিকিউটেবল, সিস্টেম ফাইল এবং আগে থেকেই সংকুচিত মিডিয়া যেমন আছে তেমনই থাকে। শুধু সাধারণ .exfat-এর জন্য, .ffpfsc সংকোচন ছাড়া।",
+"fpkg.image.lz4_unavailable": "এই গেমের জন্য উপলব্ধ নয়: {reason}",
+"fpkg.image.lz4_runtime": "গেমের ampr_emu: {version}",
+"fpkg.image.lz4_profile": "একটি প্রোফাইল (.toml) ব্যবহার করুন…",
+"fpkg.image.lz4_profile_named": "প্রোফাইল: {name}",
+"fpkg.image.lz4_profile_clear": "বিল্ট-ইন প্রোফাইল ব্যবহার করুন",
 };
 
 export default bn;

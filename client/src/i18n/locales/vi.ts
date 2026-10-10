@@ -3521,6 +3521,14 @@ usb_wizard_title_v2: "USB payload",
 v5_qa_ready: "Sẵn sàng",
 v5_qa_unavailable: "Không khả dụng",
 videos_description_browser: "Đoạn video lưu trên PS5 (Thư viện ảnh chụp). Tải chúng về nguyên dạng vào một thư mục trên máy tính đang chạy ps5upload; không cần chuyển đổi. Để xóa video, dùng Tệp.",
+"fpkg.stage.pack": "Đóng gói tài nguyên LZ4",
+"fpkg.image.lz4": "Gói tài nguyên AMPR LZ4 (nhỏ hơn, cho ShadowMount+)",
+"fpkg.image.lz4_body": "Đóng gói dữ liệu của game vào các gói tài nguyên LZ4 mà chính ampr_emu của game (fakelib/libSceAmpr.sprx) đọc lại, nhờ đó ảnh đĩa nhỏ hơn. Tệp thực thi, tệp hệ thống và phương tiện đã nén sẵn được giữ nguyên. Chỉ dùng với .exfat thường, không nén .ffpfsc.",
+"fpkg.image.lz4_unavailable": "Không khả dụng cho game này: {reason}",
+"fpkg.image.lz4_runtime": "ampr_emu của game: {version}",
+"fpkg.image.lz4_profile": "Dùng hồ sơ (.toml)…",
+"fpkg.image.lz4_profile_named": "Hồ sơ: {name}",
+"fpkg.image.lz4_profile_clear": "Dùng hồ sơ có sẵn",
 };
 
 export default vi;

@@ -3528,6 +3528,14 @@ usb_wizard_title_v2: "USB เพย์โหลด",
 v5_qa_ready: "พร้อม",
 v5_qa_unavailable: "ไม่พร้อมใช้งาน",
 videos_description_browser: "คลิปวิดีโอที่บันทึกบน PS5 (แกลเลอรีภาพที่จับไว้) ดาวน์โหลดตามต้นฉบับไปยังโฟลเดอร์บนคอมพิวเตอร์ที่รัน ps5upload ไม่ต้องแปลงไฟล์ หากต้องการลบ ให้ใช้ไฟล์",
+"fpkg.stage.pack": "แพ็กแอสเซ็ต LZ4",
+"fpkg.image.lz4": "แพ็กแอสเซ็ต AMPR LZ4 (เล็กลง สำหรับ ShadowMount+)",
+"fpkg.image.lz4_body": "แพ็กข้อมูลของเกมเป็นแพ็กแอสเซ็ต LZ4 ซึ่ง ampr_emu ของตัวเกมเอง (fakelib/libSceAmpr.sprx) จะอ่านกลับ ทำให้อิมเมจเล็กลง ไฟล์ปฏิบัติการ ไฟล์ระบบ และสื่อที่บีบอัดอยู่แล้วจะคงไว้ตามเดิม ใช้ได้กับ .exfat ธรรมดาเท่านั้น โดยไม่มีการบีบอัด .ffpfsc",
+"fpkg.image.lz4_unavailable": "ใช้ไม่ได้กับเกมนี้: {reason}",
+"fpkg.image.lz4_runtime": "ampr_emu ของเกม: {version}",
+"fpkg.image.lz4_profile": "ใช้โปรไฟล์ (.toml)…",
+"fpkg.image.lz4_profile_named": "โปรไฟล์: {name}",
+"fpkg.image.lz4_profile_clear": "ใช้โปรไฟล์ในตัว",
 };
 
 export default th;

@@ -3528,6 +3528,14 @@ usb_wizard_title_v2: "Stik payload USB",
 v5_qa_ready: "Siap",
 v5_qa_unavailable: "Tidak tersedia",
 videos_description_browser: "Klip video yang disimpan di PS5 (Galeri Tangkapan-nya). Unduh apa adanya ke folder di komputer yang menjalankan ps5upload; tidak perlu konversi. Untuk menghapusnya, gunakan Berkas.",
+"fpkg.stage.pack": "Kemas aset LZ4",
+"fpkg.image.lz4": "Paket aset AMPR LZ4 (lebih kecil, untuk ShadowMount+)",
+"fpkg.image.lz4_body": "Mengemas data game ke dalam paket aset LZ4 yang dibaca kembali oleh ampr_emu milik game itu sendiri (fakelib/libSceAmpr.sprx), sehingga image jadi lebih kecil. Berkas eksekusi, berkas sistem, dan media yang sudah terkompresi tetap apa adanya. Hanya .exfat biasa, tanpa kompresi .ffpfsc.",
+"fpkg.image.lz4_unavailable": "Tidak tersedia untuk game ini: {reason}",
+"fpkg.image.lz4_runtime": "ampr_emu milik game: {version}",
+"fpkg.image.lz4_profile": "Gunakan profil (.toml)…",
+"fpkg.image.lz4_profile_named": "Profil: {name}",
+"fpkg.image.lz4_profile_clear": "Gunakan profil bawaan",
 };
 
 export default id;

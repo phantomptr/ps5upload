@@ -3835,6 +3835,14 @@ remotePlay_check_account_hint_v2: "Ezt a fiókot még soha nem aktiválták, ez�
 remotePlay_open_profile: "Profil megnyitása",
 v5_qa_ready: "Kész",
 v5_qa_unavailable: "Nem elérhető",
+"fpkg.stage.pack": "LZ4-erőforrások csomagolása",
+"fpkg.image.lz4": "AMPR LZ4 erőforráscsomagok (kisebb, ShadowMount+-hoz)",
+"fpkg.image.lz4_body": "A játék adatait LZ4 erőforráscsomagokba rendezi, amelyeket a játék saját ampr_emu-ja (fakelib/libSceAmpr.sprx) olvas vissza, így a képfájl kisebb lesz. A futtatható fájlok, a rendszerfájlok és a már tömörített médiafájlok változatlanok maradnak. Csak sima .exfat esetén, .ffpfsc-tömörítés nélkül.",
+"fpkg.image.lz4_unavailable": "Ehhez a játékhoz nem érhető el: {reason}",
+"fpkg.image.lz4_runtime": "A játék ampr_emu-ja: {version}",
+"fpkg.image.lz4_profile": "Profil használata (.toml)…",
+"fpkg.image.lz4_profile_named": "Profil: {name}",
+"fpkg.image.lz4_profile_clear": "A beépített profil használata",
 };
 
 export default hu;

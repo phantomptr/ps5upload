@@ -3540,6 +3540,14 @@ usb_wizard_title_v2: "USB ペイロードスティック",
 v5_qa_ready: "準備完了",
 v5_qa_unavailable: "利用不可",
 videos_description_browser: "PS5 に保存されたビデオクリップ（キャプチャーギャラリー）。ps5upload を実行しているコンピューター上のフォルダーにそのままダウンロードできます。変換は不要です。削除するには「ファイル」を使ってください。",
+"fpkg.stage.pack": "LZ4 アセットをパック",
+"fpkg.image.lz4": "AMPR LZ4 アセットパック（小さく、ShadowMount+ 向け）",
+"fpkg.image.lz4_body": "ゲームのデータを LZ4 アセットパックにまとめ、ゲーム自身の ampr_emu（fakelib/libSceAmpr.sprx）が読み戻すため、イメージが小さくなります。実行ファイル、システムファイル、圧縮済みのメディアはそのまま残ります。通常の .exfat のみで、.ffpfsc 圧縮とは併用できません。",
+"fpkg.image.lz4_unavailable": "このゲームでは使用できません: {reason}",
+"fpkg.image.lz4_runtime": "ゲームの ampr_emu: {version}",
+"fpkg.image.lz4_profile": "プロファイル（.toml）を使う…",
+"fpkg.image.lz4_profile_named": "プロファイル: {name}",
+"fpkg.image.lz4_profile_clear": "内蔵プロファイルを使う",
 };
 
 export default ja;

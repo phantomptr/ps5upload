@@ -3775,6 +3775,14 @@ remotePlay_check_account_hint_v2: "To konto nigdy nie zostało aktywowane, więc
 remotePlay_open_profile: "Otwórz Profil",
 v5_qa_ready: "Gotowe",
 v5_qa_unavailable: "Niedostępne",
+"fpkg.stage.pack": "Pakowanie zasobów LZ4",
+"fpkg.image.lz4": "Paczki zasobów AMPR LZ4 (mniejszy, dla ShadowMount+)",
+"fpkg.image.lz4_body": "Pakuje dane gry do paczek zasobów LZ4, które odczytuje własny ampr_emu gry (fakelib/libSceAmpr.sprx), dzięki czemu obraz jest mniejszy. Pliki wykonywalne, pliki systemowe i już skompresowane multimedia pozostają bez zmian. Tylko zwykły .exfat, bez kompresji .ffpfsc.",
+"fpkg.image.lz4_unavailable": "Niedostępne dla tej gry: {reason}",
+"fpkg.image.lz4_runtime": "ampr_emu gry: {version}",
+"fpkg.image.lz4_profile": "Użyj profilu (.toml)…",
+"fpkg.image.lz4_profile_named": "Profil: {name}",
+"fpkg.image.lz4_profile_clear": "Użyj wbudowanego profilu",
 };
 
 export default pl;
