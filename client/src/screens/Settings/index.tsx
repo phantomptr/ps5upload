@@ -12,8 +12,6 @@ import {
   AlertTriangle,
   Sun,
   Moon,
-  MoonStar,
-  Flower2,
   Gauge,
   Bell,
   Zap,
@@ -1358,10 +1356,8 @@ function BackupRestorePanel() {
   );
 }
 
-/** Three-way theme picker. The sidebar's existing theme button cycles
- *  through dark → light → oled, but a settings-page picker is more
- *  discoverable and lets the user jump straight to OLED without
- *  cycling through light. */
+/** Light or dark. The theme button elsewhere flips between the two; here
+ *  both are shown with what each looks like. */
 function ThemePicker() {
   const tr = useTr();
   const theme = useThemeStore((s) => s.theme);
@@ -1373,57 +1369,38 @@ function ThemePicker() {
     icon: React.ReactNode;
   }> = [
     {
-      value: "dark",
-      label: tr("theme_dark", undefined, "PS5 Dark"),
-      description: tr(
-        "theme_dark_hint",
-        undefined,
-        "Default. The console's black-plastic charcoal, PlayStation-blue accent.",
-      ),
-      icon: <Moon size={14} />,
-    },
-    {
       value: "light",
-      label: tr("theme_light", undefined, "PS5 Light"),
+      label: tr("theme_light", undefined, "Light"),
       description: tr(
         "theme_light_hint",
         undefined,
-        "The console's white-plastic panels — clean, bright, cool white.",
+        "Daytime colours, high readability.",
       ),
       icon: <Sun size={14} />,
     },
     {
-      value: "oled",
-      label: tr("theme_oled", undefined, "OLED"),
+      value: "dark",
+      label: tr("theme_dark", undefined, "Dark"),
       description: tr(
-        "theme_oled_hint",
+        "theme_dark_hint",
         undefined,
-        "Pure-#000 background. Mitigates burn-in on OLED panels.",
+        "Default. Slight surface elevation, balanced contrast.",
       ),
-      icon: <MoonStar size={14} />,
-    },
-    {
-      value: "rose",
-      label: tr("theme_rose", undefined, "Rose"),
-      description: tr(
-        "theme_rose_hint",
-        undefined,
-        "Warm, bright, and soft — built around a bold rose accent.",
-      ),
-      icon: <Flower2 size={14} />,
+      icon: <Moon size={14} />,
     },
   ];
   return (
-    <div className="space-y-2">
+    <div className="grid gap-2 sm:grid-cols-2">
       {options.map((o) => (
         <button
           key={o.value}
           type="button"
           onClick={() => setTheme(o.value)}
-          className={`flex w-full items-start gap-2 rounded-md border p-2 text-left ${
+          aria-pressed={theme === o.value}
+          className={`flex w-full items-start gap-2 rounded-[var(--radius-card)] border p-3 text-left transition-colors ${
             theme === o.value
-              ? "border-[var(--color-accent)] bg-[var(--color-surface)]"
-              : "border-[var(--color-border)] hover:bg-[var(--color-surface)]"
+              ? "border-[var(--color-accent)] bg-[var(--color-surface-raised)] shadow-[var(--shadow-1)]"
+              : "border-[var(--color-border)] hover:bg-[var(--color-surface-raised)]"
           }`}
         >
           <span className="mt-0.5">{o.icon}</span>

@@ -1,45 +1,52 @@
 import { create } from "zustand";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
-/** Three-way theme:
- *    dark — original default; balanced colours, slight elevation
- *    light — daytime colours, high readability under strong ambient
- *    oled — pure-#000 background variant of dark; mitigates OLED
- *           burn-in for users running this app on an OLED panel
- *           (it's small but persistent UI, so risk is real)
+/** Two modes: light (the warm daytime atmosphere) and dark (the same
+ *  language at night). Earlier versions also had "oled" and "rose"; a stored
+ *  value from those is read as its nearest mode (see `normalizeTheme`).
  *
  *  Storage key kept at the original "ps5upload.theme" so users don't
  *  lose their setting across the upgrade. */
-export type Theme = "dark" | "light" | "oled" | "rose";
+export type Theme = "dark" | "light";
 
 const STORAGE_KEY = "ps5upload.theme";
 
-const VALID_THEMES: Theme[] = ["dark", "light", "oled", "rose"];
+/** A stored or mirrored theme value → one of the two modes. "oled" was a
+ *  darker dark and "rose" a warmer light, so each keeps the user on the side
+ *  they picked. Anything unknown is null (the caller picks the default). */
+export function normalizeTheme(value: unknown): Theme | null {
+  switch (value) {
+    case "dark":
+    case "oled":
+      return "dark";
+    case "light":
+    case "rose":
+      return "light";
+    default:
+      return null;
+  }
+}
 
-/** The cycle order the toggle button steps through. */
-const THEME_CYCLE: Theme[] = ["dark", "light", "oled", "rose"];
-
-/** Next theme in the toggle cycle (wraps around). Pure → unit-tested so the
- *  4-theme order (Rose was added later; the wrap-around is easy to break)
- *  stays locked. An unknown current theme restarts the cycle at the front. */
+/** The other mode: the toggle flips between the two. */
 export function nextTheme(current: Theme): Theme {
-  const idx = THEME_CYCLE.indexOf(current);
-  return THEME_CYCLE[(idx + 1) % THEME_CYCLE.length];
+  return current === "light" ? "dark" : "light";
 }
 
 /** Read the persisted theme synchronously so the first paint is correct.
  *  Returning "dark" as the fallback keeps parity with the app's historical
- *  look for users who've never toggled. */
+ *  look for users who've never toggled. A legacy value is rewritten in place
+ *  so the stored key only ever holds one of the two modes from here on. */
 function initialTheme(): Theme {
   if (typeof window === "undefined") return "dark";
-  const stored = safeGetItem(STORAGE_KEY) as Theme | null;
-  return stored && VALID_THEMES.includes(stored) ? stored : "dark";
+  const stored = safeGetItem(STORAGE_KEY);
+  const theme = normalizeTheme(stored) ?? "dark";
+  if (stored !== null && stored !== theme) safeSetItem(STORAGE_KEY, theme);
+  return theme;
 }
 
-/** Write the theme attribute onto <html>. Our `index.css` keys both
- *  the light and oled overrides off `:root[data-theme="<name>"]`; the
- *  dark theme is the attribute-less default so we remove the attr
- *  rather than set it. */
+/** Write the theme attribute onto <html>. `index.css` keys the light tokens
+ *  off `:root[data-theme="light"]`; dark is the attribute-less default, so
+ *  we remove the attr rather than set it. */
 function applyTheme(theme: Theme) {
   if (typeof document === "undefined") return;
   if (theme === "dark") {
@@ -52,9 +59,7 @@ function applyTheme(theme: Theme) {
 interface ThemeState {
   theme: Theme;
   setTheme: (theme: Theme) => void;
-  /** Cycles dark → light → oled → dark. Three clicks returns to
-   *  the starting theme. The picker in Settings (when one exists)
-   *  can call setTheme directly for a non-cyclic UX. */
+  /** Flips light ↔ dark. */
   toggleTheme: () => void;
 }
 

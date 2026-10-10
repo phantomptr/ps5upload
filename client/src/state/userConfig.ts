@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { isTauriEnv } from "../lib/tauriEnv";
 
-import { useThemeStore, type Theme } from "./theme";
+import { normalizeTheme, useThemeStore, type Theme } from "./theme";
 import { useLangStore } from "./lang";
 import { useKeepAwakeStore } from "./keepAwake";
 import { useUploadSettingsStore } from "./uploadSettings";
@@ -203,13 +203,10 @@ export async function hydrateFromUserConfig(): Promise<void> {
   // store one statement above, so the equality always held in practice.
   // Drop the no-op guard and rely on the value-inequality check.
   const liveTheme = useThemeStore.getState().theme;
-  if (
-    (data.theme === "dark" ||
-      data.theme === "light" ||
-      data.theme === "oled") &&
-    data.theme !== liveTheme
-  ) {
-    useThemeStore.getState().setTheme(data.theme);
+  // A settings file from an older version may still say "oled" or "rose".
+  const diskTheme = normalizeTheme(data.theme);
+  if (diskTheme && diskTheme !== liveTheme) {
+    useThemeStore.getState().setTheme(diskTheme);
   }
   const liveLang = useLangStore.getState().lang;
   if (typeof data.lang === "string" && data.lang !== liveLang) {
