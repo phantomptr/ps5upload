@@ -485,16 +485,21 @@ pub(crate) fn console_addr(addr: &str) -> String {
 
 /// The console a destructive request (delete, move, unregister, power, ...) acts on. It must
 /// name one: falling back to the engine's default console could delete files on, or power off,
-/// a console the user was not looking at. `Err` is the 400 to answer with.
-fn required_console_addr(addr: Option<String>) -> Result<String, axum::response::Response> {
-    match addr.as_deref().map(str::trim) {
-        Some(a) if !a.is_empty() => Ok(console_addr(a)),
-        _ => Err(json_err(
-            StatusCode::BAD_REQUEST,
-            "addr is required: say which console this acts on",
-        )
-        .into_response()),
-    }
+/// a console the user was not looking at. `None`: answer with [`missing_console_addr`].
+fn required_console_addr(addr: Option<String>) -> Option<String> {
+    addr.as_deref()
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .map(console_addr)
+}
+
+/// The 400 for a destructive request that names no console.
+fn missing_console_addr() -> axum::response::Response {
+    json_err(
+        StatusCode::BAD_REQUEST,
+        "addr is required: say which console this acts on",
+    )
+    .into_response()
 }
 
 fn console_addr_or_default(addr: Option<String>, default_addr: &str) -> String {
@@ -2224,9 +2229,8 @@ async fn ps5_fs_delete(
     Json(req): Json<FsPathReq>,
 ) -> impl IntoResponse {
     // Destructive: acts only on the console the request names, never the default one.
-    let addr = match required_console_addr(req.addr) {
-        Ok(a) => a,
-        Err(missing) => return missing.into_response(),
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
     };
     let path = req.path;
     let op_id = req.op_id;
@@ -2283,9 +2287,8 @@ async fn ps5_fs_move(
     Json(req): Json<FsMoveReq>,
 ) -> impl IntoResponse {
     // Destructive: acts only on the console the request names, never the default one.
-    let addr = match required_console_addr(req.addr) {
-        Ok(a) => a,
-        Err(missing) => return missing.into_response(),
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
     };
     let from = req.from;
     let to = req.to;
@@ -2600,9 +2603,8 @@ async fn ps5_app_unregister(
     Json(req): Json<AppUnregisterReq>,
 ) -> impl IntoResponse {
     // Destructive: acts only on the console the request names, never the default one.
-    let addr = match required_console_addr(req.addr) {
-        Ok(a) => a,
-        Err(missing) => return missing.into_response(),
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
     };
     let title_id = req.title_id;
     let started = std::time::Instant::now();
@@ -3503,9 +3505,8 @@ async fn ps5_process_kill(
     Json(req): Json<ProcessKillReq>,
 ) -> impl IntoResponse {
     // Destructive: acts only on the console the request names, never the default one.
-    let addr = match required_console_addr(req.addr) {
-        Ok(a) => a,
-        Err(missing) => return missing.into_response(),
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
     };
     let pid = req.pid;
     let r: Result<ProcessKillAck, anyhow::Error> =
@@ -3534,9 +3535,8 @@ async fn ps5_power_control(
     Json(req): Json<PowerControlReq>,
 ) -> impl IntoResponse {
     // Destructive: acts only on the console the request names, never the default one.
-    let addr = match required_console_addr(req.addr) {
-        Ok(a) => a,
-        Err(missing) => return missing.into_response(),
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
     };
     let action = match req.action.as_str() {
         "reboot" => PowerAction::Reboot,
@@ -6624,9 +6624,8 @@ async fn user_delete_handler(
     Json(req): Json<UserDeleteReq>,
 ) -> impl IntoResponse {
     // Destructive: acts only on the console the request names, never the default one.
-    let addr = match required_console_addr(req.addr) {
-        Ok(a) => a,
-        Err(missing) => return missing.into_response(),
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
     };
     let uid = req.uid;
     let wipe_saves = req.wipe_saves;
@@ -6704,9 +6703,8 @@ async fn backup_restore_handler(
     Json(req): Json<BackupRestoreReq>,
 ) -> impl IntoResponse {
     // Destructive: acts only on the console the request names, never the default one.
-    let addr = match required_console_addr(req.addr) {
-        Ok(a) => a,
-        Err(missing) => return missing.into_response(),
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
     };
     let tag = req.tag;
     let ts = req.timestamp;
@@ -6737,9 +6735,8 @@ async fn backup_delete_handler(
     Json(req): Json<BackupDeleteReq>,
 ) -> impl IntoResponse {
     // Destructive: acts only on the console the request names, never the default one.
-    let addr = match required_console_addr(req.addr) {
-        Ok(a) => a,
-        Err(missing) => return missing.into_response(),
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
     };
     let tag = req.tag;
     let ts = req.timestamp;
@@ -7094,9 +7091,8 @@ async fn cheats_delete_handler(
     Query(q): Query<CheatsDeleteQuery>,
 ) -> impl IntoResponse {
     // Destructive: acts only on the console the request names, never the default one.
-    let addr = match required_console_addr(q.addr) {
-        Ok(a) => a,
-        Err(missing) => return missing.into_response(),
+    let Some(addr) = required_console_addr(q.addr) else {
+        return missing_console_addr();
     };
     let title_id = q.title_id;
     let r = tokio::task::spawn_blocking(move || {
@@ -11114,13 +11110,13 @@ mod helpers_tests {
     #[test]
     fn a_destructive_request_must_name_its_console() {
         assert_eq!(
-            required_console_addr(Some(" 10.0.0.7:1234 ".into())).ok(),
+            required_console_addr(Some(" 10.0.0.7:1234 ".into())),
             Some("10.0.0.7".to_string())
         );
         for missing in [None, Some(String::new()), Some("  ".into())] {
-            let resp = required_console_addr(missing).unwrap_err();
-            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(required_console_addr(missing), None);
         }
+        assert_eq!(missing_console_addr().status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
