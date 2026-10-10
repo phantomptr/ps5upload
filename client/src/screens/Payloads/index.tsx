@@ -43,9 +43,9 @@ export default function PayloadsScreen() {
       key: "payloads_tab_catalog",
       fallback: "Catalog",
       description: tr(
-        "payloads_description_catalog",
+        "payloads_description_catalog_v2",
         undefined,
-        "Curated third-party PS5 homebrew payloads. Check for the latest release, download once, then send to your PS5 with one click. Versions cache locally so you can also bundle a USB autoloader stick.",
+        "Curated third-party PS5 homebrew payloads. Check for the latest release, download once, then send to your PS5 with one click. Versions cache locally so you can also put them on a USB payload stick.",
       ),
     },
     {

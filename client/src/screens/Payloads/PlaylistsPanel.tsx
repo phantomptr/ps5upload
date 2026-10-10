@@ -399,7 +399,7 @@ function AutoLoaderCard() {
           />
           <div className="min-w-0">
             <div className="text-xs font-semibold">
-              {tr("autoloader_title", undefined, "Auto-loader")}
+              {tr("autoloader_title_v2", undefined, "Playlist on connect")}
             </div>
             <p className="mt-0.5 text-xs text-[var(--color-muted)]">
               {tr(
@@ -469,9 +469,9 @@ function AutoLoaderCard() {
         <div className="mt-2 text-xs text-[var(--color-warn)]">
           {!selected
             ? tr(
-                "autoloader_warn_none",
+                "autoloader_warn_none_v2",
                 undefined,
-                "Pick a playlist for the auto-loader to run.",
+                "Pick a playlist to run on connect.",
               )
             : tr(
                 "autoloader_warn_empty",

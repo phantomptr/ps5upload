@@ -108,7 +108,7 @@ export default function UsbAutoloaderModal({
     <Modal
       open
       onClose={onClose}
-      title={tr("usb_wizard_title", undefined, "USB autoloader wizard")}
+      title={tr("usb_wizard_title_v2", undefined, "USB payload stick")}
       titleIcon={<HardDrive size={16} />}
       size="xl"
     >

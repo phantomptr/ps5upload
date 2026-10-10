@@ -412,9 +412,9 @@ export default function CatalogPanel() {
               onClick={() => setUsbWizardOpen(true)}
             >
               {tr(
-                "payloads_open_usb_wizard",
+                "payloads_open_usb_wizard_v2",
                 undefined,
-                "Set up USB autoloader",
+                "Make a USB payload stick",
               )}
             </Button>
           </div>
