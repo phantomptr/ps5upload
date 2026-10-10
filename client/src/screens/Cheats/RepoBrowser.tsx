@@ -302,9 +302,9 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && void handleSearch()}
               placeholder={tr(
-                "cheats_search_placeholder",
+                "cheats_search_placeholder_v2",
                 undefined,
-                "Search by game name or CUSA ID...",
+                "Search by game name or title ID (e.g. PPSA07631)",
               )}
               className="input flex-1"
               autoFocus
@@ -435,9 +435,9 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
           {!searching && entries.length === 0 && !error && (
             <div className="py-8 text-center text-sm text-[var(--color-muted)]">
               {tr(
-                "cheats_search_hint",
+                "cheats_search_hint_v2",
                 undefined,
-                "Enter a game name or title ID (e.g. CUSA00001) and press Search",
+                "Enter a game name or title ID (e.g. PPSA07631 or CUSA00900) and press Search",
               )}
             </div>
           )}
