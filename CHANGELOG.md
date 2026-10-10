@@ -4,6 +4,60 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 7.0.0
+
+A new look for the whole app, built around a soft, calm feel, plus a long list of fixes that
+make it faster and harder to break.
+
+### New look
+
+- **Two themes, light and dark,** both new: a warm peach-to-lavender light theme and a deep,
+  glowing dark one. Panels are frosted glass with rounded corners, navigation and buttons are
+  pills, and the app uses the Poppins typeface. Your old theme choice carries over (OLED becomes
+  dark, Rose becomes light).
+- **Home** opens with large tiles for Upload, Install, Games, Files, Save data and Convert, a
+  greeting panel with your console's status, and a row of your most recent games.
+- **Game covers** sit in white frames everywhere, and each game's page opens with a large cover
+  and the facts at a glance.
+- Every screen was brought into the new style, on desktop and on phones (a floating tab bar).
+- Light mode no longer shows dark bands or an invisible page title (the cause was in how the
+  styles were built).
+
+### New
+
+- **AMPR LZ4 asset packs for game images.** For a backported game that uses ampr_emu 0.4 or
+  newer, Convert can pack its assets with LZ4 inside an exFAT image for ShadowMount+, often much
+  smaller. The game's `ampr_emu.index` is now always rebuilt from the files actually packaged.
+- **Install updates and DLC from the game page**, right where they are listed.
+- **Delete screenshots and clips** from Captures.
+- **Missed reminders** show in Tasks with Run now.
+- `scripts/update-ps5-sdk.sh` (`make update-sdk`) moves the payload SDK to its latest release.
+
+### Fixed
+
+- An upload no longer shows as failed after one missed status check; after several it says it
+  lost contact and keeps checking, so a retry never starts a second copy.
+- Status checks pause while the window is hidden and while an upload runs to that console, so
+  they no longer slow transfers down.
+- Progress updates no longer resend a job's whole file list (megabytes for large games).
+- A Convert & install run installs on the console it was started for.
+- Package builds, image builds and installs that crash no longer stay "running" forever or block
+  the console's next install.
+- Link downloads resume after an interruption instead of refusing with "file exists".
+- The Collection reads each console with far fewer calls, and a failed read keeps what was known.
+- Cancelling a running job shows an error if the cancel fails, instead of hiding the job.
+- The game page never shows the game you just left; running-game badges follow the right console.
+- Sizes use one unit everywhere (GiB, MiB/s); dates follow the app's language.
+- Package builder fixes: DLC packages get the DLC content class, and failed builds leave no
+  partial files behind.
+- Retry buttons on error cards across the app.
+
+### Changed
+
+- The payload is built with PS5 Payload SDK v0.44.
+
+---
+
 ## 6.8.2
 
 A clean-up release: every screen was gone through for things that no longer make sense, and
