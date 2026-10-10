@@ -145,13 +145,10 @@ pub fn run() {
     }));
     let app = builder
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_shell::init())
         // Opener: the cross-platform way to open external URLs / reveal files.
-        // Unlike the shell plugin's `open` (which tries to spawn a system
-        // opener process and fails on Android with "No such file or directory"),
-        // the opener plugin uses an Android Intent — so in-app links AND the
-        // self-update "open the APK/release in the browser" flow work on mobile.
+        // It uses an Android Intent rather than spawning a system opener
+        // process, so in-app links AND the self-update "open the APK/release
+        // in the browser" flow work on mobile.
         .plugin(tauri_plugin_opener::init())
         // Native OS notifications. The renderer mirrors important in-app
         // inbox entries to the system notification center / Android shade
@@ -226,8 +223,6 @@ pub fn run() {
             commands::transfer_file,
             commands::transfer_dir,
             commands::transfer_zip,
-            commands::bps_inspect,
-            commands::bps_apply,
             commands::zip_inspect,
             commands::zip_inspect_stream,
             commands::transfer_7z,
@@ -239,7 +234,6 @@ pub fn run() {
             commands::profile_set_username,
             commands::profile_rename_user,
             commands::profile_activate,
-            commands::profile_clear_slot,
             commands::user_create,
             commands::user_delete,
             commands::backup_snapshot,
@@ -252,11 +246,8 @@ pub fn run() {
             commands::health_junk,
             commands::health_fix,
             commands::remoteplay_readiness,
-            commands::remoteplay_devices,
             commands::remoteplay_enable,
             commands::remoteplay_cancel,
-            commands::fan_curve_set,
-            commands::fan_curve_get,
             commands::notif_list,
             commands::notif_clear,
             commands::activity_reset,
@@ -278,7 +269,6 @@ pub fn run() {
             commands::sdk_scan,
             commands::sdk_patch,
             commands::sdk_restore,
-            commands::tmdb_fetch,
             commands::fw_spoof_status,
             commands::profile_avatar_preview,
             commands::profile_avatar_current,
@@ -306,14 +296,11 @@ pub fn run() {
             commands::ps5_game_icon_data,
             commands::collection_cover_data,
             commands::ps5_appinfo_query,
-            commands::ps5_appinfo_set,
             commands::ps5_syslog_tail,
             commands::ps5_hw_storage,
             commands::ps5_hw_drive_sensors,
             commands::ps5_time_get,
             commands::ps5_time_sync,
-            commands::ps5_time_state_get,
-            commands::ps5_time_state_set,
             commands::ps5_hw_set_fan_threshold,
             commands::ps5_smp_meta_control,
             commands::ps5_smp_meta_stats,
@@ -340,7 +327,6 @@ pub fn run() {
             // Engine proxies for the new Install Package tab. Single
             // path: parse local .pkg → host over HTTP → tell payload to
             // call sceBgftService* → poll status.
-            commands::pkg_metadata,
             commands::pkg_metadata_split,
             // Read-only UFS2 image inspector (browse a local .ffpkg
             // before uploading). See ps5upload_pkg::ufs2.
@@ -361,8 +347,6 @@ pub fn run() {
             commands::pkg_install,
             commands::pkg_install_status_v2,
             commands::pkg_install_stop,
-            commands::pkg_install_history,
-            commands::pkg_install_cancel,
             commands::host_net_open_settings,
             commands::host_net_allow_firewall,
             // ── Scene-tool integration ──────────────────────────────
@@ -428,7 +412,6 @@ pub fn run() {
             commands::power_standby,
             commands::power_tick,
             commands::power_telemetry_get,
-            commands::user_list_get,
             commands::process_list_get,
             commands::process_kill_pid,
             // ── Save data + screenshot listing ──────────────────────
@@ -479,11 +462,6 @@ pub fn run() {
             // ── In-app screenshot capture (bug-report gallery) ──────
             commands::bug_screenshots::screenshot_save,
             commands::bug_screenshots::screenshot_list,
-            // ── Filesystem search index (payload-side) ──────────────
-            commands::fs_index_start,
-            commands::fs_index_status,
-            commands::fs_search_index,
-            commands::fs_index_cancel,
             // ── App lifecycle (suspend/resume/kill/list) + toast ────
             commands::app_suspend,
             commands::app_resume,
@@ -491,27 +469,21 @@ pub fn run() {
             commands::app_list_running,
             commands::toast_push,
             // ── Diagnostics: klog stream, net interfaces, peripheral
-            //    control (BD/USB power), loaded module enumeration ──
+            //    control (disc, BD power, beep, LED), loaded modules ──
             commands::klog_chunk,
             commands::net_interfaces_get,
             commands::peripheral_eject,
             commands::peripheral_bd_off,
             commands::peripheral_bd_on,
-            commands::peripheral_usb_off,
-            commands::peripheral_usb_on,
             commands::peripheral_beep,
             commands::peripheral_led,
             commands::peripheral_led_dim,
             commands::proc_modules_get,
             commands::proc_list_get,
-            // Shell + CRC32 + app.db query + net speed test
+            // Shell + CRC32 + app.db query
             commands::shell_run_cmd,
             commands::crc32_file_get,
             commands::appdb_query_get,
-            commands::net_speed_test_run,
-            commands::pkg_direct_mount_run,
-            commands::ufs_fsck_run,
-            commands::lwfs_mount_run,
             commands::fs_write_bytes_run,
             commands::fs_read_preview,
             commands::fs_blake3_hash,
@@ -575,8 +547,6 @@ pub fn run() {
             commands::local_storage_roots,
             commands::storage_access_granted,
             commands::request_storage_access,
-            commands::acquire_multicast_lock,
-            commands::release_multicast_lock,
         ])
         .build(tauri::generate_context!())
         .expect("tauri runtime failed to build");

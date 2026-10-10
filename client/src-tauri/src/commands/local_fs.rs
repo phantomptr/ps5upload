@@ -141,32 +141,16 @@ pub async fn request_storage_access() -> Result<(), String> {
 }
 
 /// Acquire a Wi-Fi MulticastLock so mDNS discovery receives multicast
-/// frames. Android-only; no-op on desktop. Called by discover_ps5 before
-/// starting the mDNS browse.
-#[tauri::command]
+/// frames. Called by discover_ps5 before starting the mDNS browse.
+#[cfg(target_os = "android")]
 pub async fn acquire_multicast_lock() -> Result<(), String> {
-    #[cfg(target_os = "android")]
-    {
-        android::acquire_multicast_lock()
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        Ok(())
-    }
+    android::acquire_multicast_lock()
 }
 
 /// Release the MulticastLock acquired by `acquire_multicast_lock`.
-/// Android-only; no-op on desktop.
-#[tauri::command]
+#[cfg(target_os = "android")]
 pub async fn release_multicast_lock() -> Result<(), String> {
-    #[cfg(target_os = "android")]
-    {
-        android::release_multicast_lock()
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        Ok(())
-    }
+    android::release_multicast_lock()
 }
 
 #[cfg(test)]

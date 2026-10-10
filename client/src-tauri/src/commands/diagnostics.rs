@@ -1,8 +1,8 @@
 //! Tauri command wrappers for the diagnostics RPCs.
 
 use ps5upload_core::diagnostics::{
-    appdb_query, crc32_file, fs_write_bytes, klog_read, lwfs_mount, net_interfaces, net_speed_test,
-    peripheral_control, pkg_direct_mount, proc_modules, shell_run, ufs_fsck, PeripheralAction,
+    appdb_query, crc32_file, fs_write_bytes, klog_read, net_interfaces, peripheral_control,
+    proc_modules, shell_run, PeripheralAction,
 };
 use ps5upload_core::fs_ops::{fs_hash, fs_read_with_timeout};
 use ps5upload_core::hw::proc_list;
@@ -38,14 +38,6 @@ pub async fn peripheral_bd_off(addr: String) -> Result<JsonValue, String> {
 #[tauri::command]
 pub async fn peripheral_bd_on(addr: String) -> Result<JsonValue, String> {
     invoke_periph(addr, PeripheralAction::BdPowerOn, 0).await
-}
-#[tauri::command]
-pub async fn peripheral_usb_off(addr: String, port: i32) -> Result<JsonValue, String> {
-    invoke_periph(addr, PeripheralAction::UsbPortOff, port).await
-}
-#[tauri::command]
-pub async fn peripheral_usb_on(addr: String, port: i32) -> Result<JsonValue, String> {
-    invoke_periph(addr, PeripheralAction::UsbPortOn, port).await
 }
 
 #[tauri::command]
@@ -136,36 +128,6 @@ pub async fn appdb_query_get(addr: String) -> Result<JsonValue, String> {
         .map_err(|e| format!("appdb: {e}"))
 }
 
-#[tauri::command]
-pub async fn net_speed_test_run(
-    addr: String,
-    round_trips: Option<u32>,
-) -> Result<JsonValue, String> {
-    let n = round_trips.unwrap_or(32);
-    tokio::task::spawn_blocking(move || net_speed_test(&addr, n))
-        .await
-        .map_err(|e| format!("speedtest task: {e}"))?
-        .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({})))
-        .map_err(|e| format!("speedtest: {e}"))
-}
-
-#[tauri::command]
-pub async fn pkg_direct_mount_run(
-    addr: String,
-    pkg_path: String,
-    mount_point: Option<String>,
-) -> Result<JsonValue, String> {
-    tokio::task::spawn_blocking(move || pkg_direct_mount(&addr, &pkg_path, mount_point.as_deref()))
-        .await
-        .map_err(|e| format!("pkgmount task: {e}"))?
-        .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({})))
-        .map_err(|e| format!("pkgmount: {e}"))
-}
-
-/// Read up to `max_bytes` of a PS5-side file as base64. The renderer
-/// uses this to preview small text files inline (decoding to UTF-8)
-/// or render small images via `data:image/...;base64,<…>` URLs.
-/// Capped at 256 KB on the payload side; the cap here mirrors that.
 /// Compute the BLAKE3 hash of a PS5-side file. Mirrors the FS_HASH
 /// frame used internally by the reconcile path; surfaces it directly
 /// for the verifier panel + any caller that wants crypto-strength
@@ -186,6 +148,10 @@ pub async fn fs_blake3_hash(addr: String, path: String) -> Result<JsonValue, Str
         .map_err(|e| format!("hash: {e}"))
 }
 
+/// Read up to `max_bytes` of a PS5-side file as base64. The renderer
+/// uses this to preview small text files inline (decoding to UTF-8)
+/// or render small images via `data:image/...;base64,<…>` URLs.
+/// Capped at 256 KB on the payload side; the cap here mirrors that.
 #[tauri::command]
 pub async fn fs_read_preview(
     addr: String,
@@ -216,20 +182,6 @@ pub async fn fs_read_preview(
     }))
 }
 
-#[tauri::command]
-pub async fn ufs_fsck_run(
-    addr: String,
-    device: String,
-    repair: Option<bool>,
-) -> Result<JsonValue, String> {
-    let r = repair.unwrap_or(false);
-    tokio::task::spawn_blocking(move || ufs_fsck(&addr, &device, r))
-        .await
-        .map_err(|e| format!("fsck task: {e}"))?
-        .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({})))
-        .map_err(|e| format!("fsck: {e}"))
-}
-
 /// Write a small file (≤256 KB) atomically. `bytes_b64` is the
 /// already-base64-encoded payload — the renderer is in the best
 /// position to base64-encode (Web APIs do this trivially) and it
@@ -251,25 +203,4 @@ pub async fn fs_write_bytes_run(
         .map_err(|e| format!("write task: {e}"))?
         .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({})))
         .map_err(|e| format!("write: {e}"))
-}
-
-#[tauri::command]
-pub async fn lwfs_mount_run(
-    addr: String,
-    patch_path: String,
-    mount_point: Option<String>,
-    title_id: Option<String>,
-) -> Result<JsonValue, String> {
-    tokio::task::spawn_blocking(move || {
-        lwfs_mount(
-            &addr,
-            &patch_path,
-            mount_point.as_deref(),
-            title_id.as_deref(),
-        )
-    })
-    .await
-    .map_err(|e| format!("lwfs task: {e}"))?
-    .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({})))
-    .map_err(|e| format!("lwfs: {e}"))
 }

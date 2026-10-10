@@ -236,23 +236,6 @@ describe("engine-backed commands the web UI depends on (#300)", () => {
     expect(calls[0].url).toBe(`${B}/api/ps5/notif/list?since_seq=0`);
   });
 
-  it("sends refresh only when it is actually set", async () => {
-    // The engine parses `refresh` as a string, so `refresh=false` reads
-    // as truthy and would force a cache-busting refetch every time.
-    const calls = captureFetch({});
-    await browserInvoke("tmdb_fetch", {
-      req: { addr: null, title_id: "CUSA03474", refresh: false, region: null },
-    });
-    expect(calls[0].url).toBe(`${B}/api/ps5/tmdb/fetch?title_id=CUSA03474`);
-
-    await browserInvoke("tmdb_fetch", {
-      req: { addr: null, title_id: "CUSA03474", refresh: true, region: null },
-    });
-    expect(calls[1].url).toBe(
-      `${B}/api/ps5/tmdb/fetch?title_id=CUSA03474&refresh=true`,
-    );
-  });
-
   it("drops an empty backup tag the way the Rust command does", async () => {
     const calls = captureFetch({ snapshots: [] });
     await browserInvoke("backup_list", { req: { addr: null, tag: "" } });

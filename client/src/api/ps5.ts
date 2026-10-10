@@ -256,14 +256,6 @@ export async function profileActivate(
   return assertOk(resp, "Activate profile");
 }
 
-/** De-activate (clear id+flags) an offline-account slot. */
-export async function profileClearSlot(
-  slot: number,
-  addr?: string,
-): Promise<void> {
-  await invoke("profile_clear_slot", { req: { addr: addr ?? null, slot } });
-}
-
 /** Create a new local user account. Returns the new user's uid. */
 export async function userCreate(
   name: string,
@@ -2354,30 +2346,6 @@ export async function powerTelemetryGet(addr: string): Promise<PowerTelemetry> {
   return invoke<PowerTelemetry>("power_telemetry_get", { addr });
 }
 
-// ─── User account enumeration ─────────────────────────────────────────
-
-export interface UserAccount {
-  id: number;
-  name: string;
-  /** True for the currently-active foreground user. */
-  foreground: boolean;
-  /** Sony API error code from sceUserServiceGetUserName. 0 = ok. */
-  err_name: number;
-}
-
-export interface UserList {
-  /** User id of the foreground user, or -1 when unavailable. */
-  foreground: number;
-  err_fg: number;
-  err_list: number;
-  users: UserAccount[];
-}
-
-/** Enumerate logged-in user accounts on the PS5. */
-export async function userListGet(addr: string): Promise<UserList> {
-  return invoke<UserList>("user_list_get", { addr });
-}
-
 // ─── Save data + screenshot listing ───────────────────────────────────
 
 export interface SaveEntry {
@@ -2576,61 +2544,6 @@ export async function saveArchiveRestorePrepare(
   );
 }
 
-// ─── Filesystem search index ──────────────────────────────────────────
-
-export interface IndexStartResult {
-  started: boolean;
-  err?: string;
-}
-
-export interface IndexStatusResult {
-  phase: "idle" | "building" | "ready";
-  files: number;
-  started_at: number;
-  completed_at: number;
-}
-
-export interface SearchIndexHit {
-  path: string;
-  size: number;
-}
-
-export interface SearchResults {
-  results: SearchIndexHit[];
-}
-
-export async function fsIndexStart(
-  addr: string,
-  roots?: string[],
-): Promise<IndexStartResult> {
-  return invoke<IndexStartResult>("fs_index_start", {
-    addr,
-    roots: roots ?? null,
-  });
-}
-
-export async function fsIndexStatus(addr: string): Promise<IndexStatusResult> {
-  return invoke<IndexStatusResult>("fs_index_status", { addr });
-}
-
-export async function fsSearchIndex(
-  addr: string,
-  query: string,
-  opts?: { sizeMin?: number; sizeMax?: number; limit?: number },
-): Promise<SearchResults> {
-  return invoke<SearchResults>("fs_search_index", {
-    addr,
-    query,
-    sizeMin: opts?.sizeMin ?? null,
-    sizeMax: opts?.sizeMax ?? null,
-    limit: opts?.limit ?? null,
-  });
-}
-
-export async function fsIndexCancel(addr: string): Promise<void> {
-  return invoke<void>("fs_index_cancel", { addr });
-}
-
 // ─── App lifecycle + rich toast ───────────────────────────────────────
 
 export interface RunningApp {
@@ -2742,20 +2655,6 @@ export async function peripheralBdOff(addr: string): Promise<PeripheralAck> {
 /** ok-checked-by-caller: PeripheralPanel's run() checks ok once for every action. */
 export async function peripheralBdOn(addr: string): Promise<PeripheralAck> {
   return invoke<PeripheralAck>("peripheral_bd_on", { addr });
-}
-/** ok-checked-by-caller: PeripheralPanel's run() checks ok once for every action. */
-export async function peripheralUsbOff(
-  addr: string,
-  port: number,
-): Promise<PeripheralAck> {
-  return invoke<PeripheralAck>("peripheral_usb_off", { addr, port });
-}
-/** ok-checked-by-caller: PeripheralPanel's run() checks ok once for every action. */
-export async function peripheralUsbOn(
-  addr: string,
-  port: number,
-): Promise<PeripheralAck> {
-  return invoke<PeripheralAck>("peripheral_usb_on", { addr, port });
 }
 /** Sound the console's beeper once (pattern 0-3).
  *  ok-checked-by-caller: PeripheralPanel's run() checks ok once for every action. */
@@ -2869,79 +2768,11 @@ export async function appdbQuery(addr: string): Promise<AppDbList> {
   return invoke<AppDbList>("appdb_query_get", { addr });
 }
 
-export interface NetSpeedTestResult {
-  round_trips: number;
-  elapsed_ms: number;
-  avg_rtt_us: number;
-  p50_rtt_us: number;
-  p95_rtt_us: number;
-}
-
-export async function netSpeedTestRun(
-  addr: string,
-  roundTrips?: number,
-): Promise<NetSpeedTestResult> {
-  return invoke<NetSpeedTestResult>("net_speed_test_run", {
-    addr,
-    roundTrips: roundTrips ?? null,
-  });
-}
-
-export interface PkgDirectMountResult {
-  ok: boolean;
-  code?: number;
-  mount_point?: string;
-  err?: string;
-}
-
-/** Mount a .pkg file directly via sceFsMountGamePkg (bypasses BGFT
- *  install). Faster for testing patches; doesn't register the title
- *  in the home screen. */
-/** ok-checked-by-caller: Install callers render the refusal. */
-export async function pkgDirectMount(
-  addr: string,
-  pkgPath: string,
-  mountPoint?: string,
-): Promise<PkgDirectMountResult> {
-  return invoke<PkgDirectMountResult>("pkg_direct_mount_run", {
-    addr,
-    pkgPath,
-    mountPoint: mountPoint ?? null,
-  });
-}
-
-export interface UfsFsckResult {
-  ok: boolean;
-  code?: number;
-  device?: string;
-  repair: boolean;
-  err?: string;
-}
-
-/** Run UFS fsck on a device. repair=false is a read-only check;
- *  true attempts repair (UI should confirm before sending true). */
-/** ok-checked-by-caller: Disk tools render the refusal. */
-export async function ufsFsck(
-  addr: string,
-  device: string,
-  repair: boolean,
-): Promise<UfsFsckResult> {
-  return invoke<UfsFsckResult>("ufs_fsck_run", { addr, device, repair });
-}
-
 export interface FsReadPreviewResult {
   size: number;
   /** Base64-encoded file bytes. Use as `data:image/...;base64,<…>`
    *  for images, or decode to UTF-8 for text. Capped at 256 KB. */
   base64: string;
-}
-
-export interface LwfsMountResult {
-  ok: boolean;
-  code?: number;
-  mount_point?: string;
-  title_id?: string;
-  err?: string;
 }
 
 export interface FsWriteBytesResult {
@@ -3012,23 +2843,6 @@ export async function smpManualInstall(
   if (next === null) return { added: false };
   await fsWriteText(addr, SMP_MANUAL_LIST_PATH, next);
   return { added: true };
-}
-
-/** Mount a LWFS patch overlay (sceFsMountLwfs). Lets a title see
- *  patched files without a full reinstall. */
-/** ok-checked-by-caller: Mount callers render the refusal. */
-export async function lwfsMount(
-  addr: string,
-  patchPath: string,
-  mountPoint?: string,
-  titleId?: string,
-): Promise<LwfsMountResult> {
-  return invoke<LwfsMountResult>("lwfs_mount_run", {
-    addr,
-    patchPath,
-    mountPoint: mountPoint ?? null,
-    titleId: titleId ?? null,
-  });
 }
 
 export interface Blake3HashResult {
@@ -4867,12 +4681,6 @@ export interface RemotePlayReadiness {
   registry_err: number;
 }
 
-export interface RemotePlayDevice {
-  slot: number;
-  user_id: number;
-  client_type: number;
-}
-
 /** ── Console health check ──────────────────────────────────────────
  *
  *  Mirrors `ps5upload-core::health`. `status` is deliberately four-way:
@@ -4959,12 +4767,6 @@ export async function remoteplayReadiness(
   return invoke("remoteplay_readiness", { addr: addr ?? null });
 }
 
-export async function remoteplayDevices(
-  addr?: string,
-): Promise<{ devices: RemotePlayDevice[] }> {
-  return invoke("remoteplay_devices", { addr: addr ?? null });
-}
-
 /** Enable the system service or this user's permission (FW 10.00+).
  *  Answers with the re-read readiness snapshot, so callers never have to
  *  assume the write took. */
@@ -4982,29 +4784,6 @@ export async function remoteplayCancel(
     addr: addr ?? null,
   });
   return assertOk(resp, "Cancel remote play");
-}
-
-// ── Fan Curve ─────────────────────────────────────────────────────────
-export interface FanCurvePoint {
-  temp_c: number;
-  duty_pct: number;
-}
-
-export async function fanCurveSet(
-  points: FanCurvePoint[],
-  addr?: string,
-): Promise<{ ok: boolean }> {
-  return invoke("fan_curve_set", {
-    req: { addr: addr ?? null, points },
-  });
-}
-
-export async function fanCurveGet(
-  addr?: string,
-): Promise<{ points: FanCurvePoint[] }> {
-  return invoke("fan_curve_get", {
-    req: { addr: addr ?? null },
-  });
 }
 
 // ── Notifications ─────────────────────────────────────────────────────
@@ -5429,40 +5208,6 @@ export async function sdkRestore(
   });
 }
 
-// ── TMDB / PlayStation Store metadata ────────────────────────────────
-export interface TmdbFetchResponse {
-  ok: boolean;
-  title_id?: string;
-  error?: string;
-  np_title_id?: string;
-  content_id?: string;
-  name?: string;
-  description?: string;
-  icon?: string;
-  category?: string;
-  publisher?: string;
-  release_date?: string;
-  genre?: string;
-  sku?: string;
-}
-
-/** ok-checked-by-caller: Game Metadata renders not-found as an empty state. */
-export async function tmdbFetch(
-  titleId: string,
-  refresh?: boolean,
-  addr?: string,
-  region?: string,
-): Promise<TmdbFetchResponse> {
-  return invoke("tmdb_fetch", {
-    req: {
-      addr: addr ?? null,
-      title_id: titleId,
-      refresh: refresh ?? false,
-      region: region ?? null,
-    },
-  });
-}
-
 // ── FW Spoof detection ───────────────────────────────────────────────
 export interface FwSpoofStatusResponse {
   system_sw_version: string;
@@ -5478,42 +5223,6 @@ export async function fwSpoofStatus(
 ): Promise<FwSpoofStatusResponse> {
   return invoke("fw_spoof_status", { req: { addr: addr ?? null } });
 }
-
-// ── BPS patching (backport helper) ────────────────────────────────────
-export interface BpsInfo {
-  ok: boolean;
-  source_size: number;
-  target_size: number;
-  metadata: string;
-  source_crc: string;
-  target_crc: string;
-}
-
-/** Read a .bps patch's header without applying it, so the UI can show
- *  what the patch expects before anything is written. */
-/** ok-checked-by-caller: Fakelib surfaces a bad patch via the thrown HTTP error. */
-export async function bpsInspect(patchPath: string): Promise<BpsInfo> {
-  return invoke("bps_inspect", { req: { patch_path: patchPath } });
-}
-
-/** Apply a .bps patch to a library on the engine's machine. Rejects a
- *  source whose checksum does not match the one the patch was built for
- *  — that is the common mistake, and it otherwise yields a file that
- *  only fails at game launch. */
-export async function bpsApply(
-  sourcePath: string,
-  patchPath: string,
-  destPath: string,
-): Promise<{ ok: boolean; bytes: number; dest: string }> {
-  return invoke("bps_apply", {
-    req: {
-      source_path: sourcePath,
-      patch_path: patchPath,
-      dest_path: destPath,
-    },
-  });
-}
-
 
 // ─── Unified install (spec 2) ────────────────────────────────────────────
 // One endpoint owns an install end to end (resolve → deliver → install →
@@ -5621,9 +5330,4 @@ export async function pkgInstallStop(job: string): Promise<void> {
 /** Poll a unified install job by id. */
 export async function pkgInstallStatus(job: string): Promise<InstallStatus> {
   return invoke("pkg_install_status_v2", { job }) as Promise<InstallStatus>;
-}
-
-/** Recent install history for a console, newest first. */
-export async function pkgInstallHistory(ps5Addr: string): Promise<unknown[]> {
-  return invoke("pkg_install_history", { ps5_addr: ps5Addr }) as Promise<unknown[]>;
 }

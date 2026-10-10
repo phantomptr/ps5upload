@@ -12,7 +12,7 @@
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::engine;
 
@@ -381,43 +381,6 @@ pub async fn transfer_zip(req: TransferZipReq) -> Result<JsonValue, String> {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct BpsInspectReq {
-    pub patch_path: String,
-}
-
-/// Read a `.bps` patch header without applying it, so the UI can show
-/// what the patch expects before anything is written.
-#[tauri::command]
-pub async fn bps_inspect(req: BpsInspectReq) -> Result<JsonValue, String> {
-    let base = engine::url();
-    let url = format!("{base}/api/bps/inspect");
-    let body = serde_json::json!({ "patch_path": req.patch_path });
-    post_json(&url, &body).await
-}
-
-#[derive(Debug, Deserialize)]
-pub struct BpsApplyReq {
-    pub source_path: String,
-    pub patch_path: String,
-    pub dest_path: String,
-}
-
-/// Apply a `.bps` patch to a library on this machine. Long client: the
-/// libraries run to hundreds of KB and the whole file is read, patched
-/// and written back out.
-#[tauri::command]
-pub async fn bps_apply(req: BpsApplyReq) -> Result<JsonValue, String> {
-    let base = engine::url();
-    let url = format!("{base}/api/bps/apply");
-    let body = serde_json::json!({
-        "source_path": req.source_path,
-        "patch_path": req.patch_path,
-        "dest_path": req.dest_path,
-    });
-    post_json_long(&url, &body).await
-}
-
-#[derive(Debug, Deserialize)]
 pub struct ZipInspectReq {
     pub zip_path: String,
 }
@@ -642,13 +605,6 @@ pub struct ProfileActivateReq {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ProfileSlotReq {
-    #[serde(default)]
-    pub addr: Option<String>,
-    pub slot: i32,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct UserCreateReq {
     #[serde(default)]
     pub addr: Option<String>,
@@ -703,26 +659,6 @@ pub struct RemotePlayReq {
     pub addr: Option<String>,
     #[serde(default)]
     pub manual_account_id: Option<String>,
-}
-
-// ── Fan curve ─────────────────────────────────────────────────────────
-#[derive(Debug, Deserialize)]
-pub struct FanCurveSetReq {
-    #[serde(default)]
-    pub addr: Option<String>,
-    pub points: Vec<FanCurvePoint>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct FanCurvePoint {
-    pub temp_c: i32,
-    pub duty_pct: i32,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct FanCurveGetReq {
-    #[serde(default)]
-    pub addr: Option<String>,
 }
 
 // ── Notifications ─────────────────────────────────────────────────────
@@ -807,16 +743,6 @@ pub async fn profile_activate(req: ProfileActivateReq) -> Result<JsonValue, Stri
     let base = engine::url();
     let url = format!("{base}/api/profile/activate");
     let body = serde_json::json!({ "addr": req.addr, "slot": req.slot, "id": req.id });
-    post_json(&url, &body).await
-}
-
-/// De-activate (clear id+flags) an offline-account slot.
-/// Proxies `/api/profile/clear-slot`.
-#[tauri::command]
-pub async fn profile_clear_slot(req: ProfileSlotReq) -> Result<JsonValue, String> {
-    let base = engine::url();
-    let url = format!("{base}/api/profile/clear-slot");
-    let body = serde_json::json!({ "addr": req.addr, "slot": req.slot });
     post_json(&url, &body).await
 }
 
@@ -965,16 +891,6 @@ pub async fn remoteplay_readiness(addr: Option<String>) -> Result<JsonValue, Str
 }
 
 #[tauri::command]
-pub async fn remoteplay_devices(addr: Option<String>) -> Result<JsonValue, String> {
-    let base = engine::url();
-    let mut url = format!("{base}/api/ps5/remoteplay/devices");
-    if let Some(a) = addr {
-        url.push_str(&format!("?addr={}", urlencoding(&a)));
-    }
-    get_json(&url).await
-}
-
-#[tauri::command]
 pub async fn remoteplay_enable(addr: Option<String>, scope: String) -> Result<JsonValue, String> {
     let base = engine::url();
     let mut url = format!("{base}/api/ps5/remoteplay/enable");
@@ -992,26 +908,6 @@ pub async fn remoteplay_cancel(addr: Option<String>) -> Result<JsonValue, String
         url.push_str(&format!("?addr={}", urlencoding(&a)));
     }
     post_json(&url, &serde_json::json!({})).await
-}
-
-// ── Fan curve ─────────────────────────────────────────────────────────
-#[tauri::command]
-pub async fn fan_curve_set(req: FanCurveSetReq) -> Result<JsonValue, String> {
-    let base = engine::url();
-    let url = format!("{base}/api/ps5/hw/fan-curve");
-    let body = serde_json::json!({ "addr": req.addr, "points": req.points });
-    post_json(&url, &body).await
-}
-
-#[tauri::command]
-pub async fn fan_curve_get(req: FanCurveGetReq) -> Result<JsonValue, String> {
-    let base = engine::url();
-    let mut url = format!("{base}/api/ps5/hw/fan-curve/get");
-    if let Some(ref addr) = req.addr {
-        url.push('?');
-        url.push_str(&format!("addr={}", urlencoding(addr)));
-    }
-    get_json(&url).await
 }
 
 // ── Notifications ─────────────────────────────────────────────────────
@@ -1358,38 +1254,6 @@ pub async fn sdk_restore(req: SdkRestoreReq) -> Result<JsonValue, String> {
         }),
     )
     .await
-}
-
-// ── TMDB / PlayStation Store metadata ────────────────────────────────
-#[derive(Debug, Deserialize)]
-pub struct TmdbFetchReq {
-    #[serde(default)]
-    pub addr: Option<String>,
-    pub title_id: String,
-    #[serde(default)]
-    pub refresh: bool,
-    #[serde(default)]
-    pub region: Option<String>,
-}
-
-#[tauri::command]
-pub async fn tmdb_fetch(req: TmdbFetchReq) -> Result<JsonValue, String> {
-    let base = engine::url();
-    let mut url = format!("{base}/api/ps5/tmdb/fetch");
-    let mut params = Vec::new();
-    if let Some(ref addr) = req.addr {
-        params.push(format!("addr={}", urlencoding(addr)));
-    }
-    params.push(format!("title_id={}", urlencoding(&req.title_id)));
-    if req.refresh {
-        params.push("refresh=true".to_string());
-    }
-    if let Some(ref region) = req.region {
-        params.push(format!("region={}", urlencoding(region)));
-    }
-    url.push('?');
-    url.push_str(&params.join("&"));
-    get_json(&url).await
 }
 
 // ── FW Spoof detection ───────────────────────────────────────────────
@@ -2187,35 +2051,6 @@ pub async fn ps5_appinfo_query(
     get_json(&url).await
 }
 
-/// Change one appinfo.db value on the console.
-///
-/// This edits a live system database. The engine snapshots both content
-/// databases before the write and refuses the write outright if the
-/// snapshot fails; the payload refuses if the title is running or if the
-/// row does not already exist. Callers should still confirm with the user
-/// first — the visible failure mode is a title whose Settings entry stops
-/// rendering.
-#[tauri::command]
-pub async fn ps5_appinfo_set(
-    addr: Option<String>,
-    title_id: String,
-    key: String,
-    val: String,
-    backup_dir: Option<String>,
-) -> Result<JsonValue, String> {
-    post_json(
-        &format!("{}/api/ps5/appinfo/set", engine::url()),
-        &serde_json::json!({
-            "addr": addr,
-            "title_id": title_id,
-            "key": key,
-            "val": val,
-            "backup_dir": backup_dir,
-        }),
-    )
-    .await
-}
-
 /// Read the PS5's current system clock. Cheap; safe to call once on
 /// the Hardware screen render and again right after a sync.
 #[tauri::command]
@@ -2253,63 +2088,6 @@ pub async fn ps5_time_sync(
         );
     }
     post_json(&url, &body).await
-}
-
-/// Read all PS5 Date & Time state (timezone, DST, NTP flag,
-/// date/time format, tzdata version, NTP-error counter, cached
-/// NTP-tick) in one call. Returns the flat JSON the payload emits;
-/// per-field availability flags let the UI grey out fields that
-/// failed to read on this firmware. New in 2.10.0 — depends on the
-/// novel DATE_* registry read path, see
-/// reference_ps5_date_registry_keys.md for hardware status.
-#[tauri::command]
-pub async fn ps5_time_state_get(addr: Option<String>) -> Result<JsonValue, String> {
-    get_json(&addr_url("/api/ps5/time/state/get", addr.as_deref())).await
-}
-
-/// Write a partial subset of PS5 Date & Time state. Pass any subset
-/// of `tz_index`, `date_format`, `time_format`, `summer_policy`,
-/// `set_auto` — None / omitted fields are NOT written. Response
-/// surfaces per-field rc + err_code so the UI can show "set_auto
-/// took, tz_index rejected" instead of one opaque ok/fail. Same
-/// ucred-elevation envelope as ps5_time_sync.
-#[tauri::command]
-pub async fn ps5_time_state_set(
-    addr: Option<String>,
-    tz_index: Option<i32>,
-    date_format: Option<i32>,
-    time_format: Option<i32>,
-    summer_policy: Option<i32>,
-    set_auto: Option<i32>,
-) -> Result<JsonValue, String> {
-    let base = engine::url();
-    let url = format!("{base}/api/ps5/time/state/set");
-    // Build the request body with only present fields. serde's
-    // skip_serializing_if + Option<T> on the engine side already
-    // handles this, but we ALSO build the JSON conditionally so a
-    // future engine-side change that flips defaults can't silently
-    // start writing unintended fields. Belt-and-suspenders given
-    // we're writing to a novel registry surface.
-    let mut body = serde_json::Map::new();
-    if let Some(a) = addr {
-        body.insert("addr".into(), serde_json::Value::String(a));
-    }
-    if let Some(v) = tz_index {
-        body.insert("tz_index".into(), serde_json::Value::Number(v.into()));
-    }
-    if let Some(v) = date_format {
-        body.insert("date_format".into(), serde_json::Value::Number(v.into()));
-    }
-    if let Some(v) = time_format {
-        body.insert("time_format".into(), serde_json::Value::Number(v.into()));
-    }
-    if let Some(v) = summer_policy {
-        body.insert("summer_policy".into(), serde_json::Value::Number(v.into()));
-    }
-    if let Some(v) = set_auto {
-        body.insert("set_auto".into(), serde_json::Value::Number(v.into()));
-    }
-    post_json(&url, &serde_json::Value::Object(body)).await
 }
 
 /// "Console Storage" aggregate matching what PS5 Settings shows
@@ -2633,19 +2411,10 @@ pub async fn engine_logs_tail(since: u64) -> Result<JsonValue, String> {
 
 // ── PKG install ─────────────────────────────────────────────────────────────
 
-/// Parse a single `.pkg` file's header. Returns metadata: content_id,
-/// title (from PARAM.SFO), category, ICON0.PNG (base64), warnings.
-/// Files with non-stock magic surface as `kind:"unknown"` with a warning
-/// rather than a hard error so the user can still attempt install.
-#[tauri::command]
-pub async fn pkg_metadata(path: String) -> Result<JsonValue, String> {
-    let url = format!("{}/api/pkg/parse", engine::url());
-    post_json(&url, &serde_json::json!({ "path": path })).await
-}
-
-/// Same as `pkg_metadata` but auto-detects sibling split parts
-/// (`<root>.0`, `<root>.1`, ...) in the same directory and returns
-/// the assembled total size + per-part list.
+/// Parse a `.pkg` header (content_id, PARAM.SFO title, category,
+/// ICON0.PNG, warnings) and auto-detect sibling split parts
+/// (`<root>.0`, `<root>.1`, ...) in the same directory, returning the
+/// assembled total size + per-part list.
 #[tauri::command]
 pub async fn pkg_metadata_split(path: String) -> Result<JsonValue, String> {
     let url = format!("{}/api/pkg/parse-split", engine::url());
@@ -2865,26 +2634,6 @@ pub async fn pkg_install_status_v2(job: String) -> Result<JsonValue, String> {
         urlencoding(&job)
     );
     get_json(&url).await
-}
-
-/// Recent install history for a console (what/when/route/result).
-#[tauri::command]
-pub async fn pkg_install_history(ps5_addr: String) -> Result<JsonValue, String> {
-    let url = format!(
-        "{}/api/pkg/install/history?ps5_addr={}",
-        engine::url(),
-        urlencoding(&ps5_addr)
-    );
-    get_json(&url).await
-}
-
-/// Cancel an in-flight install. Stops the host-side HTTP listener
-/// for this session; BGFT on the PS5 will surface a download error
-/// in its notifications when it sees the stream drop.
-#[tauri::command]
-pub async fn pkg_install_cancel(session: String) -> Result<JsonValue, String> {
-    let url = format!("{}/api/pkg/install/cancel", engine::url());
-    post_json(&url, &serde_json::json!({ "session": session })).await
 }
 
 /// Windows: open Settings at the network page of the adapter that faces the console, so the

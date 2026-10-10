@@ -640,15 +640,6 @@ export async function browserInvoke<T>(
       return getJson<T>(`${base}${sep}${q}`);
     }
 
-    case "ps5_appinfo_set":
-      return postJson<T>("/api/ps5/appinfo/set", {
-        addr: args["addr"],
-        title_id: args["title_id"],
-        key: args["key"],
-        val: args["val"],
-        backup_dir: args["backup_dir"] ?? null,
-      });
-
     case "ps5_syslog_tail":
       return getJson<T>(addrUrl("/api/ps5/syslog/tail", args["addr"]));
 
@@ -657,23 +648,6 @@ export async function browserInvoke<T>(
 
     case "ps5_time_sync":
       return postJson<T>("/api/ps5/time/sync", timeSyncBody(args));
-
-    case "ps5_time_state_get":
-      return getJson<T>(addrUrl("/api/ps5/time/state/get", args["addr"]));
-
-    case "ps5_time_state_set": {
-      // TS caller: { addr, tzIndex, dateFormat, timeFormat, summerPolicy, setAuto }
-      // Engine expects snake_case, only non-null fields forwarded (belt+suspenders)
-      const body: Record<string, unknown> = {};
-      if (args["addr"] != null) body["addr"] = args["addr"];
-      if (args["tzIndex"] != null) body["tz_index"] = args["tzIndex"];
-      if (args["dateFormat"] != null) body["date_format"] = args["dateFormat"];
-      if (args["timeFormat"] != null) body["time_format"] = args["timeFormat"];
-      if (args["summerPolicy"] != null)
-        body["summer_policy"] = args["summerPolicy"];
-      if (args["setAuto"] != null) body["set_auto"] = args["setAuto"];
-      return postJson<T>("/api/ps5/time/state/set", body);
-    }
 
     // ── SMP meta ────────────────────────────────────────────────────────────
 
@@ -729,14 +703,6 @@ export async function browserInvoke<T>(
         id?: string | null;
       };
       return postJson<T>("/api/profile/activate", { addr, slot, id });
-    }
-
-    case "profile_clear_slot": {
-      const { addr, slot } = args["req"] as {
-        addr?: string | null;
-        slot: number;
-      };
-      return postJson<T>("/api/profile/clear-slot", { addr, slot });
     }
 
     // ── Jobs ────────────────────────────────────────────────────────────────
@@ -941,16 +907,6 @@ export async function browserInvoke<T>(
         `/api/pkg/install/status?job=${uenc(args["job"] as string)}`,
       );
 
-    case "pkg_install_history":
-      return getJson<T>(
-        `/api/pkg/install/history?ps5_addr=${uenc(args["ps5_addr"] as string)}`,
-      );
-
-    case "pkg_install_cancel":
-      return postJson<T>("/api/pkg/install/cancel", {
-        session: args["session"],
-      });
-
     // Windows network fixes (F2.1): run by the engine, on the computer the console talks to.
     case "host_net_open_settings":
       return postJson<T>("/api/host-net/open-settings", {
@@ -1050,11 +1006,6 @@ export async function browserInvoke<T>(
 
     case "power_telemetry_get":
       return getJson<T>(addrUrl("/api/ps5/power/telemetry", args["addr"]));
-
-    // ── User accounts ────────────────────────────────────────────────────────
-
-    case "user_list_get":
-      return getJson<T>(addrUrl("/api/ps5/users/list", args["addr"]));
 
     // ── Saves / screenshots / videos ────────────────────────────────────────
 
@@ -1231,11 +1182,6 @@ export async function browserInvoke<T>(
         addrUrl("/api/ps5/remoteplay/readiness", args["addr"] as string | null),
       );
 
-    case "remoteplay_devices":
-      return getJson<T>(
-        addrUrl("/api/ps5/remoteplay/devices", args["addr"] as string | null),
-      );
-
     case "remoteplay_enable":
       return postJson<T>(
         addrUrl("/api/ps5/remoteplay/enable", args["addr"] as string | null),
@@ -1341,17 +1287,6 @@ export async function browserInvoke<T>(
         addrUrl("/api/ps5/hw/drive-sensors", args["addr"] as string | null),
       );
 
-    case "fan_curve_get":
-      return getJson<T>(
-        qs("/api/ps5/hw/fan-curve/get", { addr: args["req"]?.addr }),
-      );
-
-    case "fan_curve_set":
-      return postJson<T>("/api/ps5/hw/fan-curve", {
-        addr: args["req"]?.addr,
-        points: args["req"]?.points,
-      });
-
     // ── Firmware spoof / SDK changer ───────────────────────────────────
 
     case "fw_spoof_status":
@@ -1378,18 +1313,6 @@ export async function browserInvoke<T>(
         addr: args["req"]?.addr,
         title_id: args["req"]?.title_id,
       });
-
-    case "tmdb_fetch":
-      return getJson<T>(
-        qs("/api/ps5/tmdb/fetch", {
-          addr: args["req"]?.addr,
-          title_id: args["req"]?.title_id,
-          // The Rust side pushes `refresh=true` only when set; a literal
-          // `refresh=false` would be truthy to the engine's string parse.
-          refresh: args["req"]?.refresh ? "true" : undefined,
-          region: args["req"]?.region,
-        }),
-      );
 
     // ── Users / backup ───────────────────────────────────────────────────────
 
@@ -1449,9 +1372,6 @@ export async function browserInvoke<T>(
 
     // ── Package / archive inspection ─────────────────────────────────────────
 
-    case "pkg_metadata":
-      return postJson<T>("/api/pkg/parse", { path: args["path"] });
-
     case "ffpkg_inspect":
       return postJson<T>("/api/ffpkg/inspect", { path: args["path"] });
 
@@ -1498,22 +1418,6 @@ export async function browserInvoke<T>(
         "/api/7z/inspect/stream",
         { archive_path: args["req"]?.archive_path },
         args["onProgress"] as ProgressChannel | undefined,
-      );
-
-    case "bps_inspect":
-      return postJson<T>("/api/bps/inspect", {
-        patch_path: args["req"]?.patch_path,
-      });
-
-    case "bps_apply":
-      return postJson<T>(
-        "/api/bps/apply",
-        {
-          source_path: args["req"]?.source_path,
-          patch_path: args["req"]?.patch_path,
-          dest_path: args["req"]?.dest_path,
-        },
-        /*long=*/ true,
       );
 
     // ── Profile avatar ───────────────────────────────────────────────────────

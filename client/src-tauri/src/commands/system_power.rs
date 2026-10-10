@@ -9,7 +9,6 @@
 //! the engine).
 
 use ps5upload_core::system_control::{power_telemetry, system_control, PowerAction};
-use ps5upload_core::users::user_list;
 use serde_json::Value as JsonValue;
 
 #[tauri::command]
@@ -41,16 +40,6 @@ pub async fn power_telemetry_get(addr: String) -> Result<JsonValue, String> {
         .map_err(|e| format!("telemetry task: {e}"))?
         .map(|t| serde_json::to_value(t).unwrap_or(serde_json::json!({})))
         .map_err(|e| format!("telemetry: {e}"))
-}
-
-/// Enumerate user accounts on the connected PS5.
-#[tauri::command]
-pub async fn user_list_get(addr: String) -> Result<JsonValue, String> {
-    tokio::task::spawn_blocking(move || user_list(&addr))
-        .await
-        .map_err(|e| format!("user_list task: {e}"))?
-        .map(|u| serde_json::to_value(u).unwrap_or(serde_json::json!({})))
-        .map_err(|e| format!("user_list: {e}"))
 }
 
 async fn invoke_action(addr: String, action: PowerAction) -> Result<JsonValue, String> {

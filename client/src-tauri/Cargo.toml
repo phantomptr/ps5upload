@@ -14,11 +14,11 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 ava1 = { path = "../../engine/crates/ava1" }
-# Tauri core + the built-in plugins we rely on for dialogs, fs and OS shell
+# Tauri core + the native file dialogs. File reads/writes go through our
+# own commands (see commands/save_text_file.rs), and links open through
+# tauri-plugin-opener below.
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
-tauri-plugin-fs = "2"
-tauri-plugin-shell = "2"
 # Native OS notifications (system tray/center) — mirrors the in-app
 # notification inbox to the desktop notification center and the Android
 # notification shade. Cross-platform (macOS/Windows/Linux/Android/iOS).

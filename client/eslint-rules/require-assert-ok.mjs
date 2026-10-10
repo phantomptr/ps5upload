@@ -39,7 +39,6 @@ const STATUS_ENDPOINTS = new Set([
   "discoverPs5",
   "toastPush",
   "cheatsStatus",
-  "ftpStatus",
   "remoteplayStatus",
   "smpStatus",
   "activityGet",
@@ -49,7 +48,6 @@ const STATUS_ENDPOINTS = new Set([
   "sdkScan",
   "procModulesGet",
   "netInterfacesGet",
-  "userListGet",
 ]);
 
 /** Only the API modules — this is a rule about where guards belong. */
