@@ -58,13 +58,14 @@ import type { GameView } from "../../api/games";
 import { installOffers } from "./collectionInstall";
 import { useRosterStore } from "../../state/roster";
 import { useGameView } from "./useGameView";
+import { installStagedPkg, stagedPkgAction } from "./installStaged";
 import { CollectionCover } from "../Collection/CollectionCover";
 import { ConsolesCard } from "./ConsolesCard";
 import { DrivesCard } from "./DrivesCard";
 import { fetchRunningGames } from "../../lib/runningGames";
 import { killGame } from "../../lib/killGame";
 import { playFor, useTrackedPlay } from "../../lib/trackedPlay";
-import { useRunningAppsStore } from "../../state/runningApps";
+import { runningOn, useRunningAppsStore } from "../../state/runningApps";
 // Direct import to avoid the barrel's circular-dep warning at build.
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
@@ -255,9 +256,7 @@ export default function GameHubScreen() {
   // ── Close ─────────────────────────────────────────────────────────
   // Running state comes from the shared store the shell's watcher (and the
   // Games screen, while open) keeps current for the connected console.
-  const running = useRunningAppsStore(
-    (s) => !!title_id && !!host && s.host === host && s.titleIds.has(title_id),
-  );
+  const running = useRunningAppsStore((s) => !!title_id && runningOn(s, host).has(title_id));
   const [stopping, setStopping] = useState(false);
   const { confirm: confirmDialog, dialog: confirmDialogNode } = useConfirm();
 
@@ -817,6 +816,32 @@ function PackagesTab({
   );
 
   const isAddons = kind === "addons";
+  const { confirm, dialog } = useConfirm();
+  // Unknown (no read of this console yet) counts as installed: the question
+  // is a warning, not a gate, and asking it on a guess would be noise.
+  const baseInstalled =
+    view?.consoles.find((c) => c.host === hostOf(host ?? ""))?.installed ?? true;
+  const onInstall = (e: PkgEntry) => {
+    if (!host?.trim()) return;
+    const what = isAddons
+      ? tr("pkglib.addon.dlc", undefined, "DLC")
+      : tr("pkglib.addon.update", undefined, "update");
+    void installStagedPkg({
+      host,
+      entry: e,
+      baseInstalled,
+      confirmWithoutBase: () =>
+        confirm({
+          title: tr("pkglib.baseMissing.title", undefined, "Base game isn't installed"),
+          message: tr(
+            "pkglib.baseMissing.body",
+            { kind: what, id: titleId },
+            `This ${what} is for ${titleId}, but its base game isn't installed on the PS5. Sony's installer will accept it, but nothing installs until the base game is on the console — install the base first.`,
+          ),
+          confirmLabel: tr("pkglib.baseMissing.installAnyway", undefined, "Install anyway"),
+        }),
+    });
+  };
   return (
     <TabCard
       icon={isAddons ? Package : Download}
@@ -826,6 +851,7 @@ function PackagesTab({
           : tr("game_hub_updates", undefined, "Updates")
       }
     >
+      {dialog}
       {!connected ? (
         <NotConnectedNote />
       ) : matching.length === 0 ? (
@@ -855,11 +881,31 @@ function PackagesTab({
                   {e.size > 0 && <span>· {formatBytes(e.size)}</span>}
                 </div>
               </div>
-              {e.installedHere && (
-                <Badge tone="good" variant="soft">
-                  {tr("game_hub_installed", undefined, "Installed")}
-                </Badge>
-              )}
+              <div className="flex shrink-0 items-center gap-2">
+                {e.installedHere && (
+                  <Badge tone="good" variant="soft">
+                    {tr("game_hub_installed", undefined, "Installed")}
+                  </Badge>
+                )}
+                {stagedPkgAction(e) === "busy" ? (
+                  <Badge tone="neutral" variant="soft">
+                    {e.status === "installing"
+                      ? tr("pkglib.installing", undefined, "Installing…")
+                      : tr("game_pkg_queued", undefined, "Queued")}
+                  </Badge>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant={e.installedHere ? "ghost" : "secondary"}
+                    leftIcon={<Download size={13} />}
+                    onClick={() => onInstall(e)}
+                  >
+                    {stagedPkgAction(e) === "reinstall"
+                      ? tr("pkglib.reinstall", undefined, "Reinstall")
+                      : tr("pkglib.install", undefined, "Install")}
+                  </Button>
+                )}
+              </div>
             </li>
           ))}
         </ul>

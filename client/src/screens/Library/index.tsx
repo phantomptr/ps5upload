@@ -59,7 +59,7 @@ import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
 
 import { useConnectionStore } from "../../state/connection";
 import RunningAppsPanel from "./RunningAppsPanel";
-import { useRunningAppsStore } from "../../state/runningApps";
+import { useRunningTitleIds } from "../../state/runningApps";
 import {
   usePlayTimeStore,
   formatPlayTime,
@@ -120,6 +120,7 @@ import {
   type RegisteredTitle,
 } from "../../state/library";
 import { useElapsed } from "../../lib/useElapsed";
+import { cachedGameMeta, peekGameMeta } from "../../lib/gameMetaCache";
 import { formatBytes } from "../../lib/format";
 import { mgmtAddr, transferAddr } from "../../lib/addr";
 import { useImageRetry } from "../../lib/useImageRetry";
@@ -498,7 +499,18 @@ export default function LibraryScreen() {
         <div className="mb-4">
           <ErrorCard
             title={tr("library_scan_error", undefined, "Couldn't scan the PS5")}
-            detail={error}
+            detail={humanizePs5Error(error)}
+            action={
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<RefreshCw size={12} />}
+                onClick={() => void refresh()}
+                disabled={loading || !host?.trim()}
+              >
+                {tr("games_retry", undefined, "Try again")}
+              </Button>
+            }
           />
         </div>
       )}
@@ -908,7 +920,7 @@ function LibraryRowImpl({
 }) {
   const tr = useTr();
   const Icon = entry.kind === "game" ? Gamepad2 : FileArchive;
-  const runningTitleIds = useRunningAppsStore((s) => s.titleIds);
+  const runningTitleIds = useRunningTitleIds(host);
   const isTitleRunning =
     entry.kind === "game" &&
     !!entry.titleId &&
@@ -989,7 +1001,11 @@ function LibraryRowImpl({
   // Where a stopped or failed Move was going, so it can be tried again in one click.
   const [retryMoveDest, setRetryMoveDest] = useState<string | null>(null);
   const [mountNote, setMountNote] = useState<string | null>(null);
-  const [meta, setMeta] = useState<GameMeta | null>(null);
+  // Seeded from the short-lived cache so a row that remounts (the screen
+  // shown again) paints its title on the first frame without a re-read.
+  const [meta, setMeta] = useState<GameMeta | null>(() =>
+    entry.kind === "image" || !host?.trim() ? null : peekGameMeta(host, entry.path),
+  );
   const [moveOpen, setMoveOpen] = useState(false);
   const [mountOpen, setMountOpen] = useState(false);
   // What the mount modal is being used FOR. "mount" is the ordinary
@@ -1127,7 +1143,9 @@ function LibraryRowImpl({
     if (entry.kind === "image") return;
     if (!host?.trim()) return;
     let cancelled = false;
-    metaLimit(() => fetchGameMeta(consoleAddr(host), entry.path))
+    cachedGameMeta(host, entry.path, () =>
+      metaLimit(() => fetchGameMeta(consoleAddr(host), entry.path)),
+    )
       .then((m) => {
         if (!cancelled) setMeta(m);
       })

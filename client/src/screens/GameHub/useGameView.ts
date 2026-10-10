@@ -6,6 +6,7 @@ import { hasTitleId } from "../../lib/gamePage";
 import { useConnectionStore } from "../../state/connection";
 import { useRosterStore } from "../../state/roster";
 import { useUploadQueueStore } from "../../state/uploadQueue";
+import { loadTitled, resultFor, type TitledResult } from "./gameViewState";
 
 /** One game as the engine knows it: every saved console and every copy on the drives. The
  *  connected console is read again when the page opens, and a console is read again after a
@@ -14,25 +15,33 @@ export function useGameView(titleId: string) {
   const host = useConnectionStore((s) => s.host?.trim() ?? "");
   const up = useConnectionStore((s) => s.payloadStatus === "up");
   const rosterHosts = useRosterStore((s) => s.profiles.map((p) => hostOf(p.host)).join(","));
-  const [view, setView] = useState<GameView | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const reload = useCallback(async () => {
-    try {
-      setView(await gamesApi.view(titleId));
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
+  // Tagged with the title it answers, so a page that moved to another game
+  // never shows the previous one (see gameViewState).
+  const [held, setHeld] = useState<TitledResult<GameView> | null>(null);
+  const onScreen = useRef(titleId);
+  useEffect(() => {
+    onScreen.current = titleId;
   }, [titleId]);
 
+  const reload = useCallback(
+    () =>
+      loadTitled(titleId, gamesApi.view, () => onScreen.current, (r) =>
+        // A failed re-read keeps what this page already showed, next to the error.
+        setHeld((prev) =>
+          r.error && prev?.titleId === r.titleId ? { ...r, value: prev.value } : r,
+        ),
+      ),
+    [titleId],
+  );
+
   useEffect(() => {
-    setLoading(true);
     void reload();
   }, [reload]);
+
+  const mine = resultFor(held, titleId);
+  const view = mine?.value ?? null;
+  const loading = mine === null;
+  const error = mine?.error ?? null;
 
   // The engine forgets consoles the app no longer has (a sync the roster missed while the
   // engine was away happens here).
@@ -72,7 +81,13 @@ export function useGameView(titleId: string) {
       .join(","),
   );
   const seen = useRef<Set<string> | null>(null);
+  const seenFor = useRef(titleId);
   useEffect(() => {
+    // Another game's page: its own finished jobs set the new baseline.
+    if (seenFor.current !== titleId) {
+      seenFor.current = titleId;
+      seen.current = null;
+    }
     const ids = finished ? finished.split(",") : [];
     // Jobs that were already done when the page opened changed nothing new.
     if (seen.current === null) {

@@ -1,7 +1,7 @@
 import { useConnectionStore } from "./connection";
 import { useRunningAppsStore } from "./runningApps";
 import { fetchRunningGames } from "../lib/runningGames";
-import { mgmtAddr } from "../lib/addr";
+import { hostOf, mgmtAddr } from "../lib/addr";
 import { transferScreenBusy } from "../lib/ps5Transfers";
 
 /**
@@ -66,7 +66,7 @@ export function installRunningWatch(): void {
 
     // Somebody with a faster loop is already keeping this current.
     const store = useRunningAppsStore.getState();
-    if (store.host === host && Date.now() - store.updatedAtMs < FRESH_MS) {
+    if (store.host === hostOf(host.trim()) && Date.now() - store.updatedAtMs < FRESH_MS) {
       return;
     }
 

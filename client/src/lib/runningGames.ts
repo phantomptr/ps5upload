@@ -49,6 +49,20 @@ export async function fetchRunningGames(
   return byTitle;
 }
 
+/** True when two reads name the same titles with the same handles, so a poll
+ *  that saw nothing new can keep the previous map (and its consumers' memos). */
+export function sameRunningGames(
+  a: ReadonlyMap<string, RunningGame>,
+  b: ReadonlyMap<string, RunningGame>,
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const [id, g] of a) {
+    const o = b.get(id);
+    if (!o || o.appId !== g.appId || o.pid !== g.pid) return false;
+  }
+  return true;
+}
+
 /**
  * Move running titles to the front, leaving everything else in order.
  *

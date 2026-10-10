@@ -1,5 +1,8 @@
 import { create } from "zustand";
 
+import { hostOf } from "../lib/addr";
+import { useConnectionStore } from "./connection";
+
 /**
  * Shared set of currently-running title IDs. Populated by
  * RunningAppsPanel's poll loop; consumed by Library rows to show
@@ -14,7 +17,7 @@ interface RunningAppsState {
   /** Title IDs whose app_id is currently in PROC_LIST. Empty when no
    *  RunningAppsPanel has populated it yet (default). */
   titleIds: Set<string>;
-  /** Active PS5 host these title IDs were observed on. When the
+  /** Bare host (no port) these title IDs were observed on. When the
    *  user switches to a different PS5 (multi-PS5 roster), Library
    *  rows would otherwise briefly show "running" badges for the
    *  previous console's apps until RunningAppsPanel re-mounts and
@@ -31,11 +34,23 @@ interface RunningAppsState {
   clearForHostChange: (host: string | null) => void;
 }
 
+/** Every writer used to pass its own address shape (bare host from the Games
+ *  grid, `host:port` from RunningAppsPanel), so the same console flipped
+ *  between two keys, a reader comparing against the bare host saw nothing,
+ *  and each flip reallocated the set. One shape for everyone. */
+function storeHost(host: string | null): string | null {
+  const h = host ? hostOf(host.trim()) : "";
+  return h || null;
+}
+
+const EMPTY: ReadonlySet<string> = new Set();
+
 export const useRunningAppsStore = create<RunningAppsState>((set, get) => ({
   titleIds: new Set(),
   host: null,
   updatedAtMs: 0,
-  setRunning: (titleIds, host) => {
+  setRunning: (titleIds, rawHost) => {
+    const host = storeHost(rawHost);
     // Short-circuit when the observed set is identical to the current
     // one. Without this check, every poll tick (every 5 s) allocates a
     // fresh Set and zustand reports state-changed via Object.is —
@@ -58,7 +73,8 @@ export const useRunningAppsStore = create<RunningAppsState>((set, get) => ({
       updatedAtMs: Date.now(),
     });
   },
-  clearForHostChange: (host) => {
+  clearForHostChange: (rawHost) => {
+    const host = storeHost(rawHost);
     // Skip the set() if we're already empty for this host — same
     // anti-churn rationale as setRunning. Multiple connection-store
     // subscribers can fire this in quick succession on host change.
@@ -76,9 +92,25 @@ export const useRunningAppsStore = create<RunningAppsState>((set, get) => ({
  * kept current by `installRunningWatch` at the shell level, and by the
  * faster screen loops whenever Games or Library is open.
  *
- * Host correctness is the store's job: `clearForHostChange` empties the set
- * on a console switch, so this cannot report the previous PS5's games.
+ * Only counts titles observed on the selected console, so it cannot report
+ * the previous PS5's games while the new one has not answered yet.
  */
 export function useAnyGameRunning(): boolean {
-  return useRunningAppsStore((s) => s.titleIds.size > 0);
+  const host = useConnectionStore((s) => s.host);
+  return useRunningAppsStore((s) => runningOn(s, host).size > 0);
+}
+
+/** The running set when it was observed on `host` (any address shape), else
+ *  empty — so a reader can never show one console's games under another. */
+export function runningOn(
+  s: Pick<RunningAppsState, "titleIds" | "host">,
+  host: string | null | undefined,
+): ReadonlySet<string> {
+  const h = storeHost(host ?? null);
+  return h && s.host === h ? s.titleIds : EMPTY;
+}
+
+/** Title ids running on `host`. Stable reference while the set is unchanged. */
+export function useRunningTitleIds(host: string | null | undefined): ReadonlySet<string> {
+  return useRunningAppsStore((s) => runningOn(s, host));
 }

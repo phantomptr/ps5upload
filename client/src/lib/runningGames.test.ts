@@ -3,7 +3,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 vi.mock("../api/ps5", () => ({ processList: vi.fn() }));
 
 import { processList, type ProcessInfo } from "../api/ps5";
-import { fetchRunningGames, sortRunningFirst } from "./runningGames";
+import { fetchRunningGames, sameRunningGames, sortRunningFirst } from "./runningGames";
 
 const mockedList = vi.mocked(processList);
 
@@ -140,5 +140,24 @@ describe("sortRunningFirst", () => {
 
   it("handles an empty list", () => {
     expect(sortRunningFirst([], new Set(["A"]))).toEqual([]);
+  });
+});
+
+describe("sameRunningGames", () => {
+  const g = (titleId: string, appId = 1, pid = 2) => [titleId, { titleId, appId, pid }] as const;
+
+  it("matches the same titles and handles in any order", () => {
+    expect(sameRunningGames(new Map([g("A"), g("B")]), new Map([g("B"), g("A")]))).toBe(true);
+    expect(sameRunningGames(new Map(), new Map())).toBe(true);
+  });
+
+  it("notices a title coming or going", () => {
+    expect(sameRunningGames(new Map([g("A")]), new Map([g("A"), g("B")]))).toBe(false);
+    expect(sameRunningGames(new Map([g("A")]), new Map([g("B")]))).toBe(false);
+  });
+
+  it("notices a relaunch (new pid or app id) so Close targets the live process", () => {
+    expect(sameRunningGames(new Map([g("A", 1, 2)]), new Map([g("A", 1, 3)]))).toBe(false);
+    expect(sameRunningGames(new Map([g("A", 1, 2)]), new Map([g("A", 5, 2)]))).toBe(false);
   });
 });

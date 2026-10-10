@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -48,6 +49,7 @@ import {
 } from "../../api/ps5";
 import {
   fetchRunningGames,
+  sameRunningGames,
   sortRunningFirst,
   type RunningGame,
 } from "../../lib/runningGames";
@@ -305,7 +307,9 @@ class HomebrewRefused extends Error {
 
 // ── App card ─────────────────────────────────────────────────────────────────
 
-export function AppCard({
+// Memoised: the grid can hold a few hundred cards and the screen re-renders
+// on every poll and keystroke; a card only changes when its own props do.
+export const AppCard = memo(function AppCard({
   host,
   title,
   busy,
@@ -601,7 +605,7 @@ export function AppCard({
       </div>
     </div>
   );
-}
+});
 
 // ── Section wrapper ──────────────────────────────────────────────────────────
 
@@ -803,10 +807,15 @@ export default function InstalledAppsScreen() {
       // many-file upload (a single .pkg is one finalize, so it's immune).
       // The running-game badge can wait until the upload finishes.
       if (transferScreenBusy(host)) return;
+      // A hidden window has nobody to show a badge to; the visibility
+      // listener below catches up the moment it is shown again.
+      if (document.hidden) return;
       try {
         const r = await fetchRunningGames(addr);
         if (!cancelled) {
-          setRunning(r);
+          // Keep the old map when nothing changed, so the cards (memoised)
+          // and everything derived from `running` don't redo their work.
+          setRunning((prev) => (sameRunningGames(prev, r) ? prev : r));
           // Publish to the shared store too. Two reasons: the Games tab
           // badge reads from there, and the shell-level watcher backs off
           // while this faster loop is keeping it fresh.
@@ -819,9 +828,14 @@ export default function InstalledAppsScreen() {
     };
     void tick();
     const id = setInterval(() => void tick(), 3000);
+    const onVisible = () => {
+      if (!document.hidden) void tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
       clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [host]);
 
@@ -1215,6 +1229,12 @@ export default function InstalledAppsScreen() {
   const smpRunning = smp !== null && smp !== "checking" && smp.running === true;
   const discNeedsSmp = discs.length > 0 && !smpRunning && !smpChecking;
 
+  // One pass instead of a linear find per card on every render.
+  const sdkById = useMemo(
+    () => new Map(sdkState.titles.map((row) => [row.title_id, row])),
+    [sdkState],
+  );
+
   // NOTE: `key` is passed explicitly at each call site (`<AppCard key={t.titleId}
   // {...cardProps(t)} />`) — never spread, or React warns that a key in a
   // spread object is ignored.
@@ -1231,10 +1251,7 @@ export default function InstalledAppsScreen() {
     onUninstall: handleUninstall,
     onLaunch: handleLaunch,
     onStop: handleStop,
-    backportEligible: (() => {
-      const row = sdkState.titles.find((sdk) => sdk.title_id === t.titleId);
-      return isBackportEligible(t, row, ps5Kernel);
-    })(),
+    backportEligible: isBackportEligible(t, sdkById.get(t.titleId), ps5Kernel),
     onBackport: setBackportTitle,
     onFixPermissions: handleFixPermissions,
   });
@@ -1372,6 +1389,17 @@ export default function InstalledAppsScreen() {
               "Couldn't read installed apps",
             )}
             detail={error}
+            action={
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<RefreshCw size={12} />}
+                onClick={() => void refresh()}
+                disabled={loading}
+              >
+                {tr("games_retry", undefined, "Try again")}
+              </Button>
+            }
           />
         ) : loading && titles === null ? (
           // Skeleton tiles hold the grid's shape while /user/appmeta is

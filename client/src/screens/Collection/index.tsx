@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   FolderPlus,
   FolderSearch,
@@ -59,11 +59,31 @@ import { ServingLinks } from "./ServingLinks";
 import { gamePath } from "../../lib/gamePage";
 import { exportCollection } from "./exportCollection";
 import { useActiveCopies } from "../../state/copyActivity";
+import { useShallow } from "zustand/react/shallow";
 
 /** The games kept on this computer's drives: PS Game Library, inside ps5upload. */
 export default function CollectionScreen() {
   const tr = useTr();
-  const s = useCollectionStore();
+  // Everything but the scan's progress counters: those change every second
+  // while a scan runs, and only the progress line (ScanProgress) needs them.
+  const s = useCollectionStore(
+    useShallow((st) => ({
+      library: st.library,
+      settings: st.settings,
+      loading: st.loading,
+      error: st.error,
+      search: st.search,
+      filter: st.filter,
+      platform: st.platform,
+      sort: st.sort,
+      view: st.view,
+      consoleByHost: st.consoleByHost,
+      consoleFilter: st.consoleFilter,
+      set: st.set,
+      scanning: !!st.scan?.running,
+      scanError: st.scan?.error ?? null,
+    })),
+  );
   const [foldersOpen, setFoldersOpen] = useState(false);
   const [organizeOpen, setOrganizeOpen] = useState(false);
   const [cleanupOpen, setCleanupOpen] = useState(false);
@@ -135,6 +155,7 @@ export default function CollectionScreen() {
   );
   // What is being sent or installed right now, by copy: one lookup for the whole grid.
   const active = useActiveCopies(host);
+  const openGame = useCallback((id: string) => navigate(gamePath(id)), [navigate]);
   const activityOf = (g: (typeof games)[number]) => {
     for (const l of g.locations) {
       const a = active.get(l.absolute_path);
@@ -176,7 +197,7 @@ export default function CollectionScreen() {
     );
   }
   const roots = s.settings?.roots ?? [];
-  const scanning = !!s.scan?.running;
+  const scanning = s.scanning;
   const summary = s.library?.summary;
 
   async function addFolder() {
@@ -436,23 +457,8 @@ export default function CollectionScreen() {
         />
       ) : (
         <>
-          {scanning && (
-            <div className="mb-3 flex items-center gap-2 rounded-lg border border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-muted)]">
-              <Spinner size={12} />
-              {s.scan && s.scan.found > 0
-                ? tr(
-                    "collection.scanning_n",
-                    { done: s.scan.done, found: s.scan.found },
-                    "Scanning: {done} of {found} items read",
-                  )
-                : tr(
-                    "collection.scanning",
-                    undefined,
-                    "Scanning: looking for games…",
-                  )}
-            </div>
-          )}
-          {!scanning && s.scan?.error && (
+          {scanning && <ScanProgress />}
+          {!scanning && s.scanError && (
             <div className="mb-3">
               <ErrorCard
                 title={tr(
@@ -460,7 +466,7 @@ export default function CollectionScreen() {
                   undefined,
                   "The last scan stopped",
                 )}
-                detail={s.scan.error}
+                detail={s.scanError}
               />
             </div>
           )}
@@ -715,7 +721,7 @@ export default function CollectionScreen() {
                   game={g}
                   activity={activityOf(g)}
                   consoleState={consoleStates?.get(g.game_id)}
-                  onOpen={() => navigate(gamePath(g.game_id))}
+                  onOpen={openGame}
                 />
               ))}
             </div>
@@ -739,6 +745,21 @@ export default function CollectionScreen() {
         onClose={() => setFoldersOpen(false)}
         onAdd={() => void addFolder()}
       />
+    </div>
+  );
+}
+
+/** The running scan's counters; the one part of the screen that follows them. */
+function ScanProgress() {
+  const tr = useTr();
+  const done = useCollectionStore((st) => st.scan?.done ?? 0);
+  const found = useCollectionStore((st) => st.scan?.found ?? 0);
+  return (
+    <div className="mb-3 flex items-center gap-2 rounded-lg border border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-muted)]">
+      <Spinner size={12} />
+      {found > 0
+        ? tr("collection.scanning_n", { done, found }, "Scanning: {done} of {found} items read")
+        : tr("collection.scanning", undefined, "Scanning: looking for games…")}
     </div>
   );
 }

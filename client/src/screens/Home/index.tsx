@@ -24,7 +24,7 @@ import {
 import { useConnectionStore } from "../../state/connection";
 import { useActivityHistoryStore } from "../../state/activityHistory";
 import { useNotificationsStore } from "../../state/notifications";
-import { useRunningAppsStore } from "../../state/runningApps";
+import { useRunningTitleIds } from "../../state/runningApps";
 import { useSensors } from "../../state/sensors";
 import { Badge, Card, ConsoleChip, Orb, Sparkline, Spinner } from "../../components";
 import { useTr } from "../../state/lang";
@@ -102,7 +102,7 @@ export default function HomeScreen() {
     [allActivity, recentFilter],
   );
   const recentNotifs = useMemo(() => allNotifs.slice(0, 5), [allNotifs]);
-  const runningTitleIds = useRunningAppsStore((s) => s.titleIds);
+  const runningTitleIds = useRunningTitleIds(host);
   const cpuHistory = useMemo(
     () =>
       history

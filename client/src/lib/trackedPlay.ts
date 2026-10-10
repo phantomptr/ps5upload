@@ -4,7 +4,7 @@ import { activityGet, type ActivityEntry } from "../api/ps5";
 import { transferAddr } from "./addr";
 import { useConnectionStore } from "../state/connection";
 import { lastSeenPlayingFor, playSecondsFor } from "../state/playTime";
-import { useRunningAppsStore } from "../state/runningApps";
+import { runningOn, useRunningAppsStore } from "../state/runningApps";
 
 /** One title's play as the helper's process watcher recorded it on the console. */
 export interface TrackedPlay {
@@ -60,9 +60,7 @@ export function playFor(
  */
 export function useTrackedPlay(host: string | null | undefined): Map<string, TrackedPlay> | null {
   const up = useConnectionStore((s) => s.payloadStatus === "up");
-  const runningKey = useRunningAppsStore((s) =>
-    s.host === host ? Array.from(s.titleIds).sort().join(",") : "",
-  );
+  const runningKey = useRunningAppsStore((s) => Array.from(runningOn(s, host)).sort().join(","));
   const [data, setData] = useState<{ host: string; map: Map<string, TrackedPlay> } | null>(null);
   const h = host?.trim() ?? "";
 

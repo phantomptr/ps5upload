@@ -7,7 +7,7 @@ import {
   type CollectionGame,
 } from "../../api/collection";
 import { useImageRetry } from "../../lib/useImageRetry";
-import { useCollectionStore } from "../../state/collection";
+import { coverVersion } from "./coverVersion";
 
 /** A game's cover: the one read out of the game, then the online one, then its initials. A
  *  cover that fails to load moves to the next, never to a broken image. The one read out of
@@ -17,11 +17,11 @@ export function CollectionCover({
   game,
   className = "",
 }: {
-  game: Pick<CollectionGame, "game_id" | "title" | "local_cover" | "cover_url">;
+  game: Pick<CollectionGame, "game_id" | "title" | "local_cover" | "cover_url"> &
+    Partial<Pick<CollectionGame, "locations">>;
   className?: string;
 }) {
-  const scannedAt = useCollectionStore((s) => s.library?.generated_at);
-  const local = game.local_cover ? collection.coverUrl(game.game_id, scannedAt) : null;
+  const local = game.local_cover ? collection.coverUrl(game.game_id, coverVersion(game)) : null;
   const sources = [local, game.cover_url ?? null].filter((s): s is string => !!s);
   const [at, setAt] = useState(0);
   // A cover that failed once (asked for before the scan had saved it) is tried again when the

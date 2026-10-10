@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Copy as CopyIcon } from "lucide-react";
 
 import type { CollectionGame, GameConsoleState } from "../../api/collection";
@@ -83,14 +84,16 @@ function ActivityBadge({ activity }: { activity: CopyActivity }) {
   );
 }
 
-export function CollectionCard({
+// Memoised: a big collection is hundreds of cards, and the screen re-renders on
+// every keystroke in the search box.
+export const CollectionCard = memo(function CollectionCard({
   game,
   onOpen,
   consoleState,
   activity,
 }: {
   game: CollectionGame;
-  onOpen: () => void;
+  onOpen: (gameId: string) => void;
   consoleState?: GameConsoleState;
   activity?: CopyActivity | null;
 }) {
@@ -99,7 +102,7 @@ export function CollectionCard({
   return (
     <button
       type="button"
-      onClick={onOpen}
+      onClick={() => onOpen(game.game_id)}
       className="group flex flex-col overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] text-left transition-colors hover:border-[var(--color-accent)]"
       data-testid="collection-card"
     >
@@ -152,4 +155,4 @@ export function CollectionCard({
       </div>
     </button>
   );
-}
+});
