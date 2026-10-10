@@ -4,6 +4,53 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.8.2
+
+A clean-up release: every screen was gone through for things that no longer make sense, and
+the code nothing used was removed.
+
+### Fixed
+
+- **The upload speed limit was up to 8× too high.** It held each of a transfer's connections to
+  the limit instead of the whole transfer, so 10 MB/s could run at 80. It now limits the whole
+  upload, and also applies to uploads from Files and to single files, which ignored it before.
+- **Stop on Upload and on Files downloads now really cancels.** It only stopped watching
+  before; the transfer kept running.
+- **First-time setup and "Bring up PS5" now pair with a new console** instead of timing out:
+  they send the helper the same way the rest of the app does.
+- **Home's Servers card** could show twice or vanish once you had activity; it shows once.
+- **Kill on Running apps** now uses the same close as Close game, which works on firmware where
+  the plain close fails. The game page can close a running game too.
+- **Fan presets were labelled backwards** (the quiet one said it was louder). Fixed, and fan
+  changes ask first.
+- **Profile, Shell and Payloads in the web UI**: Profile's confirms work there, Shell is hidden
+  there (it can't run), and Payloads offers the ShadowMount+ and nanoDNS tabs that do work.
+- **Send payload** no longer says an unreadable or empty file "looks OK".
+- **Cheats**: Refresh only re-reads the list; re-applying to the running game is its own button.
+- **Reset all settings & data** now names everything it deletes (pairings, the Collection,
+  saved servers and passwords, backport libraries and more).
+- Search results open the folder in Files.
+
+### Changed
+
+- **Bug report** sits right under Home in the sidebar and can't be hidden.
+- **Removed screens that only repeated others:** Dashboard (Home has it all), Fan Curve (the
+  console only takes one target temperature; the Console screen sets it), the speed test
+  (Health has it), and the typed "From another PS5" card on Upload (Files → Send to another
+  console does it better). Stats is a tab of Tasks.
+- **Game page:** fewer tabs (Media, Storage and Play Time repeated the overview); play time
+  everywhere comes from the console's helper.
+- **Settings:** grouped by what they affect (Console, Installs, Files & saves, Backporting);
+  options that did nothing (Color blind palette, Screen reader hints, Density, the PS5 power
+  tick) are gone; desktop-only options are hidden in the web UI.
+- "Connections" is now **Servers**; "Backup" is **Console snapshots**, and says the snapshots stay
+  on the PS5.
+- Many texts were corrected to say what the app does today (no FTP, current screen names).
+- **Removed dead code** across the app, engine and console helper, including the old FTP server
+  and the FTX2 upgrade shims, and 415 unused translations.
+
+---
+
 ## 6.8.1
 
 ### Fixed
