@@ -12,7 +12,7 @@ vi.mock("../../state/lang", () => ({
 }));
 
 import { KeptByAppView } from "./KeptByApp";
-import { formatStorageBytes } from "../../lib/format";
+import { formatBytes } from "../../lib/format";
 import type { UsageRow } from "../../lib/ps5uploadUsage";
 
 const row = (over: Partial<UsageRow>): UsageRow => ({
@@ -39,7 +39,7 @@ describe("what ps5upload keeps, on Volumes", () => {
       row({ key: "pkg_library", path: "/mnt/ext0/ps5upload/pkg_library", drive: "/mnt/ext0", cleanable: false, bytes: 40 * 1024 ** 3, files: 2 }),
     ]);
     expect(html).toContain("Package temp files");
-    expect(html).toContain(formatStorageBytes(5 * 1024 ** 3));
+    expect(html).toContain(formatBytes(5 * 1024 ** 3));
     expect(html).toContain("Package library");
     expect(html).toContain("/mnt/ext0");
     expect(html).toContain('data-testid="kept-clean-/user/data/ps5upload/pkg_temp"');

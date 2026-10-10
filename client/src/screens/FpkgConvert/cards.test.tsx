@@ -41,7 +41,7 @@ describe("CompressionTiles", () => {
     const out = renderToStaticMarkup(
       <CompressionTiles value="fast" onChange={() => {}} estimates={estimates} />,
     );
-    expect(out).toContain("~109.0 GB");
+    expect(out).toContain("~109 GiB");
     expect(out).toContain("~1 h 0 min");
     const pending = renderToStaticMarkup(
       <CompressionTiles value="fast" onChange={() => {}} estimates="pending" />,
@@ -83,7 +83,7 @@ describe("OptionsCard free space", () => {
     expect(low).toContain("Low on free space");
     const fine = renderToStaticMarkup(<OptionsCard {...props} plannedSize={100 * 2 ** 30} outputFree={500 * 2 ** 30} />);
     expect(fine).not.toContain("Low on free space");
-    expect(fine).toContain("500.00 GiB");
+    expect(fine).toContain("500 GiB");
   });
 });
 

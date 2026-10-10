@@ -28,16 +28,11 @@ describe("parentOf", () => {
 });
 
 describe("fmtSize", () => {
-  it("formats bytes through terabytes (KB rendered as a whole number)", () => {
+  it("is the app's IEC formatter, so sizes read the same on every screen", () => {
     expect(fmtSize(0)).toBe("0 B");
     expect(fmtSize(512)).toBe("512 B");
-    expect(fmtSize(1024)).toBe("1 KB");
-    expect(fmtSize(1536)).toBe("2 KB"); // KB tier rounds to integer
-    expect(fmtSize(1024 * 1024)).toBe("1.0 MB");
-    expect(fmtSize(2.5 * 1024 * 1024)).toBe("2.5 MB");
-  });
-
-  it("drops the decimal once it reaches double digits", () => {
-    expect(fmtSize(85.29 * 1024 * 1024 * 1024)).toBe("85 GB");
+    expect(fmtSize(1536)).toBe("1.50 KiB");
+    expect(fmtSize(2.5 * 1024 * 1024)).toBe("2.50 MiB");
+    expect(fmtSize(85.29 * 1024 * 1024 * 1024)).toBe("85.3 GiB");
   });
 });

@@ -231,7 +231,15 @@ export default function ConnectionsScreen() {
       />
       {error && (
         <div className="mb-4">
-          <ErrorCard title={error} />
+          <ErrorCard
+            title={tr("connections_failed", undefined, "Something went wrong with your servers")}
+            detail={error}
+            action={
+                <Button variant="secondary" size="sm" onClick={() => void refresh()}>
+                  {tr("connections_retry", undefined, "Retry")}
+                </Button>
+              }
+          />
         </div>
       )}
 

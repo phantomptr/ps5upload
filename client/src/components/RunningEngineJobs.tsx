@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { jobCancel } from "../api/ps5";
@@ -11,19 +11,52 @@ import { useDocumentVisible } from "../lib/visibility";
 import { useTr } from "../state/lang";
 import { useTransferStore } from "../state/transfer";
 import { useUploadQueueStore } from "../state/uploadQueue";
+import { humanizePs5Error } from "../lib/humanizeError";
+import { Button } from "./Button";
+import { ProgressBar } from "./ProgressBar";
 
 const POLL_MS = 2000;
+
+/** Ask the engine to stop an orphaned job. Resolves to null once it is stopped (or already
+ *  gone), or to the error when the request failed — the banner stays up then, because the
+ *  transfer is still running. */
+export async function cancelOrphanJob(
+  jobId: string,
+  cancel: (id: string) => Promise<unknown> = jobCancel,
+): Promise<string | null> {
+  try {
+    await cancel(jobId);
+    return null;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
+/** The job ids this tab is already watching, as one string so the selector's result only
+ *  changes when the set does (not on every progress tick of the store it reads). */
+const SEP = "\n";
 
 /** Transfers the engine is still running that nothing in this tab is watching: what a reopened
  *  browser tab finds, because the self-hosted engine keeps a job going after the tab closes
  *  (R15, #372). Shows each one's progress and a Cancel. Renders nothing in the desktop app (its
  *  engine ends with the app, so there is never an orphan) or when there is none. */
-export function RunningEngineJobs() {
+export const RunningEngineJobs = memo(function RunningEngineJobs() {
   const web = !isTauriEnv();
   const visible = useDocumentVisible();
   const [jobs, setJobs] = useState<RunningEngineJob[]>([]);
-  const queueItems = useUploadQueueStore((s) => s.items);
-  const phases = useTransferStore((s) => s.phasesByHost);
+  const queueClaimed = useUploadQueueStore((s) => {
+    const ids: string[] = [];
+    for (const it of s.items) {
+      if (it.jobId && (it.status === "running" || it.attachJobId)) ids.push(it.jobId);
+      if (it.attachJobId) ids.push(it.attachJobId);
+    }
+    return ids.join(SEP);
+  });
+  const oneShotClaimed = useTransferStore((s) =>
+    Object.values(s.phasesByHost)
+      .flatMap((p) => (p.kind === "running" && p.jobId ? [p.jobId] : []))
+      .join(SEP),
+  );
 
   useEffect(() => {
     if (!web || !visible) return;
@@ -41,16 +74,11 @@ export function RunningEngineJobs() {
   }, [web, visible]);
 
   const orphans = useMemo(() => {
-    const claimed = new Set<string>();
-    for (const it of queueItems) {
-      if (it.jobId && (it.status === "running" || it.attachJobId)) claimed.add(it.jobId);
-      if (it.attachJobId) claimed.add(it.attachJobId);
-    }
-    for (const p of Object.values(phases)) {
-      if (p.kind === "running" && p.jobId) claimed.add(p.jobId);
-    }
+    const claimed = new Set(
+      [queueClaimed, oneShotClaimed].flatMap((ids) => (ids ? ids.split(SEP) : [])),
+    );
     return unclaimedJobs(jobs, claimed);
-  }, [jobs, queueItems, phases]);
+  }, [jobs, queueClaimed, oneShotClaimed]);
 
   if (!web || orphans.length === 0) return null;
   return (
@@ -64,7 +92,7 @@ export function RunningEngineJobs() {
       ))}
     </div>
   );
-}
+});
 
 function RunningJobRow({ job, onGone }: { job: RunningEngineJob; onGone: () => void }) {
   const tr = useTr();
@@ -72,27 +100,30 @@ function RunningJobRow({ job, onGone }: { job: RunningEngineJob; onGone: () => v
   const { rate, etaSeconds } = useRateEta(job.jobId, bytesSent, totalBytes);
   const pct = totalBytes > 0 ? Math.min(100, (bytesSent / totalBytes) * 100) : null;
   const finishing = totalBytes > 0 && bytesSent >= totalBytes;
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const onCancel = async () => {
+    setCancelling(true);
+    setCancelError(null);
+    const err = await cancelOrphanJob(job.jobId);
+    setCancelling(false);
+    if (err) setCancelError(err);
+    else onGone();
+  };
   return (
-    <div className="rounded-md border border-[var(--color-accent)] bg-[var(--color-surface-2)] p-3 text-xs">
-      <div className="mb-1 flex items-center gap-2">
-        <Loader2 size={14} className="animate-spin text-[var(--color-accent)]" aria-hidden />
-        <span className="font-semibold">
+    <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-5 py-4 text-xs shadow-[var(--edge-highlight),var(--shadow-1)]">
+      <div className="mb-2 flex items-center gap-2">
+        <Loader2 size={14} className="animate-spin text-[var(--color-accent-bright)]" aria-hidden />
+        <span className="min-w-0 flex-1 text-sm font-semibold">
           {tr(
             "engine_job_running_title",
             undefined,
             "A transfer is still running on the engine",
           )}
         </span>
-        <button
-          type="button"
-          className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-0.5 hover:bg-[var(--color-surface-3)]"
-          onClick={() => {
-            void jobCancel(job.jobId).catch(() => {});
-            onGone();
-          }}
-        >
+        <Button variant="secondary" size="sm" loading={cancelling} onClick={() => void onCancel()}>
           {tr("cancel", undefined, "Cancel")}
-        </button>
+        </Button>
       </div>
       <div className="mb-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[var(--color-muted)]">
         <span>
@@ -125,14 +156,20 @@ function RunningJobRow({ job, onGone }: { job: RunningEngineJob; onGone: () => v
           </span>
         )}
       </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
-        <div
-          className={`h-full bg-[var(--color-accent)] transition-[width] duration-300 ${
-            pct === null || finishing ? "animate-pulse" : ""
-          }`}
-          style={{ width: `${Math.max(pct ?? 0, 4)}%` }}
-        />
-      </div>
+      <ProgressBar
+        size="sm"
+        value={pct === null || finishing ? null : pct / 100}
+        label={tr("engine_job_running_title", undefined, "A transfer is still running on the engine")}
+      />
+      {cancelError && (
+        <div role="alert" className="mt-2 text-[var(--color-bad)]">
+          {tr(
+            "engine_job_cancel_failed",
+            { msg: humanizePs5Error(cancelError) },
+            `Couldn't stop it: ${humanizePs5Error(cancelError)}. It is still running; try again.`,
+          )}
+        </div>
+      )}
     </div>
   );
 }

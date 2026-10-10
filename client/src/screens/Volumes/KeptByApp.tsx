@@ -4,7 +4,7 @@ import { FolderOpen, Trash2 } from "lucide-react";
 import { fsDelete } from "../../api/ps5";
 import { Button, Spinner } from "../../components";
 import { transferAddr } from "../../lib/addr";
-import { formatStorageBytes } from "../../lib/format";
+import { formatBytes } from "../../lib/format";
 import { invoke } from "../../lib/invokeLogged";
 import { ps5uploadUsage, type DirEntry, type KeptKey, type UsageRow } from "../../lib/ps5uploadUsage";
 import { useTr } from "../../state/lang";
@@ -75,7 +75,7 @@ export function KeptByAppView({
           {tr("kept_nothing", undefined, "ps5upload is not keeping anything on this console.")}
         </div>
       ) : (
-        <ul className="divide-y divide-[var(--color-border)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)]">
+        <ul className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] divide-y divide-[var(--color-border)]">
           {rows.map((r) => (
             <li key={r.path} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
               <div className="min-w-0 flex-1">
@@ -88,8 +88,8 @@ export function KeptByAppView({
               <div className="text-right text-xs text-[var(--color-muted)]">
                 <div className="font-medium text-[var(--color-text)]">
                   {r.truncated
-                    ? tr("kept_at_least", { size: formatStorageBytes(r.bytes) }, "at least {size}")
-                    : formatStorageBytes(r.bytes)}
+                    ? tr("kept_at_least", { size: formatBytes(r.bytes) }, "at least {size}")
+                    : formatBytes(r.bytes)}
                 </div>
                 <div>{tr("kept_files", { count: r.files }, "{count} files")}</div>
               </div>
@@ -168,7 +168,7 @@ export function KeptByApp({
         title: tr("kept_clean_title", undefined, "Delete these files from the PS5?"),
         message: tr(
           "kept_clean_body",
-          { path: row.path, size: formatStorageBytes(row.bytes) },
+          { path: row.path, size: formatBytes(row.bytes) },
           "Everything in {path} ({size}) will be deleted. These are leftovers ps5upload can recreate; nothing in your package library or save backups is touched.",
         ),
         confirmLabel: tr("kept_clean", undefined, "Clean up"),

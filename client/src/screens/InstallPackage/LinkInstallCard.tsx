@@ -24,8 +24,7 @@ import {
   useRecentLinksStore,
 } from "../../state/recentLinks";
 
-const FIELD =
-  "w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2.5 py-2 text-sm text-[var(--color-text)] placeholder:text-[var(--color-muted)]";
+const FIELD = "input";
 
 /** One short fact about a mode ("Keep this computer awake"), with its icon. */
 function Fact({ icon: Icon, text }: { icon: typeof Sun; text: string }) {
@@ -107,7 +106,7 @@ export function LinkInstallCard({
 
   return (
     <section
-      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
+      className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] p-4"
       data-testid="link-install-card"
     >
       <header className="mb-1 flex items-center gap-2">
@@ -180,10 +179,10 @@ export function LinkInstallCard({
               aria-checked={on}
               onClick={() => setMode(host, m)}
               data-testid={`link-mode-${m}`}
-              className={`flex flex-col gap-1.5 rounded-md border p-3 text-left transition-colors ${
+              className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] flex flex-col gap-1.5 p-4 text-left transition-colors ${
                 on
-                  ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)]"
-                  : "border-[var(--color-border)] bg-[var(--color-surface-1)] hover:border-[var(--color-muted)]"
+                  ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] ring-1 ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)]"
+                  : "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-raised)]"
               }`}
             >
               <span className="flex items-center gap-2 text-sm font-medium text-[var(--color-text)]">
@@ -191,7 +190,7 @@ export function LinkInstallCard({
                   aria-hidden
                   className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
                     on
-                      ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
+                      ? "border-transparent bg-[image:var(--accent-fill)] text-[var(--color-accent-contrast)]"
                       : "border-[var(--color-muted)]"
                   }`}
                 >
@@ -324,7 +323,7 @@ export function LinkInstallCard({
             {recent.map((l) => (
               <li
                 key={l.url}
-                className="flex flex-wrap items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2.5 py-1.5"
+                className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] flex flex-wrap items-center gap-2 px-2.5 py-1.5"
               >
                 {editing?.url === l.url ? (
                   <form
@@ -348,7 +347,7 @@ export function LinkInstallCard({
                         undefined,
                         "Name (optional)",
                       )}
-                      className={`${FIELD} py-1`}
+                      className={`${FIELD} input-sm`}
                     />
                     <Button type="submit" size="sm" variant="secondary">
                       {tr("save", undefined, "Save")}
@@ -383,7 +382,7 @@ export function LinkInstallCard({
                 </Button>
                 <button
                   type="button"
-                  className="rounded p-1 text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                  className="rounded-full p-1.5 text-[var(--color-muted)] hover:text-[var(--color-text)]"
                   aria-label={tr("linkcard.rename", undefined, "Rename")}
                   title={tr("linkcard.rename", undefined, "Rename")}
                   onClick={() => setEditing({ url: l.url, name: l.name })}
@@ -392,7 +391,7 @@ export function LinkInstallCard({
                 </button>
                 <button
                   type="button"
-                  className="rounded p-1 text-[var(--color-muted)] hover:text-[var(--color-bad)]"
+                  className="rounded-full p-1.5 text-[var(--color-muted)] hover:text-[var(--color-bad)]"
                   aria-label={tr(
                     "linkcard.forget",
                     undefined,

@@ -44,7 +44,7 @@ export function WhySlowPanel({ jobId }: { jobId: string | undefined }) {
       </button>
       {open && (
         <div
-          className="mt-1 space-y-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2"
+          className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mt-1 space-y-1 p-2"
           data-testid="why-slow-body"
         >
           {loaded.state === "loading" && (

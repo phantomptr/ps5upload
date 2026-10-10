@@ -9,16 +9,13 @@ import { Button, Card, Checkbox, ProgressBar } from "../../components";
 import { makesImage } from "../../state/fpkgConversion";
 import type { InstallMethod, Pipeline, PipelineStage } from "../../state/fpkgConversion";
 import { useTr } from "../../state/lang";
+import { formatBytes } from "../../lib/format";
 import type { Task } from "../../state/tasks";
 import type { AmprPacksReadiness, ImageFormat } from "../../api/fpkg";
 import { overallProgress, stageRows, type StageRow } from "./stages";
 
-export function prettyBytes(n: number): string {
-  if (n >= 1 << 30) return `${(n / (1 << 30)).toFixed(2)} GiB`;
-  if (n >= 1 << 20) return `${(n / (1 << 20)).toFixed(1)} MiB`;
-  if (n >= 1 << 10) return `${(n / (1 << 10)).toFixed(0)} KiB`;
-  return `${n} B`;
-}
+/** The app's one size formatter (IEC), kept under this name for the Convert cards. */
+export const prettyBytes = formatBytes;
 
 export function prettyDuration(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -84,7 +81,9 @@ export interface RunCardProps {
   /** Install the kept package: streamed from this computer, or uploaded to the PS5 first. */
   onInstall: (method: InstallMethod) => void;
   onLaunch: () => void;
-  onShowFolder: () => void;
+  /** Absent when no file manager can open the output (browser build, or an engine on
+   *  another machine). */
+  onShowFolder?: () => void;
   onDelete: () => void;
   onAnother: () => void;
   /** The source is a dump on the console: installing swaps it out (Convert & replace). */
@@ -97,6 +96,8 @@ export interface RunCardProps {
   onUploadImage?: (deleteAfter: boolean) => void;
   /** A finished image already in the Upload queue: open Upload to see it. */
   onOpenUpload?: () => void;
+  /** The console a Convert & install run installs on, by name (recorded when it started). */
+  targetLabel?: string | null;
 }
 
 function RowIcon({ state }: { state: StageRow["state"] }) {
@@ -280,6 +281,11 @@ export function RunCard(props: RunCardProps) {
       <Card>
         <div className="flex flex-col gap-3">
           {title}
+          {p.mode === "convert-install" && props.targetLabel && (
+            <div className="self-start rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-xs text-[var(--color-muted)]">
+              {tr("fpkg.willInstallOn", { console: props.targetLabel }, "Will install on {console}")}
+            </div>
+          )}
           {stageList}
           <ProgressBar
             value={overallProgress(rows)}
@@ -385,7 +391,7 @@ export function RunCard(props: RunCardProps) {
           {p.deleted ? tr("fpkg.deleted", undefined, "Package deleted") : p.packagePath}
         </div>
         {p.swap && (
-          <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] p-3 text-sm">
+          <div className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] p-3 text-sm">
             <span>
               {tr(
                 "fpkg.swapDone",
@@ -418,7 +424,7 @@ export function RunCard(props: RunCardProps) {
               {tr("fpkg.launch", undefined, "Launch on PS5")}
             </Button>
           )}
-          {!p.deleted && (
+          {!p.deleted && props.onShowFolder && (
             <Button onClick={props.onShowFolder}>{tr("fpkg.showFolder", undefined, "Show in folder")}</Button>
           )}
           {!p.deleted && !makesImage(p.mode) && props.onViewPackage && (
@@ -646,10 +652,10 @@ function ImageChoice({
             type="button"
             aria-pressed={format === o.id}
             onClick={() => setFormat(o.id)}
-            className={`rounded-lg border px-3 py-2 text-left text-xs ${
+            className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] px-3.5 py-3 text-left text-xs ${
               format === o.id
-                ? "border-[var(--color-accent)] bg-[var(--color-surface-3)]"
-                : "border-[var(--color-border)] hover:bg-[var(--color-surface-3)]"
+                ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] ring-1 ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)]"
+                : "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-raised)]"
             }`}
           >
             <div className="font-semibold text-[var(--color-text)]">{o.label}</div>

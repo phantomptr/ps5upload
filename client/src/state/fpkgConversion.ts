@@ -11,6 +11,8 @@ import { useUploadQueueStore } from "./uploadQueue";
 import { fpkg, type AmprLz4Options, type FpkgBuildRequest, type ImageFormat } from "../api/fpkg";
 import { jobCancel, jobStatus } from "../api/ps5";
 import { useConnectionStore } from "./connection";
+import { useRosterStore } from "./roster";
+import { hostOf } from "../lib/addr";
 import { pushNotification } from "./notifications";
 import { pkgLibraryStore, type PkgLibraryStore } from "./pkgLibrary";
 import { useTaskStore } from "./tasks";
@@ -417,7 +419,22 @@ function poll(jobId: string, install: InstallMethod | null, failures = 0) {
       snapshot = await jobStatus(jobId);
     } catch {
       if (failures + 1 >= MAX_POLL_FAILURES) {
-        fail(p.stage, "The engine stopped responding; the conversion did not finish.", null);
+        // Giving up on watching must not leave the build running unseen: stop it, and say
+        // so honestly when even the stop could not reach the engine.
+        let stopped = true;
+        try {
+          await jobCancel(jobId);
+        } catch {
+          stopped = false;
+        }
+        if (running()?.jobId !== jobId) return;
+        fail(
+          p.stage,
+          stopped
+            ? "The engine stopped responding, so the conversion was stopped."
+            : "The engine stopped responding; the conversion may still be running there. Check Tasks before starting it again.",
+          null,
+        );
       } else {
         poll(jobId, install, failures + 1);
       }
@@ -442,11 +459,20 @@ function poll(jobId: string, install: InstallMethod | null, failures = 0) {
       const cur = running()!;
       update({ packagePath: path, jobId: null, titleId: titleIdOf(snapshot.tx_id_hex) });
       if (install) {
-        // The console of the moment the install starts: the user may have switched during an
-        // hour-long build.
-        const host = currentHost();
-        update({ host });
-        await runInstall(path, host, install);
+        // The console chosen when Convert & install was pressed, even if the user switched
+        // to another one during an hour-long build. When it has left the roster since, stop
+        // with the package kept so the user picks where it goes.
+        const target = installTarget(cur.host);
+        if (target.gone) {
+          fail(
+            "send",
+            `${target.gone} is no longer in your consoles. The package is kept; choose a console and install it from here.`,
+            path,
+          );
+          return;
+        }
+        update({ host: target.host });
+        await runInstall(path, target.host, install);
       } else {
         finish(path, bytes, Date.now() - cur.startedMs);
         pushNotification(
@@ -615,6 +641,16 @@ function dropCopy(p: Running) {
 /** "UP4433-PPSA17221_00-MINECRAFTPS50000" → "PPSA17221". */
 function titleIdOf(contentId: string | undefined | null): string | null {
   return contentId && contentId.length >= 16 ? contentId.slice(7, 16) : null;
+}
+
+/** Where a finished build installs: the console recorded when the run started, or (when none
+ *  was) the one connected now. `gone` names a recorded console that left the roster. */
+export function installTarget(recorded: string | null): { host: string | null; gone?: string } {
+  if (!recorded) return { host: currentHost() };
+  const profiles = useRosterStore.getState().profiles ?? [];
+  if (profiles.length > 0 && !profiles.some((p) => hostOf(p.host) === hostOf(recorded)))
+    return { host: null, gone: recorded };
+  return { host: recorded };
 }
 
 /** The console the connection bar has now, when a payload answers there. */

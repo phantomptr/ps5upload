@@ -110,6 +110,11 @@ export type TransferPhase =
       /** Skipping phase, bottleneck and "finishing on the console" notes,
        *  present only when the engine sent them (see lib/jobLive.ts). */
       live?: JobLive;
+      /** Set after several status polls in a row failed: the engine may
+       *  still be sending, we just can't see it. The phase stays `running`
+       *  (so nothing starts a second upload of the same thing) and polling
+       *  continues slowly; `reattach` polls again right away. */
+      lostContact?: { error: string; sinceMs: number };
     }
   | {
       kind: "done";
@@ -195,9 +200,18 @@ interface TransferState {
    *  then reset the phase. Pass a host to cancel that console's transfer, or
    *  omit to cancel every console's. */
   cancel: (host?: string) => void;
+  /** Poll a lost-contact upload's job again right now (same job id, no new
+   *  upload). No-op when that console's upload is not waiting on contact. */
+  reattach: (host: string) => void;
 }
 
 const POLL_INTERVAL_MS = 500;
+/** Status polls that may fail in a row before the upload counts as out of
+ *  contact. One dropped request (a busy engine, a sleeping laptop's first
+ *  tick) must not read as a failed upload while the engine keeps sending. */
+export const MAX_POLL_FAILURES = 6;
+/** How often a lost-contact upload is polled again. */
+export const LOST_POLL_INTERVAL_MS = 5000;
 const POLL_INITIAL_DELAY_MS = 200;
 
 /** Read one console's phase from a store snapshot. Falls back to the shared
@@ -224,6 +238,8 @@ export const useTransferStore = create<TransferState>((set) => {
   // so a rapid start/cancel loop on one console can't leak pending timeouts.
   const gens = new Map<string, ReturnType<typeof createRunGen>>();
   const pollTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  // The live run's poll, per host, so `reattach` can fire it on demand.
+  const pollers = new Map<string, () => void>();
   const genFor = (key: string) => {
     let g = gens.get(key);
     if (!g) {
@@ -472,6 +488,7 @@ export const useTransferStore = create<TransferState>((set) => {
           });
       };
 
+      let pollFailures = 0;
       const poll = async () => {
         if (!isLive()) return;
         let snap: JobSnapshot;
@@ -480,14 +497,40 @@ export const useTransferStore = create<TransferState>((set) => {
         } catch (e) {
           if (!isLive()) return;
           const msg = e instanceof Error ? e.message : String(e);
-          log.error(
-            "upload",
-            `transfer poll failed for "${uploadName}" (job ${jobId}): ${msg}`,
+          pollFailures++;
+          // The engine answered that it has no such job (it restarted):
+          // nothing is sending, so this is a real failure — and Retry is
+          // safe (the tx id resumes what reached the console).
+          if (/job not found/i.test(msg)) {
+            log.error("upload", `transfer job ${jobId} for "${uploadName}" is gone: ${msg}`);
+            setPhase(key, { kind: "failed", error: msg, jobId });
+            return;
+          }
+          const cur = useTransferStore.getState().phasesByHost[key];
+          if (pollFailures >= MAX_POLL_FAILURES && cur?.kind === "running") {
+            if (!cur.lostContact) {
+              log.warn(
+                "upload",
+                `lost contact with transfer job ${jobId} for "${uploadName}" after ${pollFailures} failed polls: ${msg}`,
+              );
+            }
+            setPhase(key, {
+              ...cur,
+              bytesPerSec: 0,
+              lostContact: { error: msg, sinceMs: cur.lostContact?.sinceMs ?? Date.now() },
+            });
+          }
+          pollTimers.set(
+            key,
+            setTimeout(
+              poll,
+              pollFailures >= MAX_POLL_FAILURES ? LOST_POLL_INTERVAL_MS : POLL_INTERVAL_MS,
+            ),
           );
-          setPhase(key, { kind: "failed", error: msg });
           return;
         }
         if (!isLive()) return;
+        pollFailures = 0;
         if (snap.status === "done") {
           let mountedAt: string | undefined;
           const mountWarnings: string[] = [];
@@ -801,7 +844,19 @@ export const useTransferStore = create<TransferState>((set) => {
           pollTimers.set(key, setTimeout(poll, POLL_INTERVAL_MS));
         }
       };
+      pollers.set(key, () => {
+        if (!isLive()) return;
+        clearTimerFor(key);
+        void poll();
+      });
       pollTimers.set(key, setTimeout(poll, POLL_INITIAL_DELAY_MS));
+    },
+
+    reattach(host) {
+      const key = hostFromAddr(host);
+      const cur = useTransferStore.getState().phasesByHost[key];
+      if (cur?.kind !== "running" || !cur.lostContact) return;
+      pollers.get(key)?.();
     },
 
     reset(host) {

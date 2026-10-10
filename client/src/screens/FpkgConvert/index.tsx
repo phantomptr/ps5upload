@@ -20,6 +20,8 @@ import { openLocalPath } from "../../lib/openLocalPath";
 import { pickPath, pickPaths } from "../../lib/pickPath";
 import { isIOS } from "../../lib/platform";
 import { isTauriEnv } from "../../lib/tauriEnv";
+import { engineIsOnThisDevice } from "../../state/engine";
+import { profileNameForHost, useRosterStore } from "../../state/roster";
 import { useWebviewDrop } from "../../lib/useWebviewDrop";
 import { useConnectionStore } from "../../state/connection";
 import { useConvertPrefs } from "../../state/convertPrefs";
@@ -52,6 +54,7 @@ function dirOf(path: string): string {
 export default function FpkgConvertScreen() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host) ?? "";
+  const profiles = useRosterStore((s) => s.profiles);
   const payloadUp = useConnectionStore((s) => s.payloadStatus === "up");
   const canInstall = payloadUp && host.trim() !== "";
   const kernel = useConnectionStore((s) =>
@@ -462,9 +465,26 @@ export default function FpkgConvertScreen() {
             onCancel={() => void cancel()}
             onInstall={(method) => void retryInstall(host, method)}
             onLaunch={onLaunch}
-            onShowFolder={() => {
-              if (pipeline.phase === "done") void openLocalPath(dirOf(pipeline.packagePath));
-            }}
+            targetLabel={
+              pipeline.phase === "running" && pipeline.host
+                ? profileNameForHost(pipeline.host, profiles)
+                : null
+            }
+            onShowFolder={
+              // A file manager can open it only when the engine's disk is this computer's.
+              isTauriEnv() && engineIsOnThisDevice()
+                ? () => {
+                    if (pipeline.phase !== "done") return;
+                    const dir = dirOf(pipeline.packagePath);
+                    void openLocalPath(dir).then((ok) => {
+                      if (!ok)
+                        setError(
+                          tr("fpkg.showFolderFailed", { path: dir }, `Couldn't open the folder. The package is in ${dir}.`),
+                        );
+                    });
+                  }
+                : undefined
+            }
             onDelete={onDelete}
             onAnother={onAnother}
             replaces={source.trim().startsWith("ps5://")}

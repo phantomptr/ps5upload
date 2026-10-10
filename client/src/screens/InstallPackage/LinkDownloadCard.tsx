@@ -115,7 +115,7 @@ export function LinkDownloadCard({
   };
 
   return (
-    <div className="mb-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
+    <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mb-4 p-3">
       <div className="text-sm font-medium text-[var(--color-text)]">
         {tr("linkdl.title", undefined, "This link is a file, not a package")}
       </div>

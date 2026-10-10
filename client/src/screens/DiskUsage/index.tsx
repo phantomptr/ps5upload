@@ -44,6 +44,7 @@ import {
   ConnectionGate,
   Spinner,
 } from "../../components";
+import { humanizePs5Error } from "../../lib/humanizeError";
 import { useTr } from "../../state/lang";
 import { formatBytes } from "../../lib/format";
 import { mgmtAddr } from "../../lib/addr";
@@ -228,18 +229,25 @@ export default function DiskUsageScreen() {
                 key={p}
                 type="button"
                 onClick={() => setPath(p)}
-                className={`rounded px-2 py-0.5 text-xs ${
-                  path === p
-                    ? "bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
-                    : "border border-[var(--color-border)] hover:bg-[var(--color-surface-3)]"
-                }`}
+                aria-pressed={path === p}
+                className="chip px-3 py-1 font-mono text-xs"
               >
                 {p}
               </button>
             ))}
           </div>
 
-          {error && <ErrorCard title={error} />}
+          {error && (
+            <ErrorCard
+              title={tr("disk_usage_failed", undefined, "Couldn't read this folder")}
+              detail={humanizePs5Error(error) || error}
+              action={
+                <Button variant="secondary" size="sm" onClick={() => void refresh()}>
+                  {tr("disk_usage_retry", undefined, "Retry")}
+                </Button>
+              }
+            />
+          )}
 
           {loading && nodes === null && (
             <div className="text-center text-xs text-[var(--color-muted)]">
@@ -272,7 +280,7 @@ export default function DiskUsageScreen() {
                   "Folder sizes aren't computed recursively, so a folder containing only subfolders shows 0 B here. Drill in to see file sizes.",
                 )}
               </p>
-              <ul className="divide-y divide-[var(--color-border)] rounded-md border border-[var(--color-border)]">
+              <ul className="divide-y divide-[var(--color-border)] rounded-[var(--radius-card)] border border-[var(--glass-edge)]">
                 {nodes.map((n) => (
                   <li key={n.name}>
                     <button
@@ -350,7 +358,7 @@ function Treemap({
 
   return (
     <div
-      className="grid gap-1 rounded-md border border-[var(--color-border)] p-1"
+      className="grid gap-1.5 rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface)] p-2 shadow-[var(--edge-highlight),var(--shadow-1)]"
       style={{ gridAutoFlow: "row" }}
     >
       {rows.map((row, ri) => {
@@ -359,7 +367,7 @@ function Treemap({
         return (
           <div
             key={ri}
-            className="flex flex-wrap gap-1"
+            className="flex flex-wrap gap-1.5"
             style={{
               /* Row height = its share of the total bytes, mapped onto
                * a 320 px treemap canvas. minHeight 40 px ensures both
@@ -375,11 +383,13 @@ function Treemap({
               height: `${Math.max(40, rowFraction * 320)}px`,
             }}
           >
-            {row.map((n) => {
-              const colorIntensity = Math.min(
-                0.9,
-                0.3 + (n.totalSize / totalBytes) * 4,
+            {row.map((n, i) => {
+              // Bigger blocks are more saturated; the hue cycles through the palette so
+              // neighbours stay apart. Tints of the theme tokens, so both modes follow.
+              const strength = Math.round(
+                Math.min(62, 24 + (n.totalSize / totalBytes) * 160),
               );
+              const hue = TREEMAP_HUES[(ri * 3 + i) % TREEMAP_HUES.length];
               return (
                 <button
                   key={n.name}
@@ -387,7 +397,7 @@ function Treemap({
                   onClick={() => onDrill(n.name, n.isDir)}
                   disabled={!n.isDir}
                   title={`${n.name} — ${formatBytes(n.totalSize)}`}
-                  className={`flex min-w-0 flex-col justify-center overflow-hidden rounded px-1.5 py-0.5 text-xs text-white transition ${
+                  className={`flex min-w-0 flex-col justify-center overflow-hidden rounded-[var(--radius-field)] border border-[var(--glass-edge)] px-2.5 py-1 text-left text-xs text-[var(--color-text)] transition ${
                     n.isDir
                       ? "cursor-pointer hover:opacity-80"
                       : "cursor-default"
@@ -412,7 +422,7 @@ function Treemap({
                     flexGrow: n.totalSize,
                     flexBasis: 0,
                     minWidth: "64px",
-                    backgroundColor: `oklch(0.45 ${0.13 * colorIntensity} 250)`,
+                    backgroundColor: `color-mix(in srgb, var(${hue}) ${n.isDir ? strength : Math.round(strength * 0.6)}%, var(--color-surface-raised))`,
                   }}
                 >
                   <div className="truncate text-xs font-medium leading-tight">
@@ -430,5 +440,15 @@ function Treemap({
     </div>
   );
 }
+
+/** Treemap block colours: the theme's own accent and status tones. */
+const TREEMAP_HUES = [
+  "--color-accent-bright",
+  "--color-ps5",
+  "--color-accent-pink",
+  "--color-ps4",
+  "--color-warn",
+  "--color-good",
+];
 
 // formatBytes moved to lib/format.ts.

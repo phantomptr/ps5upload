@@ -50,7 +50,7 @@ function PasswordField({ onSubmit }: { onSubmit: (pw: string) => void }) {
         value={pw}
         onChange={(e) => setPw(e.target.value)}
         placeholder={tr("fpkg.archivePassword", undefined, "Archive password")}
-        className="w-36 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-xs"
+        className="input input-sm w-36! text-xs"
       />
       <Button size="sm" type="submit" disabled={!pw}>
         {tr("batch_unlock", undefined, "Unlock")}
@@ -64,7 +64,7 @@ export function BatchReview(p: BatchReviewProps) {
   const inspecting = p.rows.filter((r) => r.status === "inspecting").length;
   return (
     <section className="mb-6 grid gap-4">
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]">
+      <div className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)]">
         <header className="flex items-center justify-between gap-2 border-b border-[var(--color-border)] px-4 py-2.5">
           <div className="text-sm font-semibold">
             {tr("batch_title", { count: p.rows.length }, "{count} sources")}
@@ -142,7 +142,7 @@ export function BatchReview(p: BatchReviewProps) {
                   type="button"
                   onClick={() => p.onRemove(r.id)}
                   aria-label={tr("queue_remove", undefined, "Remove from queue")}
-                  className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
+                  className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
                 >
                   <X size={14} />
                 </button>
@@ -154,7 +154,7 @@ export function BatchReview(p: BatchReviewProps) {
 
       {p.destination}
 
-      <div className="grid gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+      <div className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] grid gap-3 p-4">
         <Toggle
           checked={p.strategy === "resume"}
           onChange={(on) => p.onStrategy(on ? "resume" : "overwrite")}
@@ -169,7 +169,7 @@ export function BatchReview(p: BatchReviewProps) {
       </div>
 
       {p.check.space.length > 0 && (
-        <div className="rounded-md border border-[var(--color-warn)] bg-[var(--color-warn)]/10 px-3 py-2 text-sm text-[var(--color-warn)]">
+        <div className="rounded-[var(--radius-field)] border border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[var(--color-warn)]/10 px-3 py-2 text-sm text-[var(--color-warn)]">
           {p.check.space.map((s) => (
             <div key={s.text}>{tr(s.key, s.vars, s.text)}</div>
           ))}

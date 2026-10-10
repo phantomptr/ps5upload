@@ -125,6 +125,12 @@ pub struct DownloadStartRequest {
     /// parts of a set find each other (`game.part2.rar`).
     #[serde(default)]
     pub keep_name: bool,
+    /// What to do with a different file already under the final name (the 409 below):
+    /// `resume` treats it as an earlier unfinished download of this link (it becomes the
+    /// `.partial`, whose tail is checked against the link before any byte is kept),
+    /// `replace` deletes it and downloads afresh. Absent: refuse, as before.
+    #[serde(default)]
+    pub existing: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -200,6 +206,27 @@ fn register_unless_busy(
     Ok(())
 }
 
+/// The id of a live download writing `path`, if there is one.
+fn live_download_for(registry: &DownloadRegistry, path: &std::path::Path) -> Option<String> {
+    let items = registry.items.lock().unwrap_or_else(|e| e.into_inner());
+    items
+        .iter()
+        .find(|(_, other)| other.path == path && is_live(other))
+        .map(|(id, _)| id.clone())
+}
+
+#[cfg(not(target_os = "android"))]
+fn already_downloading(path: &std::path::Path, busy: String) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({
+            "error": format!("{} is already being downloaded.", path.display()),
+            "download_id": busy,
+        })),
+    )
+        .into_response()
+}
+
 fn json_err(code: StatusCode, msg: &str) -> Response {
     (code, Json(serde_json::json!({ "error": msg }))).into_response()
 }
@@ -256,6 +283,11 @@ async fn start_handler(
 
     let partial = partial_path(&path);
     let total = probe.total_size;
+    // Asked first, before an existing file is taken over below: a live download of the
+    // same name owns that file and its partial.
+    if let Some(busy) = live_download_for(&state, &path) {
+        return already_downloading(&path, busy);
+    }
 
     // A file already under the final name is either this link's finished download (same
     // size: done, nothing to fetch) or an unrelated file, never resumed into or clobbered:
@@ -265,16 +297,30 @@ async fn start_handler(
     let complete = match std::fs::metadata(&path) {
         Ok(meta) if meta.len() == total => true,
         Ok(meta) => {
-            return json_err(
-                StatusCode::CONFLICT,
-                &format!(
-                    "{} already exists with a different size ({} bytes, link says {}). \
-                     Move or delete it first.",
-                    path.display(),
-                    meta.len(),
-                    total
-                ),
-            );
+            if let Err(e) = take_over_existing(&path, &partial, req.existing.as_deref()) {
+                return match e {
+                    TakeOver::Refused => (
+                        StatusCode::CONFLICT,
+                        Json(serde_json::json!({
+                            "error": format!(
+                                "{} already exists with a different size ({} bytes, link says {}).",
+                                path.display(),
+                                meta.len(),
+                                total
+                            ),
+                            "existing_path": path.display().to_string(),
+                            "existing_bytes": meta.len(),
+                            "total": total,
+                        })),
+                    )
+                        .into_response(),
+                    TakeOver::Io(e) => json_err(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &format!("cannot take over {}: {e}", path.display()),
+                    ),
+                };
+            }
+            false
         }
         Err(_) => false,
     };
@@ -297,14 +343,7 @@ async fn start_handler(
         error: Mutex::new(None),
     });
     if let Err(busy) = register_unless_busy(&state, &id, dl.clone()) {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": format!("{} is already being downloaded.", path.display()),
-                "download_id": busy,
-            })),
-        )
-            .into_response();
+        return already_downloading(&path, busy);
     }
 
     if complete {
@@ -366,6 +405,37 @@ async fn start_handler(
         StatusCode::BAD_REQUEST,
         "downloading a package from a link is not available in the Android build",
     )
+}
+
+#[cfg(not(target_os = "android"))]
+#[derive(Debug)]
+enum TakeOver {
+    /// No choice was given: the caller is asked first.
+    Refused,
+    Io(std::io::Error),
+}
+
+/// Clear the final name for this download, as the user chose. `resume` moves the file to
+/// `.partial` (the resume check then keeps only bytes that match the link); `replace`
+/// removes it and any partial.
+#[cfg(not(target_os = "android"))]
+fn take_over_existing(
+    path: &std::path::Path,
+    partial: &std::path::Path,
+    choice: Option<&str>,
+) -> Result<(), TakeOver> {
+    match choice {
+        Some("resume") => std::fs::rename(path, partial).map_err(TakeOver::Io),
+        Some("replace") => {
+            match std::fs::remove_file(partial) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(TakeOver::Io(e)),
+            }
+            std::fs::remove_file(path).map_err(TakeOver::Io)
+        }
+        _ => Err(TakeOver::Refused),
+    }
 }
 
 /// Bytes re-fetched before a resume point and compared with the partial file's tail: a
@@ -515,6 +585,34 @@ mod tests {
 
     use super::*;
 
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn an_existing_file_is_refused_unless_the_user_chose_resume_or_replace() {
+        let dir = std::env::temp_dir().join(format!("ps5u-dl-takeover-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("game.pkg");
+        let partial = partial_path(&path);
+
+        std::fs::write(&path, b"short").unwrap();
+        assert!(matches!(
+            take_over_existing(&path, &partial, None),
+            Err(TakeOver::Refused)
+        ));
+        assert!(path.exists());
+
+        // Resume: the file becomes the partial, so its bytes are checked and reused.
+        take_over_existing(&path, &partial, Some("resume")).unwrap();
+        assert!(!path.exists());
+        assert_eq!(std::fs::read(&partial).unwrap(), b"short");
+
+        // Replace: both the file and any partial go.
+        std::fs::write(&path, b"other").unwrap();
+        take_over_existing(&path, &partial, Some("replace")).unwrap();
+        assert!(!path.exists());
+        assert!(!partial.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_url_cannot_name_a_file_outside_the_download_directory() {
         assert_eq!(safe_file_name("../../etc/passwd"), "passwd");
@@ -632,6 +730,7 @@ mod tests {
             insecure_tls: false,
             dest_dir: Some(dir.display().to_string()),
             keep_name: false,
+            existing: None,
         };
         let resp = start_handler(State(state.clone()), Json(req())).await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -657,6 +756,49 @@ mod tests {
         // Once it ended (failed here), the file is free again.
         *live.error.lock().unwrap() = Some("x".into());
         assert!(register_unless_busy(&state, "third", download_for(&dir, 5)).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A different file under the name is refused with its size (so the UI can offer Resume
+    /// or Replace), and never taken over while a live download owns the name.
+    #[cfg(not(target_os = "android"))]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_existing_file_is_described_and_a_live_download_is_never_taken_over() {
+        use crate::remote_pkg::origin_tests::{body, spawn_origin};
+        let data = body(100_000);
+        let origin = spawn_origin(data.clone(), 0, false);
+        let dir = scratch("exists");
+        let path = dir.join("game.pkg");
+        std::fs::write(&path, &data[..10]).unwrap();
+        let state: DownloadStateHandle = Arc::default();
+        let req = |existing: Option<&str>| DownloadStartRequest {
+            url: format!("http://{}/game.pkg", origin.addr),
+            insecure_tls: false,
+            dest_dir: Some(dir.display().to_string()),
+            keep_name: false,
+            existing: existing.map(str::to_string),
+        };
+        let resp = start_handler(State(state.clone()), Json(req(None))).await;
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        let json: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(json["existing_bytes"], 10);
+        assert_eq!(json["total"], data.len() as u64);
+        assert!(json["existing_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("game.pkg"));
+
+        // A live download of the same name answers with its id; the file stays put.
+        let live = download_for(&dir, data.len() as u64);
+        register_unless_busy(&state, "first", live).unwrap();
+        let resp = start_handler(State(state.clone()), Json(req(Some("replace")))).await;
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        assert_eq!(std::fs::read(&path).unwrap(), &data[..10]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

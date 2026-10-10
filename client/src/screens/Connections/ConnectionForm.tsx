@@ -241,7 +241,7 @@ export function ConnectionFormView(p: ConnectionFormProps) {
           </p>
           {failed.hint && <p className="text-xs text-[var(--color-muted)]">{failed.hint}</p>}
           {failed.host_key && (
-            <div className="flex flex-wrap items-center gap-2 rounded-md border border-[var(--color-border)] p-2 text-xs">
+            <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] p-2 text-xs">
               <AlertTriangle size={14} className="text-[var(--color-warn)]" />
               <span className="min-w-0 flex-1">
                 {/changed/i.test(failed.error)

@@ -614,7 +614,7 @@ describe("describeInstallSample (stream state naming)", () => {
     const s = { ...base, phase: "download", transferBytes: 100 };
     expect(describeInstallSample(s, 0).detail).not.toMatch(/\/s/);
     expect(describeInstallSample(s, 90 * 1024 * 1024).detail).toMatch(
-      /at 90 MB\/s/,
+      /at 90.0 MiB\/s/,
     );
   });
 });

@@ -5,6 +5,7 @@ import { Button, Spinner } from "../../components";
 import { ProgressBar } from "../../components/ProgressBar";
 import { formatBytes } from "../../lib/format";
 import { invoke } from "../../lib/invokeLogged";
+import { startLinkDownload } from "../../lib/linkDownload";
 import { pickPath } from "../../lib/pickPath";
 import { useLinkInstallPrefs } from "../../state/linkInstallPrefs";
 import {
@@ -25,13 +26,19 @@ import { RarPasswordPrompt } from "../Upload/RarPasswordPrompt";
 /** Downloads a link to this computer under the file's own name (parts of a set find each
  *  other by name), with the engine's ordinary link downloader. */
 const linkDeps: ArchiveLinkDeps = {
-  start: (url, insecureTls) =>
-    invoke("pkg_remote_download_start", {
-      url,
-      insecureTls,
-      destDir: null,
-      keepName: true,
-    }),
+  start: async (url, insecureTls) => {
+    const r = await startLinkDownload({ url, insecureTls, destDir: null, keepName: true });
+    if (r.kind === "started") return { download_id: r.id, path: r.path, total: r.total };
+    // Already downloading (a second click, another tab): follow that download.
+    if (r.kind === "attached") {
+      const st = (await invoke("pkg_remote_download_status", { id: r.id })) as {
+        path?: string;
+        total?: number;
+      };
+      return { download_id: r.id, path: st.path, total: st.total };
+    }
+    throw new Error(`${r.message} Move or rename that file, then try again.`);
+  },
   status: (id) => invoke("pkg_remote_download_status", { id }),
   cancel: (id) => invoke("pkg_remote_download_cancel", { id }),
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -117,7 +124,7 @@ export function ArchivePackagesCard({ host }: { host: string }) {
 
   return (
     <section
-      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
+      className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] p-4"
       data-testid="archive-packages-card"
     >
       <header className="mb-1 flex items-center gap-2">
@@ -162,7 +169,7 @@ export function ArchivePackagesCard({ host }: { host: string }) {
       </div>
       {/* The archive is behind download links (often several, one per part of a split RAR):
           fetch the parts to this computer, then carry on as if the first had been chosen. */}
-      <details className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] text-xs">
+      <details className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mt-3 text-xs">
         <summary className="cursor-pointer px-3 py-2 text-[var(--color-text)]">
           {tr(
             "arcpkg.links.title",
@@ -184,7 +191,7 @@ export function ArchivePackagesCard({ host }: { host: string }) {
             disabled={busy || !!dl}
             rows={3}
             placeholder={LINKS_PLACEHOLDER}
-            className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2.5 py-2 font-mono text-xs text-[var(--color-text)] placeholder:text-[var(--color-muted)]"
+            className="input w-full! font-mono text-xs"
             data-testid="archive-links"
           />
           <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -265,7 +272,7 @@ export function ArchivePackagesCard({ host }: { host: string }) {
       )}
       {st?.packages && st.packages.length > 0 && (
         <div className="mt-3">
-          <ul className="mb-2 max-h-40 overflow-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] text-xs">
+          <ul className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mb-2 max-h-40 overflow-auto text-xs">
             {st.packages.map((p) => (
               <li
                 key={p.path}

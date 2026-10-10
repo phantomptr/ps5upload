@@ -41,7 +41,7 @@ function Requirements() {
   const tr = useTr();
   const [open, setOpen] = useState(false);
   return (
-    <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface)]">
+    <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)]">
       <button
         type="button"
         className="flex w-full items-center gap-1.5 p-2 text-left text-xs text-[var(--color-muted)] hover:text-[var(--color-fg)]"

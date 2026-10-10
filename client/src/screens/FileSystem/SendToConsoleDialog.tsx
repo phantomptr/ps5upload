@@ -145,10 +145,10 @@ export function SendToConsoleDialog({
                     setTarget(h);
                     setDest(startDir);
                   }}
-                  className={`flex items-center gap-2 rounded-md border px-3 py-2 text-left text-sm ${
+                  className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] flex items-center gap-2 px-3.5 py-3 text-left text-sm ${
                     on
-                      ? "border-[var(--color-accent)] bg-[var(--color-accent)]/10"
-                      : "border-[var(--color-border)] hover:bg-[var(--color-surface-3)]"
+                      ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] ring-1 ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)]"
+                      : "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-raised)]"
                   }`}
                 >
                   <Monitor size={16} className="shrink-0 text-[var(--color-muted)]" />
@@ -190,10 +190,10 @@ export function SendToConsoleDialog({
                         key={path}
                         type="button"
                         onClick={() => setDest(path)}
-                        className={`flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left text-xs ${
+                        className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] flex w-full items-center gap-2 px-3.5 py-2.5 text-left text-xs ${
                           dest === path
-                            ? "border-[var(--color-accent)] bg-[var(--color-accent)]/10"
-                            : "border-[var(--color-border)] hover:bg-[var(--color-surface-3)]"
+                            ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] ring-1 ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)]"
+                            : "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-raised)]"
                         }`}
                       >
                         <Icon size={14} className="shrink-0" />
@@ -215,7 +215,7 @@ export function SendToConsoleDialog({
                   onClick={() => setDest(parentDir(dest))}
                   disabled={dest === "/"}
                   aria-label={tr("fs_up", undefined, "Up")}
-                  className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)] disabled:opacity-40"
+                  className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-1 disabled:opacity-40"
                 >
                   <ArrowUp size={14} />
                 </button>
@@ -223,7 +223,7 @@ export function SendToConsoleDialog({
                   {dest}
                 </span>
               </div>
-              <div className="max-h-48 overflow-y-auto rounded-md border border-[var(--color-border)]">
+              <div className="max-h-48 overflow-y-auto rounded-[var(--radius-card)] border border-[var(--glass-edge)]">
                 {listing === null ? (
                   <div className="p-2 text-xs text-[var(--color-muted)]">
                     {tr("loading", undefined, "Loading…")}
@@ -255,9 +255,9 @@ export function SendToConsoleDialog({
         <div
           className={`grid gap-1 rounded-md border p-2 text-sm ${
             plan.fits === "no"
-              ? "border-[var(--color-bad)] bg-[var(--color-bad-soft)]"
+              ? "border-[color-mix(in_srgb,var(--color-bad)_40%,transparent)] bg-[var(--color-bad-soft)]"
               : plan.fits === "tight" || plan.replacing.length > 0
-                ? "border-[var(--color-warn)] bg-[var(--color-warn-soft)]"
+                ? "border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[var(--color-warn-soft)]"
                 : "border-[var(--color-border)] bg-[var(--color-surface-2)]"
           }`}
           data-testid="send-console-summary"

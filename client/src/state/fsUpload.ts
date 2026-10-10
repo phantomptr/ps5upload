@@ -146,7 +146,7 @@ export interface FsUploadDeps {
   /** `capMbps`: the upload speed limit (0 = none), read as each job starts. */
   startFile: (src: string, dest: string, addr: string, capMbps: number) => Promise<string>;
   startDir: (src: string, dest: string, addr: string, capMbps: number) => Promise<string>;
-  /** The user's upload speed limit in MB/s, 0 = none. Absent: no limit. */
+  /** The user's upload speed limit in MiB/s, 0 = none. Absent: no limit. */
   bandwidthCapMbps?: () => number;
   jobStatus: (jobId: string) => Promise<JobSnapshot>;
   jobCancel: (jobId: string) => Promise<void>;

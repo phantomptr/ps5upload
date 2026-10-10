@@ -17,12 +17,13 @@ import {
   Button,
   ConnectionGate,
   Badge,
+  ProgressBar,
 } from "../../components";
 // Direct import to avoid the barrel's circular-dep warning at build.
 import { useConfirm } from "../../components/ConfirmDialog";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { useTr } from "../../state/lang";
-import { formatStorageBytes } from "../../lib/format";
+import { formatBytes } from "../../lib/format";
 import { hostOf, transferAddr } from "../../lib/addr";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { isInternalVolume, usePkgStorageStore } from "../../lib/pkgStorage";
@@ -36,8 +37,8 @@ import { KeptByApp } from "./KeptByApp";
  *  FS_MOUNT_BASE in payload/src/runtime.c. */
 const PS5UPLOAD_MOUNT_PREFIX = "/mnt/ps5upload/";
 
-// Volume cards use formatStorageBytes (decimal GB/TB) from lib/format.ts
-// so capacity matches the PS5's own base-1000 storage figures.
+// Volume cards use formatBytes (IEC GiB/TiB) like every other size in the
+// app, so a drive's free space reads the same here as on Files and Upload.
 
 export default function VolumesScreen() {
   const tr = useTr();
@@ -219,6 +220,11 @@ export default function VolumesScreen() {
                 "Couldn't read volumes",
               )}
               detail={error}
+              action={
+                <Button variant="secondary" size="sm" onClick={() => void refresh()}>
+                  {tr("volumes_retry", undefined, "Retry")}
+                </Button>
+              }
             />
           </div>
         )}
@@ -354,7 +360,7 @@ function MountedImageCard({
     return slash >= 0 ? trimmed.slice(slash + 1) || trimmed : trimmed;
   })();
   return (
-    <article className="flex flex-col gap-3 rounded-lg border border-[var(--color-accent)] bg-[var(--color-surface-2)] p-4">
+    <article className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-surface-raised)] p-5 shadow-[var(--edge-highlight),var(--shadow-1)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold">{name}</div>
@@ -386,21 +392,16 @@ function MountedImageCard({
         <div>
           <div className="mb-1 flex items-baseline justify-between text-xs text-[var(--color-muted)]">
             <span>
-              {formatStorageBytes(v.free_bytes)}{" "}
+              {formatBytes(v.free_bytes)}{" "}
               {tr("volumes_free_of_mounted", undefined, "free of")}{" "}
-              {formatStorageBytes(v.total_bytes)}
+              {formatBytes(v.total_bytes)}
             </span>
             <span className="tabular-nums">
               {pct.toFixed(0)}
               {tr("volumes_pct_used_mounted", undefined, "% used")}
             </span>
           </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
-            <div
-              className="h-full bg-[var(--color-accent)] transition-[width] duration-300"
-              style={{ width: `${pct}%` }}
-            />
-          </div>
+          <ProgressBar size="sm" value={pct / 100} label={v.path} />
         </div>
       )}
 
@@ -453,7 +454,7 @@ export function StorageCard({
       ? Math.max(0, Math.min(100, 100 - (v.free_bytes / v.total_bytes) * 100))
       : 0;
   return (
-    <article className="flex flex-col gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+    <article className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-5 shadow-[var(--edge-highlight),var(--shadow-1)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate font-mono text-sm">{v.path}</div>
@@ -481,9 +482,9 @@ export function StorageCard({
         <div>
           <div className="mb-1 flex items-baseline justify-between text-xs text-[var(--color-muted)]">
             <span>
-              {formatStorageBytes(v.free_bytes)}{" "}
+              {formatBytes(v.free_bytes)}{" "}
               {tr("volumes_free_of_storage", undefined, "free of")}{" "}
-              {formatStorageBytes(v.total_bytes)}
+              {formatBytes(v.total_bytes)}
             </span>
             <span className="tabular-nums">
               {pct.toFixed(0)}
@@ -494,7 +495,7 @@ export function StorageCard({
             <div className="mb-2 text-xs text-[var(--color-muted)]">
               {tr(
                 "volumes_kept_by_console",
-                { kept: formatStorageBytes(consoleKeptBytes) },
+                { kept: formatBytes(consoleKeptBytes) },
                 "{kept} kept by the console for its own use",
               )}
             </div>
@@ -505,10 +506,10 @@ export function StorageCard({
                 {tr(
                   "volumes_upload_safe_capacity",
                   {
-                    safe: formatStorageBytes(uploadSafeBytes),
+                    safe: formatBytes(uploadSafeBytes),
                     // Everything between "free" and "likely to fit": the working margin,
                     // and on internal storage what the PS5 holds back as it writes.
-                    reserve: formatStorageBytes(
+                    reserve: formatBytes(
                       Math.max(0, v.free_bytes - uploadSafeBytes),
                     ),
                   },
@@ -516,18 +517,12 @@ export function StorageCard({
                 )}
               </div>
             )}
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
-            <div
-              className={`h-full transition-[width] duration-300 ${
-                pct >= 95
-                  ? "bg-[var(--color-bad)]"
-                  : pct >= 80
-                    ? "bg-[var(--color-warn)]"
-                    : "bg-[var(--color-accent)]"
-              }`}
-              style={{ width: `${pct}%` }}
-            />
-          </div>
+          <ProgressBar
+            size="sm"
+            value={pct / 100}
+            tone={pct >= 95 ? "bad" : pct >= 80 ? "warn" : "accent"}
+            label={v.path}
+          />
         </div>
       )}
       {v.writable && !v.is_placeholder && !isPackageDrive && (

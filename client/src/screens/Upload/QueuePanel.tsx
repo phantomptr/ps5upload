@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -31,6 +31,7 @@ import { usePackageViewer } from "../../state/packageViewer";
 import { GameIcon } from "../../components/GameIcon";
 import { PlatformBadge } from "../../components/PlatformBadge";
 import { humanizeJobErrorReason } from "../../api/ps5";
+import { humanizePs5Error } from "../../lib/humanizeError";
 import { hostOf } from "../../lib/addr";
 import {
   platformForTitleId,
@@ -147,7 +148,7 @@ export function queueSections(
 
 /** The console queue. On Upload it shows every console; Install Package
  *  passes `host` to show just the console being installed to. */
-export function QueuePanel({ host }: { host?: string } = {}) {
+export const QueuePanel = memo(function QueuePanel({ host }: { host?: string } = {}) {
   const tr = useTr();
   const allItems = useUploadQueueStore((s) => s.items);
   const items = useMemo(() => queueItemsForHost(allItems, host), [allItems, host]);
@@ -215,7 +216,7 @@ export function QueuePanel({ host }: { host?: string } = {}) {
   const multiConsole = groups.length > 1;
 
   return (
-    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-5">
       {!isLeader && (
         <div
           role="status"
@@ -362,7 +363,7 @@ export function QueuePanel({ host }: { host?: string } = {}) {
       </div>
     </section>
   );
-}
+});
 
 /** The queue's counts as small chips — only the states that have any, so
  *  "2 total · 0 done · 1 pending · 0 failed" becomes "1 in progress · 1
@@ -550,7 +551,7 @@ function ConsoleGroup({
     <div
       className={`rounded-md border ${
         hostRunning
-          ? "border-[var(--color-accent)]"
+          ? "border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)]"
           : "border-[var(--color-border)]"
       } bg-[var(--color-surface)]`}
     >
@@ -558,7 +559,7 @@ function ConsoleGroup({
         <button
           type="button"
           onClick={() => setCollapsed((c) => !c)}
-          className="flex min-w-0 items-center gap-2 rounded-sm px-1 py-0.5 text-left transition-colors hover:bg-[var(--color-surface-3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+          className="flex min-w-0 items-center gap-2 rounded-full px-1 py-0.5 text-left transition-colors hover:bg-[var(--color-surface-3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
           title={
             collapsed
               ? tr("queue_group_expand", undefined, "Show this console's queue")
@@ -740,14 +741,14 @@ export function QueueRow({
 
   return (
     <li
-      className={`rounded-md border text-sm transition-colors ${
-        isActive ? "p-3" : "px-3 py-2"
+      className={`rounded-[var(--radius-card)] border text-sm shadow-[var(--edge-highlight),var(--shadow-1)] transition-colors ${
+        isActive ? "px-4 py-3.5" : "px-4 py-3"
       } ${
         item.status === "failed"
-          ? "border-[var(--color-bad)] bg-[var(--color-surface)]"
+          ? "border-[color-mix(in_srgb,var(--color-bad)_35%,transparent)] bg-[var(--color-surface-raised)]"
           : isActive
-            ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)]"
-            : "border-[var(--color-border)] bg-[var(--color-surface)]"
+            ? "border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-surface-raised)]"
+            : "border-[var(--glass-edge)] bg-[var(--color-surface-raised)]"
       }`}
     >
       {confirmNode}
@@ -908,7 +909,7 @@ export function QueueRow({
                 disabled={!canMoveUp}
                 title={tr("queue_move_up", undefined, "Move up")}
                 aria-label={tr("queue_move_up", undefined, "Move up")}
-                className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+                className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
               >
                 <ArrowUp size={14} />
               </button>
@@ -918,7 +919,7 @@ export function QueueRow({
                 disabled={!canMoveDown}
                 title={tr("queue_move_down", undefined, "Move down")}
                 aria-label={tr("queue_move_down", undefined, "Move down")}
-                className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+                className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
               >
                 <ArrowDown size={14} />
               </button>
@@ -930,7 +931,7 @@ export function QueueRow({
               onClick={() => usePackageViewer.getState().open(viewPath)}
               title={tr("viewer_open", undefined, "View details")}
               aria-label={tr("viewer_open", undefined, "View details")}
-              className={`rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] ${
+              className={`rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] ${
                 isActive ? "" : "hidden sm:block"
               }`}
             >
@@ -948,7 +949,7 @@ export function QueueRow({
                 onClick={() => void stopInstall()}
                 title={tr("queue_stop_install", undefined, "Stop this install")}
                 aria-label={tr("queue_stop_install", undefined, "Stop this install")}
-                className="rounded p-1 text-[var(--color-bad)] hover:bg-[var(--color-bad)] hover:text-[var(--color-accent-contrast)]"
+                className="rounded-full p-1.5 text-[var(--color-bad)] hover:bg-[var(--color-bad)] hover:text-[var(--color-accent-contrast)]"
               >
                 <Ban size={14} />
               </button>
@@ -967,7 +968,7 @@ export function QueueRow({
                 undefined,
                 "Cancel this upload (keeps the rest of the queue going)",
               )}
-              className="rounded p-1 text-[var(--color-bad)] hover:bg-[var(--color-bad)] hover:text-[var(--color-accent-contrast)]"
+              className="rounded-full p-1.5 text-[var(--color-bad)] hover:bg-[var(--color-bad)] hover:text-[var(--color-accent-contrast)]"
             >
               <Ban size={14} />
             </button>
@@ -977,7 +978,7 @@ export function QueueRow({
               onClick={onRemove}
               title={tr("queue_remove", undefined, "Remove from queue")}
               aria-label={tr("queue_remove", undefined, "Remove from queue")}
-              className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-bad)] hover:text-[var(--color-accent-contrast)]"
+              className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-bad)] hover:text-[var(--color-accent-contrast)]"
             >
               <X size={14} />
             </button>
@@ -986,7 +987,7 @@ export function QueueRow({
       </div>
 
       {isRecovering && (
-        <div className="mt-2 flex items-center gap-2 rounded-md bg-[var(--color-warn)]/10 px-2 py-1.5 text-xs text-[var(--color-warn)]">
+        <div className="mt-2 flex items-center gap-2 rounded-[var(--radius-field)] bg-[var(--color-warn)]/10 px-2 py-1.5 text-xs text-[var(--color-warn)]">
           <Spinner size={12} className="shrink-0" />
           <span>
             {tr(
@@ -1116,6 +1117,15 @@ export function QueueRow({
           rawError={item.error}
           reason={item.errorReason}
           detail={item.errorDetail}
+          // An install has its own retry choices below; an upload re-runs from here.
+          onRetry={
+            isInstall
+              ? undefined
+              : () => {
+                  if (useUploadQueueStore.getState().retryItem(item.id))
+                    void useUploadQueueStore.getState().startHost(hostOf(item.addr), { onlyIds: [item.id] });
+                }
+          }
         />
       )}
       {partialUploadPath(item) && <PartialFileNote id={item.id} path={partialUploadPath(item)!} />}
@@ -1356,17 +1366,28 @@ function FailedRowErrorCard({
   rawError,
   reason,
   detail,
+  onRetry,
 }: {
   rawError: string;
   reason: string | null;
   detail: string | null;
+  onRetry?: () => void;
 }) {
   const tr = useTr();
   const humanized = humanizeJobErrorReason(reason ?? undefined);
+  // Without a reason code the raw error is still said for a person first.
+  const plain = humanized ? null : humanizePs5Error(rawError);
   return (
     <div className="mt-2">
       <ErrorCard
-        title={humanized ?? tr("queue_error", "Error")}
+        title={humanized ?? tr("queue_upload_failed", undefined, "Didn't finish")}
+        action={
+          onRetry && (
+            <Button variant="secondary" size="sm" leftIcon={<RotateCcw size={12} />} onClick={onRetry}>
+              {tr("queue_retry_item", undefined, "Retry")}
+            </Button>
+          )
+        }
         detail={
           humanized ? (
             <>
@@ -1393,10 +1414,20 @@ function FailedRowErrorCard({
                 </code>
               </details>
             </>
+          ) : plain && plain !== rawError ? (
+            <>
+              <div className="text-xs">{plain}</div>
+              <details className="mt-1 cursor-pointer">
+                <summary className="text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]">
+                  {tr("queue_raw_error", "raw error")}
+                </summary>
+                <code className="mt-1 block whitespace-pre-wrap break-all font-mono text-xs text-[var(--color-muted)]">
+                  {rawError}
+                </code>
+              </details>
+            </>
           ) : (
-            <code className="block whitespace-pre-wrap break-all font-mono text-xs">
-              {rawError}
-            </code>
+            <span className="block whitespace-pre-wrap break-words text-xs">{rawError}</span>
           )
         }
       />

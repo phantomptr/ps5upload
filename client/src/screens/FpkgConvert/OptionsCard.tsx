@@ -45,7 +45,7 @@ export function OptionsCard(props: OptionsCardProps) {
           <div className="flex gap-2">
             <input
               id="fpkg-output"
-              className="min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-transparent px-2 py-1"
+              className="input min-w-0 flex-1"
               placeholder={tr("fpkg.outputHint", undefined, "Default: ~/Downloads/fpkgs")}
               value={props.outputDir}
               disabled={props.locked}
@@ -95,7 +95,7 @@ export function OptionsCard(props: OptionsCardProps) {
             </label>
             <select
               id="fpkg-language"
-              className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1"
+              className="select w-auto!"
               value={props.language ?? ""}
               disabled={props.locked}
               onChange={(e) => props.onLanguage?.(e.target.value)}
