@@ -106,10 +106,6 @@ fn err(code: StatusCode, msg: impl Into<String>) -> Response {
     (code, Json(json!({ "error": msg.into() }))).into_response()
 }
 
-fn gib(n: u64) -> String {
-    format!("{:.1} GB", n as f64 / 1e9)
-}
-
 fn running(started_at_ms: u64, bytes_sent: u64, total_bytes: u64) -> JobState {
     JobState::Running {
         stage: None,
@@ -215,8 +211,8 @@ pub(crate) async fn start_fetch(r: Arc<Remote>, deps: FetchDeps, body: FetchBody
                 StatusCode::INSUFFICIENT_STORAGE,
                 format!(
                     "Not enough space: needs {}, {} free.",
-                    gib(total + HEADROOM),
-                    gib(free)
+                    ps5upload_core::units::iec_bytes(total + HEADROOM),
+                    ps5upload_core::units::iec_bytes(free)
                 ),
             );
         }

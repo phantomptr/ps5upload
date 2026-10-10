@@ -660,7 +660,7 @@ pub fn cheats_repo_download(
             return Ok(CheatDownloadResponse {
                 ok: false,
                 error: Some(format!(
-                    "file too large for fast write ({} bytes > 256 KB); use the transfer pipeline",
+                    "file too large for fast write ({} bytes > 256 KiB); use the transfer pipeline",
                     bytes.len()
                 )),
                 ..Default::default()
