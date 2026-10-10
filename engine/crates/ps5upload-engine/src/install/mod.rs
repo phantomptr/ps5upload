@@ -20,13 +20,25 @@ use status::{FailReason, InstallStatus, Phase, Verdict};
 
 /// One install job per console at a time. `begin` reserves the console;
 /// `finish` releases it. Statuses live here until the process restarts (the
-/// durable record is the history log).
+/// durable record is the history log), up to `KEEP_FINISHED` finished ones.
+///
+/// Every lock recovers from poisoning: the maps stay consistent between
+/// statements, and a panic in one console's install must not break every
+/// console's installs until a restart.
 pub struct JobStore {
     jobs: Mutex<HashMap<String, InstallStatus>>,
     active: Mutex<HashMap<String, String>>, // console_id -> job_id
     seq: Mutex<u64>,
     /// Jobs the user asked to stop; the delivery wait checks this each round.
     cancelled: Mutex<std::collections::HashSet<String>>,
+}
+
+/// Finished statuses kept for `/api/pkg/install/status` (the client reads a job's result
+/// shortly after it ends); older ones are dropped.
+const KEEP_FINISHED: usize = 200;
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 impl Default for JobStore {
@@ -46,7 +58,7 @@ impl JobStore {
     }
 
     fn new_job_id(&self) -> String {
-        let mut s = self.seq.lock().unwrap();
+        let mut s = lock(&self.seq);
         *s += 1;
         format!("{}-{}", status::now_unix(), *s)
     }
@@ -55,28 +67,28 @@ impl JobStore {
     /// install is already running for that console.
     pub fn begin(&self, ps5_addr: &str) -> Result<String, String> {
         let cid = console_id(ps5_addr);
-        let mut active = self.active.lock().unwrap();
+        let mut active = lock(&self.active);
         if let Some(j) = active.get(&cid) {
             return Err(j.clone());
         }
         let job = self.new_job_id();
         active.insert(cid, job.clone());
-        self.jobs
-            .lock()
-            .unwrap()
-            .insert(job.clone(), InstallStatus::new(&job, ps5_addr, ""));
+        lock(&self.jobs).insert(job.clone(), InstallStatus::new(&job, ps5_addr, ""));
         Ok(job)
     }
 
+    /// Release the console's slot (if this job still holds it), forget the job's
+    /// stop request and drop the oldest finished statuses past `KEEP_FINISHED`.
     pub fn finish(&self, job: &str) {
-        let cid = self
-            .jobs
-            .lock()
-            .unwrap()
-            .get(job)
-            .map(|st| console_id(&st.ps5_addr));
+        let cid = {
+            let mut jobs = lock(&self.jobs);
+            let cid = jobs.get(job).map(|st| console_id(&st.ps5_addr));
+            prune_finished(&mut jobs, KEEP_FINISHED);
+            cid
+        };
+        lock(&self.cancelled).remove(job);
         if let Some(cid) = cid {
-            let mut active = self.active.lock().unwrap();
+            let mut active = lock(&self.active);
             // only clear if this job still owns the slot
             if active.get(&cid).map(|j| j.as_str()) == Some(job) {
                 active.remove(&cid);
@@ -84,39 +96,50 @@ impl JobStore {
         }
     }
 
+    /// The install task ended without finishing the job (it panicked): a job still
+    /// marked running is marked failed so the client stops waiting, and the slot is
+    /// released. A job that finished normally was already released; nothing changes.
+    pub fn abandon(&self, job: &str) {
+        let holds_slot = lock(&self.active).values().any(|j| j == job);
+        if !holds_slot {
+            return;
+        }
+        self.update(job, |st| {
+            if !matches!(st.phase, Phase::Done | Phase::Failed) {
+                st.phase = Phase::Failed;
+                st.verdict = Some(Verdict::Failed);
+                st.hint = Some("the install stopped unexpectedly (see the engine log)".into());
+            }
+        });
+        self.finish(job);
+    }
+
     /// Whether any console has an install running.
     pub fn any_active(&self) -> bool {
-        !self
-            .active
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_empty()
+        !lock(&self.active).is_empty()
     }
 
     /// Ask a running job to stop. False when there is no such job or it already ended.
     pub fn request_cancel(&self, job: &str) -> bool {
-        let running = self
-            .jobs
-            .lock()
-            .unwrap()
+        let running = lock(&self.jobs)
             .get(job)
             .is_some_and(|st| !matches!(st.phase, Phase::Done | Phase::Failed));
         if running {
-            self.cancelled.lock().unwrap().insert(job.to_string());
+            lock(&self.cancelled).insert(job.to_string());
         }
         running
     }
 
     pub fn is_cancelled(&self, job: &str) -> bool {
-        self.cancelled.lock().unwrap().contains(job)
+        lock(&self.cancelled).contains(job)
     }
 
     pub fn get(&self, job: &str) -> Option<InstallStatus> {
-        self.jobs.lock().unwrap().get(job).cloned()
+        lock(&self.jobs).get(job).cloned()
     }
 
     pub fn update(&self, job: &str, f: impl FnOnce(&mut InstallStatus)) {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = lock(&self.jobs);
         if let Some(st) = jobs.get_mut(job) {
             f(st);
             st.updated_at = status::now_unix();
@@ -124,13 +147,47 @@ impl JobStore {
     }
 }
 
-/// The per-console key: the host part of the address, port-stripped, so
-/// `ip:9114` and `ip:9113` and a bare `ip` all map to one console.
-pub fn console_id(ps5_addr: &str) -> String {
-    match ps5_addr.rsplit_once(':') {
-        Some((host, _)) => host.to_string(),
-        None => ps5_addr.to_string(),
+/// Drops the oldest finished statuses until at most `keep` remain. Running ones stay.
+fn prune_finished(jobs: &mut HashMap<String, InstallStatus>, keep: usize) {
+    let mut finished: Vec<(u64, String)> = jobs
+        .values()
+        .filter(|st| matches!(st.phase, Phase::Done | Phase::Failed))
+        .map(|st| (st.updated_at, st.job.clone()))
+        .collect();
+    if finished.len() <= keep {
+        return;
     }
+    finished.sort();
+    let excess = finished.len() - keep;
+    for (_, job) in finished.into_iter().take(excess) {
+        jobs.remove(&job);
+    }
+}
+
+/// Releases a console's install slot when dropped: when the install task ends,
+/// including by a panic, which used to leave the console "busy" until a restart.
+pub struct SlotRelease {
+    state: crate::pkg_install::PkgInstallStateHandle,
+    job: String,
+}
+
+impl SlotRelease {
+    pub fn new(state: crate::pkg_install::PkgInstallStateHandle, job: String) -> Self {
+        Self { state, job }
+    }
+}
+
+impl Drop for SlotRelease {
+    fn drop(&mut self) {
+        self.state.jobs.abandon(&self.job);
+    }
+}
+
+/// The per-console key: the host part of the address, port-stripped, so
+/// `ip:<port>` and a bare `ip` map to one console. Bracketed and bare IPv6
+/// addresses keep their whole host (a plain split at the last colon cut them).
+pub fn console_id(ps5_addr: &str) -> String {
+    ps5upload_core::events::console_host(ps5_addr)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -663,6 +720,8 @@ pub async fn install_handler(
     let st = state.clone();
     let job2 = job.clone();
     tokio::spawn(async move {
+        // Released however the task ends (finalize also releases it on the normal path).
+        let _slot = SlotRelease::new(st.clone(), job2.clone());
         run_install(st, job2, req).await;
     });
     Json(serde_json::json!({"ok":true,"job":job})).into_response()
@@ -1778,6 +1837,103 @@ mod tests {
             h.contains("Stream & install") && h.contains("Package Installer"),
             "{h}"
         );
+    }
+
+    /// A panicking install task released nothing: the console stayed "busy" until a
+    /// restart. The slot guard releases it and fails the job.
+    #[tokio::test]
+    async fn a_panicking_install_task_frees_the_console_and_fails_the_job() {
+        let state = std::sync::Arc::new(crate::pkg_install::PkgInstallState::default());
+        let job = state.jobs.begin("192.0.2.9:1234").unwrap();
+        let (st, j) = (state.clone(), job.clone());
+        let joined = tokio::spawn(async move {
+            let _slot = SlotRelease::new(st, j.clone());
+            if !j.is_empty() {
+                panic!("injected");
+            }
+        })
+        .await;
+        assert!(joined.is_err());
+        let after = state.jobs.get(&job).unwrap();
+        assert_eq!(after.phase, Phase::Failed);
+        assert_eq!(after.verdict, Some(Verdict::Failed));
+        assert!(
+            state.jobs.begin("192.0.2.9").is_ok(),
+            "the console is free again"
+        );
+    }
+
+    /// A job that finished normally keeps its result when the guard drops later.
+    #[test]
+    fn the_slot_guard_leaves_a_finished_job_alone() {
+        let state = std::sync::Arc::new(crate::pkg_install::PkgInstallState::default());
+        let job = state.jobs.begin("192.0.2.10").unwrap();
+        state.jobs.update(&job, |s| {
+            s.phase = Phase::Done;
+            s.verdict = Some(Verdict::Installed);
+        });
+        state.jobs.finish(&job);
+        let next = state.jobs.begin("192.0.2.10").unwrap();
+        drop(SlotRelease::new(state.clone(), job.clone()));
+        assert_eq!(
+            state.jobs.get(&job).unwrap().verdict,
+            Some(Verdict::Installed)
+        );
+        // ... and does not take the next job's slot.
+        assert_eq!(state.jobs.begin("192.0.2.10"), Err(next));
+    }
+
+    /// A poisoned lock (a panic while one was held) must not break every console.
+    #[test]
+    fn a_poisoned_store_still_works() {
+        let jobs = std::sync::Arc::new(JobStore::new());
+        let j2 = jobs.clone();
+        let _ = std::thread::spawn(move || {
+            let _held = j2.jobs.lock().unwrap();
+            let _held2 = j2.active.lock().unwrap();
+            panic!("poison");
+        })
+        .join();
+        assert!(jobs.jobs.is_poisoned());
+        let job = jobs.begin("192.0.2.11").unwrap();
+        assert!(jobs.get(&job).is_some());
+        assert!(jobs.request_cancel(&job));
+        jobs.finish(&job);
+        assert!(!jobs.any_active());
+    }
+
+    /// Finishing forgets the stop request and keeps only the newest finished statuses.
+    #[test]
+    fn finish_prunes_old_statuses_and_stop_requests() {
+        let jobs = JobStore::new();
+        let mut ids = Vec::new();
+        for i in 0..(KEEP_FINISHED + 5) {
+            let job = jobs
+                .begin(&format!("10.0.{}.{}", i / 250, i % 250))
+                .unwrap();
+            jobs.request_cancel(&job);
+            jobs.update(&job, |s| s.phase = Phase::Failed);
+            jobs.update(&job, |s| s.updated_at = i as u64);
+            jobs.finish(&job);
+            assert!(!jobs.is_cancelled(&job));
+            ids.push(job);
+        }
+        let running = jobs.begin("10.9.9.9").unwrap();
+        jobs.finish(&running); // still Resolve: never pruned
+        assert_eq!(jobs.jobs.lock().unwrap().len(), KEEP_FINISHED + 1);
+        assert!(jobs.get(&ids[0]).is_none(), "the oldest went");
+        assert!(jobs.get(ids.last().unwrap()).is_some());
+        assert!(jobs.get(&running).is_some());
+    }
+
+    #[test]
+    fn console_id_keeps_ipv6_hosts_whole() {
+        assert_eq!(console_id("192.0.2.7:1234"), "192.0.2.7");
+        assert_eq!(console_id("192.0.2.7"), "192.0.2.7");
+        assert_eq!(console_id("[fe80::1]:1234"), "fe80::1");
+        assert_eq!(console_id("fe80::1"), "fe80::1");
+        assert_eq!(console_id("fe80::1"), console_id("[fe80::1]:99"));
+        assert_ne!(console_id("fe80::1"), console_id("fe80::2"));
     }
 
     #[test]
