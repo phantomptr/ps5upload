@@ -65,7 +65,6 @@ const CapturesScreen = lazyWithReload(() => import("./screens/Captures"));
 const StatsScreen = lazyWithReload(() => import("./screens/Stats"));
 const ShellScreen = lazyWithReload(() => import("./screens/Shell"));
 const DiskUsageScreen = lazyWithReload(() => import("./screens/DiskUsage"));
-const DashboardScreen = lazyWithReload(() => import("./screens/Dashboard"));
 const AboutScreen = lazyWithReload(() => import("./screens/About"));
 const FAQScreen = lazyWithReload(() => import("./screens/FAQ"));
 const LogsScreen = lazyWithReload(() => import("./screens/Logs"));
@@ -482,14 +481,8 @@ function AppRoutes({ location }: { location: Location }) {
             </Suspense>
           }
         />
-        <Route
-          path="/dashboard"
-          element={
-            <Suspense fallback={<ScreenLoader />}>
-              <DashboardScreen />
-            </Suspense>
-          }
-        />
+        {/* The old Dashboard was a smaller copy of Home. */}
+        <Route path="/dashboard" element={<Navigate to="/home" replace />} />
         <Route
           path="/faq"
           element={

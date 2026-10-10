@@ -8,6 +8,9 @@ import { useThemeStore } from "../state/theme";
 import { selectConsoleByAddress } from "../state/roster";
 import { pushNotification } from "../state/notifications";
 import { useTr } from "../state/lang";
+import { useBetaFeaturesStore } from "../state/betaFeatures";
+import { isTauriEnv } from "../lib/tauriEnv";
+import { NAV_ITEMS, navItemVisible, PINNED_NAV_ITEMS } from "../layout/navItems";
 
 /**
  * Command palette — Cmd/Ctrl+K. Lists navigation targets and a small
@@ -21,6 +24,23 @@ import { useTr } from "../state/lang";
  * Closes on Escape, click-outside, or executing a command. Reset on
  * close so reopening always starts fresh.
  */
+
+/** Extra search words per screen (old names and synonyms). */
+const NAV_KEYWORDS: Record<string, string[]> = {
+  "/home": ["dashboard", "overview"],
+  "/connection": ["host", "ip", "connect"],
+  "/install-package": ["pkg"],
+  "/games": ["library", "apps", "installed"],
+  "/captures": ["screenshots", "videos", "clips"],
+  "/volumes": ["disk", "drives"],
+  "/files": ["browse", "file system"],
+  "/console": ["hardware", "temps", "power"],
+  "/payloads": ["homebrew catalog", "payload library", "kstuff", "shadowmount", "etahen"],
+  "/tasks": ["transfer log", "jobs"],
+  "/bug-report": ["report", "problem", "issue", "discord", "github"],
+  "/shell": ["terminal"],
+  "/faq": ["help"],
+};
 
 interface Command {
   id: string;
@@ -63,44 +83,17 @@ function useCommands(close: () => void): Command[] {
       },
     });
 
+    // Every screen the sidebar has (same labels, same visibility rules), so the palette can
+    // never list a screen that is gone or call one by an old name. Extra words help matching.
+    const beta = useBetaFeaturesStore.getState().enabled;
+    const screens = [...PINNED_NAV_ITEMS, ...NAV_ITEMS].filter(
+      (i) => (!i.hideInBrowser || isTauriEnv()) && navItemVisible(i, beta),
+    );
     return [
-      nav("/dashboard", "dashboard", "Dashboard", ["home", "overview"]),
-      nav("/connection", "connect", "Connection", ["host", "ip", "connect"]),
-      nav("/upload", "upload", "Upload"),
-      nav("/install-package", "install_package", "Install Package", ["pkg"]),
-      nav("/games", "library", "Library", ["games", "apps"]),
-      nav("/saves", "saves", "Save data"),
-      nav("/captures", "captures", "Screenshots & clips", ["screenshots", "videos", "clips", "captures"]),
-      nav("/search", "search", "Search"),
-      nav("/volumes", "volumes", "Volumes", ["disk", "drives"]),
-      nav("/disk-usage", "disk_usage", "Disk usage"),
-      nav("/files", "file_system", "File System", ["browse", "files"]),
-      nav("/console", "hardware", "Hardware", ["temps", "power"]),
-      // 2.12.0 merged the SendPayload + KernelLog screens into tabs.
-      // Keep old labels as keyword aliases for muscle memory; the
-      // canonical entries are now /payloads and /logs with tabs.
-      nav("/payloads", "payloads", "Payloads", [
-        "homebrew catalog",
-        "payload library",
-        "kstuff",
-        "shadowmount",
-        "etahen",
-      ]),
-      nav("/payloads?tab=send", "payloads_tab_send", "Send payload", [
-        "send payload",
-      ]),
-      nav("/tasks", "transfer_log_title", "Transfer Log"),
-      nav("/stats", "stats", "Stats"),
-      nav("/logs", "logs", "Logs"),
-      nav("/bug-report", "bug_report", "Bug report", ["report", "problem", "issue", "discord", "github"]),
-      nav("/logs?tab=kernel", "logs_tab_kernel", "Kernel log", [
-        "dmesg",
-        "klog",
-      ]),
-      nav("/shell", "shell", "Shell", ["terminal"]),
-      nav("/settings", "settings", "Settings"),
-      nav("/about", "about", "About"),
-      nav("/faq", "faq", "FAQ", ["help"]),
+      ...screens.map((i) => nav(i.to, i.key, i.fallback, NAV_KEYWORDS[i.to])),
+      // Tabs worth jumping to directly.
+      nav("/payloads?tab=send", "payloads_tab_send", "Send payload", ["send payload"]),
+      nav("/logs?tab=kernel", "logs_tab_kernel", "Kernel log", ["dmesg", "klog"]),
       {
         id: "theme:toggle",
         label: tr("cmdpalette_toggle_theme", undefined, "Toggle theme"),
