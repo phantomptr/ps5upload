@@ -14,6 +14,7 @@ import { saveReport, type SavedReport } from "../../lib/saveReport";
 import { fetchTimeline } from "../../lib/reportTimeline";
 import { DISCORD_REPORT_URL, GITHUB_ISSUES_URL } from "../../lib/reportProblem";
 import { openExternalUrl } from "../../lib/openExternalUrl";
+import { humanizePs5Error } from "../../lib/humanizeError";
 import type { ReportForm } from "../../lib/reportOutputs";
 import {
   clearDraft,
@@ -170,7 +171,7 @@ function BugReportPage({ host }: { host: string }) {
           />
           {/* Where the report goes, up front: both places are read. */}
           <div
-            className="flex flex-col gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 sm:flex-row sm:items-center"
+            className="surface-panel flex flex-col gap-3 p-5 sm:flex-row sm:items-center"
             data-testid="br-where"
           >
             <div className="min-w-0 flex-1">
@@ -219,13 +220,24 @@ function BugReportPage({ host }: { host: string }) {
           <Card title={tr("br_section_logs", undefined, "Logs")} icon={ScrollText}>
             <LogsSection draft={draft} update={update} />
           </Card>
-          {error && <ErrorCard title={tr("br_build_failed", undefined, "Couldn't build the report")} detail={error} />}
+          {error && (
+            <ErrorCard
+              title={tr("br_build_failed", undefined, "Couldn't build the report")}
+              detail={humanizePs5Error(error)}
+              onDismiss={() => setError(null)}
+              action={
+                <Button size="sm" onClick={() => void create()} disabled={busy || missing !== null}>
+                  {tr("retry", undefined, "Retry")}
+                </Button>
+              }
+            />
+          )}
         </div>
       </div>
 
       {/* Always in reach: what still blocks the report, and the button that creates it. */}
-      <div className="sticky bottom-0 z-10 border-t border-[var(--color-border)] bg-[var(--color-surface)]/95 px-4 backdrop-blur md:px-6">
-        <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center gap-x-3 gap-y-1.5 py-3">
+      <div className="sticky bottom-3 z-10 px-4 pb-1 md:px-8 max-md:bottom-[calc(var(--safe-bottom)+5rem)]">
+        <div className="glass-float mx-auto flex w-full max-w-3xl flex-wrap items-center gap-x-3 gap-y-1.5 rounded-[var(--radius-panel)] px-4 py-2.5">
           <Button variant="ghost" size="sm" onClick={discard}>
             {tr("br_discard", undefined, "Start over")}
           </Button>

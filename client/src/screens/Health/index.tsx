@@ -217,7 +217,7 @@ export default function HealthScreen() {
       />
 
       <ConnectionGate>
-        {error && <ErrorCard title={error} />}
+        {error && <ErrorCard title={error} onRetry={() => void scan()} />}
 
         {note && (
           <Card className="mb-4 border-[var(--color-good)]/40 p-3 text-sm">

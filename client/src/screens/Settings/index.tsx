@@ -1591,7 +1591,7 @@ function ArtworkCachePanel() {
           {tr("settings_artwork_cache_clear", undefined, "Clear cached artwork")}
         </Button>
       </div>
-      {error && <ErrorCard title={error} />}
+      {error && <ErrorCard title={error} onRetry={() => void clear()} />}
     </div>
   );
 }

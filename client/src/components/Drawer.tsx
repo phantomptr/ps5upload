@@ -87,7 +87,7 @@ export function Drawer({
 
   return (
     <div
-      className="anim-scrim fixed inset-0 z-50 bg-[var(--overlay-scrim)]"
+      className="anim-scrim scrim fixed inset-0 z-50"
       onClick={onClose}
     >
       <div

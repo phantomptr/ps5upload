@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router";
 import {
   Activity as ActivityIcon,
@@ -18,6 +18,8 @@ import {
   Badge,
 } from "../../components";
 import { TaskList } from "../../components/TaskList";
+import { Tabs } from "../../components/Tabs";
+import { MissedSchedules } from "./MissedSchedules";
 import { RunningEngineJobs } from "../../components/RunningEngineJobs";
 import { StatsPanel } from "./StatsPanel";
 import { parseActivityTab, stopActionFor, type ActivityTab } from "./activityView";
@@ -114,30 +116,18 @@ export default function ActivityScreen() {
         )}
         right={
           <div className="flex flex-wrap items-center gap-2">
-            <div
-              className="flex max-w-full overflow-x-auto rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-0.5 text-xs shadow-sm"
-              role="group"
-              aria-label={tr("activity_view_toggle", undefined, "View")}
-            >
-              <ViewButton
-                active={view === "tasks"}
-                onClick={() => setView("tasks")}
-              >
-                {tr("v5_tab_tasks", undefined, "Tasks")}
-              </ViewButton>
-              <ViewButton
-                active={view === "history"}
-                onClick={() => setView("history")}
-              >
-                {tr("activity_view_history", undefined, "History")}
-              </ViewButton>
-              <ViewButton
-                active={view === "stats"}
-                onClick={() => setView("stats")}
-              >
-                {tr("stats", undefined, "Stats")}
-              </ViewButton>
-            </div>
+            <Tabs
+              variant="segmented"
+              size="sm"
+              ariaLabel={tr("activity_view_toggle", undefined, "View")}
+              value={view}
+              onChange={(id) => setView(id as ActivityTab)}
+              tabs={[
+                { id: "tasks", label: tr("v5_tab_tasks", undefined, "Tasks") },
+                { id: "history", label: tr("activity_view_history", undefined, "History") },
+                { id: "stats", label: tr("stats", undefined, "Stats") },
+              ]}
+            />
             {view === "history" && entries.length > 0 ? (
               <Button
                 variant="ghost"
@@ -186,6 +176,7 @@ export default function ActivityScreen() {
       {/* The unified task projection and legacy operation history are separate
           views. Stacking both produced duplicate rows for the same upload and
           made it unclear which controls were authoritative. */}
+      {view === "tasks" && <MissedSchedules />}
       {view === "tasks" && <RunningEngineJobs />}
       {view === "tasks" && <TaskList />}
       {view === "tasks" && taskCount === 0 && (
@@ -235,7 +226,7 @@ export default function ActivityScreen() {
             <button
               type="button"
               onClick={() => clearRunning(scopeHost)}
-              className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs normal-case tracking-normal hover:bg-[var(--color-surface-3)]"
+              className="chip ml-auto min-h-7 px-3 text-xs font-medium normal-case tracking-normal"
               title={tr(
                 "activity_clear_running_tooltip",
                 undefined,
@@ -269,31 +260,6 @@ export default function ActivityScreen() {
 
       {confirmDialogNode}
     </div>
-  );
-}
-
-function ViewButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={`rounded-md px-2.5 py-1.5 max-md:min-h-11 max-md:px-4 font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ${
-        active
-          ? "bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
-          : "text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
-      }`}
-    >
-      {children}
-    </button>
   );
 }
 

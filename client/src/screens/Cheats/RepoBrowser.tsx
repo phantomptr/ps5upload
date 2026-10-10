@@ -9,12 +9,11 @@ import {
 import {
   Search,
   Download,
-  X,
   CheckCircle2,
   ExternalLink,
   Package,
 } from "lucide-react";
-import { Button, ErrorCard, Card, GameIcon, Spinner, Toggle } from "../../components";
+import { Button, ErrorCard, Card, GameIcon, Modal, Spinner, Toggle } from "../../components";
 import { hostOf } from "../../lib/addr";
 import { useTr } from "../../state/lang";
 import {
@@ -216,25 +215,15 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-      <div className="flex max-h-[85dvh] w-full max-w-2xl flex-col rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] shadow-xl">
-        <div className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
-          <div className="flex items-center gap-2">
-            <Package size={18} />
-            <h2 className="text-sm font-semibold">
-              {tr(
-                "cheats_download_title",
-                undefined,
-                "Download Community Cheats",
-              )}
-            </h2>
-          </div>
-          <button onClick={onClose} className="text-[var(--color-muted)] hover:text-[var(--color-text)]">
-            <X size={18} />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+    <Modal
+      open
+      onClose={onClose}
+      size="xl"
+      title={tr("cheats_download_title", undefined, "Download Community Cheats")}
+      titleIcon={<Package size={18} aria-hidden />}
+      panelClassName="max-h-[85dvh]"
+    >
+        <div className="space-y-4 p-5 sm:p-6">
           {repos.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {repos.map((r) => (
@@ -243,7 +232,7 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
                   href={`https://github.com/${r.name}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="badge flex items-center gap-1 hover:border-[var(--color-accent)]"
+                  className="chip min-h-7 gap-1 px-3 text-xs"
                 >
                   <ExternalLink size={10} />
                   {r.name}
@@ -260,7 +249,7 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
               <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
                 {tr("cheats_your_games", undefined, "Your games")}
               </div>
-              <div className="max-h-48 overflow-auto rounded border border-[var(--color-border)]">
+              <div className="max-h-48 overflow-auto rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)]">
                 {games.map((g) => (
                   <button
                     key={g.titleId}
@@ -330,8 +319,8 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
           {entries.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <select
-                className="input py-1 text-xs"
-                // `.input` is plain CSS with width:100%, which a utility class cannot
+                className="select py-1 text-xs"
+                // `.select` is plain CSS with width:100%, which a utility class cannot
                 // beat — without this the two dropdowns stack full-width instead of
                 // reading as one row of controls.
                 style={{ width: "auto", minWidth: "9rem" }}
@@ -344,7 +333,7 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
                 ))}
               </select>
               <select
-                className="input py-1 text-xs"
+                className="select py-1 text-xs"
                 style={{ width: "auto", minWidth: "11rem" }}
                 value={filters.version}
                 onChange={(ev) => setFilters((f) => ({ ...f, version: ev.target.value }))}
@@ -366,8 +355,20 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
             </div>
           )}
 
-          {error && <ErrorCard title={error} />}
-          {downloadError && <ErrorCard title={downloadError} />}
+          {error && (
+            <ErrorCard
+              title={error}
+              onDismiss={() => setError(null)}
+              action={
+                <Button size="sm" onClick={() => void handleSearch()} disabled={searching}>
+                  {tr("retry", undefined, "Retry")}
+                </Button>
+              }
+            />
+          )}
+          {downloadError && (
+            <ErrorCard title={downloadError} onDismiss={() => setDownloadError(null)} />
+          )}
 
           {visible.length > 0 && (
             <div className="space-y-1.5">
@@ -442,7 +443,6 @@ export function RepoBrowser({ addr, onDownloaded, onClose }: RepoBrowserProps) {
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

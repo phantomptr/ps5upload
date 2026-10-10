@@ -271,14 +271,14 @@ export function PackagePanelView({
       </header>
 
       {g.warnings.length > 0 && (
-        <div className="rounded-md border border-[var(--color-warn)] bg-[var(--color-warn)]/10 px-3 py-2 text-sm text-[var(--color-warn)]">
+        <div className="rounded-[var(--radius-card)] border border-[var(--color-warn)]/40 bg-[var(--color-warn-soft)] px-4 py-2.5 text-sm text-[var(--color-warn)]">
           {g.warnings.map((w) => (
             <div key={w}>{w}</div>
           ))}
         </div>
       )}
 
-      <div role="tablist" className="flex gap-1 overflow-x-auto border-b border-[var(--color-border)]">
+      <div role="tablist" className="flex gap-2 overflow-x-auto pb-1">
         {TABS.filter((t) => token || (t !== "files" && t !== "images")).map((t) => (
           <button
             key={t}
@@ -286,11 +286,7 @@ export function PackagePanelView({
             role="tab"
             aria-selected={tab === t}
             onClick={() => onTab(t)}
-            className={`shrink-0 border-b-2 px-3 py-2 text-sm ${
-              tab === t
-                ? "border-[var(--color-accent)] text-[var(--color-text)]"
-                : "border-transparent text-[var(--color-muted)] hover:text-[var(--color-text)]"
-            }`}
+            className="chip min-h-9 shrink-0 px-4 text-sm"
           >
             {
               {

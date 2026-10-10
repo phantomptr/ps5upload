@@ -117,7 +117,7 @@ export function ShortcutsOverlay() {
 
   return (
     <div
-      className="anim-scrim fixed inset-0 z-[60] flex items-center justify-center bg-[var(--overlay-scrim)]"
+      className="anim-scrim scrim fixed inset-0 z-[60] flex items-center justify-center"
       onClick={(e) => {
         if (e.target === e.currentTarget) setOpen(false);
       }}

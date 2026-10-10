@@ -431,6 +431,7 @@ export default function HardwareScreen() {
               "Couldn't read hardware info",
             )}
             detail={error}
+            onRetry={() => void refresh()}
           />
         </div>
       )}

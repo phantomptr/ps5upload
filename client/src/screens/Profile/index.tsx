@@ -101,7 +101,7 @@ function ProfileBody({ addr }: { addr: string }) {
 
   return (
     <div className="space-y-6">
-      {infoError && <ErrorCard title={infoError} />}
+      {infoError && <ErrorCard title={infoError} onRetry={() => void refreshInfo()} />}
       <AvatarSection
         addr={addr}
         info={info}

@@ -122,8 +122,8 @@ export function Modal({
   // Sheet variant: bottom-anchored on mobile, centered on ≥640px.
   const isSheet = variant === "sheet";
   const wrapperCls = isSheet
-    ? "anim-scrim fixed inset-0 z-50 flex items-end justify-center bg-[var(--overlay-scrim)] sm:items-center sm:p-4"
-    : "anim-scrim fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-4";
+    ? "anim-scrim scrim fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4"
+    : "anim-scrim scrim fixed inset-0 z-50 flex items-center justify-center p-4";
   const panelCls = isSheet
     ? `anim-sheet-up glass-float elev-3 flex max-h-[90dvh] w-full ${SIZES[size]} flex-col overflow-hidden rounded-t-[var(--radius-panel)] sm:rounded-[var(--radius-panel)] ${panelClassName}`
     : `anim-pop glass-float elev-3 flex max-h-[90dvh] w-full ${SIZES[size]} flex-col overflow-hidden rounded-[var(--radius-panel)] ${panelClassName}`;

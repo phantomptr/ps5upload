@@ -236,7 +236,7 @@ export default function CheatsScreen() {
       />
 
       <ConnectionGate>
-        {error && <ErrorCard title={error} />}
+        {error && <ErrorCard title={error} onRetry={() => void refresh()} />}
 
         {status && (
           <EngineBar

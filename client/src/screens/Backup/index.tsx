@@ -246,7 +246,7 @@ export default function BackupScreen() {
         />
 
         <ConnectionGate>
-          {error && <div className="mb-4"><ErrorCard title={error} /></div>}
+          {error && <div className="mb-4"><ErrorCard title={error} onRetry={() => void refresh()} onDismiss={() => setError(null)} /></div>}
 
           {actionMsg && (
             <div className="rounded-lg border border-[var(--color-good)]/30 bg-[var(--color-good)]/10 px-4 py-3 text-sm text-[var(--color-good)]">

@@ -73,7 +73,7 @@ export default function PowerTelemetryPanel({ mgmtAddr }: { mgmtAddr: string }) 
           {tr("power_telemetry_refresh", undefined, "Refresh")}
         </Button>
       </header>
-      {error && <ErrorCard title={error} />}
+      {error && <ErrorCard title={error} onRetry={() => void refresh()} />}
       {data && (
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
           <dt className="text-[var(--color-muted)]">

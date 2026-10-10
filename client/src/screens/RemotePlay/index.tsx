@@ -354,7 +354,7 @@ export default function RemotePlayScreen() {
       />
 
       <ConnectionGate>
-        {error && <ErrorCard title={error} />}
+        {error && <ErrorCard title={error} onRetry={() => void refresh()} />}
 
         <ReadinessPanel
           readiness={readiness}

@@ -59,7 +59,7 @@ export default function FwSpoofScreen() {
           }
         />
 
-        {error && <div className="mb-4"><ErrorCard title={error} /></div>}
+        {error && <div className="mb-4"><ErrorCard title={error} onRetry={() => void refresh()} /></div>}
 
         {loading && !status ? (
           <div className="flex items-center justify-center py-12">

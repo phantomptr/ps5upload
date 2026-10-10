@@ -68,7 +68,7 @@ export default function NetworkPanel({ mgmtAddr }: { mgmtAddr: string }) {
           {tr("refresh", undefined, "Refresh")}
         </Button>
       </header>
-      {error && <ErrorCard title={error} />}
+      {error && <ErrorCard title={error} onRetry={() => void refresh()} />}
       {data && data.interfaces.length === 0 && (
         <div className="text-xs text-[var(--color-muted)]">
           {tr("network_panel_empty", undefined, "No interfaces reported.")}

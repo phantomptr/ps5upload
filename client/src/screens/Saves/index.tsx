@@ -860,6 +860,7 @@ export default function SavesScreen() {
             <ErrorCard
               title={tr("saves_error", undefined, "Couldn't list saves")}
               detail={error}
+              onRetry={() => void refresh()}
             />
           </div>
         )}
