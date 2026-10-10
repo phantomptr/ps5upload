@@ -481,7 +481,7 @@ export async function sendPayload(
   ip: string,
   elfPath: string,
   port?: number,
-): Promise<void> {
+): Promise<{ viaPayloadManager: boolean }> {
   const resp = await invoke<{ ok?: boolean; status?: string; error?: string }>(
     "payload_send",
     { ip, path: elfPath, port: port ?? null },
@@ -494,6 +494,13 @@ export async function sendPayload(
       /replace_(in_progress|cooldown)/i.test(msg) ? humanizePs5Error(msg) : msg,
     );
   }
+  return { viaPayloadManager: sentViaPayloadManager(resp?.status) };
+}
+
+/** Whether payload_send's status says the loader port was dead and the file
+ *  was launched through Payload Manager instead (client/src-tauri probes.rs). */
+export function sentViaPayloadManager(status: string | undefined): boolean {
+  return /through Payload Manager/i.test(status ?? "");
 }
 
 // ─── Transfer jobs ────────────────────────────────────────────────────────

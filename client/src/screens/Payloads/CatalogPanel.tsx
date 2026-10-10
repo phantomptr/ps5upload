@@ -253,13 +253,18 @@ export default function CatalogPanel() {
         release.tag,
       );
       await refreshInventory();
-      pushNotification("success", `Cached ${id} ${release.tag}`, {
-        body: `${(local.size / 1024).toFixed(1)} KB downloaded to local cache.`,
-        link: "/payloads",
-      });
+      const kb = (local.size / 1024).toFixed(1);
+      pushNotification(
+        "success",
+        tr("payloads_cached_title", { id, tag: release.tag }, `Cached ${id} ${release.tag}`),
+        {
+          body: tr("payloads_cached_body", { kb }, `${kb} KB downloaded to the local cache.`),
+          link: "/payloads",
+        },
+      );
     } catch (e) {
       setErrors((prev) => ({ ...prev, [id]: String(e) }));
-      pushNotification("error", `Download failed: ${id}`, {
+      pushNotification("error", tr("payloads_download_failed", { id }, `Download failed: ${id}`), {
         body: String(e),
         link: "/payloads",
       });
@@ -284,17 +289,33 @@ export default function CatalogPanel() {
     }
     setBusy(id, true);
     try {
-      await sendPayload(host.trim(), local.path);
+      const { viaPayloadManager } = await sendPayload(host.trim(), local.path);
+      const version = local.version || "?";
       pushNotification(
         "success",
-        withConsolePrefix(host, `Sent ${id} → ${host.trim()}`),
+        withConsolePrefix(
+          host,
+          tr("payloads_sent_title", { id, host: host.trim() }, `Sent ${id} → ${host.trim()}`),
+        ),
         {
-          body: `Payload v${local.version || "?"} streamed to :9021. Check the PS5 for the boot toast.`,
+          // Say which way it went: when :9021 is dead the file is launched
+          // through Payload Manager (:8084) instead.
+          body: viaPayloadManager
+            ? tr(
+                "payloads_sent_body_pm",
+                { version },
+                `Port 9021 didn't answer, so payload v${version} was launched through Payload Manager (:8084) instead. Check the PS5 for its notification.`,
+              )
+            : tr(
+                "payloads_sent_body",
+                { version },
+                `Payload v${version} sent to the loader on :9021. Check the PS5 for its notification.`,
+              ),
         },
       );
     } catch (e) {
       setErrors((prev) => ({ ...prev, [id]: String(e) }));
-      pushNotification("error", withConsolePrefix(host, `Send failed: ${id}`), {
+      pushNotification("error", withConsolePrefix(host, tr("payloads_send_failed", { id }, `Send failed: ${id}`)), {
         body: String(e),
         link: "/payloads",
       });
@@ -355,8 +376,8 @@ export default function CatalogPanel() {
           <div className="text-xs text-[var(--color-muted)]">
             {tr(
               "payloads_curated_blurb",
-              { count: catalog.length },
-              `${catalog.length} curated payloads. Releases are fetched from GitHub on demand and cached for 1 hour.`,
+              { count: catalog.filter((p) => !p.is_custom).length },
+              `${catalog.filter((p) => !p.is_custom).length} curated payloads. Releases are fetched from GitHub on demand and cached for 1 hour.`,
             )}
           </div>
           <div className="flex items-center gap-2">
