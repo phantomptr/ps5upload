@@ -509,11 +509,6 @@ export function profileAccentForHost(
   return CONSOLE_ACCENTS[idx % CONSOLE_ACCENTS.length];
 }
 
-/** Reactive hook: the accent color for a console's host/addr. */
-export function useConsoleAccent(addr: string): string | null {
-  return useRosterStore((s) => profileAccentForHost(addr, s.profiles));
-}
-
 /**
  * Prefix a notification title with the console it concerns —
  * "Living-room PS5: Backed up CUSA34882" — but only when the roster has

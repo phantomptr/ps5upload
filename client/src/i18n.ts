@@ -202,11 +202,3 @@ export function t(
       : match,
   );
 }
-
-/** Test-only escape hatch: synchronously install a locale dict (used
- *  by `i18n.test.ts` to pre-populate all 18 locales before running
- *  fallback-chain assertions, since the test runner can't await between
- *  setup and `expect`). Never called from production code paths. */
-export function __testInstallLocale(code: LanguageCode, dict: Translations) {
-  loaded[code] = dict;
-}

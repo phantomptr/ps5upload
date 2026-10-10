@@ -128,5 +128,3 @@ export function GameIcon({
     </div>
   );
 }
-
-export default GameIcon;

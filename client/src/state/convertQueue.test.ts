@@ -17,7 +17,6 @@ describe("the Convert queue", () => {
     const runner: ConvertRunner = {
       build: (item) => new Promise((resolve) => builds.push({ source: item.source, resolve })),
       handOff: (_item, pkg) => new Promise((resolve) => handoffs.push({ pkg, resolve })),
-      cancel: vi.fn(async () => {}),
     };
     setConvertRunner(runner);
     useConvertQueue.setState({ items: [], running: false });

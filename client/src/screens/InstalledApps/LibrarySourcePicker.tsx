@@ -315,17 +315,6 @@ export function deriveLabel(files: File[]): string {
   return files.length === 1 ? files[0].name.replace(/\.(sprx|prx)$/i, "") : `Imported set (${files.length} files)`;
 }
 
-export function summarise(p: ScanProgress, tr: (k: string, v?: Record<string, unknown>, f?: string) => string): string {
-  if (p.added.length === 0) {
-    return p.skipped > 0
-      ? tr("fakelibs_scan_none_new", undefined, "Nothing new — you already have every set these consoles offer.")
-      : tr("fakelibs_scan_none", undefined,
-          "No backported games found, so there were no libraries to collect.");
-  }
-  return tr("fakelibs_scan_added", { count: p.added.length },
-    `Added ${p.added.length} set(s).`);
-}
-
 /** Outcome of a sweep across several consoles, collapsed into one line.
  *
  *  `reached` is how many consoles actually answered: "nothing found" and

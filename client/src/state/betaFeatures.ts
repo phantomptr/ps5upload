@@ -36,10 +36,3 @@ export const useBetaFeaturesStore = create<BetaFeaturesState>((set) => ({
     set({ enabled: on });
   },
 }));
-
-/** Non-hook accessor for nav/route code that runs outside a React render and
- *  only needs the current value. React surfaces should use the hook so they
- *  re-render when the switch is flipped. */
-export function betaFeaturesEnabled(): boolean {
-  return useBetaFeaturesStore.getState().enabled;
-}

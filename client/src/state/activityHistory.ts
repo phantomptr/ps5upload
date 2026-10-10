@@ -156,10 +156,6 @@ interface ActivityHistoryState {
    *  entries are left alone — only running rows get touched. `host`
    *  scopes it the same way as `clear`. */
   clearRunning: (host?: string | null) => void;
-  /** All entries currently in `running` state — the ActivityBar
-   *  reads this to show the global in-flight indicator. Computed
-   *  in-place so callers don't need a selector. */
-  runningEntries: () => ActivityEntry[];
 }
 
 function loadInitial(): ActivityEntry[] {
@@ -254,7 +250,7 @@ function nextId(): string {
 }
 
 export const useActivityHistoryStore = create<ActivityHistoryState>(
-  (set, get) => ({
+  (set) => ({
     entries: loadInitial(),
 
     start(kind, label, extras) {
@@ -377,10 +373,6 @@ export const useActivityHistoryStore = create<ActivityHistoryState>(
         persist(next);
         return { entries: next };
       });
-    },
-
-    runningEntries() {
-      return get().entries.filter((e) => e.outcome === "running");
     },
   }),
 );

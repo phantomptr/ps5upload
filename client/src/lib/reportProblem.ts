@@ -64,9 +64,3 @@ export async function openReportChannel(): Promise<void> {
   const { openExternalUrl } = await import("./openExternalUrl");
   await openExternalUrl(DISCORD_REPORT_URL);
 }
-
-/** Open GitHub issues in the user's browser. Best-effort, same as above. */
-export async function openGithubIssues(): Promise<void> {
-  const { openExternalUrl } = await import("./openExternalUrl");
-  await openExternalUrl(GITHUB_ISSUES_URL);
-}

@@ -33,5 +33,3 @@ export function PlatformBadge({
     </span>
   );
 }
-
-export default PlatformBadge;

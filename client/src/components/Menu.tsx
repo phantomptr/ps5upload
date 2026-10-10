@@ -15,7 +15,6 @@ import {
  *
  * This is the shared dropdown/popover menu used by:
  *   - OverflowMenu (the "more actions" trigger)
- *   - ContextMenu (right-click / long-press)
  *   - Any future trigger that needs a WAI-ARIA Menu pattern
  *
  * Accessibility (§20.4.2):

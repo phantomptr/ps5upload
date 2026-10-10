@@ -184,7 +184,7 @@ function AppRoutes({ location }: { location: Location }) {
         <Route path="/whats-new" element={<ChangelogScreen />} />
         <Route path="/connection" element={<ConnectionScreen />} />
         {/* v5: mobile "everything else" hub. A real route (not a sheet)
-             so the Android hardware back button and the backStack treat
+             so the Android hardware back button and router history treat
              it like any other screen. */}
         <Route
           path="/more"

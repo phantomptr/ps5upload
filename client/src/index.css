@@ -261,10 +261,9 @@ body,
   overflow: hidden;
 }
 
-/* v5 §6.3 (mobile): kill the browser's pull-to-refresh globally. Lists
- * that WANT pull-to-refresh use the <PullToRefresh> component, which
- * handles the gesture itself — the browser's never fires. Also prevents
- * scroll chaining (a scroll reaching the edge propagating to body). */
+/* v5 §6.3 (mobile): kill the browser's pull-to-refresh globally. Also
+ * prevents scroll chaining (a scroll reaching the edge propagating to
+ * body). */
 body {
   overscroll-behavior-y: contain;
 }
@@ -589,8 +588,8 @@ body {
 
 /* Bottom-sheet-up: variant used by Modal variant="sheet" for its panel
  * entrance. Same keyframes as anim-sheet; kept as a separate class so the
- * modal's panel animation can be themed/killed independently from the
- * Sheet primitive if needed. */
+ * modal's panel animation can be themed/killed independently from
+ * anim-sheet if needed. */
 .anim-sheet-up {
   animation: ps-sheet-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }

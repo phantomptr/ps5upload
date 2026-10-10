@@ -74,5 +74,5 @@ let installed = false;
 export function installConvertRunner() {
   if (installed) return;
   installed = true;
-  setConvertRunner({ build, handOff, cancel: () => useFpkgConversion.getState().cancel() });
+  setConvertRunner({ build, handOff });
 }

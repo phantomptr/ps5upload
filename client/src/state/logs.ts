@@ -211,12 +211,6 @@ export function installDiskLogSink(): void {
   }
 }
 
-/** Force a flush now (e.g. just before building a bug report so the buffered
- *  tail is on disk). Returns when the in-flight write settles. */
-export async function flushDiskLogNow(): Promise<void> {
-  await flushDisk();
-}
-
 /**
  * Patch console.error / console.warn once so uncaught errors (React
  * warnings, network failures logged by fetch wrappers, etc.) also

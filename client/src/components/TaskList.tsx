@@ -426,14 +426,3 @@ export function TaskList({ maxFinished = 20 }: { maxFinished?: number }) {
     </div>
   );
 }
-
-/** Badge showing the count of active tasks — for use in tab bars, headers. */
-export function ActiveTaskCount() {
-  const count = useTaskStore((s) => s.tasks.filter((t) => isActivatable(t.status)).length);
-  if (count === 0) return null;
-  return (
-    <Badge tone="accent" variant="solid">
-      {count}
-    </Badge>
-  );
-}

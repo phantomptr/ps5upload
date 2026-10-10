@@ -54,7 +54,6 @@ export interface ConvertRunner {
   /** `installed`: the build also installed it (a console dump's swap runs inside the build). */
   build(item: ConvertItem): Promise<{ ok: boolean; packagePath?: string; message?: string; installed?: boolean }>;
   handOff(item: ConvertItem, packagePath: string): Promise<{ ok: boolean; message?: string }>;
-  cancel(): Promise<void>;
 }
 
 let runner: ConvertRunner | null = null;
@@ -97,8 +96,6 @@ interface ConvertQueueState {
   start: () => Promise<void>;
   /** Pause after the current build. */
   stop: () => void;
-  /** Cancel the running build (it fails as cancelled; the queue goes on unless stopped). */
-  cancelCurrent: () => Promise<void>;
   clearFinished: () => void;
 }
 
@@ -182,9 +179,6 @@ export const useConvertQueue = create<ConvertQueueState>((set, get) => {
     },
     stop: () => {
       stopRequested = true;
-    },
-    cancelCurrent: async () => {
-      await runner?.cancel();
     },
     clearFinished: () => {
       set({ items: get().items.filter((i) => i.status === "pending" || i.status === "running" || i.status === "installing") });
