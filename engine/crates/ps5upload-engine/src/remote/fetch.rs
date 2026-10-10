@@ -389,7 +389,6 @@ fn safe_join(dest: &Path, rel: &str) -> Result<PathBuf, String> {
 
 /// Copy every file, each to `<name>.partial` then renamed. Returns the file count.
 async fn copy_all(job: CopyJob<'_>) -> Result<u64, String> {
-    use std::io::Write;
     let mut done = 0u64;
     let mut work: Vec<(String, PathBuf, &Entry)> = Vec::new();
     for (rel, entry) in &job.files {
@@ -407,9 +406,6 @@ async fn copy_all(job: CopyJob<'_>) -> Result<u64, String> {
         work.push((remote.clone(), local.clone(), entry));
     }
     for (remote, local, entry) in work {
-        if let Some(parent) = local.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-        }
         let file = job
             .pool
             .with_fs(&job.store, &job.id, |fs| {
@@ -427,8 +423,18 @@ async fn copy_all(job: CopyJob<'_>) -> Result<u64, String> {
             job.backoff.clone(),
         );
         let partial = PathBuf::from(format!("{}.partial", local.display()));
-        let mut out =
-            std::fs::File::create(&partial).map_err(|e| format!("{}: {e}", partial.display()))?;
+        // Local disk work runs on the blocking pool, never on the async workers.
+        let mut out = {
+            let (local, partial) = (local.clone(), partial.clone());
+            blocking(move || {
+                if let Some(parent) = local.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| format!("{}: {e}", parent.display()))?;
+                }
+                std::fs::File::create(&partial).map_err(|e| format!("{}: {e}", partial.display()))
+            })
+            .await?
+        };
         let mut off = 0u64;
         while off < entry.size {
             if job.cancel.load(std::sync::atomic::Ordering::Relaxed) {
@@ -442,17 +448,40 @@ async fn copy_all(job: CopyJob<'_>) -> Result<u64, String> {
             if bytes.is_empty() {
                 return Err(format!("{} ended early on the server", entry.name));
             }
-            out.write_all(&bytes)
-                .map_err(|e| format!("{}: {e}", partial.display()))?;
-            off += bytes.len() as u64;
-            done += bytes.len() as u64;
+            let n = bytes.len() as u64;
+            out = {
+                let partial = partial.clone();
+                blocking(move || {
+                    use std::io::Write;
+                    out.write_all(&bytes)
+                        .map(|()| out)
+                        .map_err(|e| format!("{}: {e}", partial.display()))
+                })
+                .await?
+            };
+            off += n;
+            done += n;
             (job.report)(done);
         }
-        out.sync_all().ok();
-        drop(out);
-        std::fs::rename(&partial, &local).map_err(|e| format!("{}: {e}", local.display()))?;
+        // A copy that did not reach the disk is not a copy: a failed sync fails the job.
+        blocking(move || {
+            out.sync_all()
+                .map_err(|e| format!("{}: {e}", partial.display()))?;
+            drop(out);
+            std::fs::rename(&partial, &local).map_err(|e| format!("{}: {e}", local.display()))
+        })
+        .await?;
     }
     Ok((job.files.len() + job.siblings.len()) as u64)
+}
+
+/// Runs `f` on the blocking pool; a panic there is an error, not a crash of the job's task.
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| format!("disk task failed: {e}"))?
 }
 
 /// `POST /api/remote/fetch/cleanup` — remove a copy this engine made. Nothing else.

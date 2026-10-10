@@ -483,6 +483,20 @@ pub(crate) fn console_addr(addr: &str) -> String {
     }
 }
 
+/// The console a destructive request (delete, move, unregister, power, ...) acts on. It must
+/// name one: falling back to the engine's default console could delete files on, or power off,
+/// a console the user was not looking at. `Err` is the 400 to answer with.
+fn required_console_addr(addr: Option<String>) -> Result<String, axum::response::Response> {
+    match addr.as_deref().map(str::trim) {
+        Some(a) if !a.is_empty() => Ok(console_addr(a)),
+        _ => Err(json_err(
+            StatusCode::BAD_REQUEST,
+            "addr is required: say which console this acts on",
+        )
+        .into_response()),
+    }
+}
+
 fn console_addr_or_default(addr: Option<String>, default_addr: &str) -> String {
     console_addr(addr.as_deref().unwrap_or(default_addr))
 }
@@ -557,6 +571,15 @@ const ARCHIVE_STAGE_ENV: (&str, &str) = (
 /// uses a UUIDv4 token in the URL as the auth gate (~122 bits of
 /// entropy, rotated per install — the trust boundary is the local LAN,
 /// same as any other on-LAN homebrew installer).
+/// What repeated failures are collapsed by: the route AND the console it was about, so one
+/// switched-off console's failures do not hide (or get "recovered" by) another's.
+fn failure_key(method: &str, path: &str, console: Option<&str>) -> String {
+    match console {
+        Some(c) if !c.is_empty() => format!("{method} {path} @{c}"),
+        _ => format!("{method} {path}"),
+    }
+}
+
 /// Log every (allowed) request: method, path, status, duration. Recorded at
 /// `debug` so it always lands in engine.log (rotated, crash-survivable) for a
 /// complete "what was the engine doing when it hung" trace, but only reaches
@@ -594,7 +617,7 @@ async fn log_requests(req: Request, next: Next) -> axum::response::Response {
     // other line in the log and tells the reader nothing they did not
     // learn from the first one. So repeats collapse: first failure,
     // then quiet, then an occasional reminder, then a recovery line.
-    let key = format!("{method} {path}");
+    let key = failure_key(method.as_str(), &path, console.as_deref());
     let action = match log_dedup::failure_log().lock() {
         Ok(mut log) => log.observe(&key, status >= 500, std::time::Instant::now()),
         // A poisoned lock must not silence real failures.
@@ -2197,10 +2220,14 @@ struct FsChmodReq {
 }
 
 async fn ps5_fs_delete(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<FsPathReq>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    // Destructive: acts only on the console the request names, never the default one.
+    let addr = match required_console_addr(req.addr) {
+        Ok(a) => a,
+        Err(missing) => return missing.into_response(),
+    };
     let path = req.path;
     let op_id = req.op_id;
     let started = std::time::Instant::now();
@@ -2252,10 +2279,14 @@ async fn ps5_fs_delete(
 }
 
 async fn ps5_fs_move(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<FsMoveReq>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    // Destructive: acts only on the console the request names, never the default one.
+    let addr = match required_console_addr(req.addr) {
+        Ok(a) => a,
+        Err(missing) => return missing.into_response(),
+    };
     let from = req.from;
     let to = req.to;
     let started = std::time::Instant::now();
@@ -2565,10 +2596,14 @@ struct AppUnregisterReq {
 }
 
 async fn ps5_app_unregister(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<AppUnregisterReq>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    // Destructive: acts only on the console the request names, never the default one.
+    let addr = match required_console_addr(req.addr) {
+        Ok(a) => a,
+        Err(missing) => return missing.into_response(),
+    };
     let title_id = req.title_id;
     let started = std::time::Instant::now();
     crate::log_info!("app_unregister: addr={addr} title_id={title_id}");
@@ -2576,11 +2611,13 @@ async fn ps5_app_unregister(
     // Uninstalling changes which artwork exists, so drop this console's
     // cached images now rather than letting them age out — the user would
     // otherwise see a cover for a title they just removed.
-    icon_cache::invalidate_console(&addr);
-    match tokio::task::spawn_blocking(move || app_unregister(&addr, &title_id))
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r)
+    match tokio::task::spawn_blocking(move || {
+        icon_cache::invalidate_console(&addr);
+        app_unregister(&addr, &title_id)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r)
     {
         Ok(outcome) => {
             // Our teardown succeeded. Sony's own uninstall is a SEPARATE
@@ -3264,7 +3301,10 @@ async fn ps5_klog(State(state): State<AppState>, Query(q): Query<KlogQuery>) -> 
 /// machine, but it is data that persists past its subject, so it should be
 /// visible and removable rather than silently accumulating.
 async fn cache_artwork_stats() -> impl IntoResponse {
-    let (files, bytes) = icon_cache::stats();
+    // Walks the cache folder: off the async workers.
+    let (files, bytes) = tokio::task::spawn_blocking(icon_cache::stats)
+        .await
+        .unwrap_or((0, 0));
     (
         StatusCode::OK,
         Json(serde_json::json!({ "files": files, "bytes": bytes })),
@@ -3276,7 +3316,9 @@ async fn cache_artwork_stats() -> impl IntoResponse {
 /// Safe at any time: the cache is an optimisation, so the next render
 /// simply reads from the console again.
 async fn cache_artwork_clear() -> impl IntoResponse {
-    let freed = icon_cache::clear();
+    let freed = tokio::task::spawn_blocking(icon_cache::clear)
+        .await
+        .unwrap_or(0);
     (
         StatusCode::OK,
         Json(serde_json::json!({ "ok": true, "freed_bytes": freed })),
@@ -3457,10 +3499,14 @@ struct ProcessKillReq {
 
 /// POST /api/ps5/process/kill — SIGKILL a pid. Body: `{ addr, pid }`.
 async fn ps5_process_kill(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<ProcessKillReq>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    // Destructive: acts only on the console the request names, never the default one.
+    let addr = match required_console_addr(req.addr) {
+        Ok(a) => a,
+        Err(missing) => return missing.into_response(),
+    };
     let pid = req.pid;
     let r: Result<ProcessKillAck, anyhow::Error> =
         tokio::task::spawn_blocking(move || process_kill(&addr, pid))
@@ -3484,10 +3530,14 @@ struct PowerControlReq {
 
 /// POST /api/ps5/power/control — Body: `{ addr, action }`.
 async fn ps5_power_control(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<PowerControlReq>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    // Destructive: acts only on the console the request names, never the default one.
+    let addr = match required_console_addr(req.addr) {
+        Ok(a) => a,
+        Err(missing) => return missing.into_response(),
+    };
     let action = match req.action.as_str() {
         "reboot" => PowerAction::Reboot,
         "shutdown" => PowerAction::Shutdown,
@@ -4221,7 +4271,14 @@ async fn serve_cached_icon(
 ) -> axum::response::Response {
     // A revalidation we can answer from cache costs no console round-trip
     // and no body — this is the cheap path once max-age lapses.
-    match icon_cache::get(&addr, kind, &identity) {
+    // Disk reads and writes of the cache run on the blocking pool, not the async workers.
+    let cached = {
+        let (addr, identity) = (addr.clone(), identity.clone());
+        tokio::task::spawn_blocking(move || icon_cache::get(&addr, kind, &identity))
+            .await
+            .unwrap_or(icon_cache::Cached::Unknown)
+    };
+    match cached {
         icon_cache::Cached::Hit { bytes, etag } => {
             if icon_cache::etag_matches(if_none_match.as_deref(), &etag) {
                 return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag.as_str())]).into_response();
@@ -4237,14 +4294,22 @@ async fn serve_cached_icon(
         icon_cache::Cached::Unknown => {}
     }
 
-    let read_addr = addr.clone();
     // Ok(Some) = found; Ok(None) = every path cleanly absent; Err = at least
     // one path failed for another reason (the console may just be busy).
+    // The cache is written in the same blocking task.
+    //
+    // Only a clean "there is nothing there" is remembered. A transport
+    // error must NOT be: a console that was briefly unreachable would
+    // otherwise be recorded as having no artwork at all, and every
+    // cover would vanish for the length of the negative TTL.
     let result: Result<Option<Vec<u8>>, anyhow::Error> = tokio::task::spawn_blocking(move || {
         let mut transport_err = None;
         for p in &remote_paths {
-            match fs_read(&read_addr, p, 0, 2 * 1024 * 1024) {
-                Ok(bytes) if !bytes.is_empty() => return Ok(Some(bytes)),
+            match fs_read(&addr, p, 0, 2 * 1024 * 1024) {
+                Ok(bytes) if !bytes.is_empty() => {
+                    icon_cache::put(&addr, kind, &identity, &bytes);
+                    return Ok(Some(bytes));
+                }
                 Ok(_) => {}
                 Err(e) if icon_cache::is_console_said_no(&e) => {}
                 Err(e) => transport_err = Some(e),
@@ -4252,7 +4317,10 @@ async fn serve_cached_icon(
         }
         match transport_err {
             Some(e) => Err(e),
-            None => Ok(None),
+            None => {
+                icon_cache::put_missing(&addr, kind, &identity);
+                Ok(None)
+            }
         }
     })
     .await
@@ -4261,18 +4329,10 @@ async fn serve_cached_icon(
 
     match result {
         Ok(Some(bytes)) => {
-            icon_cache::put(&addr, kind, &identity, &bytes);
             let etag = icon_cache::etag_for(&bytes);
             icon_response(bytes, &etag)
         }
-        // Only a clean "there is nothing there" is remembered. A transport
-        // error must NOT be: a console that was briefly unreachable would
-        // otherwise be recorded as having no artwork at all, and every
-        // cover would vanish for the length of the negative TTL.
-        Ok(None) => {
-            icon_cache::put_missing(&addr, kind, &identity);
-            (StatusCode::NOT_FOUND, "no icon").into_response()
-        }
+        Ok(None) => (StatusCode::NOT_FOUND, "no icon").into_response(),
         Err(_) => (StatusCode::NOT_FOUND, "no icon").into_response(),
     }
 }
@@ -6560,10 +6620,14 @@ async fn user_create_handler(
 
 /// POST /api/ps5/users/delete — delete a local user account.
 async fn user_delete_handler(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<UserDeleteReq>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    // Destructive: acts only on the console the request names, never the default one.
+    let addr = match required_console_addr(req.addr) {
+        Ok(a) => a,
+        Err(missing) => return missing.into_response(),
+    };
     let uid = req.uid;
     let wipe_saves = req.wipe_saves;
     crate::log_info!("user_delete: addr={addr} uid={uid} wipe_saves={wipe_saves}");
@@ -6636,10 +6700,14 @@ async fn backup_list_handler(
 
 /// POST /api/ps5/backup/restore — restore a snapshot.
 async fn backup_restore_handler(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<BackupRestoreReq>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    // Destructive: acts only on the console the request names, never the default one.
+    let addr = match required_console_addr(req.addr) {
+        Ok(a) => a,
+        Err(missing) => return missing.into_response(),
+    };
     let tag = req.tag;
     let ts = req.timestamp;
     crate::log_info!("backup_restore: addr={addr} tag={tag} ts={ts}");
@@ -6665,10 +6733,14 @@ async fn backup_restore_handler(
 
 /// POST /api/ps5/backup/delete — delete a snapshot.
 async fn backup_delete_handler(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<BackupDeleteReq>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    // Destructive: acts only on the console the request names, never the default one.
+    let addr = match required_console_addr(req.addr) {
+        Ok(a) => a,
+        Err(missing) => return missing.into_response(),
+    };
     let tag = req.tag;
     let ts = req.timestamp;
     let tag_clone = tag.clone();
@@ -7018,10 +7090,14 @@ async fn cheats_toggle_handler(
 }
 
 async fn cheats_delete_handler(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Query(q): Query<CheatsDeleteQuery>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+    // Destructive: acts only on the console the request names, never the default one.
+    let addr = match required_console_addr(q.addr) {
+        Ok(a) => a,
+        Err(missing) => return missing.into_response(),
+    };
     let title_id = q.title_id;
     let r = tokio::task::spawn_blocking(move || {
         ps5upload_core::cheats::cheats_delete(&addr, &title_id)
@@ -11032,6 +11108,63 @@ mod helpers_tests {
         assert_eq!(post_addr(None, br#"{"addr":null}"#), None);
         assert_eq!(post_addr(Some("".into()), br#"{"addr":" "}"#), None);
         assert_eq!(post_addr(None, b"not json"), None);
+    }
+
+    /// A destructive request that names no console is refused, never sent to the default one.
+    #[test]
+    fn a_destructive_request_must_name_its_console() {
+        assert_eq!(
+            required_console_addr(Some(" 10.0.0.7:1234 ".into())).ok(),
+            Some("10.0.0.7".to_string())
+        );
+        for missing in [None, Some(String::new()), Some("  ".into())] {
+            let resp = required_console_addr(missing).unwrap_err();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_and_power_without_addr_are_400() {
+        let (events_tx, _rx) = broadcast::channel(4);
+        let state = AppState {
+            jobs: Arc::new(Mutex::new(HashMap::new())),
+            default_ps5_addr: "127.0.0.1:1".to_string(),
+            events_tx,
+        };
+        let del = ps5_fs_delete(
+            State(state.clone()),
+            Json(FsPathReq {
+                addr: None,
+                path: "/data/x".into(),
+                op_id: 0,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(del.status(), StatusCode::BAD_REQUEST);
+        let power = ps5_power_control(
+            State(state),
+            Json(PowerControlReq {
+                addr: Some(String::new()),
+                action: "reboot".into(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(power.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Failures repeat-collapse per console: one console's outage must not hide another's.
+    #[test]
+    fn the_failure_key_names_the_console() {
+        assert_ne!(
+            failure_key("GET", "/api/ps5/status", Some("10.0.0.1")),
+            failure_key("GET", "/api/ps5/status", Some("10.0.0.2"))
+        );
+        assert_eq!(
+            failure_key("GET", "/api/jobs", None),
+            failure_key("GET", "/api/jobs", Some(""))
+        );
     }
 
     #[test]
