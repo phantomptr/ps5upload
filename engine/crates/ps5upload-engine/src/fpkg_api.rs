@@ -826,9 +826,21 @@ pub(crate) async fn exfat_build_handler(
         .into_response();
     }
     let scan_source = source.clone();
-    let tree = match tokio::task::spawn_blocking(move || FolderSource::open(&scan_source)).await {
+    let check_packs = packs.is_some();
+    let scanned = tokio::task::spawn_blocking(move || {
+        let mut tree = FolderSource::open(&scan_source).map_err(|e| e.to_string())?;
+        // Refused here, before a job exists, when the game cannot use the packs.
+        if check_packs {
+            if let Some(why) = ps5upload_fpkg::ampr_pack::image::refusal(&mut tree) {
+                return Err(why);
+            }
+        }
+        Ok(tree)
+    })
+    .await;
+    let tree = match scanned {
         Ok(Ok(t)) => t,
-        Ok(Err(e)) => return json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        Ok(Err(e)) => return json_err(StatusCode::BAD_REQUEST, e).into_response(),
         Err(e) => {
             return json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
         }

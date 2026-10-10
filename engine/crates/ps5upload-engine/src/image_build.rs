@@ -536,6 +536,9 @@ pub(crate) fn build_packed(
     if format != ImageFormat::Exfat {
         return Err("LZ4 asset packs are written into exFAT images only".into());
     }
+    if let Some(why) = ampr_pack::image::refusal(source) {
+        return Err(why);
+    }
     let config = packs
         .profile
         .clone()
@@ -867,6 +870,43 @@ mod tests {
         .expect("refused");
         assert!(e.contains("exFAT"), "{e}");
         assert!(!out.exists() && !lz4_spool(&out).exists());
+
+        let exfat = root.join("x.exfat");
+        let attempt = |src: &Path| {
+            let mut tree = FolderSource::open(src).unwrap();
+            build_packed(
+                ImageFormat::Exfat,
+                &mut tree,
+                &exfat,
+                &Lz4Packs {
+                    profile: None,
+                    level: 9,
+                    block_shift: 16,
+                },
+                &AtomicBool::new(false),
+                &mut |_, _, _| {},
+            )
+            .err()
+            .expect("refused")
+        };
+        // An ampr_emu without pack support (0.3) would see every packed file missing.
+        std::fs::write(
+            src.join("fakelib/libSceAmpr.sprx"),
+            b"\x000.3.1 (c) Drakmor\0AMPRIDX3",
+        )
+        .unwrap();
+        let e = attempt(&src);
+        assert!(
+            e.contains("ampr_emu 0.3.1") && e.contains("does not serve"),
+            "{e}"
+        );
+        // No ampr_emu in the game at all.
+        std::fs::remove_file(src.join("fakelib/libSceAmpr.sprx")).unwrap();
+        assert!(attempt(&src).contains("has none"));
+        // A title that does not read through libSceAmpr.
+        let plain = game(&root.join("plain"));
+        assert!(attempt(&plain).contains("does not import libSceAmpr"));
+        assert!(!exfat.exists() && !lz4_spool(&exfat).exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 }

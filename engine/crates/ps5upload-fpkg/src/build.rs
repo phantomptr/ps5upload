@@ -1062,6 +1062,9 @@ pub struct Inspection {
     pub output_free: Option<u64>,
     /// Every readiness finding, passes and warnings alike.
     pub checks: Vec<source::Check>,
+    /// For a libSceAmpr title, whether an image can carry LZ4 asset packs (see
+    /// [`crate::ampr_pack::image::readiness`]); `None` for any other title.
+    pub ampr_packs: Option<crate::ampr_pack::image::Readiness>,
 }
 
 impl Inspection {
@@ -1299,5 +1302,6 @@ pub fn inspect(source_path: &Path, output_dir: &Path) -> Result<Inspection> {
         planned_size,
         output_free: free_bytes(output_dir),
         checks,
+        ampr_packs: crate::ampr_pack::image::readiness(tree.as_mut()),
     })
 }

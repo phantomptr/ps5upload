@@ -10,10 +10,81 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use super::config::{pack_output_glob, Config};
-use super::{glob, pack, Control, Output};
+use super::{glob, pack, runtime_support, Control, Output};
 use crate::ampr_index;
 use crate::source::{SourceFile, SourceTree};
 use crate::{format_err, Error, Result};
+
+/// Where `ampr_emu` lives in a backported game.
+pub const RUNTIME_MODULE: &str = "fakelib/libSceAmpr.sprx";
+
+/// Whether a libSceAmpr title can be packed, as the Convert screen shows it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Readiness {
+    /// The version the game's `ampr_emu` reports, when its module says.
+    pub runtime_version: Option<String>,
+    /// Why packing is refused; `None` when it can go ahead.
+    pub refusal: Option<String>,
+}
+
+/// `None` when the title does not import libSceAmpr: nothing but `ampr_emu` reads asset packs.
+/// Otherwise whether the `libSceAmpr.sprx` the game ships serves them — an older `ampr_emu`
+/// (0.3) would find every packed file missing. The module is recognised by its own strings
+/// (see [`runtime_support`]); no runtime is shipped or swapped in.
+pub fn readiness(tree: &mut dyn SourceTree) -> Option<Readiness> {
+    if !crate::source::imports_ampr(tree, "eboot.bin") {
+        return None;
+    }
+    let Some(module) = tree
+        .files()
+        .iter()
+        .find(|f| f.path.eq_ignore_ascii_case(RUNTIME_MODULE))
+        .map(|f| f.path.clone())
+    else {
+        return Some(Readiness {
+            runtime_version: None,
+            refusal: Some(format!(
+                "LZ4 asset packs need ampr_emu 0.4 or later with pack support in the game's \
+                 {RUNTIME_MODULE}, and the folder has none"
+            )),
+        });
+    };
+    let support = match tree.read(&module) {
+        Ok(bytes) => runtime_support(&bytes),
+        Err(e) => {
+            return Some(Readiness {
+                runtime_version: None,
+                refusal: Some(format!("{module} could not be read: {e}")),
+            })
+        }
+    };
+    let refusal = (!support.packs).then(|| {
+        format!(
+            "the game's {module} ({}) does not serve asset packs; LZ4 packs need ampr_emu 0.4 \
+             or later with pack support",
+            support
+                .version
+                .as_deref()
+                .map_or("unknown version".to_string(), |v| format!("ampr_emu {v}"))
+        )
+    });
+    Some(Readiness {
+        runtime_version: support.version,
+        refusal,
+    })
+}
+
+/// Why `tree` cannot be packed for `ampr_emu`, or `None` when it can.
+pub fn refusal(tree: &mut dyn SourceTree) -> Option<String> {
+    match readiness(tree) {
+        None => Some(
+            "LZ4 asset packs are read by ampr_emu, and this game's eboot.bin does not import \
+             libSceAmpr"
+                .into(),
+        ),
+        Some(r) => r.refusal,
+    }
+}
 
 /// Files an earlier AMPR build or run left, which a fresh index and pack set replace.
 fn generated(path: &str, config: &Config, pack_glob: &str) -> bool {
@@ -288,6 +359,41 @@ mod tests {
         .err()
         .unwrap();
         assert!(e.to_string().contains("already carries"), "{e}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The inspection's view: nothing for a title that does not use AMPR; for one that does,
+    /// the runtime's version and whether it serves packs.
+    #[test]
+    fn readiness_reads_the_games_ampr_emu() {
+        let root = std::env::temp_dir().join(format!(
+            "ampr-ready-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("fakelib")).unwrap();
+        std::fs::write(root.join("eboot.bin"), vec![0u8; 4096]).unwrap();
+        let check = || readiness(&mut crate::source::FolderSource::open(&root).unwrap());
+        assert_eq!(check(), None);
+
+        let mut eboot = vec![0u8; 4096];
+        eboot[100..114].copy_from_slice(b"libSceAmpr.prx");
+        std::fs::write(root.join("eboot.bin"), eboot).unwrap();
+        assert!(check().unwrap().refusal.unwrap().contains("has none"));
+
+        std::fs::write(
+            root.join("fakelib/libSceAmpr.sprx"),
+            b"x\x000.4.2.1 (c) Drakmor\0..AMPRPAK4..ampr_assets.index",
+        )
+        .unwrap();
+        assert_eq!(
+            check(),
+            Some(Readiness {
+                runtime_version: Some("0.4.2.1".into()),
+                refusal: None
+            })
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }
