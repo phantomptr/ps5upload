@@ -11,7 +11,7 @@ vi.mock("../../state/lang", () => ({
 }));
 
 import type { Pipeline } from "../../state/fpkgConversion";
-import { RunCard, deleteLabel } from "./RunCard";
+import { RunCard, deleteLabel, lz4Active, type Lz4Choice } from "./RunCard";
 
 // No DOM here (vitest in node, no testing-library): render to markup and check what a user
 // would see and could press.
@@ -208,5 +208,74 @@ describe("RunCard", () => {
   it("asks before deleting: the first press arms, the second confirms", () => {
     expect(deleteLabel(false)).toBe("Delete package");
     expect(deleteLabel(true)).toBe("Confirm delete");
+  });
+
+  describe("AMPR LZ4 asset packs", () => {
+    const lz4 = (over: Partial<Lz4Choice> = {}): Lz4Choice => ({
+      readiness: { runtime_version: "0.4.2.1", refusal: null },
+      on: false,
+      onToggle: noop,
+      profileName: null,
+      onProfile: noop,
+      ...over,
+    });
+    const idle = (format: "exfat" | "ffpkg", choice: Lz4Choice | undefined, compress = false) =>
+      renderToStaticMarkup(
+        <RunCard
+          pipeline={{ phase: "idle" }}
+          installTask={null}
+          host=""
+          canInstall={false}
+          isImage={false}
+          deleteArmed={false}
+          {...actions}
+          onMakeImage={noop}
+          imageFormat={format}
+          imageCompress={compress}
+          lz4={choice}
+        />,
+      );
+    /** The checkbox in the label whose text contains `text`. */
+    const checkbox = (out: string, text: string) => {
+      const re = /<label[^>]*>([\s\S]*?)<\/label>/g;
+      for (let m = re.exec(out); m; m = re.exec(out)) {
+        if (m[1].replace(/<[^>]+>/g, "").includes(text)) {
+          const input = /<input([^>]*)>/.exec(m[1])?.[1] ?? "";
+          return { checked: /\schecked=""/.test(input), disabled: /\sdisabled=""/.test(input) };
+        }
+      }
+      return null;
+    };
+
+    it("is offered for an AMPR game's .exfat image only", () => {
+      expect(idle("exfat", lz4())).toContain("AMPR LZ4 asset packs");
+      expect(idle("exfat", lz4())).toContain("ampr_emu: 0.4.2.1");
+      expect(idle("ffpkg", lz4())).not.toContain("AMPR LZ4 asset packs");
+      expect(idle("exfat", undefined)).not.toContain("AMPR LZ4 asset packs");
+    });
+
+    it("turns off .ffpfsc compression while it is on, and offers a profile", () => {
+      const on = idle("exfat", lz4({ on: true }), true);
+      expect(checkbox(on, "Compress it into a .ffpfsc")).toEqual({ checked: false, disabled: true });
+      expect(checkbox(on, "AMPR LZ4 asset packs")).toEqual({ checked: true, disabled: false });
+      expect(button(on, "Make game image")).not.toBeNull();
+      expect(on).toContain("Use a profile (.toml)");
+      const named = idle("exfat", lz4({ on: true, profileName: "sm2.toml" }));
+      expect(named).toContain("Profile: sm2.toml");
+      expect(button(named, "Use the built-in profile")).not.toBeNull();
+      expect(lz4Active("exfat", lz4({ on: true }))).toBe(true);
+      expect(lz4Active("ffpkg", lz4({ on: true }))).toBe(false);
+    });
+
+    it("says why, and cannot be turned on, when the game's ampr_emu cannot serve packs", () => {
+      const refused = lz4({
+        on: true,
+        readiness: { runtime_version: null, refusal: "the game's ampr_emu does not serve asset packs" },
+      });
+      const out = idle("exfat", refused);
+      expect(checkbox(out, "AMPR LZ4 asset packs")).toEqual({ checked: false, disabled: true });
+      expect(out).toContain("Not available for this game");
+      expect(lz4Active("exfat", refused)).toBe(false);
+    });
   });
 });

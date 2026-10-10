@@ -2584,6 +2584,8 @@ pub async fn exfat_build(
     output_dir: Option<String>,
     format: Option<String>,
     compress: Option<bool>,
+    // AMPR LZ4 asset packs, passed through as the engine takes them ({level, profile_toml}).
+    ampr_lz4: Option<JsonValue>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/exfat/build");
@@ -2594,6 +2596,7 @@ pub async fn exfat_build(
             "output_dir": output_dir,
             "format": format,
             "compress": compress.unwrap_or(false),
+            "ampr_lz4": ampr_lz4,
         }),
     )
     .await

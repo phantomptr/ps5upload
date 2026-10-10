@@ -46,6 +46,24 @@ export interface FpkgInspection {
   /** Bytes free where the output goes; null where the platform does not say. */
   output_free?: number | null;
   checks: FpkgCheck[];
+  /** Present for a title that reads its files through libSceAmpr: whether a game image can
+   *  carry AMPR LZ4 asset packs, which the game's own ampr_emu (fakelib) must serve. */
+  ampr_packs?: AmprPacksReadiness | null;
+}
+
+export interface AmprPacksReadiness {
+  /** The ampr_emu version the game's libSceAmpr.sprx names, when it does. */
+  runtime_version?: string | null;
+  /** Why packs cannot be used for this game; null when they can. */
+  refusal?: string | null;
+}
+
+/** Pack a game image's files into AMPR LZ4 asset packs first (exFAT images only). */
+export interface AmprLz4Options {
+  /** 1 (fastest) to 12 (smallest); the engine uses 9 when absent. */
+  level?: number;
+  /** A profile in drakmor's ampr_pack TOML format, in place of the built-in one. */
+  profileToml?: string;
 }
 
 export interface FpkgBuildRequest {
@@ -100,11 +118,20 @@ export const fpkg = {
   /** Write a game folder as one .exfat image for ShadowMountPlus. Starts a job; the image
    *  lands in the output folder, named after the game folder. */
   /** One job: the image is planned, written (straight into a .ffpfsc when `compress`), read
-   *  back and hash-checked. */
+   *  back and hash-checked. With `lz4`, the game's files are packed into AMPR LZ4 asset packs
+   *  first (exFAT, not compressed). */
   buildImage: (
     source: string,
     outputDir?: string,
     format: ImageFormat = "exfat",
     compress = false,
-  ) => invoke<{ job_id: string }>("exfat_build", { source, outputDir, format, compress }),
+    lz4?: AmprLz4Options,
+  ) =>
+    invoke<{ job_id: string }>("exfat_build", {
+      source,
+      outputDir,
+      format,
+      compress,
+      amprLz4: lz4 ? { level: lz4.level, profile_toml: lz4.profileToml } : undefined,
+    }),
 };

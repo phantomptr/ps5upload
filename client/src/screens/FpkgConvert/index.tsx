@@ -32,7 +32,7 @@ import { pickLocalPath } from "../../state/localPicker";
 import { useTaskStore } from "../../state/tasks";
 import { GameCard } from "./GameCard";
 import { OptionsCard } from "./OptionsCard";
-import { RunCard } from "./RunCard";
+import { RunCard, lz4Active, type Lz4Choice } from "./RunCard";
 import { SwapJournals } from "./SwapJournals";
 import { QueueCard } from "./QueueCard";
 import { useConvertQueue, type ConvertBuild, type ConvertThen } from "../../state/convertQueue";
@@ -84,6 +84,10 @@ export default function FpkgConvertScreen() {
   const [imageFormat, setImageFormat] = useState<ImageFormat>("ffpkg");
   const [imageCompress, setImageCompress] = useState(false);
   const [queueBuild, setQueueBuild] = useState<"pkg" | "image">("pkg");
+  // AMPR LZ4 asset packs for this game's .exfat image, and the profile it packs with. Per game
+  // (they depend on the game's own ampr_emu), so the queue does not carry them.
+  const [lz4On, setLz4On] = useState(false);
+  const [lz4Profile, setLz4Profile] = useState<{ name: string; text: string } | null>(null);
   const build: ConvertBuild =
     queueBuild === "image" ? { kind: "image", format: imageFormat, compress: imageCompress } : { kind: "pkg" };
   /** "skipped": an image was asked for a source that is not a game folder here. */
@@ -183,6 +187,8 @@ export default function FpkgConvertScreen() {
       setSource(path);
       setPassword("");
       setLanguage("");
+      setLz4On(false);
+      setLz4Profile(null);
       void check(path);
     },
     [check, reset, setSource, setPassword],
@@ -302,6 +308,8 @@ export default function FpkgConvertScreen() {
     setDeleteArmed(false);
     setSource("");
     setLanguage("");
+    setLz4On(false);
+    setLz4Profile(null);
     setInspection(null);
     setEstimates(null);
     setChecking(false);
@@ -322,6 +330,16 @@ export default function FpkgConvertScreen() {
     !isArchiveSource(src) &&
     !/^(ps5|remote):\/\//.test(src) &&
     !/\.(exfat|ffpkg|ffpfs|ffpfsc)$/i.test(src);
+  // Offered only for a game that reads its files through libSceAmpr (the check says so).
+  const lz4Choice: Lz4Choice | undefined = inspection?.ampr_packs
+    ? {
+        readiness: inspection.ampr_packs,
+        on: lz4On,
+        onToggle: setLz4On,
+        profileName: lz4Profile?.name ?? null,
+        onProfile: setLz4Profile,
+      }
+    : undefined;
 
   return (
     <div className="app-page flex flex-col gap-4">
@@ -427,10 +445,18 @@ export default function FpkgConvertScreen() {
               setImageCompress(c);
               setQueueBuild("image");
             }}
+            lz4={lz4Choice}
             onMakeImage={
               isLocalFolder
                 ? (thenCompress, format) =>
-                    void buildImage(src, outputDir.trim() || undefined, thenCompress, format)
+                    void buildImage(
+                      src,
+                      outputDir.trim() || undefined,
+                      thenCompress,
+                      format,
+                      undefined,
+                      lz4Active(format, lz4Choice) ? { profileToml: lz4Profile?.text } : undefined,
+                    )
                 : undefined
             }
             onCancel={() => void cancel()}

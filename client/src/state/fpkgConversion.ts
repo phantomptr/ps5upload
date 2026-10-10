@@ -8,7 +8,7 @@ import { create } from "zustand";
 import { imageUploadItem, type ImageUploadPlan } from "../lib/imageUpload";
 import { useUploadQueueStore } from "./uploadQueue";
 
-import { fpkg, type FpkgBuildRequest, type ImageFormat } from "../api/fpkg";
+import { fpkg, type AmprLz4Options, type FpkgBuildRequest, type ImageFormat } from "../api/fpkg";
 import { jobCancel, jobStatus } from "../api/ps5";
 import { useConnectionStore } from "./connection";
 import { pushNotification } from "./notifications";
@@ -24,6 +24,7 @@ export type PipelineStage =
   | "copy"
   | "extract"
   | "check"
+  | "pack"
   | "plan"
   | "compress"
   | "write"
@@ -126,6 +127,8 @@ export interface ConversionState {
     format?: ImageFormat,
     /** Once the image is built and checked, put it in the Upload queue. */
     thenUpload?: ImageUploadPlan,
+    /** Pack the game's files into AMPR LZ4 asset packs first (an .exfat image). */
+    lz4?: AmprLz4Options,
   ) => Promise<void>;
   /** Put the finished image in the Upload queue. */
   uploadImage: (plan: ImageUploadPlan) => void;
@@ -143,7 +146,7 @@ export interface ConversionState {
 export const POLL_MS = 500;
 /** Consecutive failed polls before the run is declared lost. */
 const MAX_POLL_FAILURES = 5;
-const BUILD_STAGES: readonly PipelineStage[] = ["check", "plan", "compress", "write", "verify"];
+const BUILD_STAGES: readonly PipelineStage[] = ["check", "pack", "plan", "compress", "write", "verify"];
 
 type Running = Extract<Pipeline, { phase: "running" }>;
 
@@ -152,6 +155,7 @@ const STAGE_LABEL: Record<PipelineStage, string> = {
   copy: "Copy from server",
   extract: "Unpack archive",
   check: "Check source",
+  pack: "Pack LZ4 assets",
   plan: "Plan package",
   compress: "Compress",
   write: "Write package",
@@ -670,20 +674,20 @@ export const useFpkgConversion = create<ConversionState>((set, get) => ({
     }
   },
 
-  buildImage: async (source, outputDir, thenCompress, format = "exfat", thenUpload) => {
+  buildImage: async (source, outputDir, thenCompress, format = "exfat", thenUpload, lz4) => {
     if (get().pipeline.phase === "running") return;
     pendingImageUpload = thenUpload ?? null;
     // One engine job: compressing happens as the image is written, so no uncompressed copy
     // is ever on disk.
     // The console it goes to, when it is sent once built: another console's view of this
     // game is not busy with it.
-    beginRun("image", source, thenUpload?.host ?? null, "plan");
+    beginRun("image", source, thenUpload?.host ?? null, lz4 ? "pack" : "plan");
     try {
-      const { job_id } = await fpkg.buildImage(source, outputDir, format, thenCompress);
+      const { job_id } = await fpkg.buildImage(source, outputDir, format, thenCompress, lz4);
       update({ jobId: job_id });
       poll(job_id, null);
     } catch (error) {
-      fail("write", error instanceof Error ? error.message : String(error), null);
+      fail(lz4 ? "pack" : "write", error instanceof Error ? error.message : String(error), null);
     }
   },
 
