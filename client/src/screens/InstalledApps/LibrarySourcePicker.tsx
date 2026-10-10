@@ -245,8 +245,14 @@ export function LibrarySourcePicker({
         <SourceCard
           icon={<RadioTower size={18} />}
           title={tr("fakelibs_scan_title", undefined, "Scan consoles")}
-          body={tr("fakelibs_scan_body", { consoles: consoleCount, count: scanTitles.length },
-            `Collect libraries from games already backported on every console you have set up — ${consoleCount} console(s), ${scanTitles.length} titles on this one. They all feed one shared corpus.`)}
+          body={
+            // From Settings there is no "this one": no console, no titles.
+            addr
+              ? tr("fakelibs_scan_body", { consoles: consoleCount, count: scanTitles.length },
+                  `Collect libraries from games already backported on every console you have set up — ${consoleCount} console(s), ${scanTitles.length} titles on this one. They all feed one shared corpus.`)
+              : tr("fakelibs_scan_body_all", { consoles: consoleCount },
+                  `Collect libraries from games already backported on every console you have set up (${consoleCount} console(s)). They all feed one shared corpus.`)
+          }
           action={
             <Button variant="secondary" disabled={scanDisabled} loading={busy === "scan"} onClick={() => void runScan()}>
               {tr("fakelibs_scan_action", undefined, "Scan")}

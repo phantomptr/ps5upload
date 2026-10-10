@@ -45,8 +45,7 @@ interface SettingsSnapshot {
    *  e.g. a USB stick plugged into the console. Default /mnt/usb0/savedata. */
   save_path?: string;
   keep_awake?: boolean;
-  /** Reveals features that are still being finished (today: the FPKG
-   *  builder). Off by default. */
+  /** Reveals features that are still being finished. Off by default. */
   beta_features?: boolean;
   upload?: {
     always_overwrite?: boolean;
@@ -57,14 +56,13 @@ interface SettingsSnapshot {
   /** The desktop sidebar: screens the user hid and sections they folded. Mirrored like every
    *  other preference so it survives a storage reset, a reinstall, or a hand-edit. */
   nav?: NavSettings;
+  /** Older files may also hold density, screen_reader_hints and
+   *  color_blind_palette: settings that never did anything, ignored on load. */
   accessibility?: {
     motion?: string;
-    density?: string;
     contrast?: string;
     dyslexia?: boolean;
     haptics_enabled?: boolean;
-    screen_reader_hints?: boolean;
-    color_blind_palette?: string;
   };
 }
 
@@ -89,12 +87,9 @@ function snapshotCurrent(): SettingsSnapshot {
     },
     accessibility: {
       motion: useAccessibilityStore.getState().motion,
-      density: useAccessibilityStore.getState().density,
       contrast: useAccessibilityStore.getState().contrast,
       dyslexia: useAccessibilityStore.getState().dyslexia,
       haptics_enabled: useAccessibilityStore.getState().hapticsEnabled,
-      screen_reader_hints: useAccessibilityStore.getState().screenReaderHints,
-      color_blind_palette: useAccessibilityStore.getState().colorBlindPalette,
     },
   };
 }
@@ -314,14 +309,6 @@ export async function hydrateFromUserConfig(): Promise<void> {
     ) {
       as.setMotion(a.motion as never);
     }
-    const densityVals = ["comfortable", "compact", "spacious"];
-    if (
-      typeof a.density === "string" &&
-      densityVals.includes(a.density) &&
-      a.density !== as.density
-    ) {
-      as.setDensity(a.density as never);
-    }
     const contrastVals = ["normal", "high"];
     if (
       typeof a.contrast === "string" &&
@@ -329,14 +316,6 @@ export async function hydrateFromUserConfig(): Promise<void> {
       a.contrast !== as.contrast
     ) {
       as.setContrast(a.contrast as never);
-    }
-    const cbVals = ["default", "deuteranopia", "protanopia", "tritanopia"];
-    if (
-      typeof a.color_blind_palette === "string" &&
-      cbVals.includes(a.color_blind_palette) &&
-      a.color_blind_palette !== as.colorBlindPalette
-    ) {
-      as.setColorBlindPalette(a.color_blind_palette as never);
     }
     if (typeof a.dyslexia === "boolean" && a.dyslexia !== as.dyslexia) {
       as.setDyslexia(a.dyslexia);
@@ -346,12 +325,6 @@ export async function hydrateFromUserConfig(): Promise<void> {
       a.haptics_enabled !== as.hapticsEnabled
     ) {
       as.setHapticsEnabled(a.haptics_enabled);
-    }
-    if (
-      typeof a.screen_reader_hints === "boolean" &&
-      a.screen_reader_hints !== as.screenReaderHints
-    ) {
-      as.setScreenReaderHints(a.screen_reader_hints);
     }
   }
   await persistNow();

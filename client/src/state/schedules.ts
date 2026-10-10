@@ -16,14 +16,17 @@ import { safeGetItem, safeSetItem } from "../lib/safeStorage";
  *   - weekly: fires at HH:MM on the named weekday(s)
  *   - once: fires on a specific timestamp; one-shot then disabled
  *
- * Action kinds (start small):
- *   - power_tick: defer auto-sleep (long-running upload supports)
+ * Action kinds:
  *   - notif: just push a notification (lets users build "remind me
  *     to back up tonight" without an action handler)
+ *
+ * Older versions also had a "power_tick" action. One tick a day never kept
+ * a console awake (Keep the PS5 awake → Always does that), so stored
+ * schedules of that kind are dropped on load.
  */
 
 export type ScheduleKind = "daily" | "weekly" | "once";
-export type ScheduleAction = "power_tick" | "notif";
+export type ScheduleAction = "notif";
 
 export interface Schedule {
   id: string;
@@ -38,12 +41,6 @@ export interface Schedule {
   oneShotMs?: number;
   /** Display name. */
   label: string;
-  /** Target console (bare host) for console-specific actions like
-   *  power_tick. Captured at creation from the active console so the tick
-   *  always hits the PS5 the schedule was made for — NOT whatever tab
-   *  happens to be active when it fires. Absent → fall back to the active
-   *  console (legacy schedules + non-console actions). */
-  host?: string;
   /** Optional payload for the action. */
   body?: string;
   /** Last fire ms (debounce — don't double-fire within 1 minute). */
@@ -63,12 +60,20 @@ interface ScheduleState {
 
 function loadInitial(): Schedule[] {
   if (typeof window === "undefined") return [];
+  return parseSchedules(safeGetItem(STORAGE_KEY));
+}
+
+/** The stored list → the schedules this version can run. Anything with an
+ *  action it no longer has (the old "power_tick") is dropped, so it never
+ *  fires and disappears from storage on the next write. Exported for tests. */
+export function parseSchedules(raw: string | null): Schedule[] {
+  if (!raw) return [];
   try {
-    const raw = safeGetItem(STORAGE_KEY);
-    if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((s): s is Schedule => typeof s?.id === "string");
+    return parsed.filter(
+      (s): s is Schedule => typeof s?.id === "string" && s.action === "notif",
+    );
   } catch {
     return [];
   }

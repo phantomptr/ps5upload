@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldFire, type Schedule } from "./schedules";
+import { parseSchedules, shouldFire, type Schedule } from "./schedules";
 
 /**
  * `shouldFire` is the pure decision function inside the schedule
@@ -119,5 +119,22 @@ describe("shouldFire", () => {
   it("daily ignores malformed hhmm", () => {
     const s = dailySchedule({ hhmm: "garbage" });
     expect(shouldFire(s, now(3, 0))).toBe(false);
+  });
+});
+
+describe("parseSchedules", () => {
+  it("drops stored PS5 power-tick schedules and keeps reminders", () => {
+    const raw = JSON.stringify([
+      { id: "a", enabled: true, kind: "daily", action: "notif", hhmm: "03:00", label: "back up" },
+      { id: "b", enabled: true, kind: "daily", action: "power_tick", hhmm: "02:00", label: "nightly tick", host: "192.168.0.5" },
+      { id: "c", enabled: true, kind: "daily", action: "something_else", hhmm: "01:00", label: "x" },
+    ]);
+    expect(parseSchedules(raw).map((s) => s.id)).toEqual(["a"]);
+  });
+
+  it("is empty for nothing stored, junk, or a non-list", () => {
+    expect(parseSchedules(null)).toEqual([]);
+    expect(parseSchedules("{oops")).toEqual([]);
+    expect(parseSchedules(JSON.stringify({ id: "a" }))).toEqual([]);
   });
 });
