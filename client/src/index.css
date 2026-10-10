@@ -428,7 +428,15 @@ body {
   pointer-events: none;
 }
 :root:not([data-theme="light"]) .photo-tile-image::after {
-  background: linear-gradient(180deg, transparent, rgb(20 12 28 / 0.72));
+  /* Deep enough at the bottom that the label and its status line keep
+   * 4.5:1 over the brightest photo. */
+  inset: 25% 0 0;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgb(22 14 30 / 0.7) 45%,
+    rgb(22 14 30 / 0.92)
+  );
 }
 .photo-tile-arrow {
   display: grid;
@@ -804,7 +812,9 @@ body {
 
 /* Dyslexia-friendly font: swap to Atkinson Hyperlegible / OpenDyslexic
  * if installed, with slightly increased spacing for readability. */
-:root[data-dyslexia="true"] body {
+/* #root too: it sets the app font itself, so the body alone was overridden. */
+:root[data-dyslexia="true"] body,
+:root[data-dyslexia="true"] #root {
   font-family: "Atkinson Hyperlegible", "OpenDyslexic", system-ui, -apple-system, sans-serif;
   letter-spacing: 0.01em;
   line-height: 1.5;
