@@ -49,9 +49,9 @@ export default function PayloadsScreen() {
       key: "payloads_tab_send",
       fallback: "Send payload",
       description: tr(
-        "payloads_description_send",
+        "payloads_description_send_v2",
         undefined,
-        "Send any PS5 payload file — .elf, .bin, .js, .lua, or .jar (kstuff, custom homebrew loaders, browser-stage exploits, plugin scripts, BD-JB JARs) — to your PS5. Same flow as the Connection tab, just pointed at a file you choose. Note: BD-JB-style .jar payloads need a JAR-aware loader on a non-9021 port — set the port to whatever your loader listens on.",
+        "Send any PS5 payload file — .elf, .bin, .js, .lua, or .jar (kstuff, custom homebrew loaders, browser-stage exploits, plugin scripts, BD-JB JARs) — to your PS5. Same flow as the Connection screen, just pointed at a file you choose. The port follows the file type (.elf/.bin 9021, .jar 9025, .lua 9026, .js 50000); change it only if your loader listens elsewhere.",
       ),
     },
     {

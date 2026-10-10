@@ -23,6 +23,8 @@ import { BrowseButton } from "../../components/BrowseButton";
 import { withLocalCopy } from "../../lib/materialize";
 import { isRemotePath } from "../../lib/remotePath";
 import { PlaylistsPanel } from "./PlaylistsPanel";
+import { dropIsOwnedElsewhere } from "./dropZone";
+import { probeVerdict } from "./probeVerdict";
 
 /**
  * Send tab of the Payloads screen — send any custom ELF (or BIN/JS/
@@ -53,7 +55,7 @@ import { PlaylistsPanel } from "./PlaylistsPanel";
 type Status =
   | { kind: "idle" }
   | { kind: "probing" }
-  | { kind: "probed"; message: string; isPs5upload: boolean }
+  | { kind: "probed"; message: string; good: boolean; blocked: boolean }
   | { kind: "sending"; bytes?: number }
   | { kind: "sent"; bytes: number }
   | { kind: "failed"; error: string };
@@ -86,21 +88,6 @@ function loaderPortForExt(path: string): number | null {
   if (p.endsWith(".jar")) return 9025;
   if (p.endsWith(".elf") || p.endsWith(".bin")) return PS5_LOADER_PORT;
   return null;
-}
-
-function probeMessage(code: string, isPs5upload: boolean): string {
-  switch (code) {
-    case "payload_probe_invalid_ext":
-      return "Payload must be a .elf, .bin, .js, .lua, or .jar file.";
-    case "payload_probe_detected":
-      return "This is a PS5Upload payload.";
-    case "payload_probe_no_signature":
-      return isPs5upload
-        ? "PS5Upload payload detected."
-        : "No PS5Upload signature found — use only if you trust this payload.";
-    default:
-      return "Payload file looks OK.";
-  }
 }
 
 /** "2m ago", "1h ago", "Apr 18" — compact timestamps for the history
@@ -274,12 +261,14 @@ export default function SendPanel() {
     getCurrentWebview()
       .onDragDropEvent((e) => {
         if (cancelled) return;
+        // A drop on the playlists' zone is the playlist's, not this form's.
         if (e.payload.type === "enter" || e.payload.type === "over") {
-          setDropActive(true);
+          setDropActive(!dropIsOwnedElsewhere(e.payload.position));
         } else if (e.payload.type === "leave") {
           setDropActive(false);
         } else if (e.payload.type === "drop") {
           setDropActive(false);
+          if (dropIsOwnedElsewhere(e.payload.position)) return;
           const first = (e.payload.paths ?? [])[0];
           if (first) applyPathRef.current(first);
         }
@@ -326,15 +315,17 @@ export default function SendPanel() {
     }
     setStatus({ kind: "probing" });
     try {
-      const r = await invoke<{ is_ps5upload: boolean; code: string }>(
+      const r = await invoke<{ is_ps5upload: boolean; code: string; error?: string }>(
         "payload_probe",
         { path },
       );
       if (latestProbePathRef.current !== path) return;
+      const v = probeVerdict(r.code, !!r.is_ps5upload, r.error);
       setStatus({
         kind: "probed",
-        isPs5upload: !!r.is_ps5upload,
-        message: probeMessage(r.code, !!r.is_ps5upload),
+        good: v.good,
+        blocked: v.blocked,
+        message: tr(v.key, v.vars, v.fallback),
       });
     } catch (e) {
       if (latestProbePathRef.current !== path) return;
@@ -548,7 +539,9 @@ export default function SendPanel() {
           {status.kind === "probed" && (
             <ProbeRow
               icon={
-                status.isPs5upload ? (
+                status.blocked ? (
+                  <XCircle size={14} className="text-[var(--color-bad)]" />
+                ) : status.good ? (
                   <CheckCircle2
                     size={14}
                     className="text-[var(--color-good)]"
@@ -575,7 +568,8 @@ export default function SendPanel() {
                 !elfPath ||
                 !host?.trim() ||
                 !portValid ||
-                status.kind === "probing"
+                status.kind === "probing" ||
+                (status.kind === "probed" && status.blocked)
               }
             >
               {tr("sendpayload_send", undefined, "Send")}
