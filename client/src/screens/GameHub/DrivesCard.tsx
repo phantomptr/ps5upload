@@ -36,8 +36,8 @@ export function DrivesCard({
   return (
     <Card>
       {dialog}
-      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold">
-        <HardDrive size={16} className="text-[var(--color-muted)]" />
+      <h2 className="mb-4 flex items-center gap-3 text-[1.0625rem] font-semibold tracking-[-0.01em]">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent-bright)]"><HardDrive size={15} aria-hidden /></span>
         {tr("game_drives_title", { n: copies.length }, "On your drives ({n})")}
       </h2>
       {copies.length === 0 ? (

@@ -22,6 +22,8 @@ import {
   Package,
   Download,
   Shield,
+  Clock,
+  CircleDot,
 } from "lucide-react";
 
 import {
@@ -60,6 +62,7 @@ import { useRosterStore } from "../../state/roster";
 import { useGameView } from "./useGameView";
 import { installStagedPkg, stagedPkgAction } from "./installStaged";
 import { CollectionCover } from "../Collection/CollectionCover";
+import { CoverFrame, PlatformTag } from "../../components/GameIconFrame";
 import { ConsolesCard } from "./ConsolesCard";
 import { DrivesCard } from "./DrivesCard";
 import { fetchRunningGames } from "../../lib/runningGames";
@@ -375,66 +378,80 @@ export default function GameHubScreen() {
     <div className="app-page">
       {makeWayDialog}
       {confirmDialogNode}
-      {/* Header */}
-      <header className="mb-6">
-        <div className="mb-3 flex items-center gap-2">
-          <button
-            type="button"
-            data-testid="game-back"
-            onClick={goBack}
-            className="flex items-center gap-1 text-sm text-[var(--color-muted)] hover:text-[var(--color-text)]"
+      {/* Hero: the framed cover beside a big title and the facts as chips, on
+          one glass panel (the reference's greeting panel, laid sideways). */}
+      <div className="mb-4">
+        <button
+          type="button"
+          data-testid="game-back"
+          onClick={goBack}
+          className="inline-flex min-h-9 items-center gap-1.5 rounded-full px-3 text-sm font-medium text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
+        >
+          <ArrowLeft size={15} />
+          {tr("game_hub_back_games", undefined, "Back")}
+        </button>
+      </div>
+      <header className="glass relative mb-6 overflow-hidden rounded-[var(--radius-panel)] p-5 sm:p-7">
+        <div aria-hidden className="dot-texture pointer-events-none absolute -right-10 -top-10 h-64 w-96" />
+        <div className="relative flex flex-col gap-5 sm:flex-row sm:items-center sm:gap-7">
+          <CoverFrame
+            className="w-36 shrink-0 sm:w-44"
+            overlay={
+              gv.view?.platform ? (
+                <span className="absolute left-2 top-2">
+                  <PlatformTag platform={gv.view.platform} />
+                </span>
+              ) : null
+            }
           >
-            <ArrowLeft size={14} />
-            {tr("game_hub_back_games", undefined, "Back")}
-          </button>
-        </div>
-
-        <div className="flex items-start gap-4">
-          {/* Game icon */}
-          {game.source === "collection" && gv.view?.cover ? (
-            // The Collection's cover, with the same fallbacks as its cards (the IPC when the
-            // window's own load is refused, then the initials): never a broken image.
-            <div className="h-20 w-20 shrink-0 overflow-hidden rounded-xl">
+            {game.source === "collection" && gv.view?.cover ? (
+              // The Collection's cover, with the same fallbacks as its cards (the IPC when the
+              // window's own load is refused, then the initials): never a broken image.
               <CollectionCover
+                className="h-full"
                 game={{
                   game_id: gv.view.title_id,
                   title: game.name,
                   local_cover: gv.view.cover.startsWith("/api/collection/") ? "cover" : undefined,
                   cover_url: gv.view.cover.startsWith("http") ? gv.view.cover : undefined,
+                  locations: gv.view.copies,
                 }}
               />
-            </div>
-          ) : (
-            <GameIcon
-              host={host ?? ""}
-              titleId={game.titleId}
-              gamePath={game.path}
-              alt={game.name}
-              size={80}
-              rounded="rounded-xl"
-              className="shrink-0"
-            />
-          )}
+            ) : (
+              <GameIcon
+                host={host ?? ""}
+                titleId={game.titleId}
+                gamePath={game.path}
+                alt={game.name}
+                size={120}
+                rounded=""
+                fill
+              />
+            )}
+          </CoverFrame>
 
-          {/* Title + meta */}
           <div className="min-w-0 flex-1">
-            <h1 className="truncate text-2xl font-bold tracking-tight">
+            <h1 className="text-[1.875rem] leading-[1.08] font-bold tracking-[-0.035em] [overflow-wrap:anywhere] sm:text-[2.75rem]">
               {game.name}
             </h1>
-            <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-[var(--color-muted)]">
-              <span className="font-mono">{game.titleId}</span>
-              {game.size > 0 && <span>· {formatBytes(game.size)}</span>}
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <FactChip mono>{game.titleId}</FactChip>
+              {game.size > 0 && <FactChip>{formatBytes(game.size)}</FactChip>}
               {playSeconds !== undefined && playSeconds > 0 && (
-                <span>· {formatDuration(playSeconds)}</span>
+                <FactChip icon={<Clock size={12} aria-hidden />}>{formatDuration(playSeconds)}</FactChip>
+              )}
+              {running && (
+                <FactChip tone="good" icon={<CircleDot size={12} className="animate-pulse" aria-hidden />}>
+                  {tr("installed_badge_playing", undefined, "Playing")}
+                </FactChip>
               )}
             </div>
             {gv.view && (gv.view.consoles.length > 0 || gv.view.copies.length > 0) && (
-              <p className="mt-1 text-sm text-[var(--color-muted)]" data-testid="game-summary">
+              <p className="mt-3 text-sm text-[var(--color-muted)]" data-testid="game-summary">
                 {summaryLine(rosterOnly(gv.view, Object.keys(names)), names, tr)}
               </p>
             )}
           </div>
-
         </div>
       </header>
 
@@ -492,6 +509,30 @@ export default function GameHubScreen() {
         tab={activeTab}
       />
     </div>
+  );
+}
+
+/** A fact about the game as a quiet pill (title id, size, play time). */
+function FactChip({
+  children,
+  icon,
+  mono = false,
+  tone,
+}: {
+  children: React.ReactNode;
+  icon?: React.ReactNode;
+  mono?: boolean;
+  tone?: "good";
+}) {
+  return (
+    <span
+      className={`inline-flex min-h-8 items-center gap-1.5 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3 text-xs font-medium shadow-[var(--edge-highlight)] ${
+        mono ? "font-mono" : ""
+      } ${tone === "good" ? "text-[var(--color-good)]" : "text-[var(--color-text)]"}`}
+    >
+      {icon}
+      {children}
+    </span>
   );
 }
 
@@ -593,8 +634,8 @@ function TabCard({
   const tr = useTr();
   return (
     <Card>
-      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold">
-        <Icon size={16} className="text-[var(--color-muted)]" />
+      <h2 className="mb-4 flex items-center gap-3 text-[1.0625rem] font-semibold tracking-[-0.01em]">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent-bright)]"><Icon size={15} aria-hidden /></span>
         {title}
         {loading && <Spinner size={14} />}
       </h2>
@@ -975,10 +1016,13 @@ function OverviewTab({
   return (
     <div className="grid gap-4 md:grid-cols-2">
       <Card>
-        <h2 className="mb-3 text-sm font-semibold">
+        <h2 className="mb-4 flex items-center gap-3 text-[1.0625rem] font-semibold tracking-[-0.01em]">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent-bright)]">
+            <Info size={15} aria-hidden />
+          </span>
           {tr("game_hub_overview", undefined, "Overview")}
         </h2>
-        <dl className="space-y-2 text-sm">
+        <dl className="text-sm [&>div]:min-h-10 [&>div]:items-center [&>div]:gap-4 [&>div]:border-b [&>div]:border-[var(--color-border)] [&>div:last-child]:border-b-0">
           <div className="flex justify-between">
             <dt className="text-[var(--color-muted)]">{tr("game_hub_title_id", undefined, "Title ID")}</dt>
             <dd className="font-mono">{game.titleId}</dd>

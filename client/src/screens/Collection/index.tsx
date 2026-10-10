@@ -473,7 +473,7 @@ export default function CollectionScreen() {
 
           {summary && (
             <div
-              className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-5"
+              className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-5"
               data-testid="collection-summary"
             >
               <Stat
@@ -582,7 +582,7 @@ export default function CollectionScreen() {
           </div>
 
           <div
-            className="mb-4 flex flex-wrap gap-1.5"
+            className="mb-4 flex flex-wrap gap-2"
             role="group"
             aria-label={tr("collection.filters", undefined, "Filters")}
           >
@@ -593,14 +593,10 @@ export default function CollectionScreen() {
                   type="button"
                   aria-pressed={s.filter === f}
                   onClick={() => s.set({ filter: f })}
-                  className={`rounded-full border px-3 py-1 text-xs ${
-                    s.filter === f
-                      ? "border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text)]"
-                      : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"
-                  }`}
+                  className="chip min-h-9 gap-1.5 px-4 text-xs font-medium"
                 >
-                  {filterLabel[f]}{" "}
-                  <span className="opacity-70">{counts[f]}</span>
+                  {filterLabel[f]}
+                  <span className="tabular-nums text-[var(--color-muted)]">{counts[f]}</span>
                 </button>
               ),
             )}
@@ -608,7 +604,7 @@ export default function CollectionScreen() {
 
           {consoleStates && (
             <div
-              className="mb-4 flex flex-wrap items-center gap-1.5"
+              className="mb-5 flex flex-wrap items-center gap-2"
               role="group"
               aria-label={tr(
                 "collection.console_filters",
@@ -616,7 +612,7 @@ export default function CollectionScreen() {
                 "On this PS5",
               )}
             >
-              <span className="mr-1 text-xs text-[var(--color-muted)]">
+              <span className="mr-1 text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]">
                 {consoleEntry?.loading
                   ? tr(
                       "collection.console_reading",
@@ -662,20 +658,17 @@ export default function CollectionScreen() {
                   type="button"
                   aria-pressed={s.consoleFilter === f}
                   onClick={() => s.set({ consoleFilter: f })}
-                  className={`rounded-full border px-3 py-1 text-xs ${
-                    s.consoleFilter === f
-                      ? "border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text)]"
-                      : "border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-text)]"
-                  }`}
+                  className="chip min-h-9 gap-1.5 px-4 text-xs font-medium"
                 >
-                  {label} <span className="opacity-70">{n}</span>
+                  {label}
+                  <span className="tabular-nums text-[var(--color-muted)]">{n}</span>
                 </button>
               ))}
             </div>
           )}
           {consoleStates && cCounts.update + cCounts.dlc > 0 && (
             // The one-click catch-up, where it can be seen rather than in the ⋯ menu.
-            <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-[var(--color-accent)] bg-[var(--color-surface-2)] px-3 py-2 text-sm">
+            <div className="surface-panel mb-5 flex flex-wrap items-center gap-3 !rounded-[var(--radius-card)] px-5 py-3 text-sm">
               <span className="min-w-0 flex-1">
                 {tr(
                   "collection.uptodate_banner",
@@ -714,7 +707,7 @@ export default function CollectionScreen() {
               }
             />
           ) : s.view === "grid" ? (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] sm:gap-4">
+            <div className="grid grid-cols-2 gap-x-3 gap-y-5 sm:grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] sm:gap-x-5 sm:gap-y-7">
               {shown.map((g) => (
                 <CollectionCard
                   key={g.game_id}
@@ -755,7 +748,7 @@ function ScanProgress() {
   const done = useCollectionStore((st) => st.scan?.done ?? 0);
   const found = useCollectionStore((st) => st.scan?.found ?? 0);
   return (
-    <div className="mb-3 flex items-center gap-2 rounded-lg border border-[var(--color-border)] px-3 py-2 text-xs text-[var(--color-muted)]">
+    <div className="surface-panel mb-4 flex items-center gap-2 !rounded-full px-4 py-2 text-xs text-[var(--color-muted)]">
       <Spinner size={12} />
       {found > 0
         ? tr("collection.scanning_n", { done, found }, "Scanning: {done} of {found} items read")
@@ -778,13 +771,13 @@ function Stat({
 }) {
   return (
     <div
-      className={`rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 ${wide ? "col-span-2 sm:col-span-1" : ""}`}
+      className={`surface-panel !rounded-[var(--radius-card)] px-4 py-3 ${wide ? "col-span-2 sm:col-span-1" : ""}`}
       title={hint}
     >
-      <div className="text-[0.6875rem] uppercase tracking-wide text-[var(--color-muted)]">
+      <div className="text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]">
         {label}
       </div>
-      <div className="text-base font-semibold tabular-nums">{value}</div>
+      <div className="mt-0.5 text-lg font-semibold tracking-[-0.01em] tabular-nums">{value}</div>
     </div>
   );
 }

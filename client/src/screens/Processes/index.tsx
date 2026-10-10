@@ -315,7 +315,7 @@ export default function ProcessesScreen() {
         )}
 
         {truncated && (
-          <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]">
+          <div className="mb-3 flex items-center gap-2 rounded-[var(--radius-card)] bg-[var(--color-warn-soft)] px-4 py-2.5 text-xs text-[var(--color-warn)]">
             <TriangleAlert size={14} />
             {tr(
               "processes_truncated",
@@ -340,7 +340,7 @@ export default function ProcessesScreen() {
             }
           />
         ) : (
-          <ul className="grid gap-1.5">
+          <ul className="grid gap-2.5">
             {visible.map((p) => (
               <ProcessRow
                 key={p.pid}
@@ -461,12 +461,15 @@ function ProcessRowImpl({
     // flex-wrap + a floored identity block: at large OS text size or a narrow
     // width the Restart/Kill buttons drop to their own line instead of crushing
     // the process name to zero. The icon + identity stay together on line 1.
-    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-sm">
+    <li className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3 py-2.5 text-sm shadow-[var(--edge-highlight),var(--shadow-1)] sm:px-4">
       {isApp ? (
-        <GameIcon host={host} size={36} titleId={proc.title_id || null} />
+        // A game's icon in the small cover frame used across the Games screens.
+        <span className="shrink-0 rounded-2xl border border-[var(--glass-edge)] bg-[var(--color-pill)] p-1 shadow-[var(--shadow-1)]">
+          <GameIcon host={host} size={38} titleId={proc.title_id || null} rounded="rounded-xl" />
+        </span>
       ) : (
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--color-surface-3)]">
-          <Cpu size={16} className="text-[var(--color-muted)]" />
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[var(--color-surface-3)]">
+          <Cpu size={17} className="text-[var(--color-muted)]" />
         </div>
       )}
       <div className="min-w-[min(100%,11rem)] flex-1">

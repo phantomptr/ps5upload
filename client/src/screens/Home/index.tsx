@@ -32,6 +32,7 @@ import { openExternalUrl } from "../../lib/openExternalUrl";
 import { COFFEE_URL } from "../../lib/supportLinks";
 import { ServersCard } from "./ServersCard";
 import { HealthCard } from "./HealthCard";
+import { RecentGames } from "./RecentGames";
 import { greetingPart } from "./greeting";
 import {
   evaluateOperationReadiness,
@@ -198,6 +199,10 @@ export default function HomeScreen() {
             <PhotoTile to="/saves" photo="saves" icon={Save} label={tr("v5_qa_saves", "Back up saves")} readiness={readinessFor("browse-console")} className="h-40 sm:col-span-2 sm:h-auto" />
             <PhotoTile to="/convert" photo="convert" icon={PackagePlus} label={tr("v5_qa_convert", "Convert")} readiness={readinessFor("local-only")} className="col-span-2 h-40 sm:col-span-2 sm:h-auto" />
           </section>
+
+          {/* The newest games from the Collection, framed like the reference's
+              "Recommended" row. Renders nothing while the Collection is empty. */}
+          <RecentGames />
 
           {/* Power, right under the actions — issue #316. These lived only at the
               bottom of Manage connections, which is several clicks away from the

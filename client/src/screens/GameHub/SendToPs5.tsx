@@ -107,7 +107,7 @@ export function SendToPs5({
   };
 
   return (
-    <div className="mt-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-sm">
+    <div className="mt-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] p-4 text-sm">
       {copies.length > 1 && (
         <Select
           label={tr("collection.send_which", undefined, "Copy")}
@@ -177,7 +177,7 @@ export function SendToPs5({
           <input
             value={subpath}
             onChange={(e) => setSubpath(e.target.value)}
-            className="w-36 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 font-mono text-sm text-[var(--color-text)]"
+            className="w-36 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3 py-1.5 font-mono text-sm text-[var(--color-text)]"
           />
         </label>
       </div>

@@ -553,7 +553,7 @@ export default function LibraryScreen() {
                 all narrow the list. Empty query renders the full list
                 unchanged (filterLibraryEntries returns the same
                 reference, so memoization downstream stays warm). */}
-            <div className="mb-4 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2">
+            <div className="mb-5 flex min-h-11 items-center gap-2 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] py-1.5 pl-4 pr-1.5 shadow-[var(--edge-highlight),var(--shadow-1)]">
               <Search
                 size={14}
                 className="shrink-0 text-[var(--color-muted)]"
@@ -604,7 +604,7 @@ export default function LibraryScreen() {
               <select
                 value={sortKey}
                 onChange={(e) => setSortKey(e.target.value as SortKey)}
-                className="shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-xs text-[var(--color-text)] outline-none hover:bg-[var(--color-surface-3)]"
+                className="shrink-0 rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-3 py-1.5 text-xs text-[var(--color-text)] outline-none hover:bg-[var(--color-surface-3)]"
                 aria-label={tr(
                   "library_sort_aria",
                   undefined,
@@ -807,7 +807,7 @@ function SectionHeader({
   count: number;
 }) {
   return (
-    <header className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+    <header className="mb-3 flex items-center gap-2 text-[0.6875rem] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]">
       {icon}
       <span>{title}</span>
       <span className="text-xs font-normal normal-case">· {count}</span>
@@ -2251,7 +2251,7 @@ function LibraryRowImpl({
   };
 
   return (
-    <article className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
+    <article className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-3 shadow-[var(--edge-highlight),var(--shadow-1)] sm:px-4">
       {/* flex-wrap so the action cluster drops to its own line instead of
           overflowing off the (clipped) right edge on narrow phone widths —
           previously the Play/Details/⋯ buttons were pushed off-screen and
@@ -3930,7 +3930,9 @@ function LibraryThumb({
           : Promise.resolve(null),
   });
   return (
-    <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md bg-[var(--color-surface-3)]">
+    // The cover frame in miniature: a pill-coloured rim around the art.
+    <div className="relative flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-[var(--glass-edge)] bg-[var(--color-pill)] p-1 shadow-[var(--shadow-1)]">
+      <div className="flex h-full w-full items-center justify-center overflow-hidden rounded-xl bg-[var(--color-surface-3)]">
       {src ? (
         <img
           src={src}
@@ -3949,6 +3951,7 @@ function LibraryThumb({
       ) : (
         <FallbackIcon size={20} className="text-[var(--color-muted)]" />
       )}
+      </div>
     </div>
   );
 }
@@ -4035,7 +4038,7 @@ function FpkgKstuffTip() {
     setDismissed(true);
   };
   return (
-    <div className="mb-2 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-xs">
+    <div className="mb-3 flex items-start gap-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] px-4 py-2.5 text-xs">
       <Sparkles
         size={13}
         className="mt-0.5 shrink-0 text-[var(--color-accent)]"

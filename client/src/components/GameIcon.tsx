@@ -35,6 +35,7 @@ export function GameIcon({
   size = 56,
   rounded = "rounded-md",
   className = "",
+  fill = false,
 }: {
   host: string;
   titleId?: string | null;
@@ -50,6 +51,8 @@ export function GameIcon({
   /** Tailwind rounding class for the frame. */
   rounded?: string;
   className?: string;
+  /** Fill the parent (a CoverFrame) instead of a fixed `size` square. */
+  fill?: boolean;
 }) {
   const hostReady = !!host.trim();
   // A folder named after a title but not exactly it (a save backup `PPSA17221.bak`) shows that
@@ -101,8 +104,8 @@ export function GameIcon({
   }, [failed, advance]);
   return (
     <div
-      className={`flex shrink-0 items-center justify-center overflow-hidden bg-[var(--color-surface-3)] ${rounded} ${className}`}
-      style={{ width: size, height: size }}
+      className={`flex shrink-0 items-center justify-center overflow-hidden bg-[var(--color-surface-3)] ${fill ? "h-full w-full" : ""} ${rounded} ${className}`}
+      style={fill ? undefined : { width: size, height: size }}
     >
       {src ? (
         <img

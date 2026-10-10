@@ -21,6 +21,7 @@ import { useConfirm } from "../../components/ConfirmDialog";
 import { useTr } from "../../state/lang";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
+import { humanizePs5Error } from "../../lib/humanizeError";
 import { useRunningAppsStore } from "../../state/runningApps";
 import { useDocumentVisible } from "../../lib/visibility";
 import { transferScreenBusy } from "../../lib/ps5Transfers";
@@ -213,7 +214,7 @@ export default function RunningAppsPanel({ mgmtAddr }: { mgmtAddr: string }) {
   if (apps.length === 0 && !error) return null;
 
   return (
-    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
+    <section className="surface-panel mb-5 !rounded-[var(--radius-card)] p-4">
       {confirmDialogNode}
       <header className="mb-2 flex items-center gap-2">
         <Activity size={14} className="text-[var(--color-good)]" />
@@ -243,7 +244,7 @@ export default function RunningAppsPanel({ mgmtAddr }: { mgmtAddr: string }) {
       {error && (
         <div className="mb-2 flex items-start gap-1 text-xs text-[var(--color-bad)]">
           <AlertTriangle size={11} className="mt-0.5 shrink-0" />
-          {error}
+          {humanizePs5Error(error)}
         </div>
       )}
       {apps.length === 0 ? (
@@ -253,7 +254,7 @@ export default function RunningAppsPanel({ mgmtAddr }: { mgmtAddr: string }) {
           {apps.map((a) => (
             <li
               key={a.app_id}
-              className="flex items-center gap-3 rounded-md bg-[var(--color-surface)] px-2 py-1.5 text-xs"
+              className="flex items-center gap-3 rounded-2xl bg-[var(--color-surface)] px-3 py-2 text-xs"
             >
               <div className="min-w-0 flex-1">
                 <div className="font-medium">

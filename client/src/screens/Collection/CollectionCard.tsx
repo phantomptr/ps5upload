@@ -2,10 +2,10 @@ import { memo } from "react";
 import { Copy as CopyIcon } from "lucide-react";
 
 import type { CollectionGame, GameConsoleState } from "../../api/collection";
-import { Badge, PlatformBadge } from "../../components";
 import { addOnCount, formatCollectionBytes } from "../../lib/collectionView";
 import { useTr } from "../../state/lang";
 import { CollectionCover } from "./CollectionCover";
+import { CoverCaption, CoverFrame, CoverTag, MetaDot, PlatformTag } from "../../components/GameIconFrame";
 import type { CopyActivity } from "../../state/copyActivity";
 
 /** "1 copy · 2 add-ons": copies are full copies of the game, add-ons its updates and DLC. */
@@ -32,9 +32,8 @@ export function ConsoleBadge({ state }: { state?: GameConsoleState }) {
   if (!state?.installed) return null;
   if (state.update) {
     return (
-      <Badge
+      <CoverTag
         tone="accent"
-        size="sm"
         title={tr(
           "collection.badge_update_hint",
           { have: state.installed_version ?? "?", v: state.update.version },
@@ -46,11 +45,11 @@ export function ConsoleBadge({ state }: { state?: GameConsoleState }) {
           { v: state.update.version },
           "Update {v}",
         )}
-      </Badge>
+      </CoverTag>
     );
   }
   return (
-    <Badge tone="good" size="sm">
+    <CoverTag tone="good">
       {state.installed_version
         ? tr(
             "collection.badge_installed_v",
@@ -61,7 +60,7 @@ export function ConsoleBadge({ state }: { state?: GameConsoleState }) {
       {state.dlc_missing.length > 0
         ? ` · +${state.dlc_missing.length} DLC`
         : ""}
-    </Badge>
+    </CoverTag>
   );
 }
 
@@ -78,9 +77,7 @@ function ActivityBadge({ activity }: { activity: CopyActivity }) {
           ? tr("collection.badge_installing", undefined, "Installing") + pct
           : tr("collection.badge_sending", undefined, "Sending") + pct;
   return (
-    <Badge tone="accent" size="sm">
-      {label}
-    </Badge>
+    <CoverTag tone="accent">{label}</CoverTag>
   );
 }
 
@@ -103,56 +100,56 @@ export const CollectionCard = memo(function CollectionCard({
     <button
       type="button"
       onClick={() => onOpen(game.game_id)}
-      className="group flex flex-col overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] text-left transition-colors hover:border-[var(--color-accent)]"
+      className="group flex min-w-0 flex-col rounded-[var(--radius-card)] text-left focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[var(--color-accent)]"
       data-testid="collection-card"
     >
-      <div className="relative">
-        <CollectionCover game={game} />
-        <div className="absolute left-2 top-2 drop-shadow">
-          <PlatformBadge platform={game.platform.toLowerCase()} />
-        </div>
-        <div className="absolute bottom-2 left-2 drop-shadow">
-          <ConsoleBadge state={consoleState} />
-        </div>
-        {activity && (activity.phase === "building" || activity.phase === "queued" || activity.phase === "sending") && (
-          <div className="absolute bottom-2 right-2 drop-shadow">
-            <ActivityBadge activity={activity} />
-          </div>
-        )}
-        {game.is_duplicate && (
-          <span className="absolute right-2 top-2 drop-shadow">
-            <Badge
-              tone="warn"
-              size="sm"
-              icon={CopyIcon}
-              title={tr(
-                "collection.duplicate_hint",
-                undefined,
-                "More than one full copy of this game is on disk.",
-              )}
-            >
-              {tr("collection.duplicate", undefined, "Duplicate")}
-            </Badge>
-          </span>
-        )}
-      </div>
-      <div className="flex flex-1 flex-col gap-1 p-2.5 sm:p-3">
-        <div
-          className="line-clamp-2 min-h-[2.5rem] text-sm font-semibold"
-          title={game.title}
-        >
-          {game.title}
-        </div>
-        <div className="truncate font-mono text-xs text-[var(--color-muted)]">
-          {game.game_id}
-        </div>
-        <div className="mt-auto flex items-center justify-between gap-2 pt-1 text-xs text-[var(--color-muted)]">
-          <span className="truncate">{copiesLabel(game)}</span>
-          <span className="shrink-0 tabular-nums">
-            {formatCollectionBytes(game.total_size_bytes)}
-          </span>
-        </div>
-      </div>
+      <CoverFrame
+        interactive
+        overlay={
+          <>
+            <div className="absolute left-2 top-2">
+              <PlatformTag platform={game.platform} />
+            </div>
+            {game.is_duplicate && (
+              <span className="absolute right-2 top-2">
+                <CoverTag
+                  tone="warn"
+                  icon={<CopyIcon size={11} aria-hidden />}
+                  title={tr(
+                    "collection.duplicate_hint",
+                    undefined,
+                    "More than one full copy of this game is on disk.",
+                  )}
+                >
+                  {tr("collection.duplicate", undefined, "Duplicate")}
+                </CoverTag>
+              </span>
+            )}
+            <div className="absolute inset-x-2 bottom-2 flex flex-wrap items-end justify-between gap-1">
+              <ConsoleBadge state={consoleState} />
+              {activity &&
+                (activity.phase === "building" ||
+                  activity.phase === "queued" ||
+                  activity.phase === "sending") && <ActivityBadge activity={activity} />}
+            </div>
+          </>
+        }
+      >
+        <CollectionCover game={game} className="h-full" />
+      </CoverFrame>
+      <CoverCaption
+        title={game.title}
+        titleAttr={`${game.title} · ${game.game_id}`}
+        meta={
+          <>
+            <span className="truncate">{copiesLabel(game)}</span>
+            <MetaDot />
+            <span className="shrink-0 tabular-nums">
+              {formatCollectionBytes(game.total_size_bytes)}
+            </span>
+          </>
+        }
+      />
     </button>
   );
 });

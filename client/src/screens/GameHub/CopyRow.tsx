@@ -33,7 +33,7 @@ export function CopyButton({ text, label }: { text: string; label: string }) {
           setTimeout(() => setDone(false), 1200);
         }
       }}
-      className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]"
+      className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]"
       title={label}
       aria-label={label}
     >
@@ -75,7 +75,7 @@ function InstallLinkButton({ host, path }: { host: string; path: string }) {
           );
         }
       }}
-      className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-text)] disabled:opacity-60"
+      className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-text)] disabled:opacity-60"
       title={tr(
         "collection.copy_link_hint_v2",
         undefined,
@@ -126,7 +126,7 @@ export function CopyRow({
   // A file manager can open it only when the engine's disk is this computer's.
   const canReveal = isTauriEnv() && engineIsOnThisDevice() && !onServer;
   return (
-    <li className="rounded-lg border border-[var(--color-border)] p-3 text-xs">
+    <li className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] p-4 text-xs">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium text-[var(--color-text)]">
           {locationKind(loc.type)}
@@ -223,7 +223,7 @@ export function CopyRow({
             onClick={() =>
               navigate("/convert", { state: { source: loc.absolute_path } })
             }
-            className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]"
+            className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]"
             title={tr(
               "collection.convert_hint",
               undefined,
@@ -238,7 +238,7 @@ export function CopyRow({
           <button
             type="button"
             onClick={() => void openLocalPath(loc.absolute_path)}
-            className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]"
+            className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]"
           >
             <FolderOpen size={12} />
             {tr("collection.show_in_files", undefined, "Show in file manager")}
@@ -248,7 +248,7 @@ export function CopyRow({
           <button
             type="button"
             onClick={() => onTrash([loc.absolute_path])}
-            className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-bad)] hover:border-[var(--color-bad)]"
+            className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-[var(--color-border-strong)] px-3 py-1 text-xs text-[var(--color-bad)] hover:border-[var(--color-bad)]"
           >
             <Trash2 size={12} />
             {noTrash

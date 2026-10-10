@@ -65,11 +65,10 @@ import {
   Button,
   ConnectionGate,
   Skeleton,
-  PlatformBadge,
   Spinner,
-  Toggle,
   OverflowMenu,
 } from "../../components";
+import { CoverFrame, CoverTag, MetaDot, PlatformTag } from "../../components/GameIconFrame";
 // Direct import to avoid the barrel's circular-dep warning at build.
 import { useConfirm } from "../../components/ConfirmDialog";
 import { DOC_ANCHORS, faqLink, installErrorLink } from "../../lib/installErrorDoc";
@@ -132,10 +131,10 @@ function KindBadge({ title }: { title: InstalledTitle }) {
   const tr = useTr();
   const k = kindOf(title);
   const base =
-    "inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-xs font-medium text-[var(--color-muted)]";
+    "inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-xs text-[var(--color-muted)]";
   if (k === "system")
     return (
-      <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded bg-[var(--color-bad-soft)] px-1.5 py-0.5 text-xs font-medium text-[var(--color-bad)]">
+      <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-medium text-[var(--color-bad)]">
         <AlertTriangle size={11} />
         {tr("installed_badge_system", undefined, "System")}
       </span>
@@ -180,7 +179,7 @@ function Cover({ host, title }: { host: string; title: InstalledTitle }) {
     },
   );
   return (
-    <div className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-[var(--color-surface-3)]">
+    <div className="relative flex h-full w-full items-center justify-center overflow-hidden bg-[var(--color-surface-3)]">
       {src ? (
         <img
           src={src}
@@ -244,8 +243,8 @@ function NowPlayingBanner({
   if (playing.length === 0) return null;
 
   return (
-    <section className="flex flex-col gap-2 rounded-xl border border-[var(--color-good)]/40 bg-[var(--color-good)]/5 p-3">
-      <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-good)]">
+    <section className="surface-panel flex flex-col gap-3 !rounded-[var(--radius-card)] p-4">
+      <div className="flex items-center gap-1.5 text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-good)]">
         <CircleDot size={12} className="animate-pulse shrink-0" />
         {tr("installed_now_playing", undefined, "Now playing")}
       </div>
@@ -253,10 +252,12 @@ function NowPlayingBanner({
         const secs = playSecondsOf(t.titleId);
         return (
           <div key={t.titleId} className="flex items-center gap-3">
-            <div className="w-14 shrink-0">
-              <Cover host={host} title={t} />
+            <div className="h-14 w-14 shrink-0 overflow-hidden rounded-2xl border border-[var(--glass-edge)] bg-[var(--color-pill)] p-1 shadow-[var(--shadow-1)]">
+              <div className="h-full w-full overflow-hidden rounded-xl">
+                <Cover host={host} title={t} />
+              </div>
             </div>
-            <div className="min-w-0 flex-1 !px-2 sm:!px-4">
+            <div className="min-w-0 flex-1">
               <div className="truncate text-sm font-semibold" title={t.titleName}>
                 <Link to={gamePath(t.titleId)} className="hover:underline">
                   {t.titleName}
@@ -359,52 +360,69 @@ export const AppCard = memo(function AppCard({
   // affordance only appears when there's actually a folder to open.
   const sourceFolder = title.source || null;
   return (
-    <div className="group flex flex-col rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)]">
-      {/* Cover with corner overlays: platform (top-left), SMP warning
-          (top-right) — keeps the body clean + every card the same height. Only the cover
-          clips to the rounded corner, so the actions menu below can open past the card. */}
-      <div className="relative overflow-hidden rounded-t-xl">
-        <Cover host={host} title={title} />
-        <div className="absolute left-2 top-2 drop-shadow">
-          <PlatformBadge platform={platformOf(title)} />
-        </div>
-        {discNeedsSmp ? (
-          <span
-            className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-full bg-[var(--color-warn)] px-2 py-0.5 text-xs font-semibold text-[var(--color-accent-contrast)] drop-shadow"
-            title={tr(
-              "installed_disc_needs_smp_row",
-              undefined,
-              "Needs ShadowMount+ running to mount + launch.",
-            )}
-          >
-            <AlertTriangle size={11} />
-            {tr("installed_badge_smp_needed", undefined, "SMP")}
-          </span>
-        ) : null}
-        {running ? (
-          <span
-            className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-full bg-[var(--color-good)] px-2 py-0.5 text-xs font-semibold text-[var(--color-accent-contrast)] drop-shadow"
-            title={tr("installed_now_playing", undefined, "Now playing")}
-          >
-            <CircleDot size={11} className="animate-pulse" />
-            {tr("installed_badge_playing", undefined, "Playing")}
-          </span>
-        ) : null}
-      </div>
+    <div className="group flex min-w-0 flex-col">
+      {/* The cover in its frame, with corner tags: platform (top-left), SMP
+          warning (top-right), Playing (bottom-right). The frame clips only
+          the art, so the actions menu below can open past the card. */}
+      <CoverFrame
+        interactive={!title.system}
+        overlay={
+          <>
+            <span className="absolute left-2 top-2">
+              <PlatformTag platform={platformOf(title)} />
+            </span>
+            {discNeedsSmp ? (
+              <span className="absolute right-2 top-2">
+                <CoverTag
+                  tone="warn"
+                  icon={<AlertTriangle size={11} aria-hidden />}
+                  title={tr(
+                    "installed_disc_needs_smp_row",
+                    undefined,
+                    "Needs ShadowMount+ running to mount + launch.",
+                  )}
+                >
+                  {tr("installed_badge_smp_needed", undefined, "SMP")}
+                </CoverTag>
+              </span>
+            ) : null}
+            {running ? (
+              <span className="absolute bottom-2 right-2">
+                <CoverTag
+                  tone="good"
+                  icon={<CircleDot size={11} className="animate-pulse" aria-hidden />}
+                  title={tr("installed_now_playing", undefined, "Now playing")}
+                >
+                  {tr("installed_badge_playing", undefined, "Playing")}
+                </CoverTag>
+              </span>
+            ) : null}
+          </>
+        }
+      >
+        {title.system ? (
+          <Cover host={host} title={title} />
+        ) : (
+          // The cover opens the game page too; the title link below is the
+          // one keyboard and screen-reader users get, so this one is skipped.
+          <Link to={gamePath(title.titleId)} tabIndex={-1} aria-hidden className="block h-full w-full">
+            <Cover host={host} title={title} />
+          </Link>
+        )}
+      </CoverFrame>
 
       {/* Body: name → type + id → actions pinned to the bottom (mt-auto) so
           rows of cards line their buttons up regardless of name length. */}
-      <div className="flex flex-1 flex-col gap-2 p-2.5 sm:p-3">
+      <div className="flex flex-1 flex-col gap-2 px-1 pt-2.5">
         <div className="min-w-0">
           {/* line-clamp-2 (not truncate): a 1-line clamp turned readable
               names like "Payload Manager" into "Payload Mana…". Two lines fit
               the vast majority of titles in full; the title attr still covers
-              the rare overflow on hover. min-h reserves the full two-line box
-              so a 1-line name and a 2-line name keep the badge/id row (and the
-              whole card body) at the same height across a grid row — otherwise
-              neighbouring cards looked vertically misaligned ("overlapping"). */}
+              the rare overflow on hover. The meta lines sit right under the
+              name, as in the reference; the actions row (mt-auto) is what
+              lines up across a grid row. */}
           <div
-            className="line-clamp-2 min-h-[2.5rem] text-sm font-semibold"
+            className="line-clamp-2 text-sm leading-5 font-medium"
             title={title.titleName}
           >
             {title.system ? (
@@ -417,10 +435,11 @@ export const AppCard = memo(function AppCard({
             )}
           </div>
           <div
-            className="mt-1 flex min-w-0 items-center gap-2"
+            className="mt-0.5 flex min-w-0 items-center gap-1.5"
             title={title.source || title.titleId}
           >
             <KindBadge title={title} />
+            <MetaDot />
             <span className="truncate font-mono text-xs text-[var(--color-muted)]">
               {title.titleId}
             </span>
@@ -437,7 +456,7 @@ export const AppCard = memo(function AppCard({
               games. (The never-seen branch also asked for --color-warning,
               which is not a token — the real one is --color-warn — so it
               silently applied no colour at all.) */}
-          <div className="mt-1 flex items-center gap-1.5 text-xs text-[var(--color-muted)]"
+          <div className="mt-0.5 flex items-center gap-1.5 text-xs text-[var(--color-muted)]"
             title={tr(
               "installed_playtime_tooltip",
               undefined,
@@ -627,15 +646,17 @@ function Section({
   controls?: React.ReactNode;
 }) {
   return (
-    <section className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="flex items-start gap-2">
-          <Icon size={16} className="mt-0.5 shrink-0 text-[var(--color-muted)]" />
+    <section className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent-bright)]">
+            <Icon size={16} />
+          </span>
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold">
+            <h2 className="text-[1.125rem] font-semibold tracking-[-0.01em]">
               {title}{" "}
-              <span className="font-normal text-[var(--color-muted)]">
-                ({count})
+              <span className="text-sm font-normal tabular-nums text-[var(--color-muted)]">
+                {count}
               </span>
             </h2>
             <p className="text-xs text-[var(--color-muted)]">{hint}</p>
@@ -643,7 +664,7 @@ function Section({
         </div>
         {controls}
       </div>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] sm:gap-4">
+      <div className="grid grid-cols-2 gap-x-3 gap-y-6 sm:grid-cols-[repeat(auto-fill,minmax(11.5rem,1fr))] sm:gap-x-5">
         {children}
       </div>
     </section>
@@ -1276,7 +1297,7 @@ export default function InstalledAppsScreen() {
   }, [installed, onlyUnplayed, sortByPlaytime, playOf, running]);
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-6">
       {backportTitle && titles ? (
         <BackportPanel
           open
@@ -1333,8 +1354,13 @@ export default function InstalledAppsScreen() {
             )}
           />
         ) : ucredElevated === true ? (
-          <div className="flex items-center gap-2 rounded-lg border border-[var(--color-good)]/40 bg-[var(--color-good)]/5 px-3 py-2 text-xs text-[var(--color-good)]">
-            <ShieldCheck size={14} className="shrink-0" />
+          // A quiet glass line with a green check: good news, not an alert. Its
+          // tint is the -soft token, not an opacity modifier on --color-good,
+          // whose colour-mix() fallback is the solid colour (text included).
+          <div className="surface-panel flex items-center gap-2.5 !rounded-full px-4 py-2 text-xs text-[var(--color-text)]">
+            <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[var(--color-good-soft)] text-[var(--color-good)]">
+              <ShieldCheck size={13} aria-hidden />
+            </span>
             {tr(
               "installed_kstuff_on",
               undefined,
@@ -1407,12 +1433,12 @@ export default function InstalledAppsScreen() {
           // says "working" without a modal spinner.
           <div
             aria-hidden
-            // Must match the real Section grid breakpoints exactly (line ~308)
+            // Must match the real Section grid breakpoints exactly (Section below)
             // or the cards visibly reflow the moment data arrives.
-            className="grid grid-cols-2 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] sm:gap-4"
+            className="grid grid-cols-2 gap-x-3 gap-y-6 sm:grid-cols-[repeat(auto-fill,minmax(11.5rem,1fr))] sm:gap-x-5"
           >
             {Array.from({ length: 10 }, (_, i) => (
-              <Skeleton key={i} className="aspect-square" />
+              <Skeleton key={i} className="aspect-square !rounded-[var(--radius-card)]" />
             ))}
           </div>
         ) : titles && titles.length === 0 ? (
@@ -1439,7 +1465,7 @@ export default function InstalledAppsScreen() {
                 <Search
                   size={14}
                   aria-hidden
-                  className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-muted)]"
+                  className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[var(--color-muted)]"
                 />
                 <input
                   type="search"
@@ -1468,7 +1494,10 @@ export default function InstalledAppsScreen() {
                   // made the field look like it had two X buttons. Ours
                   // stays because the native one is unstyled and carries no
                   // translated label.
-                  className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] py-1.5 pl-8 pr-8 text-sm outline-none focus:border-[var(--color-accent)] [&::-webkit-search-cancel-button]:appearance-none"
+                  // `.input` is the shared pill field; its padding is unlayered
+                  // CSS, so the room for the two icons goes inline.
+                  className="input outline-none [&::-webkit-search-cancel-button]:appearance-none"
+                  style={{ paddingLeft: "2.5rem", paddingRight: "2.5rem", minHeight: "2.75rem" }}
                 />
                 {searching && (
                   <button
@@ -1479,7 +1508,7 @@ export default function InstalledAppsScreen() {
                       undefined,
                       "Clear search",
                     )}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-muted)] hover:text-[var(--color-fg)]"
+                    className="absolute right-3 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-full text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
                   >
                     <X size={14} />
                   </button>
@@ -1545,17 +1574,23 @@ export default function InstalledAppsScreen() {
                   // #116: find-unused controls. Sort least-played first (never-
                   // seen titles float to the top) and optionally hide everything
                   // you HAVE played, so removal candidates are all that's left.
-                  <div className="flex flex-wrap items-center gap-3 text-xs">
-                    <Toggle
-                      checked={sortByPlaytime}
-                      onChange={setSortByPlaytime}
-                      label={tr("installed_sort_playtime", undefined, "Sort by play time")}
-                    />
-                    <Toggle
-                      checked={onlyUnplayed}
-                      onChange={setOnlyUnplayed}
-                      label={tr("installed_only_unplayed", undefined, "Only not-seen-playing")}
-                    />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      aria-pressed={sortByPlaytime}
+                      onClick={() => setSortByPlaytime(!sortByPlaytime)}
+                      className="chip min-h-9 px-4 text-xs font-medium"
+                    >
+                      {tr("installed_sort_playtime", undefined, "Sort by play time")}
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={onlyUnplayed}
+                      onClick={() => setOnlyUnplayed(!onlyUnplayed)}
+                      className="chip min-h-9 px-4 text-xs font-medium"
+                    >
+                      {tr("installed_only_unplayed", undefined, "Only not-seen-playing")}
+                    </button>
                   </div>
                 }
               >
