@@ -173,6 +173,9 @@ processes_kill_system_body:
 processes_kill_app_title: 'Close "{name}"?',
 processes_kill_app_body:
   'This force-closes the running game "{name}". Any unsaved progress will be lost. Use Restart instead to relaunch it.',
+processes_kill_payload_title: 'Stop payload "{name}"?',
+processes_kill_payload_body:
+  'This kills the payload "{name}" (kstuff, etaHEN and the like). Whatever it provides stops until you send it again, and games that need it may stop starting.',
 activity: "Activity",
 about: "About",
 activity_title: "Activity",

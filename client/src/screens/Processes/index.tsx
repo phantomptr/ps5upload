@@ -26,6 +26,9 @@ import {
   type ProcessInfo,
 } from "../../api/ps5";
 import { log } from "../../state/logs";
+// Direct import to avoid the barrel's circular-dep warning at build.
+import { useConfirm } from "../../components/ConfirmDialog";
+import { killPrompt } from "./killPrompt";
 
 /**
  * Process manager — a live task-manager for the connected PS5.
@@ -155,19 +158,35 @@ export default function ProcessesScreen() {
     [addr, refresh],
   );
 
-  // Kill request: "system" AND "app" (game) kills detour through the confirm
-  // modal — system because it can crash the console, app because killing a
-  // running game loses unsaved progress. "payload" homebrew is cheap +
-  // restartable, so it's killed immediately.
+  // Every kill asks first. System and app (game) kills use the modal below —
+  // system because it can crash the console, app because killing a running
+  // game loses unsaved progress. A payload kill is restartable but takes away
+  // what it provides (kstuff, etaHEN), so it gets a plain confirm.
+  const { confirm: confirmDialog, dialog: confirmDialogNode } = useConfirm();
   const requestKill = useCallback(
-    (p: ProcessInfo) => {
+    async (p: ProcessInfo) => {
       // The helper's own process can't be killed (the payload guards it); the
       // button is disabled, but guard here too so nothing slips through.
-      if (p.is_self) return;
-      if (p.kind === "system" || p.kind === "app") setConfirmKill(p);
-      else void doKill(p);
+      const prompt = killPrompt(p);
+      if (!prompt) return;
+      if (prompt !== "payload") {
+        setConfirmKill(p);
+        return;
+      }
+      const name = p.comm || p.name;
+      const ok = await confirmDialog({
+        title: tr("processes_kill_payload_title", { name }, `Stop payload "${name}"?`),
+        message: tr(
+          "processes_kill_payload_body",
+          { name },
+          `This kills the payload "${name}" (kstuff, etaHEN and the like). Whatever it provides stops until you send it again, and games that need it may stop starting.`,
+        ),
+        confirmLabel: tr("processes_kill", undefined, "Kill"),
+        destructive: true,
+      });
+      if (ok) void doKill(p);
     },
-    [doKill],
+    [doKill, confirmDialog, tr],
   );
 
   const doRestart = useCallback(
@@ -335,6 +354,7 @@ export default function ProcessesScreen() {
           </ul>
         )}
 
+        {confirmDialogNode}
         {confirmKill && (
           <Modal
             open
