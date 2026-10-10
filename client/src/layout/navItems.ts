@@ -40,7 +40,6 @@ import {
   Bug,
   Archive,
   MonitorPlay,
-  Fan,
   Bell,
   Clock,
   ShieldAlert,
@@ -206,7 +205,6 @@ export const NAV_ITEMS: NavItem[] = [
     fallback: "Profile",
     icon: CircleUserRound,
   },
-  { to: "/fan-curve", key: "fan_curve", fallback: "Fan Curve", icon: Fan },
   {
     to: "/health",
     key: "health",
@@ -234,7 +232,13 @@ export const NAV_ITEMS: NavItem[] = [
     icon: ShieldAlert,
     section: { key: "nav_section_advanced", fallback: "Advanced" },
   },
-  { to: "/shell", key: "shell", fallback: "Shell", icon: TerminalSquare },
+  {
+    to: "/shell",
+    key: "shell",
+    fallback: "Shell",
+    icon: TerminalSquare,
+    hideInBrowser: true,
+  },
 
   // ─ Diagnostics: history, logs, debugging ─
   {

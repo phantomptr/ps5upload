@@ -24,7 +24,8 @@ import { useConnectionStore } from "../../state/connection";
 import { mgmtAddr } from "../../lib/addr";
 import { useScrollLock } from "../../lib/useScrollLock";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
-import { PageHeader, Button, EmptyState, ErrorCard, Spinner, ConnectionGate } from "../../components";
+import { Button, EmptyState, ErrorCard, Spinner, ConnectionGate } from "../../components";
+import { CaptureToolbar } from "../Captures/CaptureToolbar";
 import { useTr } from "../../state/lang";
 import { pickPath } from "../../lib/pickPath";
 import { formatBytes } from "../../lib/format";
@@ -511,19 +512,25 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
     <div className="app-page">
       {/* The Captures screen puts its Screenshots / Video clips switch here. */}
       {tabs}
-      <PageHeader
-        icon={ImageIcon}
-        title={tr("screenshots_title", undefined, "Screenshots")}
+      <CaptureToolbar
         count={items?.length}
         loading={loading}
-        description={tr(
-          "screenshots_description_v2",
-          undefined,
-          "Screenshots saved on the PS5 (its Capture Gallery). Preview them and download them to this computer. To delete one, use Files.",
-        )}
+        description={
+          isTauriEnv()
+            ? tr(
+                "screenshots_description_v2",
+                undefined,
+                "Screenshots saved on the PS5 (its Capture Gallery). Preview them and download them to this computer. To delete one, use Files.",
+              )
+            : tr(
+                "screenshots_description_browser",
+                undefined,
+                "Screenshots saved on the PS5 (its Capture Gallery). Download them to a folder on the computer running ps5upload. To delete one, use Files.",
+              )
+        }
         right={
-          <div className="flex items-center gap-2">
-            {selected.size > 0 && isTauriEnv() && (
+          <>
+            {selected.size > 0 && (
               <Button
                 variant="primary"
                 size="sm"
@@ -553,7 +560,7 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
             >
               {tr("refresh", undefined, "Refresh")}
             </Button>
-          </div>
+          </>
         }
       />
 
@@ -672,25 +679,25 @@ export default function ScreenshotsScreen({ tabs }: { tabs?: ReactNode } = {}) {
                       {tr("screenshots_convert", undefined, "Convert to PNG")}
                     </Button>
                   )}
-                  {isTauriEnv() && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      leftIcon={
-                        busyPaths.has(item.path) ? (
-                          <Spinner size={12} tone="inherit" />
-                        ) : (
-                          <Download size={11} />
-                        )
-                      }
-                      onClick={() => downloadOne(item)}
-                      disabled={
-                        busyPaths.has(item.path) || convertingPaths.has(item.path)
-                      }
-                    >
-                      {tr("screenshots_download", undefined, "Download")}
-                    </Button>
-                  )}
+                  {/* The browser build downloads too: the engine writes the file into a
+                      folder picked on its own machine (pickPath browses it in-app). */}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    leftIcon={
+                      busyPaths.has(item.path) ? (
+                        <Spinner size={12} tone="inherit" />
+                      ) : (
+                        <Download size={11} />
+                      )
+                    }
+                    onClick={() => downloadOne(item)}
+                    disabled={
+                      busyPaths.has(item.path) || convertingPaths.has(item.path)
+                    }
+                  >
+                    {tr("screenshots_download", undefined, "Download")}
+                  </Button>
                 </li>
               );
             })}

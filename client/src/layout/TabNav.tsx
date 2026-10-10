@@ -96,7 +96,6 @@ const TABS: TabDef[] = [
     matches: [
       "/console",
       "/hardware",
-      "/fan-curve",
       "/profile",
       "/backup",
       "/local-image",

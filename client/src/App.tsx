@@ -50,7 +50,6 @@ const BackupScreen = lazyWithReload(() => import("./screens/Backup"));
 const LocalImageScreen = lazyWithReload(() => import("./screens/LocalImage"));
 const HealthScreen = lazyWithReload(() => import("./screens/Health"));
 const RemotePlayScreen = lazyWithReload(() => import("./screens/RemotePlay"));
-const FanCurveScreen = lazyWithReload(() => import("./screens/FanCurve"));
 const NotificationsScreen = lazyWithReload(() => import("./screens/Notifications"));
 const CheatsScreen = lazyWithReload(() => import("./screens/Cheats"));
 const GameActivityScreen = lazyWithReload(() => import("./screens/GameActivity"));
@@ -319,14 +318,9 @@ function AppRoutes({ location }: { location: Location }) {
             </Suspense>
           }
         />
-        <Route
-          path="/fan-curve"
-          element={
-            <Suspense fallback={<ScreenLoader />}>
-              <FanCurveScreen />
-            </Suspense>
-          }
-        />
+        {/* The console takes one fan target temperature, set on the Console
+            screen's fan card; a multi-point curve had nothing to drive. */}
+        <Route path="/fan-curve" element={<Navigate to="/console" replace />} />
         <Route
           path="/notifications"
           element={
@@ -468,9 +462,11 @@ function AppRoutes({ location }: { location: Location }) {
         <Route
           path="/shell"
           element={
-            <Suspense fallback={<ScreenLoader />}>
-              <ShellScreen />
-            </Suspense>
+            <NativeOnlyRoute>
+              <Suspense fallback={<ScreenLoader />}>
+                <ShellScreen />
+              </Suspense>
+            </NativeOnlyRoute>
           }
         />
         <Route
