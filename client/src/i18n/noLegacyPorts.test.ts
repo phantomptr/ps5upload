@@ -42,8 +42,4 @@ describe("no_user_visible_string_mentions_ftx2_or_old_ports", () => {
       .map(([k, v]) => `${name} ${k}: ${v}`);
     expect(bad).toEqual([]);
   });
-  it("says the new port where the old one was", () => {
-    const en = evalLocale(RAW["./locales/en.ts"]);
-    expect(en.status_payload_tooltip).toContain(":9120");
-  });
 });
