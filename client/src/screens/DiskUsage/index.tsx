@@ -182,7 +182,7 @@ export default function DiskUsageScreen() {
         description={tr(
           "disk_usage_description_v2",
           undefined,
-          "See what is taking up space on the PS5. Each block is a folder, sized by what it holds; click one to look inside it.",
+          "See what is taking up space on the PS5. Each block is a file or a folder. A folder is sized by the files directly inside it; its subfolders are not counted, so click it to look further down.",
         )}
         right={
           <Button

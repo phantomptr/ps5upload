@@ -190,7 +190,7 @@ export default function VolumesScreen() {
         description={tr(
           "volumes_description",
           undefined,
-          "Two distinct things, listed in two sections: ps5upload-managed disk-image mounts (created via Library → Mount; unmountable here), and the kernel-level storage drives below them (internal SSD, M.2, USB — read-only).",
+          "Storage drives and any disk images currently mounted on your PS5.",
         )}
         right={
           <Button
