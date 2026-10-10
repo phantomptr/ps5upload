@@ -134,8 +134,9 @@ pub async fn refresh(Path(id): Path<String>, Query(q): Query<RefreshQuery>) -> R
         tokio::task::spawn_blocking(move || -> Result<_, String> {
             let installed = crate::collection_api::installed_titles(&addr)?;
             let roots = crate::pkg_install::installed_storage_roots(&addr);
+            let extras = crate::collection_api::ConsoleExtras::read(&addr, &roots);
             Ok(crate::collection_api::read_title(
-                &addr, &id, &roots, &installed,
+                &addr, &id, &extras, &installed,
             ))
         })
         .await
@@ -330,7 +331,7 @@ mod tests {
 
         // A console that cannot be reached: the reason comes back and what was saved stays.
         console_snapshot::with(|s| {
-            merge_detailed(s, "127.0.0.1", "PPSA05555", &installed("01.000"), "Kept", 1)
+            merge_detailed(s, "127.0.0.1", "PPSA05555", &installed("01.000"), "Kept", 1);
         });
         let r = refresh(
             Path("PPSA05555".into()),
@@ -350,7 +351,7 @@ mod tests {
         assert_eq!(r.status(), StatusCode::OK);
 
         console_snapshot::with(|s| {
-            merge_detailed(s, "10.9.9.9", "PPSA05555", &installed("01.000"), "", 1)
+            merge_detailed(s, "10.9.9.9", "PPSA05555", &installed("01.000"), "", 1);
         });
         let r = keep(Json(KeepBody {
             hosts: vec!["10.9.9.9:5000".into()],

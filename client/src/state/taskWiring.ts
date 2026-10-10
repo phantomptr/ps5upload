@@ -79,8 +79,8 @@ export function installTaskWiring() {
 
       if (phase.kind === "running" && existingId !== null) {
         const label =
-          phase.files.length > 1
-            ? `Uploading ${phase.files.length} files`
+          phase.fileCount > 1
+            ? `Uploading ${phase.fileCount} files`
             : `Uploading ${phase.files[0]?.rel_path ?? ""}`.trim();
         useTaskStore.getState().updateTask(existingId, {
           label,

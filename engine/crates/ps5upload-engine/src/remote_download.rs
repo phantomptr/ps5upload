@@ -33,8 +33,6 @@
 // Only the copy loop uses these, and that is compiled out on Android.
 #[cfg(not(target_os = "android"))]
 use std::io::{Seek, SeekFrom, Write};
-#[cfg(not(target_os = "android"))]
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -95,6 +93,9 @@ fn safe_file_name(raw: &str) -> String {
 pub struct Download {
     pub url_host: String,
     pub path: PathBuf,
+    /// Where the bytes land until the download is complete (`<name>.partial`); renamed to
+    /// `path` at the end, so a killed download never leaves a short file under the real name.
+    pub partial: PathBuf,
     pub total: u64,
     pub written: AtomicU64,
     pub done: AtomicBool,
@@ -167,6 +168,38 @@ fn local_name_for(probed: &str, keep_name: bool) -> String {
     name
 }
 
+/// The in-progress name of a download: `<name>.partial` beside it.
+fn partial_path(path: &std::path::Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".partial");
+    path.with_file_name(name)
+}
+
+/// Whether a download is still writing (not finished, failed or cancelled).
+fn is_live(dl: &Download) -> bool {
+    !dl.done.load(Ordering::Relaxed)
+        && !dl.cancelled.load(Ordering::Relaxed)
+        && dl.error.lock().unwrap_or_else(|e| e.into_inner()).is_none()
+}
+
+/// Registers `dl` under `id` unless another live download writes the same file: two
+/// downloads of one link would write one file. `Err` carries the live one's id.
+fn register_unless_busy(
+    registry: &DownloadRegistry,
+    id: &str,
+    dl: Arc<Download>,
+) -> Result<(), String> {
+    let mut items = registry.items.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((busy, _)) = items
+        .iter()
+        .find(|(_, other)| other.path == dl.path && is_live(other))
+    {
+        return Err(busy.clone());
+    }
+    items.insert(id.to_string(), dl);
+    Ok(())
+}
+
 fn json_err(code: StatusCode, msg: &str) -> Response {
     (code, Json(serde_json::json!({ "error": msg }))).into_response()
 }
@@ -221,11 +254,17 @@ async fn start_handler(
     let name = local_name_for(&probe.filename, req.keep_name);
     let path = dir.join(name);
 
-    // Refuse to silently resume into, or clobber, an unrelated file of the
-    // same name: a half-written package that installs is far worse than an
-    // error, because the failure surfaces much later as a corrupt install.
-    if let Ok(meta) = std::fs::metadata(&path) {
-        if meta.len() != probe.total_size {
+    let partial = partial_path(&path);
+    let total = probe.total_size;
+
+    // A file already under the final name is either this link's finished download (same
+    // size: done, nothing to fetch) or an unrelated file, never resumed into or clobbered:
+    // a half-written package that installs is far worse than an error, because the
+    // failure surfaces much later as a corrupt install. Unfinished bytes only ever live in
+    // `<name>.partial`, so a killed download no longer leaves a short file here.
+    let complete = match std::fs::metadata(&path) {
+        Ok(meta) if meta.len() == total => true,
+        Ok(meta) => {
             return json_err(
                 StatusCode::CONFLICT,
                 &format!(
@@ -233,11 +272,12 @@ async fn start_handler(
                      Move or delete it first.",
                     path.display(),
                     meta.len(),
-                    probe.total_size
+                    total
                 ),
             );
         }
-    }
+        Err(_) => false,
+    };
 
     let host = url
         .parse::<axum::http::Uri>()
@@ -249,52 +289,62 @@ async fn start_handler(
     let dl = Arc::new(Download {
         url_host: host.clone(),
         path: path.clone(),
-        total: probe.total_size,
-        written: AtomicU64::new(0),
-        done: AtomicBool::new(false),
+        partial: partial.clone(),
+        total,
+        written: AtomicU64::new(if complete { total } else { 0 }),
+        done: AtomicBool::new(complete),
         cancelled: AtomicBool::new(false),
         error: Mutex::new(None),
     });
-    state
-        .items
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(id.clone(), dl.clone());
+    if let Err(busy) = register_unless_busy(&state, &id, dl.clone()) {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": format!("{} is already being downloaded.", path.display()),
+                "download_id": busy,
+            })),
+        )
+            .into_response();
+    }
 
-    // Never log the path or query of a link: signed download URLs carry
-    // credentials there. The host is enough to tell two origins apart.
-    crate::log_info!(
-        "link-download start: id={} host={} bytes={} dest={}",
-        id,
-        host,
-        probe.total_size,
-        path.display()
-    );
-
-    let total = probe.total_size;
-    let dest = path.clone();
-    let worker = dl.clone();
-    let existed = path.exists();
-    tokio::task::spawn_blocking(move || {
-        let dl = worker;
-        let src = crate::remote_pkg::RemoteSource::new_with_options(url, total, insecure);
-        if let Err(e) = copy_to_file(&src, &dl, &dest) {
-            crate::log_warn!("link-download failed: host={} err={}", dl.url_host, e);
-            // A partial file this download made would refuse the retry as "already exists
-            // with a different size": remove it, as Cancel does.
-            if !existed {
-                let _ = std::fs::remove_file(&dest);
+    if complete {
+        crate::log_info!(
+            "link-download: {} is already complete ({} bytes)",
+            path.display(),
+            total
+        );
+    } else {
+        // Never log the path or query of a link: signed download URLs carry
+        // credentials there. The host is enough to tell two origins apart.
+        crate::log_info!(
+            "link-download start: id={} host={} bytes={} dest={}",
+            id,
+            host,
+            total,
+            path.display()
+        );
+        let worker = dl.clone();
+        tokio::task::spawn_blocking(move || {
+            let dl = worker;
+            let src = crate::remote_pkg::RemoteSource::new_with_options(url, total, insecure);
+            match copy_to_file(&src, &dl) {
+                // The partial stays: the next try of the same link resumes from it.
+                Err(e) => {
+                    crate::log_warn!("link-download failed: host={} err={}", dl.url_host, e);
+                    *dl.error.lock().unwrap_or_else(|x| x.into_inner()) = Some(e.to_string());
+                }
+                Ok(()) if !dl.cancelled.load(Ordering::Relaxed) => {
+                    dl.done.store(true, Ordering::Relaxed);
+                    crate::log_info!(
+                        "link-download done: host={} bytes={}",
+                        dl.url_host,
+                        dl.written.load(Ordering::Relaxed)
+                    );
+                }
+                Ok(()) => {}
             }
-            *dl.error.lock().unwrap_or_else(|x| x.into_inner()) = Some(e.to_string());
-        } else if !dl.cancelled.load(Ordering::Relaxed) {
-            dl.done.store(true, Ordering::Relaxed);
-            crate::log_info!(
-                "link-download done: host={} bytes={}",
-                dl.url_host,
-                dl.written.load(Ordering::Relaxed)
-            );
-        }
-    });
+        });
+    }
 
     (
         StatusCode::OK,
@@ -318,26 +368,55 @@ async fn start_handler(
     )
 }
 
-/// Pull the package window by window and write it out sequentially.
+/// Bytes re-fetched before a resume point and compared with the partial file's tail: a
+/// `.partial` of the same name from a different link (or a different build of the package)
+/// must not be spliced onto this one.
+#[cfg(not(target_os = "android"))]
+const RESUME_CHECK: u64 = 64 * 1024;
+
+/// Pull the package window by window into `dl.partial`, then rename it to `dl.path`.
+///
+/// Resumes from the partial file's length: the probe already established that the origin
+/// serves byte ranges (it refuses one that does not), so a resume is always possible. The
+/// last `RESUME_CHECK` bytes are fetched again and compared first; a mismatch, or a partial
+/// longer than the package, starts over.
 ///
 /// Sequential writes on purpose: the fetcher is already parallel *inside* a
 /// window, so this needs no concurrency of its own, and one append-only
 /// stream is what a spinning disk and a network share both handle best.
 #[cfg(not(target_os = "android"))]
-fn copy_to_file(
-    src: &crate::remote_pkg::RemoteSource,
-    dl: &Arc<Download>,
-    path: &Path,
-) -> std::io::Result<()> {
+fn copy_to_file(src: &crate::remote_pkg::RemoteSource, dl: &Arc<Download>) -> std::io::Result<()> {
+    use std::io::Read;
     let mut file = std::fs::OpenOptions::new()
         .create(true)
+        .read(true)
         .write(true)
         .truncate(false)
-        .open(path)?;
-    file.seek(SeekFrom::Start(0))?;
-
+        .open(&dl.partial)?;
     let total = dl.total;
-    let mut offset = 0u64;
+    let mut offset = file.metadata()?.len();
+    if offset > total {
+        offset = 0;
+    }
+    if offset > 0 {
+        let from = offset.saturating_sub(RESUME_CHECK);
+        let mut have = vec![0u8; (offset - from) as usize];
+        file.seek(SeekFrom::Start(from))?;
+        file.read_exact(&mut have)?;
+        let fresh = src.read_range(from, offset - 1)?;
+        if fresh != have {
+            crate::log_info!(
+                "link-download: the partial file is from another download; starting over"
+            );
+            offset = 0;
+        } else {
+            crate::log_info!("link-download: resuming at {offset} of {total} bytes");
+        }
+    }
+    file.set_len(offset)?;
+    file.seek(SeekFrom::Start(offset))?;
+    dl.written.store(offset, Ordering::Relaxed);
+
     while offset < total {
         if dl.cancelled.load(Ordering::Relaxed) {
             return Ok(());
@@ -353,7 +432,11 @@ fn copy_to_file(
     // what it reads is what we fetched, not what is still in the page cache
     // of a machine that might be about to sleep.
     file.sync_all()?;
-    Ok(())
+    drop(file);
+    if dl.cancelled.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    std::fs::rename(&dl.partial, &dl.path)
 }
 
 async fn status_handler(
@@ -401,7 +484,7 @@ async fn cancel_handler(
     // Only ever the incomplete one -- a download that already finished is a
     // file the user asked for, whatever a late cancel says.
     if !dl.done.load(Ordering::Relaxed) {
-        match std::fs::remove_file(&dl.path) {
+        match std::fs::remove_file(&dl.partial) {
             Ok(()) => crate::log_info!("link-download cancelled: removed the partial file"),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => crate::log_warn!("link-download cancelled: could not remove partial: {e}"),
@@ -455,6 +538,126 @@ mod tests {
             safe_file_name("Marvel Spider-Man 2 - BASE.pkg"),
             "Marvel Spider-Man 2 - BASE.pkg"
         );
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn scratch(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("ps5u-dl-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn download_for(dir: &std::path::Path, total: u64) -> Arc<Download> {
+        let path = dir.join("game.pkg");
+        Arc::new(Download {
+            partial: partial_path(&path),
+            path,
+            total,
+            ..Default::default()
+        })
+    }
+
+    /// The bytes land in `<name>.partial` and only a complete file gets the real name.
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn a_download_writes_a_partial_and_renames_it_when_complete() {
+        use crate::remote_pkg::origin_tests::{body, spawn_origin};
+        let data = body(300_000);
+        let origin = spawn_origin(data.clone(), 0, false);
+        let dir = scratch("full");
+        let dl = download_for(&dir, data.len() as u64);
+        assert_eq!(dl.partial, dir.join("game.pkg.partial"));
+        let src = crate::remote_pkg::RemoteSource::new(
+            format!("http://{}/game.pkg", origin.addr),
+            data.len() as u64,
+        );
+        copy_to_file(&src, &dl).unwrap();
+        assert_eq!(std::fs::read(&dl.path).unwrap(), data);
+        assert!(!dl.partial.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A killed download resumes from its partial file instead of being refused.
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn a_download_resumes_from_its_partial_file() {
+        use crate::remote_pkg::origin_tests::{body, spawn_origin};
+        let data = body(300_000);
+        let origin = spawn_origin(data.clone(), 0, false);
+        let dir = scratch("resume");
+        let dl = download_for(&dir, data.len() as u64);
+        std::fs::write(&dl.partial, &data[..200_000]).unwrap();
+        let src = crate::remote_pkg::RemoteSource::new(
+            format!("http://{}/game.pkg", origin.addr),
+            data.len() as u64,
+        );
+        copy_to_file(&src, &dl).unwrap();
+        assert_eq!(std::fs::read(&dl.path).unwrap(), data);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A partial of the same name from another file is not spliced on: it starts over.
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn a_partial_from_another_file_starts_over() {
+        use crate::remote_pkg::origin_tests::{body, spawn_origin};
+        let data = body(300_000);
+        let origin = spawn_origin(data.clone(), 0, false);
+        let dir = scratch("other");
+        let dl = download_for(&dir, data.len() as u64);
+        std::fs::write(&dl.partial, vec![0xAAu8; 150_000]).unwrap();
+        let src = crate::remote_pkg::RemoteSource::new(
+            format!("http://{}/game.pkg", origin.addr),
+            data.len() as u64,
+        );
+        copy_to_file(&src, &dl).unwrap();
+        assert_eq!(std::fs::read(&dl.path).unwrap(), data);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The start route: an already complete file is done at once, and a second live
+    /// download of the same file is refused with the first one's id.
+    #[cfg(not(target_os = "android"))]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_complete_file_is_done_and_a_second_live_download_is_refused() {
+        use crate::remote_pkg::origin_tests::{body, spawn_origin};
+        let data = body(100_000);
+        let origin = spawn_origin(data.clone(), 0, false);
+        let dir = scratch("route");
+        std::fs::write(dir.join("game.pkg"), &data).unwrap();
+        let state: DownloadStateHandle = Arc::default();
+        let req = || DownloadStartRequest {
+            url: format!("http://{}/game.pkg", origin.addr),
+            insecure_tls: false,
+            dest_dir: Some(dir.display().to_string()),
+            keep_name: false,
+        };
+        let resp = start_handler(State(state.clone()), Json(req())).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let item = state
+            .items
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .cloned()
+            .unwrap();
+        assert!(item.done.load(Ordering::Relaxed));
+        assert_eq!(item.written.load(Ordering::Relaxed), data.len() as u64);
+
+        // A live one for the same file blocks a second.
+        let live = download_for(&dir, 5);
+        state.items.lock().unwrap().clear();
+        register_unless_busy(&state, "first", live.clone()).unwrap();
+        assert_eq!(
+            register_unless_busy(&state, "second", download_for(&dir, 5)),
+            Err("first".to_string())
+        );
+        // Once it ended (failed here), the file is free again.
+        *live.error.lock().unwrap() = Some("x".into());
+        assert!(register_unless_busy(&state, "third", download_for(&dir, 5)).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

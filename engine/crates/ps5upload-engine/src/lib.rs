@@ -210,13 +210,18 @@ pub(crate) enum JobState {
         /// fail to stat the source, which would error before Running).
         #[serde(default)]
         total_bytes: u64,
-        /// Ordered list of files this job will send. Shipped once on
-        /// the first Running tick so the UI can render per-file status.
-        /// For folder uploads this is the planned delta (reconcile) or
-        /// the full tree walk (plain dir). For single files / file-list
-        /// uploads, it's the requested file(s). Empty-by-default keeps
-        /// wire size small for small jobs where the list isn't useful.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        /// Ordered list of files this job will send. For folder uploads
+        /// this is the planned delta (reconcile) or the full tree walk
+        /// (plain dir); for single files / file-list uploads, the
+        /// requested file(s). The job snapshot (poll, list, events) carries
+        /// only its length as `files_count`: a big folder's list is
+        /// megabytes and was re-sent on every 500 ms poll. The list itself
+        /// is served once by `GET /api/jobs/{id}/files`.
+        #[serde(
+            rename = "files_count",
+            serialize_with = "serialize_len",
+            skip_serializing_if = "Vec::is_empty"
+        )]
         files: Vec<PlannedFile>,
         /// Files already present on the PS5 that were skipped this run
         /// (reconcile mode only). 0 for non-reconcile uploads.
@@ -321,6 +326,12 @@ pub(crate) enum JobState {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error_console: Option<String>,
     },
+}
+
+/// Serializes a list as its length (see `JobState::Running::files`).
+#[allow(clippy::ptr_arg)] // serde hands the field over as `&Vec<_>`
+fn serialize_len<S: serde::Serializer, T>(v: &Vec<T>, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_u64(v.len() as u64)
 }
 
 /// Build a `JobState::Failed` from a transfer error, populating the
@@ -472,6 +483,25 @@ pub(crate) fn console_addr(addr: &str) -> String {
     }
 }
 
+/// The console a destructive request (delete, move, unregister, power, ...) acts on. It must
+/// name one: falling back to the engine's default console could delete files on, or power off,
+/// a console the user was not looking at. `None`: answer with [`missing_console_addr`].
+fn required_console_addr(addr: Option<String>) -> Option<String> {
+    addr.as_deref()
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .map(console_addr)
+}
+
+/// The 400 for a destructive request that names no console.
+fn missing_console_addr() -> axum::response::Response {
+    json_err(
+        StatusCode::BAD_REQUEST,
+        "addr is required: say which console this acts on",
+    )
+    .into_response()
+}
+
 fn console_addr_or_default(addr: Option<String>, default_addr: &str) -> String {
     console_addr(addr.as_deref().unwrap_or(default_addr))
 }
@@ -546,6 +576,15 @@ const ARCHIVE_STAGE_ENV: (&str, &str) = (
 /// uses a UUIDv4 token in the URL as the auth gate (~122 bits of
 /// entropy, rotated per install — the trust boundary is the local LAN,
 /// same as any other on-LAN homebrew installer).
+/// What repeated failures are collapsed by: the route AND the console it was about, so one
+/// switched-off console's failures do not hide (or get "recovered" by) another's.
+fn failure_key(method: &str, path: &str, console: Option<&str>) -> String {
+    match console {
+        Some(c) if !c.is_empty() => format!("{method} {path} @{c}"),
+        _ => format!("{method} {path}"),
+    }
+}
+
 /// Log every (allowed) request: method, path, status, duration. Recorded at
 /// `debug` so it always lands in engine.log (rotated, crash-survivable) for a
 /// complete "what was the engine doing when it hung" trace, but only reaches
@@ -583,7 +622,7 @@ async fn log_requests(req: Request, next: Next) -> axum::response::Response {
     // other line in the log and tells the reader nothing they did not
     // learn from the first one. So repeats collapse: first failure,
     // then quiet, then an occasional reminder, then a recovery line.
-    let key = format!("{method} {path}");
+    let key = failure_key(method.as_str(), &path, console.as_deref());
     let action = match log_dedup::failure_log().lock() {
         Ok(mut log) => log.observe(&key, status >= 500, std::time::Instant::now()),
         // A poisoned lock must not silence real failures.
@@ -958,11 +997,10 @@ fn walk_plan_with(
 /// Intentionally does NOT carry `files: Vec<PlannedFile>`. The handler
 /// writes the files list once on the initial Running set_job; the
 /// ticker then only updates the scalar counters, preserving whatever
-/// files list the handler stored. For jobs with thousands of files
-/// (large reconcile deltas) this drops the per-tick SSE payload from
-/// O(files × path_len) back down to O(1), and the UI already caches
-/// the files list on its first snapshot, so the visible behavior is
-/// identical.
+/// files list the handler stored. The snapshot it broadcasts carries
+/// only the list's length (`files_count`), and is serialized under the
+/// lock instead of cloning the job, so a tick stays O(1) in the file
+/// count.
 #[derive(Clone)]
 struct TickerContext {
     started_at_ms: u64,
@@ -1094,9 +1132,14 @@ fn spawn_progress_ticker(
                         *fp = files_processing;
                         *ff = files_finalized;
                         *bf = bytes_finalized;
-                        // Clone once for the SSE broadcast path; the
-                        // lock-held section stays short.
-                        Some(g.get(&job_id).cloned())
+                        // Nobody listening: skip building the event.
+                        // Serialize from the reference (no clone of the
+                        // job); `files` serializes as a count.
+                        Some(
+                            (events_tx.receiver_count() > 0)
+                                .then(|| g.get(&job_id).map(|st| serde_json::json!(st)))
+                                .flatten(),
+                        )
                     }
                     // Job moved to terminal state (Done/Failed) — stop
                     // ticking to avoid writing over the terminal record.
@@ -1105,10 +1148,11 @@ fn spawn_progress_ticker(
             };
             match maybe_snapshot {
                 Some(Some(state)) => {
-                    let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": with_live_notes(job_id, serde_json::json!(state)) });
+                    let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": with_live_notes(job_id, state) });
                     let _ = events_tx.send(msg.to_string());
                 }
-                _ => break,
+                Some(None) => {}
+                None => break,
             }
         }
     });
@@ -1161,14 +1205,16 @@ fn spawn_verify_stage(
                             done,
                             total,
                         });
-                        g.get(&job_id).cloned()
+                        g.get(&job_id).map(|st| serde_json::json!(st))
                     }
                     _ => None,
                 }
             };
             let Some(state) = snapshot else { break };
-            let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": with_live_notes(job_id, serde_json::json!(state)) });
-            let _ = events_tx.send(msg.to_string());
+            if events_tx.receiver_count() > 0 {
+                let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": with_live_notes(job_id, state) });
+                let _ = events_tx.send(msg.to_string());
+            }
             if finished {
                 break;
             }
@@ -1463,22 +1509,27 @@ pub(crate) fn set_job(
     job_id: Uuid,
     state: JobState,
 ) {
+    // Serialized before the move into the map, so the (possibly long) file
+    // list is never cloned; it serializes as a count.
+    let terminal = matches!(state, JobState::Done { .. } | JobState::Failed { .. });
+    let json = serde_json::json!(state);
     {
         let mut g = jobs.lock().unwrap_or_else(|e| e.into_inner());
         if !g.contains_key(&job_id) && g.len() >= JOBS_MAP_CAP {
             evict_oldest_terminal(&mut g);
         }
-        g.insert(job_id, state.clone());
+        g.insert(job_id, state);
     }
-    if matches!(state, JobState::Done { .. } | JobState::Failed { .. }) {
-        let json = serde_json::json!(state);
+    if terminal {
         telemetry::on_state(job_id, &json);
         if let Some(e) = job_event(&job_id.to_string(), &json) {
             ps5upload_core::events::emit_event(e);
         }
     }
-    let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": with_live_notes(job_id, serde_json::json!(state)) });
-    let _ = events_tx.send(msg.to_string());
+    if events_tx.receiver_count() > 0 {
+        let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": with_live_notes(job_id, json) });
+        let _ = events_tx.send(msg.to_string());
+    }
 }
 
 /// The journal event for a job that reached a terminal state (bug-report spec §1.2); `None`
@@ -2174,10 +2225,13 @@ struct FsChmodReq {
 }
 
 async fn ps5_fs_delete(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<FsPathReq>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    // Destructive: acts only on the console the request names, never the default one.
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let path = req.path;
     let op_id = req.op_id;
     let started = std::time::Instant::now();
@@ -2229,10 +2283,13 @@ async fn ps5_fs_delete(
 }
 
 async fn ps5_fs_move(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<FsMoveReq>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    // Destructive: acts only on the console the request names, never the default one.
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let from = req.from;
     let to = req.to;
     let started = std::time::Instant::now();
@@ -2542,10 +2599,13 @@ struct AppUnregisterReq {
 }
 
 async fn ps5_app_unregister(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<AppUnregisterReq>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    // Destructive: acts only on the console the request names, never the default one.
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let title_id = req.title_id;
     let started = std::time::Instant::now();
     crate::log_info!("app_unregister: addr={addr} title_id={title_id}");
@@ -2553,11 +2613,13 @@ async fn ps5_app_unregister(
     // Uninstalling changes which artwork exists, so drop this console's
     // cached images now rather than letting them age out — the user would
     // otherwise see a cover for a title they just removed.
-    icon_cache::invalidate_console(&addr);
-    match tokio::task::spawn_blocking(move || app_unregister(&addr, &title_id))
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r)
+    match tokio::task::spawn_blocking(move || {
+        icon_cache::invalidate_console(&addr);
+        app_unregister(&addr, &title_id)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r)
     {
         Ok(outcome) => {
             // Our teardown succeeded. Sony's own uninstall is a SEPARATE
@@ -3241,7 +3303,10 @@ async fn ps5_klog(State(state): State<AppState>, Query(q): Query<KlogQuery>) -> 
 /// machine, but it is data that persists past its subject, so it should be
 /// visible and removable rather than silently accumulating.
 async fn cache_artwork_stats() -> impl IntoResponse {
-    let (files, bytes) = icon_cache::stats();
+    // Walks the cache folder: off the async workers.
+    let (files, bytes) = tokio::task::spawn_blocking(icon_cache::stats)
+        .await
+        .unwrap_or((0, 0));
     (
         StatusCode::OK,
         Json(serde_json::json!({ "files": files, "bytes": bytes })),
@@ -3253,7 +3318,9 @@ async fn cache_artwork_stats() -> impl IntoResponse {
 /// Safe at any time: the cache is an optimisation, so the next render
 /// simply reads from the console again.
 async fn cache_artwork_clear() -> impl IntoResponse {
-    let freed = icon_cache::clear();
+    let freed = tokio::task::spawn_blocking(icon_cache::clear)
+        .await
+        .unwrap_or(0);
     (
         StatusCode::OK,
         Json(serde_json::json!({ "ok": true, "freed_bytes": freed })),
@@ -3434,10 +3501,13 @@ struct ProcessKillReq {
 
 /// POST /api/ps5/process/kill — SIGKILL a pid. Body: `{ addr, pid }`.
 async fn ps5_process_kill(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<ProcessKillReq>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    // Destructive: acts only on the console the request names, never the default one.
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let pid = req.pid;
     let r: Result<ProcessKillAck, anyhow::Error> =
         tokio::task::spawn_blocking(move || process_kill(&addr, pid))
@@ -3461,10 +3531,13 @@ struct PowerControlReq {
 
 /// POST /api/ps5/power/control — Body: `{ addr, action }`.
 async fn ps5_power_control(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<PowerControlReq>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    // Destructive: acts only on the console the request names, never the default one.
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let action = match req.action.as_str() {
         "reboot" => PowerAction::Reboot,
         "shutdown" => PowerAction::Shutdown,
@@ -4198,7 +4271,14 @@ async fn serve_cached_icon(
 ) -> axum::response::Response {
     // A revalidation we can answer from cache costs no console round-trip
     // and no body — this is the cheap path once max-age lapses.
-    match icon_cache::get(&addr, kind, &identity) {
+    // Disk reads and writes of the cache run on the blocking pool, not the async workers.
+    let cached = {
+        let (addr, identity) = (addr.clone(), identity.clone());
+        tokio::task::spawn_blocking(move || icon_cache::get(&addr, kind, &identity))
+            .await
+            .unwrap_or(icon_cache::Cached::Unknown)
+    };
+    match cached {
         icon_cache::Cached::Hit { bytes, etag } => {
             if icon_cache::etag_matches(if_none_match.as_deref(), &etag) {
                 return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag.as_str())]).into_response();
@@ -4214,14 +4294,22 @@ async fn serve_cached_icon(
         icon_cache::Cached::Unknown => {}
     }
 
-    let read_addr = addr.clone();
     // Ok(Some) = found; Ok(None) = every path cleanly absent; Err = at least
     // one path failed for another reason (the console may just be busy).
+    // The cache is written in the same blocking task.
+    //
+    // Only a clean "there is nothing there" is remembered. A transport
+    // error must NOT be: a console that was briefly unreachable would
+    // otherwise be recorded as having no artwork at all, and every
+    // cover would vanish for the length of the negative TTL.
     let result: Result<Option<Vec<u8>>, anyhow::Error> = tokio::task::spawn_blocking(move || {
         let mut transport_err = None;
         for p in &remote_paths {
-            match fs_read(&read_addr, p, 0, 2 * 1024 * 1024) {
-                Ok(bytes) if !bytes.is_empty() => return Ok(Some(bytes)),
+            match fs_read(&addr, p, 0, 2 * 1024 * 1024) {
+                Ok(bytes) if !bytes.is_empty() => {
+                    icon_cache::put(&addr, kind, &identity, &bytes);
+                    return Ok(Some(bytes));
+                }
                 Ok(_) => {}
                 Err(e) if icon_cache::is_console_said_no(&e) => {}
                 Err(e) => transport_err = Some(e),
@@ -4229,7 +4317,10 @@ async fn serve_cached_icon(
         }
         match transport_err {
             Some(e) => Err(e),
-            None => Ok(None),
+            None => {
+                icon_cache::put_missing(&addr, kind, &identity);
+                Ok(None)
+            }
         }
     })
     .await
@@ -4238,18 +4329,10 @@ async fn serve_cached_icon(
 
     match result {
         Ok(Some(bytes)) => {
-            icon_cache::put(&addr, kind, &identity, &bytes);
             let etag = icon_cache::etag_for(&bytes);
             icon_response(bytes, &etag)
         }
-        // Only a clean "there is nothing there" is remembered. A transport
-        // error must NOT be: a console that was briefly unreachable would
-        // otherwise be recorded as having no artwork at all, and every
-        // cover would vanish for the length of the negative TTL.
-        Ok(None) => {
-            icon_cache::put_missing(&addr, kind, &identity);
-            (StatusCode::NOT_FOUND, "no icon").into_response()
-        }
+        Ok(None) => (StatusCode::NOT_FOUND, "no icon").into_response(),
         Err(_) => (StatusCode::NOT_FOUND, "no icon").into_response(),
     }
 }
@@ -6537,10 +6620,13 @@ async fn user_create_handler(
 
 /// POST /api/ps5/users/delete — delete a local user account.
 async fn user_delete_handler(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<UserDeleteReq>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    // Destructive: acts only on the console the request names, never the default one.
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let uid = req.uid;
     let wipe_saves = req.wipe_saves;
     crate::log_info!("user_delete: addr={addr} uid={uid} wipe_saves={wipe_saves}");
@@ -6613,10 +6699,13 @@ async fn backup_list_handler(
 
 /// POST /api/ps5/backup/restore — restore a snapshot.
 async fn backup_restore_handler(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<BackupRestoreReq>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    // Destructive: acts only on the console the request names, never the default one.
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let tag = req.tag;
     let ts = req.timestamp;
     crate::log_info!("backup_restore: addr={addr} tag={tag} ts={ts}");
@@ -6642,10 +6731,13 @@ async fn backup_restore_handler(
 
 /// POST /api/ps5/backup/delete — delete a snapshot.
 async fn backup_delete_handler(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<BackupDeleteReq>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(req.addr, &state.default_ps5_addr);
+    // Destructive: acts only on the console the request names, never the default one.
+    let Some(addr) = required_console_addr(req.addr) else {
+        return missing_console_addr();
+    };
     let tag = req.tag;
     let ts = req.timestamp;
     let tag_clone = tag.clone();
@@ -6995,10 +7087,13 @@ async fn cheats_toggle_handler(
 }
 
 async fn cheats_delete_handler(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Query(q): Query<CheatsDeleteQuery>,
 ) -> impl IntoResponse {
-    let addr = console_addr_or_default(q.addr, &state.default_ps5_addr);
+    // Destructive: acts only on the console the request names, never the default one.
+    let Some(addr) = required_console_addr(q.addr) else {
+        return missing_console_addr();
+    };
     let title_id = q.title_id;
     let r = tokio::task::spawn_blocking(move || {
         ps5upload_core::cheats::cheats_delete(&addr, &title_id)
@@ -8908,20 +9003,39 @@ async fn get_job(State(state): State<AppState>, Path(id): Path<String>) -> impl 
         Ok(u) => u,
         Err(_) => return json_err(StatusCode::BAD_REQUEST, "invalid job id").into_response(),
     };
-    match state
+    // Serialized under the lock rather than cloned: the snapshot carries the
+    // file list's length only (`files_count`), so this stays cheap at 2 polls/s.
+    let job = state
         .jobs
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .get(&uuid)
-        .cloned()
-    {
-        Some(job) => (
-            StatusCode::OK,
-            Json(with_live_notes(uuid, serde_json::json!(job))),
-        )
-            .into_response(),
+        .map(|j| serde_json::json!(j));
+    match job {
+        Some(job) => (StatusCode::OK, Json(with_live_notes(uuid, job))).into_response(),
         None => json_err(StatusCode::NOT_FOUND, "job not found").into_response(),
     }
+}
+
+/// GET /api/jobs/{id}/files — a running job's planned file list (`{"files":
+/// [{"rel_path","size"}...]}`), fetched once by the UI that shows it. The job
+/// snapshot only carries its length. A finished job no longer has one: `[]`.
+async fn get_job_files(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
+    let uuid = match id.parse::<Uuid>() {
+        Ok(u) => u,
+        Err(_) => return json_err(StatusCode::BAD_REQUEST, "invalid job id").into_response(),
+    };
+    let files = match state
+        .jobs
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&uuid)
+    {
+        Some(JobState::Running { files, .. }) => serde_json::json!(files),
+        Some(_) => serde_json::json!([]),
+        None => return json_err(StatusCode::NOT_FOUND, "job not found").into_response(),
+    };
+    (StatusCode::OK, Json(serde_json::json!({ "files": files }))).into_response()
 }
 
 /// POST /api/jobs/{id}/cancel — truly stop a running transfer. Flips the job's
@@ -9841,6 +9955,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/metrics", get(telemetry::metrics_handler))
         .route("/api/bug-report/bundle", post(bug_report_bundle_handler))
         .route("/api/jobs/{id}", get(get_job))
+        .route("/api/jobs/{id}/files", get(get_job_files))
         .route("/api/jobs/{id}/cancel", post(cancel_job))
         .route("/api/events", get(events_stream))
         .route("/api/engine-logs", get(engine_logs_tail))
@@ -10729,6 +10844,95 @@ mod helpers_tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
+    fn running_with_files(n: usize) -> JobState {
+        JobState::Running {
+            stage: None,
+            started_at_ms: 1,
+            bytes_sent: 0,
+            total_bytes: 0,
+            files: (0..n)
+                .map(|i| PlannedFile {
+                    rel_path: format!("dir/file{i}.bin"),
+                    size: 10,
+                })
+                .collect(),
+            skipped_files: 0,
+            skipped_bytes: 0,
+            files_processing: 0,
+            files_finalized: 0,
+            files_finalizing_total: 0,
+            bytes_finalized: 0,
+        }
+    }
+
+    async fn body_json(resp: axum::response::Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// The 500 ms poll used to carry the whole planned file list (megabytes on a big
+    /// folder). It carries the count; the list comes from `/files`, once.
+    #[tokio::test]
+    async fn a_running_job_snapshot_has_a_file_count_and_files_route_has_the_list() {
+        let job_id = Uuid::new_v4();
+        let (events_tx, _rx) = broadcast::channel(16);
+        let state = AppState {
+            jobs: Arc::new(Mutex::new(HashMap::from([(job_id, running_with_files(3))]))),
+            default_ps5_addr: "127.0.0.1:1".to_string(),
+            events_tx,
+        };
+        let snap = body_json(
+            get_job(State(state.clone()), Path(job_id.to_string()))
+                .await
+                .into_response(),
+        )
+        .await;
+        assert_eq!(snap["status"], "running");
+        assert_eq!(snap["files_count"], 3);
+        assert!(snap.get("files").is_none(), "full list in the poll: {snap}");
+
+        let listed = body_json(list_jobs(State(state.clone())).await.into_response()).await;
+        assert!(listed[0]["job"].get("files").is_none());
+        assert_eq!(listed[0]["job"]["files_count"], 3);
+
+        let files = body_json(
+            get_job_files(State(state.clone()), Path(job_id.to_string()))
+                .await
+                .into_response(),
+        )
+        .await;
+        let list = files["files"].as_array().unwrap();
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0]["rel_path"], "dir/file0.bin");
+        assert_eq!(list[0]["size"], 10);
+
+        let missing = get_job_files(State(state), Path(Uuid::new_v4().to_string()))
+            .await
+            .into_response();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// An event carries the count too, and nothing is built when no one listens.
+    #[test]
+    fn set_job_events_carry_the_count_only() {
+        let jobs: Arc<Mutex<HashMap<Uuid, JobState>>> = Arc::new(Mutex::new(HashMap::new()));
+        let (events_tx, mut rx) = broadcast::channel(16);
+        let job_id = Uuid::new_v4();
+        set_job(&jobs, &events_tx, job_id, running_with_files(2));
+        let msg: serde_json::Value = serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        assert_eq!(msg["job"]["files_count"], 2);
+        assert!(msg["job"].get("files").is_none());
+        drop(rx);
+        // No receiver: still stored, nothing to send to.
+        set_job(&jobs, &events_tx, job_id, running_with_files(4));
+        assert!(matches!(
+            jobs.lock().unwrap().get(&job_id),
+            Some(JobState::Running { files, .. }) if files.len() == 4
+        ));
+    }
+
     #[test]
     fn an_all_skipped_ack_reports_nothing_sent() {
         let ack =
@@ -10900,6 +11104,63 @@ mod helpers_tests {
         assert_eq!(post_addr(None, br#"{"addr":null}"#), None);
         assert_eq!(post_addr(Some("".into()), br#"{"addr":" "}"#), None);
         assert_eq!(post_addr(None, b"not json"), None);
+    }
+
+    /// A destructive request that names no console is refused, never sent to the default one.
+    #[test]
+    fn a_destructive_request_must_name_its_console() {
+        assert_eq!(
+            required_console_addr(Some(" 10.0.0.7:1234 ".into())),
+            Some("10.0.0.7".to_string())
+        );
+        for missing in [None, Some(String::new()), Some("  ".into())] {
+            assert_eq!(required_console_addr(missing), None);
+        }
+        assert_eq!(missing_console_addr().status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn delete_and_power_without_addr_are_400() {
+        let (events_tx, _rx) = broadcast::channel(4);
+        let state = AppState {
+            jobs: Arc::new(Mutex::new(HashMap::new())),
+            default_ps5_addr: "127.0.0.1:1".to_string(),
+            events_tx,
+        };
+        let del = ps5_fs_delete(
+            State(state.clone()),
+            Json(FsPathReq {
+                addr: None,
+                path: "/data/x".into(),
+                op_id: 0,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(del.status(), StatusCode::BAD_REQUEST);
+        let power = ps5_power_control(
+            State(state),
+            Json(PowerControlReq {
+                addr: Some(String::new()),
+                action: "reboot".into(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(power.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Failures repeat-collapse per console: one console's outage must not hide another's.
+    #[test]
+    fn the_failure_key_names_the_console() {
+        assert_ne!(
+            failure_key("GET", "/api/ps5/status", Some("10.0.0.1")),
+            failure_key("GET", "/api/ps5/status", Some("10.0.0.2"))
+        );
+        assert_eq!(
+            failure_key("GET", "/api/jobs", None),
+            failure_key("GET", "/api/jobs", Some(""))
+        );
     }
 
     #[test]

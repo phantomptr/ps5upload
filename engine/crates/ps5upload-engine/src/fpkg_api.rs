@@ -19,7 +19,8 @@ use uuid::Uuid;
 use ps5upload_fpkg::build::{self, BuildControl, BuildRequest};
 
 use crate::{
-    json_err, now_ms, register_transfer_cancel, set_job, AppState, JobCreated, JobStage, JobState,
+    json_err, now_ms, register_transfer_cancel, set_job, AppState, JobCreated, JobFailOnDropGuard,
+    JobStage, JobState,
 };
 
 /// A build's stages by index, as `build::Stage::index` numbers them.
@@ -321,7 +322,10 @@ pub(crate) async fn fpkg_build_handler(
                         done: *bytes_sent,
                         total: *total_bytes,
                     });
-                    let state = g.get(&job_id).cloned();
+                    // Nobody listening: nothing to build.
+                    let state = (events_tx.receiver_count() > 0)
+                        .then(|| g.get(&job_id).map(|st| serde_json::json!(st)))
+                        .flatten();
                     drop(g);
                     if let Some(state) = state {
                         let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": state });
@@ -342,18 +346,20 @@ pub(crate) async fn fpkg_build_handler(
         .filter(|n| !n.trim().is_empty())
         .or_else(|| req.content_id.clone().filter(|c| !c.trim().is_empty()))
         .or_else(|| inspection.content_id.clone());
-    let partial = stem.map(|stem| {
-        let p = clear_stale_partial(&out, &stem);
-        active_partials()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(p.clone());
-        p
-    });
+    let partial = stem.map(|stem| Writing::new(clear_stale_partial(&out, &stem)));
 
     let state_for_job = state.clone();
     let request_source = source_path.clone();
+    let ticker = JobTicker(ticker.abort_handle());
     tokio::task::spawn_blocking(move || {
+        // A panic in the work below must not leave the job "running" forever with its
+        // ticker looping: both guards act on any exit, `fail` unless a result was recorded.
+        let mut fail = JobFailOnDropGuard::new(
+            state_for_job.jobs.clone(),
+            state_for_job.events_tx.clone(),
+            job_id,
+            started_at_ms,
+        );
         sweep_output_leftovers(&out);
         let mut request = BuildRequest::new(&request_source, &out);
         request.content_id = req.content_id.filter(|id| !id.trim().is_empty());
@@ -390,17 +396,12 @@ pub(crate) async fn fpkg_build_handler(
             crate::engine_log::record("info", format!("fpkg: {line}"));
         };
         let outcome = build::build_controlled(&request, &mut phase, &mut control);
-        if let Some(p) = &partial {
-            active_partials()
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .remove(p);
-        }
+        drop(partial);
         if outcome.is_err() {
             sweep_output_leftovers(&out);
         }
         let completed_at_ms = now_ms();
-        ticker.abort();
+        drop(ticker);
         match outcome {
             Ok(report) => {
                 built_packages()
@@ -453,6 +454,7 @@ pub(crate) async fn fpkg_build_handler(
                 );
             }
         }
+        fail.mark_succeeded();
     });
 
     (
@@ -620,7 +622,10 @@ pub(crate) async fn ffpfsc_compress_handler(
             match g.get_mut(&job_id) {
                 Some(JobState::Running { bytes_sent, .. }) => {
                     *bytes_sent = tick_bytes.load(Ordering::Relaxed);
-                    let state = g.get(&job_id).cloned();
+                    // Nobody listening: nothing to build.
+                    let state = (events_tx.receiver_count() > 0)
+                        .then(|| g.get(&job_id).map(|st| serde_json::json!(st)))
+                        .flatten();
                     drop(g);
                     if let Some(state) = state {
                         let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": state });
@@ -634,7 +639,16 @@ pub(crate) async fn ffpfsc_compress_handler(
 
     let state_for_job = state.clone();
     let partial_out = PathBuf::from(format!("{}.partial", output.display()));
+    let ticker = JobTicker(ticker.abort_handle());
     tokio::task::spawn_blocking(move || {
+        // A panic in the work below must not leave the job "running" forever with its
+        // ticker looping: both guards act on any exit, `fail` unless a result was recorded.
+        let mut fail = JobFailOnDropGuard::new(
+            state_for_job.jobs.clone(),
+            state_for_job.events_tx.clone(),
+            job_id,
+            started_at_ms,
+        );
         let writing = Writing::new(partial_out);
         sweep_output_leftovers(&out_dir);
         let mut options = ffpfsc::WrapOptions::default();
@@ -652,7 +666,7 @@ pub(crate) async fn ffpfsc_compress_handler(
             sweep_output_leftovers(&out_dir);
         }
         let completed_at_ms = now_ms();
-        ticker.abort();
+        drop(ticker);
         match outcome {
             Ok(report) => {
                 crate::engine_log::record(
@@ -703,6 +717,7 @@ pub(crate) async fn ffpfsc_compress_handler(
                 );
             }
         }
+        fail.mark_succeeded();
     });
 
     (
@@ -892,7 +907,10 @@ pub(crate) async fn exfat_build_handler(
                 }) => {
                     *bytes_sent = tick_bytes.load(Ordering::Relaxed);
                     *stage = tick_stage.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                    let state = g.get(&job_id).cloned();
+                    // Nobody listening: nothing to build.
+                    let state = (events_tx.receiver_count() > 0)
+                        .then(|| g.get(&job_id).map(|st| serde_json::json!(st)))
+                        .flatten();
                     drop(g);
                     if let Some(state) = state {
                         let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": state });
@@ -906,7 +924,16 @@ pub(crate) async fn exfat_build_handler(
 
     let state_for_job = state.clone();
     let partial_out = PathBuf::from(format!("{}.partial", output.display()));
+    let ticker = JobTicker(ticker.abort_handle());
     tokio::task::spawn_blocking(move || {
+        // A panic in the work below must not leave the job "running" forever with its
+        // ticker looping: both guards act on any exit, `fail` unless a result was recorded.
+        let mut fail = JobFailOnDropGuard::new(
+            state_for_job.jobs.clone(),
+            state_for_job.events_tx.clone(),
+            job_id,
+            started_at_ms,
+        );
         let writing = Writing::new(partial_out);
         let spooling = Writing::new(crate::image_build::lz4_spool(&output));
         sweep_output_leftovers(&out_dir);
@@ -957,7 +984,7 @@ pub(crate) async fn exfat_build_handler(
             sweep_output_leftovers(&out_dir);
         }
         let completed_at_ms = now_ms();
-        ticker.abort();
+        drop(ticker);
         match outcome {
             Ok(built) => {
                 built_packages()
@@ -1011,6 +1038,7 @@ pub(crate) async fn exfat_build_handler(
                 );
             }
         }
+        fail.mark_succeeded();
     });
 
     (
@@ -1020,6 +1048,31 @@ pub(crate) async fn exfat_build_handler(
         }),
     )
         .into_response()
+}
+
+/// Stops a job's progress ticker when dropped: when the work ends, a panic included.
+struct JobTicker(tokio::task::AbortHandle);
+
+impl Drop for JobTicker {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// An unpack's folder while it is still being written: dropped with a path, it removes the
+/// folder and its place among the active extracts. Cleared (`None`) once the game is found.
+struct Unpacking(Option<PathBuf>);
+
+impl Drop for Unpacking {
+    fn drop(&mut self) {
+        if let Some(dest) = self.0.take() {
+            let _ = std::fs::remove_dir_all(&dest);
+            active_extracts()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&dest);
+        }
+    }
 }
 
 /// Package files being written by a build in this engine (`<stem>.pkg.partial`).
@@ -1281,7 +1334,10 @@ pub(crate) async fn fpkg_extract_handler(
             match g.get_mut(&job_id) {
                 Some(JobState::Running { bytes_sent, .. }) => {
                     *bytes_sent = tick_bytes.load(Ordering::Relaxed);
-                    let state = g.get(&job_id).cloned();
+                    // Nobody listening: nothing to build.
+                    let state = (events_tx.receiver_count() > 0)
+                        .then(|| g.get(&job_id).map(|st| serde_json::json!(st)))
+                        .flatten();
                     drop(g);
                     if let Some(state) = state {
                         let msg = serde_json::json!({ "job_id": job_id.to_string(), "job": state });
@@ -1294,15 +1350,27 @@ pub(crate) async fn fpkg_extract_handler(
     });
 
     let state_for_job = state.clone();
+    let ticker = JobTicker(ticker.abort_handle());
     tokio::task::spawn_blocking(move || {
+        // A panic in the work below must not leave the job "running" forever with its
+        // ticker looping: both guards act on any exit, `fail` unless a result was recorded.
+        let mut fail = JobFailOnDropGuard::new(
+            state_for_job.jobs.clone(),
+            state_for_job.events_tx.clone(),
+            job_id,
+            started_at_ms,
+        );
+        // Until the game is found, the folder is this job's to remove (a panic included).
+        let mut unpacking = Unpacking(Some(dest.clone()));
         let mut progress = |done: u64, _total: u64| bytes.store(done, Ordering::Relaxed);
         let outcome =
             archive_extract::extract(&source, &dest, password.as_deref(), &mut progress, &cancel)
                 .and_then(|()| archive_extract::find_game(&dest));
         let completed_at_ms = now_ms();
-        ticker.abort();
+        drop(ticker);
         match outcome {
             Ok(game) => {
+                unpacking.0 = None;
                 crate::engine_log::record(
                     "info",
                     format!(
@@ -1331,11 +1399,7 @@ pub(crate) async fn fpkg_extract_handler(
                 );
             }
             Err(error) => {
-                let _ = std::fs::remove_dir_all(&dest);
-                active_extracts()
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .remove(&dest);
+                drop(unpacking);
                 crate::engine_log::record("warn", format!("fpkg: unpack failed: {error:#}"));
                 set_job(
                     &state_for_job.jobs,
@@ -1353,6 +1417,7 @@ pub(crate) async fn fpkg_extract_handler(
                 );
             }
         }
+        fail.mark_succeeded();
     });
 
     (
@@ -1567,5 +1632,84 @@ mod delete_tests {
         assert!(delete_built(&ours).is_err());
         assert!(ours.exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod panic_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    /// A panic in a job's blocking work (as the build, compress, exFAT and unpack jobs run it)
+    /// fails the job, stops its ticker and gives up the unpack's folder and active-set entry.
+    #[tokio::test]
+    async fn a_panicking_job_fails_stops_its_ticker_and_frees_its_folder() {
+        let jobs: Arc<Mutex<HashMap<Uuid, JobState>>> = Arc::new(Mutex::new(HashMap::new()));
+        let (events_tx, _rx) = tokio::sync::broadcast::channel(16);
+        let job_id = Uuid::new_v4();
+        let started_at_ms = now_ms();
+        set_job(
+            &jobs,
+            &events_tx,
+            job_id,
+            JobState::Running {
+                stage: None,
+                started_at_ms,
+                bytes_sent: 0,
+                total_bytes: 1,
+                files: Vec::new(),
+                skipped_files: 0,
+                skipped_bytes: 0,
+                files_processing: 0,
+                files_finalized: 0,
+                files_finalizing_total: 0,
+                bytes_finalized: 0,
+            },
+        );
+        let dest = std::env::temp_dir().join(format!("fpkg-panic-{job_id}"));
+        std::fs::create_dir_all(&dest).unwrap();
+        active_extracts().lock().unwrap().insert(dest.clone());
+        let spinning = tokio::spawn(async {
+            loop {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+        let ticker = JobTicker(spinning.abort_handle());
+        let (j, e, d) = (jobs.clone(), events_tx.clone(), dest.clone());
+        let joined = tokio::task::spawn_blocking(move || {
+            let mut fail = JobFailOnDropGuard::new(j, e, job_id, started_at_ms);
+            let _unpacking = Unpacking(Some(d));
+            let _ticker = ticker;
+            if job_id != Uuid::nil() {
+                panic!("injected");
+            }
+            fail.mark_succeeded();
+        })
+        .await;
+        assert!(joined.is_err(), "the work panicked");
+        assert!(matches!(
+            jobs.lock().unwrap().get(&job_id),
+            Some(JobState::Failed { .. })
+        ));
+        let stopped = spinning.await;
+        assert!(
+            stopped.unwrap_err().is_cancelled(),
+            "the ticker was stopped"
+        );
+        assert!(!dest.exists());
+        assert!(!active_extracts().lock().unwrap().contains(&dest));
+    }
+
+    /// A finished unpack keeps its folder.
+    #[test]
+    fn a_found_game_keeps_its_folder() {
+        let dest = std::env::temp_dir().join(format!("fpkg-keep-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dest).unwrap();
+        let mut unpacking = Unpacking(Some(dest.clone()));
+        unpacking.0 = None;
+        drop(unpacking);
+        assert!(dest.exists());
+        let _ = std::fs::remove_dir_all(&dest);
     }
 }

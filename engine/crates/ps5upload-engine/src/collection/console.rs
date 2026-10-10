@@ -21,6 +21,11 @@ pub struct ConsoleTitle {
     pub dlc_labels: Vec<String>,
     /// Registered from a folder or an image (not a package install).
     pub registered_from: Option<String>,
+    /// The version could not be read (the console did not answer): `version` means nothing.
+    pub version_unread: bool,
+    /// The update and DLC folders could not be read: `patch_installed` and `dlc_labels` mean
+    /// nothing.
+    pub extras_unread: bool,
 }
 
 /// A package in the collection the console could take.
@@ -193,6 +198,7 @@ mod tests {
             patch_installed: true,
             dlc_labels: vec!["spexpansiondlc03".into()],
             registered_from: None,
+            ..ConsoleTitle::default()
         };
         let s = state_for(&bloodborne(), &t);
         assert!(s.base.is_none());
@@ -213,6 +219,7 @@ mod tests {
             patch_installed: true,
             dlc_labels: vec!["SPEXPANSIONDLC03".into(), "SPDLCMESSENGER00".into()],
             registered_from: None,
+            ..ConsoleTitle::default()
         };
         let s = state_for(&bloodborne(), &t);
         assert!(s.update.is_none() && s.dlc_missing.is_empty() && s.base.is_none());

@@ -25,6 +25,10 @@ use serde::Serialize;
 /// Bound the ring: 500 entries × ~200 bytes ≈ 100 KB max. Enough to cover
 /// the reconcile + transfer lifecycle of any realistic upload; older
 /// entries drop off the back.
+///
+/// Debug and trace lines (a line per HTTP request, per range a console
+/// fetches) keep a ring of their own of the same size: sharing one, a
+/// busy minute of requests pushed every warning out of the tail.
 const RING_CAP: usize = 500;
 
 /// Cap per-entry message length. Our own log sites all format short
@@ -53,6 +57,21 @@ fn ring() -> &'static Mutex<VecDeque<LogEntry>> {
     use std::sync::OnceLock;
     static RING: OnceLock<Mutex<VecDeque<LogEntry>>> = OnceLock::new();
     RING.get_or_init(|| Mutex::new(VecDeque::with_capacity(RING_CAP)))
+}
+
+/// The ring for `debug` and `trace` lines (see `RING_CAP`).
+fn debug_ring() -> &'static Mutex<VecDeque<LogEntry>> {
+    use std::sync::OnceLock;
+    static RING: OnceLock<Mutex<VecDeque<LogEntry>>> = OnceLock::new();
+    RING.get_or_init(|| Mutex::new(VecDeque::with_capacity(RING_CAP)))
+}
+
+fn ring_for(level: &str) -> &'static Mutex<VecDeque<LogEntry>> {
+    if matches!(level, "debug" | "trace") {
+        debug_ring()
+    } else {
+        ring()
+    }
 }
 
 fn now_ms() -> u64 {
@@ -135,7 +154,7 @@ pub(crate) fn record(level: &'static str, mut msg: String) {
     // whole engine down. The ring buffer's only state is the
     // contained entries; a half-mutated ring is still safe to read
     // from and append to.
-    let mut g = ring().lock().unwrap_or_else(|e| e.into_inner());
+    let mut g = ring_for(level).lock().unwrap_or_else(|e| e.into_inner());
     if g.len() >= RING_CAP {
         g.pop_front();
     }
@@ -145,8 +164,16 @@ pub(crate) fn record(level: &'static str, mut msg: String) {
 /// Return every entry whose `seq` is strictly greater than `since`.
 /// Callers poll with `since = last-seen-seq` to receive only new lines.
 pub(crate) fn tail_since(since: u64) -> Vec<LogEntry> {
-    let g = ring().lock().unwrap_or_else(|e| e.into_inner());
-    g.iter().filter(|e| e.seq > since).cloned().collect()
+    let mut out: Vec<LogEntry> = {
+        let g = ring().lock().unwrap_or_else(|e| e.into_inner());
+        g.iter().filter(|e| e.seq > since).cloned().collect()
+    };
+    {
+        let g = debug_ring().lock().unwrap_or_else(|e| e.into_inner());
+        out.extend(g.iter().filter(|e| e.seq > since).cloned());
+    }
+    out.sort_by_key(|e| e.seq);
+    out
 }
 
 /// Info-level shortcut with `format!`-style args.
@@ -174,4 +201,22 @@ macro_rules! log_error {
 #[macro_export]
 macro_rules! log_debug {
     ($($arg:tt)*) => { $crate::engine_log::record("debug", format!($($arg)*)) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A flood of debug lines (one per request) does not push a warning out of the tail.
+    #[test]
+    fn debug_lines_do_not_evict_warnings() {
+        let marker = format!("warn-kept-{}", std::process::id());
+        record("warn", marker.clone());
+        for i in 0..(RING_CAP * 2) {
+            record("debug", format!("GET /api/x -> 200 #{i}"));
+        }
+        let tail = tail_since(0);
+        assert!(tail.iter().any(|e| e.level == "warn" && e.msg == marker));
+        assert!(tail.windows(2).all(|w| w[0].seq < w[1].seq), "in order");
+    }
 }

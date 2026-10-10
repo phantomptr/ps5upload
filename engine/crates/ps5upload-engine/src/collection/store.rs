@@ -152,21 +152,9 @@ pub fn ps_game_library_index() -> Option<PathBuf> {
 
 // ── Exports (the source app's `libexport.py`, field for field) ─────────────────
 
-/// `1.5 GB`, `2 GB`, `0 B`.
+/// `1.5 GiB`, `2.0 GiB`, `0 B`: the engine's one size formatter.
 pub fn format_bytes(n: u64) -> String {
-    if n == 0 {
-        return "0 B".into();
-    }
-    let units = ["B", "KB", "MB", "GB", "TB", "PB"];
-    let mut v = n as f64;
-    let mut i = 0;
-    while v >= 1024.0 && i < units.len() - 1 {
-        v /= 1024.0;
-        i += 1;
-    }
-    let text = format!("{v:.2}");
-    let text = text.trim_end_matches('0').trim_end_matches('.');
-    format!("{text} {}", units[i])
+    ps5upload_core::units::iec_bytes(n)
 }
 
 /// `Sep 22, 2026`, or `Unknown`.
@@ -314,8 +302,8 @@ mod tests {
     #[test]
     fn sizes_and_dates_print_like_the_source_app() {
         assert_eq!(format_bytes(0), "0 B");
-        assert_eq!(format_bytes(1536), "1.5 KB");
-        assert_eq!(format_bytes(2 << 30), "2 GB");
+        assert_eq!(format_bytes(1536), "1.5 KiB");
+        assert_eq!(format_bytes(2 << 30), "2.0 GiB");
         assert_eq!(format_date(Some("2026-09-22T10:00:00Z")), "Sep 22, 2026");
         assert_eq!(format_date(None), "Unknown");
     }

@@ -42,6 +42,8 @@ impl TitleFacts {
             patch_installed: self.patch_installed.unwrap_or(false),
             dlc_labels: self.dlc_labels.clone().unwrap_or_default(),
             registered_from: self.registered_from.clone(),
+            version_unread: false,
+            extras_unread: false,
         }
     }
 }
@@ -62,15 +64,17 @@ pub fn host_key(addr: &str) -> String {
     }
 }
 
-/// Records a full read of one title (installed, version, update, DLC).
-pub fn merge_detailed(
-    s: &mut Snapshots,
+/// Records a full read of one title (installed, version, update, DLC). A detail the read could
+/// not get (`version_unread`, `extras_unread`) keeps what was recorded before. Returns the
+/// merged facts.
+pub fn merge_detailed<'a>(
+    s: &'a mut Snapshots,
     host: &str,
     title_id: &str,
     t: &ConsoleTitle,
     title: &str,
     now: u64,
-) {
+) -> &'a TitleFacts {
     let facts = s
         .entry(host_key(host))
         .or_default()
@@ -80,11 +84,16 @@ pub fn merge_detailed(
         facts.title = title.to_string();
     }
     facts.installed = t.installed;
-    facts.version = t.version.clone();
-    facts.patch_installed = Some(t.patch_installed);
-    facts.dlc_labels = Some(t.dlc_labels.clone());
+    if !t.version_unread {
+        facts.version = t.version.clone();
+    }
+    if !t.extras_unread {
+        facts.patch_installed = Some(t.patch_installed);
+        facts.dlc_labels = Some(t.dlc_labels.clone());
+    }
     facts.registered_from = t.registered_from.clone();
     facts.read_at = now;
+    facts
 }
 
 /// Records a console's installed list: each listed title is installed (details it does not
@@ -220,6 +229,7 @@ mod tests {
             patch_installed: patch,
             dlc_labels: dlc.iter().map(|d| d.to_string()).collect(),
             registered_from: None,
+            ..ConsoleTitle::default()
         }
     }
 

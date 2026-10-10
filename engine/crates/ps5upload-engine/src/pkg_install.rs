@@ -2641,7 +2641,9 @@ async fn serve_handler(
         sessions.get(&session).cloned()
     };
     let session_known = session_lookup.is_some();
-    crate::log_info!(
+    // One line per range request (hundreds per install): debug, so it never pushes the
+    // warnings out of the log tail.
+    crate::log_debug!(
         "pkg-host fetch: session={} name={} known={} peer={} range={:?} user-agent={:?}",
         session,
         filename,

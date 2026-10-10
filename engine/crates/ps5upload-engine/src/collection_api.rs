@@ -498,31 +498,95 @@ fn with_app_folders(
     out
 }
 
-/// What the console has of one title: installed, its version, an update, its DLC.
+/// The console's update and DLC folders, listed once per drive and shared by every title of a
+/// read: one listing of `<root>/user/patch` and `<root>/user/addcont` instead of two per title.
+/// A listing that failed (not one that is absent) is kept as an error, so the titles it would
+/// have answered for are marked unread rather than "no update, no DLC".
+pub(crate) struct ConsoleExtras {
+    /// Per drive root: the title IDs (upper case) with an update folder.
+    patch: Vec<Result<std::collections::HashSet<String>, String>>,
+    /// Per drive root: the root and the title IDs (upper case, as listed) with a DLC folder.
+    addcont: Vec<(String, Result<Vec<String>, String>)>,
+}
+
+impl ConsoleExtras {
+    pub(crate) fn read(addr: &str, roots: &[String]) -> Self {
+        Self::from_lister(roots, |dir| console_names_all(addr, dir))
+    }
+
+    fn from_lister(
+        roots: &[String],
+        mut list: impl FnMut(&str) -> Result<Vec<String>, String>,
+    ) -> Self {
+        let mut patch = Vec::with_capacity(roots.len());
+        let mut addcont = Vec::with_capacity(roots.len());
+        for root in roots {
+            patch.push(
+                list(&format!("{root}/user/patch"))
+                    .map(|names| names.into_iter().map(|n| n.to_ascii_uppercase()).collect()),
+            );
+            addcont.push((root.clone(), list(&format!("{root}/user/addcont"))));
+        }
+        Self { patch, addcont }
+    }
+
+    /// `(update installed, DLC labels)` of one title, or `None` when a listing it depends on
+    /// could not be read. `list` reads a title's DLC folder (only for titles that have one).
+    fn of(
+        &self,
+        id: &str,
+        mut list: impl FnMut(&str) -> Result<Vec<String>, String>,
+    ) -> Option<(bool, Vec<String>)> {
+        let mut patch = false;
+        for set in &self.patch {
+            patch |= set.as_ref().ok()?.contains(&id.to_ascii_uppercase());
+        }
+        let mut labels = Vec::new();
+        for (root, listed) in &self.addcont {
+            for folder in listed.as_ref().ok()? {
+                if folder.eq_ignore_ascii_case(id) {
+                    labels.extend(list(&format!("{root}/user/addcont/{folder}")).ok()?);
+                }
+            }
+        }
+        Some((patch, labels))
+    }
+}
+
+/// What the console has of one title: installed, its version, an update, its DLC. One version
+/// query, plus a DLC folder listing for a title that has DLC; the drives' update and DLC
+/// folders come from `extras`, listed once per read.
 pub(crate) fn read_title(
     addr: &str,
     id: &str,
-    roots: &[String],
+    extras: &ConsoleExtras,
     installed: &std::collections::HashMap<String, Option<String>>,
 ) -> crate::collection::console::ConsoleTitle {
     let mut t = crate::collection::console::ConsoleTitle::default();
     if let Some(from) = installed.get(id) {
         t.installed = true;
         t.registered_from = from.clone();
-        t.version = installed_version(addr, id);
-        for root in roots {
-            if !console_names(addr, &format!("{root}/user/patch/{id}")).is_empty() {
-                t.patch_installed = true;
+        match installed_version(addr, id) {
+            Ok(v) => t.version = v,
+            Err(_) => t.version_unread = true,
+        }
+        match extras.of(id, |dir| console_names_all(addr, dir)) {
+            Some((patch, labels)) => {
+                t.patch_installed = patch;
+                t.dlc_labels = labels;
             }
-            t.dlc_labels
-                .extend(console_names(addr, &format!("{root}/user/addcont/{id}")));
+            None => t.extras_unread = true,
         }
     }
     t
 }
 
-fn installed_version(addr: &str, title_id: &str) -> Option<String> {
-    let rows = ps5upload_core::diagnostics::appinfo_query(addr, title_id, None).ok()?;
+/// The installed version: `APP_VER` (PS4) or `CONTENT_VERSION` (PS5), normalized. `Ok(None)`
+/// when the console has neither; `Err` when it could not be asked.
+fn installed_version(addr: &str, title_id: &str) -> Result<Option<String>, String> {
+    let rows =
+        ps5upload_core::diagnostics::appinfo_query(addr, title_id, Some("APP_VER,CONTENT_VERSION"))
+            .map_err(|e| format!("{e:#}"))?;
     let get = |k: &str| {
         rows.rows
             .iter()
@@ -530,9 +594,9 @@ fn installed_version(addr: &str, title_id: &str) -> Option<String> {
             .map(|r| r.val.trim().to_string())
             .filter(|v| !v.is_empty())
     };
-    get("APP_VER")
+    Ok(get("APP_VER")
         .or_else(|| get("CONTENT_VERSION"))
-        .map(|v| ps5upload_pkg::kind::normalize_version(&v))
+        .map(|v| ps5upload_pkg::kind::normalize_version(&v)))
 }
 
 /// Names of the entries in a console folder; empty when it does not exist.
@@ -548,6 +612,40 @@ fn console_names(addr: &str, dir: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Every entry of a console folder, page by page; empty when it does not exist, `Err` when it
+/// could not be read (a busy or gone console must not read as "nothing there").
+fn console_names_all(addr: &str, dir: &str) -> Result<Vec<String>, String> {
+    use ps5upload_core::fs_ops::{is_not_found, list_dir, ListDirOptions};
+    let mut out = Vec::new();
+    let mut offset = 0u64;
+    // 64 pages of 256: far more updates or DLC than one drive holds.
+    for _ in 0..64 {
+        let page = match list_dir(addr, dir, ListDirOptions { offset, limit: 256 }) {
+            Ok(page) => page,
+            Err(e) => {
+                let msg = format!("{e:#}");
+                return if is_not_found(&msg) {
+                    Ok(out)
+                } else {
+                    Err(msg)
+                };
+            }
+        };
+        let n = page.entries.len() as u64;
+        out.extend(
+            page.entries
+                .into_iter()
+                .map(|e| e.name)
+                .filter(|n| n != "." && n != ".."),
+        );
+        if !page.truncated || n == 0 {
+            return Ok(out);
+        }
+        offset += n;
+    }
+    Ok(out)
+}
+
 /// What one console has, for every game in the collection: installed or not, at which
 /// version, and what the collection could bring it. The console is read once for its
 /// registered titles; installed ones are then asked for their update, DLC and version.
@@ -561,6 +659,7 @@ pub async fn get_console(Query(q): Query<ConsoleQuery>) -> Response {
             use crate::collection::console::state_for;
             let installed = installed_titles(&addr)?;
             let roots = crate::pkg_install::installed_storage_roots(&addr);
+            let extras = ConsoleExtras::read(&addr, &roots);
             let games: Vec<&crate::collection::Game> = lib.games.values().collect();
             let mut out = Vec::with_capacity(games.len());
             let mut read = Vec::with_capacity(games.len());
@@ -570,32 +669,28 @@ pub async fn get_console(Query(q): Query<ConsoleQuery>) -> Response {
                     let handles: Vec<_> = chunk
                         .iter()
                         .map(|g| {
-                            let (addr, roots, installed) = (&addr, &roots, &installed);
-                            scope.spawn(move || {
-                                let t = read_title(addr, &g.game_id, roots, installed);
-                                (state_for(g, &t), t, g.title.clone())
-                            })
+                            let (addr, extras, installed) = (&addr, &extras, &installed);
+                            scope
+                                .spawn(move || (read_title(addr, &g.game_id, extras, installed), g))
                         })
                         .collect();
                     handles.into_iter().filter_map(|h| h.join().ok()).collect()
                 });
                 read.extend(states);
             }
-            // Kept for the game page, which shows consoles other than the connected one.
+            // Kept for the game page, which shows consoles other than the connected one. A
+            // detail that could not be read keeps what the last read found, and the state is
+            // worked out from the merged facts, so a busy console does not turn into "no
+            // update, no DLC".
             let now = crate::console_snapshot::now_unix();
             crate::console_snapshot::with(|snaps| {
-                for (st, t, title) in &read {
-                    crate::console_snapshot::merge_detailed(
-                        snaps,
-                        &addr,
-                        &st.game_id,
-                        t,
-                        title,
-                        now,
+                for (t, g) in &read {
+                    let facts = crate::console_snapshot::merge_detailed(
+                        snaps, &addr, &g.game_id, t, &g.title, now,
                     );
+                    out.push(state_for(g, &facts.console_title()));
                 }
             });
-            out.extend(read.into_iter().map(|(st, _, _)| st));
             Ok(out)
         },
     )
@@ -624,5 +719,97 @@ mod installed_titles_tests {
         assert_eq!(m.len(), 2);
         assert_eq!(m["PPSA00001"].as_deref(), Some("/data/a"));
         assert_eq!(m["PPSA00002"], None);
+    }
+}
+
+#[cfg(test)]
+mod extras_tests {
+    use super::ConsoleExtras;
+    use crate::collection::console::ConsoleTitle;
+    use crate::console_snapshot::{merge_detailed, Snapshots};
+
+    fn listing(dir: &str) -> Result<Vec<String>, String> {
+        Ok(match dir {
+            "/r1/user/patch" => vec!["PPSA00001".into()],
+            "/r1/user/addcont" => vec!["PPSA00001".into(), "PPSA00002".into()],
+            "/r1/user/addcont/PPSA00001" => vec!["DLC1".into(), "DLC2".into()],
+            "/r1/user/addcont/PPSA00002" => vec!["X".into()],
+            _ => vec![],
+        })
+    }
+
+    /// The drives' update and DLC folders are listed once per read, not twice per title.
+    #[test]
+    fn update_and_dlc_folders_are_listed_once_for_every_title() {
+        let roots = vec!["/r1".to_string(), "/r2".to_string()];
+        let mut calls = Vec::new();
+        let extras = ConsoleExtras::from_lister(&roots, |d| {
+            calls.push(d.to_string());
+            listing(d)
+        });
+        assert_eq!(calls.len(), 4, "{calls:?}");
+        let mut per_title = 0;
+        let mut of = |id: &str| {
+            extras.of(id, |d| {
+                per_title += 1;
+                listing(d)
+            })
+        };
+        assert_eq!(
+            of("ppsa00001"),
+            Some((true, vec!["DLC1".to_string(), "DLC2".to_string()]))
+        );
+        assert_eq!(of("PPSA00003"), Some((false, vec![])));
+        // Only a title with DLC gets its own listing.
+        assert_eq!(per_title, 1);
+    }
+
+    /// A listing that failed makes the title's update and DLC unknown, not absent.
+    #[test]
+    fn a_failed_listing_is_unknown_not_none() {
+        let roots = vec!["/r1".to_string()];
+        let extras = ConsoleExtras::from_lister(&roots, |d| {
+            if d == "/r1/user/addcont" {
+                Err("timed out".into())
+            } else {
+                listing(d)
+            }
+        });
+        assert_eq!(extras.of("PPSA00001", listing), None);
+        let extras = ConsoleExtras::from_lister(&roots, listing);
+        assert_eq!(extras.of("PPSA00001", |_| Err("busy".into())), None);
+    }
+
+    /// What an earlier read found is kept when this read could not see it.
+    #[test]
+    fn an_unread_detail_keeps_the_recorded_one() {
+        let mut s = Snapshots::new();
+        let full = ConsoleTitle {
+            installed: true,
+            version: Some("01.020.000".into()),
+            patch_installed: true,
+            dlc_labels: vec!["DLC1".into()],
+            ..ConsoleTitle::default()
+        };
+        merge_detailed(&mut s, "10.0.0.5:1", "PPSA00001", &full, "Game", 1);
+        let unread = ConsoleTitle {
+            installed: true,
+            version_unread: true,
+            extras_unread: true,
+            ..ConsoleTitle::default()
+        };
+        let facts = merge_detailed(&mut s, "10.0.0.5", "PPSA00001", &unread, "Game", 2);
+        assert_eq!(facts.version.as_deref(), Some("01.020.000"));
+        assert_eq!(facts.patch_installed, Some(true));
+        assert_eq!(facts.dlc_labels.as_deref(), Some(&["DLC1".to_string()][..]));
+        assert_eq!(facts.read_at, 2);
+        // A read that did see them replaces them.
+        let read = ConsoleTitle {
+            installed: true,
+            ..ConsoleTitle::default()
+        };
+        let facts = merge_detailed(&mut s, "10.0.0.5", "PPSA00001", &read, "Game", 3);
+        assert_eq!(facts.patch_installed, Some(false));
+        assert_eq!(facts.version, None);
     }
 }

@@ -16,7 +16,8 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
 /// How long a stored image stays good.
@@ -37,6 +38,15 @@ const MISS_TTL: Duration = Duration::from_secs(15 * 60);
 
 /// Ceiling for the whole cache. Enforced opportunistically on write.
 const MAX_BYTES: u64 = 512 * 1024 * 1024;
+
+/// The cache's size as last counted plus what was written since; `None` until the first
+/// write counts it. Saves walking the whole folder on every write: it is walked again only
+/// when this passes [`MAX_BYTES`] (or after a clear or an invalidation).
+static TRACKED_BYTES: Mutex<Option<u64>> = Mutex::new(None);
+
+fn forget_tracked_size() {
+    *TRACKED_BYTES.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
 
 /// What a lookup found.
 pub enum Cached {
@@ -173,16 +183,37 @@ fn write_entry(console: &str, kind: &str, identity: &str, bytes: &[u8]) {
     }
     // Write-then-rename so a reader never sees a half-written image. Both
     // paths are in the same directory, so the rename cannot cross devices.
-    let tmp = path.with_extension("tmp");
+    // The temp name is unique per write: two requests for the same artwork
+    // used to share `<name>.tmp` and could rename each other's half-file.
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let tmp = path.with_extension(format!(
+        "{}-{}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
     if fs::write(&tmp, bytes).is_err() {
         let _ = fs::remove_file(&tmp);
         return;
     }
+    let replaced = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     if fs::rename(&tmp, &path).is_err() {
         let _ = fs::remove_file(&tmp);
         return;
     }
-    enforce_size_cap();
+    let over = {
+        let mut tracked = TRACKED_BYTES.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(root) = root() else { return };
+        let now = match *tracked {
+            Some(n) => (n + bytes.len() as u64).saturating_sub(replaced),
+            None => walk(root).iter().map(|(_, m)| m.len()).sum(),
+        };
+        *tracked = Some(now);
+        now > MAX_BYTES
+    };
+    if over {
+        let left = enforce_size_cap();
+        *TRACKED_BYTES.lock().unwrap_or_else(|e| e.into_inner()) = left;
+    }
 }
 
 /// Drop everything cached for one console.
@@ -193,6 +224,7 @@ fn write_entry(console: &str, kind: &str, identity: &str, bytes: &[u8]) {
 pub fn invalidate_console(console: &str) {
     if let Some(dir) = console_dir(console) {
         let _ = fs::remove_dir_all(dir);
+        forget_tracked_size();
     }
 }
 
@@ -223,6 +255,7 @@ pub fn clear() -> u64 {
             }
         }
     }
+    forget_tracked_size();
     bytes
 }
 
@@ -252,12 +285,14 @@ fn walk(root: &Path) -> Vec<(PathBuf, fs::Metadata)> {
 /// Eviction is by age rather than by recency of use, which keeps it
 /// consistent with the TTL rule (mtime is never touched on read) and needs
 /// no index file that could disagree with the directory.
-fn enforce_size_cap() {
-    let Some(root) = root() else { return };
+///
+/// Returns the bytes left, `None` when there is no cache.
+fn enforce_size_cap() -> Option<u64> {
+    let root = root()?;
     let mut files = walk(root);
     let total: u64 = files.iter().map(|(_, m)| m.len()).sum();
     if total <= MAX_BYTES {
-        return;
+        return Some(total);
     }
     files.sort_by_key(|(_, m)| m.modified().unwrap_or(SystemTime::UNIX_EPOCH));
     let mut freed = 0u64;
@@ -269,6 +304,7 @@ fn enforce_size_cap() {
             freed += meta.len();
         }
     }
+    Some(total - freed)
 }
 
 /// Whether a failed read means *the console answered and said no*, as
@@ -383,6 +419,43 @@ mod tests {
         backdate(&c, "app", "NPXS40172", MISS_TTL + Duration::from_secs(60));
         assert!(MISS_TTL < HIT_TTL);
         assert!(matches!(get(&c, "app", "NPXS40172"), Cached::Unknown));
+    }
+
+    /// Two requests for the same artwork write at once: each uses its own temp file, so the
+    /// entry is always one whole image and no temp file is left behind.
+    #[test]
+    fn concurrent_writes_of_one_entry_never_mix() {
+        let c = setup("concurrent");
+        let bodies: Vec<Vec<u8>> = (0..8u8).map(|i| vec![i + 1; 64 * 1024]).collect();
+        std::thread::scope(|scope| {
+            for b in &bodies {
+                let c = &c;
+                scope.spawn(move || {
+                    for _ in 0..5 {
+                        put(c, "app", "CUSA00777", b);
+                    }
+                });
+            }
+        });
+        match get(&c, "app", "CUSA00777") {
+            Cached::Hit { bytes, .. } => assert!(bodies.contains(&bytes)),
+            _ => panic!("expected a hit"),
+        }
+        let dir = console_dir(&c).unwrap();
+        let leftovers: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    /// A write counts the folder once, then keeps a running total instead of walking it.
+    #[test]
+    fn the_size_is_tracked_after_the_first_write() {
+        let c = setup("tracked");
+        put(&c, "app", "CUSA00778", b"abc");
+        assert!(TRACKED_BYTES.lock().unwrap().is_some());
     }
 
     #[test]

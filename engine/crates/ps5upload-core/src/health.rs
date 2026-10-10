@@ -228,20 +228,9 @@ pub fn summarize(checks: &[HealthCheck]) -> HealthSummary {
     s
 }
 
-/// Human-readable byte size.
+/// Human-readable byte size (binary units, labelled as such).
 pub fn human_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    let mut v = bytes as f64;
-    let mut i = 0;
-    while v >= 1024.0 && i < UNITS.len() - 1 {
-        v /= 1024.0;
-        i += 1;
-    }
-    if i == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{v:.1} {}", UNITS[i])
-    }
+    crate::units::iec_bytes(bytes)
 }
 
 // ── The scan ────────────────────────────────────────────────────────
@@ -869,8 +858,8 @@ mod tests {
     #[test]
     fn human_bytes_reads_naturally() {
         assert_eq!(human_bytes(512), "512 B");
-        assert_eq!(human_bytes(1024), "1.0 KB");
-        assert_eq!(human_bytes(gb(2)), "2.0 GB");
+        assert_eq!(human_bytes(1024), "1.0 KiB");
+        assert_eq!(human_bytes(gb(2)), "2.0 GiB");
     }
 
     #[test]

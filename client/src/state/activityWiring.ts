@@ -134,8 +134,8 @@ export function installActivityWiring() {
             : "uploading";
         useActivityHistoryStore.getState().update(existingId, {
           label:
-            phase.files.length > 1
-              ? `Uploading ${phase.files.length} files`
+            phase.fileCount > 1
+              ? `Uploading ${phase.fileCount} files`
               : `Uploading ${phase.files[0]?.rel_path ?? ""}`.trim(),
           bytes: phase.bytesSent,
           totalBytes: phase.totalBytes,
