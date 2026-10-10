@@ -507,9 +507,17 @@ export async function startTransferFile(
   dest: string,
   addr: string,
   txId?: string | null,
+  bandwidthCapMbps?: number,
 ): Promise<string> {
   const res = await invoke<{ job_id: string }>("transfer_file", {
-    req: { src, dest, addr, tx_id: txId ?? null },
+    req: {
+      src,
+      dest,
+      addr,
+      tx_id: txId ?? null,
+      bandwidth_cap_mbps:
+        bandwidthCapMbps && bandwidthCapMbps > 0 ? bandwidthCapMbps : null,
+    },
   });
   return res.job_id;
 }

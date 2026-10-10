@@ -143,8 +143,11 @@ export function restoreFsUploads(): void {
 /** What the run needs from the app. Injected so the loop is testable without an engine. */
 export interface FsUploadDeps {
   pathKind: (path: string) => Promise<string>;
-  startFile: (src: string, dest: string, addr: string) => Promise<string>;
-  startDir: (src: string, dest: string, addr: string) => Promise<string>;
+  /** `capMbps`: the upload speed limit (0 = none), read as each job starts. */
+  startFile: (src: string, dest: string, addr: string, capMbps: number) => Promise<string>;
+  startDir: (src: string, dest: string, addr: string, capMbps: number) => Promise<string>;
+  /** The user's upload speed limit in MB/s, 0 = none. Absent: no limit. */
+  bandwidthCapMbps?: () => number;
   jobStatus: (jobId: string) => Promise<JobSnapshot>;
   jobCancel: (jobId: string) => Promise<void>;
   sleep: (ms: number) => Promise<void>;
@@ -309,9 +312,10 @@ export async function runFsUpload(
             if (old?.status === "running") jobId = req.attachJobId;
           }
           if (!jobId) {
+            const cap = deps.bandwidthCapMbps?.() ?? 0;
             jobId = isFolder
-              ? await deps.startDir(src, dest, addr)
-              : await deps.startFile(src, dest, addr);
+              ? await deps.startDir(src, dest, addr, cap)
+              : await deps.startFile(src, dest, addr, cap);
           }
           base.jobId = jobId;
           store.patch(host, { active: { ...base } });

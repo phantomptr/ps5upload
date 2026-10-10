@@ -293,6 +293,9 @@ pub struct TransferFileReq {
     pub dest: String,
     pub addr: Option<String>,
     pub tx_id: Option<String>,
+    /// MB/s; None/0 = no cap.
+    #[serde(default)]
+    pub bandwidth_cap_mbps: Option<f64>,
 }
 
 #[tauri::command]
@@ -304,6 +307,7 @@ pub async fn transfer_file(req: TransferFileReq) -> Result<JsonValue, String> {
         "dest": req.dest,
         "addr": req.addr,
         "tx_id": req.tx_id,
+        "bandwidth_cap_mbps": req.bandwidth_cap_mbps,
     });
     post_json(&url, &body).await
 }
