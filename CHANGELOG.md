@@ -4,6 +4,20 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 6.8.1
+
+### Fixed
+
+- **Convert's queue always made a package.** Picking a game image (.ffpkg, .exfat or .ffpfs, or
+  compressed into a .ffpfsc) and then queueing the game still built a .pkg: the queue only ever
+  made packages. The queue now has a **Make** choice, a package or a game image, and choosing
+  image options under ③ switches it to the image you picked. Each queued game shows the file it
+  becomes (.pkg, .ffpfsc, ...) and is built as exactly that. A queued image can be kept or sent
+  to the PS5 through the Upload queue. Only game folders on this computer can become images;
+  others are skipped with a note.
+
+---
+
 ## 6.8.0
 
 ### New
