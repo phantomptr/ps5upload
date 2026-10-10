@@ -90,7 +90,7 @@ export function UnsettledLine({ live }: { live: JobLive | undefined }) {
   if (!live?.unsettled) return null;
   return (
     <div
-      className="mt-1 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]"
+      className="mt-1 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]"
       data-testid="unsettled-warning"
       role="alert"
     >

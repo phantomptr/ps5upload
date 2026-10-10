@@ -26,6 +26,7 @@ import {
   ConnectionGate,
   Spinner,
 } from "../../components";
+import { humanizePs5Error } from "../../lib/humanizeError";
 // Direct import to avoid the barrel's circular-dep warning at build.
 import { usePrompt } from "../../components/ConfirmDialog";
 import { pushNotification } from "../../state/notifications";
@@ -287,19 +288,19 @@ export default function SearchScreen() {
       />
 
       <ConnectionGate require="payload">
-        <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+        <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-4">
           <div className="flex flex-wrap items-center gap-2">
             <input
               value={pattern}
               onChange={(e) => setPattern(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && run()}
               placeholder="*.pkg  /  eboot.bin  /  PPSA*"
-              className="min-w-[12rem] flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
+              className="input min-w-[12rem] flex-1"
             />
             <select
               value={minSize}
               onChange={(e) => setMinSize(Number(e.target.value))}
-              className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm"
+              className="select w-auto!"
             >
               {SIZE_OPTIONS.map((o) => (
                 <option key={o.bytes} value={o.bytes}>
@@ -314,7 +315,7 @@ export default function SearchScreen() {
               <select
                 value={scopeTitleId}
                 onChange={(e) => setScopeTitleId(e.target.value)}
-                className="max-w-[14rem] rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm"
+                className="select max-w-[14rem]!"
                 title={tr(
                   "search_scope_tooltip",
                   undefined,
@@ -363,7 +364,7 @@ export default function SearchScreen() {
                 <button
                   type="button"
                   onClick={saveCurrent}
-                  className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 hover:bg-[var(--color-surface-3)]"
+                  className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface)] px-3 py-1"
                 >
                   {tr("search_save", undefined, "Save current")}
                 </button>
@@ -371,7 +372,7 @@ export default function SearchScreen() {
               {saved.map((s) => (
                 <span
                   key={s.id}
-                  className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] py-0.5 pl-2 pr-1"
+                  className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] inline-flex items-center gap-1 py-0.5 pl-2 pr-1"
                 >
                   <button
                     type="button"
@@ -403,13 +404,18 @@ export default function SearchScreen() {
           <div className="mb-4">
             <ErrorCard
               title={tr("search_failed", undefined, "Search failed")}
-              detail={error}
+              detail={humanizePs5Error(error) || error}
+              action={
+                <Button variant="secondary" size="sm" onClick={() => void run()}>
+                  {tr("search_retry", undefined, "Retry")}
+                </Button>
+              }
             />
           </div>
         )}
 
         {loading && progress && (
-          <div className="mb-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-sm">
+          <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mb-3 p-3 text-sm">
             <div className="flex items-center gap-2">
               <Spinner
                 size={14}
@@ -448,7 +454,7 @@ export default function SearchScreen() {
         )}
 
         {result && result.hits.length === 0 && !loading && (
-          <div className="rounded-md border border-dashed border-[var(--color-border)] p-6 text-center text-sm text-[var(--color-muted)]">
+          <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--glass-edge)] p-6 text-center text-sm text-[var(--color-muted)]">
             {result.cancelled
               ? tr(
                   "search_stopped_summary",
@@ -486,14 +492,14 @@ export default function SearchScreen() {
               <button
                 type="button"
                 onClick={() => exportSearchResults(result.hits, "csv", tr)}
-                className="ml-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-xs hover:bg-[var(--color-surface-3)]"
+                className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] ml-auto border-[var(--glass-edge)] bg-[var(--color-surface)] px-3 py-1 text-xs"
               >
                 {tr("search_export_csv", undefined, "Export CSV")}
               </button>
               <button
                 type="button"
                 onClick={() => exportSearchResults(result.hits, "json", tr)}
-                className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-xs hover:bg-[var(--color-surface-3)]"
+                className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface)] px-3 py-1 text-xs"
               >
                 {tr("search_export_json", undefined, "Export JSON")}
               </button>
@@ -510,7 +516,7 @@ export default function SearchScreen() {
                         undefined,
                         "Open in File System",
                       )}
-                      className="flex items-center gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-sm hover:border-[var(--color-accent)] hover:bg-[var(--color-surface-3)]"
+                      className="flex items-center gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-sm hover:border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] hover:bg-[var(--color-surface-3)]"
                     >
                       <Icon
                         size={14}

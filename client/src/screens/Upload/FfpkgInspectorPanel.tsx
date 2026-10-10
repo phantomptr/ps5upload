@@ -91,7 +91,7 @@ export default function FfpkgInspectorPanel({ path }: { path: string }) {
   }
 
   return (
-    <div className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)]">
+    <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mt-3">
       <div className="flex items-center gap-2 px-3 py-2">
         <FileSearch size={14} className="text-[var(--color-muted)]" />
         <div className="flex-1 text-xs font-medium">
@@ -124,7 +124,7 @@ export default function FfpkgInspectorPanel({ path }: { path: string }) {
           <button
             type="button"
             onClick={() => setOpen((v) => !v)}
-            className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
+            className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]"
           >
             {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           </button>
@@ -187,7 +187,7 @@ export default function FfpkgInspectorPanel({ path }: { path: string }) {
             onExtract={runExtract}
           />
           {extractResult && (
-            <div className="rounded-md border border-[var(--color-good)] bg-[var(--color-surface-2)] p-2">
+            <div className="rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-good)_40%,transparent)] bg-[var(--color-surface-2)] p-2">
               <div className="flex items-center gap-1 font-medium text-[var(--color-good)]">
                 <CheckCircle2 size={11} />
                 {tr(
@@ -214,7 +214,7 @@ export default function FfpkgInspectorPanel({ path }: { path: string }) {
             </div>
           )}
           {meta.warnings.length > 0 && (
-            <div className="rounded-md border border-[var(--color-warn)] bg-[var(--color-surface-2)] p-2">
+            <div className="rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[var(--color-surface-2)] p-2">
               <div className="mb-1 font-medium text-[var(--color-warn)]">
                 {tr("ffpkg_inspect_warnings", undefined, "Warnings")}
               </div>
@@ -335,7 +335,7 @@ function RootEntries({
                 type="button"
                 onClick={() => onExtract(e.name, e.name)}
                 disabled={extractBusy !== null}
-                className="rounded p-0.5 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)] disabled:opacity-50"
+                className="rounded-full p-0.5 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)] disabled:opacity-50"
                 title={tr(
                   "ffpkg_extract_one",
                   { name: e.name },

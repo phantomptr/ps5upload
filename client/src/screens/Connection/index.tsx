@@ -125,17 +125,17 @@ function StepCard({
   const tr = useTr();
   const failed = state === "fail" && !!stateText;
   const failedLabel = tr("connection_step_failed", undefined, "Didn't work");
+  // The state shows in the step's icon and line; the edge only hints at it, so a
+  // finished step reads as calm glass, not a green frame.
   const borderClass =
-    state === "ok"
-      ? "border-[var(--color-good)]"
-      : state === "fail"
-        ? "border-[var(--color-bad)]"
-        : state === "busy"
-          ? "border-[var(--color-accent)]"
-          : "border-[var(--color-border)]";
+    state === "fail"
+      ? "border-[color-mix(in_srgb,var(--color-bad)_45%,transparent)]"
+      : state === "busy"
+        ? "border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)]"
+        : "border-[var(--glass-edge)]";
   return (
     <section
-      className={`rounded-lg border bg-[var(--color-surface-2)] p-5 transition-colors ${borderClass}`}
+      className={`rounded-[var(--radius-panel)] border bg-[var(--color-surface-raised)] p-5 shadow-[var(--edge-highlight),var(--shadow-1)] transition-colors sm:p-6 ${borderClass}`}
     >
       <header className="mb-4 flex items-center gap-3">
         <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-3)] text-xs font-semibold tabular-nums">
@@ -154,7 +154,7 @@ function StepCard({
       {failed && (
         <div
           role="alert"
-          className="mb-4 flex items-start gap-2 rounded-md border border-[var(--color-bad)] bg-[var(--color-bad-soft)] p-3 text-sm"
+          className="mb-4 flex items-start gap-2 rounded-[var(--radius-field)] border border-[color-mix(in_srgb,var(--color-bad)_40%,transparent)] bg-[var(--color-bad-soft)] p-3 text-sm"
         >
           <XCircle size={16} className="mt-0.5 shrink-0 text-[var(--color-bad)]" />
           <p className="min-w-0 whitespace-pre-line break-words">{stateText}</p>
@@ -208,7 +208,7 @@ function AllowPairing({ host }: { host: string }) {
 function ElfldrFirstCallout() {
   const tr = useTr();
   return (
-    <div className="mb-4 flex items-start gap-2 rounded-md border border-[var(--color-warn)] bg-[var(--color-warn-soft)] p-3 text-sm">
+    <div className="mb-4 flex items-start gap-2 rounded-[var(--radius-field)] border border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[var(--color-warn-soft)] p-3 text-sm">
       <AlertTriangle size={16} className="mt-0.5 shrink-0 text-[var(--color-warn)]" />
       <p className="min-w-0">
         <span className="font-semibold">
@@ -550,7 +550,7 @@ export default function ConnectionScreen() {
             it bounces straight back here. Offering the button anyway just
             makes the page look broken. */}
         {step2 !== "ok" && isTauriEnv() && (
-          <div className="flex flex-wrap items-start gap-3 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface-2)] p-3 text-xs">
+          <div className="flex flex-wrap items-start gap-3 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] p-3 text-xs">
             <Sparkles
               size={14}
               className="mt-0.5 shrink-0 text-[var(--color-accent)]"
@@ -612,7 +612,7 @@ export default function ConnectionScreen() {
               placeholder="192.168.1.50"
               inputMode="decimal"
               disabled={step2 === "busy"}
-              className="max-md:min-h-11 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)] disabled:opacity-50"
+              className="input max-md:min-h-11 flex-1 disabled:opacity-50"
             />
             <Button
               variant="secondary"
@@ -874,7 +874,7 @@ function DiscoverResults({
   }
   if (candidates.length === 0) {
     return (
-      <div className="mt-2 rounded-md border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-muted)]">
+      <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mt-2 border-dashed p-2 text-xs text-[var(--color-muted)]">
         {tr(
           "connection_discover_empty",
           { ms: scannedMs },
@@ -884,7 +884,7 @@ function DiscoverResults({
     );
   }
   return (
-    <div className="mt-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)]">
+    <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mt-2">
       <div className="border-b border-[var(--color-border)] px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
         {tr(
           "connection_discover_header",
@@ -1083,7 +1083,7 @@ function BundledPayloadBanner() {
   const basename = info.path.split(/[\\/]/).pop() ?? info.path;
   return (
     <div
-      className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-xs text-[var(--color-muted)]"
+      className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5 text-xs text-[var(--color-muted)]"
       title={info.path}
     >
       <span>
@@ -1191,7 +1191,7 @@ function CompanionStrip({ host }: { host: string }) {
 
   if (!rows) {
     return (
-      <div className="rounded-md border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-xs text-[var(--color-muted)]">
+      <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] border-dashed px-3 py-2 text-xs text-[var(--color-muted)]">
         {loading
           ? tr("connection_scene_probing", undefined, "Probing scene tools…")
           : tr("connection_scene_idle", undefined, "Scene tools: —")}
@@ -1200,7 +1200,7 @@ function CompanionStrip({ host }: { host: string }) {
   }
 
   return (
-    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2">
+    <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] px-3 py-2">
       <div className="mb-1.5 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
         <span>
           {tr(
@@ -1264,7 +1264,7 @@ function CompanionSuggestion() {
     setDismissed(true);
   };
   return (
-    <div className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs">
+    <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] flex items-start gap-2 p-3 text-xs">
       <Sparkles
         size={14}
         className="mt-0.5 shrink-0 text-[var(--color-accent)]"
@@ -1296,7 +1296,7 @@ function CompanionSuggestion() {
       <button
         type="button"
         onClick={dismiss}
-        className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
+        className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
         title={tr("companion_suggest_dismiss", undefined, "Don't show again")}
       >
         ✕
@@ -1400,7 +1400,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
     : "";
 
   return (
-    <div className="mb-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs">
+    <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mb-4 p-3 text-xs">
       <div className="mb-2 flex items-center gap-2 font-medium uppercase tracking-wide text-[var(--color-muted)]">
         <span>
           {tr("connection_block_connected", undefined, "Connected")}
@@ -1530,7 +1530,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
       )}
 
       {payloadIsOlder && appVersion && payloadVersion && !payloadProbing && (
-        <div className="mt-3 flex flex-wrap items-start gap-2 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface-2)] p-2 text-xs">
+        <div className="mt-3 flex flex-wrap items-start gap-2 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[var(--color-surface-2)] p-2 text-xs">
           <AlertTriangle
             size={12}
             className="mt-0.5 shrink-0 text-[var(--color-warn)]"
@@ -1569,7 +1569,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
       )}
 
       {priorInstance === "killed_externally" && (
-        <div className="mt-3 flex flex-wrap items-start gap-2 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface-2)] p-2 text-xs">
+        <div className="mt-3 flex flex-wrap items-start gap-2 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[var(--color-surface-2)] p-2 text-xs">
           <AlertTriangle
             size={12}
             className="mt-0.5 shrink-0 text-[var(--color-warn)]"

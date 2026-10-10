@@ -52,7 +52,7 @@ export function SendAsImageCard({
   };
 
   return (
-    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-5">
       <div className="flex items-center gap-2 font-medium">
         <Layers size={16} />
         {tr("upload_as_image_title", undefined, "Or send it as one game image")}

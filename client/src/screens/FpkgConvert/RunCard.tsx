@@ -391,7 +391,7 @@ export function RunCard(props: RunCardProps) {
           {p.deleted ? tr("fpkg.deleted", undefined, "Package deleted") : p.packagePath}
         </div>
         {p.swap && (
-          <div className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] p-3 text-sm">
+          <div className="flex flex-col gap-2 rounded-[var(--radius-card)] border border-[var(--glass-edge)] p-3 text-sm">
             <span>
               {tr(
                 "fpkg.swapDone",
@@ -652,10 +652,10 @@ function ImageChoice({
             type="button"
             aria-pressed={format === o.id}
             onClick={() => setFormat(o.id)}
-            className={`rounded-lg border px-3 py-2 text-left text-xs ${
+            className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] px-3.5 py-3 text-left text-xs ${
               format === o.id
-                ? "border-[var(--color-accent)] bg-[var(--color-surface-3)]"
-                : "border-[var(--color-border)] hover:bg-[var(--color-surface-3)]"
+                ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] ring-1 ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)]"
+                : "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-raised)]"
             }`}
           >
             <div className="font-semibold text-[var(--color-text)]">{o.label}</div>

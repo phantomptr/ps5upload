@@ -1,5 +1,7 @@
 // The compression choice as three tiles, each with what it costs for this game.
 
+import { Minimize2, Scale, Zap, type LucideIcon } from "lucide-react";
+
 import type { FpkgCompression, FpkgEstimate } from "../../api/fpkg";
 import { useTr } from "../../state/lang";
 import { formatBytes } from "../../lib/format";
@@ -7,10 +9,10 @@ import { prettyDuration } from "./RunCard";
 
 const gb = formatBytes;
 
-const TILES: { value: FpkgCompression; icon: string; key: string; label: string }[] = [
-  { value: "fast", icon: "⚡", key: "fpkg.compressionFast", label: "Fast" },
-  { value: "balanced", icon: "⚖️", key: "fpkg.compressionBalanced", label: "Balanced" },
-  { value: "smallest", icon: "🗜️", key: "fpkg.compressionSmallest", label: "Smallest" },
+const TILES: { value: FpkgCompression; icon: LucideIcon; key: string; label: string }[] = [
+  { value: "fast", icon: Zap, key: "fpkg.compressionFast", label: "Fast" },
+  { value: "balanced", icon: Scale, key: "fpkg.compressionBalanced", label: "Balanced" },
+  { value: "smallest", icon: Minimize2, key: "fpkg.compressionSmallest", label: "Smallest" },
 ];
 
 export interface CompressionTilesProps {
@@ -28,7 +30,7 @@ export function CompressionTiles({ value, onChange, estimates, disabled }: Compr
     <div
       role="radiogroup"
       aria-label={tr("fpkg.compression", undefined, "Compression")}
-      className="grid grid-cols-1 gap-2 sm:grid-cols-3"
+      className="grid grid-cols-1 gap-2 min-[420px]:grid-cols-3"
     >
       {TILES.map((t) => {
         const checked = t.value === value;
@@ -41,16 +43,17 @@ export function CompressionTiles({ value, onChange, estimates, disabled }: Compr
             aria-checked={checked ? "true" : "false"}
             disabled={disabled}
             onClick={() => onChange(t.value)}
-            className={`flex flex-col items-start gap-0.5 rounded-lg border p-3 text-left text-sm transition-colors disabled:opacity-60 ${
+            className={`border rounded-[var(--radius-card)] transition-[background-color,border-color,box-shadow] flex flex-col items-start gap-1 px-3.5 py-3 text-left text-sm disabled:opacity-60 ${
               checked
-                ? "border-[var(--color-accent)] bg-[var(--color-accent-soft,transparent)]"
-                : "border-[var(--color-border)] hover:border-[var(--color-accent)]"
+                ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] ring-1 ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)]"
+                : "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-raised)]"
             }`}
           >
-            <span className="font-medium">
-              <span aria-hidden>{t.icon}</span> {tr(t.key, undefined, t.label)}
+            <span className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 font-medium">
+              <t.icon size={15} aria-hidden className="shrink-0 text-[var(--color-accent-bright)]" />
+              {tr(t.key, undefined, t.label)}
               {t.value === "balanced" && (
-                <span className="ml-1.5 text-xs font-normal text-[var(--color-muted)]">
+                <span className="rounded-full bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)]">
                   {tr("fpkg.recommended", undefined, "Recommended")}
                 </span>
               )}

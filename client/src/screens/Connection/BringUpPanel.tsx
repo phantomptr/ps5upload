@@ -35,7 +35,7 @@ export function BringUpPanel() {
   const canRun = !!host.trim() && !running;
 
   return (
-    <section className="mt-6 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mt-6 p-5">
       <header className="mb-3 flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2">
           <Zap size={16} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
@@ -104,7 +104,7 @@ function BringUpStatusLine({ status, host }: { status: BringUpStatus; host: stri
           )
         : sendMsg || tr("bringup_phase_helper", undefined, "Sending the helper…");
     return (
-      <div className="flex items-center gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] p-2 text-xs">
+      <div className="flex items-center gap-2 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] bg-[var(--color-surface)] p-2 text-xs">
         <Spinner size={14} tone="accent" />
         <span>{phaseText}</span>
       </div>
@@ -112,7 +112,7 @@ function BringUpStatusLine({ status, host }: { status: BringUpStatus; host: stri
   }
   if (status.kind === "done") {
     return (
-      <div className="flex items-center gap-2 rounded-md border border-[var(--color-good)] bg-[var(--color-surface)] p-2 text-xs">
+      <div className="flex items-center gap-2 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-good)_40%,transparent)] bg-[var(--color-surface)] p-2 text-xs">
         <CheckCircle2 size={14} className="text-[var(--color-good)]" />
         <span>{tr("bringup_done", undefined, "PS5 is ready.")}</span>
       </div>

@@ -75,7 +75,7 @@ export function GameCard(props: GameCardProps) {
         <div
           className={`flex flex-col items-center gap-2 rounded-lg border-2 border-dashed p-4 text-center text-sm ${
             props.dropActive
-              ? "border-[var(--color-accent)] bg-[var(--color-accent-soft,transparent)]"
+              ? "border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] bg-[var(--color-accent-soft,transparent)]"
               : "border-[var(--color-border)]"
           } ${props.locked ? "opacity-60" : ""}`}
         >

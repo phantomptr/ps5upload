@@ -17,6 +17,7 @@ import {
   Button,
   ConnectionGate,
   Badge,
+  ProgressBar,
 } from "../../components";
 // Direct import to avoid the barrel's circular-dep warning at build.
 import { useConfirm } from "../../components/ConfirmDialog";
@@ -219,6 +220,11 @@ export default function VolumesScreen() {
                 "Couldn't read volumes",
               )}
               detail={error}
+              action={
+                <Button variant="secondary" size="sm" onClick={() => void refresh()}>
+                  {tr("volumes_retry", undefined, "Retry")}
+                </Button>
+              }
             />
           </div>
         )}
@@ -354,7 +360,7 @@ function MountedImageCard({
     return slash >= 0 ? trimmed.slice(slash + 1) || trimmed : trimmed;
   })();
   return (
-    <article className="flex flex-col gap-3 rounded-lg border border-[var(--color-accent)] bg-[var(--color-surface-2)] p-4">
+    <article className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-surface-raised)] p-5 shadow-[var(--edge-highlight),var(--shadow-1)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold">{name}</div>
@@ -395,12 +401,7 @@ function MountedImageCard({
               {tr("volumes_pct_used_mounted", undefined, "% used")}
             </span>
           </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
-            <div
-              className="h-full bg-[var(--color-accent)] transition-[width] duration-300"
-              style={{ width: `${pct}%` }}
-            />
-          </div>
+          <ProgressBar size="sm" value={pct / 100} label={v.path} />
         </div>
       )}
 
@@ -453,7 +454,7 @@ export function StorageCard({
       ? Math.max(0, Math.min(100, 100 - (v.free_bytes / v.total_bytes) * 100))
       : 0;
   return (
-    <article className="flex flex-col gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+    <article className="flex flex-col gap-3 rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-5 shadow-[var(--edge-highlight),var(--shadow-1)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate font-mono text-sm">{v.path}</div>
@@ -516,18 +517,12 @@ export function StorageCard({
                 )}
               </div>
             )}
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
-            <div
-              className={`h-full transition-[width] duration-300 ${
-                pct >= 95
-                  ? "bg-[var(--color-bad)]"
-                  : pct >= 80
-                    ? "bg-[var(--color-warn)]"
-                    : "bg-[var(--color-accent)]"
-              }`}
-              style={{ width: `${pct}%` }}
-            />
-          </div>
+          <ProgressBar
+            size="sm"
+            value={pct / 100}
+            tone={pct >= 95 ? "bad" : pct >= 80 ? "warn" : "accent"}
+            label={v.path}
+          />
         </div>
       )}
       {v.writable && !v.is_placeholder && !isPackageDrive && (

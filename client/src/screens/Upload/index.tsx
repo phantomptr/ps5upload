@@ -883,19 +883,19 @@ function Step1Picker({
   return (
     <section
       className={clsx(
-        "mb-6 rounded-lg border-2 border-dashed p-8 text-center transition-colors",
+        // A soft dashed glass well: the drop target reads as a place, not a form field.
+        "relative mb-6 overflow-hidden rounded-[var(--radius-panel)] border-2 border-dashed px-5 py-10 text-center transition-colors sm:px-8",
         dropActive
-          ? "border-[var(--color-accent)] bg-[var(--color-surface-3)]"
-          : "border-[var(--color-border)] bg-[var(--color-surface-2)]",
+          ? "border-[var(--color-accent-bright)] bg-[var(--color-accent-soft)]"
+          : "border-[var(--color-border-strong)] bg-[var(--color-surface)]",
         !active && "opacity-70",
       )}
     >
-      <div className="mb-3 flex items-center justify-center gap-3 text-[var(--color-muted)]">
-        <FileIcon size={22} />
-        <span className="text-xs">{tr("upload_or", undefined, "or")}</span>
-        <FolderOpen size={22} />
+      <div aria-hidden className="dot-texture pointer-events-none absolute inset-0 opacity-60" />
+      <div className="relative mx-auto mb-4 grid h-16 w-16 place-items-center rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] text-[var(--color-accent-bright)] shadow-[var(--edge-highlight),var(--shadow-1)]">
+        <UploadIcon size={24} aria-hidden />
       </div>
-      <div className="text-sm">
+      <div className="relative text-base font-semibold tracking-[-0.01em]">
         {isAndroid()
           ? tr(
               "upload_pick_here_mobile",
@@ -908,7 +908,7 @@ function Step1Picker({
               "Drop a file or folder here — it's detected automatically",
             )}
       </div>
-      <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+      <div className="relative mt-5 flex flex-wrap items-center justify-center gap-2">
         {/* Native OS dialogs can't offer "file or folder" in one prompt, so there are two
             pickers — but drag-drop above needs no choice at all (it stats the path and
             auto-detects). The ▾ on each picks from a saved server instead. */}
@@ -931,14 +931,14 @@ function Step1Picker({
           {tr("batch_scan", undefined, "Add games from a folder…")}
         </Button>
       </div>
-      <p className="mx-auto mt-3 max-w-md text-xs text-[var(--color-muted)]">
+      <p className="relative mx-auto mt-5 max-w-md text-xs leading-relaxed text-[var(--color-muted)]">
         {tr(
           "upload_picker_hint",
           undefined,
           "Files: any file — .exfat images unlock a mount-after-upload option. Folders: game folders are auto-detected from sce_sys/param.sfo.",
         )}
       </p>
-      <p className="mx-auto mt-1 max-w-md text-xs text-[var(--color-muted)]">
+      <p className="relative mx-auto mt-1 max-w-md text-xs leading-relaxed text-[var(--color-muted)]">
         {tr(
           "upload_picker_from_ps5_hint",
           undefined,
@@ -1148,9 +1148,9 @@ function Step2Options(props: {
 
   return (
     <>
-      <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+      <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-5">
         <div className="flex items-start gap-3">
-          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[var(--color-surface-3)]">
+          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-field)] bg-[var(--color-surface-3)]">
             <KindIcon size={18} />
           </div>
           <div className="min-w-0 flex-1">
@@ -1169,7 +1169,7 @@ function Step2Options(props: {
               {source.path}
             </div>
             {issue && (
-              <div className="mt-2 rounded-md border border-[var(--color-danger,var(--color-border))] bg-[var(--color-surface-3)] p-2.5 text-xs">
+              <div className="mt-2 rounded-[var(--radius-field)] border border-[var(--color-danger,var(--color-border))] bg-[var(--color-surface-3)] p-2.5 text-xs">
                 {issue.kind === "mixed-extensions" && (
                   <>
                     <div className="font-medium">
@@ -1249,7 +1249,7 @@ function Step2Options(props: {
               </div>
             )}
             {partSet && (
-              <div className="mt-2 rounded-md border border-[var(--color-warn-border,var(--color-border))] bg-[var(--color-surface-3)] p-2.5 text-xs">
+              <div className="mt-2 rounded-[var(--radius-field)] border border-[var(--color-warn-border,var(--color-border))] bg-[var(--color-surface-3)] p-2.5 text-xs">
                 <div className="font-medium">
                   {tr(
                     "upload_multipart_title",
@@ -1297,7 +1297,7 @@ function Step2Options(props: {
               // the user can see the central-directory walk is
               // actually moving (especially valuable when the
               // archive is on a spun-down USB HDD).
-              <div className="mt-2 flex items-start gap-2 rounded-md border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/5 p-2 text-xs">
+              <div className="mt-2 flex items-start gap-2 rounded-[var(--radius-field)] border border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] bg-[var(--color-accent)]/5 p-2 text-xs">
                 <Spinner
                   size={14}
                   tone="accent"
@@ -1347,7 +1347,7 @@ function Step2Options(props: {
             type="button"
             onClick={onClear}
             title={tr("upload_choose_diff_source", "Choose a different source")}
-            className="rounded-md p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+            className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
           >
             <X size={16} />
           </button>
@@ -1427,7 +1427,7 @@ function Step2Options(props: {
       )}
 
       {source.kind === "game-folder" && (
-        <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+        <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-5">
           <Toggle
             checked={registerAfterUpload}
             onChange={(c) => onSetRegisterAfterUpload(c)}
@@ -1542,7 +1542,7 @@ function Step2Options(props: {
         <button
           type="button"
           onClick={onClear}
-          className="rounded-md border border-[var(--color-border)] px-4 py-2 text-sm hover:bg-[var(--color-surface-3)]"
+          className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-4 py-2 text-sm"
         >
           {tr("upload_cancel", "Cancel")}
         </button>
@@ -1554,7 +1554,7 @@ function Step2Options(props: {
           type="button"
           onClick={() => onAddToQueue("overwrite")}
           disabled={detecting || preflightBusy || !!detectError}
-          className="rounded-md border border-[var(--color-border)] px-4 py-2 text-sm hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+          className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-4 py-2 text-sm disabled:opacity-50"
           title={
             detecting
               ? tr(
@@ -1593,8 +1593,8 @@ function Step2Options(props: {
             // For a package, Stream & install (on its card) is the main
             // action; uploading it first is the fallback.
             source.kind === "pkg"
-              ? "rounded-md border border-[var(--color-border)] bg-[var(--color-surface-raised)] px-6 py-2 text-sm font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-3)] disabled:opacity-50"
-              : "rounded-md bg-[var(--color-accent)] px-6 py-2 text-sm font-medium text-[var(--color-accent-contrast)] disabled:opacity-50"
+              ? "rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-6 py-2 text-sm font-medium text-[var(--color-text)] shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] disabled:opacity-50"
+              : "rounded-full bg-[image:var(--accent-fill)] px-6 py-2 text-sm font-semibold text-[var(--color-accent-contrast)] shadow-[var(--accent-glow)] hover:brightness-105 disabled:opacity-50"
           }
         >
           {preflightBusy
@@ -1617,6 +1617,11 @@ function Step2Options(props: {
               { msg: preflightError },
               `Couldn't check the destination: ${preflightError}. Make sure the PS5 is reachable, then try again.`,
             )}
+            action={
+              <Button variant="secondary" size="sm" onClick={onUpload}>
+                {tr("upload_failed_retry", "Retry")}
+              </Button>
+            }
           />
         </div>
       )}
@@ -1720,7 +1725,7 @@ function MirrorToRosterButton({
   }
 
   return (
-    <div className="mt-3 rounded-md border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs">
+    <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mt-3 border-dashed p-2 text-xs">
       <div className="flex items-center gap-2">
         <span className="flex-1 text-[var(--color-muted)]">
           {tr(
@@ -1733,7 +1738,7 @@ function MirrorToRosterButton({
           type="button"
           onClick={fanOut}
           disabled={busy}
-          className="rounded-md border border-[var(--color-border)] px-2 py-1 text-xs hover:bg-[var(--color-surface-2)] disabled:opacity-50"
+          className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3 py-1 text-xs hover:bg-[var(--color-surface-2)] disabled:opacity-50"
         >
           {busy
             ? tr("upload_mirror_busy", undefined, "Mirroring…")
@@ -1791,7 +1796,7 @@ function ExistingDestinationDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] backdrop-blur-sm">
-      <div className="w-full max-w-md rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5 shadow-2xl">
+      <div className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] w-full max-w-md p-5 shadow-2xl">
         <h2 className="mb-1 text-base font-semibold">{title}</h2>
         <p className="mb-4 text-sm text-[var(--color-muted)]">{subtitle}</p>
 
@@ -1800,7 +1805,7 @@ function ExistingDestinationDialog({
             <button
               type="button"
               onClick={onResume}
-              className="flex items-start gap-3 rounded-md border border-[var(--color-accent)] bg-[var(--color-accent)] p-3 text-left text-sm text-[var(--color-accent-contrast)] hover:opacity-90"
+              className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] flex items-start gap-3 border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] bg-[image:var(--accent-fill)] shadow-[var(--accent-glow)] p-3 text-left text-sm text-[var(--color-accent-contrast)] hover:opacity-90"
             >
               <span className="font-medium">
                 {tr("upload_dialog_resume", "Resume")}
@@ -1817,10 +1822,10 @@ function ExistingDestinationDialog({
             type="button"
             onClick={onOverride}
             className={
-              "flex items-start gap-3 rounded-md border p-3 text-left text-sm " +
+              "flex items-start gap-3 rounded-[var(--radius-card)] border p-3.5 text-left text-sm transition-colors " +
               (hasExisting
-                ? "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-3)]"
-                : "border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-accent-contrast)] hover:opacity-90")
+                ? "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-raised)]"
+                : "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] ring-1 ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)]")
             }
           >
             <span className="font-medium">
@@ -1842,7 +1847,7 @@ function ExistingDestinationDialog({
           <button
             type="button"
             onClick={onCancel}
-            className="flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-left text-sm hover:bg-[var(--color-surface-3)]"
+            className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] flex items-start gap-3 border-[var(--glass-edge)] bg-[var(--color-surface)] p-3 text-left text-sm"
           >
             <span className="font-medium">
               {tr("upload_dialog_cancel", "Cancel")}
@@ -2045,7 +2050,7 @@ function TransferStatus({ onRetry }: { onRetry: () => void }) {
         {phase.lostContact && (
           <div
             role="status"
-            className="mb-3 flex flex-wrap items-center gap-3 rounded-[var(--radius-field)] border border-[var(--color-warn)] bg-[var(--color-warn-soft)] px-4 py-3 text-xs"
+            className="mb-3 flex flex-wrap items-center gap-3 rounded-[var(--radius-field)] border border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[var(--color-warn-soft)] px-4 py-3 text-xs"
           >
             <div className="min-w-0 flex-1">
               <div className="font-semibold text-[var(--color-warn)]">
@@ -2179,14 +2184,14 @@ function TransferStatus({ onRetry }: { onRetry: () => void }) {
         <UnsettledLine live={phase.live} />
         <WhySlowPanel jobId={phase.jobId} />
         {phase.mountWarnings && phase.mountWarnings.length > 0 && (
-          <ul className="mt-2 space-y-1 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]">
+          <ul className="mt-2 space-y-1 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]">
             {phase.mountWarnings.map((w) => (
               <li key={w}>⚠ {w}</li>
             ))}
           </ul>
         )}
         {phase.registerWarning && (
-          <div className="mt-2 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]">
+          <div className="mt-2 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]">
             ⚠ {phase.registerWarning}
           </div>
         )}
@@ -2395,7 +2400,7 @@ function FileListPanel({
   const windowed = total > FILE_LIST_RENDER_CAP;
 
   return (
-    <div className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs">
+    <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mt-3 p-2 text-xs">
       <div className="mb-1 flex items-center justify-between text-[var(--color-muted)]">
         <span>{tr("upload_file_list_files", "Files")}</span>
         <span>
@@ -2497,7 +2502,7 @@ function WrappedHintChip({
   const tr = useTr();
   const name = hint.title || hint.title_id || hint.path;
   return (
-    <div className="mt-3 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-3)] p-3 text-xs">
+    <div className="mt-3 flex items-start gap-2 rounded-[var(--radius-field)] border border-[var(--color-border)] bg-[var(--color-surface-3)] p-3 text-xs">
       <Info size={14} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
       <div className="flex-1">
         {tr(
@@ -2510,7 +2515,7 @@ function WrappedHintChip({
       <button
         type="button"
         onClick={onUse}
-        className="shrink-0 rounded-md bg-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent-contrast)]"
+        className="rounded-full shrink-0 bg-[image:var(--accent-fill)] shadow-[var(--accent-glow)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent-contrast)]"
       >
         {tr("upload_wrapped_hint_use", "Use it")}
       </button>
@@ -2543,9 +2548,9 @@ function GameMetaCard({
   const [coverFailed, setCoverFailed] = useState(false);
 
   return (
-    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-5">
       <div className="flex items-start gap-4">
-        <div className="h-20 w-20 shrink-0 overflow-hidden rounded-md bg-[var(--color-surface-3)]">
+        <div className="h-20 w-20 shrink-0 overflow-hidden rounded-[var(--radius-field)] bg-[var(--color-surface-3)]">
           {coverSrc && !coverFailed ? (
             <img
               src={coverSrc}
@@ -2594,7 +2599,7 @@ function FolderStatsCard({
 }) {
   const tr = useTr();
   return (
-    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 text-sm text-[var(--color-muted)]">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-4 text-sm text-[var(--color-muted)]">
       {formatBytes(totalBytes)} {tr("upload_folder_stats_across", "across")}{" "}
       {fileCount.toLocaleString()} {tr("upload_folder_stats_files", "files")}
     </section>
@@ -2658,7 +2663,7 @@ function PreflightEtaBanner({
   // Simplified band: medium folders just get a one-line estimate.
   if (mode === "simplified") {
     return (
-      <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs text-[var(--color-muted)]">
+      <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-3 text-xs text-[var(--color-muted)]">
         <span className="font-medium text-[var(--color-text)]">
           {tr(
             "upload_eta_simplified",
@@ -2684,7 +2689,7 @@ function PreflightEtaBanner({
   // Detailed band: huge folders get the full breakdown so the post-
   // 100% commit phase isn't a surprise.
   return (
-    <section className="mb-4 rounded-lg border border-[var(--color-warn)]/40 bg-[var(--color-warn)]/5 p-4 text-sm">
+    <section className="mb-4 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[var(--color-warn)]/5 p-4 text-sm">
       <div className="mb-1 flex items-center gap-2 font-medium text-[var(--color-warn)]">
         <span aria-hidden>ⓘ</span>
         {tr(
@@ -2780,7 +2785,7 @@ function RarSourceCard() {
 
   if (isAndroid()) {
     return (
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+      <div className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] p-4">
         <p className="mb-1 text-sm font-medium">
           {tr("upload_rar_title", "RAR archive")}
         </p>
@@ -2795,12 +2800,12 @@ function RarSourceCard() {
   }
 
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+    <div className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] p-4">
       <p className="mb-1 text-sm font-medium">
         {tr("upload_rar_title", "RAR archive")}
       </p>
       {/* Multi-volume guidance, always shown — the #1 source of confusion. */}
-      <div className="mb-3 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-3)]/40 p-2 text-xs text-[var(--color-muted)]">
+      <div className="mb-3 flex items-start gap-2 rounded-[var(--radius-field)] border border-[var(--color-border)] bg-[var(--color-surface-3)]/40 p-2 text-xs text-[var(--color-muted)]">
         <Info size={13} className="mt-0.5 shrink-0" />
         <span>
           {tr(
@@ -2897,7 +2902,7 @@ function PkgFinisherCard({
   );
   const label = pkgInfo?.title?.trim() || pkgInfo?.contentId || null;
   return (
-    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-5">
       <div className="mb-2 flex items-center gap-2 text-sm font-medium">
         <Package size={16} className="text-[var(--color-muted)]" />
         <span className="flex-1">{tr("upload_pkg_card_title", "Package install")}</span>
@@ -2916,7 +2921,7 @@ function PkgFinisherCard({
         </div>
       )}
       {onStream && (
-        <div className="mb-3 flex flex-wrap items-center gap-3 rounded-md border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 p-3">
+        <div className="mb-3 flex flex-wrap items-center gap-3 rounded-[var(--radius-field)] border border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] bg-[var(--color-accent)]/10 p-3">
           <p className="min-w-0 flex-1 text-xs">
             {tr(
               "upload_pkg_stream_recommended",
@@ -2979,9 +2984,9 @@ function ZipArchiveCard({ info }: { info: ZipInspect }) {
       : 0;
   const isGame = !!(info.title || info.title_id);
   return (
-    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-5">
       <div className="flex items-start gap-3">
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-[var(--color-surface-3)] text-[var(--color-muted)]">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[var(--radius-field)] bg-[var(--color-surface-3)] text-[var(--color-muted)]">
           {isGame ? <Gamepad2 size={22} /> : <FileArchive size={22} />}
         </div>
         <div className="min-w-0 flex-1">
@@ -3108,7 +3113,7 @@ function ArchiveExtractModeCard({
   ];
 
   return (
-    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-5">
       <div className="mb-3 flex items-center gap-2 text-sm font-medium">
         <FileArchive size={16} className="text-[var(--color-muted)]" />
         {tr(
@@ -3126,17 +3131,17 @@ function ArchiveExtractModeCard({
               type="button"
               onClick={() => onChange(opt.value)}
               className={
-                "flex items-start gap-3 rounded-md border p-3 text-left transition-colors " +
+                "flex items-start gap-3 rounded-[var(--radius-card)] border p-3.5 text-left transition-colors " +
                 (selected
-                  ? "border-[var(--color-accent)] bg-[var(--color-accent)]/5"
-                  : "border-[var(--color-border)] hover:bg-[var(--color-surface-3)]")
+                  ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] ring-1 ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)]"
+                  : "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-raised)]")
               }
             >
               <span
                 className={
                   "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border " +
                   (selected
-                    ? "border-[var(--color-accent)]"
+                    ? "border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)]"
                     : "border-[var(--color-border)]")
                 }
               >
@@ -3213,7 +3218,7 @@ function BandwidthCard() {
   const cap = useUploadSettingsStore((s) => s.bandwidthCapMbps);
   const setCap = useUploadSettingsStore((s) => s.setBandwidthCapMbps);
   return (
-    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-4">
       <div className="flex items-center gap-2">
         <label className="text-sm font-medium">
           {tr("bandwidth_cap_label", undefined, "Upload speed limit")}
@@ -3273,7 +3278,7 @@ function MountAfterUploadCard({
 }) {
   const tr = useTr();
   return (
-    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-5">
       <Toggle
         checked={checked}
         onChange={(c) => onChange(c)}
@@ -3405,7 +3410,7 @@ function DestinationCard({
   const formatUsable = (bytes: number) => `${formatBytes(bytes)} usable`;
 
   return (
-    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 p-5">
       <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
         <HardDrive size={14} />
         {tr("upload_dest_card_title", "Destination")}
@@ -3452,12 +3457,8 @@ function DestinationCard({
               type="button"
               onClick={() => onChange(volume, p.subpath)}
               title={tr(p.hintKey, p.hintFallback)}
-              className={clsx(
-                "rounded-full border px-2.5 py-0.5 text-xs transition-colors",
-                active
-                  ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
-                  : "border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-3)]",
-              )}
+              aria-pressed={active}
+              className="chip px-3 py-1 text-xs"
             >
               {p.label}
             </button>
@@ -3465,7 +3466,7 @@ function DestinationCard({
         })}
       </div>
 
-      <div className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2.5">
+      <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mt-3 p-2.5">
         <div className="text-xs uppercase tracking-wide text-[var(--color-muted)]">
           {tr("upload_dest_final_path", "Final path on PS5")}
         </div>
@@ -3501,7 +3502,7 @@ function ExcludesCard({
   const tr = useTr();
   const [draft, setDraft] = useState("");
   return (
-    <section className="mb-6 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+    <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-6 p-5">
       <h2 className="mb-3 text-sm font-semibold">
         {tr("upload_files_to_upload", "Files to upload")}
       </h2>
@@ -3542,7 +3543,7 @@ function ExcludesCard({
                 <button
                   type="button"
                   onClick={() => onRemove(rule.pattern)}
-                  className="rounded-md p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+                  className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
                   title={`Remove ${rule.pattern}`}
                 >
                   <X size={12} />
@@ -3570,7 +3571,7 @@ function ExcludesCard({
             <button
               type="submit"
               disabled={!draft.trim()}
-              className="flex items-center gap-1 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+              className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] flex items-center gap-1 px-3 py-1.5 text-xs disabled:opacity-50"
             >
               <Plus size={12} />
               {tr("upload_exclude_add", "Add")}
@@ -3598,7 +3599,7 @@ function ModeRadio({
       className={clsx(
         "cursor-pointer rounded-md border px-3 py-2 text-sm transition-colors",
         checked
-          ? "border-[var(--color-accent)] bg-[var(--color-surface-3)]"
+          ? "border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] bg-[var(--color-surface-3)]"
           : "border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-muted)]",
       )}
     >

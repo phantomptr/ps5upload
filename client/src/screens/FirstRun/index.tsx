@@ -435,7 +435,7 @@ export default function FirstRunScreen() {
               placeholder="192.168.1.50"
               inputMode="decimal"
               disabled={step3 === "busy"}
-              className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)] disabled:opacity-50"
+              className="input flex-1 disabled:opacity-50"
             />
             <Button
               variant="secondary"
@@ -621,15 +621,15 @@ function SetupCard({
 }) {
   const borderClass =
     state === "ok"
-      ? "border-[var(--color-good)]"
+      ? "border-[color-mix(in_srgb,var(--color-good)_40%,transparent)]"
       : state === "fail"
-        ? "border-[var(--color-bad)]"
+        ? "border-[color-mix(in_srgb,var(--color-bad)_40%,transparent)]"
         : state === "busy"
-          ? "border-[var(--color-accent)]"
+          ? "border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)]"
           : "border-[var(--color-border)]";
   return (
     <section
-      className={`rounded-lg border bg-[var(--color-surface-2)] p-5 transition-colors ${borderClass}`}
+      className={`rounded-[var(--radius-card)] border bg-[var(--color-surface-2)] p-5 transition-colors ${borderClass}`}
     >
       <header className="mb-4 flex items-center gap-3">
         <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-3)] text-xs font-semibold tabular-nums">

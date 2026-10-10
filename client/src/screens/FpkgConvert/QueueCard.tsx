@@ -83,7 +83,7 @@ export function QueueCard(p: QueueCardProps) {
                 p.onBuild(kind);
                 if (kind === "image" && p.then === "stream") p.onThen("upload");
               }}
-              className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-sm"
+              className="select w-auto!"
               data-testid="cq-build"
             >
               <option value="pkg">{tr("cq_build_pkg", undefined, "A package (.pkg)")}</option>
@@ -101,7 +101,7 @@ export function QueueCard(p: QueueCardProps) {
             <select
               value={p.then}
               onChange={(e) => p.onThen(e.target.value as ConvertThen)}
-              className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-sm"
+              className="select w-auto!"
             >
               {isImage ? (
                 <>
@@ -160,7 +160,7 @@ export function QueueCard(p: QueueCardProps) {
         </div>
 
         {p.items.length > 0 && (
-          <ul className="divide-y divide-[var(--color-border)] rounded-md border border-[var(--color-border)]">
+          <ul className="divide-y divide-[var(--color-border)] rounded-[var(--radius-card)] border border-[var(--glass-edge)]">
             {p.items.map((i, idx) => (
               <li key={i.id} className="flex items-center gap-2 px-3 py-2 text-sm">
                 <div className="min-w-0 flex-1">
@@ -189,7 +189,7 @@ export function QueueCard(p: QueueCardProps) {
                       disabled={idx === 0}
                       onClick={() => p.onMove(i.id, -1)}
                       aria-label={tr("queue_move_up", undefined, "Move up")}
-                      className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+                      className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
                     >
                       <ArrowUp size={14} />
                     </button>
@@ -198,7 +198,7 @@ export function QueueCard(p: QueueCardProps) {
                       disabled={idx === p.items.length - 1}
                       onClick={() => p.onMove(i.id, 1)}
                       aria-label={tr("queue_move_down", undefined, "Move down")}
-                      className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+                      className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
                     >
                       <ArrowDown size={14} />
                     </button>
@@ -209,7 +209,7 @@ export function QueueCard(p: QueueCardProps) {
                     type="button"
                     onClick={() => p.onRemove(i.id)}
                     aria-label={tr("queue_remove", undefined, "Remove from queue")}
-                    className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
+                    className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
                   >
                     <X size={14} />
                   </button>

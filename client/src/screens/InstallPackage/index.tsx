@@ -211,7 +211,7 @@ function PkgRow({
     uploading && !!entry.totalBytes && (entry.bytes ?? 0) >= entry.totalBytes;
 
   return (
-    <li className="flex flex-col gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
+    <li className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] flex flex-col gap-2 p-3">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="flex min-w-0 items-center gap-3 sm:flex-1">
           <Cover host={host} titleId={entry.titleId} />
@@ -310,7 +310,7 @@ function PkgRow({
                 <button
                   type="button"
                   onClick={onView}
-                  className="ml-2 shrink-0 rounded px-1 text-[var(--color-accent)] hover:underline"
+                  className="ml-2 shrink-0 rounded-full px-1 text-[var(--color-accent)] hover:underline"
                 >
                   {tr("viewer_open", undefined, "View details")}
                 </button>
@@ -346,7 +346,7 @@ function PkgRow({
                     <button
                       type="button"
                       onClick={onView}
-                      className="ml-1 shrink-0 rounded px-1 text-[var(--color-accent)] hover:underline"
+                      className="ml-1 shrink-0 rounded-full px-1 text-[var(--color-accent)] hover:underline"
                     >
                       {tr("viewer_open", undefined, "View details")}
                     </button>
@@ -445,7 +445,7 @@ function PkgRow({
       </div>
 
       {alternativeKey && onSelectAlternative && !busy && (
-        <label className="flex cursor-pointer items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2.5 py-2 text-xs">
+        <label className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] flex cursor-pointer items-start gap-2 px-2.5 py-2 text-xs">
           <input
             type="checkbox"
             checked={!!selectedForInstallAll}
@@ -488,7 +488,7 @@ function PkgRow({
         <div className="flex flex-col gap-1">
           <div className="h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-3)]">
             <div
-              className="h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-300"
+              className="h-full rounded-full bg-[image:var(--accent-fill)] transition-[width] duration-300"
               style={{ width: `${pct}%` }}
             />
           </div>
@@ -1506,7 +1506,7 @@ export default function InstallPackageScreen() {
         {/* A queued install shows its own progress on its queue row, so this
             line appears only for work the queue doesn't represent. */}
         {busyNotice && !queueRunningHere && (
-          <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-[var(--color-accent)] bg-[var(--color-accent-soft)] px-4 py-3 text-sm">
+          <div className="mb-4 flex items-center justify-between gap-3 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] bg-[var(--color-accent-soft)] px-4 py-3 text-sm">
             <div className="flex items-start gap-2">
               <Spinner size={14} tone="accent" className="mt-0.5 shrink-0" />
               <span>{busyNotice}</span>
@@ -1525,7 +1525,7 @@ export default function InstallPackageScreen() {
         {/* "Download through this computer" runs before its install joins
             the queue, so it reports here, next to the queue it will join. */}
         {downloadNotice && (
-          <div className="mb-4 flex items-start gap-2 rounded-lg border border-[var(--color-accent)] bg-[var(--color-accent-soft)] px-4 py-3 text-sm">
+          <div className="mb-4 flex items-start gap-2 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] bg-[var(--color-accent-soft)] px-4 py-3 text-sm">
             <Spinner size={14} tone="accent" className="mt-0.5 shrink-0" />
             <span>{downloadNotice}</span>
           </div>
@@ -1565,7 +1565,7 @@ export default function InstallPackageScreen() {
                 "The PS5 installs straight from this computer or from a link. No copy is put on the PS5 first, so it needs no spare space there, and it is the most reliable way to install.",
               )}
             </p>
-            <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+            <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] p-4">
               <header className="mb-1 flex items-center gap-2">
                 <PackageOpen size={15} aria-hidden />
                 <h3 className="text-sm font-semibold">
@@ -1663,7 +1663,7 @@ export default function InstallPackageScreen() {
                 "The package is copied onto the PS5 first, then installed from that copy. Use this when the PS5 cannot reach this computer (Stream fails with a network error), or to keep packages on the PS5 so you can reinstall them later without this computer.",
               )}
             </p>
-            <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+            <section className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] p-4">
               <header className="mb-1 flex items-center gap-2">
                 <Upload size={15} aria-hidden />
                 <h3 className="text-sm font-semibold">
@@ -1775,7 +1775,7 @@ export default function InstallPackageScreen() {
                   )}
               </header>
               {alternativeGroups.length > 0 && (
-                <div className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-3 text-sm leading-relaxed text-[var(--color-muted)]">
+                <div className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] mb-4 px-4 py-3 text-sm leading-relaxed text-[var(--color-muted)]">
                   <strong className="text-[var(--color-text)]">
                     {tr("pkglib.installAll.what", undefined, "What is Install all?")}
                   </strong>{" "}
@@ -1843,7 +1843,7 @@ export default function InstallPackageScreen() {
                       return (
                         <section
                           key={group.key}
-                          className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3"
+                          className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] p-3"
                         >
                           <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border)] pb-3">
                             <div className="min-w-0">
@@ -1876,7 +1876,7 @@ export default function InstallPackageScreen() {
                           </div>
 
                           {alternatives.length > 0 && (
-                            <div className="mb-3 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2.5 text-xs text-[var(--color-muted)]">
+                            <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mb-3 flex items-start gap-2 p-2.5 text-xs text-[var(--color-muted)]">
                               <Info size={13} className="mt-0.5 shrink-0" />
                               <span>
                                 {tr(
@@ -1977,7 +1977,7 @@ export default function InstallPackageScreen() {
 
         {/* Reference notes, below the controls they explain: read once,
             then out of the way. */}
-        <div className="mb-4 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-[12px] text-[var(--color-muted)]">
+        <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mb-4 flex items-start gap-2 p-3 text-[12px] text-[var(--color-muted)]">
           <Info size={13} className="mt-0.5 shrink-0" />
           <div>
             <span className="font-medium text-[var(--color-text)]">
@@ -1998,7 +1998,7 @@ export default function InstallPackageScreen() {
             the reader decide whether it applies to them. */}
         {/* A disclosure, not a standing callout: it matters only to someone
             installing a fake package, and they recognise the question. */}
-        <details className="group mb-4 rounded-md border border-[var(--color-warn)]/40 bg-[var(--color-warn)]/5 text-[12px] text-[var(--color-muted)]">
+        <details className="group mb-4 rounded-[var(--radius-field)] border border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[var(--color-warn)]/5 text-[12px] text-[var(--color-muted)]">
           <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 font-medium text-[var(--color-warn)] [&::-webkit-details-marker]:hidden">
             <AlertTriangle size={13} className="shrink-0" />
             <span className="flex-1">
@@ -2159,7 +2159,7 @@ function ExternalPackages({ host }: { host: string }) {
   const firstScan = scanning && !scanned;
 
   return (
-    <div className="mb-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
+    <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mb-4 p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <HardDrive
@@ -2217,14 +2217,14 @@ function ExternalPackages({ host }: { host: string }) {
 
       {firstScan ? (
         // Stable scanning state — no more "suddenly appears" pop-in.
-        <div className="flex items-center gap-2 rounded-md border border-dashed border-[var(--color-border)] px-3 py-4 text-xs text-[var(--color-muted)]">
+        <div className="flex items-center gap-2 rounded-[var(--radius-card)] border border-dashed border-[var(--glass-edge)] px-3 py-4 text-xs text-[var(--color-muted)]">
           <Spinner size={14} />
           {tr("pkglib.external.scanningDrives", "Scanning connected drives…")}
         </div>
       ) : !scanned ? (
         // Auto-scan is off and we haven't scanned yet — prompt rather than
         // claiming "nothing found" (we haven't looked).
-        <div className="rounded-md border border-dashed border-[var(--color-border)] px-3 py-4 text-xs text-[var(--color-muted)]">
+        <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--glass-edge)] px-3 py-4 text-xs text-[var(--color-muted)]">
           {tr(
             "pkglib.external.notScanned",
             "Auto-scan is off. Connect a USB or external drive with .pkg or .fpkg install packages, then click Scan.",
@@ -2232,7 +2232,7 @@ function ExternalPackages({ host }: { host: string }) {
         </div>
       ) : pkgs.length === 0 ? (
         // Empty state — informative, and the Scan button above stays put.
-        <div className="rounded-md border border-dashed border-[var(--color-border)] px-3 py-4 text-xs text-[var(--color-muted)]">
+        <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--glass-edge)] px-3 py-4 text-xs text-[var(--color-muted)]">
           {tr(
             "pkglib.external.empty",
             "No .pkg or .fpkg install packages found on connected USB or external drives. Connect a drive that has packages on it, then click Scan.",
@@ -2252,7 +2252,7 @@ function ExternalPackages({ host }: { host: string }) {
             return (
               <li
                 key={p.path}
-                className="flex items-center gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2"
+                className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] flex items-center gap-3 p-2"
               >
                 <GameIcon host={host} titleId={titleId} size={44} />
                 <div className="min-w-0 flex-1">

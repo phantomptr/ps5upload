@@ -2247,7 +2247,7 @@ export default function FileSystemScreen() {
           className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-[var(--color-accent-soft)] ring-4 ring-inset ring-[var(--color-accent)]"
           data-testid="fs-drop-overlay"
         >
-          <div className="rounded-lg bg-[var(--color-surface)] px-5 py-3 text-sm font-medium shadow-lg">
+          <div className="rounded-[var(--radius-card)] bg-[var(--color-surface)] px-5 py-3 text-sm font-medium shadow-lg">
             {tr("fs_drop_here", { path }, `Drop to copy into ${path}`)}
           </div>
         </div>
@@ -2501,11 +2501,8 @@ export default function FileSystemScreen() {
                   // moved — two different signals wearing the same clothes.
                   // Drive TYPE is now carried solely by the icon, leaving
                   // border and background to mean "you are here".
-                  className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 font-mono ${
-                    active
-                      ? "border-[var(--color-accent)] bg-[var(--color-accent)]/10 font-medium text-[var(--color-text)] ring-1 ring-[var(--color-accent)]"
-                      : "border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-surface)]"
-                  }`}
+                  aria-pressed={active}
+                  className="chip gap-1.5 px-3 py-1.5 font-mono"
                 >
                   {/* Type lives in the icon: USB glyph for removable
                       drives, platter for internal. It stays tinted so the
@@ -2529,7 +2526,7 @@ export default function FileSystemScreen() {
                 picker's "(custom path)" affordance so the lack of an active
                 chip isn't mysterious. */}
             {currentVolumePath === null && (
-              <span className="rounded-md border border-dashed border-[var(--color-border)] px-2 py-1 font-mono text-[var(--color-muted)]">
+              <span className="rounded-[var(--radius-card)] border border-dashed border-[var(--glass-edge)] px-2 py-1 font-mono text-[var(--color-muted)]">
                 {tr("fs_volume_picker_custom", undefined, "(custom path)")}
               </span>
             )}
@@ -2545,14 +2542,14 @@ export default function FileSystemScreen() {
             dropdown's absolutely-positioned panel to the thin breadcrumb bar
             — the cramped/scrollbar'd overlay users saw. Keeping the dropdown
             out of the scrolling row lets its panel open freely. */}
-        <div className="mb-3 flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-xs">
+        <div className="mb-4 flex items-center gap-1 rounded-full border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-2.5 py-1.5 text-xs shadow-[var(--edge-highlight),var(--shadow-1)]">
           <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
             <button
               type="button"
               onClick={() => setPath(parent(path))}
               disabled={path === "/"}
               title={tr("fs_parent_dir", undefined, "Parent directory")}
-              className="shrink-0 rounded-md p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] disabled:opacity-30"
+              className="shrink-0 rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] disabled:opacity-30"
             >
               <ArrowUp size={14} />
             </button>
@@ -2574,7 +2571,7 @@ export default function FileSystemScreen() {
                 onBlur={() => setPathDraft(null)}
                 spellCheck={false}
                 aria-label={tr("fs_go_to_path", undefined, "Go to path")}
-                className="min-w-0 flex-1 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 font-mono text-xs"
+                className="input input-sm min-w-0 flex-1 font-mono text-xs"
               />
             ) : (
               <>
@@ -2611,7 +2608,7 @@ export default function FileSystemScreen() {
                   type="button"
                   onClick={() => setPathDraft(path)}
                   title={tr("fs_go_to_path", undefined, "Go to path")}
-                  className="ml-1 shrink-0 rounded-md p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+                  className="ml-1 shrink-0 rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
                 >
                   <Pencil size={12} />
                 </button>
@@ -2624,7 +2621,7 @@ export default function FileSystemScreen() {
         {/* Clipboard banner: non-empty clipboard shows what's staged and
           where it came from; paste target is always the current path. */}
         {clipboardActive && (
-          <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface-2)] p-2 text-xs">
+          <div className="mb-3 flex items-center gap-2 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] p-2 text-xs">
             <ClipboardPaste size={14} className="text-[var(--color-accent)]" />
             <span>
               <span className="font-medium">
@@ -2646,14 +2643,14 @@ export default function FileSystemScreen() {
                 type="button"
                 onClick={() => void runPaste()}
                 disabled={bulkOp.op !== null || !host?.trim()}
-                className="flex items-center gap-1 rounded-md bg-[var(--color-accent)] px-2 py-1 text-xs font-medium text-[var(--color-accent-contrast)] disabled:opacity-50"
+                className="rounded-full flex items-center gap-1 bg-[image:var(--accent-fill)] shadow-[var(--accent-glow)] px-2 py-1 text-xs font-medium text-[var(--color-accent-contrast)] disabled:opacity-50"
               >
                 {tr("fs_paste_here", undefined, "Paste here")}
               </button>
               <button
                 type="button"
                 onClick={() => clipboard.clear()}
-                className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
+                className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-1"
                 title={tr(
                   "fs_cancel_clipboard",
                   undefined,
@@ -2668,7 +2665,7 @@ export default function FileSystemScreen() {
 
         {/* Selection toolbar: only visible with ≥1 selected. */}
         {selectionActive && (
-          <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface-2)] p-2 text-xs">
+          <div className="mb-3 flex items-center gap-2 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] p-2 text-xs">
             <span className="font-medium">
               {tr(
                 "fs_selected_count",
@@ -2680,7 +2677,7 @@ export default function FileSystemScreen() {
               type="button"
               onClick={() => startMove()}
               disabled={bulkOp.op !== null || !volumes?.length}
-              className="flex items-center gap-1 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] px-2 py-1 font-medium hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+              className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] flex items-center gap-1 border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] bg-[var(--color-surface)] px-3 py-1 font-medium disabled:opacity-50"
             >
               <FolderInput size={12} />
               {tr("fs_move_to", undefined, "Move to…")}
@@ -2690,7 +2687,7 @@ export default function FileSystemScreen() {
                 type="button"
                 onClick={() => startSend()}
                 data-testid="fs-send-console"
-                className="flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 hover:bg-[var(--color-surface-3)]"
+                className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] flex items-center gap-1 border-[var(--glass-edge)] bg-[var(--color-surface)] px-3 py-1"
               >
                 <Send size={12} />
                 {tr("fs_send_action", undefined, "Send to another console…")}
@@ -2700,7 +2697,7 @@ export default function FileSystemScreen() {
               type="button"
               onClick={() => stageClipboard("cut")}
               disabled={bulkOp.op !== null}
-              className="flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+              className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] flex items-center gap-1 border-[var(--glass-edge)] bg-[var(--color-surface)] px-3 py-1 disabled:opacity-50"
             >
               <Scissors size={12} />
               {tr("fs_cut", undefined, "Cut")}
@@ -2709,7 +2706,7 @@ export default function FileSystemScreen() {
               type="button"
               onClick={() => stageClipboard("copy")}
               disabled={bulkOp.op !== null}
-              className="flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+              className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] flex items-center gap-1 border-[var(--glass-edge)] bg-[var(--color-surface)] px-3 py-1 disabled:opacity-50"
             >
               <Copy size={12} />
               {tr("copy", undefined, "Copy")}
@@ -2718,7 +2715,7 @@ export default function FileSystemScreen() {
               type="button"
               onClick={() => void runChmod777()}
               disabled={bulkOp.op !== null || chmodBusy}
-              className="flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+              className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] flex items-center gap-1 border-[var(--glass-edge)] bg-[var(--color-surface)] px-3 py-1 disabled:opacity-50"
             >
               <KeyRound size={12} />
               {tr("fs_chmod_777", undefined, "Set permissions (777)")}
@@ -2732,7 +2729,7 @@ export default function FileSystemScreen() {
                 undefined,
                 "Bulk rename via pattern (s/old/new/, ^prefix_, _suffix$, lower, upper)",
               )}
-              className="flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+              className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] flex items-center gap-1 border-[var(--glass-edge)] bg-[var(--color-surface)] px-3 py-1 disabled:opacity-50"
             >
               <Pencil size={12} />
               {tr("fs_bulk_rename", undefined, "Bulk rename")}
@@ -2741,7 +2738,7 @@ export default function FileSystemScreen() {
               type="button"
               onClick={runBulkDelete}
               disabled={bulkOp.op !== null}
-              className="flex items-center gap-1 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface)] px-2 py-1 text-[var(--color-bad)] hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+              className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] flex items-center gap-1 border-[color-mix(in_srgb,var(--color-bad)_40%,transparent)] bg-[var(--color-surface)] px-3 py-1 text-[var(--color-bad)] disabled:opacity-50"
             >
               <Trash2 size={12} />
               {tr("library_delete", undefined, "Delete")}
@@ -2749,7 +2746,7 @@ export default function FileSystemScreen() {
             <button
               type="button"
               onClick={() => setSelected(new Set())}
-              className="ml-auto rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
+              className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ml-auto p-1"
               title={tr("fs_clear_selection", undefined, "Clear selection")}
             >
               <X size={12} />
@@ -2758,7 +2755,7 @@ export default function FileSystemScreen() {
         )}
 
         {mkdirDraft !== null && (
-          <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-sm">
+          <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mb-3 flex items-center gap-2 p-2 text-sm">
             <FolderPlus size={14} className="text-[var(--color-muted)]" />
             <span className="text-xs text-[var(--color-muted)]">
               {tr("fs_create_in", undefined, "Create in")}{" "}
@@ -2773,19 +2770,19 @@ export default function FileSystemScreen() {
                 if (e.key === "Enter") runMkdir();
                 if (e.key === "Escape") setMkdirDraft(null);
               }}
-              className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs"
+              className="input input-sm flex-1 text-xs"
             />
             <button
               type="button"
               onClick={runMkdir}
-              className="rounded-md bg-[var(--color-accent)] px-3 py-1 text-xs font-medium text-[var(--color-accent-contrast)]"
+              className="rounded-full bg-[image:var(--accent-fill)] shadow-[var(--accent-glow)] px-3 py-1 text-xs font-medium text-[var(--color-accent-contrast)]"
             >
               {tr("fs_create", undefined, "Create")}
             </button>
             <button
               type="button"
               onClick={() => setMkdirDraft(null)}
-              className="rounded-md border border-[var(--color-border)] px-3 py-1 text-xs hover:bg-[var(--color-surface-3)]"
+              className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] px-3 py-1 text-xs"
             >
               {tr("cancel", undefined, "Cancel")}
             </button>
@@ -2811,7 +2808,7 @@ export default function FileSystemScreen() {
           happening elsewhere and where to look — without rendering the other
           console's progress here as if it were this console's. */}
         {(bulkOpElsewhere || downloadElsewhere) && (
-          <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-xs text-[var(--color-muted)]">
+          <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mb-3 flex items-center gap-2 p-2 text-xs text-[var(--color-muted)]">
             <Spinner size={12} />
             <span>
               {tr(
@@ -2829,7 +2826,7 @@ export default function FileSystemScreen() {
         )}
 
         {busyEntry && bulkOp.op === null && (
-          <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-xs">
+          <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mb-3 flex flex-wrap items-center gap-2 p-2 text-xs">
             <Spinner size={12} tone="accent" />
             <span className="font-medium">
               {busyEntry.op === "rename"
@@ -2864,7 +2861,15 @@ export default function FileSystemScreen() {
 
         {error && (
           <div className="mb-3">
-            <ErrorCard title={tr("fs_error_title", "Error")} detail={error} />
+            <ErrorCard
+              title={tr("fs_list_failed_title", undefined, "Couldn't read this folder")}
+              detail={error}
+              action={
+                <Button variant="secondary" size="sm" onClick={() => void refresh()}>
+                  {tr("fs_retry", undefined, "Retry")}
+                </Button>
+              }
+            />
           </div>
         )}
 
@@ -2872,7 +2877,7 @@ export default function FileSystemScreen() {
           here on every visit until the user resumes it or dismisses it. */}
         {uploadStopped && uploadName === null && (
           <div
-            className={`mb-3 rounded-md border bg-[var(--color-surface-2)] p-3 text-sm ${uploadStopped.why === "failed" ? "border-[var(--color-bad)]" : "border-[var(--color-border)]"}`}
+            className={`mb-3 rounded-[var(--radius-card)] border bg-[var(--color-surface-raised)] px-4 py-3.5 text-sm shadow-[var(--edge-highlight),var(--shadow-1)] ${uploadStopped.why === "failed" ? "border-[color-mix(in_srgb,var(--color-bad)_40%,transparent)]" : "border-[var(--glass-edge)]"}`}
             data-testid="fs-upload-stopped"
           >
             <div className="font-medium">
@@ -2936,7 +2941,7 @@ export default function FileSystemScreen() {
           <div className="mb-3">
             <ErrorCard
               title={tr("fs_bulk_error_title", "Error")}
-              detail={bulkOp.errorBanner}
+              detail={humanizePs5Error(bulkOp.errorBanner) || bulkOp.errorBanner}
               onDismiss={() => fsBulk.clearError()}
             />
           </div>
@@ -2946,7 +2951,7 @@ export default function FileSystemScreen() {
           <div className="mb-3">
             <ErrorCard
               title={tr("fs_download_error_title", "Download failed")}
-              detail={downloadOp.errorBanner}
+              detail={humanizePs5Error(downloadOp.errorBanner) || downloadOp.errorBanner}
               onDismiss={() => fsDownload.clearError()}
             />
           </div>
@@ -2976,7 +2981,7 @@ export default function FileSystemScreen() {
           }}
         >
           {entries && entries.length === 0 && (
-            <div className="rounded-md border border-dashed border-[var(--color-border)] p-4 text-center text-xs text-[var(--color-muted)]">
+            <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--glass-edge)] p-4 text-center text-xs text-[var(--color-muted)]">
               {tr("fs_empty_folder", "Empty folder.")}
             </div>
           )}
@@ -3014,12 +3019,7 @@ export default function FileSystemScreen() {
                     key={k}
                     type="button"
                     onClick={() => setSort((cur) => nextSort(cur, k))}
-                    className={
-                      "rounded px-1.5 py-0.5 hover:bg-[var(--color-surface-3)] " +
-                      (sort.key === k
-                        ? "font-medium text-[var(--color-text)]"
-                        : "")
-                    }
+                    className="chip border-transparent px-2.5 py-1"
                     aria-pressed={sort.key === k}
                   >
                     {label}
@@ -3030,7 +3030,7 @@ export default function FileSystemScreen() {
             </div>
           )}
 
-          <ul className="grid gap-1">
+          <ul className="grid gap-1.5">
             {sortedEntries.map((e) => {
               const isDir = e.kind === "dir";
               const Icon = isDir ? Folder : FileIcon;
@@ -3050,17 +3050,17 @@ export default function FileSystemScreen() {
                     setRowMenu({ x: ev.clientX, y: ev.clientY, entry: e });
                   }}
                   className={
-                    "list-row-contain-sm flex items-center gap-3 rounded-md border p-2 text-sm " +
+                    "list-row-contain-sm flex items-center gap-3 rounded-[var(--radius-card)] border px-3.5 py-2.5 text-sm transition-colors " +
                     (isSelected
-                      ? "border-[var(--color-accent)] bg-[var(--color-surface-2)]"
-                      : "border-[var(--color-border)] bg-[var(--color-surface-2)]")
+                      ? "border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] bg-[var(--color-accent-soft)]"
+                      : "border-[var(--glass-edge)] bg-[var(--color-surface-raised)] hover:bg-[var(--color-float)]")
                   }
                 >
                   <input
                     type="checkbox"
                     checked={isSelected}
                     onChange={() => toggleSelected(e.name)}
-                    className="h-3.5 w-3.5 shrink-0 rounded border-[var(--color-border)]"
+                    className="input h-3.5 w-3.5! shrink-0"
                   />
                   <Icon
                     size={16}
@@ -3080,7 +3080,7 @@ export default function FileSystemScreen() {
                         if (ev.key === "Escape") setRenaming(null);
                       }}
                       onBlur={() => setRenaming(null)}
-                      className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-sm"
+                      className="input input-sm flex-1"
                     />
                   ) : (
                     <button
@@ -3089,8 +3089,8 @@ export default function FileSystemScreen() {
                         if (isDir) setPath(joinPath(path, e.name));
                       }}
                       className={
-                        "flex-1 truncate text-left font-mono text-sm " +
-                        (isDir ? "hover:text-[var(--color-accent)]" : "")
+                        "flex-1 truncate text-left text-sm " +
+                        (isDir ? "font-medium hover:text-[var(--color-accent)]" : "")
                       }
                       disabled={!isDir}
                     >
@@ -3112,7 +3112,7 @@ export default function FileSystemScreen() {
                             undefined,
                             "Save a copy of this entry to a folder on this computer",
                           )}
-                          className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+                          className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-1 disabled:opacity-30"
                         >
                           {downloadHere && downloadOp.rootName === e.name ? (
                             <Spinner size={12} tone="accent" />
@@ -3129,7 +3129,7 @@ export default function FileSystemScreen() {
                             undefined,
                             "Download to this computer as a .zip (streamed — no temp copy)",
                           )}
-                          className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+                          className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-1 disabled:opacity-30"
                         >
                           <FileArchive size={12} />
                         </button>
@@ -3142,7 +3142,7 @@ export default function FileSystemScreen() {
                         setRenameDraft(e.name);
                       }}
                       title={tr("fs_rename", undefined, "Rename")}
-                      className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
+                      className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-1"
                     >
                       <Pencil size={12} />
                     </button>
@@ -3157,7 +3157,7 @@ export default function FileSystemScreen() {
                           undefined,
                           "Overwrite this file with one from your computer — how you patch a file inside a mounted game image",
                         )}
-                        className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)] disabled:opacity-40"
+                        className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-1 disabled:opacity-40"
                       >
                         <Upload size={12} />
                       </button>
@@ -3168,7 +3168,7 @@ export default function FileSystemScreen() {
                         onClick={() => viewEntry(e)}
                         aria-label={tr("viewer_open", undefined, "View details")}
                         title={tr("viewer_open", undefined, "View details")}
-                        className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
+                        className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-1"
                       >
                         <ScanSearch size={12} />
                       </button>
@@ -3183,7 +3183,7 @@ export default function FileSystemScreen() {
                           undefined,
                           "Preview small file inline (text or image)",
                         )}
-                        className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
+                        className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-1"
                       >
                         <Eye size={12} />
                       </button>
@@ -3198,7 +3198,7 @@ export default function FileSystemScreen() {
                           undefined,
                           "Compute CRC32 of this file (cheap integrity check)",
                         )}
-                        className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
+                        className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-1"
                       >
                         <Hash size={12} />
                       </button>
@@ -3213,7 +3213,7 @@ export default function FileSystemScreen() {
                           undefined,
                           "BLAKE3 + CRC32 verification (slower, crypto-strength)",
                         )}
-                        className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
+                        className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] p-1"
                       >
                         <BadgeCheck size={12} />
                       </button>
@@ -3228,7 +3228,7 @@ export default function FileSystemScreen() {
                           undefined,
                           "Install this package on your PS5",
                         )}
-                        className="rounded-md border border-[var(--color-accent)] p-1 text-[var(--color-accent)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+                        className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] border-[color-mix(in_srgb,var(--color-accent)_40%,transparent)] p-1 text-[var(--color-accent)] disabled:opacity-30"
                       >
                         {installingPkgName === e.name ? (
                           <Spinner size={12} tone="inherit" />
@@ -3241,7 +3241,7 @@ export default function FileSystemScreen() {
                       type="button"
                       onClick={() => runDelete(e.name)}
                       title={tr("library_delete", undefined, "Delete")}
-                      className="rounded-md border border-[var(--color-bad)] p-1 text-[var(--color-bad)] hover:bg-[var(--color-surface-3)]"
+                      className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] border-[color-mix(in_srgb,var(--color-bad)_40%,transparent)] p-1 text-[var(--color-bad)]"
                     >
                       <Trash2 size={12} />
                     </button>
@@ -3257,7 +3257,7 @@ export default function FileSystemScreen() {
             onClick={() => setPreview(null)}
           >
             <div
-              className="flex max-h-[90dvh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]"
+              className="rounded-[var(--radius-panel)] border border-[var(--glass-edge)] bg-[var(--color-surface-raised)] shadow-[var(--edge-highlight),var(--shadow-1)] flex max-h-[90dvh] w-full max-w-3xl flex-col overflow-hidden"
               onClick={(e) => e.stopPropagation()}
             >
               <header className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-2">
@@ -3270,7 +3270,7 @@ export default function FileSystemScreen() {
                 <button
                   type="button"
                   onClick={() => setPreview(null)}
-                  className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
+                  className="rounded-full p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
                 >
                   ✕
                 </button>
@@ -3340,7 +3340,7 @@ function RecentPathsDropdown({
         type="button"
         onClick={() => setOpen((v) => !v)}
         title={tr("fs_recent_tooltip", undefined, "Recent destinations")}
-        className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs uppercase tracking-wider text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+        className="flex items-center gap-1 rounded-full px-1.5 py-0.5 text-xs uppercase tracking-wider text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
       >
         {tr("fs_recent", "Recent")}
         <ChevronRight
@@ -3349,7 +3349,7 @@ function RecentPathsDropdown({
         />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-30 mt-1 w-72 overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg">
+        <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] absolute right-0 top-full z-30 mt-1 w-72 overflow-hidden shadow-lg">
           <ul className="max-h-60 overflow-y-auto py-1">
             {filtered.map((p) => (
               <li key={p} className="flex items-center">
@@ -3496,14 +3496,14 @@ function UploadProgressDetail({
         <button
           type="button"
           onClick={onCancel}
-          className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-0.5 hover:bg-[var(--color-surface-3)]"
+          className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ml-auto px-3 py-1"
         >
           {tr("cancel", undefined, "Cancel")}
         </button>
       </div>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
         <div
-          className={`h-full bg-[var(--color-accent)] transition-[width] duration-300 ${
+          className={`h-full bg-[image:var(--accent-fill)] transition-[width] duration-300 ${
             pct === null || finishing ? "animate-pulse" : ""
           }`}
           style={{ width: `${Math.max(pct ?? 0, 4)}%` }}
@@ -3589,7 +3589,7 @@ function BulkOpBanner({
       : pctByFiles;
 
   return (
-    <div className="mb-3 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface-2)] p-3 text-xs">
+    <div className="mb-3 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] p-3 text-xs">
       <div className="mb-2 flex items-center gap-2">
         <Spinner size={14} tone="accent" />
         <span className="font-semibold">{verb}</span>
@@ -3621,7 +3621,7 @@ function BulkOpBanner({
           onClick={() => useFsBulkOpStore.getState().requestCancel(host)}
           disabled={cancelRequested}
           data-testid="fs-bulk-cancel"
-          className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+          className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ml-auto px-3 py-1 text-xs disabled:opacity-50"
           title={
             op === "delete"
               ? tr(
@@ -3669,14 +3669,14 @@ function BulkOpBanner({
         itemPct !== null && (
           <div className="mb-2 h-1 overflow-hidden rounded-full bg-[var(--color-surface-3)]">
             <div
-              className="h-full bg-[var(--color-accent)] transition-[width] duration-300"
+              className="h-full bg-[image:var(--accent-fill)] transition-[width] duration-300"
               style={{ width: `${itemPct}%` }}
             />
           </div>
         )}
 
       {cancelRequested && op !== "delete" && (
-        <div className="mb-2 rounded-md border border-[var(--color-warn)] bg-[var(--color-warn-soft)] p-2 text-xs text-[var(--color-warn)]">
+        <div className="mb-2 rounded-[var(--radius-field)] border border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[var(--color-warn-soft)] p-2 text-xs text-[var(--color-warn)]">
           {tr(
             "fs_bulk_cancel_copy_explainer",
             undefined,
@@ -3687,7 +3687,7 @@ function BulkOpBanner({
 
       {cancelRequested && op === "delete" && (
         // Delete has no per-byte cancel; explain why it's slower.
-        <div className="mb-2 rounded-md border border-[var(--color-warn)] bg-[var(--color-warn-soft)] p-2 text-xs text-[var(--color-warn)]">
+        <div className="mb-2 rounded-[var(--radius-field)] border border-[color-mix(in_srgb,var(--color-warn)_40%,transparent)] bg-[var(--color-warn-soft)] p-2 text-xs text-[var(--color-warn)]">
           {tr(
             "fs_bulk_stop_explainer_delete",
             { name: currentName },
@@ -3720,7 +3720,7 @@ function BulkOpBanner({
           payload-side incremental fs_copy events; future work. */}
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
         <div
-          className={`h-full bg-[var(--color-accent)] transition-[width] duration-300 ${
+          className={`h-full bg-[image:var(--accent-fill)] transition-[width] duration-300 ${
             done < total && (itemPct === null || finishing)
               ? "animate-pulse"
               : ""
@@ -3776,7 +3776,7 @@ function DownloadOpBanner({
   const speed = elapsedSec > 0 ? bytesReceived / elapsedSec : 0;
 
   return (
-    <div className="mb-3 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface-2)] p-3 text-xs">
+    <div className="mb-3 rounded-[var(--radius-card)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] p-3 text-xs">
       <div className="mb-2 flex items-center gap-2">
         <Spinner size={14} tone="accent" />
         <span className="font-semibold">
@@ -3790,7 +3790,7 @@ function DownloadOpBanner({
         <button
           type="button"
           onClick={() => useFsDownloadOpStore.getState().requestStop(host)}
-          className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs hover:bg-[var(--color-surface-3)]"
+          className="rounded-full border shadow-[var(--edge-highlight),var(--shadow-1)] hover:bg-[var(--color-float)] border-[var(--glass-edge)] bg-[var(--color-surface-raised)] ml-auto px-3 py-1 text-xs"
           title={tr(
             "fs_download_stop_tooltip",
             undefined,
@@ -3829,7 +3829,7 @@ function DownloadOpBanner({
 
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
         <div
-          className="h-full bg-[var(--color-accent)] transition-[width] duration-300"
+          className="h-full bg-[image:var(--accent-fill)] transition-[width] duration-300"
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -3893,7 +3893,7 @@ function RowMenu({
       role="menu"
       data-testid="fs-row-menu"
       style={{ left: pos.left, top: pos.top }}
-      className="fixed z-50 min-w-[12rem] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-raised)] py-1 text-sm shadow-lg"
+      className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] fixed z-50 min-w-[12rem] py-1 text-sm shadow-lg"
     >
       {items.map((it) => (
         <button

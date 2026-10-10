@@ -75,7 +75,7 @@ export function KeptByAppView({
           {tr("kept_nothing", undefined, "ps5upload is not keeping anything on this console.")}
         </div>
       ) : (
-        <ul className="divide-y divide-[var(--color-border)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)]">
+        <ul className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] divide-y divide-[var(--color-border)]">
           {rows.map((r) => (
             <li key={r.path} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
               <div className="min-w-0 flex-1">

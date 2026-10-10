@@ -9,6 +9,7 @@ import {
   EmptyState,
   Spinner,
 } from "../../components";
+import { humanizePs5Error } from "../../lib/humanizeError";
 import { useTr } from "../../state/lang";
 import { pickPath } from "../../lib/pickPath";
 import { openLocalPath } from "../../lib/openLocalPath";
@@ -128,7 +129,13 @@ export default function LocalImageScreen() {
         }
       />
 
-      {error && <ErrorCard title={error} />}
+      {error && (
+        <ErrorCard
+          title={tr("localimage_failed", undefined, "Something went wrong")}
+          detail={humanizePs5Error(error) || error}
+          onDismiss={() => setError(null)}
+        />
+      )}
 
       {unsupported && (
         <Callout

@@ -110,7 +110,7 @@ export default function FolderDiffPanel({
   // user has picked a source/dest, so we don't show it on an empty form).
   if (transferBusy && srcDir && destRoot && transferAddr) {
     return (
-      <section className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs">
+      <section className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] p-3 text-xs">
         <header className="flex items-center gap-2 text-[var(--color-muted)]">
           <GitCompare size={12} />
           <span>
@@ -128,7 +128,7 @@ export default function FolderDiffPanel({
   if (!data && !loading && !error) return null;
 
   return (
-    <section className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs">
+    <section className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] p-3 text-xs">
       <header className="flex items-center gap-2">
         <GitCompare size={12} />
         <h4 className="flex-1 text-xs font-semibold">
@@ -187,7 +187,7 @@ export default function FolderDiffPanel({
         </div>
       )}
       {expanded && data && data.sample_to_send.length > 0 && (
-        <div className="mt-2 max-h-40 overflow-auto rounded border border-[var(--color-border)] bg-[var(--color-surface)] p-2">
+        <div className="rounded-[var(--radius-card)] border border-[var(--glass-edge)] bg-[var(--color-surface)] mt-2 max-h-40 overflow-auto p-2">
           <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
             {tr(
               "folder_diff_sample",
