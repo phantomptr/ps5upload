@@ -131,7 +131,12 @@ export const NAV_ITEMS: NavItem[] = [
     fallback: "Connections",
     icon: Network,
   },
-  { to: "/backup", key: "backup", fallback: "Backup", icon: Archive },
+  {
+    to: "/backup",
+    key: "console_snapshots",
+    fallback: "Console snapshots",
+    icon: Archive,
+  },
 
   // Play, install, and manage game-related content.
   {

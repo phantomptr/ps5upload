@@ -33,6 +33,7 @@ import {
 } from "../../api/ps5";
 import { trackTask } from "../../state/trackTask";
 import { humanizePs5Error } from "../../lib/humanizeError";
+import { SNAPSHOT_MAX_DEPTH, SNAPSHOTS_KEPT_PER_NAME } from "./snapshotLimits";
 
 function formatTimestamp(ts: number): string {
   const d = new Date(ts * 1000);
@@ -222,11 +223,11 @@ export default function BackupScreen() {
       <div className="mx-auto max-w-4xl space-y-4">
         <PageHeader
           icon={Archive}
-          title={tr("backup_title", undefined, "Backup & Restore")}
+          title={tr("console_snapshots", undefined, "Console snapshots")}
           description={tr(
-          "backup_subtitle_v2",
+            "backup_subtitle_v3",
             undefined,
-            "Copy files and folders from the PS5 to this computer as a snapshot, and put a snapshot back on the PS5 later.",
+            "Copy files and folders into a snapshot kept on the PS5 itself, and put them back later. Nothing is copied to this computer. For game saves, use Save data.",
           )}
           right={
             <Button
@@ -264,9 +265,9 @@ export default function BackupScreen() {
                 already knows both what to copy and what to call it. */}
             <p className="text-sm text-[var(--color-muted)]">
               {tr(
-                "backup_explain",
+                "backup_explain_v2",
                 undefined,
-                "Copies files from the console to this computer so you can put them back later. Pick something common below, or type your own path.",
+                "Copies files to a snapshot on the console's own storage so you can put them back later. Pick something common below, or type your own path.",
               )}
             </p>
 
@@ -410,13 +411,39 @@ export default function BackupScreen() {
 
           <div className="flex items-start gap-2 rounded-lg border border-[var(--color-warn)]/20 bg-[var(--color-warn)]/5 px-4 py-3 text-xs text-[var(--color-warn)]">
             <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-            <span>
-              {tr(
-                "backup_warning",
-                undefined,
-                "Snapshots are stored on the PS5 at /data/ps5upload/backups/. Restore overwrites existing files at their original paths.",
-              )}
-            </span>
+            <div className="space-y-1">
+              <p>
+                {tr(
+                  "backup_warning",
+                  undefined,
+                  "Snapshots are stored on the PS5 at /data/ps5upload/backups/. Restore overwrites existing files at their original paths.",
+                )}
+              </p>
+              {/* What payload/src/backup.c actually does, so nobody finds out on restore. */}
+              <ul className="list-disc space-y-0.5 pl-4" data-testid="backup-limits">
+                <li>
+                  {tr(
+                    "backup_limit_keep",
+                    { n: SNAPSHOTS_KEPT_PER_NAME },
+                    `Only the newest ${SNAPSHOTS_KEPT_PER_NAME} snapshots of each name are kept; making another deletes the oldest.`,
+                  )}
+                </li>
+                <li>
+                  {tr(
+                    "backup_limit_depth",
+                    { n: SNAPSHOT_MAX_DEPTH },
+                    `Folders more than ${SNAPSHOT_MAX_DEPTH} levels below the one you pick are skipped.`,
+                  )}
+                </li>
+                <li>
+                  {tr(
+                    "backup_limit_flatten",
+                    undefined,
+                    "Files are stored under their path with every / turned into _, so two different paths can end up with the same name (a/b_c and a_b/c) and only one of them is kept.",
+                  )}
+                </li>
+              </ul>
+            </div>
           </div>
         </ConnectionGate>
         {confirmDialog}
