@@ -252,7 +252,6 @@ export const NAV_ITEMS: NavItem[] = [
     fallback: "Audit log",
     icon: ShieldCheck,
   },
-  { to: "/bug-report", key: "bug_report", fallback: "Bug report", icon: Bug },
 
   // ─ Help ─
   {
@@ -279,6 +278,23 @@ export const HOME_NAV_ITEM: NavItem = {
   fallback: "Home",
   icon: LayoutDashboard,
 };
+
+/** Bug report: right under Home, outside the sections and never hidden — when something goes
+ *  wrong, the way to report it must be where anyone can find it. */
+export const BUG_REPORT_NAV_ITEM: NavItem = {
+  to: "/bug-report",
+  key: "bug_report",
+  fallback: "Bug report",
+  icon: Bug,
+};
+
+/** Above every section, in this order; none can be hidden. */
+export const PINNED_NAV_ITEMS: readonly NavItem[] = [HOME_NAV_ITEM, BUG_REPORT_NAV_ITEM];
+
+/** Whether a screen is pinned (never hidden, never counted as hidden). */
+export function isPinnedNav(to: string): boolean {
+  return PINNED_NAV_ITEMS.some((i) => i.to === to);
+}
 
 /** Whether an item is currently visible. Beta items stay hidden until the
  *  user turns them on, which is what keeps a half-finished screen out of a

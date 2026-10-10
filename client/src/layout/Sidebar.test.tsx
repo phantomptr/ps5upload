@@ -83,6 +83,22 @@ describe("Sidebar", () => {
     expect(html).toContain("2 hidden");
   });
 
+  it("pins Bug report right under Home, outside the sections, with no way to hide it", async () => {
+    const html = render();
+    const home = html.indexOf('href="/home"');
+    const report = html.indexOf('href="/bug-report"');
+    const firstSection = html.indexOf("<section");
+    expect(home).toBeGreaterThan(-1);
+    expect(report).toBeGreaterThan(home);
+    expect(report).toBeLessThan(firstSection);
+    expect(html).not.toContain('aria-label="Hide Bug report from the sidebar"');
+    // Hidden by an older version: it stays, and is not counted as hidden.
+    const Old = await withLists(["/bug-report"], ["nav_section_diagnostics"]);
+    const old = render(<Old />);
+    expect(old).toContain('href="/bug-report"');
+    expect(old).not.toContain("1 hidden");
+  });
+
   it("folds a closed section away but keeps its header", async () => {
     const Folded = await withLists([], ["nav_section_diagnostics"]);
     const html = render(<Folded />);

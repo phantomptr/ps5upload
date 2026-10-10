@@ -4,6 +4,7 @@ import en from "../i18n/locales/en";
 import {
   NAV_ITEMS,
   HOME_NAV_ITEM,
+  PINNED_NAV_ITEMS,
   sidebarGroups,
   groupNavItems,
   filterNavItems,
@@ -59,8 +60,10 @@ describe("the sidebar's sections", () => {
     const groups = sidebarGroups([], false, false);
     expect(paths(groups)).toEqual(NAV_ITEMS.filter((i) => !i.beta).map((i) => i.to));
     expect(sections(groups)).toContain("nav_section_files");
-    // Home sits above the sections, not inside one.
+    // Home and Bug report sit above the sections, not inside one.
     expect(paths(groups)).not.toContain(HOME_NAV_ITEM.to);
+    expect(paths(groups)).not.toContain("/bug-report");
+    expect(PINNED_NAV_ITEMS.map((i) => i.to)).toEqual(["/home", "/bug-report"]);
   });
 
   it("leaves hidden screens out", () => {

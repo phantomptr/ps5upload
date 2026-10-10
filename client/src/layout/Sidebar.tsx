@@ -12,7 +12,7 @@ import { isTauriEnv } from "../lib/tauriEnv";
 import { useBetaFeaturesStore } from "../state/betaFeatures";
 import NotificationInbox from "./NotificationInbox";
 import RosterPicker from "./RosterPicker";
-import { HOME_NAV_ITEM, sidebarGroups, type NavItem } from "./navItems";
+import { isPinnedNav, PINNED_NAV_ITEMS, sidebarGroups, type NavItem } from "./navItems";
 
 const COLLAPSED_KEY = "ps5upload.desktop-sidebar.collapsed.v1";
 
@@ -55,6 +55,8 @@ export default function Sidebar() {
   const betaEnabled = useBetaFeaturesStore((s) => s.enabled);
   // Every screen, in its sections, minus what the user hid — see `sidebarGroups`.
   const hidden = useNavSidebarStore((s) => s.hidden);
+  // A pinned screen hidden by an older version stays shown, so it is not counted.
+  const hiddenCount = hidden.filter((to) => !isPinnedNav(to)).length;
   const closedSections = useNavSidebarStore((s) => s.closedSections);
   const toggleHidden = useNavSidebarStore((s) => s.toggleHidden);
   const toggleSection = useNavSidebarStore((s) => s.toggleSection);
@@ -193,7 +195,7 @@ export default function Sidebar() {
         aria-label={tr("v5_tab_primary_nav", undefined, "Primary")}
         className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-3 [overscroll-behavior:contain]"
       >
-        <ul>{renderItem(HOME_NAV_ITEM, false)}</ul>
+        <ul className="space-y-1">{PINNED_NAV_ITEMS.map((item) => renderItem(item, false))}</ul>
         {groups.map((group) => {
           const title = tr(group.section.key, undefined, group.section.fallback);
           // The icon rail has no header to reopen a folded section from, so it shows them all.
@@ -219,12 +221,12 @@ export default function Sidebar() {
         })}
 
         {/* The way back for anything hidden: More lists every screen with its switch. */}
-        {hidden.length > 0 && !collapsed && (
+        {hiddenCount > 0 && !collapsed && (
           <NavLink
             to="/more"
             className="mt-3 block rounded-[0.65rem] px-2.5 py-1.5 text-[0.6875rem] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
           >
-            {tr("nav_hidden_count", { count: hidden.length }, "{count} hidden — show them from More")}
+            {tr("nav_hidden_count", { count: hiddenCount }, "{count} hidden — show them from More")}
           </NavLink>
         )}
       </nav>

@@ -32,6 +32,8 @@ import RosterPicker from "../../layout/RosterPicker";
 import { useBetaFeaturesStore } from "../../state/betaFeatures";
 import NotificationInbox from "../../layout/NotificationInbox";
 import {
+  BUG_REPORT_NAV_ITEM,
+  isPinnedNav,
   NAV_ITEMS,
   groupNavItems,
   filterNavItems,
@@ -65,10 +67,10 @@ export default function MoreScreen() {
     [betaEnabled],
   );
   const matches = useMemo(
-    () => filterNavItems(visible, query, tr),
+    () => filterNavItems([BUG_REPORT_NAV_ITEM, ...visible], query, tr),
     [visible, query, tr],
   );
-  const groups = useMemo(() => groupNavItems(matches), [matches]);
+  const groups = useMemo(() => groupNavItems(matches.filter((i) => !isPinnedNav(i.to))), [matches]);
   const searching = query.trim().length > 0;
   return (
     <div className="app-page max-w-4xl! pb-6!">
@@ -145,6 +147,7 @@ export default function MoreScreen() {
             <MoreRow
               key={item.to}
               item={item}
+              pinned={isPinnedNav(item.to)}
               errorCount={errorCount}
               updateAvailable={updateAvailable}
             />
@@ -152,6 +155,15 @@ export default function MoreScreen() {
         </ul>
       ) : (
         <>
+          {/* Pinned, like the sidebar: the way to report a problem is always first. */}
+          <ul className="surface-panel mt-1 overflow-hidden divide-y divide-[var(--color-border)]">
+            <MoreRow
+              item={BUG_REPORT_NAV_ITEM}
+              errorCount={errorCount}
+              updateAvailable={updateAvailable}
+              pinned
+            />
+          </ul>
           {groups.map((group) => (
             <section key={group.section.key} className="mt-4 first:mt-1">
               <h2 className="px-1 pb-1 text-xs font-semibold uppercase tracking-wider text-[var(--color-muted)]">
@@ -210,16 +222,19 @@ export function MoreRow({
   item,
   errorCount,
   updateAvailable,
+  pinned = false,
 }: {
   item: NavItem;
   errorCount: number;
   updateAvailable: boolean;
+  /** Always in the sidebar: no hide switch. */
+  pinned?: boolean;
 }) {
   const tr = useTr();
   const Icon = item.icon;
   const showErrors = item.to === "/logs" && errorCount > 0;
   const showUpdate = item.to === "/settings" && updateAvailable;
-  const hidden = useNavSidebarStore((s) => s.hidden.includes(item.to));
+  const hidden = useNavSidebarStore((s) => !pinned && s.hidden.includes(item.to));
   const toggleHidden = useNavSidebarStore((s) => s.toggleHidden);
   const label = tr(item.key, undefined, item.fallback);
   return (
@@ -278,27 +293,30 @@ export function MoreRow({
       </NavLink>
       {/* Sibling of the link, not a child: a <button> inside an <a> is
           invalid markup and the click would navigate instead of toggling. */}
-      {/* Desktop only: phones navigate by tabs and this list, and have no sidebar to change. */}
-      <button
-        type="button"
-        onClick={() => toggleHidden(item.to)}
-        aria-pressed={!hidden}
-        aria-label={
-          hidden
-            ? tr("nav_show_item", { name: label }, "Show {name} in the sidebar")
-            : tr("nav_hide_item", { name: label }, "Hide {name} from the sidebar")
-        }
-        title={
-          hidden
-            ? tr("nav_show_item", { name: label }, "Show {name} in the sidebar")
-            : tr("nav_hide_item", { name: label }, "Hide {name} from the sidebar")
-        }
-        className={`mr-2 hidden h-11 w-11 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-[var(--color-surface-3)] md:flex ${
-          hidden ? "text-[var(--color-muted)] opacity-60 hover:opacity-100" : "text-[var(--color-accent)]"
-        }`}
-      >
-        {hidden ? <EyeOff size={16} aria-hidden /> : <Eye size={16} aria-hidden />}
-      </button>
+      {/* Desktop only: phones navigate by tabs and this list, and have no sidebar to change. A
+          pinned screen has no switch: it is always there. */}
+      {!pinned && (
+        <button
+          type="button"
+          onClick={() => toggleHidden(item.to)}
+          aria-pressed={!hidden}
+          aria-label={
+            hidden
+              ? tr("nav_show_item", { name: label }, "Show {name} in the sidebar")
+              : tr("nav_hide_item", { name: label }, "Hide {name} from the sidebar")
+          }
+          title={
+            hidden
+              ? tr("nav_show_item", { name: label }, "Show {name} in the sidebar")
+              : tr("nav_hide_item", { name: label }, "Hide {name} from the sidebar")
+          }
+          className={`mr-2 hidden h-11 w-11 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-[var(--color-surface-3)] md:flex ${
+            hidden ? "text-[var(--color-muted)] opacity-60 hover:opacity-100" : "text-[var(--color-accent)]"
+          }`}
+        >
+          {hidden ? <EyeOff size={16} aria-hidden /> : <Eye size={16} aria-hidden />}
+        </button>
+      )}
     </li>
   );
 }
