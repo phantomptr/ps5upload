@@ -67,6 +67,9 @@ export interface NavItem {
    *  nav entry is hidden entirely in a browser session rather than linking
    *  to a screen that can't do anything there. */
   hideInBrowser?: boolean;
+  /** Needs a macOS or Linux desktop (the screen drives that OS's own
+   *  tools on this computer); hidden on Windows and Android. */
+  macOrLinuxOnly?: boolean;
   /** Hidden unless the user turns beta features on in Settings. Reserved for
    *  screens that are still being finished — see state/betaFeatures.ts. */
   beta?: boolean;
@@ -171,8 +174,12 @@ export const NAV_ITEMS: NavItem[] = [
   {
     to: "/local-image",
     key: "local_image",
-    fallback: "Edit Game Image",
+    fallback: "Edit image on this computer",
     icon: FilePen,
+    // It attaches the image on the machine the engine runs on: in the
+    // browser build that is the server, not the viewer's computer.
+    hideInBrowser: true,
+    macOrLinuxOnly: true,
   },
   {
     to: "/game-activity",
@@ -308,6 +315,15 @@ export function navItemVisible(item: NavItem, betaEnabled: boolean): boolean {
   return !item.beta || betaEnabled;
 }
 
+/** Whether this build can offer the screen at all. */
+export function navItemOffered(
+  item: NavItem,
+  where: { inBrowser: boolean; macOrLinux: boolean },
+): boolean {
+  if (where.inBrowser && item.hideInBrowser) return false;
+  return !item.macOrLinuxOnly || where.macOrLinux;
+}
+
 /**
  * The desktop sidebar's sections: every screen in its section, minus the ones the user hid
  * (and beta screens while beta is off, and what the browser build can't offer).
@@ -320,9 +336,12 @@ export function sidebarGroups(
   hidden: readonly string[],
   betaEnabled: boolean,
   inBrowser: boolean,
+  macOrLinux = true,
 ): NavGroup[] {
   const shown = (i: NavItem) =>
-    navItemVisible(i, betaEnabled) && !(inBrowser && i.hideInBrowser) && !hidden.includes(i.to);
+    navItemVisible(i, betaEnabled) &&
+    navItemOffered(i, { inBrowser, macOrLinux }) &&
+    !hidden.includes(i.to);
   return groupNavItems(NAV_ITEMS)
     .map((g) => ({ section: g.section, items: g.items.filter(shown) }))
     .filter((g) => g.items.length > 0);

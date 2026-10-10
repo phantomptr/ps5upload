@@ -10,7 +10,8 @@ import { pushNotification } from "../state/notifications";
 import { useTr } from "../state/lang";
 import { useBetaFeaturesStore } from "../state/betaFeatures";
 import { isTauriEnv } from "../lib/tauriEnv";
-import { NAV_ITEMS, navItemVisible, PINNED_NAV_ITEMS } from "../layout/navItems";
+import { NAV_ITEMS, navItemOffered, navItemVisible, PINNED_NAV_ITEMS } from "../layout/navItems";
+import { isMacOrLinuxDesktop } from "../lib/platform";
 
 /**
  * Command palette — Cmd/Ctrl+K. Lists navigation targets and a small
@@ -87,7 +88,9 @@ function useCommands(close: () => void): Command[] {
     // never list a screen that is gone or call one by an old name. Extra words help matching.
     const beta = useBetaFeaturesStore.getState().enabled;
     const screens = [...PINNED_NAV_ITEMS, ...NAV_ITEMS].filter(
-      (i) => (!i.hideInBrowser || isTauriEnv()) && navItemVisible(i, beta),
+      (i) =>
+        navItemOffered(i, { inBrowser: !isTauriEnv(), macOrLinux: isMacOrLinuxDesktop() }) &&
+        navItemVisible(i, beta),
     );
     return [
       ...screens.map((i) => nav(i.to, i.key, i.fallback, NAV_KEYWORDS[i.to])),

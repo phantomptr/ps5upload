@@ -25,6 +25,16 @@ export function isAndroid(): boolean {
   return /android/i.test(ua());
 }
 
+export function isWindows(): boolean {
+  return /windows/i.test(ua());
+}
+
+/** A macOS or Linux desktop: where the app's own machine can attach a disk
+ *  image with the OS tools (hdiutil, udisksctl). */
+export function isMacOrLinuxDesktop(): boolean {
+  return !isAndroid() && !isIOS() && !isWindows();
+}
+
 export function isIOS(): boolean {
   const s = ua();
   // iPadOS 13+ reports as Mac; the touch-points check disambiguates.

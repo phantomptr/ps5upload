@@ -11,6 +11,7 @@ import { lazyWithReload } from "./lib/lazyWithReload";
 import AppShell from "./layout/AppShell";
 import { useRosterStore } from "./state/roster";
 import { isTauriEnv } from "./lib/tauriEnv";
+import { isMacOrLinuxDesktop } from "./lib/platform";
 
 /**
  * Code-splitting strategy:
@@ -102,6 +103,13 @@ function LandingRedirect() {
  *  a screen with no working affordances. */
 function NativeOnlyRoute({ children }: { children: ReactNode }) {
   if (!isTauriEnv()) return <Navigate to="/connection" replace />;
+  return <>{children}</>;
+}
+
+/** Edit image on this computer attaches the image with the OS's own tools, which only a
+ *  macOS or Linux desktop has (the browser build would attach it on the engine's server). */
+function LocalImageRoute({ children }: { children: ReactNode }) {
+  if (!isTauriEnv() || !isMacOrLinuxDesktop()) return <Navigate to="/home" replace />;
   return <>{children}</>;
 }
 
@@ -298,9 +306,11 @@ function AppRoutes({ location }: { location: Location }) {
         <Route
           path="/local-image"
           element={
-            <Suspense fallback={<ScreenLoader />}>
-              <LocalImageScreen />
-            </Suspense>
+            <LocalImageRoute>
+              <Suspense fallback={<ScreenLoader />}>
+                <LocalImageScreen />
+              </Suspense>
+            </LocalImageRoute>
           }
         />
         <Route
